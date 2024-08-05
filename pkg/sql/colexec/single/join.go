@@ -60,8 +60,7 @@ func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if singleJoin.ProjectList != nil {
-		singleJoin.Projection = colexec.NewProjection(singleJoin.ProjectList)
-		err = singleJoin.Projection.Prepare(proc)
+		err = singleJoin.PrepareProjection(proc)
 	}
 	return err
 }
@@ -118,9 +117,9 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 				}
 			}
 
-			if singleJoin.Projection != nil {
+			if singleJoin.ProjectList != nil {
 				var err error
-				result.Batch, err = singleJoin.Projection.Eval(result.Batch, proc)
+				result.Batch, err = singleJoin.EvalProjection(result.Batch, proc)
 				if err != nil {
 					return result, err
 				}

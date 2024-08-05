@@ -71,9 +71,9 @@ type AntiJoin struct {
 	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
-	ProjectList        []*plan.Expr
-	Projection         *colexec.Projection
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (antiJoin *AntiJoin) GetOperatorBase() *vm.OperatorBase {
@@ -127,10 +127,9 @@ func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 
 		antiJoin.ctr = nil
 	}
-	if antiJoin.Projection != nil {
-		allocSize += antiJoin.Projection.MaxAllocSize
-		antiJoin.Projection.Free(proc)
-		antiJoin.Projection = nil
+	if antiJoin.ProjectList != nil {
+		allocSize += antiJoin.MaxAllocSize
+		antiJoin.FreeProjection(proc)
 	}
 	anal.Alloc(allocSize)
 }

@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -42,14 +41,14 @@ type container struct {
 }
 
 type Product struct {
-	ctr         *container
-	Typs        []types.Type
-	Result      []colexec.ResultPos
-	IsShuffle   bool
-	JoinMapTag  int32
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	ctr        *container
+	Typs       []types.Type
+	Result     []colexec.ResultPos
+	IsShuffle  bool
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (product *Product) GetOperatorBase() *vm.OperatorBase {
@@ -94,11 +93,10 @@ func (product *Product) Free(proc *process.Process, pipelineFailed bool, err err
 		ctr.cleanBatch(mp)
 		product.ctr = nil
 	}
-	if product.Projection != nil {
+	if product.ProjectList != nil {
 		anal := proc.GetAnalyze(product.GetIdx(), product.GetParallelIdx(), product.GetParallelMajor())
-		anal.Alloc(product.Projection.MaxAllocSize)
-		product.Projection.Free(proc)
-		product.Projection = nil
+		anal.Alloc(product.MaxAllocSize)
+		product.FreeProjection(proc)
 	}
 }
 

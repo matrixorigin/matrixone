@@ -51,8 +51,7 @@ func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
 		antiJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, antiJoin.Cond)
 	}
 	if antiJoin.ProjectList != nil {
-		antiJoin.Projection = colexec.NewProjection(antiJoin.ProjectList)
-		err := antiJoin.Projection.Prepare(proc)
+		err := antiJoin.PrepareProjection(proc)
 		if err != nil {
 			return err
 		}
@@ -117,9 +116,9 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 
-			if ap.Projection != nil {
+			if ap.ProjectList != nil {
 				var err error
-				result.Batch, err = ap.Projection.Eval(result.Batch, proc)
+				result.Batch, err = ap.EvalProjection(result.Batch, proc)
 				if err != nil {
 					return result, err
 				}

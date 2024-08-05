@@ -17,7 +17,6 @@ package projection
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -42,8 +41,7 @@ func (projection *Projection) OpType() vm.OpType {
 
 func (projection *Projection) Prepare(proc *process.Process) (err error) {
 	if projection.ProjectList != nil {
-		projection.Proj = colexec.NewProjection(projection.ProjectList)
-		err = projection.Proj.Prepare(proc)
+		err = projection.PrepareProjection(proc)
 	}
 	return
 }
@@ -67,8 +65,8 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	}
 	anal.Input(result.Batch, projection.GetIsFirst())
 
-	if projection.Proj != nil {
-		result.Batch, err = projection.Proj.Eval(result.Batch, proc)
+	if projection.ProjectList != nil {
+		result.Batch, err = projection.EvalProjection(result.Batch, proc)
 		if err != nil {
 			return result, err
 		}

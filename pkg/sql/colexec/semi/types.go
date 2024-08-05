@@ -64,13 +64,11 @@ type container struct {
 }
 
 type SemiJoin struct {
-	ctr         *container
-	Result      []int32
-	Typs        []types.Type
-	Cond        *plan.Expr
-	Conditions  [][]*plan.Expr
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	ctr        *container
+	Result     []int32
+	Typs       []types.Type
+	Cond       *plan.Expr
+	Conditions [][]*plan.Expr
 
 	HashOnPK           bool
 	IsShuffle          bool
@@ -78,6 +76,7 @@ type SemiJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (semiJoin *SemiJoin) GetOperatorBase() *vm.OperatorBase {
@@ -129,10 +128,9 @@ func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 
 		semiJoin.ctr = nil
 	}
-	if semiJoin.Projection != nil {
-		allocSize += semiJoin.Projection.MaxAllocSize
-		semiJoin.Projection.Free(proc)
-		semiJoin.Projection = nil
+	if semiJoin.ProjectList != nil {
+		allocSize += semiJoin.MaxAllocSize
+		semiJoin.FreeProjection(proc)
 	}
 	anal.Alloc(allocSize)
 }

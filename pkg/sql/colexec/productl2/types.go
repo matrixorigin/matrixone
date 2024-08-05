@@ -42,14 +42,14 @@ type container struct {
 }
 
 type Productl2 struct {
-	ctr         *container
-	Typs        []types.Type
-	Result      []colexec.ResultPos
-	OnExpr      *plan.Expr
-	JoinMapTag  int32
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	ctr        *container
+	Typs       []types.Type
+	Result     []colexec.ResultPos
+	OnExpr     *plan.Expr
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -94,11 +94,10 @@ func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err
 		ctr.cleanBatch(mp)
 		productl2.ctr = nil
 	}
-	if productl2.Projection != nil {
+	if productl2.ProjectList != nil {
 		anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
-		anal.Alloc(productl2.Projection.MaxAllocSize)
-		productl2.Projection.Free(proc)
-		productl2.Projection = nil
+		anal.Alloc(productl2.MaxAllocSize)
+		productl2.FreeProjection(proc)
 	}
 }
 

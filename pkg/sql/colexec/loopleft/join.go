@@ -55,8 +55,7 @@ func (loopLeft *LoopLeft) Prepare(proc *process.Process) error {
 	}
 
 	if loopLeft.ProjectList != nil {
-		loopLeft.Projection = colexec.NewProjection(loopLeft.ProjectList)
-		err = loopLeft.Projection.Prepare(proc)
+		err = loopLeft.PrepareProjection(proc)
 	}
 	return err
 }
@@ -109,8 +108,8 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			if loopLeft.Projection != nil {
-				result.Batch, err = loopLeft.Projection.Eval(result.Batch, proc)
+			if loopLeft.ProjectList != nil {
+				result.Batch, err = loopLeft.EvalProjection(result.Batch, proc)
 				if err != nil {
 					return result, err
 				}

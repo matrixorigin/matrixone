@@ -46,15 +46,14 @@ type container struct {
 }
 
 type LoopJoin struct {
-	ctr         *container
-	Cond        *plan.Expr
-	Result      []colexec.ResultPos
-	Typs        []types.Type
-	JoinMapTag  int32
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	ctr        *container
+	Cond       *plan.Expr
+	Result     []colexec.ResultPos
+	Typs       []types.Type
+	JoinMapTag int32
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopJoin *LoopJoin) GetOperatorBase() *vm.OperatorBase {
@@ -99,11 +98,10 @@ func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanExprExecutor()
 		loopJoin.ctr = nil
 	}
-	if loopJoin.Projection != nil {
+	if loopJoin.ProjectList != nil {
 		anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
-		anal.Alloc(loopJoin.Projection.MaxAllocSize)
-		loopJoin.Projection.Free(proc)
-		loopJoin.Projection = nil
+		anal.Alloc(loopJoin.MaxAllocSize)
+		loopJoin.FreeProjection(proc)
 	}
 }
 

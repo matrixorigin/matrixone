@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -43,8 +42,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	mergeGroup.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 	if mergeGroup.ProjectList != nil {
-		mergeGroup.Projection = colexec.NewProjection(mergeGroup.ProjectList)
-		err := mergeGroup.Projection.Prepare(proc)
+		err := mergeGroup.PrepareProjection(proc)
 		if err != nil {
 			return err
 		}
@@ -111,8 +109,8 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 				}
 
 				result.Batch = ctr.bat
-				if mergeGroup.Projection != nil {
-					result.Batch, err = mergeGroup.Projection.Eval(result.Batch, proc)
+				if mergeGroup.ProjectList != nil {
+					result.Batch, err = mergeGroup.EvalProjection(result.Batch, proc)
 					if err != nil {
 						return result, err
 					}

@@ -46,14 +46,14 @@ type container struct {
 }
 
 type LoopAnti struct {
-	ctr         *container
-	Result      []int32
-	Cond        *plan.Expr
-	Typs        []types.Type
-	JoinMapTag  int32
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	ctr        *container
+	Result     []int32
+	Cond       *plan.Expr
+	Typs       []types.Type
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopAnti *LoopAnti) GetOperatorBase() *vm.OperatorBase {
@@ -102,11 +102,10 @@ func (loopAnti *LoopAnti) Free(proc *process.Process, pipelineFailed bool, err e
 		loopAnti.ctr.lastrow = 0
 		loopAnti.ctr = nil
 	}
-	if loopAnti.Projection != nil {
+	if loopAnti.ProjectList != nil {
 		anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
-		anal.Alloc(loopAnti.Projection.MaxAllocSize)
-		loopAnti.Projection.Free(proc)
-		loopAnti.Projection = nil
+		anal.Alloc(loopAnti.MaxAllocSize)
+		loopAnti.FreeProjection(proc)
 	}
 }
 

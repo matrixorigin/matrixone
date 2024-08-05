@@ -16,7 +16,6 @@ package projection
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -25,9 +24,8 @@ import (
 var _ vm.Operator = new(Projection)
 
 type Projection struct {
-	ProjectList []*plan.Expr
-	Proj        *colexec.Projection
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (projection *Projection) GetOperatorBase() *vm.OperatorBase {
@@ -66,10 +64,9 @@ func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, 
 }
 
 func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if projection.Proj != nil {
+	if projection.ProjectList != nil {
 		anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
-		anal.Alloc(int64(projection.Proj.MaxAllocSize))
-		projection.Proj.Free(proc)
-		projection.Proj = nil
+		anal.Alloc(int64(projection.MaxAllocSize))
+		projection.FreeProjection(proc)
 	}
 }

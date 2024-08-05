@@ -2206,6 +2206,11 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 			c.setProjection(n, ss[i])
 			continue
 		}
+		_, ok := c.stmt.(*tree.Insert)
+		if ok {
+			c.setProjection(n, ss[i])
+			continue
+		}
 		switch ss[i].RootOp.(type) {
 		case *table_scan.TableScan:
 			if ss[i].RootOp.(*table_scan.TableScan).ProjectList == nil {

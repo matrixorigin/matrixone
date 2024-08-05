@@ -57,8 +57,7 @@ func (loopMark *LoopMark) Prepare(proc *process.Process) error {
 	}
 
 	if loopMark.ProjectList != nil {
-		loopMark.Projection = colexec.NewProjection(loopMark.ProjectList)
-		err = loopMark.Projection.Prepare(proc)
+		err = loopMark.PrepareProjection(proc)
 	}
 	return err
 }
@@ -107,8 +106,8 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			if loopMark.Projection != nil {
-				result.Batch, err = loopMark.Projection.Eval(result.Batch, proc)
+			if loopMark.ProjectList != nil {
+				result.Batch, err = loopMark.EvalProjection(result.Batch, proc)
 				if err != nil {
 					return result, err
 				}

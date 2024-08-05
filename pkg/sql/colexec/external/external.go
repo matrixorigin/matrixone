@@ -136,8 +136,7 @@ func (external *External) Prepare(proc *process.Process) error {
 	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.zonemappable = plan2.ExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
 	if external.ProjectList != nil {
-		external.Projection = colexec.NewProjection(external.ProjectList)
-		err := external.Projection.Prepare(proc)
+		err := external.PrepareProjection(proc)
 		if err != nil {
 			return err
 		}
@@ -195,8 +194,8 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	if result.Batch != nil {
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
-	if external.Projection != nil {
-		result.Batch, err = external.Projection.Eval(result.Batch, proc)
+	if external.ProjectList != nil {
+		result.Batch, err = external.EvalProjection(result.Batch, proc)
 		if err != nil {
 			return result, err
 		}

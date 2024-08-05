@@ -98,8 +98,7 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 	}
 
 	if fill.ProjectList != nil {
-		fill.Projection = colexec.NewProjection(fill.ProjectList)
-		err := fill.Projection.Prepare(proc)
+		err := fill.PrepareProjection(proc)
 		if err != nil {
 			return err
 		}
@@ -119,8 +118,8 @@ func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result, err := ctr.process(ctr, fill, proc, anal)
 
-	if fill.Projection != nil {
-		result.Batch, err = fill.Projection.Eval(result.Batch, proc)
+	if fill.ProjectList != nil {
+		result.Batch, err = fill.EvalProjection(result.Batch, proc)
 	}
 
 	return result, err

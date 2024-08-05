@@ -44,14 +44,14 @@ type container struct {
 }
 
 type LoopMark struct {
-	ctr         *container
-	Cond        *plan.Expr
-	Typs        []types.Type
-	Result      []int32
-	JoinMapTag  int32
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	ctr        *container
+	Cond       *plan.Expr
+	Typs       []types.Type
+	Result     []int32
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopMark *LoopMark) GetOperatorBase() *vm.OperatorBase {
@@ -95,11 +95,10 @@ func (loopMark *LoopMark) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanExprExecutor()
 		loopMark.ctr = nil
 	}
-	if loopMark.Projection != nil {
+	if loopMark.ProjectList != nil {
 		anal := proc.GetAnalyze(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor())
-		anal.Alloc(loopMark.Projection.MaxAllocSize)
-		loopMark.Projection.Free(proc)
-		loopMark.Projection = nil
+		anal.Alloc(loopMark.MaxAllocSize)
+		loopMark.FreeProjection(proc)
 	}
 }
 

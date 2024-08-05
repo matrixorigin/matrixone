@@ -56,8 +56,7 @@ func (loopSingle *LoopSingle) Prepare(proc *process.Process) error {
 	}
 
 	if loopSingle.ProjectList != nil {
-		loopSingle.Projection = colexec.NewProjection(loopSingle.ProjectList)
-		err = loopSingle.Projection.Prepare(proc)
+		err = loopSingle.PrepareProjection(proc)
 	}
 	return err
 }
@@ -106,8 +105,8 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 				return result, err
 			}
 
-			if loopSingle.Projection != nil {
-				result.Batch, err = loopSingle.Projection.Eval(result.Batch, proc)
+			if loopSingle.ProjectList != nil {
+				result.Batch, err = loopSingle.EvalProjection(result.Batch, proc)
 				if err != nil {
 					return result, err
 				}

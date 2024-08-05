@@ -42,8 +42,7 @@ func (product *Product) Prepare(proc *process.Process) error {
 	ap := product
 	ap.ctr = new(container)
 	if product.ProjectList != nil {
-		product.Projection = colexec.NewProjection(product.ProjectList)
-		return product.Projection.Prepare(proc)
+		return product.PrepareProjection(proc)
 	}
 	return nil
 }
@@ -95,9 +94,9 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.probe(ap, proc, &result); err != nil {
 				return result, err
 			}
-			if product.Projection != nil {
+			if product.ProjectList != nil {
 				var err error
-				result.Batch, err = product.Projection.Eval(result.Batch, proc)
+				result.Batch, err = product.EvalProjection(result.Batch, proc)
 				if err != nil {
 					return result, err
 				}

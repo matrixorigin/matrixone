@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -52,11 +53,13 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Projection{
-				ProjectList: []*plan.Expr{
-					{
-						Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-						Typ: plan.Type{
-							Id: int32(types.T_int8),
+				Projection: colexec.Projection{
+					ProjectList: []*plan.Expr{
+						{
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+							Typ: plan.Type{
+								Id: int32(types.T_int8),
+							},
 						},
 					},
 				},

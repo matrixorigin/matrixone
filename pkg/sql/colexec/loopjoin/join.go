@@ -51,8 +51,7 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 	}
 
 	if loopJoin.ProjectList != nil {
-		loopJoin.Projection = colexec.NewProjection(loopJoin.ProjectList)
-		err = loopJoin.Projection.Prepare(proc)
+		err = loopJoin.PrepareProjection(proc)
 	}
 	return err
 }
@@ -110,8 +109,8 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			if loopJoin.Projection != nil {
-				result.Batch, err = loopJoin.Projection.Eval(result.Batch, proc)
+			if loopJoin.ProjectList != nil {
+				result.Batch, err = loopJoin.EvalProjection(result.Batch, proc)
 				if err != nil {
 					return result, err
 				}

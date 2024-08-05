@@ -95,13 +95,12 @@ type Group struct {
 	NeedEval     bool // need to projection the aggregate column
 	PreAllocSize uint64
 
-	Exprs       []*plan.Expr // group Expressions
-	Types       []types.Type
-	Aggs        []aggexec.AggFuncExecExpression
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	Exprs []*plan.Expr // group Expressions
+	Types []types.Type
+	Aggs  []aggexec.AggFuncExecExpression
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (group *Group) GetOperatorBase() *vm.OperatorBase {
@@ -173,11 +172,10 @@ func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) 
 		ctr.cleanGroupVectors()
 		group.ctr = nil
 	}
-	if group.Projection != nil {
+	if group.ProjectList != nil {
 		anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
-		anal.Alloc(group.Projection.MaxAllocSize)
-		group.Projection.Free(proc)
-		group.Projection = nil
+		anal.Alloc(group.MaxAllocSize)
+		group.FreeProjection(proc)
 	}
 }
 

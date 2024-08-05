@@ -146,12 +146,12 @@ type MarkJoin struct {
 	Typs []types.Type
 	Cond *plan.Expr
 
-	OnList      []*plan.Expr
-	HashOnPK    bool
-	JoinMapTag  int32
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	OnList     []*plan.Expr
+	HashOnPK   bool
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (markJoin *MarkJoin) GetOperatorBase() *vm.OperatorBase {
@@ -205,10 +205,9 @@ func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		markJoin.ctr = nil
 	}
 
-	if markJoin.Projection != nil {
-		allocSize += markJoin.Projection.MaxAllocSize
-		markJoin.Projection.Free(proc)
-		markJoin.Projection = nil
+	if markJoin.ProjectList != nil {
+		allocSize += markJoin.MaxAllocSize
+		markJoin.FreeProjection(proc)
 	}
 	anal.Alloc(allocSize)
 }

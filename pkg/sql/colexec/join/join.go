@@ -56,8 +56,7 @@ func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if innerJoin.ProjectList != nil {
-		innerJoin.Projection = colexec.NewProjection(innerJoin.ProjectList)
-		err = innerJoin.Projection.Prepare(proc)
+		err = innerJoin.PrepareProjection(proc)
 	}
 	return err
 }
@@ -123,9 +122,9 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, moerr.NewInternalErrorNoCtx("inner join hanging")
 			}
 
-			if innerJoin.Projection != nil {
+			if innerJoin.ProjectList != nil {
 				var err error
-				result.Batch, err = innerJoin.Projection.Eval(result.Batch, proc)
+				result.Batch, err = innerJoin.EvalProjection(result.Batch, proc)
 				if err != nil {
 					return result, err
 				}

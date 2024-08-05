@@ -65,20 +65,20 @@ type container struct {
 }
 
 type LeftJoin struct {
-	ctr         *container
-	Result      []colexec.ResultPos
-	Typs        []types.Type
-	Cond        *plan.Expr
-	Conditions  [][]*plan.Expr
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	ctr        *container
+	Result     []colexec.ResultPos
+	Typs       []types.Type
+	Cond       *plan.Expr
+	Conditions [][]*plan.Expr
 
 	HashOnPK           bool
 	IsShuffle          bool
 	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (leftJoin *LeftJoin) GetOperatorBase() *vm.OperatorBase {
@@ -135,10 +135,9 @@ func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		leftJoin.ctr.lastrow = 0
 		leftJoin.ctr = nil
 	}
-	if leftJoin.Projection != nil {
-		allocSize += leftJoin.Projection.MaxAllocSize
-		leftJoin.Projection.Free(proc)
-		leftJoin.Projection = nil
+	if leftJoin.ProjectList != nil {
+		allocSize += leftJoin.MaxAllocSize
+		leftJoin.FreeProjection(proc)
 	}
 	anal.Alloc(allocSize)
 }

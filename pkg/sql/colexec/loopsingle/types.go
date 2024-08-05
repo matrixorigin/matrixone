@@ -44,14 +44,14 @@ type container struct {
 }
 
 type LoopSingle struct {
-	ctr         *container
-	Cond        *plan.Expr
-	Typs        []types.Type
-	Result      []colexec.ResultPos
-	JoinMapTag  int32
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	ctr        *container
+	Cond       *plan.Expr
+	Typs       []types.Type
+	Result     []colexec.ResultPos
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopSingle *LoopSingle) GetOperatorBase() *vm.OperatorBase {
@@ -95,11 +95,10 @@ func (loopSingle *LoopSingle) Free(proc *process.Process, pipelineFailed bool, e
 		ctr.cleanExprExecutor()
 		loopSingle.ctr = nil
 	}
-	if loopSingle.Projection != nil {
+	if loopSingle.ProjectList != nil {
 		anal := proc.GetAnalyze(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor())
-		anal.Alloc(loopSingle.Projection.MaxAllocSize)
-		loopSingle.Projection.Free(proc)
-		loopSingle.Projection = nil
+		anal.Alloc(loopSingle.MaxAllocSize)
+		loopSingle.FreeProjection(proc)
 	}
 }
 

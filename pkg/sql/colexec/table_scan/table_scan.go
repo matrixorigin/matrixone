@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -46,8 +45,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 		tableScan.ctr.msgReceiver = message.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress(), proc.GetMessageBoard())
 	}
 	if tableScan.ProjectList != nil {
-		tableScan.Projection = colexec.NewProjection(tableScan.ProjectList)
-		err = tableScan.Projection.Prepare(proc)
+		err = tableScan.PrepareProjection(proc)
 	}
 	return
 }
@@ -147,8 +145,8 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	result.Batch = tableScan.ctr.buf
 	anal.Input(result.Batch, tableScan.IsFirst)
 	var err error
-	if tableScan.Projection != nil {
-		result.Batch, err = tableScan.Projection.Eval(result.Batch, proc)
+	if tableScan.ProjectList != nil {
+		result.Batch, err = tableScan.EvalProjection(result.Batch, proc)
 	}
 
 	anal.Output(result.Batch, tableScan.IsLast)

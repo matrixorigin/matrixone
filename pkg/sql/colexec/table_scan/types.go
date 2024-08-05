@@ -38,11 +38,11 @@ type TableScan struct {
 	TopValueMsgTag int32
 	Reader         engine.Reader
 	// letter case: origin
-	Attrs       []string
-	TableID     uint64
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	Attrs   []string
+	TableID uint64
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (tableScan *TableScan) GetOperatorBase() *vm.OperatorBase {
@@ -96,10 +96,9 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 		tableScan.ctr = nil
 	}
 
-	if tableScan.Projection != nil {
-		allocSize += tableScan.Projection.MaxAllocSize
-		tableScan.Projection.Free(proc)
-		tableScan.Projection = nil
+	if tableScan.ProjectList != nil {
+		allocSize += tableScan.MaxAllocSize
+		tableScan.FreeProjection(proc)
 	}
 	anal.Alloc(allocSize)
 }

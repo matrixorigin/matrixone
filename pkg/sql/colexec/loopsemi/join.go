@@ -51,8 +51,7 @@ func (loopSemi *LoopSemi) Prepare(proc *process.Process) error {
 	}
 
 	if loopSemi.ProjectList != nil {
-		loopSemi.Projection = colexec.NewProjection(loopSemi.ProjectList)
-		err = loopSemi.Projection.Prepare(proc)
+		err = loopSemi.PrepareProjection(proc)
 	}
 	return err
 }
@@ -114,8 +113,8 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 				loopSemi.ctr.buf = nil
 			}
 
-			if loopSemi.Projection != nil {
-				result.Batch, err = loopSemi.Projection.Eval(result.Batch, proc)
+			if loopSemi.ProjectList != nil {
+				result.Batch, err = loopSemi.EvalProjection(result.Batch, proc)
 				if err != nil {
 					return result, err
 				}

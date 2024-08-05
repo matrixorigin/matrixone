@@ -16,8 +16,9 @@ package mark
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -62,8 +63,7 @@ func (markJoin *MarkJoin) Prepare(proc *process.Process) error {
 	}
 
 	if markJoin.ProjectList != nil {
-		markJoin.Projection = colexec.NewProjection(markJoin.ProjectList)
-		err = markJoin.Projection.Prepare(proc)
+		err = markJoin.PrepareProjection(proc)
 	}
 	return err
 }
@@ -138,8 +138,8 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 			}
-			if markJoin.Projection != nil {
-				result.Batch, err = markJoin.Projection.Eval(result.Batch, proc)
+			if markJoin.ProjectList != nil {
+				result.Batch, err = markJoin.EvalProjection(result.Batch, proc)
 				if err != nil {
 					return result, err
 				}

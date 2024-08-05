@@ -41,10 +41,9 @@ type IndexJoin struct {
 	Result             []int32
 	Typs               []types.Type
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-	ProjectList        []*plan.Expr
-	Projection         *colexec.Projection
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (indexJoin *IndexJoin) GetOperatorBase() *vm.OperatorBase {
@@ -91,10 +90,9 @@ func (indexJoin *IndexJoin) Free(proc *process.Process, pipelineFailed bool, err
 		}
 		indexJoin.ctr = nil
 	}
-	if indexJoin.Projection != nil {
+	if indexJoin.ProjectList != nil {
 		anal := proc.GetAnalyze(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor())
-		anal.Alloc(indexJoin.Projection.MaxAllocSize)
-		indexJoin.Projection.Free(proc)
-		indexJoin.Projection = nil
+		anal.Alloc(indexJoin.MaxAllocSize)
+		indexJoin.FreeProjection(proc)
 	}
 }

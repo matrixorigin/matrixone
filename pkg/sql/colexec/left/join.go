@@ -54,8 +54,7 @@ func (leftJoin *LeftJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if leftJoin.ProjectList != nil {
-		leftJoin.Projection = colexec.NewProjection(leftJoin.ProjectList)
-		err = leftJoin.Projection.Prepare(proc)
+		err = leftJoin.PrepareProjection(proc)
 	}
 	return err
 }
@@ -113,9 +112,9 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			} else if leftJoin.ctr.lastrow == startrow {
 				return result, moerr.NewInternalErrorNoCtx("left join hanging")
 			}
-			if leftJoin.Projection != nil {
+			if leftJoin.ProjectList != nil {
 				var err error
-				result.Batch, err = leftJoin.Projection.Eval(result.Batch, proc)
+				result.Batch, err = leftJoin.EvalProjection(result.Batch, proc)
 				if err != nil {
 					return result, err
 				}

@@ -63,18 +63,17 @@ type container struct {
 }
 
 type SingleJoin struct {
-	ctr         *container
-	Typs        []types.Type
-	Cond        *plan.Expr
-	Conditions  [][]*plan.Expr
-	Result      []colexec.ResultPos
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	ctr        *container
+	Typs       []types.Type
+	Cond       *plan.Expr
+	Conditions [][]*plan.Expr
+	Result     []colexec.ResultPos
 
 	HashOnPK           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (singleJoin *SingleJoin) GetOperatorBase() *vm.OperatorBase {
@@ -125,10 +124,9 @@ func (singleJoin *SingleJoin) Free(proc *process.Process, pipelineFailed bool, e
 		allocSize += ctr.maxAllocSize
 		singleJoin.ctr = nil
 	}
-	if singleJoin.Projection != nil {
-		allocSize += singleJoin.Projection.MaxAllocSize
-		singleJoin.Projection.Free(proc)
-		singleJoin.Projection = nil
+	if singleJoin.ProjectList != nil {
+		allocSize += singleJoin.MaxAllocSize
+		singleJoin.FreeProjection(proc)
 	}
 	anal.Alloc(allocSize)
 }

@@ -65,20 +65,20 @@ type container struct {
 }
 
 type InnerJoin struct {
-	ctr         *container
-	Result      []colexec.ResultPos
-	Typs        []types.Type
-	Cond        *plan.Expr
-	Conditions  [][]*plan.Expr
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	ctr        *container
+	Result     []colexec.ResultPos
+	Typs       []types.Type
+	Cond       *plan.Expr
+	Conditions [][]*plan.Expr
 
 	HashOnPK           bool
 	IsShuffle          bool
 	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (innerJoin *InnerJoin) GetOperatorBase() *vm.OperatorBase {
@@ -134,10 +134,9 @@ func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err
 		innerJoin.ctr.lastrow = 0
 		innerJoin.ctr = nil
 	}
-	if innerJoin.Projection != nil {
-		anal.Alloc(innerJoin.Projection.MaxAllocSize)
-		innerJoin.Projection.Free(proc)
-		innerJoin.Projection = nil
+	if innerJoin.ProjectList != nil {
+		anal.Alloc(innerJoin.MaxAllocSize)
+		innerJoin.FreeProjection(proc)
 	}
 }
 

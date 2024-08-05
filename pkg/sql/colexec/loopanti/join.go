@@ -52,8 +52,7 @@ func (loopAnti *LoopAnti) Prepare(proc *process.Process) error {
 	}
 
 	if loopAnti.ProjectList != nil {
-		loopAnti.Projection = colexec.NewProjection(loopAnti.ProjectList)
-		err = loopAnti.Projection.Prepare(proc)
+		err = loopAnti.PrepareProjection(proc)
 	}
 	return err
 }
@@ -109,8 +108,8 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 				loopAnti.ctr.buf = nil
 			}
 
-			if loopAnti.Projection != nil {
-				result.Batch, err = loopAnti.Projection.Eval(result.Batch, proc)
+			if loopAnti.ProjectList != nil {
+				result.Batch, err = loopAnti.EvalProjection(result.Batch, proc)
 				if err != nil {
 					return result, err
 				}

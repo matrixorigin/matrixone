@@ -69,13 +69,13 @@ type container struct {
 type Fill struct {
 	ctr *container
 
-	ColLen      int
-	FillType    plan.Node_FillType
-	FillVal     []*plan.Expr
-	AggIds      []int32
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	ColLen   int
+	FillType plan.Node_FillType
+	FillVal  []*plan.Expr
+	AggIds   []int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (fill *Fill) GetOperatorBase() *vm.OperatorBase {
@@ -122,11 +122,10 @@ func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
 
 		fill.ctr = nil
 	}
-	if fill.Projection != nil {
+	if fill.ProjectList != nil {
 		anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
-		anal.Alloc(fill.Projection.MaxAllocSize)
-		fill.Projection.Free(proc)
-		fill.Projection = nil
+		anal.Alloc(fill.MaxAllocSize)
+		fill.FreeProjection(proc)
 	}
 }
 

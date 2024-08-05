@@ -110,12 +110,11 @@ type container struct {
 	buf          *batch.Batch
 }
 type External struct {
-	ctr         *container
-	Es          *ExternalParam
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	ctr *container
+	Es  *ExternalParam
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (external *External) GetOperatorBase() *vm.OperatorBase {
@@ -169,10 +168,9 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 		allocSize += int64(external.ctr.maxAllocSize)
 		external.ctr = nil
 	}
-	if external.Projection != nil {
-		allocSize += external.Projection.MaxAllocSize
-		external.Projection.Free(proc)
-		external.Projection = nil
+	if external.ProjectList != nil {
+		allocSize += external.MaxAllocSize
+		external.FreeProjection(proc)
 	}
 	anal.Alloc(allocSize)
 }

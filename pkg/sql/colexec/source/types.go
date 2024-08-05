@@ -36,12 +36,10 @@ type container struct {
 	buf    *batch.Batch
 }
 type Source struct {
-	ctr         *container
-	TblDef      *plan.TableDef
-	Offset      int64
-	Limit       int64
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	ctr    *container
+	TblDef *plan.TableDef
+	Offset int64
+	Limit  int64
 
 	// end     bool
 	attrs   []string
@@ -49,6 +47,7 @@ type Source struct {
 	Configs map[string]interface{}
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (source *Source) GetOperatorBase() *vm.OperatorBase {
@@ -94,10 +93,9 @@ func (source *Source) Free(proc *process.Process, pipelineFailed bool, err error
 		}
 		source.ctr = nil
 	}
-	if source.Projection != nil {
+	if source.ProjectList != nil {
 		anal := proc.GetAnalyze(source.GetIdx(), source.GetParallelIdx(), source.GetParallelMajor())
-		anal.Alloc(source.Projection.MaxAllocSize)
-		source.Projection.Free(proc)
-		source.Projection = nil
+		anal.Alloc(source.MaxAllocSize)
+		source.FreeProjection(proc)
 	}
 }

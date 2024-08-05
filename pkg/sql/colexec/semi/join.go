@@ -59,8 +59,7 @@ func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if semiJoin.ProjectList != nil {
-		semiJoin.Projection = colexec.NewProjection(semiJoin.ProjectList)
-		err = semiJoin.Projection.Prepare(proc)
+		err = semiJoin.PrepareProjection(proc)
 	}
 	return err
 }
@@ -121,9 +120,9 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				bat.Vecs = newvecs
 				result.Batch = bat
-				if semiJoin.Projection != nil {
+				if semiJoin.ProjectList != nil {
 					var err error
-					result.Batch, err = semiJoin.Projection.Eval(result.Batch, proc)
+					result.Batch, err = semiJoin.EvalProjection(result.Batch, proc)
 					if err != nil {
 						return result, err
 					}
@@ -139,9 +138,9 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				bat.Clean(proc.Mp())
 				return result, err
 			}
-			if semiJoin.Projection != nil {
+			if semiJoin.ProjectList != nil {
 				var err error
-				result.Batch, err = semiJoin.Projection.Eval(result.Batch, proc)
+				result.Batch, err = semiJoin.EvalProjection(result.Batch, proc)
 				if err != nil {
 					return result, err
 				}
