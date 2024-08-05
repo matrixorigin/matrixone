@@ -156,7 +156,7 @@ var jsonTypePrecedences = map[string]int{
 	"NULL":             -7,
 }
 
-func CompareByteJsonLess(left, right ByteJson) int {
+func CompareByteJson(left, right ByteJson) int {
 	precedence1 := jsonTypePrecedences[left.TYPE()]
 	precedence2 := jsonTypePrecedences[right.TYPE()]
 
@@ -183,7 +183,7 @@ func CompareByteJsonLess(left, right ByteJson) int {
 			for i := 0; i < leftCnt && i < rightCnt; i++ {
 				elem1 := left.getArrayElem(i)
 				elem2 := right.getArrayElem(i)
-				cmp = CompareByteJsonLess(elem1, elem2)
+				cmp = CompareByteJson(elem1, elem2)
 				if cmp != 0 {
 					return cmp
 				}
@@ -203,7 +203,7 @@ func CompareByteJsonLess(left, right ByteJson) int {
 				if cmp != 0 {
 					return cmp
 				}
-				cmp = CompareByteJsonLess(left.getObjectVal(i), right.getObjectVal(i))
+				cmp = CompareByteJson(left.getObjectVal(i), right.getObjectVal(i))
 				if cmp != 0 {
 					return cmp
 				}
