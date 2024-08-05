@@ -30,6 +30,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -45,12 +47,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"go.uber.org/zap"
 )
 
 type CloseFlag struct {
@@ -478,9 +478,7 @@ func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement,
 	var stmtStr string
 	stm := ses.GetStmtInfo()
 	if stm == nil {
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
-		stmt.Format(fmtCtx)
-		stmtStr = fmtCtx.String()
+		stmtStr = ses.GetSqlOfStmt()
 	} else {
 		stmtStr = stm.Statement
 	}
