@@ -2481,7 +2481,8 @@ func (tbl *txnTable) MergeObjects(
 		}
 		var locStr strings.Builder
 		locations := taskHost.commitEntry.BookingLoc
-		for _, filepath := range locations {
+		blkCnt := types.DecodeInt32(commonUtil.UnsafeStringToBytes(locations[0]))
+		for _, filepath := range locations[blkCnt+1:] {
 			locStr.WriteString(filepath)
 			locStr.WriteString(",")
 		}

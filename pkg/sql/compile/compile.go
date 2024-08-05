@@ -2643,7 +2643,7 @@ func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag = c.anal.isFirst
 	arg := constructPartition(n)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.ReplaceLeafOp(arg)
+	rs.setRootOperator(arg)
 	c.anal.isFirst = false
 
 	return []*Scope{rs}
@@ -2728,7 +2728,7 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 	currentFirstFlag = c.anal.isFirst
 	arg := constructMergeTop(n, topN)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.ReplaceLeafOp(arg)
+	rs.setRootOperator(arg)
 	c.anal.isFirst = false
 
 	return []*Scope{rs}
@@ -2778,7 +2778,7 @@ func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	arg := constructWindow(c.proc.Ctx, n, c.proc)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.ReplaceLeafOp(arg)
+	rs.setRootOperator(arg)
 	c.anal.isFirst = false
 
 	return []*Scope{rs}
@@ -2790,7 +2790,7 @@ func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	arg := constructTimeWindow(c.proc.Ctx, n)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.ReplaceLeafOp(arg)
+	rs.setRootOperator(arg)
 	c.anal.isFirst = false
 
 	return []*Scope{rs}
@@ -2802,7 +2802,7 @@ func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	arg := constructFill(n)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.ReplaceLeafOp(arg)
+	rs.setRootOperator(arg)
 	c.anal.isFirst = false
 
 	return []*Scope{rs}
@@ -2823,7 +2823,7 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	arg := constructMergeOffset(n)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.ReplaceLeafOp(arg)
+	rs.setRootOperator(arg)
 	c.anal.isFirst = false
 
 	return []*Scope{rs}
@@ -2853,7 +2853,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag = c.anal.isFirst
 	arg := constructMergeLimit(n)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.ReplaceLeafOp(arg)
+	rs.setRootOperator(arg)
 	c.anal.isFirst = false
 
 	return []*Scope{rs}
@@ -2964,7 +2964,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 			ss[0].PartialResultTypes = nil
 		}
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		rs.ReplaceLeafOp(arg)
+		rs.setRootOperator(arg)
 		c.anal.isFirst = false
 
 		return []*Scope{rs}
@@ -2988,7 +2988,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 			ss[0].PartialResultTypes = nil
 		}
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		rs.ReplaceLeafOp(arg)
+		rs.setRootOperator(arg)
 		c.anal.isFirst = false
 
 		return []*Scope{rs}
@@ -3459,7 +3459,7 @@ func (c *Compile) compileOnduplicateKey(n *plan.Node, ss []*Scope) ([]*Scope, er
 	currentFirstFlag := c.anal.isFirst
 	arg := constructOnduplicateKey(n, c.e)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.ReplaceLeafOp(arg)
+	rs.setRootOperator(arg)
 	c.anal.isFirst = false
 
 	ss = []*Scope{rs}
