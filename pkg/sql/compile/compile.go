@@ -649,7 +649,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	}()
 	if defChanged {
 		var pn *plan2.Plan
-		pn, e = c.buildPlanFunc()
+		pn, e = c.buildPlanFunc(c.proc.Ctx)
 		if e != nil {
 			return nil, e
 		}
@@ -2099,6 +2099,9 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		}
 		if n.ObjRef.PubInfo != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.TenantId))
+		}
+		if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 		if err != nil {
@@ -4777,7 +4780,7 @@ func (c *Compile) SetOriginSQL(sql string) {
 	c.originSQL = sql
 }
 
-func (c *Compile) SetBuildPlanFunc(buildPlanFunc func() (*plan2.Plan, error)) {
+func (c *Compile) SetBuildPlanFunc(buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)) {
 	c.buildPlanFunc = buildPlanFunc
 }
 
