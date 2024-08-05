@@ -7407,9 +7407,10 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
-		mrs := newMrsForCheckTenant([][]interface{}{
-			{0, "0", "open", 0},
+		sql := getAccountIdNamesSql
+		mrs := newMrsForGetAllAccounts([][]interface{}{
+			{uint64(0), "sys", "open", uint64(1), nil},
+			{uint64(1), "acc", "open", uint64(1), nil},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -7419,6 +7420,12 @@ func Test_doDropAccount(t *testing.T) {
 		for _, sql = range getSqlForDropAccount() {
 			bh.sql2result[sql] = nil
 		}
+
+		sql = getPubInfoSql + " order by update_time desc, created_time desc"
+		bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
+
+		sql = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs where 1=1 and sub_account_id = 1"
+		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
 
 		sql = "show databases;"
 		bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{})
@@ -7460,9 +7467,8 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
-		mrs := newMrsForCheckTenant([][]interface{}{})
-		bh.sql2result[sql] = mrs
+		sql := getAccountIdNamesSql
+		bh.sql2result[sql] = newMrsForGetAllAccounts([][]interface{}{})
 
 		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
@@ -7507,9 +7513,8 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
-		mrs := newMrsForCheckTenant([][]interface{}{})
-		bh.sql2result[sql] = mrs
+		sql := getAccountIdNamesSql
+		bh.sql2result[sql] = newMrsForGetAllAccounts([][]interface{}{})
 
 		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
@@ -8092,6 +8097,146 @@ func newMrsForCheckDatabaseTable(rows [][]interface{}) *MysqlResultSet {
 	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForGetAllAccounts(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("account_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("account_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col3 := &MysqlColumn{}
+	col3.SetName("status")
+	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col4 := &MysqlColumn{}
+	col4.SetName("version")
+	col4.SetColumnType(defines.MYSQL_TYPE_LONG)
+
+	col5 := &MysqlColumn{}
+	col5.SetName("suspended_time")
+	col5.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForSqlForGetPubs(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("pub_name")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col2 := &MysqlColumn{}
+	col2.SetName("database_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col3 := &MysqlColumn{}
+	col3.SetName("database_id")
+	col3.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	col4 := &MysqlColumn{}
+	col4.SetName("table_list")
+	col4.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	col5 := &MysqlColumn{}
+	col5.SetName("account_list")
+	col5.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	col6 := &MysqlColumn{}
+	col6.SetName("created_time")
+	col6.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col7 := &MysqlColumn{}
+	col7.SetName("update_time")
+	col7.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col8 := &MysqlColumn{}
+	col8.SetName("owner")
+	col8.SetColumnType(defines.MYSQL_TYPE_LONG)
+	col9 := &MysqlColumn{}
+	col9.SetName("creator")
+	col9.SetColumnType(defines.MYSQL_TYPE_LONG)
+	col10 := &MysqlColumn{}
+	col10.SetName("account_list")
+	col10.SetColumnType(defines.MYSQL_TYPE_TEXT)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+	mrs.AddColumn(col6)
+	mrs.AddColumn(col7)
+	mrs.AddColumn(col8)
+	mrs.AddColumn(col9)
+	mrs.AddColumn(col10)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForSqlForGetSubs(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("sub_account_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONG)
+	col2 := &MysqlColumn{}
+	col2.SetName("sub_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col3 := &MysqlColumn{}
+	col3.SetName("sub_time")
+	col3.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col4 := &MysqlColumn{}
+	col4.SetName("pub_account_name")
+	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col5 := &MysqlColumn{}
+	col5.SetName("pub_name")
+	col5.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col6 := &MysqlColumn{}
+	col6.SetName("pub_database")
+	col6.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col7 := &MysqlColumn{}
+	col7.SetName("pub_tables")
+	col7.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	col8 := &MysqlColumn{}
+	col8.SetName("pub_time")
+	col8.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col9 := &MysqlColumn{}
+	col9.SetName("pub_comment")
+	col9.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col10 := &MysqlColumn{}
+	col10.SetName("status")
+	col10.SetColumnType(defines.MYSQL_TYPE_TINY)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+	mrs.AddColumn(col6)
+	mrs.AddColumn(col7)
+	mrs.AddColumn(col8)
+	mrs.AddColumn(col9)
+	mrs.AddColumn(col10)
 
 	for _, row := range rows {
 		mrs.AddRow(row)

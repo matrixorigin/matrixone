@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -35,13 +36,13 @@ func Test_doCreatePublication(t *testing.T) {
 		er.EXPECT().GetRowCount().Return(uint64(2)).AnyTimes()
 		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("sys", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("normal", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("open", nil).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(1), nil).AnyTimes()
 		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(4)).Return(true, nil).AnyTimes()
 
 		er.EXPECT().GetInt64(gomock.Any(), uint64(1), uint64(0)).Return(int64(1), nil).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(1)).Return("acc1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(2)).Return("normal", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(2)).Return("open", nil).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(1), uint64(3)).Return(uint64(1), nil).AnyTimes()
 		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(1), uint64(4)).Return(true, nil).AnyTimes()
 		return []interface{}{er}
@@ -116,13 +117,13 @@ func Test_doAlterPublication(t *testing.T) {
 		er.EXPECT().GetRowCount().Return(uint64(2)).AnyTimes()
 		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("sys", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("normal", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("open", nil).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(1), nil).AnyTimes()
 		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(4)).Return(true, nil).AnyTimes()
 
 		er.EXPECT().GetInt64(gomock.Any(), uint64(1), uint64(0)).Return(int64(1), nil).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(1)).Return("acc1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(2)).Return("normal", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(2)).Return("open", nil).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(1), uint64(3)).Return(uint64(1), nil).AnyTimes()
 		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(1), uint64(4)).Return(true, nil).AnyTimes()
 		return []interface{}{er}
@@ -188,7 +189,6 @@ func Test_doAlterPublication(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-
 		ses := newSes(nil, ctrl)
 		ses.tenant = tenant
 
@@ -200,11 +200,15 @@ func Test_doAlterPublication(t *testing.T) {
 		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
 		bh.EXPECT().Close().Return().AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-		// begin; commit;
+		// begin; commit; rollback
 		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
 		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
 		// get all accounts
 		bh.EXPECT().Exec(gomock.Any(), getAccountIdNamesSql).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedAccountsResults(ctrl))
@@ -223,9 +227,6 @@ func Test_doAlterPublication(t *testing.T) {
 		// updateMoSubs
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
 		stmts, err := mysql.Parse(ctx, "alter publication pub1  account acc1 database db2 table t2 comment 'this is new comment'", 1)
 		if err != nil {
 			return
@@ -242,13 +243,13 @@ func Test_doDropPublication(t *testing.T) {
 		er.EXPECT().GetRowCount().Return(uint64(2)).AnyTimes()
 		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("sys", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("normal", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("open", nil).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(1), nil).AnyTimes()
 		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(4)).Return(true, nil).AnyTimes()
 
 		er.EXPECT().GetInt64(gomock.Any(), uint64(1), uint64(0)).Return(int64(1), nil).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(1)).Return("acc1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(2)).Return("normal", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(2)).Return("open", nil).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(1), uint64(3)).Return(uint64(1), nil).AnyTimes()
 		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(1), uint64(4)).Return(true, nil).AnyTimes()
 		return []interface{}{er}
@@ -371,235 +372,71 @@ func TestGetSqlForGetDbIdAndType(t *testing.T) {
 	}
 }
 
-//func TestCheckSubscriptionValid(t *testing.T) {
-//	ctrl := gomock.NewController(t)
-//	defer ctrl.Finish()
-//	ses := newTestSession(t, ctrl)
-//	_ = ses.SetGlobalSysVar(context.TODO(), "lower_case_table_names", int64(1))
-//	defer ses.Close()
-//
-//	bh := &backgroundExecTest{}
-//	bh.init()
-//
-//	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-//	defer bhStub.Reset()
-//
-//	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-//	pu.SV.SetDefaultValues()
-//	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-//	ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
-//
-//	rm, _ := NewRoutineManager(ctx)
-//	ses.rm = rm
-//
-//	proc := testutil.NewProcess()
-//	proc.Base.FileService = getGlobalPu().FileService
-//	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
-//		proc: proc,
-//	}
-//	ses.GetTxnCompileCtx().GetProcess().Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
-//
-//	columns := [][]Column{
-//		{
-//			&MysqlColumn{
-//				ColumnImpl: ColumnImpl{
-//					name:       "account_id",
-//					columnType: defines.MYSQL_TYPE_LONGLONG,
-//				},
-//			},
-//			&MysqlColumn{
-//				ColumnImpl: ColumnImpl{
-//					name:       "status",
-//					columnType: defines.MYSQL_TYPE_VARCHAR,
-//				},
-//			},
-//		},
-//		{
-//			&MysqlColumn{
-//				ColumnImpl: ColumnImpl{
-//					name:       "database_name",
-//					columnType: defines.MYSQL_TYPE_VARCHAR,
-//				},
-//			},
-//			&MysqlColumn{
-//				ColumnImpl: ColumnImpl{
-//					name:       "all_account",
-//					columnType: defines.MYSQL_TYPE_BOOL,
-//				},
-//			},
-//			&MysqlColumn{
-//				ColumnImpl: ColumnImpl{
-//					name:       "account_list",
-//					columnType: defines.MYSQL_TYPE_VARCHAR,
-//				},
-//			},
-//		},
-//	}
-//
-//	kases := []struct {
-//		createSql string
-//
-//		accName   string
-//		pubName   string
-//		pubExists bool
-//		accExists bool
-//
-//		subName string
-//
-//		accId     uint32
-//		accStatus string
-//
-//		databaseName string
-//		accountList  string
-//
-//		sqls  []string
-//		datas [][][]interface{}
-//
-//		err bool
-//	}{
-//		{
-//			createSql: "create database sub1 from acc0 publication",
-//			accName:   "acc0",
-//			pubName:   "",
-//			subName:   "sub1",
-//			accId:     1,
-//			err:       true,
-//		},
-//		{
-//			createSql: "create database sub1 from sys publication pub1",
-//			accName:   "sys",
-//			pubName:   "pub1",
-//			subName:   "sub1",
-//			accId:     0,
-//			accStatus: "",
-//			err:       true,
-//		},
-//		{
-//			createSql: "create database sub1 from acc0 publication pub1",
-//			accName:   "acc0",
-//			pubName:   "pub1",
-//			subName:   "sub1",
-//			pubExists: true,
-//			accExists: true,
-//			accId:     1,
-//			accStatus: "",
-//
-//			databaseName: "t1",
-//			accountList:  "all",
-//
-//			sqls: []string{},
-//			err:  false,
-//		},
-//		{
-//			createSql: "create database sub1 from acc0 publication pub1",
-//			accName:   "acc0",
-//			pubName:   "pub1",
-//			subName:   "sub1",
-//			pubExists: true,
-//			accExists: true,
-//			accId:     1,
-//			accStatus: "",
-//
-//			databaseName: "t1",
-//			accountList:  "sys",
-//
-//			sqls: []string{},
-//			err:  false,
-//		},
-//		{
-//			createSql: "create database sub1 from acc0 publication pub1",
-//			accName:   "acc0",
-//			pubName:   "pub1",
-//			subName:   "sub1",
-//			pubExists: true,
-//			accExists: false,
-//			accId:     1,
-//			accStatus: "",
-//
-//			databaseName: "t1",
-//			accountList:  "sys",
-//
-//			sqls: []string{},
-//			err:  true,
-//		},
-//		{
-//			createSql: "create database sub1 from acc0 publication pub1",
-//			accName:   "acc0",
-//			pubName:   "pub1",
-//			subName:   "sub1",
-//			pubExists: true,
-//			accExists: true,
-//			accId:     1,
-//			accStatus: tree.AccountStatusSuspend.String(),
-//
-//			databaseName: "t1",
-//			accountList:  "sys",
-//
-//			sqls: []string{},
-//			err:  true,
-//		},
-//		{
-//			createSql: "create database sub1 from acc0 publication pub1",
-//			accName:   "acc0",
-//			pubName:   "pub1",
-//			subName:   "sub1",
-//			pubExists: false,
-//			accExists: true,
-//			accId:     1,
-//			accStatus: tree.AccountStatusSuspend.String(),
-//
-//			databaseName: "t1",
-//			accountList:  "sys",
-//
-//			sqls: []string{},
-//			err:  true,
-//		},
-//	}
-//
-//	initData := func(idx int) {
-//		sql1, _ := getSqlForAccountIdAndStatus(ctx, kases[idx].accName, true)
-//		sql2, _ := getSqlForPubInfoForSub(ctx, kases[idx].pubName, true)
-//		kases[idx].sqls = []string{
-//			sql1, sql2,
-//		}
-//		kases[idx].datas = [][][]interface{}{
-//			{{kases[idx].accId, kases[idx].accStatus}},
-//			{{kases[idx].databaseName, kases[idx].accountList}},
-//		}
-//
-//		if !kases[idx].accExists {
-//			kases[idx].datas[0] = nil
-//		}
-//		if !kases[idx].pubExists {
-//			kases[idx].datas[1] = nil
-//		}
-//	}
-//
-//	for idx := range kases {
-//		initData(idx)
-//
-//		bh := &backgroundExecTest{}
-//		bh.init()
-//		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-//
-//		bh.sql2result["begin;"] = nil
-//		bh.sql2result["commit;"] = nil
-//		bh.sql2result["rollback;"] = nil
-//		for i := range kases[idx].sqls {
-//			bh.sql2result[kases[idx].sqls[i]] = &MysqlResultSet{
-//				Data:    kases[idx].datas[i],
-//				Columns: columns[i],
-//			}
-//		}
-//
-//		_, err := checkSubscriptionValid(ctx, ses, kases[idx].createSql)
-//		if kases[idx].err {
-//			require.Error(t, err)
-//		} else {
-//			require.NoError(t, err)
-//		}
-//
-//		bhStub.Reset()
-//	}
-//
-//}
+func TestCheckSubscriptionValidCommon(t *testing.T) {
+	convey.Convey("check subscription success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tenant := &TenantInfo{
+			Tenant:        "acc1",
+			User:          "user1",
+			DefaultRole:   accountAdminRoleName,
+			TenantID:      1,
+			UserID:        1,
+			DefaultRoleID: accountAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setGlobalPu(pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, 1, 1, accountAdminRoleID)
+
+		mockedSubInfoResults := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("open", nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		mockedPubInfoResults := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("pub1", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("db1", nil).AnyTimes()
+			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(2)).Return(uint64(0), nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return(pubsub.TableAll, nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return(pubsub.AccountAll, nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("", nil).AnyTimes()
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(6)).Return(true, nil).AnyTimes()
+			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(7)).Return(uint64(0), nil).AnyTimes()
+			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(8)).Return(uint64(0), nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(9)).Return("", nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		// begin; commit; rollback
+		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
+		// getAccountIdAndStatus
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedSubInfoResults(ctrl))
+		// get pub info
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedPubInfoResults(ctrl))
+
+		_, err := checkSubscriptionValidCommon(ctx, ses, "sub1", "sys", "pub1")
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
