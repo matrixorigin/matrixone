@@ -268,7 +268,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 		subInfo.PubTables = tablesStr
 		subInfo.PubComment = comment
 		if _, ok := subAccounts[subAccId]; !ok {
-			// if it's recreated but not authed, update status -> normal
+			// if it's recreated but not authed, update status -> not authorized
 			subInfo.Status = pubsub.SubStatusNotAuthorized
 		} else {
 			// if it's recreated and authed, update status -> normal

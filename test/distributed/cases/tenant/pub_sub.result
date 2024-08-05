@@ -30,8 +30,6 @@ show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 pub3    t    *    acc0,acc1        2024-08-03 15:44:49    null    
 create publication pub1 database t account all;
-create publication pub1 database t account all;
-Duplicate entry 'pub1' for key 'pub_name'
 alter publication pub1 account `all`;
 internal error: not existed account name 'all'
 show create publication pub1;

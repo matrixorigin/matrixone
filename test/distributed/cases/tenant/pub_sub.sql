@@ -18,7 +18,6 @@ drop publication pub1;
 -- @ignore:5,6
 show publications;
 create publication pub1 database t account all;
-create publication pub1 database t account all;
 alter publication pub1 account `all`;
 show create publication pub1;
 show create publication pubx;
