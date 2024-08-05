@@ -110,6 +110,7 @@ const (
 
 	Sample
 	ProductL2
+	Mock
 )
 
 type Operator interface {
