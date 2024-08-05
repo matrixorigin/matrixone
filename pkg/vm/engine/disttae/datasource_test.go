@@ -115,7 +115,7 @@ func TestTombstoneData1(t *testing.T) {
 	require.Equal(t, left, rowsOffset)
 
 	// case 2: target is blk1_3 and deleted rows is [5]
-	// expect: left is [0, 1, 2, 3], deleted rows is [5]. no rows are deleted
+	// expect: left is [], deleted rows is [5]. no rows are deleted
 	deleted := nulls.NewWithSize(0)
 	deleted.Add(5)
 	left = tombstones1.ApplyInMemTombstones(
@@ -127,7 +127,7 @@ func TestTombstoneData1(t *testing.T) {
 	require.True(t, deleted.Contains(5))
 	require.True(t, deleted.Count() == 1)
 
-	// case 1: target is blk2_0 and rowsOffset is [2, 3, 4]
+	// case 3: target is blk2_0 and rowsOffset is [2, 3, 4]
 	// expect: left is [4]. [2, 3] are deleted
 	target = types.NewBlockidWithObjectID(obj2, 0)
 	rowsOffset = []int64{2, 3, 4}
@@ -137,6 +137,23 @@ func TestTombstoneData1(t *testing.T) {
 		nil,
 	)
 	require.Equal(t, []int64{4}, left)
+
+	// case 4: target is blk1_1 and deleted rows is [4]
+	// expect: left is [], deleted rows is [0,1,2,4].
+	target = types.NewBlockidWithObjectID(obj1, 1)
+	deleted = nulls.NewWithSize(0)
+	deleted.Add(4)
+	left = tombstones1.ApplyInMemTombstones(
+		*target,
+		nil,
+		deleted,
+	)
+	require.Equal(t, 0, len(left))
+	require.True(t, deleted.Contains(0))
+	require.True(t, deleted.Contains(1))
+	require.True(t, deleted.Contains(2))
+	require.True(t, deleted.Contains(4))
+	require.Equal(t, 4, deleted.Count())
 }
 
 func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
