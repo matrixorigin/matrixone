@@ -55,9 +55,9 @@ type nodes[V any] []*node[V]
 
 // BufferConfig keep static config.
 type BufferConfig struct {
-	// goScheduleCnt how many ops will trigger runtime.Gosched.
+	// goScheduleThreshold how many ops will trigger runtime.Gosched.
 	// zero, means each time try-op will call runtime.Gosched
-	goScheduleCnt uint64
+	goScheduleThreshold uint64
 }
 
 // RingBuffer is a MPMC buffer that achieves threadsafety with CAS operations
@@ -141,7 +141,7 @@ L:
 		}
 
 		count++
-		if count >= rb.goScheduleCnt {
+		if count >= rb.goScheduleThreshold {
 			count = 0
 			runtime.Gosched() // free up the cpu before the next iteration
 		}
@@ -224,7 +224,7 @@ L:
 		}
 
 		count++
-		if count >= rb.goScheduleCnt {
+		if count >= rb.goScheduleThreshold {
 			count = 0
 			runtime.Gosched() // free up the cpu before the next iteration
 		}
@@ -262,7 +262,7 @@ func (rb *RingBuffer[V]) IsDisposed() bool {
 // with the specified size.
 func NewRingBuffer[V any](size uint64, options ...BufferOption) *RingBuffer[V] {
 	rb := &RingBuffer[V]{
-		BufferConfig: BufferConfig{goScheduleCnt: 1e3},
+		BufferConfig: BufferConfig{goScheduleThreshold: 1e3},
 	}
 	for _, opt := range options {
 		opt.apply(&rb.BufferConfig)
@@ -277,8 +277,8 @@ func (o BufferOption) apply(cfg *BufferConfig) {
 	o(cfg)
 }
 
-func WithScheduleCount(cnt uint64) BufferOption {
+func WithGoScheduleThreshold(cnt uint64) BufferOption {
 	return func(cfg *BufferConfig) {
-		cfg.goScheduleCnt = cnt
+		cfg.goScheduleThreshold = cnt
 	}
 }

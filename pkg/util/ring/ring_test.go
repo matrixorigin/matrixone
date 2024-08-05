@@ -418,7 +418,7 @@ func TestRingReset(t *testing.T) {
 	assert.NoError(t, rb.Put(1))
 }
 
-// BenchmarkFullOffer base benchmark for WithScheduleCount
+// BenchmarkFullOffer base benchmark for WithGoScheduleThreshold
 // goos: darwin
 // goarch: amd64
 // pkg: github.com/matrixorigin/matrixone/pkg/util/ring
