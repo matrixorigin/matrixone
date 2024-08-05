@@ -1588,6 +1588,7 @@ func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
 		inMigration: true,
 		ses:         ses,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: "use `" + d.db + "`"})
 }
 
@@ -1620,6 +1621,7 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 		ses:               ses,
 		executeParamTypes: p.paramTypes,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: p.sql})
 }
 
