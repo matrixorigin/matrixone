@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memorycache
+package fscache
 
-type CacheData interface {
+type Data interface {
 	Bytes() []byte
-	Slice(length int) CacheData
+	Slice(length int) Data
 	Release()
 }

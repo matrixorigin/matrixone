@@ -53,6 +53,9 @@ type tracerProviderConfig struct {
 
 	// disableSpan
 	disableSpan bool
+	// enableSpanProfile, do profile while span been record.
+	// work in MOSpan.doProfile()
+	enableSpanProfile bool
 	// disableError
 	disableError bool
 	// debugMode used in Tracer.Debug
@@ -174,7 +177,7 @@ func WithLongQueryTime(secs float64) tracerProviderOption {
 	})
 }
 
-func WithLongSpanTime(d time.Duration) tracerProviderOption {
+func WithLongSpanTime(d time.Duration) TracerProviderOption {
 	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.longSpanTime = d
 	})
@@ -183,6 +186,12 @@ func WithLongSpanTime(d time.Duration) tracerProviderOption {
 func WithSpanDisable(disable bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.disableSpan = disable
+	}
+}
+
+func EnableSpanProfile(enable bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.enableSpanProfile = enable
 	}
 }
 

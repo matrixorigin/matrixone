@@ -37,7 +37,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
 
 	// value
 	valVecs []*vector.Vector
@@ -114,7 +113,6 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := fill.ctr
 	if ctr != nil {
-		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExes()
 

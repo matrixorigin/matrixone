@@ -384,19 +384,20 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 
 		location := obj.Location()
 		objName := location.Name().String()
-
 		if name == AllColumns && obj.StatsValid() {
 			// no need to load object meta
 			for _, col := range needCols {
 				infoList = append(infoList, &plan.MetadataScanInfo{
-					ColName:    col.Name,
-					IsHidden:   col.Hidden,
-					ObjectName: objName,
-					ObjLoc:     location,
-					CreateTs:   createTs,
-					DeleteTs:   deleteTs,
-					RowCnt:     int64(obj.Rows()),
-					ZoneMap:    objectio.EmptyZm[:],
+					ColName:      col.Name,
+					IsHidden:     col.Hidden,
+					ObjectName:   objName,
+					ObjLoc:       location,
+					CreateTs:     createTs,
+					DeleteTs:     deleteTs,
+					RowCnt:       int64(obj.Rows()),
+					ZoneMap:      objectio.EmptyZm[:],
+					CompressSize: int64(obj.ObjectStats.Size()),
+					OriginSize:   int64(obj.ObjectStats.OriginSize()),
 				})
 			}
 			return nil
@@ -2281,11 +2282,16 @@ func (tbl *txnTable) transferDeletes(
 			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			beTransfered := 0
 			toTransfer := 0
+			notFound := false
 			for i, rowid := range rowids {
 				blkid, _ := rowid.Decode()
 				if _, ok := deleteObjs[*objectio.ShortName(&blkid)]; ok {
 					toTransfer++
-					newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
+					f := genPkString
+					if notFound {
+						f = nil
+					}
+					newId, ok, err := tbl.readNewRowid(pkVec, i, blks, f)
 					if err != nil {
 						return err
 					}
@@ -2303,6 +2309,7 @@ func (tbl *txnTable) transferDeletes(
 						rowids[i] = newId
 						beTransfered++
 					} else {
+						notFound = true
 						logutil.Info("transfer deletes rowid failed",
 							zap.String("oldrowid", rowids[i].ShortStringEx()),
 							zap.String("pk", genPkString(pkVec.GetBytesAt(i))))
@@ -2333,7 +2340,7 @@ func (tbl *txnTable) transferDeletes(
 }
 
 func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
-	blks []objectio.BlockInfo) (types.Rowid, bool, error) {
+	blks []objectio.BlockInfo, genPkStr func([]byte) string) (types.Rowid, bool, error) {
 	var auxIdCnt int32
 	var typ plan.Type
 	var rowid types.Rowid
@@ -2407,6 +2414,19 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 				return rowids[i], true, nil
 			}
 		}
+		if genPkStr != nil && len(blks) == 1 {
+			var idx int
+			rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+			detail := stringifySlice(rowids, func(a any) string {
+				rid := a.(types.Rowid)
+				pk := genPkStr(bat.Vecs[1].GetBytesAt(idx))
+				idx++
+				return fmt.Sprintf("%s:%s", pk, rid.ShortStringEx())
+			})
+			logutil.Error("transfer deletes rowid not found",
+				zap.String("batContent", detail))
+		}
+
 		vec.Free(tbl.proc.Load().Mp())
 		bat.Clean(tbl.proc.Load().Mp())
 	}
@@ -2497,7 +2517,8 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objStats []objectio.Objec
 		}
 		var locStr strings.Builder
 		locations := taskHost.commitEntry.BookingLoc
-		for _, filepath := range locations {
+		blkCnt := types.DecodeInt32(commonUtil.UnsafeStringToBytes(locations[0]))
+		for _, filepath := range locations[blkCnt+1:] {
 			locStr.WriteString(filepath)
 			locStr.WriteString(",")
 		}

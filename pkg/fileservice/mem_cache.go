@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/checks/interval"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -40,7 +41,7 @@ func NewMemCache(
 }
 
 func NewMemoryCache(
-	capacity int64,
+	capacity fscache.CapacityFunc,
 	checkOverlaps bool,
 	callbacks *CacheCallbacks,
 ) *memorycache.Cache {
@@ -50,7 +51,7 @@ func NewMemoryCache(
 		overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
 	}
 
-	postSetFn := func(key CacheKey, value memorycache.CacheData) {
+	postSetFn := func(key CacheKey, value fscache.Data) {
 		if overlapChecker != nil {
 			if err := overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
 				panic(err)
@@ -64,7 +65,7 @@ func NewMemoryCache(
 		}
 	}
 
-	postGetFn := func(key CacheKey, value memorycache.CacheData) {
+	postGetFn := func(key CacheKey, value fscache.Data) {
 		if callbacks != nil {
 			for _, fn := range callbacks.PostGet {
 				fn(key, value)
@@ -72,7 +73,7 @@ func NewMemoryCache(
 		}
 	}
 
-	postEvictFn := func(key CacheKey, value memorycache.CacheData) {
+	postEvictFn := func(key CacheKey, value fscache.Data) {
 		if overlapChecker != nil {
 			if err := overlapChecker.Remove(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
 				panic(err)
@@ -90,7 +91,7 @@ func NewMemoryCache(
 
 var _ IOVectorCache = new(MemCache)
 
-func (m *MemCache) Alloc(n int) memorycache.CacheData {
+func (m *MemCache) Alloc(n int) fscache.Data {
 	return m.cache.Alloc(n)
 }
 
