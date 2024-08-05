@@ -44,8 +44,6 @@ func (c *SQLConverter) Convert(ctx context.Context, obj ie.InternalExecResult) (
 	rowCount := int(obj.RowCount())
 
 	var fields, values string
-	var colNames []string
-
 	for i := 0; i < columnCount; i++ {
 		name, _, _, err := obj.Column(ctx, uint64(i))
 		if err != nil {
@@ -62,7 +60,6 @@ func (c *SQLConverter) Convert(ctx context.Context, obj ie.InternalExecResult) (
 		if i < columnCount-1 {
 			fields += ", "
 		}
-		colNames = append(colNames, name)
 	}
 	for i := 0; i < rowCount; i++ {
 		var rowValues string

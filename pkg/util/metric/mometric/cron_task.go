@@ -218,7 +218,7 @@ func CalculateStorageUsage(
 		}
 
 		for rowIdx := uint64(0); rowIdx < cnt; rowIdx++ {
-			if accountIdx, ok := name2idx[ColumnAccountName]; ok != true {
+			if accountIdx, ok := name2idx[ColumnAccountName]; !ok {
 				account = ""
 			} else {
 				account, err = result.GetString(ctx, rowIdx, accountIdx)
@@ -227,7 +227,7 @@ func CalculateStorageUsage(
 				}
 			}
 
-			if sizeMBIdx, ok := name2idx[ColumnSize]; ok != true {
+			if sizeMBIdx, ok := name2idx[ColumnSize]; !ok {
 				sizeMB = 0.0
 			} else {
 				sizeMB, err = result.GetFloat64(ctx, rowIdx, sizeMBIdx)
@@ -236,7 +236,7 @@ func CalculateStorageUsage(
 				}
 			}
 
-			if snapshotSizeMBIdx, ok := name2idx[ColumnSnapshotSize]; ok != true {
+			if snapshotSizeMBIdx, ok := name2idx[ColumnSnapshotSize]; !ok {
 				snapshotSizeMB = 0.0
 			} else {
 				snapshotSizeMB, err = result.GetFloat64(ctx, rowIdx, snapshotSizeMBIdx)
@@ -348,7 +348,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 
 		for rowIdx := uint64(0); rowIdx < result.RowCount(); rowIdx++ {
 
-			if accountIdx, ok := name2idx[ColumnAccountName]; ok != true {
+			if accountIdx, ok := name2idx[ColumnAccountName]; !ok {
 				account = ""
 			} else {
 				account, err = result.GetString(ctx, rowIdx, accountIdx)
@@ -357,7 +357,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 				}
 			}
 
-			if createdTimeIdx, ok := name2idx[ColumnCreatedTime]; ok != true {
+			if createdTimeIdx, ok := name2idx[ColumnCreatedTime]; !ok {
 				createdTime = ""
 			} else {
 				createdTime, err = result.GetString(ctx, rowIdx, createdTimeIdx)
@@ -387,7 +387,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 				logger.Warn("failed to fetch new account size, not exist.")
 				continue
 			}
-			if sizeMBIdx, ok := name2idx[ColumnSize]; ok != true {
+			if sizeMBIdx, ok := name2idx[ColumnSize]; !ok {
 				sizeMB = 0.0
 			} else {
 				sizeMB, err = result.GetFloat64(ctx, 0, sizeMBIdx)
@@ -397,7 +397,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 				}
 			}
 
-			if snapshotSizeMBIdx, ok := name2idx[ColumnSnapshotSize]; ok != true {
+			if snapshotSizeMBIdx, ok := name2idx[ColumnSnapshotSize]; !ok {
 				snapshotSizeMB = 0.0
 			} else {
 				snapshotSizeMB, err = result.GetFloat64(ctx, 0, snapshotSizeMBIdx)
