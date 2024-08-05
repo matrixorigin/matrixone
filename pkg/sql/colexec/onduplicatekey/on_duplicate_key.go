@@ -42,7 +42,6 @@ func (onDuplicatekey *OnDuplicatekey) OpType() vm.OpType {
 
 func (onDuplicatekey *OnDuplicatekey) Prepare(p *process.Process) error {
 	onDuplicatekey.ctr = &container{}
-	onDuplicatekey.ctr.InitReceiver(p, true)
 	return nil
 }
 
@@ -57,25 +56,22 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 
 	ctr := onDuplicatekey.ctr
 	result := vm.NewCallResult()
-	var err error
 	for {
 		switch ctr.state {
 		case Build:
 			for {
-				msg := ctr.ReceiveFromAllRegs(anal)
-				if msg.Err != nil {
-					result.Status = vm.ExecStop
-					return result, nil
+				result, err := onDuplicatekey.GetChildren(0).Call(proc)
+				if err != nil {
+					return result, err
 				}
 
-				if msg.Batch == nil {
+				if result.Batch == nil {
 					break
 				}
-				bat := msg.Batch
+				bat := result.Batch
 				anal.Input(bat, onDuplicatekey.GetIsFirst())
 				err = resetInsertBatchForOnduplicateKey(proc, bat, onDuplicatekey)
 				if err != nil {
-					bat.Clean(proc.Mp())
 					return result, err
 				}
 
