@@ -1761,7 +1761,7 @@ func execReadSql(ctx context.Context, op client.TxnOperator, sql string, disable
 	service := op.GetWorkspace().(*Transaction).proc.GetService()
 	v, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
-		panic("missing lock service")
+		panic(fmt.Sprintf("missing sql executor in service %q", service))
 	}
 	exec := v.(executor.SQLExecutor)
 	proc := op.GetWorkspace().(*Transaction).proc
