@@ -104,7 +104,7 @@ func (loopAnti *LoopAnti) Free(proc *process.Process, pipelineFailed bool, err e
 	}
 	if loopAnti.ProjectList != nil {
 		anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
-		anal.Alloc(loopAnti.MaxAllocSize)
+		anal.Alloc(loopAnti.ProjectAllocSize)
 		loopAnti.FreeProjection(proc)
 	}
 }

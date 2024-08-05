@@ -28,14 +28,14 @@ type Projection struct {
 	ProjectExecutors []ExpressionExecutor
 	uafs             []func(v, w *vector.Vector) error
 
-	MaxAllocSize int64
+	ProjectAllocSize int64
 }
 
 func (projection *Projection) PrepareProjection(proc *process.Process) (err error) {
 	if len(projection.ProjectList) == 0 {
 		return
 	}
-	projection.MaxAllocSize = 0
+	projection.ProjectAllocSize = 0
 	projection.ProjectExecutors, err = NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
 	if err != nil {
 		return
@@ -79,7 +79,7 @@ func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Pro
 	if err != nil {
 		return nil, err
 	}
-	projection.MaxAllocSize = max(projection.MaxAllocSize, int64(newAlloc))
+	projection.ProjectAllocSize = max(projection.ProjectAllocSize, int64(newAlloc))
 	projection.projectBat.SetRowCount(bat.RowCount())
 	return projection.projectBat, nil
 }

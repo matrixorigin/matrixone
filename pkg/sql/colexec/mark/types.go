@@ -206,7 +206,7 @@ func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	}
 
 	if markJoin.ProjectList != nil {
-		allocSize += markJoin.MaxAllocSize
+		allocSize += markJoin.ProjectAllocSize
 		markJoin.FreeProjection(proc)
 	}
 	anal.Alloc(allocSize)

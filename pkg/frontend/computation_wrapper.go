@@ -443,8 +443,8 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
-	retCompile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
-		plan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
+	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
+		plan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), stmt)
 		if err != nil {
 			return nil, err
 		}

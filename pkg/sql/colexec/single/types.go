@@ -125,7 +125,7 @@ func (singleJoin *SingleJoin) Free(proc *process.Process, pipelineFailed bool, e
 		singleJoin.ctr = nil
 	}
 	if singleJoin.ProjectList != nil {
-		allocSize += singleJoin.MaxAllocSize
+		allocSize += singleJoin.ProjectAllocSize
 		singleJoin.FreeProjection(proc)
 	}
 	anal.Alloc(allocSize)

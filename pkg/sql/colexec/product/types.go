@@ -95,7 +95,7 @@ func (product *Product) Free(proc *process.Process, pipelineFailed bool, err err
 	}
 	if product.ProjectList != nil {
 		anal := proc.GetAnalyze(product.GetIdx(), product.GetParallelIdx(), product.GetParallelMajor())
-		anal.Alloc(product.MaxAllocSize)
+		anal.Alloc(product.ProjectAllocSize)
 		product.FreeProjection(proc)
 	}
 }

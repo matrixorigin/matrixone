@@ -105,7 +105,7 @@ func (loopSemi *LoopSemi) Free(proc *process.Process, pipelineFailed bool, err e
 
 	if loopSemi.ProjectList != nil {
 		anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
-		anal.Alloc(loopSemi.MaxAllocSize)
+		anal.Alloc(loopSemi.ProjectAllocSize)
 		loopSemi.FreeProjection(proc)
 	}
 }

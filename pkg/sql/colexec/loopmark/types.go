@@ -97,7 +97,7 @@ func (loopMark *LoopMark) Free(proc *process.Process, pipelineFailed bool, err e
 	}
 	if loopMark.ProjectList != nil {
 		anal := proc.GetAnalyze(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor())
-		anal.Alloc(loopMark.MaxAllocSize)
+		anal.Alloc(loopMark.ProjectAllocSize)
 		loopMark.FreeProjection(proc)
 	}
 }

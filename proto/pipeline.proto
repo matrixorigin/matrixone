@@ -487,7 +487,6 @@ message NodeInfo {
   string id = 2;
   string addr = 3;
   string payload = 4;
-  uint32 type = 5;
 }
 
 message ProcessLimitation {

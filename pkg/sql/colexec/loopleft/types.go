@@ -99,7 +99,7 @@ func (loopLeft *LoopLeft) Free(proc *process.Process, pipelineFailed bool, err e
 
 	if loopLeft.ProjectList != nil {
 		anal := proc.GetAnalyze(loopLeft.GetIdx(), loopLeft.GetParallelIdx(), loopLeft.GetParallelMajor())
-		anal.Alloc(loopLeft.MaxAllocSize)
+		anal.Alloc(loopLeft.ProjectAllocSize)
 		loopLeft.FreeProjection(proc)
 	}
 }

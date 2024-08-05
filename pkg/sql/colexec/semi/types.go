@@ -129,7 +129,7 @@ func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		semiJoin.ctr = nil
 	}
 	if semiJoin.ProjectList != nil {
-		allocSize += semiJoin.MaxAllocSize
+		allocSize += semiJoin.ProjectAllocSize
 		semiJoin.FreeProjection(proc)
 	}
 	anal.Alloc(allocSize)

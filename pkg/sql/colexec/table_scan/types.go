@@ -17,7 +17,6 @@ package table_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -29,7 +28,6 @@ var _ vm.Operator = new(TableScan)
 
 type container struct {
 	maxAllocSize int
-	orderBy      []*plan.OrderBySpec
 	buf          *batch.Batch
 	msgReceiver  *message.MessageReceiver
 }
@@ -97,7 +95,7 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	}
 
 	if tableScan.ProjectList != nil {
-		allocSize += tableScan.MaxAllocSize
+		allocSize += tableScan.ProjectAllocSize
 		tableScan.FreeProjection(proc)
 	}
 	anal.Alloc(allocSize)

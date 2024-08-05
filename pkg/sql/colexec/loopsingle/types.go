@@ -97,7 +97,7 @@ func (loopSingle *LoopSingle) Free(proc *process.Process, pipelineFailed bool, e
 	}
 	if loopSingle.ProjectList != nil {
 		anal := proc.GetAnalyze(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor())
-		anal.Alloc(loopSingle.MaxAllocSize)
+		anal.Alloc(loopSingle.ProjectAllocSize)
 		loopSingle.FreeProjection(proc)
 	}
 }
