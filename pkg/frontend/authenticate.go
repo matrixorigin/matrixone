@@ -1141,8 +1141,6 @@ const (
 	//privilege verification
 	checkTenantFormat = `select account_id,account_name,status,version,suspended_time from mo_catalog.mo_account where account_name = "%s" order by account_id;`
 
-	getTenantNameForMat = `select account_name from mo_catalog.mo_account where account_id = %d;`
-
 	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s" order by account_id;`
 
 	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s",suspended_time = "%s" where account_name = "%s" order by account_id;`
@@ -1458,11 +1456,8 @@ const (
 
 	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
 
-	getPubInfoFormat            = `select account_list,comment,database_name,database_id from mo_catalog.mo_pubs where pub_name = '%s';`
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
-	getPubInfoForSubFormat      = `select database_name,account_list from mo_catalog.mo_pubs where pub_name = "%s";`
 	getDbPubCountFormat         = `select count(1) from mo_catalog.mo_pubs where database_name = '%s';`
-	deletePubFromDatabaseFormat = `delete from mo_catalog.mo_pubs where database_name = '%s';`
 
 	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
 )
@@ -1509,13 +1504,6 @@ func getSqlForAccountIdAndStatus(ctx context.Context, accName string, check bool
 		return "", moerr.NewInternalError(ctx, fmt.Sprintf("account name %s is invalid", accName))
 	}
 	return fmt.Sprintf(getAccountIdAndStatusFormat, accName), nil
-}
-
-func getSqlForPubInfoForSub(ctx context.Context, pubName string, check bool) (string, error) {
-	if check && nameIsInvalid(pubName) {
-		return "", moerr.NewInternalError(ctx, fmt.Sprintf("pub name %s is invalid", pubName))
-	}
-	return fmt.Sprintf(getPubInfoForSubFormat, pubName), nil
 }
 
 func getSqlForCheckTenant(ctx context.Context, tenant string) (string, error) {
@@ -1575,10 +1563,6 @@ func getsqlForUpdateStageStatus(stageName, status string) string {
 
 func getsqlForUpdateStageComment(stageName, comment string) string {
 	return fmt.Sprintf(updateStageCommentFormat, comment, stageName)
-}
-
-func getSqlForGetAccountName(tenantId uint32) string {
-	return fmt.Sprintf(getTenantNameForMat, tenantId)
 }
 
 func getSqlForUpdateCommentsOfAccount(ctx context.Context, comment, account string) (string, error) {
@@ -1825,30 +1809,12 @@ func getSqlForgetUserRolesExpectPublicRole(pRoleId int, userId uint32) string {
 	return fmt.Sprintf(getUserRolesExpectPublicRoleFormat, pRoleId, userId)
 }
 
-func getSqlForGetPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
-	if checkNameValid {
-		err := inputNameIsInvalid(ctx, pubName)
-		if err != nil {
-			return "", err
-		}
-	}
-	return fmt.Sprintf(getPubInfoFormat, pubName), nil
-}
-
 func getSqlForDbPubCount(ctx context.Context, dbName string) (string, error) {
 	err := inputNameIsInvalid(ctx, dbName)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf(getDbPubCountFormat, dbName), nil
-}
-
-func getSqlForDeletePubFromDatabase(ctx context.Context, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(deletePubFromDatabaseFormat, dbName), nil
 }
 
 func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) {

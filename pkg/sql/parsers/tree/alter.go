@@ -990,7 +990,7 @@ func (node *AlterPublication) Format(ctx *FmtCtx) {
 	}
 	if node.DbName != "" {
 		ctx.WriteString(" database ")
-		ctx.WriteString(fmt.Sprintf("%s", node.DbName))
+		ctx.WriteString(node.DbName)
 	}
 	if len(node.Table) > 0 {
 		ctx.WriteString(" table ")

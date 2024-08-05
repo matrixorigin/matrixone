@@ -1147,7 +1147,7 @@ func genPubTablesStr(ctx context.Context, bh BackgroundExec, dbName string, tabl
 		return
 	}
 
-	var tablesNames []string
+	tablesNames := make([]string, 0, len(table))
 	for _, tableName := range table {
 		tblName := string(tableName.ObjectName)
 		if !tablesInDb[tblName] {
