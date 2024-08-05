@@ -286,7 +286,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	}()
 	if defChanged {
 		var pn *plan2.Plan
-		pn, e = c.buildPlanFunc()
+		pn, e = c.buildPlanFunc(topContext)
 		if e != nil {
 			return nil, e
 		}
