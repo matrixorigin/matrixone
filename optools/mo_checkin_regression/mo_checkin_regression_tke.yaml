@@ -7,7 +7,7 @@ spec:
     proxy:
     exportToPrometheus: true
     nodeSelector:
-      tke.matrixorigin.io/mo-checkin-regression-proxy: true
+      tke.matrixorigin.io/mo-checkin-regression-proxy: "true"
     overlay:
       securityContext:
         sysctls:
