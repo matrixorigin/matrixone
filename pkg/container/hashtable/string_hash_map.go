@@ -17,6 +17,8 @@ package hashtable
 import (
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
@@ -37,12 +39,10 @@ type StringHashMap struct {
 	blockCellCnt    uint64
 	blockMaxElemCnt uint64
 	cellCntMask     uint64
-	//confCnt     uint64
-
-	cellCnt uint64
-	elemCnt uint64
-	rawData [][]byte
-	cells   [][]StringHashMapCell
+	cellCnt         uint64
+	elemCnt         uint64
+	rawData         [][]byte
+	cells           [][]StringHashMapCell
 }
 
 var (
@@ -78,6 +78,79 @@ func (ht *StringHashMap) Init(m *mpool.MPool) (err error) {
 		ht.cells[0] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData[0][0])), ht.blockCellCnt)
 	}
 	return
+}
+
+func (ht *StringHashMap) marshal() ([]byte, error) {
+	bs := make([]byte, 0, ht.Size())
+	bs = append(bs, types.EncodeUint64(&ht.blockCellCnt)...)
+	bs = append(bs, types.EncodeUint64(&ht.blockMaxElemCnt)...)
+	bs = append(bs, types.EncodeUint64(&ht.cellCntMask)...)
+	bs = append(bs, types.EncodeUint64(&ht.cellCnt)...)
+	bs = append(bs, types.EncodeUint64(&ht.elemCnt)...)
+
+	rawdataLen := uint64(len(ht.rawData))
+	bs = append(bs, types.EncodeUint64(&rawdataLen)...)
+	for i := range ht.rawData {
+		len1 := uint64(len(ht.rawData[i]))
+		bs = append(bs, types.EncodeUint64(&len1)...)
+		bs = append(bs, ht.rawData[i]...)
+	}
+
+	cellsLen := uint64(len(ht.cells))
+	bs = append(bs, types.EncodeUint64(&cellsLen)...)
+	for i := range ht.cells {
+		len1 := uint64(len(ht.cells[i]))
+		bs = append(bs, types.EncodeUint64(&len1)...)
+		for j := range ht.cells[i] {
+			cell := ht.cells[i][j]
+			bs = append(bs, types.EncodeUint64(&cell.HashState[0])...)
+			bs = append(bs, types.EncodeUint64(&cell.HashState[1])...)
+			bs = append(bs, types.EncodeUint64(&cell.HashState[2])...)
+			bs = append(bs, types.EncodeUint64(&cell.Mapped)...)
+		}
+	}
+	return bs, nil
+}
+
+func (ht *StringHashMap) unmarshal(data []byte) error {
+	ht.blockCellCnt = types.DecodeUint64(data)
+	data = data[8:]
+	ht.blockMaxElemCnt = types.DecodeUint64(data)
+	data = data[8:]
+	ht.cellCntMask = types.DecodeUint64(data)
+	data = data[8:]
+	ht.cellCnt = types.DecodeUint64(data)
+	data = data[8:]
+	ht.elemCnt = types.DecodeUint64(data)
+	data = data[8:]
+
+	rawdataLen := types.DecodeUint64(data)
+	data = data[8:]
+	ht.rawData = make([][]byte, rawdataLen)
+	for i := range ht.rawData {
+		len1 := types.DecodeUint64(data)
+		data = data[8:]
+		ht.rawData[i] = make([]byte, len1)
+		copy(ht.rawData[i], data)
+		data = data[len1:]
+	}
+
+	cellsLen := types.DecodeUint64(data)
+	data = data[8:]
+	ht.cells = make([][]StringHashMapCell, cellsLen)
+	for i := range ht.cells {
+		len1 := types.DecodeUint64(data)
+		data = data[8:]
+		ht.cells[i] = make([]StringHashMapCell, len1)
+		for j := range ht.cells[i] {
+			ht.cells[i][j].HashState[0] = types.DecodeUint64(data)
+			ht.cells[i][j].HashState[0] = types.DecodeUint64(data[8:])
+			ht.cells[i][j].HashState[0] = types.DecodeUint64(data[16:])
+			ht.cells[i][j].HashState[0] = types.DecodeUint64(data[24:])
+			data = data[:32]
+		}
+	}
+	return nil
 }
 
 func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64, m *mpool.MPool) error {
@@ -126,40 +199,6 @@ func (ht *StringHashMap) FindStringBatch(states [][3]uint64, keys [][]byte, valu
 	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
-		cell := ht.findCell(&states[i])
-		values[i] = cell.Mapped
-	}
-}
-
-func (ht *StringHashMap) FindString24Batch(states [][3]uint64, keys [][3]uint64, values []uint64) {
-	Int192BatchGenHashStates(&keys[0], &states[0], len(keys))
-
-	for i := range keys {
-		cell := ht.findCell(&states[i])
-		values[i] = cell.Mapped
-	}
-}
-
-func (ht *StringHashMap) FindString32Batch(states [][3]uint64, keys [][4]uint64, values []uint64) {
-	Int256BatchGenHashStates(&keys[0], &states[0], len(keys))
-
-	for i := range keys {
-		cell := ht.findCell(&states[i])
-		values[i] = cell.Mapped
-	}
-}
-
-func (ht *StringHashMap) FindString40Batch(states [][3]uint64, keys [][5]uint64, values []uint64) {
-	Int320BatchGenHashStates(&keys[0], &states[0], len(keys))
-
-	for i := range keys {
-		cell := ht.findCell(&states[i])
-		values[i] = cell.Mapped
-	}
-}
-
-func (ht *StringHashMap) FindHashStateBatch(states [][3]uint64, values []uint64) {
-	for i := range states {
 		cell := ht.findCell(&states[i])
 		values[i] = cell.Mapped
 	}
@@ -304,12 +343,13 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64, m *mpool.MPool) error {
 }
 
 func (ht *StringHashMap) Size() int64 {
-	// 33 is the origin size of StringHashMaps
-	ret := int64(33)
+	// 88 is the origin size of StringHashMaps
+	ret := int64(88)
 	for i := range ht.rawData {
+		ret += 24
 		ret += int64(len(ht.rawData[i]))
-		// 32 is the len of ht.cells[i]
-		ret += 32
+		ret += 24
+		ret += int64(32 * len(ht.cells[i]))
 	}
 	return ret
 }
