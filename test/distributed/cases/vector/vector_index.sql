@@ -105,6 +105,7 @@ create index idx02 using ivfflat on vector_index_08(d) lists=3 op_type "vector_l
 show create table vector_index_08;
 insert into vector_index_08(d) values ("[2.36,5.021,9.222]");
 insert into vector_index_08(d) values ("[8.555,2.11,7.22]");
+alter table vector_index_08 alter reindex idx02 ivfflat lists=3;
 select * from vector_index_08 where a>9774 order by  L2_DISTANCE(d,"[1.02,0.2,3.2]") desc limit 2;
 --explain select * from vector_index_08 where a>1 order by  L2_DISTANCE(c,"[1.02,0.2,3.2]") desc;
 
