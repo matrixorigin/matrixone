@@ -581,6 +581,7 @@ type TombstoneType uint8
 const (
 	InvalidTombstoneData TombstoneType = iota
 	TombstoneWithDeltaLoc
+	TombstoneData
 )
 
 type Tombstoner interface {
@@ -594,16 +595,23 @@ type Tombstoner interface {
 	HasTombstones() bool
 
 	MarshalBinaryWithBuffer(w *bytes.Buffer) error
-
 	UnmarshalBinary(buf []byte) error
 
 	PrefetchTombstones(srvId string, fs fileservice.FileService, bid []objectio.Blockid)
+
+	// it applies the block related in-memory tombstones to the rowsOffset
+	// `bid` is the block id
+	// `rowsOffset` is the input rows offset to apply
+	// `deleted` is the rows that are deleted from this apply
+	// `left` is the rows that are left after this apply
 	ApplyInMemTombstones(
 		bid types.Blockid,
 		rowsOffset []int64,
 		deleted *nulls.Nulls,
 	) (left []int64)
 
+	// it applies the block related tombstones from the persisted tombstone file
+	// to the rowsOffset
 	ApplyPersistedTombstones(
 		ctx context.Context,
 		bid types.Blockid,
@@ -616,7 +624,15 @@ type Tombstoner interface {
 			rowsOffset []int64,
 			deleted *nulls.Nulls) (left []int64, err error),
 	) (left []int64, err error)
+
+	// a.merge(b) => a = a U b
+	// a and b must be sorted ascendingly
+	// a.Type() must be equal to b.Type()
 	Merge(other Tombstoner) error
+
+	// in-memory tombstones must be sorted ascendingly
+	// it should be called after all in-memory tombstones are added
+	SortInMemory()
 }
 
 type RelDataType uint8

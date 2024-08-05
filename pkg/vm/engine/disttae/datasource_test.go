@@ -25,20 +25,44 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
+func TestTombstoneData_MarshalAndUnmarshal(t *testing.T) {
+	location1 := objectio.NewRandomLocation(1, 1111)
+	location2 := objectio.NewRandomLocation(2, 2222)
+
+	obj1 := objectio.NewObjectid()
+	obj2 := objectio.NewObjectid()
+	blk1_0 := objectio.NewBlockidWithObjectID(obj1, 0)
+	blk1_1 := objectio.NewBlockidWithObjectID(obj1, 1)
+	blk2_0 := objectio.NewBlockidWithObjectID(obj2, 0)
+
+	rowids := make([]types.Rowid, 0)
+	for i := 0; i < 10; i++ {
+		rowid := types.NewRowid(blk1_0, uint32(i))
+		rowids = append(rowids, *rowid)
+		rowid = types.NewRowid(blk1_1, uint32(i))
+		rowids = append(rowids, *rowid)
+		rowid = types.NewRowid(blk2_0, uint32(i))
+		rowids = append(rowids, *rowid)
+	}
+	tombstones := NewEmptyTombstoneData()
+	err := tombstones.AppendInMemory(rowids...)
+	require.Nil(t, err)
+	err = tombstones.AppendFiles(location1, location2)
+	require.Nil(t, err)
+	t.Log(tombstones.String())
+}
+
 func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 
-	objID := types.NewObjectid()
-	objName := objectio.BuildObjectNameWithObjectID(objID)
-
-	extent := objectio.NewExtent(0x1f, 0x2f, 0x3f, 0x4f)
-	delLoc := objectio.BuildLocation(objName, extent, 0, 0)
-	metaLoc := objectio.ObjectLocation(delLoc)
+	location := objectio.NewRandomLocation(0, 0)
+	objID := location.ObjectId()
+	metaLoc := objectio.ObjectLocation(location)
 	cts := types.BuildTSForTest(1, 1)
 
 	relData := NewEmptyBlockListRelationData()
 	blkNum := 10
 	for i := 0; i < blkNum; i++ {
-		blkID := types.NewBlockidWithObjectID(objID, uint16(blkNum))
+		blkID := types.NewBlockidWithObjectID(&objID, uint16(blkNum))
 		blkInfo := objectio.BlockInfo{
 			BlockID:      *blkID,
 			EntryState:   true,

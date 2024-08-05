@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"fmt"
+	"math/rand"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -47,6 +48,14 @@ func NewExtent(alg uint8, offset, length, originSize uint32) Extent {
 	copy(extent[extentLengthOff:extentOriginOff], types.EncodeUint32(&length))
 	copy(extent[extentOriginOff:ExtentSize], types.EncodeUint32(&originSize))
 	return extent[:]
+}
+
+func NewRandomExtent() Extent {
+	algo := uint8(rand.Uint32() % 2)
+	offset := rand.Uint32()
+	length := rand.Uint32()
+	originSize := length + rand.Uint32()
+	return NewExtent(algo, offset, length, originSize)
 }
 
 func (ex Extent) Alg() uint8 {
