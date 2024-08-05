@@ -4,7 +4,7 @@ metadata:
   name: mo-checkin-regression
   namespace: nsformocheckin
 spec:
-    proxy:
+  proxy:
     exportToPrometheus: true
     nodeSelector:
       tke.matrixorigin.io/mo-checkin-regression-proxy: "true"
