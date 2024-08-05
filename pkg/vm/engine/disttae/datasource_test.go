@@ -126,6 +126,17 @@ func TestTombstoneData1(t *testing.T) {
 	require.Equal(t, 0, len(left))
 	require.True(t, deleted.Contains(5))
 	require.True(t, deleted.Count() == 1)
+
+	// case 1: target is blk2_0 and rowsOffset is [2, 3, 4]
+	// expect: left is [4]. [2, 3] are deleted
+	target = types.NewBlockidWithObjectID(obj2, 0)
+	rowsOffset = []int64{2, 3, 4}
+	left = tombstones1.ApplyInMemTombstones(
+		*target,
+		rowsOffset,
+		nil,
+	)
+	require.Equal(t, []int64{4}, left)
 }
 
 func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
