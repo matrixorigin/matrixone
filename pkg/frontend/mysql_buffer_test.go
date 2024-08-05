@@ -43,9 +43,6 @@ func hasData(conn net.Conn) (bool, error) {
 
 func generateRandomBytes(n int) []byte {
 	data := make([]byte, n)
-	for i := 0; i < n; i++ {
-		data[i] = byte(rand.Intn(100) + 1)
-	}
 	return data
 }
 
@@ -254,7 +251,6 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 		defer client.Close()
 		cWriter, _ := NewIOSession(client, pu)
 		cReader, _ := NewIOSession(server, pu)
-		cReader.allowedPacketSize = 1024
 		ses := &Session{}
 		ses.respr = &MysqlResp{
 			mysqlRrWr: &MysqlProtocolImpl{io: NewIOPackage(true), tcpConn: cReader},
@@ -276,7 +272,7 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 			if err != nil {
 				panic(err)
 			}
-			exceptRow := generateRandomBytes(1024 / 2)
+			exceptRow := generateRandomBytes(int(MaxPayloadSize) / 2)
 			exceptPayload = append(exceptPayload, exceptRow)
 			err = cWriter.Append(exceptRow...)
 			if err != nil {
@@ -291,7 +287,7 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 			if err != nil {
 				panic(err)
 			}
-			exceptRow = generateRandomBytes(1024)
+			exceptRow = generateRandomBytes(int(MaxPayloadSize))
 			exceptPayload = append(exceptPayload, exceptRow)
 			err = cWriter.Append(exceptRow...)
 			if err != nil {
@@ -306,7 +302,7 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 			if err != nil {
 				panic(err)
 			}
-			exceptRow = generateRandomBytes(1024 * 2)
+			exceptRow = generateRandomBytes(int(MaxPayloadSize) * 2)
 			exceptPayload = append(exceptPayload, exceptRow)
 			err = cWriter.Append(exceptRow...)
 			if err != nil {
