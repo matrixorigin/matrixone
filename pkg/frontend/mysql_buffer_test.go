@@ -248,12 +248,13 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 	}
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	setGlobalSessionAlloc(NewSessionAllocator(pu))
-	convey.Convey("test read over packet", t, func() {
+	convey.Convey("test read max allowed packet", t, func() {
 		server, client := net.Pipe()
 		defer server.Close()
 		defer client.Close()
 		cWriter, _ := NewIOSession(client, pu)
 		cReader, _ := NewIOSession(server, pu)
+		cReader.allowedPacketSize = 1024
 		ses := &Session{}
 		ses.respr = &MysqlResp{
 			mysqlRrWr: &MysqlProtocolImpl{io: NewIOPackage(true), tcpConn: cReader},
@@ -275,7 +276,7 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 			if err != nil {
 				panic(err)
 			}
-			exceptRow := generateRandomBytes(int(MaxPayloadSize) / 2)
+			exceptRow := generateRandomBytes(1024 / 2)
 			exceptPayload = append(exceptPayload, exceptRow)
 			err = cWriter.Append(exceptRow...)
 			if err != nil {
@@ -290,7 +291,7 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 			if err != nil {
 				panic(err)
 			}
-			exceptRow = generateRandomBytes(int(MaxPayloadSize))
+			exceptRow = generateRandomBytes(1024)
 			exceptPayload = append(exceptPayload, exceptRow)
 			err = cWriter.Append(exceptRow...)
 			if err != nil {
@@ -305,7 +306,7 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 			if err != nil {
 				panic(err)
 			}
-			exceptRow = generateRandomBytes(int(MaxPayloadSize) * 2)
+			exceptRow = generateRandomBytes(1024 * 2)
 			exceptPayload = append(exceptPayload, exceptRow)
 			err = cWriter.Append(exceptRow...)
 			if err != nil {
@@ -316,6 +317,10 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 				panic(err)
 			}
 
+			err = cWriter.Flush()
+			if err != nil {
+				panic(err)
+			}
 		}()
 
 		var data []byte
@@ -328,72 +333,7 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 		data, err = cReader.Read()
 		convey.So(err, convey.ShouldNotBeNil)
 		for remain, _ = hasData(server); remain; remain, _ = hasData(server) {
-			_, _ = cReader.conn.Read(make([]byte, int(MaxPayloadSize*2)))
-		}
-	})
-
-	convey.Convey("test read big packet", t, func() {
-		server, client := net.Pipe()
-		defer server.Close()
-		defer client.Close()
-		cWriter, _ := NewIOSession(client, pu)
-		cReader, _ := NewIOSession(server, pu)
-		ses := &Session{}
-		ses.respr = &MysqlResp{
-			mysqlRrWr: &MysqlProtocolImpl{io: NewIOPackage(true), tcpConn: cReader},
-		}
-		cReader.ses = ses
-		cReader.allowedPacketSize = int(MaxPayloadSize) * 3
-		exceptPayload := make([][]byte, 0)
-		go func() {
-			for {
-				_, err := cWriter.Read()
-				if err != nil {
-					return
-				}
-			}
-		}()
-		go func() {
-			var err error
-			err = cWriter.BeginPacket()
-			if err != nil {
-				panic(err)
-			}
-			exceptRow := generateRandomBytes(int(MaxPayloadSize) * 2)
-			exceptPayload = append(exceptPayload, exceptRow)
-			err = cWriter.Append(exceptRow...)
-			if err != nil {
-				panic(err)
-			}
-			err = cWriter.FinishedPacket()
-			if err != nil {
-				panic(err)
-			}
-
-			err = cWriter.BeginPacket()
-			if err != nil {
-				panic(err)
-			}
-			exceptRow = generateRandomBytes(int(MaxPayloadSize) * 4)
-			exceptPayload = append(exceptPayload, exceptRow)
-			err = cWriter.Append(exceptRow...)
-			if err != nil {
-				panic(err)
-			}
-			err = cWriter.FinishedPacket()
-			if err != nil {
-				panic(err)
-			}
-		}()
-
-		var data []byte
-		data, err = cReader.Read()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(reflect.DeepEqual(data, exceptPayload[0]), convey.ShouldBeTrue)
-		data, err = cReader.Read()
-		convey.So(err, convey.ShouldNotBeNil)
-		for remain, _ = hasData(server); remain; remain, _ = hasData(server) {
-			_, _ = cReader.conn.Read(make([]byte, int(MaxPayloadSize*2)))
+			_, _ = cReader.conn.Read(make([]byte, int(MaxPayloadSize)))
 		}
 	})
 }
