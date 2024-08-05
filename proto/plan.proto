@@ -478,7 +478,6 @@ enum ShuffleType {
 enum ShuffleMethod {
 	Normal = 0;
 	Reuse = 1;
-	Reshuffle = 2;
 }
 
 enum ShuffleTypeForMultiCN {

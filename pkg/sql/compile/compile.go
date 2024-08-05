@@ -3001,59 +3001,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 		ss = c.compileProjection(n, c.compileRestrict(n, ss))
 		return ss
-	case plan.ShuffleMethod_Reshuffle:
-		parent, children := c.newScopeListForShuffleGroup(1)
-		// saving the last operator of all children to make sure the connector setting in
-		// the right place
-		lastOperator := make([]vm.Operator, 0, len(children))
-		for i := range children {
-			rootOp := children[i].RootOp
-			if rootOp.GetOperatorBase().NumChildren() == 0 {
-				children[i].RootOp = nil
-			} else {
-				children[i].RootOp = rootOp.GetOperatorBase().GetChildren(0)
-			}
-			rootOp.GetOperatorBase().SetChildren(nil)
-			lastOperator = append(lastOperator, rootOp)
-		}
 
-		currentIsFirst := c.anal.isFirst
-		for i := range children {
-			op := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], true, len(children), c.proc)
-			op.SetAnalyzeControl(c.anal.curNodeIdx, currentIsFirst)
-			children[i].setRootOperator(op)
-		}
-		c.anal.isFirst = false
-
-		children = c.compileProjection(n, c.compileRestrict(n, children))
-		// recovery the children's last operator
-		for i := range children {
-			children[i].doSetRootOperator(lastOperator[i])
-		}
-
-		currentIsFirst = c.anal.isFirst
-		for i := range ss {
-			op := constructShuffleGroupArg(children, n)
-			op.SetAnalyzeControl(c.anal.curNodeIdx, currentIsFirst)
-			ss[i].setRootOperator(op)
-		}
-		c.anal.isFirst = false
-
-		mergeScopes := c.newMergeScope(ss)
-		dispatchOp := constructDispatch(0, children, c.addr, n, false)
-		dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		mergeScopes.setRootOperator(dispatchOp)
-
-		appendIdx := 0
-		for i := range children {
-			if isSameCN(mergeScopes.NodeInfo.Addr, children[i].NodeInfo.Addr) {
-				appendIdx = i
-				break
-			}
-		}
-		children[appendIdx].PreScopes = append(children[appendIdx].PreScopes, mergeScopes)
-
-		return parent
 	default:
 		parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss))
 		c.constructShuffleAndDispatch(ss, children, n)
