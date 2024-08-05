@@ -392,7 +392,7 @@ func jsonLess(vs struct {
 	left := types.DecodeJson(vs.data[i].GetByteSlice(vs.area))
 	right := types.DecodeJson(vs.data[j].GetByteSlice(vs.area))
 
-	cmp := bytejson.CompareByteJsonLess(left, right)
+	cmp := bytejson.CompareByteJson(left, right)
 	if cmp != 0 {
 		return cmp < 0
 	}
@@ -405,7 +405,7 @@ func jsonGreater(vs struct {
 }, i, j int64) bool {
 	left := types.DecodeJson(vs.data[i].GetByteSlice(vs.area))
 	right := types.DecodeJson(vs.data[j].GetByteSlice(vs.area))
-	cmp := bytejson.CompareByteJsonLess(left, right)
+	cmp := bytejson.CompareByteJson(left, right)
 	if cmp != 0 {
 		return cmp > 0
 	}
