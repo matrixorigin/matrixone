@@ -730,6 +730,31 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		})
 	}()
 
+	resetRootOp := func(parentOp vm.Operator, oldArg vm.Operator, newArg vm.Operator) {
+		newArg.SetInfo(&vm.OperatorInfo{
+			Idx:         oldArg.GetOperatorBase().GetIdx(),
+			CnAddr:      oldArg.GetOperatorBase().GetCnAddr(),
+			OperatorID:  c.allocOperatorID(),
+			ParallelID:  0,
+			MaxParallel: 1,
+		})
+		if parentOp == nil {
+			s.RootOp = newArg
+		} else {
+			parentOp.GetOperatorBase().SetChild(newArg, 0)
+		}
+
+		mergeOp := merge.NewArgument()
+		mergeOp.SetInfo(&vm.OperatorInfo{
+			Idx:         oldArg.GetOperatorBase().GetIdx(),
+			CnAddr:      oldArg.GetOperatorBase().GetCnAddr(),
+			OperatorID:  c.allocOperatorID(),
+			ParallelID:  0,
+			MaxParallel: 1,
+		})
+		newArg.AppendChild(mergeOp)
+	}
+
 	if err := vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if flg {
 			return nil
@@ -743,18 +768,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			newArg := mergetop.NewArgument().
 				WithFs(arg.Fs).
 				WithLimit(arg.Limit)
-			newArg.SetInfo(&vm.OperatorInfo{
-				Idx:         arg.Idx,
-				CnAddr:      arg.CnAddr,
-				OperatorID:  c.allocOperatorID(),
-				ParallelID:  0,
-				MaxParallel: 1,
-			})
-			if parentOp == nil {
-				s.RootOp = newArg
-			} else {
-				parentOp.GetOperatorBase().SetChild(newArg, 0)
-			}
+			resetRootOp(parentOp, arg, newArg)
 
 			for j := range ss {
 				newarg := top.NewArgument().WithFs(arg.Fs).WithLimit(arg.Limit)
@@ -778,18 +792,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			toReleaseOpRoot = arg.GetChildren(0)
 			newArg := mergelimit.NewArgument().
 				WithLimit(arg.LimitExpr)
-			newArg.SetInfo(&vm.OperatorInfo{
-				Idx:         arg.Idx,
-				CnAddr:      arg.CnAddr,
-				OperatorID:  c.allocOperatorID(),
-				ParallelID:  0,
-				MaxParallel: 1,
-			})
-			if parentOp == nil {
-				s.RootOp = newArg
-			} else {
-				parentOp.GetOperatorBase().SetChild(newArg, 0)
-			}
+			resetRootOp(parentOp, arg, newArg)
 
 			for j := range ss {
 				limitOp := limit.NewArgument().
@@ -815,18 +818,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 
 			newArg := mergegroup.NewArgument().
 				WithNeedEval(false)
-			newArg.SetInfo(&vm.OperatorInfo{
-				Idx:         arg.Idx,
-				CnAddr:      arg.CnAddr,
-				OperatorID:  c.allocOperatorID(),
-				ParallelID:  0,
-				MaxParallel: 1,
-			})
-			if parentOp == nil {
-				s.RootOp = newArg
-			} else {
-				parentOp.GetOperatorBase().SetChild(newArg, 0)
-			}
+			resetRootOp(parentOp, arg, newArg)
 
 			for j := range ss {
 				groupOp := group.NewArgument().
@@ -913,18 +905,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			toReleaseOpRoot = arg.GetChildren(0)
 			newArg := mergeoffset.NewArgument().
 				WithOffset(arg.OffsetExpr)
-			newArg.SetInfo(&vm.OperatorInfo{
-				Idx:         arg.Idx,
-				CnAddr:      arg.CnAddr,
-				OperatorID:  c.allocOperatorID(),
-				ParallelID:  0,
-				MaxParallel: 1,
-			})
-			if parentOp == nil {
-				s.RootOp = newArg
-			} else {
-				parentOp.GetOperatorBase().SetChild(newArg, 0)
-			}
+			resetRootOp(parentOp, arg, newArg)
 
 			for j := range ss {
 				offsetOp := offset.NewArgument().
