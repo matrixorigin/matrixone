@@ -6852,7 +6852,10 @@ func TestSnapshotMeta(t *testing.T) {
 	snapshotSchema2 := catalog.MockSnapShotSchema()
 	snapshotSchema2.BlockMaxRows = 2
 	snapshotSchema2.ObjectMaxBlocks = 1
-	var rel3, rel4, rel5 handle.Relation
+	snapshotSchema3 := catalog.MockSnapShotSchema(true)
+	snapshotSchema3.BlockMaxRows = 2
+	snapshotSchema3.ObjectMaxBlocks = 1
+	var rel3, rel4, rel5, rel6 handle.Relation
 	{
 		txn, _ := db.StartTxn(nil)
 		database, err := txn.CreateDatabase("db", "", "")
@@ -6861,11 +6864,15 @@ func TestSnapshotMeta(t *testing.T) {
 		assert.Nil(t, err)
 		database3, err := txn.CreateDatabase("db3", "", "")
 		assert.Nil(t, err)
+		database4, err := txn.CreateDatabase("db4", "", "")
+		assert.Nil(t, err)
 		rel3, err = database.CreateRelation(snapshotSchema)
 		assert.Nil(t, err)
 		rel4, err = database2.CreateRelation(snapshotSchema1)
 		assert.Nil(t, err)
 		rel5, err = database3.CreateRelation(snapshotSchema2)
+		assert.Nil(t, err)
+		rel6, err = database4.CreateRelation(snapshotSchema3)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
@@ -6919,8 +6926,17 @@ func TestSnapshotMeta(t *testing.T) {
 		}
 		rel, _ := database.GetRelationByID(id)
 		err := rel.Append(context.Background(), data1)
-		data1.Close()
 		assert.Nil(t, err)
+		newBatch := containers.NewEmptyBatch()
+		newBatch.Vecs = append(data1.Vecs[:2], data1.Vecs[3:]...)
+		newBatch.Attrs = append(data1.Attrs[:2], data1.Attrs[3:]...)
+		id = rel6.ID()
+		database, _ = txn1.GetDatabase("db4")
+		rel, _ = database.GetRelationByID(id)
+		err = rel.Append(context.Background(), newBatch)
+		assert.Nil(t, err)
+		data1.Close()
+		newBatch.Close()
 		assert.Nil(t, txn1.Commit(context.Background()))
 	}
 	testutils.WaitExpect(10000, func() bool {
