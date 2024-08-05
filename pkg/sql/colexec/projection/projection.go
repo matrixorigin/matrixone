@@ -60,14 +60,14 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	result, err := projection.GetChildren(0).Call(proc)
-	if err != nil {
-		return result, err
-	}
-
 	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
+	result, err := vm.ChildrenCall(projection.GetChildren(0), proc, anal)
+	if err != nil {
+		return result, err
+	}
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil

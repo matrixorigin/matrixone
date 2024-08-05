@@ -72,7 +72,7 @@ func (shuffle *Shuffle) Release() {
 
 type container struct {
 	ending               bool
-	sels                 [][]int32
+	sels                 [][]int64
 	shufflePool          []*batch.Batch
 	sendPool             []*batch.Batch
 	lastSentBatch        *batch.Batch

@@ -1106,7 +1106,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileSort(n, c.compileJoin(n, ns[n.Children[0]], ns[n.Children[1]], ns, left, right))
+		ss = c.compileSort(n, c.compileJoin(n, ns[n.Children[0]], ns[n.Children[1]], left, right))
 		return ss, nil
 	case plan.Node_SORT:
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
@@ -1825,6 +1825,9 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		if n.ObjRef.PubInfo != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.TenantId))
 		}
+		if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 		if err != nil {
 			panic(err)
@@ -2013,7 +2016,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []
 		return c.compileTpMinusAndIntersect(n, left, right, nodeType)
 	}
 	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
-	rs = c.newJoinScopeListWithBucket(rs, left, right, n)
+	rs = c.newJoinScopeListOnCurrentCN(rs, left, right, n)
 
 	currentFirstFlag := c.anal.isFirst
 	switch nodeType {
@@ -2052,11 +2055,11 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileJoin(node, left, right *plan.Node, ns []*plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
 		return c.compileShuffleJoin(node, left, right, probeScopes, buildScopes)
 	}
-	rs := c.compileBroadcastJoin(node, left, right, ns, probeScopes, buildScopes)
+	rs := c.compileBroadcastJoin(node, left, right, probeScopes, buildScopes)
 	if c.IsTpQuery() {
 		//construct join build operator for tp join
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, rs[0].RootOp), false, 1))
@@ -2178,7 +2181,7 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	return children
 }
 
-func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	var rs []*Scope
 	isEq := plan2.IsEquiJoin2(node.OnList)
 
@@ -2236,7 +2239,7 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 				if c.IsTpQuery() {
 					rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
 				} else {
-					rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, probeScopes), probeScopes, buildScopes, node)
+					rs = c.newJoinScopeListOnCurrentCN(c.newScopeListForRightJoin(node), probeScopes, buildScopes, node)
 				}
 				for i := range rs {
 					op := constructRightSemi(node, rightTyps, c.proc)
@@ -2277,7 +2280,7 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 			if c.IsTpQuery() {
 				rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
 			} else {
-				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, probeScopes), probeScopes, buildScopes, node)
+				rs = c.newJoinScopeListOnCurrentCN(c.newScopeListForRightJoin(node), probeScopes, buildScopes, node)
 			}
 			for i := range rs {
 				op := constructRight(node, leftTyps, rightTyps, c.proc)
@@ -2306,7 +2309,7 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 				if c.IsTpQuery() {
 					rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
 				} else {
-					rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, probeScopes), probeScopes, buildScopes, node)
+					rs = c.newJoinScopeListOnCurrentCN(c.newScopeListForRightJoin(node), probeScopes, buildScopes, node)
 				}
 				for i := range rs {
 					op := constructRightAnti(node, rightTyps, c.proc)
@@ -2903,7 +2906,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 				// reset the channel buffer of sink for load
 				dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, dataScope.NodeInfo.Mcpu)
 			}
-			parallelSize := c.getParallelSizeForExternalScan(n, dataScope.NodeInfo.Mcpu)
+			parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
 			scopes := make([]*Scope, 0, parallelSize)
 			regs := make([]*process.WaitRegister, 0, parallelSize)
 			for i := 0; i < parallelSize; i++ {
@@ -2922,7 +2925,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 				regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 			}
 
-			if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize {
+			if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize && parallelSize > 1 {
 				_, arg := constructDispatchLocalAndRemote(0, scopes, c.addr)
 				arg.FuncId = dispatch.ShuffleToAllFunc
 				arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
@@ -3235,6 +3238,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope) *Scop
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := newScope(Merge)
 	rs.NodeInfo = getEngineNode(c)
+	rs.NodeInfo.Mcpu = 1 //merge scope is single parallel by default
 	rs.PreScopes = ss
 	cnt := 0
 	for _, s := range ss {
@@ -3274,7 +3278,7 @@ func (c *Compile) newMergeRemoteScope(ss []*Scope, nodeinfo engine.Node) *Scope 
 	// reset rs's info to remote
 	rs.Magic = Remote
 	rs.NodeInfo.Addr = nodeinfo.Addr
-	rs.NodeInfo.Mcpu = nodeinfo.Mcpu
+	rs.NodeInfo.Mcpu = 1 //merge scope is single parallel by default
 
 	return rs
 }
@@ -3283,15 +3287,9 @@ func (c *Compile) newMergeRemoteScope(ss []*Scope, nodeinfo engine.Node) *Scope 
 // waing: newScopeListOnCurrentCN result is only used to build Scope and add one merge operator.
 // If other operators are added, please let @qingxinhome know
 func (c *Compile) newScopeListOnCurrentCN(childrenCount int, blocks int) []*Scope {
-	var ss []*Scope
-	currentFirstFlag := c.anal.isFirst
-	for _, cn := range c.cnList {
-		if !isSameCN(cn.Addr, c.addr) {
-			continue
-		}
-		c.anal.isFirst = currentFirstFlag
-		ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(cn.Mcpu, blocks), childrenCount, cn.Addr)...)
-	}
+	node := getEngineNode(c)
+	mcpu := c.generateCPUNumber(node.Mcpu, blocks)
+	ss := c.newScopeListWithNode(mcpu, childrenCount, node.Addr)
 	return ss
 }
 
@@ -3318,7 +3316,6 @@ func (c *Compile) newScopeListForShuffleGroup(childrenCount int) ([]*Scope, []*S
 // If other operators are added, please let @qingxinhome know
 func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*Scope {
 	ss := make([]*Scope, mcpu)
-	//currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		ss[i] = newScope(Remote)
 		ss[i].Magic = Remote
@@ -3327,52 +3324,29 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 		ss[i].Proc = c.proc.NewNoContextChildProc(childrenCount)
 
 		// The merge operator does not act as First/Last, It needs to handle its analyze status
-		merge := merge.NewArgument()
-		merge.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		ss[i].setRootOperator(merge)
+		mergeOp := merge.NewArgument()
+		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		ss[i].setRootOperator(mergeOp)
 	}
 	//c.anal.isFirst = false
 	return ss
 }
 
-func (c *Compile) newScopeListForRightJoin(childrenCount int, bIdx int, leftScopes []*Scope) []*Scope {
-	/*
-		ss := make([]*Scope, 0, len(leftScopes))
-		for i := range leftScopes {
-			tmp := new(Scope)
-			tmp.Magic = Remote
-			tmp.IsJoin = true
-			tmp.Proc = process.NewWithAnalyze(c.proc, c.proc.Ctx, childrenCount, c.anal.Nodes())
-			tmp.NodeInfo = leftScopes[i].NodeInfo
-			ss = append(ss, tmp)
-		}
-	*/
+func (c *Compile) newScopeListForRightJoin(node *plan.Node) []*Scope {
 	// Force right join to execute on one CN due to right join issue
 	// Will fix in future
-	maxCpuNum := 1
-	for _, s := range leftScopes {
-		if s.NodeInfo.Mcpu > maxCpuNum {
-			maxCpuNum = s.NodeInfo.Mcpu
-		}
-	}
-
 	ss := make([]*Scope, 1)
 	ss[0] = newScope(Remote)
 	ss[0].IsJoin = true
-	ss[0].Proc = c.proc.NewNoContextChildProc(childrenCount)
-	ss[0].NodeInfo = engine.Node{Addr: c.addr, Mcpu: maxCpuNum}
-	ss[0].BuildIdx = bIdx
-
-	for i := range ss {
-		mergeOp := merge.NewArgument()
-		ss[i].setRootOperator(mergeOp)
-	}
-
+	ss[0].Proc = c.proc.NewNoContextChildProc(2)
+	ss[0].NodeInfo = engine.Node{Addr: c.addr, Mcpu: c.generateCPUNumber(ncpu, int(node.Stats.BlockNum))}
+	ss[0].BuildIdx = 1
+	mergeOp := merge.NewArgument()
+	ss[0].setRootOperator(mergeOp)
 	return ss
 }
 
-func (c *Compile) newJoinScopeListWithBucket(rs, left, right []*Scope, n *plan.Node) []*Scope {
-	currentFirstFlag := c.anal.isFirst
+func (c *Compile) newJoinScopeListOnCurrentCN(rs, left, right []*Scope, n *plan.Node) []*Scope {
 	// construct left
 	leftMerge := c.newMergeScope(left)
 	leftDispatch := constructDispatch(0, rs, c.addr, n, false)
@@ -3381,21 +3355,13 @@ func (c *Compile) newJoinScopeListWithBucket(rs, left, right []*Scope, n *plan.N
 	leftMerge.IsEnd = true
 
 	// construct right
-	c.anal.isFirst = currentFirstFlag
 	rightMerge := c.newMergeScope(right)
 	rightDispatch := constructDispatch(1, rs, c.addr, n, false)
 	leftDispatch.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	rightMerge.setRootOperator(rightDispatch)
 	rightMerge.IsEnd = true
 
-	// append left and right to correspond rs
-	idx := 0
-	for i := range rs {
-		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
-			idx = i
-		}
-	}
-	rs[idx].PreScopes = append(rs[idx].PreScopes, leftMerge, rightMerge)
+	rs[0].PreScopes = append(rs[0].PreScopes, leftMerge, rightMerge)
 	return rs
 }
 
@@ -3633,7 +3599,7 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 		anals[i] = reuse.Alloc[process.AnalyzeInfo](nil)
 		anals[i].NodeId = int32(i)
 	}
-	c.anal = newAnaylze()
+	c.anal = newAnalyzeModule()
 	c.anal.qry = qry
 	c.anal.analInfos = anals
 	c.anal.curNodeIdx = int(qry.Steps[0])

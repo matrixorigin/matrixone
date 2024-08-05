@@ -317,6 +317,8 @@ type ModificationArgument interface {
 	AffectedRows() uint64
 }
 
+// doHandleAllOp function uses post traversal to recursively process nodes in the operand tree.
+// In post traversal, all child nodes are recursively processed first, and then the current node is processed.
 func doHandleAllOp(parentOp Operator, op Operator, opHandle func(parentOp Operator, op Operator) error) (err error) {
 	if op == nil {
 		return nil
