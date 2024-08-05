@@ -104,4 +104,180 @@ c1    c2
 9    {"panel_no": 3}
 3    {"area": "A3", "panel_no": ""}
 10    {"panel_no": ""}
+CREATE TABLE data_table (
+id INT AUTO_INCREMENT PRIMARY KEY,
+json_data JSON NOT NULL
+);
+INSERT INTO data_table (json_data)
+VALUES
+('{"value": 100}'),
+('{"value": -200}'),
+('{"value": 150.5}'),
+('{"value": 0}'),
+('{"value": -99.9}'),
+('{"value": 50}'),
+('{"value": 300}');
+INSERT INTO data_table (json_data)
+VALUES
+('{"value": 1000000000000}'),
+('{"value": -2000000000000}'),
+('{"value": 1500000000000.5}'),
+('{"value": 0}'),
+('{"value": -999999999999.9}'),
+('{"value": 500000000000}'),
+('{"value": 3000000000000}');
+select JSON_EXTRACT(json_data, '$.value') from data_table;
+JSON_EXTRACT(json_data, $.value)
+100
+-200
+150.5
+0
+-99.9
+50
+300
+1000000000000
+-2000000000000
+1500000000000.5
+0
+-999999999999.9
+500000000000
+3000000000000
+SELECT id, json_data
+FROM data_table
+ORDER BY JSON_EXTRACT(json_data, '$.value') ASC;
+id    json_data
+9    {"value": -2000000000000}
+12    {"value": -999999999999.9}
+2    {"value": -200}
+5    {"value": -99.9}
+11    {"value": 0}
+4    {"value": 0}
+6    {"value": 50}
+1    {"value": 100}
+3    {"value": 150.5}
+7    {"value": 300}
+13    {"value": 500000000000}
+8    {"value": 1000000000000}
+10    {"value": 1500000000000.5}
+14    {"value": 3000000000000}
+SELECT id, json_data
+FROM data_table
+ORDER BY JSON_EXTRACT(json_data, '$.value') DESC;
+id    json_data
+14    {"value": 3000000000000}
+10    {"value": 1500000000000.5}
+8    {"value": 1000000000000}
+13    {"value": 500000000000}
+7    {"value": 300}
+3    {"value": 150.5}
+1    {"value": 100}
+6    {"value": 50}
+4    {"value": 0}
+11    {"value": 0}
+5    {"value": -99.9}
+2    {"value": -200}
+12    {"value": -999999999999.9}
+9    {"value": -2000000000000}
+INSERT INTO data_table (json_data)
+VALUES
+('{"value": "1000000000000"}'),
+('{"value": "-2000000000000"}'),
+('{"value": "1500000000000.5"}'),
+('{"value": "0"}'),
+('{"value": "-999999999999.9"}'),
+('{"value": "500000000000"}'),
+('{"value": "3000000000000"}'),
+('{"value":"A2"}'),
+('{"value":"A1"}'),
+('{"value":"A3"}'),
+('{"value":""}'),
+('{"value":null}');
+select JSON_EXTRACT(json_data, '$.value') from data_table;
+JSON_EXTRACT(json_data, $.value)
+100
+-200
+150.5
+0
+-99.9
+50
+300
+1000000000000
+-2000000000000
+1500000000000.5
+0
+-999999999999.9
+500000000000
+3000000000000
+"1000000000000"
+"-2000000000000"
+"1500000000000.5"
+"0"
+"-999999999999.9"
+"500000000000"
+"3000000000000"
+"A2"
+"A1"
+"A3"
+""
+null
+SELECT id, json_data
+FROM data_table
+ORDER BY JSON_EXTRACT(json_data, '$.value') ASC;
+id    json_data
+26    {"value": null}
+9    {"value": -2000000000000}
+12    {"value": -999999999999.9}
+2    {"value": -200}
+5    {"value": -99.9}
+11    {"value": 0}
+4    {"value": 0}
+6    {"value": 50}
+1    {"value": 100}
+3    {"value": 150.5}
+7    {"value": 300}
+13    {"value": 500000000000}
+8    {"value": 1000000000000}
+10    {"value": 1500000000000.5}
+14    {"value": 3000000000000}
+25    {"value": ""}
+16    {"value": "-2000000000000"}
+19    {"value": "-999999999999.9"}
+18    {"value": "0"}
+15    {"value": "1000000000000"}
+17    {"value": "1500000000000.5"}
+21    {"value": "3000000000000"}
+20    {"value": "500000000000"}
+23    {"value": "A1"}
+22    {"value": "A2"}
+24    {"value": "A3"}
+SELECT id, json_data
+FROM data_table
+ORDER BY JSON_EXTRACT(json_data, '$.value') DESC;
+id    json_data
+24    {"value": "A3"}
+22    {"value": "A2"}
+23    {"value": "A1"}
+20    {"value": "500000000000"}
+21    {"value": "3000000000000"}
+17    {"value": "1500000000000.5"}
+15    {"value": "1000000000000"}
+18    {"value": "0"}
+19    {"value": "-999999999999.9"}
+16    {"value": "-2000000000000"}
+25    {"value": ""}
+14    {"value": 3000000000000}
+10    {"value": 1500000000000.5}
+8    {"value": 1000000000000}
+13    {"value": 500000000000}
+7    {"value": 300}
+3    {"value": 150.5}
+1    {"value": 100}
+6    {"value": 50}
+11    {"value": 0}
+4    {"value": 0}
+5    {"value": -99.9}
+2    {"value": -200}
+12    {"value": -999999999999.9}
+9    {"value": -2000000000000}
+26    {"value": null}
 drop database if exists test;
