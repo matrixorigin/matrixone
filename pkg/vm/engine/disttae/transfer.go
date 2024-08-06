@@ -28,7 +28,7 @@ func ConstructPrintablePK(buf []byte, tableDef *plan.TableDef) string {
 	}
 }
 
-func TransferTombstonesWithDeltaLoc(
+func TransferTombstones(
 	ctx context.Context,
 	table *txnTable,
 	state *logtailreplay.PartitionState,
@@ -167,4 +167,15 @@ func TransferTombstonesWithDeltaLoc(
 		}
 	}
 	return nil
+}
+
+func GetRowidByPKWithDeltaLoc(
+	ctx context.Context,
+	table *txnTable,
+	pkColumn *vector.Vector,
+	pkRowIdx int,
+	blockList []objectio.BlockInfo,
+	dataSource engine.DataSource,
+) (newRowId types.Rowid, found bool, err error) {
+	return
 }
