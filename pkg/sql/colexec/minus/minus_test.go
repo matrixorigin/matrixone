@@ -88,7 +88,7 @@ func TestMinus(t *testing.T) {
 	c.proc.Reg.MergeReceivers[1].Ch <- nil
 
 	c.arg.Free(c.proc, false, nil)
-	c.proc.FreeVectors()
+	c.proc.Free()
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
