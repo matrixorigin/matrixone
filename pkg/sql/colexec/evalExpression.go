@@ -67,20 +67,23 @@ var (
 // ExpressionExecutor
 // generated from plan.Expr, can evaluate the result from vectors directly.
 type ExpressionExecutor interface {
-	// Eval will return the result vector of expression.
-	// the result memory is reused, so it should not be modified or saved.
-	// If it needs, it should be copied by vector.Dup().
+	// Eval evaluates the expression and returns the result vector.
+	// The result is a read-only vector that is only valid until the next call to Eval.
 	Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error)
 
-	// EvalWithoutResultReusing is the same as Eval, but it will not reuse the memory of result vector.
-	// so you can save the result vector directly. but should be careful about memory leak.
-	// and watch out that maybe the vector is one of the input vectors of batches.
+	// EvalWithoutResultReusing will be removed in the future.
+	// It's used to evaluate the expression,
+	// and the result's ownership is transferred to the caller except for the column expression.
 	EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error)
 
-	// Free should release all memory of executor.
-	// it will be called after query has done.
+	// ResetForNextQuery resets the expression to its initial state for a same expression.
+	// this is useful to a prepare statement.
+	ResetForNextQuery()
+
+	// Free closes the expression and releases all resources.
 	Free()
 
+	// IsColumnExpr returns true if the expression is a column expression.
 	IsColumnExpr() bool
 }
 
@@ -155,6 +158,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		}
 
 		executor := NewFunctionExpressionExecutor()
+		executor.overloadID = overloadID
 		executor.fid, _ = function.DecodeOverloadID(overloadID)
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		fn, fnFree := overload.GetExecuteMethod()
@@ -174,7 +178,8 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 		// IF all parameters here were constant. and this function can be folded.
 		// 	there is a better way to convert it as a FixedVectorExpressionExecutor.
-		if !overload.CannotFold() && !overload.IsRealTimeRelated() && ifAllArgsAreConstant(executor) {
+		// todo: I set a false here to disable this feature temporarily.
+		if false && !overload.CannotFold() && !overload.IsRealTimeRelated() && ifAllArgsAreConstant(executor) {
 			for i := range executor.parameterExecutor {
 				fixExe := executor.parameterExecutor[i].(*FixedVectorExpressionExecutor)
 				executor.parameterResults[i] = fixExe.resultVector
@@ -289,8 +294,9 @@ type FixedVectorExpressionExecutor struct {
 }
 
 type FunctionExpressionExecutor struct {
-	m           *mpool.MPool
-	fid         int32
+	m *mpool.MPool
+	functionInformationForEval
+	folded      functionFolding
 	selectList1 []bool
 	selectList2 []bool
 	selectList  function.FunctionSelectList
@@ -299,15 +305,6 @@ type FunctionExpressionExecutor struct {
 	// parameters related
 	parameterResults  []*vector.Vector
 	parameterExecutor []ExpressionExecutor
-
-	evalFn func(
-		params []*vector.Vector,
-		result vector.FunctionResultWrapper,
-		proc *process.Process,
-		length int,
-		selectList *function.FunctionSelectList) error
-
-	freeFn func() error
 }
 
 type ColumnExpressionExecutor struct {
@@ -628,6 +625,8 @@ func (expr *FunctionExpressionExecutor) Free() {
 		expr.resultVector.Free()
 		expr.resultVector = nil
 	}
+	expr.folded.close(expr.m)
+
 	for _, p := range expr.parameterExecutor {
 		if p != nil {
 			p.Free()
