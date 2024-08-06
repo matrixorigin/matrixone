@@ -3239,7 +3239,7 @@ func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 	rs.NodeInfo.Addr = nodeinfo.Addr
 	rs.NodeInfo.Mcpu = 1 // merge scope is single parallel by default
 	rs.PreScopes = ss
-	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
+	rs.Proc = c.proc.NewNoContextChildProc(1)
 	rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, len(ss))
 	rs.Proc.Reg.MergeReceivers[0].NilBatchCnt = len(ss)
 	mergeOp := merge.NewArgument()
