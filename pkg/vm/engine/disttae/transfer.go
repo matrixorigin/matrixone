@@ -3,21 +3,23 @@ package disttae
 import (
 	"context"
 	"encoding/hex"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"go.uber.org/zap"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 )
+
+type entryPostition struct {
+	offset, batOffset uint32
+}
 
 func ConstructPrintablePK(buf []byte, tableDef *plan.TableDef) string {
 	if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
@@ -33,52 +35,54 @@ func TransferTombstones(
 	table *txnTable,
 	state *logtailreplay.PartitionState,
 	deletedObjects, createdObjects map[objectio.ObjectNameShort]struct{},
-	fs *fileservice.FileService,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
 ) (err error) {
-	if len(deletedObjects) == 0 {
+	if len(deletedObjects) == 0 || len(createdObjects) == 0 {
 		return
 	}
-	var blockList []objectio.BlockInfo
-	serviceName := table.proc.Load().GetService()
-
-	relData := NewEmptyBlockListRelationData()
-	relData.AppendBlockInfo(objectio.EmptyBlockInfo)
-
-	var datasource engine.DataSource
-	if datasource, err = table.buildLocalDataSource(
-		ctx,
-		0,
-		relData,
-		Policy_CheckCommittedS3Only,
-	); err != nil {
-		return
-	}
-
+	// TODO:
+	var objectList []objectio.ObjectStats
 	for name := range createdObjects {
-		if object, ok := state.GetObject(name); ok {
-			objectStats := object.ObjectStats
-			ForeachBlkInObjStatsList(
-				false,
-				nil,
-				func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
-					// if object.HasDeltaLoc {
-					// 	_, commitTs, ok := state.GetBockDeltaLoc(blk.BlockID)
-					// 	if ok {
-					// 		blk.CommitTs = commitTs
-					// 	}
-					// }
-					blockList = append(blockList, blk)
-					return true
-				},
-				objectStats,
-			)
+		if obj, ok := state.GetObject(name); ok {
+			objectList = append(objectList, obj.ObjectStats)
 		}
 	}
 
 	txnWrites := table.getTxn().writes
 
+	var (
+		transferIntents *vector.Vector
+		targetRowids    *vector.Vector
+		searchPKColumn  *vector.Vector
+		searchEntryPos  *vector.Vector
+		searchBatPos    *vector.Vector
+		readPKColumn    *vector.Vector
+	)
+
+	defer func() {
+		if transferIntents != nil {
+			transferIntents.Free(mp)
+		}
+		if targetRowids != nil {
+			targetRowids.Free(mp)
+		}
+		if searchPKColumn != nil {
+			searchPKColumn.Free(mp)
+		}
+		if searchEntryPos != nil {
+			searchEntryPos.Free(mp)
+		}
+		if searchBatPos != nil {
+			searchBatPos.Free(mp)
+		}
+		if readPKColumn != nil {
+			readPKColumn.Free(mp)
+		}
+	}()
+
 	// loop the transaction workspace to transfer all tombstones
-	for _, entry := range txnWrites {
+	for i, entry := range txnWrites {
 		// skip all entries not table-realted
 		// skip all non-delete entries
 		if entry.tableId != table.tableId ||
@@ -87,95 +91,231 @@ func TransferTombstones(
 			continue
 		}
 
-		var (
-			transferedCnt, transferIntent int
-		)
-
 		// column 0 is rowid, column 1 is pk
 		// fetch rowid and pk column data
 		rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 		pkColumn := entry.bat.GetVector(1)
 
-		// transfer all old rowids to new rowids
-		for i, rowid := range rowids {
+		for j, rowid := range rowids {
 			blockId := rowid.BorrowBlockID()
 			// if the block of the rowid is not in the deleted objects, skip transfer
 			if _, deleted := deletedObjects[*objectio.ShortName(blockId)]; !deleted {
 				continue
 			}
-			transferIntent++
-			// TODO: refactor readNewRowid later
-			newId, ok, err := table.readNewRowid(pkColumn, i, blockList, datasource, nil)
-			if err != nil {
-				return err
+			if transferIntents == nil {
+				transferIntents = vector.NewVec(types.T_Rowid.ToType())
+				targetRowids = vector.NewVec(types.T_Rowid.ToType())
+				searchPKColumn = vector.NewVec(types.T_blob.ToType())
+				searchEntryPos = vector.NewVec(types.T_int32.ToType())
+				searchBatPos = vector.NewVec(types.T_int32.ToType())
+				readPKColumn = vector.NewVec(*pkColumn.GetType())
 			}
-			if !ok {
-				logutil.Error("TRANSFER-DELETE-ROWID-ERR",
-					zap.String("rowid", rowids[i].ShortStringEx()),
-					zap.String("pk", ConstructPrintablePK(pkColumn.GetBytesAt(i), table.GetTableDef(ctx))),
-					zap.String("state", "not-found"),
-				)
+			if err = vector.AppendFixed[types.Rowid](transferIntents, rowid, false, mp); err != nil {
+				return
+			}
+			if err = vector.AppendFixed[int32](searchEntryPos, int32(i), false, mp); err != nil {
+				return
+			}
+			if err = vector.AppendFixed[int32](searchBatPos, int32(j), false, mp); err != nil {
+				return
+			}
+			if err = searchPKColumn.UnionOne(pkColumn, int64(j), mp); err != nil {
+				return
 			}
 
-			newBlockID := newId.BorrowBlockID()
-			trace.GetService(serviceName).ApplyTransferRowID(
-				table.db.op.Txn().ID,
-				table.tableId,
-				rowids[i][:],
-				newId[:],
-				blockId[:],
-				newBlockID[:],
-				pkColumn,
-				i)
-			rowids[i] = newId
-			transferedCnt++
+			if transferIntents.Length() >= 8192 {
+				if err = batchTransferToTombstones(
+					ctx,
+					table,
+					txnWrites,
+					objectList,
+					transferIntents,
+					targetRowids,
+					searchPKColumn,
+					searchEntryPos,
+					searchBatPos,
+					readPKColumn,
+					mp,
+					fs,
+				); err != nil {
+					return
+				}
+			}
 		}
+	}
 
-		if transferIntent != transferedCnt {
-			var idx int
-			detail := stringifySlice(
-				rowids,
-				func(a any) string {
-					rid := a.(types.Rowid)
-					pk := ConstructPrintablePK(pkColumn.GetBytesAt(idx), table.GetTableDef(ctx))
-					idx++
-					return fmt.Sprintf("%s:%s", pk, rid.ShortStringEx())
-				},
-			)
-			logutil.Error(
-				"TRANSFER-DELETE-ERR",
-				zap.String("note", entry.note),
-				zap.Uint64("table-id", table.tableId),
-				zap.String("table-name", table.tableName),
-				zap.String(
-					"block-list",
-					stringifySlice(blockList, func(a any) string {
-						info := a.(objectio.BlockInfo)
-						return info.String()
-					}),
-				),
-				zap.String("detail", detail),
-			)
-			return moerr.NewInternalErrorNoCtx(
-				"%v-%v transfer deletes failed %v/%v in %v blks",
-				table.tableId,
-				table.tableName,
-				transferedCnt,
-				transferIntent,
-				len(blockList),
-			)
+	if transferIntents != nil && transferIntents.Length() > 0 {
+		if err = batchTransferToTombstones(
+			ctx,
+			table,
+			txnWrites,
+			objectList,
+			transferIntents,
+			targetRowids,
+			searchPKColumn,
+			searchEntryPos,
+			searchBatPos,
+			readPKColumn,
+			mp,
+			fs,
+		); err != nil {
+			return
 		}
 	}
 	return nil
 }
 
-func GetRowidByPKWithDeltaLoc(
+func batchTransferToTombstones(
 	ctx context.Context,
 	table *txnTable,
-	pkColumn *vector.Vector,
-	pkRowIdx int,
-	blockList []objectio.BlockInfo,
-	dataSource engine.DataSource,
-) (newRowId types.Rowid, found bool, err error) {
+	txnWrites []Entry,
+	objectList []objectio.ObjectStats,
+	transferIntents *vector.Vector,
+	targetRowids *vector.Vector,
+	searchPKColumn *vector.Vector,
+	searchEntryPos *vector.Vector,
+	searchBatPos *vector.Vector,
+	readPKColumn *vector.Vector,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+	if err = targetRowids.PreExtend(transferIntents.Length(), mp); err != nil {
+		return
+	}
+	if err = doTransferRowids(
+		ctx,
+		table,
+		objectList,
+		transferIntents,
+		targetRowids,
+		readPKColumn,
+		mp,
+		fs,
+	); err != nil {
+		return
+	}
+
+	if err = mergesort.SortColumnsByIndex(
+		[]*vector.Vector{searchPKColumn, searchEntryPos, searchBatPos},
+		0,
+		mp,
+	); err != nil {
+		return
+	}
+
+	if err = mergesort.SortColumnsByIndex(
+		[]*vector.Vector{readPKColumn, targetRowids},
+		0,
+		mp,
+	); err != nil {
+		return
+	}
+
+	entryPositions := vector.MustFixedCol[int32](searchEntryPos)
+	batPositions := vector.MustFixedCol[int32](searchBatPos)
+	rowids := vector.MustFixedCol[types.Rowid](targetRowids)
+	for pos, endPos := 0, searchPKColumn.Length(); pos < endPos; pos++ {
+		entry := txnWrites[entryPositions[pos]]
+		if err = vector.SetFixedAt[types.Rowid](
+			entry.bat.GetVector(0),
+			int(batPositions[pos]),
+			rowids[pos],
+		); err != nil {
+			return
+		}
+	}
+
+	searchPKColumn.Reset(*searchPKColumn.GetType())
+	searchEntryPos.Reset(*searchEntryPos.GetType())
+	searchBatPos.Reset(*searchBatPos.GetType())
+	targetRowids.Reset(*targetRowids.GetType())
+	transferIntents.Reset(*transferIntents.GetType())
+	readPKColumn.Reset(*readPKColumn.GetType())
+	return
+}
+
+// doTransferRowids transfers rowids from transferIntents to targetRowids
+func doTransferRowids(
+	ctx context.Context,
+	table *txnTable,
+	objectList []objectio.ObjectStats,
+	transferIntents, targetRowids, readPKColumn *vector.Vector,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+	var exprs []*plan.Expr
+	// construct in expression
+
+	var blockList objectio.BlockInfoSlice
+	if _, err = TryFastFilterBlocks(
+		ctx,
+		table,
+		table.db.op.SnapshotTS(),
+		table.GetTableDef(ctx),
+		exprs,
+		nil,
+		objectList,
+		nil,
+		&blockList,
+		fs,
+		table.proc.Load(),
+	); err != nil {
+		return
+	}
+	relData := NewEmptyBlockListRelationData()
+	for i, end := 0, blockList.Len(); i < end; i++ {
+		relData.AppendBlockInfo(*blockList.Get(i))
+	}
+
+	readers, err := table.BuildReaders(
+		ctx, table.proc.Load(), exprs[0], relData, 1, 0, false,
+	)
+	if err != nil {
+		return
+	}
+	attrs := []string{
+		table.GetTableDef(ctx).Pkey.PkeyColName,
+		catalog.Row_ID,
+	}
+	for {
+		var bat *batch.Batch
+		if bat, err = readers[0].Read(
+			ctx,
+			attrs,
+			exprs[0],
+			mp,
+			nil,
+		); err != nil {
+			return
+		}
+		if bat == nil {
+			break
+		}
+		defer bat.Clean(mp)
+		if err = vector.GetUnionAllFunction(
+			*readPKColumn.GetType(), mp,
+		)(
+			readPKColumn, bat.GetVector(0),
+		); err != nil {
+			return
+		}
+
+		if err = vector.GetUnionAllFunction(
+			*targetRowids.GetType(), mp,
+		)(
+			targetRowids, bat.GetVector(1),
+		); err != nil {
+			return
+		}
+	}
+
+	if targetRowids.Length() != transferIntents.Length() {
+		err = moerr.NewInternalErrorNoCtx(
+			"transfer rowids failed, length mismatch, expect %d, got %d",
+			transferIntents.Length(),
+			targetRowids.Length(),
+		)
+	}
+
 	return
 }
