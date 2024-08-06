@@ -3,6 +3,7 @@ package disttae
 import (
 	"context"
 	"encoding/hex"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -11,12 +12,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"go.uber.org/zap"
 )
 
 func ConstructPrintablePK(buf []byte, tableDef *plan.TableDef) string {
@@ -55,6 +58,19 @@ func TransferTombstones(
 	if len(deletedObjects) == 0 || len(createdObjects) == 0 {
 		return
 	}
+	var transferCnt int
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start)
+		if duration > time.Second || err != nil {
+			logutil.Info(
+				"TRANSFER-TOMBSTONE-SLOW-LOG",
+				zap.Duration("duration", time.Since(start)),
+				zap.Int("count", transferCnt),
+				zap.Error(err),
+			)
+		}
+	}()
 	// TODO:
 	var objectList []objectio.ObjectStats
 	for name := range createdObjects {
@@ -138,6 +154,7 @@ func TransferTombstones(
 			}
 
 			if transferIntents.Length() >= 8192 {
+				transferCnt += transferIntents.Length()
 				if err = batchTransferToTombstones(
 					ctx,
 					table,
@@ -159,6 +176,7 @@ func TransferTombstones(
 	}
 
 	if transferIntents != nil && transferIntents.Length() > 0 {
+		transferCnt += transferIntents.Length()
 		if err = batchTransferToTombstones(
 			ctx,
 			table,
