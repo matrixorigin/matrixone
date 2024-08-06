@@ -23,10 +23,9 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -419,9 +419,12 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				if sub, err = proc.GetSessionInfo().SqlHelper.GetSubscriptionMeta(dbStr); err != nil {
 					return err
 				}
+				if sub != nil && !pubsub.InSubMetaTables(sub, tableStr) {
+					return moerr.NewInternalError(ctx, "table %s not found in publication %s", tableStr, sub.Name)
+				}
 
 				// replace with pub account id
-				ctx = defines.AttachAccountId(ctx, uint32(sysAccountID))
+				ctx = defines.AttachAccountId(ctx, uint32(sub.AccountId))
 				// replace with real dbname(sub.DbName)
 				if db, err = e.Database(ctx, sub.DbName, txn); err != nil {
 					return err

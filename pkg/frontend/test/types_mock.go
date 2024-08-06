@@ -380,6 +380,21 @@ func (m *MockExecResult) EXPECT() *MockExecResultMockRecorder {
 	return m.recorder
 }
 
+// ColumnIsNull mocks base method.
+func (m *MockExecResult) ColumnIsNull(ctx context.Context, rindex, cindex uint64) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ColumnIsNull", ctx, rindex, cindex)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ColumnIsNull indicates an expected call of ColumnIsNull.
+func (mr *MockExecResultMockRecorder) ColumnIsNull(ctx, rindex, cindex interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ColumnIsNull", reflect.TypeOf((*MockExecResult)(nil).ColumnIsNull), ctx, rindex, cindex)
+}
+
 // GetInt64 mocks base method.
 func (m *MockExecResult) GetInt64(ctx context.Context, rindex, cindex uint64) (int64, error) {
 	m.ctrl.T.Helper()
