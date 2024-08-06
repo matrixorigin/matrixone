@@ -22,7 +22,6 @@ import (
 	"math"
 	"net"
 	"runtime"
-	gotrace "runtime/trace"
 	"sort"
 	"strings"
 	"sync"
@@ -53,7 +52,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -82,12 +80,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
-	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -103,8 +98,7 @@ const (
 )
 
 var (
-	ncpu           = runtime.GOMAXPROCS(0)
-	ctxCancelError = context.Canceled.Error()
+	ncpu = runtime.GOMAXPROCS(0)
 
 	cantCompileForPrepareErr = moerr.NewCantCompileForPrepareNoCtx()
 )
@@ -149,6 +143,9 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	if c.proc != nil {
+		c.proc.ResetQueryContext()
+	}
 	GetCompileService().putCompile(c)
 }
 
@@ -171,12 +168,12 @@ func (c *Compile) GetMessageCenter() *message.MessageCenter {
 }
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch) error, sql string) {
+	// clean up the process for a new query.
+	proc.ResetQueryContext()
 	c.proc = proc
+
 	c.fill = fill
 	c.sql = sql
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
-
-	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
 	c.affectRows.Store(0)
 
 	for _, info := range c.anal.analInfos {
@@ -232,7 +229,10 @@ func (c *Compile) clear() {
 	c.originSQL = ""
 	c.anal = nil
 	c.e = nil
+
+	c.proc.Free()
 	c.proc = nil
+
 	c.cnList = c.cnList[:0]
 	c.stmt = nil
 	c.startAt = time.Time{}
@@ -277,90 +277,10 @@ func (c *Compile) NeedInitTempEngine() bool {
 func (c *Compile) SetTempEngine(tempEngine engine.Engine, tempStorage *memorystorage.Storage) {
 	e := c.e.(*engine.EntireEngine)
 	e.TempEngine = tempEngine
-	if c.proc.Ctx != nil && c.proc.Ctx.Value(defines.TemporaryTN{}) == nil {
-		c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.TemporaryTN{}, tempStorage)
+
+	if topContext := c.proc.GetTopContext(); topContext.Value(defines.TemporaryTN{}) == nil {
+		c.proc.SaveToTopContext(defines.TemporaryTN{}, tempStorage)
 	}
-}
-
-// Compile is the entrance of the compute-execute-layer.
-// It generates a scope (logic pipeline) for a query plan.
-func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, fill func(*batch.Batch) error) (err error) {
-	start := time.Now()
-	defer func() {
-		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(start).Seconds())
-	}()
-
-	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
-	defer task.End()
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.ConvertPanicError(ctx, e)
-			c.proc.Error(ctx, "panic in compile",
-				zap.String("sql", c.sql),
-				zap.String("error", err.Error()))
-		}
-	}()
-
-	if c.proc.GetTxnOperator() != nil && c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		txnOp := c.proc.GetTxnOperator()
-		seq := txnOp.NextSequence()
-		txnTrace.GetService(c.proc.GetService()).AddTxnDurationAction(
-			txnOp,
-			client.CompileEvent,
-			seq,
-			0,
-			0,
-			err)
-		defer func() {
-			txnTrace.GetService(c.proc.GetService()).AddTxnDurationAction(
-				txnOp,
-				client.CompileEvent,
-				seq,
-				0,
-				time.Since(start),
-				err)
-		}()
-
-		if qry, ok := pn.Plan.(*plan.Plan_Query); ok {
-			if qry.Query.StmtType == plan.Query_SELECT {
-				for _, n := range qry.Query.Nodes {
-					if n.NodeType == plan.Node_LOCK_OP {
-						c.needLockMeta = true
-						break
-					}
-				}
-			} else {
-				c.needLockMeta = true
-			}
-		}
-	}
-
-	// with values
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
-
-	// session info and callback function to write back query result.
-	// XXX u is really a bad name, I'm not sure if `session` or `user` will be more suitable.
-	c.fill = fill
-
-	c.pn = pn
-
-	// Compile may exec some function that need engine.Engine.
-	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
-	// generate logic pipeline for query.
-	c.scope, err = c.compileScope(pn)
-	if err != nil {
-		return err
-	}
-
-	for _, s := range c.scope {
-		if len(s.NodeInfo.Addr) == 0 {
-			s.NodeInfo.Addr = c.addr
-		}
-	}
-	if c.shouldReturnCtxErr() {
-		return c.proc.Ctx.Err()
-	}
-	return nil
 }
 
 func (c *Compile) addAffectedRows(n uint64) {
@@ -472,195 +392,6 @@ func (c *Compile) allocOperatorID() int32 {
 	return c.lastAllocID
 }
 
-// Run is an important function of the compute-layer, it executes a single sql according to its scope
-// Need call Release() after call this function.
-func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
-	sql := c.originSQL
-	if sql == "" {
-		sql = c.sql
-	}
-
-	txnOp := c.proc.GetTxnOperator()
-	seq := uint64(0)
-	if txnOp != nil {
-		seq = txnOp.NextSequence()
-		txnOp.EnterRunSql()
-	}
-
-	defer func() {
-		if txnOp != nil {
-			txnOp.ExitRunSql()
-		}
-		c.proc.CleanValueScanBatchs()
-		c.proc.SetPrepareBatch(nil)
-		c.proc.SetPrepareExprList(nil)
-	}()
-
-	//fmt.Printf("%x xxxx run sql: %s\n", txnOp.Txn().ID, sql)
-
-	var writeOffset uint64
-
-	start := time.Now()
-	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
-
-	stats := statistic.StatsInfoFromContext(c.proc.Ctx)
-	stats.ExecutionStart()
-
-	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOp, sql, seq)
-	defer func() {
-		stats.ExecutionEnd()
-
-		cost := time.Since(start)
-		row := 0
-		if result != nil {
-			row = int(result.AffectRows)
-		}
-		txnTrace.GetService(c.proc.GetService()).TxnStatementCompleted(
-			txnOp,
-			sql,
-			cost,
-			seq,
-			row,
-			err,
-		)
-		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
-		if _, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
-			c.setHaveDDL(true)
-		}
-	}()
-
-	for _, s := range c.scope {
-		s.SetOperatorInfoRecursively(c.allocOperatorID)
-	}
-
-	if c.proc.GetTxnOperator() != nil {
-		writeOffset = uint64(c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset())
-	}
-	result = &util2.RunResult{}
-	var span trace.Span
-	var runC *Compile // compile structure for rerun.
-	// var result = &util2.RunResult{}
-	// var err error
-	var retryTimes int
-	releaseRunC := func() {
-		if runC != c {
-			runC.Release()
-		}
-	}
-
-	sp := c.proc.GetStmtProfile()
-	c.proc.Ctx, span = trace.Start(c.proc.Ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
-	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
-	defer func() {
-		releaseRunC()
-
-		task.End()
-		span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
-	}()
-
-	if c.proc.GetTxnOperator() != nil {
-		c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
-		c.proc.GetTxnOperator().ResetRetry(false)
-	}
-
-	v2.TxnStatementTotalCounter.Inc()
-	runC = c
-	for {
-		_, sarg, exist := fault.TriggerFault("runOnce_fail")
-		enableRetry := exist && !c.isInternal && strings.HasPrefix(c.originSQL, sarg) && retryTimes < 1
-		if err = runC.runOnce(); err == nil {
-			if enableRetry {
-				logutil.Info("runOnce_fail triggered, retrying", zap.Any("sql", c.originSQL))
-				err = moerr.NewTxnNeedRetry(c.proc.Ctx)
-			} else {
-				break
-			}
-		}
-
-		c.fatalLog(retryTimes, err)
-		if !c.canRetry(err) {
-			if c.proc.GetTxnOperator().Txn().IsRCIsolation() &&
-				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-				orphan, e := c.proc.Base.LockService.IsOrphanTxn(
-					c.proc.Ctx,
-					c.proc.GetTxnOperator().Txn().ID,
-				)
-				if e != nil {
-					getLogger(c.proc.GetService()).Error("failed to convert dup to orphan txn error",
-						zap.String("txn", hex.EncodeToString(c.proc.GetTxnOperator().Txn().ID)),
-						zap.Error(err),
-					)
-				}
-				if e == nil && orphan {
-					getLogger(c.proc.GetService()).Warn("convert dup to orphan txn error",
-						zap.String("txn", hex.EncodeToString(c.proc.GetTxnOperator().Txn().ID)),
-					)
-					err = moerr.NewCannotCommitOrphan(c.proc.Ctx)
-				}
-			}
-			return nil, err
-		}
-
-		retryTimes++
-		releaseRunC()
-		defChanged := moerr.IsMoErrCode(
-			err,
-			moerr.ErrTxnNeedRetryWithDefChanged)
-		if runC, err = c.prepareRetry(defChanged); err != nil {
-			return nil, err
-		}
-	}
-
-	if c.shouldReturnCtxErr() {
-		return nil, c.proc.Ctx.Err()
-	}
-	result.AffectRows = runC.getAffectedRows()
-
-	if c.proc.GetTxnOperator() != nil {
-		return result, c.proc.GetTxnOperator().GetWorkspace().Adjust(writeOffset)
-	}
-	return result, nil
-}
-
-func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
-	v2.TxnStatementRetryCounter.Inc()
-	c.proc.GetTxnOperator().ResetRetry(true)
-	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
-
-	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(c.proc.Ctx); e != nil {
-		return nil, e
-	}
-
-	// increase the statement id
-	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(c.proc.Ctx, false); e != nil {
-		return nil, e
-	}
-
-	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
-	// improved to refresh expression in the future.
-
-	var e error
-	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
-	runC.SetOriginSQL(c.originSQL)
-	defer func() {
-		if e != nil {
-			runC.Release()
-		}
-	}()
-	if defChanged {
-		var pn *plan2.Plan
-		pn, e = c.buildPlanFunc(c.proc.Ctx)
-		if e != nil {
-			return nil, e
-		}
-		c.pn = pn
-	}
-	if e = runC.Compile(c.proc.Ctx, c.pn, c.fill); e != nil {
-		return nil, e
-	}
-	return runC, nil
-}
-
 // isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
 // he statement
 func (c *Compile) isRetryErr(err error) bool {
@@ -714,15 +445,17 @@ func (c *Compile) runOnce() error {
 	}
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
-		s.SetContextRecursively(c.proc.Ctx)
 		err = s.InitAllDataSource(c)
 		if err != nil {
 			return err
 		}
 	}
-	GetCompileService().startService(c)
+
+	if err = GetCompileService().recordRunningCompile(c); err != nil {
+		return err
+	}
 	defer func() {
-		_, _ = GetCompileService().endService(c)
+		_, _ = GetCompileService().removeRunningCompile(c)
 	}()
 
 	//c.printPipeline()
@@ -796,15 +529,6 @@ func (c *Compile) runOnce() error {
 		}
 	}
 	return err
-}
-
-// shouldReturnCtxErr return true only if the ctx has error and the error is not canceled.
-// maybe deadlined or other error.
-func (c *Compile) shouldReturnCtxErr() bool {
-	if e := c.proc.Ctx.Err(); e != nil && e.Error() != ctxCancelError {
-		return true
-	}
-	return false
 }
 
 func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
@@ -1250,7 +974,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 					// optimize for limit 0
 					rs := newScope(Merge)
 					rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-					rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+					rs.Proc = c.proc.NewNoContextChildProc(0)
 					return c.compileLimit(n, []*Scope{rs}), nil
 				}
 			}
@@ -1605,7 +1329,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	}
 	ds.NodeInfo = getEngineNode(c)
 	ds.NodeInfo.Addr = addr
-	ds.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+	ds.Proc = c.proc.NewNoContextChildProc(0)
 	c.proc.Base.LoadTag = c.anal.qry.LoadTag
 	ds.Proc.Base.LoadTag = true
 	ds.DataSource = &Source{isConst: true}
@@ -1614,7 +1338,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 
 func (c *Compile) constructLoadMergeScope() *Scope {
 	ds := newScope(Merge)
-	ds.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
+	ds.Proc = c.proc.NewNoContextChildProc(1)
 	ds.Proc.Base.LoadTag = true
 	arg := merge.NewArgument()
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, false)
@@ -1648,7 +1372,7 @@ func (c *Compile) compileSourceScan(n *plan.Node) ([]*Scope, error) {
 	for i := range ss {
 		ss[i] = newScope(Normal)
 		ss[i].NodeInfo = getEngineNode(c)
-		ss[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+		ss[i].Proc = c.proc.NewNoContextChildProc(0)
 		arg := constructStream(n, ps[i])
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(arg)
@@ -1825,7 +1549,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		ret.setRootOperator(op)
 		c.anal.isFirst = false
 
-		ret.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+		ret.Proc = c.proc.NewNoContextChildProc(0)
 		return []*Scope{ret}, nil
 	}
 	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
@@ -2000,7 +1724,7 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 	ds.NodeInfo = getEngineNode(c)
 	ds.DataSource = &Source{isConst: true, node: n}
 	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-	ds.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+	ds.Proc = c.proc.NewNoContextChildProc(0)
 
 	currentFirstFlag := c.anal.isFirst
 	op := constructValueScan()
@@ -2044,7 +1768,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, first
 	op := constructTableScan()
 	op.SetAnalyzeControl(c.anal.curNodeIdx, firstFlag)
 	s.setRootOperator(op)
-	s.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+	s.Proc = c.proc.NewNoContextChildProc(0)
 	return s, nil
 }
 
@@ -2063,7 +1787,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 
 	//-----------------------------------------------------------------------------------------------------
-	ctx := c.proc.Ctx
+	ctx := c.proc.GetTopContext()
 	txnOp = c.proc.GetTxnOperator()
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
@@ -3191,7 +2915,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 				s.setRootOperator(mergeArg)
 
 				scopes = append(scopes, s)
-				scopes[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
+				scopes[i].Proc = c.proc.NewNoContextChildProc(1)
 				if c.anal.qry.LoadTag {
 					for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
 						rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
@@ -3366,7 +3090,7 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 
 	rs := newScope(Merge)
 	rs.NodeInfo = getEngineNode(c)
-	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(receivers))
+	rs.Proc = c.proc.NewNoContextChildProc(len(receivers))
 
 	currentFirstFlag := c.anal.isFirst
 	mergecteArg := mergecte.NewArgument()
@@ -3391,7 +3115,7 @@ func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope
 	}
 	rs := newScope(Merge)
 	rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(receivers))
+	rs.Proc = c.proc.NewNoContextChildProc(len(receivers))
 
 	currentFirstFlag := c.anal.isFirst
 	mergeRecursiveArg := mergerecursive.NewArgument()
@@ -3416,7 +3140,7 @@ func (c *Compile) compileSinkScanNode(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	}
 	rs := newScope(Merge)
 	rs.NodeInfo = getEngineNode(c)
-	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
+	rs.Proc = c.proc.NewNoContextChildProc(1)
 
 	currentFirstFlag := c.anal.isFirst
 	mergeArg := merge.NewArgument().WithSinkScan(true)
@@ -3522,7 +3246,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		}
 		cnt++
 	}
-	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, cnt)
+	rs.Proc = c.proc.NewNoContextChildProc(cnt)
 	if len(ss) > 0 {
 		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
 	}
@@ -3596,7 +3320,7 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 		ss[i].Magic = Remote
 		ss[i].NodeInfo.Addr = addr
 		ss[i].NodeInfo.Mcpu = 1 // ss is already the mcpu length so we don't need to parallel it
-		ss[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, childrenCount)
+		ss[i].Proc = c.proc.NewNoContextChildProc(childrenCount)
 
 		// The merge operator does not act as First/Last, It needs to handle its analyze status
 		mergeOp := merge.NewArgument()
@@ -3613,7 +3337,7 @@ func (c *Compile) newScopeListForRightJoin(node *plan.Node) []*Scope {
 	ss := make([]*Scope, 1)
 	ss[0] = newScope(Remote)
 	ss[0].IsJoin = true
-	ss[0].Proc = process.NewFromProc(c.proc, c.proc.Ctx, 2)
+	ss[0].Proc = c.proc.NewNoContextChildProc(2)
 	ss[0].NodeInfo = engine.Node{Addr: c.addr, Mcpu: c.generateCPUNumber(ncpu, int(node.Stats.BlockNum))}
 	ss[0].BuildIdx = 1
 	mergeOp := merge.NewArgument()
@@ -3713,7 +3437,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].IsJoin = true
 			ss[i].NodeInfo.Addr = cn.Addr
 			ss[i].NodeInfo.Mcpu = 1
-			ss[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, sum)
+			ss[i].Proc = c.proc.NewNoContextChildProc(sum)
 			ss[i].BuildIdx = lnum
 			shuffleIdx++
 			ss[i].ShuffleIdx = shuffleIdx
@@ -3780,7 +3504,7 @@ func (c *Compile) newJoinProbeScopeWithBidx(s *Scope) *Scope {
 	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
 	mergeOp.SetIsFirst(true)
 	rs.setRootOperator(mergeOp)
-	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, s.BuildIdx)
+	rs.Proc = s.Proc.NewContextChildProc(s.BuildIdx)
 	for i := 0; i < s.BuildIdx; i++ {
 		regTransplant(s, rs, i, i)
 	}
@@ -3804,7 +3528,7 @@ func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
 	mergeOp.SetIsFirst(true)
 	rs.setRootOperator(mergeOp)
-	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, s.BuildIdx)
+	rs.Proc = s.Proc.NewContextChildProc(s.BuildIdx)
 	for i := 0; i < s.BuildIdx; i++ {
 		regTransplant(s, rs, i, i)
 	}
@@ -3817,7 +3541,7 @@ func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
 	rs := newScope(Merge)
 	buildLen := len(s.Proc.Reg.MergeReceivers) - s.BuildIdx
-	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, buildLen)
+	rs.Proc = s.Proc.NewContextChildProc(buildLen)
 	for i := 0; i < buildLen; i++ {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
@@ -3943,7 +3667,7 @@ func collectTombstones(
 	var txnOp client.TxnOperator
 
 	//-----------------------------------------------------------------------------------------------------
-	ctx := c.proc.Ctx
+	ctx := c.proc.GetTopContext()
 	txnOp = c.proc.GetTxnOperator()
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
@@ -4132,7 +3856,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var txnOp client.TxnOperator
 
 	//------------------------------------------------------------------------------------------------------------------
-	ctx := c.proc.Ctx
+	ctx := c.proc.GetTopContext()
 	txnOp = c.proc.GetTxnOperator()
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
@@ -4147,7 +3871,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		}
 	}
 	//-------------------------------------------------------------------------------------------------------------
-	//ctx := c.proc.Ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}

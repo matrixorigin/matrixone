@@ -930,7 +930,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	}
 	defer mpool.DeleteMPool(mp)
 
-	testProc := process.New(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil)
+	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	params1 := testProc.GetVector(types.T_text.ToType())
 	for i := 0; i < 3; i++ {

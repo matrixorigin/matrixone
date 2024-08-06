@@ -133,6 +133,6 @@ func TestNormalDeletion(t *testing.T) {
 	require.NoError(t, err)
 	arg.Free(proc, false, nil)
 	arg.GetChildren(0).Free(proc, false, nil)
-	proc.FreeVectors()
+	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
