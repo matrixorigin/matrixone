@@ -1862,6 +1862,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 		}
 	}
 	if ret != nil {
+		ret.IsPrepare = isPrepareStmt
 		if ses != nil && ses.GetTenantInfo() != nil && !ses.IsBackgroundSession() {
 			err = authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, ret)
 			if err != nil {
