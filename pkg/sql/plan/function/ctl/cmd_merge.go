@@ -197,14 +197,15 @@ func handleCNMerge(
 		}
 	}()
 
+	ctx := proc.Ctx
 	if a.accountId != math.MaxUint64 {
-		proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(a.accountId))
+		ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(a.accountId))
 	}
 
 	target := getTNShard(proc.GetService())
 	fs := proc.GetFileService()
 	mergeAndWrite := func(rel engine.Relation, stats []objectio.ObjectStats) (*rpc.SendResult, error) {
-		entry, err := rel.MergeObjects(proc.Ctx, stats, uint32(a.targetObjSize))
+		entry, err := rel.MergeObjects(ctx, stats, uint32(a.targetObjSize))
 		if err != nil {
 			merge.CleanUpUselessFiles(entry, fs)
 			if entry == nil {
@@ -219,7 +220,7 @@ func handleCNMerge(
 			return nil, err
 		}
 
-		return txnWrite(proc.Ctx, target, txnOp, payload)
+		return txnWrite(ctx, target, txnOp, payload)
 	}
 
 	switch a.mergeType {
@@ -228,7 +229,7 @@ func handleCNMerge(
 		if err != nil {
 			return Result{}, moerr.NewInvalidArgNoCtx("tableID", a.tbl)
 		}
-		_, _, rel, err := proc.GetSessionInfo().StorageEngine.GetRelationById(proc.Ctx, txnOp, tblId)
+		_, _, rel, err := proc.GetSessionInfo().StorageEngine.GetRelationById(ctx, txnOp, tblId)
 		if err != nil {
 			logutil.Errorf("mergeblocks err on cn, tblId %d, err %s", tblId, err.Error())
 			return Result{}, err
@@ -246,25 +247,25 @@ func handleCNMerge(
 
 	case tableMergeType:
 
-		database, err := proc.GetSessionInfo().StorageEngine.Database(proc.Ctx, a.db, txnOp)
+		database, err := proc.GetSessionInfo().StorageEngine.Database(ctx, a.db, txnOp)
 		if err != nil {
 			logutil.Errorf("mergeblocks err on cn, db %s, err %s", a.db, err.Error())
 			return Result{}, err
 		}
-		rel, err := database.Relation(proc.Ctx, a.tbl, nil)
+		rel, err := database.Relation(ctx, a.tbl, nil)
 		if err != nil {
 			logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.tbl, err.Error())
 			return Result{}, err
 		}
 
-		partitionInfo, err := getRelPartitionInfo(proc.Ctx, rel)
+		partitionInfo, err := getRelPartitionInfo(ctx, rel)
 		if err != nil {
 			logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.tbl, err.Error())
 			return Result{}, err
 		}
 
 		if partitionInfo == nil {
-			stats, err := rel.GetVisibleObjectStats(proc.Ctx)
+			stats, err := rel.GetVisibleObjectStats(ctx)
 			if err != nil {
 				return Result{}, err
 			}
@@ -275,7 +276,7 @@ func handleCNMerge(
 				round := 0
 				for {
 					round++
-					ss, err := applyMergePolicy(proc.Ctx, a.filter, getSortKeyPos(proc.Ctx, rel), stats)
+					ss, err := applyMergePolicy(ctx, a.filter, getSortKeyPos(ctx, rel), stats)
 					if err != nil {
 						errOut = errors.Join(errOut, err)
 						break
@@ -346,11 +347,11 @@ func handleCNMerge(
 		hasSuccess := false
 		// for partition table, run merge on each partition table separately.
 		for _, partitionTable := range partitionInfo.PartitionTableNames {
-			prel, err = database.Relation(proc.Ctx, partitionTable, nil)
+			prel, err = database.Relation(ctx, partitionTable, nil)
 			if err != nil {
 				return Result{}, err
 			}
-			stats, err := prel.GetVisibleObjectStats(proc.Ctx)
+			stats, err := prel.GetVisibleObjectStats(ctx)
 			if err != nil {
 				return Result{}, err
 			}
@@ -358,7 +359,7 @@ func handleCNMerge(
 				round := 0
 				for {
 					round++
-					ss, err := applyMergePolicy(proc.Ctx, a.filter, getSortKeyPos(proc.Ctx, prel), stats)
+					ss, err := applyMergePolicy(ctx, a.filter, getSortKeyPos(ctx, prel), stats)
 					if err != nil {
 						errOut = errors.Join(errOut, err)
 						break
