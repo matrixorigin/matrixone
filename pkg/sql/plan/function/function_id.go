@@ -386,6 +386,7 @@ const (
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
 	EMBEDDING
+	EXTRACT_TEXT
 )
 
 // functionIdRegister is what function we have registered already.
@@ -695,4 +696,5 @@ var functionIdRegister = map[string]int32{
 	"bitmap_construct_agg": BITMAP_CONSTRUCT_AGG,
 	"bitmap_or_agg":        BITMAP_OR_AGG,
 	"embedding":            EMBEDDING,
+	"extract_text":         EXTRACT_TEXT,
 }
