@@ -217,29 +217,31 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *process.RegisterMessage, bo
 			msg = (*process.RegisterMessage)(value.UnsafePointer())
 		}
 		if !ok || msg == nil || msg.Batch == nil {
-			if msg.Batch == nil && chosen > 0 {
+			if msg != nil && msg.Batch == nil && chosen > 0 {
 				idx := chosen - 1
 				if r.nilBatchCnt[idx] > 0 {
 					r.nilBatchCnt[idx]--
 				}
-				if r.nilBatchCnt[idx] == 0 {
-					r.RemoveChosen(chosen)
+				if r.nilBatchCnt[idx] > 0 {
+					return r.selectFromAllReg()
 				}
 			}
+			r.RemoveChosen(chosen)
 		}
 		return chosen, msg, ok
 	}
 
 	if !ok || msg == nil || msg.Batch == nil {
-		if msg.Batch == nil && chosen > 0 {
+		if msg != nil && msg.Batch == nil && chosen > 0 {
 			idx := chosen - 1
 			if r.nilBatchCnt[idx] > 0 {
 				r.nilBatchCnt[idx]--
 			}
-			if r.nilBatchCnt[idx] == 0 {
-				r.DisableChosen(chosen)
+			if r.nilBatchCnt[idx] > 0 {
+				return r.selectFromAllReg()
 			}
 		}
+		r.DisableChosen(chosen)
 	}
 	return chosen, msg, ok
 }
