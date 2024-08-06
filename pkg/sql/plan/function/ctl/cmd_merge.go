@@ -309,8 +309,7 @@ func handleCNMerge(
 				}, nil
 			}
 
-			size := 10
-			slicedStats := sliceStats(stats, size)
+			slicedStats := sliceStats(stats)
 			buffer := new(bytes.Buffer)
 			var errOut error
 			hasSuccess := false
@@ -386,8 +385,7 @@ func handleCNMerge(
 				continue
 			}
 
-			size := 10
-			slicedStats := sliceStats(stats, size)
+			slicedStats := sliceStats(stats)
 			mergedStats := 0
 			for _, ss := range slicedStats {
 				mergedStats += len(ss)
@@ -438,18 +436,33 @@ func getTNShard(service string) metadata.TNShard {
 	return target
 }
 
-func sliceStats(stats []objectio.ObjectStats, size int) [][]objectio.ObjectStats {
-	var j int
-	targetSize := len(stats)/size + 1
-	slicedstats := make([][]objectio.ObjectStats, 0, targetSize)
-	for i := 0; i < len(stats); i += size {
-		j += size
-		if j > len(stats) {
-			j = len(stats)
+// Each merge process merges at most ~10^7 rows.
+// For transfer table, 10^7 rows is 12 * 10^7 ~= 120MB size.
+const slicedRowCnt = 10_000_000
+
+func sliceStats(stats []objectio.ObjectStats) [][]objectio.ObjectStats {
+	rows := uint32(0)
+	slicedSize := make([]int, 1)
+	i := 0
+	for _, stat := range stats {
+		rows += stat.Rows()
+		slicedSize[i]++
+		if rows > slicedRowCnt {
+			i++
+			slicedSize = append(slicedSize, 0)
+			rows = 0
 		}
-		slicedstats = append(slicedstats, stats[i:j])
 	}
-	return slicedstats
+
+	slicedStats := make([][]objectio.ObjectStats, len(slicedSize))
+	i = 0
+	for _, stat := range stats {
+		slicedStats[i] = append(slicedStats[i], stat)
+		if len(slicedStats) == slicedSize[i] {
+			i++
+		}
+	}
+	return slicedStats
 }
 
 func getRelPartitionInfo(ctx context.Context, rel engine.Relation) (*plan.PartitionByDef, error) {

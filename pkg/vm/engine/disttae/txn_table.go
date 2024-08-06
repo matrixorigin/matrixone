@@ -2406,8 +2406,11 @@ func (tbl *txnTable) MergeObjects(
 	for _, m := range taskHost.transferMaps {
 		rowCnt += len(m)
 	}
-	// if transfer info is small, send it to tn directly.
-	if rowCnt < 8000000 {
+
+	// If transfer info is small, send it to tn directly.
+	// For api.TransDestPos, 5*10^5 rows is 52*5*10^5 ~= 26MB
+	// For api.TransferDestPos, 5*10^5 rows is 12*5*10^5 ~= 6MB
+	if rowCnt < 500000 {
 		size := len(taskHost.transferMaps)
 		mappings := make([]api.BlkTransMap, size)
 		for i := 0; i < size; i++ {
