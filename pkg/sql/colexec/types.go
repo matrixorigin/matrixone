@@ -15,10 +15,10 @@
 package colexec
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"reflect"
 	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -72,7 +72,7 @@ type rpcClientItem struct {
 
 type runningPipelineInfo struct {
 	alreadyDone bool
-	runningProc *process.Process
+	queryCancel context.CancelFunc
 
 	isDispatch bool
 	receiver   *process.WrapCs
@@ -87,7 +87,9 @@ func (info *runningPipelineInfo) cancelPipeline() {
 		info.receiver.Unlock()
 
 	} else {
-		info.runningProc.Cancel()
+		if info.queryCancel != nil {
+			info.queryCancel()
+		}
 	}
 }
 
@@ -121,7 +123,6 @@ type ReceiverOperator struct {
 	// while Join/Intersect/Minus ... are not
 	aliveMergeReceiver int
 	chs                []chan *process.RegisterMessage
-	nilBatchCnt        []int
 	receiverListener   []reflect.SelectCase
 }
 

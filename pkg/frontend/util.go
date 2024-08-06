@@ -374,9 +374,10 @@ func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interfa
 		}
 		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
 		// Here the evalExpr may execute some function that needs engine.Engine.
-		ses.txnCompileCtx.GetProcess().Ctx = attachValue(ses.txnCompileCtx.GetProcess().Ctx,
-			defines.EngineKey{},
-			ses.GetTxnHandler().GetStorage())
+		ses.txnCompileCtx.GetProcess().ReplaceTopCtx(
+			attachValue(ses.txnCompileCtx.GetProcess().GetTopContext(),
+				defines.EngineKey{},
+				ses.GetTxnHandler().GetStorage()))
 
 		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 		if err != nil {

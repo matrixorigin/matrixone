@@ -111,10 +111,11 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 		proto := ses.GetResponser().MysqlRrWr()
 		if mrs != nil {
 			if res.isSleepSql {
+				topCtx := proc.GetTopContext()
 				select {
 				case <-time.After(time.Duration(res.seconds) * time.Second):
 					res.resultX.Store(timeout)
-				case <-proc.Ctx.Done():
+				case <-topCtx.Done():
 					res.resultX.Store(contextCancel)
 				}
 			}
