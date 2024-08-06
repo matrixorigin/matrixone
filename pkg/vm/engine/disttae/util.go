@@ -1465,6 +1465,7 @@ func ForeachSnapshotObjects(
 	ts timestamp.Timestamp,
 	onObject func(obj logtailreplay.ObjectInfo, isCommitted bool) error,
 	tableSnapshot *logtailreplay.PartitionState,
+	extraCommitted []objectio.ObjectStats,
 	uncommitted ...objectio.ObjectStats,
 ) (err error) {
 	// process all uncommitted objects first
@@ -1473,6 +1474,15 @@ func ForeachSnapshotObjects(
 			ObjectStats: obj,
 		}
 		if err = onObject(info, false); err != nil {
+			return
+		}
+	}
+	// process all uncommitted objects first
+	for _, obj := range extraCommitted {
+		info := logtailreplay.ObjectInfo{
+			ObjectStats: obj,
+		}
+		if err = onObject(info, true); err != nil {
 			return
 		}
 	}

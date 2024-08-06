@@ -779,13 +779,12 @@ func (tbl *txnTable) rangesOnePart(
 	if done, err = TryFastFilterBlocks(
 		ctx,
 		tbl,
-		txnOffset,
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
 		exprs,
 		state,
+		nil,
 		uncommittedObjects,
-		//&dirtyBlks,
 		outBlocks,
 		tbl.getTxn().engine.fs,
 		tbl.proc.Load(),
@@ -924,6 +923,7 @@ func (tbl *txnTable) rangesOnePart(
 			return
 		},
 		state,
+		nil,
 		uncommittedObjects...,
 	); err != nil {
 		return
