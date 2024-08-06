@@ -92,6 +92,11 @@ func (o *overlap) Filter(objs []objectio.ObjectStats) []objectio.ObjectStats {
 	if len(set.entries) > o.maxEntries {
 		return set.entries[:o.maxEntries]
 	}
+	for _, obj := range set.entries {
+		slices.DeleteFunc(objs, func(stats objectio.ObjectStats) bool {
+			return stats == obj
+		})
+	}
 	return set.entries
 }
 

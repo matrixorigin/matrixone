@@ -272,13 +272,15 @@ func handleCNMerge(
 				buffer := new(bytes.Buffer)
 				var errOut error
 				hasSuccess := false
+				round := 0
 				for {
-					stats, err = applyMergePolicy(proc.Ctx, a.filter, getSortKeyPos(proc.Ctx, rel), stats)
+					round++
+					ss, err := applyMergePolicy(proc.Ctx, a.filter, getSortKeyPos(proc.Ctx, rel), stats)
 					if err != nil {
 						errOut = errors.Join(errOut, err)
 						break
 					}
-					resp, err := mergeAndWrite(rel, stats)
+					resp, err := mergeAndWrite(rel, ss)
 					if err != nil {
 						errOut = errors.Join(errOut, err)
 						break
@@ -287,6 +289,13 @@ func handleCNMerge(
 					buffer.WriteString("\n")
 					resp.Release()
 					hasSuccess = true
+					logutil.Info("[CN-MERGING]",
+						zap.String("table", rel.GetTableName()),
+						zap.String("policy", a.filter),
+						zap.Int("round", round),
+						zap.Int("objects length", len(ss)),
+						zap.Int("remain objects", len(stats)),
+					)
 				}
 
 				if !hasSuccess {
@@ -299,12 +308,14 @@ func handleCNMerge(
 			}
 
 			size := 10
-			slicedstats := sliceStats(stats, size)
+			slicedStats := sliceStats(stats, size)
 			buffer := new(bytes.Buffer)
 			var errOut error
 			hasSuccess := false
-			for _, stats := range slicedstats {
-				resp, err := mergeAndWrite(rel, stats)
+			mergedStats := 0
+			for _, ss := range slicedStats {
+				mergedStats += len(ss)
+				resp, err := mergeAndWrite(rel, ss)
 				if err != nil {
 					errOut = errors.Join(errOut, err)
 					continue
@@ -313,6 +324,11 @@ func handleCNMerge(
 				buffer.WriteString("\n")
 				resp.Release()
 				hasSuccess = true
+				logutil.Info("[CN-MERGING]",
+					zap.String("table", rel.GetTableName()),
+					zap.Int("merged objects", mergedStats),
+					zap.Int("total objects", len(stats)),
+				)
 			}
 			if !hasSuccess {
 				return Result{}, errOut
@@ -339,13 +355,15 @@ func handleCNMerge(
 				return Result{}, err
 			}
 			if a.filter != "" {
+				round := 0
 				for {
-					stats, err = applyMergePolicy(proc.Ctx, a.filter, getSortKeyPos(proc.Ctx, prel), stats)
+					round++
+					ss, err := applyMergePolicy(proc.Ctx, a.filter, getSortKeyPos(proc.Ctx, prel), stats)
 					if err != nil {
 						errOut = errors.Join(errOut, err)
 						break
 					}
-					resp, err := mergeAndWrite(prel, stats)
+					resp, err := mergeAndWrite(prel, ss)
 					if err != nil {
 						errOut = errors.Join(errOut, err)
 						break
@@ -354,14 +372,23 @@ func handleCNMerge(
 					buffer.WriteString("\n")
 					resp.Release()
 					hasSuccess = true
+					logutil.Info("[CN-MERGING]",
+						zap.String("table", prel.GetTableName()),
+						zap.String("policy", a.filter),
+						zap.Int("round", round),
+						zap.Int("objects length", len(ss)),
+						zap.Int("remain objects", len(stats)),
+					)
 				}
 				continue
 			}
 
 			size := 10
-			slicedstats := sliceStats(stats, size)
-			for _, stats := range slicedstats {
-				resp, err := mergeAndWrite(prel, stats)
+			slicedStats := sliceStats(stats, size)
+			mergedStats := 0
+			for _, ss := range slicedStats {
+				mergedStats += len(ss)
+				resp, err := mergeAndWrite(prel, ss)
 				if err != nil {
 					errOut = errors.Join(errOut, err)
 					continue
@@ -370,6 +397,11 @@ func handleCNMerge(
 				buffer.WriteString("\n")
 				resp.Release()
 				hasSuccess = true
+				logutil.Info("[CN-MERGING]",
+					zap.String("table", rel.GetTableName()),
+					zap.Int("merged objects", mergedStats),
+					zap.Int("total objects", len(stats)),
+				)
 			}
 		}
 		if !hasSuccess {

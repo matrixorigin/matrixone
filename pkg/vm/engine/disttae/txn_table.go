@@ -26,7 +26,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/docker/go-units"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
