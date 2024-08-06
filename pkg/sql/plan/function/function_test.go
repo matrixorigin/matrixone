@@ -251,7 +251,7 @@ func TestRunFunctionDirectly(t *testing.T) {
 		}
 
 		v.Free(proc.Mp())
-		proc.FreeVectors()
+		proc.Free()
 		require.Equal(t, startMp, proc.Mp().CurrNB())
 	}
 

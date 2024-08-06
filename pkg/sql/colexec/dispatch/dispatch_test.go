@@ -94,7 +94,7 @@ func TestDispatch(t *testing.T) {
 				msg.Batch.Clean(tc.proc.Mp())
 			}
 		}
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }

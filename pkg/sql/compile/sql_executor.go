@@ -284,7 +284,7 @@ func (exec *txnExecutor) Exec(
 		}
 	}
 
-	proc := process.New(
+	proc := process.NewTopProcess(
 		exec.ctx,
 		exec.s.mp,
 		exec.s.txnClient,
@@ -303,8 +303,7 @@ func (exec *txnExecutor) Exec(
 	proc.Base.SessionInfo.StorageEngine = exec.s.eng
 	proc.Base.QueryClient = exec.s.qc
 	defer func() {
-		proc.CleanValueScanBatchs()
-		proc.FreeVectors()
+		proc.Free()
 	}()
 
 	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
@@ -319,9 +318,9 @@ func (exec *txnExecutor) Exec(
 	c.SetOriginSQL(sql)
 	defer c.Release()
 	c.disableRetry = exec.opts.DisableIncrStatement()
-	c.SetBuildPlanFunc(func() (*plan.Plan, error) {
+	c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
 		return plan.BuildPlan(
-			exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower),
+			exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
 			stmts[0], false)
 	})
 
@@ -385,7 +384,7 @@ func (exec *txnExecutor) LockTable(table string) error {
 	if err != nil {
 		return err
 	}
-	proc := process.New(
+	proc := process.NewTopProcess(
 		ctx,
 		exec.s.mp,
 		exec.s.txnClient,
@@ -401,8 +400,7 @@ func (exec *txnExecutor) LockTable(table string) error {
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {
-		proc.CleanValueScanBatchs()
-		proc.FreeVectors()
+		proc.Free()
 	}()
 	return doLockTable(exec.s.eng, proc, rel, false)
 }

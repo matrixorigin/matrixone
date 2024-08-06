@@ -25,6 +25,11 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	cvey "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -44,9 +49,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	cvey "github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -493,6 +495,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 
 func TestGetExprValue(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
+	catalog.SetupDefines("")
 	cvey.Convey("", t, func() {
 		type args struct {
 			sql     string
@@ -597,8 +600,11 @@ func TestGetExprValue(t *testing.T) {
 		binary.LittleEndian.PutUint64(id, 1)
 		ranges.Append(id)
 
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(&ranges, nil).AnyTimes()
-		table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
+		relData := &memoryengine.MemRelationData{
+			Shards: ranges,
+		}
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
+		//table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 		eng.EXPECT().Hints().Return(engine.Hints{
@@ -924,7 +930,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	}
 	defer mpool.DeleteMPool(mp)
 
-	testProc := process.New(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil)
+	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	params1 := testProc.GetVector(types.T_text.ToType())
 	for i := 0; i < 3; i++ {

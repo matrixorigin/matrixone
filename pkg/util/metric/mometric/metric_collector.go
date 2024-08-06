@@ -20,9 +20,11 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -303,12 +305,15 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 	buf.Reset()
 
 	ts := time.Now()
-	buffer := make(map[string]table.RowWriter, 2)
+	writer := make(map[string]table.RowWriter, 2)
 	writeValues := func(row *table.Row) error {
-		w, exist := buffer[row.Table.GetName()]
+		w, exist := writer[row.Table.GetName()]
 		if !exist {
 			w = s.collector.writerFactory.GetRowWriter(ctx, row.GetAccount(), row.Table, ts)
-			buffer[row.Table.GetName()] = w
+			if setter, ok := (w).(table.BufferSettable); ok && setter.NeedBuffer() {
+				setter.SetBuffer(getBuffer(), func(buf *bytes.Buffer) { putBuffer(buf) })
+			}
+			writer[row.Table.GetName()] = w
 		}
 		if err := w.WriteRow(row); err != nil {
 			return err
@@ -375,8 +380,8 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 		}
 	}
 
-	reqs := make([]table.WriteRequest, 0, len(buffer))
-	for _, w := range buffer {
+	reqs := make([]table.WriteRequest, 0, len(writer))
+	for _, w := range writer {
 		reqs = append(reqs, table.NewRowRequest(w))
 	}
 
@@ -389,4 +394,14 @@ func localTime(value int64) time.Time {
 
 func localTimeStr(value int64) string {
 	return time.UnixMicro(value).In(time.Local).Format("2006-01-02 15:04:05.000000")
+}
+
+var bufferPool = sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 0, mpool.MB)) }}
+
+func getBuffer() *bytes.Buffer {
+	return bufferPool.Get().(*bytes.Buffer)
+}
+func putBuffer(b *bytes.Buffer) {
+	b.Reset()
+	bufferPool.Put(b)
 }
