@@ -100,9 +100,8 @@ func (c *cluster) Start() error {
 				return
 			}
 		}(s)
-		// try to fix a test framework race.
-		wg.Wait()
 	}
+	wg.Wait()
 
 	select {
 	case err := <-errC:
