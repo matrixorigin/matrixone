@@ -54,13 +54,17 @@ type functionInformationForEval struct {
 	fid        int32
 	overloadID int64
 
+	// whether the function is volatile or time-dependent.
+	// they were used to determine whether the function can be folded.
+	volatile, timeDependent bool
+
+	// the function's evalFn and freeFn.
 	evalFn func(
 		parameters []*vector.Vector,
 		result vector.FunctionResultWrapper,
 		proc *process.Process,
 		rowCount int,
 		selectList *function.FunctionSelectList) error
-
 	freeFn func() error
 }
 
