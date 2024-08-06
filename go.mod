@@ -82,7 +82,6 @@ require (
 	google.golang.org/grpc v1.64.0
 	google.golang.org/protobuf v1.34.1
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
-	rsc.io/pdf v0.1.1
 )
 
 require (
