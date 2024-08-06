@@ -70,12 +70,11 @@ func TestMySQLProtocolRead(t *testing.T) {
 		actualPayload := make([][]byte, 0)
 		repeat := 5
 		packetSize := 1024 * 5 // 16MB
-		seqID := byte(0)
 		go func() {
 			for i := 0; i < repeat; i++ {
 				header := make([]byte, 4)
 				binary.LittleEndian.PutUint32(header, uint32(packetSize))
-				header[3] = seqID
+				header[3] = byte(i)
 
 				payload := make([]byte, packetSize)
 				for j := range payload {
@@ -110,12 +109,11 @@ func TestMySQLProtocolRead(t *testing.T) {
 		actualPayload := make([][]byte, 0)
 		repeat := 5
 		packetSize := 1024 * 1024 * 5 // 16MB
-		seqID := byte(0)
 		go func() {
 			for i := 0; i < repeat; i++ {
 				header := make([]byte, 4)
 				binary.LittleEndian.PutUint32(header, uint32(packetSize))
-				header[3] = seqID
+				header[3] = byte(i)
 
 				payload := make([]byte, packetSize)
 				for j := range payload {
@@ -150,7 +148,6 @@ func TestMySQLProtocolRead(t *testing.T) {
 		exceptPayload := make([]byte, 0)
 		go func() {
 			packetSize := MaxPayloadSize // 16MB
-			seqID := byte(1)
 			totalPackets := 3
 
 			for i := 0; i < totalPackets; i++ {
@@ -159,7 +156,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 					packetSize -= 1
 				}
 				binary.LittleEndian.PutUint32(header[:4], packetSize)
-				header[3] = seqID
+				header[3] = byte(i)
 
 				payload := make([]byte, packetSize)
 				for j := range payload {
@@ -175,7 +172,6 @@ func TestMySQLProtocolRead(t *testing.T) {
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
-				seqID++
 			}
 		}()
 
@@ -192,14 +188,12 @@ func TestMySQLProtocolRead(t *testing.T) {
 		exceptPayload := make([]byte, 0)
 		go func() {
 			packetSize := MaxPayloadSize // 16MB
-			seqID := byte(1)
 			totalPackets := 3
 
 			for i := 0; i < totalPackets; i++ {
 				header := make([]byte, 4)
 				binary.LittleEndian.PutUint32(header[:4], packetSize)
-				header[3] = seqID
-				seqID += 1
+				header[3] = byte(i)
 				payload := make([]byte, packetSize)
 				for j := range payload {
 					payload[j] = byte(i)
@@ -214,13 +208,10 @@ func TestMySQLProtocolRead(t *testing.T) {
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
-
-				seqID++
 			}
 			header := make([]byte, 4)
 			binary.LittleEndian.PutUint32(header[:4], 0)
-			header[3] = seqID
-			seqID += 1
+			header[3] = byte(totalPackets)
 			_, err := server.Write(header)
 			if err != nil {
 				panic(fmt.Sprintf("Failed to write header: %v", err))
@@ -389,7 +380,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 					exceptRow := make([]byte, 0)
 					err = cWriter.BeginPacket()
 					if err != nil {
-						t.Fatalf("Failed to begin packet: %v", err)
+						panic(fmt.Sprintf("Failed to begin packet: %v", err))
 					}
 					for j := 0; j < columns; j++ {
 						field := generateRandomBytes(fieldSize)
