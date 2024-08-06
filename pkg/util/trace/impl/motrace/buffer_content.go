@@ -44,6 +44,7 @@ type ContentBuffer struct {
 	tbl *table.Table
 	mux sync.Mutex
 
+	// formatter init-ed while alloc buf
 	formatter *db_holder.CSVWriter
 
 	checkWriteHook []table.AckHook
@@ -138,6 +139,9 @@ func (b *ContentBuffer) IsEmpty() bool {
 }
 
 func (b *ContentBuffer) isEmpty() bool {
+	if b.buf == nil {
+		return true
+	}
 	b.formatter.Flush()
 	return b.buf.Len() == 0
 }
@@ -145,12 +149,18 @@ func (b *ContentBuffer) isEmpty() bool {
 func (b *ContentBuffer) ShouldFlush() bool {
 	b.mux.Lock()
 	defer b.mux.Unlock()
+	if b.buf == nil {
+		return false
+	}
 	return b.buf.Len()+thresholdDelta > b.sizeThreshold
 }
 
 func (b *ContentBuffer) Size() int64 {
 	b.mux.Lock()
 	defer b.mux.Unlock()
+	if b.buf == nil {
+		return 0
+	}
 	return int64(b.buf.Len())
 }
 
