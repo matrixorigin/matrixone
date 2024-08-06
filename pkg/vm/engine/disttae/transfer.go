@@ -13,13 +13,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 )
-
-type entryPostition struct {
-	offset, batOffset uint32
-}
 
 func ConstructPrintablePK(buf []byte, tableDef *plan.TableDef) string {
 	if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
@@ -27,6 +24,19 @@ func ConstructPrintablePK(buf []byte, tableDef *plan.TableDef) string {
 		return tuple.ErrString(nil)
 	} else {
 		return hex.EncodeToString(buf)
+	}
+}
+
+func ConstructInExpr(vec *vector.Vector) *plan.Expr {
+	data, _ := vec.MarshalBinary()
+	return &plan.Expr{
+		Typ: plan2.MakePlan2Type(vec.GetType()),
+		Expr: &plan.Expr_Vec{
+			Vec: &plan.LiteralVec{
+				Len:  int32(vec.Length()),
+				Data: data,
+			},
+		},
 	}
 }
 
@@ -243,8 +253,8 @@ func doTransferRowids(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (err error) {
-	var exprs []*plan.Expr
-	// construct in expression
+	transferIntents.InplaceSort()
+	expr := ConstructInExpr(transferIntents)
 
 	var blockList objectio.BlockInfoSlice
 	if _, err = TryFastFilterBlocks(
@@ -252,7 +262,7 @@ func doTransferRowids(
 		table,
 		table.db.op.SnapshotTS(),
 		table.GetTableDef(ctx),
-		exprs,
+		[]*plan.Expr{expr},
 		nil,
 		objectList,
 		nil,
@@ -268,7 +278,7 @@ func doTransferRowids(
 	}
 
 	readers, err := table.BuildReaders(
-		ctx, table.proc.Load(), exprs[0], relData, 1, 0, false,
+		ctx, table.proc.Load(), expr, relData, 1, 0, false,
 	)
 	if err != nil {
 		return
@@ -282,7 +292,7 @@ func doTransferRowids(
 		if bat, err = readers[0].Read(
 			ctx,
 			attrs,
-			exprs[0],
+			expr,
 			mp,
 			nil,
 		); err != nil {
