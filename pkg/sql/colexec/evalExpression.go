@@ -190,39 +190,36 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", planExpr))
 }
 
+// EvalExpressionOnce
+// todo: return (vector, free method, error) may be better.
 func EvalExpressionOnce(proc *process.Process, planExpr *plan.Expr, batches []*batch.Batch) (*vector.Vector, error) {
 	executor, err := NewExpressionExecutor(proc, planExpr)
-	defer func() {
-		if executor != nil {
-			executor.Free()
-		}
-	}()
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		executor.Free()
+	}()
 
 	vec, err := executor.Eval(proc, batches, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	// if memory reuse, we can get it directly because we do only one evaluate.
+	// some cases that we have no need to duplicate the result because we only use it once.
 	if e, ok := executor.(*FunctionExpressionExecutor); ok {
-		e.resultVector = nil
-		return vec, nil
+		if !e.folded.canFold {
+			e.resultVector = nil
+			return vec, nil
+		}
 	}
 	if e, ok := executor.(*FixedVectorExpressionExecutor); ok {
 		e.resultVector = nil
 		return vec, nil
 	}
 
-	// I'm not sure if dup is good. but if not.
-	// we should check batch's cnt first, get if it's 1, dup if not.
-	nv, er := vec.Dup(proc.Mp())
-	if er != nil {
-		return nil, er
-	}
-	return nv, nil
+	// I'm not sure if dup is good. but ok now.
+	return vec.Dup(proc.Mp())
 }
 
 // FixedVectorExpressionExecutor
@@ -564,6 +561,9 @@ func (expr *FunctionExpressionExecutor) EvalWithoutResultReusing(proc *process.P
 	vec, err := expr.Eval(proc, batches, nil)
 	if err != nil {
 		return nil, err
+	}
+	if expr.folded.canFold {
+		return vec.Dup(proc.Mp())
 	}
 	expr.resultVector.SetResultVector(nil)
 	return vec, nil
