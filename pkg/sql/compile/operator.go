@@ -693,7 +693,7 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 		attrs = append(attrs, col.GetOriginCaseName())
 	}
 
-	ctx := proc.Ctx
+	ctx := proc.GetTopContext()
 	txnOp := proc.GetTxnOperator()
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
@@ -722,7 +722,6 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	}
 
 	op := preinsert.NewArgument()
-	op.Ctx = proc.Ctx
 	op.HasAutoCol = preCtx.HasAutoCol
 	op.SchemaName = schemaName
 	op.TableDef = preCtx.TableDef
@@ -736,14 +735,12 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 func constructPreInsertUk(n *plan.Node, proc *process.Process) *preinsertunique.PreInsertUnique {
 	preCtx := n.PreInsertUkCtx
 	op := preinsertunique.NewArgument()
-	op.Ctx = proc.Ctx
 	op.PreInsertCtx = preCtx
 	return op
 }
 
 func constructPreInsertSk(n *plan.Node, proc *process.Process) *preinsertsecondaryindex.PreInsertSecIdx {
 	op := preinsertsecondaryindex.NewArgument()
-	op.Ctx = proc.Ctx
 	op.PreInsertCtx = n.PreInsertSkCtx
 	return op
 }
@@ -913,7 +910,7 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "semi result '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -1087,7 +1084,7 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "anti result '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "anti result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -1121,7 +1118,7 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark
 		} else if rel == -1 {
 			result[i] = -1
 		} else {
-			panic(moerr.NewNYI(proc.Ctx, "loop mark result '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "loop mark result '%s'", expr))
 		}
 	}
 	cond, conds := extraJoinConditions(n.OnList)
@@ -1380,7 +1377,7 @@ func constructDeleteDispatchAndLocal(
 	rs[currentIdx].NodeInfo = ss[currentIdx].NodeInfo
 	rs[currentIdx].Magic = Remote
 	rs[currentIdx].PreScopes = append(rs[currentIdx].PreScopes, ss[currentIdx])
-	rs[currentIdx].Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(ss))
+	rs[currentIdx].Proc = c.proc.NewNoContextChildProc(len(ss))
 	rs[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0, len(ss)-1)
 
 	// use arg.RemoteRegs to know the uuid,
@@ -1589,7 +1586,7 @@ func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) 
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "loop semi result '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "loop semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -1645,7 +1642,7 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "loop semi result '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "loop semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -1709,7 +1706,7 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "loop anti result '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "loop anti result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -1737,7 +1734,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 		} else if rel == -1 {
 			result[i] = -1
 		} else {
-			panic(moerr.NewNYI(proc.Ctx, "loop mark result '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "loop mark result '%s'", expr))
 		}
 	}
 	arg := loopmark.NewArgument()
@@ -2115,7 +2112,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 func constructJoinResult(expr *plan.Expr, proc *process.Process) (int32, int32) {
 	e, ok := expr.Expr.(*plan.Expr_Col)
 	if !ok {
-		panic(moerr.NewNYI(proc.Ctx, "join result '%s'", expr))
+		panic(moerr.NewNYI(proc.GetTopContext(), "join result '%s'", expr))
 	}
 	return e.Col.RelPos, e.Col.ColPos
 }
@@ -2134,7 +2131,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	if e, ok := expr.Expr.(*plan.Expr_Lit); ok { // constant bool
 		b, ok := e.Lit.Value.(*plan.Literal_Bval)
 		if !ok {
-			panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "join condition '%s'", expr))
 		}
 		if b.Bval {
 			return expr, expr
@@ -2150,7 +2147,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
 	if !ok || !plan2.IsEqualFunc(e.F.Func.GetObj()) {
-		panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
+		panic(moerr.NewNYI(proc.GetTopContext(), "join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
 		return e.F.Args[1], e.F.Args[0]

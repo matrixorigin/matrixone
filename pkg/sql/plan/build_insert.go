@@ -356,7 +356,7 @@ func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *Tab
 		}
 	} else {
 		for _, column := range stmt.Columns {
-			colName := string(column)
+			colName := strings.ToLower(string(column))
 			if _, ok := colToIdx[colName]; !ok {
 				return nil, moerr.NewBadFieldError(ctx, colName, tableDef.Name)
 			}
