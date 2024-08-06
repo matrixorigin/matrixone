@@ -587,15 +587,11 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 		mrs:        mrs,
 	}
 	//prepare output queue
-	exportParam.OutTofile = true
 	//prepare export param
 	exportParam.DefaultBufSize = getGlobalPu().SV.ExportDataDefaultFlushSize
-	exportParam.UseFileService = true
 	exportParam.FileService = getGlobalPu().FileService
 	exportParam.Ctx = ctx
 	defer func() {
-		exportParam.LineBuffer = nil
-		exportParam.OutputStr = nil
 		if exportParam.AsyncReader != nil {
 			_ = exportParam.AsyncReader.Close()
 		}
@@ -655,7 +651,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				if err != nil {
 					return err
 				}
-				err = exportDataToCSVFile(exportParam)
+				err = exportDataFromResultSetToCSVFile(exportParam)
 				if err != nil {
 					return err
 				}
