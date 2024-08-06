@@ -190,7 +190,6 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 
 		col1 := makePlan2BoolConstExprWithType(true)
 		col2 := makePlan2BoolConstExprWithType(true)
-
 		fExpr := &plan.Expr{
 			Typ: plan.Type{
 				Id:          int32(types.T_bool),
@@ -216,6 +215,62 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		proc.Free()
 		require.Equal(t, currNb, proc.Mp().CurrNB())
 	}
+}
+
+func TestExpressionReset(t *testing.T) {
+	proc := testutil.NewProcess()
+
+	// functions will be folded.
+	{
+		col1 := makePlan2BoolConstExprWithType(true)
+		col2 := makePlan2BoolConstExprWithType(true)
+		fExpr := &plan.Expr{
+			Typ: plan.Type{
+				Id:          int32(types.T_bool),
+				NotNullable: true,
+			},
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{
+						ObjName: function.AndFunctionName,
+						Obj:     function.AndFunctionEncodedID,
+					},
+					Args: []*plan.Expr{col1, col2},
+				},
+			},
+		}
+
+		originNb := proc.Mp().CurrNB()
+
+		executor, err := NewExpressionExecutor(proc, fExpr)
+		require.NoError(t, err)
+
+		result, err := executor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, true, result != nil && result.IsConst() && result.Length() == 1)
+
+		inputs := []*batch.Batch{
+			batch.New(true, nil),
+		}
+		inputs[0].SetRowCount(100)
+		result, err = executor.Eval(proc, inputs, nil)
+		require.NoError(t, err)
+		require.Equal(t, true, result != nil && result.IsConst() && result.Length() == 100)
+
+		executor.ResetForNextQuery()
+
+		result, err = executor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, true, result != nil && result.IsConst() && result.Length() == 1)
+
+		executor.Free()
+		proc.Free()
+		require.Equal(t, originNb, proc.Mp().CurrNB())
+	}
+}
+
+func TestFunctionFold(t *testing.T) {
+	t.Skip("todo: implement this test")
 }
 
 // some util code copied from package `plan`.

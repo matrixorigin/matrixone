@@ -498,7 +498,13 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 	if expr.folded.canFold {
-		return expr.folded.foldVector, nil
+		result := expr.getFoldedVector()
+		if len(batches) > 0 {
+			result.SetLength(batches[0].RowCount())
+		} else {
+			result.SetLength(1)
+		}
+		return result, nil
 	}
 
 	var err error
