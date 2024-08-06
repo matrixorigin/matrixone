@@ -53,7 +53,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
@@ -507,7 +506,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	logDebugf(op.Txn(), "Engine.New")
-	proc := process.New(
+	proc := process.NewTopProcess(
 		ctx,
 		e.mp,
 		e.cli,
@@ -635,45 +634,64 @@ func (e *Engine) Hints() (h engine.Hints) {
 	return
 }
 
-func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-	expr *plan.Expr, filter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
-	var blockReadPKFilter blockio.BlockReadFilter
-	if filter == nil {
-		// remote block reader
-		basePKFilter := newBasePKFilter(expr, tblDef, proc.(*process.Process))
-		blockReadPKFilter = newBlockReadPKFilter(tblDef.Pkey.PkeyColName, basePKFilter)
-		//fmt.Println("remote filter: ", basePKFilter.String(), blockReadPKFilter)
+func determineScanType(relData engine.RelData, num int) (scanType int) {
+	scanType = NORMAL
+	if relData.DataCnt() < num*SMALLSCAN_THRESHOLD {
+		scanType = SMALL
+	} else if (num * LARGESCAN_THRESHOLD) <= relData.DataCnt() {
+		scanType = LARGE
 	}
+	return
+}
 
-	blkSlice := objectio.BlockInfoSlice(ranges)
-	rds := make([]engine.Reader, num)
-	blkInfos := make([]*objectio.BlockInfo, 0, blkSlice.Len())
-	for i := 0; i < blkSlice.Len(); i++ {
-		blkInfos = append(blkInfos, blkSlice.Get(i))
+func (e *Engine) BuildBlockReaders(
+	ctx context.Context,
+	p any,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+	def *plan.TableDef,
+	relData engine.RelData,
+	num int) ([]engine.Reader, error) {
+	proc := p.(*process.Process)
+	blkCnt := relData.DataCnt()
+	if blkCnt < num {
+		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
 	}
-	if len(blkInfos) < num || len(blkInfos) == 1 {
-		for i, blk := range blkInfos {
-			//FIXME::why set blk.EntryState = false ?
-			blk.EntryState = false
-			rds[i] = newBlockReader(
-				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, blockReadPKFilter, e.fs, proc.(*process.Process),
-			)
-		}
-		for j := len(blkInfos); j < num; j++ {
-			rds[j] = &emptyReader{}
-		}
-		return rds, nil
-	}
-
-	infos, steps := groupBlocksToObjects(blkInfos, num)
 	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
-	blockReaders := newBlockReaders(ctx, fs, tblDef, ts, num, expr, blockReadPKFilter, proc.(*process.Process))
-	distributeBlocksToBlockReaders(blockReaders, num, len(blkInfos), infos, steps)
+
+	var (
+		rds   []engine.Reader
+		shard engine.RelData
+	)
+	scanType := determineScanType(relData, num)
+	mod := blkCnt % num
+	divide := blkCnt / num
 	for i := 0; i < num; i++ {
-		rds[i] = blockReaders[i]
+		if i == 0 {
+			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
+		} else {
+			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
+		}
+		ds := NewRemoteDataSource(
+			ctx,
+			proc,
+			fs,
+			ts,
+			shard)
+		rd := NewReader(
+			ctx,
+			proc,
+			e,
+			def,
+			ts,
+			expr,
+			ds,
+		)
+		rd.scanType = scanType
+		rds = append(rds, rd)
 	}
 	return rds, nil
 }
@@ -747,4 +765,8 @@ func (e *Engine) GetMessageCenter() any {
 
 func (e *Engine) FS() fileservice.FileService {
 	return e.fs
+}
+
+func (e *Engine) PackerPool() *fileservice.Pool[*types.Packer] {
+	return e.packerPool
 }

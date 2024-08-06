@@ -30,6 +30,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -45,12 +47,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"go.uber.org/zap"
 )
 
 type CloseFlag struct {
@@ -306,6 +306,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 		reqCtx: execCtx.reqCtx,
 		ses:    ses,
 	}
+	defer tempExecCtx.Close()
 	err = executeStmtInSameSession(tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect)
 	if err != nil {
 		return nil, err
@@ -373,9 +374,10 @@ func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interfa
 		}
 		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
 		// Here the evalExpr may execute some function that needs engine.Engine.
-		ses.txnCompileCtx.GetProcess().Ctx = attachValue(ses.txnCompileCtx.GetProcess().Ctx,
-			defines.EngineKey{},
-			ses.GetTxnHandler().GetStorage())
+		ses.txnCompileCtx.GetProcess().ReplaceTopCtx(
+			attachValue(ses.txnCompileCtx.GetProcess().GetTopContext(),
+				defines.EngineKey{},
+				ses.GetTxnHandler().GetStorage()))
 
 		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 		if err != nil {
@@ -477,9 +479,7 @@ func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement,
 	var stmtStr string
 	stm := ses.GetStmtInfo()
 	if stm == nil {
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
-		stmt.Format(fmtCtx)
-		stmtStr = fmtCtx.String()
+		stmtStr = ses.GetSqlOfStmt()
 	} else {
 		stmtStr = stm.Statement
 	}

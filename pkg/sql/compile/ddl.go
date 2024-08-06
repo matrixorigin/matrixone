@@ -45,22 +45,22 @@ import (
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
-	var span trace.Span
-	c.proc.Ctx, span = trace.Start(c.proc.Ctx, "CreateDatabase")
+	ctx, span := trace.Start(c.proc.Ctx, "CreateDatabase")
 	defer span.End()
+
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
-	if _, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator()); err == nil {
+	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
 		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
 			return nil
 		}
-		return moerr.NewDBAlreadyExists(c.proc.Ctx, dbName)
+		return moerr.NewDBAlreadyExists(ctx, dbName)
 	}
 
 	if err := lockMoDatabase(c, dbName); err != nil {
 		return err
 	}
 
-	ctx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, s.Plan.GetDdl().GetCreateDatabase().GetSql())
+	ctx = context.WithValue(ctx, defines.SqlKey{}, s.Plan.GetDdl().GetCreateDatabase().GetSql())
 	datType := ""
 	if s.Plan.GetDdl().GetCreateDatabase().SubscriptionOption != nil {
 		datType = catalog.SystemDBTypeSubscription
@@ -777,14 +777,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := planColsToExeCols(planCols)
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-		)
-	}
 
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
@@ -806,36 +798,12 @@ func (s *Scope) CreateTable(c *Compile) error {
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
-			// TODO: debug for #11917
-			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-				c.proc.Info(c.proc.Ctx, "createTable",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-				)
-			}
 			return moerr.NewNoDB(c.proc.Ctx)
-		}
-		// TODO: debug for #11917
-		if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-			c.proc.Info(c.proc.Ctx, "createTable no exist",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-			)
 		}
 		return err
 	}
 	if _, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
-			// TODO: debug for #11917
-			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-				c.proc.Info(c.proc.Ctx, "createTable no exist",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-				)
-			}
 			return nil
 		}
 
@@ -879,14 +847,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			zap.Error(err),
 		)
 		return err
-	}
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		c.proc.Info(c.proc.Ctx, "createTable ok",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-		)
 	}
 
 	partitionTables := qry.GetPartitionTables()
