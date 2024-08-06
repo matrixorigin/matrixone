@@ -36,24 +36,20 @@ func (projection *Projection) PrepareProjection(proc *process.Process) (err erro
 		return
 	}
 	projection.ProjectAllocSize = 0
-	if projection.ProjectExecutors == nil {
-		projection.ProjectExecutors, err = NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
-		if err != nil {
-			return
+
+	projection.ProjectExecutors, err = NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
+	if err != nil {
+		return
+	}
+
+	projection.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(projection.ProjectList))
+	for i, e := range projection.ProjectList {
+		if e.Typ.Id != 0 {
+			typ := types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
+			projection.uafs[i] = vector.GetUnionAllFunction(typ, proc.Mp())
 		}
 	}
-	if projection.uafs == nil {
-		projection.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(projection.ProjectList))
-		for i, e := range projection.ProjectList {
-			if e.Typ.Id != 0 {
-				typ := types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
-				projection.uafs[i] = vector.GetUnionAllFunction(typ, proc.Mp())
-			}
-		}
-	}
-	if projection.projectBat == nil {
-		projection.projectBat = batch.NewWithSize(len(projection.ProjectList))
-	}
+
 	return
 }
 
@@ -62,6 +58,7 @@ func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Pro
 		return bat, nil
 	}
 
+	projection.projectBat = batch.NewWithSize(len(projection.ProjectList))
 	projection.projectBat.ShuffleIDX = bat.ShuffleIDX
 
 	for i := range projection.ProjectExecutors {

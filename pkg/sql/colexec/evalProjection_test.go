@@ -98,6 +98,7 @@ func TestProjection(t *testing.T) {
 		tc.ResetProjection(tc.proc)
 
 		tc.FreeProjection(tc.proc)
+		tc.proc.Free()
 
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
