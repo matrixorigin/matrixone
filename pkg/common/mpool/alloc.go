@@ -18,6 +18,8 @@
 package mpool
 
 import (
+	"runtime"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -32,5 +34,16 @@ func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool) []byte {
 	if mp.details != nil {
 		mp.details.recordAlloc(int64(pHdr.allocSz))
 	}
+
+	key, values := getProfileValue()
+	values.Active.Add(1)
+	values.Allocate.Add(1)
+	pHdr.profileValuesKey = key
+	runtime.SetFinalizer(&bs[0], func(_ *byte) {
+		if atomic.LoadInt32(&pHdr.allocSz) != -1 {
+			values.MissingFree.Add(1)
+		}
+	})
+
 	return pHdr.ToSlice(sz, requiredSpaceWithoutHeader)
 }

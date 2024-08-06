@@ -120,7 +120,7 @@ func (s *MPoolStats) RecordManyFrees(tag string, nfree, sz int64) int64 {
 
 const (
 	NumFixedPool = 5
-	kMemHdrSz    = 16
+	kMemHdrSz    = 24
 	kStripeSize  = 128
 	B            = 1
 	KB           = 1024
@@ -135,10 +135,11 @@ var PoolElemSize = [NumFixedPool]int32{64, 128, 256, 512, 1024}
 
 // Memory header, kMemHdrSz bytes.
 type memHdr struct {
-	poolId       int64
-	allocSz      int32
-	fixedPoolIdx int8
-	guard        [3]uint8
+	poolId           int64
+	allocSz          int32
+	fixedPoolIdx     int8
+	guard            [3]uint8
+	profileValuesKey int64
 }
 
 func init() {
@@ -212,6 +213,11 @@ func (fp *fixedPool) alloc(sz int32) *memHdr {
 		pHdr.fixedPoolIdx = fp.fpIdx
 		pHdr.SetGuard()
 
+		key, values := getProfileValue()
+		values.Active.Add(1)
+		values.Allocate.Add(1)
+		pHdr.profileValuesKey = key
+
 		ptr := unsafe.Add(ret, fp.eleSz+kMemHdrSz)
 		// and thread the rest
 		for i := 1; i < kStripeSize; i++ {
@@ -225,19 +231,21 @@ func (fp *fixedPool) alloc(sz int32) *memHdr {
 			ptr = unsafe.Add(ptr, fp.eleSz+kMemHdrSz)
 		}
 		return (*memHdr)(ret)
-	} else {
-		ret := fp.flist
-		fp.flist = fp.nextPtr(fp.flist)
-		pHdr := (*memHdr)(ret)
-		pHdr.allocSz = sz
-		// Zero slice.  Go requires slice to be zeroed.
-		bs := unsafe.Slice((*byte)(unsafe.Add(ret, kMemHdrSz)), fp.eleSz)
-		// the compiler will optimize this loop to memclr
-		for i := range bs {
-			bs[i] = 0
-		}
-		return pHdr
 	}
+
+	ret := fp.flist
+	fp.flist = fp.nextPtr(fp.flist)
+	pHdr := (*memHdr)(ret)
+	pHdr.allocSz = sz
+	bs := unsafe.Slice((*byte)(unsafe.Add(ret, kMemHdrSz)), fp.eleSz)
+	clear(bs)
+
+	key, values := getProfileValue()
+	values.Active.Add(1)
+	values.Allocate.Add(1)
+	pHdr.profileValuesKey = key
+
+	return pHdr
 }
 
 func (fp *fixedPool) free(hdr *memHdr) {
@@ -636,6 +644,21 @@ func (mp *MPool) Free(bs []byte) {
 	globalStats.RecordFree("global", recordSize)
 	if mp.details != nil {
 		mp.details.recordFree(int64(pHdr.allocSz))
+	}
+
+	v, deleted := profileValuesMap.LoadAndDelete(pHdr.profileValuesKey)
+	if deleted {
+		values := v.(*profileSampleValues)
+		values.Active.Add(-1)
+		values.Free.Add(1)
+		fadingProfileValuesMap.Store(pHdr.profileValuesKey, values)
+	} else {
+		// double free
+		v, deleted := fadingProfileValuesMap.LoadAndDelete(pHdr.profileValuesKey)
+		if deleted {
+			values := v.(*profileSampleValues)
+			values.DoubleFree.Add(1)
+		}
 	}
 
 	// free from fixed pool
