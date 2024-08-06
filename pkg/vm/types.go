@@ -327,7 +327,7 @@ func doHandleAllOp(parentOp Operator, op Operator, opHandle func(parentOp Operat
 	numChildren := op.GetOperatorBase().NumChildren()
 
 	for i := 0; i < numChildren; i++ {
-		if err := doHandleAllOp(op, op.GetOperatorBase().GetChildren(i), opHandle); err != nil {
+		if err = doHandleAllOp(op, op.GetOperatorBase().GetChildren(i), opHandle); err != nil {
 			return err
 		}
 	}
