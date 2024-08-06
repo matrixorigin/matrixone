@@ -276,7 +276,8 @@ func handleCNMerge(
 				round := 0
 				for {
 					round++
-					ss, err := applyMergePolicy(ctx, a.filter, getSortKeyPos(ctx, rel), stats)
+					var ss []objectio.ObjectStats
+					ss, stats, err = applyMergePolicy(ctx, a.filter, getSortKeyPos(ctx, rel), stats)
 					if err != nil {
 						errOut = errors.Join(errOut, err)
 						break
@@ -359,7 +360,8 @@ func handleCNMerge(
 				round := 0
 				for {
 					round++
-					ss, err := applyMergePolicy(ctx, a.filter, getSortKeyPos(ctx, prel), stats)
+					var ss []objectio.ObjectStats
+					ss, stats, err = applyMergePolicy(ctx, a.filter, getSortKeyPos(ctx, rel), stats)
 					if err != nil {
 						errOut = errors.Join(errOut, err)
 						break
@@ -488,7 +490,7 @@ func txnWrite(ctx context.Context, target metadata.TNShard, txnOp client.TxnOper
 	}})
 }
 
-func applyMergePolicy(ctx context.Context, policyName string, sortKeyPos int, objInfos []objectio.ObjectStats) ([]objectio.ObjectStats, error) {
+func applyMergePolicy(ctx context.Context, policyName string, sortKeyPos int, objStats []objectio.ObjectStats) ([]objectio.ObjectStats, []objectio.ObjectStats, error) {
 	arg := cutBetween(policyName, "(", ")")
 	if strings.HasPrefix(policyName, "small") {
 		size := uint32(110 * common.Const1MBytes)
@@ -496,20 +498,22 @@ func applyMergePolicy(ctx context.Context, policyName string, sortKeyPos int, ob
 		if err == nil && 10*common.Const1MBytes < i && i < 250*common.Const1MBytes {
 			size = uint32(i)
 		}
-		return NewSmall(size).Filter(objInfos), nil
+		selectedObjs, remainObjs := NewSmall(size).Filter(objStats)
+		return selectedObjs, remainObjs, nil
 	} else if strings.HasPrefix(policyName, "overlap") {
 		if sortKeyPos == -1 {
-			return objInfos, nil
+			return objStats, nil, nil
 		}
 		maxObjects := 10
 		i, err := strconv.Atoi(arg)
 		if err == nil {
 			maxObjects = i
 		}
-		return NewOverlap(maxObjects).Filter(objInfos), nil
+		selectedObjs, remainObjs := NewOverlap(maxObjects).Filter(objStats)
+		return selectedObjs, remainObjs, nil
 	}
 
-	return nil, moerr.NewInvalidInput(ctx, "invalid merge policy name")
+	return nil, nil, moerr.NewInvalidInput(ctx, "invalid merge policy name")
 }
 
 func cutBetween(s, start, end string) string {

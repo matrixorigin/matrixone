@@ -25,7 +25,7 @@ import (
 )
 
 type Filter interface {
-	Filter([]objectio.ObjectStats) []objectio.ObjectStats
+	Filter([]objectio.ObjectStats) ([]objectio.ObjectStats, []objectio.ObjectStats)
 }
 
 func NewSmall(threshold uint32) Filter {
@@ -40,17 +40,27 @@ type small struct {
 	threshold uint32
 }
 
-func (s *small) Filter(objs []objectio.ObjectStats) []objectio.ObjectStats {
+func (s *small) Filter(objs []objectio.ObjectStats) ([]objectio.ObjectStats, []objectio.ObjectStats) {
 	n := 0
 	for _, obj := range objs {
 		if obj.OriginSize() > s.threshold {
 			continue
 		}
-		objs[n] = obj
 		n++
 	}
-	objs = objs[:n]
-	return objs
+
+	newObjs := make([]objectio.ObjectStats, 0, n)
+	i := 0
+	for _, obj := range objs {
+		if obj.OriginSize() > s.threshold {
+			objs[i] = obj
+			i++
+			continue
+		}
+		newObjs = append(newObjs, obj)
+	}
+	objs = objs[:i]
+	return newObjs, objs
 }
 
 type overlap struct {
@@ -59,9 +69,9 @@ type overlap struct {
 	maxEntries int
 }
 
-func (o *overlap) Filter(objs []objectio.ObjectStats) []objectio.ObjectStats {
+func (o *overlap) Filter(objs []objectio.ObjectStats) ([]objectio.ObjectStats, []objectio.ObjectStats) {
 	if len(objs) == 0 {
-		return nil
+		return nil, nil
 	}
 	o.t = objs[0].SortKeyZoneMap().GetType()
 	for _, obj := range objs {
@@ -90,14 +100,23 @@ func (o *overlap) Filter(objs []objectio.ObjectStats) []objectio.ObjectStats {
 		}
 	}
 	if len(set.entries) > o.maxEntries {
-		return set.entries[:o.maxEntries]
+		set.entries = set.entries[:o.maxEntries]
 	}
-	for _, obj := range set.entries {
-		objs = slices.DeleteFunc(objs, func(stats objectio.ObjectStats) bool {
-			return stats == obj
-		})
+
+	objSet := make(map[objectio.ObjectStats]struct{}, len(set.entries))
+	for _, entry := range set.entries {
+		objSet[entry] = struct{}{}
 	}
-	return set.entries
+
+	i := 0
+	for _, obj := range objs {
+		if _, ok := objSet[obj]; !ok {
+			objs[i] = obj
+			i++
+		}
+	}
+	objs = objs[:i]
+	return set.entries, objs
 }
 
 func minValue(t types.T) any {
