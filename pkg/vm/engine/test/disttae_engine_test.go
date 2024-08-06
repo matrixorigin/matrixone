@@ -30,11 +30,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/require"
@@ -72,7 +76,7 @@ func Test_InsertRows(t *testing.T) {
 	schema := catalog2.MockSchemaAll(10, 0)
 	schema.Name = tableName
 
-	defs, err := catalog2.SchemaToDefs(schema)
+	defs, err := testutil.EngineTableDefBySchema(schema)
 	require.Nil(t, err)
 
 	err = db.Create(ctx, tableName, defs)
@@ -137,7 +141,7 @@ func TestSystemDB1(t *testing.T) {
 
 	schema := catalog2.MockSchema(2, 0)
 	schema.Name = "test1inDb2"
-	p.CreateDBAndTables(txnop, "db2", schema)
+	p.CreateDBAndTable(txnop, "db2", schema)
 
 	dbs, err := p.D.Engine.Databases(p.Ctx, txnop)
 	require.NoError(t, err)
@@ -246,9 +250,8 @@ func TestLogtailBasic(t *testing.T) {
 	schema.Comment = "rows:10;blks=1"
 	// craete 2 db and 2 tables
 	txnop := p.StartCNTxn()
-	p.CreateDBAndTables(txnop, "todrop", schema)
-	_, tHs := p.CreateDBAndTables(txnop, "db", schema)
-	tH := tHs[0]
+	p.CreateDBAndTable(txnop, "todrop", schema)
+	_, tH := p.CreateDBAndTable(txnop, "db", schema)
 	dbID := tH.GetDBID(p.Ctx)
 	tableID := tH.GetTableID(p.Ctx)
 	require.NoError(t, txnop.Commit(p.Ctx))
@@ -458,7 +461,7 @@ func TestAlterTableBasic(t *testing.T) {
 	schema.Comment = initComment
 
 	txnop := p.StartCNTxn()
-	p.CreateDBAndTables(txnop, "db", schema)
+	p.CreateDBAndTable(txnop, "db", schema)
 	require.NoError(t, txnop.Commit(p.Ctx))
 
 	txnop = p.StartCNTxn()
@@ -526,6 +529,58 @@ func TestAlterTableBasic(t *testing.T) {
 	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 	close()
+}
+
+func TestColumnsTransfer(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	dir := testutil.MakeDefaultTestPath("partition_state", t)
+	opts.Fs = objectio.TmpNewSharedFileservice(context.Background(), dir)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	tae := p.T.GetDB()
+
+	schema := catalog2.MockSchemaAll(8188, -1)
+	schema.Name = "test"
+
+	schema2 := catalog2.MockSchemaAll(10, -1)
+	schema2.Name = "todrop"
+
+	txnop := p.StartCNTxn()
+	p.CreateDBAndTables(txnop, "db", schema, schema2)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+	txnop.GetWorkspace().StartStatement()
+	p.DeleteTableInDB(txnop, "db", schema2.Name)
+
+	txn, _ := tae.StartTxn(nil)
+	catalogDB, _ := txn.GetDatabaseByID(catalog.MO_CATALOG_ID)
+	columnsTbl, _ := catalogDB.GetRelationByID(catalog.MO_COLUMNS_ID)
+
+	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker.Start()
+	defer worker.Stop()
+
+	it := columnsTbl.MakeObjectIt()
+	it.Next()
+	firstEntry := it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+	t.Log(firstEntry.ID().ShortStringEx())
+	task1, err := jobs.NewFlushTableTailTask(
+		tasks.WaitableCtx, txn,
+		[]*catalog2.ObjectEntry{firstEntry},
+		tae.Runtime, txn.GetStartTS())
+	require.NoError(t, err)
+	worker.SendOp(task1)
+	err = task1.WaitDone(context.Background())
+	require.NoError(t, err)
+
+	require.NoError(t, txn.Commit(p.Ctx))
+
+	time.Sleep(200 * time.Millisecond)
+	ctx := context.WithValue(p.Ctx, disttae.UT_ForceTransCheck{}, 42)
+	require.NoError(t, txnop.GetWorkspace().IncrStatementID(ctx, true))
+	require.NoError(t, txnop.Commit(p.Ctx))
+
 }
 
 func TestCacheGC(t *testing.T) {

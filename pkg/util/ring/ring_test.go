@@ -417,3 +417,21 @@ func TestRingReset(t *testing.T) {
 
 	assert.NoError(t, rb.Put(1))
 }
+
+// BenchmarkFullOffer base benchmark for WithGoScheduleThreshold
+// goos: darwin
+// goarch: amd64
+// pkg: github.com/matrixorigin/matrixone/pkg/util/ring
+// cpu: Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz
+// BenchmarkFullOffer/normal
+// BenchmarkFullOffer/normal-12         	78426302	        13.78 ns/op
+func BenchmarkFullOffer(b *testing.B) {
+	b.Run("normal", func(b *testing.B) {
+		rb := NewRingBuffer[int](1)
+		rb.Offer(1)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			rb.Offer(2)
+		}
+	})
+}

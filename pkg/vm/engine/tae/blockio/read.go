@@ -19,6 +19,8 @@ import (
 	"math"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -30,10 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go.uber.org/zap"
 )
 
-type ReadFilterSearchFuncType func([]*vector.Vector) []int32
+type ReadFilterSearchFuncType func([]*vector.Vector) []int64
 
 type BlockReadFilter struct {
 	HasFakePK          bool
@@ -42,83 +43,105 @@ type BlockReadFilter struct {
 	UnSortedSearchFunc ReadFilterSearchFuncType
 }
 
-func ReadByFilter(
+// ReadDataByFilter only read block data from storage by filter, don't apply deletes.
+func ReadDataByFilter(
 	ctx context.Context,
 	sid string,
 	info *objectio.BlockInfo,
-	inputDeletes []int64,
+	ds engine.DataSource,
 	columns []uint16,
 	colTypes []types.Type,
 	ts types.TS,
 	searchFunc ReadFilterSearchFuncType,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
-) (sels []int32, err error) {
+	tableName string,
+) (sels []int64, err error) {
 	bat, release, err := LoadColumns(ctx, columns, colTypes, fs, info.MetaLocation(), mp, fileservice.Policy(0))
 	if err != nil {
 		return
 	}
 	defer release()
-	var deleteMask *nulls.Nulls
-
-	// merge persisted deletes
-	if !info.DeltaLocation().IsEmpty() {
-		now := time.Now()
-		var persistedDeletes *batch.Batch
-		var persistedByCN bool
-		var release func()
-		// load from storage
-		if persistedDeletes, persistedByCN, release, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
-			return
-		}
-		defer release()
-		readcost := time.Since(now)
-		var rows *nulls.Nulls
-		var bisect time.Duration
-		if persistedByCN {
-			rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(persistedDeletes, ts, info.CommitTs)
-		} else {
-			nowx := time.Now()
-			rows = EvalDeleteRowsByTimestamp(persistedDeletes, ts, &info.BlockID)
-			bisect = time.Since(nowx)
-		}
-		if rows != nil {
-			deleteMask = rows
-		}
-		readtotal := time.Since(now)
-		RecordReadDel(sid, readtotal, readcost, bisect)
-	}
-
-	if deleteMask == nil {
-		deleteMask = nulls.NewWithSize(len(inputDeletes))
-	}
-
-	// merge input deletes
-	for _, row := range inputDeletes {
-		deleteMask.Add(uint64(row))
-	}
 
 	sels = searchFunc(bat.Vecs)
-
-	// deslect deleted rows from sels
-	if !deleteMask.IsEmpty() {
-		var rows []int32
-		for _, row := range sels {
-			if !deleteMask.Contains(uint64(row)) {
-				rows = append(rows, row)
-			}
-		}
-		sels = rows
+	sels, err = ds.ApplyTombstones(ctx, info.BlockID, sels)
+	if err != nil {
+		return
 	}
 	return
 }
 
-// BlockRead read block data from storage and apply deletes according given timestamp. Caller make sure metaloc is not empty
-func BlockRead(
+// BlockDataReadNoCopy only read block data from storage, don't apply deletes.
+func BlockDataReadNoCopy(
 	ctx context.Context,
 	sid string,
 	info *objectio.BlockInfo,
-	inputDeletes []int64,
+	ds engine.DataSource,
+	columns []uint16,
+	colTypes []types.Type,
+	ts types.TS,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+	policy fileservice.Policy,
+) (*batch.Batch, *nulls.Bitmap, func(), error) {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
+	}
+
+	var (
+		rowidPos   int
+		deleteMask nulls.Bitmap
+		loaded     *batch.Batch
+		release    func()
+		err        error
+	)
+
+	defer func() {
+		if err != nil {
+			if release != nil {
+				release()
+			}
+		}
+	}()
+
+	// read block data from storage specified by meta location
+	if loaded, rowidPos, deleteMask, release, err = readBlockData(
+		ctx, columns, colTypes, info, ts, fs, mp, vp, policy,
+	); err != nil {
+		return nil, nil, nil, err
+	}
+	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// merge deletes from tombstones
+	deleteMask.Merge(tombstones)
+
+	// build rowid column if needed
+	if rowidPos >= 0 {
+		if loaded.Vecs[rowidPos], err = buildRowidColumn(
+			info, nil, mp, vp,
+		); err != nil {
+
+			return nil, nil, nil, err
+		}
+		release = func() {
+			release()
+			loaded.Vecs[rowidPos].Free(mp)
+		}
+	}
+	loaded.SetRowCount(loaded.Vecs[0].Length())
+	return loaded, &deleteMask, release, nil
+}
+
+// BlockDataRead only read block data from storage, don't apply deletes.
+func BlockDataRead(
+	ctx context.Context,
+	sid string,
+	info *objectio.BlockInfo,
+	ds engine.DataSource,
 	columns []uint16,
 	colTypes []types.Type,
 	ts timestamp.Timestamp,
@@ -129,13 +152,14 @@ func BlockRead(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 	policy fileservice.Policy,
+	tableName string,
 ) (*batch.Batch, error) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
 	}
 
 	var (
-		sels []int32
+		sels []int64
 		err  error
 	)
 
@@ -147,9 +171,9 @@ func BlockRead(
 	}
 
 	if searchFunc != nil {
-		if sels, err = ReadByFilter(
-			ctx, sid, info, inputDeletes, filterSeqnums, filterColTypes,
-			types.TimestampToTS(ts), searchFunc, fs, mp,
+		if sels, err = ReadDataByFilter(
+			ctx, sid, info, ds, filterSeqnums, filterColTypes,
+			types.TimestampToTS(ts), searchFunc, fs, mp, tableName,
 		); err != nil {
 			return nil, err
 		}
@@ -174,8 +198,8 @@ func BlockRead(
 		}
 	}
 
-	columnBatch, err := BlockReadInner(
-		ctx, sid, info, inputDeletes, columns, colTypes,
+	columnBatch, err := BlockDataReadInner(
+		ctx, sid, info, ds, columns, colTypes,
 		types.TimestampToTS(ts), sels, fs, mp, vp, policy,
 	)
 	if err != nil {
@@ -226,15 +250,16 @@ func BlockCompactionRead(
 	return result, nil
 }
 
-func BlockReadInner(
+// BlockDataReadInner only read data,don't apply deletes.
+func BlockDataReadInner(
 	ctx context.Context,
 	sid string,
 	info *objectio.BlockInfo,
-	inputDeleteRows []int64,
+	ds engine.DataSource,
 	columns []uint16,
 	colTypes []types.Type,
 	ts types.TS,
-	selectRows []int32, // if selectRows is not empty, it was already filtered by filter
+	selectRows []int64, // if selectRows is not empty, it was already filtered by filter
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
@@ -255,7 +280,6 @@ func BlockReadInner(
 		return
 	}
 	defer release()
-
 	// assemble result batch for return
 	result = batch.NewWithSize(len(loaded.Vecs))
 
@@ -273,7 +297,6 @@ func BlockReadInner(
 		}
 
 		// assemble result batch only with selected rows
-		doExtendArea := len(selectRows) > 100
 		for i, col := range loaded.Vecs {
 			typ := *col.GetType()
 			if typ.Oid == types.T_Rowid {
@@ -285,11 +308,7 @@ func BlockReadInner(
 			} else {
 				result.Vecs[i] = vp.GetVector(typ)
 			}
-			extendAreaSize := 0
-			if doExtendArea {
-				extendAreaSize = len(col.GetArea())
-			}
-			if err = result.Vecs[i].PreExtendWithArea(len(selectRows), extendAreaSize, mp); err != nil {
+			if err = result.Vecs[i].PreExtendWithArea(len(selectRows), 0, mp); err != nil {
 				break
 			}
 			if err = result.Vecs[i].Union(col, selectRows, mp); err != nil {
@@ -306,48 +325,13 @@ func BlockReadInner(
 		return
 	}
 
-	// read deletes from storage specified by delta location
-	if !info.DeltaLocation().IsEmpty() {
-		var deletes *batch.Batch
-		var persistedByCN bool
-		var release func()
-		now := time.Now()
-		// load from storage
-		if deletes, persistedByCN, release, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
-			return
-		}
-		defer release()
-		readcost := time.Since(now)
-
-		// eval delete rows by timestamp
-		var rows *nulls.Nulls
-		var bisect time.Duration
-		if persistedByCN {
-			rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(deletes, ts, info.CommitTs)
-		} else {
-			nowx := time.Now()
-			rows = EvalDeleteRowsByTimestamp(deletes, ts, &info.BlockID)
-			bisect = time.Since(nowx)
-		}
-
-		// merge delete rows
-		deleteMask.Merge(rows)
-
-		readtotal := time.Since(now)
-		RecordReadDel(sid, readtotal, readcost, bisect)
-
-		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-			logutil.Debugf(
-				"blockread %s read delete %d: base %s filter out %v\n",
-				info.BlockID.String(), deletes.RowCount(), ts.ToString(), deleteMask.Count())
-		}
+	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
+	if err != nil {
+		return
 	}
 
-	// merge deletes from input
-	// deletes from storage + deletes from input
-	for _, row := range inputDeleteRows {
-		deleteMask.Add(uint64(row))
-	}
+	// merge deletes from tombstones
+	deleteMask.Merge(tombstones)
 
 	// Note: it always goes here if no filter or the block is not sorted
 
@@ -390,8 +374,6 @@ func BlockReadInner(
 				break
 			}
 		}
-
-		// shrink the vector by deleted rows
 		if len(deletedRows) > 0 {
 			result.Vecs[i].Shrink(deletedRows, true)
 		}
@@ -430,7 +412,7 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (int, []uint16, 
 
 func buildRowidColumn(
 	info *objectio.BlockInfo,
-	sels []int32,
+	sels []int64,
 	m *mpool.MPool,
 	vp engine.VectorPool,
 ) (col *vector.Vector, err error) {
@@ -487,7 +469,6 @@ func readBlockData(
 		if loaded, release, err = LoadColumns(ctx, cols, typs, fs, info.MetaLocation(), m, policy); err != nil {
 			return
 		}
-
 		colPos := 0
 		result = batch.NewWithSize(len(colTypes))
 		for i, typ := range colTypes {
@@ -532,7 +513,9 @@ func readBlockData(
 	return
 }
 
-func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, isPersistedByCN bool, release func(), err error) {
+func ReadBlockDelete(
+	ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService,
+) (bat *batch.Batch, isPersistedByCN bool, release func(), err error) {
 	isPersistedByCN, err = IsPersistedByCN(ctx, deltaloc, fs)
 	if err != nil {
 		return
@@ -541,7 +524,9 @@ func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 	return
 }
 
-func ReadBlockDeleteBySchema(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService, isPersistedByCN bool) (bat *batch.Batch, release func(), err error) {
+func ReadBlockDeleteBySchema(
+	ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService, isPersistedByCN bool,
+) (bat *batch.Batch, release func(), err error) {
 	var cols []uint16
 	if isPersistedByCN {
 		cols = []uint16{0, 1}
@@ -552,7 +537,9 @@ func ReadBlockDeleteBySchema(ctx context.Context, deltaloc objectio.Location, fs
 	return
 }
 
-func IsPersistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bool, error) {
+func IsPersistedByCN(
+	ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService,
+) (bool, error) {
 	objectMeta, err := objectio.FastLoadObjectMeta(ctx, &deltaloc, false, fs)
 	if err != nil {
 		return false, err
@@ -566,7 +553,9 @@ func IsPersistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileser
 	return columnCount == 2, nil
 }
 
-func EvalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types.Blockid) (rows *nulls.Bitmap) {
+func EvalDeleteRowsByTimestamp(
+	deletes *batch.Batch, ts types.TS, blockid *types.Blockid,
+) (rows *nulls.Bitmap) {
 	if deletes == nil {
 		return
 	}
@@ -590,7 +579,9 @@ func EvalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types
 	return
 }
 
-func EvalDeleteRowsByTimestampForDeletesPersistedByCN(deletes *batch.Batch, ts types.TS, committs types.TS) (rows *nulls.Bitmap) {
+func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
+	deletes *batch.Batch, ts types.TS, committs types.TS,
+) (rows *nulls.Bitmap) {
 	if deletes == nil || ts.Less(&committs) {
 		return
 	}
@@ -609,36 +600,35 @@ func EvalDeleteRowsByTimestampForDeletesPersistedByCN(deletes *batch.Batch, ts t
 // columns  Which columns should be taken for columns
 // service  fileservice
 // infos [s3object name][block]
+// FIXME: using objectio.BlockInfoSlice
 func BlockPrefetch(
 	sid string,
 	idxes []uint16,
 	service fileservice.FileService,
-	infos [][]*objectio.BlockInfo,
+	infos []*objectio.BlockInfo,
 	prefetchFile bool,
 ) error {
+	if len(infos) == 0 {
+		return nil
+	}
+
+	// build reader
+	pref, err := BuildPrefetchParams(service, infos[0].MetaLocation())
+	if err != nil {
+		return err
+	}
+
 	// Generate prefetch task
 	for i := range infos {
-		// build reader
-		pref, err := BuildPrefetchParams(service, infos[i][0].MetaLocation())
-		if err != nil {
-			return err
-		}
-		for _, info := range infos[i] {
-			pref.AddBlock(idxes, []uint16{info.MetaLocation().ID()})
-			if !info.DeltaLocation().IsEmpty() {
-				// Need to read all delete
-				err = PrefetchTombstone(sid, []uint16{0, 1, 2}, []uint16{info.DeltaLocation().ID()}, service, info.DeltaLocation())
-				if err != nil {
-					return err
-				}
-			}
-		}
-		pref.prefetchFile = prefetchFile
-		err = MustGetPipeline(sid).Prefetch(pref)
-		if err != nil {
-			return err
-		}
+		pref.AddBlock(idxes, []uint16{infos[i].MetaLocation().ID()})
 	}
+
+	pref.prefetchFile = prefetchFile
+	err = MustGetPipeline(sid).Prefetch(pref)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
