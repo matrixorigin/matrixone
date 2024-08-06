@@ -314,10 +314,19 @@ func (r *reader) Read(
 	vp engine.VectorPool,
 ) (bat *batch.Batch, err error) {
 
+	var dataState engine.DataState
+	freeBatch := func() {
+		if vp == nil {
+			bat.Clean(mp)
+		} else {
+			vp.PutBatch(bat)
+		}
+	}
+
 	start := time.Now()
 	defer func() {
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
-		if bat == nil {
+		if err != nil || dataState == engine.End {
 			r.Close()
 		}
 	}()
@@ -344,16 +353,19 @@ func (r *reader) Read(
 		mp,
 		vp,
 		bat)
-
+	dataState = state
 	if err != nil {
-		return nil, err
+		freeBatch()
+		return
 	}
 	if state == engine.End {
+		freeBatch()
 		return nil, nil
 	}
 	if state == engine.InMem {
-		return bat, nil
+		return
 	}
+	freeBatch()
 	//read block
 	filter := r.withFilterMixin.filterState.filter
 
@@ -402,5 +414,5 @@ func (r *reader) Read(
 		logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
 	}
 
-	return bat, nil
+	return
 }
