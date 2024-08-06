@@ -22,15 +22,15 @@ import (
 /*
 Cdc process
 	logtail replayer
-=>  CdcQueue[DecoderInput]
-=>  CdcDecoder.Decode
-=>  CdcQueue[DecoderOutput]
-=>  CdcSinker.Sink
-=>  CdcSink.Send
+=>  Queue[DecoderInput]
+=>  Decoder.Decode
+=>  Queue[DecoderOutput]
+=>  Sinker.Sink
+=>  Sink.Send
 
 */
 
-type CdcCtx struct {
+type TableCtx struct {
 	db, table     string
 	dbId, tableId uint64
 }
@@ -44,32 +44,35 @@ type DecoderOutput struct {
 	ts timestamp.Timestamp
 }
 
-type CdcDecoder interface {
+// Decoder convert binary data into sql parts
+type Decoder interface {
 	Decode(
-		cdcCtx *CdcCtx,
+		cdcCtx *TableCtx,
 		input *DecoderInput,
 	) *DecoderOutput
 }
 
-type CdcSinker interface {
+// Sinker manages and drains the sql parts
+type Sinker interface {
 	Sink(
-		cdcCtx *CdcCtx,
+		cdcCtx *TableCtx,
 		data *DecoderOutput,
 	) error
 }
 
-type CdcSink interface {
+// Sink represents the destination mysql or matrixone
+type Sink interface {
 	Send(
 		data *DecoderOutput,
 	) error
 }
 
-// CdcQueue
+// Queue
 // Two features:
 //
 //	persistence
 //	concurrent safe
-type CdcQueue[T any] interface {
+type Queue[T any] interface {
 	//Push saves the value before it returns
 	Push(T)
 	Pop()

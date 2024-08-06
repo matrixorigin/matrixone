@@ -14,47 +14,29 @@
 
 package cdc
 
-import (
-	"sync"
-)
+type sinker struct{}
 
-type memQ[T any] struct {
-	sync.Mutex
-	data []T
+func (s *sinker) Sink(
+	cdcCtx *TableCtx,
+	data *DecoderOutput,
+) error {
+	return nil
 }
 
-func (mq *memQ[T]) Push(v T) {
-	mq.Lock()
-	defer mq.Unlock()
-	mq.data = append(mq.data, v)
+type mysqlSink struct {
 }
 
-func (mq *memQ[T]) Pop() {
-	mq.Lock()
-	defer mq.Unlock()
-	mq.data = mq.data[1:]
+func (*mysqlSink) Send(
+	data *DecoderOutput,
+) error {
+	return nil
 }
 
-func (mq *memQ[T]) Front() T {
-	mq.Lock()
-	defer mq.Unlock()
-	return mq.data[0]
+type matrixoneSink struct {
 }
 
-func (mq *memQ[T]) Back() T {
-	mq.Lock()
-	defer mq.Unlock()
-	return mq.data[len(mq.data)-1]
-}
-
-func (mq *memQ[T]) Size() int {
-	mq.Lock()
-	defer mq.Unlock()
-	return len(mq.data)
-}
-
-func (mq *memQ[T]) Empty() bool {
-	mq.Lock()
-	defer mq.Unlock()
-	return len(mq.data) == 0
+func (*matrixoneSink) Send(
+	data *DecoderOutput,
+) error {
+	return nil
 }

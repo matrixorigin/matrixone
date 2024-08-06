@@ -18,16 +18,17 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPartitionStateRowsIter(t *testing.T) {
-	state := NewPartitionState("", false, 42)
+	state := NewPartitionState("", false, 42, false)
 	ctx := context.Background()
 	pool := mpool.MustNewZero()
 	packer := types.NewPacker()
@@ -265,7 +266,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 }
 
 func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
-	state := NewPartitionState("", false, 42)
+	state := NewPartitionState("", false, 42, false)
 	ctx := context.Background()
 	pool := mpool.MustNewZero()
 	packer := types.NewPacker()
@@ -357,7 +358,7 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 }
 
 func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
-	state := NewPartitionState("", false, 42)
+	state := NewPartitionState("", false, 42, false)
 	ctx := context.Background()
 	pool := mpool.MustNewZero()
 	packer := types.NewPacker()
@@ -449,7 +450,7 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 }
 
 func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
-	state := NewPartitionState("", false, 42)
+	state := NewPartitionState("", false, 42, false)
 	ctx := context.Background()
 	pool := mpool.MustNewZero()
 	packer := types.NewPacker()

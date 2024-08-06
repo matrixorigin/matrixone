@@ -68,7 +68,7 @@ func NewPartition(
 		lock: lock,
 	}
 	ret.mu.start = types.MaxTs()
-	ret.state.Store(NewPartitionState(service, false, id))
+	ret.state.Store(NewPartitionState(service, false, id, false))
 	return ret
 }
 

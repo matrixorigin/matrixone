@@ -1924,7 +1924,7 @@ func cdcReplayLogtailUnlock(
 			dbId, tblId, tableInfo.Name,
 		)
 	}()
-	state := logtailreplay.NewPartitionState(e.GetService(), false, tblId)
+	state := logtailreplay.NewPartitionState(e.GetService(), false, tblId, true)
 
 	if lazyLoad {
 		//!!!Note: CDC drop lazy load ckp

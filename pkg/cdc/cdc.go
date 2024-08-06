@@ -16,23 +16,56 @@ package cdc
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 )
 
-func RunDecoder(ctx context.Context) {
-
+func RunDecoder(
+	ctx context.Context,
+	inQueue Queue[tools.Pair[*TableCtx, *DecoderInput]],
+	outQueue Queue[tools.Pair[*TableCtx, *DecoderOutput]],
+	codec Decoder) {
+	for {
+		select {
+		case <-ctx.Done():
+			break
+		default:
+			//TODO: refine
+			if inQueue.Size() != 0 {
+				head := inQueue.Front()
+				inQueue.Pop()
+				res := codec.Decode(head.Key, head.Value)
+				outQueue.Push(tools.NewPair[*TableCtx, *DecoderOutput](head.Key, res))
+			} else {
+				time.Sleep(time.Millisecond * 100)
+			}
+		}
+	}
 }
 
-func RunSinker(ctx context.Context) {
-
-}
-
-var _ CdcDecoder = new(decoder)
-
-type decoder struct {
-}
-
-func (m *decoder) Decode(
-	cdcCtx *CdcCtx,
-	input *DecoderInput) *DecoderOutput {
-	return nil
+func RunSinker(
+	ctx context.Context,
+	inQueue Queue[tools.Pair[*TableCtx, *DecoderOutput]],
+	sinker Sinker,
+) {
+	for {
+		select {
+		case <-ctx.Done():
+			break
+		default:
+			if inQueue.Size() != 0 {
+				head := inQueue.Front()
+				inQueue.Pop()
+				err := sinker.Sink(head.Key, head.Value)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "sinker.Sink error", err)
+				}
+			} else {
+				time.Sleep(time.Millisecond * 100)
+			}
+		}
+	}
 }

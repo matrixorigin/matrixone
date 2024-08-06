@@ -16,10 +16,12 @@ package logtailreplay
 
 import (
 	"bytes"
+
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/tidwall/btree"
 )
 
 type RowsIter interface {
@@ -108,6 +110,30 @@ func (p *rowsIter) Entry() RowEntry {
 func (p *rowsIter) Close() error {
 	p.iter.Release()
 	return nil
+}
+
+func (p *PartitionState) NewRowsIterInCdc() *rowsIterInCdc {
+	iter := p.rows.Copy().Iter()
+	ret := &rowsIterInCdc{
+		iter: iter,
+	}
+	return ret
+}
+
+type rowsIterInCdc struct {
+	iter btree.IterG[RowEntry]
+}
+
+func (riter *rowsIterInCdc) Next() bool {
+	return riter.iter.Next()
+}
+func (riter *rowsIterInCdc) Close() error {
+	riter.iter.Release()
+	return nil
+}
+
+func (riter *rowsIterInCdc) Entry() RowEntry {
+	return riter.iter.Item()
 }
 
 type primaryKeyIter struct {

@@ -126,6 +126,14 @@ func (r RowEntry) Less(than RowEntry) bool {
 	return false
 }
 
+func (r RowEntry) LessInCdc(than RowEntry) bool {
+	//only consider the Time.
+	//neglect the Deleted.
+	//it is impossible that two row entries have same rowid, time and
+	//Deleted in one is true but false in another.
+	return r.Time.Less(&than.Time)
+}
+
 type BlockEntry struct {
 	objectio.BlockInfo
 
@@ -283,19 +291,26 @@ func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 	return false
 }
 
+// NewPartitionState
+// for cdc application, the cdc is true, other false
 func NewPartitionState(
 	service string,
 	noData bool,
 	tid uint64,
+	cdc bool,
 ) *PartitionState {
 	opts := btree.Options{
 		Degree: 64,
+	}
+	rowLess := (RowEntry).Less
+	if cdc {
+		rowLess = (RowEntry).LessInCdc
 	}
 	return &PartitionState{
 		service:         service,
 		tid:             tid,
 		noData:          noData,
-		rows:            btree.NewBTreeGOptions((RowEntry).Less, opts),
+		rows:            btree.NewBTreeGOptions(rowLess, opts),
 		dataObjects:     btree.NewBTreeGOptions((ObjectEntry).Less, opts),
 		blockDeltas:     btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
 		primaryIndex:    btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
