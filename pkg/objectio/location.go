@@ -56,8 +56,19 @@ func BuildLocation(name ObjectName, extent Extent, rows uint32, id uint16) Locat
 	return unsafe.Slice((*byte)(unsafe.Pointer(&location)), LocationLen)
 }
 
+func NewRandomLocation(id uint16, rows uint32) Location {
+	objID := NewObjectid()
+	objName := BuildObjectNameWithObjectID(objID)
+	extent := NewRandomExtent()
+	return BuildLocation(objName, extent, rows, id)
+}
+
 func (l Location) Name() ObjectName {
 	return ObjectName(l[:ObjectNameLen])
+}
+
+func (l Location) ObjectId() ObjectId {
+	return *(*ObjectId)(unsafe.Pointer(&l[0]))
 }
 
 func (l Location) ShortName() *ObjectNameShort {
