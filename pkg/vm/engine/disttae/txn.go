@@ -1238,8 +1238,8 @@ func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) 
 					ctx,
 					tbl,
 					state,
-					deletedObjects,
-					createdObjects,
+					deleteObjs,
+					createObjs,
 					txn.proc.Mp(),
 					txn.engine.fs,
 				); err != nil {
