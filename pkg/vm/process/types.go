@@ -90,6 +90,8 @@ func NewRegMsg(bat *batch.Batch) *RegisterMessage {
 type WaitRegister struct {
 	Ctx context.Context
 	Ch  chan *RegisterMessage
+	// should receive how many nil batches, default 0 means every nil batch close one channel
+	NilBatchCnt int
 }
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.

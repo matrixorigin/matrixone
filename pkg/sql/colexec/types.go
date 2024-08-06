@@ -15,9 +15,10 @@
 package colexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"reflect"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -120,6 +121,7 @@ type ReceiverOperator struct {
 	// while Join/Intersect/Minus ... are not
 	aliveMergeReceiver int
 	chs                []chan *process.RegisterMessage
+	nilBatchCnt        []int
 	receiverListener   []reflect.SelectCase
 }
 
