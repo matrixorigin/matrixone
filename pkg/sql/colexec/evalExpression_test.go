@@ -122,28 +122,29 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 
 		currStart := proc.Mp().CurrNB()
 		fExprExecutor := &FunctionExpressionExecutor{}
-		err := fExprExecutor.Init(proc, 2, types.T_int64.ToType(),
-			func(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *function.FunctionSelectList) error {
-				v1 := vector.GenerateFunctionFixedTypeParameter[int64](params[0])
-				v2 := vector.GenerateFunctionFixedTypeParameter[int64](params[1])
-				rs := vector.MustFunctionResult[int64](result)
-				for i := 0; i < length; i++ {
-					v11, null11 := v1.GetValue(uint64(i))
-					v22, null22 := v2.GetValue(uint64(i))
-					if null11 || null22 {
-						err := rs.Append(0, true)
-						if err != nil {
-							return err
-						}
-					} else {
-						err := rs.Append(v11+v22, false)
-						if err != nil {
-							return err
-						}
+		err := fExprExecutor.Init(proc, 2, types.T_int64.ToType())
+		fExprExecutor.evalFn = func(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *function.FunctionSelectList) error {
+			v1 := vector.GenerateFunctionFixedTypeParameter[int64](params[0])
+			v2 := vector.GenerateFunctionFixedTypeParameter[int64](params[1])
+			rs := vector.MustFunctionResult[int64](result)
+			for i := 0; i < length; i++ {
+				v11, null11 := v1.GetValue(uint64(i))
+				v22, null22 := v2.GetValue(uint64(i))
+				if null11 || null22 {
+					err := rs.Append(0, true)
+					if err != nil {
+						return err
+					}
+				} else {
+					err := rs.Append(v11+v22, false)
+					if err != nil {
+						return err
 					}
 				}
-				return nil
-			}, nil)
+			}
+			return nil
+		}
+		fExprExecutor.freeFn = nil
 		require.NoError(t, err)
 
 		col1 := &plan.Expr{
@@ -208,8 +209,9 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		currNb := proc.Mp().CurrNB()
 		executor, err := NewExpressionExecutor(proc, fExpr)
 		require.NoError(t, err)
-		_, ok := executor.(*FixedVectorExpressionExecutor)
-		require.Equal(t, true, ok)
+		result, err := executor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, true, result != nil && result.IsConst())
 		executor.Free()
 		proc.Free()
 		require.Equal(t, currNb, proc.Mp().CurrNB())
