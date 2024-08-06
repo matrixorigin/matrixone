@@ -44,7 +44,7 @@ func TestOverlap(t *testing.T) {
 		stats2 := objectio.NewObjectStats()
 		objectio.SetObjectStatsSortKeyZoneMap(stats2, zm2)
 
-		result := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2})
+		result, _ := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2})
 		require.Equal(t, 2, len(result))
 	}
 
@@ -67,7 +67,7 @@ func TestOverlap(t *testing.T) {
 		stats2 := objectio.NewObjectStats()
 		objectio.SetObjectStatsSortKeyZoneMap(stats2, zm2)
 
-		result := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2})
+		result, _ := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2})
 		require.Equal(t, 2, len(result))
 	}
 
@@ -90,7 +90,7 @@ func TestOverlap(t *testing.T) {
 		stats2 := objectio.NewObjectStats()
 		objectio.SetObjectStatsSortKeyZoneMap(stats2, zm2)
 
-		result := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2})
+		result, _ := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2})
 		require.Equal(t, 2, len(result))
 	}
 
@@ -121,7 +121,7 @@ func TestOverlap(t *testing.T) {
 		stats3 := objectio.NewObjectStats()
 		objectio.SetObjectStatsSortKeyZoneMap(stats3, zm3)
 
-		result := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2, *stats3})
+		result, _ := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2, *stats3})
 		require.Equal(t, 3, len(result))
 	}
 
@@ -152,7 +152,7 @@ func TestOverlap(t *testing.T) {
 		stats3 := objectio.NewObjectStats()
 		objectio.SetObjectStatsSortKeyZoneMap(stats3, zm3)
 
-		result := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2, *stats3})
+		result, _ := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2, *stats3})
 		require.Equal(t, 2, len(result))
 	}
 }
