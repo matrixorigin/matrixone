@@ -27,6 +27,7 @@ import (
 	"unsafe"
 
 	"github.com/docker/go-units"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -2100,13 +2101,6 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	if !flushed {
 		return false, nil
 	}
-	//for mo_tables, mo_database, mo_columns, pk always exist in memory.
-	if tbl.tableName == catalog.MO_DATABASE ||
-		tbl.tableName == catalog.MO_TABLES ||
-		tbl.tableName == catalog.MO_COLUMNS {
-		logutil.Warnf("mo table:%s always exist in memory", tbl.tableName)
-		return true, nil
-	}
 	//need check pk whether exist on S3 block.
 	return tbl.PKPersistedBetween(
 		snap,
@@ -2552,7 +2546,7 @@ func dumpTransferMaps(ctx context.Context, taskHost *cnMergeTask) error {
 			objRowCnt++
 
 			if objRowCnt*len(columns)*int(unsafe.Sizeof(int32(0))) > 200*mpool.MB {
-				filename := blockio.EncodeTmpFileName("tmp", "merge", time.Now().UTC().Unix())
+				filename := blockio.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
 				writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 				if err != nil {
 					return err
