@@ -4,7 +4,6 @@ data-dir = "./mo-data"
 
 [log]
 level = "info"
-format = "console"
 
 [malloc]
 check-fraction = 65536
