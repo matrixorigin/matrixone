@@ -283,6 +283,10 @@ func doTransferRowids(
 	if err != nil {
 		return
 	}
+	defer func() {
+		readers[0].Close()
+	}()
+
 	attrs := []string{
 		table.GetTableDef(ctx).Pkey.PkeyColName,
 		catalog.Row_ID,
