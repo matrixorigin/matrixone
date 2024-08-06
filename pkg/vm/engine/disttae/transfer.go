@@ -14,6 +14,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 )
@@ -27,17 +28,20 @@ func ConstructPrintablePK(buf []byte, tableDef *plan.TableDef) string {
 	}
 }
 
-func ConstructInExpr(vec *vector.Vector) *plan.Expr {
-	data, _ := vec.MarshalBinary()
-	return &plan.Expr{
-		Typ: plan2.MakePlan2Type(vec.GetType()),
-		Expr: &plan.Expr_Vec{
-			Vec: &plan.LiteralVec{
-				Len:  int32(vec.Length()),
-				Data: data,
-			},
-		},
-	}
+func ConstructInExpr(
+	ctx context.Context,
+	colName string,
+	colVec *vector.Vector,
+) *plan.Expr {
+	data, _ := colVec.MarshalBinary()
+	colExpr := newColumnExpr(0, plan2.MakePlan2Type(colVec.GetType()), colName)
+	return plan2.MakeInExpr(
+		ctx,
+		colExpr,
+		int32(colVec.Length()),
+		data,
+		false,
+	)
 }
 
 func TransferTombstones(
@@ -115,7 +119,7 @@ func TransferTombstones(
 			if transferIntents == nil {
 				transferIntents = vector.NewVec(types.T_Rowid.ToType())
 				targetRowids = vector.NewVec(types.T_Rowid.ToType())
-				searchPKColumn = vector.NewVec(types.T_blob.ToType())
+				searchPKColumn = vector.NewVec(*pkColumn.GetType())
 				searchEntryPos = vector.NewVec(types.T_int32.ToType())
 				searchBatPos = vector.NewVec(types.T_int32.ToType())
 				readPKColumn = vector.NewVec(*pkColumn.GetType())
@@ -192,23 +196,24 @@ func batchTransferToTombstones(
 	if err = targetRowids.PreExtend(transferIntents.Length(), mp); err != nil {
 		return
 	}
+	if err = mergesort.SortColumnsByIndex(
+		[]*vector.Vector{searchPKColumn, searchEntryPos, searchBatPos},
+		0,
+		mp,
+	); err != nil {
+		return
+	}
+
 	if err = doTransferRowids(
 		ctx,
 		table,
 		objectList,
 		transferIntents,
 		targetRowids,
+		searchPKColumn,
 		readPKColumn,
 		mp,
 		fs,
-	); err != nil {
-		return
-	}
-
-	if err = mergesort.SortColumnsByIndex(
-		[]*vector.Vector{searchPKColumn, searchEntryPos, searchBatPos},
-		0,
-		mp,
 	); err != nil {
 		return
 	}
@@ -249,12 +254,13 @@ func doTransferRowids(
 	ctx context.Context,
 	table *txnTable,
 	objectList []objectio.ObjectStats,
-	transferIntents, targetRowids, readPKColumn *vector.Vector,
+	transferIntents, targetRowids *vector.Vector,
+	searchPKColumn, readPKColumn *vector.Vector,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (err error) {
-	transferIntents.InplaceSort()
-	expr := ConstructInExpr(transferIntents)
+	pkColumName := table.GetTableDef(ctx).Pkey.PkeyColName
+	expr := ConstructInExpr(ctx, pkColumName, searchPKColumn)
 
 	var blockList objectio.BlockInfoSlice
 	if _, err = TryFastFilterBlocks(
@@ -278,7 +284,7 @@ func doTransferRowids(
 	}
 
 	readers, err := table.BuildReaders(
-		ctx, table.proc.Load(), expr, relData, 1, 0, false,
+		ctx, table.proc.Load(), expr, relData, 1, 0, false, engine.Policy_CheckCommittedS3Only,
 	)
 	if err != nil {
 		return
@@ -288,7 +294,7 @@ func doTransferRowids(
 	}()
 
 	attrs := []string{
-		table.GetTableDef(ctx).Pkey.PkeyColName,
+		pkColumName,
 		catalog.Row_ID,
 	}
 	for {

@@ -1008,8 +1008,8 @@ func TryFastFilterBlocks(
 		blockFilterOp,
 		seekOp,
 		snapshot,
+		extraCommittedObjects,
 		uncommittedObjects,
-		//dirtyBlocks,
 		outBlocks,
 		fs,
 		proc,
@@ -1028,8 +1028,8 @@ func ExecuteBlockFilter(
 	blockFilterOp BlockFilterOp,
 	seekOp SeekFirstBlockOp,
 	snapshot *logtailreplay.PartitionState,
+	extraCommittedObjects []objectio.ObjectStats,
 	uncommittedObjects []objectio.ObjectStats,
-	//dirtyBlocks *map[types.Blockid]struct{},
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 	proc *process.Process,
@@ -1176,7 +1176,7 @@ func ExecuteBlockFilter(
 			return
 		},
 		snapshot,
-		nil,
+		extraCommittedObjects,
 		uncommittedObjects...,
 	)
 	return

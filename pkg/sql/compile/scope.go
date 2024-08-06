@@ -1217,7 +1217,9 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			s.NodeInfo.Data,
 			scanUsedCpuNumber,
 			s.TxnOffset,
-			len(s.DataSource.OrderBy) > 0)
+			len(s.DataSource.OrderBy) > 0,
+			engine.Policy_CheckAll,
+		)
 
 		if err != nil {
 			return
@@ -1309,7 +1311,9 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 				s.NodeInfo.Data,
 				scanUsedCpuNumber,
 				s.TxnOffset,
-				len(s.DataSource.OrderBy) > 0)
+				len(s.DataSource.OrderBy) > 0,
+				engine.Policy_CheckAll,
+			)
 			if err != nil {
 				return
 			}
@@ -1340,7 +1344,9 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 					subRelData,
 					scanUsedCpuNumber,
 					s.TxnOffset,
-					len(s.DataSource.OrderBy) > 0)
+					len(s.DataSource.OrderBy) > 0,
+					engine.Policy_CheckAll,
+				)
 				if err != nil {
 					return
 				}
