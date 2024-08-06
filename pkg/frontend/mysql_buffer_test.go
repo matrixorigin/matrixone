@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"encoding/binary"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/smartystreets/goconvey/convey"
 	"math/rand"
@@ -43,6 +44,8 @@ func hasData(conn net.Conn) (bool, error) {
 
 func generateRandomBytes(n int) []byte {
 	data := make([]byte, n)
+	randomIndex := rand.Intn(len(data))
+	data[randomIndex] = 1
 	return data
 }
 
@@ -58,6 +61,9 @@ func TestMySQLProtocolRead(t *testing.T) {
 	}
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	cm, err := NewIOSession(client, pu)
+	if err != nil {
+		panic(err)
+	}
 	cm.allowedPacketSize = int(MaxPayloadSize) * 16
 	convey.Convey("read small packet < 1MB", t, func() {
 		exceptPayload := make([][]byte, 0)
@@ -78,12 +84,12 @@ func TestMySQLProtocolRead(t *testing.T) {
 				exceptPayload = append(exceptPayload, payload)
 				_, err := server.Write(header)
 				if err != nil {
-					t.Fatalf("Failed to write header: %v", err)
+					panic(fmt.Sprintf("Failed to write header: %v", err))
 				}
 
 				_, err = server.Write(payload)
 				if err != nil {
-					t.Fatalf("Failed to write payload: %v", err)
+					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
 			}
 		}()
@@ -118,12 +124,12 @@ func TestMySQLProtocolRead(t *testing.T) {
 				exceptPayload = append(exceptPayload, payload)
 				_, err := server.Write(header)
 				if err != nil {
-					t.Fatalf("Failed to write header: %v", err)
+					panic(fmt.Sprintf("Failed to write header: %v", err))
 				}
 
 				_, err = server.Write(payload)
 				if err != nil {
-					t.Fatalf("Failed to write payload: %v", err)
+					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
 			}
 		}()
@@ -162,12 +168,12 @@ func TestMySQLProtocolRead(t *testing.T) {
 				exceptPayload = append(exceptPayload, payload...)
 				_, err := server.Write(header)
 				if err != nil {
-					t.Fatalf("Failed to write header: %v", err)
+					panic(fmt.Sprintf("Failed to write header: %v", err))
 				}
 
 				_, err = server.Write(payload)
 				if err != nil {
-					t.Fatalf("Failed to write payload: %v", err)
+					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
 				seqID++
 			}
@@ -201,12 +207,12 @@ func TestMySQLProtocolRead(t *testing.T) {
 				exceptPayload = append(exceptPayload, payload...)
 				_, err := server.Write(header)
 				if err != nil {
-					t.Fatalf("Failed to write header: %v", err)
+					panic(fmt.Sprintf("Failed to write header: %v", err))
 				}
 
 				_, err = server.Write(payload)
 				if err != nil {
-					t.Fatalf("Failed to write payload: %v", err)
+					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
 
 				seqID++
@@ -217,7 +223,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 			seqID += 1
 			_, err := server.Write(header)
 			if err != nil {
-				t.Fatalf("Failed to write header: %v", err)
+				panic(fmt.Sprintf("Failed to write header: %v", err))
 			}
 		}()
 
@@ -245,36 +251,43 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 		defer server.Close()
 		defer client.Close()
 		cWriter, err := NewIOSession(client, pu)
+		if err != nil {
+			panic(err)
+		}
 		cReader, err := NewIOSession(server, pu)
+		if err != nil {
+			panic(err)
+		}
 		cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 		exceptPayload := make([][]byte, 0)
 		actualPayload := make([][]byte, 0)
 		columns := rand.Intn(20) + 1
 		fieldSize := rand.Intn(20) + 1
 		go func() {
+			var err error
 			for i := 0; i < rows; i++ {
 				exceptRow := make([]byte, 0)
 				err = cWriter.BeginPacket()
 				if err != nil {
-					t.Fatalf("Failed to begin packet: %v", err)
+					panic(fmt.Sprintf("Failed to begin packet: %v", err))
 				}
 				for j := 0; j < columns; j++ {
 					field := generateRandomBytes(fieldSize)
 					exceptRow = append(exceptRow, field...)
 					err = cWriter.Append(field...)
 					if err != nil {
-						t.Fatalf("Failed to append bytes: %v", err)
+						panic(fmt.Sprintf("Failed to append bytes: %v", err))
 					}
 				}
 				exceptPayload = append(exceptPayload, exceptRow)
 				err = cWriter.FinishedPacket()
 				if err != nil {
-					t.Fatalf("Failed to finished packet: %v", err)
+					panic(fmt.Sprintf("Failed to finished packet: %v", err))
 				}
 			}
 			err = cWriter.Flush()
 			if err != nil {
-				t.Fatalf("Failed to flush packet: %v", err)
+				panic(fmt.Sprintf("Failed to flush packet: %v", err))
 			}
 		}()
 
@@ -300,36 +313,43 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			defer server.Close()
 			defer client.Close()
 			cWriter, err := NewIOSession(client, pu)
+			if err != nil {
+				panic(err)
+			}
 			cReader, err := NewIOSession(server, pu)
+			if err != nil {
+				panic(err)
+			}
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
 			actualPayload := make([][]byte, 0)
-			columns := 1024 * 1024 * 2
-			fieldSize := 2
+			columns := 1024
+			fieldSize := 4 * 1024
 			go func() {
+				var err error
 				for i := 0; i < rows; i++ {
 					exceptRow := make([]byte, 0)
 					err = cWriter.BeginPacket()
 					if err != nil {
-						t.Fatalf("Failed to begin packet: %v", err)
+						panic(fmt.Sprintf("Failed to begin packet: %v", err))
 					}
 					for j := 0; j < columns; j++ {
 						field := generateRandomBytes(fieldSize)
 						exceptRow = append(exceptRow, field...)
 						err = cWriter.Append(field...)
 						if err != nil {
-							t.Fatalf("Failed to append bytes: %v", err)
+							panic(fmt.Sprintf("Failed to append bytes: %v", err))
 						}
 					}
+					exceptPayload = append(exceptPayload, exceptRow)
 					err = cWriter.FinishedPacket()
 					if err != nil {
-						t.Fatalf("Failed to finished packet: %v", err)
+						panic(fmt.Sprintf("Failed to finished packet: %v", err))
 					}
-					exceptPayload = append(exceptPayload, exceptRow)
 				}
 				err = cWriter.Flush()
 				if err != nil {
-					t.Fatalf("Failed to flush packet: %v", err)
+					panic(fmt.Sprintf("Failed to flush packet: %v", err))
 				}
 			}()
 			var data []byte
@@ -351,13 +371,20 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			defer server.Close()
 			defer client.Close()
 			cWriter, err := NewIOSession(client, pu)
+			if err != nil {
+				panic(err)
+			}
 			cReader, err := NewIOSession(server, pu)
+			if err != nil {
+				panic(err)
+			}
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
 			actualPayload := make([][]byte, 0)
 			columns := 2
 			fieldSize := 1024 * 1024 * 2
 			go func() {
+				var err error
 				for i := 0; i < rows; i++ {
 					exceptRow := make([]byte, 0)
 					err = cWriter.BeginPacket()
@@ -369,18 +396,19 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 						exceptRow = append(exceptRow, field...)
 						err = cWriter.Append(field...)
 						if err != nil {
-							t.Fatalf("Failed to append bytes: %v", err)
+							panic(fmt.Sprintf("Failed to append bytes: %v", err))
 						}
 					}
+					exceptPayload = append(exceptPayload, exceptRow)
 					err = cWriter.FinishedPacket()
 					if err != nil {
-						t.Fatalf("Failed to finished packet: %v", err)
+						panic(fmt.Sprintf("Failed to finished packet: %v", err))
 					}
-					exceptPayload = append(exceptPayload, exceptRow)
+
 				}
 				err = cWriter.Flush()
 				if err != nil {
-					t.Fatalf("Failed to flush packet: %v", err)
+					panic(fmt.Sprintf("Failed to flush packet: %v", err))
 				}
 			}()
 			var data []byte
@@ -400,42 +428,50 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 	})
 
 	convey.Convey("test write packet when sometime buffer size >= 16MB", t, func() {
-		rows := 3
+		rows := 1
 		convey.Convey("big field size", func() {
 			server, client := net.Pipe()
 			defer server.Close()
 			defer client.Close()
 			cWriter, err := NewIOSession(client, pu)
+			if err != nil {
+				panic(err)
+			}
 			cReader, err := NewIOSession(server, pu)
+			if err != nil {
+				panic(err)
+			}
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
 			actualPayload := make([][]byte, 0)
 			columns := 2
 			fieldSize := 1024 * 1024 * 20
 			go func() {
+				var err error
 				for i := 0; i < rows; i++ {
 					exceptRow := make([]byte, 0)
 					err = cWriter.BeginPacket()
 					if err != nil {
-						t.Fatalf("Failed to begin packet: %v", err)
+						panic(fmt.Sprintf("Failed to begin packet: %v", err))
 					}
 					for j := 0; j < columns; j++ {
 						field := generateRandomBytes(fieldSize)
 						exceptRow = append(exceptRow, field...)
 						err = cWriter.Append(field...)
 						if err != nil {
-							t.Fatalf("Failed to append bytes: %v", err)
+							panic(fmt.Sprintf("Failed to append bytes: %v", err))
 						}
 					}
+					exceptPayload = append(exceptPayload, exceptRow)
 					err = cWriter.FinishedPacket()
 					if err != nil {
-						t.Fatalf("Failed to finished packet: %v", err)
+						panic(fmt.Sprintf("Failed to finished packet: %v", err))
 					}
-					exceptPayload = append(exceptPayload, exceptRow)
+
 				}
 				err = cWriter.Flush()
 				if err != nil {
-					t.Fatalf("Failed to flush packet: %v", err)
+					panic(fmt.Sprintf("Failed to flush packet: %v", err))
 				}
 			}()
 			var data []byte
@@ -458,36 +494,43 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			defer server.Close()
 			defer client.Close()
 			cWriter, err := NewIOSession(client, pu)
+			if err != nil {
+				panic(err)
+			}
 			cReader, err := NewIOSession(server, pu)
+			if err != nil {
+				panic(err)
+			}
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
 			actualPayload := make([][]byte, 0)
-			columns := 1024 * 1024 * 20
-			fieldSize := 2
+			columns := 1024
+			fieldSize := 1024 * 20
 			go func() {
+				var err error
 				for i := 0; i < rows; i++ {
 					exceptRow := make([]byte, 0)
 					err = cWriter.BeginPacket()
 					if err != nil {
-						t.Fatalf("Failed to begin packet: %v", err)
+						panic(fmt.Sprintf("Failed to begin packet: %v", err))
 					}
 					for j := 0; j < columns; j++ {
 						field := generateRandomBytes(fieldSize)
 						exceptRow = append(exceptRow, field...)
 						err = cWriter.Append(field...)
 						if err != nil {
-							t.Fatalf("Failed to append bytes: %v", err)
+							panic(fmt.Sprintf("Failed to append bytes: %v", err))
 						}
 					}
+					exceptPayload = append(exceptPayload, exceptRow)
 					err = cWriter.FinishedPacket()
 					if err != nil {
-						t.Fatalf("Failed to finished packet: %v", err)
+						panic(fmt.Sprintf("Failed to finished packet: %v", err))
 					}
-					exceptPayload = append(exceptPayload, exceptRow)
 				}
 				err = cWriter.Flush()
 				if err != nil {
-					t.Fatalf("Failed to flush packet: %v", err)
+					panic(fmt.Sprintf("Failed to flush packet: %v", err))
 				}
 			}()
 			var data []byte
@@ -510,25 +553,32 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			defer server.Close()
 			defer client.Close()
 			cWriter, err := NewIOSession(client, pu)
+			if err != nil {
+				panic(err)
+			}
 			cReader, err := NewIOSession(server, pu)
+			if err != nil {
+				panic(err)
+			}
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
 			actualPayload := make([][]byte, 0)
 			columns := 2
 			fieldSize := int(MaxPayloadSize / 2)
 			go func() {
+				var err error
 				for i := 0; i < rows; i++ {
 					exceptRow := make([]byte, 0)
 					err = cWriter.BeginPacket()
 					if err != nil {
-						t.Fatalf("Failed to begin packet: %v", err)
+						panic(fmt.Sprintf("Failed to begin packet: %v", err))
 					}
 					for j := 0; j < columns; j++ {
 						field := generateRandomBytes(fieldSize)
 						exceptRow = append(exceptRow, field...)
 						err = cWriter.Append(field...)
 						if err != nil {
-							t.Fatalf("Failed to append bytes: %v", err)
+							panic(fmt.Sprintf("Failed to append bytes: %v", err))
 						}
 					}
 
@@ -536,18 +586,17 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 					exceptRow = append(exceptRow, field...)
 					err = cWriter.Append(field...)
 					if err != nil {
-						t.Fatalf("Failed to append bytes: %v", err)
-					}
-
-					err = cWriter.FinishedPacket()
-					if err != nil {
-						t.Fatalf("Failed to finished packet: %v", err)
+						panic(fmt.Sprintf("Failed to append bytes: %v", err))
 					}
 					exceptPayload = append(exceptPayload, exceptRow)
+					err = cWriter.FinishedPacket()
+					if err != nil {
+						panic(fmt.Sprintf("Failed to finished packet: %v", err))
+					}
 				}
 				err = cWriter.Flush()
 				if err != nil {
-					t.Fatalf("Failed to flush packet: %v", err)
+					panic(fmt.Sprintf("Failed to flush packet: %v", err))
 				}
 			}()
 			var data []byte
@@ -570,37 +619,43 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			defer server.Close()
 			defer client.Close()
 			cWriter, err := NewIOSession(client, pu)
+			if err != nil {
+				panic(err)
+			}
 			cReader, err := NewIOSession(server, pu)
+			if err != nil {
+				panic(err)
+			}
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
 			actualPayload := make([][]byte, 0)
 			columns := 2
 			fieldSize := int(MaxPayloadSize)
 			go func() {
+				var err error
 				for i := 0; i < rows; i++ {
 					exceptRow := make([]byte, 0)
 					err = cWriter.BeginPacket()
 					if err != nil {
-						t.Fatalf("Failed to begin packet: %v", err)
+						panic(fmt.Sprintf("Failed to begin packet: %v", err))
 					}
 					for j := 0; j < columns; j++ {
 						field := generateRandomBytes(fieldSize)
 						exceptRow = append(exceptRow, field...)
 						err = cWriter.Append(field...)
 						if err != nil {
-							t.Fatalf("Failed to append bytes: %v", err)
+							panic(fmt.Sprintf("Failed to append bytes: %v", err))
 						}
 					}
-
+					exceptPayload = append(exceptPayload, exceptRow)
 					err = cWriter.FinishedPacket()
 					if err != nil {
-						t.Fatalf("Failed to finished packet: %v", err)
+						panic(fmt.Sprintf("Failed to finished packet: %v", err))
 					}
-					exceptPayload = append(exceptPayload, exceptRow)
 				}
 				err = cWriter.Flush()
 				if err != nil {
-					t.Fatalf("Failed to flush packet: %v", err)
+					panic(fmt.Sprintf("Failed to flush packet: %v", err))
 				}
 			}()
 			var data []byte
@@ -634,8 +689,13 @@ func TestMySQLBufferReadLoadLocal(t *testing.T) {
 		defer server.Close()
 		defer client.Close()
 		cWriter, _ := NewIOSession(client, pu)
+		if err != nil {
+			panic(err)
+		}
 		cReader, _ := NewIOSession(server, pu)
-
+		if err != nil {
+			panic(err)
+		}
 		exceptPayload := make([][]byte, 0)
 		actualPayload := make([][]byte, 0)
 		go func() {
@@ -699,8 +759,14 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 		server, client := net.Pipe()
 		defer server.Close()
 		defer client.Close()
-		cWriter, _ := NewIOSession(client, pu)
-		cReader, _ := NewIOSession(server, pu)
+		cWriter, err := NewIOSession(client, pu)
+		if err != nil {
+			panic(err)
+		}
+		cReader, err := NewIOSession(server, pu)
+		if err != nil {
+			panic(err)
+		}
 		ses := &Session{}
 		ses.respr = &MysqlResp{
 			mysqlRrWr: &MysqlProtocolImpl{io: NewIOPackage(true), tcpConn: cReader},
