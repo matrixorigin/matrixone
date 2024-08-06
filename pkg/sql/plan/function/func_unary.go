@@ -1135,7 +1135,7 @@ func isSameSentence(current, last pdf.Text) bool {
 
 func readPdfToString(path string) (string, error) {
 	f, r, err := pdf.Open(path)
-	defer f.Close() // 确保文件在函数返回时关闭
+	defer f.Close()
 	if err != nil {
 		return "", err
 	}
@@ -1160,7 +1160,6 @@ func readPdfToString(path string) (string, error) {
 				lastTextStyle = text
 			}
 		}
-		// 处理页面最后一个句子
 		if lastTextStyle.S != "" {
 			textBuilder.WriteString(lastTextStyle.S + " ")
 		}
@@ -1172,13 +1171,11 @@ func readPdfToString(path string) (string, error) {
 func extractText(pdfPath string, txtPath string) bool {
 	content, err := readPdfToString(pdfPath)
 	if err != nil {
-		fmt.Println("Error reading PDF:", err)
 		return false
 	}
 
 	err = os.WriteFile(txtPath, []byte(content), 0666)
 	if err != nil {
-		fmt.Println("Error writing to text file:", err)
 		return false
 	}
 
