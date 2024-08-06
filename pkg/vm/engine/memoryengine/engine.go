@@ -74,8 +74,14 @@ func (e *Engine) Rollback(_ context.Context, _ client.TxnOperator) error {
 	return nil
 }
 
-func (e *Engine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ any, _ []byte, _ *plan.TableDef, _ any) ([]engine.Reader, error) {
+func (e *Engine) BuildBlockReaders(
+	ctx context.Context,
+	proc any,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+	def *plan.TableDef,
+	relData engine.RelData,
+	num int) ([]engine.Reader, error) {
 	return nil, nil
 }
 

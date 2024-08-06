@@ -28,8 +28,6 @@ import (
 var _ vm.Operator = new(MergeTop)
 
 type container struct {
-	colexec.ReceiverOperator
-
 	n     int // result vector number
 	sels  []int64
 	poses []int32           // sorted list of attributes
@@ -102,7 +100,6 @@ func (mergeTop *MergeTop) Free(proc *process.Process, pipelineFailed bool, err e
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanExecutors()
-		ctr.FreeMergeTypeOperator(pipelineFailed)
 		mergeTop.ctr = nil
 	}
 }

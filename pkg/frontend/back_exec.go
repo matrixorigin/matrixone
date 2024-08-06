@@ -112,6 +112,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 		reqCtx: ctx,
 		ses:    back.backSes,
 	}
+	defer execCtx.Close()
 	return doComQueryInBack(back.backSes, &execCtx, userInput)
 }
 
@@ -166,6 +167,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 		reqCtx: ctx,
 		ses:    back.backSes,
 	}
+	defer execCtx.Close()
 	return doComQueryInBack(back.backSes, &execCtx, userInput)
 }
 
@@ -216,7 +218,7 @@ func doComQueryInBack(
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
 	userNameOnly := rootName
-	proc := process.New(
+	proc := process.NewTopProcess(
 		execCtx.reqCtx,
 		backSes.pool,
 		getGlobalPu().TxnClient,
@@ -297,6 +299,7 @@ func doComQueryInBack(
 		execCtx.stmt = nil
 		execCtx.cw = nil
 		execCtx.cws = nil
+		execCtx.runner = nil
 		for i := 0; i < len(cws); i++ {
 			cws[i].Free()
 		}
@@ -550,7 +553,7 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 		ses.ReplaceDerivedStmt(prevDerivedStmt)
 		//@todo we need to improve: make one session, one proc, one txnOperator
 		p := ses.GetTxnCompileCtx().GetProcess()
-		p.FreeVectors()
+		p.Free()
 		execCtx.proc = proc
 		ses.GetTxnHandler().SetOptionBits(prevOptionBits)
 		ses.GetTxnHandler().SetServerStatus(prevServerStatus)
