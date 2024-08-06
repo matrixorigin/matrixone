@@ -393,7 +393,7 @@ func (e *Engine) GetOrCreateLatestPart(
 
 func LazyLoadLatestCkp(
 	ctx context.Context,
-	engine SimpleEngine,
+	engine TempEngine,
 	tbl engine.Relation) (*logtailreplay.Partition, error) {
 
 	part := engine.GetOrCreateLatestPart(tbl.GetDBID(ctx), tbl.GetTableID(ctx))

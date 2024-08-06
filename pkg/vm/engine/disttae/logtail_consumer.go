@@ -143,7 +143,7 @@ type PushClient struct {
 
 	consumeErrC chan error
 	receiver    []routineController
-	eng         SimpleEngine
+	eng         TempEngine
 
 	LogtailRPCClientFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
 	cdcId                   string
@@ -193,10 +193,10 @@ type connector struct {
 	signal chan struct{}
 
 	client *PushClient
-	engine SimpleEngine
+	engine TempEngine
 }
 
-func newConnector(c *PushClient, e SimpleEngine) *connector {
+func newConnector(c *PushClient, e TempEngine) *connector {
 	co := &connector{
 		signal: make(chan struct{}),
 		client: c,
@@ -222,7 +222,7 @@ func (c *connector) run(ctx context.Context) {
 func (c *PushClient) init(
 	serviceAddr string,
 	timestampWaiter client.TimestampWaiter,
-	e SimpleEngine,
+	e TempEngine,
 ) error {
 
 	c.serviceID = e.GetService()
@@ -483,7 +483,7 @@ func (c *PushClient) resume() {
 	}
 }
 
-func (c *PushClient) receiveOneLogtail(ctx context.Context, e SimpleEngine) error {
+func (c *PushClient) receiveOneLogtail(ctx context.Context, e TempEngine) error {
 	ctx, cancel := context.WithTimeout(ctx, maxTimeToWaitServerResponse)
 	defer cancel()
 
@@ -527,7 +527,7 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e SimpleEngine) erro
 	return nil
 }
 
-func (c *PushClient) receiveLogtails(ctx context.Context, e SimpleEngine) {
+func (c *PushClient) receiveLogtails(ctx context.Context, e TempEngine) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -552,7 +552,7 @@ func (c *PushClient) receiveLogtails(ctx context.Context, e SimpleEngine) {
 	}
 }
 
-func (c *PushClient) startConsumers(ctx context.Context, e SimpleEngine) {
+func (c *PushClient) startConsumers(ctx context.Context, e TempEngine) {
 	// new parallelNums routine to consume log tails.
 	for i := range c.receiver {
 		c.receiver[i] = c.createRoutineToConsumeLogTails(ctx, i, consumerBufferLength, e)
@@ -580,7 +580,7 @@ func (c *PushClient) sendConnectSig() {
 	}
 }
 
-func (c *PushClient) run(ctx context.Context, e SimpleEngine) {
+func (c *PushClient) run(ctx context.Context, e TempEngine) {
 	go c.receiveLogtails(ctx, e)
 
 	// for the first time connector.
@@ -702,95 +702,105 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
 
 }
 
-func (c *PushClient) connect(ctx context.Context, e SimpleEngine) {
+func (c *PushClient) connect(ctx context.Context, e TempEngine) {
 	if c.connector.first.Load() {
 		c.startConsumers(ctx, e)
 
 		for {
-			fmt.Fprintln(os.Stderr, "====>", c.cdcId, "connect 1")
+			fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 1")
 			err := c.subSysTables(ctx)
 			if err != nil {
+				fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 1-1")
 				c.pause(false)
 				time.Sleep(time.Second)
 
 				tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
+				fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 1-2", tnLogTailServerBackend)
 				if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
-					logutil.Errorf("%s init push client failed: %v", logTag, err)
+					fmt.Fprintf(os.Stderr, "*****>%s init push client [%s] failed: %v\n", logTag, c.cdcId, err)
 					continue
 				}
-
+				fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 1-3")
 				c.resume()
 				continue
 			}
+			fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 1-4")
 			c.waitTimestamp()
-
+			fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 1-5")
 			if cnEng, ok := e.(*Engine); ok {
 				if err := c.replayCatalogCache(ctx, cnEng); err != nil {
 					panic(err)
 				}
 			}
-
+			fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 1-6")
 			e.setPushClientStatus(true)
 			c.connector.first.Store(false)
+			fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 1-7")
 			return
 		}
 	}
 
+	fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 2")
 	e.setPushClientStatus(false)
+	fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 2-1")
 
 	c.stopConsumers()
+	fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 2-2")
 
-	logutil.Infof("%s %s: clean finished, start to reconnect to tn log tail service", logTag, c.serviceID)
+	fmt.Fprintf(os.Stderr, "*****>%s %s: clean finished, start to reconnect to tn log tail service [%s]\n", logTag, c.serviceID, c.cdcId)
 	for {
-		fmt.Fprintln(os.Stderr, "====>", c.cdcId, "connect 2")
+		fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 3")
 		if ctx.Err() != nil {
-			logutil.Infof("%s mo context has done, exit log tail receive routine", logTag)
+			fmt.Fprintf(os.Stderr, "*****>%s mo context has done, exit log tail receive routine[%s]\n", logTag, c.cdcId)
 			return
 		}
 
 		tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
+		fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 3-1", tnLogTailServerBackend)
 		if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
-			logutil.Errorf("%s rebuild the cn log tail client failed, reason: %s", logTag, err)
+			fmt.Fprintf(os.Stderr, "*****>%s rebuild the cn log tail client failed[%s], reason: %s\n", logTag, c.cdcId, err)
 			time.Sleep(retryReconnect)
 			continue
 		}
-		logutil.Infof("%s %s: client init finished", logTag, c.serviceID)
+		fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 3-2")
+		fmt.Fprintf(os.Stderr, "*****>%s %s: client init finished[%s]\n", logTag, c.serviceID, c.cdcId)
 
 		// set all the running transaction to be aborted.
 		e.abortAllRunningTxn()
-		logutil.Infof("%s %s: abort all running transactions finished", logTag, c.serviceID)
+		fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 3-3")
+		fmt.Fprintf(os.Stderr, "*****>%s %s: abort all running transactions finished[%s]\n", logTag, c.serviceID, c.cdcId)
 
 		// clean memory table.
 		err := e.init(ctx)
 		if err != nil {
-			logutil.Errorf("%s rebuild memory-table failed, err: %s", logTag, err)
+			fmt.Fprintf(os.Stderr, "*****>%s rebuild memory-table failed[%s], err: %s\n", logTag, c.cdcId, err)
 			time.Sleep(retryReconnect)
 			continue
 		}
-		logutil.Infof("%s %s: clean memory table finished", logTag, c.serviceID)
-
+		fmt.Fprintf(os.Stderr, "*****>%s %s: clean memory table finished[%s]\n", logTag, c.serviceID, c.cdcId)
+		fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 3-4")
 		// After init, start up again.
 		c.startConsumers(ctx, e)
-
+		fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 3-5")
 		c.resume()
-
+		fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 3-6")
 		err = c.subSysTables(ctx)
 		if err != nil {
-			logutil.Errorf("%s subscribe system tables failed, err %v", logTag, err)
+			fmt.Fprintf(os.Stderr, "*****>%s subscribe system tables failed[%s], err %v\n", logTag, c.cdcId, err)
 			continue
 		}
-
+		fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 3-7")
 		c.waitTimestamp()
-
+		fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 3-8")
 		if cnEng, ok := e.(*Engine); ok {
 			if err := c.replayCatalogCache(ctx, cnEng); err != nil {
 				panic(err)
 			}
 		}
-
+		fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 3-9")
 		e.setPushClientStatus(true)
-		logutil.Infof("%s %s: connected to server", logTag, c.serviceID)
-
+		fmt.Fprintf(os.Stderr, "*****>%s %s: connected to server [%s]\n", logTag, c.serviceID, c.cdcId)
+		fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 3-10")
 		return
 	}
 }
@@ -896,7 +906,7 @@ func (c *PushClient) unusedTableGCTicker(ctx context.Context) {
 	}()
 }
 
-func (c *PushClient) partitionStateGCTicker(ctx context.Context, e SimpleEngine) {
+func (c *PushClient) partitionStateGCTicker(ctx context.Context, e TempEngine) {
 	go func() {
 		ticker := time.NewTicker(gcPartitionStateTicker)
 		for {
@@ -934,7 +944,7 @@ type SubTableID struct {
 // subscribedTable used to record table subscribed status.
 // only if m[table T] = true, T has been subscribed.
 type subscribedTable struct {
-	eng   SimpleEngine
+	eng   TempEngine
 	mutex sync.Mutex
 
 	// value is table's latest use time.
@@ -1174,7 +1184,7 @@ type syncLogTailTimestamp struct {
 	ready                  atomic.Bool
 	tList                  []atomic.Pointer[timestamp.Timestamp]
 	latestAppliedLogTailTS atomic.Pointer[timestamp.Timestamp]
-	e                      SimpleEngine
+	e                      TempEngine
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
@@ -1416,7 +1426,7 @@ func waitServerReady(addr string) {
 	}
 }
 
-func InitLogTailPushModel(ctx context.Context, e SimpleEngine, timestampWaiter client.TimestampWaiter) error {
+func InitLogTailPushModel(ctx context.Context, e TempEngine, timestampWaiter client.TimestampWaiter) error {
 	tnStores := e.getTNServices()
 	if len(tnStores) == 0 {
 		return moerr.NewInternalError(ctx, "no TN store found")
@@ -1460,7 +1470,7 @@ func ifShouldNotDistribute(dbId, tblId uint64) bool {
 
 func dispatchSubscribeResponse(
 	ctx context.Context,
-	e SimpleEngine,
+	e TempEngine,
 	response *logtail.SubscribeResponse,
 	recRoutines []routineController,
 	receiveAt time.Time) error {
@@ -1503,7 +1513,7 @@ func dispatchSubscribeResponse(
 
 func dispatchUpdateResponse(
 	ctx context.Context,
-	e SimpleEngine,
+	e TempEngine,
 	response *logtail.UpdateResponse,
 	recRoutines []routineController,
 	receiveAt time.Time) error {
@@ -1559,7 +1569,7 @@ func dispatchUpdateResponse(
 
 func dispatchUnSubscribeResponse(
 	_ context.Context,
-	_ SimpleEngine,
+	_ TempEngine,
 	response *logtail.UnSubscribeResponse,
 	recRoutines []routineController,
 	receiveAt time.Time) error {
@@ -1632,10 +1642,10 @@ func (rc *routineController) close() {
 }
 
 func (c *PushClient) createRoutineToConsumeLogTails(
-	ctx context.Context, routineId int, signalBufferLength int, e SimpleEngine,
+	ctx context.Context, routineId int, signalBufferLength int, e TempEngine,
 ) routineController {
 
-	singleRoutineToConsumeLogTail := func(ctx context.Context, engine SimpleEngine, receiver *routineController, errRet chan error) {
+	singleRoutineToConsumeLogTail := func(ctx context.Context, engine TempEngine, receiver *routineController, errRet chan error) {
 		errHappen := false
 		for {
 			select {
@@ -1685,7 +1695,7 @@ func (c *PushClient) setStatusUnlock(ready bool) {
 
 // a signal to control the routine which is responsible for consuming log tail.
 type routineControlCmd interface {
-	action(ctx context.Context, e SimpleEngine, ctrl *routineController) error
+	action(ctx context.Context, e TempEngine, ctrl *routineController) error
 }
 
 type cmdToConsumeSub struct {
@@ -1705,7 +1715,7 @@ type cmdToConsumeUnSub struct {
 	receiveAt time.Time
 }
 
-func (cmd cmdToConsumeSub) action(ctx context.Context, e SimpleEngine, ctrl *routineController) error {
+func (cmd cmdToConsumeSub) action(ctx context.Context, e TempEngine, ctrl *routineController) error {
 	response := cmd.log
 	if err := consumeSubscribeResponse(ctx, e, response, true, cmd.receiveAt); err != nil {
 		return err
@@ -1716,7 +1726,7 @@ func (cmd cmdToConsumeSub) action(ctx context.Context, e SimpleEngine, ctrl *rou
 	return nil
 }
 
-func (cmd cmdToConsumeLog) action(ctx context.Context, e SimpleEngine, ctrl *routineController) error {
+func (cmd cmdToConsumeLog) action(ctx context.Context, e TempEngine, ctrl *routineController) error {
 	response := cmd.log
 	if err := consumeUpdateLogTail(ctx, e, response, true, cmd.receiveAt); err != nil {
 		return err
@@ -1724,12 +1734,12 @@ func (cmd cmdToConsumeLog) action(ctx context.Context, e SimpleEngine, ctrl *rou
 	return nil
 }
 
-func (cmd cmdToUpdateTime) action(ctx context.Context, e SimpleEngine, ctrl *routineController) error {
+func (cmd cmdToUpdateTime) action(ctx context.Context, e TempEngine, ctrl *routineController) error {
 	e.PushClient().receivedLogTailTime.updateTimestamp(ctrl.routineId, cmd.time, cmd.receiveAt)
 	return nil
 }
 
-func (cmd cmdToConsumeUnSub) action(ctx context.Context, e SimpleEngine, ctrl *routineController) error {
+func (cmd cmdToConsumeUnSub) action(ctx context.Context, e TempEngine, ctrl *routineController) error {
 	table := cmd.log.Table
 	//e.cleanMemoryTableWithTable(table.DbId, table.TbId)
 	e.PushClient().subscribed.setTableUnsubscribe(table.DbId, table.TbId)
@@ -1738,7 +1748,7 @@ func (cmd cmdToConsumeUnSub) action(ctx context.Context, e SimpleEngine, ctrl *r
 
 func consumeSubscribeResponse(
 	ctx context.Context,
-	e SimpleEngine,
+	e TempEngine,
 	rp *logtail.SubscribeResponse,
 	lazyLoad bool,
 	receiveAt time.Time) error {
@@ -1748,7 +1758,7 @@ func consumeSubscribeResponse(
 
 func consumeUpdateLogTail(
 	ctx context.Context,
-	e SimpleEngine,
+	e TempEngine,
 	rp logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time) error {
@@ -1758,7 +1768,7 @@ func consumeUpdateLogTail(
 // updatePartitionOfPush is the partition update method of log tail push model.
 func updatePartitionOfPush(
 	ctx context.Context,
-	e SimpleEngine,
+	e TempEngine,
 	tl *logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time) (err error) {
@@ -1767,6 +1777,10 @@ func updatePartitionOfPush(
 	defer func() {
 		v2.LogTailApplyDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+	if e.IsCdcEngine() {
+		fmt.Fprintln(os.Stderr, "====> cdc handle logtail before")
+		defer fmt.Fprintln(os.Stderr, "====> cdc handle logtail after")
+	}
 
 	// after consume the logtail, enqueue it to global stats.
 	defer func() {
@@ -1801,8 +1815,9 @@ func updatePartitionOfPush(
 	state, doneMutate := partition.MutateState()
 
 	var (
-		ckpStart types.TS
-		ckpEnd   types.TS
+		ckpStart         types.TS
+		ckpEnd           types.TS
+		firstCkpConsumed bool = state.IsFirstCkpConsumed()
 	)
 
 	if lazyLoad {
@@ -1835,6 +1850,18 @@ func updatePartitionOfPush(
 		}
 		t0 = time.Now()
 		err = consumeCkpsAndLogTail(ctx, partition.TableInfo.PrimarySeqnum, e, state, tl, dbId, tblId, partition.TableInfo.Name)
+
+		fmt.Fprintf(os.Stderr, "$$$$$$> %v:%v %s  firstCkpConsumed prev %v cur %v \n",
+			dbId, tblId, partition.TableInfo.Name,
+			firstCkpConsumed,
+			state.IsFirstCkpConsumed())
+		if err == nil && !firstCkpConsumed {
+			state.SetFirstCkpConsumed(true)
+		}
+		fmt.Fprintf(os.Stderr, "$$$$$$> %v:%v %s firstCkpConsumed prev %v cur %v after \n",
+			dbId, tblId, partition.TableInfo.Name,
+			firstCkpConsumed,
+			state.IsFirstCkpConsumed())
 		v2.LogtailUpdatePartitonConsumeLogtailDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
@@ -1858,13 +1885,81 @@ func updatePartitionOfPush(
 
 	doneMutate()
 
+	//cdc replay logtail
+	if e.IsCdcEngine() {
+		_ = cdcReplayLogtailUnlock(
+			ctx,
+			e,
+			dbId, tblId,
+			&partition.TableInfo,
+			tl,
+			lazyLoad,
+			firstCkpConsumed,
+		)
+	}
+
 	return nil
+}
+
+// cdcReplayLogtailUnlock replays the logtail for cdc.
+// only the cdc engine needs it.
+// put it under partition.Lock.
+func cdcReplayLogtailUnlock(
+	ctx context.Context,
+	e TempEngine,
+	dbId, tblId uint64,
+	tableInfo *logtailreplay.TableInfo,
+	tl *logtail.TableLogtail,
+	lazyLoad bool,
+	firstCkpConsumed bool,
+) (err error) {
+
+	fmt.Fprintf(os.Stderr, "$$$$$$> cdc replay logtail db:table %v:%v %v start lazyload %v firstCkpConsumed %v\n",
+		dbId, tblId, tableInfo.Name,
+		lazyLoad,
+		firstCkpConsumed,
+	)
+	defer func() {
+		fmt.Fprintf(os.Stderr, "$$$$$$> cdc replay logtail db:table %v:%v %v end\n",
+			dbId, tblId, tableInfo.Name,
+		)
+	}()
+	state := logtailreplay.NewPartitionState(e.GetService(), false, tblId)
+
+	if lazyLoad {
+		//!!!Note: CDC drop lazy load ckp
+		fmt.Fprintf(os.Stderr, "$$$$$$> cdc replay logtail db:table %v:%v %v consume logtail \n",
+			dbId, tblId, tableInfo.Name,
+		)
+		err = consumeLogTail(
+			ctx,
+			tableInfo.PrimarySeqnum,
+			e,
+			state,
+			tl,
+		)
+	} else {
+		if !firstCkpConsumed {
+			fmt.Fprintf(os.Stderr, "$$$$$$> cdc replay logtail db:table %v:%v %v consume ckp\n",
+				dbId, tblId, tableInfo.Name,
+			)
+			err = consumeCkpsAndLogTail(ctx, tableInfo.PrimarySeqnum, e, state, tl, dbId, tblId, tableInfo.Name)
+		}
+	}
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "$$$$$$> cdc %s consume %v:%d-%s log tail error: %v\n", logTag, dbId, tblId, tableInfo.Name, err)
+		return err
+	}
+
+	//!!!NOTE: Cdc ignore updating duration on the partition
+	return err
 }
 
 func consumeLogTail(
 	ctx context.Context,
 	primarySeqnum int,
-	engine SimpleEngine,
+	engine TempEngine,
 	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail,
 ) error {
@@ -1892,7 +1987,7 @@ func parseCkpDuration(lt *logtail.TableLogtail) (start types.TS, end types.TS) {
 func consumeCkpsAndLogTail(
 	ctx context.Context,
 	primarySeqnum int,
-	engine SimpleEngine,
+	engine TempEngine,
 	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail,
 	databaseId uint64,
@@ -1926,7 +2021,7 @@ func consumeCkpsAndLogTail(
 func hackConsumeLogtail(
 	ctx context.Context,
 	primarySeqnum int,
-	engine SimpleEngine,
+	engine TempEngine,
 	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail) error {
 

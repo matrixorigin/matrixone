@@ -201,66 +201,6 @@ type Engine struct {
 	messageCenter *process.MessageCenter
 }
 
-var _ SimpleEngine = new(Engine)
-
-type SimpleEngine interface {
-	engine.Engine
-	Cli() client.TxnClient
-	init(ctx context.Context) error
-	Enqueue(tail *logtail.TableLogtail)
-	GetOrCreateLatestPart(databaseId uint64, tableId uint64) *logtailreplay.Partition
-	GetLatestCatalogCache() *cache.CatalogCache
-	Get(ptr **types.Packer) fileservice.PutBack[*types.Packer]
-	GetMPool() *mpool.MPool
-	GetFS() fileservice.FileService
-	GetService() string
-	getTNServices() []DNStore
-	setPushClientStatus(ready bool)
-	abortAllRunningTxn()
-	CopyPartitions() map[[2]uint64]*logtailreplay.Partition
-	cleanMemoryTableWithTable(dbId, tblId uint64)
-	PushClient() *PushClient
-	New(ctx context.Context, op client.TxnOperator) error
-	FS() fileservice.FileService
-	TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error
-	IsCdcEngine() bool
-}
-
-var _ SimpleEngine = new(CdcEngine)
-
-type CdcEngine struct {
-	sync.RWMutex
-	service string
-
-	//latest partitions which be protected by e.Lock().
-	partitions map[[2]uint64]*logtailreplay.Partition
-
-	//latest catalog will be loaded from TN when engine is initialized.
-	catalog *cache.CatalogCache
-
-	packerPool *fileservice.Pool[*types.Packer]
-
-	mp *mpool.MPool
-
-	fs    fileservice.FileService
-	etlFs fileservice.FileService
-
-	pClient PushClient
-
-	cli client.TxnClient
-
-	cdcId string
-}
-
-var _ engine.Relation = new(CdcRelation)
-
-type CdcRelation struct {
-	db, table     string
-	dbId, tableId uint64
-	cdcEng        *CdcEngine
-	_partState    atomic.Pointer[logtailreplay.PartitionState]
-}
-
 // Transaction represents a transaction
 type Transaction struct {
 	sync.Mutex
@@ -926,4 +866,127 @@ type mergeReader struct {
 }
 
 type emptyReader struct {
+}
+
+// TODO: define the suitable name
+var _ TempEngine = new(Engine)
+
+type TempEngine interface {
+	engine.Engine
+	Cli() client.TxnClient
+	init(ctx context.Context) error
+	Enqueue(tail *logtail.TableLogtail)
+	GetOrCreateLatestPart(databaseId uint64, tableId uint64) *logtailreplay.Partition
+	GetLatestCatalogCache() *cache.CatalogCache
+	Get(ptr **types.Packer) fileservice.PutBack[*types.Packer]
+	GetMPool() *mpool.MPool
+	GetFS() fileservice.FileService
+	GetService() string
+	getTNServices() []DNStore
+	setPushClientStatus(ready bool)
+	abortAllRunningTxn()
+	CopyPartitions() map[[2]uint64]*logtailreplay.Partition
+	cleanMemoryTableWithTable(dbId, tblId uint64)
+	PushClient() *PushClient
+	New(ctx context.Context, op client.TxnOperator) error
+	FS() fileservice.FileService
+	TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error
+	IsCdcEngine() bool
+}
+
+var _ TempEngine = new(CdcEngine)
+
+type CdcEngine struct {
+	sync.RWMutex
+	//!!!Note: inherit the cn
+	service string
+
+	//latest partitions which be protected by e.Lock().
+	partitions map[[2]uint64]*logtailreplay.Partition
+
+	//latest catalog will be loaded from TN when engine is initialized.
+	catalog *cache.CatalogCache
+
+	packerPool *fileservice.Pool[*types.Packer]
+
+	mp *mpool.MPool
+
+	fs    fileservice.FileService
+	etlFs fileservice.FileService
+
+	pClient PushClient
+
+	//TODO: may delete it
+	cli client.TxnClient
+
+	cdcId string
+}
+
+var _ engine.Relation = new(CdcRelation)
+
+type CdcRelation struct {
+	db, table     string
+	dbId, tableId uint64
+	cdcEng        *CdcEngine
+	_partState    atomic.Pointer[logtailreplay.PartitionState]
+}
+
+/*
+Cdc process
+	logtail replayer
+=>  CdcQueue[DecoderInput]
+=>  CdcDecoder.Decode
+=>  CdcQueue[DecoderOutput]
+=>  CdcSinker.Sink
+=>  CdcSink.Send
+
+*/
+
+type CdcCtx struct {
+	db, table     string
+	dbId, tableId uint64
+}
+
+type DecoderInput struct {
+	ts    timestamp.Timestamp
+	state *logtailreplay.PartitionState
+}
+
+type DecoderOutput struct {
+	ts timestamp.Timestamp
+}
+
+type CdcDecoder interface {
+	Decode(
+		cdcCtx *CdcCtx,
+		input *DecoderInput,
+	) *DecoderOutput
+}
+
+type CdcSinker interface {
+	Sink(
+		cdcCtx *CdcCtx,
+		data *DecoderOutput,
+	) error
+}
+
+type CdcSink interface {
+	Send(
+		data *DecoderOutput,
+	) error
+}
+
+// CdcQueue
+// Two features:
+//
+//	persistence
+//	concurrent safe
+type CdcQueue[T any] interface {
+	//Push saves the value before it returns
+	Push(T)
+	Pop()
+	Front() T
+	Back() T
+	Size() int
+	Empty() bool
 }

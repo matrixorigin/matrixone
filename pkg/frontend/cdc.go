@@ -487,6 +487,19 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 		return err
 	}
 
+	//TODO: refine it
+	start := time.Now()
+	for !cdcEngine.PushClient().IsSubscriberReady() {
+		time.Sleep(30 * time.Millisecond)
+		if time.Since(start) > time.Second*10 {
+			break
+		}
+	}
+
+	if !cdcEngine.PushClient().IsSubscriberReady() {
+		return moerr.NewInternalError(ctx, "cdc pushClient is not ready")
+	}
+
 	//step3 : subscribe the table
 	seps := strings.Split(tables, ":")
 	if len(seps) != 2 {
@@ -520,17 +533,21 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 		return err
 	}
 
-	fmt.Fprintln(os.Stderr, "====>", "cdc task row dbId:tableId", dbId, tableId)
+	ch := make(chan int, 1)
 	cdcTbl := disttae.NewCdcRelation(db, table, dbId, tableId, cdcEngine)
+	fmt.Fprintln(os.Stderr, "====>", "cdc SubscribeTable",
+		dbId, tableId, "before")
 	err = disttae.SubscribeCdcTable(ctx, cdcTbl, dbId, tableId)
 	if err != nil {
 		return err
 	}
 
 	//step4 : process partition state
-
+	fmt.Fprintf(os.Stderr, "====> cdc SubscribeTable %v:%v after\n",
+		dbId, tableId,
+	)
 	//TODO:
-	ch := make(chan int, 1)
+
 	<-ch
 
 	return nil

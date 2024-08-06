@@ -23,6 +23,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
-	"github.com/tidwall/btree"
 )
 
 type PartitionState struct {
@@ -73,6 +74,10 @@ type PartitionState struct {
 	// blocks deleted before minTS is hard deleted.
 	// partition state can't serve txn with snapshotTS less than minTS
 	minTS types.TS
+
+	//for cdc, it denotes the first ckp consumed or not.
+	//if it is consumed, the ckp will be dropped after the consumed one.
+	firstCkpConsumed atomic.Bool
 }
 
 // sharedStates is shared among all PartitionStates
@@ -315,6 +320,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		start:           p.start,
 		end:             p.end,
 	}
+	state.firstCkpConsumed.Store(p.firstCkpConsumed.Load())
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
 		copy(state.checkpoints, p.checkpoints)
@@ -1217,4 +1223,11 @@ func (p *PartitionState) LastFlushTimestamp() types.TS {
 	p.shared.Lock()
 	defer p.shared.Unlock()
 	return p.shared.lastFlushTimestamp
+}
+
+func (p *PartitionState) SetFirstCkpConsumed(b bool) {
+	p.firstCkpConsumed.Store(b)
+}
+func (p *PartitionState) IsFirstCkpConsumed() bool {
+	return p.firstCkpConsumed.Load()
 }
