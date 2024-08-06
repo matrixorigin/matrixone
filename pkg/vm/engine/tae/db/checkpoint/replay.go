@@ -292,6 +292,56 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	return
 }
 
+func ReplayCheckpointEntry(
+	ctx context.Context,
+	sid, name string,
+	fs fileservice.FileService,
+) (entries []*CheckpointEntry, err error) {
+	reader, err := blockio.NewFileReader(sid, fs, name)
+	if err != nil {
+		return
+	}
+	bats, closeCB, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
+	if err != nil {
+		return
+	}
+	defer func() {
+		if closeCB != nil {
+			closeCB()
+		}
+	}()
+	bat := containers.NewBatch()
+	defer bat.Close()
+	colNames := CheckpointSchema.Attrs()
+	colTypes := CheckpointSchema.Types()
+	var checkpointVersion int
+	// in version 1, checkpoint metadata doesn't contain 'version'.
+	vecLen := len(bats[0].Vecs)
+	if vecLen < CheckpointSchemaColumnCountV1 {
+		checkpointVersion = 1
+	} else if vecLen < CheckpointSchemaColumnCountV2 {
+		checkpointVersion = 2
+	} else {
+		checkpointVersion = 3
+	}
+	for i := range bats[0].Vecs {
+		if len(bats) == 0 {
+			continue
+		}
+		var vec containers.Vector
+		if bats[0].Vecs[i].Length() == 0 {
+			vec = containers.MakeVector(colTypes[i], common.CheckpointAllocator)
+		} else {
+			vec = containers.ToTNVector(bats[0].Vecs[i], common.CheckpointAllocator)
+		}
+		bat.AddVector(colNames[i], vec)
+	}
+
+	entries, _ = replayCheckpointEntries(bat, checkpointVersion)
+
+	return entries, nil
+}
+
 func MergeCkpMeta(
 	ctx context.Context,
 	sid string,
