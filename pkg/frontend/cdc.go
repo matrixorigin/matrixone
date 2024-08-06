@@ -547,6 +547,8 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 		dbId, tableId,
 	)
 	//TODO:
+	
+	
 
 	<-ch
 
