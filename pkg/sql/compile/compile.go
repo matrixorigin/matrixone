@@ -53,25 +53,45 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -1905,15 +1925,163 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	if len(n.ProjectList) == 0 {
 		return ss
 	}
-	currentFirstFlag := c.anal.isFirst
-	var op *projection.Projection
+
 	for i := range ss {
-		op = constructProjection(n)
-		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		ss[i].setRootOperator(op)
+		if ss[i].RootOp == nil {
+			c.setProjection(n, ss[i])
+			continue
+		}
+		_, ok := c.stmt.(*tree.Insert)
+		if ok {
+			c.setProjection(n, ss[i])
+			continue
+		}
+		switch ss[i].RootOp.(type) {
+		case *table_scan.TableScan:
+			if ss[i].RootOp.(*table_scan.TableScan).ProjectList == nil {
+				ss[i].RootOp.(*table_scan.TableScan).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *value_scan.ValueScan:
+			if ss[i].RootOp.(*value_scan.ValueScan).ProjectList == nil {
+				ss[i].RootOp.(*value_scan.ValueScan).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *fill.Fill:
+			if ss[i].RootOp.(*fill.Fill).ProjectList == nil {
+				ss[i].RootOp.(*fill.Fill).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *source.Source:
+			if ss[i].RootOp.(*source.Source).ProjectList == nil {
+				ss[i].RootOp.(*source.Source).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *external.External:
+			if ss[i].RootOp.(*external.External).ProjectList == nil {
+				ss[i].RootOp.(*external.External).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *group.Group:
+			if ss[i].RootOp.(*group.Group).ProjectList == nil {
+				ss[i].RootOp.(*group.Group).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *mergegroup.MergeGroup:
+			if ss[i].RootOp.(*mergegroup.MergeGroup).ProjectList == nil {
+				ss[i].RootOp.(*mergegroup.MergeGroup).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *anti.AntiJoin:
+			if ss[i].RootOp.(*anti.AntiJoin).ProjectList == nil {
+				ss[i].RootOp.(*anti.AntiJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *indexjoin.IndexJoin:
+			if ss[i].RootOp.(*indexjoin.IndexJoin).ProjectList == nil {
+				ss[i].RootOp.(*indexjoin.IndexJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *join.InnerJoin:
+			if ss[i].RootOp.(*join.InnerJoin).ProjectList == nil {
+				ss[i].RootOp.(*join.InnerJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *left.LeftJoin:
+			if ss[i].RootOp.(*left.LeftJoin).ProjectList == nil {
+				ss[i].RootOp.(*left.LeftJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *loopanti.LoopAnti:
+			if ss[i].RootOp.(*loopanti.LoopAnti).ProjectList == nil {
+				ss[i].RootOp.(*loopanti.LoopAnti).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *loopjoin.LoopJoin:
+			if ss[i].RootOp.(*loopjoin.LoopJoin).ProjectList == nil {
+				ss[i].RootOp.(*loopjoin.LoopJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *loopleft.LoopLeft:
+			if ss[i].RootOp.(*loopleft.LoopLeft).ProjectList == nil {
+				ss[i].RootOp.(*loopleft.LoopLeft).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *loopmark.LoopMark:
+			if ss[i].RootOp.(*loopmark.LoopMark).ProjectList == nil {
+				ss[i].RootOp.(*loopmark.LoopMark).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *loopsemi.LoopSemi:
+			if ss[i].RootOp.(*loopsemi.LoopSemi).ProjectList == nil {
+				ss[i].RootOp.(*loopsemi.LoopSemi).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *loopsingle.LoopSingle:
+			if ss[i].RootOp.(*loopsingle.LoopSingle).ProjectList == nil {
+				ss[i].RootOp.(*loopsingle.LoopSingle).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *mark.MarkJoin:
+			if ss[i].RootOp.(*mark.MarkJoin).ProjectList == nil {
+				ss[i].RootOp.(*mark.MarkJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *product.Product:
+			if ss[i].RootOp.(*product.Product).ProjectList == nil {
+				ss[i].RootOp.(*product.Product).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *productl2.Productl2:
+			if ss[i].RootOp.(*productl2.Productl2).ProjectList == nil {
+				ss[i].RootOp.(*productl2.Productl2).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *semi.SemiJoin:
+			if ss[i].RootOp.(*semi.SemiJoin).ProjectList == nil {
+				ss[i].RootOp.(*semi.SemiJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *single.SingleJoin:
+			if ss[i].RootOp.(*single.SingleJoin).ProjectList == nil {
+				ss[i].RootOp.(*single.SingleJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+
+		default:
+			c.setProjection(n, ss[i])
+		}
 	}
 	c.anal.isFirst = false
 	return ss
+}
+
+func (c *Compile) setProjection(n *plan.Node, s *Scope) {
+	op := constructProjection(n)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+	s.setRootOperator(op)
 }
 
 func (c *Compile) compileTPUnion(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
