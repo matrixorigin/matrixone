@@ -1234,7 +1234,15 @@ func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) 
 				len(deleteObjs))
 
 			if len(deleteObjs) > 0 {
-				if err := tbl.transferDeletes(ctx, state, deleteObjs, createObjs); err != nil {
+				if err := TransferTombstones(
+					ctx,
+					tbl,
+					state,
+					deletedObjects,
+					createdObjects,
+					txn.proc.Mp(),
+					txn.engine.fs,
+				); err != nil {
 					return err
 				}
 			}
