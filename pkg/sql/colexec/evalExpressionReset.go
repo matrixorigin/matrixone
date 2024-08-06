@@ -36,9 +36,13 @@ type functionFolding struct {
 	foldVector       *vector.Vector
 }
 
-func (fF *functionFolding) reset(m *mpool.MPool) {
+func (fF *functionFolding) init() {
 	fF.needFoldingCheck = true
 	fF.canFold = false
+}
+
+func (fF *functionFolding) reset(m *mpool.MPool) {
+	fF.init()
 	fF.close(m)
 }
 
@@ -100,6 +104,60 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 		expr.parameterResults[i] = nil
 		param.ResetForNextQuery()
 	}
+}
+
+func (expr *FunctionExpressionExecutor) getFoldedVector() *vector.Vector {
+	return expr.folded.foldVector
+}
+
+func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime bool) (err error) {
+	if !expr.folded.needFoldingCheck {
+		return nil
+	}
+
+	expr.folded.needFoldingCheck = false
+	expr.folded.canFold = false
+
+	// fold parameters.
+	allParametersFolded := true
+	for i, param := range expr.parameterExecutor {
+		// constant expression.
+		if constant, ok := param.(*FixedVectorExpressionExecutor); ok {
+			expr.parameterResults[i] = constant.resultVector
+			continue
+		}
+		// function expression.
+		if fExpr, ok := param.(*FunctionExpressionExecutor); ok {
+			paramFoldError := fExpr.doFold(proc, atRuntime)
+			if paramFoldError != nil {
+				return err
+			}
+			if fExpr.folded.canFold {
+				expr.parameterResults[i] = fExpr.getFoldedVector()
+				continue
+			}
+		}
+
+		allParametersFolded = false
+	}
+	if !allParametersFolded || expr.volatile || (!atRuntime && expr.timeDependent) {
+		return nil
+	}
+
+	// fold the function.
+	for i := range expr.parameterResults {
+		expr.parameterResults[i].SetLength(1)
+	}
+	if err = expr.resultVector.PreExtendAndReset(1); err != nil {
+		return err
+	}
+	if err = expr.evalFn(expr.parameterResults, expr.resultVector, proc, 1, nil); err != nil {
+		return err
+	}
+
+	expr.folded.foldVector = expr.resultVector.GetResultVector().ToConst(0, 1, proc.Mp())
+	expr.folded.canFold = true
+	return nil
 }
 
 func (expr *ParamExpressionExecutor) ResetForNextQuery() {
