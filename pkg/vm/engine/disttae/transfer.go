@@ -65,8 +65,10 @@ func TransferTombstones(
 		if duration > time.Second || err != nil {
 			logutil.Info(
 				"TRANSFER-TOMBSTONE-SLOW-LOG",
-				zap.Duration("duration", time.Since(start)),
+				zap.Duration("duration", duration),
 				zap.Int("count", transferCnt),
+				zap.String("table-name", table.tableDef.Name),
+				zap.Uint64("table-id", table.tableId),
 				zap.Error(err),
 			)
 		}
