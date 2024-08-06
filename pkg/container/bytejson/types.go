@@ -146,7 +146,7 @@ func (bj ByteJson) TYPE() string {
 	}
 }
 
-var jsonTypePrecedences = map[string]int{
+var jsonTpOrder = map[string]int{
 	"ARRAY":            -1,
 	"OBJECT":           -2,
 	"STRING":           -3,
@@ -157,12 +157,12 @@ var jsonTypePrecedences = map[string]int{
 }
 
 func CompareByteJson(left, right ByteJson) int {
-	precedence1 := jsonTypePrecedences[left.TYPE()]
-	precedence2 := jsonTypePrecedences[right.TYPE()]
+	order1 := jsonTpOrder[left.TYPE()]
+	order2 := jsonTpOrder[right.TYPE()]
 
 	var cmp int
-	if precedence1 == precedence2 {
-		if precedence1 == jsonTypePrecedences["NULL"] {
+	if order1 == order2 {
+		if order1 == jsonTpOrder["NULL"] {
 			cmp = 0
 		}
 		switch left.Type {
@@ -210,7 +210,7 @@ func CompareByteJson(left, right ByteJson) int {
 			}
 		}
 	} else {
-		if (-6 <= precedence1 && precedence1 <= -4) && (-6 <= precedence2 && precedence2 <= -4) {
+		if (-6 <= order1 && order1 <= -4) && (-6 <= order2 && order2 <= -4) {
 			var cmp int
 			switch left.Type {
 			case TpCodeInt64:
@@ -243,7 +243,7 @@ func CompareByteJson(left, right ByteJson) int {
 			}
 			return cmp
 		} else {
-			cmp = precedence1 - precedence2
+			cmp = order1 - order2
 			if cmp > 0 {
 				cmp = 1
 			} else if cmp < 0 {
