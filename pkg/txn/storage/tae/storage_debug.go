@@ -103,7 +103,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 		if err := req.Unmarshal(data); err != nil {
 			return nil, err
 		}
-		ret := ctl.SelfProcess(req.Cmd, req.Spans, req.Threshold)
+		ret := ctl.UpdateCurrentCNTraceSpan(req.Cmd, req.Spans, req.Threshold)
 		return []byte(ret), nil
 
 	case uint32(api.OpCode_OpStorageUsage):

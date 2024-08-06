@@ -2374,17 +2374,6 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 					return err
 				}
 			}
-			// XXX: This is so strange, why we need to handle this case here?
-			//
-			// case defines.MYSQL_TYPE_TIMESTAMP:
-			// 	if value, err := mrs.GetString(rowIdx, i); err != nil {
-			// 		return nil, err
-			// 	} else {
-			// 		data = err = mp.appendStringLenEnc(data, value)
-			//; if err != nil {
-			// 	return err
-			// }
-		// 	}
 		default:
 			return moerr.NewInternalError(mp.ctx, "type is not supported in binary text result row")
 		}
