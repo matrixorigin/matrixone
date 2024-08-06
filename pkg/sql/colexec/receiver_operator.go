@@ -150,12 +150,6 @@ func (r *ReceiverOperator) RemoveChosen(idx int) {
 	if idx == 0 {
 		return
 	}
-	if r.nilBatchCnt[idx] > 0 {
-		r.nilBatchCnt[idx]--
-	}
-	if r.nilBatchCnt[idx] > 0 {
-		return
-	}
 	r.receiverListener = append(r.receiverListener[:idx], r.receiverListener[idx+1:]...)
 	//remove idx-1 from chs
 	r.chs = append(r.chs[:idx-1], r.chs[idx:]...)
@@ -223,13 +217,29 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *process.RegisterMessage, bo
 			msg = (*process.RegisterMessage)(value.UnsafePointer())
 		}
 		if !ok || msg == nil || msg.Batch == nil {
-			r.RemoveChosen(chosen)
+			if msg.Batch == nil && chosen > 0 {
+				idx := chosen - 1
+				if r.nilBatchCnt[idx] > 0 {
+					r.nilBatchCnt[idx]--
+				}
+				if r.nilBatchCnt[idx] == 0 {
+					r.RemoveChosen(chosen)
+				}
+			}
 		}
 		return chosen, msg, ok
 	}
 
 	if !ok || msg == nil || msg.Batch == nil {
-		r.DisableChosen(chosen)
+		if msg.Batch == nil && chosen > 0 {
+			idx := chosen - 1
+			if r.nilBatchCnt[idx] > 0 {
+				r.nilBatchCnt[idx]--
+			}
+			if r.nilBatchCnt[idx] == 0 {
+				r.DisableChosen(chosen)
+			}
+		}
 	}
 	return chosen, msg, ok
 }
