@@ -100,6 +100,7 @@ type Group struct {
 	Aggs  []aggexec.AggFuncExecExpression
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (group *Group) GetOperatorBase() *vm.OperatorBase {
@@ -170,6 +171,11 @@ func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) 
 		ctr.cleanAggVectors()
 		ctr.cleanGroupVectors()
 		group.ctr = nil
+	}
+	if group.ProjectList != nil {
+		anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
+		anal.Alloc(group.ProjectAllocSize)
+		group.FreeProjection(proc)
 	}
 }
 

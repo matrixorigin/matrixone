@@ -96,6 +96,12 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 		ctr.process = processDefault
 	}
 
+	if fill.ProjectList != nil {
+		err := fill.PrepareProjection(proc)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -109,7 +115,13 @@ func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 	ctr := fill.ctr
 
-	return ctr.process(ctr, fill, proc, anal)
+	result, err := ctr.process(ctr, fill, proc, anal)
+
+	if fill.ProjectList != nil {
+		result.Batch, err = fill.EvalProjection(result.Batch, proc)
+	}
+
+	return result, err
 }
 
 func resetColRef(expr *plan.Expr, idx int) {
