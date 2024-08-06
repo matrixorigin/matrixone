@@ -65,13 +65,13 @@ func (c *SQLConverter) Convert(ctx context.Context, obj ie.InternalExecResult) (
 		var rowValues string
 		var err error
 		for j := 0; j < columnCount; j++ {
-			var val interface{}
-			val, err = obj.Value(ctx, uint64(i), uint64(j))
+			var val string
+			val, err = obj.GetString(ctx, uint64(i), uint64(j))
 			// Enclose the value in single quotes if it is a string
 			if err != nil {
 				rowValues += "NULL"
 			} else {
-				rowValues += "'" + val.(string) + "'"
+				rowValues += "'" + val + "'"
 			}
 			if j < columnCount-1 {
 				rowValues += ", "
