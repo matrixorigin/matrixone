@@ -109,7 +109,6 @@ func (tomb *tombstoneData) UnmarshalBinary(buf []byte) error {
 	buf = buf[4:]
 	tomb.rowids = types.DecodeSlice[types.Rowid](buf[:size*types.RowidSize])
 	buf = buf[size*types.RowidSize:]
-	size = types.DecodeUint32(buf)
 	buf = buf[4:]
 	tomb.files = objectio.LocationSlice(buf[:])
 	return nil
