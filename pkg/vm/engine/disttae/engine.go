@@ -506,7 +506,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	logDebugf(op.Txn(), "Engine.New")
-	proc := process.New(
+	proc := process.NewTopProcess(
 		ctx,
 		e.mp,
 		e.cli,

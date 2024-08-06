@@ -547,7 +547,7 @@ func NewSession(
 			panic(err)
 		}
 	}
-	ses.proc = process.New(
+	ses.proc = process.NewTopProcess(
 		context.TODO(),
 		ses.pool,
 		getGlobalPu().TxnClient,
@@ -620,28 +620,24 @@ func (ses *Session) Close() {
 		ses.sqlHelper = nil
 	}
 	ses.ClearStmtProfile()
-	//  The mpool cleanup must be placed at the end,
-	// and you must wait for all resources to be cleaned up before you can delete the mpool
-	if ses.proc != nil {
-		ses.proc.FreeVectors()
-		bats := ses.proc.GetValueScanBatchs()
-		for _, bat := range bats {
-			bat.Clean(ses.proc.Mp())
-		}
-		ses.proc = nil
-	}
+
+	ses.proc.Free()
+	ses.proc = nil
+
 	for _, bat := range ses.resultBatches {
 		bat.Clean(ses.pool)
 	}
-
-	pool := ses.GetMemPool()
-	mpool.DeleteMPool(pool)
-	ses.SetMemPool(nil)
 
 	if ses.buf != nil {
 		ses.buf.Free()
 		ses.buf = nil
 	}
+
+	//  The mpool cleanup must be placed at the end,
+	// and you must wait for all resources to be cleaned up before you can delete the mpool
+	pool := ses.GetMemPool()
+	mpool.DeleteMPool(pool)
+	ses.SetMemPool(nil)
 
 	ses.timestampMap = nil
 	ses.upstream = nil
