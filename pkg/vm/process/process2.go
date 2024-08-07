@@ -38,7 +38,7 @@ import (
 // It is used to store all the query information, including pool, txn, file service, lock service, etc.
 //
 // Each developer should watch that, do not call this function twice during the query execution.
-// Use Process.NewContextChildProc() and Process.NewNoContextChildProc() to create a new child process instead.
+// Use Process.NewNoContextChildProc() to create a new child process instead.
 //
 // The returning Process will hold a top context, which is session-client level context.
 // It can be modified by calling Process.ReplaceTopCtx() method, but should be careful to avoid modifying it after the query starts.
@@ -95,8 +95,8 @@ func NewTopProcess(
 	return proc
 }
 
-// NewNoContextChildProc make a new child process without context field.
-// This is used for the compile process, which doesn't need to pass the context.
+// NewNoContextChildProc make a new child process without the context field.
+// the context field is used for pipeline execution, which is only set when the pipeline is going to run.
 func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 	child := &Process{
 		Base: proc.Base,
@@ -113,14 +113,6 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 
 	// todo: if there is no dispatch operation, we don't need to create the following channel. but OK for now.
 	child.DispatchNotifyCh = make(chan *WrapCs)
-	return child
-}
-
-// NewContextChildProc make a new child and init its context field.
-// This is used for parallel execution, which will make a new child process to run a pipeline directly.
-func (proc *Process) NewContextChildProc(dataEntryCount int) *Process {
-	child := proc.NewNoContextChildProc(dataEntryCount)
-	child.BuildPipelineContext(proc.Ctx)
 	return child
 }
 
@@ -175,6 +167,14 @@ func (proc *Process) doPrepareForRunningWithoutPipeline() {
 // just for easy access.
 func GetQueryCtxFromProc(proc *Process) (context.Context, context.CancelFunc) {
 	return proc.Base.sqlContext.queryContext, proc.Base.sqlContext.queryCancel
+}
+
+// ReplacePipelineCtx replaces the pipeline context and cancel function for the process.
+// It's a very dangerous operation, should be used with caution.
+// And we only use it for the new built pipeline by the pipeline's ParallelRun method.
+func ReplacePipelineCtx(proc *Process, ctx context.Context, cancel context.CancelFunc) {
+	proc.Base.sqlContext.queryContext = ctx
+	proc.Base.sqlContext.queryCancel = cancel
 }
 
 // GetQueryContextError return error once top context or query context with error.

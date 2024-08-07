@@ -831,7 +831,7 @@ func constructProjection(n *plan.Node) *projection.Projection {
 	return arg
 }
 
-func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool) *external.External {
+func constructExternal(n *plan.Node, param *tree.ExternParam, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool) *external.External {
 	var attrs []string
 
 	for _, col := range n.TableDef.Cols {
@@ -855,7 +855,6 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 				TbColToDataCol:  tbColToDataCol,
 				FileOffsetTotal: fileOffset,
 				CreateSql:       n.TableDef.Createsql,
-				Ctx:             ctx,
 				FileList:        fileList,
 				FileSize:        FileSize,
 				ClusterTable:    n.GetClusterTable(),
@@ -1776,7 +1775,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	return arg
 }
 
-func constructJoinBuildOperator(c *Compile, op vm.Operator, isShuffle bool, mcpu int32) vm.Operator {
+func constructJoinBuildOperator(op vm.Operator, isShuffle bool, mcpu int32) vm.Operator {
 	switch op.OpType() {
 	case vm.IndexJoin:
 		indexJoin := op.(*indexjoin.IndexJoin)
@@ -1789,19 +1788,19 @@ func constructJoinBuildOperator(c *Compile, op vm.Operator, isShuffle bool, mcpu
 		return ret
 	default:
 		if isShuffle {
-			res := constructShuffleBuild(op, c.proc)
+			res := constructShuffleBuild(op)
 			res.SetIdx(op.GetOperatorBase().GetIdx())
 			res.SetIsFirst(true)
 			return res
 		}
-		res := constructHashBuild(op, c.proc, mcpu)
+		res := constructHashBuild(op, mcpu)
 		res.SetIdx(op.GetOperatorBase().GetIdx())
 		res.SetIsFirst(true)
 		return res
 	}
 }
 
-func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hashbuild.HashBuild {
+func constructHashBuild(op vm.Operator, mcpu int32) *hashbuild.HashBuild {
 	// XXX BUG
 	// relation index of arg.Conditions should be rewritten to 0 here.
 	ret := hashbuild.NewArgument()
@@ -2003,13 +2002,13 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 
 	default:
 		ret.Release()
-		panic(moerr.NewInternalError(proc.Ctx, "unsupport join type '%v'", op.OpType()))
+		panic(moerr.NewInternalErrorNoCtx("unsupported join type '%v'", op.OpType()))
 	}
 	ret.JoinMapRefCnt = mcpu
 	return ret
 }
 
-func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.ShuffleBuild {
+func constructShuffleBuild(op vm.Operator) *shufflebuild.ShuffleBuild {
 	ret := shufflebuild.NewArgument()
 
 	switch op.OpType() {
@@ -2128,7 +2127,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 
 	default:
 		ret.Release()
-		panic(moerr.NewInternalError(proc.Ctx, "unsupported type for shuffle join: '%v'", op.OpType()))
+		panic(moerr.NewInternalErrorNoCtx("unsupported type for shuffle join: '%v'", op.OpType()))
 	}
 	return ret
 }

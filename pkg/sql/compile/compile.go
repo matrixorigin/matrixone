@@ -1646,7 +1646,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{0, -1}...)
 			}
 		}
-		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
+		op := constructExternal(n, param, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 		pre += count
@@ -1679,7 +1679,7 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, 
 
 	s := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
-	op := constructExternal(n, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
+	op := constructExternal(n, param, nil, nil, nil, strictSqlMode)
 	op.SetIdx(c.anal.curNodeIdx)
 	op.SetIsFirst(currentFirstFlag)
 	s.setRootOperator(op)
@@ -1711,7 +1711,7 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 
 	scope := c.constructScopeForExternal("", false)
 	currentFirstFlag := c.anal.isFirst
-	extern := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
+	extern := constructExternal(n, param, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 	extern.Es.ParallelLoad = true
 	extern.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(extern)
@@ -1807,20 +1807,20 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 
 	//-----------------------------------------------------------------------------------------------------
-	ctx := c.proc.GetTopContext()
-	txnOp = c.proc.GetTxnOperator()
+	ctx := s.Proc.GetTopContext()
+	txnOp = s.Proc.GetTxnOperator()
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
 		return err
 	}
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
+			n.ScanSnapshot.TS.Less(s.Proc.GetTxnOperator().Txn().SnapshotTS) {
+			if s.Proc.GetCloneTxnOperator() != nil {
+				txnOp = s.Proc.GetCloneTxnOperator()
 			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
+				txnOp = s.Proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
+				s.Proc.SetCloneTxnOperator(txnOp)
 			}
 
 			if n.ScanSnapshot.Tenant != nil {
@@ -1830,7 +1830,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	//-----------------------------------------------------------------------------------------------------
 
-	if c.proc != nil && c.proc.GetTxnOperator() != nil {
+	if s.Proc != nil && s.Proc.GetTxnOperator() != nil {
 		ts = txnOp.Txn().SnapshotTS
 	}
 	{
@@ -1857,11 +1857,11 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 				return err
 			}
 			var e error // avoid contamination of error messages
-			db, e = c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, txnOp)
+			db, e = c.e.Database(s.Proc.Ctx, defines.TEMPORARY_DBNAME, txnOp)
 			if e != nil {
 				panic(e)
 			}
-			rel, e = db.Relation(c.proc.Ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
+			rel, e = db.Relation(s.Proc.Ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
 			if e != nil {
 				panic(e)
 			}
@@ -2229,7 +2229,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 	rs := c.compileBroadcastJoin(node, left, right, probeScopes, buildScopes)
 	if c.IsTpQuery() {
 		//construct join build operator for tp join
-		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, rs[0].RootOp), false, 1))
+		buildScopes[0].setRootOperator(constructJoinBuildOperator(vm.GetLeafOpParent(nil, rs[0].RootOp), false, 1))
 		rs[0].Proc.Reg.MergeReceivers = rs[0].Proc.Reg.MergeReceivers[:1]
 		buildScopes[0].IsEnd = true
 	}
@@ -3687,7 +3687,7 @@ func (c *Compile) newJoinProbeScopeWithBidx(s *Scope) *Scope {
 	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
 	mergeOp.SetIsFirst(true)
 	rs.setRootOperator(mergeOp)
-	rs.Proc = s.Proc.NewContextChildProc(s.BuildIdx)
+	rs.Proc = s.Proc.NewNoContextChildProc(s.BuildIdx)
 
 	for i := 0; i < s.BuildIdx; i++ {
 		regTransplant(s, rs, i, i)
@@ -3712,7 +3712,7 @@ func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
 	mergeOp.SetIsFirst(true)
 	rs.setRootOperator(mergeOp)
-	rs.Proc = s.Proc.NewContextChildProc(s.BuildIdx)
+	rs.Proc = s.Proc.NewNoContextChildProc(s.BuildIdx)
 	for i := 0; i < s.BuildIdx; i++ {
 		regTransplant(s, rs, i, i)
 	}
@@ -3725,7 +3725,7 @@ func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
 	rs := newScope(Merge)
 	buildLen := len(s.Proc.Reg.MergeReceivers) - s.BuildIdx
-	rs.Proc = s.Proc.NewContextChildProc(buildLen)
+	rs.Proc = s.Proc.NewNoContextChildProc(buildLen)
 	for i := 0; i < buildLen; i++ {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
@@ -3733,7 +3733,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
 	mergeOp.SetIdx(c.anal.curNodeIdx)
 	mergeOp.SetIsFirst(c.anal.isFirst)
 	rs.setRootOperator(mergeOp)
-	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, s.RootOp), s.ShuffleIdx > 0, mcpu))
+	rs.setRootOperator(constructJoinBuildOperator(vm.GetLeafOpParent(nil, s.RootOp), s.ShuffleIdx > 0, mcpu))
 
 	rs.IsEnd = true
 
