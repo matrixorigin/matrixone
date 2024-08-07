@@ -185,6 +185,10 @@ create pitr pitr04 range 1 'y';
 -- @ignore:1,2
 show pitr;
 -- @ignore:1,2
+show pitr where ACCOUNT_NAME = 'sys';
+-- @ignore:1,2
+show pitr where ACCOUNT_NAME = 'sys' AND CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > CAST_RANGE_VALUE_UNIT(1, 'h');
+-- @ignore:1,2
 show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > 1;
 -- @ignore:1,2
 show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > CAST_RANGE_VALUE_UNIT(1, 'h');
@@ -200,3 +204,5 @@ drop pitr if exists pitr01;
 drop pitr if exists pitr02;
 drop pitr if exists pitr03;
 drop pitr if exists pitr04;
+-- @ignore:1,2
+show pitr;
