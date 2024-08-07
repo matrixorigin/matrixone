@@ -30,6 +30,7 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -51,7 +52,7 @@ type DiskCache struct {
 func NewDiskCache(
 	ctx context.Context,
 	path string,
-	capacity int,
+	capacity fscache.CapacityFunc,
 	perfCounterSets []*perfcounter.CounterSet,
 	asyncLoad bool,
 ) (ret *DiskCache, err error) {
@@ -114,7 +115,7 @@ func (d *DiskCache) loadCache() {
 					continue // ignore
 				}
 
-				d.cache.Set(work.Path, struct{}{}, int(fileSize(info)))
+				d.cache.Set(work.Path, struct{}{}, int64(fileSize(info)))
 			}
 		}()
 	}
@@ -269,7 +270,7 @@ func (d *DiskCache) Read(
 			if err != nil {
 				return err
 			}
-			d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
+			d.cache.Set(diskPath, struct{}{}, fileSize(stat))
 		}
 
 		if err := entry.ReadFromOSFile(ctx, file); err != nil {
@@ -393,7 +394,7 @@ func (d *DiskCache) writeFile(
 	stat, err := os.Stat(diskPath)
 	if err == nil {
 		// file exists
-		d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
+		d.cache.Set(diskPath, struct{}{}, fileSize(stat))
 		numStat++
 		return false, nil
 	}
@@ -433,7 +434,7 @@ func (d *DiskCache) writeFile(
 	if err != nil {
 		return false, err
 	}
-	d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
+	d.cache.Set(diskPath, struct{}{}, fileSize(stat))
 
 	if err := f.Close(); err != nil {
 		return false, err

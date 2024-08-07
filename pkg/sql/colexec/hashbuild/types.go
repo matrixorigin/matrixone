@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -107,8 +108,8 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := hashBuild.ctr
-	proc.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err)
-	proc.FinalizeJoinMapMessage(hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
+	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
 	if ctr != nil {
 		ctr.batches = nil
 		ctr.intHashMap = nil

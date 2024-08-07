@@ -203,7 +203,7 @@ func (c *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.Clust
 
 func mockHandleTraceSpan(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.TraceSpanResponse = new(query.TraceSpanResponse)
-	resp.TraceSpanResponse.Resp = SelfProcess(
+	resp.TraceSpanResponse.Resp = UpdateCurrentCNTraceSpan(
 		req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans, req.TraceSpanRequest.Threshold)
 	return nil
 }

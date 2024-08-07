@@ -32,7 +32,7 @@ create index ACT_IDX_IDENT_LNK_SCOPE on ACT_RU_IDENTITYLINK(SCOPE_ID_, SCOPE_TYP
 create index ACT_IDX_IDENT_LNK_SUB_SCOPE on ACT_RU_IDENTITYLINK(SUB_SCOPE_ID_, SCOPE_TYPE_);
 desc ACT_RU_IDENTITYLINK;
 Field    Type    Null    Key    Default    Extra    Comment
-ID_    VARCHAR(64)    YES    PRI    null        
+ID_    VARCHAR(64)    NO    PRI    null        
 REV_    INT(32)    YES        null        
 GROUP_ID_    VARCHAR(255)    YES    MUL    null        
 TYPE_    VARCHAR(255)    YES        null        

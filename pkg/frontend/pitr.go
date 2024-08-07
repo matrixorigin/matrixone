@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -642,12 +643,6 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 		return moerr.NewInternalError(ctx, "pitr %s does not exist", pitrName)
 	}
 
-	// check privilege
-	// only sys account can restore other account's pitr
-	if len(srcAccountName) != 0 && tenantInfo.GetTenant() != sysAccountName {
-		return moerr.NewInternalError(ctx, "only sys account can restore other account's pitr")
-	}
-
 	// check if the database can be restore
 	if len(dbName) != 0 && needSkipDb(dbName) {
 		return moerr.NewInternalError(ctx, "database %s can not be restore", dbName)
@@ -787,6 +782,10 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 
 	// restore according the restore level
 	switch restoreLevel {
+	case tree.RESTORELEVELCLUSTER:
+		if err = restoreToCluster(ctx, ses, bh, pitrName, ts); err != nil {
+			return
+		}
 	case tree.RESTORELEVELACCOUNT:
 		if err = restoreToAccountWithPitr(ctx, ses.GetService(), bh, pitrName, ts, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
@@ -852,13 +851,8 @@ func restoreToAccountWithPitr(
 			continue
 		}
 
-		// do some op to pub database
-		if err := checkPubAndDropPubRecord(ctx, sid, bh, pitrName, dbName); err != nil {
-			return err
-		}
-
 		getLogger(sid).Info(fmt.Sprintf("[%s]drop current exists db: %v", pitrName, dbName))
-		if err = bh.Exec(ctx, fmt.Sprintf("drop database if exists %s", dbName)); err != nil {
+		if err = dropDb(ctx, bh, dbName); err != nil {
 			return
 		}
 	}
@@ -1192,7 +1186,7 @@ func fkTablesTopoSortInPitrRestore(
 		return
 	}
 
-	g := topsort{next: make(map[string][]string)}
+	g := toposort{next: make(map[string][]string)}
 	for key, deps := range fkDeps {
 		g.addVertex(key)
 		for _, depTbl := range deps {
@@ -1254,7 +1248,7 @@ func restoreViewsWithPitr(
 		compCtx.SetSnapshot(oldSnapshot)
 	}()
 
-	g := topsort{next: make(map[string][]string)}
+	g := toposort{next: make(map[string][]string)}
 	for key, view := range viewMap {
 		stmts, err := parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1)
 		if err != nil {
@@ -1338,8 +1332,8 @@ func checkAndRestorePublicationRecordWithPitr(
 			// restore the publication record
 
 			// insert data
-			insertIntoSql := fmt.Sprintf(restorePubDbDataWithTsFmt, moCatalog, PubDbName, moCatalog, PubDbName, ts, dbName)
-			getLogger(sid).Info(fmt.Sprintf("[%s] start to restore db '%s' pub record, insert sql: %s", pitrName, PubDbName, insertIntoSql))
+			insertIntoSql := fmt.Sprintf(restorePubDbDataWithTsFmt, moCatalog, catalog.MO_PUBS, moCatalog, catalog.MO_PUBS, ts, dbName)
+			getLogger(sid).Info(fmt.Sprintf("[%s] start to restore db '%s' pub record, insert sql: %s", pitrName, catalog.MO_PUBS, insertIntoSql))
 
 			if err = bh.Exec(ctx, insertIntoSql); err != nil {
 				return
@@ -1527,6 +1521,16 @@ func addTimeSpan(length int, unit string) (time.Time, error) {
 func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantInfo *TenantInfo) (err error) {
 	restoreLevel := stmt.Level
 	switch restoreLevel {
+	case tree.RESTORELEVELCLUSTER:
+		// check the level
+		// if the pitr level is account/ database/table, return err
+		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() || pitrRecord.level == tree.PITRLEVELDATABASE.String() || pitrRecord.level == tree.PITRLEVELTABLE.String() {
+			return moerr.NewInternalErrorNoCtx("restore level %v is not allowed for cluster restore", pitrRecord.level)
+		}
+		// if the accout not sys account, return err
+		if tenantInfo.GetTenantID() != sysAccountID {
+			return moerr.NewInternalErrorNoCtx("account %s is not allowed to restore cluster level pitr %s", tenantInfo.GetTenant(), pitrRecord.pitrName)
+		}
 	case tree.RESTORELEVELACCOUNT:
 
 		if len(stmt.AccountName) == 0 { // restore self account
@@ -1537,8 +1541,16 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 			if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 				return moerr.NewInternalErrorNoCtx("pitr %s is not allowed to restore account %v", pitrRecord.pitrName, tenantInfo.GetTenant())
 			}
+			// if the pitr level is cluster, the tenant must be sys account
+			if pitrRecord.level == tree.PITRLEVELCLUSTER.String() && tenantInfo.GetTenantID() != sysAccountID {
+				return moerr.NewInternalErrorNoCtx("account %s is not allowed to restore cluster level pitr %s", tenantInfo.GetTenant(), pitrRecord.pitrName)
+			}
 		} else {
 			// sys restore other account's pitr
+			// if the accout not sys account, return err
+			if tenantInfo.GetTenantID() != sysAccountID {
+				return moerr.NewInternalErrorNoCtx("account %s is not allowed to restore other account %s", tenantInfo.GetTenant(), string(stmt.AccountName))
+			}
 			// if the pitr level is cluster, the scource account can not be empty
 			if pitrRecord.level == tree.PITRLEVELCLUSTER.String() && len(stmt.SrcAccountName) == 0 {
 				return moerr.NewInternalErrorNoCtx("source account %s can not be empty when restore cluster level pitr %s", string(stmt.AccountName), pitrRecord.pitrName)

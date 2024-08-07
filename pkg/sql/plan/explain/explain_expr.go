@@ -21,19 +21,20 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func describeMessage(m *plan.MsgHeader, buf *bytes.Buffer) {
 	buf.WriteString("[tag ")
 	fmt.Fprintf(buf, "%d", m.MsgTag)
 	buf.WriteString(" , type ")
-	msgType := process.MsgType(m.MsgType)
+	msgType := message.MsgType(m.MsgType)
 	buf.WriteString(msgType.MessageName())
 	buf.WriteString("]")
 }

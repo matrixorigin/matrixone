@@ -16,36 +16,38 @@ package fifocache
 
 import (
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
 func BenchmarkSequentialSet(b *testing.B) {
 	size := 65536
-	cache := New[int, int](size, nil, ShardInt[int])
+	cache := New[int, int](fscache.ConstCapacity(int64(size)), nil, ShardInt[int])
 	nElements := size * 16
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cache.Set(i%nElements, i, 1+i%3)
+		cache.Set(i%nElements, i, int64(1+i%3))
 	}
 }
 
 func BenchmarkParallelSet(b *testing.B) {
 	size := 65536
-	cache := New[int, int](size, nil, ShardInt[int])
+	cache := New[int, int](fscache.ConstCapacity(int64(size)), nil, ShardInt[int])
 	nElements := size * 16
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for i := 0; pb.Next(); i++ {
-			cache.Set(i%nElements, i, 1+i%3)
+			cache.Set(i%nElements, i, int64(1+i%3))
 		}
 	})
 }
 
 func BenchmarkGet(b *testing.B) {
 	size := 65536
-	cache := New[int, int](size, nil, ShardInt[int])
+	cache := New[int, int](fscache.ConstCapacity(int64(size)), nil, ShardInt[int])
 	nElements := size * 16
 	for i := 0; i < nElements; i++ {
-		cache.Set(i, i, 1+i%3)
+		cache.Set(i, i, int64(1+i%3))
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -55,10 +57,10 @@ func BenchmarkGet(b *testing.B) {
 
 func BenchmarkParallelGet(b *testing.B) {
 	size := 65536
-	cache := New[int, int](size, nil, ShardInt[int])
+	cache := New[int, int](fscache.ConstCapacity(int64(size)), nil, ShardInt[int])
 	nElements := size * 16
 	for i := 0; i < nElements; i++ {
-		cache.Set(i, i, 1+i%3)
+		cache.Set(i, i, int64(1+i%3))
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -70,7 +72,7 @@ func BenchmarkParallelGet(b *testing.B) {
 
 func BenchmarkParallelGetOrSet(b *testing.B) {
 	size := 65536
-	cache := New[int, int](size, nil, ShardInt[int])
+	cache := New[int, int](fscache.ConstCapacity(int64(size)), nil, ShardInt[int])
 	nElements := size * 16
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -78,7 +80,7 @@ func BenchmarkParallelGetOrSet(b *testing.B) {
 			if i%2 == 0 {
 				cache.Get(i % nElements)
 			} else {
-				cache.Set(i%nElements, i, 1+i%3)
+				cache.Set(i%nElements, i, int64(1+i%3))
 			}
 		}
 	})
