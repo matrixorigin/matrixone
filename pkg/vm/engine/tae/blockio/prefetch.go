@@ -50,14 +50,7 @@ func buildPrefetchParams(service fileservice.FileService, key objectio.Location)
 func mergePrefetch(processes []PrefetchParams) map[string]PrefetchParams {
 	pc := make(map[string]PrefetchParams)
 	for _, p := range processes {
-		var name string
-		name = p.key.Name().String()
-		old, ok := pc[name]
-		if !ok {
-			pc[name] = p
-			continue
-		}
-		pc[name] = old
+		pc[p.key.Name().String()] = p
 	}
 	return pc
 }

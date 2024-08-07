@@ -2223,11 +2223,6 @@ func (data *CheckpointData) PrefetchMeta(
 	return blockio.Prefetch(data.sid, service, key)
 }
 
-type blockIdx struct {
-	location objectio.Location
-	dataType uint16
-}
-
 func (data *CheckpointData) PrefetchFrom(
 	ctx context.Context,
 	version uint32,
