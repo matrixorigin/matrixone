@@ -16,5 +16,12 @@ create table t3(c varchar);
 load data infile {'filepath'='$resources/load_data/indexed_str.parq', 'format'='parquet'} into table t3;
 select * from t3;
 
+
+create table t4(id bigint not null, name varchar not null, sex bool, f32 float(5,2));
+create stage parqstage URL='file:///$resources/load_data/';
+load data infile {'filepath'='stage://parqstage/simple2.parq', 'format'='parquet'} into table t4;
+select * from t4;
+drop stage parqstage;
+
 -- post
 drop database parq;
