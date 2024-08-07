@@ -168,15 +168,12 @@ func MakeAgg(
 	if ok {
 		return exec
 	}
-
 	if _, ok = singleAgg[aggID]; ok && len(param) == 1 {
 		return makeSingleAgg(mg, aggID, isDistinct, param[0])
 	}
-
 	if _, ok = multiAgg[aggID]; ok && len(param) > 0 {
 		return makeMultiAgg(mg, aggID, isDistinct, param)
 	}
-
 	panic(fmt.Sprintf("unexpected aggID %d and param types %v.", aggID, param))
 }
 

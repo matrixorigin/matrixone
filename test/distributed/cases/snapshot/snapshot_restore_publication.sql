@@ -12,7 +12,7 @@ create account test_tenant_1 admin_name 'test_account' identified by '111';
 -- publish to tenant test_tenant_1
 create publication pubname1 database db1 account test_tenant_1 comment 'publish db1 database';
 
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db1';
 
@@ -28,7 +28,7 @@ create snapshot snapshot2 for account sys;
 
 drop publication pubname1;
 drop database db1;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db1';
 
@@ -39,7 +39,7 @@ show tables;
 -- @session
 
 restore account sys from snapshot snapshot2;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db1';
 
@@ -53,7 +53,7 @@ drop snapshot snapshot2;
 drop account test_tenant_1;
 drop publication if exists pubname1;
 drop database if exists db1;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db1';
 
@@ -83,7 +83,7 @@ create account test_tenant_2 admin_name 'test_account' identified by '111';
 -- publish to tenant test_tenant_1 and test_tenant_2
 create publication pubname2 database db2 account all comment 'publish db2 database';
 
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 
@@ -98,7 +98,7 @@ use sub_db2;
 show tables;
 select * from t2;
 
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -107,7 +107,7 @@ create database sub_db2 from sys publication pubname2;
 use sub_db2;
 show tables;
 select * from t2;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -117,7 +117,7 @@ drop publication pubname1;
 drop publication pubname2;
 drop database db1;
 drop database db2;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 
@@ -129,7 +129,7 @@ show tables;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -137,13 +137,13 @@ show subscriptions;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
 restore account sys from snapshot snapshot3;
 
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 
@@ -155,7 +155,7 @@ show tables;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -163,7 +163,7 @@ show subscriptions;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -174,7 +174,7 @@ drop publication if exists pubname1;
 drop publication if exists pubname2;
 drop database if exists db1;
 drop database if exists db2;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 
@@ -206,7 +206,7 @@ create account test_tenant_2 admin_name 'test_account' identified by '111';
 -- publish to tenant test_tenant_1 and test_tenant_2
 create publication pubname2 database db2 account all comment 'publish db2 database';
 
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 
@@ -221,7 +221,7 @@ use sub_db2;
 show tables;
 select * from t2;
 
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -230,13 +230,13 @@ create database sub_db2 from sys publication pubname2;
 use sub_db2;
 show tables;
 select * from t2;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
 restore account sys from snapshot snapshot4;
 
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 
@@ -248,7 +248,7 @@ show tables;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -256,7 +256,7 @@ show subscriptions;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -267,7 +267,7 @@ drop publication if exists pubname1;
 drop publication if exists pubname2;
 drop database if exists db1;
 drop database if exists db2;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 -- @ignore:1
@@ -286,7 +286,7 @@ create account test_tenant_1 admin_name 'test_account' identified by '111';
 -- publish to tenant test_tenant_1
 create publication pubname1 database db1 account test_tenant_1 comment 'publish db1 database';
 
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 
@@ -295,7 +295,7 @@ create database sub_db1 from sys publication pubname1;
 use sub_db1;
 show tables;
 
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -316,7 +316,7 @@ create account test_tenant_2 admin_name 'test_account' identified by '111';
 -- publish to tenant test_tenant_1 and test_tenant_2
 create publication pubname2 database db2 account all comment 'publish db2 database';
 
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 
@@ -325,7 +325,7 @@ create database sub_db2 from sys publication pubname2;
 use sub_db2;
 show tables;
 select * from t2;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -334,13 +334,13 @@ create database sub_db2 from sys publication pubname2;
 use sub_db2;
 show tables;
 select * from t2;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
 restore account sys from snapshot snapshot6;
 
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 
@@ -352,7 +352,7 @@ show tables;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -361,7 +361,7 @@ show databases like 'sub_db2';
 use sub_db2;
 show tables;
 
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -374,7 +374,7 @@ show tables;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -383,7 +383,7 @@ show databases like 'sub_db2';
 use sub_db2;
 show tables;
 
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -395,7 +395,7 @@ drop publication if exists pubname1;
 drop publication if exists pubname2;
 drop database if exists db1;
 drop database if exists db2;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 -- @ignore:1
@@ -462,7 +462,7 @@ drop publication if exists pub05;
 create publication pub05 database db09 account acc02 comment 'publish db09';
 drop publication if exists pub06;
 create publication pub06 database db10 account acc02 comment 'publish db10';
--- @ignore:2
+-- @ignore:5,6
 show publications;
 -- @session
 
@@ -478,7 +478,7 @@ select * from index02;
 restore account acc01 from snapshot sp05;
 
 -- @session:id=9&user=acc01:test_account&password=111
--- @ignore:2
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 -- @session
@@ -488,7 +488,7 @@ create account acc03 admin_name 'test_account' identified by '111';
 restore account acc01 from snapshot sp05 to account acc03;
 -- @bvt:issue#16497
 -- @session:id=11&user=acc03:test_account&password=111
--- @ignore:2
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 -- @session

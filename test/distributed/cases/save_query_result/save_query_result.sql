@@ -141,16 +141,18 @@ create table table03(col1 char, col2 varchar(100));
 insert into table03 values ('1', 'database');
 insert into table03 values ('a', 'data warehouse');
 create publication publication02 database database02 account acc_save;
--- @ignore:2
+-- @ignore:5,6
 show publications;
 -- @session:id=1&user=acc_save:admin&password=123456
 create database sub_database02 from sys publication publication02;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @session
+-- @ignore:5,7
 show subscriptions;
+-- @ignore:5,7
 show subscriptions all;
 drop publication publication02;
 drop database if exists database02;

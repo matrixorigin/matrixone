@@ -51,7 +51,9 @@ type LoopSemi struct {
 	Cond       *plan.Expr
 	Typs       []types.Type
 	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopSemi *LoopSemi) GetOperatorBase() *vm.OperatorBase {
@@ -99,6 +101,12 @@ func (loopSemi *LoopSemi) Free(proc *process.Process, pipelineFailed bool, err e
 		//}
 		loopSemi.ctr.lastrow = 0
 		loopSemi.ctr = nil
+	}
+
+	if loopSemi.ProjectList != nil {
+		anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
+		anal.Alloc(loopSemi.ProjectAllocSize)
+		loopSemi.FreeProjection(proc)
 	}
 }
 
