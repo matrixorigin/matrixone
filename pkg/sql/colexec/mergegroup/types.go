@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -58,6 +59,7 @@ type MergeGroup struct {
 	PartialResultTypes []types.T
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (mergeGroup *MergeGroup) GetOperatorBase() *vm.OperatorBase {
@@ -107,6 +109,11 @@ func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, e
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
 		mergeGroup.ctr = nil
+	}
+	if mergeGroup.ProjectList != nil {
+		anal := proc.GetAnalyze(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor())
+		anal.Alloc(mergeGroup.ProjectAllocSize)
+		mergeGroup.FreeProjection(proc)
 	}
 }
 

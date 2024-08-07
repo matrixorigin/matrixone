@@ -289,6 +289,10 @@ type FrontendParameters struct {
 
 	// disable select into
 	DisableSelectInto bool `toml:"disable-select-into"`
+
+	// PubAllAccounts shows the accounts which can publish data to all accounts
+	// consists of account names are separated by comma
+	PubAllAccounts string `toml:"pub-all-accounts"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
