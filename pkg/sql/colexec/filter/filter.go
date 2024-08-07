@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,22 +41,17 @@ func (filter *Filter) OpType() vm.OpType {
 }
 
 func (filter *Filter) Prepare(proc *process.Process) (err error) {
-	filter.ctr = new(container)
-	var filterExpr *plan.Expr
-
 	if filter.exeExpr == nil && filter.E == nil {
 		return nil
 	}
 
-	if filter.exeExpr == nil {
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.E), proc, true, true)
-	} else {
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.exeExpr), proc, true, true)
+	if len(filter.ctr.executors) == 0 {
+		if filter.exeExpr == nil {
+			filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
+		} else {
+			filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.exeExpr}))
+		}
 	}
-	if err != nil {
-		return err
-	}
-	filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
 	return err
 }
 
@@ -79,13 +73,20 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() || len(filter.ctr.executors) == 0 {
 		return result, nil
 	}
-	if filter.ctr.buf != nil {
-		proc.PutBatch(filter.ctr.buf)
-		filter.ctr.buf = nil
-	}
-	filter.ctr.buf = result.Batch
 
-	anal.Input(filter.ctr.buf, filter.GetIsFirst())
+	if filter.ctr.buf == nil {
+		newBat, err := result.Batch.Dup(proc.Mp())
+		if err != nil {
+			return result, err
+		}
+		filter.ctr.buf = newBat
+	} else {
+		filter.ctr.buf.CleanOnlyData()
+		_, err := filter.ctr.buf.Append(proc.Ctx, proc.Mp(), result.Batch)
+		if err != nil {
+			return result, err
+		}
+	}
 
 	var sels []int64
 	for i := range filter.ctr.executors {
@@ -103,6 +104,7 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, moerr.NewOOM(proc.Ctx)
 		}
 		anal.Alloc(int64(vec.Size()))
+
 		if !vec.GetType().IsBoolean() {
 			return result, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
@@ -111,10 +113,6 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
-				filter.ctr.buf, err = tryDupBatch(proc, filter.ctr.buf)
-				if err != nil {
-					return result, err
-				}
 				filter.ctr.buf.Shrink(nil, false)
 			}
 		} else {
@@ -139,10 +137,6 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 				}
 			}
-			filter.ctr.buf, err = tryDupBatch(proc, filter.ctr.buf)
-			if err != nil {
-				return result, err
-			}
 			filter.ctr.buf.Shrink(sels, false)
 		}
 	}
@@ -157,25 +151,7 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Batch = nil
 	} else {
 		anal.Output(filter.ctr.buf, filter.GetIsLast())
-		if filter.ctr.buf == result.Batch {
-			filter.ctr.buf = nil
-		} else {
-			result.Batch = filter.ctr.buf
-		}
+		result.Batch = filter.ctr.buf
 	}
-
 	return result, nil
-}
-
-func tryDupBatch(proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
-	cnt := bat.GetCnt()
-	if cnt == 1 {
-		return bat, nil
-	}
-	newBat, err := bat.Dup(proc.Mp())
-	if err != nil {
-		return nil, err
-	}
-	// proc.PutBatch(bat)
-	return newBat, nil
 }
