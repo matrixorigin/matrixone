@@ -1554,7 +1554,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// after this ,never call ReCalcNodeStats again !!!
 
 		if builder.isForUpdate {
-			reCheckifNeedLockWholeTable(builder, false)
+			reCheckifNeedLockWholeTable(builder)
 		}
 
 		builder.handleMessgaes(rootID)

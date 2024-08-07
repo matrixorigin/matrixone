@@ -1431,6 +1431,10 @@ func appendPrimaryConstraintPlan(
 				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
 			}
 
+			if builder.isRestore {
+				scanNode.Stats = DefaultHugeStats()
+			}
+
 			var tableScanId int32
 
 			if len(pkFilterExprs) > 0 {
