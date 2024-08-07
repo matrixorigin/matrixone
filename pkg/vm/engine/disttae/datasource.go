@@ -172,9 +172,8 @@ func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
 		bids[idx-begin] = blk.BlockID
 	}
 
-	// prefetch blk data
-	err := blockio.BlockPrefetch(
-		rs.proc.GetService(), seqNums, rs.fs, blks, true)
+	err := blockio.Prefetch(
+		rs.proc.GetService(), rs.fs, blks[0].MetaLocation())
 	if err != nil {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
@@ -1126,8 +1125,8 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 	}
 
 	// prefetch blk data
-	err := blockio.BlockPrefetch(
-		ls.table.proc.Load().GetService(), seqNums, ls.fs, blks, true)
+	err := blockio.Prefetch(
+		ls.table.proc.Load().GetService(), ls.fs, blks[0].MetaLocation())
 	if err != nil {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
@@ -1135,9 +1134,8 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 	// prefetch blk delta location
 	for idx := begin; idx < end; idx++ {
 		if loc, _, ok := ls.pState.GetBockDeltaLoc(ls.rangeSlice.Get(idx).BlockID); ok {
-			if err = blockio.PrefetchTombstone(
-				ls.table.proc.Load().GetService(), []uint16{0, 1, 2},
-				[]uint16{objectio.Location(loc[:]).ID()}, ls.fs, objectio.Location(loc[:])); err != nil {
+			if err = blockio.Prefetch(
+				ls.table.proc.Load().GetService(), ls.fs, objectio.Location(loc[:])); err != nil {
 				logutil.Errorf("prefetch block delta location: %s", err.Error())
 			}
 		}
@@ -1149,43 +1147,32 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 	// prefetch cn flushed but not committed deletes
 	var ok bool
 	var bats []*batch.Batch
-	var locs []objectio.Location = make([]objectio.Location, 0)
-
-	pkColIdx := ls.table.tableDef.Pkey.PkeyColId
+	var keys map[objectio.ObjectNameShort]objectio.Location
 
 	for idx := begin; idx < end; idx++ {
 		if bats, ok = ls.table.getTxn().blockId_tn_delete_metaLoc_batch.data[ls.rangeSlice.Get(idx).BlockID]; !ok {
 			continue
 		}
 
-		locs = locs[:0]
 		for _, bat := range bats {
 			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
 			for i := range vs {
 				location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
 				if err != nil {
 					logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
+					continue
 				}
-				locs = append(locs, location)
+				if len(keys) == 0 {
+					keys = make(map[objectio.ObjectNameShort]objectio.Location)
+				}
+				keys[*location.ShortName()] = location
 			}
 		}
 
-		if len(locs) == 0 {
-			continue
-		}
-
-		pref, err := blockio.BuildPrefetchParams(ls.fs, locs[0])
-		if err != nil {
-			logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
-		}
-
-		for _, loc := range locs {
-			//rowId + pk
-			pref.AddBlockWithType([]uint16{0, uint16(pkColIdx)}, []uint16{loc.ID()}, uint16(objectio.SchemaTombstone))
-		}
-
-		if err = blockio.PrefetchWithMerged(ls.table.proc.Load().GetService(), pref); err != nil {
-			logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
+		for _, location := range keys {
+			if err = blockio.Prefetch(ls.table.proc.Load().GetService(), ls.fs, location); err != nil {
+				logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
+			}
 		}
 	}
 

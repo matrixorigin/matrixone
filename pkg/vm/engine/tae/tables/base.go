@@ -544,7 +544,7 @@ func (blk *baseObject) foreachPersistedDeletes(
 	}
 	return
 }
-func (blk *baseObject) Prefetch(idxes []uint16, blkID uint16) error {
+func (blk *baseObject) Prefetch(blkID uint16) error {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
@@ -554,7 +554,7 @@ func (blk *baseObject) Prefetch(idxes []uint16, blkID uint16) error {
 		if err != nil {
 			return err
 		}
-		return blockio.Prefetch(blk.rt.SID(), idxes, []uint16{key.ID()}, blk.rt.Fs.Service, key)
+		return blockio.Prefetch(blk.rt.SID(), blk.rt.Fs.Service, key)
 	}
 }
 

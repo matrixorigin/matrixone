@@ -38,7 +38,7 @@ type InsertNode interface {
 	PrintDeletes() string
 	GetColumnDataByIds([]int, *mpool.MPool) (*containers.Batch, error)
 	GetColumnDataById(context.Context, int, *mpool.MPool) (*containers.Batch, error)
-	Prefetch(idxes []uint16) error
+	Prefetch() error
 	FillBlockView(view *containers.Batch, colIdxes []int, mp *mpool.MPool) (err error)
 	FillColumnView(*containers.Batch, int, *mpool.MPool) error
 	Window(start, end uint32) (*containers.Batch, error)

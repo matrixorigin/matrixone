@@ -87,7 +87,7 @@ type Object interface {
 	GetColumnDataByIds(
 		ctx context.Context, txn txnif.AsyncTxn, readSchema any, blkID uint16, colIdxes []int, mp *mpool.MPool,
 	) (*containers.Batch, error)
-	Prefetch(idxes []uint16, blkID uint16) error
+	Prefetch(blkID uint16) error
 	GetMeta() any
 
 	MakeAppender() (ObjectAppender, error)

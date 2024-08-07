@@ -83,26 +83,18 @@ func (h *Handle) prefetchDeleteRowID(_ context.Context, req *db.WriteReq) error 
 		return nil
 	}
 	//for loading deleted rowid.
-	columnIdx := 0
-	pkIdx := 1
 	//start loading jobs asynchronously,should create a new root context.
-	loc, err := blockio.EncodeLocationFromString(req.DeltaLocs[0])
-	if err != nil {
-		return err
-	}
-	pref, err := blockio.BuildPrefetchParams(h.db.Runtime.Fs.Service, loc)
-	if err != nil {
-		return err
-	}
 	for _, key := range req.DeltaLocs {
-		var location objectio.Location
-		location, err = blockio.EncodeLocationFromString(key)
+		location, err := blockio.EncodeLocationFromString(key)
 		if err != nil {
 			return err
 		}
-		pref.AddBlockWithType([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()}, uint16(objectio.SchemaTombstone))
+		err = blockio.Prefetch(h.db.Opts.SID, h.db.Runtime.Fs.Service, location)
+		if err != nil {
+			return err
+		}
 	}
-	return blockio.PrefetchWithMerged(h.db.Opts.SID, pref)
+	return nil
 }
 
 func (h *Handle) prefetchMetadata(_ context.Context, req *db.WriteReq) (int, error) {

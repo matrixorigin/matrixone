@@ -494,9 +494,9 @@ func (space *tableSpace) GetColumnDataById(
 	return n.GetColumnDataById(ctx, colIdx, mp)
 }
 
-func (space *tableSpace) Prefetch(obj *catalog.ObjectEntry, idxes []uint16) error {
+func (space *tableSpace) Prefetch(obj *catalog.ObjectEntry) error {
 	n := space.nodes[0]
-	return n.Prefetch(idxes)
+	return n.Prefetch()
 }
 
 func (space *tableSpace) GetValue(row uint32, col uint16) (any, bool, error) {
