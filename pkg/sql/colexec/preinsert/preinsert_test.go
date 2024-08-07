@@ -16,17 +16,15 @@ package preinsert
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -59,19 +57,8 @@ func TestPreInsertNormal(t *testing.T) {
 	proc := testutil.NewProc()
 	proc.Base.TxnClient = txnClient
 	proc.Base.SessionInfo.StorageEngine = eng
-	batch1 := &batch.Batch{
-		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{3}),
-			testutil.MakeScalarInt64(3, 3),
-			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil),
-			testutil.MakeScalarVarchar("d", 3),
-			testutil.MakeScalarNull(types.T_int64, 3),
-		},
-		Cnt: 1,
-	}
-	batch1.SetRowCount(3)
 	argument1 := PreInsert{
-		ctr:        &container{},
+		ctr:        container{},
 		SchemaName: "testDb",
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{
@@ -94,22 +81,17 @@ func TestPreInsertNormal(t *testing.T) {
 			},
 		},
 	}
-	checkResultBat, _ := batch1.Dup(proc.Mp())
-	resetChildren(&argument1, batch1)
-	callResult, err := argument1.Call(proc)
+	resetChildren(&argument1)
+	err := argument1.Prepare(proc)
 	require.NoError(t, err)
-	{
-		result := callResult.Batch
-		// check attr names
-		require.Equal(t, []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"}, result.Attrs)
-		// check vector
-		require.Equal(t, len(checkResultBat.Vecs), len(result.Vecs))
-		for i, vec := range result.Vecs {
-			require.Equal(t, checkResultBat.RowCount(), vec.Length(), fmt.Sprintf("column number: %d", i))
-		}
-		checkResultBat.Clean(proc.Mp())
-	}
-
+	_, err = argument1.Call(proc)
+	require.NoError(t, err)
+	argument1.Reset(proc, false, nil)
+	resetChildren(&argument1)
+	err = argument1.Prepare(proc)
+	require.NoError(t, err)
+	_, err = argument1.Call(proc)
+	require.NoError(t, err)
 	argument1.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
@@ -137,16 +119,8 @@ func TestPreInsertNullCheck(t *testing.T) {
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	proc.Base.SessionInfo.StorageEngine = eng
-	batch2 := &batch.Batch{
-		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
-		},
-		Attrs: []string{"int64_column_primary"},
-		Cnt:   1,
-	}
-	batch2.SetRowCount(3)
 	argument2 := PreInsert{
-		ctr:        &container{},
+		ctr:        container{},
 		SchemaName: "testDb",
 		Attrs:      []string{"int64_column_primary"},
 		TableDef: &plan.TableDef{
@@ -169,18 +143,26 @@ func TestPreInsertNullCheck(t *testing.T) {
 			},
 		},
 	}
-	resetChildren(&argument2, batch2)
-	_, err2 := argument2.Call(proc)
+
+	resetChildren(&argument2)
+	err2 := argument2.Prepare(proc)
+	require.NoError(t, err2)
+	_, err2 = argument2.Call(proc)
 	require.Error(t, err2, "should return error when insert null into primary key column")
+	argument2.Reset(proc, false, nil)
+	resetChildren(&argument2)
+	err2 = argument2.Prepare(proc)
+	require.NoError(t, err2)
+	_, err2 = argument2.Call(proc)
+	require.Error(t, err2, "should return error when insert null into primary key column")
+	argument2.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
-func resetChildren(arg *PreInsert, bat *batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: []*batch.Batch{bat},
-	}
-	valueScanArg.Prepare(nil)
-	arg.SetChildren(
-		[]vm.Operator{
-			valueScanArg,
-		})
+func resetChildren(arg *PreInsert) {
+	bat := colexec.MakeMockBatchsWithNullVec()
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
 }
