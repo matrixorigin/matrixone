@@ -31,7 +31,7 @@ type container struct {
 	buf *batch.Batch
 }
 type PreInsert struct {
-	ctr *container
+	ctr container
 
 	HasAutoCol bool
 	IsUpdate   bool
@@ -77,16 +77,11 @@ func (preInsert *PreInsert) Release() {
 }
 
 func (preInsert *PreInsert) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	preInsert.Free(proc, pipelineFailed, err)
 }
 
 func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if preInsert.ctr != nil {
-		if preInsert.ctr.buf != nil {
-			preInsert.ctr.buf.Clean(proc.Mp())
-			preInsert.ctr = nil
-		}
-		preInsert.ctr = nil
+	if preInsert.ctr.buf != nil {
+		preInsert.ctr.buf.Clean(proc.Mp())
+		preInsert.ctr.buf = nil
 	}
-
 }
