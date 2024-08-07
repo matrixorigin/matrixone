@@ -38,7 +38,9 @@ func (projection *Projection) PrepareProjection(proc *process.Process) (err erro
 			return
 		}
 	}
-	projection.projectBat = batch.NewWithSize(len(projection.ProjectList))
+	if projection.projectBat == nil {
+		projection.projectBat = batch.NewWithSize(len(projection.ProjectList))
+	}
 
 	return
 }
