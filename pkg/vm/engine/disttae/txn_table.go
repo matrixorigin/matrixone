@@ -2415,7 +2415,7 @@ func (tbl *txnTable) MergeObjects(
 		mappings := make([]api.BlkTransMap, size)
 		for i := 0; i < size; i++ {
 			mappings[i] = api.BlkTransMap{
-				M: make(map[int32]api.TransDestPos),
+				M: make(map[int32]api.TransDestPos, len(taskHost.transferMaps[i])),
 			}
 		}
 		taskHost.commitEntry.Booking = &api.BlkTransferBooking{
