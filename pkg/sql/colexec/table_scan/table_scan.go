@@ -39,6 +39,10 @@ func (tableScan *TableScan) OpType() vm.OpType {
 }
 
 func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
+	//if tableScan.OpAnalyzer == nil {
+	tableScan.OpAnalyzer = process.NewAnalyzer(tableScan.GetIdx(), tableScan.IsFirst, tableScan.IsLast, "table_scan")
+	//}
+
 	tableScan.ctr = new(container)
 	if tableScan.TopValueMsgTag > 0 {
 		tableScan.ctr.msgReceiver = message.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress(), proc.GetMessageBoard())
@@ -63,13 +67,16 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		0,
 		nil)
 
-	anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
-	anal.Start()
+	//anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
+	//anal.Start()
+
+	analyzer := tableScan.OpAnalyzer
+	analyzer.Start()
 	defer func() {
-		anal.Stop()
+		//anal.Stop()
+		analyzer.Stop()
 
 		cost := time.Since(start)
-
 		trace.GetService(proc.GetService()).AddTxnDurationAction(
 			txnOp,
 			client.TableScanEvent,
@@ -110,10 +117,12 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			e = err
 			return result, err
 		}
+		analyzer.Input(bat)
 
 		if bat == nil {
 			result.Status = vm.ExecStop
 			e = err
+			analyzer.Output(result.Batch)
 			return result, err
 		}
 
@@ -129,8 +138,11 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			bat)
 
 		bat.Cnt = 1
-		anal.InputBlock()
-		anal.S3IOByte(bat)
+		//anal.InputBlock()
+		//anal.S3IOByte(bat)
+		analyzer.InputBlock()
+		analyzer.S3IOByte(bat)
+
 		batSize := bat.Size()
 		tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, batSize)
 
@@ -138,7 +150,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		break
 	}
 	result.Batch = tableScan.ctr.buf
-	anal.Input(result.Batch, tableScan.IsFirst)
-	anal.Output(result.Batch, tableScan.IsLast)
+	//anal.Output(result.Batch, tableScan.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }

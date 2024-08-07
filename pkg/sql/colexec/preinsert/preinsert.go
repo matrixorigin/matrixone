@@ -16,6 +16,11 @@ package preinsert
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"go.uber.org/zap"
 )
 
 const opName = "preinsert"
@@ -40,7 +44,10 @@ func (preInsert *PreInsert) OpType() vm.OpType {
 	return vm.PreInsert
 }
 
-func (preInsert *PreInsert) Prepare(_ *proc) error {
+func (preInsert *PreInsert) Prepare(proc *process.Process) error {
+	//if preInsert.OpAnalyzer == nil {
+	preInsert.OpAnalyzer = process.NewAnalyzer(preInsert.GetIdx(), preInsert.IsFirst, preInsert.IsLast, "preinsert")
+	//}
 	preInsert.ctr = new(container)
 	return nil
 }
@@ -50,15 +57,19 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(preInsert.GetIdx(), preInsert.GetParallelIdx(), preInsert.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(preInsert.GetIdx(), preInsert.GetParallelIdx(), preInsert.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
 
-	result, err := vm.ChildrenCall(preInsert.GetChildren(0), proc, anal)
+	analyzer := preInsert.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
+	result, err := vm.ChildrenCallV1(preInsert.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
-	anal.Input(result.Batch, preInsert.IsFirst)
+	//preInsert.OpAnalyzer.Input(result.Batch)
 
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
@@ -87,11 +98,14 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	preInsert.ctr.buf.AddRowCount(bat.RowCount())
 
 	if preInsert.HasAutoCol {
-		err := genAutoIncrCol(preInsert.ctr.buf, proc, preInsert)
+		start := time.Now()
+		err = genAutoIncrCol(preInsert.ctr.buf, proc, preInsert)
 		if err != nil {
 			return result, err
 		}
+		analyzer.ServiceInvokeTime(start)
 	}
+
 	// check new rows not null
 	err = colexec.BatchDataNotNullCheck(preInsert.ctr.buf, preInsert.TableDef, proc.Ctx)
 	if err != nil {
@@ -120,7 +134,8 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	}
 
 	result.Batch = preInsert.ctr.buf
-	anal.Output(result.Batch, preInsert.IsLast)
+	//anal.Output(result.Batch, preInsert.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 

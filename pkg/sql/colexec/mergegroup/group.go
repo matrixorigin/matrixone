@@ -37,6 +37,10 @@ func (mergeGroup *MergeGroup) OpType() vm.OpType {
 }
 
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
+	//if mergeGroup.OpAnalyzer == nil {
+	mergeGroup.OpAnalyzer = process.NewAnalyzer(mergeGroup.GetIdx(), mergeGroup.IsFirst, mergeGroup.IsLast, "merge_group")
+	//}
+
 	mergeGroup.ctr = new(container)
 	mergeGroup.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	mergeGroup.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
@@ -48,16 +52,21 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
+	//anal := proc.GetAnalyze(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := mergeGroup.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := mergeGroup.ctr
-	anal := proc.GetAnalyze(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
 			for {
-				result, err := mergeGroup.GetChildren(0).Call(proc)
+				result, err := vm.ChildrenCallV1(mergeGroup.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -75,7 +84,7 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 					bat.Aggs = result.Batch.Aggs
 					result.Batch.Aggs = nil
 				}
-				anal.Input(bat, mergeGroup.GetIsFirst())
+				//anal.Input(bat, mergeGroup.GetIsFirst())
 				if err = ctr.process(bat, proc); err != nil {
 					return result, err
 				}
@@ -99,22 +108,24 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 						ctr.bat.Aggs[i] = nil
 						ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
 						if vec != nil {
-							anal.Alloc(int64(vec.Size()))
+							analyzer.Alloc(int64(vec.Size()))
 						}
 
 						agg.Free()
 					}
 					ctr.bat.Aggs = nil
 				}
-				anal.Output(ctr.bat, mergeGroup.GetIsLast())
+				//anal.Output(ctr.bat, mergeGroup.GetIsLast())
 				result.Batch = ctr.bat
 			}
 			ctr.state = End
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		case End:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

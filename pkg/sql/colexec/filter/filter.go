@@ -42,6 +42,10 @@ func (filter *Filter) OpType() vm.OpType {
 }
 
 func (filter *Filter) Prepare(proc *process.Process) (err error) {
+	//if filter.OpAnalyzer == nil {
+	filter.OpAnalyzer = process.NewAnalyzer(filter.GetIdx(), filter.IsFirst, filter.IsLast, "filter")
+	//}
+
 	filter.ctr = new(container)
 	var filterExpr *plan.Expr
 
@@ -66,15 +70,19 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(filter.GetIdx(), filter.GetParallelIdx(), filter.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(filter.GetIdx(), filter.GetParallelIdx(), filter.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
 
-	result, err := vm.ChildrenCall(filter.GetChildren(0), proc, anal)
+	analyzer := filter.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
+	result, err := vm.ChildrenCallV1(filter.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
-	anal.Input(result.Batch, filter.IsFirst)
+	//anal.Input(result.Batch, filter.IsFirst)
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() || len(filter.ctr.executors) == 0 {
 		return result, nil
@@ -85,7 +93,7 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	filter.ctr.buf = result.Batch
 
-	anal.Input(filter.ctr.buf, filter.GetIsFirst())
+	//anal.Input(filter.ctr.buf, filter.GetIsFirst())
 
 	var sels []int64
 	for i := range filter.ctr.executors {
@@ -102,7 +110,9 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		if proc.OperatorOutofMemory(int64(vec.Size())) {
 			return result, moerr.NewOOM(proc.Ctx)
 		}
-		anal.Alloc(int64(vec.Size()))
+		//anal.Alloc(int64(vec.Size()))
+		analyzer.Alloc(int64(vec.Size()))
+
 		if !vec.GetType().IsBoolean() {
 			return result, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
@@ -156,13 +166,14 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	if filter.IsEnd {
 		result.Batch = nil
 	} else {
-		anal.Output(filter.ctr.buf, filter.GetIsLast())
+		//anal.Output(filter.ctr.buf, filter.GetIsLast())
 		if filter.ctr.buf == result.Batch {
 			filter.ctr.buf = nil
 		} else {
 			result.Batch = filter.ctr.buf
 		}
 	}
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 

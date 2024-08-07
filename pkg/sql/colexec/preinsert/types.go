@@ -88,5 +88,4 @@ func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err
 		}
 		preInsert.ctr = nil
 	}
-
 }

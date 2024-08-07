@@ -127,8 +127,12 @@ type Operator interface {
 	// OpType returns the OpType of an operator.
 	OpType() OpType
 
+	//OpName() string
+
 	//Prepare prepares an operator for execution.
 	Prepare(proc *process.Process) error
+
+	//Exec(proc *process.Process) (CallResult, error)
 
 	//Call calls an operator.
 	Call(proc *process.Process) (CallResult, error)
@@ -145,7 +149,8 @@ type Operator interface {
 
 type OperatorBase struct {
 	OperatorInfo
-	Children []Operator
+	OpAnalyzer process.Analyzer
+	Children   []Operator
 }
 
 func (o *OperatorBase) SetInfo(info *OperatorInfo) {
@@ -258,6 +263,18 @@ func ChildrenCall(o Operator, proc *process.Process, anal process.Analyze) (Call
 	beforeChildrenCall := time.Now()
 	result, err := o.Call(proc)
 	anal.ChildrenCallStop(beforeChildrenCall)
+	return result, err
+}
+
+func ChildrenCallV1(op Operator, proc *process.Process, anal process.Analyzer) (CallResult, error) {
+	beforeChildrenCall := time.Now()
+	result, err := op.Call(proc)
+	anal.ChildrenCallStop(beforeChildrenCall)
+	if err == nil {
+		anal.Input(result.Batch)
+		//op.GetAnalzyer.Output(result.Batch)
+		//op.GetAnalzyer.Stop()
+	}
 	return result, err
 }
 

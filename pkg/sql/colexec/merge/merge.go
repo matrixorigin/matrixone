@@ -34,6 +34,10 @@ func (merge *Merge) OpType() vm.OpType {
 }
 
 func (merge *Merge) Prepare(proc *process.Process) error {
+	if merge.OpAnalyzer == nil {
+		merge.OpAnalyzer = process.NewAnalyzer(merge.GetIdx(), merge.IsFirst, merge.IsLast, "merge")
+	}
+
 	merge.ctr = new(container)
 	merge.ctr.InitReceiver(proc, true)
 	return nil
@@ -44,9 +48,13 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(merge.GetIdx(), merge.GetParallelIdx(), merge.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(merge.GetIdx(), merge.GetParallelIdx(), merge.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := merge.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
 	if merge.ctr.buf != nil {
@@ -55,7 +63,8 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	for {
-		msg = merge.ctr.ReceiveFromAllRegs(anal)
+		//msg = merge.ctr.ReceiveFromAllRegs(anal)
+		msg = merge.ctr.ReceiveFromAllRegsV1(analyzer)
 		if msg.Err != nil {
 			result.Status = vm.ExecStop
 			return result, msg.Err
@@ -73,8 +82,9 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		break
 	}
 
-	anal.Input(merge.ctr.buf, merge.GetIsFirst())
-	anal.Output(merge.ctr.buf, merge.GetIsLast())
+	//anal.Input(merge.ctr.buf, merge.GetIsFirst())
+	//anal.Output(merge.ctr.buf, merge.GetIsLast())
 	result.Batch = merge.ctr.buf
+	analyzer.Output(result.Batch)
 	return result, nil
 }

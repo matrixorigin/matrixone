@@ -41,6 +41,10 @@ func (innerJoin *InnerJoin) OpType() vm.OpType {
 }
 
 func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
+	//if innerJoin.OpAnalyzer == nil {
+	innerJoin.OpAnalyzer = process.NewAnalyzer(innerJoin.GetIdx(), innerJoin.IsFirst, innerJoin.IsLast, "innerJoin")
+	//}
+
 	innerJoin.ctr = new(container)
 	innerJoin.ctr.vecs = make([]*vector.Vector, len(innerJoin.Conditions[0]))
 	innerJoin.ctr.evecs = make([]evalVector, len(innerJoin.Conditions[0]))
@@ -62,17 +66,21 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := innerJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := innerJoin.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			innerJoin.build(anal, proc)
-
+			innerJoin.build(analyzer, proc)
 			if ctr.mp == nil && !innerJoin.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
@@ -82,7 +90,8 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		case Probe:
 			if innerJoin.ctr.bat == nil {
-				result, err = innerJoin.Children[0].Call(proc)
+				//result, err = innerJoin.Children[0].Call(proc)
+				result, err = vm.ChildrenCallV1(innerJoin.Children[0], proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -108,7 +117,7 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			startrow := innerJoin.ctr.lastrow
-			if err := ctr.probe(innerJoin, proc, anal, innerJoin.GetIsFirst(), innerJoin.GetIsLast(), &result); err != nil {
+			if err := ctr.probe(innerJoin, proc, innerJoin.GetIsFirst(), innerJoin.GetIsLast(), &result); err != nil {
 				return result, err
 			}
 			if innerJoin.ctr.lastrow == 0 {
@@ -117,17 +126,19 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			} else if innerJoin.ctr.lastrow == startrow {
 				return result, moerr.NewInternalErrorNoCtx("inner join hanging")
 			}
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
 
-func (innerJoin *InnerJoin) build(anal process.Analyze, proc *process.Process) {
+func (innerJoin *InnerJoin) build(anal process.Analyzer, proc *process.Process) {
 	ctr := innerJoin.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
@@ -139,9 +150,7 @@ func (innerJoin *InnerJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
-func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-
-	anal.Input(ap.ctr.bat, isFirst)
+func (ctr *container) probe(ap *InnerJoin, proc *process.Process, isFirst bool, isLast bool, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -174,7 +183,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.A
 	for i := ap.ctr.lastrow; i < count; i += hashmap.UnitLimit {
 		if rowCount >= colexec.DefaultBatchSize {
 			ctr.rbat.AddRowCount(rowCount)
-			anal.Output(ctr.rbat, isLast)
+			//anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.ctr.lastrow = i
 			return nil
@@ -243,7 +252,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.A
 	}
 
 	ctr.rbat.AddRowCount(rowCount)
-	anal.Output(ctr.rbat, isLast)
+	//anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	ap.ctr.lastrow = 0
 	return nil

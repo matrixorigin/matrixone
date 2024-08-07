@@ -54,6 +54,8 @@ func (top *Top) OpType() vm.OpType {
 }
 
 func (top *Top) Prepare(proc *process.Process) (err error) {
+	top.OpAnalyzer = process.NewAnalyzer(top.GetIdx(), top.IsFirst, top.IsLast, "top")
+
 	top.ctr = new(container)
 	top.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, top.Limit)
 	if err != nil {
@@ -92,14 +94,18 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
+	analyzer := top.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ap := top
 	ctr := ap.ctr
 
-	anal := proc.GetAnalyze(top.GetIdx(), top.GetParallelIdx(), top.GetParallelMajor())
-	anal.Start()
-	defer func() {
-		anal.Stop()
-	}()
+	//anal := proc.GetAnalyze(top.GetIdx(), top.GetParallelIdx(), top.GetParallelMajor())
+	//anal.Start()
+	//defer func() {
+	//	anal.Stop()
+	//}()
 
 	if top.ctr.limit == 0 {
 		result := vm.NewCallResult()
@@ -109,12 +115,12 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(top.GetChildren(0), proc, anal)
+			result, err := vm.ChildrenCallV1(top.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
 			bat := result.Batch
-			anal.Input(bat, top.IsFirst)
+			//anal.Input(bat, top.IsFirst)
 
 			if bat == nil {
 				ctr.state = vm.Eval
@@ -123,7 +129,7 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 			if bat.IsEmpty() {
 				continue
 			}
-			err = ctr.build(ap, bat, proc, anal)
+			err = ctr.build(ap, bat, proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -142,17 +148,19 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 		}
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
 	if ctr.state == vm.End {
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
 	panic("bug")
 }
 
-func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, analyze process.Analyze) error {
+func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, analyze process.Analyzer) error {
 	ctr.n = len(bat.Vecs)
 	ctr.poses = ctr.poses[:0]
 	for i := range ap.Fs {

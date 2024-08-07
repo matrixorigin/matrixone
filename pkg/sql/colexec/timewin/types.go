@@ -147,6 +147,9 @@ type Interval struct {
 
 func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	timeWin.Free(proc, pipelineFailed, err)
+	if timeWin.OpAnalyzer != nil {
+		timeWin.OpAnalyzer = nil
+	}
 }
 
 func (timeWin *TimeWin) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -157,6 +160,10 @@ func (timeWin *TimeWin) Free(proc *process.Process, pipelineFailed bool, err err
 		ctr.cleanAggVector()
 		ctr.cleanWin()
 		timeWin.ctr = nil
+	}
+
+	if timeWin.OpAnalyzer != nil {
+		timeWin.OpAnalyzer = nil
 	}
 }
 

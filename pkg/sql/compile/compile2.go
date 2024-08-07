@@ -17,6 +17,13 @@ package compile
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
+	gotrace "runtime/trace"
+	"strings"
+	"time"
+
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -29,9 +36,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
-	"go.uber.org/zap"
-	gotrace "runtime/trace"
-	"time"
 )
 
 // I create this file to store the two most important entry functions for the Compile struct and their helper functions.
@@ -252,6 +256,22 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	if txnOperator != nil {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
 	}
+
+	//--------------------------------------------------------------------------------------------------------------
+	if strings.HasPrefix(c.sql, "SELECt") {
+		scopeInfo := DebugShowScopes(c.scope)
+		fmt.Printf("----------------------------------wuxiliang end----------------------------------\nSQL:%s %s\n--------------------------------------------", c.sql, scopeInfo)
+		phyPlan := ConvertCompileToPhyPlan(runC)
+		runC.fillPlanNodeAnalyzeInfoV11(&phyPlan)
+
+		jsonStr, err := PhyPlanToJSON(phyPlan)
+		if err != nil {
+			panic(fmt.Sprintf("--------->wuxiliang Error serializing to JSON: %s", err))
+		}
+		fmt.Printf("---------->wuxiliang JSON2: %s\n", jsonStr)
+	}
+	//--------------------------------------------------------------------------------------------------------------
+
 	return queryResult, err
 }
 

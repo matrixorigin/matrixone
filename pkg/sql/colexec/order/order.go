@@ -176,6 +176,10 @@ func (order *Order) OpType() vm.OpType {
 }
 
 func (order *Order) Prepare(proc *process.Process) (err error) {
+	if order.OpAnalyzer == nil {
+		order.OpAnalyzer = process.NewAnalyzer(order.GetIdx(), order.IsFirst, order.IsLast, "order")
+	}
+
 	order.ctr = new(container)
 	ctr := order.ctr
 	ctr.state = vm.Build
@@ -212,16 +216,19 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	ctr := order.ctr
-	anal := proc.GetAnalyze(order.GetIdx(), order.GetParallelIdx(), order.GetParallelMajor())
-	anal.Start()
+	//anal := proc.GetAnalyze(order.GetIdx(), order.GetParallelIdx(), order.GetParallelMajor())
+	//anal.Start()
+	analyzer := order.OpAnalyzer
+	analyzer.Start()
 	defer func() {
-		anal.Stop()
+		analyzer.Stop()
+		//anal.Stop()
 	}()
 
+	ctr := order.ctr
 	if ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(order.GetChildren(0), proc, anal)
+			result, err := vm.ChildrenCallV1(order.GetChildren(0), proc, analyzer)
 			if err != nil {
 				result.Status = vm.ExecStop
 				return result, err
@@ -234,7 +241,6 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			anal.Input(result.Batch, order.IsFirst)
 			enoughToSend, err := ctr.appendBatch(proc, result.Batch)
 			if err != nil {
 				result.Status = vm.ExecStop
@@ -260,10 +266,12 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, err
 		}
 		ctr.state = vm.End
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
 	if ctr.state == vm.End {
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 

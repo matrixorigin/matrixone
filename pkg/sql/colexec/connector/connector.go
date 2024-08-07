@@ -29,7 +29,10 @@ func (connector *Connector) String(buf *bytes.Buffer) {
 	buf.WriteString(": pipe connector")
 }
 
-func (connector *Connector) Prepare(_ *process.Process) error {
+func (connector *Connector) Prepare(proc *process.Process) error {
+	//if connector.OpAnalyzer == nil {
+	connector.OpAnalyzer = process.NewAnalyzer(connector.GetIdx(), connector.IsFirst, connector.IsLast, "connector")
+	//}
 	return nil
 }
 

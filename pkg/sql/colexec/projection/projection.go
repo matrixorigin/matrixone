@@ -44,6 +44,10 @@ func (projection *Projection) OpType() vm.OpType {
 }
 
 func (projection *Projection) Prepare(proc *process.Process) (err error) {
+	//if projection.OpAnalyzer == nil {
+	projection.OpAnalyzer = process.NewAnalyzer(projection.GetIdx(), projection.IsFirst, projection.IsLast, "projection")
+	//}
+
 	projection.ctr = new(container)
 	projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.Es)
 	projection.ctr.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(projection.Es))
@@ -60,11 +64,14 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := projection.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCall(projection.GetChildren(0), proc, anal)
+	result, err := vm.ChildrenCallV1(projection.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
@@ -73,7 +80,7 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		return result, nil
 	}
 	bat := result.Batch
-	anal.Input(bat, projection.GetIsFirst())
+	//anal.Input(bat, projection.GetIsFirst())
 
 	if projection.ctr.buf != nil {
 		proc.PutBatch(projection.ctr.buf)
@@ -109,7 +116,8 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	projection.maxAllocSize = max(projection.maxAllocSize, newAlloc)
 	projection.ctr.buf.SetRowCount(bat.RowCount())
 
-	anal.Output(projection.ctr.buf, projection.GetIsLast())
+	//anal.Output(projection.ctr.buf, projection.GetIsLast())
 	result.Batch = projection.ctr.buf
+	analyzer.Output(result.Batch)
 	return result, nil
 }

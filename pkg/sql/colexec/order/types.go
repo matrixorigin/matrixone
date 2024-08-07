@@ -30,8 +30,7 @@ var _ vm.Operator = new(Order)
 const maxBatchSizeToSort = 64 * mpool.MB
 
 type Order struct {
-	ctr *container
-
+	ctr         *container
 	OrderBySpec []*plan.OrderBySpec
 
 	vm.OperatorBase

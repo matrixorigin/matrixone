@@ -58,6 +58,10 @@ func (group *Group) OpType() vm.OpType {
 }
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
+	//if group.OpAnalyzer == nil {
+	group.OpAnalyzer = process.NewAnalyzer(group.GetIdx(), group.IsFirst, group.IsLast, "group")
+	//}
+
 	group.ctr = new(container)
 	group.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	group.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
@@ -132,15 +136,19 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
 
-	return group.ctr.processGroupByAndAgg(group, proc, anal, group.GetIsFirst(), group.GetIsLast())
+	analyzer := group.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
+	return group.ctr.processGroupByAndAgg(group, proc, analyzer, group.GetIsFirst(), group.GetIsLast())
 }
 
 // compute the `agg(expression)List group by expressionList`.
-func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, anal process.Analyze, isFirst, isLast bool) (vm.CallResult, error) {
+func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, anal process.Analyzer, isFirst, isLast bool) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		// receive data from pre-operator.
@@ -149,7 +157,7 @@ func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, ana
 		case vm.Build:
 			batList := make([]*batch.Batch, 1)
 			for {
-				result, err := vm.ChildrenCall(ap.GetChildren(0), proc, anal)
+				result, err := vm.ChildrenCallV1(ap.GetChildren(0), proc, anal)
 				if err != nil {
 					return result, err
 				}
@@ -163,7 +171,7 @@ func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, ana
 				if result.Batch.IsEmpty() {
 					continue
 				}
-				anal.Input(result.Batch, isFirst)
+				//anal.Input(result.Batch, isFirst)
 
 				bat := result.Batch
 				batList[0] = bat
@@ -215,16 +223,18 @@ func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, ana
 					anal.Alloc(int64(vec.Size()))
 				}
 			}
-			anal.Output(ctr.bat, isLast)
+
 			result.Batch = ctr.bat
 
 			ctr.bat = nil
 			ctr.state = vm.End
+			anal.Output(result.Batch)
 			return result, nil
 
 		// send an End-Message to tell the next operator all were done.
 		case vm.End:
 			result := vm.NewCallResult()
+			anal.Output(result.Batch)
 			return result, nil
 
 		default:

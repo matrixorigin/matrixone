@@ -125,6 +125,46 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) *process.
 	}
 }
 
+func (r *ReceiverOperator) ReceiveFromAllRegsV1(analyzer process.Analyzer) *process.RegisterMessage {
+	for {
+		if r.aliveMergeReceiver == 0 {
+			return process.NormalEndRegisterMessage
+		}
+
+		start := time.Now()
+		chosen, msg, ok := r.selectFromAllReg()
+		analyzer.WaitStop(start)
+
+		// chosen == 0 means the info comes from proc context.Done
+		if chosen == 0 {
+			return process.NormalEndRegisterMessage
+		}
+
+		if !ok {
+			return process.NormalEndRegisterMessage
+		}
+
+		if msg == nil {
+			continue
+		}
+
+		if msg.Err != nil {
+			return msg
+		}
+
+		if msg.Batch == nil {
+			continue
+		}
+
+		if msg.Batch.IsEmpty() {
+			r.proc.PutBatch(msg.Batch)
+			continue
+		}
+		analyzer.Input(msg.Batch)
+		return msg
+	}
+}
+
 func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 	if len(r.receiverListener) > 0 {
 		// Remove the proc context.Done waiter because it MUST BE done
