@@ -200,6 +200,12 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		if err = handleDropPublication(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.ShowPublications:
+		//ses.EnterFPrint(32)
+		//defer ses.ExitFPrint(32)
+		if err = handleShowPublications(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.ShowSubscriptions:
 		ses.EnterFPrint(32)
 		defer ses.ExitFPrint(32)
@@ -454,6 +460,12 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		if err = handleRestorePitr(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.CreateCDC:
+	case *tree.PauseCDC:
+	case *tree.DropCDC:
+	case *tree.RestartCDC:
+	case *tree.ResumeCDC:
+	case *tree.ShowCDC:
 	}
 	return
 }

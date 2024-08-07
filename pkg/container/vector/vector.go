@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
@@ -681,10 +682,14 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 // PreExtendArea use to expand the mpool and area of vector
 // extraAreaSize: the size of area to be extended
 // mp: mpool
-func (v *Vector) PreExtendArea(extraAreaSize int, mp *mpool.MPool) error {
-
+func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool) error {
 	if v.class == CONSTANT {
 		return nil
+	}
+
+	// pre-extend vector, the fixed len part
+	if err := v.PreExtend(rows, mp); err != nil {
+		return err
 	}
 
 	// check if required size is already satisfied
@@ -783,7 +788,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	case types.T_float64:
 		shrinkFixed[float64](v, sels, negate)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -847,7 +852,7 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	case types.T_float64:
 		err = shuffleFixed[float64](v, sels, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		err = shuffleFixed[types.Varlena](v, sels, mp)
 	case types.T_date:
 		err = shuffleFixed[types.Date](v, sels, mp)
@@ -1581,7 +1586,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
@@ -1893,7 +1898,7 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64:
+		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return func(v, w *Vector, sel int64) error {
 			if w.IsConstNull() {
 				return appendOneFixed(v, types.Varlena{}, true, mp)
@@ -2182,7 +2187,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			return SetConstFixed(v, ws[sel], length, mp)
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64:
+		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
@@ -2330,7 +2335,14 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	return nil
 }
 
-func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
+func (v *Vector) Union(w *Vector, sels []int64, mp *mpool.MPool) error {
+	return unionT[int64](v, w, sels, mp)
+}
+func (v *Vector) UnionInt32(w *Vector, sels []int32, mp *mpool.MPool) error {
+	return unionT[int32](v, w, sels, mp)
+}
+
+func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	if len(sels) == 0 {
 		return nil
 	}
@@ -2635,7 +2647,7 @@ func (v *Vector) String() string {
 		return vecToString[types.Rowid](v)
 	case types.T_Blockid:
 		return vecToString[types.Blockid](v)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink:
 		col := InefficientMustStrCol(v)
 		if len(col) == 1 {
 			if nulls.Contains(v.nsp, 0) {
@@ -2729,6 +2741,25 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 	return nil
 }
 
+func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.MPool) error {
+	var err error
+	if vec.capacity == 0 {
+		if err := extend(vec, 1, mp); err != nil {
+			return err
+		}
+	}
+	vec.class = CONSTANT
+	var col []types.Varlena
+	ToSlice(vec, &col)
+	err = BuildVarlenaFromByteJson(vec, &col[0], bj, mp)
+	if err != nil {
+		return err
+	}
+	vec.data = vec.data[:cap(vec.data)]
+	vec.length = length
+	return nil
+}
+
 // SetConstArray set current vector as Constant_Array vector of given length.
 func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mpool.MPool) error {
 	var err error
@@ -2810,7 +2841,7 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 	case types.T_Blockid:
 		return appendOneFixed(vec, val.(types.Blockid), false, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return appendOneBytes(vec, val.([]byte), false, mp)
 	}
 	return nil
@@ -2834,6 +2865,16 @@ func AppendBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
 	return appendOneBytes(vec, val, isNull, mp)
+}
+
+func AppendByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool.MPool) error {
+	if vec.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
+	}
+	if mp == nil {
+		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
+	}
+	return appendOneByteJson(vec, bj, isNull, mp)
 }
 
 // AppendArray mainly used in tests
@@ -2944,6 +2985,21 @@ func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error
 		return appendOneFixed(vec, va, true, mp)
 	} else {
 		err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
+		if err != nil {
+			return err
+		}
+		return appendOneFixed(vec, va, false, mp)
+	}
+}
+
+func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool.MPool) error {
+	var err error
+	var va types.Varlena
+
+	if isNull {
+		return appendOneFixed(vec, va, true, mp)
+	} else {
+		err = BuildVarlenaFromByteJson(vec, &va, bj, mp)
 		if err != nil {
 			return err
 		}
@@ -3657,7 +3713,7 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		minv = types.EncodeFixed(minVal)
 		maxv = types.EncodeFixed(maxVal)
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		minv, maxv = VarlenGetMinMax(v)
 	case types.T_array_float32:
 		// Zone map Comparator should be consistent with the SQL Comparator for Array.
@@ -3954,7 +4010,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			appendList(v, newCol, nil, nil)
 		}
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
 			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
@@ -4144,7 +4200,7 @@ func (v *Vector) InplaceSort() {
 			return col[i].Less(col[j])
 		})
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
 			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
@@ -4198,6 +4254,31 @@ func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 	return nil
 }
 
+func BuildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejson.ByteJson, m *mpool.MPool) error {
+	vlen := len(bj.Data) + 1
+	area1 := vec.GetArea()
+	voff := len(area1)
+
+	var err error
+	if voff+vlen > cap(area1) && m != nil {
+		// Pass nil to Grow2, we can grow area1 to voff+vlen without
+		// copy bytejson data.
+		area1, err = m.Grow2(area1, nil, voff+vlen)
+		if err != nil {
+			return err
+		}
+		area1[voff] = byte(bj.Type)
+		copy(area1[voff+1:voff+vlen], bj.Data)
+	} else {
+		area1 = append(area1, byte(bj.Type))
+		area1 = append(area1, bj.Data...)
+	}
+
+	v1.SetOffsetLen(uint32(voff), uint32(vlen))
+	vec.area = area1
+	return nil
+}
+
 func BuildVarlenaFromValena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m *mpool.MPool) error {
 	if (*v2)[0] <= types.VarlenaInlineSize {
 		BuildVarlenaInline(v1, v2)
@@ -4221,6 +4302,22 @@ func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpo
 		return nil
 	}
 	return BuildVarlenaNoInline(vec, v, bs, m)
+}
+
+func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJson, m *mpool.MPool) error {
+	vlen := len(bj.Data) + 1
+	if vlen <= types.VarlenaInlineSize {
+		// first clear varlena to 0
+		p1 := v.UnsafePtr()
+		*(*int64)(p1) = 0
+		*(*int64)(unsafe.Add(p1, 8)) = 0
+		*(*int64)(unsafe.Add(p1, 16)) = 0
+		v[0] = byte(vlen)
+		v[1] = byte(bj.Type)
+		copy(v[2:vlen+1], bj.Data)
+		return nil
+	}
+	return BuildVarlenaNoInlineFromByteJson(vec, v, bj, m)
 }
 
 // BuildVarlenaFromArray convert array to Varlena so that it can be stored in the vector

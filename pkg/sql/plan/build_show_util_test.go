@@ -81,7 +81,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				KEY IDX_RoundId (ROUND_ID),
 				KEY IDX_UserId_EndTime (USER_ID,END_TIME)
 				)`,
-			want: "CREATE TABLE `t_log` (\n  `log_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,\n  `round_id` BIGINT UNSIGNED NOT NULL,\n  `user_id` INT UNSIGNED NOT NULL,\n  `user_ip` INT UNSIGNED DEFAULT NULL,\n  `end_time` DATETIME NOT NULL,\n  `user_type` INT DEFAULT NULL,\n  `app_id` INT DEFAULT NULL,\n  PRIMARY KEY (`log_id`,`end_time`),\n  KEY `idx_endtime` (`end_time`),\n  KEY `idx_roundid` (`round_id`),\n  KEY `idx_userid_endtime` (`user_id`,`end_time`)\n)",
+			want: "CREATE TABLE `t_log` (\n  `LOG_ID` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,\n  `ROUND_ID` BIGINT UNSIGNED NOT NULL,\n  `USER_ID` INT UNSIGNED NOT NULL,\n  `USER_IP` INT UNSIGNED DEFAULT NULL,\n  `END_TIME` DATETIME NOT NULL,\n  `USER_TYPE` INT DEFAULT NULL,\n  `APP_ID` INT DEFAULT NULL,\n  PRIMARY KEY (`LOG_ID`,`END_TIME`),\n  KEY `idx_endtime` (`END_TIME`),\n  KEY `idx_roundid` (`ROUND_ID`),\n  KEY `idx_userid_endtime` (`USER_ID`,`END_TIME`)\n)",
 		},
 		{
 			name: "test5",
@@ -189,7 +189,7 @@ func buildTestShowCreateTable(sql string) (string, error) {
 	}
 
 	snapshot := Snapshot{TS: &timestamp.Timestamp{}}
-	showSQL, err := ConstructCreateTableSQL(nil, tableDef, snapshot, &mock.ctxt)
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false)
 	if err != nil {
 		return "", err
 	}

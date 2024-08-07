@@ -19,6 +19,8 @@ import (
 	"container/heap"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -112,6 +114,8 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			bat := result.Batch
+			anal.Input(bat, top.IsFirst)
+
 			if bat == nil {
 				ctr.state = vm.Eval
 				break
@@ -124,7 +128,7 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			if top.TopValueTag > 0 && top.updateTopValueZM() {
-				proc.SendMessage(process.TopValueMessage{TopValueZM: top.ctr.topValueZM, Tag: top.TopValueTag})
+				message.SendMessage(message.TopValueMessage{TopValueZM: top.ctr.topValueZM, Tag: top.TopValueTag}, proc.GetMessageBoard())
 			}
 		}
 	}

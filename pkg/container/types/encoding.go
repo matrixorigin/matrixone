@@ -261,6 +261,14 @@ func DecodeUuid(v []byte) Uuid {
 	return *(*Uuid)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeBlockID(v *Blockid) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), BlockidSize)
+}
+
+func EncodeTxnTS(v *TS) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), TxnTsSize)
+}
+
 func EncodeStringSlice(vs []string) []byte {
 	var o int32
 	var buf bytes.Buffer
@@ -349,7 +357,7 @@ func DecodeValue(val []byte, t T) any {
 		return DecodeFixed[TS](val)
 	case T_Rowid:
 		return DecodeFixed[Rowid](val)
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink:
 		return val
 	case T_enum:
 		return DecodeFixed[Enum](val)
@@ -403,7 +411,7 @@ func EncodeValue(val any, t T) []byte {
 	case T_Rowid:
 		return EncodeFixed(val.(Rowid))
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary,
-		T_array_float32, T_array_float64:
+		T_array_float32, T_array_float64, T_datalink:
 		// Mainly used by Zonemap, which receives val input from DN batch/vector.
 		// This val is mostly []bytes and not []float32 or []float64
 		return val.([]byte)

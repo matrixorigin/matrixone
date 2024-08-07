@@ -17,6 +17,7 @@ package memoryengine
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -138,7 +139,6 @@ func (c *CompilerContext) GetSubscriptionMeta(dbName string, snapshot plan.Snaps
 
 func (c *CompilerContext) GetProcess() *process.Process {
 	proc := testutil.NewProcess()
-	proc.Ctx = context.Background()
 	return proc
 }
 
@@ -268,8 +268,8 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string, snapshot 
 			tableDef.Pkey = &plan.PrimaryKeyDef{
 				Cols:        []uint64{uint64(i)},
 				PkeyColId:   uint64(i),
-				PkeyColName: attr.Name,
-				Names:       []string{attr.Name},
+				PkeyColName: strings.ToLower(attr.Name),
+				Names:       []string{strings.ToLower(attr.Name)},
 			}
 		}
 		tableDef.Cols = append(tableDef.Cols, engineAttrToPlanColDef(i, attr))
@@ -334,8 +334,9 @@ func (c *CompilerContext) GetBuildingAlterView() (bool, string, string) {
 
 func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 	return &plan.ColDef{
-		ColId: uint64(attr.ID),
-		Name:  attr.Name,
+		ColId:      attr.ID,
+		Name:       strings.ToLower(attr.Name),
+		OriginName: attr.Name,
 		Typ: plan.Type{
 			Id:          int32(attr.Type.Oid),
 			NotNullable: attr.Default != nil && !(attr.Default.NullAbility),

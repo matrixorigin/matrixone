@@ -19,46 +19,50 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCkpCheck(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	r := NewRunner(context.Background(), nil, nil, nil, nil)
+	blockio.RunPipelineTest(
+		func() {
+			defer testutils.AfterTest(t)()
+			r := NewRunner(context.Background(), nil, nil, nil, nil)
 
-	for i := 0; i < 100; i += 10 {
-		r.storage.entries.Set(&CheckpointEntry{
-			start:      types.BuildTS(int64(i), 0),
-			end:        types.BuildTS(int64(i+9), 0),
-			state:      ST_Finished,
-			cnLocation: objectio.Location(fmt.Sprintf("loc-%d", i)),
-			version:    1,
-		})
-	}
+			for i := 0; i < 100; i += 10 {
+				r.storage.entries.Set(&CheckpointEntry{
+					start:      types.BuildTS(int64(i), 0),
+					end:        types.BuildTS(int64(i+9), 0),
+					state:      ST_Finished,
+					cnLocation: objectio.Location(fmt.Sprintf("loc-%d", i)),
+					version:    1,
+				})
+			}
 
-	r.storage.entries.Set(&CheckpointEntry{
-		start:      types.BuildTS(int64(100), 0),
-		end:        types.BuildTS(int64(109), 0),
-		state:      ST_Running,
-		cnLocation: objectio.Location("loc-100"),
-		version:    1,
-	})
+			r.storage.entries.Set(&CheckpointEntry{
+				start:      types.BuildTS(int64(100), 0),
+				end:        types.BuildTS(int64(109), 0),
+				state:      ST_Running,
+				cnLocation: objectio.Location("loc-100"),
+				version:    1,
+			})
 
-	ctx := context.Background()
+			ctx := context.Background()
 
-	loc, e, err := r.CollectCheckpointsInRange(ctx, types.BuildTS(4, 0), types.BuildTS(5, 0))
-	assert.NoError(t, err)
-	assert.True(t, e.Equal(types.BuildTSForTest(9, 0)))
-	assert.Equal(t, "loc-0;1;[0-0_9-0]", loc)
+			loc, e, err := r.CollectCheckpointsInRange(ctx, types.BuildTS(4, 0), types.BuildTS(5, 0))
+			assert.NoError(t, err)
+			assert.True(t, e.Equal(types.BuildTSForTest(9, 0)))
+			assert.Equal(t, "loc-0;1;[0-0_9-0]", loc)
 
-	loc, e, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(12, 0), types.BuildTS(25, 0))
-	assert.NoError(t, err)
-	assert.True(t, e.Equal(types.BuildTSForTest(29, 0)))
-	assert.Equal(t, "loc-10;1;loc-20;1;[10-0_29-0]", loc)
+			loc, e, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(12, 0), types.BuildTS(25, 0))
+			assert.NoError(t, err)
+			assert.True(t, e.Equal(types.BuildTSForTest(29, 0)))
+			assert.Equal(t, "loc-10;1;loc-20;1;[10-0_29-0]", loc)
+		},
+	)
 }
 
 func TestGetCheckpoints1(t *testing.T) {

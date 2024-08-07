@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -112,7 +113,7 @@ func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool
 }
 
 func (fuzzyFilter *FuzzyFilter) Free(proc *process.Process, pipelineFailed bool, err error) {
-	proc.FinalizeRuntimeFilter(fuzzyFilter.RuntimeFilterSpec, pipelineFailed, err)
+	message.FinalizeRuntimeFilter(fuzzyFilter.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	if fuzzyFilter.ctr.bloomFilter != nil {
 		fuzzyFilter.ctr.bloomFilter.Clean()
 		fuzzyFilter.ctr.bloomFilter = nil

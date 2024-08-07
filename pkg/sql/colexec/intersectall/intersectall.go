@@ -47,7 +47,6 @@ func (intersectAll *IntersectAll) Prepare(proc *process.Process) error {
 	if intersectAll.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp()); err != nil {
 		return err
 	}
-	intersectAll.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	intersectAll.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	intersectAll.ctr.resetInserted = make([]uint8, hashmap.UnitLimit)
 	return nil
@@ -199,18 +198,12 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 					n = hashmap.UnitLimit
 				}
 
-				copy(ctr.inBuckets, hashmap.OneUInt8s)
 				copy(ctr.inserted[:n], ctr.resetInserted[:n])
 				cnt = 0
 
-				vs, _ := itr.Find(i, n, bat.Vecs, ctr.inBuckets)
+				vs, _ := itr.Find(i, n, bat.Vecs)
 
 				for j, v := range vs {
-					// not in the processed bucket
-					if ctr.inBuckets[j] == 0 {
-						continue
-					}
-
 					// not found
 					if v == 0 {
 						continue

@@ -34,8 +34,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state    int
 	probeIdx int
 	bat      *batch.Batch // build batch
@@ -44,11 +42,14 @@ type container struct {
 }
 
 type Productl2 struct {
-	ctr    *container
-	Typs   []types.Type
-	Result []colexec.ResultPos
-	OnExpr *plan.Expr
+	ctr        *container
+	Typs       []types.Type
+	Result     []colexec.ResultPos
+	OnExpr     *plan.Expr
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -91,8 +92,12 @@ func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
-		ctr.FreeAllReg()
 		productl2.ctr = nil
+	}
+	if productl2.ProjectList != nil {
+		anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
+		anal.Alloc(productl2.ProjectAllocSize)
+		productl2.FreeProjection(proc)
 	}
 }
 

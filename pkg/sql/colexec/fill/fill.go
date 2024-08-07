@@ -42,7 +42,6 @@ func (fill *Fill) OpType() vm.OpType {
 func (fill *Fill) Prepare(proc *process.Process) (err error) {
 	fill.ctr = new(container)
 	ctr := fill.ctr
-	ctr.InitReceiver(proc, true)
 
 	f := true
 	for i := len(fill.AggIds) - 1; i >= 0; i-- {
@@ -97,6 +96,12 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 		ctr.process = processDefault
 	}
 
+	if fill.ProjectList != nil {
+		err := fill.PrepareProjection(proc)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -110,7 +115,13 @@ func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 	ctr := fill.ctr
 
-	return ctr.process(ctr, fill, proc, anal)
+	result, err := ctr.process(ctr, fill, proc, anal)
+
+	if fill.ProjectList != nil {
+		result.Batch, err = fill.EvalProjection(result.Batch, proc)
+	}
+
+	return result, err
 }
 
 func resetColRef(expr *plan.Expr, idx int) {
@@ -128,21 +139,26 @@ func resetColRef(expr *plan.Expr, idx int) {
 
 func processValue(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
-	result := vm.NewCallResult()
 	if ctr.buf != nil {
 		proc.PutBatch(ctr.buf)
 		ctr.buf = nil
 	}
-	msg := ctr.ReceiveFromAllRegs(anal)
-	if msg.Err != nil {
-		return result, msg.Err
+	result, err := ap.GetChildren(0).Call(proc)
+	if err != nil {
+		return result, err
 	}
-	ctr.buf = msg.Batch
-	if ctr.buf == nil {
+	if result.Batch == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
+	ctr.buf, err = result.Batch.Dup(proc.Mp())
+	if err != nil {
+		return result, err
+	}
+
+	anal.Input(ctr.buf, ap.IsFirst)
+
 	for i := 0; i < ap.ColLen; i++ {
 		for j := 0; j < ctr.buf.Vecs[i].Length(); j++ {
 			if ctr.buf.Vecs[i].IsNull(uint64(j)) {
@@ -152,7 +168,9 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, anal process.
 			}
 		}
 	}
+
 	result.Batch = ctr.buf
+	anal.Output(ctr.buf, ap.IsLast)
 	return result, nil
 }
 
@@ -255,21 +273,25 @@ func processNextCol(ctr *container, idx int, proc *process.Process) error {
 
 func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
-	result := vm.NewCallResult()
 	if ctr.buf != nil {
 		proc.PutBatch(ctr.buf)
 		ctr.buf = nil
 	}
-	msg := ctr.ReceiveFromAllRegs(anal)
-	if msg.Err != nil {
-		return result, msg.Err
+	result, err := ap.GetChildren(0).Call(proc)
+	if err != nil {
+		return result, err
 	}
-	ctr.buf = msg.Batch
-	if ctr.buf == nil {
+	if result.Batch == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
+	anal.Input(ctr.buf, ap.IsFirst)
+	ctr.buf, err = result.Batch.Dup(proc.Mp())
+	if err != nil {
+		return result, err
+	}
+
 	for i := 0; i < ap.ColLen; i++ {
 		for j := 0; j < ctr.buf.Vecs[i].Length(); j++ {
 			if ctr.buf.Vecs[i].IsNull(uint64(j)) {
@@ -295,6 +317,7 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		}
 	}
 	result.Batch = ctr.buf
+	anal.Output(result.Batch, ap.IsLast)
 	return result, nil
 }
 
@@ -435,20 +458,26 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		return result, nil
 	}
 	for {
-		msg := ctr.ReceiveFromAllRegs(anal)
-		if msg.Err != nil {
-			return result, msg.Err
+		result, err = ap.GetChildren(0).Call(proc)
+		if err != nil {
+			return result, err
 		}
-		if msg.Batch == nil {
+		if result.Batch == nil {
 			break
 		}
-		ctr.bats = append(ctr.bats, msg.Batch)
+		appBat, err := result.Batch.Dup(proc.Mp())
+		if err != nil {
+			return result, err
+		}
+		ctr.bats = append(ctr.bats, appBat)
 	}
 	if len(ctr.bats) == 0 {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
+	anal.Input(ctr.buf, ap.IsFirst)
+
 	for i := range ctr.bats[0].Vecs {
 		if err = processNextCol(ctr, i, proc); err != nil {
 			return result, err
@@ -458,6 +487,8 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 	result.Batch = ctr.bats[ctr.idx]
 	result.Status = vm.ExecNext
 	ctr.idx++
+
+	anal.Output(result.Batch, ap.IsLast)
 	return result, nil
 }
 
@@ -476,14 +507,19 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 		return result, nil
 	}
 	for {
-		msg := ctr.ReceiveFromAllRegs(anal)
-		if msg.Err != nil {
-			return result, msg.Err
+		result, err = ap.GetChildren(0).Call(proc)
+		if err != nil {
+			return result, err
 		}
-		if msg.Batch == nil {
+		if result.Batch == nil {
 			break
 		}
-		ctr.bats = append(ctr.bats, msg.Batch)
+		anal.Input(result.Batch, ap.IsFirst)
+		appBat, err := result.Batch.Dup(proc.Mp())
+		if err != nil {
+			return result, err
+		}
+		ctr.bats = append(ctr.bats, appBat)
 	}
 	if len(ctr.bats) == 0 {
 		result.Batch = nil
@@ -499,26 +535,31 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 	result.Batch = ctr.bats[ctr.idx]
 	result.Status = vm.ExecNext
 	ctr.idx++
+
+	anal.Output(result.Batch, ap.IsLast)
 	return result, nil
 }
 
 func processDefault(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
-	result := vm.NewCallResult()
 	if ctr.buf != nil {
 		proc.PutBatch(ctr.buf)
 		ctr.buf = nil
 	}
-	msg := ctr.ReceiveFromAllRegs(anal)
-	if msg.Err != nil {
-		return result, msg.Err
+	result, err := ap.GetChildren(0).Call(proc)
+	if err != nil {
+		return result, err
 	}
-	ctr.buf = msg.Batch
-	if ctr.buf == nil {
+	if result.Batch == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	result.Batch = ctr.buf
+	anal.Input(ctr.buf, ap.IsFirst)
+	anal.Output(result.Batch, ap.IsLast)
+	ctr.buf, err = result.Batch.Dup(proc.Mp())
+	if err != nil {
+		return result, err
+	}
 	return result, nil
 }
 
@@ -571,7 +612,7 @@ func appendValue(v, w *vector.Vector, j int, proc *process.Process) error {
 		err = vector.AppendFixed[types.Rowid](v, vector.GetFixedAt[types.Rowid](w, j), false, proc.Mp())
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		err = vector.AppendBytes(v, w.GetBytesAt(j), false, proc.Mp())
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))
@@ -631,7 +672,7 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 		err = vector.SetFixedAt[types.Rowid](v, i, vector.GetFixedAt[types.Rowid](w, j))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		err = vector.SetBytesAt(v, i, w.GetBytesAt(j), proc.Mp())
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))

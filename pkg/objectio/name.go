@@ -36,15 +36,15 @@ func BuildObjectName(segid *Segmentid, num uint16) ObjectName {
 	var name [ObjectNameLen]byte
 	copy(name[:SegmentIdSize], types.EncodeUuid(segid))
 	copy(name[FileNumOff:FileNumOff+FileNumLen], types.EncodeUint16(&num))
-	str := fmt.Sprintf("%v_%05d", segid.ToString(), num)
+	str := fmt.Sprintf("%v_%05d", segid.String(), num)
 	copy(name[NameStringOff:NameStringOff+NameStringLen], str)
 	return unsafe.Slice((*byte)(unsafe.Pointer(&name)), ObjectNameLen)
 }
 
-func BuildObjectNameWithObjectID(segid *ObjectId) ObjectName {
+func BuildObjectNameWithObjectID(id *ObjectId) ObjectName {
 	var name [ObjectNameLen]byte
-	copy(name[:ObjectIDSize], segid[:])
-	str := fmt.Sprintf("%v_%05d", segid.Segment().ToString(), segid.Offset())
+	copy(name[:ObjectIDSize], id[:])
+	str := fmt.Sprintf("%v_%05d", id.Segment().String(), id.Offset())
 	copy(name[NameStringOff:NameStringOff+NameStringLen], str)
 	return unsafe.Slice((*byte)(unsafe.Pointer(&name)), ObjectNameLen)
 }
@@ -103,6 +103,7 @@ var NameCheckPoint [NameStringOff]byte
 var NameDiskCleaner [NameStringOff]byte
 var NameETL [NameStringOff]byte
 var NameNormal [NameStringOff]byte
+var NameTmp [NameStringOff]byte
 
 func init() {
 	copy(NameQueryResult[:], "Query_ResultXXXX")
@@ -110,6 +111,7 @@ func init() {
 	copy(NameDiskCleaner[:], "Disk_CleanerXXXX")
 	copy(NameETL[:], "Writer_ETLXXXXXX")
 	copy(NameNormal[:], "Writer_NormalXXX")
+	copy(NameTmp[:], "Writer_TmpXXXXXX")
 }
 
 func BuildQueryResultName() ObjectName {
@@ -130,4 +132,8 @@ func BuildETLName() ObjectName {
 
 func BuildNormalName() ObjectName {
 	return NameNormal[:]
+}
+
+func BuildTmpName() ObjectName {
+	return NameTmp[:]
 }

@@ -16,11 +16,12 @@ package aggexec
 
 import (
 	"fmt"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"math"
 )
 
 const (
@@ -248,6 +249,7 @@ var oidToConcatFunc = map[types.T]func(*vector.Vector, int, []byte) ([]byte, err
 	types.T_char:          concatVar,
 	types.T_blob:          concatVar,
 	types.T_text:          concatVar,
+	types.T_datalink:      concatVar,
 	types.T_varbinary:     concatVar,
 	types.T_binary:        concatVar,
 	types.T_json:          concatVar,

@@ -25,6 +25,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -44,11 +47,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
-var MaxPrepareNumberInOneSession int = 100000
+var (
+	MaxPrepareNumberInOneSession atomic.Uint32
+)
+
+func init() {
+	MaxPrepareNumberInOneSession.Store(100000)
+}
 
 // TODO: this variable should be configure by set variable
 const MoDefaultErrorCount = 64
@@ -239,6 +246,10 @@ type Session struct {
 	proxyAddr  string
 
 	disableTrace bool
+
+	// disableAgg co-operate with RecordStatement
+	// more can see Benchmark_RecordStatement_IsTrue()
+	disableAgg bool
 }
 
 func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
@@ -426,7 +437,9 @@ func (ses *Session) ResetPacketCounter() {
 
 // SetTStmt do set the Session.tStmt
 // 1. init-set at RecordStatement, which means the statement is started.
-// 2. reset at logStatementStringStatus, which means the statement is finished.
+// 2. reset nil, means the statement is finished.
+//   - case 1: logStatementStringStatus()
+//   - case 2: RecordParseErrorStatement()
 func (ses *Session) SetTStmt(stmt *motrace.StatementInfo) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -534,7 +547,7 @@ func NewSession(
 			panic(err)
 		}
 	}
-	ses.proc = process.New(
+	ses.proc = process.NewTopProcess(
 		context.TODO(),
 		ses.pool,
 		getGlobalPu().TxnClient,
@@ -607,28 +620,24 @@ func (ses *Session) Close() {
 		ses.sqlHelper = nil
 	}
 	ses.ClearStmtProfile()
-	//  The mpool cleanup must be placed at the end,
-	// and you must wait for all resources to be cleaned up before you can delete the mpool
-	if ses.proc != nil {
-		ses.proc.FreeVectors()
-		bats := ses.proc.GetValueScanBatchs()
-		for _, bat := range bats {
-			bat.Clean(ses.proc.Mp())
-		}
-		ses.proc = nil
-	}
+
+	ses.proc.Free()
+	ses.proc = nil
+
 	for _, bat := range ses.resultBatches {
 		bat.Clean(ses.pool)
 	}
-
-	pool := ses.GetMemPool()
-	mpool.DeleteMPool(pool)
-	ses.SetMemPool(nil)
 
 	if ses.buf != nil {
 		ses.buf.Free()
 		ses.buf = nil
 	}
+
+	//  The mpool cleanup must be placed at the end,
+	// and you must wait for all resources to be cleaned up before you can delete the mpool
+	pool := ses.GetMemPool()
+	mpool.DeleteMPool(pool)
+	ses.SetMemPool(nil)
 
 	ses.timestampMap = nil
 	ses.upstream = nil
@@ -915,8 +924,8 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
-		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
-			return moerr.NewInvalidState(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession)
+		if len(ses.prepareStmts) >= int(MaxPrepareNumberInOneSession.Load()) {
+			return moerr.NewInvalidState(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession.Load())
 		}
 	} else {
 		stmt.Close()
@@ -1577,6 +1586,7 @@ func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
 		inMigration: true,
 		ses:         ses,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: "use `" + d.db + "`"})
 }
 
@@ -1609,6 +1619,7 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 		ses:               ses,
 		executeParamTypes: p.paramTypes,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: p.sql})
 }
 

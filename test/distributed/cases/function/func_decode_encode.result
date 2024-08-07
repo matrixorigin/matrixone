@@ -1,0 +1,39 @@
+SELECT DECODE(ENCODE('Hello, World!', 'mysecretkey'), 'mysecretkey');
+DECODE(ENCODE(Hello, World!, mysecretkey), mysecretkey)
+Hello, World!
+SELECT DECODE(ENCODE('', ''), '');
+DECODE(ENCODE(, ), )
+
+SELECT DECODE(ENCODE('MatrixOne', '1234567890123456'), '1234567890123456');
+DECODE(ENCODE(MatrixOne, 1234567890123456), 1234567890123456)
+MatrixOne
+SELECT DECODE(ENCODE('MatrixOne', 'asdfjasfwefjfjkj'), 'asdfjasfwefjfjkj');
+DECODE(ENCODE(MatrixOne, asdfjasfwefjfjkj), asdfjasfwefjfjkj)
+MatrixOne
+SELECT DECODE(ENCODE('MatrixOne123', '123456789012345678901234'), '123456789012345678901234');
+DECODE(ENCODE(MatrixOne123, 123456789012345678901234), 123456789012345678901234)
+MatrixOne123
+SELECT DECODE(ENCODE('MatrixOne#%$%^', '*^%YTu1234567'), '*^%YTu1234567');
+DECODE(ENCODE(MatrixOne#%$%^, *^%YTu1234567), *^%YTu1234567)
+MatrixOne#%$%^
+SELECT DECODE(ENCODE('MatrixOne', ''), '');
+DECODE(ENCODE(MatrixOne, ), )
+MatrixOne
+SELECT DECODE(ENCODE('分布式データベース', 'pass1234@#$%%^^&'), 'pass1234@#$%%^^&');
+DECODE(ENCODE(分布式データベース, pass1234@#$%%^^&), pass1234@#$%%^^&)
+分布式データベース
+SELECT DECODE(ENCODE('分布式データベース', '分布式7782734adgwy1242'), '分布式7782734adgwy1242');
+DECODE(ENCODE(分布式データベース, 分布式7782734adgwy1242), 分布式7782734adgwy1242)
+分布式データベース
+SELECT DECODE(ENCODE('MatrixOne', '密匙'), '密匙');
+DECODE(ENCODE(MatrixOne, 密匙), 密匙)
+MatrixOne
+SELECT DECODE(ENCODE('MatrixOne数据库', '数据库passwd12345667'), '数据库passwd12345667');
+DECODE(ENCODE(MatrixOne数据库, 数据库passwd12345667), 数据库passwd12345667)
+MatrixOne数据库
+SELECT HEX(ENCODE('MatrixOne数据库', '数据库passwd12345667'));
+HEX(ENCODE(MatrixOne数据库, 数据库passwd12345667))
+34B8B67B8C4EDF31009142BC6346E3C32B0C
+SELECT HEX(ENCODE('mytext','mykeystring'));
+HEX(ENCODE(mytext, mykeystring))
+562C778A6367

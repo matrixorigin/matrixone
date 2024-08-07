@@ -42,17 +42,18 @@ type container struct {
 	joinBat *batch.Batch
 	expr    colexec.ExpressionExecutor
 	cfs     []func(*vector.Vector, *vector.Vector, int64, int) error
-	colexec.ReceiverOperator
-	buf *batch.Batch
+	buf     *batch.Batch
 }
 
 type LoopAnti struct {
-	ctr    *container
-	Result []int32
-	Cond   *plan.Expr
-	Typs   []types.Type
+	ctr        *container
+	Result     []int32
+	Cond       *plan.Expr
+	Typs       []types.Type
+	JoinMapTag int32
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopAnti *LoopAnti) GetOperatorBase() *vm.OperatorBase {
@@ -94,13 +95,17 @@ func (loopAnti *LoopAnti) Free(proc *process.Process, pipelineFailed bool, err e
 	if ctr := loopAnti.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 		//	if arg.ctr.buf != nil {
 		//	proc.PutBatch(arg.ctr.buf)
 		//	arg.ctr.buf = nil
 		//}
 		loopAnti.ctr.lastrow = 0
 		loopAnti.ctr = nil
+	}
+	if loopAnti.ProjectList != nil {
+		anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
+		anal.Alloc(loopAnti.ProjectAllocSize)
+		loopAnti.FreeProjection(proc)
 	}
 }
 

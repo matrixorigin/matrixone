@@ -118,6 +118,7 @@ func (s *store) newMemTxnStorage(
 		return nil, err
 	}
 	return memorystorage.NewMemoryStorage(
+		s.cfg.UUID,
 		mp,
 		s.rt.Clock(),
 		memoryengine.NewHakeeperIDGenerator(hakeeper),
@@ -196,6 +197,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		Ctx:               ctx,
 		MaxMessageSize:    max2LogServiceMsgSizeLimit,
 		TaskServiceGetter: s.GetTaskService,
+		SID:               s.cfg.UUID,
 	}
 
 	return taestorage.NewTAEStorage(

@@ -54,7 +54,7 @@ func (s *service) initDistributedTAE(
 	colexec.NewServer(hakeeper)
 
 	// start I/O pipeline
-	blockio.Start()
+	blockio.Start(s.cfg.UUID)
 
 	// engine
 	distributeTaeMp, err := mpool.NewMPool("distributed_tae", 0, mpool.NoFixed)

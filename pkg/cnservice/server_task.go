@@ -22,13 +22,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/proxy"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -177,6 +177,10 @@ func (s *service) canClaimDaemonTask(taskAccount string) bool {
 	return false
 }
 
+func (s *service) createProxyUser(command *logservicepb.CreateTaskService) {
+	frontend.SetSpecialUser(proxy.SQLUsername, []byte(command.User.Password))
+}
+
 func (s *service) startTaskRunner() {
 	s.task.Lock()
 	defer s.task.Unlock()
@@ -244,16 +248,6 @@ func (s *service) registerExecutorsLocked() {
 		return
 	}
 
-	pu := config.NewParameterUnit(
-		&s.cfg.Frontend,
-		nil,
-		nil,
-		nil)
-	pu.StorageEngine = s.storeEngine
-	pu.TxnClient = s._txnClient
-	s.cfg.Frontend.SetDefaultValues()
-	pu.FileService = s.fileService
-	pu.LockService = s.lockService
 	ieFactory := func() ie.InternalExecutor {
 		return frontend.NewInternalExecutor(s.cfg.UUID)
 	}

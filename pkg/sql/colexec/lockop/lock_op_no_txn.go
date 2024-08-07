@@ -59,8 +59,8 @@ func LockTableWithUniqueID(
 		return err
 	}
 
-	parker := types.NewPacker(proc.Mp())
-	defer parker.FreeMem()
+	parker := types.NewPacker()
+	defer parker.Close()
 
 	opts := DefaultLockOptions(parker).
 		WithLockMode(mode).
@@ -114,7 +114,7 @@ func getInternalProcessByUniqueID(
 		return nil, err
 	}
 	v, _ := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.LockService)
-	proc := process.New(
+	proc := process.NewTopProcess(
 		ctx,
 		mp,
 		txnClient,

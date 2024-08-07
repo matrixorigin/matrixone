@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -39,6 +40,7 @@ type PartitionState struct {
 	service string
 
 	// also modify the Copy method if adding fields
+	tid uint64
 
 	// data
 	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
@@ -55,7 +57,7 @@ type PartitionState struct {
 	//for non-appendable block's memory deletes, used to getting dirty
 	// non-appendable blocks quickly.
 	//TODO::remove it
-	dirtyBlocks *btree.BTreeG[types.Blockid]
+	//dirtyBlocks *btree.BTreeG[types.Blockid]
 	//index for objects by timestamp.
 	objectIndexByTS *btree.BTreeG[ObjectIndexByTSEntry]
 
@@ -119,17 +121,6 @@ func (r RowEntry) Less(than RowEntry) bool {
 	return false
 }
 
-type BlockEntry struct {
-	objectio.BlockInfo
-
-	CreateTime types.TS
-	DeleteTime types.TS
-}
-
-func (b BlockEntry) Less(than BlockEntry) bool {
-	return b.BlockID.Compare(than.BlockID) < 0
-}
-
 type BlockDeltaEntry struct {
 	BlockID types.Blockid
 
@@ -158,9 +149,8 @@ type ObjectInfo struct {
 
 func (o ObjectInfo) String() string {
 	return fmt.Sprintf(
-		"%s; entryState: %v; sorted: %v; hasDeltaLoc: %v; commitTS: %s; createTS: %s; deleteTS: %s",
-		o.ObjectStats.String(), o.EntryState,
-		o.Sorted, o.HasDeltaLoc, o.CommitTS.ToString(),
+		"%s; entryState: %v; sorted: %v; commitTS: %s; createTS: %s; deleteTS: %s",
+		o.ObjectStats.String(), o.EntryState, o.Sorted, o.CommitTS.ToString(),
 		o.CreateTime.ToString(), o.DeleteTime.ToString())
 }
 
@@ -279,18 +269,20 @@ func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 func NewPartitionState(
 	service string,
 	noData bool,
+	tid uint64,
 ) *PartitionState {
 	opts := btree.Options{
 		Degree: 64,
 	}
 	return &PartitionState{
-		service:         service,
-		noData:          noData,
-		rows:            btree.NewBTreeGOptions((RowEntry).Less, opts),
-		dataObjects:     btree.NewBTreeGOptions((ObjectEntry).Less, opts),
-		blockDeltas:     btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
-		primaryIndex:    btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
-		dirtyBlocks:     btree.NewBTreeGOptions((types.Blockid).Less, opts),
+		service:      service,
+		tid:          tid,
+		noData:       noData,
+		rows:         btree.NewBTreeGOptions((RowEntry).Less, opts),
+		dataObjects:  btree.NewBTreeGOptions((ObjectEntry).Less, opts),
+		blockDeltas:  btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
+		primaryIndex: btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
+		//dirtyBlocks:     btree.NewBTreeGOptions((types.Blockid).Less, opts),
 		objectIndexByTS: btree.NewBTreeGOptions((ObjectIndexByTSEntry).Less, opts),
 		shared:          new(sharedStates),
 	}
@@ -298,13 +290,14 @@ func NewPartitionState(
 
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
-		service:         p.service,
-		rows:            p.rows.Copy(),
-		dataObjects:     p.dataObjects.Copy(),
-		blockDeltas:     p.blockDeltas.Copy(),
-		primaryIndex:    p.primaryIndex.Copy(),
-		noData:          p.noData,
-		dirtyBlocks:     p.dirtyBlocks.Copy(),
+		service:      p.service,
+		tid:          p.tid,
+		rows:         p.rows.Copy(),
+		dataObjects:  p.dataObjects.Copy(),
+		blockDeltas:  p.blockDeltas.Copy(),
+		primaryIndex: p.primaryIndex.Copy(),
+		noData:       p.noData,
+		//dirtyBlocks:     p.dirtyBlocks.Copy(),
 		objectIndexByTS: p.objectIndexByTS.Copy(),
 		shared:          p.shared,
 		start:           p.start,
@@ -358,25 +351,31 @@ func (p *PartitionState) HandleLogtailEntry(
 	entry *api.Entry,
 	primarySeqnum int,
 	packer *types.Packer,
+	pool *mpool.MPool,
 ) {
+
 	txnTrace.GetService(p.service).ApplyLogtail(entry, 1)
+
 	switch entry.EntryType {
+
 	case api.Entry_Insert:
 		if IsBlkTable(entry.TableName) {
-			p.HandleMetadataInsert(ctx, fs, entry.Bat)
+			p.HandleMetadataInsert(ctx, fs, entry.Bat, pool)
 		} else if IsObjTable(entry.TableName) {
-			p.HandleObjectInsert(ctx, entry.Bat, fs)
+			p.HandleObjectInsert(ctx, entry.Bat, fs, pool)
 		} else {
-			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
+			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer, pool)
 		}
+
 	case api.Entry_Delete:
 		if IsBlkTable(entry.TableName) {
 			p.HandleMetadataDelete(ctx, entry.TableId, entry.Bat)
 		} else if IsObjTable(entry.TableName) {
-			p.HandleObjectDelete(entry.TableId, entry.Bat)
+			p.HandleObjectDelete(entry.TableId, entry.Bat, pool)
 		} else {
-			p.HandleRowsDelete(ctx, entry.Bat, packer)
+			p.HandleRowsDelete(ctx, entry.Bat, packer, pool)
 		}
+
 	default:
 		panic("unknown entry type")
 	}
@@ -384,13 +383,32 @@ func (p *PartitionState) HandleLogtailEntry(
 
 func (p *PartitionState) HandleObjectDelete(
 	tableID uint64,
-	bat *api.Batch) {
+	bat *api.Batch,
+	pool *mpool.MPool,
+) {
+
 	statsVec := mustVectorFromProto(bat.Vecs[2])
-	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
-	sortedCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[4]))
-	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
-	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[8]))
-	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[11]))
+	defer statsVec.Free(pool)
+
+	vec := mustVectorFromProto(bat.Vecs[3])
+	defer vec.Free(pool)
+	stateCol := vector.MustFixedCol[bool](vec)
+
+	vec = mustVectorFromProto(bat.Vecs[4])
+	defer vec.Free(pool)
+	sortedCol := vector.MustFixedCol[bool](vec)
+
+	vec = mustVectorFromProto(bat.Vecs[7])
+	defer vec.Free(pool)
+	createTSCol := vector.MustFixedCol[types.TS](vec)
+
+	vec = mustVectorFromProto(bat.Vecs[8])
+	defer vec.Free(pool)
+	deleteTSCol := vector.MustFixedCol[types.TS](vec)
+
+	vec = mustVectorFromProto(bat.Vecs[11])
+	defer vec.Free(pool)
+	commitTSCol := vector.MustFixedCol[types.TS](vec)
 
 	for idx := 0; idx < len(stateCol); idx++ {
 		var objEntry ObjectEntry
@@ -410,16 +428,41 @@ func (p *PartitionState) HandleObjectDelete(
 	}
 }
 
-func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch, fs fileservice.FileService) {
+func (p *PartitionState) HandleObjectInsert(
+	ctx context.Context,
+	bat *api.Batch,
+	fs fileservice.FileService,
+	pool *mpool.MPool,
+) {
 
 	var numDeleted, blockDeleted, scanCnt int64
+
 	statsVec := mustVectorFromProto(bat.Vecs[2])
-	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
-	sortedCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[4]))
-	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
-	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[8]))
-	startTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[9]))
-	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[11]))
+	defer statsVec.Free(pool)
+
+	vec := mustVectorFromProto(bat.Vecs[3])
+	defer vec.Free(pool)
+	stateCol := vector.MustFixedCol[bool](vec)
+
+	vec = mustVectorFromProto(bat.Vecs[4])
+	defer vec.Free(pool)
+	sortedCol := vector.MustFixedCol[bool](vec)
+
+	vec = mustVectorFromProto(bat.Vecs[7])
+	defer vec.Free(pool)
+	createTSCol := vector.MustFixedCol[types.TS](vec)
+
+	vec = mustVectorFromProto(bat.Vecs[8])
+	defer vec.Free(pool)
+	deleteTSCol := vector.MustFixedCol[types.TS](vec)
+
+	vec = mustVectorFromProto(bat.Vecs[9])
+	defer vec.Free(pool)
+	startTSCol := vector.MustFixedCol[types.TS](vec)
+
+	vec = mustVectorFromProto(bat.Vecs[11])
+	defer vec.Free(pool)
+	commitTSCol := vector.MustFixedCol[types.TS](vec)
 
 	for idx := 0; idx < len(stateCol); idx++ {
 		p.shared.Lock()
@@ -442,9 +485,9 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 		objEntry.Sorted = sortedCol[idx]
 
 		old, exist := p.dataObjects.Get(objEntry)
-		if exist {
-			objEntry.HasDeltaLoc = old.HasDeltaLoc
-		}
+		//if exist {
+		//	objEntry.HasDeltaLoc = old.HasDeltaLoc
+		//}
 		if exist && !old.IsEmpty() {
 			// why check the deleteTime here? consider this situation:
 			// 		1. insert on an object, then these insert operations recorded into a CKP.
@@ -556,17 +599,17 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 				//   from the checkpoint, then apply the block meta into PartitionState.blocks.
 				// So , if the above scenario happens, we need to set the non-appendable block into
 				// PartitionState.dirtyBlocks.
-				if !objEntry.EntryState && !objEntry.HasDeltaLoc {
-					p.dirtyBlocks.Set(entry.BlockID)
-					break
-				}
+				//if !objEntry.EntryState && !objEntry.HasDeltaLoc {
+				//	p.dirtyBlocks.Set(entry.BlockID)
+				//	break
+				//}
 			}
 			iter.Release()
 
 			// if there are no rows for the block, delete the block from the dirty
-			if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
-				p.dirtyBlocks.Delete(*blkID)
-			}
+			//if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
+			//	p.dirtyBlocks.Delete(*blkID)
+			//}
 		}
 	}
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
@@ -581,14 +624,21 @@ func (p *PartitionState) HandleRowsInsert(
 	input *api.Batch,
 	primarySeqnum int,
 	packer *types.Packer,
+	pool *mpool.MPool,
 ) (
 	primaryKeys [][]byte,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
-	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
-	timeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
+	vec := mustVectorFromProto(input.Vecs[0])
+	defer vec.Free(pool)
+	rowIDVector := vector.MustFixedCol[types.Rowid](vec)
+
+	vec = mustVectorFromProto(input.Vecs[1])
+	defer vec.Free(pool)
+	timeVector := vector.MustFixedCol[types.TS](vec)
+
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
@@ -647,12 +697,19 @@ func (p *PartitionState) HandleRowsDelete(
 	ctx context.Context,
 	input *api.Batch,
 	packer *types.Packer,
+	pool *mpool.MPool,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsDelete")
 	defer task.End()
 
-	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
-	timeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
+	vec := mustVectorFromProto(input.Vecs[0])
+	defer vec.Free(pool)
+	rowIDVector := vector.MustFixedCol[types.Rowid](vec)
+
+	vec = mustVectorFromProto(input.Vecs[1])
+	defer vec.Free(pool)
+	timeVector := vector.MustFixedCol[types.TS](vec)
+
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
@@ -694,7 +751,7 @@ func (p *PartitionState) HandleRowsDelete(
 		p.rows.Set(entry)
 
 		//handle memory deletes for non-appendable block.
-		p.dirtyBlocks.Set(blockID)
+		//p.dirtyBlocks.Set(blockID)
 
 		// primary key
 		if i < len(primaryKeys) && len(primaryKeys[i]) > 0 {
@@ -720,19 +777,46 @@ func (p *PartitionState) HandleRowsDelete(
 func (p *PartitionState) HandleMetadataInsert(
 	ctx context.Context,
 	fs fileservice.FileService,
-	input *api.Batch) {
+	input *api.Batch,
+	pool *mpool.MPool,
+) {
+
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataInsert")
 	defer task.End()
 
-	createTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
-	blockIDVector := vector.MustFixedCol[types.Blockid](mustVectorFromProto(input.Vecs[2]))
-	entryStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[3]))
-	sortedStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[4]))
+	vec := mustVectorFromProto(input.Vecs[1])
+	defer vec.Free(pool)
+	createTimeVector := vector.MustFixedCol[types.TS](vec)
+
+	vec = mustVectorFromProto(input.Vecs[2])
+	defer vec.Free(pool)
+	blockIDVector := vector.MustFixedCol[types.Blockid](vec)
+
+	vec = mustVectorFromProto(input.Vecs[3])
+	defer vec.Free(pool)
+	entryStateVector := vector.MustFixedCol[bool](vec)
+
+	vec = mustVectorFromProto(input.Vecs[4])
+	defer vec.Free(pool)
+	sortedStateVector := vector.MustFixedCol[bool](vec)
+
 	metaLocationVector := mustVectorFromProto(input.Vecs[5])
+	defer metaLocationVector.Free(pool)
+
 	deltaLocationVector := mustVectorFromProto(input.Vecs[6])
-	commitTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[7]))
-	//segmentIDVector := vector.MustFixedCol[types.Uuid](mustVectorFromProto(input.Vecs[8]))
-	memTruncTSVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[9]))
+	defer deltaLocationVector.Free(pool)
+
+	vec = mustVectorFromProto(input.Vecs[7])
+	defer vec.Free(pool)
+	commitTimeVector := vector.MustFixedCol[types.TS](vec)
+
+	//vec = mustVectorFromProto(input.Vecs[8])
+	//defer vec.Free(pool)
+	//segmentIDVector := vector.MustFixedCol[types.Uuid](vec)
+
+	vec = mustVectorFromProto(input.Vecs[9])
+	defer vec.Free(pool)
+	memTruncTSVector := vector.MustFixedCol[types.TS](vec)
 
 	var numInserted, numDeleted int64
 	for i, blockID := range blockIDVector {
@@ -794,7 +878,7 @@ func (p *PartitionState) HandleMetadataInsert(
 				// So , if the above scenario happens, we need to set the non-appendable block into
 				// PartitionState.dirtyBlocks.
 				if !isAppendable && isEmptyDelta {
-					p.dirtyBlocks.Set(blockID)
+					//p.dirtyBlocks.Set(blockID)
 					break
 				}
 
@@ -821,9 +905,9 @@ func (p *PartitionState) HandleMetadataInsert(
 			iter.Release()
 
 			// if there are no rows for the block, delete the block from the dirty
-			if scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
-				p.dirtyBlocks.Delete(blockID)
-			}
+			//if scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
+			//	p.dirtyBlocks.Delete(blockID)
+			//}
 		}
 
 		//create object by block insert to set objEntry.HasDeltaLoc
@@ -843,9 +927,9 @@ func (p *PartitionState) HandleMetadataInsert(
 			objEntry, ok := p.dataObjects.Get(objPivot)
 			if ok {
 				// don't need to update objEntry, except for HasDeltaLoc and blkCnt
-				if !isEmptyDelta {
-					objEntry.HasDeltaLoc = true
-				}
+				//if !isEmptyDelta {
+				//	objEntry.HasDeltaLoc = true
+				//}
 
 				blkCnt := blockID.Sequence() + 1
 				if uint32(blkCnt) > objEntry.BlkCnt() {
@@ -866,9 +950,9 @@ func (p *PartitionState) HandleMetadataInsert(
 				objEntry = objPivot
 				objEntry.EntryState = entryStateVector[i]
 				objEntry.Sorted = sortedStateVector[i]
-				if !isEmptyDelta {
-					objEntry.HasDeltaLoc = true
-				}
+				//if !isEmptyDelta {
+				//	objEntry.HasDeltaLoc = true
+				//}
 				objEntry.CommitTS = commitTimeVector[i]
 				createTS := createTimeVector[i]
 				// after blk is removed, create ts is empty
@@ -975,7 +1059,8 @@ func (p *PartitionState) objectDeleteHelper(
 func (p *PartitionState) HandleMetadataDelete(
 	ctx context.Context,
 	tableID uint64,
-	input *api.Batch) {
+	input *api.Batch,
+) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataDelete")
 	defer task.End()
 

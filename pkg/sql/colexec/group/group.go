@@ -124,6 +124,13 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		ctr.typ = HStr
 	}
 
+	if group.ProjectList != nil {
+		err = group.PrepareProjection(proc)
+		if err != nil {
+			return
+		}
+	}
+
 	return nil
 }
 
@@ -136,13 +143,24 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
-	return group.ctr.processGroupByAndAgg(group, proc, anal, group.GetIsFirst(), group.GetIsLast())
+	result, err := group.ctr.processGroupByAndAgg(group, proc, anal, group.GetIsFirst())
+	if err != nil {
+		return result, err
+	}
+
+	if group.ProjectList != nil {
+		result.Batch, err = group.EvalProjection(result.Batch, proc)
+		if err != nil {
+			return result, err
+		}
+	}
+
+	anal.Output(result.Batch, group.GetIsLast())
+	return result, nil
 }
 
 // compute the `agg(expression)List group by expressionList`.
-func (ctr *container) processGroupByAndAgg(
-	ap *Group, proc *process.Process, anal process.Analyze, isFirst, isLast bool) (vm.CallResult, error) {
-
+func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, anal process.Analyze, isFirst bool) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		// receive data from pre-operator.
@@ -217,7 +235,6 @@ func (ctr *container) processGroupByAndAgg(
 					anal.Alloc(int64(vec.Size()))
 				}
 			}
-			anal.Output(ctr.bat, isLast)
 			result.Batch = ctr.bat
 
 			ctr.bat = nil
@@ -236,6 +253,7 @@ func (ctr *container) processGroupByAndAgg(
 }
 
 func (ctr *container) generateAggStructures(proc *process.Process, group *Group) error {
+
 	for i, ag := range group.Aggs {
 		ctr.bat.Aggs[i] = aggexec.MakeAgg(
 			proc,

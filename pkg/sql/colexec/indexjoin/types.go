@@ -32,7 +32,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
 	state int
 	buf   *batch.Batch
 }
@@ -42,7 +41,9 @@ type IndexJoin struct {
 	Result             []int32
 	Typs               []types.Type
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (indexJoin *IndexJoin) GetOperatorBase() *vm.OperatorBase {
@@ -83,12 +84,15 @@ func (indexJoin *IndexJoin) Reset(proc *process.Process, pipelineFailed bool, er
 func (indexJoin *IndexJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := indexJoin.ctr
 	if ctr != nil {
-		ctr.FreeAllReg()
 		if indexJoin.ctr.buf != nil {
 			indexJoin.ctr.buf.Clean(proc.Mp())
 			indexJoin.ctr.buf = nil
 		}
 		indexJoin.ctr = nil
 	}
-
+	if indexJoin.ProjectList != nil {
+		anal := proc.GetAnalyze(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor())
+		anal.Alloc(indexJoin.ProjectAllocSize)
+		indexJoin.FreeProjection(proc)
+	}
 }

@@ -161,6 +161,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 		reqCtx: ctx,
 		ses:    sess,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
 }
 
@@ -180,6 +181,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 		reqCtx: ctx,
 		ses:    sess,
 	}
+	defer tempExecCtx.Close()
 	err := doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
 	res.err = err
@@ -311,6 +313,10 @@ func (ip *internalProtocol) WriteEOF(warnings, status uint16) error {
 }
 
 func (ip *internalProtocol) WriteEOFIF(warnings uint16, status uint16) error {
+	return nil
+}
+
+func (ip *internalProtocol) WriteEOFIFAndNoFlush(warnings uint16, status uint16) error {
 	return nil
 }
 

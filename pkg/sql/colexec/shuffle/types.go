@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,7 +35,7 @@ type Shuffle struct {
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
 	RuntimeFilterSpec  *plan.RuntimeFilterSpec
-	msgReceiver        *process.MessageReceiver
+	msgReceiver        *message.MessageReceiver
 	vm.OperatorBase
 }
 
@@ -71,7 +72,7 @@ func (shuffle *Shuffle) Release() {
 
 type container struct {
 	ending               bool
-	sels                 [][]int32
+	sels                 [][]int64
 	shufflePool          []*batch.Batch
 	sendPool             []*batch.Batch
 	lastSentBatch        *batch.Batch

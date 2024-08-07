@@ -94,18 +94,14 @@ func (deletion *Deletion) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, error) {
-	var err error
-
 	anal := proc.GetAnalyze(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor())
 	anal.Start()
-	defer func() {
-		anal.Stop()
-	}()
+	defer anal.Stop()
 
+	var err error
 	if deletion.ctr.state == vm.Build {
 		for {
 			result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, anal)
-
 			if err != nil {
 				return result, err
 			}
@@ -116,6 +112,7 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 			if result.Batch.IsEmpty() {
 				continue
 			}
+			anal.Input(result.Batch, deletion.IsFirst)
 
 			if err = deletion.SplitBatch(proc, result.Batch); err != nil {
 				return result, err
@@ -211,17 +208,18 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 }
 
 func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, error) {
-	result, err := deletion.GetChildren(0).Call(proc)
+	anal := proc.GetAnalyze(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor())
+	anal.Start()
+	defer anal.Stop()
+
+	result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, anal)
 	if err != nil {
 		return result, err
 	}
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}
-
-	anal := proc.GetAnalyze(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	anal.Input(result.Batch, deletion.IsFirst)
 
 	bat := result.Batch
 

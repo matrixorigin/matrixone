@@ -204,9 +204,11 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 				fixed := NewFixedVectorExpressionExecutor(mp, false, nil)
 
 				if execLen == 1 {
-					// ToConst just returns a new pointer to the same memory.
+					// ToConst may returns a new pointer to the same memory.
 					// so we need to duplicate it.
-					fixed.resultVector, err = result.ToConst(0, 1, mp).Dup(mp)
+					constResult := result.ToConst(0, 1, mp)
+					defer constResult.Free(mp)
+					fixed.resultVector, err = constResult.Dup(mp)
 				} else {
 					fixed.fixed = true
 					fixed.resultVector = result
@@ -793,6 +795,12 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 					return nil, err1
 				}
 				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
+			} else if typ.Oid == types.T_datalink {
+				_, _, _, err1 := types.ParseDatalink(sval)
+				if err1 != nil {
+					return nil, err1
+				}
+				vec, err = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
 			} else {
 				vec, err = vector.NewConstBytes(constSType, []byte(sval), 1, proc.Mp())
 			}

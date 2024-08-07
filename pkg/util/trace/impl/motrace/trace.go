@@ -22,6 +22,7 @@
 package motrace
 
 import (
+	"bytes"
 	"context"
 	"sync/atomic"
 	"time"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -62,12 +64,13 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithLongQueryTime(SV.LongQueryTime),
 		WithLongSpanTime(SV.LongSpanTime.Duration),
 		WithSpanDisable(SV.DisableSpan),
+		EnableSpanProfile(SV.EnableSpanProfile),
 		WithErrorDisable(SV.DisableError),
 		WithSkipRunningStmt(SV.SkipRunningStmt),
 		WithSQLWriterDisable(SV.DisableSqlWriter),
 		WithAggregatorDisable(SV.DisableStmtAggregation),
 		WithAggregatorWindow(SV.AggregationWindow.Duration),
-		WithSelectThreshold(SV.SelectAggrThreshold.Duration),
+		WithSelectThreshold(SV.SelectAggThreshold.Duration),
 		WithStmtMergeEnable(SV.EnableStmtMerge),
 		WithCUConfig(SV.CU, SV.CUv1),
 		WithTCPPacket(SV.TCPPacket),
@@ -174,7 +177,7 @@ func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) err
 	return nil
 }
 
-// InitSchema2
+// InitSchemaWithTxn
 // PS: only in system bootstrap init schema with `executor.TxnExecutor`
 func InitSchemaWithTxn(ctx context.Context, txn executor.TxnExecutor) error {
 	_, err := txn.Exec(sqlCreateDBConst, executor.StatementOption{})
@@ -266,7 +269,28 @@ func GetSQLExecutorFactory() func() ie.InternalExecutor {
 	return nil
 }
 
-type PipeImpl batchpipe.PipeImpl[batchpipe.HasName, any]
+// PipeImpl implements batchpipe.PipeImpl[batchpipe.HasName, any]
+type PipeImpl interface {
+	NewItemBuffer(name string) batchpipe.ItemBuffer[batchpipe.HasName, any]
+	// NewItemBatchHandler handle the StoreBatch from an ItemBuffer, for example, execute an insert sql.
+	// this handle may be running on multiple goroutine
+	NewItemBatchHandler(ctx context.Context) func(batch any)
+
+	// NewAggregator get new aggr
+	NewAggregator(context.Context, string) table.Aggregator
+}
+
+// Buffer implements batchpipe.ItemBuffer[batchpipe.HasName, any]
+type Buffer interface {
+	batchpipe.Reminder
+	Add(item batchpipe.HasName)
+	Reset()
+	IsEmpty() bool
+	ShouldFlush() bool
+	Size() int64
+	// GetBatch use bytes.Buffer to mitigate mem allocation and the returned bytes should own its data
+	GetBatch(ctx context.Context, buf *bytes.Buffer) any
+}
 
 type BatchProcessor interface {
 	Collect(context.Context, batchpipe.HasName) error

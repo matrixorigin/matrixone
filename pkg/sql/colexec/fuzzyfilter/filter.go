@@ -17,6 +17,8 @@ package fuzzyfilter
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -157,13 +159,13 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 	for {
 		switch ctr.state {
 		case Build:
-
 			buildIdx := fuzzyFilter.BuildIdx
 
 			msg := ctr.ReceiveFromSingleReg(buildIdx, anal)
 			if msg.Err != nil {
 				return result, msg.Err
 			}
+			anal.Input(msg.Batch, fuzzyFilter.IsFirst)
 
 			bat := msg.Batch
 			if bat == nil {
@@ -199,13 +201,13 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			ctr.state = Probe
 
 		case Probe:
-
 			probeIdx := fuzzyFilter.getProbeIdx()
 
 			msg := ctr.ReceiveFromSingleReg(probeIdx, anal)
 			if msg.Err != nil {
 				return result, msg.Err
 			}
+			anal.Input(msg.Batch, fuzzyFilter.IsFirst)
 
 			bat := msg.Batch
 			if bat == nil {
@@ -213,6 +215,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 				// this will happen in such case:create unique index from a table that unique col have no data
 				if ctr.rbat == nil || ctr.collisionCnt == 0 {
 					result.Status = vm.ExecStop
+					anal.Output(result.Batch, fuzzyFilter.IsLast)
 					return result, nil
 				}
 
@@ -224,6 +227,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 				if err := fuzzyFilter.Callback(ctr.rbat); err != nil {
 					return result, err
 				} else {
+					anal.Output(result.Batch, fuzzyFilter.IsLast)
 					return result, nil
 				}
 			}
@@ -246,6 +250,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			continue
 		case End:
 			result.Status = vm.ExecStop
+			anal.Output(result.Batch, fuzzyFilter.IsLast)
 			return result, nil
 		}
 	}
@@ -306,13 +311,13 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 		return nil
 	}
 
-	var runtimeFilter process.RuntimeFilterMessage
+	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = fuzzyFilter.RuntimeFilterSpec.Tag
 
 	//                                                 the number of data insert is greater than inFilterCardLimit
 	if fuzzyFilter.RuntimeFilterSpec.Expr == nil || ctr.pass2RuntimeFilter == nil {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, fuzzyFilter.RuntimeFilterSpec)
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, fuzzyFilter.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	}
 
@@ -328,9 +333,9 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 		return err
 	}
 
-	runtimeFilter.Typ = process.RuntimeFilter_IN
+	runtimeFilter.Typ = message.RuntimeFilter_IN
 	runtimeFilter.Data = data
-	proc.SendRuntimeFilter(runtimeFilter, fuzzyFilter.RuntimeFilterSpec)
+	message.SendRuntimeFilter(runtimeFilter, fuzzyFilter.RuntimeFilterSpec, proc.GetMessageBoard())
 	return nil
 }
 

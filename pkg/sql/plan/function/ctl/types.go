@@ -58,6 +58,8 @@ var (
 	HandleTxnTrace = strings.ToUpper("txn-trace")
 
 	ReloadAutoIncrementCache = strings.ToUpper("reload-auto-increment-cache")
+
+	CtlReaderMethod = strings.ToUpper("reader")
 )
 
 var (
@@ -87,7 +89,7 @@ var (
 		TraceSpanMethod:        handleTraceSpan,
 		CoreDumpMethod:         handleCoreDump,
 		InterceptCommitMethod:  handleInterceptCommit(),
-		MergeObjectsMethod:     handleMerge(),
+		MergeObjectsMethod:     handleCNMerge,
 		DiskCleanerMethod:      handleDiskCleaner(),
 
 		GetProtocolVersionMethod: handleGetProtocolVersion,
@@ -98,6 +100,8 @@ var (
 		HandleTxnTrace:           handleTxnTrace,
 
 		ReloadAutoIncrementCache: handleReloadAutoIncrementCache,
+
+		CtlReaderMethod: handleCtlReader,
 	}
 )
 

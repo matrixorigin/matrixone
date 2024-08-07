@@ -19,10 +19,10 @@ insert into test01 values (2,3,4,5,6,7,8,9,2131.3242343,-3824.34324);
 show create table test01;
 Table    Create Table
 test01    CREATE TABLE `test01` (\n  `col1` TINYINT DEFAULT NULL,\n  `col2` SMALLINT DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE DEFAULT NULL\n)
-create publication publication01 database test;
+create publication publication01 database test account all;
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-publication01    test    2024-05-16 17:16:11    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+publication01    test    *    *        2024-07-29 12:37:00    null    
 alter table test01 add primary key (col1, col2);
 show create table test01;
 Table    Create Table
@@ -46,14 +46,14 @@ col1    newcol    col2    col3    col4    col5    col6    col7    col8    col9  
 2    null    3    4    5    6    7    8    9    2131.3242    -3824.34324
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col1` TINYINT NOT NULL,\n  `newcol` INT DEFAULT NULL,\n  `col2` SMALLINT NOT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE NOT NULL,\n  PRIMARY KEY (`col10`),\n  UNIQUE KEY `ui` (`col1`,`col3`)\n)
+test01    CREATE TABLE `test01` (\n  `col1` TINYINT NOT NULL,\n  `newCol` INT DEFAULT NULL,\n  `col2` SMALLINT NOT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE NOT NULL,\n  PRIMARY KEY (`col10`),\n  UNIQUE KEY `ui` (`col1`,`col3`)\n)
 alter table test01 modify column col1 decimal;
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col1` DECIMAL(38,0) DEFAULT NULL,\n  `newcol` INT DEFAULT NULL,\n  `col2` SMALLINT NOT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE NOT NULL,\n  PRIMARY KEY (`col10`),\n  UNIQUE KEY `ui` (`col1`,`col3`)\n)
+test01    CREATE TABLE `test01` (\n  `col1` DECIMAL(38,0) DEFAULT NULL,\n  `newCol` INT DEFAULT NULL,\n  `col2` SMALLINT NOT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE NOT NULL,\n  PRIMARY KEY (`col10`),\n  UNIQUE KEY `ui` (`col1`,`col3`)\n)
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-publication01    test    2024-05-16 17:16:11    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+publication01    test    *    *        2024-07-29 12:37:00    null    
 drop publication publication01;
 drop table test01;
 drop database test;
@@ -64,15 +64,15 @@ create database sys_db_1;
 use sys_db_1;
 create table sys_tbl_1(a int primary key, b decimal, c char, d varchar(20) );
 insert into sys_tbl_1 values(1,2,'a','database'),(2,3,'b','test publication'),(3, 4, 'c','324243243');
-create publication sys_pub_1 database sys_db_1;
+create publication sys_pub_1 database sys_db_1 account all;
 select * from sys_tbl_1;
 a    b    c    d
 1    2    a    database
 2    3    b    test publication
 3    4    c    324243243
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-sys_pub_1    sys_db_1    2024-05-16 17:16:12    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+sys_pub_1    sys_db_1    *    *        2024-07-29 12:37:01    null    
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    sys_db_1    all
@@ -86,7 +86,7 @@ sub1
 system
 system_metrics
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 use sys_db_1;
 alter table sys_tbl_1 drop primary key;
 show create table sys_tbl_1;

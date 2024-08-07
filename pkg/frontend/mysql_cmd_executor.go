@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -173,7 +174,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
 	// fixme: this op leads all internal/background executor got NULL result if call last_query_id().
 	if sqlType != constant.InternalSql {
-		ses.pushQueryId(types.Uuid(stmID).ToString())
+		ses.pushQueryId(types.Uuid(stmID).String())
 	}
 
 	// -------------------------------------
@@ -233,6 +234,9 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if stm.IsMoLogger() && stm.StatementType == "Load" && len(stm.Statement) > 128 {
 		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-70:]
 	}
+	if ses.disableAgg {
+		stm.DisableAgg()
+	}
 	stm.Report(ctx) // pls keep it simple: Only call Report twice at most.
 	ses.SetTStmt(stm)
 
@@ -252,6 +256,9 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	} else {
 		sqlType = constant.ExternSql
 	}
+	// [!WARNING]
+	// after Call EndStatement, MUST reset ses.tStmt = nil
+	// avoid call EndStatement again in logStatementStringStatus()
 	if len(envStmt) > 0 {
 		for i, sql := range envStmt {
 			if i < len(sqlTypes) {
@@ -270,6 +277,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 		}
 		ses.tStmt.EndStatement(ctx, retErr, 0, 0, 0)
 	}
+	ses.SetTStmt(nil) // see [!WARNING] above
 
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
@@ -335,39 +343,22 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 
 	txnOp := ses.GetTxnHandler().GetTxn()
 	ctx := execCtx.reqCtx
-	// get db info as current account
-	if db, err = ses.GetTxnHandler().GetStorage().Database(ctx, stmt.DbName, txnOp); err != nil {
+
+	subMeta, err := getSubscriptionMeta(ctx, stmt.DbName, ses, txnOp)
+	if err != nil {
 		return err
 	}
 
-	if db.IsSubscription(ctx) {
-		// get global unique (pubAccountName, pubName)
-		var pubAccountName, pubName string
-		if _, pubAccountName, pubName, err = getSubInfoFromSql(ctx, ses, db.GetCreateSql(ctx)); err != nil {
+	if subMeta == nil {
+		// get db info as current account
+		if db, err = ses.GetTxnHandler().GetStorage().Database(ctx, stmt.DbName, txnOp); err != nil {
 			return err
 		}
-
-		bh := GetRawBatchBackgroundExec(ctx, ses)
-		defer bh.Close()
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
-		var pubAccountId int32
-		if pubAccountId = getAccountIdByName(ctx, ses, bh, pubAccountName); pubAccountId == -1 {
-			return moerr.NewInternalError(ctx, "publish account does not exist")
-		}
-
-		// get publication record
-		var pubs []*published
-		if pubs, err = getPubs(ctx, ses, bh, pubAccountId, pubAccountName, pubName, ses.GetTenantName()); err != nil {
-			return err
-		}
-		if len(pubs) != 1 {
-			return moerr.NewInternalError(ctx, "no satisfied publication")
-		}
-
+	} else {
 		// as pub account
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(pubAccountId))
-		// get db as pub account
-		if db, err = ses.GetTxnHandler().GetStorage().Database(ctx, pubs[0].pubDatabase, txnOp); err != nil {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(subMeta.AccountId))
+		// get db info via subMeta
+		if db, err = ses.GetTxnHandler().GetStorage().Database(ctx, subMeta.DbName, txnOp); err != nil {
 			return err
 		}
 	}
@@ -393,6 +384,11 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	mrs := ses.GetMysqlResultSet()
 	for _, row := range ses.data {
 		tableName := string(row[0].([]byte))
+		// check if the table is in the subscription meta
+		if subMeta != nil && !pubsub.InSubMetaTables(subMeta, tableName) {
+			continue
+		}
+
 		r, err := db.Relation(ctx, tableName, nil)
 		if err != nil {
 			return err
@@ -441,39 +437,38 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) erro
 		n,
 		tTime)
 
+	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
+	stats.AddOutputTimeConsumption(tTime)
 	return nil
 }
 
-func doUse(ctx context.Context, ses FeSession, db string) error {
+func doUse(ctx context.Context, ses FeSession, db string) (err error) {
 	defer RecordStatementTxnID(ctx, ses)
-	txnHandler := ses.GetTxnHandler()
-	var txn TxnOperator
-	var err error
-	var dbMeta engine.Database
 
 	// In order to be compatible with various GUI clients and BI tools, lower case db name if it's a mysql system db
 	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(db)) {
 		db = strings.ToLower(db)
 	}
 
-	txn = txnHandler.GetTxn()
+	var dbMeta engine.Database
+	txnHandler := ses.GetTxnHandler()
+	txn := txnHandler.GetTxn()
 	//TODO: check meta data
 	if dbMeta, err = getGlobalPu().StorageEngine.Database(ctx, db, txn); err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(ctx, db)
 	}
+
 	if dbMeta.IsSubscription(ctx) {
-		_, err = checkSubscriptionValid(ctx, ses, dbMeta.GetCreateSql(ctx))
-		if err != nil {
-			return err
+		if _, err = checkSubscriptionValid(ctx, ses, db); err != nil {
+			return
 		}
 	}
 	oldDB := ses.GetDatabaseName()
 	ses.SetDatabaseName(db)
 
 	ses.Debugf(ctx, "User %s change database from [%s] to [%s]", ses.GetUserName(), oldDB, ses.GetDatabaseName())
-
-	return nil
+	return
 }
 
 func handleChangeDB(ses FeSession, execCtx *ExecCtx, db string) error {
@@ -707,6 +702,13 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				return err
 			}
 			runtime.ServiceRuntime(ses.service).SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
+		} else if name == "disable_agg_statement" {
+			err = setVarFunc(assign.System, assign.Global, name, value, sql)
+			if err != nil {
+				return err
+			}
+			boolVal := InitSystemVariableBoolType("_")
+			ses.disableAgg = boolVal.IsTrue(value)
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
@@ -935,6 +937,7 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 		ses:    ses,
 		reqCtx: execCtx.reqCtx,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(ses, &tempExecCtx, &UserInput{sql: sql})
 }
 
@@ -1084,13 +1087,6 @@ func createPrepareStmt(
 			comp.Release()
 			comp = nil
 		}
-
-		// @xxx when refactor prepare finish, remove this code
-		if comp != nil {
-			comp.SetIsPrepare(false)
-			comp.Release()
-			comp = nil
-		}
 	}
 
 	prepareStmt := &PrepareStmt{
@@ -1182,8 +1178,7 @@ func handleAlterPitr(ses *Session, execCtx *ExecCtx, ap *tree.AlterPitr) error {
 }
 
 func handleRestorePitr(ses *Session, execCtx *ExecCtx, rp *tree.RestorePitr) error {
-	//return doRestorePitr(execCtx.reqCtx, ses, rp)
-	return nil
+	return doRestorePitr(execCtx.reqCtx, ses, rp)
 }
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
@@ -1612,12 +1607,12 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 	return err
 }
 
+func handleShowPublications(ses FeSession, execCtx *ExecCtx, sp *tree.ShowPublications) error {
+	return doShowPublications(execCtx.reqCtx, ses.(*Session), sp)
+}
+
 func handleShowSubscriptions(ses FeSession, execCtx *ExecCtx, ss *tree.ShowSubscriptions) error {
-	err := doShowSubscriptions(execCtx.reqCtx, ses.(*Session), ss)
-	if err != nil {
-		return err
-	}
-	return err
+	return doShowSubscriptions(execCtx.reqCtx, ses.(*Session), ss)
 }
 
 func doShowBackendServers(ses *Session, execCtx *ExecCtx) error {
@@ -1720,13 +1715,18 @@ func handleEmptyStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.EmptyStmt) erro
 
 func GetExplainColumns(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
 	cols := []*plan2.ColDef{
-		{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
+		{
+			Typ:        plan2.Type{Id: int32(types.T_varchar)},
+			Name:       strings.ToLower(explainColName),
+			OriginName: explainColName,
+		},
 	}
 	columns := make([]interface{}, len(cols))
 	var err error = nil
 	for i, col := range cols {
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
+		c.SetOrgName(col.GetOriginCaseName())
 		err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
 		if err != nil {
 			return nil, nil, err
@@ -1862,6 +1862,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 		}
 	}
 	if ret != nil {
+		ret.IsPrepare = isPrepareStmt
 		if ses != nil && ses.GetTenantInfo() != nil && !ses.IsBackgroundSession() {
 			err = authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, ret)
 			if err != nil {
@@ -2293,6 +2294,7 @@ func executeStmtWithResponse(ses *Session,
 			ses:    ses,
 			reqCtx: execCtx.reqCtx,
 		}
+		defer tempExecCtx.Close()
 		if err = doComQuery(ses, &tempExecCtx, &UserInput{sql: sql}); err != nil {
 			return err
 		}
@@ -2664,6 +2666,16 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	ses.SetSql(input.getSql())
 	input.genHash()
 
+	sqlLen := len(input.getSql())
+	if sqlLen != 0 {
+		v2.TotalSQLLengthHistogram.Observe(float64(sqlLen))
+		if strings.HasPrefix(input.sql, "LOAD DATA INLINE") {
+			v2.LoadDataInlineSQLLengthHistogram.Observe(float64(sqlLen))
+		} else {
+			v2.OtherSQLLengthHistogram.Observe(float64(sqlLen))
+		}
+	}
+
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
 	userNameOnly := rootName
@@ -2677,7 +2689,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	ses.tStmt = nil
 
 	proc := ses.proc
-	proc.Ctx = execCtx.reqCtx
+	proc.ReplaceTopCtx(execCtx.reqCtx)
 
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
@@ -2779,6 +2791,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.stmt = nil
 		execCtx.cw = nil
 		execCtx.cws = nil
+		execCtx.runner = nil
 		if !Cached {
 			for i := 0; i < len(cws); i++ {
 				cws[i].Free()
@@ -3094,7 +3107,7 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 	sql = fmt.Sprintf("%sexecute %s", prefix, stmtName)
 
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
-	err = ses.GetResponser().MysqlRrWr().ParseExecuteData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	err = ses.GetResponser().MysqlRrWr().ParseExecuteData(reqCtx, ses.GetProc(), preStmt, data, pos)
 	if err != nil {
 		return "", nil, err
 	}
@@ -3125,7 +3138,7 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 
-	err = ses.GetResponser().MysqlRrWr().ParseSendLongData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	err = ses.GetResponser().MysqlRrWr().ParseSendLongData(reqCtx, ses.GetProc(), preStmt, data, pos)
 	if err != nil {
 		return err
 	}
@@ -3176,6 +3189,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	case types.T_array_float32, types.T_array_float64:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_datalink:
+		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
 	case types.T_binary:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_varbinary:
@@ -3203,6 +3218,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_Blockid:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_enum:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_Rowid:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	default:
 		return moerr.NewInternalError(ctx, "RunWhileSend : unsupported type %d", engineType)

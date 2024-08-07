@@ -33,6 +33,10 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 		return vm.CancelResult, err
 	}
 
+	anal := proc.GetAnalyze(tableFunction.GetIdx(), tableFunction.GetParallelIdx(), tableFunction.GetParallelMajor())
+	anal.Start()
+	defer anal.Stop()
+
 	tblArg := tableFunction
 	var (
 		f bool
@@ -40,14 +44,11 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 	)
 	idx := tableFunction.GetIdx()
 
-	result, err := tableFunction.GetChildren(0).Call(proc)
+	result, err := vm.ChildrenCall(tableFunction.GetChildren(0), proc, anal)
 	if err != nil {
 		return result, err
 	}
-
-	anal := proc.GetAnalyze(tableFunction.GetIdx(), tableFunction.GetParallelIdx(), tableFunction.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	anal.Input(result.Batch, tableFunction.IsFirst)
 
 	switch tblArg.FuncName {
 	case "unnest":

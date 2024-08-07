@@ -3809,7 +3809,7 @@ func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
 		WithAccountID(proc.GetSessionInfo().AccountId)
-	return exec.Exec(proc.Ctx, sql, opts)
+	return exec.Exec(proc.GetTopContext(), sql, opts)
 }
 
 /*
@@ -3837,8 +3837,8 @@ type FkReferDef struct {
 	Db       string //fk database name
 	Tbl      string //fk table name
 	Name     string //fk constraint name
-	Col      string //fk column name
-	ReferCol string //referenced column name
+	Col      string //fk column name, letter case: lower
+	ReferCol string //referenced column name, letter case: lower
 	OnDelete string //on delete action
 	OnUpdate string //on update action
 }

@@ -450,6 +450,7 @@ func init() {
 		"terminated":                 TERMINATED,
 		"task":                       TASK,
 		"text":                       TEXT,
+		"datalink":                   DATALINK,
 		"temporary":                  TEMPORARY,
 		"than":                       THAN,
 		"then":                       THEN,
@@ -631,5 +632,6 @@ func init() {
 		"mo_ts":                      MO_TS,
 		"restore":                    RESTORE,
 		"pitr":                       PITR,
+		"cdc":                        CDC,
 	}
 }

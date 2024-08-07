@@ -30,6 +30,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -45,12 +47,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"go.uber.org/zap"
 )
 
 type CloseFlag struct {
@@ -306,6 +306,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 		reqCtx: execCtx.reqCtx,
 		ses:    ses,
 	}
+	defer tempExecCtx.Close()
 	err = executeStmtInSameSession(tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect)
 	if err != nil {
 		return nil, err
@@ -373,9 +374,10 @@ func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interfa
 		}
 		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
 		// Here the evalExpr may execute some function that needs engine.Engine.
-		ses.txnCompileCtx.GetProcess().Ctx = attachValue(ses.txnCompileCtx.GetProcess().Ctx,
-			defines.EngineKey{},
-			ses.GetTxnHandler().GetStorage())
+		ses.txnCompileCtx.GetProcess().ReplaceTopCtx(
+			attachValue(ses.txnCompileCtx.GetProcess().GetTopContext(),
+				defines.EngineKey{},
+				ses.GetTxnHandler().GetStorage()))
 
 		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 		if err != nil {
@@ -417,7 +419,7 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, e
 		return vector.MustFixedCol[float32](vec)[0], nil
 	case types.T_float64:
 		return vector.MustFixedCol[float64](vec)[0], nil
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		return vec.GetStringAt(0), nil
 	case types.T_array_float32:
 		return vector.GetArrayAt[float32](vec, 0), nil
@@ -435,7 +437,7 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, e
 		return byteJson.String(), nil
 	case types.T_uuid:
 		val := vector.MustFixedCol[types.Uuid](vec)[0]
-		return val.ToString(), nil
+		return val.String(), nil
 	case types.T_date:
 		val := vector.MustFixedCol[types.Date](vec)[0]
 		return val.String(), nil
@@ -477,9 +479,7 @@ func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement,
 	var stmtStr string
 	stm := ses.GetStmtInfo()
 	if stm == nil {
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
-		stmt.Format(fmtCtx)
-		stmtStr = fmtCtx.String()
+		stmtStr = ses.GetSqlOfStmt()
 	} else {
 		stmtStr = stm.Statement
 	}
@@ -774,7 +774,35 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					vData[rowIdx] = fmt.Sprintf("%v", row[colIdx])
 				}
 			}
-			err := vector.AppendStringList(bat.Vecs[colIdx], vData, nil, pool)
+			if err = vector.AppendStringList(bat.Vecs[colIdx], vData, nil, pool); err != nil {
+				return nil, nil, err
+			}
+		case types.T_text:
+			vData := make([][]byte, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				if val, ok := row[colIdx].([]byte); ok {
+					vData[rowIdx] = val
+				} else {
+					vData[rowIdx] = ([]byte)(fmt.Sprintf("%v", row[colIdx]))
+				}
+			}
+			if err = vector.AppendBytesList(bat.Vecs[colIdx], vData, nil, pool); err != nil {
+				return nil, nil, err
+			}
+		case types.T_int8:
+			vData := make([]int8, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(int8)
+			}
+			err := vector.AppendFixedList[int8](bat.Vecs[colIdx], vData, nil, pool)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -955,6 +983,16 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 				Id: int32(types.T_varchar),
 			}
 			tType = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+		case defines.MYSQL_TYPE_TEXT:
+			pType = plan.Type{
+				Id: int32(types.T_text),
+			}
+			tType = types.New(types.T_text, types.MaxVarcharLen, 0)
+		case defines.MYSQL_TYPE_TINY:
+			pType = plan.Type{
+				Id: int32(types.T_int8),
+			}
+			tType = types.New(types.T_int8, 0, 0)
 		case defines.MYSQL_TYPE_SHORT:
 			pType = plan.Type{
 				Id: int32(types.T_int16),
@@ -1273,25 +1311,25 @@ func splitKey(key string) (string, string) {
 	return parts[0], ""
 }
 
-type topsort struct {
+type toposort struct {
 	next map[string][]string
 }
 
-func (g *topsort) addVertex(v string) {
+func (g *toposort) addVertex(v string) {
 	if _, ok := g.next[v]; ok {
 		return
 	}
 	g.next[v] = make([]string, 0)
 }
 
-func (g *topsort) addEdge(from, to string) {
+func (g *toposort) addEdge(from, to string) {
 	if _, ok := g.next[from]; !ok {
 		g.next[from] = make([]string, 0)
 	}
 	g.next[from] = append(g.next[from], to)
 }
 
-func (g *topsort) sort() (ans []string, err error) {
+func (g *toposort) sort() (ans []string, err error) {
 	inDegree := make(map[string]uint)
 	for u := range g.next {
 		inDegree[u] = 0

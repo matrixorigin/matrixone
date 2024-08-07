@@ -77,6 +77,9 @@
 # pkg/defines
 /pkg/defines @daviszhen
 
+# pkg/embed
+/pkg/embed @zhangxu19830126
+
 # pkg/tnservice
 /pkg/tnservice @zhangxu19830126 @XuPeng-SH
 
@@ -95,7 +98,7 @@
 # pkg/lockservice
 /pkg/lockservice @zhangxu19830126
 
-# pkg/shardservice 
+# pkg/shardservice
 /pkg/shardservice @zhangxu19830126
 
 # pkg/logservice
@@ -128,7 +131,7 @@
 /pkg/sort @aunjgr @m-schen
 
 # pkg/bootstrap
-/pkg/bootstrap @daviszhen @zhangxu19830126 @qingxinhome
+/pkg/bootstrap @daviszhen @zhangxu19830126 @qingxinhome @LeftHandCold
 
 # pkg/sql
 /pkg/sql @aunjgr
@@ -191,6 +194,7 @@
 /pkg/vm/engine @XuPeng-SH
 /pkg/vm/pipeline @m-schen
 /pkg/vm/process @m-schen @XuPeng-SH @aunjgr
+/pkg/vm/message @badboynt1
 /pkg/vm/engine/disttae @XuPeng-SH @triump2020
 /pkg/vm/engine/disttae/logtailreplay @reusee @triump2020
 /pkg/vm/engine/tae @XuPeng-SH

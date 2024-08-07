@@ -381,7 +381,7 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 	}
 	cn.connID = cid
 
-	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", e.connID), resp)
+	return c.connAndExec(cn, e.stmt, resp)
 }
 
 // handleSetVar handles the set variable event.
@@ -392,6 +392,15 @@ func (c *clientConn) handleSetVar(e *setVarEvent) error {
 
 // Close implements the ClientConn interface.
 func (c *clientConn) Close() error {
+	if c.mysqlProto != nil {
+		tcpConn := c.mysqlProto.GetTcpConnection()
+		if tcpConn != nil {
+			if err := tcpConn.Close(); err != nil {
+				c.log.Error("failed to close tcp connection", zap.Error(err))
+			}
+		}
+		c.mysqlProto.Close()
+	}
 	return c.queryClient.Close()
 }
 
