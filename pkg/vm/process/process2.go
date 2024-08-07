@@ -175,8 +175,14 @@ func GetQueryCtxFromProc(proc *Process) (context.Context, context.CancelFunc) {
 // It's a very dangerous operation, should be used with caution.
 // And we only use it for the new built pipeline by the pipeline's ParallelRun method.
 func ReplacePipelineCtx(proc *Process, ctx context.Context, cancel context.CancelFunc) {
-	proc.Base.sqlContext.queryContext = ctx
-	proc.Base.sqlContext.queryCancel = cancel
+	proc.Ctx = ctx
+	proc.Cancel = cancel
+
+	mp := proc.Mp()
+	for _, sender := range proc.Reg.MergeReceivers {
+		sender.Ctx = proc.Ctx
+		sender.CleanChannel(mp)
+	}
 }
 
 // GetQueryContextError return error once top context or query context with error.
