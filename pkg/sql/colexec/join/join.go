@@ -41,21 +41,25 @@ func (innerJoin *InnerJoin) OpType() vm.OpType {
 }
 
 func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
-	innerJoin.ctr = new(container)
-	innerJoin.ctr.vecs = make([]*vector.Vector, len(innerJoin.Conditions[0]))
-	innerJoin.ctr.evecs = make([]evalVector, len(innerJoin.Conditions[0]))
-	for i := range innerJoin.ctr.evecs {
-		innerJoin.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, innerJoin.Conditions[0][i])
-		if err != nil {
-			return err
+	if innerJoin.ctr.vecs == nil {
+		innerJoin.ctr.vecs = make([]*vector.Vector, len(innerJoin.Conditions[0]))
+	}
+
+	if innerJoin.ctr.evecs == nil {
+		innerJoin.ctr.evecs = make([]evalVector, len(innerJoin.Conditions[0]))
+		for i := range innerJoin.ctr.evecs {
+			innerJoin.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, innerJoin.Conditions[0][i])
+			if err != nil {
+				return err
+			}
 		}
 	}
 
-	if innerJoin.Cond != nil {
+	if innerJoin.Cond != nil && innerJoin.ctr.expr == nil {
 		innerJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, innerJoin.Cond)
 	}
 
-	if innerJoin.ProjectList != nil {
+	if innerJoin.ProjectList != nil && innerJoin.ProjectExecutors == nil {
 		err = innerJoin.PrepareProjection(proc)
 	}
 	return err
@@ -69,7 +73,7 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := innerJoin.ctr
+	ctr := &innerJoin.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
@@ -141,7 +145,7 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (innerJoin *InnerJoin) build(anal process.Analyze, proc *process.Process) {
-	ctr := innerJoin.ctr
+	ctr := &innerJoin.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
 	ctr.mp = message.ReceiveJoinMap(innerJoin.JoinMapTag, innerJoin.IsShuffle, innerJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
