@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,6 +96,29 @@ func TestCall(t *testing.T) {
 	proc.Ctx = ctx
 	proc.Base.TxnOperator = txnOperator
 
+	reader := getReader(t, ctrl)
+	arg := &TableScan{
+		Reader: reader,
+	}
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+	_, err = arg.Call(proc)
+	require.NoError(t, err)
+
+	arg.Reset(proc, false, nil)
+
+	reader = getReader(t, ctrl)
+	arg.Reader = reader
+	err = arg.Prepare(proc)
+	require.NoError(t, err)
+	_, err = arg.Call(proc)
+	require.NoError(t, err)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func getReader(t *testing.T, ctrl *gomock.Controller) engine.Reader {
 	reader := mock_frontend.NewMockReader(ctrl)
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, expr *plan.Expr, b, c interface{}) (*batch.Batch, error) {
 		bat := batch.NewWithSize(3)
@@ -121,15 +145,6 @@ func TestCall(t *testing.T) {
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
-	arg := &TableScan{
-		Reader: reader,
-	}
 
-	err := arg.Prepare(proc)
-	require.NoError(t, err)
-	_, err = arg.Call(proc)
-	require.NoError(t, err)
-	arg.Free(proc, false, nil)
-	proc.Free()
-	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+	return reader
 }

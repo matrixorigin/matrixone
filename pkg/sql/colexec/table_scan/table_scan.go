@@ -39,13 +39,11 @@ func (tableScan *TableScan) OpType() vm.OpType {
 }
 
 func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
-	tableScan.ctr = new(container)
 	if tableScan.TopValueMsgTag > 0 {
 		tableScan.ctr.msgReceiver = message.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress(), proc.GetMessageBoard())
 	}
-	if tableScan.ProjectList != nil {
-		err = tableScan.PrepareProjection(proc)
-	}
+	err = tableScan.PrepareProjection(proc)
+	//todo need to init buf here(when refactor table_scan & reader finished)
 	return
 }
 
@@ -90,7 +88,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if tableScan.ctr.buf != nil {
-		proc.PutBatch(tableScan.ctr.buf)
+		tableScan.ctr.buf.Clean(proc.GetMPool())
 		tableScan.ctr.buf = nil
 	}
 

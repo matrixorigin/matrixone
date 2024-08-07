@@ -32,7 +32,7 @@ type container struct {
 	msgReceiver  *message.MessageReceiver
 }
 type TableScan struct {
-	ctr            *container
+	ctr            container
 	TopValueMsgTag int32
 	Reader         engine.Reader
 	// letter case: origin
@@ -75,28 +75,35 @@ func (tableScan *TableScan) Release() {
 }
 
 func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	tableScan.Free(proc, pipelineFailed, err)
+	anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
+	allocSize := int64(0)
+	// we need refactor table_scan & reader to reuse this buf
+	// maybe make reader reuse buf. or reader return a buf and table_scan just send it to next Operator
+	if tableScan.ctr.buf != nil {
+		tableScan.ctr.buf.Clean(proc.Mp())
+		tableScan.ctr.buf = nil
+	}
+	allocSize += int64(tableScan.ctr.maxAllocSize)
+	if tableScan.ctr.msgReceiver != nil {
+		tableScan.ctr.msgReceiver.Free()
+		tableScan.ctr.msgReceiver = nil
+	}
+	allocSize += tableScan.ProjectAllocSize
+	tableScan.ResetProjection(proc)
+	anal.Alloc(allocSize)
+
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
-	anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
-	allocSize := int64(0)
-	if tableScan.ctr != nil {
-		if tableScan.ctr.buf != nil {
-			tableScan.ctr.buf.Clean(proc.Mp())
-			tableScan.ctr.buf = nil
-		}
-		allocSize += int64(tableScan.ctr.maxAllocSize)
-		if tableScan.ctr.msgReceiver != nil {
-			tableScan.ctr.msgReceiver.Free()
-			tableScan.ctr.msgReceiver = nil
-		}
-		tableScan.ctr = nil
+	if tableScan.ctr.buf != nil {
+		tableScan.ctr.buf.Clean(proc.Mp())
+		tableScan.ctr.buf = nil
 	}
-
+	if tableScan.ctr.msgReceiver != nil {
+		tableScan.ctr.msgReceiver.Free()
+		tableScan.ctr.msgReceiver = nil
+	}
 	if tableScan.ProjectList != nil {
-		allocSize += tableScan.ProjectAllocSize
 		tableScan.FreeProjection(proc)
 	}
-	anal.Alloc(allocSize)
 }
