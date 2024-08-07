@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -1886,7 +1887,10 @@ func updatePartitionOfPush(
 	doneMutate()
 
 	//cdc replay logtail
-	if e.IsCdcEngine() {
+	if e.IsCdcEngine() &&
+		(tblId != catalog.MO_DATABASE_ID &&
+			tblId != catalog.MO_TABLES_ID &&
+			tblId != catalog.MO_COLUMNS_ID) {
 		_ = cdcReplayLogtailUnlock(
 			ctx,
 			e,
@@ -1955,12 +1959,13 @@ func cdcReplayLogtailUnlock(
 	//!!!NOTE: Cdc ignore updating duration on the partition
 
 	//step2: deliver the partition state to the cdc module
-	//TODO: complement heatbeat
+	//TODO: complement heartbeat
 	schemaCache := e.GetLatestCatalogCache()
+	schemaCache.PrintTables(math.MaxUint64)
 	tblItem := schemaCache.GetTableById(uint32(tableInfo.AccountId), dbId, tblId)
 	if tblItem == nil {
-		return moerr.NewInternalError(ctx, "no table %v:%v %v:%v in catalog cache", "",
-			tableInfo.Name, dbId, tblId)
+		return moerr.NewInternalError(ctx, "no table accountid %v %v:%v %v:%v in catalog cache", "",
+			tableInfo.AccountId, tableInfo.Name, dbId, tblId)
 	}
 	tblCtx := TableCtx{
 		table:   tableInfo.Name,

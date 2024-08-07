@@ -38,6 +38,8 @@ func RunDecoder(
 			if inQueue.Size() != 0 {
 				head := inQueue.Front()
 				inQueue.Pop()
+				fmt.Fprintln(os.Stderr, "^^^^^", "get ps of",
+					head.Key.Db(), head.Key.Table(), head.Key.DBId(), head.Key.TableId())
 				res := codec.Decode(ctx, head.Key, head.Value)
 				outQueue.Push(tools.NewPair[*disttae.TableCtx, *DecoderOutput](head.Key, res))
 			} else {
@@ -60,9 +62,11 @@ func RunSinker(
 			if inQueue.Size() != 0 {
 				head := inQueue.Front()
 				inQueue.Pop()
+				fmt.Fprintln(os.Stderr, "^^^^^", "get decoded sqls of",
+					head.Key.Db(), head.Key.Table(), head.Key.DBId(), head.Key.TableId())
 				err := sinker.Sink(ctx, head.Key, head.Value)
 				if err != nil {
-					fmt.Fprintln(os.Stderr, "sinker.Sink error", err)
+					fmt.Fprintln(os.Stderr, "consoleSinker.Sink error", err)
 				}
 			} else {
 				time.Sleep(time.Millisecond * 100)

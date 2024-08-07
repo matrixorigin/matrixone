@@ -271,9 +271,9 @@ func convertColIntoSql(
 		types.T_binary,
 		types.T_varbinary,
 		types.T_datalink:
-		value := data.(string)
+		value := data.([]byte)
 		sqlBuff = appendByte(sqlBuff, '"')
-		sqlBuff = appendString(sqlBuff, value)
+		sqlBuff = appendBytes(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '"')
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output

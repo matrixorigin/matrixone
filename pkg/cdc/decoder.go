@@ -25,6 +25,7 @@ import (
 	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -43,19 +44,24 @@ func NewDecoder() Decoder {
 	return &decoder{}
 }
 
-func (m *decoder) Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input *disttae.DecoderInput) *DecoderOutput {
+func (m *decoder) Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input *disttae.DecoderInput) (out *DecoderOutput) {
 	//parallel step1:decode rows
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	err := ants.Submit(func() {
 		defer wg.Done()
 		it := input.State().NewRowsIterInCdc()
-		decodeRows(ctx, cdcCtx, input.TS(), it)
+		rows, err := decodeRows(ctx, cdcCtx, input.TS(), it)
+		if err != nil {
+			return
+		}
+		out.sqlOfRows.Store(rows)
 		defer it.Close()
 	})
 	if err != nil {
 		panic(err)
 	}
+	//TODO: objects
 	//parallel step2:decode objects
 	//wg.Add(1)
 	//err = ants.Submit(func() {
@@ -74,6 +80,7 @@ func (m *decoder) Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input *d
 	//if err != nil {
 	//	panic(err)
 	//}
+	wg.Wait()
 	return nil
 }
 
@@ -122,7 +129,7 @@ func decodeRows(
 		sbuf.WriteString(pkCol.Name)
 	}
 	sbuf.WriteByte(')')
-	deletePrefix := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s IN ", cdcCtx.Db(), cdcCtx.Table(), sbuf.String())
+	deletePrefix := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s IN ( ", cdcCtx.Db(), cdcCtx.Table(), sbuf.String())
 
 	//TODO: complement the
 	firstInsertRow, firstDeleteRow := true, true
@@ -149,7 +156,7 @@ func decodeRows(
 			//need primary key only
 			//if the schema does not have the primary key,
 			//it also has the fake primary key
-			//end insert sql, first
+			//end insert sql first
 			if len(insertBuff) != 0 {
 				res = append(res, copyBytes(insertBuff))
 				firstInsertRow = true
@@ -162,17 +169,41 @@ func decodeRows(
 			}
 
 			if !firstDeleteRow {
-				//TODO:
+				deleteBuff = appendByte(deleteBuff, ',')
 			} else {
 				firstDeleteRow = false
 			}
 
-			//TODO:
+			//decode primary key col from composited pk col
+			comPkCol := row[2]
+			pkTuple, pkTypes, err := types.UnpackWithSchema(comPkCol.([]byte))
+			if err != nil {
+				return nil, err
+			}
+			deleteBuff = appendByte(deleteBuff, '(')
+			for pkIdx, pkEle := range pkTuple {
+				//
+				if pkIdx > 0 {
+					deleteBuff = appendByte(deleteBuff, ',')
+				}
+				pkColIdx := tableDef.Pkey.Cols[pkIdx]
+				pkCol := tableDef.Cols[pkColIdx]
+				if pkTypes[pkIdx] != types.T(pkCol.Typ.Id) {
+					return nil, moerr.NewInternalError(ctx, "different pk col Type %v %v", pkTypes[pkIdx], pkCol.Typ.Id)
+				}
+				ttype := types.Type{
+					Oid:   types.T(pkCol.Typ.Id),
+					Width: pkCol.Typ.Width,
+					Scale: pkCol.Typ.Scale,
+				}
+				deleteBuff, err = convertColIntoSql(ctx, pkEle, &ttype, deleteBuff)
+			}
+			deleteBuff = appendByte(deleteBuff, ')')
 		} else {
 			//to insert
 			//just fetch all columns.
 			//do not distinguish primary keys first.
-			//end delete sql, first
+			//end delete sql first
 			if len(deleteBuff) != 0 {
 				deleteBuff = appendString(deleteBuff, ")")
 				res = append(res, copyBytes(deleteBuff))
@@ -206,10 +237,16 @@ func decodeRows(
 			}
 			insertBuff = appendString(insertBuff, ") ")
 		}
-
 	}
-	//TODO:end the last one delete or insert
-	return nil, nil
+	if len(insertBuff) != 0 {
+		res = append(res, copyBytes(insertBuff))
+	}
+
+	if len(deleteBuff) != 0 {
+		deleteBuff = appendString(deleteBuff, ")")
+		res = append(res, copyBytes(deleteBuff))
+	}
+	return res, nil
 }
 
 func decodeObjects(

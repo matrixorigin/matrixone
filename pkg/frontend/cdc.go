@@ -490,7 +490,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	//init cdc decoder or sinker
 	go cdc2.RunDecoder(ctx, inQueue, outQueue, cdc2.NewDecoder())
 
-	go cdc2.RunSinker(ctx, outQueue, cdc2.NewSinker())
+	go cdc2.RunSinker(ctx, outQueue, cdc2.NewConsoleSinker())
 
 	err = disttae.InitLogTailPushModel(ctx, cdcEngine, cdc.cdcTsWaiter)
 	if err != nil {

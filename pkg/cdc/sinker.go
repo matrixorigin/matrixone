@@ -16,19 +16,32 @@ package cdc
 
 import (
 	"context"
+	"fmt"
+	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
-var _ Sinker = new(sinker)
+var _ Sinker = new(consoleSinker)
 
-type sinker struct{}
+type consoleSinker struct{}
 
-func NewSinker() Sinker {
-	return &sinker{}
+func NewConsoleSinker() Sinker {
+	return &consoleSinker{}
 }
 
-func (s *sinker) Sink(ctx context.Context, cdcCtx *disttae.TableCtx, data *DecoderOutput) error {
+func (s *consoleSinker) Sink(ctx context.Context, cdcCtx *disttae.TableCtx, data *DecoderOutput) error {
+	fmt.Fprintln(os.Stderr, "====console sinker====")
+	fmt.Fprintln(os.Stderr, cdcCtx.Db(), cdcCtx.DBId(), cdcCtx.Table(), cdcCtx.Table(), data.ts)
+	if value, ok := data.sqlOfRows.Load().([][]byte); !ok {
+		fmt.Fprintln(os.Stderr, "no sqlOfrows")
+	} else {
+		fmt.Fprintln(os.Stderr, "total rows sql", len(value))
+		for i, sqlBytes := range value {
+			fmt.Fprintln(os.Stderr, i, string(sqlBytes))
+		}
+	}
+
 	return nil
 }
 

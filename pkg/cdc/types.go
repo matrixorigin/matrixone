@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -33,7 +34,10 @@ Cdc process
 */
 
 type DecoderOutput struct {
-	ts timestamp.Timestamp
+	ts           timestamp.Timestamp
+	sqlOfRows    atomic.Value
+	sqlOfObjects atomic.Value
+	sqlOfDeletes atomic.Value
 }
 
 // Decoder convert binary data into sql parts
