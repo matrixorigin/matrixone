@@ -873,13 +873,11 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 			var wr *process.WaitRegister
 			if c.anal.qry.LoadTag {
 				wr = &process.WaitRegister{
-					Ctx: c.proc.Ctx,
-					Ch:  make(chan *process.RegisterMessage, ncpu),
+					Ch: make(chan *process.RegisterMessage, ncpu),
 				}
 			} else {
 				wr = &process.WaitRegister{
-					Ctx: c.proc.Ctx,
-					Ch:  make(chan *process.RegisterMessage, 1),
+					Ch: make(chan *process.RegisterMessage, 1),
 				}
 			}
 			c.appendStepRegs(s, nodeId, wr)
@@ -3250,6 +3248,10 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 }
 
 func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	rs := newScope(Merge)
+	rs.NodeInfo = getEngineNode(c)
+	rs.Proc = c.proc.NewNoContextChildProc(0)
+
 	receivers := make([]*process.WaitRegister, len(n.SourceStep))
 	for i, step := range n.SourceStep {
 		receivers[i] = c.getNodeReg(step, curNodeIdx)
@@ -3257,10 +3259,7 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
 		}
 	}
-
-	rs := newScope(Merge)
-	rs.NodeInfo = getEngineNode(c)
-	rs.Proc = c.proc.NewNoContextChildProc(len(receivers))
+	rs.Proc.Reg.MergeReceivers = receivers
 
 	currentFirstFlag := c.anal.isFirst
 	mergecteArg := mergecte.NewArgument()
@@ -3268,14 +3267,14 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	rs.setRootOperator(mergecteArg)
 	c.anal.isFirst = false
 
-	for _, r := range receivers {
-		r.Ctx = rs.Proc.Ctx
-	}
-	rs.Proc.Reg.MergeReceivers = receivers
 	return []*Scope{rs}, nil
 }
 
 func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	rs := newScope(Merge)
+	rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+	rs.Proc = c.proc.NewNoContextChildProc(0)
+
 	receivers := make([]*process.WaitRegister, len(n.SourceStep))
 	for i, step := range n.SourceStep {
 		receivers[i] = c.getNodeReg(step, curNodeIdx)
@@ -3283,9 +3282,7 @@ func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope
 			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
 		}
 	}
-	rs := newScope(Merge)
-	rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-	rs.Proc = c.proc.NewNoContextChildProc(len(receivers))
+	rs.Proc.Reg.MergeReceivers = receivers
 
 	currentFirstFlag := c.anal.isFirst
 	mergeRecursiveArg := mergerecursive.NewArgument()
@@ -3293,14 +3290,14 @@ func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope
 	rs.setRootOperator(mergeRecursiveArg)
 	c.anal.isFirst = false
 
-	for _, r := range receivers {
-		r.Ctx = rs.Proc.Ctx
-	}
-	rs.Proc.Reg.MergeReceivers = receivers
 	return []*Scope{rs}, nil
 }
 
 func (c *Compile) compileSinkScanNode(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	rs := newScope(Merge)
+	rs.NodeInfo = getEngineNode(c)
+	rs.Proc = c.proc.NewNoContextChildProc(0)
+
 	receivers := make([]*process.WaitRegister, len(n.SourceStep))
 	for i, step := range n.SourceStep {
 		receivers[i] = c.getNodeReg(step, curNodeIdx)
@@ -3308,9 +3305,7 @@ func (c *Compile) compileSinkScanNode(n *plan.Node, curNodeIdx int32) ([]*Scope,
 			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
 		}
 	}
-	rs := newScope(Merge)
-	rs.NodeInfo = getEngineNode(c)
-	rs.Proc = c.proc.NewNoContextChildProc(1)
+	rs.Proc.Reg.MergeReceivers = receivers
 
 	currentFirstFlag := c.anal.isFirst
 	mergeArg := merge.NewArgument().WithSinkScan(true)
@@ -3318,10 +3313,6 @@ func (c *Compile) compileSinkScanNode(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	rs.setRootOperator(mergeArg)
 	c.anal.isFirst = false
 
-	for _, r := range receivers {
-		r.Ctx = rs.Proc.Ctx
-	}
-	rs.Proc.Reg.MergeReceivers = receivers
 	return []*Scope{rs}, nil
 }
 
@@ -3697,19 +3688,20 @@ func (c *Compile) newJoinProbeScopeWithBidx(s *Scope) *Scope {
 	mergeOp.SetIsFirst(true)
 	rs.setRootOperator(mergeOp)
 	rs.Proc = s.Proc.NewContextChildProc(s.BuildIdx)
+
 	for i := 0; i < s.BuildIdx; i++ {
 		regTransplant(s, rs, i, i)
 	}
-
 	s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: s.Proc.Ctx,
 		Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
 	}
+	s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
+
 	rs.setRootOperator(
 		connector.NewArgument().
 			WithReg(s.Proc.Reg.MergeReceivers[0]),
 	)
-	s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
 	rs.IsEnd = true
 	return rs
 }
@@ -3741,7 +3733,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
 	mergeOp.SetIdx(c.anal.curNodeIdx)
 	mergeOp.SetIsFirst(c.anal.isFirst)
 	rs.setRootOperator(mergeOp)
-	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, (s.RootOp)), s.ShuffleIdx > 0, mcpu))
+	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, s.RootOp), s.ShuffleIdx > 0, mcpu))
 
 	rs.IsEnd = true
 
@@ -3751,8 +3743,10 @@ func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
 // Transplant the source's RemoteReceivRegInfos which index equal to sourceIdx to
 // target with new index targetIdx
 func regTransplant(source, target *Scope, sourceIdx, targetIdx int) {
-	target.Proc.Reg.MergeReceivers[targetIdx] = source.Proc.Reg.MergeReceivers[sourceIdx]
-	target.Proc.Reg.MergeReceivers[targetIdx].Ctx = target.Proc.Ctx
+	waitRegister := source.Proc.Reg.MergeReceivers[sourceIdx]
+	waitRegister.Ctx = target.Proc.Ctx
+	target.Proc.Reg.MergeReceivers[targetIdx] = waitRegister
+
 	i := 0
 	for i < len(source.RemoteReceivRegInfos) {
 		op := &source.RemoteReceivRegInfos[i]

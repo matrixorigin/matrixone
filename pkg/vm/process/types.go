@@ -88,7 +88,7 @@ func NewRegMsg(bat *batch.Batch) *RegisterMessage {
 
 // WaitRegister channel
 type WaitRegister struct {
-	// Ctx, context for data receiver.
+	// Ctx, context of data receiver.
 	Ctx context.Context
 	// Ch, data receiver channel, receiver will wait for data from this channel.
 	Ch chan *RegisterMessage
