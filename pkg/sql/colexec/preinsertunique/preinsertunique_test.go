@@ -22,15 +22,63 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+type preinsertuniqueTestCase struct {
+	arg *PreInsertUnique
+}
+
+var (
+	tcs []preinsertuniqueTestCase
+)
+
+func init() {
+	tcs = []preinsertuniqueTestCase{
+		{
+			arg: &PreInsertUnique{
+				ctr: container{},
+				PreInsertCtx: &plan.PreInsertUkCtx{
+					Columns:  []int32{1},
+					PkColumn: 0,
+					PkType:   plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
+					UkType:   plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
+				},
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
+				},
+			},
+		},
+		{
+			arg: &PreInsertUnique{
+				ctr: container{},
+				PreInsertCtx: &plan.PreInsertUkCtx{
+					Columns:  []int32{1, 2},
+					PkColumn: 0,
+					PkType:   plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
+					UkType:   plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
+				},
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
+				},
+			},
+		},
+	}
+}
 
 func TestPreInsertUnique(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -61,44 +109,29 @@ func TestPreInsertUnique(t *testing.T) {
 	// (1, 11, 23)
 	// (2, 22, 23)
 	// (3, 33, 23)
-	testBatch := &batch.Batch{
-		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{1, 2, 3}, nil),
-			testutil.MakeInt64Vector([]int64{11, 22, 33}, nil),
-			testutil.MakeInt64Vector([]int64{23, 23, 23}, nil),
-		},
-		Cnt: 1,
-	}
-	testBatch.SetRowCount(3)
 
-	argument := PreInsertUnique{
-		ctr: &container{},
-		PreInsertCtx: &plan.PreInsertUkCtx{
-			Columns:  []int32{1},
-			PkColumn: 0,
-			PkType:   plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
-			UkType:   plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
-		},
-		OperatorBase: vm.OperatorBase{
-			OperatorInfo: vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			},
-		},
+	var err error
+	for _, tc := range tcs {
+		resetChildren(tc.arg)
+		err = tc.arg.Prepare(proc)
+		require.NoError(t, err)
+		_, err = tc.arg.Call(proc)
+		require.NoError(t, err)
+		tc.arg.Reset(proc, false, nil)
+		resetChildren(tc.arg)
+		err = tc.arg.Prepare(proc)
+		require.NoError(t, err)
+		_, err = tc.arg.Call(proc)
+		require.NoError(t, err)
+		tc.arg.Free(proc, false, nil)
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
 	}
 
-	types.T_int64.ToType()
-	resetChildren(&argument, testBatch)
-	_, err := argument.Call(proc)
-	require.NoError(t, err)
 }
 
-func resetChildren(arg *PreInsertUnique, bat *batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: []*batch.Batch{bat},
-	}
-	valueScanArg.Prepare(nil)
-	arg.SetChildren(
-		[]vm.Operator{valueScanArg})
+func resetChildren(arg *PreInsertUnique) {
+	bat := colexec.MakeMockBatchs()
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
 }

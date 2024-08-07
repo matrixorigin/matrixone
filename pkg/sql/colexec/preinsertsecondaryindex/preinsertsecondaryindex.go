@@ -93,7 +93,8 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 	// colCount >= 2 is more common.
 	if colCount == 1 {
 		pos := secondaryColumnPos[indexColPos]
-		vec, bitMap, err = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)
+		vec := proc.GetVector(*inputBat.Vecs[pos].GetType())
+		bitMap, err = util.CompactSingleIndexCol(inputBat.Vecs[pos], vec, proc)
 		if err != nil {
 			return result, err
 		}
@@ -110,7 +111,8 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 	preInsertSecIdx.ctr.buf.SetVector(indexColPos, vec)
 	preInsertSecIdx.ctr.buf.SetRowCount(vec.Length())
 
-	vec, err = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
+	vec = proc.GetVector(*inputBat.Vecs[pkPos].GetType())
+	err = util.CompactPrimaryCol(inputBat.Vecs[pkPos], vec, bitMap, proc)
 	if err != nil {
 		return result, err
 	}
