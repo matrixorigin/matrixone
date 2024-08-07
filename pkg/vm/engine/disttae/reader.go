@@ -315,13 +315,6 @@ func (r *reader) Read(
 ) (bat *batch.Batch, err error) {
 
 	var dataState engine.DataState
-	freeBatch := func() {
-		if vp == nil {
-			bat.Clean(mp)
-		} else {
-			vp.PutBatch(bat)
-		}
-	}
 
 	start := time.Now()
 	defer func() {
@@ -344,7 +337,7 @@ func (r *reader) Read(
 		}
 	}
 
-	blkInfo, state, err := r.source.Next(
+	bat, blkInfo, state, err := r.source.Next(
 		ctx,
 		cols,
 		r.columns.colTypes,
@@ -352,20 +345,19 @@ func (r *reader) Read(
 		r.memFilter,
 		mp,
 		vp,
-		bat)
+	)
+
 	dataState = state
+
 	if err != nil {
-		freeBatch()
 		return
 	}
 	if state == engine.End {
-		freeBatch()
 		return nil, nil
 	}
 	if state == engine.InMem {
 		return
 	}
-	freeBatch()
 	//read block
 	filter := r.withFilterMixin.filterState.filter
 
