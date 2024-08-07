@@ -695,3 +695,45 @@ func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWra
 	}
 	return nil
 }
+
+// CastRangeValueUnit returns the value in hour unit according to the range value and unit
+func CastRangeValueUnit(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	values := vector.GenerateFunctionFixedTypeParameter[uint8](ivecs[0])
+	units := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		value, null := values.GetValue(i)
+		unit, unitNull := units.GetStrValue(i)
+		if null || unitNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			unitStr := functionUtil.QuickBytesToStr(unit)
+			res, err := castRangevalueUnitToHourUnit(value, unitStr)
+			if err != nil {
+				return err
+			}
+			if err := rs.Append(res, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func castRangevalueUnitToHourUnit(value uint8, unit string) (int64, error) {
+	switch unit {
+	case "h":
+		return int64(value), nil
+	case "d":
+		return int64(value) * 24, nil
+	case "mo":
+		return int64(value) * 24 * 30, nil
+	case "y":
+		return int64(value) * 24 * 365, nil
+	default:
+		return -1, moerr.NewInvalidArgNoCtx("invalid pitr time unit %s", unit)
+	}
+}
