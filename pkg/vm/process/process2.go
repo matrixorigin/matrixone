@@ -37,8 +37,8 @@ import (
 // NewTopProcess creates a new top process for the query.
 // It is used to store all the query information, including pool, txn, file service, lock service, etc.
 //
-// Each developer should watch that, do not call this function twice during the query execution.
-// Use Process.NewNoContextChildProc() to create a new child process instead.
+// One query should have only one top process, do not call this function twice during the query execution.
+// Use Process.DeriveProcess() to create a new process instead.
 //
 // The returning Process will hold a top context, which is session-client level context.
 // It can be modified by calling Process.ReplaceTopCtx() method, but should be careful to avoid modifying it after the query starts.
@@ -95,9 +95,11 @@ func NewTopProcess(
 	return proc
 }
 
-// NewNoContextChildProc make a new child process without the context field.
-// the context field is used for pipeline execution, which is only set when the pipeline is going to run.
-func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
+// DeriveProcess make a new process owns a same basic process.
+//
+// The new process has no pipeline context and cancel function, and it's not ready to run a pipeline.
+// The pipeline context should be set when the pipeline is going to run.
+func (proc *Process) DeriveProcess(dataEntryCount int) *Process {
 	child := &Process{
 		Base: proc.Base,
 	}
