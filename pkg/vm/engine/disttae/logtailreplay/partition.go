@@ -47,6 +47,7 @@ type Partition struct {
 }
 
 type TableInfo struct {
+	AccountId     uint64 //for cdc
 	ID            uint64
 	Name          string
 	PrimarySeqnum int

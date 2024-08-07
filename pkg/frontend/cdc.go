@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -470,6 +472,9 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+
+	inQueue := cdc2.NewMemQ[tools.Pair[*disttae.TableCtx, *disttae.DecoderInput]]()
+	outQueue := cdc2.NewMemQ[tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput]]()
 	cdc.cdcEngine = disttae.NewCdcEngine(
 		ctx,
 		cdc.cnUUID,
@@ -478,9 +483,14 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 		etlFs,
 		cdc.cdcTxnClient,
 		cdc.cdcTask.GetTaskId(),
+		inQueue,
 	)
-
 	cdcEngine := cdc.cdcEngine.(*disttae.CdcEngine)
+
+	//init cdc decoder or sinker
+	go cdc2.RunDecoder(ctx, inQueue, outQueue, cdc2.NewDecoder())
+
+	go cdc2.RunSinker(ctx, outQueue, cdc2.NewSinker())
 
 	err = disttae.InitLogTailPushModel(ctx, cdcEngine, cdc.cdcTsWaiter)
 	if err != nil {
@@ -534,7 +544,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	}
 
 	ch := make(chan int, 1)
-	cdcTbl := disttae.NewCdcRelation(db, table, dbId, tableId, cdcEngine)
+	cdcTbl := disttae.NewCdcRelation(db, table, cdc.cdcTask.AccountId, dbId, tableId, cdcEngine)
 	fmt.Fprintln(os.Stderr, "====>", "cdc SubscribeTable",
 		dbId, tableId, "before")
 	err = disttae.SubscribeCdcTable(ctx, cdcTbl, dbId, tableId)
@@ -547,8 +557,6 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 		dbId, tableId,
 	)
 	//TODO:
-	
-	
 
 	<-ch
 

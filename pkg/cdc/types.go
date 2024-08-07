@@ -15,8 +15,10 @@
 package cdc
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
 /*
@@ -30,54 +32,21 @@ Cdc process
 
 */
 
-type TableCtx struct {
-	db, table     string
-	dbId, tableId uint64
-}
-
-type DecoderInput struct {
-	ts    timestamp.Timestamp
-	state *logtailreplay.PartitionState
-}
-
 type DecoderOutput struct {
 	ts timestamp.Timestamp
 }
 
 // Decoder convert binary data into sql parts
 type Decoder interface {
-	Decode(
-		cdcCtx *TableCtx,
-		input *DecoderInput,
-	) *DecoderOutput
+	Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input *disttae.DecoderInput) *DecoderOutput
 }
 
 // Sinker manages and drains the sql parts
 type Sinker interface {
-	Sink(
-		cdcCtx *TableCtx,
-		data *DecoderOutput,
-	) error
+	Sink(ctx context.Context, cdcCtx *disttae.TableCtx, data *DecoderOutput) error
 }
 
 // Sink represents the destination mysql or matrixone
 type Sink interface {
-	Send(
-		data *DecoderOutput,
-	) error
-}
-
-// Queue
-// Two features:
-//
-//	persistence
-//	concurrent safe
-type Queue[T any] interface {
-	//Push saves the value before it returns
-	Push(T)
-	Pop()
-	Front() T
-	Back() T
-	Size() int
-	Empty() bool
+	Send(ctx context.Context, data *DecoderOutput) error
 }

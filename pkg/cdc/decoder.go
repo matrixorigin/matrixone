@@ -15,13 +15,23 @@
 package cdc
 
 import (
+	"context"
+	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/panjf2000/ants/v2"
 	"github.com/tidwall/btree"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+)
+
+const (
+	ROWS_REAL_DATA_OFFSET int = 2
 )
 
 var _ Decoder = new(decoder)
@@ -29,54 +39,177 @@ var _ Decoder = new(decoder)
 type decoder struct {
 }
 
-func (m *decoder) Decode(
-	cdcCtx *TableCtx,
-	input *DecoderInput) *DecoderOutput {
+func NewDecoder() Decoder {
+	return &decoder{}
+}
+
+func (m *decoder) Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input *disttae.DecoderInput) *DecoderOutput {
 	//parallel step1:decode rows
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	err := ants.Submit(func() {
 		defer wg.Done()
-		it := input.state.NewRowsIterInCdc()
-		decodeRows(input.ts, it)
+		it := input.State().NewRowsIterInCdc()
+		decodeRows(ctx, cdcCtx, input.TS(), it)
 		defer it.Close()
 	})
 	if err != nil {
 		panic(err)
 	}
 	//parallel step2:decode objects
-	wg.Add(1)
-	err = ants.Submit(func() {
-		defer wg.Done()
-
-	})
-	if err != nil {
-		panic(err)
-	}
-	//parallel step3:decode deltas
-	wg.Add(1)
-	err = ants.Submit(func() {
-		defer wg.Done()
-
-	})
-	if err != nil {
-		panic(err)
-	}
+	//wg.Add(1)
+	//err = ants.Submit(func() {
+	//	defer wg.Done()
+	//
+	//})
+	//if err != nil {
+	//	panic(err)
+	//}
+	////parallel step3:decode deltas
+	//wg.Add(1)
+	//err = ants.Submit(func() {
+	//	defer wg.Done()
+	//
+	//})
+	//if err != nil {
+	//	panic(err)
+	//}
 	return nil
 }
 
 func decodeRows(
+	ctx context.Context,
+	cdcCtx *disttae.TableCtx,
 	ts timestamp.Timestamp,
-	rowsIter logtailreplay.RowsIter) error {
+	rowsIter logtailreplay.RowsIter) (res [][]byte, err error) {
+	//TODO: schema info
+	var row []any
+	//TODO:refine && limit sql size
+	timePrefix := fmt.Sprintf("/* %v, %v */ ", ts.String(), time.Now())
+	//---------------------------------------------------
+	insertPrefix := fmt.Sprintf("INSERT INTO `%s`.`%s` values ", cdcCtx.Db(), cdcCtx.Table())
+	/*
+		FORMAT:
+		insert into db.t values
+		(...),
+		...
+		(...)
+	*/
+
+	//---------------------------------------------------
+	/*
+		DELETE FORMAT:
+			mysql:
+				delete from db.t where
+				(pk1,..,pkn) in
+				(
+					(col1,..,coln),
+					...
+					(col1,...,coln)
+				)
+			matrixone:
+				TODO:
+	*/
+	//FIXME: assume the sink is mysql
+	sbuf := strings.Builder{}
+	sbuf.WriteByte('(')
+	tableDef := cdcCtx.TableDef()
+	for i, pkColIdx := range tableDef.Pkey.Cols {
+		if i > 0 {
+			sbuf.WriteByte(',')
+		}
+		pkCol := tableDef.Cols[pkColIdx]
+		sbuf.WriteString(pkCol.Name)
+	}
+	sbuf.WriteByte(')')
+	deletePrefix := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s IN ", cdcCtx.Db(), cdcCtx.Table(), sbuf.String())
+
+	//TODO: complement the
+	firstInsertRow, firstDeleteRow := true, true
+	insertBuff := make([]byte, 1024)
+	deleteBuff := make([]byte, 1024)
 	for rowsIter.Next() {
 		ent := rowsIter.Entry()
+		//step1 : get row from the batch
+		//TODO: refine
+		if row == nil {
+			colCnt := len(ent.Batch.Attrs) - ROWS_REAL_DATA_OFFSET
+			if colCnt <= 0 {
+				return nil, moerr.NewInternalError(ctx, "invalid row entry")
+			}
+			row = make([]any, len(ent.Batch.Attrs))
+		}
+		err = extractRowFromEveryVector(ctx, ent.Batch, ROWS_REAL_DATA_OFFSET, int(ent.Offset), row)
+		if err != nil {
+			return nil, err
+		}
+		//step2 : transform rows into sql parts
 		if ent.Deleted {
 			//to delete
+			//need primary key only
+			//if the schema does not have the primary key,
+			//it also has the fake primary key
+			//end insert sql, first
+			if len(insertBuff) != 0 {
+				res = append(res, copyBytes(insertBuff))
+				firstInsertRow = true
+				insertBuff = insertBuff[:0]
+			}
+			if len(deleteBuff) == 0 {
+				//fill delete prefix
+				deleteBuff = appendString(deleteBuff, timePrefix)
+				deleteBuff = appendString(deleteBuff, deletePrefix)
+			}
+
+			if !firstDeleteRow {
+				//TODO:
+			} else {
+				firstDeleteRow = false
+			}
+
+			//TODO:
 		} else {
 			//to insert
+			//just fetch all columns.
+			//do not distinguish primary keys first.
+			//end delete sql, first
+			if len(deleteBuff) != 0 {
+				deleteBuff = appendString(deleteBuff, ")")
+				res = append(res, copyBytes(deleteBuff))
+				firstDeleteRow = true
+				deleteBuff = deleteBuff[:0]
+			}
+			if len(insertBuff) == 0 {
+				//fill insert prefix
+				insertBuff = appendString(insertBuff, timePrefix)
+				insertBuff = appendString(insertBuff, insertPrefix)
+			}
+
+			if !firstInsertRow {
+				insertBuff = appendString(insertBuff, ",")
+			} else {
+				firstInsertRow = false
+			}
+			insertBuff = appendString(insertBuff, "(")
+			for colIdx, col := range row {
+				if colIdx < ROWS_REAL_DATA_OFFSET {
+					continue
+				}
+				if colIdx > ROWS_REAL_DATA_OFFSET {
+					insertBuff = appendString(insertBuff, ",")
+				}
+				//transform column into text values
+				insertBuff, err = convertColIntoSql(ctx, col, ent.Batch.Vecs[colIdx].GetType(), insertBuff)
+				if err != nil {
+					return nil, err
+				}
+			}
+			insertBuff = appendString(insertBuff, ") ")
 		}
+
 	}
-	return nil
+	//TODO:end the last one delete or insert
+	return nil, nil
 }
 
 func decodeObjects(

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -42,6 +43,7 @@ func NewCdcEngine(
 	etlFs fileservice.FileService,
 	cli client.TxnClient,
 	cdcId string,
+	inQueue Queue[tools.Pair[*TableCtx, *DecoderInput]],
 ) *CdcEngine {
 	cdcEng := &CdcEngine{
 		service: service,
@@ -60,8 +62,9 @@ func NewCdcEngine(
 				packer.Close()
 			},
 		),
-		cli:   cli,
-		cdcId: cdcId,
+		cli:     cli,
+		cdcId:   cdcId,
+		inQueue: inQueue,
 	}
 
 	if err := cdcEng.init(ctx); err != nil {
@@ -227,17 +230,22 @@ func (cdcEng *CdcEngine) IsCdcEngine() bool {
 	return true
 }
 
+func (cdcEng *CdcEngine) ToCdc(cdcCtx *TableCtx, decInput *DecoderInput) {
+	cdcEng.inQueue.Push(tools.NewPair[*TableCtx, *DecoderInput](cdcCtx, decInput))
+}
+
 func NewCdcRelation(
 	db, table string,
-	dbId, tableId uint64,
+	accountId, dbId, tableId uint64,
 	cdcEng *CdcEngine,
 ) *CdcRelation {
 	return &CdcRelation{
-		db:      db,
-		table:   table,
-		dbId:    dbId,
-		tableId: tableId,
-		cdcEng:  cdcEng,
+		db:        db,
+		table:     table,
+		accountId: accountId,
+		dbId:      dbId,
+		tableId:   tableId,
+		cdcEng:    cdcEng,
 	}
 }
 
@@ -391,7 +399,13 @@ func (cdcTbl *CdcRelation) GetPrimarySeqNum() int {
 }
 
 func (cdcTbl *CdcRelation) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
-	return cdcTbl.cdcEng.PushClient().toSubscribeTable(ctx, cdcTbl)
+	ps, err = cdcTbl.cdcEng.PushClient().toSubscribeTable(ctx, cdcTbl)
+	if err != nil {
+		return nil, err
+	}
+	part := cdcTbl.cdcEng.GetOrCreateLatestPart(cdcTbl.GetDBID(ctx), cdcTbl.GetTableID(ctx))
+	part.TableInfo.AccountId = cdcTbl.accountId
+	return
 }
 
 func (cdcTbl *CdcRelation) getPartitionState(

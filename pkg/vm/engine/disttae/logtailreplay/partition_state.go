@@ -127,11 +127,38 @@ func (r RowEntry) Less(than RowEntry) bool {
 }
 
 func (r RowEntry) LessInCdc(than RowEntry) bool {
-	//only consider the Time.
-	//neglect the Deleted.
-	//it is impossible that two row entries have same rowid, time and
-	//Deleted in one is true but false in another.
-	return r.Time.Less(&than.Time)
+	/*
+		!!!NOTE:
+		the same pk,at the same time, the entry deleted is true must be placed before the one deleted is false.
+	*/
+	pkCmp := bytes.Compare(r.PrimaryIndexBytes, than.PrimaryIndexBytes)
+	if pkCmp < 0 {
+		return true
+	}
+	if pkCmp > 0 {
+		return false
+	}
+
+	if r.Time.Less(&than.Time) {
+		return true
+	}
+	if than.Time.Less(&r.Time) {
+		return false
+	}
+
+	if r.Deleted && !than.Deleted {
+		return true
+	}
+	if !r.Deleted && than.Deleted {
+		return false
+	}
+	if r.Deleted && than.Deleted {
+		panic("impossible")
+	}
+	if !r.Deleted && !than.Deleted {
+		panic("impossible")
+	}
+	return false
 }
 
 type BlockEntry struct {

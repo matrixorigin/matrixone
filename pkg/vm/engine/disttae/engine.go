@@ -758,3 +758,5 @@ func (e *Engine) Cli() client.TxnClient {
 func (e *Engine) IsCdcEngine() bool {
 	return false
 }
+
+func (e *Engine) ToCdc(*TableCtx, *DecoderInput) {}

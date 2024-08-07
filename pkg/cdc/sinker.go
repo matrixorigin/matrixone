@@ -14,29 +14,34 @@
 
 package cdc
 
+import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+)
+
+var _ Sinker = new(sinker)
+
 type sinker struct{}
 
-func (s *sinker) Sink(
-	cdcCtx *TableCtx,
-	data *DecoderOutput,
-) error {
+func NewSinker() Sinker {
+	return &sinker{}
+}
+
+func (s *sinker) Sink(ctx context.Context, cdcCtx *disttae.TableCtx, data *DecoderOutput) error {
 	return nil
 }
 
 type mysqlSink struct {
 }
 
-func (*mysqlSink) Send(
-	data *DecoderOutput,
-) error {
+func (*mysqlSink) Send(ctx context.Context, data *DecoderOutput) error {
 	return nil
 }
 
 type matrixoneSink struct {
 }
 
-func (*matrixoneSink) Send(
-	data *DecoderOutput,
-) error {
+func (*matrixoneSink) Send(ctx context.Context, data *DecoderOutput) error {
 	return nil
 }

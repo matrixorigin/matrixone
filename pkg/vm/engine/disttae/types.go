@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -892,6 +893,7 @@ type TempEngine interface {
 	FS() fileservice.FileService
 	TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error
 	IsCdcEngine() bool
+	ToCdc(*TableCtx, *DecoderInput)
 }
 
 var _ TempEngine = new(CdcEngine)
@@ -920,13 +922,70 @@ type CdcEngine struct {
 	cli client.TxnClient
 
 	cdcId string
+
+	inQueue Queue[tools.Pair[*TableCtx, *DecoderInput]]
 }
 
 var _ engine.Relation = new(CdcRelation)
 
 type CdcRelation struct {
+	db, table                string
+	accountId, dbId, tableId uint64
+	cdcEng                   *CdcEngine
+	_partState               atomic.Pointer[logtailreplay.PartitionState]
+}
+
+// TableCtx TODO: define suitable names
+type TableCtx struct {
 	db, table     string
 	dbId, tableId uint64
-	cdcEng        *CdcEngine
-	_partState    atomic.Pointer[logtailreplay.PartitionState]
+	tblDef        *plan.TableDef
+}
+
+func (tctx *TableCtx) Db() string {
+	return tctx.db
+}
+
+func (tctx *TableCtx) Table() string {
+	return tctx.table
+}
+
+func (tctx *TableCtx) DBId() uint64 {
+	return tctx.dbId
+}
+
+func (tctx *TableCtx) TableId() uint64 {
+	return tctx.tableId
+}
+
+func (tctx *TableCtx) TableDef() *plan.TableDef {
+	return tctx.tblDef
+}
+
+type DecoderInput struct {
+	ts    timestamp.Timestamp
+	state *logtailreplay.PartitionState
+}
+
+func (dec *DecoderInput) TS() timestamp.Timestamp {
+	return dec.ts
+}
+
+func (dec *DecoderInput) State() *logtailreplay.PartitionState {
+	return dec.state
+}
+
+// Queue
+// Two features:
+//
+//	persistence
+//	concurrent safe
+type Queue[T any] interface {
+	//Push saves the value before it returns
+	Push(T)
+	Pop()
+	Front() T
+	Back() T
+	Size() int
+	Empty() bool
 }
