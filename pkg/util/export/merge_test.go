@@ -125,8 +125,8 @@ func TestInitCronExpr(t *testing.T) {
 				sche, err := parser.Parse(MergeTaskCronExpr)
 				require.Nil(t, err)
 
-				now := time.Unix(60, 0)
-				next := sche.Next(time.UnixMilli(now.UnixMilli()))
+				now := time.Unix(60, 0).UTC()
+				next := sche.Next(time.UnixMilli(now.UnixMilli()).UTC())
 				t.Logf("duration: %v, expr: %s, next: %v", tt.args.duration, MergeTaskCronExpr, next)
 				if tt.expectDuration > 0 {
 					require.Equal(t, tt.expectDuration, next.Sub(now))

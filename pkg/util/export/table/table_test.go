@@ -364,9 +364,9 @@ func TestColumnField_EncodedDatetime(t *testing.T) {
 		{
 			name: "Unix_Zero",
 			fields: fields{
-				cf: TimeField(time.Unix(0, 0)),
+				cf: TimeField(time.Unix(0, 0).UTC()),
 			},
-			wantT: time.Unix(0, 0),
+			wantT: time.Unix(0, 0).UTC(),
 			want:  "1970-01-01 00:00:00.000000",
 		},
 	}

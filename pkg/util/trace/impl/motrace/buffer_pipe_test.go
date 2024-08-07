@@ -54,7 +54,7 @@ var dummyBaseTime time.Time
 func init() {
 	// Tips: Op 'time.Local = time.FixedZone(...)' would cause DATA RACE against to time.Now()
 
-	dummyBaseTime = time.Unix(0, 0)
+	dummyBaseTime = time.Unix(0, 0).UTC()
 	SV := config.ObservabilityParameters{}
 	SV.SetDefaultValues("v0.test.0")
 	SV.TraceExportInterval = 15

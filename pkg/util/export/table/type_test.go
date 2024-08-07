@@ -58,7 +58,7 @@ func TestPathBuilder(t *testing.T) {
 			args: args{
 				account:  "user",
 				typ:      MergeLogTypeLogs,
-				ts:       time.Unix(0, 0),
+				ts:       time.Unix(0, 0).UTC(),
 				db:       "db",
 				name:     "table",
 				nodeUUID: "123456",
@@ -75,7 +75,7 @@ func TestPathBuilder(t *testing.T) {
 			args: args{
 				account:  "user",
 				typ:      MergeLogTypeLogs,
-				ts:       time.Unix(0, 0),
+				ts:       time.Unix(0, 0).UTC(),
 				db:       "db",
 				name:     "table",
 				nodeUUID: "123456",
