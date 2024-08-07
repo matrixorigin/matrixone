@@ -51,7 +51,9 @@ type LoopAnti struct {
 	Cond       *plan.Expr
 	Typs       []types.Type
 	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopAnti *LoopAnti) GetOperatorBase() *vm.OperatorBase {
@@ -99,6 +101,11 @@ func (loopAnti *LoopAnti) Free(proc *process.Process, pipelineFailed bool, err e
 		//}
 		loopAnti.ctr.lastrow = 0
 		loopAnti.ctr = nil
+	}
+	if loopAnti.ProjectList != nil {
+		anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
+		anal.Alloc(loopAnti.ProjectAllocSize)
+		loopAnti.FreeProjection(proc)
 	}
 }
 
