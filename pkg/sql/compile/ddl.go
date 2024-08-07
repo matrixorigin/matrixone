@@ -45,25 +45,30 @@ import (
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
-	var span trace.Span
-	c.proc.Ctx, span = trace.Start(c.proc.Ctx, "CreateDatabase")
+	ctx, span := trace.Start(c.proc.Ctx, "CreateDatabase")
 	defer span.End()
-	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
-	if _, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator()); err == nil {
-		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
+
+	createDatabase := s.Plan.GetDdl().GetCreateDatabase()
+	dbName := createDatabase.GetDatabase()
+	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
+		if createDatabase.GetIfNotExists() {
 			return nil
 		}
-		return moerr.NewDBAlreadyExists(c.proc.Ctx, dbName)
+		return moerr.NewDBAlreadyExists(ctx, dbName)
 	}
 
 	if err := lockMoDatabase(c, dbName); err != nil {
 		return err
 	}
 
-	ctx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, s.Plan.GetDdl().GetCreateDatabase().GetSql())
+	ctx = context.WithValue(ctx, defines.SqlKey{}, createDatabase.GetSql())
 	datType := ""
-	if s.Plan.GetDdl().GetCreateDatabase().SubscriptionOption != nil {
+	// handle sub
+	if subOption := createDatabase.SubscriptionOption; subOption != nil {
 		datType = catalog.SystemDBTypeSubscription
+		if err := createSubscription(ctx, c, dbName, subOption); err != nil {
+			return err
+		}
 	}
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
 	return c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
@@ -71,27 +76,35 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 
 func (s *Scope) DropDatabase(c *Compile) error {
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
-	if _, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator()); err != nil {
+	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	if err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
 		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
 	}
 
-	if err := lockMoDatabase(c, dbName); err != nil {
+	if err = lockMoDatabase(c, dbName); err != nil {
 		return err
+	}
+
+	ctx := c.proc.Ctx
+	// handle sub
+	if db.IsSubscription(ctx) {
+		if err = dropSubscription(ctx, c, dbName); err != nil {
+			return err
+		}
 	}
 
 	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
 	if len(sql) != 0 {
-		err := runDetectFkReferToDBSql(c, sql)
-		if err != nil {
+		if err = runDetectFkReferToDBSql(c, sql); err != nil {
 			return err
 		}
 	}
 
 	// whether foreign_key_checks = 0 or 1
-	err := s.removeFkeysRelationships(c, dbName)
+	err = s.removeFkeysRelationships(c, dbName)
 	if err != nil {
 		return err
 	}
@@ -115,7 +128,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	//3. delete fks
+	// 3. delete fks
 	err = c.runSql(s.Plan.GetDdl().GetDropDatabase().GetUpdateFkSql())
 	if err != nil {
 		return err
@@ -777,14 +790,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := planColsToExeCols(planCols)
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-		)
-	}
 
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
@@ -806,36 +811,12 @@ func (s *Scope) CreateTable(c *Compile) error {
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
-			// TODO: debug for #11917
-			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-				c.proc.Info(c.proc.Ctx, "createTable",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-				)
-			}
 			return moerr.NewNoDB(c.proc.Ctx)
-		}
-		// TODO: debug for #11917
-		if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-			c.proc.Info(c.proc.Ctx, "createTable no exist",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-			)
 		}
 		return err
 	}
 	if _, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
-			// TODO: debug for #11917
-			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-				c.proc.Info(c.proc.Ctx, "createTable no exist",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-				)
-			}
 			return nil
 		}
 
@@ -879,14 +860,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			zap.Error(err),
 		)
 		return err
-	}
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		c.proc.Info(c.proc.Ctx, "createTable ok",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-		)
 	}
 
 	partitionTables := qry.GetPartitionTables()

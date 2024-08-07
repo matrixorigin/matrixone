@@ -28,6 +28,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -408,12 +409,12 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot plan2.Snapsh
 	return obj, tableDef
 }
 
-func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan2.ObjectRef, *plan2.TableDef) {
+func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subMeta *plan.SubscriptionMeta) (*plan2.ObjectRef, *plan2.TableDef) {
 	txn := tcc.GetTxnHandler().GetTxn()
 
 	pubContext := tcc.execCtx.reqCtx
-	if pubmeta != nil {
-		pubContext = context.WithValue(pubContext, defines.TenantIDKey{}, uint32(pubmeta.AccountId))
+	if subMeta != nil {
+		pubContext = context.WithValue(pubContext, defines.TenantIDKey{}, uint32(subMeta.AccountId))
 	}
 
 	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(pubContext, txn, tableId)
@@ -446,7 +447,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	}
 
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, snapshot)
-	if err != nil {
+	if err != nil || sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
 		return nil, nil
 	}
 
@@ -734,7 +735,7 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (account
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string, snapshot plan2.Snapshot) []*plan2.ColDef {
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, snapshot)
-	if err != nil {
+	if err != nil || sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
 		return nil
 	}
 	ctx, relation, err := tcc.getRelation(dbName, tableName, sub, snapshot)
@@ -773,6 +774,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot plan2.Snapsh
 	}()
 
 	dbName := obj.GetSchemaName()
+	tableName := obj.GetObjName()
 	checkSub := true
 	if obj.PubInfo != nil {
 		checkSub = false
@@ -781,13 +783,15 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot plan2.Snapsh
 	if err != nil {
 		return nil, err
 	}
+	if sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
+		return nil, moerr.NewInternalErrorNoCtx("table %s not found in publication %s", tableName, sub.Name)
+	}
 	if !checkSub {
 		sub = &plan.SubscriptionMeta{
 			AccountId: obj.PubInfo.TenantId,
 			DbName:    dbName,
 		}
 	}
-	tableName := obj.GetObjName()
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
 	if err != nil {
 		return nil, err
@@ -940,12 +944,13 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 }
 
 func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot plan2.Snapshot) (*plan.SubscriptionMeta, error) {
-	tempCtx := tcc.execCtx.reqCtx
-	txn := tcc.GetTxnHandler().GetTxn()
 	start := time.Now()
 	defer func() {
 		v2.GetSubMetaDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+
+	tempCtx := tcc.execCtx.reqCtx
+	txn := tcc.GetTxnHandler().GetTxn()
 	if plan2.IsSnapshotValid(&snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
@@ -954,11 +959,7 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot plan2
 		}
 	}
 
-	sub, err := getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn)
-	if err != nil {
-		return nil, err
-	}
-	return sub, nil
+	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn)
 }
 
 func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {

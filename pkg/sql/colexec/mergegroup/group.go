@@ -38,9 +38,14 @@ func (mergeGroup *MergeGroup) OpType() vm.OpType {
 
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr = new(container)
-	mergeGroup.ctr.InitReceiver(proc, true)
 	mergeGroup.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	mergeGroup.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
+	if mergeGroup.ProjectList != nil {
+		err := mergeGroup.PrepareProjection(proc)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -54,24 +59,30 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
-	var err error
 	for {
 		switch ctr.state {
 		case Build:
 			for {
-				msg := ctr.ReceiveFromAllRegs(anal)
-				if msg.Err != nil {
-					result.Status = vm.ExecStop
-					return result, nil
+				result, err := mergeGroup.GetChildren(0).Call(proc)
+				if err != nil {
+					return result, err
 				}
 
-				if msg.Batch == nil {
+				if result.Batch == nil {
 					break
 				}
-				bat := msg.Batch
+
+				bat := result.Batch
+				if ctr.bat == nil {
+					bat, err = result.Batch.Dup(proc.GetMPool())
+					if err != nil {
+						return result, err
+					}
+					bat.Aggs = result.Batch.Aggs
+					result.Batch.Aggs = nil
+				}
 				anal.Input(bat, mergeGroup.GetIsFirst())
 				if err = ctr.process(bat, proc); err != nil {
-					bat.Clean(proc.Mp())
 					return result, err
 				}
 			}
@@ -101,8 +112,16 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 					}
 					ctr.bat.Aggs = nil
 				}
-				anal.Output(ctr.bat, mergeGroup.GetIsLast())
+
 				result.Batch = ctr.bat
+				if mergeGroup.ProjectList != nil {
+					var err error
+					result.Batch, err = mergeGroup.EvalProjection(result.Batch, proc)
+					if err != nil {
+						return result, err
+					}
+				}
+				anal.Output((result.Batch), mergeGroup.GetIsLast())
 			}
 			ctr.state = End
 			return result, nil
@@ -184,12 +203,11 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 	return err
 }
 
-func (ctr *container) processH0(bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) processH0(bat *batch.Batch, _ *process.Process) error {
 	if ctr.bat == nil {
 		ctr.bat = bat
 		return nil
 	}
-	defer proc.PutBatch(bat)
 	ctr.bat.SetRowCount(1)
 
 	for i, agg := range ctr.bat.Aggs {
@@ -205,9 +223,6 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	count := bat.RowCount()
 	itr := ctr.intHashMap.NewIterator()
 	flg := ctr.bat == nil
-	if !flg {
-		defer proc.PutBatch(bat)
-	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		if i%(hashmap.UnitLimit*32) == 0 {
 			runtime.Gosched()
@@ -237,9 +252,6 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 	count := bat.RowCount()
 	itr := ctr.strHashMap.NewIterator()
 	flg := ctr.bat == nil
-	if !flg {
-		defer proc.PutBatch(bat)
-	}
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
 		if i%(hashmap.UnitLimit*32) == 0 {
 			runtime.Gosched()

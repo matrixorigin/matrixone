@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,16 +43,21 @@ func (filter *Filter) OpType() vm.OpType {
 
 func (filter *Filter) Prepare(proc *process.Process) (err error) {
 	filter.ctr = new(container)
+	var filterExpr *plan.Expr
 
 	if filter.exeExpr == nil && filter.E == nil {
 		return nil
 	}
 
 	if filter.exeExpr == nil {
-		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressionsInRuntime(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.E), proc, true, true)
 	} else {
-		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressionsInRuntime(proc, colexec.SplitAndExprs([]*plan.Expr{filter.exeExpr}))
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.exeExpr), proc, true, true)
 	}
+	if err != nil {
+		return err
+	}
+	filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
 	return err
 }
 
@@ -60,14 +66,15 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	result, err := filter.GetChildren(0).Call(proc)
-	if err != nil {
-		return result, err
-	}
-
 	anal := proc.GetAnalyze(filter.GetIdx(), filter.GetParallelIdx(), filter.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
+	result, err := vm.ChildrenCall(filter.GetChildren(0), proc, anal)
+	if err != nil {
+		return result, err
+	}
+	anal.Input(result.Batch, filter.IsFirst)
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() || len(filter.ctr.executors) == 0 {
 		return result, nil
@@ -156,6 +163,7 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Batch = filter.ctr.buf
 		}
 	}
+
 	return result, nil
 }
 
