@@ -1331,13 +1331,6 @@ func getConstValueByExpr(
 	return rule.GetConstantValue(vec, true, 0)
 }
 
-func getConstExpr(oid int32, c *plan.Literal) *plan.Expr {
-	return &plan.Expr{
-		Typ:  plan.Type{Id: oid},
-		Expr: &plan.Expr_Lit{Lit: c},
-	}
-}
-
 // ListTnService gets all tn service in the cluster
 func ListTnService(
 	service string,
