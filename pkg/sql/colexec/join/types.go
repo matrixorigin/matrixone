@@ -34,11 +34,6 @@ const (
 	End
 )
 
-type evalVector struct {
-	executor colexec.ExpressionExecutor
-	vec      *vector.Vector
-}
-
 type container struct {
 	state int
 
@@ -55,8 +50,8 @@ type container struct {
 	joinBat2 *batch.Batch
 	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
-	evecs []evalVector
-	vecs  []*vector.Vector
+	executor []colexec.ExpressionExecutor
+	vecs     []*vector.Vector
 
 	mp  *message.JoinMap
 	bat *batch.Batch
@@ -116,26 +111,39 @@ func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr := &innerJoin.ctr
 	anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
 
-	ctr.cleanBatch(proc)
-	ctr.cleanHashMap()
+	ctr.resetExecutor()
+	ctr.resetExprExecutor()
+	ctr.cleanHashMap() // -> resetHashMap
+	ctr.bat = nil      // children[0] clean
+	ctr.batches = nil  // reset/free in hashmap
 	ctr.lastrow = 0
 
 	if innerJoin.ProjectList != nil {
 		anal.Alloc(innerJoin.ProjectAllocSize + innerJoin.ctr.maxAllocSize)
+		innerJoin.ctr.maxAllocSize = 0
 		innerJoin.ResetProjection(proc)
 	} else {
 		anal.Alloc(innerJoin.ctr.maxAllocSize)
+		innerJoin.ctr.maxAllocSize = 0
 	}
 }
 
 func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &innerJoin.ctr
 
-	ctr.cleanEvalVectors()
+	ctr.cleanExecutor()
 	ctr.cleanExprExecutor()
+	ctr.cleanBatch(proc)
 
 	if innerJoin.ProjectList != nil {
 		innerJoin.FreeProjection(proc)
+	}
+
+}
+
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
 }
 
@@ -147,22 +155,14 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
-	ctr.batches = nil
-	if ctr.bat != nil {
-		proc.PutBatch(ctr.bat)
-		ctr.bat = nil
-	}
 	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
+		ctr.rbat.Clean(proc.Mp())
 	}
 	if ctr.joinBat1 != nil {
-		proc.PutBatch(ctr.joinBat1)
-		ctr.joinBat1 = nil
+		ctr.joinBat1.Clean(proc.Mp())
 	}
 	if ctr.joinBat2 != nil {
-		proc.PutBatch(ctr.joinBat2)
-		ctr.joinBat2 = nil
+		ctr.joinBat2.Clean(proc.Mp())
 	}
 }
 
@@ -173,12 +173,18 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanEvalVectors() {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.Free()
+func (ctr *container) resetExecutor() {
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].ResetForNextQuery()
 		}
-		ctr.evecs[i].vec = nil
 	}
-	ctr.evecs = nil
+}
+
+func (ctr *container) cleanExecutor() {
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].Free()
+		}
+	}
 }

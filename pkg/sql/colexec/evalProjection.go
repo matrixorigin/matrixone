@@ -46,10 +46,7 @@ func (projection *Projection) PrepareProjection(proc *process.Process) (err erro
 }
 
 func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
-	if bat == nil || bat.IsEmpty() || bat.Last() {
-		return bat, nil
-	}
-	if len(projection.ProjectExecutors) == 0 {
+	if len(projection.ProjectExecutors) == 0 || bat == nil || bat.IsEmpty() || bat.Last() {
 		return bat, nil
 	}
 
