@@ -58,6 +58,11 @@ func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Pro
 		if err != nil {
 			return nil, err
 		}
+		// for projection operator, all Vectors of projectBat come from executor.Eval
+		// and will not be modified within projection operator. so we can used the result of executor.Eval directly.
+		// (if operator will modify vector/agg of batch, you should make a copy)
+		// however, it should be noted that since they directly come from executor.Eval
+		// these vectors cannot be free by batch.Clean directly and must be handed over executor.Free
 		projection.projectBat.Vecs[i] = vec
 	}
 	projection.ProjectAllocSize = max(projection.ProjectAllocSize, int64(projection.projectBat.Size()))
