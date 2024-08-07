@@ -72,7 +72,9 @@ type Fill struct {
 	FillType plan.Node_FillType
 	FillVal  []*plan.Expr
 	AggIds   []int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (fill *Fill) GetOperatorBase() *vm.OperatorBase {
@@ -117,6 +119,11 @@ func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
 		ctr.cleanExes()
 
 		fill.ctr = nil
+	}
+	if fill.ProjectList != nil {
+		anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
+		anal.Alloc(fill.ProjectAllocSize)
+		fill.FreeProjection(proc)
 	}
 }
 

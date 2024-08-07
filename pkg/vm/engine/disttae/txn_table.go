@@ -2101,6 +2101,13 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	if !flushed {
 		return false, nil
 	}
+	//for mo_tables, mo_database, mo_columns, pk always exist in memory.
+	if tbl.tableName == catalog.MO_DATABASE ||
+		tbl.tableName == catalog.MO_TABLES ||
+		tbl.tableName == catalog.MO_COLUMNS {
+		logutil.Warnf("mo table:%s always exist in memory", tbl.tableName)
+		return true, nil
+	}
 	//need check pk whether exist on S3 block.
 	return tbl.PKPersistedBetween(
 		snap,

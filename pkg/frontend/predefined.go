@@ -164,6 +164,21 @@ var (
     		comment text
     		)`
 
+	MoCatalogMoSubsDDL = `create table mo_catalog.mo_subs (
+			sub_account_id INT NOT NULL, 
+			sub_name VARCHAR(5000) DEFAULT NULL,
+			sub_time TIMESTAMP DEFAULT NULL,
+			pub_account_name VARCHAR(300) NOT NULL,
+			pub_name VARCHAR(64) NOT NULL,
+			pub_database VARCHAR(5000) NOT NULL,
+			pub_tables TEXT NOT NULL,
+			pub_time TIMESTAMP NOT NULL,
+			pub_comment TEXT NOT NULL,
+			status TINYINT(8) NOT NULL,
+			PRIMARY KEY (pub_account_name, pub_name, sub_account_id),
+			UNIQUE KEY (sub_account_id, sub_name)
+	)`
+
 	MoCatalogMoStoredProcedureDDL = `create table mo_catalog.mo_stored_procedure (
 				proc_id int auto_increment,
 				name     varchar(100) unique key,
