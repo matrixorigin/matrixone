@@ -76,6 +76,7 @@ type SemiJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (semiJoin *SemiJoin) GetOperatorBase() *vm.OperatorBase {
@@ -115,17 +116,23 @@ func (semiJoin *SemiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 
 func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := semiJoin.ctr
+	anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
+	allocSize := int64(0)
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 
-		anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
+		allocSize += ctr.maxAllocSize
 
 		semiJoin.ctr = nil
 	}
+	if semiJoin.ProjectList != nil {
+		allocSize += semiJoin.ProjectAllocSize
+		semiJoin.FreeProjection(proc)
+	}
+	anal.Alloc(allocSize)
 }
 
 func (ctr *container) cleanExprExecutor() {

@@ -15,13 +15,18 @@
 package testutil
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"path/filepath"
 )
 
 type PObjectStats struct {
@@ -83,4 +88,26 @@ func (s *PartitionStateStats) String() string {
 type TestOptions struct {
 	TaeEngineOptions *options.Options
 	Timeout          time.Duration
+}
+
+func GetS3SharedFileServiceOption(ctx context.Context, dir string) (*options.Options, error) {
+	config := fileservice.Config{
+		Name:    defines.SharedFileServiceName,
+		Backend: "DISK",
+		DataDir: filepath.Join(dir, "share"),
+	}
+
+	fs, err := fileservice.NewFileService(
+		ctx,
+		config,
+		[]*perfcounter.CounterSet{},
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &options.Options{
+		Fs: fs,
+	}, nil
 }

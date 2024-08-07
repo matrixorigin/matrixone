@@ -40,7 +40,6 @@ func (mergeLimit *MergeLimit) OpType() vm.OpType {
 func (mergeLimit *MergeLimit) Prepare(proc *process.Process) error {
 	mergeLimit.ctr = new(container)
 	mergeLimit.ctr.seen = 0
-	mergeLimit.ctr.InitReceiver(proc, true)
 	var err error
 	if mergeLimit.ctr.limitExecutor == nil {
 		mergeLimit.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, mergeLimit.Limit)
@@ -65,47 +64,30 @@ func (mergeLimit *MergeLimit) Call(proc *process.Process) (vm.CallResult, error)
 	anal.Start()
 	defer anal.Stop()
 
-	result := vm.NewCallResult()
-	var msg *process.RegisterMessage
-	if mergeLimit.ctr.buf != nil {
-		proc.PutBatch(mergeLimit.ctr.buf)
-		mergeLimit.ctr.buf = nil
-	}
-
 	for {
-		msg = mergeLimit.ctr.ReceiveFromAllRegs(anal)
-		if msg.Err != nil {
-			result.Status = vm.ExecStop
-			return result, msg.Err
+		result, err := mergeLimit.GetChildren(0).Call(proc)
+		if err != nil {
+			return result, err
 		}
-		if msg.Batch == nil {
-			result.Batch = nil
-			result.Status = vm.ExecStop
-			return result, nil
-		}
-		mergeLimit.ctr.buf = msg.Batch
-		if mergeLimit.ctr.buf.Last() {
-			result.Batch = mergeLimit.ctr.buf
+		if result.Batch == nil || result.Batch.Last() {
 			return result, nil
 		}
 
-		anal.Input(mergeLimit.ctr.buf, mergeLimit.GetIsFirst())
+		buf := result.Batch
+		anal.Input(buf, mergeLimit.GetIsFirst())
 		if mergeLimit.ctr.seen >= mergeLimit.ctr.limit {
-			proc.PutBatch(mergeLimit.ctr.buf)
 			continue
 		}
-		newSeen := mergeLimit.ctr.seen + uint64(mergeLimit.ctr.buf.RowCount())
+		newSeen := mergeLimit.ctr.seen + uint64(buf.RowCount())
 		if newSeen < mergeLimit.ctr.limit {
 			mergeLimit.ctr.seen = newSeen
-			anal.Output(mergeLimit.ctr.buf, mergeLimit.GetIsLast())
-			result.Batch = mergeLimit.ctr.buf
+			anal.Output(buf, mergeLimit.GetIsLast())
 			return result, nil
 		} else {
 			num := int(newSeen - mergeLimit.ctr.limit)
-			batch.SetLength(mergeLimit.ctr.buf, mergeLimit.ctr.buf.RowCount()-num)
+			batch.SetLength(buf, buf.RowCount()-num)
 			mergeLimit.ctr.seen = newSeen
-			anal.Output(mergeLimit.ctr.buf, mergeLimit.GetIsLast())
-			result.Batch = mergeLimit.ctr.buf
+			anal.Output(buf, mergeLimit.GetIsLast())
 			return result, nil
 		}
 	}

@@ -9,8 +9,8 @@ insert into repub01 values (1);
 drop database if exists resub01;
 create database resub01 from sys publication publication01;
 show subscriptions all;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-publication01    sys    republication01    2024-05-09 13:58:08    resub01    2024-05-09 13:58:08
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+publication01    sys    republication01    *    republish    2024-07-23 21:40:26    resub01    2024-07-23 21:40:26    0
 drop database if exists database03;
 create database database03;
 use database03;
@@ -19,8 +19,8 @@ insert into table01 values (1);
 insert into table01 select * from table01;
 alter publication publication01 database database03;
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-publication01    database03    2024-05-09 13:58:08    2024-05-09 13:58:08    test_tenant_1    republish
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+publication01    database03    *    test_tenant_1    test_tenant_1    2024-07-23 21:40:26    2024-07-23 21:40:27    republish
 use resub01;
 show tables;
 Tables_in_resub01
@@ -31,30 +31,30 @@ col1
 1
 show columns from table01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null
+col1    INT(32)    YES        null        
 desc table01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null
+col1    INT(32)    YES        null        
 show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-table01    Tae    Dynamic    2    0    72    0    0    NULL    0    2024-05-09 13:58:08    NULL    NULL    utf-8    NULL            0    moadmin
+table01    Tae    Dynamic    2    0    72    0    0    NULL    0    2024-07-23 21:40:26    NULL    NULL    utf-8    NULL            0    moadmin
 alter publication publication01 database republication01;
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-publication01    republication01    2024-05-09 13:58:08    2024-05-09 13:58:08    test_tenant_1    republish
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+publication01    republication01    *    test_tenant_1    test_tenant_1    2024-07-23 21:40:26    2024-07-23 21:40:27    republish
 show subscriptions all;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-publication01    sys    republication01    2024-05-09 13:58:08    resub01    2024-05-09 13:58:08
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+publication01    sys    republication01    *    republish    2024-07-23 21:40:27    resub01    2024-07-23 21:40:26    0
 use resub01;
 show tables;
 Tables_in_resub01
 repub01
 show columns from repub01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null
+col1    INT(32)    YES        null        
 desc repub01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null
+col1    INT(32)    YES        null        
 select * from repub01;
 col1
 1

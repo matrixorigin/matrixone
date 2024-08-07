@@ -72,3 +72,11 @@ a    b    c
 10    bbbb    2020-09-08 00:00:00
 10    aaaa    1998-09-12 00:00:00
 drop table dis_table_02;
+create table t1 (a int);
+insert into t1 values (1), (2), (3);
+begin;
+delete from t1 where a = 1; -- dels in workspace
+drop table t1;  -- the previous delete should be canceled
+show tables;    -- no error in transfer deletes
+Tables_in_ww_conflict
+commit;

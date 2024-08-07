@@ -37,7 +37,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
 
 	// value
 	valVecs []*vector.Vector
@@ -73,7 +72,9 @@ type Fill struct {
 	FillType plan.Node_FillType
 	FillVal  []*plan.Expr
 	AggIds   []int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (fill *Fill) GetOperatorBase() *vm.OperatorBase {
@@ -114,11 +115,15 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := fill.ctr
 	if ctr != nil {
-		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExes()
 
 		fill.ctr = nil
+	}
+	if fill.ProjectList != nil {
+		anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
+		anal.Alloc(fill.ProjectAllocSize)
+		fill.FreeProjection(proc)
 	}
 }
 

@@ -26,16 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func newColumnExpr(pos int, typ plan.Type, name string) *plan.Expr {
@@ -62,14 +57,6 @@ func genWriteReqs(
 	var tnID string
 	var tn metadata.TNService
 	entries := make([]*api.Entry, 0, len(writes))
-	isDropped := func(id uint64) bool {
-		for _, op := range tablesInVain {
-			if op.tableId == id {
-				return true
-			}
-		}
-		return false
-	}
 	for _, e := range writes {
 		if tnID == "" {
 			tnID = e.tnStore.ServiceID
@@ -79,9 +66,6 @@ func genWriteReqs(
 			panic(fmt.Sprintf("txnCommit contains entries from different TNs, %s != %s", tnID, e.tnStore.ServiceID))
 		}
 		if e.bat == nil || e.bat.IsEmpty() {
-			continue
-		}
-		if isDropped(e.tableId) { // cancel dml and alter request
 			continue
 		}
 		e.pkChkByTN = pkChkByTN
@@ -99,7 +83,7 @@ func genWriteReqs(
 		// the txn wrote a delete & insert batch due to alter, and the insert batch was cancelled by dropping.
 		// the table should be dropped in TN, so we need to reset the delete batch to normal delete.
 		isAlter, typ, id, name := noteSplitAlter(e.note)
-		if isAlter && typ == DELETE && isDropped(id) {
+		if _, deleted := tablesInVain[id]; deleted && isAlter && typ == DELETE {
 			// reset to normal delete, this will lead to dropping table in TN
 			e.note = noteForDrop(id, name)
 		} else if isAlter {
@@ -464,68 +448,4 @@ func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
 	default:
 		return false, nil
 	}
-}
-
-func groupBlocksToObjects(blkInfos []*objectio.BlockInfo, dop int) ([][]*objectio.BlockInfo, []int) {
-	var infos [][]*objectio.BlockInfo
-	objMap := make(map[string]int)
-	lenObjs := 0
-	for _, blkInfo := range blkInfos {
-		//block := catalog.DecodeBlockInfo(blkInfos[i])
-		objName := blkInfo.MetaLocation().Name().String()
-		if idx, ok := objMap[objName]; ok {
-			infos[idx] = append(infos[idx], blkInfo)
-		} else {
-			objMap[objName] = lenObjs
-			lenObjs++
-			infos = append(infos, []*objectio.BlockInfo{blkInfo})
-		}
-	}
-	steps := make([]int, len(infos))
-	currentBlocks := 0
-	for i := range infos {
-		steps[i] = (currentBlocks-PREFETCH_THRESHOLD)/dop - PREFETCH_ROUNDS
-		if steps[i] < 0 {
-			steps[i] = 0
-		}
-		currentBlocks += len(infos[i])
-	}
-	return infos, steps
-}
-
-func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef,
-	ts timestamp.Timestamp, num int, expr *plan.Expr, filter blockio.BlockReadFilter,
-	proc *process.Process) []*blockReader {
-	rds := make([]*blockReader, num)
-	for i := 0; i < num; i++ {
-		rds[i] = newBlockReader(
-			ctx, tblDef, ts, nil, expr, filter, fs, proc,
-		)
-	}
-	return rds
-}
-
-func distributeBlocksToBlockReaders(rds []*blockReader, numOfReaders int, numOfBlocks int, infos [][]*objectio.BlockInfo, steps []int) []*blockReader {
-	readerIndex := 0
-	for i := range infos {
-		//distribute objects and steps for prefetch
-		rds[readerIndex].steps = append(rds[readerIndex].steps, steps[i])
-		rds[readerIndex].infos = append(rds[readerIndex].infos, infos[i])
-		for j := range infos[i] {
-			//distribute block
-			rds[readerIndex].blks = append(rds[readerIndex].blks, infos[i][j])
-			readerIndex++
-			readerIndex = readerIndex % numOfReaders
-		}
-	}
-	scanType := NORMAL
-	if numOfBlocks < numOfReaders*SMALLSCAN_THRESHOLD {
-		scanType = SMALL
-	} else if (numOfReaders * LARGESCAN_THRESHOLD) <= numOfBlocks {
-		scanType = LARGE
-	}
-	for i := range rds {
-		rds[i].scanType = scanType
-	}
-	return rds
 }
