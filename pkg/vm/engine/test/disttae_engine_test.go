@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -635,5 +637,78 @@ func TestCacheGC(t *testing.T) {
 	r := cc.GC(gcTime)
 	require.Equal(t, 7 /*because of three tables inserted at 0 time*/, r.TStaleItem)
 	require.Equal(t, 2 /*test2 & test 4*/, r.TDelCpk)
+
+}
+
+func TestShowDatabasesInRestoreTxn(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	tae := p.T.GetDB()
+
+	schema := catalog2.MockSchemaAll(10, -1)
+	schema.Name = "test"
+	txnop := p.StartCNTxn()
+	p.CreateDBAndTable(txnop, "db", schema)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	ts := time.Now().UTC().UnixNano()
+
+	time.Sleep(10 * time.Millisecond)
+
+	schema2 := catalog2.MockSchemaAll(10, -1)
+	schema2.Name = "test2"
+	txnop = p.StartCNTxn()
+	p.CreateDBAndTable(txnop, "db2", schema)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txn, _ := tae.StartTxn(nil)
+	catalogDB, _ := txn.GetDatabaseByID(catalog.MO_CATALOG_ID)
+	dbTbl, _ := catalogDB.GetRelationByID(catalog.MO_DATABASE_ID)
+
+	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker.Start()
+	defer worker.Stop()
+
+	it := dbTbl.MakeObjectIt()
+	it.Next()
+	firstEntry := it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+	task1, err := jobs.NewFlushTableTailTask(
+		tasks.WaitableCtx, txn,
+		[]*catalog2.ObjectEntry{firstEntry},
+		tae.Runtime, txn.GetStartTS())
+	require.NoError(t, err)
+	worker.SendOp(task1)
+	err = task1.WaitDone(context.Background())
+	require.NoError(t, err)
+
+	require.NoError(t, txn.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+	require.NoError(t, p.D.Engine.Delete(p.Ctx, "db2", txnop))
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		panic(fmt.Sprintf("missing sql executor in service %q", ""))
+	}
+	exec := v.(executor.SQLExecutor)
+	res, err := exec.Exec(p.Ctx, fmt.Sprintf("show databases {MO_TS=%d}", ts), executor.Options{}.WithTxn(txnop))
+	require.NoError(t, err)
+	var rels []string
+	for _, b := range res.Batches {
+		for i, v := 0, b.Vecs[0]; i < v.Length(); i++ {
+			rels = append(rels, v.GetStringAt(i))
+		}
+	}
+	require.Equal(t, 2, len(rels), rels) // mo_catalog + db
+	require.NotContains(t, rels, "db2")
+	// res, err = exec.Exec(p.Ctx, "show databases", executor.Options{}.WithTxn(txnop))
+	// var brels []string
+	// for _, b := range res.Batches {
+	// 	for i, v := 0, b.Vecs[0]; i < v.Length(); i++ {
+	// 		brels = append(brels, v.GetStringAt(i))
+	// 	}
+	// }
+	// require.NoError(t, err)
+	// t.Log(rels, brels)
 
 }

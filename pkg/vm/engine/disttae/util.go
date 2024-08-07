@@ -1528,33 +1528,6 @@ func ConstructObjStatsByLoadObjMeta(
 	return
 }
 
-// removeIf removes the elements that pred is true.
-func removeIf[T any](data []T, pred func(t T) bool) []T {
-	if len(data) == 0 {
-		return data
-	}
-	res := 0
-	for i := 0; i < len(data); i++ {
-		if !pred(data[i]) {
-			if res != i {
-				data[res] = data[i]
-			}
-			res++
-		}
-	}
-	return data[:res]
-}
-
-func find[T ~string | ~int, S any](data map[T]S, val T) bool {
-	if len(data) == 0 {
-		return false
-	}
-	if _, exists := data[val]; exists {
-		return true
-	}
-	return false
-}
-
 // txnIsValid
 // if the workspace is nil or txnOp is aborted, it returns error
 func txnIsValid(txnOp client.TxnOperator) (*Transaction, error) {

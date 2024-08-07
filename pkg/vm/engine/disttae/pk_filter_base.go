@@ -15,8 +15,6 @@
 package disttae
 
 import (
-	"regexp"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -24,18 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// TODO(ghs) workaround for special tables, remove later
-// FIXME(ghs) remove this specialPattern later
-var (
-	specialPattern *regexp.Regexp = regexp.MustCompile(`mo_tables|mo_database`)
-)
-
 func newBasePKFilter(
 	expr *plan.Expr,
 	tblDef *plan.TableDef,
 	proc *process.Process,
 ) (filter basePKFilter) {
-	if expr == nil || specialPattern.MatchString(tblDef.Name) {
+	if expr == nil {
 		return
 	}
 
