@@ -52,7 +52,8 @@ func noopReportError(context.Context, error, int) {}
 var dummyBaseTime time.Time
 
 func init() {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
+	// Tips: Op 'time.Local = time.FixedZone(...)' would cause DATA RACE against to time.Now()
+
 	dummyBaseTime = time.Unix(0, 0)
 	SV := config.ObservabilityParameters{}
 	SV.SetDefaultValues("v0.test.0")

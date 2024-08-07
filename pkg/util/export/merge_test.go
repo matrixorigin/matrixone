@@ -47,7 +47,8 @@ import (
 )
 
 func init() {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
+	// Tips: Op 'time.Local = time.FixedZone(...)' would cause DATA RACE against to time.Now()
+
 	table.RegisterTableDefine(dummyTable)
 	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 }
