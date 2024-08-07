@@ -60,13 +60,11 @@ func (projection *Projection) Release() {
 }
 
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	projection.Free(proc, pipelineFailed, err)
+	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
+	anal.Alloc(int64(projection.ProjectAllocSize))
+	projection.ResetProjection(proc)
 }
 
 func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if projection.ProjectList != nil {
-		anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
-		anal.Alloc(int64(projection.ProjectAllocSize))
-		projection.FreeProjection(proc)
-	}
+	projection.FreeProjection(proc)
 }
