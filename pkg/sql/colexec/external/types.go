@@ -110,7 +110,7 @@ type container struct {
 	buf          *batch.Batch
 }
 type External struct {
-	ctr *container
+	ctr container
 	Es  *ExternalParam
 
 	vm.OperatorBase
@@ -154,20 +154,27 @@ func (external *External) Release() {
 }
 
 func (external *External) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	external.Free(proc, pipelineFailed, err)
+	if external.ctr.buf != nil {
+		external.ctr.buf.CleanOnlyData()
+	}
+	anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
+	allocSize := int64(external.ctr.maxAllocSize)
+	if external.ProjectList != nil {
+		allocSize += external.ProjectAllocSize
+		external.ResetProjection(proc)
+	}
+	anal.Alloc(allocSize)
+	external.ctr.maxAllocSize = 0
 }
 
 func (external *External) Free(proc *process.Process, pipelineFailed bool, err error) {
 	anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
 	allocSize := int64(0)
-	if external.ctr != nil {
-		if external.ctr.buf != nil {
-			external.ctr.buf.Clean(proc.Mp())
-			external.ctr.buf = nil
-		}
-		allocSize += int64(external.ctr.maxAllocSize)
-		external.ctr = nil
+	if external.ctr.buf != nil {
+		external.ctr.buf.Clean(proc.Mp())
+		external.ctr.buf = nil
 	}
+	allocSize += int64(external.ctr.maxAllocSize)
 	if external.ProjectList != nil {
 		allocSize += external.ProjectAllocSize
 		external.FreeProjection(proc)
