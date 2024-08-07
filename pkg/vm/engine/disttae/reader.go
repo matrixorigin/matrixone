@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -325,17 +324,6 @@ func (r *reader) Read(
 	}()
 
 	r.tryUpdateColumns(cols)
-
-	bat = batch.NewWithSize(len(r.columns.colTypes))
-	bat.Attrs = append(bat.Attrs, cols...)
-
-	for i := 0; i < len(r.columns.colTypes); i++ {
-		if vp == nil {
-			bat.Vecs[i] = vector.NewVec(r.columns.colTypes[i])
-		} else {
-			bat.Vecs[i] = vp.GetVector(r.columns.colTypes[i])
-		}
-	}
 
 	bat, blkInfo, state, err := r.source.Next(
 		ctx,
