@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -32,6 +33,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
 )
@@ -72,11 +74,12 @@ func TransferTombstones(
 	if len(deletedObjects) == 0 || len(createdObjects) == 0 {
 		return
 	}
+	wantDetail := true
 	var transferCnt int
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start)
-		if duration > time.Second || err != nil {
+		if duration > time.Second || err != nil || wantDetail {
 			logutil.Info(
 				"TRANSFER-TOMBSTONE-SLOW-LOG",
 				zap.Duration("duration", duration),
@@ -184,6 +187,7 @@ func TransferTombstones(
 					readPKColumn,
 					mp,
 					fs,
+					wantDetail,
 				); err != nil {
 					return
 				}
@@ -206,6 +210,7 @@ func TransferTombstones(
 			readPKColumn,
 			mp,
 			fs,
+			wantDetail,
 		); err != nil {
 			return
 		}
@@ -226,6 +231,7 @@ func batchTransferToTombstones(
 	readPKColumn *vector.Vector,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	wantDetail bool,
 ) (err error) {
 	if err = targetRowids.PreExtend(transferIntents.Length(), mp); err != nil {
 		return
@@ -258,6 +264,51 @@ func batchTransferToTombstones(
 		mp,
 	); err != nil {
 		return
+	}
+
+	// compare readPKColumn with searchPKColumn. equal is expected
+	if wantDetail {
+		typ := searchPKColumn.GetType()
+		comp := compare.New(*typ, false, false)
+		comp.Set(0, searchPKColumn)
+		comp.Set(1, readPKColumn)
+
+		errPKVec1 := vector.NewVec(*typ)
+		errPKVec2 := vector.NewVec(*typ)
+		errCnt := 0
+		defer func() {
+			errPKVec1.Free(mp)
+			errPKVec2.Free(mp)
+		}()
+		for i, last := 0, searchPKColumn.Length(); i < last; i++ {
+			res := comp.Compare(0, 1, int64(i), int64(i))
+			if res != 0 {
+				errCnt++
+				if errCnt > 20 {
+					continue
+				}
+				if err = errPKVec1.UnionOne(searchPKColumn, int64(i), mp); err != nil {
+					return
+				}
+				if err = errPKVec2.UnionOne(readPKColumn, int64(i), mp); err != nil {
+					return
+				}
+			}
+		}
+		if errCnt > 0 {
+			logutil.Error(
+				"TRANSFER-ROWIDS-ERROR-DETAIL-LOG",
+				zap.String("table-name", table.tableDef.Name),
+				zap.Uint64("table-id", table.tableId),
+				zap.Int("error-count", errCnt),
+				zap.String("expect-pks", common.MoVectorToString(errPKVec1, errPKVec1.Length())),
+				zap.String("actual-pks", common.MoVectorToString(errPKVec2, errPKVec2.Length())),
+			)
+			err = moerr.NewInternalErrorNoCtx("transfer rowids failed, pk mismatch")
+		}
+		if err != nil {
+			return
+		}
 	}
 
 	entryPositions := vector.MustFixedCol[int32](searchEntryPos)
