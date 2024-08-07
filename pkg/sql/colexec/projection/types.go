@@ -72,24 +72,11 @@ type container struct {
 }
 
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	projection.Free(proc, pipelineFailed, err)
+	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
+	anal.Alloc(int64(projection.ProjectAllocSize))
+	projection.ResetProjection(proc)
 }
 
 func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if projection.ctr != nil {
-		for i := range projection.ctr.projExecutors {
-			if projection.ctr.projExecutors[i] != nil {
-				projection.ctr.projExecutors[i].Free()
-			}
-		}
-		projection.ctr.projExecutors = nil
-		if projection.ctr.buf != nil {
-			projection.ctr.buf.Clean(proc.Mp())
-			projection.ctr.buf = nil
-		}
-		projection.ctr = nil
-	}
-
-	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
-	anal.Alloc(int64(projection.maxAllocSize))
+	projection.FreeProjection(proc)
 }

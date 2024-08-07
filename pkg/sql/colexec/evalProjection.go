@@ -16,8 +16,6 @@ package colexec
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -26,8 +24,6 @@ type Projection struct {
 	projectBat       *batch.Batch
 	ProjectList      []*plan.Expr
 	ProjectExecutors []ExpressionExecutor
-	uafs             []func(v, w *vector.Vector) error
-
 	ProjectAllocSize int64
 }
 
@@ -36,18 +32,14 @@ func (projection *Projection) PrepareProjection(proc *process.Process) (err erro
 		return
 	}
 	projection.ProjectAllocSize = 0
-
-	projection.ProjectExecutors, err = NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
-	if err != nil {
-		return
-	}
-
-	projection.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(projection.ProjectList))
-	for i, e := range projection.ProjectList {
-		if e.Typ.Id != 0 {
-			typ := types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
-			projection.uafs[i] = vector.GetUnionAllFunction(typ, proc.Mp())
+	if projection.ProjectExecutors == nil {
+		projection.ProjectExecutors, err = NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
+		if err != nil {
+			return
 		}
+	}
+	if projection.projectBat == nil {
+		projection.projectBat = batch.NewWithSize(len(projection.ProjectList))
 	}
 
 	return
@@ -57,49 +49,51 @@ func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Pro
 	if bat == nil || bat.IsEmpty() || bat.Last() {
 		return bat, nil
 	}
+	if len(projection.ProjectExecutors) == 0 {
+		return bat, nil
+	}
 
-	projection.projectBat = batch.NewWithSize(len(projection.ProjectList))
 	projection.projectBat.ShuffleIDX = bat.ShuffleIDX
 
 	for i := range projection.ProjectExecutors {
 		vec, err := projection.ProjectExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
-			for _, newV := range projection.projectBat.Vecs {
-				if newV != nil {
-					for k, oldV := range bat.Vecs {
-						if oldV != nil && newV == oldV {
-							bat.Vecs[k] = nil
-						}
-					}
-				}
-			}
-			projection.projectBat = nil
 			return nil, err
 		}
+		// for projection operator, all Vectors of projectBat come from executor.Eval
+		// and will not be modified within projection operator. so we can used the result of executor.Eval directly.
+		// (if operator will modify vector/agg of batch, you should make a copy)
+		// however, it should be noted that since they directly come from executor.Eval
+		// these vectors cannot be free by batch.Clean directly and must be handed over executor.Free
 		projection.projectBat.Vecs[i] = vec
 	}
-	newAlloc, err := FixProjectionResult(proc, projection.ProjectExecutors, projection.uafs, projection.projectBat, bat)
-	if err != nil {
-		return nil, err
-	}
-	projection.ProjectAllocSize = max(projection.ProjectAllocSize, int64(newAlloc))
+	projection.ProjectAllocSize = max(projection.ProjectAllocSize, int64(projection.projectBat.Size()))
 	projection.projectBat.SetRowCount(bat.RowCount())
 	return projection.projectBat, nil
 }
 
 func (projection *Projection) ResetProjection(proc *process.Process) {
+	for i := range projection.ProjectExecutors {
+		if projection.ProjectExecutors[i] != nil {
+			projection.ProjectExecutors[i].ResetForNextQuery()
+		}
+	}
+	projection.ProjectAllocSize = 0
 }
 
 func (projection *Projection) FreeProjection(proc *process.Process) {
-	if projection != nil {
-		for i := range projection.ProjectExecutors {
-			if projection.ProjectExecutors[i] != nil {
-				projection.ProjectExecutors[i].Free()
-			}
+	for i := range projection.ProjectExecutors {
+		if projection.ProjectExecutors[i] != nil {
+			projection.ProjectExecutors[i].Free()
 		}
-		if projection.projectBat != nil {
-			projection.projectBat.Clean(proc.Mp())
-			projection.projectBat = nil
-		}
+	}
+	projection.ProjectExecutors = nil
+
+	if projection.projectBat != nil {
+		// do not free projectBat's Vecs,  that will be free in ProjectExecutors[x].Free()
+		projection.projectBat.Vecs = nil
+		// allways call batch.Clean, even if there is no data
+		projection.projectBat.Clean(proc.Mp())
+		projection.projectBat = nil
 	}
 }
