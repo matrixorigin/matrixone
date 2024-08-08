@@ -179,7 +179,7 @@ func GetQueryCtxFromProc(proc *Process) (context.Context, context.CancelFunc) {
 
 // ReplacePipelineCtx replaces the pipeline context and cancel function for the process.
 // It's a very dangerous operation, should be used with caution.
-// And we only use it for the new built pipeline by the pipeline's ParallelRun method.
+// And we only use it for the newly built pipeline by the pipeline's ParallelRun method.
 func ReplacePipelineCtx(proc *Process, ctx context.Context, cancel context.CancelFunc) {
 	proc.Ctx = ctx
 	proc.Cancel = cancel
