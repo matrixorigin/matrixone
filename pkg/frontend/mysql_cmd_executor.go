@@ -802,7 +802,6 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 	}
 
 	rows := make([][]interface{}, 0, len(gSysVarsDefs))
-	//for name, value := range sysVars {
 	for name, def := range gSysVarsDefs {
 		if hasLike {
 			s := name

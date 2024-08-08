@@ -790,7 +790,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 		}
 		ses := &Session{planCache: newPlanCache(1),
 			feSessionImpl: feSessionImpl{
-				gSysVars: &SystemVariables{sysVars: sysVars},
+				gSysVars: &SystemVariables{mp: sysVars},
 			},
 		}
 		ctrl := gomock.NewController(t)
