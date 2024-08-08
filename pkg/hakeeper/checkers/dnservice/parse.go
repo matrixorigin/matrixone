@@ -143,16 +143,16 @@ func checkInitiatingShards(
 			if moerr.IsMoErrCode(err, moerr.ErrShardNotReported) {
 				// if a shard not reported, register it,
 				// and launch its replica after a while.
-				waitingShards.register(shardID, currTick)
+				getCheckState(service).waitingShards.register(shardID, currTick)
 			}
 			continue
 		}
 		// shard reported via heartbeat, no need to wait
-		waitingShards.remove(shardID)
+		getCheckState(service).waitingShards.remove(shardID)
 	}
 
 	// list newly-created shards which had been waiting for a while
-	expired := waitingShards.listEligibleShards(func(start uint64) bool {
+	expired := getCheckState(service).waitingShards.listEligibleShards(func(start uint64) bool {
 		return cfg.TNStoreExpired(start, currTick)
 	})
 
@@ -167,8 +167,8 @@ func checkInitiatingShards(
 	}
 
 	runtime.ServiceRuntime(service).Logger().Debug(fmt.Sprintf("construct %d operators for initiating tn shards", len(ops)))
-	if bootstrapping && len(ops) != 0 {
-		bootstrapping = false
+	if getCheckState(service).bootstrapping && len(ops) != 0 {
+		getCheckState(service).bootstrapping = false
 	}
 
 	return ops
@@ -180,11 +180,13 @@ type earliestTick struct {
 
 // initialShards records all fresh tn shards.
 type initialShards struct {
+	sid    string
 	shards map[uint64]earliestTick
 }
 
-func newInitialShards() *initialShards {
+func newInitialShards(sid string) *initialShards {
 	return &initialShards{
+		sid:    sid,
 		shards: make(map[uint64]earliestTick),
 	}
 }
@@ -215,7 +217,7 @@ func (w *initialShards) remove(shardID uint64) bool {
 func (w *initialShards) listEligibleShards(fn func(tick uint64) bool) []uint64 {
 	ids := make([]uint64, 0)
 	for id, earliest := range w.shards {
-		if bootstrapping || fn(earliest.tick) {
+		if getCheckState(w.sid).bootstrapping || fn(earliest.tick) {
 			ids = append(ids, id)
 		}
 	}

@@ -373,6 +373,19 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+func (c *Config) UpdateAddresses(
+	host string,
+	servicePort int,
+	raftPort int,
+	gossipPort int,
+) {
+	c.ServiceHost = host
+	c.ServiceAddress = fmt.Sprintf("0.0.0.0:%d", servicePort)
+	c.RaftAddress = fmt.Sprintf("0.0.0.0:%d", raftPort)
+	c.GossipAddress = fmt.Sprintf("0.0.0.0:%d", gossipPort)
+	c.GossipSeedAddresses = []string{fmt.Sprintf("%s:%d", host, gossipPort)}
+}
+
 func DefaultConfig() Config {
 	uid := "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 	return Config{

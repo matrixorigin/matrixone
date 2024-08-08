@@ -23,6 +23,11 @@ data-dir = "%s"
 level = "info"
 format = "console"
 max-size = 512
+
+[hakeeper-client]
+service-addresses = [
+  "127.0.0.1:%d",
+]
 `
 
 	tnConfig = `
@@ -36,7 +41,7 @@ max-size = 512
 
 [hakeeper-client]
 service-addresses = [
-  "127.0.0.1:32001",
+  "127.0.0.1:%d",
 ]
 
 [[fileservice]]
@@ -58,7 +63,7 @@ name = "ETL"
 backend = "DISK-ETL"
 
 [tn]
-uuid = "dn"
+uuid = "%d-tn"
 port-base = %d
 
 [tn.Txn.Storage]
@@ -92,7 +97,7 @@ max-size = 512
 
 [hakeeper-client]
 service-addresses = [
-	"127.0.0.1:32001",
+	"127.0.0.1:%d",
 ]
 
 [[fileservice]]
@@ -114,7 +119,7 @@ name = "ETL"
 backend = "DISK-ETL"
 
 [cn]
-uuid = "cn-%d"
+uuid = "%d-cn-%d"
 port-base = %d
 
 [cn.txn.trace]
@@ -139,7 +144,7 @@ max-size = 512
 
 [hakeeper-client]
 service-addresses = [
-  "127.0.0.1:32001",
+  "127.0.0.1:%d",
 ]
 
 [[fileservice]]
