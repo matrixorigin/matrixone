@@ -146,7 +146,6 @@ func (innerJoin *InnerJoin) build(anal process.Analyze, proc *process.Process) {
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-	ctr.batches = ctr.mp.GetBatches()
 	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
@@ -162,7 +161,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.A
 				// for inner join, if left batch is sorted , then output batch is sorted
 				ctr.rbat.Vecs[i].SetSorted(ap.ctr.inbat.Vecs[rp.Pos].GetSorted())
 			} else {
-				ctr.rbat.Vecs[i] = vector.NewVec(*ctr.batches[0].Vecs[rp.Pos].GetType())
+				ctr.rbat.Vecs[i] = vector.NewVec(*ctr.mp.Batches[0].Vecs[rp.Pos].GetType())
 			}
 		}
 	} else {
@@ -181,7 +180,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.A
 		ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(ap.ctr.inbat, proc.Mp())
 	}
 	if ctr.joinBat2 == nil && ctr.batchRowCount > 0 {
-		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
+		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.mp.Batches[0], proc.Mp())
 	}
 
 	mSels := ctr.mp.Sels()
@@ -215,7 +214,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.A
 							}
 						} else {
 							idx1, idx2 := idx/colexec.DefaultBatchSize, idx%colexec.DefaultBatchSize
-							if err := ctr.rbat.Vecs[j].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
+							if err := ctr.rbat.Vecs[j].UnionOne(ctr.mp.Batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
 								return err
 							}
 						}
@@ -231,7 +230,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.A
 						} else {
 							for _, sel := range sels {
 								idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-								if err := ctr.rbat.Vecs[j].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
+								if err := ctr.rbat.Vecs[j].UnionOne(ctr.mp.Batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
 									return err
 								}
 							}
@@ -270,7 +269,7 @@ func (ctr *container) evalApCondForOneSel(bat, rbat *batch.Batch, ap *InnerJoin,
 		return err
 	}
 	idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-	if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], idx2,
+	if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.mp.Batches[idx1], idx2,
 		1, ctr.cfs2); err != nil {
 		return err
 	}
@@ -291,7 +290,7 @@ func (ctr *container) evalApCondForOneSel(bat, rbat *batch.Batch, ap *InnerJoin,
 				return err
 			}
 		} else {
-			if err := rbat.Vecs[j].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], idx2, proc.Mp()); err != nil {
+			if err := rbat.Vecs[j].UnionOne(ctr.mp.Batches[idx1].Vecs[rp.Pos], idx2, proc.Mp()); err != nil {
 				return err
 			}
 		}

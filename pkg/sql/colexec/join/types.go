@@ -37,7 +37,6 @@ const (
 type container struct {
 	state int
 
-	batches       []*batch.Batch
 	batchRowCount int64
 	lastrow       int
 	inbat         *batch.Batch
@@ -61,7 +60,7 @@ type container struct {
 
 /*
 InnerJoin.container has 5 *batch or []*batch
-1. batches means the data of right table. It's created by HashBuild operator and cleaned by cleanHashMap() in InnerJoin.Reset().
+1.
 2. inbat means the data of left table. It's created by InnerJoin.Children[0] and cleaned by InnerJoin.Children[0].
 3. rbat means the result of InnerJoin. InnerJoin.Probe() create rbat once when it's called first time and use CleanOnlyData() after that.
    InnerJoin.Reset() doesn't need to reset or clean rbat, because the result always has same types. InnerJoin.Free() will clean rbat.
@@ -127,7 +126,6 @@ func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()
 	ctr.inbat = nil
-	ctr.batches = nil
 	ctr.lastrow = 0
 
 	if innerJoin.ProjectList != nil {
