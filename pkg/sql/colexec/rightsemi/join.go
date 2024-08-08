@@ -42,7 +42,7 @@ func (rightSemi *RightSemi) OpType() vm.OpType {
 
 func (rightSemi *RightSemi) Prepare(proc *process.Process) (err error) {
 	rightSemi.ctr = new(container)
-	rightSemi.ctr.InitReceiver(proc, false)
+	rightSemi.ctr.InitProc(proc)
 	rightSemi.ctr.vecs = make([]*vector.Vector, len(rightSemi.Conditions[0]))
 	rightSemi.ctr.evecs = make([]evalVector, len(rightSemi.Conditions[0]))
 	for i := range rightSemi.ctr.evecs {

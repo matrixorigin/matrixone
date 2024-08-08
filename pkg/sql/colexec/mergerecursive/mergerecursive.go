@@ -34,7 +34,6 @@ func (mergeRecursive *MergeRecursive) OpType() vm.OpType {
 
 func (mergeRecursive *MergeRecursive) Prepare(proc *process.Process) error {
 	mergeRecursive.ctr = new(container)
-	mergeRecursive.ctr.InitReceiver(proc, true)
 	return nil
 }
 

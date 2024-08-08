@@ -16,9 +16,10 @@ package colexec
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"reflect"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -113,14 +114,8 @@ type CnSegmentMap struct {
 
 // ReceiverOperator need to receive batch from proc.Reg.MergeReceivers
 type ReceiverOperator struct {
-	proc *process.Process
-
-	// parameter for Merge-Type receiver.
-	// Merge-Type specifys the operator receive batch from all
-	// regs or single reg.
-	//
-	// Merge/MergeGroup/MergeLimit ... are Merge-Type
-	// while Join/Intersect/Minus ... are not
+	proc               *process.Process
+	MergeReceivers     []*process.WaitRegister
 	aliveMergeReceiver int
 	chs                []chan *process.RegisterMessage
 	nilBatchCnt        []int

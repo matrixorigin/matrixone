@@ -31,9 +31,9 @@ type container struct {
 }
 
 type Merge struct {
-	ctr      *container
-	SinkScan bool
-
+	ctr            *container
+	SinkScan       bool
+	MergeReceivers []*process.WaitRegister
 	vm.OperatorBase
 }
 

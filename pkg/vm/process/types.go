@@ -96,13 +96,6 @@ type WaitRegister struct {
 	NilBatchCnt int
 }
 
-// Register used in execution pipeline and shared with all operators of the same pipeline.
-type Register struct {
-	// MergeReceivers, receives result of multi previous operators from other pipelines
-	// e.g. merge operator.
-	MergeReceivers []*WaitRegister
-}
-
 // Limitation specifies the maximum resources that can be used in one query.
 type Limitation struct {
 	// Size, memory threshold for operator.
@@ -362,7 +355,6 @@ type BaseProcess struct {
 type Process struct {
 	// BaseProcess is the common part of one process, and it's shared by all its children processes.
 	Base *BaseProcess
-	Reg  Register
 
 	// Ctx and Cancel are pipeline's context and cancel function.
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.

@@ -22,25 +22,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// isMergeType means the receiver operator receive batch from all regs or single by some order
-// Merge/MergeGroup/MergeLimit ... are Merge-Type
-func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool) {
+func (r *ReceiverOperator) InitReceiver(proc *process.Process, mergeReceivers []*process.WaitRegister) {
 	r.proc = proc
-	if isMergeType {
-		r.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
-		r.chs = make([]chan *process.RegisterMessage, r.aliveMergeReceiver)
-		r.nilBatchCnt = make([]int, r.aliveMergeReceiver)
-		r.receiverListener = make([]reflect.SelectCase, r.aliveMergeReceiver+1)
-		r.receiverListener[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
-		for i, mr := range proc.Reg.MergeReceivers {
-			r.chs[i] = mr.Ch
-			r.nilBatchCnt[i] = mr.NilBatchCnt
-			r.receiverListener[i+1] = reflect.SelectCase{
-				Dir:  reflect.SelectRecv,
-				Chan: reflect.ValueOf(mr.Ch),
-			}
+	r.MergeReceivers = mergeReceivers
+	r.aliveMergeReceiver = len(mergeReceivers)
+	r.chs = make([]chan *process.RegisterMessage, r.aliveMergeReceiver)
+	r.nilBatchCnt = make([]int, r.aliveMergeReceiver)
+	r.receiverListener = make([]reflect.SelectCase, r.aliveMergeReceiver+1)
+	r.receiverListener[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
+	for i, mr := range mergeReceivers {
+		r.chs[i] = mr.Ch
+		r.nilBatchCnt[i] = mr.NilBatchCnt
+		r.receiverListener[i+1] = reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(mr.Ch),
 		}
 	}
+
 }
 
 func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Analyze) *process.RegisterMessage {
@@ -49,7 +47,7 @@ func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Anal
 	select {
 	case <-r.proc.Ctx.Done():
 		return process.NormalEndRegisterMessage
-	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
+	case msg, ok := <-r.MergeReceivers[regIdx].Ch:
 		if !ok || msg == nil {
 			return process.NormalEndRegisterMessage
 		}
@@ -75,13 +73,13 @@ func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Anal
 // }
 
 func (r *ReceiverOperator) FreeAllReg() {
-	for i := range r.proc.Reg.MergeReceivers {
+	for i := range r.MergeReceivers {
 		r.FreeSingleReg(i)
 	}
 }
 
 func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
-	w := r.proc.Reg.MergeReceivers[regIdx]
+	w := r.MergeReceivers[regIdx]
 	w.CleanChannel(r.proc.GetMPool())
 }
 
@@ -244,6 +242,10 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *process.RegisterMessage, bo
 		r.DisableChosen(chosen)
 	}
 	return chosen, msg, ok
+}
+
+func (r *ReceiverOperator) InitProc(proc *process.Process) {
+	r.proc = proc
 }
 
 func (r *ReceiverOperator) ReceiveBitmapFromChannel(ch chan *bitmap.Bitmap) *bitmap.Bitmap {

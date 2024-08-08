@@ -85,7 +85,6 @@ func (fuzzyFilter *FuzzyFilter) OpType() vm.OpType {
 func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 	ctr := new(container)
 	fuzzyFilter.ctr = ctr
-	ctr.InitReceiver(proc, false)
 	rowCount := int64(fuzzyFilter.N)
 	if rowCount < 1000 {
 		rowCount = 1000

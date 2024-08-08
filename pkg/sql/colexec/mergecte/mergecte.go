@@ -37,8 +37,8 @@ func (mergeCTE *MergeCTE) OpType() vm.OpType {
 
 func (mergeCTE *MergeCTE) Prepare(proc *process.Process) error {
 	mergeCTE.ctr = new(container)
-	mergeCTE.ctr.InitReceiver(proc, true)
-	mergeCTE.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
+
+	//mergeCTE.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
 	mergeCTE.ctr.curNodeCnt = mergeCTE.ctr.nodeCnt
 	mergeCTE.ctr.status = sendInitial
 	return nil

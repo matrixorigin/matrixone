@@ -80,9 +80,7 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 	lockOp.ctr.rt.parker = types.NewPacker()
 	lockOp.ctr.rt.retryError = nil
 	lockOp.ctr.rt.step = stepLock
-	if lockOp.block {
-		lockOp.ctr.rt.InitReceiver(proc, true)
-	}
+
 	return nil
 }
 
@@ -874,7 +872,6 @@ func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error
 			}
 			lockOp.ctr.rt.retryError = nil
 			lockOp.cleanCachedBatch(proc)
-			lockOp.ctr.rt.FreeMergeTypeOperator(pipelineFailed)
 			lockOp.ctr.rt = nil
 		}
 		lockOp.ctr = nil
@@ -895,9 +892,6 @@ func (lockOp *LockOp) getBatch(
 	anal process.Analyze,
 	isFirst bool) (*batch.Batch, error) {
 	fn := lockOp.ctr.rt.batchFetchFunc
-	if fn == nil {
-		fn = lockOp.ctr.rt.ReceiveFromAllRegs
-	}
 
 	msg := fn(anal)
 	if msg.Err != nil {

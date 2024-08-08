@@ -35,7 +35,7 @@ func (merge *Merge) OpType() vm.OpType {
 
 func (merge *Merge) Prepare(proc *process.Process) error {
 	merge.ctr = new(container)
-	merge.ctr.InitReceiver(proc, true)
+	merge.ctr.InitReceiver(proc, merge.MergeReceivers)
 	return nil
 }
 
