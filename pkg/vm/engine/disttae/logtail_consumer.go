@@ -1510,7 +1510,9 @@ func dispatchSubscribeResponse(
 	receiveAt time.Time) error {
 	lt := response.Logtail
 	tbl := lt.GetTable()
-
+	if e.IsCdcEngine() {
+		printLogtail("subscribe", []logtail.TableLogtail{lt})
+	}
 	notDistribute := ifShouldNotDistribute(tbl.DbId, tbl.TbId)
 	if notDistribute {
 		// time check for issue #10833.
@@ -1552,6 +1554,10 @@ func dispatchUpdateResponse(
 	recRoutines []routineController,
 	receiveAt time.Time) error {
 	list := response.GetLogtailList()
+
+	if e.IsCdcEngine() && len(list) > 0 {
+		printLogtail("update", list)
+	}
 
 	// loops for mo_database, mo_tables, mo_columns.
 	for i := 0; i < len(list); i++ {
