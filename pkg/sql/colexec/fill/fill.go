@@ -40,8 +40,7 @@ func (fill *Fill) OpType() vm.OpType {
 }
 
 func (fill *Fill) Prepare(proc *process.Process) (err error) {
-	fill.ctr = new(container)
-	ctr := fill.ctr
+	ctr := &fill.ctr
 
 	f := true
 	for i := len(fill.AggIds) - 1; i >= 0; i-- {
@@ -57,6 +56,7 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 
 	switch fill.FillType {
 	case plan.Node_VALUE:
+		// the batch just for eval const value
 		b := batch.NewWithSize(1)
 		b.SetVector(0, proc.GetVector(types.T_varchar.ToType()))
 		batch.SetLength(b, 1)
@@ -66,13 +66,13 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 			if err != nil {
 				return err
 			}
-			ctr.valVecs[i], err = exe.EvalWithoutResultReusing(proc, []*batch.Batch{b}, nil)
+			ctr.valVecs[i], err = exe.Eval(proc, []*batch.Batch{b}, nil)
 			if err != nil {
-				exe.Free()
 				return err
 			}
-			exe.Free()
+			ctr.exes = append(ctr.exes, exe)
 		}
+		b.Clean(proc.Mp())
 		ctr.process = processValue
 	case plan.Node_PREV:
 		ctr.prevVecs = make([]*vector.Vector, fill.ColLen)
@@ -113,7 +113,7 @@ func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := fill.ctr
+	ctr := &fill.ctr
 
 	result, err := ctr.process(ctr, fill, proc, anal)
 
@@ -139,20 +139,18 @@ func resetColRef(expr *plan.Expr, idx int) {
 
 func processValue(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
-	if ctr.buf != nil {
-		proc.PutBatch(ctr.buf)
-		ctr.buf = nil
-	}
 	result, err := ap.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
 	if result.Batch == nil {
-		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	ctr.buf, err = result.Batch.Dup(proc.Mp())
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
+	ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 	if err != nil {
 		return result, err
 	}
@@ -273,21 +271,19 @@ func processNextCol(ctr *container, idx int, proc *process.Process) error {
 
 func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
-	if ctr.buf != nil {
-		proc.PutBatch(ctr.buf)
-		ctr.buf = nil
-	}
 	result, err := ap.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
 	if result.Batch == nil {
-		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 	anal.Input(ctr.buf, ap.IsFirst)
-	ctr.buf, err = result.Batch.Dup(proc.Mp())
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
+	ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 	if err != nil {
 		return result, err
 	}
@@ -401,7 +397,7 @@ func processLinearCol(ctr *container, proc *process.Process, idx int) error {
 				return err
 			}
 			b.SetRowCount(1)
-			ctr.valVecs[idx], err = ctr.exes[idx].EvalWithoutResultReusing(proc, []*batch.Batch{b}, nil)
+			ctr.valVecs[idx], err = ctr.exes[idx].Eval(proc, []*batch.Batch{b}, nil)
 			if err != nil {
 				return err
 			}
@@ -457,7 +453,7 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		ctr.idx++
 		return result, nil
 	}
-	for {
+	for i := 0; ; i++ {
 		result, err = ap.GetChildren(0).Call(proc)
 		if err != nil {
 			return result, err
@@ -465,11 +461,21 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		if result.Batch == nil {
 			break
 		}
-		appBat, err := result.Batch.Dup(proc.Mp())
-		if err != nil {
-			return result, err
+		if len(ctr.bats) > i {
+			if ctr.bats[i] != nil {
+				ctr.bats[i].CleanOnlyData()
+			}
+			ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+			if err != nil {
+				return result, err
+			}
+		} else {
+			appBat, err := result.Batch.Dup(proc.Mp())
+			if err != nil {
+				return result, err
+			}
+			ctr.bats = append(ctr.bats, appBat)
 		}
-		ctr.bats = append(ctr.bats, appBat)
 	}
 	if len(ctr.bats) == 0 {
 		result.Batch = nil
@@ -506,7 +512,7 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 		ctr.idx++
 		return result, nil
 	}
-	for {
+	for i := 0; ; i++ {
 		result, err = ap.GetChildren(0).Call(proc)
 		if err != nil {
 			return result, err
@@ -515,11 +521,21 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 			break
 		}
 		anal.Input(result.Batch, ap.IsFirst)
-		appBat, err := result.Batch.Dup(proc.Mp())
-		if err != nil {
-			return result, err
+		if len(ctr.bats) > i {
+			if ctr.bats[i] != nil {
+				ctr.bats[i].CleanOnlyData()
+			}
+			ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+			if err != nil {
+				return result, err
+			}
+		} else {
+			appBat, err := result.Batch.Dup(proc.Mp())
+			if err != nil {
+				return result, err
+			}
+			ctr.bats = append(ctr.bats, appBat)
 		}
-		ctr.bats = append(ctr.bats, appBat)
 	}
 	if len(ctr.bats) == 0 {
 		result.Batch = nil
@@ -541,10 +557,6 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 }
 
 func processDefault(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
-	if ctr.buf != nil {
-		proc.PutBatch(ctr.buf)
-		ctr.buf = nil
-	}
 	result, err := ap.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
