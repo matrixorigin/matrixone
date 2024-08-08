@@ -49,6 +49,7 @@ func testCreateQueryService(t *testing.T) QueryService {
 		clusterservice.WithDisableRefresh(),
 		clusterservice.WithServices([]metadata.CNService{{}}, nil))
 	runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
+	defer cluster.Close()
 	address := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	err := os.RemoveAll(address[7:])
 	assert.NoError(t, err)
@@ -165,6 +166,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice
 					ServiceID:    cn.ServiceID,
 					QueryAddress: address,
 				}}, nil))
+			defer cluster.Close()
 			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
 
 			sm := NewSessionManager()

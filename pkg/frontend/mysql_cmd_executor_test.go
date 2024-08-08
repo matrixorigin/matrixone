@@ -1244,6 +1244,7 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 					),
 				)
 				runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
+				defer cluster.Close()
 				ses.SetTenantInfo(&TenantInfo{Tenant: "t1"})
 				proto.connectAttrs = map[string]string{}
 				ec := newTestExecCtx(ctx, ctrl)

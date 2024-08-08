@@ -57,6 +57,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(qc qcl
 					SQLAddress:   cn.SQLAddress,
 					QueryAddress: address,
 				}}, nil))
+			defer cluster.Close()
 			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
 			runtime.SetupServiceBasedRuntime(cn.ServiceID, rt)
 

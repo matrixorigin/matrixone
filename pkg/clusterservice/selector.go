@@ -121,7 +121,7 @@ func (s Selector) Match(labels map[string]metadata.LabelList) bool {
 			if len(labels) == 0 {
 				return true
 			}
-			return labelEQGlobbing(s.labels, labels)
+			return labelEQGlobbing(s.labels, labels, s.regexpCache)
 
 		default:
 			return false
@@ -165,13 +165,13 @@ func labelEQ(src map[string]string, dst map[string]metadata.LabelList) bool {
 	return labelContains(src, dst, nil)
 }
 
-func labelEQGlobbing(src map[string]string, dst map[string]metadata.LabelList) bool {
+func labelEQGlobbing(src map[string]string, dst map[string]metadata.LabelList, cache *regexpCache) bool {
 	l1 := len(src)
 	l2 := len(dst)
 	if l1 != l2 {
 		return false
 	}
-	return labelContains(src, dst, globbing)
+	return labelContains(src, dst, globbing(cache))
 }
 
 func containLabel(src string, dst []string, comp func(string, string) bool) bool {
@@ -186,29 +186,38 @@ func containLabel(src string, dst []string, comp func(string, string) bool) bool
 	return false
 }
 
-func globbing(src, dst string) bool {
-	if dst == "" {
-		return false
-	}
-	// dst is '*', or starts with '*'.
-	if strings.HasPrefix(dst, "*") {
-		dst = "." + dst
-	} else {
-		for i := 1; i < len(dst); i++ {
-			if dst[i] == '*' && dst[i-1] != '.' {
-				dst = dst[:i] + "." + dst[i:]
+func globbing(cache *regexpCache) func(string, string) bool {
+	return func(src, dst string) bool {
+		if dst == "" {
+			return false
+		}
+		// dst is '*', or starts with '*'.
+		if strings.HasPrefix(dst, "*") {
+			dst = "." + dst
+		} else {
+			for i := 1; i < len(dst); i++ {
+				if dst[i] == '*' && dst[i-1] != '.' {
+					dst = dst[:i] + "." + dst[i:]
+				}
 			}
 		}
+		if dst[0] != '^' {
+			dst = "^" + dst
+		}
+		if dst[len(dst)-1] != '$' {
+			dst = dst + "$"
+		}
+		if cache != nil {
+			reg, err := cache.get(dst)
+			if err != nil {
+				return false
+			}
+			return reg.MatchString(src)
+		}
+		ok, err := regexp.MatchString(dst, src)
+		if err != nil {
+			return false
+		}
+		return ok
 	}
-	if dst[0] != '^' {
-		dst = "^" + dst
-	}
-	if dst[len(dst)-1] != '$' {
-		dst = dst + "$"
-	}
-	ok, err := regexp.MatchString(dst, src)
-	if err != nil {
-		return false
-	}
-	return ok
 }
