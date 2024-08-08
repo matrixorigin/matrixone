@@ -421,6 +421,10 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		return err
 	}
 
+	if parallelScope != s {
+		setContextForParallelScope(parallelScope, s.Proc.Ctx, s.Proc.Cancel)
+	}
+
 	if parallelScope.Magic == Normal {
 		return parallelScope.Run(c)
 	}
