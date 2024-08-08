@@ -40,6 +40,7 @@ type container struct {
 	batches       []*batch.Batch
 	batchRowCount int64
 	lastrow       int
+	inbat         *batch.Batch
 	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
@@ -53,11 +54,22 @@ type container struct {
 	executor []colexec.ExpressionExecutor
 	vecs     []*vector.Vector
 
-	mp  *message.JoinMap
-	bat *batch.Batch
+	mp *message.JoinMap
 
 	maxAllocSize int64
 }
+
+/*
+InnerJoin.container has 5 *batch or []*batch
+1. batches means the data of right table. It's created by HashBuild operator and cleaned by cleanHashMap() in InnerJoin.Reset().
+2. inbat means the data of left table. It's created by InnerJoin.Children[0] and cleaned by InnerJoin.Children[0].
+3. rbat means the result of InnerJoin. InnerJoin.Probe() create rbat once when it's called first time and use CleanOnlyData() after that.
+   InnerJoin.Reset() doesn't need to reset or clean rbat, because the result always has same types. InnerJoin.Free() will clean rbat.
+4. joinBat1 means some data from left table used to evaluate join conditions. InnerJoin.Probe() create joinBat1 once.
+   joinBat1 will always be overwritten by colexec.SetJoinBatchValues().
+   InnerJoin.Reset() doesn't need to reset or clean joinBat1. InnerJoin.Free() will clean joinBat1.
+5. joinBat2 means some data from right table, same as joinBat1.
+*/
 
 type InnerJoin struct {
 	ctr        container
@@ -113,9 +125,9 @@ func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, er
 
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
-	ctr.cleanHashMap() // -> resetHashMap
-	ctr.bat = nil      // children[0] clean
-	ctr.batches = nil  // reset/free in hashmap
+	ctr.cleanHashMap()
+	ctr.inbat = nil
+	ctr.batches = nil
 	ctr.lastrow = 0
 
 	if innerJoin.ProjectList != nil {
