@@ -924,6 +924,9 @@ type CdcEngine struct {
 	cdcId string
 
 	inQueue Queue[tools.Pair[*TableCtx, *DecoderInput]]
+
+	cnEng       engine.Engine
+	cnTxnClient client.TxnClient
 }
 
 var _ engine.Relation = new(CdcRelation)

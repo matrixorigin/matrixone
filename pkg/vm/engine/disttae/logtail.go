@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"time"
 
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -65,11 +67,13 @@ func consumeEntry(
 		case catalog.MO_TABLES_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			if cache != nil {
+				fmt.Fprintln(os.Stderr, "%%%%%> insert table into catalog cache")
 				cache.InsertTable(bat)
 			}
 		case catalog.MO_DATABASE_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			if cache != nil {
+				fmt.Fprintln(os.Stderr, "%%%%%> insert database into catalog cache")
 				cache.InsertDatabase(bat)
 			}
 		case catalog.MO_COLUMNS_ID:
@@ -86,11 +90,13 @@ func consumeEntry(
 	case catalog.MO_TABLES_ID:
 		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
+			fmt.Fprintln(os.Stderr, "%%%%%> delete table from catalog cache")
 			cache.DeleteTable(bat)
 		}
 	case catalog.MO_DATABASE_ID:
 		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
+			fmt.Fprintln(os.Stderr, "%%%%%> delete database from catalog cache")
 			cache.DeleteDatabase(bat)
 		}
 	}

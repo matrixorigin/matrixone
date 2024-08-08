@@ -44,6 +44,8 @@ func NewCdcEngine(
 	cli client.TxnClient,
 	cdcId string,
 	inQueue Queue[tools.Pair[*TableCtx, *DecoderInput]],
+	cnEng engine.Engine,
+	cnTxnClient client.TxnClient,
 ) *CdcEngine {
 	cdcEng := &CdcEngine{
 		service: service,
@@ -62,9 +64,11 @@ func NewCdcEngine(
 				packer.Close()
 			},
 		),
-		cli:     cli,
-		cdcId:   cdcId,
-		inQueue: inQueue,
+		cli:         cli,
+		cdcId:       cdcId,
+		inQueue:     inQueue,
+		cnEng:       cnEng,
+		cnTxnClient: cnTxnClient,
 	}
 
 	if err := cdcEng.init(ctx); err != nil {

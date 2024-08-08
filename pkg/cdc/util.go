@@ -349,7 +349,7 @@ func convertColIntoSql(
 		return nil, moerr.NewInternalError(ctx, "extractRowFromVector : unsupported type %d", typ.Oid)
 	}
 
-	return nil, nil
+	return sqlBuff, nil
 }
 
 func appendByte(buf []byte, d byte) []byte {

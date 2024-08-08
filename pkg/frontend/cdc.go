@@ -484,6 +484,8 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 		cdc.cdcTxnClient,
 		cdc.cdcTask.GetTaskId(),
 		inQueue,
+		cdc.cnEngine,
+		cdc.cnTxnClient,
 	)
 	cdcEngine := cdc.cdcEngine.(*disttae.CdcEngine)
 

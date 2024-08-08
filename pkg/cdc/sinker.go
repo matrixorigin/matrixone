@@ -32,7 +32,7 @@ func NewConsoleSinker() Sinker {
 
 func (s *consoleSinker) Sink(ctx context.Context, cdcCtx *disttae.TableCtx, data *DecoderOutput) error {
 	fmt.Fprintln(os.Stderr, "====console sinker====")
-	fmt.Fprintln(os.Stderr, cdcCtx.Db(), cdcCtx.DBId(), cdcCtx.Table(), cdcCtx.Table(), data.ts)
+	fmt.Fprintln(os.Stderr, cdcCtx.Db(), cdcCtx.DBId(), cdcCtx.Table(), cdcCtx.TableId(), data.ts)
 	if value, ok := data.sqlOfRows.Load().([][]byte); !ok {
 		fmt.Fprintln(os.Stderr, "no sqlOfrows")
 	} else {

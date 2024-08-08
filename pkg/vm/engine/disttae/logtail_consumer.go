@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"strings"
 	"sync"
@@ -39,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
@@ -624,15 +624,20 @@ func (c *PushClient) waitTimestamp() {
 	}
 }
 
-func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
+func (c *PushClient) replayCatalogCache(
+	ctx context.Context,
+	cnTxnClient client.TxnClient,
+	cnEng *Engine,
+	catCache *cache.CatalogCache,
+) error {
 	// replay mo_catalog cache
-	ts := c.receivedLogTailTime.getTimestamp()
+	ts := cnEng.PushClient().receivedLogTailTime.getTimestamp()
 	typeTs := types.TimestampToTS(ts)
-	op, err := e.cli.New(ctx, timestamp.Timestamp{}, client.WithSkipPushClientReady(), client.WithSnapshotTS(ts))
+	op, err := cnTxnClient.New(ctx, timestamp.Timestamp{}, client.WithSkipPushClientReady(), client.WithSnapshotTS(ts))
 	if err != nil {
 		return err
 	}
-	_ = e.New(ctx, op)
+	_ = cnEng.New(ctx, op)
 
 	// read databases
 	result, err := execReadSql(ctx, op, catalog.MoDatabaseBatchQuery, true)
@@ -650,7 +655,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
 		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 			return err
 		}
-		e.GetLatestCatalogCache().InsertDatabase(b)
+		catCache.InsertDatabase(b)
 	}
 
 	// read tables
@@ -665,7 +670,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
 			return err
 		}
 		tryAdjustThreeTablesCreatedTimeWithBatch(b)
-		e.GetLatestCatalogCache().InsertTable(b)
+		catCache.InsertTable(b)
 	}
 
 	// read columns
@@ -681,7 +686,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
 			if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 				return err
 			}
-			e.GetLatestCatalogCache().InsertColumns(b)
+			catCache.InsertColumns(b)
 		}
 	} else {
 		logutil.Info("FIND_TABLE merge mo_columns results")
@@ -695,10 +700,10 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
 		if err := fillTsVecForSysTableQueryBatch(bat, typeTs, result.Mp); err != nil {
 			return err
 		}
-		e.GetLatestCatalogCache().InsertColumns(bat)
+		catCache.InsertColumns(bat)
 	}
 
-	e.GetLatestCatalogCache().UpdateStart(typeTs)
+	catCache.UpdateStart(typeTs)
 	return nil
 
 }
@@ -728,8 +733,22 @@ func (c *PushClient) connect(ctx context.Context, e TempEngine) {
 			fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 1-4")
 			c.waitTimestamp()
 			fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 1-5")
-			if cnEng, ok := e.(*Engine); ok {
-				if err := c.replayCatalogCache(ctx, cnEng); err != nil {
+			switch eng := e.(type) {
+			case *Engine:
+				if err := c.replayCatalogCache(
+					ctx,
+					eng.cli,
+					eng,
+					eng.GetLatestCatalogCache()); err != nil {
+					panic(err)
+				}
+			case *CdcEngine:
+				coreEng := eng.cnEng.(*Engine)
+				if err := c.replayCatalogCache(
+					ctx,
+					coreEng.cli,
+					coreEng,
+					eng.GetLatestCatalogCache()); err != nil {
 					panic(err)
 				}
 			}
@@ -793,8 +812,22 @@ func (c *PushClient) connect(ctx context.Context, e TempEngine) {
 		fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 3-7")
 		c.waitTimestamp()
 		fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 3-8")
-		if cnEng, ok := e.(*Engine); ok {
-			if err := c.replayCatalogCache(ctx, cnEng); err != nil {
+		switch eng := e.(type) {
+		case *Engine:
+			if err := c.replayCatalogCache(
+				ctx,
+				eng.cli,
+				eng,
+				eng.GetLatestCatalogCache()); err != nil {
+				panic(err)
+			}
+		case *CdcEngine:
+			coreEng := eng.cnEng.(*Engine)
+			if err := c.replayCatalogCache(
+				ctx,
+				coreEng.cli,
+				coreEng,
+				eng.GetLatestCatalogCache()); err != nil {
 				panic(err)
 			}
 		}
@@ -1962,7 +1995,7 @@ func cdcReplayLogtailUnlock(
 	//step2: deliver the partition state to the cdc module
 	//TODO: complement heartbeat
 	schemaCache := e.GetLatestCatalogCache()
-	schemaCache.PrintTables(math.MaxUint64)
+	schemaCache.PrintTables(tblId)
 	tblItem := schemaCache.GetTableById(uint32(tableInfo.AccountId), dbId, tblId)
 	if tblItem == nil {
 		return moerr.NewInternalError(ctx, "no table accountid %v %v:%v %v:%v in catalog cache", "",

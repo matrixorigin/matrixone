@@ -454,6 +454,8 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 				Ts:         ts.ToTimestamp(),
 			}
 			cc.tables.data.Set(newItem)
+			fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache delete table",
+				item.AccountId, item.DatabaseName, item.Name, item.DatabaseId, item.Id)
 		}
 	}
 }
@@ -476,6 +478,8 @@ func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
 				Ts:        ts.ToTimestamp(),
 			}
 			cc.databases.data.Set(newItem)
+			fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache delete database",
+				item.AccountId, item.Name, item.Id)
 		}
 	}
 }
@@ -644,8 +648,7 @@ func (cc *CatalogCache) PrintTables(dbId uint64) {
 				item.DatabaseId,
 				item.Name,
 				item.Id,
-				"deleted", item.deleted,
-				item.CreateSql)
+				"deleted", item.deleted)
 		}
 		return true
 	})
