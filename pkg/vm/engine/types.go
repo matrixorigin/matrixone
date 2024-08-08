@@ -725,8 +725,7 @@ type DataSource interface {
 		memFilter any,
 		mp *mpool.MPool,
 		vp VectorPool,
-		bat *batch.Batch,
-	) (*objectio.BlockInfo, DataState, error)
+	) (*batch.Batch, *objectio.BlockInfo, DataState, error)
 
 	ApplyTombstones(
 		ctx context.Context,
