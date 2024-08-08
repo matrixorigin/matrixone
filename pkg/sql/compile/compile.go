@@ -449,7 +449,7 @@ func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!")
 	} else {
-		fmt.Println("pipeline for ap query!")
+		fmt.Println("pipeline for ap query! current cn", c.addr, "sql: ", c.originSQL)
 	}
 	fmt.Println(DebugShowScopes(c.scope))
 }
@@ -1631,15 +1631,21 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	if time.Since(t) > time.Second {
 		c.proc.Infof(ctx, "read file offset cost %v", time.Since(t))
 	}
-	ss := make([]*Scope, 1)
+
+	var ss []*Scope
 	if param.Parallel {
 		ss = make([]*Scope, len(c.cnList))
+		for i := range ss {
+			ss[i] = c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
+		}
+	} else {
+		ss = make([]*Scope, 1)
+		ss[0] = c.constructScopeForExternal(c.addr, param.Parallel)
 	}
 	pre := 0
 
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		ss[i] = c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
 		ss[i].IsLoad = true
 		count := ID2Addr[i]
 		fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
@@ -3591,7 +3597,6 @@ func (c *Compile) newMergeRemoteScopeByCN(ss []*Scope) []*Scope {
 }
 
 func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []*Scope, n *plan.Node) []*Scope {
-	usedBuildScope := false
 	rs := c.newMergeRemoteScopeByCN(probeScopes)
 	for i := range rs {
 		rs[i].IsJoin = true
@@ -3603,34 +3608,29 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		}
 		rs[i].Proc.Reg.MergeReceivers = append(rs[i].Proc.Reg.MergeReceivers, w)
 	}
-	// all join's first flag will setting in newLeftScope and newRightScope
-	// so we set it to false now
+
 	if c.IsTpQuery() {
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
-		usedBuildScope = true
-	} else {
-		c.anal.isFirst = false
-		for i := range rs {
-			if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
-				mergeBuild := buildScopes[0]
-				usedBuildScope = true
-				if len(buildScopes) > 1 {
-					mergeBuild = c.newMergeScope(buildScopes)
-				}
-				mergeBuild.setRootOperator(constructDispatch(rs[i].BuildIdx, rs, c.addr, n, false))
-				mergeBuild.IsEnd = true
-				rs[i].PreScopes = append(rs[i].PreScopes, mergeBuild)
-				break
-			}
-		}
+		return rs
 	}
 
-	if !usedBuildScope {
-		for _, s := range buildScopes {
-			s.release()
+	idx := 0
+	// all join's first flag will setting in newLeftScope and newRightScope
+	// so we set it to false now
+	c.anal.isFirst = false
+	for i := range rs {
+		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
+			idx = i
+			break
 		}
 	}
-
+	mergeBuild := buildScopes[0]
+	if len(buildScopes) > 1 {
+		mergeBuild = c.newMergeScope(buildScopes)
+	}
+	mergeBuild.setRootOperator(constructDispatch(rs[idx].BuildIdx, rs, c.addr, n, false))
+	mergeBuild.IsEnd = true
+	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeBuild)
 	return rs
 }
 
