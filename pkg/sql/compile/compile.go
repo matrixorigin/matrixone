@@ -449,7 +449,7 @@ func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!")
 	} else {
-		fmt.Println("pipeline for ap query!")
+		fmt.Println("pipeline for ap query! current cn", c.addr, "sql: ", c.originSQL)
 	}
 	fmt.Println(DebugShowScopes(c.scope))
 }
@@ -1616,15 +1616,21 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	if time.Since(t) > time.Second {
 		c.proc.Infof(ctx, "read file offset cost %v", time.Since(t))
 	}
-	ss := make([]*Scope, 1)
+
+	var ss []*Scope
 	if param.Parallel {
 		ss = make([]*Scope, len(c.cnList))
+		for i := range ss {
+			ss[i] = c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
+		}
+	} else {
+		ss = make([]*Scope, 1)
+		ss[0] = c.constructScopeForExternal(c.addr, param.Parallel)
 	}
 	pre := 0
 
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		ss[i] = c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
 		ss[i].IsLoad = true
 		count := ID2Addr[i]
 		fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
