@@ -185,6 +185,7 @@ func initFrontendMetrics() {
 	registry.MustRegister(requestCounter)
 	registry.MustRegister(resolveDurationHistogram)
 	registry.MustRegister(createAccountDurationHistogram)
+	registry.MustRegister(pubSubDurationHistogram)
 	registry.MustRegister(sqlLengthHistogram)
 }
 
