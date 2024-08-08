@@ -55,7 +55,7 @@ type container struct {
 }
 
 type FuzzyFilter struct {
-	ctr *container
+	ctr container
 
 	// Estimates of the number of data items obtained from statistical information
 	N                  float64
@@ -78,8 +78,8 @@ func init() {
 		func() *FuzzyFilter {
 			return &FuzzyFilter{}
 		},
-		func(a *FuzzyFilter) {
-			*a = FuzzyFilter{}
+		func(f *FuzzyFilter) {
+			*f = FuzzyFilter{}
 		},
 		reuse.DefaultOptions[FuzzyFilter]().
 			WithEnableChecker(),
@@ -109,6 +109,19 @@ func (fuzzyFilter *FuzzyFilter) getProbeIdx() int {
 }
 
 func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &fuzzyFilter.ctr
+	ctr.state = Build
+	ctr.collisionCnt = 0
+	ctr.pass2RuntimeFilter.CleanOnlyData()
+	ctr.rbat.CleanOnlyData()
+
+	useRoaring := IfCanUseRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
+	if useRoaring {
+		ctr.roaringFilter.b.Clear()
+	} else {
+		ctr.bloomFilter.Reset()
+	}
+
 	fuzzyFilter.Free(proc, pipelineFailed, err)
 }
 
@@ -134,7 +147,7 @@ func (fuzzyFilter *FuzzyFilter) Free(proc *process.Process, pipelineFailed bool,
 }
 
 func (fuzzyFilter *FuzzyFilter) add(pkCol *vector.Vector) {
-	ctr := fuzzyFilter.ctr
+	ctr := &fuzzyFilter.ctr
 	if ctr.roaringFilter != nil {
 		ctr.roaringFilter.addFunc(ctr.roaringFilter, pkCol)
 	} else {
@@ -143,7 +156,7 @@ func (fuzzyFilter *FuzzyFilter) add(pkCol *vector.Vector) {
 }
 
 func (fuzzyFilter *FuzzyFilter) test(proc *process.Process, pkCol *vector.Vector) error {
-	ctr := fuzzyFilter.ctr
+	ctr := &fuzzyFilter.ctr
 	if ctr.roaringFilter != nil {
 		idx, dupVal := ctr.roaringFilter.testFunc(ctr.roaringFilter, pkCol)
 		if idx == -1 {
@@ -164,7 +177,7 @@ func (fuzzyFilter *FuzzyFilter) test(proc *process.Process, pkCol *vector.Vector
 }
 
 func (fuzzyFilter *FuzzyFilter) testAndAdd(proc *process.Process, pkCol *vector.Vector) error {
-	ctr := fuzzyFilter.ctr
+	ctr := &fuzzyFilter.ctr
 	if ctr.roaringFilter != nil {
 		idx, dupVal := ctr.roaringFilter.testAndAddFunc(ctr.roaringFilter, pkCol)
 		if idx == -1 {

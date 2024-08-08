@@ -83,8 +83,7 @@ func (fuzzyFilter *FuzzyFilter) OpType() vm.OpType {
 }
 
 func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
-	ctr := new(container)
-	fuzzyFilter.ctr = ctr
+	ctr := &fuzzyFilter.ctr
 	ctr.InitReceiver(proc, false)
 	rowCount := int64(fuzzyFilter.N)
 	if rowCount < 1000 {
@@ -155,7 +154,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
-	ctr := fuzzyFilter.ctr
+	ctr := &fuzzyFilter.ctr
 	for {
 		switch ctr.state {
 		case Build:
@@ -178,7 +177,6 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			}
 
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
@@ -187,11 +185,9 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 
 			err := fuzzyFilter.handleBuild(proc, pkCol)
 			if err != nil {
-				proc.PutBatch(bat)
 				return result, err
 			}
 
-			proc.PutBatch(bat)
 			continue
 
 		case HandleRuntimeFilter:
@@ -233,7 +229,6 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			}
 
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
@@ -242,11 +237,9 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			// arg.probeCnt += pkCol.Length()
 			err := fuzzyFilter.handleProbe(proc, pkCol)
 			if err != nil {
-				proc.PutBatch(bat)
 				return result, err
 			}
 
-			proc.PutBatch(bat)
 			continue
 		case End:
 			result.Status = vm.ExecStop
@@ -305,7 +298,7 @@ func (fuzzyFilter *FuzzyFilter) handleProbe(proc *process.Process, pkCol *vector
 }
 
 func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error {
-	ctr := fuzzyFilter.ctr
+	ctr := &fuzzyFilter.ctr
 
 	if fuzzyFilter.RuntimeFilterSpec == nil {
 		return nil
@@ -340,7 +333,7 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 }
 
 func (fuzzyFilter *FuzzyFilter) appendPassToRuntimeFilter(v *vector.Vector, proc *process.Process) {
-	ctr := fuzzyFilter.ctr
+	ctr := &fuzzyFilter.ctr
 	if ctr.pass2RuntimeFilter != nil && fuzzyFilter.RuntimeFilterSpec != nil {
 		el := ctr.pass2RuntimeFilter.Length()
 		al := v.Length()
@@ -356,14 +349,14 @@ func (fuzzyFilter *FuzzyFilter) appendPassToRuntimeFilter(v *vector.Vector, proc
 
 // appendCollisionKey will append collision key into rbat
 func (fuzzyFilter *FuzzyFilter) appendCollisionKey(proc *process.Process, idx int, pkCol *vector.Vector) {
-	ctr := fuzzyFilter.ctr
+	ctr := &fuzzyFilter.ctr
 	ctr.rbat.GetVector(0).UnionOne(pkCol, int64(idx), proc.GetMPool())
 	ctr.collisionCnt++
 }
 
 // rbat will contain the keys that have hash collisions
 func (fuzzyFilter *FuzzyFilter) generate(proc *process.Process) error {
-	ctr := fuzzyFilter.ctr
+	ctr := &fuzzyFilter.ctr
 	rbat := batch.NewWithSize(1)
 	rbat.SetVector(0, proc.GetVector(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)))
 	ctr.pass2RuntimeFilter = proc.GetVector(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))

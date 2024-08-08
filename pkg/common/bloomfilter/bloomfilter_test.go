@@ -58,6 +58,30 @@ func TestBloomFilter(t *testing.T) {
 	require.Equal(t, allAdd, false)
 }
 
+func TestBloomFilterReset(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := testutil.NewVector(testCount*1.2, types.New(types.T_int64, 0, 0), mp, false, nil)
+
+	boom := New(testCount, testRate)
+	boom.TestAndAdd(vec, func(_ bool, _ int) {})
+
+	allAdd := true
+	boom.Test(vec, func(exits bool, _ int) {
+		allAdd = allAdd && exits
+	})
+	require.Equal(t, allAdd, true)
+
+	boom.Reset()
+
+	findOne := false
+	boom.Test(vec, func(exits bool, _ int) {
+		findOne = findOne || exits
+	})
+	require.Equal(t, findOne, false)
+
+	vec.Free(mp)
+}
+
 func BenchmarkBloomFiltrerAdd(b *testing.B) {
 	mp := mpool.MustNewZero()
 	vecs := make([]*vector.Vector, vecCount)
