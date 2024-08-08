@@ -200,6 +200,12 @@ type Engine struct {
 
 	//for message on multiCN, use uuid to get the messageBoard
 	messageCenter *message.MessageCenter
+
+	timeFixed             bool
+	moCatalogCreatedTime  *vector.Vector
+	moDatabaseCreatedTime *vector.Vector
+	moTablesCreatedTime   *vector.Vector
+	moColumnsCreatedTime  *vector.Vector
 }
 
 func (txn *Transaction) String() string {
