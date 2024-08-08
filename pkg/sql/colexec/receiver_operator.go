@@ -29,10 +29,12 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool)
 	if isMergeType {
 		r.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
 		r.chs = make([]chan *process.RegisterMessage, r.aliveMergeReceiver)
+		r.nilBatchCnt = make([]int, r.aliveMergeReceiver)
 		r.receiverListener = make([]reflect.SelectCase, r.aliveMergeReceiver+1)
 		r.receiverListener[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
 		for i, mr := range proc.Reg.MergeReceivers {
 			r.chs[i] = mr.Ch
+			r.nilBatchCnt[i] = mr.NilBatchCnt
 			r.receiverListener[i+1] = reflect.SelectCase{
 				Dir:  reflect.SelectRecv,
 				Chan: reflect.ValueOf(mr.Ch),
@@ -215,12 +217,30 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *process.RegisterMessage, bo
 			msg = (*process.RegisterMessage)(value.UnsafePointer())
 		}
 		if !ok || msg == nil || msg.Batch == nil {
+			if msg != nil && msg.Batch == nil && chosen > 0 {
+				idx := chosen - 1
+				if r.nilBatchCnt[idx] > 0 {
+					r.nilBatchCnt[idx]--
+				}
+				if r.nilBatchCnt[idx] > 0 {
+					return r.selectFromAllReg()
+				}
+			}
 			r.RemoveChosen(chosen)
 		}
 		return chosen, msg, ok
 	}
 
 	if !ok || msg == nil || msg.Batch == nil {
+		if msg != nil && msg.Batch == nil && chosen > 0 {
+			idx := chosen - 1
+			if r.nilBatchCnt[idx] > 0 {
+				r.nilBatchCnt[idx]--
+			}
+			if r.nilBatchCnt[idx] > 0 {
+				return r.selectFromAllReg()
+			}
+		}
 		r.DisableChosen(chosen)
 	}
 	return chosen, msg, ok

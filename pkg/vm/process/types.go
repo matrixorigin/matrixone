@@ -88,8 +88,12 @@ func NewRegMsg(bat *batch.Batch) *RegisterMessage {
 
 // WaitRegister channel
 type WaitRegister struct {
+	// Ctx, context for data receiver.
 	Ctx context.Context
-	Ch  chan *RegisterMessage
+	// Ch, data receiver channel, receiver will wait for data from this channel.
+	Ch chan *RegisterMessage
+	// how many nil batch this channel can receive, default 0 means every nil batch close channel
+	NilBatchCnt int
 }
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
@@ -315,9 +319,10 @@ func (sp *StmtProfile) GetStmtId() uuid.UUID {
 	return sp.stmtId
 }
 
-// the common part of process.
-// each query share only 1 instance of BaseProcess
 type BaseProcess struct {
+	// sqlContext includes the client context and the query context.
+	sqlContext QueryBaseContext
+
 	StmtProfile *StmtProfile
 	// Id, query id.
 	Id              string
@@ -355,10 +360,16 @@ type BaseProcess struct {
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
 type Process struct {
-	Base             *BaseProcess
-	Reg              Register
-	Ctx              context.Context
-	Cancel           context.CancelFunc
+	// BaseProcess is the common part of one process, and it's shared by all its children processes.
+	Base *BaseProcess
+	Reg  Register
+
+	// Ctx and Cancel are pipeline's context and cancel function.
+	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
+	Ctx    context.Context
+	Cancel context.CancelFunc
+
+	// TODO: move to dispatch operator.
 	DispatchNotifyCh chan *WrapCs
 }
 
@@ -419,23 +430,15 @@ func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
 }
 
 func (proc *Process) CleanValueScanBatchs() {
-	for k, bat := range proc.Base.valueScanBatch {
-		bat.SetCnt(1)
-		bat.Clean(proc.Mp())
-		delete(proc.Base.valueScanBatch, k)
-	}
-}
-
-func (proc *Process) GetValueScanBatchs() []*batch.Batch {
-	var bats []*batch.Batch
-
+	mp := proc.Mp()
 	for k, bat := range proc.Base.valueScanBatch {
 		if bat != nil {
-			bats = append(bats, bat)
+			bat.SetCnt(1)
+			bat.Clean(mp)
 		}
+		// todo: why not remake the map after all clean ?
 		delete(proc.Base.valueScanBatch, k)
 	}
-	return bats
 }
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {

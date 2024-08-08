@@ -46,7 +46,9 @@ type Product struct {
 	Result     []colexec.ResultPos
 	IsShuffle  bool
 	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (product *Product) GetOperatorBase() *vm.OperatorBase {
@@ -90,6 +92,11 @@ func (product *Product) Free(proc *process.Process, pipelineFailed bool, err err
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		product.ctr = nil
+	}
+	if product.ProjectList != nil {
+		anal := proc.GetAnalyze(product.GetIdx(), product.GetParallelIdx(), product.GetParallelMajor())
+		anal.Alloc(product.ProjectAllocSize)
+		product.FreeProjection(proc)
 	}
 }
 

@@ -46,10 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	DefaultRpcBufferSize = 1 << 10
-)
-
 type (
 	TxnOperator = client.TxnOperator
 	TxnClient   = client.TxnClient
@@ -57,8 +53,12 @@ type (
 )
 
 type ComputationRunner interface {
+	// todo: remove the ts next day, that's useless.
 	Run(ts uint64) (*util.RunResult, error)
 }
+
+// compile.Compile should implement ComputationRunner to support Run method.
+var _ ComputationRunner = &compile.Compile{}
 
 // ComputationWrapper is the wrapper of the computation
 type ComputationWrapper interface {
@@ -175,6 +175,8 @@ type ExecResult interface {
 	GetUint64(ctx context.Context, rindex, cindex uint64) (uint64, error)
 
 	GetInt64(ctx context.Context, rindex, cindex uint64) (int64, error)
+
+	ColumnIsNull(ctx context.Context, rindex, cindex uint64) (bool, error)
 }
 
 func execResultArrayHasData(arr []ExecResult) bool {

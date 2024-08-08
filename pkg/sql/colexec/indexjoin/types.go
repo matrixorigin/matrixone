@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -40,7 +41,9 @@ type IndexJoin struct {
 	Result             []int32
 	Typs               []types.Type
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (indexJoin *IndexJoin) GetOperatorBase() *vm.OperatorBase {
@@ -87,5 +90,9 @@ func (indexJoin *IndexJoin) Free(proc *process.Process, pipelineFailed bool, err
 		}
 		indexJoin.ctr = nil
 	}
-
+	if indexJoin.ProjectList != nil {
+		anal := proc.GetAnalyze(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor())
+		anal.Alloc(indexJoin.ProjectAllocSize)
+		indexJoin.FreeProjection(proc)
+	}
 }

@@ -105,8 +105,7 @@ func (s *Scope) Reset(c *Compile) error {
 		return err
 	}
 	for _, scope := range s.PreScopes {
-		err := scope.Reset(c)
-		if err != nil {
+		if err = scope.Reset(c); err != nil {
 			return err
 		}
 	}
@@ -114,24 +113,14 @@ func (s *Scope) Reset(c *Compile) error {
 }
 
 func (s *Scope) resetForReuse(c *Compile) (err error) {
-	if s.Proc != nil {
-		newctx, cancel := context.WithCancel(c.proc.Ctx)
-		s.Proc.Base = c.proc.Base
-		s.Proc.Ctx = newctx
-		s.Proc.Cancel = cancel
-	}
-
-	for i := 0; i < len(s.Proc.Reg.MergeReceivers); i++ {
-		s.Proc.Reg.MergeReceivers[i].Ctx = s.Proc.Ctx
-		s.Proc.Reg.MergeReceivers[i].CleanChannel(s.Proc.GetMPool())
-	}
-
-	vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
+	if err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if op.OpType() == vm.Output {
 			op.(*output.Output).Func = c.fill
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 
 	if s.DataSource != nil {
 		if s.DataSource.isConst {
@@ -192,8 +181,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 	}()
 
-	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
-
 	id := uint64(0)
 	if s.DataSource.TableDef != nil {
 		id = s.DataSource.TableDef.TblId
@@ -224,16 +211,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 	default:
 	}
 	return err
-}
-
-func (s *Scope) SetContextRecursively(ctx context.Context) {
-	if s.Proc == nil {
-		return
-	}
-	newCtx := s.Proc.ResetContextFromParent(ctx)
-	for _, scope := range s.PreScopes {
-		scope.SetContextRecursively(newCtx)
-	}
 }
 
 func (s *Scope) InitAllDataSource(c *Compile) error {
@@ -297,7 +274,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 		}
 	}
 
-	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	var notifyMessageResultReceiveChan chan notifyMessageResult
 	if len(s.RemoteReceivRegInfos) > 0 {
 		notifyMessageResultReceiveChan = make(chan notifyMessageResult, len(s.RemoteReceivRegInfos))
@@ -421,8 +397,6 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		}
 	}()
 
-	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
-
 	switch {
 	// probability 1: it's a JOIN pipeline.
 	case s.IsJoin:
@@ -491,7 +465,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	for i := 0; i < mcpu; i++ {
 		ss[i] = newScope(Merge)
 		ss[i].NodeInfo = s.NodeInfo
-		ss[i].Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, 1)
+		ss[i].Proc = s.Proc.NewContextChildProc(1)
 	}
 	probeScope, buildScope := c.newBroadcastJoinProbeScope(s, ss), c.newJoinBuildScope(s, int32(mcpu))
 
@@ -547,7 +521,7 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		ss[i].DataSource = &Source{
 			isConst: true,
 		}
-		ss[i].Proc = process.NewFromProc(s.Proc, c.proc.Ctx, 0)
+		ss[i].Proc = s.Proc.NewContextChildProc(0)
 		if err := ss[i].initDataSource(c); err != nil {
 			return nil, err
 		}
@@ -606,7 +580,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			AccountId:    s.DataSource.AccountId,
 			node:         s.DataSource.node,
 		}
-		readerScopes[i].Proc = process.NewFromProc(s.Proc, c.proc.Ctx, 0)
+		readerScopes[i].Proc = s.Proc.NewContextChildProc(0)
 		readerScopes[i].TxnOffset = s.TxnOffset
 	}
 
@@ -615,7 +589,6 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		ReleaseScopes(readerScopes)
 		return nil, err
 	}
-	mergeFromParallelScanScope.SetContextRecursively(s.Proc.Ctx)
 	return mergeFromParallelScanScope, nil
 }
 
@@ -751,7 +724,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 	var flg bool
 	var toReleaseOpRoot vm.Operator
 	defer func() {
-		vm.HandleAllOp(toReleaseOpRoot, func(parentOp, op vm.Operator) error {
+		_ = vm.HandleAllOp(toReleaseOpRoot, func(parentOp, op vm.Operator) error {
 			op.Release()
 			return nil
 		})
@@ -782,7 +755,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		newArg.AppendChild(mergeOp)
 	}
 
-	vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
+	if err := vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if flg {
 			return nil
 		}
@@ -957,7 +930,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return nil, err
+	}
 
 	if !flg {
 		newArg := merge.NewArgument()
@@ -978,10 +953,12 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		}
 		otherOp := s.RootOp.GetOperatorBase().GetChildren(0)
 		s.RootOp.GetOperatorBase().SetChild(newArg, 0)
-		vm.HandleAllOp(otherOp, func(parentOp vm.Operator, op vm.Operator) error {
+		if err := vm.HandleAllOp(otherOp, func(parentOp vm.Operator, op vm.Operator) error {
 			op.Release()
 			return nil
-		})
+		}); err != nil {
+			return nil, err
+		}
 	}
 	s.Magic = Merge
 	s.PreScopes = ss
@@ -1157,7 +1134,7 @@ func (s *Scope) replace(c *Compile) error {
 
 	delAffectedRows := uint64(0)
 	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond))
+		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond), NoAccountId)
 		if err != nil {
 			return err
 		}
@@ -1170,7 +1147,7 @@ func (s *Scope) replace(c *Compile) error {
 	} else {
 		sql = "insert " + c.sql[7:]
 	}
-	result, err := c.runSqlWithResult(sql)
+	result, err := c.runSqlWithResult(sql, NoAccountId)
 	if err != nil {
 		return err
 	}
