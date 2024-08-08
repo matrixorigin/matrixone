@@ -16,6 +16,9 @@ package projection
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -24,8 +27,11 @@ import (
 var _ vm.Operator = new(Projection)
 
 type Projection struct {
+	ctr         *container
+	ProjectList []*plan.Expr
 	vm.OperatorBase
-	colexec.Projection
+
+	maxAllocSize int
 }
 
 func (projection *Projection) GetOperatorBase() *vm.OperatorBase {
@@ -59,14 +65,31 @@ func (projection *Projection) Release() {
 	}
 }
 
+type container struct {
+	buf           *batch.Batch
+	projExecutors []colexec.ExpressionExecutor
+	uafs          []func(v, w *vector.Vector) error // vector.GetUnionAllFunction
+}
+
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	projection.Free(proc, pipelineFailed, err)
 }
 
 func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if projection.ProjectList != nil {
-		anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
-		anal.Alloc(int64(projection.ProjectAllocSize))
-		projection.FreeProjection(proc)
+	if projection.ctr != nil {
+		for i := range projection.ctr.projExecutors {
+			if projection.ctr.projExecutors[i] != nil {
+				projection.ctr.projExecutors[i].Free()
+			}
+		}
+		projection.ctr.projExecutors = nil
+		if projection.ctr.buf != nil {
+			projection.ctr.buf.Clean(proc.Mp())
+			projection.ctr.buf = nil
+		}
+		projection.ctr = nil
 	}
+
+	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
+	anal.Alloc(int64(projection.maxAllocSize))
 }
