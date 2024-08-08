@@ -1933,8 +1933,8 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 			c.setProjection(n, ss[i])
 			continue
 		}
-		_, ok := c.stmt.(*tree.Insert)
-		if ok {
+		_, ok := c.stmt.(*tree.Select)
+		if !ok {
 			c.setProjection(n, ss[i])
 			continue
 		}
