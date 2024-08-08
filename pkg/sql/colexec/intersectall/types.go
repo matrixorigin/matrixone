@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -26,7 +25,6 @@ import (
 var _ vm.Operator = new(IntersectAll)
 
 type container struct {
-	colexec.ReceiverOperator
 
 	// operator state: Build, Probe or End
 	state int

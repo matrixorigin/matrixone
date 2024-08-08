@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -70,7 +69,6 @@ func (minus *Minus) Release() {
 }
 
 type container struct {
-	colexec.ReceiverOperator
 
 	// operator execution stage.
 	state int
@@ -91,7 +89,6 @@ func (minus *Minus) Free(proc *process.Process, pipelineFailed bool, err error) 
 	if minus.ctr != nil {
 		minus.ctr.cleanBatch(mp)
 		minus.ctr.cleanHashMap()
-		minus.ctr.FreeAllReg()
 		minus.ctr = nil
 	}
 }
