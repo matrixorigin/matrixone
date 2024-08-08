@@ -33,17 +33,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
-var (
-	timeFixed             bool
-	moCatalogCreatedTime  *vector.Vector
-	moDatabaseCreatedTime *vector.Vector
-	moTablesCreatedTime   *vector.Vector
-	moColumnsCreatedTime  *vector.Vector
-)
-
 // tryAdjustThreeTablesCreatedTime analyzes the mo_tables batch and tries to adjust the created time of the three tables.
-func tryAdjustThreeTablesCreatedTimeWithBatch(b *batch.Batch) {
-	if timeFixed {
+func (e *Engine) tryAdjustThreeTablesCreatedTimeWithBatch(b *batch.Batch) {
+	if e.timeFixed {
 		return
 	}
 
@@ -55,11 +47,11 @@ func tryAdjustThreeTablesCreatedTimeWithBatch(b *batch.Batch) {
 		tname := b.Vecs[tnameIdx].GetStringAt(i)
 		if aid == 0 && tname == "mo_user" {
 			ts := vector.GetFixedAt[types.Timestamp](b.Vecs[createdTsIdx], i)
-			vector.SetFixedAt(moDatabaseCreatedTime, 0, ts)
-			vector.SetFixedAt(moTablesCreatedTime, 0, ts)
-			vector.SetFixedAt(moColumnsCreatedTime, 0, ts)
-			vector.SetFixedAt(moCatalogCreatedTime, 0, ts)
-			timeFixed = true
+			vector.SetFixedAt(e.moDatabaseCreatedTime, 0, ts)
+			vector.SetFixedAt(e.moTablesCreatedTime, 0, ts)
+			vector.SetFixedAt(e.moColumnsCreatedTime, 0, ts)
+			vector.SetFixedAt(e.moCatalogCreatedTime, 0, ts)
+			e.timeFixed = true
 			return
 		}
 	}
@@ -90,7 +82,7 @@ func (e *Engine) init(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		moCatalogCreatedTime = bat.Vecs[catalog.MO_DATABASE_CREATED_TIME_IDX]
+		e.moCatalogCreatedTime = bat.Vecs[catalog.MO_DATABASE_CREATED_TIME_IDX]
 		ibat, err := fillRandomRowidAndZeroTs(bat, m)
 		if err != nil {
 			bat.Clean(m)
@@ -119,7 +111,7 @@ func (e *Engine) init(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		moDatabaseCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
+		e.moDatabaseCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		ibat, err := fillRandomRowidAndZeroTs(bat, m)
 		if err != nil {
 			bat.Clean(m)
@@ -177,7 +169,7 @@ func (e *Engine) init(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		moTablesCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
+		e.moTablesCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		ibat, err := fillRandomRowidAndZeroTs(bat, m)
 		if err != nil {
 			bat.Clean(m)
@@ -225,7 +217,7 @@ func (e *Engine) init(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		moColumnsCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
+		e.moColumnsCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		ibat, err := fillRandomRowidAndZeroTs(bat, m)
 		if err != nil {
 			bat.Clean(m)
