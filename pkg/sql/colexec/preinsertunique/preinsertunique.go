@@ -57,18 +57,18 @@ func (preInsertUnique *PreInsertUnique) initBuf(proc *process.Process, bat *batc
 	if isUpdate {
 		preInsertUnique.ctr.buf = batch.NewWithSize(3)
 		preInsertUnique.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
-		preInsertUnique.ctr.buf.Vecs[2] = proc.GetVector(types.T_Rowid.ToType())
+		preInsertUnique.ctr.buf.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
 	} else {
 		preInsertUnique.ctr.buf = batch.NewWithSize(2)
 		preInsertUnique.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 	}
 
 	if len(uniqueColumnPos) == 1 {
-		preInsertUnique.ctr.buf.Vecs[0] = proc.GetVector(*bat.Vecs[uniqueColumnPos[0]].GetType())
+		preInsertUnique.ctr.buf.Vecs[0] = vector.NewVec(*bat.Vecs[uniqueColumnPos[0]].GetType())
 	} else {
-		preInsertUnique.ctr.buf.Vecs[0] = proc.GetVector(types.T_varchar.ToType())
+		preInsertUnique.ctr.buf.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	}
-	preInsertUnique.ctr.buf.Vecs[1] = proc.GetVector(*bat.Vecs[pkPos].GetType())
+	preInsertUnique.ctr.buf.Vecs[1] = vector.NewVec(*bat.Vecs[pkPos].GetType())
 }
 
 func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResult, error) {

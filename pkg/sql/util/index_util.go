@@ -102,7 +102,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 			v := cIndexVecMap[part]
 			vs = append(vs, v)
 		}
-		b.Vecs[0] = proc.GetVector(types.T_varchar.ToType())
+		b.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 		bitMap, err = serialWithCompacted(vs, nil, proc, packers)
 	} else {
 		var vec *vector.Vector
@@ -112,7 +112,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 				break
 			}
 		}
-		b.Vecs[0] = proc.GetVector(*vec.GetType())
+		b.Vecs[0] = vector.NewVec(*vec.GetType())
 		bitMap, err = compactSingleIndexCol(vec, b.Vecs[0], proc)
 	}
 
@@ -123,7 +123,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 				vec = vecs[i]
 			}
 		}
-		b.Vecs[1] = proc.GetVector(*vec.GetType())
+		b.Vecs[1] = vector.NewVec(*vec.GetType())
 		err = compactPrimaryCol(vec, nil, bitMap, proc)
 	}
 
@@ -489,10 +489,10 @@ func serialWithCompacted(vs []*vector.Vector, vec *vector.Vector, proc *process.
 // result bitmap is [] (empty)
 // Here we are keeping the same function signature of serialWithCompacted so that we can duplicate the same code of
 // `preinsertunique` in `preinsertsecondaryindex`
-func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process, packers *PackerList) (*vector.Vector, *nulls.Nulls, error) {
+func serialWithoutCompacted(vs []*vector.Vector, vec *vector.Vector, proc *process.Process, packers *PackerList) (*nulls.Nulls, error) {
 	if len(vs) == 0 {
-		// return empty vector and empty bitmap
-		return proc.GetVector(types.T_varchar.ToType()), new(nulls.Nulls), nil
+		// return empty bitmap
+		return new(nulls.Nulls), nil
 	}
 
 	rowCount := vs[0].Length()
@@ -521,15 +521,14 @@ func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process, packers 
 		function.SerialHelper(v, nil, ps, true)
 	}
 
-	vec := proc.GetVector(types.T_varchar.ToType())
 	for i := 0; i < rowCount; i++ {
 		if err := vector.AppendBytes(vec, ps[i].GetBuf(), false, proc.Mp()); err != nil {
 			proc.PutVector(vec)
-			return nil, nil, err
+			return nil, err
 		}
 	}
 
-	return vec, new(nulls.Nulls), nil
+	return new(nulls.Nulls), nil
 }
 
 func compactSingleIndexCol(v *vector.Vector, vec *vector.Vector, proc *process.Process) (*nulls.Nulls, error) {
