@@ -1181,7 +1181,7 @@ Table    Create Table
 test02    CREATE TABLE `test02` (\n  `col1` INT NOT NULL,\n  PRIMARY KEY (`col1`)\n)
 desc test02;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null
+col1    INT(32)    NO    PRI    null        
 insert into test02 values (2);
 Duplicate entry '2' for key 'col1'
 drop table if exists test03;
@@ -1191,7 +1191,7 @@ Table    Create Table
 test03    CREATE TABLE `test03` (\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  UNIQUE KEY `col2` (`col2`)\n)
 desc test03;
 Field    Type    Null    Key    Default    Extra    Comment
-col2    DECIMAL(38)    YES    UNI    null
+col2    DECIMAL(38)    YES    UNI    null        
 insert into test03 values (372.324);
 Duplicate entry '372' for key '__mo_index_idx_col'
 drop table if exists test04;
@@ -1540,10 +1540,10 @@ insert into test01 values (2,3,4,5,6,7,8,9,2131.3242343,-3824.34324);
 show create table test01;
 Table    Create Table
 test01    CREATE TABLE `test01` (\n  `col1` TINYINT DEFAULT NULL,\n  `col2` SMALLINT DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE DEFAULT NULL\n)
-create publication publication01 database test;
+create publication publication01 database test account all;
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-publication01    test    2024-07-04 14:37:01    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+publication01    test    *    *        2024-08-03 15:29:02    null    
 drop table if exists test02;
 create table test02 as select * from test01;
 select * from test02;
@@ -1557,15 +1557,15 @@ create account acc0 admin_name 'root' identified by '111';
 drop table if exists sys_tbl_1;
 create table sys_tbl_1(a int primary key, b decimal, c char, d varchar(20) );
 insert into sys_tbl_1 values(1,2,'a','database'),(2,3,'b','test publication'),(3, 4, 'c','324243243');
-create publication sys_pub_1 database test;
+create publication sys_pub_1 database test account all;
 select * from sys_tbl_1;
 a    b    c    d
 1    2    a    database
 2    3    b    test publication
 3    4    c    324243243
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-sys_pub_1    test    2024-07-04 14:37:02    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+sys_pub_1    test    *    *        2024-08-03 15:29:02    null    
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    test    all
@@ -1802,3 +1802,23 @@ no such table db7.t2
 drop role role_r1;
 drop user role_u1;
 drop database db7;
+drop database if exists db8;
+create database db8;
+use db8;
+drop table if exists math01;
+create table math01 (col1 int default 0, col2 decimal, col3 float, col4 double not null);
+insert into math01 values (1, 7382.4324, 432453.3243, -2930.321323);
+insert into math01 values (-100, 3283.32324, 328932.0, -9392032);
+insert into math01 values (22813, -241, 932342.4324, -0.1);
+insert into math01 values (null, null, null, 10);
+drop table if exists agg01;
+create table agg01 as select avg(col1) as avgCol, sum(col2) as sumcol, count(col3) as countCol, max(col4) as maxCol, min(col4) as minCol from math01;
+show create table agg01;
+Table    Create Table
+agg01    CREATE TABLE `agg01` (\n  `avgcol` DOUBLE DEFAULT NULL,\n  `sumcol` DECIMAL(38,0) DEFAULT NULL,\n  `countcol` BIGINT NOT NULL,\n  `maxcol` DOUBLE NOT NULL,\n  `mincol` DOUBLE NOT NULL\n)
+select * from agg01;
+avgcol    sumcol    countcol    maxcol    mincol
+7571.333333333333    10424    3    10.0    -9392032.0
+drop table agg01;
+drop table math01;
+drop database db8;

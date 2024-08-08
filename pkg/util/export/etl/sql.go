@@ -23,7 +23,6 @@ import (
 
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 const MAX_INSERT_TIME = 3 * time.Second
@@ -84,7 +83,6 @@ func (sw *DefaultSqlWriter) dumpBufferToCSV() error {
 	for _, row := range sw.buffer {
 		sw.csvWriter.WriteStrings(row)
 	}
-	v2.TraceMOLoggerExportCsvHistogram.Observe(float64(sw.csvWriter.GetContentLength()))
 	return nil
 }
 

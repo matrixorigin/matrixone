@@ -1,4 +1,4 @@
-// Copyright 2021 - 2023 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,23 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cache
+package fscache
 
-import (
-	"testing"
-
-	"github.com/lni/goutils/leaktest"
-	"github.com/stretchr/testify/require"
-)
-
-func TestNewTableGuard(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	g := newTableGuard()
-	require.NotNil(t, g)
-}
-
-func TestTableGuardGC(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	g := newTableGuard()
-	require.NotNil(t, g)
+type Data interface {
+	Bytes() []byte
+	Slice(length int) Data
+	Release()
 }

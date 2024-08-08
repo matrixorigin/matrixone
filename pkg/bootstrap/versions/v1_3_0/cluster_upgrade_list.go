@@ -23,7 +23,10 @@ import (
 
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pitr,
+	upg_mo_subs,
 }
+
+var needUpgradePubSub = false
 
 var upg_mo_pitr = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
@@ -39,6 +42,25 @@ var upg_mo_pitr = versions.UpgradeEntry{
 		if isExist {
 			return true, nil
 		}
+		return false, nil
+	},
+}
+
+var upg_mo_subs = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_SUBS,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoSubsDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		isExist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_SUBS)
+		if err != nil {
+			return false, err
+		}
+
+		if isExist {
+			return true, nil
+		}
+		needUpgradePubSub = true
 		return false, nil
 	},
 }

@@ -229,7 +229,7 @@ Table    Create Table
 parameters    CREATE TABLE `parameters` (\n  `SPECIFIC_CATALOG` VARCHAR(64) DEFAULT NULL,\n  `SPECIFIC_SCHEMA` VARCHAR(64) DEFAULT NULL,\n  `SPECIFIC_NAME` VARCHAR(64) DEFAULT NULL,\n  `ORDINAL_POSITION` BIGINT UNSIGNED DEFAULT NULL,\n  `PARAMETER_MODE` VARCHAR(5) DEFAULT NULL,\n  `PARAMETER_NAME` VARCHAR(64) DEFAULT NULL,\n  `DATA_TYPE` TEXT DEFAULT NULL,\n  `CHARACTER_MAXIMUM_LENGTH` BIGINT DEFAULT NULL,\n  `CHARACTER_OCTET_LENGTH` BIGINT DEFAULT NULL,\n  `NUMERIC_PRECISION` INT UNSIGNED DEFAULT NULL,\n  `NUMERIC_SCALE` BIGINT DEFAULT NULL,\n  `DATETIME_PRECISION` INT UNSIGNED DEFAULT NULL,\n  `CHARACTER_SET_NAME` VARCHAR(64) DEFAULT NULL,\n  `COLLATION_NAME` VARCHAR(64) DEFAULT NULL,\n  `DTD_IDENTIFIER` TEXT DEFAULT NULL,\n  `ROUTINE_TYPE` VARCHAR(64) DEFAULT NULL\n)
 SHOW CREATE TABLE mo_catalog.mo_columns;
 Table    Create Table
-mo_columns    CREATE TABLE `mo_columns` (\n  `att_uniq_name` VARCHAR(256) DEFAULT NULL,\n  `account_id` INT UNSIGNED DEFAULT NULL,\n  `att_database_id` BIGINT UNSIGNED DEFAULT NULL,\n  `att_database` VARCHAR(256) DEFAULT NULL,\n  `att_relname_id` BIGINT UNSIGNED DEFAULT NULL,\n  `att_relname` VARCHAR(256) DEFAULT NULL,\n  `attname` VARCHAR(256) DEFAULT NULL,\n  `atttyp` VARCHAR(256) DEFAULT NULL,\n  `attnum` INT DEFAULT NULL,\n  `att_length` INT DEFAULT NULL,\n  `attnotnull` TINYINT DEFAULT NULL,\n  `atthasdef` TINYINT DEFAULT NULL,\n  `att_default` VARCHAR(2048) DEFAULT NULL,\n  `attisdropped` TINYINT DEFAULT NULL,\n  `att_constraint_type` CHAR(1) DEFAULT NULL,\n  `att_is_unsigned` TINYINT DEFAULT NULL,\n  `att_is_auto_increment` TINYINT DEFAULT NULL,\n  `att_comment` VARCHAR(2048) DEFAULT NULL,\n  `att_is_hidden` TINYINT DEFAULT NULL,\n  `attr_has_update` TINYINT DEFAULT NULL,\n  `attr_update` VARCHAR(2048) DEFAULT NULL,\n  `attr_is_clusterby` TINYINT DEFAULT NULL,\n  `attr_seqnum` SMALLINT UNSIGNED DEFAULT NULL,\n  `attr_enum` VARCHAR(65535) DEFAULT NULL,\n  PRIMARY KEY (`att_uniq_name`)\n)
+mo_columns    CREATE TABLE `mo_columns` (\n  `att_uniq_name` VARCHAR(256) DEFAULT NULL,\n  `account_id` INT UNSIGNED DEFAULT NULL,\n  `att_database_id` BIGINT UNSIGNED DEFAULT NULL,\n  `att_database` VARCHAR(256) DEFAULT NULL,\n  `att_relname_id` BIGINT UNSIGNED DEFAULT NULL,\n  `att_relname` VARCHAR(256) DEFAULT NULL,\n  `attname` VARCHAR(256) DEFAULT NULL,\n  `atttyp` VARCHAR(256) DEFAULT NULL,\n  `attnum` INT DEFAULT NULL,\n  `att_length` INT DEFAULT NULL,\n  `attnotnull` TINYINT DEFAULT NULL,\n  `atthasdef` TINYINT DEFAULT NULL,\n  `att_default` VARCHAR(2048) DEFAULT NULL,\n  `attisdropped` TINYINT DEFAULT NULL,\n  `att_constraint_type` CHAR(1) DEFAULT NULL,\n  `att_is_unsigned` TINYINT DEFAULT NULL,\n  `att_is_auto_increment` TINYINT DEFAULT NULL,\n  `att_comment` VARCHAR(2048) DEFAULT NULL,\n  `att_is_hidden` TINYINT DEFAULT NULL,\n  `attr_has_update` TINYINT DEFAULT NULL,\n  `attr_update` VARCHAR(2048) DEFAULT NULL,\n  `attr_is_clusterby` TINYINT DEFAULT NULL,\n  `attr_seqnum` SMALLINT UNSIGNED DEFAULT NULL,\n  `attr_enum` VARCHAR(65535) DEFAULT NULL,\n  PRIMARY KEY (`account_id`,`att_database`,`att_relname`,`attname`)\n)
 SHOW CREATE TABLE mo_sample_data_tpch_sf1.lineitem;
 invalid database mo_sample_data_tpch_sf1
 SHOW CREATE TABLE mo_sample_data_tpch_sf1.supplier;
@@ -361,13 +361,13 @@ DTD_IDENTIFIER    TEXT(0)    YES        null
 ROUTINE_TYPE    VARCHAR(64)    YES        null        
 DESC `mo_catalog`.`mo_columns` ;
 Field    Type    Null    Key    Default    Extra    Comment
-att_uniq_name    VARCHAR(256)    YES    PRI    null        
-account_id    INT UNSIGNED(0)    YES        null        
+att_uniq_name    VARCHAR(256)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 att_database_id    BIGINT UNSIGNED(0)    YES        null        
-att_database    VARCHAR(256)    YES        null        
+att_database    VARCHAR(256)    YES    PRI    null        
 att_relname_id    BIGINT UNSIGNED(0)    YES        null        
-att_relname    VARCHAR(256)    YES        null        
-attname    VARCHAR(256)    YES        null        
+att_relname    VARCHAR(256)    YES    PRI    null        
+attname    VARCHAR(256)    YES    PRI    null        
 atttyp    VARCHAR(256)    YES        null        
 attnum    INT(0)    YES        null        
 att_length    INT(0)    YES        null        
@@ -711,12 +711,12 @@ SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_tabl
 name    rows    size    owner
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mysql';
 name    rows    size    owner
-user    0    0    accountadmin
-db    0    0    accountadmin
 procs_priv    0    0    accountadmin
 columns_priv    0    0    accountadmin
 tables_priv    0    0    accountadmin
 role_edges    0    0    accountadmin
+user    0    0    accountadmin
+db    0    0    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='system';
 name    rows    size    owner
 statement_info    0    0    accountadmin

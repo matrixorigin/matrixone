@@ -210,14 +210,12 @@ func (mgr *Manager) GetTableOperator(
 	from, to types.TS,
 	catalog *catalog.Catalog,
 	dbID, tableID uint64,
-	scope Scope,
 	visitor catalog.Processor,
 ) *BoundTableOperator {
 	reader := mgr.GetReader(from, to)
 	return NewBoundTableOperator(
 		catalog,
 		reader,
-		scope,
 		dbID,
 		tableID,
 		visitor,

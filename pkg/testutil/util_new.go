@@ -56,7 +56,7 @@ func SetupAutoIncrService(sid string) {
 
 func NewProcessWithMPool(sid string, mp *mpool.MPool) *process.Process {
 	SetupAutoIncrService(sid)
-	proc := process.New(
+	proc := process.NewTopProcess(
 		context.Background(),
 		mp,
 		nil, // no txn client can be set

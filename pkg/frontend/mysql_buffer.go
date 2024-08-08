@@ -157,7 +157,10 @@ func (c *Conn) Close() error {
 		c.allocator.Free(e.Value.([]byte))
 	}
 	c.ses = nil
-	getGlobalRtMgr().Closed(c)
+	rm := getGlobalRtMgr()
+	if rm != nil {
+		rm.Closed(c)
+	}
 	return nil
 }
 

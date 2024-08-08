@@ -135,6 +135,12 @@ func (external *External) Prepare(proc *process.Process) error {
 	}
 	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.zonemappable = plan2.ExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
+	if external.ProjectList != nil {
+		err := external.PrepareProjection(proc)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -182,13 +188,19 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if external.ctr.buf != nil {
-		anal.Output(external.ctr.buf, external.GetIsLast())
 		external.ctr.maxAllocSize = max(external.ctr.maxAllocSize, external.ctr.buf.Size())
 	}
 	result.Batch = external.ctr.buf
 	if result.Batch != nil {
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
+	if external.ProjectList != nil {
+		result.Batch, err = external.EvalProjection(result.Batch, proc)
+		if err != nil {
+			return result, err
+		}
+	}
+	anal.Output(result.Batch, external.GetIsLast())
 	return result, nil
 }
 
@@ -1073,7 +1085,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	}
 	filepathBytes := []byte(param.Fileparam.Filepath)
 
-	var sels []int32
+	var sels []int64
 	for i := 0; i < len(param.Attrs); i++ {
 		if uint16(param.Name2ColIndex[strings.ToLower(param.Attrs[i])]) >= colCnt {
 			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
@@ -1103,9 +1115,9 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		if cap(sels) >= vecTmp.Length() {
 			sels = sels[:vecTmp.Length()]
 		} else {
-			sels = make([]int32, vecTmp.Length())
+			sels = make([]int64, vecTmp.Length())
 
-			for j, k := int32(0), int32(len(sels)); j < k; j++ {
+			for j, k := int64(0), int64(len(sels)); j < k; j++ {
 				sels[j] = j
 			}
 		}

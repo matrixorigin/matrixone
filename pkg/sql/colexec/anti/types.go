@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -52,7 +53,7 @@ type container struct {
 	executorForVecs []colexec.ExpressionExecutor
 	vecs            []*vector.Vector
 
-	mp *process.JoinMap
+	mp *message.JoinMap
 
 	maxAllocSize int64
 	bat          *batch.Batch
@@ -70,7 +71,9 @@ type AntiJoin struct {
 	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (antiJoin *AntiJoin) GetOperatorBase() *vm.OperatorBase {
@@ -110,19 +113,25 @@ func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 
 func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := antiJoin.ctr
+	anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
+	allocSize := int64(0)
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 
-		anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
+		allocSize += ctr.maxAllocSize
 
 		antiJoin.ctr.lastrow = 0
 
 		antiJoin.ctr = nil
 	}
+	if antiJoin.ProjectList != nil {
+		allocSize += antiJoin.ProjectAllocSize
+		antiJoin.FreeProjection(proc)
+	}
+	anal.Alloc(allocSize)
 }
 
 func (ctr *container) cleanExprExecutor() {

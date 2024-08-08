@@ -185,7 +185,7 @@ func (c *codecService) Decode(
 		return nil, err
 	}
 
-	proc := New(
+	proc := NewTopProcess(
 		ctx,
 		c.mp,
 		c.txnClient,

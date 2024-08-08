@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -56,7 +57,7 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *process.JoinMap
+	mp *message.JoinMap
 
 	maxAllocSize int64
 }
@@ -72,6 +73,7 @@ type SingleJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (singleJoin *SingleJoin) GetOperatorBase() *vm.OperatorBase {
@@ -111,16 +113,22 @@ func (singleJoin *SingleJoin) Reset(proc *process.Process, pipelineFailed bool, 
 
 func (singleJoin *SingleJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := singleJoin.ctr
+	anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
+	allocSize := int64(0)
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 
-		anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
+		allocSize += ctr.maxAllocSize
 		singleJoin.ctr = nil
 	}
+	if singleJoin.ProjectList != nil {
+		allocSize += singleJoin.ProjectAllocSize
+		singleJoin.FreeProjection(proc)
+	}
+	anal.Alloc(allocSize)
 }
 
 func (ctr *container) cleanExprExecutor() {
