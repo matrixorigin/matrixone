@@ -27,7 +27,6 @@ import (
 	"github.com/ledongthuc/pdf"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
-	"log"
 	"math"
 	"os"
 	"runtime"
@@ -37,12 +36,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/baidubce/bce-qianfan-sdk/go/qianfan"
-	"github.com/google/generative-ai-go/genai"
-	"github.com/tmc/langchaingo/llms/ollama"
-	"google.golang.org/api/option"
-
 	"github.com/RoaringBitmap/roaring"
+	"github.com/tmc/langchaingo/llms/ollama"
 	"golang.org/x/exp/constraints"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1009,24 +1004,6 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	return nil
 }
 
-func createGeminiEmbedding(ctx context.Context, input string) ([]float32, error) {
-	//Access your API key as an environment variable (tbd)
-	//Currently, replace the placeholder with yours
-	client, err := genai.NewClient(ctx, option.WithAPIKey("AIzaSyB1UQ_hzKKmedA5HCcHT9l3JMAW_IyiMh4"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer client.Close()
-	// For embeddings, use the Text Embeddings model
-	em := client.EmbeddingModel("text-embedding-004")
-	res, err := em.EmbedContent(ctx, genai.Text(input))
-
-	if err != nil {
-		panic(err)
-	}
-	return res.Embedding.Values, nil
-}
-
 func createOllamaEmbedding(ctx context.Context, input string) ([]float32, error) {
 	llm, err := ollama.New(ollama.WithModel("llama3"))
 	if err != nil {
@@ -1039,32 +1016,6 @@ func createOllamaEmbedding(ctx context.Context, input string) ([]float32, error)
 	}
 
 	return embeddings[0], nil
-}
-
-func createErnieEmbedding(ctx context.Context, input string) ([]float64, error) {
-	// set Qianfan's Access Key and Secret Key
-	os.Setenv("QIANFAN_ACCESS_KEY", "772e36c529874893818234746b9dad7d")
-	os.Setenv("QIANFAN_SECRET_KEY", "a0037096e4434e99aa7445ec1917e6d8")
-
-	embed := qianfan.NewEmbedding(
-		qianfan.WithModel("Embedding-V1"),
-	)
-
-	resp, err := embed.Do(
-		ctx,
-		&qianfan.EmbeddingRequest{
-			Input: []string{input},
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(resp.Data) == 0 || len(resp.Data[0].Embedding) == 0 {
-		return nil, fmt.Errorf("embedding data is empty")
-	}
-
-	return resp.Data[0].Embedding, nil
 }
 
 // Embedding function
@@ -1101,18 +1052,6 @@ func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				return err
 			}
 			embeddingBytes = types.ArrayToBytes[float32](embeddingFloats)
-		case "gemini":
-			embeddingFloats, err := createGeminiEmbedding(ctx, input)
-			if err != nil {
-				return err
-			}
-			embeddingBytes = types.ArrayToBytes[float32](embeddingFloats)
-		case "ernie":
-			embeddingFloats, err := createErnieEmbedding(ctx, input)
-			if err != nil {
-				return err
-			}
-			embeddingBytes = types.ArrayToBytes[float64](embeddingFloats)
 		default:
 			return fmt.Errorf("unsupported embedding model: %s", modelStr)
 		}
