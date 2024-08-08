@@ -17,7 +17,7 @@ select * from table01;
 
 -- publish to tenant test_tenant_1
 create publication publication01 database database01 account test_tenant_1 comment 'publish database to account01';
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 
 -- subscribe database01
@@ -33,7 +33,7 @@ update table01 set col1 = 100 where col2 = 2413242;
 -- @ignore:10,11,12
 show table status;
 drop table table01;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -46,8 +46,8 @@ create database database01;
 use database01;
 create table t1(a int, b int);
 insert into t1 values (1, 1), (2, 2), (3, 3);
-create publication publication01 database database01;
--- @ignore:2,3
+create publication publication01 database database01 account all;
+-- @ignore:5,6
 show publications;
 
 drop account if exists test_tenant_1;
@@ -58,7 +58,7 @@ create account test_tenant_2 admin_name 'test_account' identified by '111';
 -- @session:id=3&user=test_tenant_1:test_account&password=111
 drop database if exists sub_database01;
 create database sub_database01 from sys publication publication01;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 use sub_database01;
 show tables;
@@ -78,7 +78,7 @@ select * from t2;
 -- @session:id=5&user=test_tenant_2:test_account&password=111
 drop database if exists sub_database01;
 create database sub_database01 from sys publication publication01;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 use sub_database01;
 show tables;
@@ -93,14 +93,14 @@ use database02;
 create table table03(col1 char, col2 varchar(100));
 insert into table03 values ('1', 'database');
 insert into table03 values ('a', 'data warehouse');
-create publication publication02 database database02;
--- @ignore:2,3
+create publication publication02 database database02 account all;
+-- @ignore:5,6
 show publications;
 
 -- @session:id=4&user=test_tenant_1:test_account&password=111
 drop database if exists sub_database02;
 create database sub_database02 from sys publication publication02;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 use sub_database02;
 show tables;
@@ -110,7 +110,7 @@ select * from table03;
 -- @session:id=7&user=test_tenant_2:test_account&password=111
 drop database if exists sub_database02;
 create database sub_database02 from sys publication publication02;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 use sub_database02;
 show tables;
@@ -127,13 +127,13 @@ drop table if exists table01;
 create table table01(col1 int);
 insert into table01 values (-1),(1),(2);
 create publication publication03 database database03 account test_tenant_1;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 
 -- @session:id=8&user=test_tenant_1:test_account&password=111
 drop database if exists sub_database03;
 create database sub_database03 from sys publication publication03;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 use sub_database03;
 show tables;
@@ -144,17 +144,17 @@ show table status;
 -- @session
 
 -- @session:id=9&user=test_tenant_2:test_account&password=111
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @session
 
 -- sys modify sub to all tanant
 alter publication publication03 account all;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 
 -- @session:id=10&user=test_tenant_2:test_account&password=111
--- @ignore:3,4,5
+-- @ignore:5,7
 show subscriptions all;
 create database sub_database03 from sys publication publication03;
 use sub_database03;
@@ -165,7 +165,7 @@ select * from table01;
 -- @session
 
 drop publication publication03;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 
 -- @session:id=11&user=test_tenant_1:test_account&password=111

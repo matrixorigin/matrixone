@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -104,7 +105,13 @@ func (b *basePKFilter) String() string {
 		b.valid, name[b.op], b.lb, b.ub, b.vec, b.oid.String())
 }
 
-func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName string, proc *process.Process) (
+func evalValue(
+	exprImpl *plan.Expr_F,
+	tblDef *plan.TableDef,
+	isVec bool,
+	pkName string,
+	proc *process.Process,
+) (
 	ok bool, oid types.T, vals [][]byte) {
 	var val []byte
 	var col *plan.Expr_Col
@@ -141,7 +148,9 @@ func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName 
 	return true, types.T(tblDef.Cols[colPos].Typ.Id), vals
 }
 
-func mergeBaseFilterInKind(left, right basePKFilter, isOR bool, proc *process.Process) (ret basePKFilter) {
+func mergeBaseFilterInKind(
+	left, right basePKFilter, isOR bool, proc *process.Process,
+) (ret basePKFilter) {
 	var ok bool
 	var va, vb *vector.Vector
 	ret.vec = vector.NewVec(left.oid.ToType())
@@ -316,7 +325,9 @@ func mergeBaseFilterInKind(left, right basePKFilter, isOR bool, proc *process.Pr
 // left op in (">", ">=", "=", "<", "<="), right op in (">", ">=", "=", "<", "<=")
 // left op AND right op
 // left op OR right op
-func mergeFilters(left, right basePKFilter, connector int, proc *process.Process) (finalFilter basePKFilter) {
+func mergeFilters(
+	left, right basePKFilter, connector int, proc *process.Process,
+) (finalFilter basePKFilter) {
 	defer func() {
 		finalFilter.oid = left.oid
 	}()
@@ -662,93 +673,6 @@ func mergeFilters(left, right basePKFilter, connector int, proc *process.Process
 		}
 	}
 	return
-}
-
-func tryConstructPrimaryKeyIndexIter(
-	ts timestamp.Timestamp,
-	pkFilter memPKFilter,
-	state *logtailreplay.PartitionState,
-) (iter logtailreplay.RowsIter, delIterFactory func(blkId types.Blockid) logtailreplay.RowsIter) {
-	if !pkFilter.isValid {
-		return
-	}
-
-	switch pkFilter.op {
-	case function.EQUAL, function.PREFIX_EQ:
-		iter = state.NewPrimaryKeyIter(
-			types.TimestampToTS(ts),
-			logtailreplay.Prefix(pkFilter.packed[0]),
-		)
-		delIterFactory = func(blkId types.Blockid) logtailreplay.RowsIter {
-			return state.NewPrimaryKeyDelIter(
-				types.TimestampToTS(ts),
-				logtailreplay.Prefix(pkFilter.packed[0]), blkId)
-		}
-
-	case function.IN, function.PREFIX_IN:
-		// may be it's better to iterate rows instead.
-		if len(pkFilter.packed) > 128 {
-			return
-		}
-
-		iter = state.NewPrimaryKeyIter(
-			types.TimestampToTS(ts),
-			logtailreplay.InKind(pkFilter.packed, pkFilter.op),
-		)
-		delIterFactory = func(blkId types.Blockid) logtailreplay.RowsIter {
-			return state.NewPrimaryKeyDelIter(
-				types.TimestampToTS(ts),
-				logtailreplay.InKind(pkFilter.packed, pkFilter.op), blkId)
-		}
-
-	case function.LESS_EQUAL, function.LESS_THAN:
-		iter = state.NewPrimaryKeyIter(
-			types.TimestampToTS(ts),
-			logtailreplay.LessKind(pkFilter.packed[0], pkFilter.op == function.LESS_EQUAL),
-		)
-		delIterFactory = func(blkId types.Blockid) logtailreplay.RowsIter {
-			return state.NewPrimaryKeyDelIter(
-				types.TimestampToTS(ts),
-				logtailreplay.LessKind(pkFilter.packed[0], pkFilter.op == function.LESS_EQUAL), blkId)
-		}
-
-	case function.GREAT_EQUAL, function.GREAT_THAN:
-		iter = state.NewPrimaryKeyIter(
-			types.TimestampToTS(ts),
-			logtailreplay.GreatKind(pkFilter.packed[0], pkFilter.op == function.GREAT_EQUAL),
-		)
-		delIterFactory = func(blkId types.Blockid) logtailreplay.RowsIter {
-			return state.NewPrimaryKeyDelIter(
-				types.TimestampToTS(ts),
-				logtailreplay.GreatKind(pkFilter.packed[0], pkFilter.op == function.GREAT_EQUAL), blkId)
-		}
-
-	case function.BETWEEN, rangeLeftOpen, rangeRightOpen, rangeBothOpen, function.PREFIX_BETWEEN:
-		var kind int
-		switch pkFilter.op {
-		case function.BETWEEN:
-			kind = 0
-		case rangeLeftOpen:
-			kind = 1
-		case rangeRightOpen:
-			kind = 2
-		case rangeBothOpen:
-			kind = 3
-		case function.PREFIX_BETWEEN:
-			kind = 4
-		}
-		iter = state.NewPrimaryKeyIter(
-			types.TimestampToTS(ts),
-			logtailreplay.BetweenKind(pkFilter.packed[0], pkFilter.packed[1], kind))
-
-		delIterFactory = func(blkId types.Blockid) logtailreplay.RowsIter {
-			return state.NewPrimaryKeyDelIter(
-				types.TimestampToTS(ts),
-				logtailreplay.BetweenKind(pkFilter.packed[0], pkFilter.packed[1], kind), blkId)
-		}
-	}
-
-	return iter, delIterFactory
 }
 
 func getPkExpr(
@@ -1428,13 +1352,6 @@ func ListTnService(
 	})
 }
 
-// util function for object stats
-
-// ForeachBlkInObjStatsList receives an object info list,
-// and visits each blk of these object info by OnBlock,
-// until the onBlock returns false or all blks have been enumerated.
-// when onBlock returns a false,
-// the next argument decides whether continue onBlock on the next stats or exit foreach completely.
 func ForeachBlkInObjStatsList(
 	next bool,
 	dataMeta objectio.ObjectDataMeta,
@@ -1514,9 +1431,8 @@ func (i *StatsBlkIter) Entry() objectio.BlockInfo {
 
 	loc := objectio.BuildLocation(i.name, i.extent, i.curBlkRows, uint16(i.cur))
 	blk := objectio.BlockInfo{
-		BlockID:   *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
-		SegmentID: i.name.SegmentId(),
-		MetaLoc:   objectio.ObjectLocation(loc),
+		BlockID: *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
+		MetaLoc: objectio.ObjectLocation(loc),
 	}
 	return blk
 }
@@ -1525,7 +1441,8 @@ func ForeachCommittedObjects(
 	createObjs map[objectio.ObjectNameShort]struct{},
 	delObjs map[objectio.ObjectNameShort]struct{},
 	p *logtailreplay.PartitionState,
-	onObj func(info logtailreplay.ObjectInfo) error) (err error) {
+	onObj func(info logtailreplay.ObjectInfo) error,
+) (err error) {
 	for obj := range createObjs {
 		if objInfo, ok := p.GetObject(obj); ok {
 			if err = onObj(objInfo); err != nil {
@@ -1580,8 +1497,10 @@ func ForeachSnapshotObjects(
 }
 
 func ConstructObjStatsByLoadObjMeta(
-	ctx context.Context, metaLoc objectio.Location,
-	fs fileservice.FileService) (stats objectio.ObjectStats, dataMeta objectio.ObjectDataMeta, err error) {
+	ctx context.Context,
+	metaLoc objectio.Location,
+	fs fileservice.FileService,
+) (stats objectio.ObjectStats, dataMeta objectio.ObjectDataMeta, err error) {
 
 	// 1. load object meta
 	var meta objectio.ObjectMeta
@@ -1719,6 +1638,94 @@ func (e *concurrentExecutor) Run(ctx context.Context) {
 // GetConcurrency implements the ConcurrentExecutor interface.
 func (e *concurrentExecutor) GetConcurrency() int {
 	return e.concurrency
+}
+
+// for test
+
+func MakeColExprForTest(idx int32, typ types.T, colName ...string) *plan.Expr {
+	schema := []string{"a", "b", "c", "d"}
+	var name = schema[idx]
+	if len(colName) > 0 {
+		name = colName[0]
+	}
+
+	containerType := typ.ToType()
+	exprType := plan2.MakePlan2Type(&containerType)
+
+	return &plan.Expr{
+		Typ: exprType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: idx,
+				Name:   name,
+			},
+		},
+	}
+}
+
+func MakeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
+	argTypes := make([]types.Type, len(args))
+	for i, arg := range args {
+		argTypes[i] = plan2.MakeTypeByPlan2Expr(arg)
+	}
+
+	finfo, err := function.GetFunctionByName(context.TODO(), name, argTypes)
+	if err != nil {
+		panic(err)
+	}
+
+	retTyp := finfo.GetReturnType()
+
+	return &plan.Expr{
+		Typ: plan2.MakePlan2Type(&retTyp),
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     finfo.GetEncodedOverloadID(),
+					ObjName: name,
+				},
+				Args: args,
+			},
+		},
+	}
+}
+
+func MakeInExprForTest[T any](
+	arg0 *plan.Expr, vals []T, oid types.T, mp *mpool.MPool,
+) *plan.Expr {
+	vec := vector.NewVec(oid.ToType())
+	for _, val := range vals {
+		_ = vector.AppendAny(vec, val, false, mp)
+	}
+	data, _ := vec.MarshalBinary()
+	vec.Free(mp)
+	return &plan.Expr{
+		Typ: plan.Type{
+			Id:          int32(types.T_bool),
+			NotNullable: true,
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     function.InFunctionEncodedID,
+					ObjName: function.InFunctionName,
+				},
+				Args: []*plan.Expr{
+					arg0,
+					{
+						Typ: plan2.MakePlan2Type(vec.GetType()),
+						Expr: &plan.Expr_Vec{
+							Vec: &plan.LiteralVec{
+								Len:  int32(len(vals)),
+								Data: data,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 }
 
 func stringifySlice(req any, f func(any) string) string {

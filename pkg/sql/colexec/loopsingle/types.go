@@ -49,7 +49,9 @@ type LoopSingle struct {
 	Typs       []types.Type
 	Result     []colexec.ResultPos
 	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopSingle *LoopSingle) GetOperatorBase() *vm.OperatorBase {
@@ -92,6 +94,11 @@ func (loopSingle *LoopSingle) Free(proc *process.Process, pipelineFailed bool, e
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
 		loopSingle.ctr = nil
+	}
+	if loopSingle.ProjectList != nil {
+		anal := proc.GetAnalyze(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor())
+		anal.Alloc(loopSingle.ProjectAllocSize)
+		loopSingle.FreeProjection(proc)
 	}
 }
 

@@ -202,6 +202,10 @@ type Engine struct {
 	messageCenter *message.MessageCenter
 }
 
+func (txn *Transaction) String() string {
+	return fmt.Sprintf("writes %v", txn.writes)
+}
+
 // Transaction represents a transaction
 type Transaction struct {
 	sync.Mutex
@@ -311,24 +315,14 @@ func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64
 	b.offsets[*blockID] = append(b.offsets[*blockID], offsets...)
 }
 
-func (b *deletedBlocks) hasDeletes(blockID *types.Blockid) bool {
+func (b *deletedBlocks) getDeletedRowIDs(mp map[types.Blockid][]int32) {
 	b.RLock()
 	defer b.RUnlock()
-	_, ok := b.offsets[*blockID]
-	return ok
-}
-
-func (b *deletedBlocks) isEmpty() bool {
-	b.RLock()
-	defer b.RUnlock()
-	return len(b.offsets) == 0
-}
-
-func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid, offsets *[]int64) {
-	b.RLock()
-	defer b.RUnlock()
-	res := b.offsets[*blockID]
-	*offsets = append(*offsets, res...)
+	for bid, offsets := range b.offsets {
+		for _, offset := range offsets {
+			mp[bid] = append(mp[bid], int32(offset))
+		}
+	}
 }
 
 func (b *deletedBlocks) clean() {
@@ -647,6 +641,10 @@ func (txn *Transaction) IncrSQLCount() {
 	v2.TxnLifeCycleStatementsTotalHistogram.Observe(float64(n))
 }
 
+func (txn *Transaction) GetProc() *process.Process {
+	return txn.proc
+}
+
 func (txn *Transaction) GetSQLCount() uint64 {
 	return txn.sqlCount.Load()
 }
@@ -707,6 +705,18 @@ func (e *Entry) String() string {
 	return fmt.Sprintf("Entry{type:%v, note:%v, table:%v, db:%v, account:%v, tableId:%v, dbId:%v, bat:%v, fileName:%v}",
 		typesNames[e.typ], e.note, e.tableName, e.databaseName, e.accountId, e.tableId, e.databaseId, batinfo, e.fileName)
 }
+
+func (e *Entry) DatabaseId() uint64 {
+	return e.databaseId
+}
+
+func (e *Entry) TableId() uint64 {
+	return e.tableId
+}
+
+func (e *Entry) Type() int         { return e.typ }
+func (e *Entry) FileName() string  { return e.fileName }
+func (e *Entry) Bat() *batch.Batch { return e.bat }
 
 // isCatalog denotes the entry is apply the tree tables
 func (e *Entry) isCatalog() bool {
@@ -810,8 +820,7 @@ type withFilterMixin struct {
 		colTypes []types.Type
 		// colNulls []bool
 
-		pkPos int // -1 means no primary key in columns
-
+		pkPos                    int // -1 means no primary key in columns
 		indexOfFirstSortedColumn int
 	}
 
@@ -823,50 +832,25 @@ type withFilterMixin struct {
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
 		hasNull  bool
+		record   bool
 	}
-
-	sels []int32
 }
 
+// FIXME: no pointer here
 type blockSortHelper struct {
 	blk *objectio.BlockInfo
 	zm  index.ZM
 }
 
-type blockReader struct {
-	tableName string
-	tid       uint64
+type reader struct {
 	withFilterMixin
 
-	// used for prefetch
-	dontPrefetch bool
-	infos        [][]*objectio.BlockInfo
-	steps        []int
-	currentStep  int
+	source engine.DataSource
+	ts     timestamp.Timestamp
+
+	memFilter MemPKFilter
 
 	scanType int
-	// block list to scan
-	blks []*objectio.BlockInfo
-	//buffer for block's deletes
-	buffer []int64
-
-	// for ordered scan
-	desc     bool
-	blockZMS []index.ZM
-	OrderBy  []*plan.OrderBySpec
-	sorted   bool // blks need to be sorted by zonemap
-	filterZM objectio.ZoneMap
-}
-
-type blockMergeReader struct {
-	*blockReader
-	table     *txnTable
-	txnOffset int // Transaction writes offset used to specify the starting position for reading data.
-	pkFilter  memPKFilter
-	//for perfetch deletes
-	loaded     bool
-	pkidx      int
-	deletaLocs map[string][]objectio.Location
 }
 
 type mergeReader struct {

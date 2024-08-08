@@ -256,7 +256,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 			cwft.compile.SetOriginSQL(originSQL)
 		} else {
 			// retComp
-			cwft.proc.Ctx = execCtx.reqCtx
+			cwft.proc.ReplaceTopCtx(execCtx.reqCtx)
 			retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql())
 			cwft.compile = retComp
 		}
@@ -281,9 +281,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 func updateTempStorageInCtx(execCtx *ExecCtx, proc *process.Process, tempStorage *memorystorage.Storage) {
 	if execCtx != nil && execCtx.reqCtx != nil {
 		execCtx.reqCtx = attachValue(execCtx.reqCtx, defines.TemporaryTN{}, tempStorage)
-	}
-	if proc != nil && proc.Ctx != nil {
-		proc.Ctx = attachValue(proc.Ctx, defines.TemporaryTN{}, tempStorage)
+		proc.ReplaceTopCtx(execCtx.reqCtx)
 	}
 }
 
@@ -410,7 +408,7 @@ func createCompile(
 	if len(getGlobalPu().ClusterNodes) > 0 {
 		addr = getGlobalPu().ClusterNodes[0].Addr
 	}
-	proc.Ctx = execCtx.reqCtx
+	proc.ReplaceTopCtx(execCtx.reqCtx)
 	proc.Base.FileService = getGlobalPu().FileService
 
 	var tenant string
@@ -443,8 +441,8 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
-	retCompile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
-		plan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
+	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
+		plan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), stmt)
 		if err != nil {
 			return nil, err
 		}

@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -37,7 +36,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
 	status int
 
 	bat *batch.Batch
@@ -103,7 +101,6 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr := window.ctr
 	if ctr != nil {
 		mp := proc.Mp()
-		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(mp)
 		ctr.cleanAggVectors()
 		ctr.cleanOrderVectors()
