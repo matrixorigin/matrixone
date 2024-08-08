@@ -161,6 +161,7 @@ func TestFuzzyFilter(t *testing.T) {
 				}
 
 				if result.Status == vm.ExecStop {
+					require.Equal(t, int64(0), tc.arg.ctr.collisionCnt)
 					tc.arg.Reset(tc.proc, false, err)
 					break
 				}
@@ -182,6 +183,7 @@ func TestFuzzyFilter(t *testing.T) {
 				}
 
 				if result.Status == vm.ExecStop {
+					require.Equal(t, int64(0), tc.arg.ctr.collisionCnt)
 					tc.arg.Free(tc.proc, false, err)
 					break
 				}
