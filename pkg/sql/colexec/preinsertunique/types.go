@@ -31,7 +31,7 @@ type container struct {
 	buf *batch.Batch
 }
 type PreInsertUnique struct {
-	ctr          *container
+	ctr          container
 	PreInsertCtx *plan.PreInsertUkCtx
 
 	packers util.PackerList
@@ -71,16 +71,15 @@ func (preInsertUnique *PreInsertUnique) Release() {
 }
 
 func (preInsertUnique *PreInsertUnique) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	preInsertUnique.Free(proc, pipelineFailed, err)
+	if preInsertUnique.ctr.buf != nil {
+		preInsertUnique.ctr.buf.CleanOnlyData()
+	}
 }
 
 func (preInsertUnique *PreInsertUnique) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if preInsertUnique.ctr != nil {
-		if preInsertUnique.ctr.buf != nil {
-			preInsertUnique.ctr.buf.Clean(proc.Mp())
-			preInsertUnique.ctr.buf = nil
-		}
-		preInsertUnique.ctr = nil
+	if preInsertUnique.ctr.buf != nil {
+		preInsertUnique.ctr.buf.Clean(proc.Mp())
+		preInsertUnique.ctr.buf = nil
 	}
 
 	preInsertUnique.packers.Free()
