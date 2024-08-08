@@ -138,7 +138,7 @@ type state struct {
 	step                 int
 	fetchers             []FetchLockRowsFunc
 	cachedBatches        []*batch.Batch
-	batchFetchFunc       func(process.Analyze) *process.RegisterMessage
+	batchFetchFunc       func(proc *process.Process) (vm.CallResult, error)
 	hasNewVersionInRange hasNewVersionInRangeFunc
 }
 
