@@ -21,34 +21,35 @@ grant connect on account * to r1;
 use mo_catalog;
 show tables;
 Tables_in_mo_catalog
-mo_indexes
-mo_database
-mo_tables
+mo_account
+mo_cache
 mo_columns
-mo_table_partitions
-mo_user
-mo_role
-mo_user_grant
-mo_role_grant
-mo_role_privs
-mo_user_defined_function
+mo_configurations
+mo_database
+mo_foreign_keys
+mo_indexes
+mo_locks
 mo_mysql_compatibility_mode
 mo_pitr
 mo_pubs
-mo_stored_procedure
-mo_stages
+mo_role
+mo_role_grant
+mo_role_privs
 mo_sessions
 mo_snapshots
-mo_configurations
-mo_locks
-mo_variables
+mo_stages
+mo_stored_procedure
+mo_subs
+mo_table_partitions
+mo_tables
 mo_transactions
-mo_cache
-mo_version
 mo_upgrade
 mo_upgrade_tenant
-mo_account
-mo_foreign_keys
+mo_user
+mo_user_defined_function
+mo_user_grant
+mo_variables
+mo_version
 create database t;
 internal error: do not have privilege to execute the statement
 grant create database on account * to r1;

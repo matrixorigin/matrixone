@@ -123,6 +123,7 @@ type ReceiverOperator struct {
 	// while Join/Intersect/Minus ... are not
 	aliveMergeReceiver int
 	chs                []chan *process.RegisterMessage
+	nilBatchCnt        []int
 	receiverListener   []reflect.SelectCase
 }
 

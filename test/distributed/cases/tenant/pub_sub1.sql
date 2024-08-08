@@ -9,7 +9,7 @@ create publication mo_test_pub database test account `62915dd9_d454_4b02_be16_07
 -- @session
 -- @session:id=5&user=62915dd9_d454_4b02_be16_0741d94b62cc:admin&password=111
 create database mo_test_sub from `0b6d35cc_11ab_4da5_a5c5_c4cc09917c11` publication mo_test_pub;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 -- @session:id=7&user=0b6d35cc_11ab_4da5_a5c5_c4cc09917c11:admin&password=111

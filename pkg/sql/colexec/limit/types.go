@@ -30,7 +30,7 @@ type container struct {
 	limitExecutor colexec.ExpressionExecutor
 }
 type Limit struct {
-	ctr       *container
+	ctr       container
 	LimitExpr *plan.Expr
 
 	vm.OperatorBase
@@ -73,16 +73,15 @@ func (limit *Limit) Release() {
 }
 
 func (limit *Limit) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	limit.Free(proc, pipelineFailed, err)
+	if limit.ctr.limitExecutor != nil {
+		limit.ctr.limitExecutor.ResetForNextQuery()
+	}
+	limit.ctr.seen = 0
 }
 
 func (limit *Limit) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if limit.ctr != nil {
-		if limit.ctr.limitExecutor != nil {
-			limit.ctr.limitExecutor.Free()
-			limit.ctr.limitExecutor = nil
-		}
-		limit.ctr = nil
+	if limit.ctr.limitExecutor != nil {
+		limit.ctr.limitExecutor.Free()
+		limit.ctr.limitExecutor = nil
 	}
-
 }

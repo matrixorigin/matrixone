@@ -175,6 +175,8 @@ type ExecResult interface {
 	GetUint64(ctx context.Context, rindex, cindex uint64) (uint64, error)
 
 	GetInt64(ctx context.Context, rindex, cindex uint64) (int64, error)
+
+	ColumnIsNull(ctx context.Context, rindex, cindex uint64) (bool, error)
 }
 
 func execResultArrayHasData(arr []ExecResult) bool {

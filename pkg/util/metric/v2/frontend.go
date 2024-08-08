@@ -93,6 +93,20 @@ var (
 	CreateTablesInSystemDurationHistogram     = createAccountDurationHistogram.WithLabelValues("create-tables-in-system")
 	CreateTablesInInfoSchemaDurationHistogram = createAccountDurationHistogram.WithLabelValues("create-tables-in-info-schema")
 
+	pubSubDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "pub_sub_duration",
+			Help:      "Bucketed histogram of pub sub duration.",
+			Buckets:   getDurationBuckets(),
+		}, []string{"label"})
+	CreatePubHistogram = pubSubDurationHistogram.WithLabelValues("create-pub")
+	AlterPubHistogram  = pubSubDurationHistogram.WithLabelValues("alter-pub")
+	DropPubHistogram   = pubSubDurationHistogram.WithLabelValues("drop-pub")
+	ShowPubHistogram   = pubSubDurationHistogram.WithLabelValues("show-pub")
+	ShowSubHistogram   = pubSubDurationHistogram.WithLabelValues("show-sub")
+
 	sqlLengthHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
