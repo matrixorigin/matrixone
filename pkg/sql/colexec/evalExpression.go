@@ -160,7 +160,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		executor := NewFunctionExpressionExecutor()
 		{
 			// init function folding status.
-			executor.folded.init()
+			executor.folded.reset(proc.Mp())
 		}
 		{
 			// init function information for evaluation.
@@ -211,6 +211,9 @@ func EvalExpressionOnce(proc *process.Process, planExpr *plan.Expr, batches []*b
 		if !e.folded.canFold {
 			e.resultVector = nil
 			return vec, nil
+		} else {
+			e.folded.foldVector = nil
+			return vec, nil
 		}
 	}
 	if e, ok := executor.(*FixedVectorExpressionExecutor); ok {
@@ -232,8 +235,8 @@ func EvalExpressionOnce(proc *process.Process, planExpr *plan.Expr, batches []*b
 type FixedVectorExpressionExecutor struct {
 	m *mpool.MPool
 
-	fixed        bool
-	resultVector *vector.Vector
+	noNeedToSetLength bool
+	resultVector      *vector.Vector
 }
 
 type FunctionExpressionExecutor struct {
@@ -495,13 +498,10 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 	if expr.folded.canFold {
-		result := expr.getFoldedVector()
 		if len(batches) > 0 {
-			result.SetLength(batches[0].RowCount())
-		} else {
-			result.SetLength(1)
+			return expr.getFoldedVector(batches[0].RowCount()), nil
 		}
-		return result, nil
+		return expr.getFoldedVector(1), nil
 	}
 
 	var err error
@@ -577,16 +577,16 @@ func (expr *FunctionExpressionExecutor) Free() {
 		expr.resultVector.Free()
 		expr.resultVector = nil
 	}
-	if expr.freeFn != nil {
-		_ = expr.freeFn()
-		expr.freeFn = nil
-	}
-	expr.folded.close(expr.m)
+	expr.folded.reset(expr.m)
 
 	for _, p := range expr.parameterExecutor {
 		if p != nil {
 			p.Free()
 		}
+	}
+	if expr.freeFn != nil {
+		_ = expr.freeFn()
+		expr.freeFn = nil
 	}
 	reuse.Free[FunctionExpressionExecutor](expr, nil)
 }
@@ -653,7 +653,7 @@ func (expr *ColumnExpressionExecutor) IsColumnExpr() bool {
 }
 
 func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
-	if !expr.fixed {
+	if !expr.noNeedToSetLength {
 		expr.resultVector.SetLength(batches[0].RowCount())
 	}
 	return expr.resultVector, nil
@@ -930,10 +930,10 @@ func FixProjectionResult(proc *process.Process,
 					dupSize += newVec.Size()
 					rbat.Vecs[i] = newVec
 				}
-			} else if functionExpr, ok := executors[i].(*FunctionExpressionExecutor); ok {
+			} else if functionExpr, ok := executors[i].(*FunctionExpressionExecutor); ok && !functionExpr.folded.canFold {
 				// if projection, we can get the result directly
-				// newVec = functionExpr.resultVector.GetResultVector()
 				functionExpr.resultVector.SetResultVector(nil)
+
 			} else {
 				newVec, err = getNewVec(i, oldVec)
 				if err != nil {

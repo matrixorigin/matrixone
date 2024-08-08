@@ -26,7 +26,6 @@ func (expr *ColumnExpressionExecutor) ResetForNextQuery() {
 }
 
 func (expr *FixedVectorExpressionExecutor) ResetForNextQuery() {
-	// todo: care that the executor may be from function expression's constant folding.
 	// do nothing.
 }
 
@@ -36,21 +35,13 @@ type functionFolding struct {
 	foldVector       *vector.Vector
 }
 
-func (fF *functionFolding) init() {
-	fF.needFoldingCheck = true
-	fF.canFold = false
-}
-
 func (fF *functionFolding) reset(m *mpool.MPool) {
-	fF.init()
-	fF.close(m)
-}
-
-func (fF *functionFolding) close(m *mpool.MPool) {
 	if fF.foldVector != nil {
 		fF.foldVector.Free(m)
-		fF.foldVector = nil
 	}
+	fF.needFoldingCheck = true
+	fF.canFold = false
+	fF.foldVector = nil
 }
 
 type functionInformationForEval struct {
@@ -106,7 +97,10 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 	}
 }
 
-func (expr *FunctionExpressionExecutor) getFoldedVector() *vector.Vector {
+func (expr *FunctionExpressionExecutor) getFoldedVector(requiredLength int) *vector.Vector {
+	if expr.folded.foldVector.IsConst() {
+		expr.folded.foldVector.SetLength(requiredLength)
+	}
 	return expr.folded.foldVector
 }
 
@@ -124,6 +118,9 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 		// constant expression.
 		if constant, ok := param.(*FixedVectorExpressionExecutor); ok {
 			expr.parameterResults[i] = constant.resultVector
+			if !constant.noNeedToSetLength {
+				expr.parameterResults[i].SetLength(1)
+			}
 			continue
 		}
 		// function expression.
@@ -133,7 +130,7 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 				return err
 			}
 			if fExpr.folded.canFold {
-				expr.parameterResults[i] = fExpr.getFoldedVector()
+				expr.parameterResults[i] = fExpr.getFoldedVector(1)
 				continue
 			}
 		}
@@ -144,18 +141,39 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 		return nil
 	}
 
-	// fold the function.
-	for i := range expr.parameterResults {
-		expr.parameterResults[i].SetLength(1)
-	}
-	if err = expr.resultVector.PreExtendAndReset(1); err != nil {
-		return err
-	}
-	if err = expr.evalFn(expr.parameterResults, expr.resultVector, proc, 1, nil); err != nil {
-		return err
+	// todo: I cannot understand these following codes, but I keep them here.
+	//  it seems to deal with some IN filter and very dangerous.
+	//  See the pull request: https://github.com/matrixorigin/matrixone/pull/13403.
+	execLen := 1
+	if len(expr.parameterResults) > 0 { // todo: == 1 ?
+		if !expr.parameterResults[0].IsConst() {
+			execLen = expr.parameterResults[0].Length()
+		}
 	}
 
-	expr.folded.foldVector = expr.resultVector.GetResultVector().ToConst(0, 1, proc.Mp())
+	// fold the function.
+	if execLen > 1 {
+		if err = expr.resultVector.PreExtendAndReset(execLen); err != nil {
+			return err
+		}
+		if err = expr.evalFn(expr.parameterResults, expr.resultVector, proc, execLen, nil); err != nil {
+			return err
+		}
+		expr.folded.foldVector = expr.resultVector.GetResultVector()
+		expr.resultVector.SetResultVector(nil)
+
+	} else {
+		if err = expr.resultVector.PreExtendAndReset(1); err != nil {
+			return err
+		}
+		if err = expr.evalFn(expr.parameterResults, expr.resultVector, proc, 1, nil); err != nil {
+			return err
+		}
+		if expr.folded.foldVector, err = expr.resultVector.GetResultVector().ToConst(0, 1, proc.Mp()).Dup(proc.Mp()); err != nil {
+			return err
+		}
+		expr.resultVector.Free()
+	}
 	expr.folded.canFold = true
 	return nil
 }
