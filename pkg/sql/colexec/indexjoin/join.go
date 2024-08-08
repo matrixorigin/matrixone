@@ -76,12 +76,12 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			indexJoin.ctr.buf.CleanOnlyData()
 			for i, pos := range ap.Result {
 				srcVec := bat.Vecs[pos]
-				vec := proc.GetVector(*srcVec.GetType())
-				if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
-					vec.Free(proc.Mp())
+				if ctr.buf.Vecs[i] == nil {
+					ctr.buf.Vecs[i] = vector.NewVec(*srcVec.GetType())
+				}
+				if err = vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(ctr.buf.Vecs[i], srcVec); err != nil {
 					return result, err
 				}
-				indexJoin.ctr.buf.SetVector(int32(i), vec)
 			}
 			indexJoin.ctr.buf.AddRowCount(bat.RowCount())
 			result.Batch = indexJoin.ctr.buf
