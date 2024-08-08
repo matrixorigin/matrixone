@@ -16,9 +16,8 @@ package indexbuild
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
