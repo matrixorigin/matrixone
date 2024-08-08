@@ -3576,7 +3576,6 @@ func (c *Compile) newMergeRemoteScopeByCN(ss []*Scope) []*Scope {
 }
 
 func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []*Scope, n *plan.Node) []*Scope {
-	usedBuildScope := false
 	rs := c.newMergeRemoteScopeByCN(probeScopes)
 	for i := range rs {
 		rs[i].IsJoin = true
@@ -3592,13 +3591,11 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 	// so we set it to false now
 	if c.IsTpQuery() {
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
-		usedBuildScope = true
 	} else {
 		c.anal.isFirst = false
 		for i := range rs {
 			if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
 				mergeBuild := buildScopes[0]
-				usedBuildScope = true
 				if len(buildScopes) > 1 {
 					mergeBuild = c.newMergeScope(buildScopes)
 				}
@@ -3607,12 +3604,6 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 				rs[i].PreScopes = append(rs[i].PreScopes, mergeBuild)
 				break
 			}
-		}
-	}
-
-	if !usedBuildScope {
-		for _, s := range buildScopes {
-			s.release()
 		}
 	}
 
