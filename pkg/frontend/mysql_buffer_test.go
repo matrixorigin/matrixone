@@ -76,10 +76,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 				binary.LittleEndian.PutUint32(header, uint32(packetSize))
 				header[3] = byte(i)
 
-				payload := make([]byte, packetSize)
-				for j := range payload {
-					payload[j] = byte(rand.Intn(100) + 1)
-				}
+				payload := generateRandomBytes(packetSize)
 				exceptPayload = append(exceptPayload, payload)
 				_, err := server.Write(header)
 				if err != nil {
@@ -115,10 +112,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 				binary.LittleEndian.PutUint32(header, uint32(packetSize))
 				header[3] = byte(i)
 
-				payload := make([]byte, packetSize)
-				for j := range payload {
-					payload[j] = byte(rand.Intn(100) + 1)
-				}
+				payload := generateRandomBytes(packetSize)
 				exceptPayload = append(exceptPayload, payload)
 				_, err := server.Write(header)
 				if err != nil {
@@ -158,10 +152,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 				binary.LittleEndian.PutUint32(header[:4], packetSize)
 				header[3] = byte(i)
 
-				payload := make([]byte, packetSize)
-				for j := range payload {
-					payload[j] = byte(i)
-				}
+				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
 				_, err := server.Write(header)
 				if err != nil {
@@ -194,10 +185,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 				header := make([]byte, 4)
 				binary.LittleEndian.PutUint32(header[:4], packetSize)
 				header[3] = byte(i)
-				payload := make([]byte, packetSize)
-				for j := range payload {
-					payload[j] = byte(i)
-				}
+				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
 				_, err := server.Write(header)
 				if err != nil {
