@@ -98,7 +98,7 @@ func (s *Scope) handleIndexColCount(c *Compile, indexDef *plan.IndexDef, qryData
 		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name)
-	rs, err := c.runSqlWithResult(countTotalSql)
+	rs, err := c.runSqlWithResult(countTotalSql, NoAccountId)
 	if err != nil {
 		return 0, err
 	}

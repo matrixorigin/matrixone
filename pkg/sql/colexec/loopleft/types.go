@@ -51,7 +51,9 @@ type LoopLeft struct {
 	Cond       *plan.Expr
 	Result     []colexec.ResultPos
 	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopLeft *LoopLeft) GetOperatorBase() *vm.OperatorBase {
@@ -93,6 +95,12 @@ func (loopLeft *LoopLeft) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
 		loopLeft.ctr = nil
+	}
+
+	if loopLeft.ProjectList != nil {
+		anal := proc.GetAnalyze(loopLeft.GetIdx(), loopLeft.GetParallelIdx(), loopLeft.GetParallelMajor())
+		anal.Alloc(loopLeft.ProjectAllocSize)
+		loopLeft.FreeProjection(proc)
 	}
 }
 
