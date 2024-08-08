@@ -46,10 +46,17 @@ func init() {
 	boolType := types.T_bool.ToType()
 	int32Type := types.T_int32.ToType()
 
-	fr, _ := function.GetFunctionByName(nil, ">", []types.Type{int32Type, int32Type})
-	fid := fr.GetEncodedOverloadID()
+	fr0, _ := function.GetFunctionByName(nil, "and", []types.Type{boolType, boolType})
+	fid0 := fr0.GetEncodedOverloadID()
+
+	fr1, _ := function.GetFunctionByName(nil, ">", []types.Type{int32Type, int32Type})
+	fid1 := fr1.GetEncodedOverloadID()
+
+	fr2, _ := function.GetFunctionByName(nil, "<", []types.Type{int32Type, int32Type})
+	fid2 := fr2.GetEncodedOverloadID()
 
 	tcs = []filterTestCase{
+		// case1: Contains one conditional expression
 		{
 			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			arg: &Filter{
@@ -59,7 +66,7 @@ func init() {
 						F: &plan.Function{
 							Func: &plan.ObjectRef{
 								ObjName: ">",
-								Obj:     fid,
+								Obj:     fid1,
 							},
 
 							Args: []*plan.Expr{
@@ -88,6 +95,83 @@ func init() {
 			},
 			getRowCount: 20,
 		},
+		// case2: Contains two conditional expressions
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			arg: &Filter{
+				E: &plan.Expr{
+					Typ: plan2.MakePlan2Type(&boolType),
+					Expr: &plan.Expr_F{
+						F: &plan.Function{
+							Func: &plan.ObjectRef{
+								ObjName: "and",
+								Obj:     fid0,
+							},
+							Args: []*plan.Expr{
+								{
+									Typ: plan2.MakePlan2Type(&boolType),
+									Expr: &plan.Expr_F{
+										F: &plan.Function{
+											Func: &plan.ObjectRef{
+												ObjName: ">",
+												Obj:     fid1,
+											},
+
+											Args: []*plan.Expr{
+												{
+													Typ: plan2.MakePlan2Type(&int32Type),
+													Expr: &plan.Expr_Col{
+														Col: &plan.ColRef{
+															RelPos: 0,
+															ColPos: 0,
+															Name:   "a",
+														},
+													},
+												},
+												makePlan2Int32ConstExprWithType(10),
+											},
+										},
+									},
+								},
+								{
+									Typ: plan2.MakePlan2Type(&boolType),
+									Expr: &plan.Expr_F{
+										F: &plan.Function{
+											Func: &plan.ObjectRef{
+												ObjName: "<",
+												Obj:     fid2,
+											},
+
+											Args: []*plan.Expr{
+												{
+													Typ: plan2.MakePlan2Type(&int32Type),
+													Expr: &plan.Expr_Col{
+														Col: &plan.ColRef{
+															RelPos: 0,
+															ColPos: 1,
+															Name:   "b",
+														},
+													},
+												},
+												makePlan2Int32ConstExprWithType(40),
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
+				},
+			},
+			getRowCount: 10,
+		},
 	}
 }
 
@@ -106,6 +190,48 @@ func TestFilter(t *testing.T) {
 
 		//--------------------------------------------------------
 
+		resetChildren(tc.arg)
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		res, _ = tc.arg.Call(tc.proc)
+		if tc.getRowCount > 0 {
+			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
+		} else {
+			require.Equal(t, res.Batch == nil, true)
+		}
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+
+		tc.proc.Free()
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+	}
+}
+
+func TestFilter2(t *testing.T) {
+	for _, tc := range tcs {
+		resetChildren(tc.arg)
+		err := tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		// 1. First call
+		res, _ := tc.arg.Call(tc.proc)
+		if tc.getRowCount > 0 {
+			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
+		} else {
+			require.Equal(t, res.Batch == nil, true)
+		}
+
+		// 2. Second call
+		resetChildren(tc.arg)
+		res, _ = tc.arg.Call(tc.proc)
+		if tc.getRowCount > 0 {
+			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
+		} else {
+			require.Equal(t, res.Batch == nil, true)
+		}
+		tc.arg.Reset(tc.proc, false, nil)
+
+		//--------------------------------------------------------
+		// Re enable the operator after reset
 		resetChildren(tc.arg)
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -151,9 +277,10 @@ func makePlan2Int32ConstExpr(v int32) *plan.Expr_Lit {
 
 // new batchs with schema : (a int, b uuid, c varchar, d json, e datetime)
 func MakeFilterMockBatchs() *batch.Batch {
-	bat := batch.New(true, []string{"a", "b"})
-	vecs := make([]*vector.Vector, 2)
-	vecs[0] = testutil.MakeInt32Vector([]int32{1,
+	bat := batch.New(true, []string{"a", "b", "c"})
+	vecs := make([]*vector.Vector, 3)
+	vecs[0] = testutil.MakeInt32Vector([]int32{
+		1,
 		2,
 		3,
 		4,
@@ -183,7 +310,40 @@ func MakeFilterMockBatchs() *batch.Batch {
 		28,
 		29,
 		30}, nil)
-	vecs[1] = testutil.MakeVarcharVector([]string{
+	vecs[1] = testutil.MakeInt32Vector([]int32{
+		20,
+		21,
+		22,
+		23,
+		24,
+		25,
+		26,
+		27,
+		28,
+		29,
+		30,
+		31,
+		32,
+		33,
+		34,
+		35,
+		36,
+		37,
+		38,
+		39,
+		40,
+		41,
+		42,
+		43,
+		44,
+		45,
+		46,
+		47,
+		48,
+		49,
+	}, nil)
+
+	vecs[2] = testutil.MakeVarcharVector([]string{
 		"xfgj",
 		"xasj",
 		"xasj",
