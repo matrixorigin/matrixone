@@ -17,6 +17,7 @@ package table_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -37,6 +38,7 @@ type TableScan struct {
 	Reader         engine.Reader
 	// letter case: origin
 	Attrs   []string
+	Types   []types.Type
 	TableID uint64
 
 	vm.OperatorBase
@@ -68,6 +70,11 @@ func NewArgument() *TableScan {
 	return reuse.Alloc[TableScan](nil)
 }
 
+func (tableScan *TableScan) WithTypes(types []types.Type) *TableScan {
+	tableScan.Types = types
+	return tableScan
+}
+
 func (tableScan *TableScan) Release() {
 	if tableScan != nil {
 		reuse.Free[TableScan](tableScan, nil)
@@ -77,11 +84,8 @@ func (tableScan *TableScan) Release() {
 func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
 	allocSize := int64(0)
-	// we need refactor table_scan & reader to reuse this buf
-	// maybe make reader reuse buf. or reader return a buf and table_scan just send it to next Operator
 	if tableScan.ctr.buf != nil {
-		tableScan.ctr.buf.Clean(proc.Mp())
-		tableScan.ctr.buf = nil
+		tableScan.ctr.buf.CleanOnlyData()
 	}
 	allocSize += int64(tableScan.ctr.maxAllocSize)
 	if tableScan.ctr.msgReceiver != nil {
@@ -103,7 +107,5 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 		tableScan.ctr.msgReceiver.Free()
 		tableScan.ctr.msgReceiver = nil
 	}
-	if tableScan.ProjectList != nil {
-		tableScan.FreeProjection(proc)
-	}
+	tableScan.FreeProjection(proc)
 }

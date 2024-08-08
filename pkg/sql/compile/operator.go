@@ -2179,8 +2179,12 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	return e.F.Args[0], e.F.Args[1]
 }
 
-func constructTableScan() *table_scan.TableScan {
-	return table_scan.NewArgument()
+func constructTableScan(n *plan.Node) *table_scan.TableScan {
+	types := make([]types.Type, len(n.TableDef.Cols))
+	for j, col := range n.TableDef.Cols {
+		types[j] = plan2.MakeTypeByPlan2Type(col.GetTyp())
+	}
+	return table_scan.NewArgument().WithTypes(types)
 }
 
 func constructValueScan() *value_scan.ValueScan {
