@@ -91,13 +91,21 @@ type WaitRegister struct {
 	// Ctx, context of data receiver's pipeline.
 	//
 	// todo:
-	// This will cause a race here, because the context was shared by multiple pipelines.
-	// Once run a pipeline, we will build pipeline context for the whole pipeline tree.
-	// We call pipeline1 for this pipeline here.
-	// If this context was shared to a pipeline outside of this tree, we call this outside pipeline to be pipeline2.
-	// If pipeline2 starts before pipeline1, this context will be changed by pipeline1 while pipeline2 is running.
+	// This must cause a race here, because the context was shared by multiple pipelines.
 	//
-	// it's better to use a self context but not the pipeline context here.
+	// Assume we have two pipelines,
+	// pipeline1 and pipeline2, pipeline1 will dispatch data to pipeline2.
+	// so they share the same WaitRegister.
+	// and all of the receiver pipeline2 is parallel type.
+	//
+	// see the function `setContextForParallelScope` in `pkg/sql/compile/compile2.go`,
+	// we will rebuild pipeline context sometimes for parallel-type pipeline.
+	//
+	// If pipeline1 run first, it will listen to the context of pipeline2 from WaitRegister,
+	// and then pipeline2 run, it will rebuild the context, and the context of pipeline2 will be changed.
+	// it's a race but maybe not a problem, because the receiver never receive data before the pipeline2 run.
+	//
+	// it's a better way to use a self context but not the pipeline context here.
 	// and the receiver shut down the context when it's done.
 	Ctx context.Context
 	// Ch, data receiver's channel, receiver will wait for data from this channel.
