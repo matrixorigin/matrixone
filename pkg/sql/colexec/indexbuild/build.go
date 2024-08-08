@@ -80,6 +80,9 @@ func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.
 		if result.Batch == nil {
 			break
 		}
+		if result.Batch.IsEmpty() {
+			continue
+		}
 
 		anal.Input(result.Batch, isFirst)
 		anal.Alloc(int64(result.Batch.Size()))
