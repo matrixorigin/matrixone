@@ -88,10 +88,21 @@ func NewRegMsg(bat *batch.Batch) *RegisterMessage {
 
 // WaitRegister channel
 type WaitRegister struct {
-	// Ctx, context for data receiver.
+	// Ctx, context of data receiver's pipeline.
+	//
+	// todo:
+	// This will cause a race here, because the context was shared by multiple pipelines.
+	// Once run a pipeline, we will build pipeline context for the whole pipeline tree.
+	// We call pipeline1 for this pipeline here.
+	// If this context was shared to a pipeline outside of this tree, we call this outside pipeline to be pipeline2.
+	// If pipeline2 starts before pipeline1, this context will be changed by pipeline1 while pipeline2 is running.
+	//
+	// it's better to use a self context but not the pipeline context here.
+	// and the receiver shut down the context when it's done.
 	Ctx context.Context
-	// Ch, data receiver channel, receiver will wait for data from this channel.
+	// Ch, data receiver's channel, receiver will wait for data from this channel.
 	Ch chan *RegisterMessage
+
 	// how many nil batch this channel can receive, default 0 means every nil batch close channel
 	NilBatchCnt int
 }

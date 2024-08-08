@@ -95,8 +95,8 @@ func NewTopProcess(
 	return proc
 }
 
-// NewNoContextChildProc make a new child process without context field.
-// This is used for the compile process, which doesn't need to pass the context.
+// NewNoContextChildProc make a new child process without a context field.
+// This is used for the compile-process, which doesn't need to pass the context.
 func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 	child := &Process{
 		Base: proc.Base,
@@ -118,6 +118,7 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 
 // NewContextChildProc make a new child and init its context field.
 // This is used for parallel execution, which will make a new child process to run a pipeline directly.
+// todo: I will remove this method next day, it's a waste to create a new context.
 func (proc *Process) NewContextChildProc(dataEntryCount int) *Process {
 	child := proc.NewNoContextChildProc(dataEntryCount)
 	child.BuildPipelineContext(proc.Ctx)
