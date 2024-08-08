@@ -177,7 +177,11 @@ func callBlocking(
 
 			// blocking lock node. Never pass the input batch into downstream operators before
 			// all lock are performed.
-			lockOp.ctr.rt.cachedBatches = append(lockOp.ctr.rt.cachedBatches, bat)
+			appendBat, err := bat.Dup(proc.GetMPool())
+			if err != nil {
+				return result, err
+			}
+			lockOp.ctr.rt.cachedBatches = append(lockOp.ctr.rt.cachedBatches, appendBat)
 		}
 	}
 
@@ -879,26 +883,28 @@ func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error
 
 }
 
-func (lockOp *LockOp) cleanCachedBatch(_ *process.Process) {
-	// do not need clean,  only set nil
-	// for _, bat := range arg.ctr.rt.cachedBatches {
-	// 	bat.Clean(proc.Mp())
-	// }
+func (lockOp *LockOp) cleanCachedBatch(proc *process.Process) {
+	for _, bat := range lockOp.ctr.rt.cachedBatches {
+		bat.Clean(proc.Mp())
+	}
 	lockOp.ctr.rt.cachedBatches = nil
 }
 
 func (lockOp *LockOp) getBatch(
-	_ *process.Process,
+	proc *process.Process,
 	anal process.Analyze,
 	isFirst bool) (*batch.Batch, error) {
 	fn := lockOp.ctr.rt.batchFetchFunc
-
-	msg := fn(anal)
-	if msg.Err != nil {
-		return nil, msg.Err
+	if fn == nil {
+		fn = lockOp.GetChildren(0).Call
 	}
-	anal.Input(msg.Batch, isFirst)
-	return msg.Batch, nil
+
+	input, err := fn(proc)
+	if err != nil {
+		return nil, err
+	}
+	anal.Input(input.Batch, isFirst)
+	return input.Batch, nil
 }
 
 func getRowsFilter(
