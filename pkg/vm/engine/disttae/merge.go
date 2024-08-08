@@ -79,7 +79,6 @@ func newCNMergeTask(
 	ctx context.Context,
 	tbl *txnTable,
 	snapshot types.TS,
-	state *logtailreplay.PartitionState,
 	sortkeyPos int,
 	sortkeyIsPK bool,
 	targets []logtailreplay.ObjectInfo,
@@ -185,7 +184,7 @@ func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.
 		// update delta location
 		obj := t.targets[objIdx]
 		blk.Sorted = obj.Sorted
-		blk.EntryState = obj.EntryState
+		blk.Appendable = obj.Appendable
 		blk.CommitTs = obj.CommitTS
 		return t.readblock(ctx, &blk)
 	}

@@ -903,7 +903,7 @@ func (tbl *txnTable) rangesOnePart(
 				}
 
 				blk.Sorted = obj.Sorted
-				blk.EntryState = obj.EntryState
+				blk.Appendable = obj.Appendable
 				blk.CommitTs = obj.CommitTS
 				//if obj.HasDeltaLoc {
 				//	_, commitTs, ok := state.GetBockDeltaLoc(blk.BlockID)
@@ -1986,7 +1986,7 @@ func (tbl *txnTable) PKPersistedBetween(
 					}
 
 					blk.Sorted = obj.Sorted
-					blk.EntryState = obj.EntryState
+					blk.Appendable = obj.Appendable
 					blk.CommitTs = obj.CommitTS
 					if obj.HasDeltaLoc {
 						_, commitTs, ok := p.GetBockDeltaLoc(blk.BlockID)
@@ -2161,7 +2161,7 @@ func (tbl *txnTable) transferDeletes(
 					bid := objectio.BuildObjectBlockid(objectStats.ObjectName(), uint16(i))
 					blkInfo := objectio.BlockInfo{
 						BlockID:    *bid,
-						EntryState: obj.EntryState,
+						Appendable: obj.Appendable,
 						Sorted:     obj.Sorted,
 						MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
 						CommitTs:   obj.CommitTS,
@@ -2389,7 +2389,7 @@ func (tbl *txnTable) MergeObjects(
 	tbl.ensureSeqnumsAndTypesExpectRowid()
 
 	taskHost, err := newCNMergeTask(
-		ctx, tbl, snapshot, state, // context
+		ctx, tbl, snapshot, // context
 		sortKeyPos, sortKeyIsPK, // schema
 		objInfos, // targets
 		targetObjSize)
@@ -2407,57 +2407,10 @@ func (tbl *txnTable) MergeObjects(
 		return taskHost.commitEntry, nil
 	}
 
-	// if transfer info is too large, write it down to s3
-	// transfer info size is only related to row count.
-	rowCnt := 0
-	for _, m := range taskHost.transferMaps {
-		rowCnt += len(m)
-	}
-
-	// If transfer info is small, send it to tn directly.
-	// For api.TransDestPos, 5*10^5 rows is 52*5*10^5 ~= 26MB
-	// For api.TransferDestPos, 5*10^5 rows is 12*5*10^5 ~= 6MB
-	if rowCnt < 500000 {
-		size := len(taskHost.transferMaps)
-		mappings := make([]api.BlkTransMap, size)
-		for i := 0; i < size; i++ {
-			mappings[i] = api.BlkTransMap{
-				M: make(map[int32]api.TransDestPos, len(taskHost.transferMaps[i])),
-			}
-		}
-		taskHost.commitEntry.Booking = &api.BlkTransferBooking{
-			Mappings: mappings,
-		}
-
-		for i, m := range taskHost.transferMaps {
-			for r, pos := range m {
-				taskHost.commitEntry.Booking.Mappings[i].M[int32(r)] = api.TransDestPos{
-					ObjIdx: int32(pos.ObjIdx),
-					BlkIdx: int32(pos.BlkIdx),
-					RowIdx: int32(pos.RowIdx),
-				}
-			}
-		}
-	} else {
-		if err := dumpTransferInfo(ctx, taskHost); err != nil {
-			return taskHost.commitEntry, err
-		}
-		var locStr strings.Builder
-		locations := taskHost.commitEntry.BookingLoc
-		blkCnt := types.DecodeInt32(commonUtil.UnsafeStringToBytes(locations[0]))
-		for _, filepath := range locations[blkCnt+1:] {
-			locStr.WriteString(filepath)
-			locStr.WriteString(",")
-		}
-		logutil.Infof("mergeblocks %v-%v on cn: write s3 transfer info %v",
-			tbl.tableId, tbl.tableName, locStr.String())
-	}
-
-	// commit this to tn
-	return taskHost.commitEntry, nil
+	return dumpTransferInfo(ctx, taskHost)
 }
 
-func (tbl *txnTable) GetVisibleObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
+func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
@@ -2465,25 +2418,23 @@ func (tbl *txnTable) GetVisibleObjectStats(ctx context.Context) ([]objectio.Obje
 	}
 
 	sortKeyPos, _ := tbl.getSortKeyPosAndSortKeyIsPK()
-
 	objStats := make([]objectio.ObjectStats, 0, tbl.ApproxObjectsNum(ctx))
-	iter, err := state.NewObjectsIter(snapshot, true)
-	if err != nil {
-		logutil.Errorf("txn: %s, error: %v", tbl.db.op.Txn().DebugString(), err)
-		return nil, err
-	}
-	for iter.Next() {
-		obj := iter.Entry().ObjectInfo
-		if obj.EntryState {
-			continue
+
+	err = ForeachVisibleDataObject(state, snapshot, func(obj logtailreplay.ObjectEntry) error {
+		if obj.Appendable {
+			return nil
 		}
 		if sortKeyPos != -1 {
 			sortKeyZM := obj.SortKeyZoneMap()
 			if !sortKeyZM.IsInited() {
-				continue
+				return nil
 			}
 		}
 		objStats = append(objStats, obj.ObjectStats)
+		return nil
+	}, nil)
+	if err != nil {
+		return nil, err
 	}
 	return objStats, nil
 }
@@ -2505,7 +2456,58 @@ func (tbl *txnTable) getSortKeyPosAndSortKeyIsPK() (int, bool) {
 	return sortKeyPos, sortKeyIsPK
 }
 
-func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
+func dumpTransferInfo(ctx context.Context, mergeTask *cnMergeTask) (*api.MergeCommitEntry, error) {
+	rowCnt := 0
+	for _, m := range mergeTask.transferMaps {
+		rowCnt += len(m)
+	}
+
+	// If transfer info is small, send it to tn directly.
+	// transfer info size is only related to row count.
+	// For api.TransDestPos, 5*10^5 rows is 52*5*10^5 ~= 26MB
+	// For api.TransferDestPos, 5*10^5 rows is 12*5*10^5 ~= 6MB
+	if rowCnt < 500000 {
+		size := len(mergeTask.transferMaps)
+		mappings := make([]api.BlkTransMap, size)
+		for i := 0; i < size; i++ {
+			mappings[i] = api.BlkTransMap{
+				M: make(map[int32]api.TransDestPos, len(mergeTask.transferMaps[i])),
+			}
+		}
+		mergeTask.commitEntry.Booking = &api.BlkTransferBooking{
+			Mappings: mappings,
+		}
+
+		for i, m := range mergeTask.transferMaps {
+			for r, pos := range m {
+				mergeTask.commitEntry.Booking.Mappings[i].M[int32(r)] = api.TransDestPos{
+					ObjIdx: int32(pos.ObjIdx),
+					BlkIdx: int32(pos.BlkIdx),
+					RowIdx: int32(pos.RowIdx),
+				}
+			}
+		}
+		return mergeTask.commitEntry, nil
+	}
+
+	// if transfer info is too large, write it down to s3
+	if err := writeTransferInfoToS3(ctx, mergeTask); err != nil {
+		return mergeTask.commitEntry, err
+	}
+	var locStr strings.Builder
+	locations := mergeTask.commitEntry.BookingLoc
+	blkCnt := types.DecodeInt32(commonUtil.UnsafeStringToBytes(locations[0]))
+	for _, filepath := range locations[blkCnt+1:] {
+		locStr.WriteString(filepath)
+		locStr.WriteString(",")
+	}
+	logutil.Infof("mergeblocks %v-%v on cn: write s3 transfer info %v",
+		mergeTask.host.tableId, mergeTask.host.tableName, locStr.String())
+
+	return mergeTask.commitEntry, nil
+}
+
+func writeTransferInfoToS3(ctx context.Context, taskHost *cnMergeTask) (err error) {
 	defer func() {
 		if err != nil {
 			locations := taskHost.commitEntry.BookingLoc
@@ -2515,10 +2517,10 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 		}
 	}()
 
-	return dumpTransferMaps(ctx, taskHost)
+	return writeTransferMapsToS3(ctx, taskHost)
 }
 
-func dumpTransferMaps(ctx context.Context, taskHost *cnMergeTask) error {
+func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) error {
 	bookingMaps := taskHost.transferMaps
 
 	blkCnt := int32(len(bookingMaps))
@@ -2587,7 +2589,7 @@ func dumpTransferMaps(ctx context.Context, taskHost *cnMergeTask) error {
 
 	// write remaining data
 	if buffer.RowCount() != 0 {
-		filename := blockio.EncodeTmpFileName("tmp", "merge", time.Now().UTC().Unix())
+		filename := blockio.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
 		writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 		if err != nil {
 			return err

@@ -355,7 +355,7 @@ func HandleShardingReadVisibleObjectStats(
 		return nil, err
 	}
 
-	stats, err := tbl.GetVisibleObjectStats(ctx)
+	stats, err := tbl.GetNonAppendableObjectStats(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -58,7 +58,7 @@ type BlockInfo struct {
 	BlockID types.Blockid
 	//It's used to indicate whether the block is appendable block or non-appendable blk for reader.
 	// for appendable block, the data visibility in the block is determined by the commit ts and abort ts.
-	EntryState bool
+	Appendable bool
 	Sorted     bool
 	MetaLoc    ObjectLocation
 	CommitTs   types.TS
@@ -68,7 +68,7 @@ type BlockInfo struct {
 }
 
 func (b *BlockInfo) String() string {
-	return fmt.Sprintf("[A-%v]blk-%s", b.EntryState, b.BlockID.ShortStringEx())
+	return fmt.Sprintf("[A-%v]blk-%s", b.Appendable, b.BlockID.ShortStringEx())
 }
 
 func (b *BlockInfo) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
@@ -78,7 +78,7 @@ func (b *BlockInfo) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
 	}
 	space += uint32(types.BlockidSize)
 
-	if _, err := w.Write(types.EncodeBool(&b.EntryState)); err != nil {
+	if _, err := w.Write(types.EncodeBool(&b.Appendable)); err != nil {
 		return 0, err
 	}
 	space++
@@ -109,7 +109,7 @@ func (b *BlockInfo) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
 func (b *BlockInfo) Unmarshal(buf []byte) error {
 	b.BlockID = types.DecodeFixed[types.Blockid](buf[:types.BlockidSize])
 	buf = buf[types.BlockidSize:]
-	b.EntryState = types.DecodeFixed[bool](buf)
+	b.Appendable = types.DecodeFixed[bool](buf)
 	buf = buf[1:]
 	b.Sorted = types.DecodeFixed[bool](buf)
 	buf = buf[1:]

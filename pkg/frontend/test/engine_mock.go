@@ -1151,18 +1151,18 @@ func (mr *MockRelationMockRecorder) GetTableName() *gomock.Call {
 }
 
 // GetVisibleObjectStats mocks base method.
-func (m *MockRelation) GetVisibleObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
+func (m *MockRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetVisibleObjectStats", ctx)
+	ret := m.ctrl.Call(m, "GetNonAppendableObjectStats", ctx)
 	ret0, _ := ret[0].([]objectio.ObjectStats)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetVisibleObjectStats indicates an expected call of GetVisibleObjectStats.
-func (mr *MockRelationMockRecorder) GetVisibleObjectStats(ctx interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) GetNonAppendableObjectStats(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVisibleObjectStats", reflect.TypeOf((*MockRelation)(nil).GetVisibleObjectStats), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNonAppendableObjectStats", reflect.TypeOf((*MockRelation)(nil).GetNonAppendableObjectStats), ctx)
 }
 
 // MaxAndMinValues mocks base method.

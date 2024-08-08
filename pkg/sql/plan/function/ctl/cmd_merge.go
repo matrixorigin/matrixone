@@ -265,7 +265,7 @@ func handleCNMerge(
 		}
 
 		if partitionInfo == nil {
-			stats, err := rel.GetVisibleObjectStats(ctx)
+			stats, err := rel.GetNonAppendableObjectStats(ctx)
 			if err != nil {
 				return Result{}, err
 			}
@@ -351,7 +351,7 @@ func handleCNMerge(
 			if err != nil {
 				return Result{}, err
 			}
-			stats, err := prel.GetVisibleObjectStats(ctx)
+			stats, err := prel.GetNonAppendableObjectStats(ctx)
 			if err != nil {
 				return Result{}, err
 			}

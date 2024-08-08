@@ -835,7 +835,7 @@ type Relation interface {
 
 	ApproxObjectsNum(ctx context.Context) int
 	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)
-	GetVisibleObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
+	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
 }
 
 type Reader interface {

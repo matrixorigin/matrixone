@@ -4179,7 +4179,7 @@ func TestBlockRead(t *testing.T) {
 
 			info := &objectio.BlockInfo{
 				BlockID:    *objectio.NewBlockidWithObjectID(bid, 0),
-				EntryState: true,
+				Appendable: true,
 			}
 			metaloc := objStats.ObjectLocation()
 			metaloc.SetRows(schema.BlockMaxRows)
@@ -4243,7 +4243,7 @@ func TestBlockRead(t *testing.T) {
 			assert.Equal(t, 16, b4.Vecs[0].Length())
 
 			// read rowid column only
-			info.EntryState = false
+			info.Appendable = false
 			b5, err := blockio.BlockDataReadInner(
 				context.Background(), "", info,
 				ds, []uint16{2},

@@ -409,9 +409,9 @@ func (tbl *txnTableDelegate) MergeObjects(ctx context.Context, objstats []object
 	return &entry, nil
 }
 
-func (tbl *txnTableDelegate) GetVisibleObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
+func (tbl *txnTableDelegate) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	if tbl.isLocal() {
-		return tbl.origin.GetVisibleObjectStats(
+		return tbl.origin.GetNonAppendableObjectStats(
 			ctx,
 		)
 	}

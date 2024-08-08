@@ -554,6 +554,6 @@ func (t *Table) MergeObjects(ctx context.Context, objstats []objectio.ObjectStat
 	return nil, nil
 }
 
-func (t *Table) GetVisibleObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
+func (t *Table) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	return nil, nil
 }
