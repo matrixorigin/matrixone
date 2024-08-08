@@ -61,16 +61,20 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 		b.SetVector(0, proc.GetVector(types.T_varchar.ToType()))
 		batch.SetLength(b, 1)
 		ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
-		for i, val := range fill.FillVal {
-			exe, err := colexec.NewExpressionExecutor(proc, val)
+		if len(ctr.exes) == 0 {
+			for _, val := range fill.FillVal {
+				exe, err := colexec.NewExpressionExecutor(proc, val)
+				if err != nil {
+					return err
+				}
+				ctr.exes = append(ctr.exes, exe)
+			}
+		}
+		for i, _ := range fill.FillVal {
+			ctr.valVecs[i], err = ctr.exes[i].Eval(proc, []*batch.Batch{b}, nil)
 			if err != nil {
 				return err
 			}
-			ctr.valVecs[i], err = exe.Eval(proc, []*batch.Batch{b}, nil)
-			if err != nil {
-				return err
-			}
-			ctr.exes = append(ctr.exes, exe)
 		}
 		b.Clean(proc.Mp())
 		ctr.process = processValue
@@ -82,14 +86,16 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 		ctr.subStatus = findNull
 		ctr.process = processNext
 	case plan.Node_LINEAR:
-		for _, v := range fill.FillVal {
-			resetColRef(v, 0)
-			exe, err := colexec.NewExpressionExecutor(proc, v)
-			if err != nil {
-				return err
+		ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
+		if len(ctr.exes) == 0 {
+			for _, v := range fill.FillVal {
+				resetColRef(v, 0)
+				exe, err := colexec.NewExpressionExecutor(proc, v)
+				if err != nil {
+					return err
+				}
+				ctr.exes = append(ctr.exes, exe)
 			}
-			ctr.exes = append(ctr.exes, exe)
-			ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
 		}
 		ctr.process = processLinear
 	default:
