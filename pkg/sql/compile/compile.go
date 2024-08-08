@@ -3587,26 +3587,29 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		}
 		rs[i].Proc.Reg.MergeReceivers = append(rs[i].Proc.Reg.MergeReceivers, w)
 	}
-	// all join's first flag will setting in newLeftScope and newRightScope
-	// so we set it to false now
+
 	if c.IsTpQuery() {
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
-	} else {
-		c.anal.isFirst = false
-		for i := range rs {
-			if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
-				mergeBuild := buildScopes[0]
-				if len(buildScopes) > 1 {
-					mergeBuild = c.newMergeScope(buildScopes)
-				}
-				mergeBuild.setRootOperator(constructDispatch(rs[i].BuildIdx, rs, c.addr, n, false))
-				mergeBuild.IsEnd = true
-				rs[i].PreScopes = append(rs[i].PreScopes, mergeBuild)
-				break
-			}
-		}
+		return rs
 	}
 
+	idx := 0
+	// all join's first flag will setting in newLeftScope and newRightScope
+	// so we set it to false now
+	c.anal.isFirst = false
+	for i := range rs {
+		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
+			idx = i
+			break
+		}
+	}
+	mergeBuild := buildScopes[0]
+	if len(buildScopes) > 1 {
+		mergeBuild = c.newMergeScope(buildScopes)
+	}
+	mergeBuild.setRootOperator(constructDispatch(rs[idx].BuildIdx, rs, c.addr, n, false))
+	mergeBuild.IsEnd = true
+	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeBuild)
 	return rs
 }
 
