@@ -81,6 +81,7 @@ func (cdcEng *CdcEngine) init(ctx context.Context) error {
 	defer cdcEng.Unlock()
 
 	cdcEng.catalog = cache.NewCatalog()
+	cdcEng.catalog.SetCdcId(cdcEng.cdcId)
 	cdcEng.partitions = make(map[[2]uint64]*logtailreplay.Partition)
 
 	return initEngine(ctx, cdcEng.service, cdcEng.catalog, cdcEng.partitions, cdcEng.mp, cdcEng.packerPool)

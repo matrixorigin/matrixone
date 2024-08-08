@@ -1944,7 +1944,8 @@ func cdcReplayLogtailUnlock(
 			tl,
 		)
 	} else {
-		if !firstCkpConsumed {
+		//if !firstCkpConsumed
+		{
 			fmt.Fprintf(os.Stderr, "$$$$$$> cdc replay logtail db:table %v:%v %v consume ckp\n",
 				dbId, tblId, tableInfo.Name,
 			)

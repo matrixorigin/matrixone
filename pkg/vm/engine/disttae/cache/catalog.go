@@ -527,6 +527,8 @@ func ParseTablesBatchAnd(bat *batch.Batch, f func(*TableItem)) {
 
 func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	ParseTablesBatchAnd(bat, func(item *TableItem) {
+		fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache insert table",
+			item.AccountId, item.DatabaseName, item.Name, item.DatabaseId, item.Id)
 		cc.tables.data.Set(item)
 		cc.tables.cpkeyIndex.Set(item)
 	})
@@ -626,6 +628,8 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 
 func (cc *CatalogCache) InsertDatabase(bat *batch.Batch) {
 	ParseDatabaseBatchAnd(bat, func(item *DatabaseItem) {
+		fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache insert database",
+			item.AccountId, item.Name, item.Id)
 		cc.databases.data.Set(item)
 		cc.databases.cpkeyIndex.Set(item)
 	})
@@ -645,6 +649,10 @@ func (cc *CatalogCache) PrintTables(dbId uint64) {
 		}
 		return true
 	})
+}
+
+func (cc *CatalogCache) SetCdcId(id string) {
+	cc.cdcId = id
 }
 
 func ParseDatabaseBatchAnd(bat *batch.Batch, f func(*DatabaseItem)) {
