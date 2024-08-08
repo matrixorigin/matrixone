@@ -117,8 +117,8 @@ func (c *cluster) Start() error {
 			}
 		}(s)
 	}
-
 	wg.Wait()
+
 	select {
 	case err := <-errC:
 		return err

@@ -139,6 +139,9 @@ const (
 	// MO_PUBS publication meta table
 	MO_PUBS = "mo_pubs"
 
+	// MO_SUBS subscriptions meta table
+	MO_SUBS = "mo_subs"
+
 	// MO_SNAPSHOTS
 	MO_SNAPSHOTS = "mo_snapshots"
 
@@ -656,9 +659,9 @@ var (
 		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName)
 
 	MoColumnsRowidsQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q and %s = %%q and %s = %%d",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%q and %s = %%q and %s = %%d order by %s",
 		Row_ID, MO_CATALOG, MO_COLUMNS,
-		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName, SystemColAttr_RelID)
+		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName, SystemColAttr_RelID, SystemColAttr_Num)
 
 	MoColumnsSchema_V1 = []string{
 		SystemColAttr_UniqName,

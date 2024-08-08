@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
 // FileService is a write-once file system
@@ -125,14 +125,14 @@ type IOEntry struct {
 	// When reading, if the ToCacheData field is not nil, the returning object's byte slice will be set to this field
 	// Data, WriterForRead, ReadCloserForRead may be empty if CachedData is not null
 	// if ToCacheData is provided, caller should always read CachedData instead of Data, WriterForRead or ReadCloserForRead
-	CachedData memorycache.CacheData
+	CachedData fscache.Data
 
 	// ToCacheData constructs an object byte slice from entry contents
 	// reader or data must not be retained after returns
 	// reader always contains entry contents
 	// data may contains entry contents if available
 	// if data is empty, the io.Reader must be fully read before returning nil error
-	ToCacheData func(reader io.Reader, data []byte, allocator CacheDataAllocator) (cacheData memorycache.CacheData, err error)
+	ToCacheData func(reader io.Reader, data []byte, allocator CacheDataAllocator) (cacheData fscache.Data, err error)
 
 	// done indicates whether the entry is filled with data
 	// for implementing cascade cache
@@ -154,7 +154,7 @@ func (i IOEntry) String() string {
 }
 
 type CacheDataAllocator interface {
-	Alloc(size int) memorycache.CacheData
+	Alloc(size int) fscache.Data
 }
 
 // DirEntry is a file or dir

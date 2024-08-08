@@ -1,5 +1,6 @@
 drop account if exists bvt_result_count;
 create account bvt_result_count admin_name 'admin' identified by '111';
+set disable_agg_statement = on;
 begin;
 rollback;
 commit;

@@ -24,20 +24,24 @@ import (
 	"time"
 
 	"github.com/google/gops/agent"
+
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap/zapcore"
 )
 
 func init() {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
+	// Tips: Op 'time.Local = time.FixedZone(...)' would cause DATA RACE against to time.Now()
+
 	logutil.SetupMOLogger(&logutil.LogConfig{
 		Level:      zapcore.DebugLevel.String(),
 		Format:     "console",
@@ -115,6 +119,7 @@ func (s *dummyBuffer) ShouldFlush() bool {
 	}
 	return should
 }
+func (s *dummyBuffer) Size() int64 { return 0 }
 
 var waitGetBatchFinish = func() {}
 
@@ -159,6 +164,8 @@ func (n *dummyPipeImpl) NewItemBatchHandler(ctx context.Context) func(any) {
 		n.ch <- batch.(string)
 	}
 }
+
+func (n *dummyPipeImpl) NewAggregator(context.Context, string) table.Aggregator { return nil }
 
 var MOCollectorMux sync.Mutex
 
@@ -220,10 +227,10 @@ func TestNewMOCollector_Stop(t *testing.T) {
 	for i := 0; i < N; i++ {
 		collector.Collect(ctx, newDummy(int64(i)))
 	}
-	length := len(collector.awakeCollect)
+	length := collector.awakeQueue.Len()
 	dropCnt := collector.stopDrop.Load()
 	t.Logf("channal len: %d, dropCnt: %d, totalElem: %d", length, dropCnt, N)
-	require.Equal(t, N, int(dropCnt)+length)
+	require.Equal(t, N, int(dropCnt)+int(length))
 }
 
 func TestNewMOCollector_BufferCnt(t *testing.T) {
@@ -374,15 +381,15 @@ func TestMOCollector_DiscardableCollect(t *testing.T) {
 	cfg := getDummyOBCollectorConfig()
 	collector := NewMOCollector(context.TODO(), "", WithOBCollectorConfig(cfg))
 	elem := newDummy(1)
-	for i := 0; i < defaultQueueSize; i++ {
+	for i := 0; i < defaultRingBufferSize; i++ {
 		collector.Collect(ctx, elem)
 	}
-	require.Equal(t, defaultQueueSize, len(collector.awakeCollect))
+	require.Equal(t, defaultRingBufferSize, int(collector.awakeQueue.Len()))
 
 	// check DisableStore will discard
 	now := time.Now()
 	collector.DiscardableCollect(ctx, elem)
-	require.Equal(t, defaultQueueSize, len(collector.awakeCollect))
+	require.Equal(t, defaultRingBufferSize, int(collector.awakeQueue.Len()))
 	require.True(t, time.Since(now) > discardCollectTimeout)
 	t.Logf("DiscardableCollect accept")
 }
