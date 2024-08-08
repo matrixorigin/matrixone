@@ -28,7 +28,7 @@ type container struct {
 	idx int
 }
 type ValueScan struct {
-	ctr    *container
+	ctr    container
 	Batchs []*batch.Batch
 
 	vm.OperatorBase
@@ -67,7 +67,15 @@ func (valueScan *ValueScan) Release() {
 }
 
 func (valueScan *ValueScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	valueScan.Free(proc, pipelineFailed, err)
+	//@todo need move make batchs function from Scope.Run to value_scan.Prepare, then batchs will not be cleaned here
+	for _, bat := range valueScan.Batchs {
+		if bat != nil {
+			bat.Clean(proc.Mp())
+		}
+	}
+	valueScan.Batchs = nil
+	valueScan.ctr.idx = 0
+	valueScan.ResetProjection(proc)
 }
 
 func (valueScan *ValueScan) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -77,11 +85,6 @@ func (valueScan *ValueScan) Free(proc *process.Process, pipelineFailed bool, err
 		}
 	}
 	valueScan.Batchs = nil
-	if valueScan.ctr != nil {
-		valueScan.ctr.idx = 0
-		valueScan.ctr = nil
-	}
-	if valueScan.ProjectList != nil {
-		valueScan.FreeProjection(proc)
-	}
+	valueScan.ctr.idx = 0
+	valueScan.FreeProjection(proc)
 }
