@@ -92,7 +92,7 @@ func TestInsertOperator(t *testing.T) {
 				IsLast:  false,
 			},
 		},
-		ctr: &container{
+		ctr: container{
 			state:  vm.Build,
 			source: &mockRelation{},
 		},
