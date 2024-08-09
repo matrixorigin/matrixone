@@ -252,6 +252,9 @@ func findTerminator(b []byte) int {
 		length += 2
 		bp = bp[idx+2:]
 	}
+	if length == -1 {
+		return len(b)
+	}
 
 	return length
 }

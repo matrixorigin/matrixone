@@ -32,7 +32,7 @@ func newBlockReadPKFilter(
 	}
 
 	var readFilter blockio.BlockReadFilter
-	var sortedSearchFunc, unSortedSearchFunc func(*vector.Vector) []int32
+	var sortedSearchFunc, unSortedSearchFunc func(*vector.Vector) []int64
 
 	readFilter.HasFakePK = pkName == catalog.FakePrimaryKeyColName
 
@@ -423,10 +423,10 @@ func newBlockReadPKFilter(
 	}
 
 	if sortedSearchFunc != nil {
-		readFilter.SortedSearchFunc = func(vecs []*vector.Vector) []int32 {
+		readFilter.SortedSearchFunc = func(vecs []*vector.Vector) []int64 {
 			return sortedSearchFunc(vecs[0])
 		}
-		readFilter.UnSortedSearchFunc = func(vecs []*vector.Vector) []int32 {
+		readFilter.UnSortedSearchFunc = func(vecs []*vector.Vector) []int64 {
 			return unSortedSearchFunc(vecs[0])
 		}
 		readFilter.Valid = true

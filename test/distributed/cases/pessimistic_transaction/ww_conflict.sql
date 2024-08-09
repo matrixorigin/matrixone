@@ -77,3 +77,12 @@ select * from dis_table_02;
 -- @session}
 select * from dis_table_02;
 drop table dis_table_02;
+
+
+create table t1 (a int);
+insert into t1 values (1), (2), (3);
+begin;
+delete from t1 where a = 1; -- dels in workspace
+drop table t1;  -- the previous delete should be canceled
+show tables;    -- no error in transfer deletes
+commit;

@@ -73,6 +73,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Minus:                   "minus",
 	vm.Intersect:               "intersect",
 	vm.IntersectAll:            "intersect all",
+	vm.UnionAll:                "union all",
 	vm.HashBuild:               "hash build",
 	vm.ShuffleBuild:            "shuffle build",
 	vm.IndexBuild:              "index build",

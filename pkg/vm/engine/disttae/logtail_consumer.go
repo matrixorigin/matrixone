@@ -358,7 +358,6 @@ func (c *PushClient) TryToSubscribeTable(
 	// state machine for subscribe table.
 	//Unsubscribed -> Subscribing -> SubRspReceived -> Subscribed-->Unsubscribing-->Unsubscribed
 	for {
-
 		switch state {
 
 		case Subscribing:

@@ -19,11 +19,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/prashantv/gostub"
-
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
+
+func init() {
+	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
+}
 
 func TestPathBuilder(t *testing.T) {
 	type field struct {
@@ -159,6 +164,29 @@ func TestString2Bytes(t *testing.T) {
 	}
 }
 
-func init() {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
+func TestGetExtension(t *testing.T) {
+	type args struct {
+		ext string
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: CsvExtension,
+			args: args{ext: CsvExtension},
+			want: ".csv",
+		},
+		{
+			name: TaeExtension,
+			args: args{ext: TaeExtension},
+			want: ".tae",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, GetExtension(tt.args.ext), "GetExtension(%v)", tt.args.ext)
+		})
+	}
 }

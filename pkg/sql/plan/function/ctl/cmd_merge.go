@@ -195,8 +195,9 @@ func handleCNMerge(
 		}
 	}()
 
+	ctx := proc.Ctx
 	if a.accountId != math.MaxUint64 {
-		proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(a.accountId))
+		ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(a.accountId))
 	}
 
 	switch a.mergeType {
@@ -205,13 +206,13 @@ func handleCNMerge(
 		if err != nil {
 			return Result{}, moerr.NewInvalidArgNoCtx("tableID", a.tbl)
 		}
-		_, _, rel, err := proc.GetSessionInfo().StorageEngine.GetRelationById(proc.Ctx, txnOp, tblId)
+		_, _, rel, err := proc.GetSessionInfo().StorageEngine.GetRelationById(ctx, txnOp, tblId)
 		if err != nil {
 			logutil.Errorf("mergeblocks err on cn, tblId %d, err %s", tblId, err.Error())
 			return Result{}, err
 		}
 
-		entry, err := rel.MergeObjects(proc.Ctx, a.objs, a.filter, uint32(a.targetObjSize))
+		entry, err := rel.MergeObjects(ctx, a.objs, a.filter, uint32(a.targetObjSize))
 		if err != nil {
 			merge.CleanUpUselessFiles(entry, proc.GetFileService())
 			if entry == nil {
@@ -226,7 +227,7 @@ func handleCNMerge(
 			return Result{}, err
 		}
 
-		resp, err := txnWrite(proc.Ctx, proc.GetService(), txnOp, payload)
+		resp, err := txnWrite(ctx, proc.GetService(), txnOp, payload)
 		if err != nil {
 			return Result{}, err
 		}
@@ -238,19 +239,19 @@ func handleCNMerge(
 
 	case tableMergeType:
 
-		database, err := proc.GetSessionInfo().StorageEngine.Database(proc.Ctx, a.db, txnOp)
+		database, err := proc.GetSessionInfo().StorageEngine.Database(ctx, a.db, txnOp)
 		if err != nil {
 			logutil.Errorf("mergeblocks err on cn, db %s, err %s", a.db, err.Error())
 			return Result{}, err
 		}
-		rel, err := database.Relation(proc.Ctx, a.tbl, nil)
+		rel, err := database.Relation(ctx, a.tbl, nil)
 		if err != nil {
 			logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.db, err.Error())
 			return Result{}, err
 		}
 
 		var engineDefs []engine.TableDef
-		engineDefs, err = rel.TableDefs(proc.Ctx)
+		engineDefs, err = rel.TableDefs(ctx)
 		if err != nil {
 			return Result{}, err
 		}
@@ -269,7 +270,7 @@ func handleCNMerge(
 		}
 
 		if partitionInfo == nil {
-			entry, err := rel.MergeObjects(proc.Ctx, a.objs, a.filter, uint32(a.targetObjSize))
+			entry, err := rel.MergeObjects(ctx, a.objs, a.filter, uint32(a.targetObjSize))
 			if err != nil {
 				return Result{}, err
 			}
@@ -279,7 +280,7 @@ func handleCNMerge(
 				return Result{}, err
 			}
 
-			resp, err := txnWrite(proc.Ctx, proc.GetService(), txnOp, payload)
+			resp, err := txnWrite(ctx, proc.GetService(), txnOp, payload)
 			if err != nil {
 				return Result{}, err
 			}
@@ -295,11 +296,11 @@ func handleCNMerge(
 		var resultBuffer bytes.Buffer
 		// for partition table, run merge on each partition table separately.
 		for _, partitionTable := range partitionInfo.PartitionTableNames {
-			prel, err = database.Relation(proc.Ctx, partitionTable, nil)
+			prel, err = database.Relation(ctx, partitionTable, nil)
 			if err != nil {
 				return Result{}, err
 			}
-			entry, err := prel.MergeObjects(proc.Ctx, a.objs, a.filter, uint32(a.targetObjSize))
+			entry, err := prel.MergeObjects(ctx, a.objs, a.filter, uint32(a.targetObjSize))
 			if err != nil {
 				resultBuffer.WriteString(err.Error())
 				resultBuffer.WriteString("\n")
@@ -311,7 +312,7 @@ func handleCNMerge(
 				return Result{}, err
 			}
 
-			resp, err := txnWrite(proc.Ctx, proc.GetService(), txnOp, payload)
+			resp, err := txnWrite(ctx, proc.GetService(), txnOp, payload)
 			if err != nil {
 				return Result{}, err
 			}

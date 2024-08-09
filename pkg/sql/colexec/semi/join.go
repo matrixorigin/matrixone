@@ -53,6 +53,13 @@ func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {
 
 	if semiJoin.Cond != nil {
 		semiJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, semiJoin.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if semiJoin.ProjectList != nil {
+		err = semiJoin.PrepareProjection(proc)
 	}
 	return err
 }
@@ -98,6 +105,7 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				proc.PutBatch(bat)
 				continue
 			}
+			anal.Input(bat, semiJoin.GetIsFirst())
 			if ctr.skipProbe {
 				vecused := make([]bool, len(bat.Vecs))
 				newvecs := make([]*vector.Vector, len(semiJoin.Result))
@@ -112,17 +120,32 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				bat.Vecs = newvecs
 				result.Batch = bat
-				anal.Output(bat, semiJoin.GetIsLast())
+				if semiJoin.ProjectList != nil {
+					var err error
+					result.Batch, err = semiJoin.EvalProjection(result.Batch, proc)
+					if err != nil {
+						return result, err
+					}
+				}
+				anal.Output(result.Batch, semiJoin.GetIsLast())
 				return result, nil
 			}
 			if ctr.mp == nil {
 				proc.PutBatch(bat)
 				continue
 			}
-			if err := ctr.probe(bat, semiJoin, proc, anal, semiJoin.GetIsFirst(), semiJoin.GetIsLast(), &result); err != nil {
+			if err := ctr.probe(bat, semiJoin, proc, &result); err != nil {
 				bat.Clean(proc.Mp())
 				return result, err
 			}
+			if semiJoin.ProjectList != nil {
+				var err error
+				result.Batch, err = semiJoin.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, semiJoin.GetIsLast())
 			proc.PutBatch(bat)
 			return result, nil
 
@@ -146,8 +169,7 @@ func (semiJoin *SemiJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -172,7 +194,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 	itr := ctr.mp.NewIterator()
 
 	rowCountIncrease := 0
-	eligible := make([]int32, 0) // eligible := make([]int32, 0, hashmap.UnitLimit)
+	eligible := make([]int64, 0) // eligible := make([]int32, 0, hashmap.UnitLimit)
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -237,7 +259,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 					continue
 				}
 			}
-			eligible = append(eligible, int32(i+k))
+			eligible = append(eligible, int64(i+k))
 			rowCountIncrease++
 		}
 		//eligible = eligible[:0]
@@ -256,7 +278,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 	}
 
 	ctr.rbat.AddRowCount(rowCountIncrease)
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }

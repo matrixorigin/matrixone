@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -134,9 +135,6 @@ func HandleShardingReadApproxObjectsNum(
 	num := tbl.ApproxObjectsNum(
 		ctx,
 	)
-	if err != nil {
-		return nil, err
-	}
 	return buffer.EncodeInt(num), nil
 }
 
@@ -167,7 +165,11 @@ func HandleShardingReadRanges(
 		return nil, err
 	}
 
-	bys := []byte(*ranges.(*objectio.BlockInfoSlice))
+	bys, err := ranges.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+
 	return buffer.EncodeBytes(bys), nil
 }
 
@@ -225,13 +227,18 @@ func HandleShardingReadReader(
 		return nil, err
 	}
 
-	_, err = tbl.NewReader(
+	relData, err := UnmarshalRelationData(param.ReaderParam.Ranges)
+	if err != nil {
+		return nil, err
+	}
+	_, err = tbl.BuildReaders(
 		ctx,
-		int(param.ReaderParam.Num),
+		tbl.proc.Load(),
 		&param.ReaderParam.Expr,
-		param.ReaderParam.Ranges,
-		param.ReaderParam.OrderedScan,
+		relData,
+		int(param.ReaderParam.Num),
 		int(param.ReaderParam.TxnOffset),
+		param.ReaderParam.OrderedScan,
 	)
 	if err != nil {
 		return nil, err

@@ -3809,7 +3809,7 @@ func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
 		WithAccountID(proc.GetSessionInfo().AccountId)
-	return exec.Exec(proc.Ctx, sql, opts)
+	return exec.Exec(proc.GetTopContext(), sql, opts)
 }
 
 /*

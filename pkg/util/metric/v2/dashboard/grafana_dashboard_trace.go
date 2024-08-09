@@ -48,12 +48,12 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 	// export data bytes
 	panels := c.getMultiHistogram(
 		[]string{
-			c.getMetricWithFilter(`mo_trace_mologger_export_data_bytes_bucket`, `type="sql"`),
 			c.getMetricWithFilter(`mo_trace_mologger_export_data_bytes_bucket`, `type="csv"`),
+			c.getMetricWithFilter(`mo_trace_mologger_export_data_bytes_bucket`, `type="sql"`),
 		},
 		[]string{
-			"sql",
 			"csv",
+			"sql",
 		},
 		[]float64{0.50, 0.99},
 		[]float32{3, 3},
@@ -66,7 +66,7 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 		"files",
 		3,
 		[]string{
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_export_data_bytes_count", "") + `[$interval])) by (type)`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_export_data_bytes_count", "") + `[$interval:1m])) by (type)`,
 		},
 		[]string{
 			"{{type}}",
@@ -78,14 +78,14 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 		"ETLMerge files",
 		3,
 		[]string{
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", "") + `[$interval]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="success"`) + `[$interval]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="exist"`) + `[$interval]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="open_failed"`) + `[$interval]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="read_failed"`) + `[$interval]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="parse_failed"`) + `[$interval]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="write_failed"`) + `[$interval]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="delete_failed"`) + `[$interval]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", "") + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="success"`) + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="exist"`) + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="open_failed"`) + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="read_failed"`) + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="parse_failed"`) + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="write_failed"`) + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="delete_failed"`) + `[$interval:1m]))`,
 		},
 		[]string{
 			"total",
@@ -107,9 +107,11 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 
 func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 
-	panelP99Cost := c.getMultiHistogram(
+	panelP00Cost := c.getMultiHistogram(
 		[]string{
 			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="collect"`),
+			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="consume"`),
+			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="consume_delay"`),
 			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_awake"`),
 			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_awake_discard"`),
 			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_delay"`),
@@ -119,6 +121,8 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 		},
 		[]string{
 			"collect",
+			"consume",
+			"consume_delay",
 			"generate_awake",
 			"generate_awake_discard",
 			"generate_delay",
@@ -126,32 +130,25 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			"generate_discard",
 			"export",
 		},
-		[]float64{0.99},
-		[]float32{3},
+		[]float64{0.50, 0.99},
+		[]float32{3, 3},
 		axis.Unit("s"),
 		axis.Min(0))
 
 	return dashboard.Row(
 		"Collector Overview",
 
-		c.withMultiGraph(
-			"rate (avg) - each component",
-			3,
-			[]string{
-				`avg(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="collect"`) + `[$interval])) by (type, matrixorigin_io_component)`,
-			},
-			[]string{
-				"",
-			}),
-
+		// ------------- next row ------------
 		c.withMultiGraph(
 			"rate (sum)",
 			3,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="collect"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="consume"`) + `[$interval]))`,
 			},
 			[]string{
 				"collect",
+				"consume",
 			}),
 
 		c.withMultiGraph(
@@ -174,11 +171,13 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 				"export",
 			}),
 
-		panelP99Cost[0],
+		panelP00Cost[0], // P50
+		panelP00Cost[1], // P99
 
+		// ------------- next row ------------
 		c.withMultiGraph(
 			"Discard Count",
-			12,
+			3,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="statement_info"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="rawlog"`) + `[$interval]))`,
@@ -189,6 +188,64 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 				"rawlog",
 				"metric",
 			}),
+
+		c.withMultiGraph(
+			"Discard item Total",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_discard_item_total", "") + `[$interval:1m])) by (type)`,
+			},
+			[]string{"{{ type }}"}),
+		c.withMultiGraph(
+			"Collect hung",
+			3,
+			// try interval: 1ms, need 'val / 1000'
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_collect_hung_total", "") + `[$interval:1m])) by (type) / 1000`,
+			},
+			[]string{"{{ type }}"}),
+		c.withMultiGraph(
+			"MOLogger error count",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_error_total", "") + `[$interval:1m])) by (type)`,
+			},
+			[]string{"{{ type }}"}),
+
+		// ------------- next row ------------
+		c.withMultiGraph(
+			"MoLogger Consume - Rate",
+			3,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="consume"`) + `[$interval:1m]))`,
+			},
+			[]string{
+				"comsume",
+			}),
+
+		c.withMultiGraph(
+			"MoLogger Consume - Check error",
+			3,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_status_total", "") + `[$interval:1m])) by(type)`,
+			},
+			[]string{
+				"{{ type }}",
+			}),
+
+		c.withMultiGraph(
+			"MoLogger Consume - Check Cost (avg)",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_sum", `type="consume_delay"`) + `[$interval:1m]))` +
+					`/` +
+					`sum(delta(mo_trace_collector_status_total[$interval:1m]))`,
+			},
+			[]string{
+				"{{ type }}",
+			},
+			axis.Unit("s"),
+		),
 	)
 }
 
@@ -199,7 +256,7 @@ func (c *DashboardCreator) initCUStatusRow() dashboard.Option {
 			"Negative CU status",
 			6,
 			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_negative_cu_total", "") + `[$interval])) by (type)`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_negative_cu_total", "") + `[$interval:1m])) by (type)`,
 			},
 			[]string{"{{ type }}"}),
 	)

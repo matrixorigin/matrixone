@@ -71,16 +71,16 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
-	result, err := limit.GetChildren(0).Call(proc)
+	result, err := vm.ChildrenCall(limit.GetChildren(0), proc, anal)
 	if err != nil {
 		return result, err
 	}
+	anal.Input(result.Batch, limit.GetIsFirst())
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}
 	bat := result.Batch
-	anal.Input(bat, limit.GetIsFirst())
 
 	if limit.ctr.seen >= limit.ctr.limit {
 		result.Batch = nil

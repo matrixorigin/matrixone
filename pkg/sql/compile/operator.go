@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
@@ -135,6 +136,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.IsShuffle = t.IsShuffle
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Group:
@@ -146,6 +148,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Exprs = t.Exprs
 		op.Types = t.Types
 		op.Aggs = t.Aggs
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Sample:
@@ -164,6 +167,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Left:
@@ -177,6 +181,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Right:
@@ -232,6 +237,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Cond = t.Cond
 		op.Typs = t.Typs
 		op.JoinMapTag = t.JoinMapTag
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.LoopJoin:
@@ -241,6 +247,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Cond = t.Cond
 		op.Typs = t.Typs
 		op.JoinMapTag = t.JoinMapTag
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.IndexJoin:
@@ -249,6 +256,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Typs = t.Typs
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.LoopLeft:
@@ -258,6 +266,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Typs = t.Typs
 		op.Result = t.Result
 		op.JoinMapTag = t.JoinMapTag
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.LoopSemi:
@@ -267,6 +276,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Cond = t.Cond
 		op.Typs = t.Typs
 		op.JoinMapTag = t.JoinMapTag
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.LoopSingle:
@@ -276,6 +286,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Cond = t.Cond
 		op.Typs = t.Typs
 		op.JoinMapTag = t.JoinMapTag
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.LoopMark:
@@ -285,6 +296,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Cond = t.Cond
 		op.Typs = t.Typs
 		op.JoinMapTag = t.JoinMapTag
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Offset:
@@ -306,6 +318,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Typs = t.Typs
 		op.IsShuffle = t.IsShuffle
 		op.JoinMapTag = t.JoinMapTag
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.ProductL2:
@@ -315,12 +328,13 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Typs = t.Typs
 		op.OnExpr = t.OnExpr
 		op.JoinMapTag = t.JoinMapTag
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Projection:
 		t := sourceOp.(*projection.Projection)
 		op := projection.NewArgument()
-		op.Es = t.Es
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Filter:
@@ -343,6 +357,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Single:
@@ -355,6 +370,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Top:
@@ -397,6 +413,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.NeedEval = t.NeedEval
 		op.PartialResults = t.PartialResults
 		op.PartialResultTypes = t.PartialResultTypes
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.MergeLimit:
@@ -434,6 +451,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.OnList = t.OnList
 		op.HashOnPK = t.HashOnPK
 		op.JoinMapTag = t.JoinMapTag
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.TableFunction:
@@ -475,6 +493,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 				},
 			},
 		)
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Source:
@@ -484,6 +503,8 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Limit = t.Limit
 		op.Offset = t.Offset
 		op.Configs = t.Configs
+		op.ProjectList = t.ProjectList
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Connector:
@@ -577,11 +598,15 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.SetInfo(&info)
 		return op
 	case vm.TableScan:
+		t := sourceOp.(*table_scan.TableScan)
 		op := table_scan.NewArgument()
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.ValueScan:
+		t := sourceOp.(*value_scan.ValueScan)
 		op := value_scan.NewArgument()
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	default:
@@ -692,7 +717,7 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 		attrs = append(attrs, col.GetOriginCaseName())
 	}
 
-	ctx := proc.Ctx
+	ctx := proc.GetTopContext()
 	txnOp := proc.GetTxnOperator()
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
@@ -721,7 +746,6 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	}
 
 	op := preinsert.NewArgument()
-	op.Ctx = proc.Ctx
 	op.HasAutoCol = preCtx.HasAutoCol
 	op.SchemaName = schemaName
 	op.TableDef = preCtx.TableDef
@@ -735,24 +759,22 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 func constructPreInsertUk(n *plan.Node, proc *process.Process) *preinsertunique.PreInsertUnique {
 	preCtx := n.PreInsertUkCtx
 	op := preinsertunique.NewArgument()
-	op.Ctx = proc.Ctx
 	op.PreInsertCtx = preCtx
 	return op
 }
 
 func constructPreInsertSk(n *plan.Node, proc *process.Process) *preinsertsecondaryindex.PreInsertSecIdx {
 	op := preinsertsecondaryindex.NewArgument()
-	op.Ctx = proc.Ctx
 	op.PreInsertCtx = n.PreInsertSkCtx
 	return op
 }
 
-func constructMergeblock(eg engine.Engine, insertArg *insert.Insert) *mergeblock.MergeBlock {
+func constructMergeblock(eg engine.Engine, n *plan.Node) *mergeblock.MergeBlock {
 	return mergeblock.NewArgument().
 		WithEngine(eg).
-		WithObjectRef(insertArg.InsertCtx.Ref).
-		WithParitionNames(insertArg.InsertCtx.PartitionTableNames).
-		WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows)
+		WithObjectRef(n.InsertCtx.Ref).
+		WithParitionNames(n.InsertCtx.PartitionTableNames).
+		WithAddAffectedRows(n.InsertCtx.AddAffectedRows)
 }
 
 func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
@@ -780,7 +802,7 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 	return arg, nil
 }
 
-func constructInsert(n *plan.Node, eg engine.Engine) (*insert.Insert, error) {
+func constructInsert(n *plan.Node, eg engine.Engine) *insert.Insert {
 	oldCtx := n.InsertCtx
 	var attrs []string
 	for _, col := range oldCtx.TableDef.Cols {
@@ -800,12 +822,12 @@ func constructInsert(n *plan.Node, eg engine.Engine) (*insert.Insert, error) {
 	}
 	arg := insert.NewArgument()
 	arg.InsertCtx = newCtx
-	return arg, nil
+	return arg
 }
 
 func constructProjection(n *plan.Node) *projection.Projection {
 	arg := projection.NewArgument()
-	arg.Es = n.ProjectList
+	arg.ProjectList = n.ProjectList
 	return arg
 }
 
@@ -912,7 +934,7 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "semi result '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -1086,7 +1108,7 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "anti result '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "anti result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -1120,7 +1142,7 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark
 		} else if rel == -1 {
 			result[i] = -1
 		} else {
-			panic(moerr.NewNYI(proc.Ctx, "loop mark result '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "loop mark result '%s'", expr))
 		}
 	}
 	cond, conds := extraJoinConditions(n.OnList)
@@ -1137,6 +1159,11 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark
 func constructOrder(n *plan.Node) *order.Order {
 	arg := order.NewArgument()
 	arg.OrderBySpec = n.OrderBy
+	return arg
+}
+
+func constructUnionAll(_ *plan.Node) *unionall.UnionAll {
+	arg := unionall.NewArgument()
 	return arg
 }
 
@@ -1374,7 +1401,7 @@ func constructDeleteDispatchAndLocal(
 	rs[currentIdx].NodeInfo = ss[currentIdx].NodeInfo
 	rs[currentIdx].Magic = Remote
 	rs[currentIdx].PreScopes = append(rs[currentIdx].PreScopes, ss[currentIdx])
-	rs[currentIdx].Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(ss))
+	rs[currentIdx].Proc = c.proc.NewNoContextChildProc(len(ss))
 	rs[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0, len(ss)-1)
 
 	// use arg.RemoteRegs to know the uuid,
@@ -1583,7 +1610,7 @@ func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) 
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "loop semi result '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "loop semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -1639,7 +1666,7 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "loop semi result '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "loop semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -1703,7 +1730,7 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
-			panic(moerr.NewNYI(proc.Ctx, "loop anti result '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "loop anti result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -1731,7 +1758,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 		} else if rel == -1 {
 			result[i] = -1
 		} else {
-			panic(moerr.NewNYI(proc.Ctx, "loop mark result '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "loop mark result '%s'", expr))
 		}
 	}
 	arg := loopmark.NewArgument()
@@ -2109,7 +2136,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 func constructJoinResult(expr *plan.Expr, proc *process.Process) (int32, int32) {
 	e, ok := expr.Expr.(*plan.Expr_Col)
 	if !ok {
-		panic(moerr.NewNYI(proc.Ctx, "join result '%s'", expr))
+		panic(moerr.NewNYI(proc.GetTopContext(), "join result '%s'", expr))
 	}
 	return e.Col.RelPos, e.Col.ColPos
 }
@@ -2128,7 +2155,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	if e, ok := expr.Expr.(*plan.Expr_Lit); ok { // constant bool
 		b, ok := e.Lit.Value.(*plan.Literal_Bval)
 		if !ok {
-			panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
+			panic(moerr.NewNYI(proc.GetTopContext(), "join condition '%s'", expr))
 		}
 		if b.Bval {
 			return expr, expr
@@ -2144,7 +2171,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
 	if !ok || !plan2.IsEqualFunc(e.F.Func.GetObj()) {
-		panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
+		panic(moerr.NewNYI(proc.GetTopContext(), "join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
 		return e.F.Args[1], e.F.Args[0]

@@ -840,9 +840,9 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	toVec := result.GetResultVector()
 	toVec.Reset(*toVec.GetType())
 
-	sels := make([]int32, fromVec.Length())
+	sels := make([]int64, fromVec.Length())
 	for j := 0; j < len(sels); j++ {
-		sels[j] = int32(j)
+		sels[j] = int64(j)
 	}
 
 	err := toVec.Union(fromVec, sels, proc.GetMPool())

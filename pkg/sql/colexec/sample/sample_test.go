@@ -124,7 +124,7 @@ func TestSamplePool(t *testing.T) {
 		pool3.Free()
 	}
 
-	proc.FreeVectors()
+	proc.Free()
 	b1.Clean(proc.Mp())
 	b2.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())

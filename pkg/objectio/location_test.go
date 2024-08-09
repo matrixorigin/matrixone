@@ -15,9 +15,9 @@
 package objectio
 
 import (
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/stretchr/testify/require"
+	"testing"
 )
 
 func getLocation(name ObjectName) Location {
@@ -70,4 +70,92 @@ func BenchmarkCheckSame(b *testing.B) {
 			IsEmptyBlkid(&blkid)
 		}
 	})
+}
+
+func TestLocationSlice_Append(t *testing.T) {
+	var s LocationSlice
+	location1 := MockLocation(MockObjectName())
+	s.AppendLocation(location1)
+	require.Equal(t, 1, s.Len())
+	require.Equal(t, LocationLen, s.Size())
+	require.Equal(t, &location1, s.Get(0))
+
+	location2 := MockLocation(MockObjectName())
+	var s2 LocationSlice
+	s2.AppendLocation(location1)
+	s2.AppendLocation(location2)
+	require.Equal(t, 2, s2.Len())
+	require.Equal(t, LocationLen*2, s2.Size())
+	require.Equal(t, &location1, s2.Get(0))
+	require.Equal(t, &location2, s2.Get(1))
+
+	var s3 LocationSlice
+	s3.Append(EncodeLocation(location1))
+	s3.Append(EncodeLocation(location2))
+	require.Equal(t, 2, s3.Len())
+	require.Equal(t, LocationLen*2, s3.Size())
+	require.Equal(t, &location1, s3.Get(0))
+	require.Equal(t, &location2, s3.Get(1))
+}
+
+func TestLocationSliceTraverse(t *testing.T) {
+	var s LocationSlice
+	objectName := MockObjectName()
+	for i := uint32(0); i < 1000; i++ {
+		location := BuildLocation(objectName, NewExtent(1, i, i, i), i, uint16(i))
+		s.AppendLocation(location)
+	}
+
+	require.Equal(t, 1000, s.Len())
+
+	for i := 0; i < s.Len(); i++ {
+		location := s.Get(i)
+		require.Equal(t, uint16(i), location.ID())
+		require.Equal(t, uint32(i), location.Rows())
+	}
+}
+
+func TestBytesToLocationSlice(t *testing.T) {
+	bs := make([]byte, 0)
+	objectName := MockObjectName()
+	for i := uint32(0); i < 1000; i++ {
+		location := BuildLocation(objectName, NewExtent(1, i, i, i), i, uint16(i))
+		bs = append(bs, EncodeLocation(location)...)
+	}
+
+	s := LocationSlice(bs)
+	require.Equal(t, 1000, s.Len())
+
+	for i := 0; i < s.Len(); i++ {
+		location := s.Get(i)
+		require.Equal(t, uint16(i), location.ID())
+		require.Equal(t, uint32(i), location.Rows())
+	}
+
+}
+
+func TestLocationSlice_Remove(t *testing.T) {
+	var s LocationSlice
+	objectName := MockObjectName()
+	for i := uint32(0); i < 1000; i++ {
+		location := BuildLocation(objectName, NewExtent(1, i, i, i), i, uint16(i))
+		s.AppendLocation(location)
+	}
+
+	curr := 0
+	for i := 0; i < 10; i++ {
+		location := s.Get(i)
+		if location.ID() == uint16(0) {
+			// remove the first element
+			continue
+		}
+		s.Set(curr, location)
+		curr++
+	}
+
+	s = s.Slice(0, curr)
+	require.Equal(t, 9, s.Len())
+	for i := 0; i < 9; i++ {
+		require.Equal(t, uint16(i+1), s.Get(i).ID())
+	}
 }

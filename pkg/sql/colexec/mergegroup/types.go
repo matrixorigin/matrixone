@@ -40,8 +40,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state     int
 	typ       int
 	inserted  []uint8
@@ -61,6 +59,7 @@ type MergeGroup struct {
 	PartialResultTypes []types.T
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (mergeGroup *MergeGroup) GetOperatorBase() *vm.OperatorBase {
@@ -107,10 +106,14 @@ func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, e
 	ctr := mergeGroup.ctr
 	if ctr != nil {
 		mp := proc.Mp()
-		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
 		mergeGroup.ctr = nil
+	}
+	if mergeGroup.ProjectList != nil {
+		anal := proc.GetAnalyze(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor())
+		anal.Alloc(mergeGroup.ProjectAllocSize)
+		mergeGroup.FreeProjection(proc)
 	}
 }
 

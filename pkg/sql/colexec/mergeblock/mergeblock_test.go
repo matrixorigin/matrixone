@@ -62,7 +62,6 @@ func TestMergeBlock(t *testing.T) {
 			&sid1,
 			loc1.Name().Num(),
 			loc1.ID()),
-		SegmentID: sid1,
 		//non-appendable block
 		EntryState: false,
 	}
@@ -74,7 +73,6 @@ func TestMergeBlock(t *testing.T) {
 			&sid2,
 			loc2.Name().Num(),
 			loc2.ID()),
-		SegmentID: sid2,
 		//non-appendable block
 		EntryState: false,
 	}
@@ -86,7 +84,6 @@ func TestMergeBlock(t *testing.T) {
 			&sid3,
 			loc3.Name().Num(),
 			loc3.ID()),
-		SegmentID: sid3,
 		//non-appendable block
 		EntryState: false,
 	}
@@ -169,7 +166,7 @@ func TestMergeBlock(t *testing.T) {
 		argument1.container.mp[k].Clean(proc.GetMPool())
 	}
 	argument1.GetChildren(0).Free(proc, false, nil)
-	proc.FreeVectors()
+	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
@@ -247,7 +244,7 @@ func TestArgument_GetMetaLocBat(t *testing.T) {
 		arg.container.mp[k].Clean(proc.GetMPool())
 	}
 
-	proc.FreeVectors()
+	proc.Free()
 	bat.Clean(proc.GetMPool())
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }

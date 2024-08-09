@@ -15,7 +15,7 @@ create snapshot sp01 for cluster;
 -- @ignore:1
 drop publication if exists publication01;
 create publication publication01 database republication01 account acc01 comment 'publish before creating snapshot';
--- @ignore:2
+-- @ignore:5,6
 show publications;
 -- @ignore:2,6
 select * from mo_catalog.mo_pubs;
@@ -28,7 +28,7 @@ select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select * from mo_catalog.mo_pubs;
 use republication01;
 select * from repub01;
--- @ignore:2
+-- @ignore:5,6
 show publications;
 
 drop snapshot sp01;
@@ -80,7 +80,7 @@ create snapshot sp02 for cluster;
 
 drop publication if exists pub02;
 create publication pub02 database repub02 account acc01 comment 'publish before creating snapshot';
--- @ignore:2
+-- @ignore:5,6
 show publications;
 -- @ignore:2,6
 select * from mo_catalog.mo_pubs;
@@ -98,7 +98,7 @@ select * from aff01;
 restore account sys from snapshot sp02;
 select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
--- @ignore:2
+-- @ignore:5,6
 show publications;
 -- @ignore:2,6
 select * from mo_catalog.mo_pubs;
@@ -141,7 +141,7 @@ insert into rs03 values (1, 43425.4325, -7483.432, 2);
 
 drop publication if exists pub03;
 create publication pub03 database repub03 account acc01 comment 'create repub03';
--- @ignore:2
+-- @ignore:5,6
 show publications;
 
 drop snapshot if exists sp01;
@@ -149,7 +149,7 @@ create snapshot sp01 for cluster;
 -- @session:id=1&user=acc01:test_account&password=111
 drop database if exists sub03;
 create database sub03 from sys publication pub03;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 show databases;
 use sub03;
@@ -161,14 +161,14 @@ select * from rs03;
 restore account acc01 from snapshot sp01;
 
 -- @session:id=1&user=acc01:test_account&password=111
--- @ignore:3
+-- @ignore:5,7
 show subscriptions;
 show databases;
 -- @session
 drop snapshot sp01;
 -- @ignore:2,6
 select * from mo_catalog.mo_pubs;
--- @ignore:2
+-- @ignore:5,6
 show publications;
 drop publication pub03;
 drop database repub03;
@@ -195,7 +195,7 @@ drop publication if exists pub04;
 create publication pub04 database db01 account acc01 comment 'create pub04';
 -- @ignore:2,6
 select * from mo_catalog.mo_pubs;
--- @ignore:2
+-- @ignore:5,6
 show publications;
 
 -- @session:id=1&user=acc01:test_account&password=111
@@ -212,7 +212,7 @@ restore account acc01 from snapshot sp02;
 show databases;
 use sub04;
 -- @session
--- @ignore:2
+-- @ignore:5,6
 show publications;
 drop publication pub04;
 drop database db01;
@@ -280,7 +280,7 @@ drop publication if exists pub05;
 create publication pub05 database db09 account acc02 comment 'publish db09';
 drop publication if exists pub06;
 create publication pub06 database db10 account acc02 comment 'publish db10';
--- @ignore:2
+-- @ignore:5,6
 show publications;
 -- @session
 
@@ -296,12 +296,12 @@ select * from index02;
 restore account acc01 from snapshot sp05;
 
 -- @session:id=1&user=acc01:test_account&password=111
--- @ignore:2
+-- @ignore:5,6
 show publications;
 -- @session
 
 -- @session:id=2&user=acc02:test_account&password=111
--- @ignore:3
+-- @ignore:5,7
 show subscriptions;
 show databases;
 use sub05;
@@ -372,7 +372,7 @@ drop publication if exists pub05;
 create publication pub05 database db09 account acc02 comment 'publish db09';
 drop publication if exists pub06;
 create publication pub06 database db10 account acc02 comment 'publish db10';
--- @ignore:2
+-- @ignore:5,6
 show publications;
 -- @session
 
@@ -388,12 +388,12 @@ select * from index02;
 restore account acc02 from snapshot sp05;
 
 -- @session:id=1&user=acc01:test_account&password=111
--- @ignore:2
+-- @ignore:5,6
 show publications;
 -- @session
 
 -- @session:id=2&user=acc02:test_account&password=111
--- @ignore:3
+-- @ignore:5,7
 show subscriptions;
 show databases;
 -- @session
@@ -567,7 +567,7 @@ restore account acc01 from snapshot sp104 to account acc03;
 -- @session:id=3&user=acc03:test_account&password=111
 show databases;
 use test03;
--- @ignore:2
+-- @ignore:5,6
 show publications;
 -- @session
 

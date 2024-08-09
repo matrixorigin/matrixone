@@ -15,8 +15,6 @@
 package preinsertunique
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -34,7 +32,6 @@ type container struct {
 }
 type PreInsertUnique struct {
 	ctr          *container
-	Ctx          context.Context
 	PreInsertCtx *plan.PreInsertUkCtx
 
 	packers util.PackerList

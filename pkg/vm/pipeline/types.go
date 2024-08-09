@@ -94,19 +94,6 @@ func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare
 	// should cancel the context before clean the pipeline to avoid more batch inputting while cleaning.
 	proc.Cancel()
 
-	// clean all the coming batches.
-	// if pipelineFailed {
-	// 	bat := proc.InputBatch()
-	// 	if bat != nil {
-	// 		cnt := bat.GetCnt()
-	// 		for cnt > 0 {
-	// 			cnt--
-	// 			bat.Clean(proc.Mp())
-	// 		}
-	// 	}
-	// 	proc.SetInputBatch(nil)
-	// }
-
 	// clean operator hold memory.
 	if isPrepare {
 		vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {

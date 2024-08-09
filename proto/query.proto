@@ -80,8 +80,9 @@ enum CmdMethod {
   // ReloadAutoIncrementCache is the method to reload auto increment cache.
   ReloadAutoIncrementCache = 22;
 
+  CtlReader = 23;
   // GetReplicaCount get the replica count on specified cn node.
-  GetReplicaCount = 23;
+  GetReplicaCount = 24;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -207,7 +208,8 @@ message Request {
   MigrateConnFromRequest MigrateConnFromRequest = 23;
   MigrateConnToRequest MigrateConnToRequest = 24;
   ReloadAutoIncrementCacheRequest ReloadAutoIncrementCache = 25;
-  GetReplicaCountRequest GetReplicaCount = 26 [ (gogoproto.nullable) = false ];
+  CtlReaderRequest CtlReaderRequest = 26;
+  GetReplicaCountRequest GetReplicaCount = 27 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -258,7 +260,8 @@ message Response {
   MigrateConnFromResponse MigrateConnFromResponse = 23;
   MigrateConnToResponse MigrateConnToResponse = 24;
   ReloadAutoIncrementCacheResponse ReloadAutoIncrementCache = 25;
-  GetReplicaCountResponse GetReplicaCount = 26 [ (gogoproto.nullable) = false ];
+  CtlReaderResponse CtlReaderResponse = 26;
+  GetReplicaCountResponse GetReplicaCount = 27 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -284,6 +287,16 @@ message KillConnRequest {
 // KillConnResponse is the response to the kill connection request.
 message KillConnResponse {
   bool Success = 1;
+}
+
+message CtlReaderRequest {
+  string Cmd = 1;
+  string Cfg = 2;
+  bytes Extra = 3;
+}
+
+message CtlReaderResponse {
+  string Resp = 1;
 }
 
 message TraceSpanRequest {

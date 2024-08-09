@@ -130,6 +130,6 @@ func TestCall(t *testing.T) {
 	_, err = arg.Call(proc)
 	require.NoError(t, err)
 	arg.Free(proc, false, nil)
-	proc.FreeVectors()
+	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }

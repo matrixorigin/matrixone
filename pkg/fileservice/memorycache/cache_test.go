@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	cachepb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +30,7 @@ func TestCache(t *testing.T) {
 	ctx := context.Background()
 
 	cache := NewCache(
-		1<<30,
+		fscache.ConstCapacity(1<<30),
 		nil,
 		nil,
 		nil,

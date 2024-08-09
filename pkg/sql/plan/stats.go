@@ -575,28 +575,32 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 	switch expr.Typ.Id {
 	case int32(types.T_decimal64):
-		w += 64
+		w += 8
 	case int32(types.T_decimal128):
-		w += 128
+		w += 16
 	case int32(types.T_float32), int32(types.T_float64):
 		w += 8
-	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text), int32(types.T_json), int32(types.T_datalink):
+	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text):
 		w += 4
+	case int32(types.T_json), int32(types.T_datalink):
+		w += 32
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funcImpl := exprImpl.F
 		switch funcImpl.Func.GetObjName() {
+		case "json_extract":
+			w += 256
 		case "like":
-			w += 10
+			w += 32
 		case "cast":
-			w += 3
+			w += 8
 		case "in":
-			w += 2
+			w += 3
 		case "<>", "!=":
-			w += 1.2
+			w += 2
 		case "<", "<=":
-			w += 1.1
+			w += 1.5
 		default:
 			w += 1
 		}

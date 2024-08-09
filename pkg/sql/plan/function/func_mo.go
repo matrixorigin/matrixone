@@ -23,10 +23,9 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -375,6 +375,14 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 
 	var getValueFailed bool
 	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	sysAccountCtx := proc.Ctx
+	if accountId, err := defines.GetAccountId(proc.Ctx); err != nil {
+		return err
+	} else if accountId != uint32(sysAccountID) {
+		sysAccountCtx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
+	}
+
 	for i := uint64(0); i < uint64(length); i++ {
 		db, null1 := dbNames.GetStrValue(i)
 		table, null2 := tableNames.GetStrValue(i)
@@ -394,17 +402,11 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				return moerr.NewInvalidInput(proc.Ctx, "%s has bad input column %s", fnName, columnStr)
 			}
 
+			ctx := proc.Ctx
 			if isClusterTable(dbStr, tableStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				accountId, err := defines.GetAccountId(proc.Ctx)
-				if err != nil {
-					return err
-				}
-				if accountId != uint32(sysAccountID) {
-					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
-				}
+				ctx = sysAccountCtx
 			}
-			ctx := proc.Ctx
 
 			db, err := e.Database(ctx, dbStr, txn)
 			if err != nil {
@@ -417,9 +419,12 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				if sub, err = proc.GetSessionInfo().SqlHelper.GetSubscriptionMeta(dbStr); err != nil {
 					return err
 				}
+				if sub != nil && !pubsub.InSubMetaTables(sub, tableStr) {
+					return moerr.NewInternalError(ctx, "table %s not found in publication %s", tableStr, sub.Name)
+				}
 
 				// replace with pub account id
-				ctx = defines.AttachAccountId(ctx, uint32(sysAccountID))
+				ctx = defines.AttachAccountId(ctx, uint32(sub.AccountId))
 				// replace with real dbname(sub.DbName)
 				if db, err = e.Database(ctx, sub.DbName, txn); err != nil {
 					return err
@@ -441,10 +446,13 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				return err
 			}
 
-			if ranges.Len() == 0 {
+			if ranges.DataCnt() == 0 {
 				getValueFailed = true
-			} else if ranges.Len() == 1 && engine.IsMemtable(ranges.GetBytes(0)) {
-				getValueFailed = true
+			} else if ranges.DataCnt() == 1 {
+				first := ranges.GetBlockInfo(0)
+				if first.IsMemBlk() {
+					getValueFailed = true
+				}
 			} else {
 				// BUG： if user delete the max or min value within the same txn, the result will be wrong.
 				tValues, _, er := rel.MaxAndMinValues(ctx)

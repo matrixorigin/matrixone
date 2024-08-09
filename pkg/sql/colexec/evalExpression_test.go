@@ -179,7 +179,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, curr3, proc.Mp().CurrNB())
 		fExprExecutor.Free()
-		proc.FreeVectors()
+		proc.Free()
 		require.Equal(t, currStart, proc.Mp().CurrNB())
 	}
 
@@ -208,10 +208,10 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		currNb := proc.Mp().CurrNB()
 		executor, err := NewExpressionExecutor(proc, fExpr)
 		require.NoError(t, err)
-		_, err = executor.Eval(proc, nil, nil)
-		require.NoError(t, err)
+		_, ok := executor.(*FixedVectorExpressionExecutor)
+		require.Equal(t, true, ok)
 		executor.Free()
-		proc.FreeVectors()
+		proc.Free()
 		require.Equal(t, currNb, proc.Mp().CurrNB())
 	}
 }

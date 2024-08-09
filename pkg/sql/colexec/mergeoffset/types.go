@@ -16,7 +16,6 @@ package mergeoffset
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -27,10 +26,8 @@ import (
 var _ vm.Operator = new(MergeOffset)
 
 type container struct {
-	colexec.ReceiverOperator
 	seen           uint64
 	offset         uint64
-	buf            *batch.Batch
 	offsetExecutor colexec.ExpressionExecutor
 }
 
@@ -84,14 +81,9 @@ func (mergeOffset *MergeOffset) Reset(proc *process.Process, pipelineFailed bool
 
 func (mergeOffset *MergeOffset) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if mergeOffset.ctr != nil {
-		mergeOffset.ctr.FreeMergeTypeOperator(pipelineFailed)
 		if mergeOffset.ctr.offsetExecutor != nil {
 			mergeOffset.ctr.offsetExecutor.Free()
 			mergeOffset.ctr.offsetExecutor = nil
-		}
-		if mergeOffset.ctr.buf != nil {
-			mergeOffset.ctr.buf.Clean(proc.Mp())
-			mergeOffset.ctr.buf = nil
 		}
 		mergeOffset.ctr = nil
 	}

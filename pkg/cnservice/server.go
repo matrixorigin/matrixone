@@ -449,7 +449,8 @@ func (s *service) handleRequest(
 		s.pipelines.counter.Add(1)
 		defer s.pipelines.counter.Add(-1)
 
-		err := s.requestHandler(ctx,
+		// there is no need to handle the return error, because the error will be logged in the function.
+		_ = s.requestHandler(ctx,
 			s.pipelineServiceServiceAddr(),
 			req,
 			cs,
@@ -462,11 +463,6 @@ func (s *service) handleRequest(
 			s._txnClient,
 			s.aicm,
 			s.acquireMessage)
-		if err != nil {
-			logutil.Infof("error occurred while handling the pipeline message, "+
-				"msg is %v, error is %v",
-				req, err)
-		}
 	}()
 	return nil
 }

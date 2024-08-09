@@ -350,7 +350,11 @@ func setGlobalRtMgr(rtMgr *RoutineManager) {
 }
 
 func getGlobalRtMgr() *RoutineManager {
-	return globalRtMgr.Load().(*RoutineManager)
+	v := globalRtMgr.Load()
+	if v != nil {
+		return v.(*RoutineManager)
+	}
+	return nil
 }
 
 func setGlobalPu(pu *config.ParameterUnit) {

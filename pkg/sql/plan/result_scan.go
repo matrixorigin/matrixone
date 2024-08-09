@@ -50,6 +50,9 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		}
 		exprs = append(exprs, curExpr)
 	}
+	if exprs[0].GetP() != nil {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "invalid argument of result_scan")
+	}
 	exprs[0], err = appendCastBeforeExpr(builder.GetContext(), exprs[0], plan.Type{
 		Id:          int32(types.T_uuid),
 		NotNullable: true,
