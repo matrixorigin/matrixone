@@ -2081,7 +2081,15 @@ func (tbl *txnTable) PKPersistedBetween(
 
 		//for sorted block, we can use binary search to find the keys.
 		if filter == nil {
-			if filter, err = buildFilter(); err != nil {
+			filter, err = buildFilter()
+			if filter == nil || err != nil {
+				logutil.Warn("build filter failed, switch to linear search",
+					zap.Uint32("accid", tbl.accountId),
+					zap.Uint64("tableid", tbl.tableId),
+					zap.String("tablename", tbl.tableName))
+				filter = buildUnsortedFilter()
+			}
+			if err != nil {
 				return false, err
 			}
 		}
@@ -2122,13 +2130,14 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	if !flushed {
 		return false, nil
 	}
-	//for mo_tables, mo_database, mo_columns, pk always exist in memory.
-	if tbl.tableName == catalog.MO_DATABASE ||
-		tbl.tableName == catalog.MO_TABLES ||
-		tbl.tableName == catalog.MO_COLUMNS {
-		logutil.Warnf("mo table:%s always exist in memory", tbl.tableName)
-		return true, nil
-	}
+
+	// if tbl.tableName == catalog.MO_DATABASE ||
+	// 	tbl.tableName == catalog.MO_TABLES ||
+	// 	tbl.tableName == catalog.MO_COLUMNS {
+	// 	logutil.Warnf("mo table:%s always exist in memory", tbl.tableName)
+	// 	return true, nil
+	// }
+
 	//need check pk whether exist on S3 block.
 	return tbl.PKPersistedBetween(
 		snap,
