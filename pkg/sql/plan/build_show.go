@@ -949,6 +949,17 @@ func buildShowPitr(stmt *tree.ShowPitr, ctx CompilerContext) (*Plan, error) {
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowCdc(stmt *tree.ShowCDC, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	var sql string
+	if stmt.Option.All {
+		sql = fmt.Sprintf("SELECT task_id, task_name, source_uri, sink_uri, state, checkpoint FROM %s.mo_cdc_task", MO_CATALOG_DB_NAME)
+	} else {
+		sql = fmt.Sprintf("SELECT task_id, task_name, source_uri, sink_uri, state, checkpoint FROM %s.mo_cdc_task WHERE task_name = '%s'", MO_CATALOG_DB_NAME, stmt.Option.TaskName)
+	}
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func buildShowAccountUpgrade(stmt *tree.ShowAccountUpgrade, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_UPGRADE
 	sql := fmt.Sprintf("select account_name as `account_name`, create_version as `current_version` from %s.mo_account order by account_id;", MO_CATALOG_DB_NAME)

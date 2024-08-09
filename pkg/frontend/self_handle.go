@@ -462,9 +462,13 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		}
 	case *tree.PauseCDC:
 	case *tree.DropCDC:
+		ses.EnterFPrint(126)
+		defer ses.ExitFPrint(126)
+		if err = handleDropCdc(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.RestartCDC:
 	case *tree.ResumeCDC:
-	case *tree.ShowCDC:
 	}
 	return
 }
