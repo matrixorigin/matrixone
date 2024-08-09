@@ -38,8 +38,6 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
