@@ -3226,13 +3226,12 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 		}
 		lockOpArg.SetBlock(block)
 		lockOpArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		if block {
-			lockOpArg.SetChildren(ss[i].RootOp.GetOperatorBase().Children)
-			ss[i].RootOp.Release()
-			ss[i].RootOp = lockOpArg
-		} else {
-			ss[i].doSetRootOperator(lockOpArg)
+		if !block {
+			mergeOp := merge.NewArgument()
+			ss[i].setRootOperator(mergeOp)
 		}
+		ss[i].doSetRootOperator(lockOpArg)
+
 	}
 	c.anal.isFirst = false
 	return ss, nil
