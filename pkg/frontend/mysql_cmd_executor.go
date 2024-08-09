@@ -34,6 +34,9 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -2800,6 +2803,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if ses.proc != nil {
 			ses.proc.UnixTime = proc.UnixTime
 		}
+		execCtx.txnOpt.reset()
 		execCtx.stmt = stmt
 		execCtx.isLastStmt = i >= len(cws)-1
 		execCtx.tenant = tenant

@@ -142,6 +142,13 @@ type FeTxnOption struct {
 	byRollback bool
 }
 
+func (opt *FeTxnOption) reset() {
+	opt.byBegin = false
+	opt.autoCommit = true
+	opt.byCommit = false
+	opt.byRollback = false
+}
+
 const (
 	defaultServerStatus uint32 = uint32(SERVER_STATUS_AUTOCOMMIT)
 	defaultOptionBits   uint32 = OPTION_AUTOCOMMIT
