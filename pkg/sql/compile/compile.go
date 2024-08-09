@@ -3293,7 +3293,7 @@ func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope
 	rs.setRootOperator(mergeRecursiveArg)
 
 	mergeOp2 := merge.NewArgument()
-	mergeOp2.WithPartial(1, len(receivers))
+	mergeOp2.WithPartial(1, int32(len(receivers)))
 	mergeRecursiveArg.AppendChild(mergeOp1)
 	c.anal.isFirst = false
 	return []*Scope{rs}, nil
