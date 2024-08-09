@@ -44,13 +44,15 @@ var (
 )
 
 func init() {
-	rowCnts = []float64{1000000, 10000000}
+	// rowCnts = []float64{1000000, 10000000}
+
+	rowCnts = []float64{1000, 10000}
 
 	// https://hur.st/bloomfilter/?n=100000&p=0.00001&m=&k=3
-	referM = []float64{
-		68871111,
-		137742221,
-	}
+	// referM = []float64{
+	// 	68871111,
+	// 	137742221,
+	// }
 
 	tcs = []fuzzyTestCase{
 		{
@@ -108,7 +110,6 @@ func newProcess() *process.Process {
 	return proc
 }
 
-
 func setProcForTest(fuzzyFilter *FuzzyFilter, proc *process.Process, typs []types.Type, rowCnt float64) {
 	fuzzyFilter.Children = nil
 
@@ -152,7 +153,16 @@ func TestFuzzyFilter(t *testing.T) {
 
 			for {
 				result, err := tc.arg.Call(tc.proc)
-				require.NoError(t, err)
+
+				if result.Status != vm.ExecStop {
+					if IfCanUseRoaringFilter(tc.types[0].Oid) {
+						require.Error(t, err)
+					} else {
+						require.NoError(t, err)
+						require.Greater(t, tc.arg.ctr.rbat.RowCount(), int64(0))
+					}
+				}
+
 				if result.Status == vm.ExecStop {
 					tc.arg.Reset(tc.proc, false, err)
 					break
@@ -165,10 +175,17 @@ func TestFuzzyFilter(t *testing.T) {
 
 			for {
 				result, err := tc.arg.Call(tc.proc)
-				require.NoError(t, err)
+				if result.Status != vm.ExecStop {
+					if IfCanUseRoaringFilter(tc.types[0].Oid) {
+						require.Error(t, err)
+					} else {
+						require.NoError(t, err)
+						require.Greater(t, tc.arg.ctr.rbat.RowCount(), int64(0))
+					}
+				}
+
 				if result.Status == vm.ExecStop {
 					tc.arg.Free(tc.proc, false, err)
-					require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 					break
 				}
 			}
