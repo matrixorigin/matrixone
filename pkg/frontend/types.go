@@ -974,6 +974,7 @@ type MysqlReader interface {
 	MediaReader
 	Property
 	Read() ([]byte, error)
+	ReadLoadLocalPacket() ([]byte, error)
 	Free(buf []byte)
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 	Authenticate(ctx context.Context) error
