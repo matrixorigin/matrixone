@@ -17,6 +17,7 @@ package malloc
 import (
 	"hash/maphash"
 	"io"
+	"net/http"
 	"runtime"
 	"slices"
 	"sync"
@@ -306,4 +307,13 @@ func copyLocation(location *profile.Location) *profile.Location {
 	ret := *location
 	ret.Line = slices.Clone(location.Line)
 	return &ret
+}
+
+var _ http.Handler = new(Profiler[HeapSampleValues, *HeapSampleValues])
+
+func (p *Profiler[T, P]) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	err := p.Write(w)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+	}
 }
