@@ -1534,25 +1534,9 @@ func getSqlForCheckStage(ctx context.Context, stage string) (string, error) {
 	return fmt.Sprintf(checkStageFormat, stage), nil
 }
 
-/*
-func getSqlForCheckStageStatus(ctx context.Context, status string) string {
-	return fmt.Sprintf(checkStageStatusFormat, status)
-}
-*/
-
 func getSqlForCheckUdfWithDb(dbName string) string {
 	return fmt.Sprintf(checkUdfWithDb, dbName)
 }
-
-/*
-func getSqlForCheckStageStatusWithStageName(ctx context.Context, stage string) (string, error) {
-	err := inputNameIsInvalid(ctx, stage)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkStageStatusWithStageNameFormat, stage), nil
-}
-*/
 
 func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credentials, status, createdTime, comment string) (string, error) {
 	err := inputNameIsInvalid(ctx, stageName)
