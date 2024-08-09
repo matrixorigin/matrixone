@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -39,13 +41,16 @@ func (tableScan *TableScan) OpType() vm.OpType {
 }
 
 func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
-	tableScan.ctr = new(container)
 	if tableScan.TopValueMsgTag > 0 {
 		tableScan.ctr.msgReceiver = message.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress(), proc.GetMessageBoard())
 	}
-	if tableScan.ProjectList != nil {
-		err = tableScan.PrepareProjection(proc)
+	if tableScan.ctr.buf == nil {
+		tableScan.ctr.buf = batch.NewWithSize(len(tableScan.Types))
+		for i := range tableScan.Types {
+			tableScan.ctr.buf.Vecs[i] = vector.NewVec(tableScan.Types[i])
+		}
 	}
+	err = tableScan.PrepareProjection(proc)
 	return
 }
 
@@ -83,15 +88,9 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		v2.TxnStatementScanDurationHistogram.Observe(cost.Seconds())
 	}()
 
-	result := vm.NewCallResult()
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		e = err
 		return vm.CancelResult, err
-	}
-
-	if tableScan.ctr.buf != nil {
-		proc.PutBatch(tableScan.ctr.buf)
-		tableScan.ctr.buf = nil
 	}
 
 	for {
@@ -107,20 +106,18 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 		// read data from storage engine
-		bat, err := tableScan.Reader.Read(proc.Ctx, tableScan.Attrs, nil, proc.Mp(), proc)
+		isEnd, err := tableScan.Reader.Read(proc.Ctx, tableScan.Attrs, nil, proc.Mp(), proc, tableScan.ctr.buf)
 		if err != nil {
-			result.Status = vm.ExecStop
 			e = err
-			return result, err
+			return vm.CancelResult, err
 		}
 
-		if bat == nil {
-			result.Status = vm.ExecStop
+		if isEnd {
 			e = err
-			return result, err
+			return vm.CancelResult, err
 		}
 
-		if bat.IsEmpty() {
+		if tableScan.ctr.buf.IsEmpty() {
 			continue
 		}
 
@@ -129,26 +126,22 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			proc.GetTxnOperator().Txn().SnapshotTS,
 			tableScan.TableID,
 			tableScan.Attrs,
-			bat)
+			tableScan.ctr.buf)
 
-		bat.Cnt = 1
 		anal.InputBlock()
-		anal.S3IOByte(bat)
-		batSize := bat.Size()
+		anal.S3IOByte(tableScan.ctr.buf)
+		batSize := tableScan.ctr.buf.Size()
 		tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, batSize)
-
-		tableScan.ctr.buf = bat
 		break
 	}
 
-	result.Batch = tableScan.ctr.buf
-	anal.Input(result.Batch, tableScan.IsFirst)
-	var err error
-	if tableScan.ProjectList != nil {
-		result.Batch, err = tableScan.EvalProjection(result.Batch, proc)
+	anal.Input(tableScan.ctr.buf, tableScan.IsFirst)
+	retBatch, err := tableScan.EvalProjection(tableScan.ctr.buf, proc)
+	if err != nil {
+		e = err
+		return vm.CancelResult, err
 	}
-
-	anal.Output(result.Batch, tableScan.IsLast)
-	return result, err
+	anal.Output(retBatch, tableScan.IsLast)
+	return vm.CallResult{Batch: retBatch}, nil
 
 }
