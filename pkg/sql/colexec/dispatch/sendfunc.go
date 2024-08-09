@@ -35,8 +35,8 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (
 	var refCountAdd int64
 	var err error
 
-	if ap.ctr.localRegsCnt > 1 {
-		logutil.Infof("dispatch send %v rows to %v localregs", bat.RowCount(), ap.ctr.localRegsCnt)
+	if ap.ctr.localRegsCnt == 1 {
+		logutil.Infof("dispatch send %v rows to %p", bat.RowCount(), ap.LocalRegs[0].Ch)
 	}
 
 	if !ap.RecSink {

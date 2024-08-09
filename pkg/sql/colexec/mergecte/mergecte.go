@@ -17,6 +17,7 @@ package mergecte
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -88,7 +89,9 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			if result.Batch != nil {
-				logutil.Infof("receive batch in mergecte from 1 %v rows", result.Batch.RowCount())
+				mergeop := mergeCTE.GetChildren(1).(*merge.Merge)
+				receivers := proc.Reg.MergeReceivers[mergeop.StartIDX:mergeop.EndIDX]
+				logutil.Infof("receive batch in mergecte from rest, channel %p, receive %v rows", receivers[0].Ch, result.Batch.RowCount())
 			}
 			if result.Batch == nil {
 				result.Batch = nil

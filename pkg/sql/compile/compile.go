@@ -3266,6 +3266,7 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	}
 	rs := newScope(Merge)
 	rs.NodeInfo = getEngineNode(c)
+	rs.NodeInfo.Mcpu = 1
 	rs.Proc = c.proc.NewNoContextChildProc(len(receivers))
 	for _, r := range receivers {
 		r.Ctx = rs.Proc.Ctx

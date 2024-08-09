@@ -17,6 +17,7 @@ package mergerecursive
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -66,6 +67,7 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 		if bat.Last() {
 			mergeRecursive.ctr.last = true
 		}
+		atomic.AddInt64(&bat.Cnt, 1)
 		mergeRecursive.ctr.bats = append(mergeRecursive.ctr.bats, bat)
 	}
 	mergeRecursive.ctr.buf = mergeRecursive.ctr.bats[0]
