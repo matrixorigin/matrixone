@@ -3264,10 +3264,18 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
 		}
 	}
-
 	rs := newScope(Merge)
 	rs.NodeInfo = getEngineNode(c)
 	rs.Proc = c.proc.NewNoContextChildProc(len(receivers))
+	for _, r := range receivers {
+		r.Ctx = rs.Proc.Ctx
+	}
+	rs.Proc.Reg.MergeReceivers = receivers
+
+	//for mergecte, children[0] receive from the first channel, and children[1] receive from the rest channels
+	mergeOp1 := merge.NewArgument()
+	mergeOp1.WithPartial(0, 1)
+	rs.setRootOperator(mergeOp1)
 
 	currentFirstFlag := c.anal.isFirst
 	mergecteArg := mergecte.NewArgument()
@@ -3275,10 +3283,11 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	rs.setRootOperator(mergecteArg)
 	c.anal.isFirst = false
 
-	for _, r := range receivers {
-		r.Ctx = rs.Proc.Ctx
-	}
-	rs.Proc.Reg.MergeReceivers = receivers
+	mergeOp2 := merge.NewArgument()
+	mergeOp2.WithPartial(1, int32(len(receivers)))
+	mergecteArg.AppendChild(mergeOp2)
+	c.anal.isFirst = false
+
 	return []*Scope{rs}, nil
 }
 
@@ -3298,18 +3307,12 @@ func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope
 	}
 	rs.Proc.Reg.MergeReceivers = receivers
 
-	mergeOp1 := merge.NewArgument()
-	mergeOp1.WithPartial(0, 1)
-	rs.setRootOperator(mergeOp1)
-
+	mergeOp := merge.NewArgument()
+	rs.setRootOperator(mergeOp)
 	currentFirstFlag := c.anal.isFirst
 	mergeRecursiveArg := mergerecursive.NewArgument()
 	mergeRecursiveArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergeRecursiveArg)
-
-	mergeOp2 := merge.NewArgument()
-	mergeOp2.WithPartial(1, int32(len(receivers)))
-	mergeRecursiveArg.AppendChild(mergeOp1)
 	c.anal.isFirst = false
 	return []*Scope{rs}, nil
 }
