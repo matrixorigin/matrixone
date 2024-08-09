@@ -33,6 +33,10 @@ drop snapshot if exists sp06;
 create snapshot sp06 for account sys;
 drop database test01;
 restore account sys from snapshot sp06;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from test01.EmployeeSalaries;
 employeeid    employeename    salary
 1    Alice    70000.00
@@ -85,6 +89,10 @@ create snapshot sp06 for account sys;
 drop table EmployeeSalaries;
 drop view EmployeeSalaryRanking;
 restore account sys from snapshot sp06;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from test01.EmployeeSalaries;
 employeeid    employeename    salary
 1    Alice    70000.00
@@ -216,6 +224,10 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot sp06 for account sys;
 drop database test01;
 restore account sys from snapshot sp06;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from test01.employees;
 employee_id    first_name    last_name    department_id    status
 1    John    Doe    1    active
@@ -257,6 +269,10 @@ drop table if exists departments;
 drop table if exists orders;
 drop table if exists sales_summary;
 restore account sys from snapshot sp06;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from test01.employees;
 employee_id    first_name    last_name    department_id    status
 1    John    Doe    1    active
@@ -543,6 +559,10 @@ drop database School;
 drop database University;
 drop database EducationSystem;
 restore account sys from snapshot sp06;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from School.Students;
 studentid    name    grade
 1    Alice Smith    3.50

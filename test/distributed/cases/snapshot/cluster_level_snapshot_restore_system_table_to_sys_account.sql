@@ -51,12 +51,16 @@ drop function subab(x int,y int);
 drop function udf_db.concatenate(str1 varchar(255), str2 varchar(255));
 
 restore account sys from snapshot udf_dsp03;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+
 -- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
 -- @ignore:0,1
 show snapshots;
 
 restore account sys from snapshot udf_dsp02;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+
 -- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
 -- @ignore:0,1
@@ -87,6 +91,8 @@ drop database udf_db2;
 select * from mo_catalog.mo_user_defined_function;
 
 restore account sys from snapshot udf_sp04;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+
 -- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
 drop database udf_db2;
@@ -128,6 +134,7 @@ drop procedure test_if_hit_elseif_first_elseif;
 drop procedure test_if_hit_if;
 
 restore account sys from snapshot sp_sp05;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 -- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
@@ -177,6 +184,7 @@ drop procedure test_if_hit_second_elseif;
 select * from mo_catalog.mo_stored_procedure;
 
 restore account sys from snapshot sp_sp06;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 call test_if_hit_else();
 call test_if_hit_second_elseif();
@@ -210,6 +218,8 @@ drop stage my_ext_stage;
 select * from mo_catalog.mo_stages;
 
 restore account sys from snapshot stage_sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+
 -- @ignore:0,5
 select * from mo_catalog.mo_stages;
 drop snapshot stage_sp01;
@@ -236,10 +246,11 @@ drop snapshot if exists user_sp02;
 create snapshot user_sp02 for cluster;
 
 restore account sys from snapshot user_sp01;
-select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 restore account sys from snapshot user_sp02;
-select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+
 drop user userx;
 drop user usery;
 drop user userz;
@@ -262,6 +273,7 @@ drop role role1;
 drop role role2;
 
 restore account sys from snapshot role_sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select role_name, creator, owner from mo_catalog.mo_role;
 drop snapshot role_sp01;
@@ -293,6 +305,7 @@ select role_name, creator, owner from mo_catalog.mo_role;
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
 
 restore account sys from snapshot prvis_sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select role_name, creator, owner from mo_catalog.mo_role;
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
@@ -324,6 +337,7 @@ drop user user_grant_2;
 drop role 'role_account_priv_1';
 
 restore account sys from snapshot grant_sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 select role_name, creator, owner from mo_catalog.mo_role;
@@ -357,6 +371,7 @@ select role_name, creator, owner from mo_catalog.mo_role;
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
 
 restore account sys from snapshot grant_sp02;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 select role_name, creator, owner from mo_catalog.mo_role;
@@ -385,6 +400,7 @@ select role_name, creator, owner from mo_catalog.mo_role;
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
 
 restore account sys from snapshot sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select role_name, creator, owner from mo_catalog.mo_role;
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
@@ -412,6 +428,7 @@ select role_name, creator, owner from mo_catalog.mo_role;
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
 
 restore account sys from snapshot sp02;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select role_name, creator, owner from mo_catalog.mo_role;
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
@@ -449,6 +466,7 @@ select role_name, creator, owner from mo_catalog.mo_role;
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r5');
 
 restore account sys from snapshot sp03;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 select role_name, creator, owner from mo_catalog.mo_role;
@@ -483,6 +501,7 @@ revoke role_r1 from role_r2;
 
 select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 restore account sys from snapshot sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 drop snapshot sp01;
 drop role role_r1, role_r2, role_r3;

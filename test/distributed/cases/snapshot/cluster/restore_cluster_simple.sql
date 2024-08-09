@@ -530,6 +530,7 @@ drop database if exists test_snapshot_restore_3;
 -- @session
 
 restore cluster from snapshot cluster_sp;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;

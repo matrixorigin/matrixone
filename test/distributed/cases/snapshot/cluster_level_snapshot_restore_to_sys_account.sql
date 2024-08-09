@@ -9,6 +9,7 @@ insert into clu01 values(2,3,0);
 drop table clu01;
 
 restore account sys from snapshot sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select * from clu01;
 drop table clu01;
@@ -28,6 +29,7 @@ create snapshot sp01 for cluster;
 insert into clu01 values(2,3);
 
 restore account sys from snapshot sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select * from clu01;
 select count(*) from clu01;
@@ -66,6 +68,7 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase =
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 restore account sys from snapshot sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select count(*) from rs01 {snapshot = 'sp01'};
 select count(*) from rs01 {snapshot = 'sp01'};
 select * from rs01 {snapshot = 'sp01'};
@@ -131,6 +134,7 @@ select count(*) from rs03;
 select count(*) from rs03{snapshot = 'sp02'};
 
 restore account sys from snapshot sp02;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 show databases;
 select count(*) from rs02;
@@ -217,6 +221,7 @@ select * from test03.pri01{snapshot = 'sp04'};
 select count(*) from test03.aff01{snapshot = 'sp04'};
 
 restore account sys from snapshot sp04;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 use test03;
 show create table aff01;
 show create table pri01;
@@ -288,6 +293,7 @@ select * from test01.t1;
 select count(*) from test03.t3;
 
 restore account sys from snapshot snap01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 show databases;
 select count(*) from test01.t1;
@@ -312,6 +318,7 @@ drop snapshot if exists sp05;
 create snapshot sp05 for cluster;
 create database db01;
 restore account sys FROM snapshot sp05;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 show databases;
 drop snapshot sp05;
 
@@ -341,11 +348,13 @@ create snapshot sp08 for cluster;
 -- @ignore:1
 show snapshots;
 restore account sys from snapshot sp08;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select * from table02;
 select * from db01.table01;
 select count(*) from table02;
 
 restore account sys from snapshot sp07;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select * from table01;
 select * from table02;
@@ -383,6 +392,7 @@ create snapshot sp10 for cluster;
 -- @ignore:1
 show snapshots;
 restore account sys from snapshot sp09;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select * from table02;
 select * from db02.table01;
 select count(*) from table02;
@@ -390,6 +400,7 @@ select count(*) from table01;
 show create table table01;
 
 restore account sys from snapshot sp10;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select * from db02.table01;
 select count(*) from table01;
 show create table db02.table01;
@@ -474,6 +485,7 @@ select count(*) from ti2;
 select count(*) from tm2;
 
 restore account sys from snapshot sp11;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 show databases;
 select * from db03.ti1;
 select * from db03.tm1;
@@ -485,6 +497,7 @@ show create table db03.ti2;
 show create table db03.tm2;
 
 restore account sys from snapshot sp14;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 show databases;
 select * from db03.ti1;
 select * from db03.tm1;

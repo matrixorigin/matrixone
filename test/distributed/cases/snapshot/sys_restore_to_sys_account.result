@@ -5,6 +5,10 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account sys;
 insert into clu01 values(2,3,0);
 restore account sys from snapshot sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from clu01;
 col1    col2    account_id
 1    2    0
@@ -18,6 +22,10 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account sys;
 insert into clu01 values(2,3);
 restore account sys from snapshot sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from clu01;
 col1    col2
 1    2
@@ -71,6 +79,10 @@ col1
 col2
 col3
 restore account sys from snapshot sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select count(*) from rs01 {snapshot = 'sp01'};
 count(*)
 6
@@ -182,6 +194,10 @@ select count(*) from rs03{snapshot = 'sp02'};
 count(*)
 5
 restore account sys from snapshot sp02;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show databases;
 Database
 information_schema
@@ -322,6 +338,10 @@ select count(*) from test03.aff01{snapshot = 'sp04'};
 count(*)
 14
 restore account sys from snapshot sp04;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 use test03;
 show create table aff01;
 Table    Create Table
@@ -425,6 +445,10 @@ select count(*) from test03.t3;
 count(*)
 3
 restore account sys from snapshot snap01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show databases;
 Database
 information_schema
@@ -479,6 +503,10 @@ drop snapshot if exists sp05;
 create snapshot sp05 for account sys;
 create database db01;
 restore account sys FROM snapshot sp05;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show databases;
 Database
 information_schema
@@ -511,6 +539,10 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 sp08    2024-05-15 06:06:08.797713    account    sys
 sp07    2024-05-15 06:06:08.772359    account    sys
 restore account sys from snapshot sp08;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from table02;
 col1    col2
 133    database
@@ -521,6 +553,10 @@ select count(*) from table02;
 count(*)
 2
 restore account sys from snapshot sp07;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from table01;
 col1    col2    col3    col4    col5    col6
 1    2    a    23eiojf    r23v324r23rer    3923.324
@@ -558,6 +594,10 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 sp10    2024-05-15 06:06:09.060988    account    sys
 sp09    2024-05-15 06:06:09.039712    account    sys
 restore account sys from snapshot sp09;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from table02;
 col1    col2
 133    database
@@ -572,6 +612,10 @@ select count(*) from table01;
 count(*)
 2
 restore account sys from snapshot sp10;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from db02.table01;
 col1    col2    col3    col4    col5    col6
 1    2    a    23eiojf    r23v324r23rer    3923.324
@@ -700,6 +744,10 @@ select count(*) from tm2;
 count(*)
 0
 restore account sys from snapshot sp11;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show databases;
 Database
 db03
@@ -732,6 +780,10 @@ show create table db03.tm2;
 Table    Create Table
 tm2    CREATE TABLE `tm2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 restore account sys from snapshot sp14;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show databases;
 Database
 db03

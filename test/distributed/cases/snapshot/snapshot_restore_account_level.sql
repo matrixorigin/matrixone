@@ -129,6 +129,7 @@ drop database test_snapshot_restore;
 drop database snapshot_read;
 
 restore account sys from snapshot snapshot_01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 use test_snapshot_restore;
 select count(*) from test_snapshot_restore.test_restore;

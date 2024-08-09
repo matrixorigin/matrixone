@@ -44,6 +44,10 @@ internal error: there is no publication pubname1
 show tables;
 internal error: there is no publication pubname1
 restore account sys from snapshot snapshot2;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 pubname1    db1    *    test_tenant_1    test_tenant_1    2024-08-01 17:01:13    null    publish db1 database
@@ -160,6 +164,10 @@ show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:15    sub_db2    2024-08-01 17:01:15    2
 restore account sys from snapshot snapshot3;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 pubname2    db2    *    *    test_tenant_1,test_tenant_2    2024-08-01 17:01:15    null    publish db2 database
@@ -266,6 +274,10 @@ show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:17    sub_db2    2024-08-01 17:01:17    0
 restore account sys from snapshot snapshot4;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show databases like 'db%';
@@ -374,6 +386,10 @@ show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:19    sub_db2    2024-08-01 17:01:19    0
 restore account sys from snapshot snapshot6;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 pubname1    db1    *    test_tenant_1    test_tenant_1    2024-08-01 17:01:19    null    publish db1 database
@@ -410,6 +426,10 @@ show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:19    sub_db2    2024-08-01 17:01:19    2
 restore account sys from snapshot snapshot5;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show databases like 'sub_db1';
 Database
 sub_db1

@@ -781,6 +781,7 @@ drop database if exists Company;
 -- @session
 
 restore cluster from snapshot cluster_sp;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select * from Company.Departments;
 select * from Company.Employees;

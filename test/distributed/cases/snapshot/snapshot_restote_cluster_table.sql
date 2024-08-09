@@ -26,6 +26,7 @@ select * from mo_catalog.cluster_table_1;
 -- @session
 
 restore account sys from snapshot snapshot2;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 -- @session:id=1&user=acc01:test_account&password=111
 select * from mo_catalog.cluster_table_1;

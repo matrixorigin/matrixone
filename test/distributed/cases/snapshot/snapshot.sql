@@ -73,6 +73,7 @@ drop snapshot if exists `binary`;
 create snapshot `binary` for account sys;
 select count(*) from cluster01{snapshot = `binary`};
 restore account sys from snapshot `binary`;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select count(*) from cluster01{snapshot = `binary`};
 drop snapshot if exists `binary`;
 
@@ -85,6 +86,7 @@ drop snapshot if exists `_binary`;
 create snapshot `_binary` for account sys;
 select count(*) from cluster01{snapshot = `_binary`};
 restore account sys from snapshot `_binary`;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select count(*) from cluster01{snapshot = `_binary`};
 drop snapshot if exists `_binary`;
 drop table if exists cluster01;

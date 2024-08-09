@@ -22,6 +22,10 @@ restore account acc01 from snapshot snapshot1;
 select * from mo_catalog.cluster_table_1;
 SQL parser error: table "cluster_table_1" does not exist
 restore account sys from snapshot snapshot2;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from mo_catalog.cluster_table_1;
 a    b
 drop snapshot if exists snapshot1;

@@ -124,6 +124,10 @@ create snapshot snapshot_01 for account sys;
 drop database test_snapshot_restore;
 drop database snapshot_read;
 restore account sys from snapshot snapshot_01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 use test_snapshot_restore;
 select count(*) from test_snapshot_restore.test_restore;
 count(*)
