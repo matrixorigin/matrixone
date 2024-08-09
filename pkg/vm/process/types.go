@@ -356,6 +356,8 @@ type Process struct {
 	// BaseProcess is the common part of one process, and it's shared by all its children processes.
 	Base *BaseProcess
 
+	// todo: need to delete this in the future
+	MergeReceivers []*WaitRegister
 	// Ctx and Cancel are pipeline's context and cancel function.
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
 	Ctx    context.Context

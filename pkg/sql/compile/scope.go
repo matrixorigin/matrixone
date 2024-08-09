@@ -443,14 +443,14 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			probeScope := c.newJoinProbeScopeWithBidx(s)
 			s.PreScopes = append(s.PreScopes, probeScope)
 		}
-		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
+		s.Proc.MergeReceivers = s.Proc.MergeReceivers[:1]
 		return s, nil
 	}
 
 	if mcpu <= 1 { // broadcast join with no parallel
 		buildScope := c.newJoinBuildScope(s, 1)
 		s.PreScopes = append(s.PreScopes, buildScope)
-		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx]
+		s.Proc.MergeReceivers = s.Proc.MergeReceivers[:s.BuildIdx]
 		return s, nil
 	}
 
@@ -969,10 +969,10 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		}
 		cnt++
 	}
-	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, cnt)
+	s.Proc.MergeReceivers = make([]*process.WaitRegister, cnt)
 	{
 		for i := 0; i < cnt; i++ {
-			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+			s.Proc.MergeReceivers[i] = &process.WaitRegister{
 				Ctx: s.Proc.Ctx,
 				Ch:  make(chan *process.RegisterMessage, 1),
 			}
@@ -982,7 +982,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 	for i := range ss {
 		if !ss[i].IsEnd {
 			connectorOp := connector.NewArgument().
-				WithReg(s.Proc.Reg.MergeReceivers[j])
+				WithReg(s.Proc.MergeReceivers[j])
 			connectorOp.SetInfo(&vm.OperatorInfo{
 				CnAddr:      vm.GetLeafOp(ss[i].RootOp).GetOperatorBase().CnAddr,
 				OperatorID:  c.allocOperatorID(),
@@ -1075,7 +1075,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 					nil,
 				)
 				if err != nil {
-					closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+					closeWithError(err, s.Proc.MergeReceivers[receiverIdx], nil)
 					return
 				}
 
@@ -1086,14 +1086,14 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 				message.Uuid = uuid
 
 				if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
-					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+					closeWithError(errSend, s.Proc.MergeReceivers[receiverIdx], sender)
 					return
 				}
 				sender.safeToClose = false
 				sender.alreadyClose = false
 
-				err = receiveMsgAndForward(s.Proc, sender, s.Proc.Reg.MergeReceivers[receiverIdx].Ch)
-				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+				err = receiveMsgAndForward(s.Proc, sender, s.Proc.MergeReceivers[receiverIdx].Ch)
+				closeWithError(err, s.Proc.MergeReceivers[receiverIdx], sender)
 			},
 		)
 
