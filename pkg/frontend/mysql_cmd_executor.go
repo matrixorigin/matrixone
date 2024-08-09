@@ -392,7 +392,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		return roleName, nil
 	}
 
-	needRowAndSizeTableTypes := []string{catalog.SystemOrdinaryRel, catalog.SystemClusterRel, catalog.SystemPartitionRel}
+	needRowsAndSizeTableTypes := []string{catalog.SystemOrdinaryRel, catalog.SystemMaterializedRel}
 
 	mrs := ses.GetMysqlResultSet()
 	for _, row := range ses.data {
@@ -402,7 +402,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			return err
 		}
 
-		if slices.Contains(needRowAndSizeTableTypes, r.GetTableDef(ctx).TableType) {
+		if slices.Contains(needRowsAndSizeTableTypes, r.GetTableDef(ctx).TableType) {
 			if row[3], err = r.Rows(ctx); err != nil {
 				return err
 			}
