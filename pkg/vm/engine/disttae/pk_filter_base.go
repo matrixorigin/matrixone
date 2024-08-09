@@ -26,7 +26,7 @@ func newBasePKFilter(
 	expr *plan.Expr,
 	tblDef *plan.TableDef,
 	proc *process.Process,
-) (filter basePKFilter) {
+) (filter basePKFilter, err error) {
 	if expr == nil {
 		return
 	}
@@ -43,23 +43,29 @@ func newBasePKFilter(
 		case "and":
 			var filters []basePKFilter
 			for idx := range exprImpl.F.Args {
-				ff := newBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
+				ff, err := newBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
+				if err != nil {
+					return basePKFilter{}, err
+				}
 				if ff.valid {
 					filters = append(filters, ff)
 				}
 			}
 
 			if len(filters) == 0 {
-				return basePKFilter{}
+				return basePKFilter{}, nil
 			}
 
 			for idx := 0; idx < len(filters)-1; {
 				f1 := filters[idx]
 				f2 := filters[idx+1]
-				ff := mergeFilters(f1, f2, function.AND, proc)
+				ff, err := mergeFilters(f1, f2, function.AND, proc)
+				if err != nil {
+					return basePKFilter{}, err
+				}
 
 				if !ff.valid {
-					return basePKFilter{}
+					return basePKFilter{}, nil
 				}
 
 				idx++
@@ -73,30 +79,36 @@ func newBasePKFilter(
 			}
 
 			ret := filters[len(filters)-1]
-			return ret
+			return ret, nil
 
 		case "or":
 			var filters []basePKFilter
 			for idx := range exprImpl.F.Args {
-				ff := newBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
+				ff, err := newBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
+				if err != nil {
+					return basePKFilter{}, err
+				}
 				if !ff.valid {
-					return basePKFilter{}
+					return basePKFilter{}, err
 				}
 
 				filters = append(filters, ff)
 			}
 
 			if len(filters) == 0 {
-				return basePKFilter{}
+				return basePKFilter{}, nil
 			}
 
 			for idx := 0; idx < len(filters)-1; {
 				f1 := filters[idx]
 				f2 := filters[idx+1]
-				ff := mergeFilters(f1, f2, function.OR, proc)
+				ff, err := mergeFilters(f1, f2, function.OR, proc)
+				if err != nil {
+					return basePKFilter{}, nil
+				}
 
 				if !ff.valid {
-					return basePKFilter{}
+					return basePKFilter{}, nil
 				}
 
 				idx++
@@ -110,7 +122,7 @@ func newBasePKFilter(
 			}
 
 			ret := filters[len(filters)-1]
-			return ret
+			return ret, nil
 
 		case ">=":
 			//a >= ?
