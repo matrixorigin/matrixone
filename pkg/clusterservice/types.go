@@ -50,6 +50,9 @@ type Selector struct {
 	// would do the filter. This is only used for CN. Its default value
 	// is false.
 	all bool
+
+	// regexCache is the cache for compiled regexp item.
+	regexpCache *regexpCache
 }
 
 // MOCluster is used to get the meta and status information of the MO cluster.
