@@ -30,6 +30,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -50,7 +52,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"go.uber.org/zap"
 )
 
 type CloseFlag struct {
@@ -1418,4 +1419,39 @@ func hashString(s string) string {
 	hash.Write(util.UnsafeStringToBytes(s))
 	hashBytes := hash.Sum(nil)
 	return hex.EncodeToString(hashBytes)
+}
+
+func extractUriInfo(ctx context.Context, uri string) (user string, pwd string, ip string, port int, err error) {
+	slashIdx := strings.Index(uri, "//")
+	if slashIdx == -1 {
+		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 1")
+	}
+	atIdx := strings.Index(uri[slashIdx+2:], "@")
+	if atIdx == -1 {
+		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 2")
+	}
+	userPwd := uri[slashIdx+2:][:atIdx]
+	seps := strings.Split(userPwd, ":")
+	if len(seps) != 2 {
+		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 3")
+	}
+	user = seps[0]
+	pwd = seps[1]
+	ipPort := uri[slashIdx+2:][atIdx+1:]
+	seps = strings.Split(ipPort, ":")
+	if len(seps) != 2 {
+		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 4")
+	}
+	ip = seps[0]
+	portStr := seps[1]
+	var portInt int64
+	portInt, err = strconv.ParseInt(portStr, 10, 32)
+	if err != nil {
+		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 5 %d", portStr)
+	}
+	if portInt < 0 || portInt > 65535 {
+		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 6")
+	}
+	port = int(portInt)
+	return
 }
