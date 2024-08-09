@@ -808,7 +808,6 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 	}
 
 	rows := make([][]interface{}, 0, len(gSysVarsDefs))
-	//for name, value := range sysVars {
 	for name, def := range gSysVarsDefs {
 		if hasLike {
 			s := name
@@ -2138,7 +2137,7 @@ func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeS
 func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, mysqlRrWr MysqlRrWr, skipWrite bool, epoch uint64) (bool, time.Duration, time.Duration, error) {
 	var readTime, writeTime time.Duration
 	readStart := time.Now()
-	payload, err := mysqlRrWr.Read()
+	payload, err := mysqlRrWr.ReadLoadLocalPacket()
 	if err != nil {
 		if errors.Is(err, errorInvalidLength0) {
 			return skipWrite, readTime, writeTime, err
