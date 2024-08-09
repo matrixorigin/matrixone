@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -73,6 +74,11 @@ func dropSubscription(ctx context.Context, c *Compile, dbName string) error {
 }
 
 func updatePubTableList(ctx context.Context, c *Compile, dbName, dropTblName string) error {
+	// mo_catalog can't be published, skip
+	if dbName == catalog.MO_CATALOG {
+		return nil
+	}
+
 	accountName, err := func() (string, error) {
 		accountId, err := defines.GetAccountId(ctx)
 		if err != nil {

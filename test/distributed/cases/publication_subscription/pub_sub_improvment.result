@@ -135,8 +135,8 @@ drop database if exists sub_database02;
 create database sub_database02 from sys publication publication02;
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication02    sys    database02    *        2024-07-23 21:42:42    sub_database02    2024-07-23 21:42:42    0
-publication01    sys    database01    *        2024-07-23 21:42:42    sub_database01    2024-07-23 21:42:42    2
+publication02    sys    database02    *        2024-08-09 15:53:33    sub_database02    2024-08-09 15:53:33    0
+publication01    sys    null    null    null    null    sub_database01    2024-08-09 15:53:33    2
 use sub_database02;
 show tables;
 Tables_in_sub_database02
@@ -149,8 +149,8 @@ drop database if exists sub_database02;
 create database sub_database02 from sys publication publication02;
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication02    sys    database02    *        2024-07-23 21:42:42    sub_database02    2024-07-23 21:42:42    0
-publication01    sys    database01    *        2024-07-23 21:42:42    sub_database01    2024-07-23 21:42:42    2
+publication02    sys    database02    *        2024-08-09 15:53:33    sub_database02    2024-08-09 15:53:33    0
+publication01    sys    null    null    null    null    sub_database01    2024-08-09 15:53:33    2
 use sub_database02;
 show tables;
 Tables_in_sub_database02
@@ -177,9 +177,9 @@ drop database if exists sub_database03;
 create database sub_database03 from sys publication publication03;
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication03    sys    database03    *        2024-07-23 21:42:42    sub_database03    2024-07-23 21:42:42    0
-publication02    sys    database02    *        2024-07-23 21:42:42    sub_database02    2024-07-23 21:42:42    2
-publication01    sys    database01    *        2024-07-23 21:42:42    sub_database01    2024-07-23 21:42:42    2
+publication03    sys    database03    *        2024-08-09 15:53:33    sub_database03    2024-08-09 15:53:33    0
+publication02    sys    null    null    null    null    sub_database02    2024-08-09 15:53:33    2
+publication01    sys    null    null    null    null    sub_database01    2024-08-09 15:53:33    2
 use sub_database03;
 show tables;
 Tables_in_sub_database03
@@ -197,17 +197,17 @@ Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_dat
 table01    Tae    Dynamic    3    0    108    0    0    NULL    0    2024-07-23 21:42:42    NULL    NULL    utf-8    NULL            0    moadmin
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication02    sys    database02    *        2024-07-23 21:42:42    sub_database02    2024-07-23 21:42:42    2
-publication01    sys    database01    *        2024-07-23 21:42:42    sub_database01    2024-07-23 21:42:42    2
+publication02    sys    null    null    null    null    sub_database02    2024-08-09 15:53:33    2
+publication01    sys    null    null    null    null    sub_database01    2024-08-09 15:53:33    2
 alter publication publication03 account all;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 publication03    database03    *    *    test_tenant_1    2024-07-23 21:42:42    2024-07-23 21:42:43    
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication03    sys    database03    *        2024-07-23 21:42:43    null    null    0
-publication02    sys    database02    *        2024-07-23 21:42:42    sub_database02    2024-07-23 21:42:42    2
-publication01    sys    database01    *        2024-07-23 21:42:42    sub_database01    2024-07-23 21:42:42    2
+publication02    sys    null    null    null    null    sub_database02    2024-08-09 15:53:33    2
+publication01    sys    null    null    null    null    sub_database01    2024-08-09 15:53:33    2
+publication03    sys    database03    *        2024-08-09 15:53:33    null    null    0
 create database sub_database03 from sys publication publication03;
 use sub_database03;
 show tables;
