@@ -30,7 +30,6 @@ func (unionall *UnionAll) Free(proc *process.Process, pipelineFailed bool, err e
 }
 
 func (unionall *UnionAll) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	unionall.Free(proc, pipelineFailed, err)
 }
 
 func (unionall *UnionAll) Release() {
