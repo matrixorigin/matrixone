@@ -425,6 +425,9 @@ func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
 		if f.CannotFold() { // function cannot be fold
 			return false
 		}
+		if f.IsRealTimeRelated() && !varAndParamIsConst {
+			return false
+		}
 		for i := range ef.F.Args {
 			if !IsConstant(ef.F.Args[i], varAndParamIsConst) {
 				return false

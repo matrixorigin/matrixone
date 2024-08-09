@@ -178,5 +178,8 @@ select count(a) from v1;
 count(a)
 10000
 drop table t1;
+create table t1(a int unsigned, b int, c varchar, primary key(a, c));
+select a from t1 where a = current_account_id() or (a = 0 and c in ('mo_catalog'));
+a
 drop database if exists d1;
 SET experimental_master_index = 0;
