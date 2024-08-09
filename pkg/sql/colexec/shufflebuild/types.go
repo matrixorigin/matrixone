@@ -98,7 +98,7 @@ func (shuffleBuild *ShuffleBuild) Release() {
 }
 
 func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := shuffleBuild.ctr
+	ctr := &shuffleBuild.ctr
 	ctr.state = ReceiveBatch
 	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
@@ -121,7 +121,7 @@ func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bo
 }
 
 func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := shuffleBuild.ctr
+	ctr := &shuffleBuild.ctr
 	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
 	ctr.intHashMap = nil

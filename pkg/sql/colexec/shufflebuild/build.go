@@ -44,7 +44,7 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 	if shuffleBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
 	}
-	ctr := shuffleBuild.ctr
+	ctr := &shuffleBuild.ctr
 
 	if ctr.vecs == nil {
 		ctr.vecs = make([][]*vector.Vector, 0)
@@ -97,7 +97,7 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 
 	result := vm.NewCallResult()
 	ap := shuffleBuild
-	ctr := ap.ctr
+	ctr := &ap.ctr
 	for {
 		switch ctr.state {
 		case ReceiveBatch:
