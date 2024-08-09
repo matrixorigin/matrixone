@@ -88,10 +88,9 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	ctx := c.proc.Ctx
 	// handle sub
-	if db.IsSubscription(ctx) {
-		if err = dropSubscription(ctx, c, dbName); err != nil {
+	if db.IsSubscription(c.proc.Ctx) {
+		if err = dropSubscription(c.proc.Ctx, c, dbName); err != nil {
 			return err
 		}
 	}
@@ -2101,6 +2100,11 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 		}
 		isTemp = true
+	}
+
+	// if dbSource is a pub, update tableList
+	if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
+		return err
 	}
 
 	if !isTemp && !isView && !isSource && c.proc.GetTxnOperator().Txn().IsPessimistic() {
