@@ -49,7 +49,7 @@ func (indexBuild *IndexBuild) Call(proc *process.Process) (vm.CallResult, error)
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
-	ctr := indexBuild.ctr
+	ctr := &indexBuild.ctr
 	for {
 		switch ctr.state {
 		case ReceiveBatch:
