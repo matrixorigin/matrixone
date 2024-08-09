@@ -2401,7 +2401,7 @@ var (
 			output: "create table pt2 (id int, date_column date) partition by range(year(date_column)) (partition p1 values less than (2010) comment = 'p1 comment', partition p2 values less than (MAXVALUE) comment = 'p3 comment')",
 		},
 		{
-			input: "create publication pub1 database db1",
+			input: "create publication pub1 database db1 account all",
 		},
 		{
 			input: "create publication pub1 database db1 account acc0",
@@ -2413,22 +2413,26 @@ var (
 			input: "create publication pub1 database db1 account acc0, acc1, acc2 comment 'test'",
 		},
 		{
-			input: "create publication pub1 database db1 comment 'test'",
+			input: "create publication pub1 database db1 account all comment 'test'",
 		},
 		{
-			input: "create publication pub1 table t1",
+			input: "create publication pub1 database db1 table t1 account all",
 		},
 		{
-			input: "create publication pub1 table t1 account acc0",
+			input: "create publication pub1 database db1 table t1 account acc0",
 		},
 		{
-			input: "create publication pub1 table t1 account acc0, acc1",
+			input: "create publication pub1 database db1 table t1 account acc0, acc1",
 		},
 		{
-			input: "create publication pub1 table t1 account acc0, acc1, acc2 comment 'test'",
+			input: "create publication pub1 database db1 table t1 account acc0, acc1, acc2 comment 'test'",
 		},
 		{
-			input: "create publication pub1 table t1 comment 'test'",
+			input: "create publication pub1 database db1 table t1 account all comment 'test'",
+		},
+		{
+			input:  "create publication pub1 database db1 table t1,t2 account all comment 'test'",
+			output: "create publication pub1 database db1 table t1, t2 account all comment 'test'",
 		},
 		{
 			input:  "CREATE STAGE my_ext_stage URL='s3://load/files/'",
@@ -2494,6 +2498,13 @@ var (
 		},
 		{
 			input: "alter publication pub1 account add acc0",
+		},
+		{
+			input: "alter publication pub1 account add acc0 database db1",
+		},
+		{
+			input:  "alter publication pub1 account acc0 database db1 table t1,t2",
+			output: "alter publication pub1 account acc0 database db1 table t1, t2",
 		},
 		{
 			input: "restore cluster from snapshot snapshot_01",

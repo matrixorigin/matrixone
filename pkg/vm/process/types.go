@@ -92,6 +92,8 @@ type WaitRegister struct {
 	Ctx context.Context
 	// Ch, data receiver channel, receiver will wait for data from this channel.
 	Ch chan *RegisterMessage
+	// how many nil batch this channel can receive, default 0 means every nil batch close channel
+	NilBatchCnt int
 }
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.

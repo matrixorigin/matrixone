@@ -34,6 +34,7 @@ func (c *DashboardCreator) initFrontendDashboard() error {
 			c.initFrontendRoutineAndRequestCount(),
 			c.initFrontendResolveDuration(),
 			c.initFrontendCreateAccount(),
+			c.initFrontendPubSubDuration(),
 			c.initFrontendSQLLength(),
 		)...)
 	if err != nil {
@@ -158,6 +159,31 @@ func (c *DashboardCreator) initFrontendCreateAccount() dashboard.Option {
 				"init-data1",
 				"create-tables-in-system",
 				"create-tables-in-info-schema",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Unit("s"),
+			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initFrontendPubSubDuration() dashboard.Option {
+	return dashboard.Row(
+		"Create account Duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_frontend_pub_sub_duration_bucket`, `label="create-pub"`),
+				c.getMetricWithFilter(`mo_frontend_pub_sub_duration_bucket`, `label="alter-pub"`),
+				c.getMetricWithFilter(`mo_frontend_pub_sub_duration_bucket`, `label="drop-pub"`),
+				c.getMetricWithFilter(`mo_frontend_pub_sub_duration_bucket`, `label="show-pub"`),
+				c.getMetricWithFilter(`mo_frontend_pub_sub_duration_bucket`, `label="show-sub"`),
+			},
+			[]string{
+				"create-pub",
+				"alter-pub",
+				"drop-pub",
+				"show-pub",
+				"show-sub",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},

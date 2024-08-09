@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -41,9 +42,19 @@ func UnmarshalTombstoneData(data []byte) (engine.Tombstoner, error) {
 			return nil, err
 		}
 		return tomb, nil
+	case engine.TombstoneData:
+		tomb := new(tombstoneData)
+		if err := tomb.UnmarshalBinary(data); err != nil {
+			return nil, err
+		}
+		return tomb, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unsupported tombstone type")
 	}
+}
+
+func NewEmptyTombstoneData() *tombstoneData {
+	return new(tombstoneData)
 }
 
 func NewEmptyTombstoneWithDeltaLoc() *tombstoneDataWithDeltaLoc {
@@ -54,6 +65,205 @@ func NewEmptyTombstoneWithDeltaLoc() *tombstoneDataWithDeltaLoc {
 	}
 }
 
+// =======================================================================================
+// tombstoneDataWithDeltaLoc define and APIs
+// =======================================================================================
+
+type tombstoneData struct {
+	rowids []types.Rowid
+	files  objectio.LocationSlice
+}
+
+func (tomb *tombstoneData) MarshalBinaryWithBuffer(buf *bytes.Buffer) (err error) {
+	buf.Grow(1 + 4*2 + len(tomb.rowids)*types.RowidSize + len(tomb.files)*objectio.LocationLen)
+
+	typ := uint8(tomb.Type())
+	if _, err = buf.Write(types.EncodeUint8(&typ)); err != nil {
+		return
+	}
+
+	size := uint32(len(tomb.rowids))
+	if _, err = buf.Write(types.EncodeUint32(&size)); err != nil {
+		return
+	}
+	if _, err = buf.Write(types.EncodeSlice[types.Rowid](tomb.rowids)); err != nil {
+		return
+	}
+
+	size = uint32(len(tomb.files))
+	if _, err = buf.Write(types.EncodeUint32(&size)); err != nil {
+		return
+	}
+	_, err = buf.Write(tomb.files[:])
+	return
+}
+
+func (tomb *tombstoneData) UnmarshalBinary(buf []byte) error {
+	typ := engine.TombstoneType(types.DecodeUint8(buf))
+	if typ != engine.TombstoneData {
+		return moerr.NewInternalErrorNoCtx("UnmarshalBinary TombstoneData with %v", typ)
+	}
+	buf = buf[1:]
+
+	size := types.DecodeUint32(buf)
+	buf = buf[4:]
+	tomb.rowids = types.DecodeSlice[types.Rowid](buf[:size*types.RowidSize])
+	buf = buf[size*types.RowidSize:]
+	buf = buf[4:]
+	tomb.files = objectio.LocationSlice(buf[:])
+	return nil
+}
+
+func (tomb *tombstoneData) AppendInMemory(rowids ...types.Rowid) error {
+	tomb.rowids = append(tomb.rowids, rowids...)
+	return nil
+}
+
+func (tomb *tombstoneData) AppendFiles(locs ...objectio.Location) error {
+	for _, loc := range locs {
+		tomb.files = append(tomb.files, loc[:]...)
+	}
+	return nil
+}
+
+func (tomb *tombstoneData) String() string {
+	return tomb.StringWithPrefix("")
+}
+
+func (tomb *tombstoneData) StringWithPrefix(prefix string) string {
+	var w bytes.Buffer
+	w.WriteString(fmt.Sprintf("%sTombstone[%d]<\n", prefix, tomb.Type()))
+	w.WriteString(fmt.Sprintf("\t%sInMemTombstones: \n", prefix))
+	count := 0
+	for _, rowId := range tomb.rowids {
+		if count%2 == 0 && count != 0 {
+			w.WriteByte('\n')
+		}
+		if count%2 == 0 {
+			w.WriteString(fmt.Sprintf("\t\t%s", prefix))
+		}
+		w.WriteString(fmt.Sprintf("%s, ", rowId.String()))
+		count++
+	}
+
+	w.WriteString(fmt.Sprintf("\n\t%sTombstoneFiles: \n", prefix))
+	for i := 0; i < tomb.files.Len(); i++ {
+		w.WriteString(fmt.Sprintf("\t\t%s%s\n", prefix, tomb.files.Get(i).String()))
+	}
+
+	return w.String()
+}
+
+func (tomb *tombstoneData) Type() engine.TombstoneType {
+	return engine.TombstoneData
+}
+
+func (tomb *tombstoneData) HasAnyInMemoryTombstone() bool {
+	return tomb != nil && len(tomb.rowids) > 0
+}
+
+func (tomb *tombstoneData) HasAnyTombstoneFile() bool {
+	return tomb != nil && len(tomb.files) > 0
+}
+
+func (tomb *tombstoneData) HasTombstones() bool {
+	return tomb != nil && (len(tomb.rowids) > 0 || len(tomb.files) > 0)
+}
+
+// FIXME:
+func (tomb *tombstoneData) PrefetchTombstones(
+	srvId string,
+	fs fileservice.FileService,
+	bids []objectio.Blockid,
+) {
+	for i, end := 0, tomb.files.Len(); i < end; i++ {
+		loc := tomb.files.Get(i)
+		if err := blockio.PrefetchTombstone(
+			srvId,
+			[]uint16{0, 1, 2},
+			[]uint16{loc.ID()},
+			fs,
+			*loc,
+		); err != nil {
+			logutil.Errorf("prefetch block delta location: %s", err.Error())
+		}
+	}
+}
+
+func (tomb *tombstoneData) ApplyInMemTombstones(
+	bid types.Blockid,
+	rowsOffset []int64,
+	deleted *nulls.Nulls,
+) (left []int64) {
+
+	left = rowsOffset
+
+	if len(tomb.rowids) == 0 {
+		return
+	}
+
+	start, end := blockio.FindIntervalForBlock(tomb.rowids, &bid)
+
+	for i := start; i < end; i++ {
+		offset := tomb.rowids[i].GetRowOffset()
+		left = fastApplyDeletedRows(left, deleted, offset)
+	}
+
+	return
+}
+
+func (tomb *tombstoneData) ApplyPersistedTombstones(
+	ctx context.Context,
+	bid types.Blockid,
+	rowsOffset []int64,
+	mask *nulls.Nulls,
+	apply func(
+		ctx context.Context,
+		loc objectio.Location,
+		cts types.TS,
+		rowsOffset []int64,
+		deleted *nulls.Nulls,
+	) (left []int64, err error),
+) (left []int64, err error) {
+
+	left = rowsOffset
+	if len(tomb.files) == 0 {
+		return
+	}
+
+	for i, end := 0, tomb.files.Len(); i < end; i++ {
+		loc := tomb.files.Get(i)
+		left, err = apply(ctx, *loc, types.TS{}, left, mask)
+		if err != nil {
+			return
+		}
+	}
+
+	return
+}
+
+func (tomb *tombstoneData) SortInMemory() {
+	sort.Slice(tomb.rowids, func(i, j int) bool {
+		return tomb.rowids[i].Less(tomb.rowids[j])
+	})
+}
+
+func (tomb *tombstoneData) Merge(other engine.Tombstoner) error {
+	if v, ok := other.(*tombstoneData); ok {
+		tomb.rowids = append(tomb.rowids, v.rowids...)
+		tomb.files = append(tomb.files, v.files...)
+		tomb.SortInMemory()
+	}
+	return moerr.NewInternalErrorNoCtx(
+		"tombstone type mismatch %d, %d", tomb.Type(), other.Type(),
+	)
+}
+
+// =======================================================================================
+// tombstoneDataWithDeltaLoc define and APIs
+// =======================================================================================
+
+// TODO: DECRYPTED
 type tombstoneDataWithDeltaLoc struct {
 	//in memory tombstones
 	inMemTombstones map[types.Blockid][]int32
@@ -65,17 +275,22 @@ type tombstoneDataWithDeltaLoc struct {
 	blk2CommitLoc map[types.Blockid]logtailreplay.BlockDeltaInfo
 }
 
+// FIXME
 func (tomb *tombstoneDataWithDeltaLoc) PrefetchTombstones(
 	srvId string,
 	fs fileservice.FileService,
-	bids []objectio.Blockid) {
-
+	bids []objectio.Blockid,
+) {
 	// prefetch blk delta location
 	for idx := 0; idx < len(bids); idx++ {
 		for _, loc := range tomb.blk2UncommitLoc[bids[idx]] {
 			if err := blockio.PrefetchTombstone(
-				srvId, []uint16{0, 1, 2},
-				[]uint16{loc.ID()}, fs, objectio.Location(loc[:])); err != nil {
+				srvId,
+				[]uint16{0, 1, 2},
+				[]uint16{loc.ID()},
+				fs,
+				objectio.Location(loc[:]),
+			); err != nil {
 				logutil.Errorf("prefetch block delta location: %s", err.Error())
 			}
 		}
@@ -83,8 +298,12 @@ func (tomb *tombstoneDataWithDeltaLoc) PrefetchTombstones(
 		if info, ok := tomb.blk2CommitLoc[bids[idx]]; ok {
 			loc := info.Loc
 			if err := blockio.PrefetchTombstone(
-				srvId, []uint16{0, 1, 2},
-				[]uint16{loc.ID()}, fs, objectio.Location(loc[:])); err != nil {
+				srvId,
+				[]uint16{0, 1, 2},
+				[]uint16{loc.ID()},
+				fs,
+				objectio.Location(loc[:]),
+			); err != nil {
 				logutil.Errorf("prefetch block delta location: %s", err.Error())
 			}
 		}
@@ -361,6 +580,8 @@ func rowIdsToOffset(rowIds []types.Rowid, wantedType any) any {
 func (tomb *tombstoneDataWithDeltaLoc) Type() engine.TombstoneType {
 	return engine.TombstoneWithDeltaLoc
 }
+
+func (tomb *tombstoneDataWithDeltaLoc) SortInMemory() {}
 
 func (tomb *tombstoneDataWithDeltaLoc) Merge(other engine.Tombstoner) error {
 	if v, ok := other.(*tombstoneDataWithDeltaLoc); ok {
