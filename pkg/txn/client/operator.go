@@ -542,9 +542,7 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 		tc.triggerEvent(newCostEvent(CommitEvent, tc.getTxnMeta(false), tc.commitSeq, err, cost))
 	}()
 
-	wc := tc.GetWorkspace()
-	if tc.options.ReadOnly() ||
-		(wc != nil && wc.Readonly()) {
+	if tc.options.ReadOnly() {
 		tc.mu.Lock()
 		defer tc.mu.Unlock()
 		tc.closeLocked()
