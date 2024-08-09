@@ -48,12 +48,11 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 
 	result := vm.NewCallResult()
 	for !mergeRecursive.ctr.last {
-		msg := mergeRecursive.ctr.ReceiveFromSingleReg(0, anal)
-		if msg.Err != nil {
-			result.Status = vm.ExecStop
-			return result, msg.Err
+		result, err := mergeRecursive.GetChildren(0).Call(proc)
+		if err != nil {
+			return result, err
 		}
-		bat := msg.Batch
+		bat := result.Batch
 		if bat == nil || bat.End() {
 			result.Batch = nil
 			result.Status = vm.ExecStop
