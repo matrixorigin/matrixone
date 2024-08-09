@@ -529,7 +529,7 @@ func readBlockData(
 		return
 	}
 
-	if info.EntryState {
+	if info.Appendable {
 		bat, deleteMask, err = readABlkColumns(idxes)
 	} else {
 		bat, _, err = readColumns(idxes)
