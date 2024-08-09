@@ -102,7 +102,7 @@ func (hashBuild *HashBuild) Release() {
 }
 
 func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := hashBuild.ctr
+	ctr := &hashBuild.ctr
 	ctr.state = BuildHashMap
 	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
@@ -125,7 +125,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := hashBuild.ctr
+	ctr := &hashBuild.ctr
 	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
 	ctr.batches = nil

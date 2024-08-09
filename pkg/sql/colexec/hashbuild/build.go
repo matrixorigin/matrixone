@@ -16,8 +16,9 @@ package hashbuild
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"runtime"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -40,7 +41,7 @@ func (hashBuild *HashBuild) OpType() vm.OpType {
 }
 
 func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
-	ctr := hashBuild.ctr
+	ctr := &hashBuild.ctr
 	if hashBuild.NeedHashMap {
 		if ctr.vecs == nil {
 			ctr.vecs = make([][]*vector.Vector, 0)
@@ -94,7 +95,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result := vm.NewCallResult()
 	ap := hashBuild
-	ctr := ap.ctr
+	ctr := &ap.ctr
 	for {
 		switch ctr.state {
 		case BuildHashMap:
