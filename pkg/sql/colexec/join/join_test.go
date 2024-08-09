@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -50,9 +51,11 @@ type joinTestCase struct {
 
 var (
 	tcs []joinTestCase
+	tag int32
 )
 
 func init() {
+	tag = 0
 	tcs = []joinTestCase{
 		newTestCase(2, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
 			[][]*plan.Expr{
@@ -282,6 +285,7 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 
 func newTestCase(rows int, flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
 	ctx, cancel := context.WithCancel(context.Background())
 	fr, _ := function.GetFunctionByName(ctx, "=", ts)
 	fid := fr.GetEncodedOverloadID()
@@ -325,6 +329,7 @@ func newTestCase(rows int, flgs []bool, ts []types.Type, rp []colexec.ResultPos,
 		bat := colexec.MakeMockBatchs()
 		resultBatch.Vecs[i] = bat.Vecs[rp[i].Pos]
 	}
+	tag++
 	return joinTestCase{
 		types:  ts,
 		flgs:   flgs,
@@ -342,6 +347,7 @@ func newTestCase(rows int, flgs []bool, ts []types.Type, rp []colexec.ResultPos,
 					IsLast:  false,
 				},
 			},
+			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
 			Typs:            ts,
@@ -356,6 +362,7 @@ func newTestCase(rows int, flgs []bool, ts []types.Type, rp []colexec.ResultPos,
 				},
 			},
 			NeedAllocateSels: true,
+			JoinMapTag:       tag,
 		},
 		resultBatch: resultBatch,
 	}
