@@ -641,10 +641,9 @@ func constructDeletion(n *plan.Node, eg engine.Engine) (*deletion.Deletion, erro
 	return op, nil
 }
 
-func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.OnDuplicatekey {
+func constructOnduplicateKey(n *plan.Node, _ engine.Engine) *onduplicatekey.OnDuplicatekey {
 	oldCtx := n.OnDuplicateKey
 	op := onduplicatekey.NewArgument()
-	op.Engine = eg
 	op.OnDuplicateIdx = oldCtx.OnDuplicateIdx
 	op.OnDuplicateExpr = oldCtx.OnDuplicateExpr
 	op.Attrs = oldCtx.Attrs
