@@ -17,7 +17,6 @@ package shufflebuild
 import (
 	"bytes"
 	"runtime"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
@@ -45,11 +44,15 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 	if shuffleBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
 	}
-	shuffleBuild.ctr = new(container)
-
-	shuffleBuild.ctr.vecs = make([][]*vector.Vector, 0)
 	ctr := shuffleBuild.ctr
-	ctr.executor = make([]colexec.ExpressionExecutor, len(shuffleBuild.Conditions))
+
+	if ctr.vecs == nil {
+		ctr.vecs = make([][]*vector.Vector, 0)
+	}
+	if ctr.executor == nil {
+		ctr.executor = make([]colexec.ExpressionExecutor, len(shuffleBuild.Conditions))
+	}
+
 	ctr.keyWidth = 0
 	for i, expr := range shuffleBuild.Conditions {
 		typ := expr.Typ
@@ -59,9 +62,11 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 			width = 128
 		}
 		ctr.keyWidth += width
-		ctr.executor[i], err = colexec.NewExpressionExecutor(proc, shuffleBuild.Conditions[i])
-		if err != nil {
-			return err
+		if ctr.executor[i] == nil {
+			ctr.executor[i], err = colexec.NewExpressionExecutor(proc, shuffleBuild.Conditions[i])
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -75,8 +80,9 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 		}
 	}
 
-	shuffleBuild.ctr.batches = make([]*batch.Batch, 0)
-
+	if shuffleBuild.ctr.batches == nil {
+		shuffleBuild.ctr.batches = make([]*batch.Batch, 0)
+	}
 	return nil
 }
 
@@ -146,32 +152,34 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 
 // make sure src is not empty
 func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) error {
-	var err error
 	if src.RowCount() == colexec.DefaultBatchSize {
-		ctr.batches = append(ctr.batches, src)
+		dupbatch, err := src.Dup(proc.Mp())
+		if err != nil {
+			return err
+		}
+		ctr.batches = append(ctr.batches, dupbatch)
 		return nil
 	} else {
 		offset := 0
 		appendRows := 0
 		length := src.RowCount()
+		var err error
 		for offset < length {
-			ctr.tmpBatch, appendRows, err = proc.AppendToFixedSizeFromOffset(ctr.tmpBatch, src, offset)
+			ctr.buf, appendRows, err = proc.AppendToFixedSizeFromOffset(ctr.buf, src, offset)
 			if err != nil {
 				return err
 			}
-			if ctr.tmpBatch.RowCount() == colexec.DefaultBatchSize {
-				ctr.batches = append(ctr.batches, ctr.tmpBatch)
-				ctr.tmpBatch = nil
+			if ctr.buf.RowCount() == colexec.DefaultBatchSize {
+				ctr.batches = append(ctr.batches, ctr.buf)
+				ctr.buf = nil
 			}
 			offset += appendRows
 		}
-		proc.PutBatch(src)
 	}
 	return nil
 }
 
 func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	var currentBatch *batch.Batch
 	for {
 		result, err := vm.ChildrenCall(shuffleBuild.Children[0], proc, anal)
 		if err != nil {
@@ -180,28 +188,20 @@ func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *proc
 		if result.Batch == nil {
 			break
 		}
-		currentBatch = result.Batch
-		if currentBatch == nil {
-			break
-		}
-		atomic.AddInt64(&currentBatch.Cnt, 1)
-		if currentBatch.IsEmpty() {
-			proc.PutBatch(currentBatch)
+		if result.Batch.IsEmpty() {
 			continue
 		}
-
-		anal.Input(currentBatch, isFirst)
-		anal.Alloc(int64(currentBatch.Size()))
-
-		ctr.inputBatchRowCount += currentBatch.RowCount()
-		err = ctr.mergeIntoBatches(currentBatch, proc)
+		anal.Input(result.Batch, isFirst)
+		anal.Alloc(int64(result.Batch.Size()))
+		ctr.inputBatchRowCount += result.Batch.RowCount()
+		err = ctr.mergeIntoBatches(result.Batch, proc)
 		if err != nil {
 			return err
 		}
 	}
-	if ctr.tmpBatch != nil && ctr.tmpBatch.RowCount() > 0 {
-		ctr.batches = append(ctr.batches, ctr.tmpBatch)
-		ctr.tmpBatch = nil
+	if ctr.buf != nil && ctr.buf.RowCount() > 0 {
+		ctr.batches = append(ctr.batches, ctr.buf)
+		ctr.buf = nil
 	}
 	return nil
 }
