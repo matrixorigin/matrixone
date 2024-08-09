@@ -2404,6 +2404,10 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 	} else {
+		if obj.PubInfo != nil {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
+		}
+
 		enabled, err := IsForeignKeyChecksEnabled(ctx)
 		if err != nil {
 			return nil, err
@@ -2445,10 +2449,6 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		}
 		if dropTable.GetClusterTable().GetIsClusterTable() && accountId != catalog.System_Account {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
-		}
-
-		if obj.PubInfo != nil {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
 		}
 
 		dropTable.TableId = tableDef.TblId
