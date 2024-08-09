@@ -2008,6 +2008,7 @@ func cdcReplayLogtailUnlock(
 			tableInfo.AccountId, tableInfo.Name, dbId, tblId)
 	}
 	tblCtx := TableCtx{
+		db:      tl.GetTable().GetDbName(),
 		table:   tableInfo.Name,
 		dbId:    dbId,
 		tableId: tblId,
