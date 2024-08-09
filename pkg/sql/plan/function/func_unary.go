@@ -24,9 +24,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/ledongthuc/pdf"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"math"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -35,6 +37,7 @@ import (
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/tmc/langchaingo/llms/ollama"
 	"golang.org/x/exp/constraints"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -996,6 +999,167 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err := unhexToBytes(data, null, rs); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+func createOllamaEmbedding(ctx context.Context, input string) ([]float32, error) {
+	llm, err := ollama.New(ollama.WithModel("llama3"))
+	if err != nil {
+		return nil, err
+	}
+
+	embeddings, err := llm.CreateEmbedding(ctx, []string{input})
+	if err != nil {
+		return nil, err
+	}
+
+	return embeddings[0], nil
+}
+
+// Embedding function
+func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	ctx := context.Background()
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		inputBytes, nullInput := source.GetStrValue(i)
+		if nullInput {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		model, err := proc.GetResolveVariableFunc()("vector_embedding_model", true, false)
+		if err != nil {
+			return err
+		}
+		modelStr, ok := model.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type for vector_embedding_model: %T", model)
+		}
+
+		input := string(inputBytes)
+		var embeddingBytes []byte
+		switch modelStr {
+		case "ollama":
+			embeddingFloats, err := createOllamaEmbedding(ctx, input)
+			if err != nil {
+				return err
+			}
+			embeddingBytes = types.ArrayToBytes[float32](embeddingFloats)
+		default:
+			return fmt.Errorf("unsupported embedding model: %s", modelStr)
+		}
+
+		if err := rs.AppendBytes(embeddingBytes, false); err != nil {
+			return err
+		}
+	}
+	return nil
+
+}
+
+func isSameSentence(current, last pdf.Text) bool {
+	return strings.TrimSpace(current.S) != "" &&
+		last.Font == current.Font &&
+		last.FontSize == current.FontSize &&
+		last.X == current.X &&
+		last.Y == current.Y
+}
+
+func readPdfToString(path string) (string, error) {
+	f, r, err := pdf.Open(path)
+	defer f.Close()
+	if err != nil {
+		return "", err
+	}
+
+	var textBuilder strings.Builder
+	totalPage := r.NumPage()
+
+	for pageIndex := 1; pageIndex <= totalPage; pageIndex++ {
+		p := r.Page(pageIndex)
+		if p.V.IsNull() {
+			continue
+		}
+		var lastTextStyle pdf.Text
+		texts := p.Content().Text
+		for _, text := range texts {
+			if isSameSentence(text, lastTextStyle) {
+				lastTextStyle.S += text.S
+			} else {
+				if lastTextStyle.S != "" {
+					textBuilder.WriteString(lastTextStyle.S)
+				}
+				lastTextStyle = text
+			}
+		}
+		if lastTextStyle.S != "" {
+			textBuilder.WriteString(lastTextStyle.S + " ")
+		}
+	}
+
+	return textBuilder.String(), nil
+}
+
+func extractText(pdfPath string, txtPath string) bool {
+	content, err := readPdfToString(pdfPath)
+	if err != nil {
+		return false
+	}
+
+	err = os.WriteFile(txtPath, []byte(content), 0666)
+	if err != nil {
+		return false
+	}
+
+	return true
+}
+
+// ExtractText function
+func ExtractText(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	input := vector.GenerateFunctionStrParameter(parameters[0])
+	output := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[bool](result)
+
+	rowCount := uint64(length)
+
+	for i := uint64(0); i < rowCount; i++ {
+		inputBytes, nullInput := input.GetStrValue(i)
+		if nullInput {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		outputBytes, nullInput2 := output.GetStrValue(i)
+		if nullInput2 {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		inputPath := string(inputBytes)
+		outputPath := string(outputBytes)
+
+		success := extractText(inputPath, outputPath)
+		if success {
+			if err := rs.Append(true, false); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(false, false); err != nil {
+				return err
+			}
+		}
+
 	}
 
 	return nil

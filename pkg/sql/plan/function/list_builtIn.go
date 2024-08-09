@@ -2963,6 +2963,48 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `embedding`
+	{
+		functionId: EMBEDDING,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return EmbeddingOp
+				},
+			},
+		},
+	},
+
+	// function `extract_text`
+	{
+		functionId: EXTRACT_TEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ExtractText
+				},
+			},
+		},
+	},
+
 	// function `md5`
 	{
 		functionId: MD5,
