@@ -137,11 +137,11 @@ func newTestCase() onDupTestCase {
 	return onDupTestCase{
 		proc: proc,
 		arg: &OnDuplicatekey{
-			Attrs:              []string{"a", "b"}, //create table t1(a int primary key, b int)
+			Attrs:              []string{"a", "b", "a", "b", catalog.Row_ID}, //create table t1(a int primary key, b int)
 			InsertColCount:     2,
 			UniqueColCheckExpr: []*plan.Expr{eqExpr},
 			UniqueCols:         []string{"a"},
-			OnDuplicateIdx:     []int32{0},
+			OnDuplicateIdx:     []int32{3, 4, 5},
 			OnDuplicateExpr:    onDupMap, // on duplicate key update b = 10 -》 here is b = 10
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{

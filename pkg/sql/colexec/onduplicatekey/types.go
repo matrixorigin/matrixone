@@ -102,6 +102,7 @@ func (onDuplicatekey *OnDuplicatekey) Reset(proc *process.Process, pipelineFaile
 			exe.ResetForNextQuery()
 		}
 	}
+	onDuplicatekey.ctr.state = Build
 }
 
 func (onDuplicatekey *OnDuplicatekey) Free(proc *process.Process, pipelineFailed bool, err error) {

@@ -59,10 +59,9 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 	anal.Start()
 	defer anal.Stop()
 
-	ctr := onDuplicatekey.ctr
 	result := vm.NewCallResult()
 	for {
-		switch ctr.state {
+		switch onDuplicatekey.ctr.state {
 		case Build:
 			for {
 				result, err := onDuplicatekey.GetChildren(0).Call(proc)
@@ -81,14 +80,14 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 				}
 
 			}
-			ctr.state = Eval
+			onDuplicatekey.ctr.state = Eval
 
 		case Eval:
-			if ctr.rbat != nil {
-				anal.Output(ctr.rbat, onDuplicatekey.GetIsLast())
+			if onDuplicatekey.ctr.rbat != nil {
+				anal.Output(onDuplicatekey.ctr.rbat, onDuplicatekey.GetIsLast())
 			}
-			result.Batch = ctr.rbat
-			ctr.state = End
+			result.Batch = onDuplicatekey.ctr.rbat
+			onDuplicatekey.ctr.state = End
 			return result, nil
 
 		case End:
@@ -200,7 +199,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					return err
 				}
 			}
-			proc.PutBatch(tmpBatch)
+			tmpBatch.Clean(proc.GetMPool())
 		} else {
 			// row id is null: means no uniqueness conflict found in origin rows
 			if len(oldRowIdVec) == 0 || originBatch.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
@@ -217,7 +216,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			} else {
 
 				if insertArg.IsIgnore {
-					proc.PutBatch(newBatch)
+					newBatch.Clean(proc.GetMPool())
 					continue
 				}
 
@@ -251,10 +250,10 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 						return err
 					}
 				}
-				proc.PutBatch(tmpBatch)
+				tmpBatch.Clean(proc.GetMPool())
 			}
 		}
-		proc.PutBatch(newBatch)
+		newBatch.Clean(proc.GetMPool())
 	}
 
 	return nil
@@ -278,7 +277,7 @@ func fetchOneRowAsBatch(idx int, originBatch *batch.Batch, proc *process.Process
 	newBatch.Attrs = attrs
 	var uErr error
 	for i, v := range originBatch.Vecs {
-		newVec := proc.GetVector(*v.GetType())
+		newVec := vector.NewVec(*v.GetType())
 		uErr = newVec.UnionOne(v, int64(idx), proc.Mp())
 		if uErr != nil {
 			newBatch.Clean(proc.Mp())
@@ -308,7 +307,7 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 				newBatch.SetVector(int32(i), newVec)
 			} else {
 				originVec = evalBatch.Vecs[i+columnCount]
-				newVec := proc.GetVector(*originVec.GetType())
+				newVec := vector.NewVec(*originVec.GetType())
 				err := newVec.UnionOne(originVec, int64(0), proc.Mp())
 				if err != nil {
 					newBatch.Clean(proc.Mp())
@@ -319,7 +318,7 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 		} else {
 			// keep old cols
 			originVec = evalBatch.Vecs[i]
-			newVec := proc.GetVector(*originVec.GetType())
+			newVec := vector.NewVec(*originVec.GetType())
 			err := newVec.UnionOne(originVec, int64(0), proc.Mp())
 			if err != nil {
 				newBatch.Clean(proc.Mp())
