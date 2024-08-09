@@ -373,12 +373,15 @@ func calRes[T constraints.Integer](ctr *container, ap *TimeWin, proc *process.Pr
 		for t, v := range ctr.wstart {
 			wstart[t] = T(v)
 		}
-		vec := proc.GetVector(*ctr.tsTyp)
-		err = vector.AppendFixedList(vec, wstart, nil, proc.Mp())
+		if ctr.rbat.Vecs[int32(i)] != nil {
+			ctr.rbat.Vecs[int32(i)].CleanOnlyData()
+		} else {
+			ctr.rbat.Vecs[int32(i)] = vector.NewVec(*ctr.tsTyp)
+		}
+		err = vector.AppendFixedList(ctr.rbat.Vecs[int32(i)], wstart, nil, proc.Mp())
 		if err != nil {
 			return err
 		}
-		ctr.rbat.SetVector(int32(i), vec)
 		i++
 	}
 	if ap.WEnd {
@@ -386,12 +389,15 @@ func calRes[T constraints.Integer](ctr *container, ap *TimeWin, proc *process.Pr
 		for t, v := range ctr.wend {
 			wend[t] = T(v)
 		}
-		vec := proc.GetVector(*ctr.tsTyp)
-		err = vector.AppendFixedList(vec, wend, nil, proc.Mp())
+		if ctr.rbat.Vecs[int32(i)] != nil {
+			ctr.rbat.Vecs[int32(i)].CleanOnlyData()
+		} else {
+			ctr.rbat.Vecs[int32(i)] = vector.NewVec(*ctr.tsTyp)
+		}
+		err = vector.AppendFixedList(ctr.rbat.Vecs[int32(i)], wend, nil, proc.Mp())
 		if err != nil {
 			return err
 		}
-		ctr.rbat.SetVector(int32(i), vec)
 	}
 	batch.SetLength(ctr.rbat, ctr.rbat.Vecs[0].Length())
 	return nil
@@ -407,7 +413,21 @@ func (ctr *container) evalVecs(proc *process.Process) error {
 		return err
 	}
 	ctr.tsTyp = vec.GetType()
-	ctr.tsVec = append(ctr.tsVec, vec)
+
+	if len(ctr.tsVec) > ctr.tsIndex {
+		ctr.tsVec[ctr.tsIndex].CleanOnlyData()
+		if err = ctr.tsVec[ctr.tsIndex].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+			return err
+		}
+	} else {
+		tv, err := vec.Dup(proc.Mp())
+		if err != nil {
+			return err
+		}
+		ctr.tsVec = append(ctr.tsVec, tv)
+	}
+	ctr.tsIndex++
+
 	if err = ctr.evalAggVector(ctr.peekBatch(ctr.curIdx), proc); err != nil {
 		return err
 	}
@@ -415,17 +435,31 @@ func (ctr *container) evalVecs(proc *process.Process) error {
 }
 
 func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) error {
-	vs := make([]*vector.Vector, len(ctr.aggExe))
+	f := len(ctr.aggVec) > ctr.aggIndex
+	if !f {
+		ctr.aggVec = append(ctr.aggVec, make([]*vector.Vector, len(ctr.aggExe)))
+	}
 	for i := range ctr.aggExe {
 		if ctr.aggExe[i] != nil {
 			vec, err := ctr.aggExe[i].Eval(proc, []*batch.Batch{bat}, nil)
 			if err != nil {
 				return err
 			}
-			vs[i] = vec
+			if f {
+				ctr.aggVec[ctr.aggIndex][i].CleanOnlyData()
+				if err = ctr.aggVec[ctr.aggIndex][i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+					return err
+				}
+			} else {
+				ctr.aggVec[ctr.aggIndex][i], err = vec.Dup(proc.Mp())
+				if err != nil {
+					return err
+				}
+			}
 		}
 	}
-	ctr.aggVec = append(ctr.aggVec, vs)
+
+	ctr.aggIndex++
 	return nil
 }
 
