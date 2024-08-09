@@ -220,6 +220,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildShowAccountUpgrade(stmt, ctx)
 	case *tree.ShowPitr:
 		return buildShowPitr(stmt, ctx)
+	case *tree.ShowCDC:
+		return buildShowCdc(stmt, ctx)
 	default:
 		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}

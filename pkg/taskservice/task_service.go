@@ -215,6 +215,10 @@ func (s *taskService) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonT
 	return s.store.UpdateDaemonTask(ctx, tasks, conds...)
 }
 
+func (s *taskService) DeleteDaemonTask(ctx context.Context, conds ...Condition) (int, error) {
+	return s.store.DeleteDaemonTask(ctx, conds...)
+}
+
 func (s *taskService) QueryDaemonTask(ctx context.Context, conds ...Condition) ([]task.DaemonTask, error) {
 	return s.store.QueryDaemonTask(ctx, conds...)
 }

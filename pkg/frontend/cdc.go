@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -88,6 +89,14 @@ const (
 		`task_id = "%s"`
 
 	getDbIdAndTableIdFormat = "select reldatabase_id,rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = '%s' and relname = '%s'"
+
+	getTables = "select account_name, reldatabase, relname from mo_catalog.mo_tables join mo_catalog.mo_account on mo_catalog.mo_tables.account_id = mo_catalog.mo_account.account_id where REGEXP_LIKE(account_name, '^%s$') and REGEXP_LIKE(reldatabase, '^%s$') and REGEXP_LIKE(relname, '^%s$')"
+
+	getCdcTaskId = "select task_id from mo_catalog.mo_cdc_task where account_id = %d"
+
+	getCdcTaskIdWhere = "select task_id from mo_catalog.mo_cdc_task where account_id = %d and task_name = '%s'"
+
+	dropCdcMeta = "delete from mo_catalog.mo_cdc_task where account_id = %d and task_id = '%s'"
 )
 
 func getSqlForNewCdcTask(
@@ -156,6 +165,24 @@ func getSqlForRetrivingNewCdcTask(
 
 func getSqlForDbIdAndTableId(accId uint64, db, table string) string {
 	return fmt.Sprintf(getDbIdAndTableIdFormat, accId, db, table)
+}
+
+func getSqlForTables(
+	pt *PatternTuple,
+) string {
+	return fmt.Sprintf(getTables, pt.SourceAccount, pt.SourceDatabase, pt.SourceTable)
+}
+
+func getSqlForTaskId(ses *Session, all bool, taskName string) string {
+	if all {
+		return fmt.Sprintf(getCdcTaskId, ses.GetAccountId())
+	} else {
+		return fmt.Sprintf(getCdcTaskIdWhere, ses.GetAccountId(), taskName)
+	}
+}
+
+func getSqlForDropCdcMeta(ses *Session, taskId string) string {
+	return fmt.Sprintf(dropCdcMeta, ses.GetAccountId(), taskId)
 }
 
 const (
@@ -240,15 +267,15 @@ func createCdc(
 			},
 		},
 	}
-	if err = ts.CreateDaemonTask(ctx, cdcTaskMetadata(), details); err != nil {
+	if err = ts.CreateDaemonTask(ctx, cdcTaskMetadata(cdcId.String()), details); err != nil {
 		return err
 	}
 	return nil
 }
 
-func cdcTaskMetadata() pb.TaskMetadata {
+func cdcTaskMetadata(cdcId string) pb.TaskMetadata {
 	return pb.TaskMetadata{
-		ID:       "-",
+		ID:       cdcId,
 		Executor: pb.TaskCode_InitCdc,
 		Options: pb.TaskOptions{
 			MaxRetryTimes: defaultConnectorTaskMaxRetryTimes,
@@ -258,6 +285,188 @@ func cdcTaskMetadata() pb.TaskMetadata {
 		},
 	}
 }
+func string2uint64(str string) (res uint64, err error) {
+	if str != "" {
+		res, err = strconv.ParseUint(str, 10, 64)
+		if err != nil {
+			return 0, err
+		}
+	} else {
+		res = uint64(0)
+	}
+	return res, nil
+}
+
+type PatternTuple struct {
+	SourceAccount  string
+	SourceDatabase string
+	SourceTable    string
+	SinkAccount    string
+	SinkDatabase   string
+	SinkTable      string
+}
+
+func splitPattern(pattern string) (*PatternTuple, error) {
+	pt := &PatternTuple{}
+	if strings.Contains(pattern, ":") {
+		splitRes := strings.Split(pattern, ":")
+		if len(splitRes) != 2 {
+			return nil, fmt.Errorf("invalid pattern format")
+		}
+
+		source := strings.Split(splitRes[0], ".")
+		if len(source) != 2 && len(source) != 3 {
+			return nil, fmt.Errorf("invalid pattern format")
+		}
+		if len(source) == 2 {
+			pt.SourceDatabase, pt.SourceTable = source[0], source[1]
+		} else {
+			pt.SourceAccount, pt.SourceDatabase, pt.SourceTable = source[0], source[1], source[2]
+		}
+
+		sink := strings.Split(splitRes[1], ".")
+		if len(sink) != 2 && len(sink) != 3 {
+			return nil, fmt.Errorf("invalid pattern format")
+		}
+		if len(sink) == 2 {
+			pt.SinkDatabase, pt.SinkTable = sink[0], sink[1]
+		} else {
+			pt.SinkAccount, pt.SinkDatabase, pt.SinkTable = sink[0], sink[1], sink[2]
+		}
+		return pt, nil
+	}
+
+	source := make([]string, 0)
+	current := strings.Builder{}
+	inRegex := false
+	isRegex := false
+	for i := 0; i < len(pattern); i++ {
+		char := pattern[i]
+		if char == '/' {
+			isRegex = true
+			inRegex = !inRegex
+		} else if char == '.' && !inRegex {
+			res := current.String()
+			if !isRegex {
+				res = strings.ReplaceAll(res, ".", "?")
+				res = strings.ReplaceAll(res, "*", ".*")
+
+			}
+			isRegex = false
+			source = append(source, res)
+			current.Reset()
+		} else {
+			current.WriteByte(char)
+		}
+	}
+	if current.Len() > 0 {
+		res := current.String()
+		if !isRegex {
+			res = strings.ReplaceAll(res, ".", "?")
+			res = strings.ReplaceAll(res, "*", ".*")
+
+		}
+		isRegex = false
+		source = append(source, res)
+		current.Reset()
+	}
+	if (len(source) != 2 && len(source) != 3) || inRegex {
+		return nil, fmt.Errorf("invalid pattern format")
+	}
+	if len(source) == 2 {
+		pt.SourceDatabase, pt.SourceTable = source[0], source[1]
+	} else {
+		pt.SourceAccount, pt.SourceDatabase, pt.SourceTable = source[0], source[1], source[2]
+	}
+	return pt, nil
+}
+
+func string2tables(ctx context.Context, ses *Session, pattern string) (map[string]string, error) {
+	pts := make([]*PatternTuple, 0)
+	current := strings.Builder{}
+	inRegex := false
+	for i := 0; i < len(pattern); i++ {
+		char := pattern[i]
+		if char == '/' {
+			inRegex = !inRegex
+		}
+		if char == ',' && !inRegex {
+			pt, err := splitPattern(current.String())
+			if err != nil {
+				return nil, err
+			}
+			pts = append(pts, pt)
+			current.Reset()
+		} else {
+			current.WriteByte(char)
+		}
+	}
+
+	if current.Len() != 0 {
+		pt, err := splitPattern(current.String())
+		if err != nil {
+			return nil, err
+		}
+		pts = append(pts, pt)
+	}
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	resMap := make(map[string]string)
+	for _, pt := range pts {
+		if pt.SourceAccount == "" {
+			pt.SourceAccount = ses.GetTenantName()
+		}
+
+		sql := getSqlForTables(pt)
+		bh.ClearExecResultSet()
+		err := bh.Exec(ctx, sql)
+		if err != nil {
+			return nil, err
+		}
+		erArray, err := getResultSet(ctx, bh)
+		if err != nil {
+			return nil, err
+		}
+		if execResultArrayHasData(erArray) {
+			res := erArray[0]
+			for rowIdx := range erArray[0].GetRowCount() {
+				sourceString := strings.Builder{}
+				sinkString := strings.Builder{}
+				acc, err := res.GetString(ctx, rowIdx, 0)
+				if err != nil {
+					return nil, err
+				}
+				db, err := res.GetString(ctx, rowIdx, 1)
+				if err != nil {
+					return nil, err
+				}
+				tbl, err := res.GetString(ctx, rowIdx, 2)
+				if err != nil {
+					return nil, err
+				}
+				sourceString.WriteString(acc)
+				sourceString.WriteString(".")
+				sourceString.WriteString(db)
+				sourceString.WriteString(".")
+				sourceString.WriteString(tbl)
+				if pt.SinkTable != "" {
+					if pt.SinkAccount != "" {
+						sinkString.WriteString(pt.SinkAccount)
+						sinkString.WriteString(".")
+					}
+					sinkString.WriteString(pt.SinkDatabase)
+					sinkString.WriteString(".")
+					sinkString.WriteString(pt.SinkTable)
+				} else {
+					sinkString.WriteString(sourceString.String())
+				}
+				resMap[sourceString.String()] = sinkString.String()
+			}
+		}
+	}
+
+	return resMap, nil
+}
 
 func saveCdcTask(
 	ctx context.Context,
@@ -265,6 +474,8 @@ func saveCdcTask(
 	cdcId uuid.UUID,
 	create *tree.CreateCDC,
 ) error {
+	var startTs, endTs uint64
+	var err error
 	accInfo := ses.GetTenantInfo()
 
 	fmt.Fprintln(os.Stderr, "====>save cdc task",
@@ -275,7 +486,24 @@ func saveCdcTask(
 		create.SinkUri,
 		create.SinkType,
 	)
+	cdcTaskOptionsMap := make(map[string]string)
+	for i := 0; i < len(create.Option); i += 2 {
+		cdcTaskOptionsMap[create.Option[i]] = create.Option[i+1]
+	}
 
+	startTs, err = string2uint64(cdcTaskOptionsMap["StartTS"])
+	if err != nil {
+		return err
+	}
+	endTs, err = string2uint64(cdcTaskOptionsMap["EndTS"])
+	if err != nil {
+		return err
+	}
+	ssmap, err := string2tables(ctx, ses, create.Tables)
+	if err != nil {
+		return err
+	}
+	fmt.Println("KKKKKKK>", ssmap)
 	dat := time.Now().UTC()
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -300,9 +528,9 @@ func saveCdcTask(
 		"FIXME",
 		SASCommon,
 		SASCommon,
-		0, //FIXME
-		0, //FIXME
-		"FIXME",
+		startTs,
+		endTs,
+		cdcTaskOptionsMap["ConfigFile"],
 		dat,
 		SyncLoading,
 		0, //FIXME
@@ -310,7 +538,7 @@ func saveCdcTask(
 		"FIXME",
 	)
 
-	err := bh.Exec(ctx, sql)
+	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return err
 	}
@@ -562,5 +790,88 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 
 	<-ch
 
+	return nil
+}
+
+func handleDropCdc(ses *Session, execCtx *ExecCtx, st *tree.DropCDC) error {
+	return doDropCdc(execCtx.reqCtx, ses, st)
+}
+
+func doDropCdc(ctx context.Context, ses *Session, drop *tree.DropCDC) error {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	sql := getSqlForTaskId(ses, drop.Option.All, drop.Option.TaskName)
+	err := bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	var taskIds []string
+	if execResultArrayHasData(erArray) {
+		rowCount := erArray[0].GetRowCount()
+		taskIds = make([]string, 0, rowCount)
+		for i := uint64(0); i < rowCount; i++ {
+			taskId, err := erArray[0].GetString(ctx, i, 0)
+			if err != nil {
+				return err
+			}
+			taskIds = append(taskIds, taskId)
+		}
+	} else {
+		return moerr.NewInternalError(ctx, "no cdc task drop")
+	}
+	bh.ClearExecResultSet()
+	for _, taskId := range taskIds {
+		ts := getGlobalPu().TaskService
+		if ts == nil {
+			return moerr.NewInternalError(ctx,
+				"task service not ready yet, please try again later.")
+		}
+		tasks, err := ts.QueryDaemonTask(ctx,
+			taskservice.WithTaskMetadataId(taskservice.EQ, taskId),
+			taskservice.WithAccountID(taskservice.EQ, ses.accountId),
+		)
+		if err != nil {
+			return err
+		}
+		if len(tasks) != 1 {
+			return moerr.NewInternalError(ctx, "no cdc task drop")
+		}
+		// Already in canceled status.
+		if tasks[0].TaskStatus == task.TaskStatus_Canceled || tasks[0].TaskStatus == task.TaskStatus_CancelRequested {
+			return nil
+		} else if tasks[0].TaskStatus == task.TaskStatus_Error {
+			return moerr.NewInternalError(ctx,
+				"task can not be canceled because it is in %s state", task.TaskStatus_Error)
+		}
+		tasks[0].TaskStatus = task.TaskStatus_CancelRequested
+		c, err := ts.UpdateDaemonTask(ctx, tasks)
+		if err != nil {
+			return err
+		}
+		if c != 1 {
+			return moerr.NewInternalError(ctx, "no cdc task drop")
+		}
+
+		c, err = ts.DeleteDaemonTask(ctx,
+			taskservice.WithTaskMetadataId(taskservice.EQ, taskId),
+			taskservice.WithAccountID(taskservice.EQ, ses.accountId),
+		)
+		if err != nil {
+			return err
+		}
+		if c != 1 {
+			return moerr.NewInternalError(ctx, "no cdc task drop")
+		}
+
+		sql = getSqlForDropCdcMeta(ses, taskId)
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
