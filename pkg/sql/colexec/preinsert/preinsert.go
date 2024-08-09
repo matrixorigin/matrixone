@@ -45,10 +45,13 @@ func (preInsert *PreInsert) Prepare(_ *proc) error {
 }
 
 func (preInsert *PreInsert) initBuf(proc *proc, bat *batch.Batch) {
+	tableDef := preInsert.TableDef
 	if preInsert.ctr.buf != nil {
-		for i := range preInsert.Attrs {
-			if preInsert.ctr.buf.Vecs[i] != nil {
-				preInsert.ctr.buf.Vecs[i].CleanOnlyData()
+		for i, attr := range preInsert.Attrs {
+			if idx, ok := tableDef.Name2ColIndex[attr]; ok {
+				if tableDef.Cols[idx].Typ.AutoIncr {
+					preInsert.ctr.buf.Vecs[i].CleanOnlyData()
+				}
 			}
 		}
 		for i := len(preInsert.Attrs); i < len(preInsert.ctr.buf.Vecs); i++ {
@@ -62,8 +65,13 @@ func (preInsert *PreInsert) initBuf(proc *proc, bat *batch.Batch) {
 		preInsert.ctr.buf.Attrs = make([]string, 0, len(preInsert.Attrs))
 		for i, attr := range preInsert.Attrs {
 			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, attr)
-			srcVec := bat.Vecs[i]
-			preInsert.ctr.buf.SetVector(int32(i), vector.NewVec(*srcVec.GetType()))
+			if idx, ok := tableDef.Name2ColIndex[attr]; ok {
+				if tableDef.Cols[idx].Typ.AutoIncr {
+					preInsert.ctr.buf.SetVector(int32(i), vector.NewVec(*bat.Vecs[i].GetType()))
+				} else {
+					preInsert.ctr.buf.SetVector(int32(i), bat.Vecs[i])
+				}
+			}
 		}
 	}
 }
@@ -91,14 +99,6 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 
 	// keep shuffleIDX unchanged
 	preInsert.ctr.buf.ShuffleIDX = bat.ShuffleIDX
-
-	for idx := range preInsert.Attrs {
-		srcVec := bat.Vecs[idx]
-		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(preInsert.ctr.buf.Vecs[idx], srcVec); err != nil {
-			return result, err
-		}
-	}
-
 	preInsert.ctr.buf.AddRowCount(bat.RowCount())
 
 	if preInsert.HasAutoCol {

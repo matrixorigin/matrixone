@@ -119,6 +119,8 @@ func TestPreInsertNullCheck(t *testing.T) {
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	proc.Base.SessionInfo.StorageEngine = eng
+	name2ColIndex := make(map[string]int32, 1)
+	name2ColIndex["int64_column_primary"] = 0
 	argument2 := PreInsert{
 		ctr:        container{},
 		SchemaName: "testDb",
@@ -134,6 +136,7 @@ func TestPreInsertNullCheck(t *testing.T) {
 			Pkey: &plan.PrimaryKeyDef{
 				PkeyColName: "int64_column_primary",
 			},
+			Name2ColIndex: name2ColIndex,
 		},
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{

@@ -81,6 +81,13 @@ func (preInsert *PreInsert) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if preInsert.ctr.buf != nil {
+		for i, attr := range preInsert.Attrs {
+			if idx, ok := preInsert.TableDef.Name2ColIndex[attr]; ok {
+				if !preInsert.TableDef.Cols[idx].Typ.AutoIncr {
+					preInsert.ctr.buf.SetVector(int32(i), nil)
+				}
+			}
+		}
 		preInsert.ctr.buf.Clean(proc.Mp())
 		preInsert.ctr.buf = nil
 	}
