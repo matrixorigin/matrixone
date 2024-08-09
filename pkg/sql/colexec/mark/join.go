@@ -16,8 +16,9 @@ package mark
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -56,6 +57,13 @@ func (markJoin *MarkJoin) Prepare(proc *process.Process) error {
 
 	if markJoin.Cond != nil {
 		markJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, markJoin.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if markJoin.ProjectList != nil {
+		err = markJoin.PrepareProjection(proc)
 	}
 	return err
 }
@@ -116,19 +124,27 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				proc.PutBatch(bat)
 				continue
 			}
+			anal.Input(bat, markJoin.GetIsFirst())
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-				if err = ctr.emptyProbe(bat, markJoin, proc, anal, markJoin.GetIsFirst(), markJoin.GetIsLast(), &result); err != nil {
+				if err = ctr.emptyProbe(bat, markJoin, proc, &result); err != nil {
 					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			} else {
-				if err = ctr.probe(bat, markJoin, proc, anal, markJoin.GetIsFirst(), markJoin.GetIsLast(), &result); err != nil {
+				if err = ctr.probe(bat, markJoin, proc, &result); err != nil {
 					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			}
+			if markJoin.ProjectList != nil {
+				result.Batch, err = markJoin.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, markJoin.GetIsLast())
 			proc.PutBatch(bat)
 			return result, nil
 
@@ -175,8 +191,8 @@ func (markJoin *MarkJoin) build(ap *MarkJoin, proc *process.Process, anal proces
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *MarkJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (err error) {
-	anal.Input(bat, isFirst)
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *MarkJoin, proc *process.Process, result *vm.CallResult) (err error) {
+
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -196,14 +212,12 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *MarkJoin, proc *process.P
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 
 	result.Batch = ctr.rbat
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *MarkJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) probe(bat *batch.Batch, ap *MarkJoin, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -283,7 +297,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *MarkJoin, proc *process.Proces
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }

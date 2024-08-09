@@ -26,7 +26,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/docker/go-units"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
@@ -56,7 +55,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -905,7 +903,7 @@ func (tbl *txnTable) rangesOnePart(
 				}
 
 				blk.Sorted = obj.Sorted
-				blk.EntryState = obj.EntryState
+				blk.Appendable = obj.Appendable
 				blk.CommitTs = obj.CommitTS
 				//if obj.HasDeltaLoc {
 				//	_, commitTs, ok := state.GetBockDeltaLoc(blk.BlockID)
@@ -1988,7 +1986,7 @@ func (tbl *txnTable) PKPersistedBetween(
 					}
 
 					blk.Sorted = obj.Sorted
-					blk.EntryState = obj.EntryState
+					blk.Appendable = obj.Appendable
 					blk.CommitTs = obj.CommitTS
 					if obj.HasDeltaLoc {
 						_, commitTs, ok := p.GetBockDeltaLoc(blk.BlockID)
@@ -2063,6 +2061,13 @@ func (tbl *txnTable) PKPersistedBetween(
 		//for sorted block, we can use binary search to find the keys.
 		if filter == nil {
 			filter = buildFilter()
+			if filter == nil {
+				logutil.Warn("build filter failed, switch to linear search",
+					zap.Uint32("accid", tbl.accountId),
+					zap.Uint64("tableid", tbl.tableId),
+					zap.String("tablename", tbl.tableName))
+				filter = buildUnsortedFilter()
+			}
 		}
 		sels := filter(bat.Vecs)
 		if len(sels) > 0 {
@@ -2101,6 +2106,14 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	if !flushed {
 		return false, nil
 	}
+
+	// if tbl.tableName == catalog.MO_DATABASE ||
+	// 	tbl.tableName == catalog.MO_TABLES ||
+	// 	tbl.tableName == catalog.MO_COLUMNS {
+	// 	logutil.Warnf("mo table:%s always exist in memory", tbl.tableName)
+	// 	return true, nil
+	// }
+
 	//need check pk whether exist on S3 block.
 	return tbl.PKPersistedBetween(
 		snap,
@@ -2156,7 +2169,7 @@ func (tbl *txnTable) transferDeletes(
 					bid := objectio.BuildObjectBlockid(objectStats.ObjectName(), uint16(i))
 					blkInfo := objectio.BlockInfo{
 						BlockID:    *bid,
-						EntryState: obj.EntryState,
+						Appendable: obj.Appendable,
 						Sorted:     obj.Sorted,
 						MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
 						CommitTs:   obj.CommitTS,
@@ -2353,67 +2366,28 @@ func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, erro
 
 func (tbl *txnTable) MergeObjects(
 	ctx context.Context,
-	objstats []objectio.ObjectStats,
-	policyName string,
+	objStats []objectio.ObjectStats,
 	targetObjSize uint32,
 ) (*api.MergeCommitEntry, error) {
+	if len(objStats) < 2 {
+		return nil, moerr.NewInternalErrorNoCtx("no matching objects")
+	}
+
 	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	sortkeyPos := -1
-	sortkeyIsPK := false
-	if tbl.primaryIdx >= 0 && tbl.tableDef.Cols[tbl.primaryIdx].Name != catalog.FakePrimaryKeyColName {
-		if tbl.clusterByIdx < 0 {
-			sortkeyPos = tbl.primaryIdx
-			sortkeyIsPK = true
-		} else {
-			panic(fmt.Sprintf("bad schema pk %v, ck %v", tbl.primaryIdx, tbl.clusterByIdx))
+	sortKeyPos, sortKeyIsPK := tbl.getSortKeyPosAndSortKeyIsPK()
+	objInfos := make([]logtailreplay.ObjectInfo, 0, len(objStats))
+	for _, objstat := range objStats {
+		info, exist := state.GetObject(*objstat.ObjectShortName())
+		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
+			logutil.Errorf("object not visible: %s", info.String())
+			return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
 		}
-	} else if tbl.clusterByIdx >= 0 {
-		sortkeyPos = tbl.clusterByIdx
-		sortkeyIsPK = false
-	}
-
-	var objInfos []logtailreplay.ObjectInfo
-	if len(objstats) != 0 {
-		objInfos = make([]logtailreplay.ObjectInfo, 0, len(objstats))
-		for _, objstat := range objstats {
-			info, exist := state.GetObject(*objstat.ObjectShortName())
-			if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
-				logutil.Errorf("object not visible: %s", info.String())
-				return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
-			}
-			objInfos = append(objInfos, info)
-		}
-	} else {
-		objInfos = make([]logtailreplay.ObjectInfo, 0, len(objstats))
-		iter, err := state.NewObjectsIter(snapshot, true)
-		if err != nil {
-			logutil.Errorf("txn: %s, error: %v", tbl.db.op.Txn().DebugString(), err)
-			return nil, err
-		}
-		for iter.Next() {
-			obj := iter.Entry().ObjectInfo
-			if obj.EntryState {
-				continue
-			}
-			if sortkeyPos != -1 {
-				sortKeyZM := obj.SortKeyZoneMap()
-				if !sortKeyZM.IsInited() {
-					continue
-				}
-			}
-			objInfos = append(objInfos, obj)
-		}
-		if len(policyName) != 0 {
-			objInfos, err = applyMergePolicy(ctx, policyName, sortkeyPos, objInfos)
-			if err != nil {
-				return nil, err
-			}
-		}
+		objInfos = append(objInfos, info)
 	}
 
 	if len(objInfos) < 2 {
@@ -2423,15 +2397,15 @@ func (tbl *txnTable) MergeObjects(
 	tbl.ensureSeqnumsAndTypesExpectRowid()
 
 	taskHost, err := newCNMergeTask(
-		ctx, tbl, snapshot, state, // context
-		sortkeyPos, sortkeyIsPK, // schema
+		ctx, tbl, snapshot, // context
+		sortKeyPos, sortKeyIsPK, // schema
 		objInfos, // targets
 		targetObjSize)
 	if err != nil {
 		return nil, err
 	}
 
-	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortkeyPos, taskHost)
+	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost)
 	if err != nil {
 		taskHost.commitEntry.Err = err.Error()
 		return taskHost.commitEntry, err
@@ -2441,54 +2415,107 @@ func (tbl *txnTable) MergeObjects(
 		return taskHost.commitEntry, nil
 	}
 
-	// if transfer info is too large, write it down to s3
-	// transfer info size is only related to row count.
+	return dumpTransferInfo(ctx, taskHost)
+}
+
+func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
+	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	sortKeyPos, _ := tbl.getSortKeyPosAndSortKeyIsPK()
+	objStats := make([]objectio.ObjectStats, 0, tbl.ApproxObjectsNum(ctx))
+
+	err = ForeachVisibleDataObject(state, snapshot, func(obj logtailreplay.ObjectEntry) error {
+		if obj.Appendable {
+			return nil
+		}
+		if sortKeyPos != -1 {
+			sortKeyZM := obj.SortKeyZoneMap()
+			if !sortKeyZM.IsInited() {
+				return nil
+			}
+		}
+		objStats = append(objStats, obj.ObjectStats)
+		return nil
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return objStats, nil
+}
+
+func (tbl *txnTable) getSortKeyPosAndSortKeyIsPK() (int, bool) {
+	sortKeyPos := -1
+	sortKeyIsPK := false
+	if tbl.primaryIdx >= 0 && tbl.tableDef.Cols[tbl.primaryIdx].Name != catalog.FakePrimaryKeyColName {
+		if tbl.clusterByIdx < 0 {
+			sortKeyPos = tbl.primaryIdx
+			sortKeyIsPK = true
+		} else {
+			panic(fmt.Sprintf("bad schema pk %v, ck %v", tbl.primaryIdx, tbl.clusterByIdx))
+		}
+	} else if tbl.clusterByIdx >= 0 {
+		sortKeyPos = tbl.clusterByIdx
+		sortKeyIsPK = false
+	}
+	return sortKeyPos, sortKeyIsPK
+}
+
+func dumpTransferInfo(ctx context.Context, mergeTask *cnMergeTask) (*api.MergeCommitEntry, error) {
 	rowCnt := 0
-	for _, m := range taskHost.transferMaps {
+	for _, m := range mergeTask.transferMaps {
 		rowCnt += len(m)
 	}
-	// if transfer info is small, send it to tn directly.
-	if rowCnt < 8000000 {
-		size := len(taskHost.transferMaps)
+
+	// If transfer info is small, send it to tn directly.
+	// transfer info size is only related to row count.
+	// For api.TransDestPos, 5*10^5 rows is 52*5*10^5 ~= 26MB
+	// For api.TransferDestPos, 5*10^5 rows is 12*5*10^5 ~= 6MB
+	if rowCnt < 500000 {
+		size := len(mergeTask.transferMaps)
 		mappings := make([]api.BlkTransMap, size)
 		for i := 0; i < size; i++ {
 			mappings[i] = api.BlkTransMap{
-				M: make(map[int32]api.TransDestPos),
+				M: make(map[int32]api.TransDestPos, len(mergeTask.transferMaps[i])),
 			}
 		}
-		taskHost.commitEntry.Booking = &api.BlkTransferBooking{
+		mergeTask.commitEntry.Booking = &api.BlkTransferBooking{
 			Mappings: mappings,
 		}
 
-		for i, m := range taskHost.transferMaps {
+		for i, m := range mergeTask.transferMaps {
 			for r, pos := range m {
-				taskHost.commitEntry.Booking.Mappings[i].M[int32(r)] = api.TransDestPos{
+				mergeTask.commitEntry.Booking.Mappings[i].M[int32(r)] = api.TransDestPos{
 					ObjIdx: int32(pos.ObjIdx),
 					BlkIdx: int32(pos.BlkIdx),
 					RowIdx: int32(pos.RowIdx),
 				}
 			}
 		}
-	} else {
-		if err := dumpTransferInfo(ctx, taskHost); err != nil {
-			return taskHost.commitEntry, err
-		}
-		var locStr strings.Builder
-		locations := taskHost.commitEntry.BookingLoc
-		blkCnt := types.DecodeInt32(commonUtil.UnsafeStringToBytes(locations[0]))
-		for _, filepath := range locations[blkCnt+1:] {
-			locStr.WriteString(filepath)
-			locStr.WriteString(",")
-		}
-		logutil.Infof("mergeblocks %v-%v on cn: write s3 transfer info %v",
-			tbl.tableId, tbl.tableName, locStr.String())
+		return mergeTask.commitEntry, nil
 	}
 
-	// commit this to tn
-	return taskHost.commitEntry, nil
+	// if transfer info is too large, write it down to s3
+	if err := writeTransferInfoToS3(ctx, mergeTask); err != nil {
+		return mergeTask.commitEntry, err
+	}
+	var locStr strings.Builder
+	locations := mergeTask.commitEntry.BookingLoc
+	blkCnt := types.DecodeInt32(commonUtil.UnsafeStringToBytes(locations[0]))
+	for _, filepath := range locations[blkCnt+1:] {
+		locStr.WriteString(filepath)
+		locStr.WriteString(",")
+	}
+	logutil.Infof("mergeblocks %v-%v on cn: write s3 transfer info %v",
+		mergeTask.host.tableId, mergeTask.host.tableName, locStr.String())
+
+	return mergeTask.commitEntry, nil
 }
 
-func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
+func writeTransferInfoToS3(ctx context.Context, taskHost *cnMergeTask) (err error) {
 	defer func() {
 		if err != nil {
 			locations := taskHost.commitEntry.BookingLoc
@@ -2498,10 +2525,10 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 		}
 	}()
 
-	return dumpTransferMaps(ctx, taskHost)
+	return writeTransferMapsToS3(ctx, taskHost)
 }
 
-func dumpTransferMaps(ctx context.Context, taskHost *cnMergeTask) error {
+func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) error {
 	bookingMaps := taskHost.transferMaps
 
 	blkCnt := int32(len(bookingMaps))
@@ -2570,7 +2597,7 @@ func dumpTransferMaps(ctx context.Context, taskHost *cnMergeTask) error {
 
 	// write remaining data
 	if buffer.RowCount() != 0 {
-		filename := blockio.EncodeTmpFileName("tmp", "merge", time.Now().UTC().Unix())
+		filename := blockio.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
 		writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 		if err != nil {
 			return err
@@ -2591,46 +2618,6 @@ func dumpTransferMaps(ctx context.Context, taskHost *cnMergeTask) error {
 
 	taskHost.commitEntry.Booking = nil
 	return nil
-}
-
-func applyMergePolicy(
-	ctx context.Context,
-	policyName string,
-	sortKeyPos int,
-	objInfos []logtailreplay.ObjectInfo,
-) ([]logtailreplay.ObjectInfo, error) {
-	arg := cutBetween(policyName, "(", ")")
-	if strings.HasPrefix(policyName, "small") {
-		size := uint32(110 * common.Const1MBytes)
-		i, err := units.RAMInBytes(arg)
-		if err == nil && 10*common.Const1MBytes < i && i < 250*common.Const1MBytes {
-			size = uint32(i)
-		}
-		return logtailreplay.NewSmall(size).Filter(objInfos), nil
-	} else if strings.HasPrefix(policyName, "overlap") {
-		if sortKeyPos == -1 {
-			return objInfos, nil
-		}
-		maxObjects := 100
-		i, err := strconv.Atoi(arg)
-		if err == nil {
-			maxObjects = i
-		}
-		return logtailreplay.NewOverlap(maxObjects).Filter(objInfos), nil
-	}
-
-	return nil, moerr.NewInvalidInput(ctx, "invalid merge policy name")
-}
-
-func cutBetween(s, start, end string) string {
-	i := strings.Index(s, start)
-	if i >= 0 {
-		j := strings.Index(s[i:], end)
-		if j >= 0 {
-			return s[i+len(start) : i+j]
-		}
-	}
-	return ""
 }
 
 func (tbl *txnTable) getUncommittedRows(

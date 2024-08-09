@@ -43,6 +43,9 @@ func (productl2 *Productl2) OpType() vm.OpType {
 func (productl2 *Productl2) Prepare(proc *process.Process) error {
 	ap := productl2
 	ap.ctr = new(container)
+	if productl2.ProjectList != nil {
+		return productl2.PrepareProjection(proc)
+	}
 	return nil
 }
 
@@ -67,36 +70,42 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = Probe
 
 		case Probe:
-			if ctr.inBat != nil {
-				if err := ctr.probe(ap, proc, anal, productl2.GetIsLast(), &result); err != nil {
+			if ctr.inBat == nil {
+				result, err = productl2.Children[0].Call(proc)
+				if err != nil {
 					return result, err
 				}
-				return result, nil
+
+				ctr.inBat = result.Batch
+				if ctr.inBat == nil {
+					ctr.state = End
+					continue
+				}
+				if ctr.inBat.IsEmpty() {
+					proc.PutBatch(ctr.inBat)
+					ctr.inBat = nil
+					continue
+				}
+				if ctr.bat == nil {
+					proc.PutBatch(ctr.inBat)
+					ctr.inBat = nil
+					continue
+				}
+				anal.Input(ctr.inBat, productl2.GetIsFirst())
 			}
-			result, err = productl2.Children[0].Call(proc)
-			if err != nil {
+
+			if err := ctr.probe(ap, proc, &result); err != nil {
 				return result, err
 			}
 
-			ctr.inBat = result.Batch
-			if ctr.inBat == nil {
-				ctr.state = End
-				continue
+			if productl2.ProjectList != nil {
+				var err error
+				result.Batch, err = productl2.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
 			}
-			if ctr.inBat.IsEmpty() {
-				proc.PutBatch(ctr.inBat)
-				ctr.inBat = nil
-				continue
-			}
-			if ctr.bat == nil {
-				proc.PutBatch(ctr.inBat)
-				ctr.inBat = nil
-				continue
-			}
-			anal.Input(ctr.inBat, productl2.GetIsFirst())
-			if err := ctr.probe(ap, proc, anal, productl2.GetIsLast(), &result); err != nil {
-				return result, err
-			}
+			anal.Output(result.Batch, productl2.GetIsLast())
 			return result, nil
 
 		default:
@@ -142,7 +151,7 @@ func (productl2 *Productl2) build(proc *process.Process, anal process.Analyze) e
 //	}
 //)
 
-func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -267,7 +276,6 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.A
 		}
 
 		if ctr.rbat.Vecs[0].Length() >= colexec.DefaultBatchSize {
-			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
 			ctr.probeIdx = j + 1
@@ -277,7 +285,6 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.A
 	// ctr.rbat.AddRowCount(count * count2)
 	ctr.probeIdx = 0
 	ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 
 	proc.PutBatch(ctr.inBat)
