@@ -1038,7 +1038,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("max_allowed_packet", 1024, 1073741824, false),
+		Type:              InitSystemVariableIntType("max_allowed_packet", 1024, 67108864, false),
 		Default:           int64(67108864),
 	},
 	"version_comment": {

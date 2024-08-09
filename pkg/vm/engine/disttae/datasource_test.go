@@ -169,7 +169,7 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 		blkID := types.NewBlockidWithObjectID(&objID, uint16(blkNum))
 		blkInfo := objectio.BlockInfo{
 			BlockID:      *blkID,
-			EntryState:   true,
+			Appendable:   true,
 			Sorted:       false,
 			MetaLoc:      metaLoc,
 			CommitTs:     *cts,
