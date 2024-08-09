@@ -164,24 +164,21 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 	}
 
 	result := vm.NewCallResult()
+	result.Batch = insert.ctr.buf
 	if insert.ctr.state == vm.Eval {
-		if insert.ctr.buf != nil {
-			proc.PutBatch(insert.ctr.buf)
-			insert.ctr.buf = nil
-		}
 
 		// If the target is partition table
 		if len(insert.InsertCtx.PartitionTableIDs) > 0 {
 			for _, writer := range insert.ctr.partitionS3Writers {
 				if err := writer.WriteS3CacheBatch(proc); err != nil {
 					insert.ctr.state = vm.End
-					return result, err
+					return vm.CancelResult, err
 				}
 			}
 
 			if err := collectAndOutput(proc, insert.ctr.partitionS3Writers, &result); err != nil {
 				insert.ctr.state = vm.End
-				return result, err
+				return vm.CancelResult, err
 			}
 		} else {
 			// Normal non partition table
@@ -190,15 +187,14 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 			// for more info, refer to the comments about reSizeBatch
 			if err := s3Writer.WriteS3CacheBatch(proc); err != nil {
 				insert.ctr.state = vm.End
-				return result, err
+				return vm.CancelResult, err
 			}
 			err := s3Writer.Output(proc, &result)
 			if err != nil {
-				return result, err
+				return vm.CancelResult, err
 			}
 		}
 		insert.ctr.state = vm.End
-		insert.ctr.buf = result.Batch
 		anal.Output(result.Batch, insert.IsLast)
 		return result, nil
 	}
@@ -266,24 +262,15 @@ func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) 
 
 // Collect all partition subtables' s3writers  metaLoc information and output it
 func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer, result *vm.CallResult) (err error) {
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-	res := batch.NewWithSize(len(attrs))
-	res.SetAttributes(attrs)
-	res.Vecs[0] = proc.GetVector(types.T_int16.ToType())
-	res.Vecs[1] = proc.GetVector(types.T_text.ToType())
-	res.Vecs[2] = proc.GetVector(types.T_binary.ToType())
-
 	for _, w := range s3Writers {
 		//deep copy.
 		bat := w.GetBlockInfoBat()
-		res, err = res.Append(proc.Ctx, proc.GetMPool(), bat)
+		_, err = result.Batch.Append(proc.Ctx, proc.GetMPool(), bat)
 		if err != nil {
-			proc.PutBatch(res)
 			return
 		}
-		res.SetRowCount(res.RowCount() + bat.RowCount())
+		result.Batch.SetRowCount(result.Batch.RowCount() + bat.RowCount())
 		w.ResetBlockInfoBat(proc)
 	}
-	result.Batch = res
 	return
 }
