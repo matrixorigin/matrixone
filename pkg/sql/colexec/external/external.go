@@ -83,7 +83,7 @@ func (external *External) OpType() vm.OpType {
 
 func (external *External) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
-	external.ctr = new(container)
+
 	defer span.End()
 	param := external.Es
 	if proc.GetLim().MaxMsgSize == 0 {
@@ -141,6 +141,20 @@ func (external *External) Prepare(proc *process.Process) error {
 			return err
 		}
 	}
+	if external.ctr.buf == nil {
+		external.ctr.buf = batch.New(false, param.Attrs)
+		var flag bool
+		if param.Extern.Format == tree.PARQUET {
+			flag = false
+		} else {
+			flag = param.ParallelLoad
+		}
+		//alloc space for vector
+		for i := range param.Attrs {
+			typ := makeType(&param.Cols[i].Typ, flag)
+			external.ctr.buf.Vecs[i] = vector.NewVec(typ)
+		}
+	}
 	return nil
 }
 
@@ -178,22 +192,20 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		param.Fileparam.FileIndex++
 	}
 	if external.ctr.buf != nil {
-		proc.PutBatch(external.ctr.buf)
-		external.ctr.buf = nil
+		external.ctr.buf.CleanOnlyData()
 	}
-	external.ctr.buf, err = scanFileData(ctx, param, proc)
+	err = scanFileData(ctx, param, proc, external.ctr.buf)
 	if err != nil {
 		param.Fileparam.End = true
 		return result, err
 	}
 
+	result.Batch = external.ctr.buf
 	if external.ctr.buf != nil {
 		external.ctr.maxAllocSize = max(external.ctr.maxAllocSize, external.ctr.buf.Size())
-	}
-	result.Batch = external.ctr.buf
-	if result.Batch != nil {
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
+
 	if external.ProjectList != nil {
 		result.Batch, err = external.EvalProjection(result.Batch, proc)
 		if err != nil {
@@ -841,21 +853,14 @@ func makeType(typ *plan.Type, flag bool) types.Type {
 	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
 }
 
-func makeBatch(param *ExternalParam, batchSize int, proc *process.Process) (bat *batch.Batch, err error) {
-	bat = batch.New(false, param.Attrs)
-	//alloc space for vector
-	for i := range param.Attrs {
-		typ := makeType(&param.Cols[i].Typ, param.ParallelLoad)
-		bat.Vecs[i] = proc.GetVector(typ)
-	}
-	if err = bat.PreExtend(proc.GetMPool(), batchSize); err != nil {
-		bat.Clean(proc.GetMPool())
-		return nil, err
+func initBatch(batchSize int, proc *process.Process, bat *batch.Batch) error {
+	if err := bat.PreExtend(proc.GetMPool(), batchSize); err != nil {
+		return err
 	}
 	for i := range bat.Vecs {
 		bat.Vecs[i].SetLength(batchSize)
 	}
-	return bat, nil
+	return nil
 }
 
 func getRealAttrCnt(attrs []string, cols []*plan.ColDef) int {
@@ -911,10 +916,10 @@ func checkLineValid(param *ExternalParam, proc *process.Process, line []csvparse
 	return nil
 }
 
-func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
-	bat, err := makeBatch(param, plh.batchSize, proc)
-	if err != nil {
-		return nil, err
+func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process, bat *batch.Batch) error {
+	var err error
+	if err = initBatch(plh.batchSize, proc, bat); err != nil {
+		return err
 	}
 
 	unexpectEOF := false
@@ -928,18 +933,17 @@ func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 					unexpectEOF = true
 					continue
 				}
-				return nil, err
+				return err
 			}
 			plh.moCsvLineArray[rowIdx] = line
 		}
 
-		if err := checkLineValid(param, proc, line, rowIdx); err != nil {
-			return nil, err
+		if err = checkLineValid(param, proc, line, rowIdx); err != nil {
+			return err
 		}
 
-		err = getOneRowData(bat, line, rowIdx, param, proc.GetMPool())
-		if err != nil {
-			return nil, err
+		if err = getOneRowData(bat, line, rowIdx, param, proc.GetMPool()); err != nil {
+			return err
 		}
 	}
 
@@ -952,7 +956,7 @@ func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 		}
 	}
 	bat.SetRowCount(n)
-	return bat, nil
+	return nil
 }
 
 // getMOCSVReader get file reader from external file
@@ -978,8 +982,7 @@ func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 	return plh, nil
 }
 
-func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	var bat *batch.Batch
+func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
 	var err error
 	var cnt int
 	_, span := trace.Start(ctx, "scanCsvFile")
@@ -988,7 +991,7 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 		param.IgnoreLine = param.IgnoreLineTag
 		param.plh, err = getMOCSVReader(param, proc)
 		if err != nil || param.plh == nil {
-			return nil, err
+			return err
 		}
 	}
 	plh := param.plh
@@ -996,7 +999,7 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 	cnt, finish, err = readCountStringLimitSize(plh.csvReader, proc.Ctx, param.maxBatchSize, plh.moCsvLineArray)
 	if err != nil {
 		logutil.Errorf("read external file meet error: %s", err.Error())
-		return nil, err
+		return err
 	}
 
 	if finish {
@@ -1024,14 +1027,10 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 		}
 	}
 	plh.batchSize = cnt
-	bat, err = getBatchData(param, plh, proc)
-	if err != nil {
-		return nil, err
-	}
-	return bat, nil
+	return getBatchData(param, plh, proc, bat)
 }
 
-func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) (bat *batch.Batch, err error) {
+func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader, bat *batch.Batch) (err error) {
 	var tmpBat *batch.Batch
 	var vecTmp *vector.Vector
 	var release func()
@@ -1054,17 +1053,10 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		if release != nil {
 			release()
 		}
-		if err != nil && bat != nil {
-			bat.Clean(mp)
-		}
 	}()
 
-	bat, err = makeBatch(param, 0, proc)
-	if err != nil {
-		return nil, err
-	}
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
-		return bat, nil
+		return nil
 	}
 
 	rows := 0
@@ -1081,7 +1073,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 
 	tmpBat, release, err = objectReader.LoadColumns(ctx, idxs, nil, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID().Sequence(), mp)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	filepathBytes := []byte(param.Fileparam.Filepath)
 
@@ -1090,7 +1082,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		if uint16(param.Name2ColIndex[strings.ToLower(param.Attrs[i])]) >= colCnt {
 			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			for j := 0; j < rows; j++ {
 				nulls.Add(vecTmp.GetNulls(), uint64(j))
@@ -1101,11 +1093,11 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 			}
 			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			for j := 0; j < rows; j++ {
 				if err = vector.SetBytesAt(vecTmp, j, filepathBytes, mp); err != nil {
-					return nil, err
+					return err
 				}
 			}
 		} else {
@@ -1123,13 +1115,13 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 
 		if err = bat.Vecs[i].Union(vecTmp, sels, proc.GetMPool()); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	n := bat.Vecs[0].Length()
 	bat.SetRowCount(n)
-	return bat, nil
+	return nil
 }
 
 func needRead(ctx context.Context, param *ExternalParam, proc *process.Process) bool {
@@ -1163,14 +1155,14 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process) 
 		notReportErrCtx, proc, expr, meta, columnMap, zms, vecs)
 }
 
-func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) (*batch.Batch, error) {
+func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader, bat *batch.Batch) error {
 	var err error
 	param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, proc.GetMPool())
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
-		return makeBatch(param, 0, proc)
+		return nil
 	}
 
 	if param.Filter.zonemappable {
@@ -1178,19 +1170,18 @@ func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Pr
 			param.Zoneparam.offset++
 		}
 	}
-	return getBatchFromZonemapFile(ctx, param, proc, objectReader)
+	return getBatchFromZonemapFile(ctx, param, proc, objectReader, bat)
 }
 
-func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
 	var err error
 	param.Filter.blockReader, err = blockio.NewFileReader(proc.GetService(), param.Extern.FileService, param.Fileparam.Filepath)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	bat, err := getZonemapBatch(ctx, param, proc, param.Filter.blockReader)
-	if err != nil {
-		return nil, err
+	if err := getZonemapBatch(ctx, param, proc, param.Filter.blockReader, bat); err != nil {
+		return err
 	}
 
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
@@ -1203,18 +1194,18 @@ func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		}
 		param.Zoneparam.offset = 0
 	}
-	return bat, nil
+	return nil
 }
 
 // scanFileData read batch data from external file
-func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
 	if param.Extern.QueryResult {
-		return scanZonemapFile(ctx, param, proc)
+		return scanZonemapFile(ctx, param, proc, bat)
 	}
 	if param.Extern.Format == tree.PARQUET {
-		return scanParquetFile(ctx, param, proc)
+		return scanParquetFile(ctx, param, proc, bat)
 	}
-	return scanCsvFile(ctx, param, proc)
+	return scanCsvFile(ctx, param, proc, bat)
 }
 
 func transJson2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, jsonData string, param *ExternalParam) ([]csvparser.Field, error) {
