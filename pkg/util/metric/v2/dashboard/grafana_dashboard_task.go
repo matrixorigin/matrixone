@@ -17,6 +17,7 @@ package dashboard
 import (
 	"context"
 	"fmt"
+
 	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/row"
@@ -25,7 +26,7 @@ import (
 )
 
 func (c *DashboardCreator) initTaskDashboard() error {
-	folder, err := c.createFolder(moFolderName)
+	folder, err := c.createFolder(c.folderName)
 	if err != nil {
 		return err
 	}
