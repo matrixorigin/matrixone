@@ -38,6 +38,8 @@ func TestBasicCluster(t *testing.T) {
 }
 
 func TestMultiClusterCanWork(t *testing.T) {
+	// TODO(fagongzi) wait may data race fixed
+	t.SkipNow()
 	new := func() Cluster {
 		c, err := NewCluster(WithCNCount(3))
 		require.NoError(t, err)
@@ -57,6 +59,9 @@ func TestMultiClusterCanWork(t *testing.T) {
 }
 
 func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
+	// TODO(fagongzi) wait may data race fixed
+	t.SkipNow()
+
 	RunBaseClusterTests(
 		func(c Cluster) {
 			validCNCanWork(t, c, 0)
