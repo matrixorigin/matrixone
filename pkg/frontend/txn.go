@@ -142,7 +142,7 @@ type FeTxnOption struct {
 	byRollback bool
 }
 
-func (opt *FeTxnOption) reset() {
+func (opt *FeTxnOption) Close() {
 	opt.byBegin = false
 	opt.autoCommit = true
 	opt.byCommit = false

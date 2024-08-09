@@ -332,7 +332,7 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 				return err
 			}
 		}
-		execCtx.txnOpt.reset()
+		execCtx.txnOpt.Close()
 		execCtx.stmt = stmt
 		execCtx.isLastStmt = i >= len(cws)-1
 		execCtx.tenant = tenant
