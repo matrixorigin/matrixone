@@ -26,7 +26,7 @@ func newBasePKFilter(
 	expr *plan.Expr,
 	tblDef *plan.TableDef,
 	proc *process.Process,
-) (filter basePKFilter) {
+) (filter basePKFilter, err error) {
 	if expr == nil {
 		return
 	}
