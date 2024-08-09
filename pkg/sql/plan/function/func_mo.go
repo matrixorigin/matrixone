@@ -703,3 +703,24 @@ func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWra
 	}
 	return nil
 }
+
+// CastRangeValueUnit returns the value in hour unit according to the range value and unit
+func CastRangeValueUnit(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryFixedStrToFixedWithErrorCheck[uint8, int64](ivecs, result, proc, length,
+		castRangevalueUnitToHourUnit, selectList)
+}
+
+func castRangevalueUnitToHourUnit(value uint8, unit string) (int64, error) {
+	switch unit {
+	case "h":
+		return int64(value), nil
+	case "d":
+		return int64(value) * 24, nil
+	case "mo":
+		return int64(value) * 24 * 30, nil
+	case "y":
+		return int64(value) * 24 * 365, nil
+	default:
+		return -1, moerr.NewInvalidArgNoCtx("invalid pitr time unit %s", unit)
+	}
+}
