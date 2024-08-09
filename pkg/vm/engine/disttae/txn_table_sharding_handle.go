@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -324,7 +325,6 @@ func HandleShardingReadMergeObjects(
 	entry, err := tbl.MergeObjects(
 		ctx,
 		objstats,
-		param.MergeObjectsParam.PolicyName,
 		param.MergeObjectsParam.TargetObjSize,
 	)
 	if err != nil {
@@ -336,6 +336,38 @@ func HandleShardingReadMergeObjects(
 		return nil, err
 	}
 	return buffer.EncodeBytes(bys), nil
+}
+
+func HandleShardingReadVisibleObjectStats(
+	ctx context.Context,
+	shard shard.TableShard,
+	engine engine.Engine,
+	param shard.ReadParam,
+	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
+) ([]byte, error) {
+	tbl, err := getTxnTable(
+		ctx,
+		param,
+		engine,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	stats, err := tbl.GetNonAppendableObjectStats(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	b := new(bytes.Buffer)
+	size := len(stats)
+	marshalSize := size * (objectio.ObjectStatsLen)
+	b.Grow(marshalSize)
+	for _, stat := range stats {
+		b.Write(stat.Marshal())
+	}
+	return buffer.EncodeBytes(b.Bytes()), nil
 }
 
 func getTxnTable(
