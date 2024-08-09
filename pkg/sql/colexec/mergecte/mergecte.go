@@ -52,7 +52,7 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(mergeCTE.GetIdx(), mergeCTE.GetParallelIdx(), mergeCTE.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	var msg *process.RegisterMessage
+
 	result := vm.NewCallResult()
 	if mergeCTE.ctr.buf != nil {
 		proc.PutBatch(mergeCTE.ctr.buf)
@@ -60,12 +60,12 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	switch mergeCTE.ctr.status {
 	case sendInitial:
-		msg = mergeCTE.ctr.ReceiveFromSingleReg(0, anal)
-		if msg.Err != nil {
+		result, err := mergeCTE.GetChildren(0).Call(proc)
+		if err != nil {
 			result.Status = vm.ExecStop
-			return result, msg.Err
+			return result, err
 		}
-		mergeCTE.ctr.buf = msg.Batch
+		mergeCTE.ctr.buf = result.Batch
 		if mergeCTE.ctr.buf == nil {
 			mergeCTE.ctr.status = sendLastTag
 		}
@@ -74,17 +74,21 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		if mergeCTE.ctr.status == sendLastTag {
 			mergeCTE.ctr.status = sendRecursive
 			mergeCTE.ctr.buf = makeRecursiveBatch(proc)
-			mergeCTE.ctr.RemoveChosen(1)
 		}
 	case sendRecursive:
 		for {
-			msg = mergeCTE.ctr.ReceiveFromAllRegs(anal)
-			if msg.Batch == nil {
+			// TODO: @nitao, here it need to receive all children data
+			result, err := mergeCTE.GetChildren(1).Call(proc)
+			if err != nil {
+				result.Status = vm.ExecStop
+				return result, err
+			}
+			if result.Batch == nil {
 				result.Batch = nil
 				result.Status = vm.ExecStop
 				return result, nil
 			}
-			mergeCTE.ctr.buf = msg.Batch
+			mergeCTE.ctr.buf = result.Batch
 			if !mergeCTE.ctr.buf.Last() {
 				break
 			}
