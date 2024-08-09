@@ -2149,20 +2149,27 @@ func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right 
 	connectRightArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	right[0].setRootOperator(connectRightArg)
 
+	merge0 := rs[0].RootOp.(*merge.Merge)
+	merge0.WithPartial(0, 1)
+	merge1 := merge.NewArgument().WithPartial(1, 2)
+
 	currentFirstFlag := c.anal.isFirst
 	switch nodeType {
 	case plan.Node_MINUS:
 		arg := minus.NewArgument()
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		rs[0].ReplaceLeafOp(arg)
+		rs[0].setRootOperator(arg)
+		arg.AppendChild(merge1)
 	case plan.Node_INTERSECT:
 		arg := intersect.NewArgument()
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		rs[0].ReplaceLeafOp(arg)
+		rs[0].setRootOperator(arg)
+		arg.AppendChild(merge1)
 	case plan.Node_INTERSECT_ALL:
 		arg := intersectall.NewArgument()
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		rs[0].ReplaceLeafOp(arg)
+		rs[0].setRootOperator(arg)
+		arg.AppendChild(merge1)
 	}
 	c.anal.isFirst = false
 	return rs
@@ -2179,21 +2186,33 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
+			merge0 := rs[i].RootOp.(*merge.Merge)
+			merge0.WithPartial(0, 1)
+			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := minus.NewArgument()
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs[i].ReplaceLeafOp(arg)
+			rs[i].setRootOperator(arg)
+			arg.AppendChild(merge1)
 		}
 	case plan.Node_INTERSECT:
 		for i := range rs {
+			merge0 := rs[i].RootOp.(*merge.Merge)
+			merge0.WithPartial(0, 1)
+			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := intersect.NewArgument()
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs[i].ReplaceLeafOp(arg)
+			rs[i].setRootOperator(arg)
+			arg.AppendChild(merge1)
 		}
 	case plan.Node_INTERSECT_ALL:
 		for i := range rs {
+			merge0 := rs[i].RootOp.(*merge.Merge)
+			merge0.WithPartial(0, 1)
+			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := intersectall.NewArgument()
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs[i].ReplaceLeafOp(arg)
+			rs[i].setRootOperator(arg)
+			arg.AppendChild(merge1)
 		}
 	}
 	c.anal.isFirst = false
