@@ -66,13 +66,13 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
-func TestProjection(t *testing.T) {
+func TestOnDuplicateKey(t *testing.T) {
 	for _, tc := range tcs {
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		ret, _ := tc.arg.Call(tc.proc)
-		require.Equal(t, ret.Batch.RowCount(), tc.rowCount)
+		require.Equal(t, tc.rowCount, ret.Batch.RowCount())
 
 		tc.arg.Reset(tc.proc, false, nil)
 
@@ -80,7 +80,7 @@ func TestProjection(t *testing.T) {
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		ret, _ = tc.arg.Call(tc.proc)
-		require.Equal(t, ret.Batch.RowCount(), tc.rowCount)
+		require.Equal(t, tc.rowCount, ret.Batch.RowCount())
 
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.Free()
@@ -91,10 +91,10 @@ func TestProjection(t *testing.T) {
 func resetChildren(arg *OnDuplicatekey) {
 	bat := batch.New(true, []string{"a", "b", "a", "b", catalog.Row_ID})
 	vecs := make([]*vector.Vector, 5)
-	vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil)
-	vecs[1] = testutil.MakeInt32Vector([]int32{2, 2}, nil)
-	vecs[2] = testutil.MakeInt32Vector([]int32{1, 1}, []uint64{0, 1})
-	vecs[3] = testutil.MakeInt32Vector([]int32{2, 2}, []uint64{0, 1})
+	vecs[0] = testutil.MakeInt64Vector([]int64{1, 1}, nil)
+	vecs[1] = testutil.MakeInt64Vector([]int64{2, 2}, nil)
+	vecs[2] = testutil.MakeInt64Vector([]int64{1, 1}, []uint64{0, 1})
+	vecs[3] = testutil.MakeInt64Vector([]int64{2, 2}, []uint64{0, 1})
 	uuid1 := objectio.NewSegmentid()
 	blkId1 := objectio.NewBlockid(uuid1, 0, 0)
 	rowid1 := *objectio.NewRowid(blkId1, 0)
@@ -110,9 +110,9 @@ func resetChildren(arg *OnDuplicatekey) {
 
 func newTestCase() onDupTestCase {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
-	int32Typ := types.T_int32.ToType()
+	pkType := types.T_int64.ToType()
 	leftExpr := &plan.Expr{
-		Typ: plan2.MakePlan2Type(&int32Typ),
+		Typ: plan2.MakePlan2Type(&pkType),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
@@ -121,7 +121,7 @@ func newTestCase() onDupTestCase {
 		},
 	}
 	rightExpr := &plan.Expr{
-		Typ: plan2.MakePlan2Type(&int32Typ),
+		Typ: plan2.MakePlan2Type(&pkType),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 1,
@@ -131,6 +131,9 @@ func newTestCase() onDupTestCase {
 	}
 	eqExpr, _ := plan2.BindFuncExprImplByPlanExpr(context.TODO(), "=", []*plan.Expr{leftExpr, rightExpr})
 
+	onDupMap := make(map[string]*plan.Expr)
+	onDupMap["b"] = plan2.MakePlan2Int64ConstExprWithType(10)
+
 	return onDupTestCase{
 		proc: proc,
 		arg: &OnDuplicatekey{
@@ -139,7 +142,7 @@ func newTestCase() onDupTestCase {
 			UniqueColCheckExpr: []*plan.Expr{eqExpr},
 			UniqueCols:         []string{"a"},
 			OnDuplicateIdx:     []int32{0},
-			OnDuplicateExpr:    nil, // on duplicate key update b = 10 -》 here is b = 10
+			OnDuplicateExpr:    onDupMap, // on duplicate key update b = 10 -》 here is b = 10
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
