@@ -16,6 +16,7 @@ package mergerecursive
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -47,10 +48,14 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
+	var err error
 	for !mergeRecursive.ctr.last {
-		result, err := mergeRecursive.GetChildren(0).Call(proc)
+		result, err = mergeRecursive.GetChildren(0).Call(proc)
 		if err != nil {
 			return result, err
+		}
+		if result.Batch != nil {
+			logutil.Infof("receive batch in mergerecursive %v rows", result.Batch.RowCount())
 		}
 		bat := result.Batch
 		if bat == nil || bat.End() {
@@ -80,5 +85,6 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 	anal.Input(mergeRecursive.ctr.buf, mergeRecursive.GetIsFirst())
 	anal.Output(mergeRecursive.ctr.buf, mergeRecursive.GetIsLast())
 	result.Batch = mergeRecursive.ctr.buf
+	result.Status = vm.ExecHasMore
 	return result, nil
 }

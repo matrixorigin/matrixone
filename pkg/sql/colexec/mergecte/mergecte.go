@@ -16,6 +16,7 @@ package mergecte
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,7 +39,7 @@ func (mergeCTE *MergeCTE) OpType() vm.OpType {
 func (mergeCTE *MergeCTE) Prepare(proc *process.Process) error {
 	mergeCTE.ctr = new(container)
 
-	//mergeCTE.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
+	mergeCTE.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
 	mergeCTE.ctr.curNodeCnt = mergeCTE.ctr.nodeCnt
 	mergeCTE.ctr.status = sendInitial
 	return nil
@@ -54,16 +55,20 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
+	var err error
 	if mergeCTE.ctr.buf != nil {
 		proc.PutBatch(mergeCTE.ctr.buf)
 		mergeCTE.ctr.buf = nil
 	}
 	switch mergeCTE.ctr.status {
 	case sendInitial:
-		result, err := mergeCTE.GetChildren(0).Call(proc)
+		result, err = mergeCTE.GetChildren(0).Call(proc)
 		if err != nil {
 			result.Status = vm.ExecStop
 			return result, err
+		}
+		if result.Batch != nil {
+			logutil.Infof("receive batch in mergecte from 0 %v rows", result.Batch.RowCount())
 		}
 		mergeCTE.ctr.buf = result.Batch
 		if mergeCTE.ctr.buf == nil {
@@ -77,11 +82,13 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	case sendRecursive:
 		for {
-			// TODO: @nitao, here it need to receive all children data
-			result, err := mergeCTE.GetChildren(1).Call(proc)
+			result, err = mergeCTE.GetChildren(1).Call(proc)
 			if err != nil {
 				result.Status = vm.ExecStop
 				return result, err
+			}
+			if result.Batch != nil {
+				logutil.Infof("receive batch in mergecte from 1 %v rows", result.Batch.RowCount())
 			}
 			if result.Batch == nil {
 				result.Batch = nil
@@ -107,6 +114,7 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Input(mergeCTE.ctr.buf, mergeCTE.GetIsFirst())
 	anal.Output(mergeCTE.ctr.buf, mergeCTE.GetIsLast())
 	result.Batch = mergeCTE.ctr.buf
+	result.Status = vm.ExecHasMore
 	return result, nil
 }
 
