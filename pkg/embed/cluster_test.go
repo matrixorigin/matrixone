@@ -26,8 +26,6 @@ import (
 )
 
 func TestBasicCluster(t *testing.T) {
-	// TODO: #17842
-	t.SkipNow()
 	c, err := NewCluster(WithCNCount(3))
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
