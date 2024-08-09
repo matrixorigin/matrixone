@@ -529,9 +529,9 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	}
 
 	if res.RowCount() < 1 {
-		return moerr.NewInternalError(ctx, "none cdc task for %d %s", cdc.cdcTask.AccountId, cdc.cdcTask.TaskId)
+		return moerr.NewInternalError(ctx, "no table %s:%s", db, table)
 	} else if res.RowCount() > 1 {
-		return moerr.NewInternalError(ctx, "duplicate cdc task for %d %s", cdc.cdcTask.AccountId, cdc.cdcTask.TaskId)
+		return moerr.NewInternalError(ctx, "duplicate table %s:%s", db, table)
 	}
 
 	//
