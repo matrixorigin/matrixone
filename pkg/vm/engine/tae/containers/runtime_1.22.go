@@ -1,4 +1,4 @@
-// Copyright 2021-2024 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,30 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package embed
+//go:build go1.22
+
+package containers
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	_ "unsafe"
 )
 
-// Cluster is the mo cluster interface
-type Cluster interface {
-	ID() uint64
-	Start() error
-	Close() error
-	GetService(sid string) (ServiceOperator, error)
-	GetCNService(index int) (ServiceOperator, error)
-	ForeachServices(fn func(ServiceOperator) bool)
-}
-
-type Option func(*cluster)
-
-type ServiceOperator interface {
-	ServiceID() string
-	ServiceType() metadata.ServiceType
-	Index() int
-	Adjust(func(*ServiceConfig))
-
-	Start() error
-	Close() error
-}
+//go:linkname fastrand runtime.cheaprand
+func fastrand() uint32

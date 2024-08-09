@@ -1150,6 +1150,21 @@ func (mr *MockRelationMockRecorder) GetTableName() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTableName", reflect.TypeOf((*MockRelation)(nil).GetTableName))
 }
 
+// GetVisibleObjectStats mocks base method.
+func (m *MockRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetNonAppendableObjectStats", ctx)
+	ret0, _ := ret[0].([]objectio.ObjectStats)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetVisibleObjectStats indicates an expected call of GetVisibleObjectStats.
+func (mr *MockRelationMockRecorder) GetNonAppendableObjectStats(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNonAppendableObjectStats", reflect.TypeOf((*MockRelation)(nil).GetNonAppendableObjectStats), ctx)
+}
+
 // MaxAndMinValues mocks base method.
 func (m *MockRelation) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
 	m.ctrl.T.Helper()
@@ -1167,18 +1182,18 @@ func (mr *MockRelationMockRecorder) MaxAndMinValues(ctx interface{}) *gomock.Cal
 }
 
 // MergeObjects mocks base method.
-func (m *MockRelation) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error) {
+func (m *MockRelation) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MergeObjects", ctx, objstats, policyName, targetObjSize)
+	ret := m.ctrl.Call(m, "MergeObjects", ctx, objstats, targetObjSize)
 	ret0, _ := ret[0].(*api.MergeCommitEntry)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // MergeObjects indicates an expected call of MergeObjects.
-func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, policyName, targetObjSize interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, targetObjSize interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MergeObjects", reflect.TypeOf((*MockRelation)(nil).MergeObjects), ctx, objstats, policyName, targetObjSize)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MergeObjects", reflect.TypeOf((*MockRelation)(nil).MergeObjects), ctx, objstats, targetObjSize)
 }
 
 // PrimaryKeysMayBeModified mocks base method.

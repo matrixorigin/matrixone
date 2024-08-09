@@ -59,6 +59,6 @@ type Queue interface {
 type StateMachine interface {
 	Start()
 	Stop()
-	EnqueueRecevied(any) (any, error)
+	EnqueueReceived(any) (any, error)
 	EnqueueCheckpoint(any) (any, error)
 }

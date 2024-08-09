@@ -654,7 +654,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
 		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 			return err
 		}
-		tryAdjustThreeTablesCreatedTimeWithBatch(b)
+		e.tryAdjustThreeTablesCreatedTimeWithBatch(b)
 		e.catalog.InsertTable(b)
 	}
 

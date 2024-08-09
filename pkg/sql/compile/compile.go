@@ -53,45 +53,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -1935,12 +1914,16 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	}
 
 	for i := range ss {
+		c.setProjection(n, ss[i])
+	}
+
+	/*for i := range ss {
 		if ss[i].RootOp == nil {
 			c.setProjection(n, ss[i])
 			continue
 		}
-		_, ok := c.stmt.(*tree.Insert)
-		if ok {
+		_, ok := c.stmt.(*tree.Select)
+		if !ok {
 			c.setProjection(n, ss[i])
 			continue
 		}
@@ -2081,7 +2064,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 		default:
 			c.setProjection(n, ss[i])
 		}
-	}
+	}*/
 	c.anal.isFirst = false
 	return ss
 }

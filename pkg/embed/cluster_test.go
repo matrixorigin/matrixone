@@ -26,8 +26,6 @@ import (
 )
 
 func TestBasicCluster(t *testing.T) {
-	// TODO: #17842
-	t.SkipNow()
 	c, err := NewCluster(WithCNCount(3))
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
@@ -37,6 +35,65 @@ func TestBasicCluster(t *testing.T) {
 	validCNCanWork(t, c, 2)
 
 	require.NoError(t, c.Close())
+}
+
+func TestMultiClusterCanWork(t *testing.T) {
+	// TODO(fagongzi) wait may data race fixed
+	t.SkipNow()
+	new := func() Cluster {
+		c, err := NewCluster(WithCNCount(3))
+		require.NoError(t, err)
+		require.NoError(t, c.Start())
+
+		validCNCanWork(t, c, 0)
+		validCNCanWork(t, c, 1)
+		validCNCanWork(t, c, 2)
+		return c
+	}
+
+	c1 := new()
+	c2 := new()
+
+	require.NoError(t, c1.Close())
+	require.NoError(t, c2.Close())
+}
+
+func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
+	// TODO(fagongzi) wait may data race fixed
+	t.SkipNow()
+
+	RunBaseClusterTests(
+		func(c Cluster) {
+			validCNCanWork(t, c, 0)
+			validCNCanWork(t, c, 1)
+			validCNCanWork(t, c, 2)
+		},
+	)
+
+	c, err := NewCluster(WithCNCount(3))
+	require.NoError(t, err)
+	require.NoError(t, c.Start())
+
+	validCNCanWork(t, c, 0)
+	validCNCanWork(t, c, 1)
+	validCNCanWork(t, c, 2)
+}
+
+func TestBaseClusterOnlyStartOnce(t *testing.T) {
+	var id1, id2 uint64
+	RunBaseClusterTests(
+		func(c Cluster) {
+			id1 = c.ID()
+		},
+	)
+
+	RunBaseClusterTests(
+		func(c Cluster) {
+			id2 = c.ID()
+		},
+	)
+
+	require.Equal(t, id1, id2)
 }
 
 func TestRestartCN(t *testing.T) {

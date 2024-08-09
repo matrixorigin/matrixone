@@ -135,8 +135,8 @@ func (h *Handle) prefetchMetadata(_ context.Context, req *db.WriteReq) (int, err
 	return objCnt, nil
 }
 
-// TryPrefechTxn only prefecth data written by CN, do not change the state machine of TxnEngine.
-func (h *Handle) TryPrefechTxn(ctx context.Context, meta txn.TxnMeta) error {
+// TryPrefetchTxn only prefetch data written by CN, do not change the state machine of TxnEngine.
+func (h *Handle) TryPrefetchTxn(ctx context.Context, meta txn.TxnMeta) error {
 	txnCtx, _ := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
 
 	metaLocCnt := 0

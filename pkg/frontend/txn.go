@@ -20,6 +20,8 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"go.uber.org/zap"
 )
 
 var (
@@ -139,6 +140,13 @@ type FeTxnOption struct {
 	//byRollback denotes the txn rolled back by the ROLLBACK.
 	//or error types that need to roll back the whole txn.
 	byRollback bool
+}
+
+func (opt *FeTxnOption) Close() {
+	opt.byBegin = false
+	opt.autoCommit = true
+	opt.byCommit = false
+	opt.byRollback = false
 }
 
 const (

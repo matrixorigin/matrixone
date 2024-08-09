@@ -223,25 +223,6 @@ func NewService(
 	srv.server = server
 	srv.storeEngine = pu.StorageEngine
 
-	srv.requestHandler = func(ctx context.Context,
-		cnAddr string,
-		message morpc.Message,
-		cs morpc.ClientSession,
-		engine engine.Engine,
-		fService fileservice.FileService,
-		lockService lockservice.LockService,
-		queryClient qclient.QueryClient,
-		hakeeper logservice.CNHAKeeperClient,
-		udfService udf.Service,
-		cli client.TxnClient,
-		aicm *defines.AutoIncrCacheManager,
-		messageAcquirer func() morpc.Message) error {
-		return nil
-	}
-	for _, opt := range options {
-		opt(srv)
-	}
-
 	// TODO: global client need to refactor
 	c, err := cnclient.NewPipelineClient(
 		cfg.UUID,
@@ -785,6 +766,7 @@ func (s *service) initShardService() {
 			shardservice.ReadReader:                   disttae.HandleShardingReadReader,
 			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
 			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
+			shardservice.ReadVisibleObjectStats:       disttae.HandleShardingReadVisibleObjectStats,
 		},
 		s.storeEngine,
 	)
