@@ -1084,12 +1084,12 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	//	ts = *node.ScanTS
 	//}
 
-	scanSnapshot := node.ScanSnapshot
-	if scanSnapshot == nil {
-		scanSnapshot = &Snapshot{}
+	var scanSnapshot *plan.Snapshot
+	if node.ScanSnapshot != nil {
+		scanSnapshot = node.ScanSnapshot
 	}
 
-	s, err := builder.compCtx.Stats(node.ObjRef, *scanSnapshot)
+	s, err := builder.compCtx.Stats(node.ObjRef, scanSnapshot)
 	if err != nil || s == nil {
 		return DefaultStats()
 	}

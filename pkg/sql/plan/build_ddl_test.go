@@ -99,7 +99,7 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().GetUserName().Return("sys:dump").AnyTimes()
 	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
 	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot Snapshot) (*ObjectRef, *TableDef) {
+		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
@@ -191,7 +191,7 @@ func TestBuildLockTables(t *testing.T) {
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
 	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot Snapshot) (*ObjectRef, *TableDef) {
+		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
