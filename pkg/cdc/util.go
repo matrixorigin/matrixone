@@ -16,6 +16,8 @@ package cdc
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"math"
 	"slices"
 	"strconv"
@@ -383,4 +385,46 @@ func appendFloat64(buf []byte, value float64, bitSize int) []byte {
 		}
 	}
 	return buf
+}
+
+func openDbConn(
+	user, password string,
+	ip string,
+	port int) (db *sql.DB, err error) {
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?readTimeout=30s&timeout=30s&writeTimeout=30s",
+		user,
+		password,
+		ip,
+		port)
+	for i := 0; i < 3; i++ {
+		db, err = tryConn(dsn)
+		if err != nil {
+			time.Sleep(time.Second)
+			continue
+		}
+		break
+	}
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func tryConn(dsn string) (*sql.DB, error) {
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, err
+	} else {
+		db.SetConnMaxLifetime(time.Minute * 3)
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+		time.Sleep(time.Millisecond * 100)
+
+		//ping opens the connection
+		err = db.Ping()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return db, err
 }

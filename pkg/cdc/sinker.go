@@ -16,9 +16,11 @@ package cdc
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
@@ -45,11 +47,68 @@ func (s *consoleSinker) Sink(ctx context.Context, cdcCtx *disttae.TableCtx, data
 	return nil
 }
 
-type mysqlSink struct {
+type mysqlSinker struct {
+	mysql Sink
 }
 
-func (*mysqlSink) Send(ctx context.Context, data *DecoderOutput) error {
+func NewMysqlSinker(mysql Sink) Sinker {
+	return &mysqlSinker{
+		mysql: mysql,
+	}
+}
+
+func (mysql *mysqlSinker) Sink(ctx context.Context, cdcCtx *disttae.TableCtx, data *DecoderOutput) error {
+	return mysql.mysql.Send(ctx, data)
+}
+
+type mysqlSink struct {
+	conn           *sql.DB
+	user, password string
+	ip             string
+	port           int
+}
+
+func NewMysqlSink(
+	user, password string,
+	ip string, port int) (Sink, error) {
+	ret := &mysqlSink{
+		user:     user,
+		password: password,
+		ip:       ip,
+		port:     port,
+	}
+	err := ret.connect()
+	if err != nil {
+		return nil, err
+	}
+	return ret, err
+}
+
+func (mysql *mysqlSink) connect() (err error) {
+	mysql.conn, err = openDbConn(mysql.user, mysql.password, mysql.ip, mysql.port)
+	if err != nil {
+		return err
+	}
+	return err
+}
+
+func (mysql *mysqlSink) Send(ctx context.Context, data *DecoderOutput) (err error) {
+	sqlOfRows := data.sqlOfRows.Load().([][]byte)
+	for _, row := range sqlOfRows {
+		_, err = mysql.conn.ExecContext(ctx, util.UnsafeBytesToString(row))
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+func (mysql *mysqlSink) Close() {
+	if mysql.conn != nil {
+		_ = mysql.conn.Close()
+		mysql.conn = nil
+	}
 }
 
 type matrixoneSink struct {
