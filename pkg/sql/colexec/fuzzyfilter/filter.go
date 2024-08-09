@@ -160,13 +160,13 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 		case Build:
 			buildIdx := fuzzyFilter.BuildIdx
 
-			msg := ctr.ReceiveFromSingleReg(buildIdx, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			input, err := fuzzyFilter.GetChildren(buildIdx).Call(proc)
+			if err != nil {
+				return result, err
 			}
-			anal.Input(msg.Batch, fuzzyFilter.IsFirst)
+			bat := input.Batch
+			anal.Input(bat, fuzzyFilter.IsFirst)
 
-			bat := msg.Batch
 			if bat == nil {
 				if fuzzyFilter.ifBuildOnSink() {
 					ctr.state = HandleRuntimeFilter
@@ -184,7 +184,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			pkCol := bat.GetVector(0)
 			fuzzyFilter.appendPassToRuntimeFilter(pkCol, proc)
 
-			err := fuzzyFilter.handleBuild(proc, pkCol)
+			err = fuzzyFilter.handleBuild(proc, pkCol)
 			if err != nil {
 				proc.PutBatch(bat)
 				return result, err
@@ -202,13 +202,13 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 		case Probe:
 			probeIdx := fuzzyFilter.getProbeIdx()
 
-			msg := ctr.ReceiveFromSingleReg(probeIdx, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			input, err := fuzzyFilter.GetChildren(probeIdx).Call(proc)
+			if err != nil {
+				return result, err
 			}
-			anal.Input(msg.Batch, fuzzyFilter.IsFirst)
+			bat := input.Batch
+			anal.Input(bat, fuzzyFilter.IsFirst)
 
-			bat := msg.Batch
 			if bat == nil {
 				// fmt.Println("probe cnt = ", arg.probeCnt)
 				// this will happen in such case:create unique index from a table that unique col have no data
@@ -239,7 +239,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			pkCol := bat.GetVector(0)
 
 			// arg.probeCnt += pkCol.Length()
-			err := fuzzyFilter.handleProbe(proc, pkCol)
+			err = fuzzyFilter.handleProbe(proc, pkCol)
 			if err != nil {
 				proc.PutBatch(bat)
 				return result, err

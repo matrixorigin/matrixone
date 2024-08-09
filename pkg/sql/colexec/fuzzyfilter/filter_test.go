@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -98,16 +99,25 @@ func newArgument(typ types.Type) *FuzzyFilter {
 
 func newProcess() *process.Process {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
-	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: proc.Ctx,
-		Ch:  make(chan *process.RegisterMessage, 10),
-	}
-	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-		Ctx: proc.Ctx,
-		Ch:  make(chan *process.RegisterMessage, 3),
-	}
+	// proc := testutil.NewProcess()
 	return proc
+}
+
+
+func setProcForTest(fuzzyFilter *FuzzyFilter, proc *process.Process, typs []types.Type, rowCnt float64) {
+	for _, child := range fuzzyFilter.Children {
+		child.Free(proc, false, nil)
+	}
+	fuzzyFilter.Children = nil
+
+	leftBatches := newBatch(typs, proc, int64(rowCnt))
+	rightBatches := newBatch(typs, proc, int64(rowCnt))
+
+	leftChild := colexec.NewMockOperator().WithBatchs(leftBatches)
+	rightChild := colexec.NewMockOperator().WithBatchs(rightBatches)
+
+	fuzzyFilter.AppendChild(leftChild)
+	fuzzyFilter.AppendChild(rightChild)
 }
 
 func TestString(t *testing.T) {
@@ -128,6 +138,7 @@ func TestPrepare(t *testing.T) {
 func TestFuzzyFilter(t *testing.T) {
 	for _, tc := range tcs {
 		for _, r := range rowCnts {
+			setProcForTest(tc.arg, tc.proc, tc.types, r)
 			tc.arg.N = r
 			tc.arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 				Idx:     0,
@@ -137,12 +148,12 @@ func TestFuzzyFilter(t *testing.T) {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 
-			bat := newBatch(tc.types, tc.proc, int64(r))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(bat)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
+			// bat := newBatch(tc.types, tc.proc, int64(r))
+			// tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(bat)
+			// tc.proc.Reg.MergeReceivers[0].Ch <- nil
+			// tc.proc.Reg.MergeReceivers[1].Ch <- nil
 
-			resetChildren(tc.arg, []*batch.Batch{bat})
+			// resetChildren(tc.arg, []*batch.Batch{bat})
 			for {
 				result, err := tc.arg.Call(tc.proc)
 				require.NoError(t, err)
@@ -156,12 +167,12 @@ func TestFuzzyFilter(t *testing.T) {
 			err = tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 
-			bat = newBatch(tc.types, tc.proc, int64(r))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(bat)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
+			// bat = newBatch(tc.types, tc.proc, int64(r))
+			// tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(bat)
+			// tc.proc.Reg.MergeReceivers[0].Ch <- nil
+			// tc.proc.Reg.MergeReceivers[1].Ch <- nil
 
-			resetChildren(tc.arg, []*batch.Batch{bat})
+			// resetChildren(tc.arg, []*batch.Batch{bat})
 			for {
 				result, err := tc.arg.Call(tc.proc)
 				require.NoError(t, err)
@@ -177,13 +188,13 @@ func TestFuzzyFilter(t *testing.T) {
 }
 
 // create a new block based on the type information
-func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) []*batch.Batch {
 	// not random
 	bat := testutil.NewBatch(ts, false, int(rows), proc.Mp())
 	pkAttr := make([]string, 1)
 	pkAttr[0] = "pkCol"
 	bat.SetAttributes(pkAttr)
-	return bat
+	return []*batch.Batch{bat, nil}
 }
 
 func resetChildren(arg *FuzzyFilter, bats []*batch.Batch) {
