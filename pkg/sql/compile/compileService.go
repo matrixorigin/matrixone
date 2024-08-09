@@ -115,6 +115,7 @@ func (srv *ServiceOfCompile) recordRunningCompile(runningCompile *Compile) error
 
 	select {
 	case <-srv.lch:
+		runningCompile.proc.SetBaseProcessRunningStatus(true)
 		srv.aliveCompiles[runningCompile] = compileAdditionalInformation{
 			mustReturnError: nil,
 			queryCancel:     queryCancel,
@@ -130,6 +131,7 @@ func (srv *ServiceOfCompile) recordRunningCompile(runningCompile *Compile) error
 
 func (srv *ServiceOfCompile) removeRunningCompile(c *Compile) (mustReturnError bool, err error) {
 	c.queryStatus.noticeQueryCompleted()
+	c.proc.SetBaseProcessRunningStatus(false)
 
 	<-srv.lch
 	if item, ok := srv.aliveCompiles[c]; ok {

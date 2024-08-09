@@ -35,10 +35,11 @@ func (indexJoin *IndexJoin) OpType() vm.OpType {
 }
 
 func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
-	ap := indexJoin
-	ap.ctr = new(container)
 	if indexJoin.ProjectList != nil {
 		err = indexJoin.PrepareProjection(proc)
+	}
+	if indexJoin.ctr.buf == nil {
+		indexJoin.ctr.buf = batch.NewWithSize(len(indexJoin.Result))
 	}
 	return err
 }
@@ -69,26 +70,20 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
-			if indexJoin.ctr.buf != nil {
-				proc.PutBatch(indexJoin.ctr.buf)
-				indexJoin.ctr.buf = nil
-			}
-			indexJoin.ctr.buf = batch.NewWithSize(len(ap.Result))
+			indexJoin.ctr.buf.CleanOnlyData()
 			for i, pos := range ap.Result {
 				srcVec := bat.Vecs[pos]
-				vec := proc.GetVector(*srcVec.GetType())
-				if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
-					vec.Free(proc.Mp())
+				if ctr.buf.Vecs[i] == nil {
+					ctr.buf.Vecs[i] = vector.NewVec(*srcVec.GetType())
+				}
+				if err = vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(ctr.buf.Vecs[i], srcVec); err != nil {
 					return result, err
 				}
-				indexJoin.ctr.buf.SetVector(int32(i), vec)
 			}
 			indexJoin.ctr.buf.AddRowCount(bat.RowCount())
-			proc.PutBatch(bat)
 			result.Batch = indexJoin.ctr.buf
 			if indexJoin.ProjectList != nil {
 				var err error

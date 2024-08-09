@@ -77,9 +77,9 @@ func (expr FixedVectorExpressionExecutor) TypeName() string {
 func NewFixedVectorExpressionExecutor(m *mpool.MPool, fixed bool, resultVector *vector.Vector) *FixedVectorExpressionExecutor {
 	fe := reuse.Alloc[FixedVectorExpressionExecutor](nil)
 	*fe = FixedVectorExpressionExecutor{
-		m:            m,
-		fixed:        fixed,
-		resultVector: resultVector,
+		m:                 m,
+		noNeedToSetLength: fixed,
+		resultVector:      resultVector,
 	}
 	return fe
 }

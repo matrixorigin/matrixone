@@ -47,7 +47,8 @@ import (
 )
 
 func init() {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
+	// Tips: Op 'time.Local = time.FixedZone(...)' would cause DATA RACE against to time.Now()
+
 	table.RegisterTableDefine(dummyTable)
 	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 }
@@ -124,8 +125,8 @@ func TestInitCronExpr(t *testing.T) {
 				sche, err := parser.Parse(MergeTaskCronExpr)
 				require.Nil(t, err)
 
-				now := time.Unix(60, 0)
-				next := sche.Next(time.UnixMilli(now.UnixMilli()))
+				now := time.Unix(60, 0).UTC()
+				next := sche.Next(time.UnixMilli(now.UnixMilli()).UTC())
 				t.Logf("duration: %v, expr: %s, next: %v", tt.args.duration, MergeTaskCronExpr, next)
 				if tt.expectDuration > 0 {
 					require.Equal(t, tt.expectDuration, next.Sub(now))

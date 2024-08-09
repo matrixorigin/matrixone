@@ -29,7 +29,7 @@ type container struct {
 	buf *batch.Batch
 }
 type PreInsertSecIdx struct {
-	ctr          *container
+	ctr          container
 	PreInsertCtx *plan.PreInsertUkCtx
 
 	packer util.PackerList
@@ -69,16 +69,15 @@ func (preInsertSecIdx *PreInsertSecIdx) Release() {
 }
 
 func (preInsertSecIdx *PreInsertSecIdx) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	preInsertSecIdx.Free(proc, pipelineFailed, err)
+	if preInsertSecIdx.ctr.buf != nil {
+		preInsertSecIdx.ctr.buf.CleanOnlyData()
+	}
 }
 
 func (preInsertSecIdx *PreInsertSecIdx) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if preInsertSecIdx.ctr != nil {
-		if preInsertSecIdx.ctr.buf != nil {
-			preInsertSecIdx.ctr.buf.Clean(proc.Mp())
-			preInsertSecIdx.ctr.buf = nil
-		}
-		preInsertSecIdx.ctr = nil
+	if preInsertSecIdx.ctr.buf != nil {
+		preInsertSecIdx.ctr.buf.Clean(proc.Mp())
+		preInsertSecIdx.ctr.buf = nil
 	}
 
 	preInsertSecIdx.packer.Free()

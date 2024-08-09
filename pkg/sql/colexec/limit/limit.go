@@ -38,18 +38,20 @@ func (limit *Limit) OpType() vm.OpType {
 
 func (limit *Limit) Prepare(proc *process.Process) error {
 	var err error
-	limit.ctr = new(container)
 	if limit.ctr.limitExecutor == nil {
 		limit.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, limit.LimitExpr)
 		if err != nil {
 			return err
 		}
 	}
+
 	vec, err := limit.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
 	limit.ctr.limit = uint64(vector.MustFixedCol[uint64](vec)[0])
+	// do not free the vector from executor.Eval after used.
+	// should use executor.Free to free it in Operator.Free()
 
 	return nil
 }
@@ -60,16 +62,15 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(limit.GetIdx(), limit.GetParallelIdx(), limit.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
-
-	if limit.ctr.limit == 0 {
+	if limit.ctr.seen >= limit.ctr.limit {
 		result := vm.NewCallResult()
-		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
+
+	anal := proc.GetAnalyze(limit.GetIdx(), limit.GetParallelIdx(), limit.GetParallelMajor())
+	anal.Start()
+	defer anal.Stop()
 
 	result, err := vm.ChildrenCall(limit.GetChildren(0), proc, anal)
 	if err != nil {
@@ -81,21 +82,13 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-
-	if limit.ctr.seen >= limit.ctr.limit {
-		result.Batch = nil
-		result.Status = vm.ExecStop
-		return result, nil
-	}
 	length := bat.RowCount()
 	newSeen := limit.ctr.seen + uint64(length)
 	if newSeen >= limit.ctr.limit { // limit - seen
+		// reset length is ok.
+		// we do not change the batch.Vecs & batch.Agg from pre Operator
 		batch.SetLength(bat, int(limit.ctr.limit-limit.ctr.seen))
-		limit.ctr.seen = newSeen
-		anal.Output(bat, limit.GetIsLast())
-
 		result.Status = vm.ExecStop
-		return result, nil
 	}
 	anal.Output(bat, limit.GetIsLast())
 	limit.ctr.seen = newSeen

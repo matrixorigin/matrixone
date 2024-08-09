@@ -37,7 +37,7 @@ type container struct {
 }
 
 type IndexJoin struct {
-	ctr                *container
+	ctr                container
 	Result             []int32
 	Typs               []types.Type
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
@@ -78,17 +78,21 @@ func (indexJoin *IndexJoin) Release() {
 }
 
 func (indexJoin *IndexJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	indexJoin.Free(proc, pipelineFailed, err)
+	indexJoin.ctr.state = Probe
+	if indexJoin.ctr.buf != nil {
+		indexJoin.ctr.buf.CleanOnlyData()
+	}
+	if indexJoin.ProjectList != nil {
+		anal := proc.GetAnalyze(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor())
+		anal.Alloc(indexJoin.ProjectAllocSize)
+		indexJoin.ResetProjection(proc)
+	}
 }
 
 func (indexJoin *IndexJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := indexJoin.ctr
-	if ctr != nil {
-		if indexJoin.ctr.buf != nil {
-			indexJoin.ctr.buf.Clean(proc.Mp())
-			indexJoin.ctr.buf = nil
-		}
-		indexJoin.ctr = nil
+	if indexJoin.ctr.buf != nil {
+		indexJoin.ctr.buf.Clean(proc.Mp())
+		indexJoin.ctr.buf = nil
 	}
 	if indexJoin.ProjectList != nil {
 		anal := proc.GetAnalyze(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor())
