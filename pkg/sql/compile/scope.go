@@ -185,7 +185,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	if s.DataSource.TableDef != nil {
 		id = s.DataSource.TableDef.TblId
 	}
-	p = pipeline.New(id, s.DataSource.Attributes, s.RootOp, s.Reg)
+	p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 	if s.DataSource.isConst {
 		_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 	} else {
@@ -298,7 +298,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 		}
 	}()
 
-	p := pipeline.NewMerge(s.RootOp, s.Reg)
+	p := pipeline.NewMerge(s.RootOp)
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		select {
 		case <-s.Proc.Ctx.Done():
@@ -356,7 +356,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
 
-	p := pipeline.New(0, nil, s.RootOp, s.Reg)
+	p := pipeline.New(0, nil, s.RootOp)
 	sender, err := s.remoteRun(c)
 
 	runErr := err
@@ -393,7 +393,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		// if codes run here, it means some error happens during build the parallel scope.
 		// we should do clean work for source-scope to avoid receiver hung.
 		if parallelScope == nil {
-			pipeline.NewMerge(s.RootOp, s.Reg).Cleanup(s.Proc, true, c.isPrepare, err)
+			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, true, c.isPrepare, err)
 		}
 	}()
 
@@ -419,6 +419,10 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 
 	if err != nil {
 		return err
+	}
+
+	if parallelScope != s {
+		setContextForParallelScope(parallelScope, s.Proc.Ctx, s.Proc.Cancel)
 	}
 
 	if parallelScope.Magic == Normal {
