@@ -176,8 +176,8 @@ func (d *DeltaLocDataSource) Next(
 	_ any,
 	_ *mpool.MPool,
 	_ engine.VectorPool,
-	_ *batch.Batch) (*objectio.BlockInfo, engine.DataState, error) {
-	return nil, engine.Persisted, nil
+) (*batch.Batch, *objectio.BlockInfo, engine.DataState, error) {
+	return nil, nil, engine.Persisted, nil
 }
 
 func (d *DeltaLocDataSource) Close() {

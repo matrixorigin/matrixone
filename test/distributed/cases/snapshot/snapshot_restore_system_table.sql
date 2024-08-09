@@ -597,12 +597,6 @@ use mo_catalog;
 drop table if exists cluster_table_1;
 create cluster table cluster_table_1(a int, b int);
 
-drop account if exists test_account1;
-create account test_account1 admin_name = 'test_user' identified by '111';
-
-drop account if exists test_account2;
-create account test_account2 admin_name = 'test_user' identified by '111';
-
 insert into cluster_table_1 values(0,0,0),(1,1,0);
 insert into cluster_table_1 values(0,0,1),(1,1,1);
 select * from cluster_table_1;

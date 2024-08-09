@@ -53,45 +53,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -449,7 +428,7 @@ func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!")
 	} else {
-		fmt.Println("pipeline for ap query!")
+		fmt.Println("pipeline for ap query! current cn", c.addr, "sql: ", c.originSQL)
 	}
 	fmt.Println(DebugShowScopes(c.scope))
 }
@@ -1616,15 +1595,21 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	if time.Since(t) > time.Second {
 		c.proc.Infof(ctx, "read file offset cost %v", time.Since(t))
 	}
-	ss := make([]*Scope, 1)
+
+	var ss []*Scope
 	if param.Parallel {
 		ss = make([]*Scope, len(c.cnList))
+		for i := range ss {
+			ss[i] = c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
+		}
+	} else {
+		ss = make([]*Scope, 1)
+		ss[0] = c.constructScopeForExternal(c.addr, param.Parallel)
 	}
 	pre := 0
 
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		ss[i] = c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
 		ss[i].IsLoad = true
 		count := ID2Addr[i]
 		fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
@@ -1929,12 +1914,16 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	}
 
 	for i := range ss {
+		c.setProjection(n, ss[i])
+	}
+
+	/*for i := range ss {
 		if ss[i].RootOp == nil {
 			c.setProjection(n, ss[i])
 			continue
 		}
-		_, ok := c.stmt.(*tree.Insert)
-		if ok {
+		_, ok := c.stmt.(*tree.Select)
+		if !ok {
 			c.setProjection(n, ss[i])
 			continue
 		}
@@ -2075,7 +2064,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 		default:
 			c.setProjection(n, ss[i])
 		}
-	}
+	}*/
 	c.anal.isFirst = false
 	return ss
 }
@@ -3587,26 +3576,29 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		}
 		rs[i].Proc.Reg.MergeReceivers = append(rs[i].Proc.Reg.MergeReceivers, w)
 	}
-	// all join's first flag will setting in newLeftScope and newRightScope
-	// so we set it to false now
+
 	if c.IsTpQuery() {
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
-	} else {
-		c.anal.isFirst = false
-		for i := range rs {
-			if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
-				mergeBuild := buildScopes[0]
-				if len(buildScopes) > 1 {
-					mergeBuild = c.newMergeScope(buildScopes)
-				}
-				mergeBuild.setRootOperator(constructDispatch(rs[i].BuildIdx, rs, c.addr, n, false))
-				mergeBuild.IsEnd = true
-				rs[i].PreScopes = append(rs[i].PreScopes, mergeBuild)
-				break
-			}
-		}
+		return rs
 	}
 
+	idx := 0
+	// all join's first flag will setting in newLeftScope and newRightScope
+	// so we set it to false now
+	c.anal.isFirst = false
+	for i := range rs {
+		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
+			idx = i
+			break
+		}
+	}
+	mergeBuild := buildScopes[0]
+	if len(buildScopes) > 1 {
+		mergeBuild = c.newMergeScope(buildScopes)
+	}
+	mergeBuild.setRootOperator(constructDispatch(rs[idx].BuildIdx, rs, c.addr, n, false))
+	mergeBuild.IsEnd = true
+	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeBuild)
 	return rs
 }
 
