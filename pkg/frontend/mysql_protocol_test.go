@@ -2946,6 +2946,10 @@ func (fp *testMysqlWriter) Read() ([]byte, error) {
 	return fp.ioses.Read()
 }
 
+func (fp *testMysqlWriter) ReadLoadLocalPacket() ([]byte, error) {
+	return fp.ioses.ReadLoadLocalPacket()
+}
+
 func (fp *testMysqlWriter) Free(buf []byte) {
 	fp.ioses.allocator.Free(buf)
 }
