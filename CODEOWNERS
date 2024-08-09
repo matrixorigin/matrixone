@@ -143,6 +143,7 @@
 /pkg/sql/plan/explain @ouyuanning @aunjgr @badboynt1 @qingxinhome
 /pkg/sql/plan/tools @daviszhen @qingxinhome
 /pkg/sql/colexec/indexjoin @aunjgr @badboynt1
+/pkg/sql/colexec/indexbuild @badboynt1
 /pkg/sql/colexec/intersect @aunjgr @badboynt1
 /pkg/sql/colexec/intersectall @aunjgr @badboynt1
 /pkg/sql/colexec/loopanti @aunjgr @badboynt1
