@@ -312,7 +312,8 @@ func (tbl *txnTableDelegate) BuildReaders(
 	relData engine.RelData,
 	num int,
 	txnOffset int,
-	orderBy bool) ([]engine.Reader, error) {
+	orderBy bool,
+	policy engine.TombstoneApplyPolicy) ([]engine.Reader, error) {
 	if tbl.isLocal() {
 		return tbl.origin.BuildReaders(
 			ctx,
@@ -322,6 +323,7 @@ func (tbl *txnTableDelegate) BuildReaders(
 			num,
 			txnOffset,
 			orderBy,
+			engine.Policy_CheckAll,
 		)
 	}
 	return nil, nil

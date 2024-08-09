@@ -40,20 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type TombstoneApplyPolicy uint64
-
-const (
-	Policy_SkipUncommitedInMemory = 1 << iota
-	Policy_SkipCommittedInMemory
-	Policy_SkipUncommitedS3
-	Policy_SkipCommittedS3
-)
-
-const (
-	Policy_CheckAll             = 0
-	Policy_CheckCommittedS3Only = Policy_SkipUncommitedInMemory | Policy_SkipCommittedInMemory | Policy_SkipUncommitedS3
-)
-
 const (
 	batchPrefetchSize = 1000
 )
@@ -80,7 +66,7 @@ func NewLocalDataSource(
 	txnOffset int,
 	rangesSlice objectio.BlockInfoSlice,
 	skipReadMem bool,
-	policy TombstoneApplyPolicy,
+	policy engine.TombstoneApplyPolicy,
 ) (source *LocalDataSource, err error) {
 
 	source = &LocalDataSource{}
@@ -336,7 +322,7 @@ type LocalDataSource struct {
 	OrderBy  []*plan.OrderBySpec
 
 	filterZM        objectio.ZoneMap
-	tombstonePolicy TombstoneApplyPolicy
+	tombstonePolicy engine.TombstoneApplyPolicy
 }
 
 func (ls *LocalDataSource) String() string {
@@ -849,17 +835,27 @@ func (ls *LocalDataSource) ApplyTombstones(
 
 	var err error
 
-	rowsOffset = ls.applyWorkspaceEntryDeletes(bid, rowsOffset, nil)
-	rowsOffset, err = ls.applyWorkspaceFlushedS3Deletes(bid, rowsOffset, nil)
-	if err != nil {
-		return nil, err
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
+		rowsOffset = ls.applyWorkspaceEntryDeletes(bid, rowsOffset, nil)
+	}
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 {
+		rowsOffset, err = ls.applyWorkspaceFlushedS3Deletes(bid, rowsOffset, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	rowsOffset = ls.applyWorkspaceRawRowIdDeletes(bid, rowsOffset, nil)
-	rowsOffset = ls.applyPStateInMemDeletes(bid, rowsOffset, nil)
-	rowsOffset, err = ls.applyPStatePersistedDeltaLocation(bid, rowsOffset, nil)
-	if err != nil {
-		return nil, err
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
+		rowsOffset = ls.applyWorkspaceRawRowIdDeletes(bid, rowsOffset, nil)
+	}
+	if ls.tombstonePolicy&engine.Policy_SkipCommittedInMemory == 0 {
+		rowsOffset = ls.applyPStateInMemDeletes(bid, rowsOffset, nil)
+	}
+	if ls.tombstonePolicy&engine.Policy_SkipCommittedS3 == 0 {
+		rowsOffset, err = ls.applyPStatePersistedDeltaLocation(bid, rowsOffset, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return rowsOffset, nil
@@ -872,21 +868,21 @@ func (ls *LocalDataSource) GetTombstones(
 	deletedRows = &nulls.Nulls{}
 	deletedRows.InitWithSize(8192)
 
-	if ls.tombstonePolicy&Policy_SkipUncommitedInMemory == 0 {
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
 		ls.applyWorkspaceEntryDeletes(bid, nil, deletedRows)
 	}
-	if ls.tombstonePolicy&Policy_SkipUncommitedS3 == 0 {
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 {
 		_, err = ls.applyWorkspaceFlushedS3Deletes(bid, nil, deletedRows)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if ls.tombstonePolicy&Policy_SkipUncommitedInMemory == 0 {
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
 		ls.applyWorkspaceRawRowIdDeletes(bid, nil, deletedRows)
 	}
 
-	if ls.tombstonePolicy&Policy_SkipCommittedInMemory == 0 {
+	if ls.tombstonePolicy&engine.Policy_SkipCommittedInMemory == 0 {
 		ls.applyPStateInMemDeletes(bid, nil, deletedRows)
 	}
 
