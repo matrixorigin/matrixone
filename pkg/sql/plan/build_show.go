@@ -43,9 +43,16 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 
 	var err error
 	var snapshot *Snapshot
+	var snapshotSpec string
 	if stmt.AtTsExpr != nil {
 		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
+		}
+
+		if stmt.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+			snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.AtTsExpr.SnapshotName)
+		} else {
+			snapshotSpec = fmt.Sprintf("{MO_TS = %d}", snapshot.TS.PhysicalTime)
 		}
 	}
 
@@ -63,7 +70,7 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		}
 		// get data from schema
 		//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
-		sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database md WHERE md.datname = '%s' and account_id=%d", MO_CATALOG_DB_NAME, stmt.Name, accountId)
+		sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database %s md WHERE md.datname = '%s' and account_id=%d", MO_CATALOG_DB_NAME, snapshotSpec, stmt.Name, accountId)
 		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 	}
 
