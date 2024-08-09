@@ -127,6 +127,7 @@ func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.cleanHashMap()
 	ctr.inbat = nil
 	ctr.lastrow = 0
+	ctr.state = Build
 
 	if innerJoin.ProjectList != nil {
 		anal.Alloc(innerJoin.ProjectAllocSize + innerJoin.ctr.maxAllocSize)

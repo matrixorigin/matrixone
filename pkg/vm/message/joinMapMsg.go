@@ -36,7 +36,7 @@ type JoinMap struct {
 	ihm              *hashmap.IntHashMap
 	mpool            *mpool.MPool
 	multiSels        [][]int32
-	Batches          []*batch.Batch
+	batches          []*batch.Batch
 }
 
 func NewJoinMap(sels [][]int32, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
@@ -44,7 +44,7 @@ func NewJoinMap(sels [][]int32, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap
 		shm:       shm,
 		ihm:       ihm,
 		multiSels: sels,
-		Batches:   batches,
+		batches:   batches,
 		mpool:     m,
 		valid:     true,
 	}
@@ -54,7 +54,7 @@ func (jm *JoinMap) GetBatches() []*batch.Batch {
 	if jm == nil {
 		return nil
 	}
-	return jm.Batches
+	return jm.batches
 }
 
 func (jm *JoinMap) SetRowCount(cnt int64) {
@@ -109,10 +109,10 @@ func (jm *JoinMap) Free() {
 	} else {
 		jm.shm.Free()
 	}
-	for i := range jm.Batches {
-		jm.Batches[i].Clean(jm.mpool)
+	for i := range jm.batches {
+		jm.batches[i].Clean(jm.mpool)
 	}
-	jm.Batches = nil
+	jm.batches = nil
 	jm.valid = false
 }
 
