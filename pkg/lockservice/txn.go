@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"fmt"
+	"go.uber.org/zap"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -304,6 +305,9 @@ func (txn *activeTxn) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID 
 					m[l.Group] = make(map[uint64]uint64, 1024)
 				}
 				m[l.Group][l.Table]++
+				getLogger().Error("incLockTableRef 1",
+					txnField(txn),
+					zap.String("lockTableRef", fmt.Sprintf("%v", m)))
 			}
 		}
 	}
