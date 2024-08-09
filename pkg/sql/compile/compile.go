@@ -1499,8 +1499,23 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	} else if param.ScanType == tree.INLINE {
 		return c.compileExternValueScan(n, param, strictSqlMode)
 	} else {
-		if err := plan2.InitInfileParam(param); err != nil {
+		if err := plan2.InitInfileOrStageParam(param, c.proc); err != nil {
 			return nil, err
+		}
+
+		// if filepath is stage URL, ScanType may change to tree.S3.  check param.Parallel again
+		if param.ScanType == tree.S3 && param.Parallel {
+			mcpu = 0
+			ID2Addr = make(map[int]int, 0)
+			for i := 0; i < len(c.cnList); i++ {
+				tmp := mcpu
+				if c.cnList[i].Mcpu > external.S3ParallelMaxnum {
+					mcpu += external.S3ParallelMaxnum
+				} else {
+					mcpu += c.cnList[i].Mcpu
+				}
+				ID2Addr[i] = mcpu - tmp
+			}
 		}
 	}
 
