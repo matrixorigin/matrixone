@@ -81,6 +81,7 @@ func (nsp *Nulls) Build(size int, rows ...uint64) {
 	nsp.InitWithSize(size)
 	Add(nsp, rows...)
 }
+
 func Build(size int, rows ...uint64) *Nulls {
 	var n Nulls
 	n.Build(size, rows...)
