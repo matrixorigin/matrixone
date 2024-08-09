@@ -71,3 +71,68 @@ func dropSubscription(ctx context.Context, c *Compile, dbName string) error {
 	sql = fmt.Sprintf("delete from mo_catalog.mo_subs where sub_account_id = %d and sub_name = '%s' and status != %d", accountId, dbName, pubsub.SubStatusNormal)
 	return c.runSqlWithAccountId(sql, sysAccountId)
 }
+
+func updatePubTableList(ctx context.Context, c *Compile, dbName, dropTblName string) error {
+	accountName, err := func() (string, error) {
+		accountId, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return "", err
+		}
+
+		sql := fmt.Sprintf("select account_name from mo_catalog.mo_account where account_id = %d", accountId)
+		rs, err := c.runSqlWithResult(sql, sysAccountId)
+		if err != nil {
+			return "", err
+		}
+		defer rs.Close()
+
+		var accountName string
+		rs.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; {
+				accountName = cols[0].GetStringAt(i)
+				break
+			}
+			return false
+		})
+		return accountName, nil
+	}()
+	if err != nil {
+		return err
+	}
+
+	// get pub
+	sql := fmt.Sprintf("select pub_name, table_list from mo_catalog.mo_pubs where database_name = '%s'", dbName)
+	rs, err := c.runSqlWithResult(sql, NoAccountId)
+	if err != nil {
+		return err
+	}
+	defer rs.Close()
+
+	pubNameTableListMap := make(map[string]string)
+	rs.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		for i := 0; i < rows; i++ {
+			pubNameTableListMap[cols[0].GetStringAt(i)] = cols[1].GetStringAt(i)
+		}
+		return true
+	})
+
+	for pubName, tableListStr := range pubNameTableListMap {
+		if tableListStr == pubsub.TableAll {
+			continue
+		}
+
+		newTableListStr := pubsub.RemoveTable(tableListStr, dropTblName)
+		// update pub
+		sql = fmt.Sprintf("update mo_catalog.mo_pubs set table_list='%s' where pub_name = '%s'", newTableListStr, pubName)
+		if err = c.runSqlWithAccountId(sql, NoAccountId); err != nil {
+			return err
+		}
+
+		// update sub
+		sql = fmt.Sprintf("update mo_catalog.mo_subs set pub_tables='%s' where pub_account_name = '%s' and pub_name = '%s'", newTableListStr, accountName, pubName)
+		if err = c.runSqlWithAccountId(sql, sysAccountId); err != nil {
+			return err
+		}
+	}
+	return nil
+}
