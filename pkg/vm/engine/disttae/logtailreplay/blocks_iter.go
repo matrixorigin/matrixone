@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/tidwall/btree"
 )
 
 type ObjectsIter interface {
@@ -78,6 +79,42 @@ func (b *objectsIter) Entry() ObjectEntry {
 func (b *objectsIter) Close() error {
 	b.iter.Release()
 	return nil
+}
+
+var _ ObjectsIter = new(ObjectsIterInCdc)
+
+type ObjectsIterInCdc struct {
+	iter btree.IterG[ObjectEntry]
+}
+
+func (iter *ObjectsIterInCdc) Next() bool {
+	for iter.iter.Next() {
+		entry := iter.iter.Item()
+		if !entry.DeleteTime.IsEmpty() {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (iter *ObjectsIterInCdc) Close() error {
+	iter.iter.Release()
+	return nil
+}
+
+func (iter *ObjectsIterInCdc) Entry() ObjectEntry {
+	return ObjectEntry{
+		ObjectInfo: iter.iter.Item().ObjectInfo,
+	}
+}
+
+func (p *PartitionState) NewObjectsIterInCdc() ObjectsIter {
+	iter := p.dataObjects.Copy().Iter()
+	ret := &ObjectsIterInCdc{
+		iter: iter,
+	}
+	return ret
 }
 
 type BlocksIter interface {
@@ -204,4 +241,37 @@ func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, b
 		}
 	}
 	return ObjectInfo{}, false
+}
+
+type BlockDeltaIter interface {
+	Entry() BlockDeltaEntry
+	Close() error
+	Next() bool
+}
+
+var _ BlockDeltaIter = new(blockDeltaIter)
+
+type blockDeltaIter struct {
+	iter btree.IterG[BlockDeltaEntry]
+}
+
+func (iter *blockDeltaIter) Entry() BlockDeltaEntry {
+	return iter.iter.Item()
+}
+
+func (iter *blockDeltaIter) Close() error {
+	iter.iter.Release()
+	return nil
+}
+
+func (iter *blockDeltaIter) Next() bool {
+	return iter.iter.Next()
+}
+
+func (p *PartitionState) NewBlockDeltaIter() BlockDeltaIter {
+	iter := p.blockDeltas.Copy().Iter()
+	ret := &blockDeltaIter{
+		iter: iter,
+	}
+	return ret
 }

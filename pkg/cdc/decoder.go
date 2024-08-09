@@ -17,18 +17,25 @@ package cdc
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
-	"github.com/tidwall/btree"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 const (
@@ -38,13 +45,18 @@ const (
 var _ Decoder = new(decoder)
 
 type decoder struct {
+	mp *mpool.MPool
+	fs fileservice.FileService
 }
 
-func NewDecoder() Decoder {
-	return &decoder{}
+func NewDecoder(mp *mpool.MPool, fs fileservice.FileService) Decoder {
+	return &decoder{
+		mp: mp,
+		fs: fs,
+	}
 }
 
-func (m *decoder) Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input *disttae.DecoderInput) (out *DecoderOutput) {
+func (dec *decoder) Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input *disttae.DecoderInput) (out *DecoderOutput) {
 	//parallel step1:decode rows
 	out = &DecoderOutput{
 		ts: input.TS(),
@@ -54,35 +66,59 @@ func (m *decoder) Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input *d
 	err := ants.Submit(func() {
 		defer wg.Done()
 		it := input.State().NewRowsIterInCdc()
-		rows, err := decodeRows(ctx, cdcCtx, input.TS(), it)
-		if err != nil {
+		defer it.Close()
+		rows, err2 := decodeRows(ctx, cdcCtx, input.TS(), it)
+		if err2 != nil {
 			return
 		}
 		out.sqlOfRows.Store(rows)
-		defer it.Close()
+
 	})
 	if err != nil {
 		panic(err)
 	}
-	//TODO: objects
 	//parallel step2:decode objects
-	//wg.Add(1)
-	//err = ants.Submit(func() {
-	//	defer wg.Done()
-	//
-	//})
-	//if err != nil {
-	//	panic(err)
-	//}
-	////parallel step3:decode deltas
-	//wg.Add(1)
-	//err = ants.Submit(func() {
-	//	defer wg.Done()
-	//
-	//})
-	//if err != nil {
-	//	panic(err)
-	//}
+	wg.Add(1)
+	err = ants.Submit(func() {
+		defer wg.Done()
+		it := input.State().NewObjectsIterInCdc()
+		defer it.Close()
+		rows, err2 := decodeObjects(
+			ctx,
+			cdcCtx,
+			input.TS(),
+			it,
+			dec.fs,
+			dec.mp,
+		)
+		if err2 != nil {
+			return
+		}
+		out.sqlOfObjects.Store(rows)
+	})
+	if err != nil {
+		panic(err)
+	}
+	//parallel step3:decode deltas
+	wg.Add(1)
+	err = ants.Submit(func() {
+		defer wg.Done()
+		it := input.State().NewBlockDeltaIter()
+		defer it.Close()
+		rows, err2 := decodeDeltas(
+			ctx,
+			input.TS(),
+			it.Entry(),
+			dec.fs,
+		)
+		if err2 != nil {
+			return
+		}
+		out.sqlOfDeletes.Store(rows)
+	})
+	if err != nil {
+		panic(err)
+	}
 	wg.Wait()
 	return
 }
@@ -280,15 +316,96 @@ func decodeRows(
 }
 
 func decodeObjects(
+	ctx context.Context,
+	cdcCtx *disttae.TableCtx,
 	ts timestamp.Timestamp,
-	objects *btree.BTreeG[logtailreplay.ObjectEntry],
-) error {
-	return nil
+	objIter logtailreplay.ObjectsIter,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) (res [][]byte, err error) {
+	var objMeta objectio.ObjectMeta
+	var bat *batch.Batch
+	var release func()
+	var row []any
+	tableDef := cdcCtx.TableDef()
+	cols := make([]uint16, 0)
+	typs := make([]types.Type, 0)
+	for i, colDef := range tableDef.Cols {
+		if colDef.Name == catalog.Row_ID {
+			continue
+		}
+		cols = append(cols, uint16(i))
+		typs = append(typs, types.Type{
+			Oid:   types.T(colDef.Typ.Id),
+			Width: colDef.Typ.Width,
+			Scale: colDef.Typ.Scale,
+		})
+	}
+	for objIter.Next() {
+		ent := objIter.Entry()
+		loc := ent.ObjectLocation()
+		objMeta, err = objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+		if err != nil {
+			return nil, err
+		}
+		disttae.ForeachBlkInObjStatsList(
+			true,
+			objMeta.MustDataMeta(),
+			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+				bat, release, err = blockio.LoadColumns(
+					ctx,
+					cols,
+					typs,
+					fs,
+					blk.MetaLocation(),
+					mp,
+					fileservice.Policy(0))
+				if err != nil {
+					return false
+				}
+				defer release()
+
+				if row == nil {
+					colCnt := len(bat.Vecs)
+					if colCnt <= 0 {
+						return false
+					}
+					row = make([]any, len(bat.Vecs))
+				}
+				for i := 0; i < bat.Vecs[0].Length(); i++ {
+					err = extractRowFromEveryVector(ctx, bat, 0, i, row)
+					if err != nil {
+						return false
+					}
+					fmt.Fprintln(os.Stderr, "-----objects row----", row)
+				}
+				//TODO:decode
+				return true
+			},
+			ent.ObjectStats,
+		)
+	}
+	return
 }
 
 func decodeDeltas(
+	ctx context.Context,
 	ts timestamp.Timestamp,
-	deltas *btree.BTreeG[logtailreplay.BlockDeltaEntry],
-) error {
-	return nil
+	delta logtailreplay.BlockDeltaEntry,
+	fs fileservice.FileService,
+) (res [][]byte, err error) {
+	var dels *nulls.Nulls
+	bat, byCn, release, err := blockio.ReadBlockDelete(ctx, delta.DeltaLocation(), fs)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	if byCn {
+		dels = blockio.EvalDeleteRowsByTimestampForDeletesPersistedByCN(bat, types.MaxTs(), delta.CommitTs)
+	}
+	if dels == nil {
+		dels = nulls.NewWithSize(128)
+	}
+	//TODO:how to process dels
+	return
 }

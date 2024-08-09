@@ -743,7 +743,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	}
 
 	//init cdc decoder or sinker
-	go cdc2.RunDecoder(ctx, inQueue, outQueue, cdc2.NewDecoder())
+	go cdc2.RunDecoder(ctx, inQueue, outQueue, cdc2.NewDecoder(cdc.cdcEngMp, fs))
 
 	go cdc2.RunSinker(ctx, outQueue, sinker)
 
