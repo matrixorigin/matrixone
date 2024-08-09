@@ -16,77 +16,64 @@ package table_function
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func metaScanPrepare(proc *process.Process, tableFunction *TableFunction) (err error) {
-	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
-	return err
+// metaScanState still uses simpleOneBatchState
+type metaScanState struct {
+	simpleOneBatchState
 }
 
-func metaScanCall(_ int, proc *process.Process, tableFunction *TableFunction, result *vm.CallResult) (bool, error) {
-	var (
-		err  error
-		rbat *batch.Batch
-	)
-	bat := result.Batch
-	defer func() {
-		if err != nil && rbat != nil {
-			rbat.Clean(proc.Mp())
-		}
-	}()
-	if bat == nil {
-		return true, nil
-	}
+func metaScanPrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
+	return &metaScanState{}, nil
+}
 
-	v, err := tableFunction.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat}, nil)
-	if err != nil {
-		return false, err
-	}
-	uuid := vector.MustFixedCol[types.Uuid](v)[0]
+func (s *metaScanState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+	s.startPreamble(tf, proc, nthRow)
+
+	// Get uuid
+	uuid := vector.GetFixedAt[types.Uuid](tf.ctr.argVecs[0], nthRow)
 	// get file size
 	path := catalog.BuildQueryResultMetaPath(proc.GetSessionInfo().Account, uuid.String())
-	// read meta's meta
+
+	// Get reader
 	reader, err := blockio.NewFileReader(proc.GetService(), proc.Base.FileService, path)
 	if err != nil {
-		return false, err
+		return err
 	}
+
 	var idxs []uint16
 	for i, name := range catalog.MetaColNames {
-		for _, attr := range tableFunction.Attrs {
+		for _, attr := range tf.Attrs {
 			if name == attr {
 				idxs = append(idxs, uint16(i))
 			}
 		}
 	}
+
 	// read meta's data
 	bats, closeCB, err := reader.LoadAllColumns(proc.Ctx, idxs, common.DefaultAllocator)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer func() {
 		if closeCB != nil {
 			closeCB()
 		}
 	}()
-	rbat = batch.NewWithSize(len(bats[0].Vecs))
-	metaVecs := rbat.Vecs
+
+	// Note that later s.batch.Vecs will be dupped from sbat.   So we must clean.
+	s.batch.Clean(proc.Mp())
 	for i, vec := range bats[0].Vecs {
-		metaVecs[i], err = vec.Dup(proc.Mp())
+		s.batch.Vecs[i], err = vec.Dup(proc.Mp())
 		if err != nil {
-			rbat.Clean(proc.Mp())
-			return false, err
+			return err
 		}
 	}
-	rbat.SetAttributes(catalog.MetaColNames)
-	rbat.SetRowCount(1)
-	result.Batch = rbat
-	return false, nil
+	s.batch.SetRowCount(1)
+	return nil
 }
