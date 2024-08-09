@@ -320,6 +320,12 @@ func (c *Compile) InitPipelineContextToExecuteQuery() {
 	}
 }
 
+// CleanPipelineChannelToNextQuery cleans the channel between each pipeline tree for recall / rerun.
+// todo: this has not implement now.
+//func (c *Compile) CleanPipelineChannelToNextQuery() {
+//	// do nothing now.
+//}
+
 // buildContextFromParentCtx build the context for the pipeline tree.
 // the input parameter is the whole tree's parent context.
 func (s *Scope) buildContextFromParentCtx(parentCtx context.Context) {

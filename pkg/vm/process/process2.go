@@ -133,10 +133,11 @@ func (proc *Process) BuildPipelineContext(parentContext context.Context) context
 	proc.Ctx, proc.Cancel = context.WithCancel(parentContext)
 
 	// update the context held by this process's data producers.
-	mp := proc.Mp()
 	for _, sender := range proc.Reg.MergeReceivers {
 		sender.Ctx = proc.Ctx
-		sender.CleanChannel(mp)
+
+		// do not clean the channel here, because we cannot ensure that sender was not in progress.
+		//sender.CleanChannel(mp)
 	}
 	return proc.Ctx
 }
@@ -185,10 +186,11 @@ func ReplacePipelineCtx(proc *Process, ctx context.Context, cancel context.Cance
 	proc.Ctx = ctx
 	proc.Cancel = cancel
 
-	mp := proc.Mp()
 	for _, sender := range proc.Reg.MergeReceivers {
 		sender.Ctx = proc.Ctx
-		sender.CleanChannel(mp)
+
+		// do not clean the channel here, because we cannot ensure that sender was not in progress.
+		//sender.CleanChannel(mp)
 	}
 }
 
