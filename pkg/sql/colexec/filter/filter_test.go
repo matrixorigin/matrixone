@@ -221,12 +221,16 @@ func TestFilter2(t *testing.T) {
 		}
 
 		// 2. Second call
-		resetChildren(tc.arg)
-		res, _ = tc.arg.Call(tc.proc)
-		if tc.getRowCount > 0 {
-			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
-		} else {
-			require.Equal(t, res.Batch == nil, true)
+		for {
+			res, _ = tc.arg.Call(tc.proc)
+			if res.Batch == nil {
+				break
+			}
+			if tc.getRowCount > 0 {
+				require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
+			} else {
+				require.Equal(t, res.Batch == nil, true)
+			}
 		}
 		tc.arg.Reset(tc.proc, false, nil)
 
@@ -250,8 +254,9 @@ func TestFilter2(t *testing.T) {
 }
 
 func resetChildren(arg *Filter) {
-	bat := MakeFilterMockBatchs()
-	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	bat0 := MakeFilterMockBatchs()
+	bat1 := MakeFilterMockBatchs()
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat0, bat1})
 	arg.Children = nil
 	arg.AppendChild(op)
 }
