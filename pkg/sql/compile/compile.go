@@ -2094,7 +2094,7 @@ func (c *Compile) compileTPUnion(n *plan.Node, ss []*Scope, children []*Scope) [
 	for i := range ss {
 		// waring: `connector` operator is not used as an input/output analyze,
 		// and `connector` operator cannot play the role of IsFirst/IsLast
-		connArg := connector.NewArgument().WithReg(rs[0].Proc.MergeReceivers[i])
+		connArg := connector.NewArgument().WithReg(rs[0].Proc.Reg.MergeReceivers[i])
 		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		ss[i].setRootOperator(connArg)
 		rs[0].PreScopes = append(rs[0].PreScopes, ss[i])
@@ -2142,11 +2142,11 @@ func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right 
 	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
 	rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
 
-	connectLeftArg := connector.NewArgument().WithReg(rs[0].Proc.MergeReceivers[0])
+	connectLeftArg := connector.NewArgument().WithReg(rs[0].Proc.Reg.MergeReceivers[0])
 	connectLeftArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	left[0].setRootOperator(connectLeftArg)
 
-	connectRightArg := connector.NewArgument().WithReg(rs[0].Proc.MergeReceivers[1])
+	connectRightArg := connector.NewArgument().WithReg(rs[0].Proc.Reg.MergeReceivers[1])
 	connectRightArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	right[0].setRootOperator(connectRightArg)
 
@@ -2221,7 +2221,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 	if c.IsTpQuery() {
 		//construct join build operator for tp join
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, rs[0].RootOp), false, 1))
-		rs[0].Proc.MergeReceivers = rs[0].Proc.MergeReceivers[:1]
+		rs[0].Proc.Reg.MergeReceivers = rs[0].Proc.Reg.MergeReceivers[:1]
 		buildScopes[0].IsEnd = true
 	}
 	return rs
@@ -3062,7 +3062,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 			dataScope := c.newMergeScope(ss)
 			if c.anal.qry.LoadTag {
 				// reset the channel buffer of sink for load
-				dataScope.Proc.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, dataScope.NodeInfo.Mcpu)
+				dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, dataScope.NodeInfo.Mcpu)
 			}
 			parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
 			scopes := make([]*Scope, 0, parallelSize)
@@ -3076,11 +3076,11 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 				scopes = append(scopes, s)
 				scopes[i].Proc = c.proc.NewNoContextChildProc(1)
 				if c.anal.qry.LoadTag {
-					for _, rr := range scopes[i].Proc.MergeReceivers {
+					for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
 						rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 					}
 				}
-				regs = append(regs, scopes[i].Proc.MergeReceivers...)
+				regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 			}
 
 			if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize && parallelSize > 1 {
@@ -3260,7 +3260,7 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	for _, r := range receivers {
 		r.Ctx = rs.Proc.Ctx
 	}
-	rs.Proc.MergeReceivers = receivers
+	rs.Proc.Reg.MergeReceivers = receivers
 	return []*Scope{rs}, nil
 }
 
@@ -3285,7 +3285,7 @@ func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope
 	for _, r := range receivers {
 		r.Ctx = rs.Proc.Ctx
 	}
-	rs.Proc.MergeReceivers = receivers
+	rs.Proc.Reg.MergeReceivers = receivers
 	return []*Scope{rs}, nil
 }
 
@@ -3310,7 +3310,7 @@ func (c *Compile) compileSinkScanNode(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	for _, r := range receivers {
 		r.Ctx = rs.Proc.Ctx
 	}
-	rs.Proc.MergeReceivers = receivers
+	rs.Proc.Reg.MergeReceivers = receivers
 	return []*Scope{rs}, nil
 }
 
@@ -3399,15 +3399,15 @@ func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 	rs.NodeInfo.Mcpu = 1 // merge scope is single parallel by default
 	rs.PreScopes = ss
 	rs.Proc = c.proc.NewNoContextChildProc(1)
-	rs.Proc.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, len(ss))
-	rs.Proc.MergeReceivers[0].NilBatchCnt = len(ss)
+	rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, len(ss))
+	rs.Proc.Reg.MergeReceivers[0].NilBatchCnt = len(ss)
 	mergeOp := merge.NewArgument()
 	mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	rs.setRootOperator(mergeOp)
 	for i := range ss {
 		// waring: `connector` operator is not used as an input/output analyze,
 		// and `connector` operator cannot play the role of IsFirst/IsLast
-		connArg := connector.NewArgument().WithReg(rs.Proc.MergeReceivers[0])
+		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[0])
 		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		ss[i].setRootOperator(connArg)
 		ss[i].IsEnd = true
@@ -3444,7 +3444,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		if !ss[i].IsEnd {
 			// waring: `connector` operator is not used as an input/output analyze,
 			// and `connector` operator cannot play the role of IsFirst/IsLast
-			connArg := connector.NewArgument().WithReg(rs.Proc.MergeReceivers[j])
+			connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])
 			connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			ss[i].setRootOperator(connArg)
 			j++
@@ -3482,7 +3482,7 @@ func (c *Compile) newScopeListForShuffleGroup(childrenCount int) ([]*Scope, []*S
 		//c.anal.isFirst = currentFirstFlag
 		scopes := c.newScopeListWithNode(plan2.GetShuffleDop(n.Mcpu), childrenCount, n.Addr)
 		for _, s := range scopes {
-			for _, rr := range s.Proc.MergeReceivers {
+			for _, rr := range s.Proc.Reg.MergeReceivers {
 				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 			}
 		}
@@ -3569,12 +3569,12 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 	for i := range rs {
 		rs[i].IsJoin = true
 		rs[i].NodeInfo.Mcpu = c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
-		rs[i].BuildIdx = len(rs[i].Proc.MergeReceivers)
+		rs[i].BuildIdx = len(rs[i].Proc.Reg.MergeReceivers)
 		w := &process.WaitRegister{
 			Ctx: rs[i].Proc.Ctx,
 			Ch:  make(chan *process.RegisterMessage, 10),
 		}
-		rs[i].Proc.MergeReceivers = append(rs[i].Proc.MergeReceivers, w)
+		rs[i].Proc.Reg.MergeReceivers = append(rs[i].Proc.Reg.MergeReceivers, w)
 	}
 
 	if c.IsTpQuery() {
@@ -3625,7 +3625,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].BuildIdx = lnum
 			shuffleIdx++
 			ss[i].ShuffleIdx = shuffleIdx
-			for _, rr := range ss[i].Proc.MergeReceivers {
+			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
 				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 			}
 		}
@@ -3693,15 +3693,15 @@ func (c *Compile) newJoinProbeScopeWithBidx(s *Scope) *Scope {
 		regTransplant(s, rs, i, i)
 	}
 
-	s.Proc.MergeReceivers[0] = &process.WaitRegister{
+	s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: s.Proc.Ctx,
 		Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
 	}
 	rs.setRootOperator(
 		connector.NewArgument().
-			WithReg(s.Proc.MergeReceivers[0]),
+			WithReg(s.Proc.Reg.MergeReceivers[0]),
 	)
-	s.Proc.MergeReceivers = s.Proc.MergeReceivers[:1]
+	s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
 	rs.IsEnd = true
 	return rs
 }
@@ -3724,7 +3724,7 @@ func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 
 func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
 	rs := newScope(Merge)
-	buildLen := len(s.Proc.MergeReceivers) - s.BuildIdx
+	buildLen := len(s.Proc.Reg.MergeReceivers) - s.BuildIdx
 	rs.Proc = s.Proc.NewContextChildProc(buildLen)
 	for i := 0; i < buildLen; i++ {
 		regTransplant(s, rs, i+s.BuildIdx, i)
@@ -3743,8 +3743,8 @@ func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
 // Transplant the source's RemoteReceivRegInfos which index equal to sourceIdx to
 // target with new index targetIdx
 func regTransplant(source, target *Scope, sourceIdx, targetIdx int) {
-	target.Proc.MergeReceivers[targetIdx] = source.Proc.MergeReceivers[sourceIdx]
-	target.Proc.MergeReceivers[targetIdx].Ctx = target.Proc.Ctx
+	target.Proc.Reg.MergeReceivers[targetIdx] = source.Proc.Reg.MergeReceivers[sourceIdx]
+	target.Proc.Reg.MergeReceivers[targetIdx].Ctx = target.Proc.Ctx
 	i := 0
 	for i < len(source.RemoteReceivRegInfos) {
 		op := &source.RemoteReceivRegInfos[i]
@@ -4478,7 +4478,7 @@ func extraRegisters(ss []*Scope, i int) []*process.WaitRegister {
 		if s.IsEnd {
 			continue
 		}
-		regs = append(regs, s.Proc.MergeReceivers[i])
+		regs = append(regs, s.Proc.Reg.MergeReceivers[i])
 	}
 	return regs
 }

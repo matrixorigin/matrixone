@@ -118,8 +118,8 @@ func DebugShowScopes(ss []*Scope) string {
 		if s.Proc == nil {
 			return
 		}
-		for i := range s.Proc.MergeReceivers {
-			mp[s.Proc.MergeReceivers[i]] = len(mp)
+		for i := range s.Proc.Reg.MergeReceivers {
+			mp[s.Proc.Reg.MergeReceivers[i]] = len(mp)
 		}
 	}
 
@@ -251,7 +251,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 		str := addGap()
 		receiverStr := "nil"
 		if ss[i].Proc != nil {
-			receiverStr = getReceiverStr(ss[i], ss[i].Proc.MergeReceivers)
+			receiverStr = getReceiverStr(ss[i], ss[i].Proc.Reg.MergeReceivers)
 		}
 		str += fmt.Sprintf("Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s): [", i+1, magicShow(ss[i].Magic), ss[i].NodeInfo.Addr, ss[i].NodeInfo.Mcpu, receiverStr)
 

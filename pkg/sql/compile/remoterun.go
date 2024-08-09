@@ -201,10 +201,10 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	}
 	ctx.pipe = p
 	ctx.scope = s
-	p.ChildrenCount = int32(len(s.Proc.MergeReceivers))
+	p.ChildrenCount = int32(len(s.Proc.Reg.MergeReceivers))
 	{
-		for i := range s.Proc.MergeReceivers {
-			ctx.regs[s.Proc.MergeReceivers[i]] = int32(i)
+		for i := range s.Proc.Reg.MergeReceivers {
+			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
 		}
 	}
 	// DataSource
@@ -371,8 +371,8 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 	s.Proc = proc.NewNoContextChildProc(int(p.ChildrenCount))
 	{
-		for i := range s.Proc.MergeReceivers {
-			ctx.regs[s.Proc.MergeReceivers[i]] = int32(i)
+		for i := range s.Proc.Reg.MergeReceivers {
+			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
 		}
 	}
 	s.PreScopes = make([]*Scope, len(p.Children))
@@ -408,8 +408,8 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 		s.doSetRootOperator(ins)
 	}
 	if s.isShuffle() {
-		for _, rr := range s.Proc.MergeReceivers {
-			rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
+		for _, rr := range s.Proc.Reg.MergeReceivers {
+			rr.Ch = make(chan *process.RegisterMessage, 16)
 		}
 	}
 	return nil

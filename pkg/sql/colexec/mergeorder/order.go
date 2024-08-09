@@ -185,8 +185,10 @@ func (mergeOrder *MergeOrder) OpType() vm.OpType {
 func (mergeOrder *MergeOrder) Prepare(proc *process.Process) (err error) {
 	mergeOrder.ctr = new(container)
 	ctr := mergeOrder.ctr
-	ctr.batchList = make([]*batch.Batch, 0, 16)
-	ctr.orderCols = make([][]*vector.Vector, 0, 16)
+
+	length := 2 * len(proc.Reg.MergeReceivers)
+	ctr.batchList = make([]*batch.Batch, 0, length)
+	ctr.orderCols = make([][]*vector.Vector, 0, length)
 
 	mergeOrder.ctr.executors = make([]colexec.ExpressionExecutor, len(mergeOrder.OrderBySpecs))
 	for i := range mergeOrder.ctr.executors {

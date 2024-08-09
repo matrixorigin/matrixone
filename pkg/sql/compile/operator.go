@@ -1450,7 +1450,7 @@ func constructDeleteDispatchAndLocal(
 
 	op.LocalRegs = append(
 		op.LocalRegs,
-		rs[currentIdx].Proc.MergeReceivers[currentIdx])
+		rs[currentIdx].Proc.Reg.MergeReceivers[currentIdx])
 
 	ss[currentIdx].setRootOperator(op)
 	// add merge to recieve all batches
@@ -1475,7 +1475,7 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 			isSameCN(s.NodeInfo.Addr, currentCNAddr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
-			arg.LocalRegs = append(arg.LocalRegs, s.Proc.MergeReceivers[idx])
+			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 			arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
 		} else {
 			// Remote reg.

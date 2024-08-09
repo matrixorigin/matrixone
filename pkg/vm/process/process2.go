@@ -103,9 +103,9 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 	}
 
 	if dataEntryCount > 0 {
-		child.MergeReceivers = make([]*WaitRegister, dataEntryCount)
-		for i := range child.MergeReceivers {
-			child.MergeReceivers[i] = &WaitRegister{
+		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
+		for i := range child.Reg.MergeReceivers {
+			child.Reg.MergeReceivers[i] = &WaitRegister{
 				Ch: make(chan *RegisterMessage, 1),
 			}
 		}
@@ -133,7 +133,7 @@ func (proc *Process) BuildPipelineContext(parentContext context.Context) context
 
 	// update the context held by this process's data producers.
 	mp := proc.Mp()
-	for _, sender := range proc.MergeReceivers {
+	for _, sender := range proc.Reg.MergeReceivers {
 		sender.Ctx = proc.Ctx
 		sender.CleanChannel(mp)
 	}
