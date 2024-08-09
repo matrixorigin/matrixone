@@ -127,9 +127,13 @@ func initExportFileParam(ep *ExportConfig, mrs *MysqlResultSet) {
 		ep.Symbol[i] = []byte(ep.userConfig.Fields.Terminated.Value)
 	}
 	ep.Symbol[n-1] = []byte(ep.userConfig.Lines.TerminatedBy.Value)
-	ep.ColumnFlag = make([]bool, len(mrs.Name2Index))
+	columnsSet := make(map[string]int)
+	for i := 0; i < len(mrs.Columns); i++ {
+		columnsSet[mrs.Columns[i].Name()] = i
+	}
+	ep.ColumnFlag = make([]bool, len(mrs.Columns))
 	for i := 0; i < len(ep.userConfig.ForceQuote); i++ {
-		col, ok := mrs.Name2Index[ep.userConfig.ForceQuote[i]]
+		col, ok := columnsSet[ep.userConfig.ForceQuote[i]]
 		if ok {
 			ep.ColumnFlag[col] = true
 		}

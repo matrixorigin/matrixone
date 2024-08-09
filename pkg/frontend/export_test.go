@@ -56,7 +56,6 @@ func Test_initExportFileParam(t *testing.T) {
 	ep.mrs.AddColumn(col2)
 
 	ep.userConfig.ForceQuote = append(ep.userConfig.ForceQuote, colName1)
-	ep.mrs.Name2Index[colName1] = 0
 	initExportFileParam(ep, ep.mrs)
 }
 

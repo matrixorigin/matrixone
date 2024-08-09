@@ -549,7 +549,6 @@ func getAccountInfo(ctx context.Context,
 
 		backSes := bh.(*backExec)
 		backSes.backSes.allResultSet[0].Columns = backSes.backSes.allResultSet[0].Columns[idxOfAccountId+1:]
-		delete(backSes.backSes.allResultSet[0].Name2Index, "account_id")
 		backSes.backSes.rs.ResultCols = backSes.backSes.rs.ResultCols[idxOfAccountId+1:]
 	}
 
