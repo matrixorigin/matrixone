@@ -178,10 +178,8 @@ func (tomb *tombstoneData) PrefetchTombstones(
 ) {
 	for i, end := 0, tomb.files.Len(); i < end; i++ {
 		loc := tomb.files.Get(i)
-		if err := blockio.PrefetchTombstone(
+		if err := blockio.Prefetch(
 			srvId,
-			[]uint16{0, 1, 2},
-			[]uint16{loc.ID()},
 			fs,
 			*loc,
 		); err != nil {
@@ -284,12 +282,10 @@ func (tomb *tombstoneDataWithDeltaLoc) PrefetchTombstones(
 	// prefetch blk delta location
 	for idx := 0; idx < len(bids); idx++ {
 		for _, loc := range tomb.blk2UncommitLoc[bids[idx]] {
-			if err := blockio.PrefetchTombstone(
+			if err := blockio.Prefetch(
 				srvId,
-				[]uint16{0, 1, 2},
-				[]uint16{loc.ID()},
 				fs,
-				objectio.Location(loc[:]),
+				loc,
 			); err != nil {
 				logutil.Errorf("prefetch block delta location: %s", err.Error())
 			}
@@ -297,12 +293,10 @@ func (tomb *tombstoneDataWithDeltaLoc) PrefetchTombstones(
 
 		if info, ok := tomb.blk2CommitLoc[bids[idx]]; ok {
 			loc := info.Loc
-			if err := blockio.PrefetchTombstone(
+			if err := blockio.Prefetch(
 				srvId,
-				[]uint16{0, 1, 2},
-				[]uint16{loc.ID()},
 				fs,
-				objectio.Location(loc[:]),
+				loc,
 			); err != nil {
 				logutil.Errorf("prefetch block delta location: %s", err.Error())
 			}

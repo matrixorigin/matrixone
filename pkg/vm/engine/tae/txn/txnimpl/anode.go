@@ -228,6 +228,6 @@ func (n *anode) GetColumnDataById(
 	return
 }
 
-func (n *anode) Prefetch(idxes []uint16) error {
+func (n *anode) Prefetch() error {
 	return nil
 }

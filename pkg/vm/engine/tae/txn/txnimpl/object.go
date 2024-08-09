@@ -201,16 +201,11 @@ func (obj *txnObject) UpdateStats(stats objectio.ObjectStats) error {
 }
 
 func (obj *txnObject) Prefetch(idxes []int) error {
-	schema := obj.table.GetLocalSchema()
-	seqnums := make([]uint16, 0, len(idxes))
-	for _, idx := range idxes {
-		seqnums = append(seqnums, schema.ColDefs[idx].SeqNum)
-	}
 	if obj.IsUncommitted() {
-		return obj.table.tableSpace.Prefetch(obj.entry, seqnums)
+		return obj.table.tableSpace.Prefetch(obj.entry)
 	}
 	for i := 0; i < obj.entry.BlockCnt(); i++ {
-		err := obj.entry.GetObjectData().Prefetch(seqnums, uint16(i))
+		err := obj.entry.GetObjectData().Prefetch(uint16(i))
 		if err != nil {
 			return err
 		}
