@@ -33,6 +33,8 @@ func (mergeRecursive *MergeRecursive) OpType() vm.OpType {
 }
 
 func (mergeRecursive *MergeRecursive) Prepare(proc *process.Process) error {
+	mergeRecursive.OpAnalyzer = process.NewAnalyzer(mergeRecursive.GetIdx(), mergeRecursive.IsFirst, mergeRecursive.IsLast, "merge recursive")
+
 	mergeRecursive.ctr = new(container)
 	mergeRecursive.ctr.InitReceiver(proc, true)
 	return nil
@@ -43,13 +45,17 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeRecursive.GetIdx(), mergeRecursive.GetParallelIdx(), mergeRecursive.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(mergeRecursive.GetIdx(), mergeRecursive.GetParallelIdx(), mergeRecursive.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := mergeRecursive.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	for !mergeRecursive.ctr.last {
-		msg := mergeRecursive.ctr.ReceiveFromSingleReg(0, anal)
+		msg := mergeRecursive.ctr.ReceiveFromSingleRegV1(0, analyzer)
 		if msg.Err != nil {
 			result.Status = vm.ExecStop
 			return result, msg.Err
@@ -79,8 +85,9 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 		return result, nil
 	}
 
-	anal.Input(mergeRecursive.ctr.buf, mergeRecursive.GetIsFirst())
-	anal.Output(mergeRecursive.ctr.buf, mergeRecursive.GetIsLast())
+	//anal.Input(mergeRecursive.ctr.buf, mergeRecursive.GetIsFirst())
+	//anal.Output(mergeRecursive.ctr.buf, mergeRecursive.GetIsLast())
 	result.Batch = mergeRecursive.ctr.buf
+	analyzer.Output(result.Batch)
 	return result, nil
 }

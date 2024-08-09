@@ -42,8 +42,9 @@ func (hashBuild *HashBuild) OpType() vm.OpType {
 }
 
 func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
-	hashBuild.ctr = new(container)
+	hashBuild.OpAnalyzer = process.NewAnalyzer(hashBuild.GetIdx(), hashBuild.IsFirst, hashBuild.IsLast, "hash build")
 
+	hashBuild.ctr = new(container)
 	if hashBuild.NeedHashMap {
 		hashBuild.ctr.vecs = make([][]*vector.Vector, 0)
 		ctr := hashBuild.ctr
@@ -84,9 +85,13 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(hashBuild.GetIdx(), hashBuild.GetParallelIdx(), hashBuild.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(hashBuild.GetIdx(), hashBuild.GetParallelIdx(), hashBuild.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := hashBuild.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	ap := hashBuild
@@ -94,14 +99,14 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := ctr.build(ap, proc, anal, hashBuild.GetIsFirst()); err != nil {
+			if err := ctr.build(ap, proc, analyzer); err != nil {
 				ctr.cleanHashMap()
 				return result, err
 			}
 			if ap.ctr.intHashMap != nil {
-				anal.Alloc(ap.ctr.intHashMap.Size())
+				analyzer.Alloc(ap.ctr.intHashMap.Size())
 			} else if ap.ctr.strHashMap != nil {
-				anal.Alloc(ap.ctr.strHashMap.Size())
+				analyzer.Alloc(ap.ctr.strHashMap.Size())
 			}
 			ctr.state = HandleRuntimeFilter
 
@@ -128,6 +133,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
@@ -159,10 +165,10 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 	return nil
 }
 
-func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
+func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
 	var currentBatch *batch.Batch
 	for {
-		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, anal)
+		result, err := vm.ChildrenCallV1(hashBuild.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return err
 		}
@@ -175,8 +181,8 @@ func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Pr
 			proc.PutBatch(currentBatch)
 			continue
 		}
-		anal.Input(currentBatch, isFirst)
-		anal.Alloc(int64(currentBatch.Size()))
+		//anal.Input(currentBatch, isFirst)
+		analyzer.Alloc(int64(currentBatch.Size()))
 		ctr.inputBatchRowCount += currentBatch.RowCount()
 		err = ctr.mergeIntoBatches(currentBatch, proc)
 		if err != nil {
@@ -323,8 +329,8 @@ func (ctr *container) buildHashmap(ap *HashBuild, proc *process.Process) error {
 	return nil
 }
 
-func (ctr *container) build(ap *HashBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	err := ctr.collectBuildBatches(ap, proc, anal, isFirst)
+func (ctr *container) build(ap *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
+	err := ctr.collectBuildBatches(ap, proc, analyzer)
 	if err != nil {
 		return err
 	}

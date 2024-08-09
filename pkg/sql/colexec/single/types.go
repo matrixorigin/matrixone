@@ -118,8 +118,9 @@ func (singleJoin *SingleJoin) Free(proc *process.Process, pipelineFailed bool, e
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 
-		anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
+		//anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
+		//anal.Alloc(ctr.maxAllocSize)
+		singleJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
 		singleJoin.ctr = nil
 	}
 }

@@ -83,6 +83,8 @@ func (fuzzyFilter *FuzzyFilter) OpType() vm.OpType {
 }
 
 func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
+	fuzzyFilter.OpAnalyzer = process.NewAnalyzer(fuzzyFilter.GetIdx(), fuzzyFilter.IsFirst, fuzzyFilter.IsLast, "fuzzy_filter")
+
 	ctr := new(container)
 	fuzzyFilter.ctr = ctr
 	ctr.InitReceiver(proc, false)
@@ -150,9 +152,13 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(fuzzyFilter.GetIdx(), fuzzyFilter.GetParallelIdx(), fuzzyFilter.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(fuzzyFilter.GetIdx(), fuzzyFilter.GetParallelIdx(), fuzzyFilter.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := fuzzyFilter.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	ctr := fuzzyFilter.ctr
@@ -161,11 +167,11 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 		case Build:
 			buildIdx := fuzzyFilter.BuildIdx
 
-			msg := ctr.ReceiveFromSingleReg(buildIdx, anal)
+			msg := ctr.ReceiveFromSingleRegV1(buildIdx, analyzer)
 			if msg.Err != nil {
 				return result, msg.Err
 			}
-			anal.Input(msg.Batch, fuzzyFilter.IsFirst)
+			//anal.Input(msg.Batch, fuzzyFilter.IsFirst)
 
 			bat := msg.Batch
 			if bat == nil {
@@ -203,11 +209,11 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 		case Probe:
 			probeIdx := fuzzyFilter.getProbeIdx()
 
-			msg := ctr.ReceiveFromSingleReg(probeIdx, anal)
+			msg := ctr.ReceiveFromSingleRegV1(probeIdx, analyzer)
 			if msg.Err != nil {
 				return result, msg.Err
 			}
-			anal.Input(msg.Batch, fuzzyFilter.IsFirst)
+			//anal.Input(msg.Batch, fuzzyFilter.IsFirst)
 
 			bat := msg.Batch
 			if bat == nil {
@@ -215,7 +221,8 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 				// this will happen in such case:create unique index from a table that unique col have no data
 				if ctr.rbat == nil || ctr.collisionCnt == 0 {
 					result.Status = vm.ExecStop
-					anal.Output(result.Batch, fuzzyFilter.IsLast)
+					//anal.Output(result.Batch, fuzzyFilter.IsLast)
+					analyzer.Output(result.Batch)
 					return result, nil
 				}
 
@@ -227,7 +234,8 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 				if err := fuzzyFilter.Callback(ctr.rbat); err != nil {
 					return result, err
 				} else {
-					anal.Output(result.Batch, fuzzyFilter.IsLast)
+					//anal.Output(result.Batch, fuzzyFilter.IsLast)
+					analyzer.Output(result.Batch)
 					return result, nil
 				}
 			}
@@ -250,7 +258,8 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			continue
 		case End:
 			result.Status = vm.ExecStop
-			anal.Output(result.Batch, fuzzyFilter.IsLast)
+			//anal.Output(result.Batch, fuzzyFilter.IsLast)
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

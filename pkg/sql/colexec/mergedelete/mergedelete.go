@@ -37,6 +37,8 @@ func (mergeDelete *MergeDelete) OpType() vm.OpType {
 }
 
 func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
+	mergeDelete.OpAnalyzer = process.NewAnalyzer(mergeDelete.GetIdx(), mergeDelete.IsFirst, mergeDelete.IsLast, "merge_delete")
+
 	mergeDelete.ctr = new(container)
 	ref := mergeDelete.Ref
 	eng := mergeDelete.Engine
@@ -55,15 +57,19 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeDelete.GetIdx(), mergeDelete.GetParallelIdx(), mergeDelete.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(mergeDelete.GetIdx(), mergeDelete.GetParallelIdx(), mergeDelete.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := mergeDelete.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	var err error
 	var name string
 	ap := mergeDelete
 
-	result, err := vm.ChildrenCall(mergeDelete.Children[0], proc, anal)
+	result, err := vm.ChildrenCallV1(mergeDelete.Children[0], proc, analyzer)
 	if err != nil {
 		return result, err
 	}
@@ -116,5 +122,7 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	}
 	// and there are another attr used to record how many rows are deleted
 	ap.AffectedRows += uint64(vector.GetFixedAt[uint32](bat.GetVector(4), 0))
+
+	analyzer.Output(result.Batch)
 	return result, nil
 }

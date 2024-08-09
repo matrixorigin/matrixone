@@ -37,6 +37,7 @@ func (indexBuild *IndexBuild) OpType() vm.OpType {
 }
 
 func (indexBuild *IndexBuild) Prepare(proc *process.Process) (err error) {
+	indexBuild.OpAnalyzer = process.NewAnalyzer(indexBuild.GetIdx(), indexBuild.IsFirst, indexBuild.IsLast, "index build")
 	if indexBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in index build!")
 	}
@@ -49,15 +50,20 @@ func (indexBuild *IndexBuild) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(indexBuild.GetIdx(), indexBuild.GetParallelIdx(), indexBuild.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(indexBuild.GetIdx(), indexBuild.GetParallelIdx(), indexBuild.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := indexBuild.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	result := vm.NewCallResult()
 	ctr := indexBuild.ctr
 	for {
 		switch ctr.state {
 		case ReceiveBatch:
-			if err := ctr.build(indexBuild, proc, anal, indexBuild.GetIsFirst()); err != nil {
+			if err := ctr.build(indexBuild, proc, analyzer); err != nil {
 				return result, err
 			}
 			ctr.state = HandleRuntimeFilter
@@ -74,15 +80,16 @@ func (indexBuild *IndexBuild) Call(proc *process.Process) (vm.CallResult, error)
 			}
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
 
-func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
+func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.Process, analyzer process.Analyzer) error {
 	var currentBatch *batch.Batch
 	for {
-		result, err := vm.ChildrenCall(indexBuild.GetChildren(0), proc, anal)
+		result, err := vm.ChildrenCallV1(indexBuild.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return err
 		}
@@ -96,8 +103,8 @@ func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.
 			continue
 		}
 
-		anal.Input(currentBatch, isFirst)
-		anal.Alloc(int64(currentBatch.Size()))
+		//anal.Input(currentBatch, isFirst)
+		analyzer.Alloc(int64(currentBatch.Size()))
 		ctr.batch, err = ctr.batch.AppendWithCopy(proc.Ctx, proc.Mp(), currentBatch)
 		if err != nil {
 			return err
@@ -113,8 +120,8 @@ func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.
 	return nil
 }
 
-func (ctr *container) build(ap *IndexBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	err := ctr.collectBuildBatches(ap, proc, anal, isFirst)
+func (ctr *container) build(ap *IndexBuild, proc *process.Process, analyzer process.Analyzer) error {
+	err := ctr.collectBuildBatches(ap, proc, analyzer)
 	if err != nil {
 		return err
 	}

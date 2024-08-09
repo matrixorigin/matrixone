@@ -112,6 +112,16 @@ func (c *Compile) fillPlanNodeAnalyzeInfoV11(plan *PhyPlan) {
 	}
 }
 
+// Check if SQL has a query plan
+func (c *Compile) checkSQLHasQueryPlan() bool {
+	if qry, ok := c.pn.Plan.(*plan.Plan_Query); ok {
+		if qry.Query.StmtType != plan.Query_REPLACE {
+			return true
+		}
+	}
+	return false
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 
 type PhyPlan struct {

@@ -183,6 +183,8 @@ func (mergeOrder *MergeOrder) OpType() vm.OpType {
 }
 
 func (mergeOrder *MergeOrder) Prepare(proc *process.Process) (err error) {
+	mergeOrder.OpAnalyzer = process.NewAnalyzer(mergeOrder.GetIdx(), mergeOrder.IsFirst, mergeOrder.IsLast, "merge order")
+
 	mergeOrder.ctr = new(container)
 	ctr := mergeOrder.ctr
 
@@ -205,16 +207,20 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
+	analyzer := mergeOrder.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := mergeOrder.ctr
-	anal := proc.GetAnalyze(mergeOrder.GetIdx(), mergeOrder.GetParallelIdx(), mergeOrder.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(mergeOrder.GetIdx(), mergeOrder.GetParallelIdx(), mergeOrder.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.status {
 		case receiving:
-			result, err = vm.ChildrenCall(mergeOrder.GetChildren(0), proc, anal)
+			result, err = vm.ChildrenCallV1(mergeOrder.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -246,6 +252,7 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 			if len(ctr.batchList) == 0 {
 				result.Batch = nil
 				result.Status = vm.ExecStop
+				analyzer.Output(result.Batch)
 				return result, nil
 			}
 
@@ -255,6 +262,7 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 				ctr.batchList[0] = nil
 				result.Batch = ctr.buf
 				result.Status = vm.ExecStop
+				analyzer.Output(result.Batch)
 				return result, nil
 			}
 
@@ -265,6 +273,7 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 				return result, err
 			}
 			result.Status = vm.ExecHasMore
+			analyzer.Output(result.Batch)
 			return result, err
 		}
 	}

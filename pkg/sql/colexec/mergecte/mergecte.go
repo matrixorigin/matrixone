@@ -36,6 +36,8 @@ func (mergeCTE *MergeCTE) OpType() vm.OpType {
 }
 
 func (mergeCTE *MergeCTE) Prepare(proc *process.Process) error {
+	mergeCTE.OpAnalyzer = process.NewAnalyzer(mergeCTE.GetIdx(), mergeCTE.IsFirst, mergeCTE.IsLast, "merge cte")
+
 	mergeCTE.ctr = new(container)
 	mergeCTE.ctr.InitReceiver(proc, true)
 	mergeCTE.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
@@ -49,9 +51,13 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeCTE.GetIdx(), mergeCTE.GetParallelIdx(), mergeCTE.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(mergeCTE.GetIdx(), mergeCTE.GetParallelIdx(), mergeCTE.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := mergeCTE.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
 	if mergeCTE.ctr.buf != nil {
@@ -60,7 +66,8 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	switch mergeCTE.ctr.status {
 	case sendInitial:
-		msg = mergeCTE.ctr.ReceiveFromSingleReg(0, anal)
+		// 后期验证该方法内部是否需要统计input
+		msg = mergeCTE.ctr.ReceiveFromSingleRegV1(0, analyzer)
 		if msg.Err != nil {
 			result.Status = vm.ExecStop
 			return result, msg.Err
@@ -78,7 +85,7 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	case sendRecursive:
 		for {
-			msg = mergeCTE.ctr.ReceiveFromAllRegs(anal)
+			msg = mergeCTE.ctr.ReceiveFromAllRegsV1(analyzer)
 			if msg.Batch == nil {
 				result.Batch = nil
 				result.Status = vm.ExecStop
@@ -100,9 +107,10 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
-	anal.Input(mergeCTE.ctr.buf, mergeCTE.GetIsFirst())
-	anal.Output(mergeCTE.ctr.buf, mergeCTE.GetIsLast())
+	//anal.Input(mergeCTE.ctr.buf, mergeCTE.GetIsFirst())
+	//anal.Output(mergeCTE.ctr.buf, mergeCTE.GetIsLast())
 	result.Batch = mergeCTE.ctr.buf
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 

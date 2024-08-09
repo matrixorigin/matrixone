@@ -21,6 +21,10 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -38,9 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 var testFunc = func(
@@ -532,7 +533,7 @@ func runLockBlockingOpTest(
 				batches2 = append(batches2, bat)
 			}
 			require.NoError(t, arg.Prepare(proc))
-			arg.ctr.rt.batchFetchFunc = func(process.Analyze) *process.RegisterMessage {
+			arg.ctr.rt.batchFetchFunc = func(process.Analyzer) *process.RegisterMessage {
 				if len(batches) == 0 {
 					return testutil.NewRegMsg(nil)
 				}

@@ -69,6 +69,8 @@ func (lockOp *LockOp) OpType() vm.OpType {
 }
 
 func (lockOp *LockOp) Prepare(proc *process.Process) error {
+	lockOp.OpAnalyzer = process.NewAnalyzer(lockOp.GetIdx(), lockOp.IsFirst, lockOp.IsLast, "lock_op")
+
 	lockOp.logger = getLogger(proc.GetService())
 	lockOp.ctr = new(container)
 	lockOp.ctr.rt = &state{}
@@ -114,30 +116,35 @@ func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
 func callNonBlocking(
 	proc *process.Process,
 	lockOp *LockOp) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(lockOp.GetIdx(), lockOp.GetParallelIdx(), lockOp.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(lockOp.GetIdx(), lockOp.GetParallelIdx(), lockOp.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
 
-	result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, anal)
+	analyzer := lockOp.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
+	result, err := vm.ChildrenCallV1(lockOp.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
 
-	anal.Input(result.Batch, lockOp.IsFirst)
+	//anal.Input(result.Batch, lockOp.IsFirst)
 	if result.Batch == nil {
 		return result, lockOp.ctr.rt.retryError
 	}
 	bat := result.Batch
 	if bat.IsEmpty() {
-		anal.Output(result.Batch, lockOp.IsLast)
+		//anal.Output(result.Batch, lockOp.IsLast)
+		analyzer.Output(result.Batch)
 		return result, err
 	}
 
-	if err = performLock(bat, proc, lockOp, anal); err != nil {
+	if err = performLock(bat, proc, lockOp, analyzer); err != nil {
 		return result, err
 	}
 
-	anal.Output(result.Batch, lockOp.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -147,14 +154,18 @@ func callBlocking(
 	isFirst bool,
 	_ bool) (vm.CallResult, error) {
 
-	anal := proc.GetAnalyze(lockOp.GetIdx(), lockOp.GetParallelIdx(), lockOp.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(lockOp.GetIdx(), lockOp.GetParallelIdx(), lockOp.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := lockOp.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	if lockOp.ctr.rt.step == stepLock {
 		for {
-			bat, err := lockOp.getBatch(proc, anal, isFirst)
+			bat, err := lockOp.getBatch(proc, analyzer, isFirst)
 			if err != nil {
 				return result, err
 			}
@@ -173,7 +184,7 @@ func callBlocking(
 				continue
 			}
 
-			if err = performLock(bat, proc, lockOp, anal); err != nil {
+			if err = performLock(bat, proc, lockOp, analyzer); err != nil {
 				return result, err
 			}
 
@@ -195,7 +206,8 @@ func callBlocking(
 			bat := lockOp.ctr.rt.cachedBatches[0]
 			lockOp.ctr.rt.cachedBatches = lockOp.ctr.rt.cachedBatches[1:]
 			result.Batch = bat
-			anal.Output(result.Batch, lockOp.IsLast)
+			//anal.Output(result.Batch, lockOp.IsLast)
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
@@ -203,7 +215,8 @@ func callBlocking(
 	if lockOp.ctr.rt.step == stepEnd {
 		result.Status = vm.ExecStop
 		lockOp.cleanCachedBatch(proc)
-		anal.Output(result.Batch, lockOp.IsLast)
+		//anal.Output(result.Batch, lockOp.IsLast)
+		analyzer.Output(result.Batch)
 		return result, lockOp.ctr.rt.retryError
 	}
 
@@ -214,7 +227,7 @@ func performLock(
 	bat *batch.Batch,
 	proc *process.Process,
 	lockOp *LockOp,
-	analyze process.Analyze) error {
+	analyzer process.Analyzer) error {
 	needRetry := false
 	for idx, target := range lockOp.targets {
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
@@ -240,7 +253,7 @@ func performLock(
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,
-			analyze,
+			analyzer,
 			nil,
 			target.tableID,
 			proc,
@@ -400,7 +413,7 @@ func LockRows(
 func doLock(
 	ctx context.Context,
 	eng engine.Engine,
-	analyze process.Analyze,
+	analyzer process.Analyzer,
 	rel engine.Relation,
 	tableID uint64,
 	proc *process.Process,
@@ -498,7 +511,7 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, err
 	}
 	// Record lock waiting time
-	analyzeLockWaitTime(analyze, start)
+	analyzeLockWaitTime(analyzer, start)
 
 	if len(result.ConflictKey) > 0 {
 		trace.GetService(proc.GetService()).AddTxnActionInfo(
@@ -550,7 +563,7 @@ func doLock(
 			return false, false, timestamp.Timestamp{}, err
 		}
 		// Record logtail waiting time
-		analyzeLockWaitTime(analyze, start)
+		analyzeLockWaitTime(analyzer, start)
 
 		fn := opts.hasNewVersionInRangeFunc
 		if fn == nil {
@@ -892,18 +905,18 @@ func (lockOp *LockOp) cleanCachedBatch(_ *process.Process) {
 
 func (lockOp *LockOp) getBatch(
 	_ *process.Process,
-	anal process.Analyze,
+	analyzer process.Analyzer,
 	isFirst bool) (*batch.Batch, error) {
 	fn := lockOp.ctr.rt.batchFetchFunc
 	if fn == nil {
-		fn = lockOp.ctr.rt.ReceiveFromAllRegs
+		fn = lockOp.ctr.rt.ReceiveFromAllRegsV1
 	}
 
-	msg := fn(anal)
+	msg := fn(analyzer)
 	if msg.Err != nil {
 		return nil, msg.Err
 	}
-	anal.Input(msg.Batch, isFirst)
+	//anal.Input(msg.Batch, isFirst)
 	return msg.Batch, nil
 }
 
@@ -947,8 +960,8 @@ func hasNewVersionInRange(
 	return rel.PrimaryKeysMayBeModified(proc.Ctx, fromTS, toTS, vec)
 }
 
-func analyzeLockWaitTime(analyze process.Analyze, start time.Time) {
-	if analyze != nil {
-		analyze.WaitStop(start)
+func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {
+	if analyzer != nil {
+		analyzer.WaitStop(start)
 	}
 }

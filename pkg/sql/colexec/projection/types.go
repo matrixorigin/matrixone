@@ -90,6 +90,7 @@ func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, e
 		projection.ctr = nil
 	}
 
-	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
-	anal.Alloc(int64(projection.maxAllocSize))
+	//anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
+	//anal.Alloc(int64(projection.maxAllocSize))
+	projection.OpAnalyzer.Alloc(int64(projection.maxAllocSize))
 }

@@ -140,8 +140,9 @@ func (rightAnti *RightAnti) Free(proc *process.Process, pipelineFailed bool, err
 		ctr.cleanExprExecutor()
 		ctr.tmpBatches = nil
 
-		anal := proc.GetAnalyze(rightAnti.GetIdx(), rightAnti.GetParallelIdx(), rightAnti.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
+		//anal := proc.GetAnalyze(rightAnti.GetIdx(), rightAnti.GetParallelIdx(), rightAnti.GetParallelMajor())
+		//anal.Alloc(ctr.maxAllocSize)
+		rightAnti.OpAnalyzer.Alloc(ctr.maxAllocSize)
 
 		rightAnti.ctr = nil
 	}

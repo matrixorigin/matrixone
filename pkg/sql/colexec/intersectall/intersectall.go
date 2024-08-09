@@ -41,6 +41,8 @@ func (intersectAll *IntersectAll) OpType() vm.OpType {
 }
 
 func (intersectAll *IntersectAll) Prepare(proc *process.Process) error {
+	intersectAll.OpAnalyzer = process.NewAnalyzer(intersectAll.GetIdx(), intersectAll.IsFirst, intersectAll.IsLast, "intersectAll")
+
 	var err error
 	intersectAll.ctr = new(container)
 	intersectAll.ctr.InitReceiver(proc, false)
@@ -63,15 +65,20 @@ func (intersectAll *IntersectAll) Call(proc *process.Process) (vm.CallResult, er
 		return vm.CancelResult, err
 	}
 
-	var err error
-	analyzer := proc.GetAnalyze(intersectAll.GetIdx(), intersectAll.GetParallelIdx(), intersectAll.GetParallelMajor())
+	//analyzer := proc.GetAnalyze(intersectAll.GetIdx(), intersectAll.GetParallelIdx(), intersectAll.GetParallelMajor())
+	//analyzer.Start()
+	//defer analyzer.Stop()
+
+	analyzer := intersectAll.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()
+
+	var err error
 	result := vm.NewCallResult()
 	for {
 		switch intersectAll.ctr.state {
 		case Build:
-			if err = intersectAll.ctr.build(proc, analyzer, intersectAll.GetIsFirst()); err != nil {
+			if err = intersectAll.ctr.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			if intersectAll.ctr.hashTable != nil {
@@ -81,7 +88,7 @@ func (intersectAll *IntersectAll) Call(proc *process.Process) (vm.CallResult, er
 
 		case Probe:
 			last := false
-			last, err = intersectAll.ctr.probe(proc, analyzer, intersectAll.GetIsFirst(), intersectAll.GetIsLast(), &result)
+			last, err = intersectAll.ctr.probe(proc, analyzer, &result)
 			if err != nil {
 				return result, err
 			}
@@ -100,9 +107,9 @@ func (intersectAll *IntersectAll) Call(proc *process.Process) (vm.CallResult, er
 }
 
 // build use all batches from proc.Reg.MergeReceiver[1](right relation) to build the hash map.
-func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isFirst bool) error {
+func (ctr *container) build(proc *process.Process, analyzer process.Analyzer) error {
 	for {
-		msg := ctr.ReceiveFromSingleReg(1, analyzer)
+		msg := ctr.ReceiveFromSingleRegV1(1, analyzer)
 		if msg.Err != nil {
 			return msg.Err
 		}
@@ -116,7 +123,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 			continue
 		}
 
-		analyzer.Input(bat, isFirst)
+		//analyzer.Input(bat, isFirst)
 		// build hashTable and a counter to record how many times each key appears
 		{
 			itr := ctr.hashTable.NewIterator()
@@ -155,13 +162,13 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 // If a row of the batch appears in the hash table and the value of it in the ctr.counter is greater than 0，
 // send it to the next operator and counter--; else, continue.
 // if batch is the last one, return true, else return false.
-func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
+func (ctr *container) probe(proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) (bool, error) {
 	if ctr.buf != nil {
 		proc.PutBatch(ctr.buf)
 		ctr.buf = nil
 	}
 	for {
-		msg := ctr.ReceiveFromSingleReg(0, analyzer)
+		msg := ctr.ReceiveFromSingleRegV1(0, analyzer)
 		if msg.Err != nil {
 			return false, msg.Err
 		}
@@ -169,7 +176,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		if bat == nil {
 			return true, nil
 		}
-		analyzer.Input(bat, isFirst)
+		//analyzer.Input(bat, isFirst)
 		if bat.Last() {
 			ctr.buf = bat
 			result.Batch = ctr.buf
@@ -233,7 +240,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 
 		}
 		analyzer.Alloc(int64(ctr.buf.Size()))
-		analyzer.Output(ctr.buf, isLast)
+		//analyzer.Output(ctr.buf, isLast)
 
 		result.Batch = ctr.buf
 		proc.PutBatch(bat)

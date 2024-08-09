@@ -35,6 +35,7 @@ func (indexJoin *IndexJoin) OpType() vm.OpType {
 }
 
 func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
+	indexJoin.OpAnalyzer = process.NewAnalyzer(indexJoin.GetIdx(), indexJoin.IsFirst, indexJoin.IsLast, "index join")
 	ap := indexJoin
 	ap.ctr = new(container)
 	return err
@@ -45,18 +46,23 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := indexJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ap := indexJoin
 	ctr := ap.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
-
 		case Probe:
-			result, err = indexJoin.Children[0].Call(proc)
+			// TODO: index join 算子原本没有input统计，该处后期需要验证
+			result, err = vm.ChildrenCallV1(indexJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -87,12 +93,14 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			indexJoin.ctr.buf.AddRowCount(bat.RowCount())
 			proc.PutBatch(bat)
 			result.Batch = indexJoin.ctr.buf
-			anal.Output(indexJoin.ctr.buf, indexJoin.GetIsLast())
+			//anal.Output(indexJoin.ctr.buf, indexJoin.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

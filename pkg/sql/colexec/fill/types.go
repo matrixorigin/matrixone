@@ -62,7 +62,7 @@ type container struct {
 	exes    []colexec.ExpressionExecutor
 	done    bool
 
-	process func(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error)
+	process func(ctr *container, ap *Fill, proc *process.Process, anal process.Analyzer) (vm.CallResult, error)
 }
 
 type Fill struct {

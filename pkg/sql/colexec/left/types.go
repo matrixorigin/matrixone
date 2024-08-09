@@ -122,8 +122,9 @@ func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanExprExecutor()
 		ctr.cleanEvalVectors()
 
-		anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
+		//anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
+		//anal.Alloc(ctr.maxAllocSize)
+		leftJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
 
 		if leftJoin.ctr.bat != nil {
 			proc.PutBatch(leftJoin.ctr.bat)

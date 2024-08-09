@@ -38,6 +38,8 @@ func (mergeLimit *MergeLimit) OpType() vm.OpType {
 }
 
 func (mergeLimit *MergeLimit) Prepare(proc *process.Process) error {
+	mergeLimit.OpAnalyzer = process.NewAnalyzer(mergeLimit.GetIdx(), mergeLimit.IsFirst, mergeLimit.IsLast, "merge limit")
+
 	mergeLimit.ctr = new(container)
 	mergeLimit.ctr.seen = 0
 	var err error
@@ -60,12 +62,16 @@ func (mergeLimit *MergeLimit) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeLimit.GetIdx(), mergeLimit.GetParallelIdx(), mergeLimit.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(mergeLimit.GetIdx(), mergeLimit.GetParallelIdx(), mergeLimit.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := mergeLimit.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	for {
-		result, err := mergeLimit.GetChildren(0).Call(proc)
+		result, err := vm.ChildrenCallV1(mergeLimit.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}
@@ -74,20 +80,22 @@ func (mergeLimit *MergeLimit) Call(proc *process.Process) (vm.CallResult, error)
 		}
 
 		buf := result.Batch
-		anal.Input(buf, mergeLimit.GetIsFirst())
+		//anal.Input(buf, mergeLimit.GetIsFirst())
 		if mergeLimit.ctr.seen >= mergeLimit.ctr.limit {
 			continue
 		}
 		newSeen := mergeLimit.ctr.seen + uint64(buf.RowCount())
 		if newSeen < mergeLimit.ctr.limit {
 			mergeLimit.ctr.seen = newSeen
-			anal.Output(buf, mergeLimit.GetIsLast())
+			//anal.Output(buf, mergeLimit.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 		} else {
 			num := int(newSeen - mergeLimit.ctr.limit)
 			batch.SetLength(buf, buf.RowCount()-num)
 			mergeLimit.ctr.seen = newSeen
-			anal.Output(buf, mergeLimit.GetIsLast())
+			//anal.Output(buf, mergeLimit.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

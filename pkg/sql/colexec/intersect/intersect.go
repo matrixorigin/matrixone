@@ -35,6 +35,8 @@ func (intersect *Intersect) OpType() vm.OpType {
 }
 
 func (intersect *Intersect) Prepare(proc *process.Process) error {
+	intersect.OpAnalyzer = process.NewAnalyzer(intersect.GetIdx(), intersect.IsFirst, intersect.IsLast, "intersect")
+
 	var err error
 
 	intersect.ctr = new(container)
@@ -52,27 +54,29 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	analyze := proc.GetAnalyze(intersect.GetIdx(), intersect.GetParallelIdx(), intersect.GetParallelMajor())
-	analyze.Start()
-	defer analyze.Stop()
+	//analyze := proc.GetAnalyze(intersect.GetIdx(), intersect.GetParallelIdx(), intersect.GetParallelMajor())
+	//analyze.Start()
+	//defer analyze.Stop()
+	analyzer := intersect.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
-
 	for {
 		switch intersect.ctr.state {
 		case build:
-			if err := intersect.ctr.buildHashTable(proc, analyze, 1, intersect.GetIsFirst()); err != nil {
+			if err := intersect.ctr.buildHashTable(proc, analyzer, 1); err != nil {
 				return result, err
 			}
 			if intersect.ctr.hashTable != nil {
-				analyze.Alloc(intersect.ctr.hashTable.Size())
+				analyzer.Alloc(intersect.ctr.hashTable.Size())
 			}
 			intersect.ctr.state = probe
 
 		case probe:
 			var err error
 			isLast := false
-			if isLast, err = intersect.ctr.probeHashTable(proc, analyze, 0, intersect.GetIsFirst(), intersect.GetIsLast(), &result); err != nil {
+			if isLast, err = intersect.ctr.probeHashTable(proc, analyzer, 0, &result); err != nil {
 				result.Status = vm.ExecStop
 				return result, err
 			}
@@ -80,21 +84,22 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 				intersect.ctr.state = end
 				continue
 			}
-
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		case end:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
 
 // build hash table
-func (c *container) buildHashTable(proc *process.Process, analyse process.Analyze, idx int, isFirst bool) error {
+func (c *container) buildHashTable(proc *process.Process, analyzer process.Analyzer, idx int) error {
 	for {
-		msg := c.ReceiveFromSingleReg(idx, analyse)
+		msg := c.ReceiveFromSingleRegV1(idx, analyzer)
 		if msg.Err != nil {
 			return msg.Err
 		}
@@ -111,7 +116,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 			continue
 		}
 
-		analyse.Input(btc, isFirst)
+		//analyse.Input(btc, isFirst)
 
 		cnt := btc.RowCount()
 		itr := c.hashTable.NewIterator()
@@ -146,9 +151,9 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 	return nil
 }
 
-func (c *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
+func (c *container) probeHashTable(proc *process.Process, analyzer process.Analyzer, idx int, result *vm.CallResult) (bool, error) {
 	for {
-		msg := c.ReceiveFromSingleReg(idx, analyze)
+		msg := c.ReceiveFromSingleRegV1(idx, analyzer)
 		if msg.Err != nil {
 			return false, msg.Err
 		}
@@ -165,7 +170,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 			continue
 		}
 
-		analyze.Input(btc, isFirst)
+		//analyze.Input(btc, isFirst)
 		if c.btc != nil {
 			proc.PutBatch(c.btc)
 			c.btc = nil
@@ -223,8 +228,9 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		}
 
 		proc.PutBatch(btc)
-		analyze.Alloc(int64(c.btc.Size()))
-		analyze.Output(c.btc, isLast)
+		//analyze.Alloc(int64(c.btc.Size()))
+		//analyze.Output(c.btc, isLast)
+		analyzer.Alloc(int64(c.btc.Size()))
 
 		result.Batch = c.btc
 		return false, nil

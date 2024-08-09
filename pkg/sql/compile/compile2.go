@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	gotrace "runtime/trace"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -258,7 +257,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}
 
 	//--------------------------------------------------------------------------------------------------------------
-	if strings.HasPrefix(c.sql, "SELECt") {
+
+	if c.checkSQLHasQueryPlan() {
+		//if strings.HasPrefix(c.sql, "select") {
 		scopeInfo := DebugShowScopes(c.scope)
 		fmt.Printf("----------------------------------wuxiliang end----------------------------------\nSQL:%s %s\n--------------------------------------------", c.sql, scopeInfo)
 		phyPlan := ConvertCompileToPhyPlan(runC)
@@ -269,9 +270,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			panic(fmt.Sprintf("--------->wuxiliang Error serializing to JSON: %s", err))
 		}
 		fmt.Printf("---------->wuxiliang JSON2: %s\n", jsonStr)
+		//}
 	}
 	//--------------------------------------------------------------------------------------------------------------
-
 	return queryResult, err
 }
 

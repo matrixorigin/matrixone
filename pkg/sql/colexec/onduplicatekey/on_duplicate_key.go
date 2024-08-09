@@ -41,6 +41,7 @@ func (onDuplicatekey *OnDuplicatekey) OpType() vm.OpType {
 }
 
 func (onDuplicatekey *OnDuplicatekey) Prepare(p *process.Process) error {
+	onDuplicatekey.OpAnalyzer = process.NewAnalyzer(onDuplicatekey.GetIdx(), onDuplicatekey.IsFirst, onDuplicatekey.IsLast, "on_duplicate_key")
 	onDuplicatekey.ctr = &container{}
 	return nil
 }
@@ -50,9 +51,13 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(onDuplicatekey.GetIdx(), onDuplicatekey.GetParallelIdx(), onDuplicatekey.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(onDuplicatekey.GetIdx(), onDuplicatekey.GetParallelIdx(), onDuplicatekey.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := onDuplicatekey.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	ctr := onDuplicatekey.ctr
 	result := vm.NewCallResult()
@@ -60,7 +65,8 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 		switch ctr.state {
 		case Build:
 			for {
-				result, err := onDuplicatekey.GetChildren(0).Call(proc)
+				//result, err := onDuplicatekey.GetChildren(0).Call(proc)
+				result, err := vm.ChildrenCallV1(onDuplicatekey.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -69,7 +75,7 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 					break
 				}
 				bat := result.Batch
-				anal.Input(bat, onDuplicatekey.GetIsFirst())
+				//anal.Input(bat, onDuplicatekey.GetIsFirst())
 				err = resetInsertBatchForOnduplicateKey(proc, bat, onDuplicatekey)
 				if err != nil {
 					return result, err
@@ -79,16 +85,18 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 			ctr.state = Eval
 
 		case Eval:
-			if ctr.rbat != nil {
-				anal.Output(ctr.rbat, onDuplicatekey.GetIsLast())
-			}
+			//if ctr.rbat != nil {
+			//	anal.Output(ctr.rbat, onDuplicatekey.GetIsLast())
+			//}
 			result.Batch = ctr.rbat
 			ctr.state = End
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		case End:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

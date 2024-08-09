@@ -41,6 +41,8 @@ func (singleJoin *SingleJoin) OpType() vm.OpType {
 }
 
 func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
+	singleJoin.OpAnalyzer = process.NewAnalyzer(singleJoin.GetIdx(), singleJoin.IsFirst, singleJoin.IsLast, "single_left")
+
 	singleJoin.ctr = new(container)
 	singleJoin.ctr.vecs = make([]*vector.Vector, len(singleJoin.Conditions[0]))
 
@@ -63,20 +65,25 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := singleJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := singleJoin.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			singleJoin.build(anal, proc)
+			singleJoin.build(analyzer, proc)
 			ctr.state = Probe
 
 		case Probe:
-			result, err = singleJoin.Children[0].Call(proc)
+			result, err = vm.ChildrenCallV1(singleJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -95,29 +102,30 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 				continue
 			}
 			if ctr.mp == nil {
-				if err := ctr.emptyProbe(bat, singleJoin, proc, anal, singleJoin.GetIsFirst(), singleJoin.GetIsLast(), &result); err != nil {
+				if err := ctr.emptyProbe(bat, singleJoin, proc, analyzer, singleJoin.GetIsFirst(), singleJoin.GetIsLast(), &result); err != nil {
 					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			} else {
-				if err := ctr.probe(bat, singleJoin, proc, anal, singleJoin.GetIsFirst(), singleJoin.GetIsLast(), &result); err != nil {
+				if err := ctr.probe(bat, singleJoin, proc, analyzer, singleJoin.GetIsFirst(), singleJoin.GetIsLast(), &result); err != nil {
 					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			}
 			proc.PutBatch(bat)
+			analyzer.Output(result.Batch)
 			return result, nil
-
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
-func (singleJoin *SingleJoin) build(anal process.Analyze, proc *process.Process) {
+func (singleJoin *SingleJoin) build(anal process.Analyzer, proc *process.Process) {
 	ctr := singleJoin.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
@@ -129,8 +137,8 @@ func (singleJoin *SingleJoin) build(anal process.Analyze, proc *process.Process)
 	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, proc *process.Process, anal process.Analyzer, isFirst bool, isLast bool, result *vm.CallResult) error {
+	//anal.Input(bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -145,13 +153,13 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, proc *process
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
+	//anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Process, anal process.Analyzer, isFirst bool, isLast bool, result *vm.CallResult) error {
+	//anal.Input(bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -306,7 +314,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Proc
 		}
 	}
 	ctr.rbat.SetRowCount(ctr.rbat.RowCount() + bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
+	//anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }

@@ -40,6 +40,8 @@ func (semiJoin *SemiJoin) OpType() vm.OpType {
 }
 
 func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {
+	semiJoin.OpAnalyzer = process.NewAnalyzer(semiJoin.GetIdx(), semiJoin.IsFirst, semiJoin.IsLast, "semi join")
+
 	semiJoin.ctr = new(container)
 	semiJoin.ctr.vecs = make([]*vector.Vector, len(semiJoin.Conditions[0]))
 
@@ -62,16 +64,21 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := semiJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := semiJoin.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			semiJoin.build(anal, proc)
+			semiJoin.build(analyzer, proc)
 			if ctr.mp == nil && !semiJoin.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
@@ -84,7 +91,7 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			result, err = semiJoin.Children[0].Call(proc)
+			result, err = vm.ChildrenCallV1(semiJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -112,29 +119,32 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				bat.Vecs = newvecs
 				result.Batch = bat
-				anal.Output(bat, semiJoin.GetIsLast())
+				//anal.Output(bat, semiJoin.GetIsLast())
+				analyzer.Output(result.Batch)
 				return result, nil
 			}
 			if ctr.mp == nil {
 				proc.PutBatch(bat)
 				continue
 			}
-			if err := ctr.probe(bat, semiJoin, proc, anal, semiJoin.GetIsFirst(), semiJoin.GetIsLast(), &result); err != nil {
+			if err := ctr.probe(bat, semiJoin, proc, analyzer, &result); err != nil {
 				bat.Clean(proc.Mp())
 				return result, err
 			}
 			proc.PutBatch(bat)
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
 
-func (semiJoin *SemiJoin) build(anal process.Analyze, proc *process.Process) {
+func (semiJoin *SemiJoin) build(anal process.Analyzer, proc *process.Process) {
 	ctr := semiJoin.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
@@ -146,8 +156,8 @@ func (semiJoin *SemiJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Process, anal process.Analyzer, result *vm.CallResult) error {
+	//anal.Input(bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -256,7 +266,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 	}
 
 	ctr.rbat.AddRowCount(rowCountIncrease)
-	anal.Output(ctr.rbat, isLast)
+	//anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }

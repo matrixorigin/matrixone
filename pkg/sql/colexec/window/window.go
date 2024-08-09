@@ -45,6 +45,8 @@ func (window *Window) OpType() vm.OpType {
 }
 
 func (window *Window) Prepare(proc *process.Process) (err error) {
+	window.OpAnalyzer = process.NewAnalyzer(window.GetIdx(), window.IsFirst, window.IsLast, "window")
+
 	window.ctr = new(container)
 
 	ctr := window.ctr
@@ -68,17 +70,21 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
+	//anal := proc.GetAnalyze(window.GetIdx(), window.GetParallelIdx(), window.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := window.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	var err error
 	ctr := window.ctr
-	anal := proc.GetAnalyze(window.GetIdx(), window.GetParallelIdx(), window.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
-
 	for {
 		switch ctr.status {
 		case receiveAll:
 			for {
-				result, err := window.GetChildren(0).Call(proc)
+				//result, err := window.GetChildren(0).Call(proc)
+				result, err := vm.ChildrenCallV1(window.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -94,7 +100,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 					continue
 				}
-				anal.Input(result.Batch, window.GetIsFirst())
+				//anal.Input(result.Batch, window.GetIsFirst())
 				for i := range result.Batch.Vecs {
 					n := result.Batch.Vecs[i].Length()
 					err = ctr.bat.Vecs[i].UnionBatch(result.Batch.Vecs[i], 0, n, makeFlagsOne(n), proc.Mp())
@@ -105,7 +111,8 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.bat.AddRowCount(result.Batch.RowCount())
 			}
 		case receive:
-			result, err := window.GetChildren(0).Call(proc)
+			//result, err := window.GetChildren(0).Call(proc)
+			result, err := vm.ChildrenCallV1(window.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -113,7 +120,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.status = done
 			} else {
 				ctr.status = eval
-				anal.Input(result.Batch, window.GetIsFirst())
+				//anal.Input(result.Batch, window.GetIsFirst())
 				ctr.bat, err = result.Batch.Dup(proc.Mp())
 				if err != nil {
 					return result, err
@@ -154,7 +161,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 				}
 				// evaluate func
-				if err = ctr.processFunc(i, window, proc, anal); err != nil {
+				if err = ctr.processFunc(i, window, proc, analyzer); err != nil {
 					return result, err
 				}
 
@@ -162,7 +169,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.cleanOrderVectors()
 			}
 
-			anal.Output(ctr.bat, window.GetIsLast())
+			//anal.Output(ctr.bat, window.GetIsLast())
 			if len(window.WinSpecList[0].Expr.(*plan.Expr_W).W.PartitionBy) == 0 {
 				ctr.status = done
 			} else {
@@ -171,16 +178,18 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 
 			result.Batch = ctr.bat
 			result.Status = vm.ExecNext
+			analyzer.Output(result.Batch)
 			return result, nil
 		case done:
 			result := vm.NewCallResult()
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
 
-func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, analyzer process.Analyzer) error {
 	var err error
 	n := ctr.bat.Vecs[0].Length()
 	isWinOrder := function.GetFunctionIsWinOrderFunByName(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Name)
@@ -271,7 +280,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	}
 	ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
 	if vec != nil {
-		anal.Alloc(int64(vec.Size()))
+		analyzer.Alloc(int64(vec.Size()))
 	}
 	ctr.os = nil
 	ctr.ps = nil

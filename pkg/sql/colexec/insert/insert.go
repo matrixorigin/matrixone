@@ -40,6 +40,8 @@ func (insert *Insert) OpType() vm.OpType {
 }
 
 func (insert *Insert) Prepare(proc *process.Process) error {
+	insert.OpAnalyzer = process.NewAnalyzer(insert.GetIdx(), insert.IsFirst, insert.IsLast, "insert")
+
 	insert.ctr = new(container)
 	insert.ctr.state = vm.Build
 	if insert.ToWriteS3 {
@@ -79,21 +81,25 @@ func (insert *Insert) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(insert.GetIdx(), insert.GetParallelIdx(), insert.GetParallelMajor())
-	anal.Start()
+	analyzer := insert.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
+	//anal := proc.GetAnalyze(insert.GetIdx(), insert.GetParallelIdx(), insert.GetParallelMajor())
+	//anal.Start()
 	t := time.Now()
 	defer func() {
-		anal.AddInsertTime(t)
-		anal.Stop()
+		analyzer.AddInsertTime(t)
+		defer analyzer.Stop()
 	}()
 
 	if insert.ToWriteS3 {
-		return insert.insert_s3(proc, anal)
+		return insert.insert_s3(proc, analyzer)
 	}
-	return insert.insert_table(proc, anal)
+	return insert.insert_table(proc, analyzer)
 }
 
-func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementInsertS3DurationHistogram.Observe(time.Since(start).Seconds())
@@ -101,11 +107,11 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 
 	if insert.ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(insert.GetChildren(0), proc, anal)
+			result, err := vm.ChildrenCallV1(insert.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
-			anal.Input(result.Batch, insert.IsFirst)
+			//anal.Input(result.Batch, insert.IsFirst)
 
 			if result.Batch == nil {
 				insert.ctr.state = vm.Eval
@@ -186,24 +192,26 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 		}
 		insert.ctr.state = vm.End
 		insert.ctr.buf = result.Batch
-		anal.Output(result.Batch, insert.IsLast)
+		//anal.Output(result.Batch, insert.IsLast)
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
 	if insert.ctr.state == vm.End {
-		anal.Output(result.Batch, insert.IsLast)
+		//anal.Output(result.Batch, insert.IsLast)
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
 	panic("bug")
 }
 
-func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
-	result, err := vm.ChildrenCall(insert.GetChildren(0), proc, anal)
+func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	result, err := vm.ChildrenCallV1(insert.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
-	anal.Input(result.Batch, insert.IsFirst)
+	//anal.Input(result.Batch, insert.IsFirst)
 
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
@@ -252,7 +260,8 @@ func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) 
 		atomic.AddUint64(&insert.affectedRows, affectedRows)
 	}
 	// `insertBat` does not include partition expression columns
-	anal.Output(result.Batch, insert.IsLast)
+	//anal.Output(result.Batch, insert.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 

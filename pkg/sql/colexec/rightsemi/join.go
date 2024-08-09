@@ -41,6 +41,8 @@ func (rightSemi *RightSemi) OpType() vm.OpType {
 }
 
 func (rightSemi *RightSemi) Prepare(proc *process.Process) (err error) {
+	rightSemi.OpAnalyzer = process.NewAnalyzer(rightSemi.GetIdx(), rightSemi.IsFirst, rightSemi.IsLast, "right semi join")
+
 	rightSemi.ctr = new(container)
 	rightSemi.ctr.InitReceiver(proc, false)
 	rightSemi.ctr.vecs = make([]*vector.Vector, len(rightSemi.Conditions[0]))
@@ -64,16 +66,21 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	analyze := proc.GetAnalyze(rightSemi.GetIdx(), rightSemi.GetParallelIdx(), rightSemi.GetParallelMajor())
-	analyze.Start()
-	defer analyze.Stop()
+	//analyze := proc.GetAnalyze(rightSemi.GetIdx(), rightSemi.GetParallelIdx(), rightSemi.GetParallelMajor())
+	//analyze.Start()
+	//defer analyze.Stop()
+
+	analyzer := rightSemi.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := rightSemi.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			rightSemi.build(analyze, proc)
+			rightSemi.build(analyzer, proc)
 			if ctr.mp == nil && !rightSemi.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
@@ -83,7 +90,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			result, err = rightSemi.Children[0].Call(proc)
+			result, err = vm.ChildrenCallV1(rightSemi.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -103,7 +110,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			if err = ctr.probe(bat, rightSemi, proc, analyze, rightSemi.GetIsFirst(), rightSemi.GetIsLast()); err != nil {
+			if err = ctr.probe(bat, rightSemi, proc, analyzer); err != nil {
 				bat.Clean(proc.Mp())
 				return result, err
 			}
@@ -113,7 +120,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 		case SendLast:
 			if rightSemi.ctr.buf == nil {
 				rightSemi.ctr.lastpos = 0
-				setNil, err := ctr.sendLast(rightSemi, proc, analyze, rightSemi.GetIsFirst(), rightSemi.GetIsLast())
+				setNil, err := ctr.sendLast(rightSemi, proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -129,18 +136,20 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 				result.Batch = rightSemi.ctr.buf[rightSemi.ctr.lastpos]
 				rightSemi.ctr.lastpos++
 				result.Status = vm.ExecHasMore
+				analyzer.Output(result.Batch)
 				return result, nil
 			}
 
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
 
-func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) {
+func (rightSemi *RightSemi) build(anal process.Analyzer, proc *process.Process) {
 	ctr := rightSemi.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
@@ -156,7 +165,7 @@ func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) {
 	}
 }
 
-func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyze process.Analyze, _ bool, isLast bool) (bool, error) {
+func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyzer process.Analyzer) (bool, error) {
 	ctr.handledLast = true
 
 	if ctr.matched == nil {
@@ -208,7 +217,7 @@ func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyze pro
 		}
 		ctr.rbat.AddRowCount(len(sels))
 
-		analyze.Output(ctr.rbat, isLast)
+		//analyze.Output(ctr.rbat, isLast)
 		ap.ctr.buf = []*batch.Batch{ctr.rbat}
 		return false, nil
 	} else {
@@ -234,15 +243,15 @@ func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyze pro
 				}
 			}
 			ap.ctr.buf[k].SetRowCount(len(newsels))
-			analyze.Output(ap.ctr.buf[k], isLast)
+			//analyze.Output(ap.ctr.buf[k], isLast)
 		}
 		return false, nil
 	}
 
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *RightSemi, proc *process.Process, analyze process.Analyze, isFirst bool, _ bool) error {
-	analyze.Input(bat, isFirst)
+func (ctr *container) probe(bat *batch.Batch, ap *RightSemi, proc *process.Process, analyzer process.Analyzer) error {
+	//analyze.Input(bat, isFirst)
 
 	if err := ctr.evalJoinCondition(bat, proc); err != nil {
 		return err

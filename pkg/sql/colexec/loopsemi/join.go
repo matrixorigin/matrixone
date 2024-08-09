@@ -39,6 +39,8 @@ func (loopSemi *LoopSemi) OpType() vm.OpType {
 }
 
 func (loopSemi *LoopSemi) Prepare(proc *process.Process) error {
+	loopSemi.OpAnalyzer = process.NewAnalyzer(loopSemi.GetIdx(), loopSemi.IsFirst, loopSemi.IsLast, "loop semi join")
+
 	var err error
 
 	loopSemi.ctr = new(container)
@@ -54,16 +56,21 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := loopSemi.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := loopSemi.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			if err := loopSemi.build(proc, anal); err != nil {
+			if err := loopSemi.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			if ctr.bat == nil {
@@ -75,7 +82,7 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if loopSemi.ctr.buf == nil {
-				result, err = loopSemi.Children[0].Call(proc)
+				result, err = vm.ChildrenCallV1(loopSemi.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -96,22 +103,24 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 				loopSemi.ctr.lastrow = 0
 			}
 
-			err := ctr.probe(loopSemi, proc, anal, loopSemi.GetIsFirst(), loopSemi.GetIsLast(), &result)
+			err := ctr.probe(loopSemi, proc, analyzer, &result)
 			if loopSemi.ctr.lastrow == 0 {
 				proc.PutBatch(loopSemi.ctr.buf)
 				loopSemi.ctr.buf = nil
 			}
+			analyzer.Output(result.Batch)
 			return result, err
 
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
 
-func (loopSemi *LoopSemi) build(proc *process.Process, anal process.Analyze) error {
+func (loopSemi *LoopSemi) build(proc *process.Process, anal process.Analyzer) error {
 	ctr := loopSemi.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
@@ -131,8 +140,8 @@ func (loopSemi *LoopSemi) build(proc *process.Process, anal process.Analyze) err
 	return nil
 }
 
-func (ctr *container) probe(ap *LoopSemi, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(ap.ctr.buf, isFirst)
+func (ctr *container) probe(ap *LoopSemi, proc *process.Process, anal process.Analyzer, result *vm.CallResult) error {
+	//anal.Input(ap.ctr.buf, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -150,7 +159,7 @@ func (ctr *container) probe(ap *LoopSemi, proc *process.Process, anal process.An
 	for i := ap.ctr.lastrow; i < count; i++ {
 		if rowCountIncrease >= colexec.DefaultBatchSize {
 			ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
-			anal.Output(ctr.rbat, isLast)
+			//anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.ctr.lastrow = i
 			return nil
@@ -179,7 +188,7 @@ func (ctr *container) probe(ap *LoopSemi, proc *process.Process, anal process.An
 		}
 	}
 	ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
-	anal.Output(ctr.rbat, isLast)
+	//anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	ap.ctr.lastrow = 0
 	return nil

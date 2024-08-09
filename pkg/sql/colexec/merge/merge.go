@@ -34,9 +34,9 @@ func (merge *Merge) OpType() vm.OpType {
 }
 
 func (merge *Merge) Prepare(proc *process.Process) error {
-	if merge.OpAnalyzer == nil {
-		merge.OpAnalyzer = process.NewAnalyzer(merge.GetIdx(), merge.IsFirst, merge.IsLast, "merge")
-	}
+	//if merge.OpAnalyzer == nil {
+	merge.OpAnalyzer = process.NewAnalyzer(merge.GetIdx(), merge.IsFirst, merge.IsLast, "merge")
+	//}
 
 	merge.ctr = new(container)
 	merge.ctr.InitReceiver(proc, true)

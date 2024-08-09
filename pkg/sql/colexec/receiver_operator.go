@@ -56,6 +56,22 @@ func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Anal
 	}
 }
 
+// 后期验证该方法内部是否需要统计input
+func (r *ReceiverOperator) ReceiveFromSingleRegV1(regIdx int, analyzer process.Analyzer) *process.RegisterMessage {
+	start := time.Now()
+	defer analyzer.WaitStop(start)
+	select {
+	case <-r.proc.Ctx.Done():
+		return process.NormalEndRegisterMessage
+	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
+		if !ok || msg == nil {
+			return process.NormalEndRegisterMessage
+		}
+		analyzer.Input(msg.Batch)
+		return msg
+	}
+}
+
 // func (r *ReceiverOperator) ReceiveFromSingleRegNonBlock(regIdx int, analyze process.Analyze) (*process.RegisterMessage, bool, error) {
 // 	start := time.Now()
 // 	defer analyze.WaitStop(start)

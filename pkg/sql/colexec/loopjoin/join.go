@@ -39,6 +39,8 @@ func (loopJoin *LoopJoin) OpType() vm.OpType {
 }
 
 func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
+	loopJoin.OpAnalyzer = process.NewAnalyzer(loopJoin.GetIdx(), loopJoin.IsFirst, loopJoin.IsLast, "loop_join")
+
 	var err error
 
 	loopJoin.ctr = new(container)
@@ -54,16 +56,20 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := loopJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := loopJoin.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			if err := loopJoin.build(proc, anal); err != nil {
+			if err := loopJoin.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			if ctr.bat == nil {
@@ -75,7 +81,8 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if ctr.inBat != nil {
-				err = ctr.probe(loopJoin, proc, anal, loopJoin.GetIsLast(), &result)
+				err = ctr.probe(loopJoin, proc, analyzer, loopJoin.GetIsLast(), &result)
+				analyzer.Output(result.Batch)
 				return result, err
 			}
 			result, err = loopJoin.Children[0].Call(proc)
@@ -97,18 +104,20 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.inBat = nil
 				continue
 			}
-			anal.Input(ctr.inBat, loopJoin.GetIsFirst())
-			err = ctr.probe(loopJoin, proc, anal, loopJoin.GetIsLast(), &result)
+			//anal.Input(ctr.inBat, loopJoin.GetIsFirst())
+			err = ctr.probe(loopJoin, proc, analyzer, loopJoin.GetIsLast(), &result)
+			analyzer.Output(result.Batch)
 			return result, err
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
 
-func (loopJoin *LoopJoin) build(proc *process.Process, anal process.Analyze) error {
+func (loopJoin *LoopJoin) build(proc *process.Process, anal process.Analyzer) error {
 	ctr := loopJoin.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
@@ -128,7 +137,7 @@ func (loopJoin *LoopJoin) build(proc *process.Process, anal process.Analyze) err
 	return nil
 }
 
-func (ctr *container) probe(ap *LoopJoin, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *LoopJoin, proc *process.Process, anal process.Analyzer, isLast bool, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -197,7 +206,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, anal process.An
 			}
 		}
 		if rowCountIncrease >= colexec.DefaultBatchSize {
-			anal.Output(ctr.rbat, isLast)
+			//anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ctr.rbat.SetRowCount(rowCountIncrease)
 			ctr.probeIdx = i + 1
@@ -207,7 +216,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, anal process.An
 
 	ctr.probeIdx = 0
 	ctr.rbat.SetRowCount(rowCountIncrease)
-	anal.Output(ctr.rbat, isLast)
+	//anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	proc.PutBatch(ctr.inBat)
 	ctr.inBat = nil

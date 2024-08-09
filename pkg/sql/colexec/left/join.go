@@ -41,6 +41,8 @@ func (leftJoin *LeftJoin) OpType() vm.OpType {
 }
 
 func (leftJoin *LeftJoin) Prepare(proc *process.Process) (err error) {
+	leftJoin.OpAnalyzer = process.NewAnalyzer(leftJoin.GetIdx(), leftJoin.IsFirst, leftJoin.IsLast, "left join")
+
 	leftJoin.ctr = new(container)
 	leftJoin.ctr.vecs = make([]*vector.Vector, len(leftJoin.Conditions[0]))
 
@@ -60,21 +62,27 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := leftJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := leftJoin.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			leftJoin.build(anal, proc)
+			leftJoin.build(analyzer, proc)
 			ctr.state = Probe
 
 		case Probe:
 			if leftJoin.ctr.bat == nil {
-				result, err = leftJoin.Children[0].Call(proc)
+				//result, err = leftJoin.Children[0].Call(proc)
+				vm.ChildrenCallV1(leftJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 
@@ -94,11 +102,11 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			startrow := leftJoin.ctr.lastrow
 			if ctr.mp == nil {
-				if err := ctr.emptyProbe(leftJoin, proc, anal, leftJoin.GetIsFirst(), leftJoin.GetIsLast(), &result); err != nil {
+				if err := ctr.emptyProbe(leftJoin, proc, analyzer, leftJoin.GetIsFirst(), leftJoin.GetIsLast(), &result); err != nil {
 					return result, err
 				}
 			} else {
-				if err := ctr.probe(leftJoin, proc, anal, leftJoin.GetIsFirst(), leftJoin.GetIsLast(), &result); err != nil {
+				if err := ctr.probe(leftJoin, proc, analyzer, leftJoin.GetIsFirst(), leftJoin.GetIsLast(), &result); err != nil {
 					return result, err
 				}
 			}
@@ -108,17 +116,19 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			} else if leftJoin.ctr.lastrow == startrow {
 				return result, moerr.NewInternalErrorNoCtx("left join hanging")
 			}
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
 
-func (leftJoin *LeftJoin) build(anal process.Analyze, proc *process.Process) {
+func (leftJoin *LeftJoin) build(anal process.Analyzer, proc *process.Process) {
 	ctr := leftJoin.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
@@ -130,8 +140,8 @@ func (leftJoin *LeftJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
-func (ctr *container) emptyProbe(ap *LeftJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(ap.ctr.bat, isFirst)
+func (ctr *container) emptyProbe(ap *LeftJoin, proc *process.Process, anal process.Analyzer, isFirst bool, isLast bool, result *vm.CallResult) error {
+	//anal.Input(ap.ctr.bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -154,14 +164,14 @@ func (ctr *container) emptyProbe(ap *LeftJoin, proc *process.Process, anal proce
 		}
 	}
 	ctr.rbat.AddRowCount(ap.ctr.bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
+	//anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	ap.ctr.lastrow = 0
 	return nil
 }
 
-func (ctr *container) probe(ap *LeftJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(ap.ctr.bat, isFirst)
+func (ctr *container) probe(ap *LeftJoin, proc *process.Process, anal process.Analyzer, isFirst bool, isLast bool, result *vm.CallResult) error {
+	//anal.Input(ap.ctr.bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -193,7 +203,7 @@ func (ctr *container) probe(ap *LeftJoin, proc *process.Process, anal process.An
 	itr := ctr.mp.NewIterator()
 	for i := ap.ctr.lastrow; i < count; i += hashmap.UnitLimit {
 		if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
-			anal.Output(ctr.rbat, isLast)
+			//anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.ctr.lastrow = i
 			return nil
@@ -352,7 +362,7 @@ func (ctr *container) probe(ap *LeftJoin, proc *process.Process, anal process.An
 
 		ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCount)
 	}
-	anal.Output(ctr.rbat, isLast)
+	//anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	ap.ctr.lastrow = 0
 	return nil

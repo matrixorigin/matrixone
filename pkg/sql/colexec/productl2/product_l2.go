@@ -41,6 +41,7 @@ func (productl2 *Productl2) OpType() vm.OpType {
 }
 
 func (productl2 *Productl2) Prepare(proc *process.Process) error {
+	productl2.OpAnalyzer = process.NewAnalyzer(productl2.GetIdx(), productl2.IsFirst, productl2.IsLast, "product_l2")
 	ap := productl2
 	ap.ctr = new(container)
 	return nil
@@ -51,9 +52,13 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := productl2.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ap := productl2
 	ctr := ap.ctr
 	result := vm.NewCallResult()
@@ -61,19 +66,21 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := productl2.build(proc, anal); err != nil {
+			if err := productl2.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
 			if ctr.inBat != nil {
-				if err := ctr.probe(ap, proc, anal, productl2.GetIsLast(), &result); err != nil {
+				if err := ctr.probe(ap, proc, analyzer, &result); err != nil {
 					return result, err
 				}
+				analyzer.Output(result.Batch)
 				return result, nil
 			}
-			result, err = productl2.Children[0].Call(proc)
+			//result, err = productl2.Children[0].Call(proc)
+			result, err = vm.ChildrenCallV1(productl2.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -93,21 +100,22 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.inBat = nil
 				continue
 			}
-			anal.Input(ctr.inBat, productl2.GetIsFirst())
-			if err := ctr.probe(ap, proc, anal, productl2.GetIsLast(), &result); err != nil {
+			//anal.Input(ctr.inBat, productl2.GetIsFirst())
+			if err := ctr.probe(ap, proc, analyzer, &result); err != nil {
 				return result, err
 			}
+			analyzer.Output(result.Batch)
 			return result, nil
-
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
 
-func (productl2 *Productl2) build(proc *process.Process, anal process.Analyze) error {
+func (productl2 *Productl2) build(proc *process.Process, anal process.Analyzer) error {
 	ctr := productl2.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
@@ -142,7 +150,7 @@ func (productl2 *Productl2) build(proc *process.Process, anal process.Analyze) e
 //	}
 //)
 
-func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *Productl2, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -267,7 +275,7 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.A
 		}
 
 		if ctr.rbat.Vecs[0].Length() >= colexec.DefaultBatchSize {
-			anal.Output(ctr.rbat, isLast)
+			//anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
 			ctr.probeIdx = j + 1
@@ -277,7 +285,7 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.A
 	// ctr.rbat.AddRowCount(count * count2)
 	ctr.probeIdx = 0
 	ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
-	anal.Output(ctr.rbat, isLast)
+	//anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 
 	proc.PutBatch(ctr.inBat)

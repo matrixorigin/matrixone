@@ -33,6 +33,7 @@ func (valueScan *ValueScan) OpType() vm.OpType {
 }
 
 func (valueScan *ValueScan) Prepare(proc *process.Process) (err error) {
+	valueScan.OpAnalyzer = process.NewAnalyzer(valueScan.GetIdx(), valueScan.IsFirst, valueScan.IsLast, "value_scan")
 	valueScan.ctr = new(container)
 	return nil
 }
@@ -42,11 +43,15 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(valueScan.GetIdx(), valueScan.GetParallelIdx(), valueScan.GetParallelMajor())
-	anal.Start()
-	defer func() {
-		anal.Stop()
-	}()
+	//anal := proc.GetAnalyze(valueScan.GetIdx(), valueScan.GetParallelIdx(), valueScan.GetParallelMajor())
+	//anal.Start()
+	//defer func() {
+	//	anal.Stop()
+	//}()
+
+	analyzer := valueScan.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	if valueScan.ctr.idx < len(valueScan.Batchs) {
@@ -58,7 +63,9 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 		valueScan.ctr.idx += 1
 	}
 
-	anal.Input(result.Batch, valueScan.IsFirst)
-	anal.Output(result.Batch, valueScan.IsLast)
+	//anal.Input(result.Batch, valueScan.IsFirst)
+	//anal.Output(result.Batch, valueScan.IsLast)
+	analyzer.Input(result.Batch)
+	analyzer.Output(result.Batch)
 	return result, nil
 }

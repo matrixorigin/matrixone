@@ -40,6 +40,8 @@ func (loopAnti *LoopAnti) OpType() vm.OpType {
 }
 
 func (loopAnti *LoopAnti) Prepare(proc *process.Process) error {
+	loopAnti.OpAnalyzer = process.NewAnalyzer(loopAnti.GetIdx(), loopAnti.IsFirst, loopAnti.IsLast, "loop anti join")
+
 	var err error
 
 	loopAnti.ctr = new(container)
@@ -55,15 +57,20 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := loopAnti.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := loopAnti.ctr
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
-			if err := loopAnti.build(proc, anal); err != nil {
+			if err := loopAnti.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
@@ -71,7 +78,7 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		case Probe:
 			var err error
 			if loopAnti.ctr.buf == nil {
-				result, err = loopAnti.Children[0].Call(proc)
+				result, err = vm.ChildrenCallV1(loopAnti.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -89,24 +96,26 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(loopAnti, proc, anal, loopAnti.GetIsFirst(), loopAnti.GetIsLast(), &result)
+				err = ctr.emptyProbe(loopAnti, proc, analyzer, &result)
 			} else {
-				err = ctr.probe(loopAnti, proc, anal, loopAnti.GetIsFirst(), loopAnti.GetIsLast(), &result)
+				err = ctr.probe(loopAnti, proc, analyzer, &result)
 			}
 			if loopAnti.ctr.lastrow == 0 {
 				proc.PutBatch(loopAnti.ctr.buf)
 				loopAnti.ctr.buf = nil
 			}
+			analyzer.Output(result.Batch)
 			return result, err
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}
 }
 
-func (loopAnti *LoopAnti) build(proc *process.Process, anal process.Analyze) error {
+func (loopAnti *LoopAnti) build(proc *process.Process, anal process.Analyzer) error {
 	ctr := loopAnti.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
@@ -126,8 +135,8 @@ func (loopAnti *LoopAnti) build(proc *process.Process, anal process.Analyze) err
 	return nil
 }
 
-func (ctr *container) emptyProbe(ap *LoopAnti, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(ap.ctr.buf, isFirst)
+func (ctr *container) emptyProbe(ap *LoopAnti, proc *process.Process, anal process.Analyzer, result *vm.CallResult) error {
+	//anal.Input(ap.ctr.buf, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -143,14 +152,14 @@ func (ctr *container) emptyProbe(ap *LoopAnti, proc *process.Process, anal proce
 		}
 	}
 	ctr.rbat.AddRowCount(ap.ctr.buf.RowCount())
-	anal.Output(ctr.rbat, isLast)
+	//anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	ap.ctr.lastrow = 0
 	return nil
 }
 
-func (ctr *container) probe(ap *LoopAnti, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(ap.ctr.buf, isFirst)
+func (ctr *container) probe(ap *LoopAnti, proc *process.Process, anal process.Analyzer, result *vm.CallResult) error {
+	//anal.Input(ap.ctr.buf, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -168,7 +177,7 @@ func (ctr *container) probe(ap *LoopAnti, proc *process.Process, anal process.An
 	for i := ap.ctr.lastrow; i < count; i++ {
 		if rowCountIncrease >= colexec.DefaultBatchSize {
 			ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
-			anal.Output(ctr.rbat, isLast)
+			//anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.ctr.lastrow = i
 			return nil
@@ -201,7 +210,7 @@ func (ctr *container) probe(ap *LoopAnti, proc *process.Process, anal process.An
 		}
 	}
 	ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
-	anal.Output(ctr.rbat, isLast)
+	//anal.Output(ctr.rbat, isLast)
 
 	result.Batch = ctr.rbat
 	ap.ctr.lastrow = 0

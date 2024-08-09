@@ -37,6 +37,8 @@ func (offset *Offset) OpType() vm.OpType {
 }
 
 func (offset *Offset) Prepare(proc *process.Process) error {
+	offset.OpAnalyzer = process.NewAnalyzer(offset.GetIdx(), offset.IsFirst, offset.IsLast, "offset")
+
 	var err error
 	offset.ctr = new(container)
 	if offset.ctr.offsetExecutor == nil {
@@ -59,11 +61,15 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(offset.GetIdx(), offset.GetParallelIdx(), offset.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(offset.GetIdx(), offset.GetParallelIdx(), offset.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
 
-	result, err := vm.ChildrenCall(offset.GetChildren(0), proc, anal)
+	analyzer := offset.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
+	result, err := vm.ChildrenCallV1(offset.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
@@ -71,9 +77,10 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-	anal.Input(bat, offset.GetIsFirst())
+	//anal.Input(bat, offset.GetIsFirst())
 
 	if offset.ctr.seen > offset.ctr.offset {
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 	length := bat.RowCount()
@@ -83,10 +90,12 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 		bat.Shrink(sels, false)
 		proc.Mp().PutSels(sels)
 		result.Batch = bat
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 	offset.ctr.seen += uint64(length)
 	result.Batch = batch.EmptyBatch
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 

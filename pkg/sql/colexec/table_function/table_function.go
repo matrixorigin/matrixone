@@ -33,9 +33,13 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(tableFunction.GetIdx(), tableFunction.GetParallelIdx(), tableFunction.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(tableFunction.GetIdx(), tableFunction.GetParallelIdx(), tableFunction.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := tableFunction.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	tblArg := tableFunction
 	var (
@@ -44,11 +48,11 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 	)
 	idx := tableFunction.GetIdx()
 
-	result, err := vm.ChildrenCall(tableFunction.GetChildren(0), proc, anal)
+	result, err := vm.ChildrenCallV1(tableFunction.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
-	anal.Input(result.Batch, tableFunction.IsFirst)
+	//anal.Input(result.Batch, tableFunction.IsFirst)
 
 	switch tblArg.FuncName {
 	case "unnest":
@@ -90,9 +94,11 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 	tableFunction.ctr.buf = result.Batch
 	if tableFunction.ctr.buf == nil {
 		result.Status = vm.ExecStop
+		analyzer.Output(result.Batch)
 		return result, e
 	}
 	if tableFunction.ctr.buf.IsEmpty() {
+		analyzer.Output(result.Batch)
 		return result, e
 	}
 
@@ -109,8 +115,10 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 
 	if f {
 		result.Status = vm.ExecStop
+		analyzer.Output(result.Batch)
 		return result, e
 	}
+	analyzer.Output(result.Batch)
 	return result, e
 }
 
@@ -124,6 +132,8 @@ func (tableFunction *TableFunction) OpType() vm.OpType {
 }
 
 func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
+	tableFunction.OpAnalyzer = process.NewAnalyzer(tableFunction.GetIdx(), tableFunction.IsFirst, tableFunction.IsLast, "tableFunction")
+
 	tblArg := tableFunction
 	tblArg.ctr = new(container)
 
