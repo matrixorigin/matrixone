@@ -423,16 +423,15 @@ func (c *Compile) SetIsPrepare(isPrepare bool) {
 	c.isPrepare = isPrepare
 }
 
-/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
-		fmt.Println("pipeline for tp query!")
+		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)
 	} else {
 		fmt.Println("pipeline for ap query! current cn", c.addr, "sql: ", c.originSQL)
 	}
 	fmt.Println(DebugShowScopes(c.scope))
 }
-*/
+
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
@@ -459,7 +458,7 @@ func (c *Compile) runOnce() error {
 		_, _ = GetCompileService().removeRunningCompile(c)
 	}()
 
-	//c.printPipeline()
+	c.printPipeline()
 
 	for i := range c.scope {
 		wg.Add(1)
@@ -2757,10 +2756,15 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	all := []*Scope{l, r}
 	rs := c.newMergeScope(all)
 
+	merge1 := rs.RootOp.(*merge.Merge)
+	merge1.WithPartial(0, 1)
+	merge2 := merge.NewArgument().WithPartial(1, 2)
+
 	currentFirstFlag := c.anal.isFirst
 	op := constructFuzzyFilter(n, ns[n.Children[0]], ns[n.Children[1]])
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(op)
+	op.AppendChild(merge2)
 	c.anal.isFirst = false
 
 	fuzzyCheck, err := newFuzzyCheck(n)
@@ -3274,17 +3278,24 @@ func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope
 	rs := newScope(Merge)
 	rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 	rs.Proc = c.proc.NewNoContextChildProc(len(receivers))
+	for _, r := range receivers {
+		r.Ctx = rs.Proc.Ctx
+	}
+	rs.Proc.Reg.MergeReceivers = receivers
+
+	mergeOp1 := merge.NewArgument()
+	mergeOp1.WithPartial(0, 1)
+	rs.setRootOperator(mergeOp1)
 
 	currentFirstFlag := c.anal.isFirst
 	mergeRecursiveArg := mergerecursive.NewArgument()
 	mergeRecursiveArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergeRecursiveArg)
-	c.anal.isFirst = false
 
-	for _, r := range receivers {
-		r.Ctx = rs.Proc.Ctx
-	}
-	rs.Proc.Reg.MergeReceivers = receivers
+	mergeOp2 := merge.NewArgument()
+	mergeOp2.WithPartial(1, len(receivers))
+	mergeRecursiveArg.AppendChild(mergeOp1)
+	c.anal.isFirst = false
 	return []*Scope{rs}, nil
 }
 

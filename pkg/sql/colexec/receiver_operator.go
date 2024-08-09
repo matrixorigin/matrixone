@@ -38,49 +38,6 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, mergeReceivers []
 			Chan: reflect.ValueOf(mr.Ch),
 		}
 	}
-
-}
-
-func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Analyze) *process.RegisterMessage {
-	start := time.Now()
-	defer analyze.WaitStop(start)
-	select {
-	case <-r.proc.Ctx.Done():
-		return process.NormalEndRegisterMessage
-	case msg, ok := <-r.MergeReceivers[regIdx].Ch:
-		if !ok || msg == nil {
-			return process.NormalEndRegisterMessage
-		}
-
-		return msg
-	}
-}
-
-// func (r *ReceiverOperator) ReceiveFromSingleRegNonBlock(regIdx int, analyze process.Analyze) (*process.RegisterMessage, bool, error) {
-// 	start := time.Now()
-// 	defer analyze.WaitStop(start)
-// 	select {
-// 	case <-r.proc.Ctx.Done():
-// 		return process.EmtpyRegisterMessage, true, nil
-// 	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
-// 		if !ok || msg == nil {
-// 			return process.EmtpyRegisterMessage, true, nil
-// 		}
-// 		return msg, false, msg.Err
-// 	default:
-// 		return process.EmtpyRegisterMessage, false, nil
-// 	}
-// }
-
-func (r *ReceiverOperator) FreeAllReg() {
-	for i := range r.MergeReceivers {
-		r.FreeSingleReg(i)
-	}
-}
-
-func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
-	w := r.MergeReceivers[regIdx]
-	w.CleanChannel(r.proc.GetMPool())
 }
 
 // You MUST Init ReceiverOperator with Merge-Type
