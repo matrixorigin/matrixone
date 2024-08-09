@@ -197,6 +197,7 @@ func mockTnShard(
 }
 
 func TestCheck(t *testing.T) {
+	InitCheckState("")
 	// clear all records, or other test would fail
 	defer func() {
 		getCheckState("").waitingShards.clear()
