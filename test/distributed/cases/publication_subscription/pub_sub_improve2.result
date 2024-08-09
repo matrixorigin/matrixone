@@ -1,0 +1,314 @@
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop account if exists acc02;
+create account acc02 admin_name = 'test_account' identified by '111';
+drop account if exists acc03;
+create account acc03 admin_name = 'test_account' identified by '111';
+drop database if exists db01;
+create database db01;
+use db01;
+create table table01 (col1 int, col2 enum ('a','b','c'));
+insert into table01 values(1,'a');
+insert into table01 values(2, 'b');
+create table table02 (col1 int, col2 enum ('a','b','c'));
+insert into table02 values(1,'a');
+insert into table02 values(2, 'b');
+drop database if exists db02;
+create database db02;
+use db02;
+create table index01(col1 int,key key1(col1));
+insert into index01 values (1);
+insert into index01 values (2);
+drop publication if exists pub01;
+create publication pub01 database db01 account acc02;
+create publication pub02 database db02 table index01 account acc03;
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub02    db02    index01    acc03        2024-08-09 18:03:40    null    
+pub01    db01    *    acc02        2024-08-09 18:03:40    null    
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub01    acc01    db01    *        2024-08-09 18:03:40    null    null    0
+drop database if exists sub01;
+create database sub01 from acc01 publication pub01;
+show subscriptions;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub01    acc01    db01    *        2024-08-09 18:03:40    sub01    2024-08-09 18:03:40    0
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub02    acc01    db02    index01        2024-08-09 18:03:40    null    null    0
+drop database if exists sub03;
+create database sub03 from acc01 publication pub02;
+show databases;
+Database
+information_schema
+mo_catalog
+mysql
+sub03
+system
+system_metrics
+use sub03;
+select * from index01;
+col1
+1
+2
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub02    db02    index01    acc03    acc03    2024-08-09 18:03:40    null    
+pub01    db01    *    acc02    acc02    2024-08-09 18:03:40    null    
+alter publication pub01 account acc02 database db02;
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub01    db02    *    acc02    acc02    2024-08-09 18:03:40    2024-08-09 18:03:40    
+pub02    db02    index01    acc03    acc03    2024-08-09 18:03:40    null    
+show databases;
+Database
+information_schema
+mo_catalog
+mysql
+sub01
+system
+system_metrics
+use sub01;
+show tables;
+Tables_in_sub01
+index01
+select * from index01;
+col1
+1
+2
+select count(*) from index01;
+count(*)
+2
+show create table index01;
+Table    Create Table
+index01    CREATE TABLE `index01` (\n  `col1` INT DEFAULT NULL,\n  KEY `key1` (`col1`)\n)
+show subscriptions;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub01    acc01    db02    *        2024-08-09 18:03:40    sub01    2024-08-09 18:03:40    0
+drop database sub01;
+drop publication pub01;
+drop database db01;
+drop database if exists db04;
+create database db04;
+use db04;
+drop table if exists index01;
+create table index01(col1 char, col2 int, col3 binary);
+insert into index01 values('a', 33, 1);
+insert into index01 values('c', 231, 0);
+alter table index01 add key pk(col1) comment 'primary key';
+select count(*) from index01;
+count(*)
+2
+drop publication if exists pub04;
+create publication pub04 database db04 account all comment 'pub to account all';
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub04    db04    *    *        2024-08-09 18:03:41    null    pub to account all
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub04    sys    db04    *    pub to account all    2024-08-09 18:03:41    null    null    0
+drop database if exists db05;
+create database sub05 from sys publication pub04;
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub04    sys    db04    *    pub to account all    2024-08-09 18:03:41    sub05    2024-08-09 18:03:41    0
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub04    sys    db04    *    pub to account all    2024-08-09 18:03:41    null    null    0
+drop database if exists db05;
+create database sub05 from sys publication pub04;
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub04    sys    db04    *    pub to account all    2024-08-09 18:03:41    sub05    2024-08-09 18:03:41    0
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub02    acc01    db02    index01        2024-08-09 18:03:40    sub03    2024-08-09 18:03:40    0
+pub04    sys    db04    *    pub to account all    2024-08-09 18:03:41    null    null    0
+drop database if exists db05;
+create database sub05 from sys publication pub04;
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub04    sys    db04    *    pub to account all    2024-08-09 18:03:41    sub05    2024-08-09 18:03:41    0
+pub02    acc01    db02    index01        2024-08-09 18:03:40    sub03    2024-08-09 18:03:40    0
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub04    db04    *    *    acc01,acc02,acc03    2024-08-09 18:03:41    null    pub to account all
+drop database sub05;
+drop database sub05;
+drop database sub05;
+drop publication pub04;
+drop database db04;
+drop database if exists db05;
+create database db05;
+use db05;
+drop table if exists t1;
+create table t1 (a text);
+insert into t1 values('abcdef'),('_bcdef'),('a_cdef'),('ab_def'),('abcd_f'),('abcde_');
+drop table if exists t2;
+create table t2 (a datetime(0) not null, primary key(a));
+insert into t2 values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
+drop table if exists t3;
+create table t3(col1 datetime);
+insert into t3 values('2020-01-13 12:20:59.1234586153121');
+insert into t3 values('2023-04-17 01:01:45');
+insert into t3 values(NULL);
+drop table if exists t4;
+create table t4(a int unique key, b int, c int, unique key(b,c));
+insert into t4 values(1,1,1);
+insert into t4 values(2,3,3);
+insert into t4 values(10,19,11);
+drop publication if exists pub05;
+create publication pub05 database db05 table t1,t3 account all comment 'publish t1、t3 to all account except sys';
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub05    db05    t1,t3    *        2024-08-09 18:03:42    null    publish t1、t3 to all account except sys
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub05    sys    db05    t1,t3    publish t1、t3 to all account except sys    2024-08-09 18:03:42    null    null    0
+drop database if exists sub06;
+create database sub06 from sys publication pub05;
+use sub06;
+show tables;
+Tables_in_sub06
+t1
+t3
+select * from t1;
+a
+abcdef
+_bcdef
+a_cdef
+ab_def
+abcd_f
+abcde_
+show create table t3;
+Table    Create Table
+t3    CREATE TABLE `t3` (\n  `col1` DATETIME DEFAULT NULL\n)
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub05    sys    db05    t1,t3    publish t1、t3 to all account except sys    2024-08-09 18:03:42    null    null    0
+drop database if exists sub06;
+create database sub06 from sys publication pub05;
+use sub06;
+show tables;
+Tables_in_sub06
+t1
+t3
+select * from t1;
+a
+abcdef
+_bcdef
+a_cdef
+ab_def
+abcd_f
+abcde_
+show create table t3;
+Table    Create Table
+t3    CREATE TABLE `t3` (\n  `col1` DATETIME DEFAULT NULL\n)
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub02    acc01    db02    index01        2024-08-09 18:03:40    sub03    2024-08-09 18:03:40    0
+pub05    sys    db05    t1,t3    publish t1、t3 to all account except sys    2024-08-09 18:03:42    null    null    0
+drop database if exists sub06;
+create database sub06 from sys publication pub05;
+use sub06;
+show tables;
+Tables_in_sub06
+t1
+t3
+select * from t1;
+a
+abcdef
+_bcdef
+a_cdef
+ab_def
+abcd_f
+abcde_
+show create table t3;
+Table    Create Table
+t3    CREATE TABLE `t3` (\n  `col1` DATETIME DEFAULT NULL\n)
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub05    db05    t1,t3    *    acc01,acc02,acc03    2024-08-09 18:03:42    null    publish t1、t3 to all account except sys
+drop database sub06;
+drop database sub06;
+drop database sub06;
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub05    db05    t1,t3    *        2024-08-09 18:03:42    null    publish t1、t3 to all account except sys
+alter publication pub05 account acc01,acc02 database db05;
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub05    db05    t1,t3    acc01,acc02        2024-08-09 18:03:42    2024-08-09 18:03:43    publish t1、t3 to all account except sys
+drop database sub06;
+Can't drop database 'sub06'; database doesn't exist
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub02    acc01    db02    index01        2024-08-09 18:03:40    sub03    2024-08-09 18:03:40    0
+drop publication pub05;
+drop database db05;
+drop database if exists db06;
+create database db06;
+use db06;
+drop table if exists t1;
+create table t1 (a text);
+insert into t1 values('abcdef'),('_bcdef'),('a_cdef'),('ab_def'),('abcd_f'),('abcde_');
+drop table if exists t2;
+create table t2 (a datetime(0) not null, primary key(a));
+insert into t2 values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
+drop table if exists t3;
+create table t3(col1 datetime);
+insert into t3 values('2020-01-13 12:20:59.1234586153121');
+insert into t3 values('2023-04-17 01:01:45');
+insert into t3 values(NULL);
+drop table if exists t4;
+create table t4(a int unique key, b int, c int, unique key(b,c));
+insert into t4 values(1,1,1);
+insert into t4 values(2,3,3);
+insert into t4 values(10,19,11);
+drop publication if exists pub06;
+create publication pub06 database db06 account acc02 comment 'publish all tables to account acc02';
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub06    db06    *    acc02        2024-08-09 18:03:44    null    publish all tables to account acc02
+pub02    db02    index01    acc03    acc03    2024-08-09 18:03:40    null    
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub06    acc01    db06    *    publish all tables to account acc02    2024-08-09 18:03:44    null    null    0
+drop database if exists sub06;
+create database sub06 from acc01 publication pub06;
+use sub06;
+show tables;
+Tables_in_sub06
+t1
+t2
+t3
+t4
+use db06;
+drop table t1;
+drop table t2;
+drop table t3;
+show publications;           -- table字段需要实时更新
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub06    db06    *    acc02    acc02    2024-08-09 18:03:44    null    publish all tables to account acc02
+pub02    db02    index01    acc03    acc03    2024-08-09 18:03:40    null    
+show databases;
+Database
+information_schema
+mo_catalog
+mysql
+sub06
+system
+system_metrics
+use sub06;
+show tables;
+Tables_in_sub06
+t4
+select * from t4;
+a    b    c
+1    1    1
+2    3    3
+10    19    11
+show subscriptions;              -- table字段需要实时更新
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub06    acc01    db06    *    publish all tables to account acc02    2024-08-09 18:03:44    sub06    2024-08-09 18:03:44    0
