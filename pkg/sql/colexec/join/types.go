@@ -34,17 +34,12 @@ const (
 	End
 )
 
-type evalVector struct {
-	executor colexec.ExpressionExecutor
-	vec      *vector.Vector
-}
-
 type container struct {
 	state int
 
-	batches       []*batch.Batch
 	batchRowCount int64
 	lastrow       int
+	inbat         *batch.Batch
 	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
@@ -55,17 +50,28 @@ type container struct {
 	joinBat2 *batch.Batch
 	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
-	evecs []evalVector
-	vecs  []*vector.Vector
+	executor []colexec.ExpressionExecutor
+	vecs     []*vector.Vector
 
-	mp  *message.JoinMap
-	bat *batch.Batch
+	mp *message.JoinMap
 
 	maxAllocSize int64
 }
 
+/*
+InnerJoin.container has 5 *batch or []*batch
+1.
+2. inbat means the data of left table. It's created by InnerJoin.Children[0] and cleaned by InnerJoin.Children[0].
+3. rbat means the result of InnerJoin. InnerJoin.Probe() create rbat once when it's called first time and use CleanOnlyData() after that.
+   InnerJoin.Reset() doesn't need to reset or clean rbat, because the result always has same types. InnerJoin.Free() will clean rbat.
+4. joinBat1 means some data from left table used to evaluate join conditions. InnerJoin.Probe() create joinBat1 once.
+   joinBat1 will always be overwritten by colexec.SetJoinBatchValues().
+   InnerJoin.Reset() doesn't need to reset or clean joinBat1. InnerJoin.Free() will clean joinBat1.
+5. joinBat2 means some data from right table, same as joinBat1.
+*/
+
 type InnerJoin struct {
-	ctr        *container
+	ctr        container
 	Result     []colexec.ResultPos
 	Typs       []types.Type
 	Cond       *plan.Expr
@@ -113,29 +119,42 @@ func (innerJoin *InnerJoin) Release() {
 }
 
 func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	innerJoin.Free(proc, pipelineFailed, err)
+	ctr := &innerJoin.ctr
+	anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
+
+	ctr.resetExecutor()
+	ctr.resetExprExecutor()
+	ctr.cleanHashMap()
+	ctr.inbat = nil
+	ctr.lastrow = 0
+	ctr.state = Build
+
+	if innerJoin.ProjectList != nil {
+		anal.Alloc(innerJoin.ProjectAllocSize + innerJoin.ctr.maxAllocSize)
+		innerJoin.ctr.maxAllocSize = 0
+		innerJoin.ResetProjection(proc)
+	} else {
+		anal.Alloc(innerJoin.ctr.maxAllocSize)
+		innerJoin.ctr.maxAllocSize = 0
+	}
 }
 
 func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := innerJoin.ctr
-	anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
-	if ctr != nil {
-		ctr.cleanBatch(proc)
-		ctr.cleanEvalVectors()
-		ctr.cleanHashMap()
-		ctr.cleanExprExecutor()
+	ctr := &innerJoin.ctr
 
-		anal.Alloc(ctr.maxAllocSize)
+	ctr.cleanExecutor()
+	ctr.cleanExprExecutor()
+	ctr.cleanBatch(proc)
 
-		if innerJoin.ctr.bat != nil {
-			innerJoin.ctr.bat = nil
-		}
-		innerJoin.ctr.lastrow = 0
-		innerJoin.ctr = nil
-	}
 	if innerJoin.ProjectList != nil {
-		anal.Alloc(innerJoin.ProjectAllocSize)
 		innerJoin.FreeProjection(proc)
+	}
+
+}
+
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
 }
 
@@ -147,18 +166,14 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
-	ctr.batches = nil
 	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
+		ctr.rbat.Clean(proc.Mp())
 	}
 	if ctr.joinBat1 != nil {
-		proc.PutBatch(ctr.joinBat1)
-		ctr.joinBat1 = nil
+		ctr.joinBat1.Clean(proc.Mp())
 	}
 	if ctr.joinBat2 != nil {
-		proc.PutBatch(ctr.joinBat2)
-		ctr.joinBat2 = nil
+		ctr.joinBat2.Clean(proc.Mp())
 	}
 }
 
@@ -169,12 +184,18 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanEvalVectors() {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.Free()
+func (ctr *container) resetExecutor() {
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].ResetForNextQuery()
 		}
-		ctr.evecs[i].vec = nil
 	}
-	ctr.evecs = nil
+}
+
+func (ctr *container) cleanExecutor() {
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].Free()
+		}
+	}
 }
