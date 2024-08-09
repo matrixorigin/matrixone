@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -151,7 +150,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	tblName := stmt.Name.GetTableName()
 	dbName := stmt.Name.GetDBName()
 
-	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
+	var snapshot *Snapshot
 	if stmt.AtTsExpr != nil {
 		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
@@ -202,7 +201,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	var sql string
 	snapshotSpec := ""
 
-	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
+	var snapshot *Snapshot
 	if stmt.AtTsExpr != nil {
 		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
@@ -268,7 +267,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		return nil, err
 	}
 
-	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
+	var snapshot *Snapshot
 	snapshotSpec := ""
 	if stmt.AtTsExpr != nil {
 		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
@@ -352,7 +351,7 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 	}
 
 	// snapshot to fix
-	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
+	var snapshot *Snapshot
 	dbName, err := databaseIsValid(stmt.DbName, ctx, snapshot)
 	if err != nil {
 		return nil, err
