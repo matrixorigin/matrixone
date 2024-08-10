@@ -3682,30 +3682,6 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 	return parent, children
 }
 
-func (c *Compile) newJoinProbeScopeWithBidx(s *Scope) *Scope {
-	rs := newScope(Merge)
-	mergeOp := merge.NewArgument()
-	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
-	mergeOp.SetIsFirst(true)
-	rs.setRootOperator(mergeOp)
-	rs.Proc = s.Proc.NewContextChildProc(s.BuildIdx)
-	for i := 0; i < s.BuildIdx; i++ {
-		regTransplant(s, rs, i, i)
-	}
-
-	s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: s.Proc.Ctx,
-		Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
-	}
-	rs.setRootOperator(
-		connector.NewArgument().
-			WithReg(s.Proc.Reg.MergeReceivers[0]),
-	)
-	s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
-	rs.IsEnd = true
-	return rs
-}
-
 func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	rs := newScope(Merge)
 	mergeOp := merge.NewArgument()
