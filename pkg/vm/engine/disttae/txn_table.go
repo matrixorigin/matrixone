@@ -621,7 +621,9 @@ func (tbl *txnTable) CollectTombstones(
 		return nil, err
 	}
 	//collect committed persisted tombstones from partition state.
-	state.GetTombstoneDeltaLocs(tombstone.blk2CommitLoc)
+	if err = state.GetTombstoneDeltaLocs(tombstone.blk2CommitLoc); err != nil {
+		return nil, err
+	}
 	return tombstone, nil
 }
 
@@ -1570,7 +1572,9 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		if bat.RowCount() == 0 {
 			return nil
 		}
-		tbl.writeTnPartition(tbl.getTxn().proc.Ctx, bat)
+		if err = tbl.writeTnPartition(tbl.getTxn().proc.Ctx, bat); err != nil {
+			return err
+		}
 	default:
 		tbl.getTxn().hasS3Op.Store(true)
 		panic(moerr.NewInternalErrorNoCtx("Unsupport type for table delete %d", typ))
@@ -1624,7 +1628,9 @@ func (tbl *txnTable) compaction(
 		if bat.RowCount() == 0 {
 			continue
 		}
-		s3writer.WriteBlock(bat)
+		if err = s3writer.WriteBlock(bat); err != nil {
+			return nil, nil, err
+		}
 		bat.Clean(tbl.getTxn().proc.GetMPool())
 
 	}
@@ -1700,7 +1706,9 @@ func buildRemoteDS(
 	}
 	//tombstones.Init()
 
-	relData.AttachTombstones(tombstones)
+	if err = relData.AttachTombstones(tombstones); err != nil {
+		return nil, err
+	}
 	buf, err := relData.MarshalBinary()
 	if err != nil {
 		return
@@ -1839,7 +1847,7 @@ func (tbl *txnTable) BuildReaders(
 		if err != nil {
 			return nil, err
 		}
-		rd := NewReader(
+		rd, err := NewReader(
 			ctx,
 			proc,
 			tbl.getTxn().engine,
@@ -1848,6 +1856,10 @@ func (tbl *txnTable) BuildReaders(
 			expr,
 			ds,
 		)
+		if err != nil {
+			return nil, err
+		}
+
 		rd.scanType = scanType
 		rds = append(rds, rd)
 	}
@@ -2005,7 +2017,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	}
 
 	var filter blockio.ReadFilterSearchFuncType
-	buildFilter := func() blockio.ReadFilterSearchFuncType {
+	buildFilter := func() (blockio.ReadFilterSearchFuncType, error) {
 		//keys must be sorted.
 		keys.InplaceSort()
 		bytes, _ := keys.MarshalBinary()
@@ -2017,10 +2029,17 @@ func (tbl *txnTable) PKPersistedBetween(
 			bytes,
 			false)
 
-		basePKFilter := newBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
-		blockReadPKFilter := newBlockReadPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
+		basePKFilter, err := newBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
+		if err != nil {
+			return nil, err
+		}
 
-		return blockReadPKFilter.SortedSearchFunc
+		blockReadPKFilter, err := newBlockReadPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
+		if err != nil {
+			return nil, err
+		}
+
+		return blockReadPKFilter.SortedSearchFunc, nil
 	}
 
 	var unsortedFilter blockio.ReadFilterSearchFuncType
@@ -2060,13 +2079,16 @@ func (tbl *txnTable) PKPersistedBetween(
 
 		//for sorted block, we can use binary search to find the keys.
 		if filter == nil {
-			filter = buildFilter()
-			if filter == nil {
+			filter, err = buildFilter()
+			if filter == nil || err != nil {
 				logutil.Warn("build filter failed, switch to linear search",
 					zap.Uint32("accid", tbl.accountId),
 					zap.Uint64("tableid", tbl.tableId),
 					zap.String("tablename", tbl.tableName))
 				filter = buildUnsortedFilter()
+			}
+			if err != nil {
+				return false, err
 			}
 		}
 		sels := filter(bat.Vecs)
@@ -2528,7 +2550,7 @@ func writeTransferInfoToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 	return writeTransferMapsToS3(ctx, taskHost)
 }
 
-func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) error {
+func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err error) {
 	bookingMaps := taskHost.transferMaps
 
 	blkCnt := int32(len(bookingMaps))
@@ -2563,11 +2585,21 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) error {
 	objRowCnt := 0
 	for blkIdx, transMap := range bookingMaps {
 		for rowIdx, destPos := range transMap {
-			vector.AppendFixed(buffer.Vecs[0], int32(blkIdx), false, taskHost.GetMPool())
-			vector.AppendFixed(buffer.Vecs[1], rowIdx, false, taskHost.GetMPool())
-			vector.AppendFixed(buffer.Vecs[2], destPos.ObjIdx, false, taskHost.GetMPool())
-			vector.AppendFixed(buffer.Vecs[3], destPos.BlkIdx, false, taskHost.GetMPool())
-			vector.AppendFixed(buffer.Vecs[4], destPos.RowIdx, false, taskHost.GetMPool())
+			if err = vector.AppendFixed(buffer.Vecs[0], int32(blkIdx), false, taskHost.GetMPool()); err != nil {
+				return err
+			}
+			if err = vector.AppendFixed(buffer.Vecs[1], rowIdx, false, taskHost.GetMPool()); err != nil {
+				return nil
+			}
+			if err = vector.AppendFixed(buffer.Vecs[2], destPos.ObjIdx, false, taskHost.GetMPool()); err != nil {
+				return nil
+			}
+			if err = vector.AppendFixed(buffer.Vecs[3], destPos.BlkIdx, false, taskHost.GetMPool()); err != nil {
+				return nil
+			}
+			if err = vector.AppendFixed(buffer.Vecs[4], destPos.RowIdx, false, taskHost.GetMPool()); err != nil {
+				return nil
+			}
 
 			buffer.SetRowCount(buffer.RowCount() + 1)
 			objRowCnt++
