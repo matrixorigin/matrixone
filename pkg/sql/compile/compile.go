@@ -3363,7 +3363,6 @@ func (c *Compile) newMergeRemoteScope(ss []*Scope, nodeinfo engine.Node) *Scope 
 	rs.Magic = Remote
 	rs.NodeInfo.Addr = nodeinfo.Addr
 	rs.NodeInfo.Mcpu = 1 //merge scope is single parallel by default
-
 	return rs
 }
 
@@ -3512,6 +3511,7 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 	}
 	mergeBuild := buildScopes[0]
 	if len(buildScopes) > 1 {
+		buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes)
 		mergeBuild = c.newMergeScope(buildScopes)
 	}
 	mergeBuild.setRootOperator(constructDispatch(rs[idx].BuildIdx, rs, c.addr, n, false))
