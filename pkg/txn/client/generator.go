@@ -15,19 +15,26 @@
 package client
 
 import (
-	"github.com/google/uuid"
+	"github.com/rogpeppe/fastuuid"
 )
 
 var _ TxnIDGenerator = (*uuidTxnIDGenerator)(nil)
 
 type uuidTxnIDGenerator struct {
+	g *fastuuid.Generator
 }
 
 func newUUIDTxnIDGenerator() TxnIDGenerator {
-	return &uuidTxnIDGenerator{}
+	g, err := fastuuid.NewGenerator()
+	if err != nil {
+		panic(err)
+	}
+	return &uuidTxnIDGenerator{
+		g: g,
+	}
 }
 
 func (gen *uuidTxnIDGenerator) Generate() []byte {
-	id, _ := uuid.NewV7()
-	return id[:]
+	v := gen.g.Next()
+	return v[:]
 }
