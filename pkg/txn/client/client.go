@@ -392,6 +392,10 @@ func (client *txnClient) getTxnMode() txn.TxnMode {
 }
 
 func (client *txnClient) updateLastCommitTS(event TxnEvent) {
+	if event.Txn.CommitTS.IsEmpty() {
+		return
+	}
+
 	var old *timestamp.Timestamp
 	new := &event.Txn.CommitTS
 	for {

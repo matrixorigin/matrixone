@@ -143,18 +143,23 @@ func (c *Conn) Disconnect() error {
 }
 
 func (c *Conn) Close() error {
+	defer func() {
+		if c.fixBuf.data != nil && len(c.fixBuf.data) > 0 {
+			// Free all allocated memory
+			c.allocator.Free(c.fixBuf.data)
+			c.fixBuf.data = nil
+		}
+		for e := c.dynamicBuf.Front(); e != nil; e = e.Next() {
+			c.allocator.Free(e.Value.([]byte))
+		}
+		c.dynamicBuf.Init()
+	}()
 
 	err := c.closeConn()
 	if err != nil {
 		return err
 	}
 
-	// Free all allocated memory
-	c.allocator.Free(c.fixBuf.data)
-	c.fixBuf.data = nil
-	for e := c.dynamicBuf.Front(); e != nil; e = e.Next() {
-		c.allocator.Free(e.Value.([]byte))
-	}
 	c.ses = nil
 	rm := getGlobalRtMgr()
 	if rm != nil {
@@ -162,6 +167,7 @@ func (c *Conn) Close() error {
 	}
 	return nil
 }
+
 func (c *Conn) CheckAllowedPacketSize(totalLength int) error {
 	var err error
 	if totalLength > c.allowedPacketSize {
