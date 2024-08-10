@@ -3319,28 +3319,6 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope) *Scop
 	return c.newMergeScope(rs)
 }
 
-func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
-	rs := newScope(Remote)
-	rs.NodeInfo.Addr = nodeinfo.Addr
-	rs.NodeInfo.Mcpu = 1 // merge scope is single parallel by default
-	rs.PreScopes = ss
-	rs.Proc = c.proc.NewNoContextChildProc(1)
-	rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, len(ss))
-	rs.Proc.Reg.MergeReceivers[0].NilBatchCnt = len(ss)
-	mergeOp := merge.NewArgument()
-	mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
-	rs.setRootOperator(mergeOp)
-	for i := range ss {
-		// waring: `connector` operator is not used as an input/output analyze,
-		// and `connector` operator cannot play the role of IsFirst/IsLast
-		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[0])
-		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		ss[i].setRootOperator(connArg)
-		ss[i].IsEnd = true
-	}
-	return rs
-}
-
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := newScope(Merge)
 	rs.NodeInfo = getEngineNode(c)
