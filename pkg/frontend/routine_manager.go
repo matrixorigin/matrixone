@@ -360,9 +360,9 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
-	connectionInfo := getConnectionInfo(rs)
 	routine := rm.getRoutine(rs)
 	if routine == nil {
+		connectionInfo := getConnectionInfo(rs)
 		err = moerr.NewInternalError(ctx, "routine does not exist")
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
