@@ -133,16 +133,22 @@ func numTest[T int32 | int64](t *testing.T, typ types.T) {
 	proc := testutil.NewProc()
 	for _, kase := range kases {
 		var gs genNumState[T]
-		startVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.start, 1, nil)
-		endVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.end, 1, nil)
-		stepVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.step, 1, nil)
+		startVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.start, 1, proc.Mp())
+		endVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.end, 1, proc.Mp())
+		stepVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.step, 1, proc.Mp())
 
-		initStartAndEndNum[T](&gs, proc, startVec, endVec, stepVec, 0)
+		err := initStartAndEndNum[T](&gs, proc, startVec, endVec, stepVec, 0)
+		if err != nil {
+			require.True(t, kase.err)
+			continue
+		}
+
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewVec(typ.ToType())
 
 		var result []T
 		for {
+			bat.CleanOnlyData()
 			buildNextNumBatch[T](&gs, bat, 3, proc)
 			if bat.RowCount() == 0 {
 				break
@@ -153,7 +159,11 @@ func numTest[T int32 | int64](t *testing.T, typ types.T) {
 				result = append(result, val)
 			}
 		}
-		require.Equal(t, kase.res, result)
+		if len(kase.res) == 0 {
+			require.True(t, len(result) == 0)
+		} else {
+			require.Equal(t, kase.res, result)
+		}
 	}
 }
 
@@ -260,9 +270,9 @@ func TestGenerateTimestamp(t *testing.T) {
 		end, err := types.ParseDatetime(kase.end, scale)
 		require.Nil(t, err)
 
-		startVec, _ := vector.NewConstFixed[types.Datetime](types.T_datetime.ToType(), start, 1, nil)
-		endVec, _ := vector.NewConstFixed[types.Datetime](types.T_datetime.ToType(), end, 1, nil)
-		stepVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(kase.step), 1, nil)
+		startVec, _ := vector.NewConstFixed[types.Datetime](types.T_datetime.ToType(), start, 1, proc.Mp())
+		endVec, _ := vector.NewConstFixed[types.Datetime](types.T_datetime.ToType(), end, 1, proc.Mp())
+		stepVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(kase.step), 1, proc.Mp())
 
 		err = initDateTimeStep(&gs, proc, stepVec, 0)
 		if err != nil {
@@ -280,6 +290,7 @@ func TestGenerateTimestamp(t *testing.T) {
 		var res []types.Datetime
 
 		for {
+			bat.CleanOnlyData()
 			buildNextDatetimeBatch(&gs, bat, 3, proc)
 			if bat.RowCount() == 0 {
 				break
@@ -290,7 +301,11 @@ func TestGenerateTimestamp(t *testing.T) {
 				res = append(res, val)
 			}
 		}
-		require.Equal(t, kase.res, res)
+		if len(kase.res) == 0 {
+			require.True(t, len(res) == 0)
+		} else {
+			require.Equal(t, kase.res, res)
+		}
 	}
 }
 

@@ -198,11 +198,12 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 func buildNextNumBatch[T int32 | int64](g *genNumState[T], rbat *batch.Batch, maxSz int, proc *process.Process) {
 	cnt := 0
 	for cnt = 0; cnt < maxSz; cnt++ {
-		if (g.step > 0 && g.next > g.end) || (g.step < 0 && g.next < g.end) {
+		if (g.step > 0 && (g.next < g.start || g.next > g.end)) || (g.step < 0 && (g.next > g.start || g.next < g.end)) {
 			break
+		} else {
+			vector.AppendFixed(rbat.Vecs[0], g.next, false, proc.Mp())
+			g.next += g.step
 		}
-		g.next += g.step
-		vector.AppendFixed(rbat.Vecs[0], g.next, false, proc.Mp())
 	}
 	rbat.SetRowCount(cnt)
 }
@@ -211,20 +212,22 @@ func buildNextDatetimeBatch(g *genDatetimeState, rbat *batch.Batch, maxSz int, p
 	var ok bool
 	cnt := 0
 	for cnt = 0; cnt < maxSz; cnt++ {
-		if (g.step > 0 && g.next > g.end) || (g.step < 0 && g.next < g.end) {
+		if (g.step > 0 && (g.next < g.start || g.next > g.end)) || (g.step < 0 && (g.next > g.start || g.next < g.end)) {
 			break
 		}
+		vector.AppendFixed(rbat.Vecs[0], g.next, false, proc.Mp())
 		g.next, ok = g.next.AddInterval(g.step, g.tp, types.DateTimeType)
 		if !ok {
 			return moerr.NewInvalidInput(proc.Ctx, "invalid step '%v %v'", g.step, g.tp)
 		}
-		vector.AppendFixed(rbat.Vecs[0], g.next, false, proc.Mp())
 	}
 	rbat.SetRowCount(cnt)
 	return nil
 }
 
 func (g *generateSeriesArg) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
+	// clean up previous batch
+	g.batch.CleanOnlyData()
 	switch g.batch.Vecs[0].GetType().Oid {
 	case types.T_int32:
 		buildNextNumBatch[int32](&g.i32State, g.batch, 8192, proc)
