@@ -58,7 +58,6 @@ require (
 	github.com/prometheus/client_golang v1.17.0
 	github.com/prometheus/client_model v0.4.1-0.20230718164431-9a2bf3000d16
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/rogpeppe/fastuuid v1.2.0
 	github.com/samber/lo v1.38.1
 	github.com/segmentio/encoding v0.4.0
 	github.com/shirou/gopsutil/v3 v3.23.12

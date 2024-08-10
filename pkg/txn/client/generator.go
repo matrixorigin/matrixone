@@ -15,57 +15,36 @@
 package client
 
 import (
-	"sync"
-
-	"github.com/fagongzi/goetty/v2/buf"
-	"github.com/rogpeppe/fastuuid"
+	"encoding/binary"
+	"hash/fnv"
+	"sync/atomic"
+	"time"
 )
 
 var _ TxnIDGenerator = (*uuidTxnIDGenerator)(nil)
 
-var (
-	bufferSize = 1024 * 1024 * 32 // 32MB
-)
-
 type uuidTxnIDGenerator struct {
-	g *fastuuid.Generator
-
-	mu struct {
-		sync.Mutex
-		buffer *buf.ByteBuf
-	}
+	hash uint64
+	seq  uint64
 }
 
-func newUUIDTxnIDGenerator() TxnIDGenerator {
-	g, err := fastuuid.NewGenerator()
+func newUUIDTxnIDGenerator(sid string) TxnIDGenerator {
+	h := fnv.New64()
+	_, err := h.Write([]byte(sid))
 	if err != nil {
 		panic(err)
 	}
+
 	v := &uuidTxnIDGenerator{
-		g: g,
+		hash: h.Sum64(),
+		seq:  uint64(time.Now().UnixNano()),
 	}
-	v.resetLocked()
 	return v
 }
 
 func (gen *uuidTxnIDGenerator) Generate() []byte {
-	v := gen.g.Next()
-	id := v[:]
-	return gen.get(id)
-}
-
-func (gen *uuidTxnIDGenerator) get(v []byte) []byte {
-	gen.mu.Lock()
-	defer gen.mu.Unlock()
-	if gen.mu.buffer.Writeable() < len(v) {
-		gen.resetLocked()
-	}
-
-	idx := gen.mu.buffer.GetWriteIndex()
-	gen.mu.buffer.MustWrite(v)
-	return gen.mu.buffer.RawBuf()[idx : idx+len(v)]
-}
-
-func (gen *uuidTxnIDGenerator) resetLocked() {
-	gen.mu.buffer = buf.NewByteBuf(bufferSize)
+	var uuid [16]byte
+	binary.BigEndian.PutUint64(uuid[:8], gen.hash)
+	binary.BigEndian.PutUint64(uuid[8:], atomic.AddUint64(&gen.seq, 1))
+	return uuid[:]
 }
