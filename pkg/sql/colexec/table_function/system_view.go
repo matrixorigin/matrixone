@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -81,7 +82,22 @@ type moLocksState struct {
 	simpleOneBatchState
 }
 
-func moLocksPrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
+func moLocksPrepare(proc *process.Process, tf *TableFunction) (tvfState, error) {
+	if len(tf.ctr.retSchema) == 0 {
+		tf.ctr.retSchema = make([]types.Type, len(tf.Attrs))
+		for i, col := range tf.Attrs {
+			col = strings.ToLower(col)
+			idx, ok := plan2.MoLocksColName2Index[col]
+			if !ok {
+				return nil, moerr.NewInternalError(proc.Ctx, "invalid column name %s", col)
+			}
+			tf.ctr.retSchema[i] = plan2.MoLocksColTypes[idx]
+		}
+	}
+	if len(tf.ctr.retSchema) != len(tf.Attrs) {
+		return nil, moerr.NewInternalError(proc.Ctx, "invalid column count")
+	}
+
 	return &moLocksState{}, nil
 }
 
@@ -234,7 +250,21 @@ type moConfigurationState struct {
 	simpleOneBatchState
 }
 
-func moConfigurationsPrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
+func moConfigurationsPrepare(proc *process.Process, tf *TableFunction) (tvfState, error) {
+	if len(tf.ctr.retSchema) == 0 {
+		tf.ctr.retSchema = make([]types.Type, len(tf.Attrs))
+		for i, col := range tf.Attrs {
+			col = strings.ToLower(col)
+			idx, ok := plan2.MoConfigColName2Index[col]
+			if !ok {
+				return nil, moerr.NewInternalError(proc.Ctx, "invalid column name %s", col)
+			}
+			tf.ctr.retSchema[i] = plan2.MoConfigColTypes[idx]
+		}
+	}
+	if len(tf.ctr.retSchema) != len(tf.Attrs) {
+		return nil, moerr.NewInternalError(proc.Ctx, "invalid column count")
+	}
 	return &moConfigurationState{}, nil
 }
 
@@ -343,7 +373,22 @@ type moTransactionsState struct {
 	simpleOneBatchState
 }
 
-func moTransactionsPrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
+func moTransactionsPrepare(proc *process.Process, tf *TableFunction) (tvfState, error) {
+	if len(tf.ctr.retSchema) == 0 {
+		tf.ctr.retSchema = make([]types.Type, len(tf.Attrs))
+		for i, col := range tf.Attrs {
+			col = strings.ToLower(col)
+			idx, ok := plan2.MoTransactionsColName2Index[col]
+			if !ok {
+				return nil, moerr.NewInternalError(proc.Ctx, "invalid column name %s", col)
+			}
+			tf.ctr.retSchema[i] = plan2.MoTransactionsColTypes[idx]
+		}
+	}
+	if len(tf.ctr.retSchema) != len(tf.Attrs) {
+		return nil, moerr.NewInternalError(proc.Ctx, "invalid column count")
+	}
+
 	return &moTransactionsState{}, nil
 }
 
@@ -535,7 +580,16 @@ type moCacheState struct {
 	simpleOneBatchState
 }
 
-func moCachePrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
+func moCachePrepare(proc *process.Process, tf *TableFunction) (tvfState, error) {
+	tf.ctr.retSchema = make([]types.Type, len(tf.Attrs))
+	for i, col := range tf.Attrs {
+		col = strings.ToLower(col)
+		idx, ok := plan2.MoCacheColName2Index[col]
+		if !ok {
+			return nil, moerr.NewInternalError(proc.Ctx, "invalid column name %s", col)
+		}
+		tf.ctr.retSchema[i] = plan2.MoCacheColTypes[idx]
+	}
 	return &moCacheState{}, nil
 }
 
