@@ -93,7 +93,7 @@ import (
 const (
 	DistributedThreshold     uint64 = 10 * mpool.MB
 	SingleLineSizeEstimate   uint64 = 300 * mpool.B
-	shuffleChannelBufferSize        = 64
+	shuffleChannelBufferSize        = 32
 
 	NoAccountId = -1
 )
