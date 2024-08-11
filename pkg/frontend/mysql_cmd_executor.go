@@ -50,7 +50,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -1913,7 +1912,7 @@ func checkModify(plan0 *plan.Plan, ses FeSession) bool {
 		return true
 	}
 	checkFn := func(db string, tableName string, tableId uint64, version uint32) bool {
-		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, tableName, plan.Snapshot{TS: &timestamp.Timestamp{}})
+		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, tableName, nil)
 		if tableDef == nil {
 			return true
 		}
@@ -1991,7 +1990,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		}
 		stmts = append(stmts, cmdFieldStmt)
 	} else {
-		stmts, err = parseSql(execCtx)
+		stmts, err = parseSql(execCtx, ses.GetMySQLParser())
 		if err != nil {
 			return nil, err
 		}
@@ -2003,13 +2002,13 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	return cws, nil
 }
 
-func parseSql(execCtx *ExecCtx) (stmts []tree.Statement, err error) {
+func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, err error) {
 	var v interface{}
 	v, err = execCtx.ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
 		v = int64(1)
 	}
-	stmts, err = parsers.Parse(execCtx.reqCtx, dialect.MYSQL, execCtx.input.getSql(), v.(int64))
+	stmts, err = p.Parse(execCtx.reqCtx, execCtx.input.getSql(), v.(int64))
 	if err != nil {
 		return nil, err
 	}
@@ -2488,7 +2487,7 @@ func dispatchStmt(ses FeSession,
 			//plan changed
 			//clear all cached plan and parse sql again
 			var stmts []tree.Statement
-			stmts, err = parseSql(execCtx)
+			stmts, err = parseSql(execCtx, ses.GetMySQLParser())
 			if err != nil {
 				return err
 			}
