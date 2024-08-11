@@ -50,19 +50,19 @@ type Scanner struct {
 	strBuilder bytes.Buffer
 }
 
-func (scanner *Scanner) setSql(sql string) {
+func (s *Scanner) setSql(sql string) {
 	// This is a mysql scanner, so we set the dialect type to mysql
-	scanner.dialectType = dialect.MYSQL
-	scanner.LastToken = ""
-	scanner.LastError = nil
-	scanner.posVarIndex = 0
-	scanner.MysqlSpecialComment = nil
-	scanner.Pos = 0
-	scanner.Line = 0
-	scanner.Col = 0
-	scanner.PrePos = 0
-	scanner.buf = sql
-	scanner.strBuilder.Reset()
+	s.dialectType = dialect.MYSQL
+	s.LastToken = ""
+	s.LastError = nil
+	s.posVarIndex = 0
+	s.MysqlSpecialComment = nil
+	s.Pos = 0
+	s.Line = 0
+	s.Col = 0
+	s.PrePos = 0
+	s.buf = sql
+	s.strBuilder.Reset()
 }
 
 func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
