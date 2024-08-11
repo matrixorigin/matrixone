@@ -3460,6 +3460,11 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope) []*Scope {
 		}
 	}
 	rs := c.mergeScopesByCN(ss)
+	for i := range rs {
+		for _, rr := range rs[i].Proc.Reg.MergeReceivers {
+			rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
+		}
+	}
 	return rs
 }
 
