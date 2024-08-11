@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -52,7 +51,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		dbName = ctx.DefaultDatabase()
 	}
 
-	_, t := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
+	_, t := ctx.Resolve(dbName, tblName, nil)
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}

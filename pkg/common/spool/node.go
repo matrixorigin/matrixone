@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package client
+package spool
 
 import (
-	"testing"
-
-	"github.com/stretchr/testify/assert"
+	"sync"
+	"sync/atomic"
 )
 
-func TestGenerateUUID(t *testing.T) {
-	gen := newUUIDTxnIDGenerator("")
-	assert.NotEmpty(t, gen.Generate())
+type node[T Element] struct {
+	mu   sync.Mutex
+	cond *sync.Cond
+	nodeState[T]
+}
 
-	n := 1000000
-	ids := make(map[string]struct{}, n)
-	for i := 0; i < n; i++ {
-		id := string(gen.Generate())
-		if _, ok := ids[id]; ok {
-			assert.Fail(t, "repeat uuid")
-		}
-		ids[id] = struct{}{}
-	}
+type nodeState[T Element] struct {
+	next        *node[T]
+	value       T
+	valueOK     bool
+	maxConsumer atomic.Int64
+	target      *Cursor[T]
+	numCursors  atomic.Int64
+	stop        bool
+}
+
+func (s *Spool[T]) recycleNode(node *node[T]) {
+	node.nodeState = nodeState[T]{}
+	s.nodePool.Put(node)
+}
+
+func (s *Spool[T]) newNode() *node[T] {
+	return s.nodePool.Get().(*node[T])
 }

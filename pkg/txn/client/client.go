@@ -249,7 +249,7 @@ func NewTxnClient(
 
 func (client *txnClient) adjust() {
 	if client.generator == nil {
-		client.generator = newUUIDTxnIDGenerator()
+		client.generator = newUUIDTxnIDGenerator(client.sid)
 	}
 	if runtime.ServiceRuntime(client.sid).Clock() == nil {
 		panic("txn clock not set")
