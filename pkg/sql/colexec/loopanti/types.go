@@ -15,7 +15,6 @@
 package loopanti
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,17 +35,15 @@ const (
 
 type container struct {
 	state   int
-	lastrow int
 	bat     *batch.Batch
 	rbat    *batch.Batch
 	joinBat *batch.Batch
 	expr    colexec.ExpressionExecutor
 	cfs     []func(*vector.Vector, *vector.Vector, int64, int) error
-	buf     *batch.Batch
 }
 
 type LoopAnti struct {
-	ctr        *container
+	ctr        container
 	Result     []int32
 	Cond       *plan.Expr
 	Typs       []types.Type
@@ -88,39 +85,34 @@ func (loopAnti *LoopAnti) Release() {
 }
 
 func (loopAnti *LoopAnti) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	loopAnti.Free(proc, pipelineFailed, err)
-}
+	ctr := &loopAnti.ctr
 
-func (loopAnti *LoopAnti) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := loopAnti.ctr; ctr != nil {
-		ctr.cleanBatch(proc.Mp())
-		ctr.cleanExprExecutor()
-		//	if arg.ctr.buf != nil {
-		//	proc.PutBatch(arg.ctr.buf)
-		//	arg.ctr.buf = nil
-		//}
-		loopAnti.ctr.lastrow = 0
-		loopAnti.ctr = nil
-	}
+	ctr.resetExprExecutor()
+	ctr.state = Build
+	ctr.bat.Clean(proc.Mp())
+	ctr.bat = nil
+
 	if loopAnti.ProjectList != nil {
 		anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
 		anal.Alloc(loopAnti.ProjectAllocSize)
+		loopAnti.ResetProjection(proc)
+	}
+}
+
+func (loopAnti *LoopAnti) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &loopAnti.ctr
+
+	ctr.cleanExprExecutor()
+	ctr.cleanBatch(proc)
+
+	if loopAnti.ProjectList != nil {
 		loopAnti.FreeProjection(proc)
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
-	if ctr.rbat != nil {
-		ctr.rbat.Clean(mp)
-		ctr.rbat = nil
-	}
-	if ctr.joinBat != nil {
-		ctr.joinBat.Clean(mp)
-		ctr.joinBat = nil
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
 }
 
@@ -128,5 +120,14 @@ func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
 		ctr.expr = nil
+	}
+}
+
+func (ctr *container) cleanBatch(proc *process.Process) {
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(proc.Mp())
+	}
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.Mp())
 	}
 }
