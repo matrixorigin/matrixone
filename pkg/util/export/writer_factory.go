@@ -70,6 +70,11 @@ func (rw *reactWriter) FlushAndClose() (int, error) {
 			hook(rw.ctx)
 		}
 	}
+	// cleanup rw.afters
+	for idx := range rw.afters {
+		rw.afters[idx] = nil
+	}
+	rw.afters = nil
 	return n, err
 }
 

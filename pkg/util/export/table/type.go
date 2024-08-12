@@ -380,7 +380,6 @@ type NeedSyncWrite interface {
 // work on flow: from Generate to Export.
 type WriteRequest interface {
 	Handle() (int, error)
-	GetContent() string
 }
 
 type ExportRequests []WriteRequest
@@ -393,15 +392,13 @@ func NewRowRequest(writer RowWriter) *RowRequest {
 	return &RowRequest{writer}
 }
 
-func (r *RowRequest) Handle() (int, error) {
+func (r *RowRequest) Handle() (n int, err error) {
 	if r.writer == nil {
 		return 0, nil
 	}
-	return r.writer.FlushAndClose()
-}
-
-func (r *RowRequest) GetContent() string {
-	return r.writer.GetContent()
+	n, err = r.writer.FlushAndClose()
+	r.writer = nil
+	return
 }
 
 type WriterFactory interface {

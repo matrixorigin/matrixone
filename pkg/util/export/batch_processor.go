@@ -48,7 +48,7 @@ import (
 // 2. [generate] statement_info << query qps
 // 3. [generate] rawlog qps ~= [1000, 3000]
 // 4. [generate] metric 1ps = 60s / 15s = 4
-const defaultRingBufferSize = 20_000
+const defaultRingBufferSize = 2 << 13
 
 const LoggerNameMOCollector = "MOCollector"
 
