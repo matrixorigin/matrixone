@@ -139,7 +139,7 @@ pub_name    database_name    account_list
 sys_pub_1    sys_db_1    acc1
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    1
+sys_pub_1    sys    null    null    null    null    sub1    2024-08-09 16:06:32    1
 select * from sub1.sys_tbl_1;
 SQL parser error: table "sys_tbl_1" does not exist
 use sub1;
