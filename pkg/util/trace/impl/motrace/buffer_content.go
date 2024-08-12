@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
@@ -211,8 +210,4 @@ func (c *contentWriteRequest) Handle() (int, error) {
 		setter.SetBuffer(c.buffer, nil)
 	}
 	return c.writer.FlushAndClose()
-}
-
-func (c *contentWriteRequest) GetContent() string {
-	return util.UnsafeBytesToString(c.buffer.Bytes())
 }

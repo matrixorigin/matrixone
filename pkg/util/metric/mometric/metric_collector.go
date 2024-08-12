@@ -21,6 +21,7 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -284,20 +285,27 @@ func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch 
 	}
 }
 
+const bufferInitSize = 16 * mpool.KB
+
 func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, table.ExportRequests] {
+	bufferPool := sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 0, bufferInitSize)) }}
 	return &mfsetETL{
 		mfset: mfset{
 			Reminder:        bp.NewConstantClock(c.opts.flushInterval),
 			metricThreshold: c.opts.metricThreshold,
 			sampleThreshold: c.opts.sampleThreshold,
 		},
-		collector: c,
+		collector:  c,
+		bufferPool: bufferPool,
 	}
 }
 
 type mfsetETL struct {
 	mfset
 	collector *metricFSCollector
+	// bufferPool adapt backoff strategy
+	bufferPool  sync.Pool
+	bufferCount atomic.Int32
 }
 
 // GetBatch implements table.Table.GetBatch.
@@ -312,7 +320,7 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 		if !exist {
 			w = s.collector.writerFactory.GetRowWriter(ctx, row.GetAccount(), row.Table, ts)
 			if setter, ok := (w).(table.BufferSettable); ok && setter.NeedBuffer() {
-				setter.SetBuffer(getBuffer(), putBuffer)
+				setter.SetBuffer(s.getBuffer(), s.putBuffer)
 			}
 			writer[row.Table.GetName()] = w
 		}
@@ -383,7 +391,7 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 
 	reqs := make([]table.WriteRequest, 0, len(writer))
 	for _, w := range writer {
-		reqs = append(reqs, table.NewRowRequest(w))
+		reqs = append(reqs, table.NewRowRequest(w, s /*table.BackOff*/))
 	}
 
 	return reqs
@@ -397,14 +405,23 @@ func localTimeStr(value int64) string {
 	return time.UnixMicro(value).In(time.Local).Format("2006-01-02 15:04:05.000000")
 }
 
-var bufferPool = sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 0, mpool.MB)) }}
-
-func getBuffer() *bytes.Buffer {
+func (s *mfsetETL) getBuffer() *bytes.Buffer {
 	v2.TraceMOLoggerBufferAlloc.Inc()
-	return bufferPool.Get().(*bytes.Buffer)
+	s.bufferCount.Add(1)
+	return s.bufferPool.Get().(*bytes.Buffer)
 }
-func putBuffer(b *bytes.Buffer) {
+func (s *mfsetETL) putBuffer(b *bytes.Buffer) {
 	v2.TraceMOLoggerBufferFree.Inc()
+	s.bufferCount.Add(-1)
 	b.Reset()
-	bufferPool.Put(b)
+	s.bufferPool.Put(b)
+}
+
+var _ table.BackOff = (*mfsetETL)(nil)
+
+const backOffThreshold = mpool.MB / bufferInitSize
+
+// Count implement table.BackOff
+func (s *mfsetETL) Count() bool {
+	return s.bufferCount.Load() > backOffThreshold
 }

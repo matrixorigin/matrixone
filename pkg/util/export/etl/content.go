@@ -21,6 +21,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -29,8 +30,11 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+var errBackOff = moerr.NewInternalErrorNoCtx("BackOff trigger")
+
 var _ table.RowWriter = (*ContentWriter)(nil)
 var _ table.BufferSettable = (*ContentWriter)(nil)
+var _ table.BackOffSettable = (*ContentWriter)(nil)
 
 // ContentWriter NO do gen op, just do the flush op.
 type ContentWriter struct {
@@ -47,6 +51,8 @@ type ContentWriter struct {
 	// main flow
 	sqlFlusher table.Flusher
 	csvFlusher table.Flusher
+
+	backoff table.BackOff
 }
 
 func NewContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher) *ContentWriter {
@@ -68,6 +74,10 @@ func (c *ContentWriter) SetBuffer(buf *bytes.Buffer, callback func(buffer *bytes
 
 // NeedBuffer implements table.BufferSettable
 func (c *ContentWriter) NeedBuffer() bool { return true }
+
+func (c *ContentWriter) SetupBackOff(backoff table.BackOff) {
+	c.backoff = backoff
+}
 
 // WriteRow serialize the row into buffer
 // It new a formatter to serialize the row.
@@ -92,7 +102,7 @@ func (c *ContentWriter) GetContentLength() int {
 	return c.buf.Len()
 }
 
-func (c *ContentWriter) FlushAndClose() (int, error) {
+func (c *ContentWriter) FlushAndClose() (n int, err error) {
 	if c.buf == nil {
 		return 0, nil
 	}
@@ -101,7 +111,13 @@ func (c *ContentWriter) FlushAndClose() (int, error) {
 		c.formatter.Flush()
 	}
 	// main flow
-	n, err := c.sqlFlusher.FlushBuffer(c.buf)
+	if !c.backoff.Count() {
+		n, err = c.sqlFlusher.FlushBuffer(c.buf)
+	} else {
+		// case 1: metric collector is too much data to write
+		v2.TraceMOLoggerBufferBackOff.Inc()
+		err = errBackOff // trigger csv flusher
+	}
 	if err != nil {
 		n, err = c.csvFlusher.FlushBuffer(c.buf)
 		if err != nil {

@@ -340,6 +340,18 @@ type RowWriter interface {
 	FlushAndClose() (int, error)
 }
 
+type BackOff interface {
+	// Count do the event count
+	// return true, means not in backoff cycle. You can run your code.
+	// return false, means you should skip this time.
+	Count() bool
+}
+
+// BackOffSettable work with reactWriter and ContentWriter
+type BackOffSettable interface {
+	SetupBackOff(BackOff)
+}
+
 // RowField work with Row
 // base usage:
 //
@@ -386,15 +398,23 @@ type ExportRequests []WriteRequest
 
 type RowRequest struct {
 	writer RowWriter
+	// backoff adapt BackOffSettable
+	backoff BackOff
 }
 
-func NewRowRequest(writer RowWriter) *RowRequest {
-	return &RowRequest{writer}
+func NewRowRequest(writer RowWriter, backoff BackOff) *RowRequest {
+	return &RowRequest{
+		writer:  writer,
+		backoff: backoff,
+	}
 }
 
 func (r *RowRequest) Handle() (n int, err error) {
 	if r.writer == nil {
 		return 0, nil
+	}
+	if setter, ok := r.writer.(BackOffSettable); ok {
+		setter.SetupBackOff(r.backoff)
 	}
 	n, err = r.writer.FlushAndClose()
 	r.writer = nil

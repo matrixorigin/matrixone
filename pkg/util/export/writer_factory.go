@@ -92,6 +92,12 @@ func (rw *reactWriter) SetBuffer(buf *bytes.Buffer, callback func(*bytes.Buffer)
 
 func (rw *reactWriter) NeedBuffer() bool { return rw.setter != nil }
 
+func (rw *reactWriter) SetupBackOff(backoff table.BackOff) {
+	if s, ok := rw.w.(table.BackOffSettable); ok {
+		s.SetupBackOff(backoff)
+	}
+}
+
 func (rw *reactWriter) AddAfter(hook table.AckHook) {
 	rw.afters = append(rw.afters, hook)
 }

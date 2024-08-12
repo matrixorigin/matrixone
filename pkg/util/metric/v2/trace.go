@@ -169,6 +169,7 @@ var (
 	TraceMOLoggerBufferWriteCSV         = traceMOLoggerMetricBufferCounter.WithLabelValues("write_csv")
 	TraceMOLoggerBufferWriteFailed      = traceMOLoggerMetricBufferCounter.WithLabelValues("write_failed")
 	TraceMOLoggerBufferReactWrite       = traceMOLoggerMetricBufferCounter.WithLabelValues("react_write")
+	TraceMOLoggerBufferBackOff          = traceMOLoggerMetricBufferCounter.WithLabelValues("backoff")
 	TraceMOLoggerBufferReactWriteFailed = traceMOLoggerMetricBufferCounter.WithLabelValues("react_write_failed")
 )
 
