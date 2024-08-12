@@ -89,13 +89,15 @@ var (
 	TraceCollectorTimeoutCounter  = traceCollectorStatusCounter.WithLabelValues("timeout")
 	TraceCollectorEmptyCounter    = traceCollectorStatusCounter.WithLabelValues("empty")
 
-	traceCollectorQueueLength = prometheus.NewGauge(
+	traceCollectorQueueLength = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
 			Subsystem: "trace",
 			Name:      "collector_queue_length",
 			Help:      "The itmes that mologger collector queue hold.",
-		})
+		}, []string{"type"})
+	TraceCollectorMoLoggerQueueLength = traceCollectorQueueLength.WithLabelValues("mologger")
+	TraceCollectorMetricQueueLength   = traceCollectorQueueLength.WithLabelValues("metric")
 
 	traceNegativeCUCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -197,4 +199,4 @@ func GetTraceCollectorCollectHungCounter(typ string) prometheus.Counter {
 	return traceCollectorCollectHungCounter.WithLabelValues(typ)
 }
 
-func GetTraceCollectorQueueLength() prometheus.Gauge { return traceCollectorQueueLength }
+func GetTraceCollectorQueueLength() prometheus.Gauge { return TraceCollectorMoLoggerQueueLength }

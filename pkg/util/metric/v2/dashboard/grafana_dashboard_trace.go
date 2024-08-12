@@ -251,7 +251,7 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			"Collector Queue Length",
 			3,
 			[]string{
-				`sum(` + c.getMetricWithFilter("mo_trace_collector_queue_length", ``) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_trace_collector_queue_length", ``) + `) by (type)`,
 			},
 			[]string{
 				"{{ type }}",
