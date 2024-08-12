@@ -260,6 +260,17 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 		),
 
 		// ------------- next row ------------
+
+		c.withMultiGraph(
+			"Collector Metric Buffer",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_metric_buffer_total", ``) + `[$interval:1m])) by (type)`,
+			},
+			[]string{
+				"{{ type }}",
+			},
+		),
 	)
 }
 

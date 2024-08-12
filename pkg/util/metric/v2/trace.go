@@ -30,6 +30,9 @@ func initTraceMetrics() {
 	registry.MustRegister(traceMOLoggerExportDataHistogram)
 	registry.MustRegister(traceCheckStorageUsageCounter)
 	registry.MustRegister(traceMOLoggerErrorCounter)
+
+	// debug
+	registry.MustRegister(traceMOLoggerMetricBufferCounter)
 }
 
 var (
@@ -147,6 +150,16 @@ var (
 	TraceMOLoggerErrorWriteItemCounter = traceMOLoggerErrorCounter.WithLabelValues("write_item")
 	TraceMOLoggerErrorFlushCounter     = traceMOLoggerErrorCounter.WithLabelValues("flush")
 	TraceMOLoggerErrorConnDBCounter    = traceMOLoggerErrorCounter.WithLabelValues("conn_db")
+
+	traceMOLoggerMetricBufferCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "mologger_metric_buffer_total",
+			Help:      "Count of mologger metric used buffer count",
+		}, []string{"type"})
+	TraceMOLoggerBufferAlloc = traceMOLoggerMetricBufferCounter.WithLabelValues("alloc")
+	TraceMOLoggerBufferFree  = traceMOLoggerMetricBufferCounter.WithLabelValues("free")
 )
 
 func GetTraceNegativeCUCounter(typ string) prometheus.Counter {

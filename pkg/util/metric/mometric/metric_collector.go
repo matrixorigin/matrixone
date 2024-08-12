@@ -30,6 +30,7 @@ import (
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 const CHAN_CAPACITY = 10000
@@ -399,9 +400,11 @@ func localTimeStr(value int64) string {
 var bufferPool = sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 0, mpool.MB)) }}
 
 func getBuffer() *bytes.Buffer {
+	v2.TraceMOLoggerBufferAlloc.Inc()
 	return bufferPool.Get().(*bytes.Buffer)
 }
 func putBuffer(b *bytes.Buffer) {
+	v2.TraceMOLoggerBufferFree.Inc()
 	b.Reset()
 	bufferPool.Put(b)
 }
