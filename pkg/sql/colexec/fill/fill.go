@@ -60,8 +60,8 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 		b := batch.NewWithSize(1)
 		b.SetVector(0, proc.GetVector(types.T_varchar.ToType()))
 		batch.SetLength(b, 1)
-		ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
 		if len(ctr.exes) == 0 {
+			ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
 			for _, val := range fill.FillVal {
 				exe, err := colexec.NewExpressionExecutor(proc, val)
 				if err != nil {
@@ -79,15 +79,17 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 		b.Clean(proc.Mp())
 		ctr.process = processValue
 	case plan.Node_PREV:
-		ctr.prevVecs = make([]*vector.Vector, fill.ColLen)
+		if len(ctr.prevVecs) == 0 {
+			ctr.prevVecs = make([]*vector.Vector, fill.ColLen)
+		}
 		ctr.process = processPrev
 	case plan.Node_NEXT:
 		ctr.status = receiveBat
 		ctr.subStatus = findNull
 		ctr.process = processNext
 	case plan.Node_LINEAR:
-		ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
 		if len(ctr.exes) == 0 {
+			ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
 			for _, v := range fill.FillVal {
 				resetColRef(v, 0)
 				exe, err := colexec.NewExpressionExecutor(proc, v)
