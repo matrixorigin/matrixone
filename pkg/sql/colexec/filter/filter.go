@@ -74,27 +74,30 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
-	if filter.ctr.buf == nil {
-		newBat, err := result.Batch.Dup(proc.Mp())
-		if err != nil {
-			return result, err
-		}
-		filter.ctr.buf = newBat
-	} else {
+	// mark whether use sub opertor call result batch
+	useResultFlag := filter.ctr.buf == nil
+	if !useResultFlag {
 		filter.ctr.buf.CleanOnlyData()
-		_, err := filter.ctr.buf.Append(proc.Ctx, proc.Mp(), result.Batch)
+		_, err = filter.ctr.buf.Append(proc.Ctx, proc.Mp(), result.Batch)
 		if err != nil {
 			return result, err
 		}
 	}
 
 	var sels []int64
+	var vec *vector.Vector
 	for i := range filter.ctr.executors {
-		if filter.ctr.buf.IsEmpty() {
+		if !useResultFlag && filter.ctr.buf.IsEmpty() {
 			break
 		}
 
-		vec, err := filter.ctr.executors[i].Eval(proc, []*batch.Batch{filter.ctr.buf}, nil)
+		// Based on whether result.Batch are used or not to select execution objects
+		batchToEval := result.Batch
+		if !useResultFlag {
+			batchToEval = filter.ctr.buf
+		}
+
+		vec, err = filter.ctr.executors[i].Eval(proc, []*batch.Batch{batchToEval}, nil)
 		if err != nil {
 			result.Batch = nil
 			return result, err
@@ -113,6 +116,13 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
+				if useResultFlag {
+					err = filter.dupResultBatchToBuf(proc, result.Batch)
+					if err != nil {
+						return result, err
+					}
+					useResultFlag = false
+				}
 				filter.ctr.buf.Shrink(nil, false)
 			}
 		} else {
@@ -137,6 +147,18 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 				}
 			}
+
+			if useResultFlag {
+				if len(sels) == result.Batch.RowCount() {
+					continue
+				} else {
+					err = filter.dupResultBatchToBuf(proc, result.Batch)
+					if err != nil {
+						return result, err
+					}
+					useResultFlag = false
+				}
+			}
 			filter.ctr.buf.Shrink(sels, false)
 		}
 	}
@@ -146,12 +168,21 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	// bad design here. should compile a pipeline like `-> restrict -> output (just do clean work or memory reuse) -> `
-	// but not use the IsEnd flag to do the clean work.
+	// but not use the IsEnd useResultBatch to do the clean work.
 	if filter.IsEnd {
 		result.Batch = nil
-	} else {
-		anal.Output(filter.ctr.buf, filter.GetIsLast())
+	} else if !useResultFlag {
 		result.Batch = filter.ctr.buf
 	}
+	anal.Output(result.Batch, filter.GetIsLast())
 	return result, nil
+}
+
+func (filter *Filter) dupResultBatchToBuf(proc *process.Process, result *batch.Batch) error {
+	newBat, err := result.Dup(proc.Mp())
+	if err != nil {
+		return err
+	}
+	filter.ctr.buf = newBat
+	return nil
 }

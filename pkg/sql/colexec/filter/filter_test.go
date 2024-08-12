@@ -180,42 +180,10 @@ func TestFilter(t *testing.T) {
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		res, _ := tc.arg.Call(tc.proc)
-		if tc.getRowCount > 0 {
-			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
-		} else {
-			require.Equal(t, res.Batch == nil, true)
-		}
-		tc.arg.Reset(tc.proc, false, nil)
-
-		//--------------------------------------------------------
-
-		resetChildren(tc.arg)
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		res, _ = tc.arg.Call(tc.proc)
-		if tc.getRowCount > 0 {
-			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
-		} else {
-			require.Equal(t, res.Batch == nil, true)
-		}
-		tc.arg.Reset(tc.proc, false, nil)
-		tc.arg.Free(tc.proc, false, nil)
-
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
-	}
-}
-
-func TestFilter2(t *testing.T) {
-	for _, tc := range tcs {
-		resetChildren(tc.arg)
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
 		// 1. First call
 		res, _ := tc.arg.Call(tc.proc)
 		if tc.getRowCount > 0 {
-			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
+			require.Equal(t, tc.getRowCount, res.Batch.RowCount())
 		} else {
 			require.Equal(t, res.Batch == nil, true)
 		}
@@ -227,7 +195,7 @@ func TestFilter2(t *testing.T) {
 				break
 			}
 			if tc.getRowCount > 0 {
-				require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
+				require.Equal(t, tc.getRowCount, res.Batch.RowCount())
 			} else {
 				require.Equal(t, res.Batch == nil, true)
 			}
