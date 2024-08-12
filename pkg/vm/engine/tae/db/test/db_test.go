@@ -7554,6 +7554,46 @@ func TestDedupSnapshot3(t *testing.T) {
 	require.NoError(t, txn.Commit(context.Background()))
 }
 
+func TestSoftDeleteRollback(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 20
+	schema.Name = "testtable"
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	// flush the table
+	txn2, rel := tae.GetRelation()
+	metas := testutil.GetAllBlockMetas(rel)
+	task, err := jobs.NewFlushTableTailTask(nil, txn2, metas, tae.Runtime, types.MaxTs())
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	assert.NoError(t, err)
+	assert.NoError(t, txn2.Commit(context.Background()))
+
+	txn, rel := tae.GetRelation()
+	it := rel.MakeObjectIt()
+	var obj *catalog.ObjectEntry
+	for it.Next() {
+		obj = it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if obj.IsActive() && !obj.IsAppendable() {
+			break
+		}
+	}
+	t.Log(obj.ID().String())
+	require.NoError(t, txn.GetStore().SoftDeleteObject(obj.AsCommonID()))
+	require.NoError(t, txn.Rollback(ctx))
+
+	tae.CheckRowsByScan(50, false)
+}
+
 func TestDeduplication(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
