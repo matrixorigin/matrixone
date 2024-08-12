@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -614,6 +615,7 @@ func restoreToDatabaseOrTable(
 		return
 	}
 
+	// if restore to table, check if the db is sub db
 	isSubDb := strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
 	if isSubDb && restoreToTbl {
 		return moerr.NewInternalError(ctx, "can't restore to table for sub db")
@@ -628,12 +630,31 @@ func restoreToDatabaseOrTable(
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to create database: %v", snapshotName, dbName))
-	if err = bh.Exec(toCtx, createDbSql); err != nil {
-		return
-	}
 
 	if isSubDb {
+		var err2 error
+		// check if the publication exists
+		// if the publication exists, create the db with the publication
+		// else skip restore the db
+		pubName, err2 := extractPubNameFromCreateDbSql(ctx, createDbSql)
+		if err2 != nil {
+			return err2
+		}
+		pubInfo, err2 := getPubInfo(ctx, bh, pubName)
+		if err2 != nil {
+			return err2
+		}
+
+		if pubInfo != nil {
+			if err = bh.Exec(toCtx, createDbSql); err != nil {
+				return
+			}
+		}
 		return
+	} else {
+		if err = bh.Exec(toCtx, createDbSql); err != nil {
+			return
+		}
 	}
 
 	if !restoreToTbl {
@@ -1584,4 +1605,17 @@ func createPub(ctx context.Context, bh BackgroundExec, snapshotName, dbName stri
 		}
 	}
 	return
+}
+
+func extractPubNameFromCreateDbSql(ctx context.Context, createDbSql string) (string, error) {
+	pattern := `publication \b(\w+)\b`
+
+	re := regexp.MustCompile(pattern)
+	matches := re.FindStringSubmatch(createDbSql)
+
+	if len(matches) > 1 {
+		return matches[1], nil
+	} else {
+		return "", moerr.NewInternalError(ctx, "extract pub name from create db sql failed")
+	}
 }
