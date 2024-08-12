@@ -78,26 +78,29 @@ func (dec *decoder) Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input 
 		panic(err)
 	}
 	//parallel step2:decode objects
-	wg.Add(1)
-	err = ants.Submit(func() {
-		defer wg.Done()
-		it := input.State().NewObjectsIterInCdc()
-		defer it.Close()
-		rows, err2 := decodeObjects(
-			ctx,
-			cdcCtx,
-			input.TS(),
-			it,
-			dec.fs,
-			dec.mp,
-		)
-		if err2 != nil {
-			return
+	//only process the objects from cn
+	if input.State().HasObjectsCreatedByCn() {
+		wg.Add(1)
+		err = ants.Submit(func() {
+			defer wg.Done()
+			it := input.State().NewObjectsIterInCdc()
+			defer it.Close()
+			rows, err2 := decodeObjects(
+				ctx,
+				cdcCtx,
+				input.TS(),
+				it,
+				dec.fs,
+				dec.mp,
+			)
+			if err2 != nil {
+				return
+			}
+			out.sqlOfObjects.Store(rows)
+		})
+		if err != nil {
+			panic(err)
 		}
-		out.sqlOfObjects.Store(rows)
-	})
-	if err != nil {
-		panic(err)
 	}
 	//parallel step3:decode deltas
 	wg.Add(1)
@@ -108,7 +111,7 @@ func (dec *decoder) Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input 
 		rows, err2 := decodeDeltas(
 			ctx,
 			input.TS(),
-			it.Entry(),
+			it,
 			dec.fs,
 		)
 		if err2 != nil {
@@ -344,6 +347,9 @@ func decodeObjects(
 	for objIter.Next() {
 		ent := objIter.Entry()
 		loc := ent.ObjectLocation()
+		if loc.IsEmpty() {
+			continue
+		}
 		objMeta, err = objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
 		if err != nil {
 			return nil, err
@@ -391,17 +397,38 @@ func decodeObjects(
 func decodeDeltas(
 	ctx context.Context,
 	ts timestamp.Timestamp,
-	delta logtailreplay.BlockDeltaEntry,
+	deltaIter logtailreplay.BlockDeltaIter,
+	fs fileservice.FileService,
+) (res [][]byte, err error) {
+
+	var entRes [][]byte
+	for deltaIter.Next() {
+		ent := deltaIter.Entry()
+		if ent.DeltaLocation().IsEmpty() {
+			continue
+		}
+		entRes, err = decodeDeltaEntry(ctx, ent, fs)
+		if err != nil {
+			return nil, err
+		}
+		res = append(res, entRes...)
+	}
+	return
+}
+
+func decodeDeltaEntry(
+	ctx context.Context,
+	ent logtailreplay.BlockDeltaEntry,
 	fs fileservice.FileService,
 ) (res [][]byte, err error) {
 	var dels *nulls.Nulls
-	bat, byCn, release, err := blockio.ReadBlockDelete(ctx, delta.DeltaLocation(), fs)
+	bat, byCn, release, err := blockio.ReadBlockDelete(ctx, ent.DeltaLocation(), fs)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
 	if byCn {
-		dels = blockio.EvalDeleteRowsByTimestampForDeletesPersistedByCN(bat, types.MaxTs(), delta.CommitTs)
+		dels = blockio.EvalDeleteRowsByTimestampForDeletesPersistedByCN(bat, types.MaxTs(), ent.CommitTs)
 	}
 	if dels == nil {
 		dels = nulls.NewWithSize(128)

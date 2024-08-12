@@ -296,3 +296,7 @@ func (p *PartitionState) GetTombstoneDeltaLocs(mp map[types.Blockid]BlockDeltaIn
 
 	return nil
 }
+
+func (p *PartitionState) HasObjectsCreatedByCn() bool {
+	return p.objectsCreatedByCn
+}
