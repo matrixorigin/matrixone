@@ -39,8 +39,6 @@ type container struct {
 
 	hasNull       bool
 	batchRowCount int64
-	lastrow       int
-	inbat         *batch.Batch
 	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
@@ -113,8 +111,6 @@ func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()
-	ctr.inbat = nil
-	ctr.lastrow = 0
 	ctr.state = Build
 
 	if antiJoin.ProjectList != nil {

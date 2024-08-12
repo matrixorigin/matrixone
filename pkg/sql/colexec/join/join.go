@@ -107,12 +107,13 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if ctr.mp == nil {
 					continue
 				}
-				innerJoin.ctr.inbat = bat
-				innerJoin.ctr.lastrow = 0
+				ctr.inbat = bat
+				ctr.lastrow = 0
+				anal.Input(bat, innerJoin.GetIsFirst())
 			}
 
 			startrow := innerJoin.ctr.lastrow
-			if err := ctr.probe(innerJoin, proc, anal, innerJoin.GetIsFirst(), &probeResult); err != nil {
+			if err := ctr.probe(innerJoin, proc, &probeResult); err != nil {
 				return result, err
 			}
 			if innerJoin.ctr.lastrow == 0 {
@@ -148,9 +149,7 @@ func (innerJoin *InnerJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
-func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.Analyze, isFirst bool, result *vm.CallResult) error {
-
-	anal.Input(ap.ctr.inbat, isFirst)
+func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.CallResult) error {
 
 	mpbat := ctr.mp.GetBatches()
 	if ctr.rbat == nil {
