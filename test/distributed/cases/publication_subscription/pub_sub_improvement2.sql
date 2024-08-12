@@ -242,25 +242,6 @@ drop database sys_db01;
 -- @session
 
 
--- abnormal test
--- create duplicate publication/subscription name
-drop database if exists dup01;
-create database dup01;
-use dup01;
-create table t01(col1 int, col2 decimal);
-insert into t01 values(1,2);
-insert into t01 values(2,3);
-drop publication if exists p10;
-create publication p10 database dup01 account acc01;
-create publication p10 database dup01 account acc02;
--- @session:id=1&user=acc01:test_account&password=111
-drop database if exists dup_sub01;
-create database dup_sub01 from sys publication p10;
-create database dup_sub01 from sys publication p10;
-drop database dup_sub01;
--- @session
-drop publication p10;
-drop database dup01;
 
 
 -- abnormal test

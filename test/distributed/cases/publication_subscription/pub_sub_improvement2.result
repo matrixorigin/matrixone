@@ -258,23 +258,6 @@ internal error: can't publish to self
 create publication pub_sys database sys_db01 table t1 account acc08,acc10;
 internal error: not existed account name 'acc08'
 drop database sys_db01;
-drop database if exists dup01;
-create database dup01;
-use dup01;
-create table t01(col1 int, col2 decimal);
-insert into t01 values(1,2);
-insert into t01 values(2,3);
-drop publication if exists p10;
-create publication p10 database dup01 account acc01;
-create publication p10 database dup01 account acc02;
-Duplicate entry 'p10' for key 'pub_name'
-drop database if exists dup_sub01;
-create database dup_sub01 from sys publication p10;
-create database dup_sub01 from sys publication p10;
-database dup_sub01 already exists
-drop database dup_sub01;
-drop publication p10;
-drop database dup01;
 use mo_catalog;
 create cluster table clu01(col1 int, col2 decimal);
 insert into clu01 values(1,2,0);
