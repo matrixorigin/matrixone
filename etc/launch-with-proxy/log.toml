@@ -26,4 +26,6 @@ name = "ETL"
 backend = "DISK-ETL"
 
 [observability]
-status-port = 7001
+enable-metric-to-prom = true
+enable-stmt-merge = true
+status-port = 7011
