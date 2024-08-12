@@ -1075,6 +1075,25 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 
 		// 4. return [serialExpr, idxExpr, typeExpr]. Used in list_builtIn.go
 		args = []*Expr{serialExpr, idxExpr, typeExpr}
+	} else if name == "grouping" {
+		for _, arg := range astArgs {
+			astStr := tree.String(arg, dialect.MYSQL)
+			colPos, ok := b.ctx.groupByAst[astStr]
+			if ok {
+				args = append(args, &plan.Expr{
+					Typ: b.ctx.groups[colPos].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: b.ctx.aggregateTag,
+							ColPos: colPos - int32(len(b.ctx.groups)),
+						},
+					},
+				})
+			} else {
+				return nil, moerr.NewInvalidArg(b.GetContext(), astStr+" not exsisted in group-by", 1)
+			}
+		}
+
 	} else {
 		args = make([]*Expr, len(astArgs))
 		for idx, arg := range astArgs {

@@ -1591,19 +1591,19 @@ func GroupingFunc(parameters []*vector.Vector,
 	_ *process.Process,
 	length int,
 	selectList *FunctionSelectList) error {
-	// rs := vector.MustFunctionResult[types.Varlena](result)
-	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
-	for i := range ps {
-		ps[i] = vector.GenerateFunctionStrParameter(parameters[i])
-	}
+	rs := vector.MustFunctionResult[int64](result)
 
-	for i := uint64(0); i < uint64(length); i++ {
-
-		// for _, p := range ps {
-		// 	if err := rs.AppendBytes(types.EncodeFixed(int64(0)), false); err != nil {
-		// 		return err
-		// 	}
-		// }
+	for i := 0; i < length; i++ {
+		var ans int64 = 0
+		power := 0
+		for j := len(parameters) - 1; j >= 0; j-- {
+			rollup := parameters[j].GetFlagAt(i)
+			if rollup {
+				ans += 1 << power
+			}
+			power++
+		}
+		rs.AppendMustValue(ans)
 	}
 	return nil
 }

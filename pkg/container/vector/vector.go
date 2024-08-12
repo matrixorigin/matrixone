@@ -48,6 +48,7 @@ type Vector struct {
 
 	// area for holding large strings.
 	area []byte
+	flag []bool
 
 	capacity int
 	length   int
@@ -112,6 +113,18 @@ func (v *Vector) Reset(typ types.Type) {
 
 func (v *Vector) ResetArea() {
 	v.area = v.area[:0]
+}
+
+func (v *Vector) AddFlag(val []bool) {
+	v.flag = append(v.flag, val...)
+}
+
+func (v *Vector) GetFlag() []bool {
+	return v.flag
+}
+
+func (v *Vector) GetFlagAt(i int) bool {
+	return v.flag[i]
 }
 
 // TODO: It is semantically same as Reset, need to merge them later.
@@ -2319,7 +2332,6 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 			}
 		}
 	}
-
 	return nil
 }
 
@@ -2427,7 +2439,6 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 			}
 		}
 	}
-
 	return nil
 }
 

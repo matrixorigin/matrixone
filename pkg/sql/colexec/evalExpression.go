@@ -555,16 +555,6 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 	return err
 }
 
-func (expr *FunctionExpressionExecutor) EvalGrouping(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
-	for i := range expr.parameterExecutor {
-		expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches, selectList)
-		if err != nil {
-			return err
-		}
-	}
-	expr.parameterResults = append(expr.parameterResults, batch.EmptyBatch.Vecs[len(batch.EmptyBatch.Vecs)-1])
-}
-
 func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
 	var err error
 	if expr.fid == function.IFF {
@@ -574,11 +564,6 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	} else if expr.fid == function.CASE {
 		err = expr.EvalCase(proc, batches, selectList)
-		if err != nil {
-			return nil, err
-		}
-	} else if expr.fid == function.GROUPING {
-		err = expr.EvalGrouping(proc, batches, selectList)
 		if err != nil {
 			return nil, err
 		}
