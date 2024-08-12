@@ -205,14 +205,6 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 			}
 		}
 	}
-	if execCtx.prepareColDef != nil {
-		for _, colDef := range execCtx.prepareColDef {
-			err = resper.mysqlRrWr.(*MysqlProtocolImpl).appendPacket(colDef)
-		}
-		if err != nil {
-			return
-		}
-	}
 	/*
 		mysql COM_QUERY response: End after the column has been sent.
 		send EOF packet
