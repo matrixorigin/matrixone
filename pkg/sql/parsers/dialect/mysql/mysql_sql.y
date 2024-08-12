@@ -354,7 +354,7 @@ import (
 %token <str> PROPERTIES
 
 // Secondary Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER LLM
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX
 
 
@@ -7244,6 +7244,10 @@ using_opt:
     {
         $$ = tree.INDEX_TYPE_RTREE
     }
+|   USING LLM
+    {
+        $$ = tree.INDEX_TYPE_LLM
+    }
 |   USING BSI
     {
         $$ = tree.INDEX_TYPE_BSI
@@ -8601,6 +8605,8 @@ index_def:
             	keyTyp = tree.INDEX_TYPE_HASH
 	    case "rtree":
 	   	keyTyp = tree.INDEX_TYPE_RTREE
+	   case "llm":
+           	   	keyTyp = tree.INDEX_TYPE_LLM
             case "zonemap":
                 keyTyp = tree.INDEX_TYPE_ZONEMAP
             case "bsi":
@@ -8640,6 +8646,8 @@ index_def:
 		keyTyp = tree.INDEX_TYPE_HASH
 	     case "rtree":
 		keyTyp = tree.INDEX_TYPE_RTREE
+	     case "llm":
+		keyTyp = tree.INDEX_TYPE_LLM
 	     case "zonemap":
 		keyTyp = tree.INDEX_TYPE_ZONEMAP
 	     case "bsi":
@@ -8804,6 +8812,7 @@ index_type:
     BTREE
 |   HASH
 |   RTREE
+|   LLM
 |   ZONEMAP
 |   IVFFLAT
 |   MASTER
@@ -12290,6 +12299,7 @@ non_reserved_keyword:
 |	ROUTINE
 |	ROW_COUNT
 |	RTREE
+|	LLM
 |	SECOND
 |	SHUTDOWN
 |	SQL_CACHE

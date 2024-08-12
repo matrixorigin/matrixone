@@ -29,6 +29,7 @@ const (
 	MoIndexBTreeAlgo   = tree.INDEX_TYPE_BTREE   // used for Mocking MySQL behaviour.
 	MoIndexIvfFlatAlgo = tree.INDEX_TYPE_IVFFLAT // used for IVF flat index on Vector/Array columns
 	MOIndexMasterAlgo  = tree.INDEX_TYPE_MASTER  // used for Master Index on VARCHAR columns
+	MOIndexLLMAlgo     = tree.INDEX_TYPE_LLM
 )
 
 // ToLower is used for before comparing AlgoType and IndexAlgoParamOpType. Reason why they are strings
@@ -172,6 +173,8 @@ func indexParamsToMap(def *tree.Index) (map[string]string, error) {
 	case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
 		// do nothing
 	case tree.INDEX_TYPE_MASTER:
+		// do nothing
+	case tree.INDEX_TYPE_LLM:
 		// do nothing
 	case tree.INDEX_TYPE_IVFFLAT:
 		if def.IndexOption.AlgoParamList == 0 {

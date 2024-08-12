@@ -1970,10 +1970,9 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	return []*plan.IndexDef{indexDef}, []*TableDef{tableDef}, nil
 }
 
-// TODO need to pass 3 parameters, list 100, op_type L2, embedding model as argument - need to be done
 func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 
-	indexParts := make([]string, 2)
+	indexParts := make([]string, 1)
 
 	// 0. validate indexInfo and colMap
 	{
@@ -1983,18 +1982,21 @@ func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 		}
 
 		colName := indexInfo.KeyParts[0].ColName.ColName()
+		indexParts[0] = colName
 		if _, ok := colMap[colName]; !ok {
 			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
 		}
+
+		// TODO there is no datalink in plan.proto, needs validation of datalink type
 	}
 
-	// init index and table definition slices
+	// init index and table definition slices,
 	indexDefs := make([]*plan.IndexDef, 1)
 	tableDefs := make([]*TableDef, 1)
 
-	// 1. create LLM hidden table
+	// 1. create LLM chunk and embedding table
 	{
-		// 1.a table consists of 3 columns: original primary key, chunk, embedding
+		// 1.a table consists of 3 columns: original primary key int, chunk datalink, embedding vecf32(120)
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
 		if err != nil {
 			return nil, nil, err
@@ -2012,8 +2014,8 @@ func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 		// chunks facilitates querying of text fragments
 		// embedding are high-dimensional floating-point arrays, not suitable for direct key-value query
 
-		indexParts[0] = catalog.LLM_Index_Table_Primary_ColName
-		indexParts[1] = catalog.LLM_Index_Table_Chunk_ColName
+		//indexParts[0] = catalog.LLM_Index_Table_Primary_ColName
+		//indexParts[1] = catalog.LLM_Index_Table_Chunk_ColName
 
 		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_LLM_Table_Type, indexParts, false)
 		if err != nil {
@@ -2026,8 +2028,9 @@ func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 			Alg:  plan.CompressType_Lz4,
 			Typ: Type{
 				// TODO the types of primary key column?
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
+				Id: int32(types.T_datalink),
+				//Width: types.MaxVarcharLen,
+				//Width: types.MaxVarcharLen,
 			},
 			Primary: true,
 			Default: &plan.Default{
@@ -2041,8 +2044,8 @@ func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 			Name: catalog.LLM_Index_Table_Chunk_ColName,
 			Alg:  plan.CompressType_Lz4,
 			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
+				Id: int32(types.T_datalink),
+				//Width: types.MaxVarcharLen,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -2365,6 +2368,9 @@ func CreateIndexDef(indexInfo *tree.Index,
 			indexDef.Comment = ""
 			indexDef.IndexAlgoParams = ""
 		case catalog.MOIndexMasterAlgo:
+			indexDef.Comment = ""
+			indexDef.IndexAlgoParams = ""
+		case catalog.MOIndexLLMAlgo:
 			indexDef.Comment = ""
 			indexDef.IndexAlgoParams = ""
 		case catalog.MoIndexIvfFlatAlgo:

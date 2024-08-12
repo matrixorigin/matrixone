@@ -325,7 +325,7 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
 
 	// LLM table type
-	SystemSI_LLM_Table_Type = "LLMTable"
+	SystemSI_LLM_Table_Type = "LLM_Data_Table"
 
 	// LLM index table columns
 	LLM_Index_Table_Primary_ColName   = "original_tbl_pk"

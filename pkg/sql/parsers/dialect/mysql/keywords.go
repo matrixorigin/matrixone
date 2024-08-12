@@ -633,5 +633,6 @@ func init() {
 		"restore":                    RESTORE,
 		"pitr":                       PITR,
 		"cdc":                        CDC,
+		"llm":                        LLM,
 	}
 }

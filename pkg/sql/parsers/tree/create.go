@@ -2010,10 +2010,10 @@ func (it IndexType) ToString() string {
 		return "ivfflat"
 	case INDEX_TYPE_MASTER:
 		return "master"
-	case INDEX_TYPE_INVALID:
-		return ""
 	case INDEX_TYPE_LLM:
 		return "llm"
+	case INDEX_TYPE_INVALID:
+		return ""
 	default:
 		return "Unknown IndexType"
 	}
