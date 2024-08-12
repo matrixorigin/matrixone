@@ -646,12 +646,17 @@ func restoreToDatabaseOrTable(
 		}
 
 		if pubInfo != nil {
+			// create db with publication
+			getLogger(sid).Info(fmt.Sprintf("[%s] start to create db with pub: %v, create db sql: %s", snapshotName, pubName, createDbSql))
 			if err = bh.Exec(toCtx, createDbSql); err != nil {
 				return
 			}
 		}
 		return
 	} else {
+		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXITST %s", dbName)
+		// create db
+		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", snapshotName, dbName, createDbSql))
 		if err = bh.Exec(toCtx, createDbSql); err != nil {
 			return
 		}
