@@ -421,6 +421,11 @@ func (r *RowRequest) Handle() (n int, err error) {
 	return
 }
 
+// GetContent for test
+func (r *RowRequest) GetContent() string {
+	return r.writer.GetContent()
+}
+
 type WriterFactory interface {
 	GetRowWriter(ctx context.Context, account string, tbl *Table, ts time.Time) RowWriter
 	GetWriter(ctx context.Context, filepath string) io.WriteCloser

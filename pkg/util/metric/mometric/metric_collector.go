@@ -288,7 +288,6 @@ func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch 
 const bufferInitSize = 16 * mpool.KB
 
 func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, table.ExportRequests] {
-	bufferPool := sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 0, bufferInitSize)) }}
 	return &mfsetETL{
 		mfset: mfset{
 			Reminder:        bp.NewConstantClock(c.opts.flushInterval),
@@ -296,7 +295,7 @@ func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFami
 			sampleThreshold: c.opts.sampleThreshold,
 		},
 		collector:  c,
-		bufferPool: bufferPool,
+		bufferPool: &sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 0, bufferInitSize)) }},
 	}
 }
 
@@ -304,7 +303,7 @@ type mfsetETL struct {
 	mfset
 	collector *metricFSCollector
 	// bufferPool adapt backoff strategy
-	bufferPool  sync.Pool
+	bufferPool  *sync.Pool
 	bufferCount atomic.Int32
 }
 
