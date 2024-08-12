@@ -202,9 +202,7 @@ func (s *serverConn) Close() error {
 	if s.mysqlProto != nil {
 		tcpConn := s.mysqlProto.GetTcpConnection()
 		if tcpConn != nil {
-			if err := tcpConn.Close(); err != nil {
-				logutil.Errorf("failed to close tcp connection, err: %v", err)
-			}
+			_ = tcpConn.Close()
 		}
 		s.mysqlProto.Close()
 	}

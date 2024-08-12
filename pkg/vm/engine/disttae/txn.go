@@ -1085,13 +1085,16 @@ func (txn *Transaction) getCachedTable(
 
 func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	logDebugf(txn.op.Txn(), "Transaction.Commit")
-	if err := txn.IncrStatementID(ctx, true); err != nil {
-		return nil, err
-	}
+
 	defer txn.delTransaction()
 	if txn.readOnly.Load() {
 		return nil, nil
 	}
+
+	if err := txn.IncrStatementID(ctx, true); err != nil {
+		return nil, err
+	}
+
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return nil, err
 	}
