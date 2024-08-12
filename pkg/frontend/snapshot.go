@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -610,7 +609,7 @@ func restoreToDatabaseOrTable(
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 	restoreToTbl := tblName != ""
 
-	createDbSql, err = getCreateDatabaseSql(ctx, sid, bh, snapshotName, dbName)
+	createDbSql, err = getCreateDatabaseSql(toCtx, sid, bh, snapshotName, dbName)
 	if err != nil {
 		return
 	}
@@ -618,7 +617,7 @@ func restoreToDatabaseOrTable(
 	// if restore to table, check if the db is sub db
 	isSubDb := strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
 	if isSubDb && restoreToTbl {
-		return moerr.NewInternalError(ctx, "can't restore to table for sub db")
+		return moerr.NewInternalError(toCtx, "can't restore to table for sub db")
 	}
 
 	// if restore to db, delete the same name db first
@@ -636,11 +635,11 @@ func restoreToDatabaseOrTable(
 		// check if the publication exists
 		// if the publication exists, create the db with the publication
 		// else skip restore the db
-		pubName, err2 := extractPubNameFromCreateDbSql(ctx, createDbSql)
+		pubName, err2 := extractPubNameFromCreateDbSql(toCtx, createDbSql)
 		if err2 != nil {
 			return err2
 		}
-		pubInfo, err2 := getPubInfo(ctx, bh, pubName)
+		pubInfo, err2 := getPubInfo(toCtx, bh, pubName)
 		if err2 != nil {
 			return err2
 		}
@@ -1613,14 +1612,23 @@ func createPub(ctx context.Context, bh BackgroundExec, snapshotName, dbName stri
 }
 
 func extractPubNameFromCreateDbSql(ctx context.Context, createDbSql string) (string, error) {
-	pattern := `publication \b(\w+)\b`
-
-	re := regexp.MustCompile(pattern)
-	matches := re.FindStringSubmatch(createDbSql)
-
-	if len(matches) > 1 {
-		return matches[1], nil
-	} else {
-		return "", moerr.NewInternalError(ctx, "extract pub name from create db sql failed")
+	var ast []tree.Statement
+	var err error
+	if ast, err = mysql.Parse(ctx, createDbSql, 1); err != nil {
+		return "", err
 	}
+
+	if len(ast) == 0 {
+		return "", moerr.NewInternalError(ctx, "parse create db sql failed")
+	}
+	createDbStmt, ok := ast[0].(*tree.CreateDatabase)
+	if !ok {
+		return "", moerr.NewInternalError(ctx, "parse create db sql failed")
+	}
+
+	if createDbStmt.SubscriptionOption == nil {
+		return "", moerr.NewInternalError(ctx, "create db sql has no subscription option")
+	}
+
+	return string(createDbStmt.SubscriptionOption.Publication), nil
 }
