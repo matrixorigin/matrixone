@@ -1547,7 +1547,8 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 			x := 0
 			x++
 		}
-		basePKFilter := newBasePKFilter(expr, tableDef, proc)
+		basePKFilter, err := newBasePKFilter(expr, tableDef, proc)
+		require.NoError(t, err)
 		require.Equal(t, filters[i].valid, basePKFilter.valid, exprStrings[i])
 		if filters[i].valid {
 			require.Equal(t, filters[i].op, basePKFilter.op, exprStrings[i])

@@ -29,7 +29,7 @@ import (
 )
 
 // ConstructCreateTableSQL used to build CREATE Table statement
-func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snapshot Snapshot, useDbName bool) (string, tree.Statement, error) {
+func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snapshot *Snapshot, useDbName bool) (string, tree.Statement, error) {
 	var err error
 	var createStr string
 
@@ -74,7 +74,7 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 		}
 
 		if util.IsClusterTableAttribute(colNameOrigin) && isClusterTable &&
-			(accountId != catalog.System_Account || IsSnapshotValid(&snapshot)) {
+			(accountId != catalog.System_Account || IsSnapshotValid(snapshot)) {
 			continue
 		}
 
