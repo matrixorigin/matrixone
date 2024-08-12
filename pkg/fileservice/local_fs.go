@@ -479,6 +479,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 	numNotDoneEntries := 0
 	defer func() {
 		metric.FSReadLocalCounter.Add(float64(numNotDoneEntries))
+		metric.ReadCounterByModule(float64(numNotDoneEntries), vector.Module)
 	}()
 
 	for i, entry := range vector.Entries {

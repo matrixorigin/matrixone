@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/sync/errgroup"
 )
@@ -714,6 +715,7 @@ func (d *DefaultPkgReader) Get(ctx context.Context, path string) (io.ReadCloser,
 				WriterForRead: writer,
 			},
 		},
+		Module: v2.UDFGet,
 	}
 
 	errGroup = new(errgroup.Group)

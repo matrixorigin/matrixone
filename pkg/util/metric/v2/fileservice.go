@@ -15,7 +15,29 @@
 package v2
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/prometheus/client_golang/prometheus"
+)
+
+var (
+	Backup                         = "backup"
+	Bootstrap                      = "bootstrap"
+	ExternalReadFile               = "external-read-file"
+	ExternalReadFileOffsetNoStrict = "external-offset-no-strict"
+	ExternalReadFileOffsetStrict   = "external-offset-strict"
+	ExternalStats                  = "external-stats"
+	ReadFromFileOffsetSize         = "read-from-file-offset-size"
+	ReadExtent                     = "read-extent"
+	ReadOneBlockWithMeta           = "read-one-block-with-meta"
+	ReadMultiBlocksWithMeta        = "read-multi-blocks-with-meta"
+	ReadAllBlocksWithMeta          = "read-all-blocks-with-meta"
+	ReadOneBlockAllColumns         = "read-one-block-all-columns"
+	ReadMultiSubBlocks             = "read-multi-sub-blocks"
+	ReadParquet                    = "read-parquet"
+	UDFGet                         = "udf-get"
+	NewCSVReadr                    = "new-csv-reader"
+	UtilReadFile                   = "util-read-file"
+	LoadTable                      = "load-table"
 )
 
 var (
@@ -47,7 +69,70 @@ var (
 	FSReadHitMemCounter    = fsReadCounter.WithLabelValues("hit-mem")
 	FSReadHitDiskCounter   = fsReadCounter.WithLabelValues("hit-disk")
 	FSReadHitRemoteCounter = fsReadCounter.WithLabelValues("hit-remote")
+
+	// for debug
+	FSReadBackupCounter                         = fsReadCounter.WithLabelValues(Backup)
+	FSReadBoostrapCounter                       = fsReadCounter.WithLabelValues(Bootstrap)
+	FSReadExternalReadFileCounter               = fsReadCounter.WithLabelValues(ExternalReadFile)
+	FSReadExternalReadFileOffsetNoStrictCounter = fsReadCounter.WithLabelValues(ExternalReadFileOffsetNoStrict)
+	FSReadExternalReadFileOffsetStrictCounter   = fsReadCounter.WithLabelValues(ExternalReadFileOffsetStrict)
+	FSReadExternalStatsCounter                  = fsReadCounter.WithLabelValues(ExternalStats)
+	FSReadReadFromFileOffsetSizeCounter         = fsReadCounter.WithLabelValues(ReadFromFileOffsetSize)
+	FSReadReadExtentCounter                     = fsReadCounter.WithLabelValues(ReadExtent)
+	FSReadReadOneBlockWithMetaCounter           = fsReadCounter.WithLabelValues(ReadOneBlockWithMeta)
+	FSReadReadMultiBlocksWithMetaCounter        = fsReadCounter.WithLabelValues(ReadMultiBlocksWithMeta)
+	FSReadReadAllBlocksWithMetaCounter          = fsReadCounter.WithLabelValues(ReadAllBlocksWithMeta)
+	FSReadReadOneBlockAllColumnsCounter         = fsReadCounter.WithLabelValues(ReadOneBlockAllColumns)
+	FSReadReadMultiSubBlocksCounter             = fsReadCounter.WithLabelValues(ReadMultiSubBlocks)
+	FSReadReadParquetCounter                    = fsReadCounter.WithLabelValues(ReadParquet)
+	FSReadUDFGetCounter                         = fsReadCounter.WithLabelValues(UDFGet)
+	FSReadNewCSVReadrCounter                    = fsReadCounter.WithLabelValues(NewCSVReadr)
+	FSReadUtilReadFileCounter                   = fsReadCounter.WithLabelValues(UtilReadFile)
+	FSReadLoadTableCounter                      = fsReadCounter.WithLabelValues(LoadTable)
 )
+
+func ReadCounterByModule(num float64, module string) {
+	switch module {
+	case Backup:
+		FSReadBackupCounter.Add(num)
+	case Bootstrap:
+		FSReadBoostrapCounter.Add(num)
+	case ExternalReadFile:
+		FSReadExternalReadFileCounter.Add(num)
+	case ExternalReadFileOffsetNoStrict:
+		FSReadExternalReadFileOffsetNoStrictCounter.Add(num)
+	case ExternalReadFileOffsetStrict:
+		FSReadExternalReadFileOffsetStrictCounter.Add(num)
+	case ExternalStats:
+		FSReadExternalStatsCounter.Add(num)
+	case ReadFromFileOffsetSize:
+		FSReadReadFromFileOffsetSizeCounter.Add(num)
+	case ReadExtent:
+		FSReadReadExtentCounter.Add(num)
+	case ReadOneBlockWithMeta:
+		FSReadReadOneBlockWithMetaCounter.Add(num)
+	case ReadMultiBlocksWithMeta:
+		FSReadReadMultiBlocksWithMetaCounter.Add(num)
+	case ReadAllBlocksWithMeta:
+		FSReadReadAllBlocksWithMetaCounter.Add(num)
+	case ReadOneBlockAllColumns:
+		FSReadReadOneBlockAllColumnsCounter.Add(num)
+	case ReadMultiSubBlocks:
+		FSReadReadMultiSubBlocksCounter.Add(num)
+	case ReadParquet:
+		FSReadReadParquetCounter.Add(num)
+	case UDFGet:
+		FSReadUDFGetCounter.Add(num)
+	case NewCSVReadr:
+		FSReadNewCSVReadrCounter.Add(num)
+	case UtilReadFile:
+		FSReadUtilReadFileCounter.Add(num)
+	case LoadTable:
+		FSReadLoadTableCounter.Add(num)
+	default:
+		logutil.Infof("unknown module: %s", module)
+	}
+}
 
 var (
 	s3IOBytesHistogram = prometheus.NewHistogramVec(

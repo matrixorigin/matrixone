@@ -255,6 +255,7 @@ func (page *TransferHashPage) loadTable() *api.TransferMap {
 	ioVector := fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0),
+		Module:   v2.LoadTable,
 	}
 
 	entry := fileservice.IOEntry{

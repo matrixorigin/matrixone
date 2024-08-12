@@ -18,12 +18,11 @@ import (
 	"context"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type objectReaderV1 struct {
@@ -321,6 +320,7 @@ func (r *objectReaderV1) ReadMultiSubBlocks(
 	ioVec = &fileservice.IOVector{
 		FilePath: r.name,
 		Entries:  make([]fileservice.IOEntry, 0),
+		Module:   v2.ReadMultiSubBlocks,
 	}
 	for _, opt := range opts {
 		meta, _ := metaHeader.SubMeta(opt.DataType)

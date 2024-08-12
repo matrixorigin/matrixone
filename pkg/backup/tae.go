@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -579,6 +580,7 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, d
 			},
 		},
 		Policy: fileservice.SkipAllCache,
+		Module: v2.Backup,
 	}
 
 	err := srcFs.Read(ctx, ioVec)

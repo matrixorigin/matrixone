@@ -19,11 +19,13 @@ import (
 	"crypto/sha256"
 	"encoding/csv"
 	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"strconv"
-	"strings"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 // setupFilesystem returns a FileService for ETL which the reader outside the matrixone
@@ -174,6 +176,7 @@ func readFile(ctx context.Context, fs fileservice.FileService, path string) ([]b
 				Size:   -1,
 			},
 		},
+		Module: v2.Backup,
 	}
 	err = fs.Read(ctx, iov)
 	if err != nil {
