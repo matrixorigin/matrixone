@@ -95,13 +95,11 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if bat.IsEmpty() {
 					continue
 				}
-				leftJoin.ctr.inbat = bat
-				leftJoin.ctr.lastrow = 0
+				ctr.inbat = bat
+				ctr.lastrow = 0
+				anal.Input(bat, leftJoin.GetIsFirst())
 			}
 
-			if leftJoin.ctr.lastrow == 0 {
-				anal.Input(ctr.inbat, leftJoin.GetIsFirst())
-			}
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(leftJoin.Result))
 				for i, rp := range leftJoin.Result {
