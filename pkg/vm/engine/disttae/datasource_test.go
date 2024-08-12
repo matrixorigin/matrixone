@@ -20,28 +20,156 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
+func TestTombstoneData1(t *testing.T) {
+	location1 := objectio.NewRandomLocation(1, 1111)
+	location2 := objectio.NewRandomLocation(2, 2222)
+	location3 := objectio.NewRandomLocation(3, 3333)
+
+	obj1 := objectio.NewObjectid()
+	obj2 := objectio.NewObjectid()
+	blk1_0 := objectio.NewBlockidWithObjectID(obj1, 0)
+	blk1_1 := objectio.NewBlockidWithObjectID(obj1, 1)
+	blk1_2 := objectio.NewBlockidWithObjectID(obj1, 2)
+	blk2_0 := objectio.NewBlockidWithObjectID(obj2, 0)
+
+	rowids := make([]types.Rowid, 0)
+	for i := 0; i < 4; i++ {
+		rowid := types.NewRowid(blk1_0, uint32(i))
+		rowids = append(rowids, *rowid)
+		rowid = types.NewRowid(blk2_0, uint32(i))
+		rowids = append(rowids, *rowid)
+	}
+
+	// Test AppendInMemory and AppendFiles and SortInMemory
+	tombstones1 := NewEmptyTombstoneData()
+	err := tombstones1.AppendInMemory(rowids...)
+	require.Nil(t, err)
+	err = tombstones1.AppendFiles(location1, location2)
+	require.Nil(t, err)
+
+	tombstones1.SortInMemory()
+	last := tombstones1.rowids[0]
+	for i := 1; i < len(tombstones1.rowids); i++ {
+		require.True(t, last.Le(tombstones1.rowids[i]))
+	}
+
+	tombstones2 := NewEmptyTombstoneData()
+	rowids = rowids[:0]
+	for i := 0; i < 3; i++ {
+		rowid := types.NewRowid(blk1_1, uint32(i))
+		rowids = append(rowids, *rowid)
+		rowid = types.NewRowid(blk1_2, uint32(i))
+		rowids = append(rowids, *rowid)
+	}
+	err = tombstones2.AppendInMemory(rowids...)
+	require.Nil(t, err)
+	err = tombstones2.AppendFiles(location3)
+	require.Nil(t, err)
+	tombstones2.SortInMemory()
+	last = tombstones2.rowids[0]
+	for i := 1; i < len(tombstones2.rowids); i++ {
+		require.True(t, last.Le(tombstones2.rowids[i]))
+	}
+
+	// Test Merge
+	tombstones1.Merge(tombstones2)
+	tombstones1.SortInMemory()
+	last = tombstones1.rowids[0]
+	for i := 1; i < len(tombstones1.rowids); i++ {
+		require.True(t, last.Le(tombstones1.rowids[i]))
+	}
+
+	// Test MarshalBinary and UnmarshalBinary
+	var w bytes.Buffer
+	err = tombstones1.MarshalBinaryWithBuffer(&w)
+	require.NoError(t, err)
+
+	tombstonesCopy, err := UnmarshalTombstoneData(w.Bytes())
+	require.NoError(t, err)
+	require.Equal(t, tombstones1.Type(), tombstonesCopy.Type())
+
+	require.Equal(t, tombstones1.String(), tombstonesCopy.String())
+
+	// Test AppendInMemory
+	// inMemTombstones:
+	//    blk1_0: [0, 1, 2, 3],
+	//    blk1_1: [0, 1, 2],
+	//    blk1_2: [0, 1, 2],
+	//    blk2_0: [0, 1, 2, 3]
+
+	// case 1: target is blk1_3 and rowsOffset is [0, 1, 2, 3]
+	// expect: left is [0, 1, 2, 3]. no rows are deleted
+	target := types.NewBlockidWithObjectID(obj1, 3)
+	rowsOffset := []int64{0, 1, 2, 3}
+	left := tombstones1.ApplyInMemTombstones(
+		*target,
+		rowsOffset,
+		nil,
+	)
+	require.Equal(t, left, rowsOffset)
+
+	// case 2: target is blk1_3 and deleted rows is [5]
+	// expect: left is [], deleted rows is [5]. no rows are deleted
+	deleted := nulls.NewWithSize(0)
+	deleted.Add(5)
+	left = tombstones1.ApplyInMemTombstones(
+		*target,
+		nil,
+		deleted,
+	)
+	require.Equal(t, 0, len(left))
+	require.True(t, deleted.Contains(5))
+	require.True(t, deleted.Count() == 1)
+
+	// case 3: target is blk2_0 and rowsOffset is [2, 3, 4]
+	// expect: left is [4]. [2, 3] are deleted
+	target = types.NewBlockidWithObjectID(obj2, 0)
+	rowsOffset = []int64{2, 3, 4}
+	left = tombstones1.ApplyInMemTombstones(
+		*target,
+		rowsOffset,
+		nil,
+	)
+	require.Equal(t, []int64{4}, left)
+
+	// case 4: target is blk1_1 and deleted rows is [4]
+	// expect: left is [], deleted rows is [0,1,2,4].
+	target = types.NewBlockidWithObjectID(obj1, 1)
+	deleted = nulls.NewWithSize(0)
+	deleted.Add(4)
+	left = tombstones1.ApplyInMemTombstones(
+		*target,
+		nil,
+		deleted,
+	)
+	require.Equal(t, 0, len(left))
+	require.True(t, deleted.Contains(0))
+	require.True(t, deleted.Contains(1))
+	require.True(t, deleted.Contains(2))
+	require.True(t, deleted.Contains(4))
+	require.Equal(t, 4, deleted.Count())
+}
+
 func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 
-	objID := types.NewObjectid()
-	objName := objectio.BuildObjectNameWithObjectID(objID)
-
-	extent := objectio.NewExtent(0x1f, 0x2f, 0x3f, 0x4f)
-	delLoc := objectio.BuildLocation(objName, extent, 0, 0)
-	metaLoc := objectio.ObjectLocation(delLoc)
+	location := objectio.NewRandomLocation(0, 0)
+	objID := location.ObjectId()
+	metaLoc := objectio.ObjectLocation(location)
 	cts := types.BuildTSForTest(1, 1)
 
 	relData := NewEmptyBlockListRelationData()
 	blkNum := 10
 	for i := 0; i < blkNum; i++ {
-		blkID := types.NewBlockidWithObjectID(objID, uint16(blkNum))
+		blkID := types.NewBlockidWithObjectID(&objID, uint16(blkNum))
 		blkInfo := objectio.BlockInfo{
 			BlockID:      *blkID,
-			EntryState:   true,
+			Appendable:   true,
 			Sorted:       false,
 			MetaLoc:      metaLoc,
 			CommitTs:     *cts,

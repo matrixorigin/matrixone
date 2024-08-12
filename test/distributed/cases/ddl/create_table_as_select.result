@@ -1540,10 +1540,10 @@ insert into test01 values (2,3,4,5,6,7,8,9,2131.3242343,-3824.34324);
 show create table test01;
 Table    Create Table
 test01    CREATE TABLE `test01` (\n  `col1` TINYINT DEFAULT NULL,\n  `col2` SMALLINT DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE DEFAULT NULL\n)
-create publication publication01 database test;
+create publication publication01 database test account all;
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-publication01    test    2024-08-01 14:33:19    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+publication01    test    *    *        2024-08-03 15:29:02    null    
 drop table if exists test02;
 create table test02 as select * from test01;
 select * from test02;
@@ -1557,15 +1557,15 @@ create account acc0 admin_name 'root' identified by '111';
 drop table if exists sys_tbl_1;
 create table sys_tbl_1(a int primary key, b decimal, c char, d varchar(20) );
 insert into sys_tbl_1 values(1,2,'a','database'),(2,3,'b','test publication'),(3, 4, 'c','324243243');
-create publication sys_pub_1 database test;
+create publication sys_pub_1 database test account all;
 select * from sys_tbl_1;
 a    b    c    d
 1    2    a    database
 2    3    b    test publication
 3    4    c    324243243
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-sys_pub_1    test    2024-08-01 14:33:20    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+sys_pub_1    test    *    *        2024-08-03 15:29:02    null    
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    test    all

@@ -930,7 +930,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	}
 	defer mpool.DeleteMPool(mp)
 
-	testProc := process.New(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil)
+	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	params1 := testProc.GetVector(types.T_text.ToType())
 	for i := 0; i < 3; i++ {
@@ -1147,7 +1147,7 @@ func TestUserInput_getSqlSourceType(t *testing.T) {
 
 func TestTopsort(t *testing.T) {
 	cvey.Convey("create graph", t, func() {
-		g := topsort{next: make(map[string][]string)}
+		g := toposort{next: make(map[string][]string)}
 		g.addVertex("0")
 		g.addVertex("1")
 		g.addVertex("2")
@@ -1172,7 +1172,7 @@ func TestTopsort(t *testing.T) {
 	})
 
 	cvey.Convey("create graph", t, func() {
-		g := topsort{next: make(map[string][]string)}
+		g := toposort{next: make(map[string][]string)}
 		g.addVertex("0")
 		g.addVertex("1")
 		g.addVertex("2")
@@ -1183,7 +1183,7 @@ func TestTopsort(t *testing.T) {
 	})
 
 	cvey.Convey("create graph", t, func() {
-		g := topsort{next: make(map[string][]string)}
+		g := toposort{next: make(map[string][]string)}
 		g.addVertex("0")
 		g.addVertex("1")
 		g.addVertex("2")

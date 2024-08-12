@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -152,7 +151,7 @@ func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef
 		for i, colId := range fkInfo.Cols {
 			if colId == originalCol.ColId {
 				// Check if the parent table of the foreign key exists
-				_, referTableDef := ctx.ResolveById(fkInfo.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
+				_, referTableDef := ctx.ResolveById(fkInfo.ForeignTbl, nil)
 				if referTableDef == nil {
 					continue
 				}
@@ -174,7 +173,7 @@ func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef
 	}
 
 	for _, referredTblId := range tbInfo.RefChildTbls {
-		refObjRef, refTableDef := ctx.ResolveById(referredTblId, Snapshot{TS: &timestamp.Timestamp{}})
+		refObjRef, refTableDef := ctx.ResolveById(referredTblId, nil)
 		if refTableDef == nil {
 			return moerr.NewInternalError(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
 		}

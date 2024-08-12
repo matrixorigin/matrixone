@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
@@ -250,6 +251,13 @@ type Session struct {
 	// disableAgg co-operate with RecordStatement
 	// more can see Benchmark_RecordStatement_IsTrue()
 	disableAgg bool
+
+	// mysql parser
+	mysqlParser mysql.MySQLParser
+}
+
+func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
+	return &ses.mysqlParser
 }
 
 func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
@@ -547,7 +555,7 @@ func NewSession(
 			panic(err)
 		}
 	}
-	ses.proc = process.New(
+	ses.proc = process.NewTopProcess(
 		context.TODO(),
 		ses.pool,
 		getGlobalPu().TxnClient,
@@ -620,28 +628,24 @@ func (ses *Session) Close() {
 		ses.sqlHelper = nil
 	}
 	ses.ClearStmtProfile()
-	//  The mpool cleanup must be placed at the end,
-	// and you must wait for all resources to be cleaned up before you can delete the mpool
-	if ses.proc != nil {
-		ses.proc.FreeVectors()
-		bats := ses.proc.GetValueScanBatchs()
-		for _, bat := range bats {
-			bat.Clean(ses.proc.Mp())
-		}
-		ses.proc = nil
-	}
+
+	ses.proc.Free()
+	ses.proc = nil
+
 	for _, bat := range ses.resultBatches {
 		bat.Clean(ses.pool)
 	}
-
-	pool := ses.GetMemPool()
-	mpool.DeleteMPool(pool)
-	ses.SetMemPool(nil)
 
 	if ses.buf != nil {
 		ses.buf.Free()
 		ses.buf = nil
 	}
+
+	//  The mpool cleanup must be placed at the end,
+	// and you must wait for all resources to be cleaned up before you can delete the mpool
+	pool := ses.GetMemPool()
+	mpool.DeleteMPool(pool)
+	ses.SetMemPool(nil)
 
 	ses.timestampMap = nil
 	ses.upstream = nil

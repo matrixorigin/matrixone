@@ -148,7 +148,7 @@ func TestOffset(t *testing.T) {
 		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -188,7 +188,7 @@ func BenchmarkOffset(b *testing.B) {
 			resetChildren(tc.arg, bats)
 			_, _ = tc.arg.Call(tc.proc)
 			tc.arg.Free(tc.proc, false, nil)
-			tc.proc.FreeVectors()
+			tc.proc.Free()
 		}
 	}
 }

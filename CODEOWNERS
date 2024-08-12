@@ -50,6 +50,7 @@
 /pkg/common @zhangxu19830126
 /pkg/common/mpool @m-schen
 /pkg/common/malloc @reusee
+/pkg/common/spool @reusee @m-schen
 /pkg/common/async @zhangxu19830126
 /pkg/common/bitmap @aunjgr
 /pkg/common/hashmap @aunjgr

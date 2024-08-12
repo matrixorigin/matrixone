@@ -52,7 +52,7 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Projection{
-				Es: []*plan.Expr{
+				ProjectList: []*plan.Expr{
 					{
 						Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
 						Typ: plan.Type{
@@ -101,7 +101,7 @@ func TestProjection(t *testing.T) {
 		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }

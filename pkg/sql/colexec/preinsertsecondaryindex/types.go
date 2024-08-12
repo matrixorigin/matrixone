@@ -15,8 +15,6 @@
 package preinsertsecondaryindex
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -32,7 +30,6 @@ type container struct {
 }
 type PreInsertSecIdx struct {
 	ctr          *container
-	Ctx          context.Context
 	PreInsertCtx *plan.PreInsertUkCtx
 
 	packer util.PackerList

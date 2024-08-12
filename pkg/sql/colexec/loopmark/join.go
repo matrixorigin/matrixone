@@ -51,6 +51,13 @@ func (loopMark *LoopMark) Prepare(proc *process.Process) error {
 
 	if loopMark.Cond != nil {
 		loopMark.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopMark.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if loopMark.ProjectList != nil {
+		err = loopMark.PrepareProjection(proc)
 	}
 	return err
 }
@@ -88,11 +95,24 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 				proc.PutBatch(bat)
 				continue
 			}
+
+			anal.Input(bat, loopMark.GetIsFirst())
 			if ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(bat, loopMark, proc, anal, loopMark.GetIsFirst(), loopMark.GetIsLast(), &result)
+				err = ctr.emptyProbe(bat, loopMark, proc, &result)
 			} else {
-				err = ctr.probe(bat, loopMark, proc, anal, loopMark.GetIsFirst(), loopMark.GetIsLast(), &result)
+				err = ctr.probe(bat, loopMark, proc, &result)
 			}
+			if err != nil {
+				return result, err
+			}
+
+			if loopMark.ProjectList != nil {
+				result.Batch, err = loopMark.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, loopMark.GetIsLast())
 			proc.PutBatch(bat)
 			return result, err
 
@@ -124,8 +144,7 @@ func (loopMark *LoopMark) build(proc *process.Process, anal process.Analyze) err
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopMark, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (err error) {
-	anal.Input(bat, isFirst)
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopMark, proc *process.Process, result *vm.CallResult) (err error) {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -146,14 +165,11 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopMark, proc *process.P
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
-
 	result.Batch = ctr.rbat
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *LoopMark, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) probe(bat *batch.Batch, ap *LoopMark, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -225,7 +241,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *LoopMark, proc *process.Proces
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }

@@ -506,7 +506,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	logDebugf(op.Txn(), "Engine.New")
-	proc := process.New(
+	proc := process.NewTopProcess(
 		ctx,
 		e.mp,
 		e.cli,
@@ -681,7 +681,7 @@ func (e *Engine) BuildBlockReaders(
 			fs,
 			ts,
 			shard)
-		rd := NewReader(
+		rd, err := NewReader(
 			ctx,
 			proc,
 			e,
@@ -690,6 +690,9 @@ func (e *Engine) BuildBlockReaders(
 			expr,
 			ds,
 		)
+		if err != nil {
+			return nil, err
+		}
 		rd.scanType = scanType
 		rds = append(rds, rd)
 	}

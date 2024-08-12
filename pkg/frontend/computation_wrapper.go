@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -256,7 +255,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 			cwft.compile.SetOriginSQL(originSQL)
 		} else {
 			// retComp
-			cwft.proc.Ctx = execCtx.reqCtx
+			cwft.proc.ReplaceTopCtx(execCtx.reqCtx)
 			retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql())
 			cwft.compile = retComp
 		}
@@ -281,9 +280,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 func updateTempStorageInCtx(execCtx *ExecCtx, proc *process.Process, tempStorage *memorystorage.Storage) {
 	if execCtx != nil && execCtx.reqCtx != nil {
 		execCtx.reqCtx = attachValue(execCtx.reqCtx, defines.TemporaryTN{}, tempStorage)
-	}
-	if proc != nil && proc.Ctx != nil {
-		proc.Ctx = attachValue(proc.Ctx, defines.TemporaryTN{}, tempStorage)
+		proc.ReplaceTopCtx(execCtx.reqCtx)
 	}
 }
 
@@ -342,7 +339,7 @@ func replacePlan(reqCtx context.Context, ses *Session, cwft *TxnComputationWrapp
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	for _, obj := range preparePlan.GetSchemas() {
-		newObj, newTableDef := ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
+		newObj, newTableDef := ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName, nil)
 		if newObj == nil {
 			return nil, nil, nil, originSQL, moerr.NewInternalError(reqCtx, "table '%s' in prepare statement '%s' does not exist anymore", obj.ObjName, stmtName)
 		}
@@ -410,7 +407,7 @@ func createCompile(
 	if len(getGlobalPu().ClusterNodes) > 0 {
 		addr = getGlobalPu().ClusterNodes[0].Addr
 	}
-	proc.Ctx = execCtx.reqCtx
+	proc.ReplaceTopCtx(execCtx.reqCtx)
 	proc.Base.FileService = getGlobalPu().FileService
 
 	var tenant string
