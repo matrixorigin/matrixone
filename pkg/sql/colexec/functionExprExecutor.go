@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -314,7 +315,7 @@ func (fI *functionInformationForEval) reset() {
 	// get evalFn and freeFn from the function registry here.
 	if fI.evalFn != nil {
 		// we can set the context nil here since this function will never return an error.
-		overload, _ := function.GetFunctionById(nil, fI.overloadID)
+		overload, _ := function.GetFunctionById(context.TODO(), fI.overloadID)
 		fI.evalFn, fI.freeFn = overload.GetExecuteMethod()
 	}
 }
