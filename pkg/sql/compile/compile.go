@@ -3338,15 +3338,6 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	return rs
 }
 
-func (c *Compile) newMergeRemoteScope(ss []*Scope, nodeinfo engine.Node) *Scope {
-	rs := c.newMergeScope(ss)
-	// reset rs's info to remote
-	rs.Magic = Remote
-	rs.NodeInfo.Addr = nodeinfo.Addr
-	rs.NodeInfo.Mcpu = 1 //merge scope is single parallel by default
-	return rs
-}
-
 // newScopeListOnCurrentCN traverse the cnList and only generate Scope list for the current CN node
 // waing: newScopeListOnCurrentCN result is only used to build Scope and add one merge operator.
 // If other operators are added, please let @qingxinhome know
@@ -3355,25 +3346,6 @@ func (c *Compile) newScopeListOnCurrentCN(childrenCount int, blocks int) []*Scop
 	mcpu := c.generateCPUNumber(node.Mcpu, blocks)
 	ss := c.newScopeListWithNode(mcpu, childrenCount, node.Addr)
 	return ss
-}
-
-func (c *Compile) newScopeListForShuffleGroup(childrenCount int) ([]*Scope, []*Scope) {
-	parent := make([]*Scope, 0, len(c.cnList))
-	children := make([]*Scope, 0, len(c.cnList))
-
-	//currentFirstFlag := c.anal.isFirst
-	for _, n := range c.cnList {
-		//c.anal.isFirst = currentFirstFlag
-		scopes := c.newScopeListWithNode(plan2.GetShuffleDop(n.Mcpu), childrenCount, n.Addr)
-		for _, s := range scopes {
-			for _, rr := range s.Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
-			}
-		}
-		children = append(children, scopes...)
-		parent = append(parent, c.newMergeScopeByCN(scopes, n))
-	}
-	return parent, children
 }
 
 func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
