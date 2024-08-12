@@ -24,7 +24,6 @@ import (
 
 	"github.com/panjf2000/ants/v2"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -329,20 +328,43 @@ func decodeObjects(
 	var bat *batch.Batch
 	var release func()
 	var row []any
+	timePrefix := fmt.Sprintf("/* %v, %v */ ", ts.String(), time.Now())
+	//---------------------------------------------------
+	insertPrefix := fmt.Sprintf("INSERT INTO `%s`.`%s` values ", cdcCtx.Db(), cdcCtx.Table())
+	/*
+		FORMAT:
+		insert into db.t values
+		(...),
+		...
+		(...)
+	*/
+
 	tableDef := cdcCtx.TableDef()
+	if len(tableDef.Pkey.Names) == 0 {
+		return nil, moerr.NewInternalError(ctx, "cdc table need primary key")
+	}
+
+	firstInsertRow := true
+	insertBuff := make([]byte, 0, 1024)
+
 	cols := make([]uint16, 0)
 	typs := make([]types.Type, 0)
-	for i, colDef := range tableDef.Cols {
-		if colDef.Name == catalog.Row_ID {
-			continue
-		}
-		cols = append(cols, uint16(i))
+
+	colName2Index := make(map[string]int)
+	for i, col := range tableDef.Cols {
+		colName2Index[col.Name] = i
+	}
+	for _, pkName := range tableDef.Pkey.Names {
+		pkColIdx := colName2Index[pkName]
+		pkColDef := tableDef.Cols[pkColIdx]
+		cols = append(cols, uint16(pkColIdx))
 		typs = append(typs, types.Type{
-			Oid:   types.T(colDef.Typ.Id),
-			Width: colDef.Typ.Width,
-			Scale: colDef.Typ.Scale,
+			Oid:   types.T(pkColDef.Typ.Id),
+			Width: pkColDef.Typ.Width,
+			Scale: pkColDef.Typ.Scale,
 		})
 	}
+
 	rowCnt := uint64(0)
 	for objIter.Next() {
 		ent := objIter.Entry()
@@ -384,13 +406,39 @@ func decodeObjects(
 						return false
 					}
 					//fmt.Fprintln(os.Stderr, "-----objects row----", row)
+					if len(insertBuff) == 0 {
+						//fill insert prefix
+						insertBuff = appendString(insertBuff, timePrefix)
+						insertBuff = appendString(insertBuff, insertPrefix)
+					}
+
+					if !firstInsertRow {
+						insertBuff = appendString(insertBuff, ",")
+					} else {
+						firstInsertRow = false
+					}
+					insertBuff = appendString(insertBuff, "(")
+					for colIdx, col := range row {
+						if colIdx > 0 {
+							insertBuff = appendString(insertBuff, ",")
+						}
+						//transform column into text values
+						insertBuff, err = convertColIntoSql(ctx, col, &typs[colIdx], insertBuff)
+						if err != nil {
+							return false
+						}
+					}
+					insertBuff = appendString(insertBuff, ") ")
 					rowCnt++
 				}
-				//TODO:decode
 				return true
 			},
 			ent.ObjectStats,
 		)
+	}
+
+	if len(insertBuff) != 0 {
+		res = append(res, copyBytes(insertBuff))
 	}
 
 	fmt.Fprintln(os.Stderr, "-----objects row count----", rowCnt)

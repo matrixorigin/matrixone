@@ -551,7 +551,7 @@ func RegisterCdcExecutor(
 	ts taskservice.TaskService,
 	ieFactory func() ie.InternalExecutor,
 	attachToTask func(context.Context, uint64, taskservice.ActiveRoutine) error,
-	createTxnClient func() (client.TxnClient, client.TimestampWaiter, error),
+	createTxnClient func(bool) (client.TxnClient, client.TimestampWaiter, error),
 	cnUUID string,
 	fileService fileservice.FileService,
 	cnTxnClient client.TxnClient,
@@ -606,7 +606,7 @@ type CdcTask struct {
 	cnTxnClient     client.TxnClient
 	cnEngine        engine.Engine
 	fileService     fileservice.FileService
-	createTxnClient func() (client.TxnClient, client.TimestampWaiter, error)
+	createTxnClient func(bool) (client.TxnClient, client.TimestampWaiter, error)
 
 	cdcTask      *task.CreateCdcDetails
 	cdcTxnClient client.TxnClient
@@ -620,7 +620,7 @@ func NewCdcTask(
 	logger *zap.Logger,
 	ie ie.InternalExecutor,
 	cdcTask *task.CreateCdcDetails,
-	createTxnClient func() (client.TxnClient, client.TimestampWaiter, error),
+	createTxnClient func(bool) (client.TxnClient, client.TimestampWaiter, error),
 	cnUUID string,
 	fileService fileservice.FileService,
 	cnTxnClient client.TxnClient,
@@ -694,7 +694,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 		return err
 	}
 
-	cdc.cdcTxnClient, cdc.cdcTsWaiter, err = cdc.createTxnClient()
+	cdc.cdcTxnClient, cdc.cdcTsWaiter, err = cdc.createTxnClient(false)
 	if err != nil {
 		return err
 	}

@@ -45,6 +45,26 @@ func (s *consoleSinker) Sink(ctx context.Context, cdcCtx *disttae.TableCtx, data
 		}
 	}
 
+	if value, ok := data.sqlOfObjects.Load().([][]byte); !ok {
+		fmt.Fprintln(os.Stderr, "no sqlOfObjects")
+	} else {
+		fmt.Fprintln(os.Stderr, "total objects sql", len(value))
+		for i, sqlBytes := range value {
+			plen := min(len(sqlBytes), 200)
+			fmt.Fprintln(os.Stderr, i, string(sqlBytes[:plen]))
+		}
+	}
+
+	if value, ok := data.sqlOfDeletes.Load().([][]byte); !ok {
+		fmt.Fprintln(os.Stderr, "no sqlOfDeltas")
+	} else {
+		fmt.Fprintln(os.Stderr, "total deltas sql", len(value))
+		for i, sqlBytes := range value {
+			plen := min(len(sqlBytes), 200)
+			fmt.Fprintln(os.Stderr, i, string(sqlBytes[:plen]))
+		}
+	}
+
 	return nil
 }
 

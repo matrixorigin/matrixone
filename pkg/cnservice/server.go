@@ -555,7 +555,7 @@ func (s *service) initClusterService() {
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.ClusterService, s.moCluster)
 }
 
-func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
+func (s *service) getTxnSender(forCn bool) (sender rpc.TxnSender, err error) {
 	// handleTemp is used to manipulate memorystorage stored for temporary table created by sessions.
 	// processing of temporary table is currently on local, so we need to add a WithLocalDispatch logic to service.
 	handleTemp := func(d metadata.TNShard) rpc.TxnRequestHandleFunc {
@@ -622,24 +622,38 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 		}
 	}
 
-	s.initTxnSenderOnce.Do(func() {
-		sender, err = rpc.NewSender(
-			s.cfg.RPC,
-			runtime.ServiceRuntime(s.cfg.UUID),
-			rpc.WithSenderLocalDispatch(handleTemp),
-		)
+	if forCn {
+		s.initTxnSenderOnce.Do(func() {
+			sender, err = s.createTxnSender(handleTemp)
+			if err != nil {
+				return
+			}
+			s._txnSender = sender
+		})
+		sender = s._txnSender
+	} else {
+		sender, err = s.createTxnSender(handleTemp)
 		if err != nil {
 			return
 		}
-		s._txnSender = sender
-	})
-	sender = s._txnSender
+	}
+
 	return
+}
+
+func (s *service) createTxnSender(
+	handleTemp func(d metadata.TNShard) rpc.TxnRequestHandleFunc,
+) (sender rpc.TxnSender, err error) {
+	return rpc.NewSender(
+		s.cfg.RPC,
+		runtime.ServiceRuntime(s.cfg.UUID),
+		rpc.WithSenderLocalDispatch(handleTemp),
+	)
 }
 
 func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	s.initTxnClientOnce.Do(func() {
-		s._txnClient, s.timestampWaiter, err = s.createTxnClient()
+		s._txnClient, s.timestampWaiter, err = s.createTxnClient(true)
 		if err != nil {
 			return
 		}
@@ -648,7 +662,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	return
 }
 
-func (s *service) createTxnClient() (c client.TxnClient, timestampWaiter client.TimestampWaiter, err error) {
+func (s *service) createTxnClient(forCn bool) (c client.TxnClient, timestampWaiter client.TimestampWaiter, err error) {
 	timestampWaiter = client.NewTimestampWaiter(runtime.ServiceRuntime(s.cfg.UUID).Logger())
 
 	rt := runtime.ServiceRuntime(s.cfg.UUID)
@@ -659,7 +673,7 @@ func (s *service) createTxnClient() (c client.TxnClient, timestampWaiter client.
 	)
 	var sender rpc.TxnSender
 	//TODO: fix shared rpc sender
-	sender, err = s.getTxnSender()
+	sender, err = s.getTxnSender(forCn)
 	if err != nil {
 		return
 	}
