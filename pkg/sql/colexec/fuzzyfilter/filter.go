@@ -89,7 +89,7 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 		rowCount = 1000
 	}
 
-	if err := fuzzyFilter.generate(proc); err != nil {
+	if err := fuzzyFilter.generate(); err != nil {
 		return err
 	}
 
@@ -340,7 +340,7 @@ func (fuzzyFilter *FuzzyFilter) appendPassToRuntimeFilter(v *vector.Vector, proc
 		if int64(el)+int64(al) <= int64(fuzzyFilter.RuntimeFilterSpec.UpperLimit) {
 			ctr.pass2RuntimeFilter.UnionMulti(v, 0, al, proc.Mp())
 		} else {
-			proc.PutVector(ctr.pass2RuntimeFilter)
+			ctr.pass2RuntimeFilter.Free(proc.Mp())
 			ctr.pass2RuntimeFilter = nil
 		}
 	}
@@ -354,11 +354,11 @@ func (fuzzyFilter *FuzzyFilter) appendCollisionKey(proc *process.Process, idx in
 }
 
 // rbat will contain the keys that have hash collisions
-func (fuzzyFilter *FuzzyFilter) generate(proc *process.Process) error {
+func (fuzzyFilter *FuzzyFilter) generate() error {
 	ctr := &fuzzyFilter.ctr
 	rbat := batch.NewWithSize(1)
-	rbat.SetVector(0, proc.GetVector(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)))
-	ctr.pass2RuntimeFilter = proc.GetVector(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))
+	rbat.SetVector(0, vector.NewVec(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)))
+	ctr.pass2RuntimeFilter = vector.NewVec(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))
 	ctr.rbat = rbat
 	return nil
 }
