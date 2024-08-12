@@ -311,7 +311,7 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 		if !exist {
 			w = s.collector.writerFactory.GetRowWriter(ctx, row.GetAccount(), row.Table, ts)
 			if setter, ok := (w).(table.BufferSettable); ok && setter.NeedBuffer() {
-				setter.SetBuffer(getBuffer(), func(buf *bytes.Buffer) { putBuffer(buf) })
+				setter.SetBuffer(getBuffer(), putBuffer)
 			}
 			writer[row.Table.GetName()] = w
 		}

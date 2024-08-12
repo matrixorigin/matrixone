@@ -37,12 +37,12 @@ type ContentWriter struct {
 	ctx context.Context
 	tbl *table.Table
 
-	// mode 1
+	// formatter used in 'mode 1', more can see table.BufferSettable
+	formatter Formatter
+
+	// mode 1 & 2
 	buf         *bytes.Buffer
 	bufCallback func(*bytes.Buffer)
-
-	// mode 2
-	formatter Formatter
 
 	// main flow
 	sqlFlusher table.Flusher
@@ -69,6 +69,8 @@ func (c *ContentWriter) SetBuffer(buf *bytes.Buffer, callback func(buffer *bytes
 // NeedBuffer implements table.BufferSettable
 func (c *ContentWriter) NeedBuffer() bool { return true }
 
+// WriteRow serialize the row into buffer
+// It new a formatter to serialize the row.
 func (c *ContentWriter) WriteRow(row *table.Row) error {
 	if c.formatter == nil {
 		c.formatter = NewContentFormatter(c.ctx, c.buf)
@@ -94,7 +96,7 @@ func (c *ContentWriter) FlushAndClose() (int, error) {
 	if c.buf == nil {
 		return 0, nil
 	}
-	// mode 2
+	// mode 1 of table.BufferSettable
 	if c.formatter != nil {
 		c.formatter.Flush()
 	}
@@ -115,6 +117,7 @@ func (c *ContentWriter) FlushAndClose() (int, error) {
 	}
 	c.buf = nil
 	c.formatter = nil
+	c.bufCallback = nil
 	return n, nil
 }
 
