@@ -3509,6 +3509,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("vector_embedding_model"),
 		Default:           "ollama",
 	},
+	"ollama_server_proxy": {
+		Name:              "ollama_server_proxy",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("ollama_server_proxy"),
+		Default:           "http://localhost:11434/api/embed",
+	},
 	"experimental_ivf_index": {
 		Name:              "experimental_ivf_index",
 		Scope:             ScopeBoth,
