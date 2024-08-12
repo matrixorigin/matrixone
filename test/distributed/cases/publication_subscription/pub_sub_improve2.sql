@@ -286,7 +286,7 @@ drop table t1;
 drop table t2;
 drop table t3;
 -- @ignore:5,6
-show publications;           -- table字段需要实时更新
+show publications;
 -- @session
 
 -- @session:id=2&user=acc02:test_account&password=111
@@ -294,7 +294,147 @@ show databases;
 use sub06;
 show tables;
 select * from t4;
-show subscriptions;              -- table字段需要实时更新
+-- @ignore:5,7
+show subscriptions;
+-- @session
+
+-- @session:id=1&user=acc01:test_account&password=111
+drop publication pub06;
+drop database db06;
+-- @session
+
+-- @session:id=2&user=acc02:test_account&password=111
+drop database sub06;
 -- @session
 
 
+
+
+-- normal tenant is the publisher, the publisher publishes certain tables, tables in show subscriptions
+-- are displayed as valid tables, then delete some tables, and the tables in show subscriptions are verified as valid tables
+-- @session:id=1&user=acc01:test_account&password=111
+drop database if exists db07;
+create database db07;
+use db07;
+drop table if exists t1;
+create table t1 (a text);
+insert into t1 values('abcdef'),('_bcdef'),('a_cdef'),('ab_def'),('abcd_f'),('abcde_');
+drop table if exists t2;
+create table t2 (a datetime(0) not null, primary key(a));
+insert into t2 values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
+drop table if exists t3;
+create table t3(col1 datetime);
+insert into t3 values('2020-01-13 12:20:59.1234586153121');
+insert into t3 values('2023-04-17 01:01:45');
+insert into t3 values(NULL);
+drop table if exists t4;
+create table t4(a int unique key, b int, c int, unique key(b,c));
+insert into t4 values(1,1,1);
+insert into t4 values(2,3,3);
+insert into t4 values(10,19,11);
+drop publication if exists pub07;
+create publication pub07 database db07 table t1,t2,t3 account acc02 comment 'publish some tables to account acc02';
+-- @ignore:5,6
+show publications;
+-- @session
+
+-- @session:id=2&user=acc02:test_account&password=111
+-- @ignore:5,7
+show subscriptions all;
+drop database if exists sub07;
+create database sub07 from acc01 publication pub07;
+use sub07;
+show tables;
+-- @session
+
+-- @session:id=1&user=acc01:test_account&password=111
+use db07;
+drop table t1;
+drop table t3;
+-- @ignore:5,6
+show publications;
+-- @session
+
+-- @session:id=2&user=acc02:test_account&password=111
+show databases;
+use sub07;
+show tables;
+select * from t2;
+-- @ignore:5,7
+show subscriptions;
+-- @session
+
+-- @session:id=1&user=acc01:test_account&password=111
+drop publication pub07;
+drop database db07;
+-- @session
+
+-- @session:id=2&user=acc02:test_account&password=111
+drop database sub07;
+-- @session
+
+
+
+
+-- normal tenant is the publisher, the publisher publishes certain tables, tables in show subscriptions
+-- are displayed as valid tables, then delete all published tables, and the tables in show subscriptions are verified as null
+-- @session:id=1&user=acc01:test_account&password=111
+drop database if exists db08;
+create database db08;
+use db08;
+drop table if exists t1;
+create table t1 (a text);
+insert into t1 values('abcdef'),('_bcdef'),('a_cdef'),('ab_def'),('abcd_f'),('abcde_');
+drop table if exists t2;
+create table t2 (a datetime(0) not null, primary key(a));
+insert into t2 values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
+drop table if exists t3;
+create table t3(col1 datetime);
+insert into t3 values('2020-01-13 12:20:59.1234586153121');
+insert into t3 values('2023-04-17 01:01:45');
+insert into t3 values(NULL);
+drop table if exists t4;
+create table t4(a int unique key, b int, c int, unique key(b,c));
+insert into t4 values(1,1,1);
+insert into t4 values(2,3,3);
+insert into t4 values(10,19,11);
+drop publication if exists pub08;
+create publication pub08 database db08 table t1,t2,t3 account acc02 comment 'publish sone tables to account acc02';
+-- @ignore:5,6
+show publications;
+-- @session
+
+-- @session:id=2&user=acc02:test_account&password=111
+-- @ignore:5,7
+show subscriptions all;
+drop database if exists sub08;
+create database sub08 from acc01 publication pub08;
+use sub08;
+show tables;
+-- @session
+
+-- @session:id=1&user=acc01:test_account&password=111
+use db08;
+drop table t1;
+drop table t2;
+drop table t3;
+-- @ignore:5,6
+show publications;
+-- @session
+
+-- @session:id=2&user=acc02:test_account&password=111
+show databases;
+use sub08;
+show tables;
+-- @ignore:5,7
+show subscriptions;
+-- @session
+
+-- @session:id=1&user=acc01:test_account&password=111
+drop publication pub08;
+drop database db08;
+-- @session
+
+-- @session:id=2&user=acc02:test_account&password=111
+drop database sub08;
+-- @session
