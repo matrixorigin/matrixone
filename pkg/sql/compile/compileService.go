@@ -129,14 +129,17 @@ func (srv *ServiceOfCompile) removeRunningCompile(c *Compile) (mustReturnError b
 	c.queryStatus.noticeQueryCompleted()
 
 	srv.Lock()
-	if item, ok := srv.aliveCompiles[c]; ok {
-		err = item.mustReturnError
-	}
+
+	// todo: because we don't deal with the mustReturnError now, I just ignore it.
+	//if item, ok := srv.aliveCompiles[c]; ok {
+	//	err = item.mustReturnError
+	//}
 	delete(srv.aliveCompiles, c)
 	srv.Unlock()
 
 	c.queryStatus.clear()
-	return err != nil, err
+	//return err != nil, err
+	return false, nil
 }
 
 func (srv *ServiceOfCompile) putCompile(c *Compile) {
