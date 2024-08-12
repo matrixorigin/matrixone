@@ -727,7 +727,7 @@ func restoreToDatabaseOrTable(
 		}
 		return
 	} else {
-		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXITST %s", dbName)
+		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbName)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", snapshotName, dbName, createDbSql))
 		if err = bh.Exec(toCtx, createDbSql); err != nil {
