@@ -604,6 +604,12 @@ func restoreToDatabaseOrTable(
 		return
 	}
 
+	var currentAccount uint32
+	currentAccount, err = defines.GetAccountId(ctx)
+	if err != nil {
+		return
+	}
+
 	var createDbSql string
 
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
@@ -618,6 +624,12 @@ func restoreToDatabaseOrTable(
 	isSubDb := strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
 	if isSubDb && restoreToTbl {
 		return moerr.NewInternalError(toCtx, "can't restore to table for sub db")
+	}
+
+	// if current account is not to account id, and the db is sub db, skip restore
+	if currentAccount != toAccountId && isSubDb {
+		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore subscription db: %v, current account is not to account", snapshotName, dbName))
+		return
 	}
 
 	// if restore to db, delete the same name db first
