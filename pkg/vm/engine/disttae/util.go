@@ -1880,7 +1880,7 @@ func printLogtail(tip string, list []logtail.TableLogtail) {
 				panic(err)
 			}
 			fmt.Fprintln(os.Stderr, "&&&&&&> seq", i, "cmd", j, "batch attrs", strings.Join(batch.Attrs, ","))
-			fmt.Fprintln(os.Stderr, "&&&&&&> seq", i, "cmd", j, "batch data", batch.String())
+			//fmt.Fprintln(os.Stderr, "&&&&&&> seq", i, "cmd", j, "batch data", batch.String())
 		}
 	}
 }

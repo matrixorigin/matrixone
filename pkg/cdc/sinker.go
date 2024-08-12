@@ -40,7 +40,8 @@ func (s *consoleSinker) Sink(ctx context.Context, cdcCtx *disttae.TableCtx, data
 	} else {
 		fmt.Fprintln(os.Stderr, "total rows sql", len(value))
 		for i, sqlBytes := range value {
-			fmt.Fprintln(os.Stderr, i, string(sqlBytes))
+			plen := min(len(sqlBytes), 200)
+			fmt.Fprintln(os.Stderr, i, string(sqlBytes[:plen]))
 		}
 	}
 

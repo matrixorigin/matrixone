@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -344,6 +343,7 @@ func decodeObjects(
 			Scale: colDef.Typ.Scale,
 		})
 	}
+	rowCnt := uint64(0)
 	for objIter.Next() {
 		ent := objIter.Entry()
 		loc := ent.ObjectLocation()
@@ -383,7 +383,8 @@ func decodeObjects(
 					if err != nil {
 						return false
 					}
-					fmt.Fprintln(os.Stderr, "-----objects row----", row)
+					//fmt.Fprintln(os.Stderr, "-----objects row----", row)
+					rowCnt++
 				}
 				//TODO:decode
 				return true
@@ -391,6 +392,8 @@ func decodeObjects(
 			ent.ObjectStats,
 		)
 	}
+
+	fmt.Fprintln(os.Stderr, "-----objects row count----", rowCnt)
 	return
 }
 
@@ -402,12 +405,19 @@ func decodeDeltas(
 ) (res [][]byte, err error) {
 
 	var entRes [][]byte
+	dedup := make(map[[objectio.LocationLen]byte]struct{})
 	for deltaIter.Next() {
 		ent := deltaIter.Entry()
 		if ent.DeltaLocation().IsEmpty() {
 			continue
 		}
-		entRes, err = decodeDeltaEntry(ctx, ent, fs)
+		if _, ok := dedup[ent.DeltaLoc]; !ok {
+			dedup[ent.DeltaLoc] = struct{}{}
+		}
+	}
+
+	for loc, _ := range dedup {
+		entRes, err = decodeDeltaEntry(ctx, loc[:], fs)
 		if err != nil {
 			return nil, err
 		}
@@ -418,21 +428,21 @@ func decodeDeltas(
 
 func decodeDeltaEntry(
 	ctx context.Context,
-	ent logtailreplay.BlockDeltaEntry,
+	loc []byte,
 	fs fileservice.FileService,
 ) (res [][]byte, err error) {
-	var dels *nulls.Nulls
-	bat, byCn, release, err := blockio.ReadBlockDelete(ctx, ent.DeltaLocation(), fs)
+	bat, byCn, release, err := blockio.ReadBlockDelete(ctx, loc, fs)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
+	fmt.Fprintln(os.Stderr, "-----delta batch----",
+		"byCn", byCn,
+		"column cnt", len(bat.Vecs),
+		"row count", bat.Vecs[0].Length())
+	fmt.Fprintln(os.Stderr, "attrs", bat.Attrs)
 	if byCn {
-		dels = blockio.EvalDeleteRowsByTimestampForDeletesPersistedByCN(bat, types.MaxTs(), ent.CommitTs)
+
 	}
-	if dels == nil {
-		dels = nulls.NewWithSize(128)
-	}
-	//TODO:how to process dels
 	return
 }
