@@ -448,9 +448,6 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	}
 
 	if mcpu <= 1 { // broadcast join with no parallel
-		buildScope := c.newJoinBuildScope(s, 1)
-		s.PreScopes = append(s.PreScopes, buildScope)
-		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx]
 		return s, nil
 	}
 

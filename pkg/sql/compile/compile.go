@@ -2219,7 +2219,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		return c.compileShuffleJoin(node, left, right, probeScopes, buildScopes)
 	}
 	rs := c.compileBroadcastJoin(node, left, right, probeScopes, buildScopes)
-	if c.IsTpQuery() {
+	if c.IsTpQuery() || c.IsSingleScope(rs) {
 		//construct join build operator for tp join
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, rs[0].RootOp), false, 1))
 		rs[0].Proc.Reg.MergeReceivers = rs[0].Proc.Reg.MergeReceivers[:1]
