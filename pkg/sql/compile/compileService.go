@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	txnClient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"sync"
 	"time"
 )
 
@@ -40,9 +41,7 @@ func GetCompileService() *ServiceOfCompile {
 //
 // It also tracks the currently active complies within a single CN.
 type ServiceOfCompile struct {
-	// lch is lock for the service.
-	// we use channel but not mutex to prevent users' cannot stop his query when the service is paused.
-	lch chan struct{}
+	sync.Mutex
 
 	// ongoing compiles with additional information.
 	aliveCompiles map[*Compile]compileAdditionalInformation
@@ -90,10 +89,8 @@ func (waiter queryDoneWaiter) clear() {
 
 func InitCompileService() *ServiceOfCompile {
 	srv := &ServiceOfCompile{
-		lch:           make(chan struct{}, 1),
 		aliveCompiles: make(map[*Compile]compileAdditionalInformation, 1024),
 	}
-	srv.lch <- struct{}{}
 	return srv
 }
 
@@ -113,32 +110,32 @@ func (srv *ServiceOfCompile) recordRunningCompile(runningCompile *Compile) error
 
 	queryCtx, queryCancel := process.GetQueryCtxFromProc(runningCompile.proc)
 
-	select {
-	case <-srv.lch:
-		srv.aliveCompiles[runningCompile] = compileAdditionalInformation{
-			mustReturnError: nil,
-			queryCancel:     queryCancel,
-			queryDone:       runningCompile.queryStatus,
-		}
-		srv.lch <- struct{}{}
-		return nil
-
-	case <-queryCtx.Done():
-		return queryCtx.Err()
+	srv.Lock()
+	srv.aliveCompiles[runningCompile] = compileAdditionalInformation{
+		mustReturnError: nil,
+		queryCancel:     queryCancel,
+		queryDone:       runningCompile.queryStatus,
 	}
+	srv.Unlock()
+
+	err := queryCtx.Err()
+	if err != nil {
+		_, _ = srv.removeRunningCompile(runningCompile)
+	}
+	return err
 }
 
 func (srv *ServiceOfCompile) removeRunningCompile(c *Compile) (mustReturnError bool, err error) {
 	c.queryStatus.noticeQueryCompleted()
 
-	<-srv.lch
+	srv.Lock()
 	if item, ok := srv.aliveCompiles[c]; ok {
 		err = item.mustReturnError
 	}
 	delete(srv.aliveCompiles, c)
-	c.queryStatus.clear()
-	srv.lch <- struct{}{}
+	srv.Unlock()
 
+	c.queryStatus.clear()
 	return err != nil, err
 }
 
@@ -150,18 +147,18 @@ func (srv *ServiceOfCompile) putCompile(c *Compile) {
 }
 
 func (srv *ServiceOfCompile) aliveCompile() int {
-	<-srv.lch
+	srv.Lock()
 	l := len(srv.aliveCompiles)
-	srv.lch <- struct{}{}
+	srv.Unlock()
 	return l
 }
 
 func (srv *ServiceOfCompile) PauseService() {
-	<-srv.lch
+	srv.Lock()
 }
 
 func (srv *ServiceOfCompile) ResumeService() {
-	srv.lch <- struct{}{}
+	srv.Unlock()
 }
 
 func (srv *ServiceOfCompile) KillAllQueriesWithError(err error) {
