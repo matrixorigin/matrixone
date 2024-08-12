@@ -5,6 +5,7 @@ data-dir = "./mo-data"
 level = "info"
 format = "console"
 max-size = 512
+disable-store = true
 
 [hakeeper-client]
 service-addresses = [
@@ -36,3 +37,6 @@ uuid = "rd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 enable-metric-to-prom = true
 enable-stmt-merge = true
 status-port = 7051
+disable-span = true
+disable-error = true
+# no disable-statement
