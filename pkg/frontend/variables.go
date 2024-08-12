@@ -3517,6 +3517,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int64(0),
 	},
+	"experimental_llm_index": {
+		Name:              "experimental_llm_index",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_llm_index"),
+		Default:           int64(0),
+	},
 	"disable_agg_statement": {
 		Name:              "disable_agg_statement",
 		Scope:             ScopeSession,
