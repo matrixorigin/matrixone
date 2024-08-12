@@ -15,32 +15,52 @@
 package malloc
 
 import (
-	"sync"
-	"unsafe"
-
-	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type MetricsAllocator struct {
-	upstream Allocator
-	funcPool sync.Pool
+	upstream        Allocator
+	deallocatorPool *ClosureDeallocatorPool[metricsDeallocatorArgs, *metricsDeallocatorArgs]
+
+	allocateBytesCounter   prometheus.Counter
+	inuseBytesGauge        prometheus.Gauge
+	allocateObjectsCounter prometheus.Counter
+	inuseObjectsGauge      prometheus.Gauge
 }
 
-func NewMetricsAllocator(upstream Allocator) *MetricsAllocator {
-	ret := &MetricsAllocator{
-		upstream: upstream,
+type metricsDeallocatorArgs struct {
+	size uint64
+}
+
+func (metricsDeallocatorArgs) As(Trait) bool {
+	return false
+}
+
+func NewMetricsAllocator(
+	upstream Allocator,
+	allocateBytesCounter prometheus.Counter,
+	inuseBytesGauge prometheus.Gauge,
+	allocateObjectsCounter prometheus.Counter,
+	inuseObjectsGauge prometheus.Gauge,
+) *MetricsAllocator {
+	return &MetricsAllocator{
+		upstream:               upstream,
+		allocateBytesCounter:   allocateBytesCounter,
+		inuseBytesGauge:        inuseBytesGauge,
+		allocateObjectsCounter: allocateObjectsCounter,
+		inuseObjectsGauge:      inuseObjectsGauge,
+
+		deallocatorPool: NewClosureDeallocatorPool(
+			func(hints Hints, args *metricsDeallocatorArgs) {
+				if inuseBytesGauge != nil {
+					inuseBytesGauge.Add(-float64(args.size))
+				}
+				if inuseObjectsGauge != nil {
+					inuseObjectsGauge.Add(-1)
+				}
+			},
+		),
 	}
-	ret.funcPool = sync.Pool{
-		New: func() any {
-			argumented := new(argumentedFuncDeallocator[uint64])
-			argumented.fn = func(_ unsafe.Pointer, hints Hints, size uint64) {
-				metric.MallocCounterFreeBytes.Add(float64(size))
-				ret.funcPool.Put(argumented)
-			}
-			return argumented
-		},
-	}
-	return ret
 }
 
 type AllocateInfo struct {
@@ -50,13 +70,28 @@ type AllocateInfo struct {
 
 var _ Allocator = new(MetricsAllocator)
 
-func (m *MetricsAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointer, Deallocator, error) {
+func (m *MetricsAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	ptr, dec, err := m.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, nil, err
 	}
-	metric.MallocCounterAllocateBytes.Add(float64(size))
-	fn := m.funcPool.Get().(*argumentedFuncDeallocator[uint64])
-	fn.SetArgument(size)
-	return ptr, ChainDeallocator(dec, fn), nil
+	if m.allocateBytesCounter != nil {
+		m.allocateBytesCounter.Add(float64(size))
+	}
+	if m.inuseBytesGauge != nil {
+		m.inuseBytesGauge.Add(float64(size))
+	}
+	if m.allocateObjectsCounter != nil {
+		m.allocateObjectsCounter.Add(1)
+	}
+	if m.inuseObjectsGauge != nil {
+		m.inuseObjectsGauge.Add(1)
+	}
+
+	return ptr, ChainDeallocator(
+		dec,
+		m.deallocatorPool.Get(metricsDeallocatorArgs{
+			size: size,
+		}),
+	), nil
 }

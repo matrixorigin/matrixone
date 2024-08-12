@@ -70,7 +70,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		arg.rt.fetchers = append(arg.rt.fetchers,
 			GetFetchRowsFunc(arg.targets[idx].primaryColumnType))
 	}
-	arg.rt.parker = types.NewPacker(proc.Mp())
+	arg.rt.parker = types.NewPacker()
 	arg.rt.retryError = nil
 	arg.rt.step = stepLock
 	if arg.block {
@@ -301,8 +301,8 @@ func LockTable(
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
-	parker := types.NewPacker(proc.Mp())
-	defer parker.FreeMem()
+	parker := types.NewPacker()
+	defer parker.Close()
 
 	opts := DefaultLockOptions(parker).
 		WithLockTable(true, changeDef).
@@ -346,8 +346,8 @@ func LockRows(
 		return nil
 	}
 
-	parker := types.NewPacker(proc.Mp())
-	defer parker.FreeMem()
+	parker := types.NewPacker()
+	defer parker.Close()
 
 	opts := DefaultLockOptions(parker).
 		WithLockTable(false, false).
@@ -844,7 +844,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		return
 	}
 	if arg.rt.parker != nil {
-		arg.rt.parker.FreeMem()
+		arg.rt.parker.Close()
 	}
 	arg.rt.retryError = nil
 	arg.cleanCachedBatch(proc)

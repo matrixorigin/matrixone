@@ -20,6 +20,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 var defaultAllocator Allocator
@@ -33,11 +35,12 @@ func GetDefault(defaultConfig *Config) Allocator {
 	return defaultAllocator
 }
 
-func newDefault(config *Config) (allocator Allocator) {
+func newDefault(delta *Config) (allocator Allocator) {
+
 	// config
-	if config == nil {
-		c := *defaultConfig.Load()
-		config = &c
+	config := *defaultConfig.Load()
+	if delta != nil {
+		config = patchConfig(config, *delta)
 	}
 
 	// debug
@@ -61,8 +64,9 @@ func newDefault(config *Config) (allocator Allocator) {
 	// checked
 	defer func() {
 		if config.CheckFraction != nil && *config.CheckFraction > 0 {
-			allocator = NewCheckedAllocator(
+			allocator = NewRandomAllocator(
 				allocator,
+				NewCheckedAllocator(allocator),
 				*config.CheckFraction,
 			)
 		}
@@ -78,7 +82,13 @@ func newDefault(config *Config) (allocator Allocator) {
 		// c allocator
 		allocator = NewCAllocator()
 		if config.EnableMetrics != nil && *config.EnableMetrics {
-			allocator = NewMetricsAllocator(allocator)
+			allocator = NewMetricsAllocator(
+				allocator,
+				metric.MallocCounterAllocateBytes,
+				metric.MallocGaugeInuseBytes,
+				metric.MallocCounterAllocateObjects,
+				metric.MallocGaugeInuseObjects,
+			)
 		}
 		return allocator
 
@@ -90,7 +100,13 @@ func newDefault(config *Config) (allocator Allocator) {
 				var ret Allocator
 				ret = NewClassAllocator(NewFixedSizeSyncPoolAllocator)
 				if config.EnableMetrics != nil && *config.EnableMetrics {
-					ret = NewMetricsAllocator(ret)
+					ret = NewMetricsAllocator(
+						ret,
+						metric.MallocCounterAllocateBytes,
+						metric.MallocGaugeInuseBytes,
+						metric.MallocCounterAllocateObjects,
+						metric.MallocGaugeInuseObjects,
+					)
 				}
 				return ret
 			},
@@ -104,7 +120,13 @@ func newDefault(config *Config) (allocator Allocator) {
 				var ret Allocator
 				ret = NewClassAllocator(NewFixedSizeMmapAllocator)
 				if config.EnableMetrics != nil && *config.EnableMetrics {
-					ret = NewMetricsAllocator(ret)
+					ret = NewMetricsAllocator(
+						ret,
+						metric.MallocCounterAllocateBytes,
+						metric.MallocGaugeInuseBytes,
+						metric.MallocCounterAllocateObjects,
+						metric.MallocGaugeInuseObjects,
+					)
 				}
 				return ret
 			},

@@ -40,7 +40,7 @@ type PackerList struct {
 func (list *PackerList) Free() {
 	for _, p := range list.ps {
 		if p != nil {
-			p.FreeMem()
+			p.Close()
 		}
 	}
 }
@@ -148,10 +148,10 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, packers *Pa
 	if length > cap(packers.ps) {
 		for _, p := range packers.ps {
 			if p != nil {
-				p.FreeMem()
+				p.Close()
 			}
 		}
-		packers.ps = types.NewPackerArray(length, proc.Mp())
+		packers.ps = types.NewPackerArray(length)
 	}
 	defer func() {
 		for i := 0; i < length; i++ {
@@ -498,10 +498,10 @@ func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process, packers 
 	if rowCount > cap(packers.ps) {
 		for _, p := range packers.ps {
 			if p != nil {
-				p.FreeMem()
+				p.Close()
 			}
 		}
-		packers.ps = types.NewPackerArray(rowCount, proc.Mp())
+		packers.ps = types.NewPackerArray(rowCount)
 	}
 	defer func() {
 		for i := 0; i < rowCount; i++ {

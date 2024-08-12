@@ -57,15 +57,13 @@ func TestLRUCallbacks(t *testing.T) {
 	s.capacity = 1
 
 	// PostSet
-	h := l.hasher.Hash(1)
-	s.Set(ctx, h, 1, []byte{42})
+	s.Set(ctx, 1, []byte{42})
 	assert.True(t, postSetInvokedMap[1])
 	postSetInvokedMap[1] = false // resetting
 	assert.False(t, postEvictInvokedMap[1])
 
 	// PostSet and PostEvict
-	h = l.hasher.Hash(2)
-	s.Set(ctx, h, 2, []byte{44})
+	s.Set(ctx, 2, []byte{44})
 	assert.True(t, postEvictInvokedMap[1])        //postEvictInvokedMap is updated by PostEvict
 	assert.Equal(t, []byte{42}, evictEntryMap[1]) //evictEntryMap is updated by PostEvict
 }

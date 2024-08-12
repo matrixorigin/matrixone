@@ -35,6 +35,17 @@ func makeOKPacket(l int) []byte {
 	return data
 }
 
+// makeErrPacket returns an ERROR packet
+func makeErrPacket(l int) []byte {
+	data := make([]byte, l+4)
+	data[4] = 0xFF
+	data[0] = byte(l)
+	data[1] = byte(l >> 8)
+	data[2] = byte(l >> 16)
+	data[3] = 1
+	return data
+}
+
 func isCmdQuery(p []byte) bool {
 	if len(p) > 4 && p[4] == byte(cmdQuery) {
 		return true

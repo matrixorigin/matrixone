@@ -392,6 +392,27 @@ type ExecCtx struct {
 	isIssue3482       bool
 }
 
+func (execCtx *ExecCtx) Close() {
+	execCtx.reqCtx = nil
+	execCtx.prepareStmt = nil
+	execCtx.runResult = nil
+	execCtx.stmt = nil
+	execCtx.isLastStmt = false
+	execCtx.tenant = ""
+	execCtx.userName = ""
+	execCtx.sqlOfStmt = ""
+	execCtx.cw = nil
+	execCtx.runner = nil
+	execCtx.loadLocalWriter = nil
+	execCtx.proc = nil
+	execCtx.ses = nil
+	execCtx.cws = nil
+	execCtx.input = nil
+	execCtx.executeParamTypes = nil
+	execCtx.resper = nil
+	execCtx.results = nil
+}
+
 // outputCallBackFunc is the callback function to send the result to the client.
 // parameters:
 //

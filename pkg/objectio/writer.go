@@ -70,6 +70,7 @@ const (
 	WriterQueryResult
 	WriterGC
 	WriterETL
+	WriterTmp
 )
 
 const ObjectSizeLimit = 3 * mpool.GB
@@ -88,6 +89,8 @@ func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.Fil
 		name = BuildDiskCleanerName()
 	case WriterETL:
 		name = BuildETLName()
+	case WriterTmp:
+		name = BuildTmpName()
 	}
 	writer := &objectWriterV1{
 		seqnums:       NewSeqnums(nil),

@@ -20,7 +20,6 @@ import (
 	"sync/atomic"
 
 	"github.com/dolthub/maphash"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache/internal/hashmap"
 )
 
 func New[K comparable, V BytesLike](
@@ -67,24 +66,20 @@ func New[K comparable, V BytesLike](
 		if l.shards[i].capacity < 1 {
 			l.shards[i].capacity = 1
 		}
-		l.shards[i].kv = hashmap.New[K, lruItem[K, V]](0)
+		l.shards[i].kv = make(map[K]*lruItem[K, V])
 	}
 	return &l
 }
 
 func (l *LRU[K, V]) Set(ctx context.Context, key K, value V) {
-	var s *shard[K, V]
-
 	h := l.hash(key)
-	s = &l.shards[h%uint64(len(l.shards))]
-	s.Set(ctx, h, key, value)
+	s := &l.shards[h%uint64(len(l.shards))]
+	s.Set(ctx, key, value)
 }
 
 func (l *LRU[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
-	var s *shard[K, V]
-
 	h := l.hash(key)
-	s = &l.shards[h%uint64(len(l.shards))]
+	s := &l.shards[h%uint64(len(l.shards))]
 	return s.Get(ctx, h, key)
 }
 
@@ -112,4 +107,17 @@ func (l *LRU[K, V]) Available() int64 {
 
 func (l *LRU[K, V]) hash(k K) uint64 {
 	return l.hasher.Hash(k)
+}
+
+func (l *LRU[K, V]) EnsureNBytes(n int) {
+	want := int64(n * 2)
+	for {
+		for i := 0; i < len(l.shards); i++ {
+			if l.Available() > want {
+				return
+			}
+			shard := &l.shards[i]
+			shard.evictOne()
+		}
+	}
 }
