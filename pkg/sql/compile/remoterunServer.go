@@ -176,6 +176,12 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
+		runCompile.proc.SetBaseProcessRunningStatus(true)
+		defer func() {
+			runCompile.proc.SetBaseProcessRunningStatus(false)
+			runCompile.clear()
+			runCompile.Release()
+		}()
 
 		// decode and running the pipeline.
 		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
@@ -186,10 +192,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		runCompile.scope = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
-		defer func() {
-			runCompile.clear()
-			runCompile.Release()
-		}()
 
 		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 

@@ -77,6 +77,10 @@ type ExpressionExecutor interface {
 	// and watch out that maybe the vector is one of the input vectors of batches.
 	EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error)
 
+	// ResetForNextQuery resets the expression to its initial state for a same expression.
+	// this is useful to a prepare statement.
+	ResetForNextQuery()
+
 	// Free should release all memory of executor.
 	// it will be called after query has done.
 	Free()
@@ -155,10 +159,20 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		}
 
 		executor := NewFunctionExpressionExecutor()
-		executor.fid, _ = function.DecodeOverloadID(overloadID)
+		{
+			// init function folding status.
+			executor.folded.reset(proc.Mp())
+		}
+		{
+			// init function information for evaluation.
+			executor.overloadID = overloadID
+			executor.volatile, executor.timeDependent = overload.CannotFold(), overload.IsRealTimeRelated()
+			executor.fid, _ = function.DecodeOverloadID(overloadID)
+			executor.evalFn, executor.freeFn = overload.GetExecuteMethod()
+		}
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		fn, fnFree := overload.GetExecuteMethod()
-		if err = executor.Init(proc, len(t.F.Args), typ, fn, fnFree); err != nil {
+
+		if err = executor.Init(proc, len(t.F.Args), typ); err != nil {
 			executor.Free()
 			return nil, err
 		}
@@ -171,98 +185,45 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			}
 			executor.SetParameter(i, subExecutor)
 		}
-
-		// IF all parameters here were constant. and this function can be folded.
-		// 	there is a better way to convert it as a FixedVectorExpressionExecutor.
-		if !overload.CannotFold() && !overload.IsRealTimeRelated() && ifAllArgsAreConstant(executor) {
-			for i := range executor.parameterExecutor {
-				fixExe := executor.parameterExecutor[i].(*FixedVectorExpressionExecutor)
-				executor.parameterResults[i] = fixExe.resultVector
-				if !fixExe.fixed {
-					executor.parameterResults[i].SetLength(1)
-				}
-			}
-
-			execLen := 1
-			if len(executor.parameterResults) > 0 {
-				firstParam := executor.parameterResults[0]
-				if !firstParam.IsConst() {
-					execLen = firstParam.Length()
-				}
-			}
-
-			if err = executor.resultVector.PreExtendAndReset(execLen); err != nil {
-				executor.Free()
-				return nil, err
-			}
-
-			err = executor.evalFn(executor.parameterResults, executor.resultVector, proc, execLen, nil)
-			if err == nil {
-				mp := proc.Mp()
-
-				result := executor.resultVector.GetResultVector()
-				fixed := NewFixedVectorExpressionExecutor(mp, false, nil)
-
-				if execLen == 1 {
-					// ToConst may returns a new pointer to the same memory.
-					// so we need to duplicate it.
-					constResult := result.ToConst(0, 1, mp)
-					defer constResult.Free(mp)
-					fixed.resultVector, err = constResult.Dup(mp)
-				} else {
-					fixed.fixed = true
-					fixed.resultVector = result
-					executor.resultVector.SetResultVector(nil)
-				}
-				executor.Free()
-				if err != nil {
-					return nil, err
-				}
-				return fixed, nil
-			}
-			executor.Free()
-			return nil, err
-		}
-
 		return executor, nil
 	}
 
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", planExpr))
 }
 
+// EvalExpressionOnce
+// todo: return (vector, free method, error) may be better.
 func EvalExpressionOnce(proc *process.Process, planExpr *plan.Expr, batches []*batch.Batch) (*vector.Vector, error) {
 	executor, err := NewExpressionExecutor(proc, planExpr)
-	defer func() {
-		if executor != nil {
-			executor.Free()
-		}
-	}()
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		executor.Free()
+	}()
 
 	vec, err := executor.Eval(proc, batches, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	// if memory reuse, we can get it directly because we do only one evaluate.
+	// some cases that we have no need to duplicate the result because we only use it once.
 	if e, ok := executor.(*FunctionExpressionExecutor); ok {
-		e.resultVector = nil
-		return vec, nil
+		if !e.folded.canFold {
+			e.resultVector = nil
+			return vec, nil
+		} else {
+			e.folded.foldVector = nil
+			return vec, nil
+		}
 	}
 	if e, ok := executor.(*FixedVectorExpressionExecutor); ok {
 		e.resultVector = nil
 		return vec, nil
 	}
 
-	// I'm not sure if dup is good. but if not.
-	// we should check batch's cnt first, get if it's 1, dup if not.
-	nv, er := vec.Dup(proc.Mp())
-	if er != nil {
-		return nil, er
-	}
-	return nv, nil
+	// I'm not sure if dup is good. but ok now.
+	return vec.Dup(proc.Mp())
 }
 
 func ifAllArgsAreConstant(executor *FunctionExpressionExecutor) bool {
@@ -284,30 +245,8 @@ func ifAllArgsAreConstant(executor *FunctionExpressionExecutor) bool {
 type FixedVectorExpressionExecutor struct {
 	m *mpool.MPool
 
-	fixed        bool
-	resultVector *vector.Vector
-}
-
-type FunctionExpressionExecutor struct {
-	m           *mpool.MPool
-	fid         int32
-	selectList1 []bool
-	selectList2 []bool
-	selectList  function.FunctionSelectList
-
-	resultVector vector.FunctionResultWrapper
-	// parameters related
-	parameterResults  []*vector.Vector
-	parameterExecutor []ExpressionExecutor
-
-	evalFn func(
-		params []*vector.Vector,
-		result vector.FunctionResultWrapper,
-		proc *process.Process,
-		length int,
-		selectList *function.FunctionSelectList) error
-
-	freeFn func() error
+	noNeedToSetLength bool
+	resultVector      *vector.Vector
 }
 
 type ColumnExpressionExecutor struct {
@@ -371,6 +310,10 @@ func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Proc
 	}
 	expr.vec = nil
 	return vec, nil
+}
+
+func (expr *ParamExpressionExecutor) ResetForNextQuery() {
+	// do nothing.
 }
 
 func (expr *ParamExpressionExecutor) Free() {
@@ -445,6 +388,10 @@ func (expr *VarExpressionExecutor) EvalWithoutResultReusing(proc *process.Proces
 	return vec, nil
 }
 
+func (expr *VarExpressionExecutor) ResetForNextQuery() {
+	// do nothing.
+}
+
 func (expr *VarExpressionExecutor) Free() {
 	if expr == nil {
 		return
@@ -461,189 +408,6 @@ func (expr *VarExpressionExecutor) Free() {
 }
 
 func (expr *VarExpressionExecutor) IsColumnExpr() bool {
-	return false
-}
-
-func (expr *FunctionExpressionExecutor) Init(
-	proc *process.Process,
-	parameterNum int,
-	retType types.Type,
-	fn func(
-		params []*vector.Vector,
-		result vector.FunctionResultWrapper,
-		proc *process.Process,
-		length int,
-		selectList *function.FunctionSelectList) error,
-	freeFn func() error) (err error) {
-	m := proc.Mp()
-
-	expr.m = m
-	expr.evalFn = fn
-	expr.freeFn = freeFn
-	expr.parameterResults = make([]*vector.Vector, parameterNum)
-	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
-
-	expr.resultVector = vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, retType, m)
-	return err
-}
-
-func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
-	expr.parameterResults[0], err = expr.parameterExecutor[0].Eval(proc, batches, selectList)
-	if err != nil {
-		return err
-	}
-	rowCount := batches[0].RowCount()
-	if len(expr.selectList1) < rowCount {
-		expr.selectList1 = make([]bool, rowCount)
-		expr.selectList2 = make([]bool, rowCount)
-	}
-	for i := 0; i < rowCount; i++ {
-		b, null := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0]).GetValue(uint64(i))
-		if selectList != nil {
-			expr.selectList1[i] = selectList[i]
-			expr.selectList2[i] = selectList[i]
-		} else {
-			expr.selectList1[i] = true
-			expr.selectList2[i] = true
-		}
-		if !null && b {
-			expr.selectList2[i] = false
-		} else {
-			expr.selectList1[i] = false
-		}
-	}
-	expr.parameterResults[1], err = expr.parameterExecutor[1].Eval(proc, batches, expr.selectList1)
-	if err != nil {
-		return err
-	}
-	expr.parameterResults[2], err = expr.parameterExecutor[2].Eval(proc, batches, expr.selectList2)
-	return err
-}
-
-func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
-	rowCount := batches[0].RowCount()
-	if len(expr.selectList1) < rowCount {
-		expr.selectList1 = make([]bool, rowCount)
-		expr.selectList2 = make([]bool, rowCount)
-	}
-	if selectList != nil {
-		copy(expr.selectList1, selectList)
-	} else {
-		for i := range expr.selectList1 {
-			expr.selectList1[i] = true
-		}
-	}
-	for i := 0; i < len(expr.parameterExecutor); i += 2 {
-		expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches, expr.selectList1)
-		if err != nil {
-			return err
-		}
-		if i != len(expr.parameterExecutor)-1 {
-			for j := 0; j < rowCount; j++ {
-				b, null := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[i]).GetValue(uint64(j))
-				if !null && b {
-					expr.selectList1[j] = false
-					expr.selectList2[j] = true
-				} else {
-					expr.selectList2[j] = false
-				}
-			}
-			expr.parameterResults[i+1], err = expr.parameterExecutor[i+1].Eval(proc, batches, expr.selectList2)
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return err
-}
-
-func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	var err error
-	if expr.fid == function.IFF {
-		err = expr.EvalIff(proc, batches, selectList)
-		if err != nil {
-			return nil, err
-		}
-	} else if expr.fid == function.CASE {
-		err = expr.EvalCase(proc, batches, selectList)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		for i := range expr.parameterExecutor {
-			expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches, selectList)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	if err = expr.resultVector.PreExtendAndReset(batches[0].RowCount()); err != nil {
-		return nil, err
-	}
-
-	if len(expr.selectList.SelectList) < batches[0].RowCount() {
-		expr.selectList.SelectList = make([]bool, batches[0].RowCount())
-	}
-	if selectList == nil {
-		expr.selectList.AnyNull = false
-		expr.selectList.AllNull = false
-		for i := range expr.selectList.SelectList {
-			expr.selectList.SelectList[i] = true
-		}
-	} else {
-		expr.selectList.AllNull = true
-		expr.selectList.AnyNull = false
-		for i := range selectList {
-			expr.selectList.SelectList[i] = selectList[i]
-			if selectList[i] {
-				expr.selectList.AllNull = false
-			} else {
-				expr.selectList.AnyNull = true
-			}
-		}
-	}
-
-	if err = expr.evalFn(
-		expr.parameterResults, expr.resultVector, proc, batches[0].RowCount(), &expr.selectList); err != nil {
-		return nil, err
-	}
-	return expr.resultVector.GetResultVector(), nil
-}
-
-func (expr *FunctionExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
-	vec, err := expr.Eval(proc, batches, nil)
-	if err != nil {
-		return nil, err
-	}
-	expr.resultVector.SetResultVector(nil)
-	return vec, nil
-}
-
-func (expr *FunctionExpressionExecutor) Free() {
-	if expr == nil {
-		return
-	}
-	if expr.resultVector != nil {
-		expr.resultVector.Free()
-		expr.resultVector = nil
-	}
-	for _, p := range expr.parameterExecutor {
-		if p != nil {
-			p.Free()
-		}
-	}
-	if expr.freeFn != nil {
-		_ = expr.freeFn()
-	}
-	reuse.Free[FunctionExpressionExecutor](expr, nil)
-}
-
-func (expr *FunctionExpressionExecutor) SetParameter(index int, executor ExpressionExecutor) {
-	expr.parameterExecutor[index] = executor
-}
-
-func (expr *FunctionExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
 
@@ -685,6 +449,10 @@ func (expr *ColumnExpressionExecutor) EvalWithoutResultReusing(proc *process.Pro
 	return vec, err
 }
 
+func (expr *ColumnExpressionExecutor) ResetForNextQuery() {
+	// do nothing.
+}
+
 func (expr *ColumnExpressionExecutor) Free() {
 	if expr == nil {
 		return
@@ -701,7 +469,7 @@ func (expr *ColumnExpressionExecutor) IsColumnExpr() bool {
 }
 
 func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
-	if !expr.fixed {
+	if !expr.noNeedToSetLength {
 		expr.resultVector.SetLength(batches[0].RowCount())
 	}
 	return expr.resultVector, nil
@@ -713,6 +481,10 @@ func (expr *FixedVectorExpressionExecutor) EvalWithoutResultReusing(proc *proces
 		return nil, err
 	}
 	return vec.Dup(proc.Mp())
+}
+
+func (expr *FixedVectorExpressionExecutor) ResetForNextQuery() {
+	// do nothing.
 }
 
 func (expr *FixedVectorExpressionExecutor) Free() {
@@ -978,10 +750,10 @@ func FixProjectionResult(proc *process.Process,
 					dupSize += newVec.Size()
 					rbat.Vecs[i] = newVec
 				}
-			} else if functionExpr, ok := executors[i].(*FunctionExpressionExecutor); ok {
+			} else if functionExpr, ok := executors[i].(*FunctionExpressionExecutor); ok && !functionExpr.folded.canFold {
 				// if projection, we can get the result directly
-				// newVec = functionExpr.resultVector.GetResultVector()
 				functionExpr.resultVector.SetResultVector(nil)
+
 			} else {
 				newVec, err = getNewVec(i, oldVec)
 				if err != nil {

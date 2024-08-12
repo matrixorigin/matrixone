@@ -452,6 +452,9 @@ func (c *Compile) runOnce() error {
 		}
 	}
 
+	c.proc.SetBaseProcessRunningStatus(true)
+	defer c.proc.SetBaseProcessRunningStatus(false)
+
 	if err = GetCompileService().recordRunningCompile(c); err != nil {
 		return err
 	}
