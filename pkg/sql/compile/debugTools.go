@@ -157,8 +157,8 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 			remote := ""
 			for _, u := range s.RemoteReceivRegInfos {
 				if u.Idx == i {
-					remote = fmt.Sprintf("(%s)", u.Uuid)
-					remote = remote[len(remote)-6:]
+					uuidStr := u.Uuid.String()
+					remote = fmt.Sprintf("(%s)", uuidStr[len(uuidStr)-6:])
 					break
 				}
 			}
@@ -238,7 +238,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 							remoteChs += ", "
 						}
 						uuidStr := reg.Uuid.String()
-						remoteChs += fmt.Sprintf("[addr: %s, uuid %s]", reg.NodeAddr, uuidStr[len(uuidStr)-6:])
+						remoteChs += fmt.Sprintf("[addr: %s(%s)]", reg.NodeAddr, uuidStr[len(uuidStr)-6:])
 					}
 					str += fmt.Sprintf(" cross-cn receiver info: %s", remoteChs)
 				}
