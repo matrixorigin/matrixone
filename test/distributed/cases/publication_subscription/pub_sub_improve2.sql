@@ -75,7 +75,9 @@ drop database sub01;
 
 -- @session:id=1&user=acc01:test_account&password=111
 drop publication pub01;
+drop publication pub02;
 drop database db01;
+drop database db02;
 -- @session
 
 
@@ -120,7 +122,7 @@ show subscriptions all;
 -- @session:id=3&user=acc03:test_account&password=111
 -- @ignore:5,7
 show subscriptions all;
-drop database if exists db05;
+drop database if exists sub05;
 create database sub05 from sys publication pub04;
 -- @ignore:5,7
 show subscriptions all;
@@ -231,7 +233,6 @@ alter publication pub05 account acc01,acc02 database db05;
 show publications;
 
 -- @session:id=3&user=acc03:test_account&password=111
-drop database sub06;
 -- @ignore:5,7
 show subscriptions all;
 -- @session
@@ -438,3 +439,7 @@ drop database db08;
 -- @session:id=2&user=acc02:test_account&password=111
 drop database sub08;
 -- @session
+
+drop account acc01;
+drop account acc02;
+drop account acc03;
