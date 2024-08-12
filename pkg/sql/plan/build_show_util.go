@@ -29,7 +29,7 @@ import (
 )
 
 // ConstructCreateTableSQL used to build CREATE Table statement
-func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snapshot Snapshot, useDbName bool) (string, tree.Statement, error) {
+func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snapshot *Snapshot, useDbName bool) (string, tree.Statement, error) {
 	var err error
 	var createStr string
 
@@ -74,7 +74,7 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 		}
 
 		if util.IsClusterTableAttribute(colNameOrigin) && isClusterTable &&
-			(accountId != catalog.System_Account || IsSnapshotValid(&snapshot)) {
+			(accountId != catalog.System_Account || IsSnapshotValid(snapshot)) {
 			continue
 		}
 
@@ -410,7 +410,7 @@ func FormatColType(colType plan.Type) string {
 		}
 
 	case types.T_float64, types.T_float32:
-		if colType.Scale != -1 {
+		if colType.Width > 0 && colType.Scale != -1 {
 			suffix = fmt.Sprintf("(%d,%d)", colType.Width, colType.Scale)
 		}
 

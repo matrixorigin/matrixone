@@ -16,11 +16,11 @@ package compile
 
 import (
 	"context"
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	txnClient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"time"
 )
 
 // todo: Move it to a CN level structure next day.
@@ -40,7 +40,9 @@ func GetCompileService() *ServiceOfCompile {
 //
 // It also tracks the currently active complies within a single CN.
 type ServiceOfCompile struct {
-	sync.RWMutex
+	// lch is lock for the service.
+	// we use channel but not mutex to prevent users' cannot stop his query when the service is paused.
+	lch chan struct{}
 
 	// ongoing compiles with additional information.
 	aliveCompiles map[*Compile]compileAdditionalInformation
@@ -88,48 +90,55 @@ func (waiter queryDoneWaiter) clear() {
 
 func InitCompileService() *ServiceOfCompile {
 	srv := &ServiceOfCompile{
+		lch:           make(chan struct{}, 1),
 		aliveCompiles: make(map[*Compile]compileAdditionalInformation, 1024),
 	}
+	srv.lch <- struct{}{}
 	return srv
 }
 
 func (srv *ServiceOfCompile) getCompile(proc *process.Process) *Compile {
-	// make sure the process has a cancel function.
-	if proc.Cancel == nil {
-		proc.Ctx, proc.Cancel = context.WithCancel(proc.Ctx)
-	}
-
 	runningCompile := reuse.Alloc[Compile](nil)
 	// runningCompile.AllocMsg = time.Now().String() + " : " + string(debug.Stack())
 	runningCompile.proc = proc
 	return runningCompile
 }
 
-func (srv *ServiceOfCompile) startService(runningCompile *Compile) {
+func (srv *ServiceOfCompile) recordRunningCompile(runningCompile *Compile) error {
 	if runningCompile.queryStatus == nil {
 		runningCompile.queryStatus = newQueryDoneWaiter()
 	} else {
 		runningCompile.queryStatus.clear()
 	}
 
-	srv.Lock()
-	srv.aliveCompiles[runningCompile] = compileAdditionalInformation{
-		mustReturnError: nil,
-		queryCancel:     runningCompile.proc.Cancel,
-		queryDone:       runningCompile.queryStatus,
+	queryCtx, queryCancel := process.GetQueryCtxFromProc(runningCompile.proc)
+
+	select {
+	case <-srv.lch:
+		srv.aliveCompiles[runningCompile] = compileAdditionalInformation{
+			mustReturnError: nil,
+			queryCancel:     queryCancel,
+			queryDone:       runningCompile.queryStatus,
+		}
+		srv.lch <- struct{}{}
+		return nil
+
+	case <-queryCtx.Done():
+		return queryCtx.Err()
 	}
-	srv.Unlock()
 }
 
-func (srv *ServiceOfCompile) endService(c *Compile) (mustReturnError bool, err error) {
+func (srv *ServiceOfCompile) removeRunningCompile(c *Compile) (mustReturnError bool, err error) {
 	c.queryStatus.noticeQueryCompleted()
-	srv.Lock()
+
+	<-srv.lch
 	if item, ok := srv.aliveCompiles[c]; ok {
 		err = item.mustReturnError
 	}
 	delete(srv.aliveCompiles, c)
 	c.queryStatus.clear()
-	srv.Unlock()
+	srv.lch <- struct{}{}
+
 	return err != nil, err
 }
 
@@ -141,21 +150,27 @@ func (srv *ServiceOfCompile) putCompile(c *Compile) {
 }
 
 func (srv *ServiceOfCompile) aliveCompile() int {
-	srv.Lock()
-	defer srv.Unlock()
-
-	return len(srv.aliveCompiles)
+	<-srv.lch
+	l := len(srv.aliveCompiles)
+	srv.lch <- struct{}{}
+	return l
 }
 
 func (srv *ServiceOfCompile) PauseService() {
-	srv.Lock()
+	<-srv.lch
 }
 
 func (srv *ServiceOfCompile) ResumeService() {
-	srv.Unlock()
+	srv.lch <- struct{}{}
 }
 
 func (srv *ServiceOfCompile) KillAllQueriesWithError(err error) {
+	logutil.Infof("compile service starts to kill all running queries.")
+	start := time.Now()
+	defer func() {
+		logutil.Infof("compile service has killed all running queries, time cost: %.2f s", time.Since(start).Seconds())
+	}()
+
 	for _, v := range srv.aliveCompiles {
 		v.kill(err)
 	}

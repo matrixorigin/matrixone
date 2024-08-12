@@ -27,7 +27,7 @@ import (
 var _ batchpipe.HasName = (*ItemSyncer)(nil)
 var _ IBuffer2SqlItem = (*ItemSyncer)(nil)
 var _ table.RowField = (*ItemSyncer)(nil)
-var _ table.NeedCheckWrite = (*ItemSyncer)(nil)
+var _ table.NeedAck = (*ItemSyncer)(nil)
 var _ table.NeedSyncWrite = (*ItemSyncer)(nil)
 
 type NamedItemRow interface {
@@ -67,14 +67,14 @@ func (s *ItemSyncer) GetTable() *table.Table { return s.item.GetTable() }
 // FillRow implements table.RowField
 func (s *ItemSyncer) FillRow(ctx context.Context, row *table.Row) { s.item.FillRow(ctx, row) }
 
-// NeedCheckWrite implements NeedCheckWrite
-func (s *ItemSyncer) NeedCheckWrite() bool { return true }
+// NeedCheckAck implements NeedAck
+func (s *ItemSyncer) NeedCheckAck() bool { return true }
 
 // NeedSyncWrite implements NeedSyncWrite
 func (s *ItemSyncer) NeedSyncWrite() bool { return true }
 
-// GetCheckWriteHook implements NeedCheckWrite and NeedSyncWrite
-func (s *ItemSyncer) GetCheckWriteHook() table.CheckWriteHook {
+// GetAckHook implements NeedAck and NeedSyncWrite
+func (s *ItemSyncer) GetAckHook() table.AckHook {
 	return func(_ context.Context) {
 		close(s.ch)
 	}

@@ -2840,6 +2840,178 @@ func (data *CheckpointData) GetTNBlkBatchs() (
 		data.bats[BLKTNMetaDeleteIDX],
 		data.bats[BLKTNMetaDeleteTxnIDX]
 }
+
+type tableinfo struct {
+	tid    uint64
+	add    uint64
+	delete uint64
+}
+
+type TableInfoJson struct {
+	ID             uint64 `json:"id"`
+	Add            uint64 `json:"add,omitempty"`
+	Delete         uint64 `json:"delete,omitempty"`
+	TombstoneRows  uint64 `json:"tombstone_rows,omitempty"`
+	TombstoneCount uint64 `json:"tombstone_count,omitempty"`
+}
+
+type ObjectInfoJson struct {
+	TableCnt     int    `json:"table_count,omitempty"`
+	ObjectCnt    uint64 `json:"object_count"`
+	ObjectAddCnt uint64 `json:"object_add_count"`
+	ObjectDelCnt uint64 `json:"object_del_count"`
+	TombstoneCnt int    `json:"tombstone_count"`
+
+	Tables []TableInfoJson `json:"tables,omitempty"`
+}
+
+type CheckpointInfoJson struct {
+	CheckpointDataCount int              `json:"checkpoint_data_count"`
+	Data                []ObjectInfoJson `json:"data"`
+}
+
+const (
+	invalid = 0xffffff
+)
+
+func (data *CheckpointData) GetCheckpointMetaInfo(id uint64, limit int) (res *ObjectInfoJson, err error) {
+	tombstone := make(map[string]struct{})
+	tombstoneInfo := make(map[uint64]*tableinfo)
+	for i := range data.bats[BLKMetaInsertIDX].Length() {
+		deltaLoc := objectio.Location(
+			data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		tid := data.bats[BLKMetaInsertTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+
+		if tombstoneInfo[tid] == nil {
+			tombstoneInfo[tid] = &tableinfo{
+				tid: tid,
+			}
+		}
+		if _, ok := tombstone[deltaLoc.Name().String()]; !ok {
+			tombstone[deltaLoc.Name().String()] = struct{}{}
+			tombstoneInfo[tid].delete++
+		}
+		tombstoneInfo[tid].add++
+	}
+	for i := range data.bats[BLKCNMetaInsertIDX].Length() {
+		deltaLoc := objectio.Location(
+			data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		if deltaLoc.IsEmpty() {
+			return nil, moerr.NewInfoNoCtx("failed to get checkpoint data, deltaLoc in empty")
+		}
+		if _, ok := tombstone[deltaLoc.Name().String()]; !ok {
+			tombstone[deltaLoc.Name().String()] = struct{}{}
+		}
+	}
+
+	insTableIDs := vector.MustFixedCol[uint64](
+		data.bats[ObjectInfoIDX].GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+	insDeleteTSs := vector.MustFixedCol[types.TS](
+		data.bats[ObjectInfoIDX].GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
+	files := make(map[uint64]*tableinfo)
+	for i := range data.bats[ObjectInfoIDX].Length() {
+		if files[insTableIDs[i]] == nil {
+			files[insTableIDs[i]] = &tableinfo{
+				tid: insTableIDs[i],
+			}
+		}
+		deleteTs := insDeleteTSs[i]
+		if deleteTs.IsEmpty() {
+			files[insTableIDs[i]].add++
+		} else {
+			files[insTableIDs[i]].delete++
+		}
+	}
+
+	tableinfos := make([]*tableinfo, 0)
+	objectCount := uint64(0)
+	addCount := uint64(0)
+	deleteCount := uint64(0)
+	for _, count := range files {
+		tableinfos = append(tableinfos, count)
+		objectCount += count.add
+		addCount += count.add
+		objectCount += count.delete
+		deleteCount += count.delete
+	}
+	sort.Slice(tableinfos, func(i, j int) bool {
+		return tableinfos[i].add > tableinfos[j].add
+	})
+	tableJsons := make([]TableInfoJson, 0, data.bats[ObjectInfoIDX].Length())
+	tables := make(map[uint64]int)
+	for i := range len(tableinfos) {
+		tablejson := TableInfoJson{
+			ID:     tableinfos[i].tid,
+			Add:    tableinfos[i].add,
+			Delete: tableinfos[i].delete,
+		}
+		if id == 0 || tablejson.ID == id {
+			tables[tablejson.ID] = len(tableJsons)
+			tableJsons = append(tableJsons, tablejson)
+		}
+	}
+	tableinfos2 := make([]*tableinfo, 0)
+	objectCount2 := uint64(0)
+	addCount2 := uint64(0)
+	for _, count := range tombstoneInfo {
+		tableinfos2 = append(tableinfos2, count)
+		objectCount2 += count.add
+		addCount2 += count.add
+	}
+	sort.Slice(tableinfos2, func(i, j int) bool {
+		return tableinfos2[i].add > tableinfos2[j].add
+	})
+
+	for i := range len(tableinfos2) {
+		if idx, ok := tables[tableinfos2[i].tid]; ok {
+			tablejson := &tableJsons[idx]
+			tablejson.TombstoneRows = tableinfos2[i].add
+			tablejson.TombstoneCount = tableinfos2[i].delete
+			continue
+		}
+		tablejson := TableInfoJson{
+			ID:             tableinfos2[i].tid,
+			TombstoneRows:  tableinfos2[i].add,
+			TombstoneCount: tableinfos2[i].delete,
+		}
+		if id == 0 || tablejson.ID == id {
+			tableJsons = append(tableJsons, tablejson)
+		}
+	}
+
+	res = &ObjectInfoJson{
+		TableCnt:     len(tableJsons),
+		ObjectCnt:    objectCount,
+		ObjectAddCnt: addCount,
+		ObjectDelCnt: deleteCount,
+		TombstoneCnt: len(tombstone),
+	}
+
+	if id != invalid {
+		if limit < len(tableJsons) {
+			tableJsons = tableJsons[:limit]
+		}
+		res.Tables = tableJsons
+	}
+
+	return
+}
+
+func (data *CheckpointData) GetTableIds() []uint64 {
+	input := vector.MustFixedCol[uint64](data.bats[ObjectInfoIDX].GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+	seen := make(map[uint64]struct{})
+	var result []uint64
+
+	for _, v := range input {
+		if _, ok := seen[v]; !ok {
+			result = append(result, v)
+			seen[v] = struct{}{}
+		}
+	}
+
+	return result
+}
+
 func (collector *BaseCollector) LoadAndCollectObject(c *catalog.Catalog, visitObject func(*catalog.ObjectEntry) error) error {
 	if collector.isPrefetch {
 		collector.isPrefetch = false

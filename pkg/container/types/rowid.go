@@ -58,10 +58,10 @@ func NewObjectid() *Objectid {
 	return &oid
 }
 
-func NewBlockidWithObjectID(segid *Objectid, blknum uint16) *Blockid {
+func NewBlockidWithObjectID(id *Objectid, blknum uint16) *Blockid {
 	var bid Blockid
 	size := ObjectidSize
-	copy(bid[:size], segid[:])
+	copy(bid[:size], id[:])
 	copy(bid[size:size+2], EncodeUint16(&blknum))
 	return &bid
 }
@@ -74,10 +74,10 @@ func NewRowid(blkid *Blockid, offset uint32) *Rowid {
 	return &rowid
 }
 
-func NewRowIDWithObjectIDBlkNumAndRowID(segid Objectid, blknum uint16, offset uint32) Rowid {
+func NewRowIDWithObjectIDBlkNumAndRowID(id Objectid, blknum uint16, offset uint32) Rowid {
 	var rowID Rowid
 	size := ObjectidSize
-	copy(rowID[:size], segid[:])
+	copy(rowID[:size], id[:])
 	copy(rowID[size:size+2], EncodeUint16(&blknum))
 	copy(rowID[size+2:], EncodeUint32(&offset))
 	return rowID

@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -80,7 +79,7 @@ func NewCdcEngine(
 	return cdcEng
 }
 
-func (cdcEng *CdcEngine) init(ctx context.Context) error {
+func (cdcEng *CdcEngine) init(ctx context.Context) (err error) {
 	cdcEng.Lock()
 	defer cdcEng.Unlock()
 
@@ -88,7 +87,8 @@ func (cdcEng *CdcEngine) init(ctx context.Context) error {
 	cdcEng.catalog.SetCdcId(cdcEng.cdcId)
 	cdcEng.partitions = make(map[[2]uint64]*logtailreplay.Partition)
 
-	return initEngine(ctx, cdcEng.service, cdcEng.catalog, cdcEng.partitions, cdcEng.mp, cdcEng.packerPool)
+	_, _, _, _, err = initEngine(ctx, cdcEng.service, cdcEng.catalog, cdcEng.partitions, cdcEng.mp, cdcEng.packerPool)
+	return err
 }
 
 func (cdcEng *CdcEngine) Enqueue(tail *logtail.TableLogtail) {}
@@ -239,6 +239,11 @@ func (cdcEng *CdcEngine) ToCdc(cdcCtx *TableCtx, decInput *DecoderInput) {
 	cdcEng.inQueue.Push(tools.NewPair[*TableCtx, *DecoderInput](cdcCtx, decInput))
 }
 
+func (cdcEng *CdcEngine) BuildBlockReaders(ctx context.Context, proc any, ts timestamp.Timestamp, expr *plan.Expr, def *plan.TableDef, relData engine.RelData, num int) ([]engine.Reader, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func NewCdcRelation(
 	db, table string,
 	accountId, dbId, tableId uint64,
@@ -265,11 +270,6 @@ func (cdcTbl *CdcRelation) Rows(ctx context.Context) (uint64, error) {
 }
 
 func (cdcTbl *CdcRelation) Size(ctx context.Context, columnName string) (uint64, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (cdcTbl *CdcRelation) Ranges(ctx context.Context, exprs []*plan.Expr, i int) (engine.Ranges, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -382,11 +382,6 @@ func (cdcTbl *CdcRelation) PrimaryKeysMayBeModified(ctx context.Context, from ty
 }
 
 func (cdcTbl *CdcRelation) ApproxObjectsNum(ctx context.Context) int {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (cdcTbl *CdcRelation) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error) {
 	//TODO implement me
 	panic("implement me")
 }

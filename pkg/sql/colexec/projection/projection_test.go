@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -52,7 +52,7 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Projection{
-				Es: []*plan.Expr{
+				ProjectList: []*plan.Expr{
 					{
 						Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
 						Typ: plan.Type{
@@ -90,44 +90,25 @@ func TestProjection(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		bats := []*batch.Batch{
-			newBatch(tc.types, tc.proc, Rows),
-			newBatch(tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
-		}
-		resetChildren(tc.arg, bats)
+		resetChildren(tc.arg)
 		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.arg.Reset(tc.proc, false, nil)
 
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		bats = []*batch.Batch{
-			newBatch(tc.types, tc.proc, Rows),
-			newBatch(tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
-		}
-		resetChildren(tc.arg, bats)
+		resetChildren(tc.arg)
 		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
-// create a new block based on the type information
-func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
-}
-
-func resetChildren(arg *Projection, bats []*batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: bats,
-	}
-	valueScanArg.Prepare(nil)
-	arg.SetChildren(
-		[]vm.Operator{
-			valueScanArg,
-		})
+func resetChildren(arg *Projection) {
+	bat := colexec.MakeMockBatchs()
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
 }

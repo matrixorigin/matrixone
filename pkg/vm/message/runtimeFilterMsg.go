@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package process
+package message
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 const (
 	RuntimeFilter_IN          = 0
@@ -54,19 +56,19 @@ func (rt RuntimeFilterMessage) GetReceiverAddr() MessageAddress {
 	return AddrBroadCastOnCurrentCN()
 }
 
-func (proc *Process) SendRuntimeFilter(rt RuntimeFilterMessage, m *plan.RuntimeFilterSpec) {
+func SendRuntimeFilter(rt RuntimeFilterMessage, m *plan.RuntimeFilterSpec, mb *MessageBoard) {
 	if m != nil {
-		proc.SendMessage(rt)
+		SendMessage(rt, mb)
 	}
 }
 
-func (proc *Process) FinalizeRuntimeFilter(m *plan.RuntimeFilterSpec, pipelineFailed bool, err error) {
+func FinalizeRuntimeFilter(m *plan.RuntimeFilterSpec, pipelineFailed bool, err error, mb *MessageBoard) {
 	if m != nil {
 		if pipelineFailed || err != nil {
 			var runtimeFilter RuntimeFilterMessage
 			runtimeFilter.Tag = m.Tag
 			runtimeFilter.Typ = RuntimeFilter_DROP
-			proc.SendMessage(runtimeFilter)
+			SendMessage(runtimeFilter, mb)
 		}
 	}
 }

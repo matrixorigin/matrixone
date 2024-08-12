@@ -217,6 +217,8 @@ func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
 			return true, nil
 		}
 	}
+	// todo: these should do a log here to indicate that the system is not bootstrapped like the following
+	//  "show databases cannot find the bootstrappedCheckerDB."
 	return false, nil
 }
 

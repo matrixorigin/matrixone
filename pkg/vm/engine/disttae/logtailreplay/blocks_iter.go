@@ -129,9 +129,9 @@ type dirtyBlocksIter struct {
 }
 
 func (p *PartitionState) NewDirtyBlocksIter() BlocksIter {
-	iter := p.dirtyBlocks.Copy().Iter()
+	//iter := p.dirtyBlocks.Copy().Iter()
 	ret := &dirtyBlocksIter{
-		iter: iter,
+		iter: btree.IterG[types.Blockid]{},
 	}
 	return ret
 }
@@ -274,4 +274,25 @@ func (p *PartitionState) NewBlockDeltaIter() BlockDeltaIter {
 		iter: iter,
 	}
 	return ret
+}
+
+type BlockDeltaInfo struct {
+	//the commit ts of location.
+	Cts types.TS
+	Loc objectio.Location
+}
+
+func (p *PartitionState) GetTombstoneDeltaLocs(mp map[types.Blockid]BlockDeltaInfo) (err error) {
+	iter := p.blockDeltas.Copy().Iter()
+	defer iter.Release()
+
+	for ok := iter.First(); ok; ok = iter.Next() {
+		item := iter.Item()
+		mp[item.BlockID] = BlockDeltaInfo{
+			Loc: item.DeltaLoc[:],
+			Cts: item.CommitTs,
+		}
+	}
+
+	return nil
 }

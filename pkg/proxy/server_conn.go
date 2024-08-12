@@ -199,6 +199,13 @@ func (s *serverConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, erro
 
 // Close implements the ServerConn interface.
 func (s *serverConn) Close() error {
+	if s.mysqlProto != nil {
+		tcpConn := s.mysqlProto.GetTcpConnection()
+		if tcpConn != nil {
+			_ = tcpConn.Close()
+		}
+		s.mysqlProto.Close()
+	}
 	// Un-track the connection.
 	s.rebalancer.connManager.disconnect(s.cnServer, s.tun)
 	return nil

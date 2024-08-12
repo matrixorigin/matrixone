@@ -60,6 +60,12 @@ func (source *Source) Prepare(proc *process.Process) error {
 		}
 	}
 
+	if source.ProjectList != nil {
+		err := source.PrepareProjection(proc)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -92,5 +98,9 @@ func (source *Source) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 	}
 
-	return result, nil
+	if source.ProjectList != nil {
+		result.Batch, err = source.EvalProjection(result.Batch, proc)
+	}
+
+	return result, err
 }

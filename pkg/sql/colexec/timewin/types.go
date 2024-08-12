@@ -55,8 +55,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	rbat   *batch.Batch
 	colCnt int
 
@@ -154,7 +152,6 @@ func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err er
 func (timeWin *TimeWin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := timeWin.ctr
 	if ctr != nil {
-		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanTsVector()
 		ctr.cleanAggVector()

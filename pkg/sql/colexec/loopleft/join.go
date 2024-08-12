@@ -16,6 +16,9 @@ package loopleft
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -46,6 +49,13 @@ func (loopLeft *LoopLeft) Prepare(proc *process.Process) error {
 
 	if loopLeft.Cond != nil {
 		loopLeft.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopLeft.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if loopLeft.ProjectList != nil {
+		err = loopLeft.PrepareProjection(proc)
 	}
 	return err
 }
@@ -70,31 +80,42 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = Probe
 
 		case Probe:
-			if ctr.inBat != nil {
-				err = ctr.probe(loopLeft, proc, anal, loopLeft.GetIsLast(), &result)
-				return result, err
+			if ctr.inBat == nil {
+				result, err = loopLeft.Children[0].Call(proc)
+				if err != nil {
+					return result, err
+				}
+
+				ctr.inBat = result.Batch
+				if ctr.inBat == nil {
+					ctr.state = End
+					continue
+				}
+				if ctr.inBat.IsEmpty() {
+					proc.PutBatch(ctr.inBat)
+					ctr.inBat = nil
+					continue
+				}
+				anal.Input(ctr.inBat, loopLeft.GetIsFirst())
 			}
-			result, err = loopLeft.Children[0].Call(proc)
+
+			if ctr.bat.RowCount() == 0 {
+				err = ctr.emptyProbe(loopLeft, proc, &result)
+			} else {
+				err = ctr.probe(loopLeft, proc, &result)
+			}
 			if err != nil {
 				return result, err
 			}
 
-			ctr.inBat = result.Batch
-			if ctr.inBat == nil {
-				ctr.state = End
-				continue
+			if loopLeft.ProjectList != nil {
+				result.Batch, err = loopLeft.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
 			}
-			if ctr.inBat.IsEmpty() {
-				proc.PutBatch(ctr.inBat)
-				ctr.inBat = nil
-				continue
-			}
-			anal.Input(ctr.inBat, loopLeft.GetIsFirst())
-			if ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(loopLeft, proc, anal, loopLeft.GetIsLast(), &result)
-			} else {
-				err = ctr.probe(loopLeft, proc, anal, loopLeft.GetIsLast(), &result)
-			}
+			anal.Output(result.Batch, loopLeft.GetIsLast())
+
 			return result, err
 
 		default:
@@ -107,7 +128,9 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (loopLeft *LoopLeft) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopLeft.ctr
-	mp := proc.ReceiveJoinMap(anal, loopLeft.JoinMapTag, false, 0)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(loopLeft.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil
 	}
@@ -123,7 +146,7 @@ func (loopLeft *LoopLeft) build(proc *process.Process, anal process.Analyze) err
 	return nil
 }
 
-func (ctr *container) emptyProbe(ap *LoopLeft, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
+func (ctr *container) emptyProbe(ap *LoopLeft, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -144,14 +167,13 @@ func (ctr *container) emptyProbe(ap *LoopLeft, proc *process.Process, anal proce
 	}
 	ctr.probeIdx = 0
 	ctr.rbat.AddRowCount(ctr.inBat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	proc.PutBatch(ctr.inBat)
 	ctr.inBat = nil
 	return nil
 }
 
-func (ctr *container) probe(ap *LoopLeft, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *LoopLeft, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -250,7 +272,6 @@ func (ctr *container) probe(ap *LoopLeft, proc *process.Process, anal process.An
 			}
 		}
 		if rowCountIncrease >= colexec.DefaultBatchSize {
-			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ctr.rbat.SetRowCount(rowCountIncrease)
 			ctr.probeIdx = i + 1
@@ -259,7 +280,6 @@ func (ctr *container) probe(ap *LoopLeft, proc *process.Process, anal process.An
 	}
 	ctr.probeIdx = 0
 	ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	proc.PutBatch(ctr.inBat)
 	ctr.inBat = nil

@@ -4114,6 +4114,25 @@ func TestDirtyWatchRace(t *testing.T) {
 	wg.Wait()
 }
 
+type TestBlockReadDeltaSource struct {
+	deltaLoc objectio.Location
+	testTs   types.TS
+}
+
+func (b *TestBlockReadDeltaSource) SetTS(ts types.TS) {
+	b.testTs = ts
+}
+
+func (b *TestBlockReadDeltaSource) GetDeltaLoc(bid objectio.Blockid) (objectio.Location, types.TS) {
+	return b.deltaLoc, b.testTs
+}
+
+func NewTestBlockReadSource(deltaLoc objectio.Location) logtail.DeltaSource {
+	return &TestBlockReadDeltaSource{
+		deltaLoc: deltaLoc,
+	}
+}
+
 func TestBlockRead(t *testing.T) {
 	blockio.RunPipelineTest(
 		func() {
@@ -4154,18 +4173,17 @@ func TestBlockRead(t *testing.T) {
 			deltaloc := rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(*blkEntry.ID()).GetLatestDeltaloc(0)
 			assert.False(t, objStats.IsEmpty())
 			assert.NotEmpty(t, deltaloc)
-
-			bid, sid := blkEntry.ID(), blkEntry.ID()
+			testDS := NewTestBlockReadSource(deltaloc)
+			ds := logtail.NewDeltaLocDataSource(ctx, tae.DB.Runtime.Fs.Service, beforeDel, testDS)
+			bid, _ := blkEntry.ID(), blkEntry.ID()
 
 			info := &objectio.BlockInfo{
 				BlockID:    *objectio.NewBlockidWithObjectID(bid, 0),
-				SegmentID:  *sid.Segment(),
-				EntryState: true,
+				Appendable: true,
 			}
 			metaloc := objStats.ObjectLocation()
 			metaloc.SetRows(schema.BlockMaxRows)
 			info.SetMetaLocation(metaloc)
-			info.SetDeltaLocation(deltaloc)
 
 			columns := make([]string, 0)
 			colIdxs := make([]uint16, 0)
@@ -4181,36 +4199,41 @@ func TestBlockRead(t *testing.T) {
 			fs := tae.DB.Runtime.Fs.Service
 			pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 			assert.NoError(t, err)
-			infos := make([][]*objectio.BlockInfo, 0)
-			infos = append(infos, []*objectio.BlockInfo{info})
+			infos := make([]*objectio.BlockInfo, 0)
+			infos = append(infos, info)
 			err = blockio.BlockPrefetch("", colIdxs, fs, infos, false)
 			assert.NoError(t, err)
-			b1, err := blockio.BlockReadInner(
-				context.Background(), "", info, nil, colIdxs, colTyps,
+
+			b1, err := blockio.BlockDataReadInner(
+				context.Background(), "", info, ds, colIdxs, colTyps,
 				beforeDel, nil, fs, pool, nil, fileservice.Policy(0),
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b1.Vecs))
 			assert.Equal(t, 20, b1.Vecs[0].Length())
 
-			b2, err := blockio.BlockReadInner(
-				context.Background(), "", info, nil, colIdxs, colTyps,
+			testDS.SetTS(afterFirstDel)
+
+			b2, err := blockio.BlockDataReadInner(
+				context.Background(), "", info, ds, colIdxs, colTyps,
 				afterFirstDel, nil, fs, pool, nil, fileservice.Policy(0),
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 19, b2.Vecs[0].Length())
-			b3, err := blockio.BlockReadInner(
-				context.Background(), "", info, nil, colIdxs, colTyps,
+
+			testDS.SetTS(afterSecondDel)
+
+			b3, err := blockio.BlockDataReadInner(
+				context.Background(), "", info, ds, colIdxs, colTyps,
 				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0),
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b2.Vecs))
 			assert.Equal(t, 16, b3.Vecs[0].Length())
-
 			// read rowid column only
-			b4, err := blockio.BlockReadInner(
+			b4, err := blockio.BlockDataReadInner(
 				context.Background(), "", info,
-				nil,
+				ds,
 				[]uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
 				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0),
@@ -4220,10 +4243,10 @@ func TestBlockRead(t *testing.T) {
 			assert.Equal(t, 16, b4.Vecs[0].Length())
 
 			// read rowid column only
-			info.EntryState = false
-			b5, err := blockio.BlockReadInner(
+			info.Appendable = false
+			b5, err := blockio.BlockDataReadInner(
 				context.Background(), "", info,
-				nil, []uint16{2},
+				ds, []uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
 				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0),
 			)

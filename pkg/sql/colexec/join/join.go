@@ -16,6 +16,9 @@ package join
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -50,6 +53,10 @@ func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
 
 	if innerJoin.Cond != nil {
 		innerJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, innerJoin.Cond)
+	}
+
+	if innerJoin.ProjectList != nil {
+		err = innerJoin.PrepareProjection(proc)
 	}
 	return err
 }
@@ -105,7 +112,7 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			startrow := innerJoin.ctr.lastrow
-			if err := ctr.probe(innerJoin, proc, anal, innerJoin.GetIsFirst(), innerJoin.GetIsLast(), &result); err != nil {
+			if err := ctr.probe(innerJoin, proc, anal, innerJoin.GetIsFirst(), &result); err != nil {
 				return result, err
 			}
 			if innerJoin.ctr.lastrow == 0 {
@@ -114,6 +121,15 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			} else if innerJoin.ctr.lastrow == startrow {
 				return result, moerr.NewInternalErrorNoCtx("inner join hanging")
 			}
+
+			if innerJoin.ProjectList != nil {
+				var err error
+				result.Batch, err = innerJoin.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, innerJoin.GetIsLast())
 			return result, nil
 
 		default:
@@ -126,7 +142,9 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (innerJoin *InnerJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr := innerJoin.ctr
-	ctr.mp = proc.ReceiveJoinMap(anal, innerJoin.JoinMapTag, innerJoin.IsShuffle, innerJoin.ShuffleIdx)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	ctr.mp = message.ReceiveJoinMap(innerJoin.JoinMapTag, innerJoin.IsShuffle, innerJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
@@ -134,7 +152,7 @@ func (innerJoin *InnerJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
-func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.Analyze, isFirst bool, result *vm.CallResult) error {
 
 	anal.Input(ap.ctr.bat, isFirst)
 	if ctr.rbat != nil {
@@ -169,7 +187,6 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.A
 	for i := ap.ctr.lastrow; i < count; i += hashmap.UnitLimit {
 		if rowCount >= colexec.DefaultBatchSize {
 			ctr.rbat.AddRowCount(rowCount)
-			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.ctr.lastrow = i
 			return nil
@@ -238,7 +255,6 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.A
 	}
 
 	ctr.rbat.AddRowCount(rowCount)
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	ap.ctr.lastrow = 0
 	return nil

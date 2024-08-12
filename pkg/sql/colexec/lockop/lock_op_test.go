@@ -352,7 +352,7 @@ func TestLockWithBlocking(t *testing.T) {
 		},
 		func(arg *LockOp, proc *process.Process) {
 			arg.Free(proc, false, nil)
-			proc.FreeVectors()
+			proc.Free()
 		},
 	)
 }
@@ -408,7 +408,7 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 				bat.Clean(proc.Mp())
 			}
 			arg.Free(proc, false, nil)
-			proc.FreeVectors()
+			proc.Free()
 		},
 	)
 }
@@ -590,7 +590,7 @@ func runLockOpTest(
 					txnOp, err := c.New(ctx, timestamp.Timestamp{})
 					require.NoError(t, err)
 
-					proc := process.New(
+					proc := process.NewTopProcess(
 						ctx,
 						mpool.MustNewZero(),
 						c,

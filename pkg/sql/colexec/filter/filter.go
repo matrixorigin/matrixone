@@ -66,14 +66,15 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	result, err := filter.GetChildren(0).Call(proc)
-	if err != nil {
-		return result, err
-	}
-
 	anal := proc.GetAnalyze(filter.GetIdx(), filter.GetParallelIdx(), filter.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
+	result, err := vm.ChildrenCall(filter.GetChildren(0), proc, anal)
+	if err != nil {
+		return result, err
+	}
+	anal.Input(result.Batch, filter.IsFirst)
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() || len(filter.ctr.executors) == 0 {
 		return result, nil
@@ -162,6 +163,7 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Batch = filter.ctr.buf
 		}
 	}
+
 	return result, nil
 }
 

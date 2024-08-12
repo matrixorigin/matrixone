@@ -19,6 +19,8 @@ import (
 	"runtime"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -125,15 +127,15 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			if ap.JoinMapTag <= 0 {
 				panic("wrong joinmap message tag!")
 			}
-			var jm *process.JoinMap
+			var jm *message.JoinMap
 			if ctr.inputBatchRowCount > 0 {
-				jm = process.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
+				jm = message.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
 				if ap.NeedMergedBatch {
 					jm.SetRowCount(int64(ctr.inputBatchRowCount))
 				}
 				jm.IncRef(1)
 			}
-			proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, IsShuffle: true, ShuffleIdx: ap.ShuffleIdx, Tag: ap.JoinMapTag})
+			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, IsShuffle: true, ShuffleIdx: ap.ShuffleIdx, Tag: ap.JoinMapTag}, proc.GetMessageBoard())
 
 			result.Batch = nil
 			result.Status = vm.ExecStop
@@ -342,10 +344,10 @@ func (ctr *container) handleRuntimeFilter(ap *ShuffleBuild, proc *process.Proces
 		panic("there must be runtime filter in shuffle build!")
 	}
 	//only support runtime filter pass for now in shuffle join
-	var runtimeFilter process.RuntimeFilterMessage
+	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
-	runtimeFilter.Typ = process.RuntimeFilter_PASS
-	proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+	runtimeFilter.Typ = message.RuntimeFilter_PASS
+	message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 	return nil
 }
 

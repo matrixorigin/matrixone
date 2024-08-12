@@ -49,6 +49,26 @@ func (p *Path) step() (sub subPath, newP Path) {
 	return
 }
 
+// A path is simple if it is a linear path with no star, double star, or range.
+func (p *Path) IsSimple() bool {
+	if p == nil {
+		return true
+	}
+	if p.flag != 0 {
+		return false
+	}
+
+	for _, sub := range p.paths {
+		if (sub.tp == subPathKey && sub.key != "*") ||
+			sub.tp == subPathIdx {
+			continue
+		} else {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *Path) String() string {
 	var s strings.Builder
 

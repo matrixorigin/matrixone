@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package process
+package message
 
-import "github.com/matrixorigin/matrixone/pkg/objectio"
+import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+)
 
 var _ Message = new(TopValueMessage)
 

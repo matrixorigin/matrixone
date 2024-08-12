@@ -873,6 +873,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 	return &plan.TableDef{
 		TblId:         tblItem.Id,
 		Name:          tblItem.Name,
+		DbName:        tblItem.DatabaseName,
 		Cols:          cols,
 		Name2ColIndex: name2index,
 		Defs:          defs,

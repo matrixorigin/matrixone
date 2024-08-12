@@ -367,7 +367,6 @@ func (c *PushClient) TryToSubscribeTable(
 	// state machine for subscribe table.
 	//Unsubscribed -> Subscribing -> SubRspReceived -> Subscribed-->Unsubscribing-->Unsubscribed
 	for {
-
 		switch state {
 
 		case Subscribing:
@@ -669,7 +668,8 @@ func (c *PushClient) replayCatalogCache(
 		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 			return err
 		}
-		tryAdjustThreeTablesCreatedTimeWithBatch(b)
+
+		cnEng.tryAdjustThreeTablesCreatedTimeWithBatch(b)
 		catCache.InsertTable(b)
 	}
 
@@ -807,6 +807,8 @@ func (c *PushClient) connect(ctx context.Context, e TempEngine) {
 		err = c.subSysTables(ctx)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "*****>%s subscribe system tables failed[%s], err %v\n", logTag, c.cdcId, err)
+			c.pause(false)
+			logutil.Errorf("%s subscribe system tables failed, err %v", logTag, err)
 			continue
 		}
 		fmt.Fprintln(os.Stderr, "*****>[", c.cdcId, "]connect 3-7")
@@ -1425,7 +1427,7 @@ func waitServerReady(addr string) {
 
 	// If we still cannot connect to logtail server for serverTimeout, we consider
 	// it has something wrong happened and panic immediately.
-	serverTimeout := time.Minute * 5
+	serverTimeout := time.Minute * 10
 	serverFatal := time.NewTimer(serverTimeout)
 	defer serverFatal.Stop()
 

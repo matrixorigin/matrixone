@@ -224,25 +224,6 @@ func NewService(
 	srv.server = server
 	srv.storeEngine = pu.StorageEngine
 
-	srv.requestHandler = func(ctx context.Context,
-		cnAddr string,
-		message morpc.Message,
-		cs morpc.ClientSession,
-		engine engine.Engine,
-		fService fileservice.FileService,
-		lockService lockservice.LockService,
-		queryClient qclient.QueryClient,
-		hakeeper logservice.CNHAKeeperClient,
-		udfService udf.Service,
-		cli client.TxnClient,
-		aicm *defines.AutoIncrCacheManager,
-		messageAcquirer func() morpc.Message) error {
-		return nil
-	}
-	for _, opt := range options {
-		opt(srv)
-	}
-
 	// TODO: global client need to refactor
 	c, err := cnclient.NewPipelineClient(
 		cfg.UUID,
@@ -450,7 +431,8 @@ func (s *service) handleRequest(
 		s.pipelines.counter.Add(1)
 		defer s.pipelines.counter.Add(-1)
 
-		err := s.requestHandler(ctx,
+		// there is no need to handle the return error, because the error will be logged in the function.
+		_ = s.requestHandler(ctx,
 			s.pipelineServiceServiceAddr(),
 			req,
 			cs,
@@ -463,11 +445,6 @@ func (s *service) handleRequest(
 			s._txnClient,
 			s.aicm,
 			s.acquireMessage)
-		if err != nil {
-			logutil.Infof("error occurred while handling the pipeline message, "+
-				"msg is %v, error is %v",
-				req, err)
-		}
 	}()
 	return nil
 }
@@ -798,6 +775,7 @@ func (s *service) initShardService() {
 			shardservice.ReadReader:                   disttae.HandleShardingReadReader,
 			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
 			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
+			shardservice.ReadVisibleObjectStats:       disttae.HandleShardingReadVisibleObjectStats,
 		},
 		s.storeEngine,
 	)

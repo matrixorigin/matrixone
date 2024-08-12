@@ -16,6 +16,9 @@ package loopsingle
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -47,6 +50,13 @@ func (loopSingle *LoopSingle) Prepare(proc *process.Process) error {
 
 	if loopSingle.Cond != nil {
 		loopSingle.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopSingle.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if loopSingle.ProjectList != nil {
+		err = loopSingle.PrepareProjection(proc)
 	}
 	return err
 }
@@ -84,13 +94,25 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 				proc.PutBatch(bat)
 				continue
 			}
-			if ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(bat, loopSingle, proc, anal, loopSingle.GetIsFirst(), loopSingle.GetIsLast(), &result)
-			} else {
-				err = ctr.probe(bat, loopSingle, proc, anal, loopSingle.GetIsFirst(), loopSingle.GetIsLast(), &result)
-			}
-			proc.PutBatch(bat)
 
+			anal.Input(bat, loopSingle.GetIsFirst())
+			if ctr.bat.RowCount() == 0 {
+				err = ctr.emptyProbe(bat, loopSingle, proc, &result)
+			} else {
+				err = ctr.probe(bat, loopSingle, proc, &result)
+			}
+			if err != nil {
+				return result, err
+			}
+
+			if loopSingle.ProjectList != nil {
+				result.Batch, err = loopSingle.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, loopSingle.GetIsLast())
+			proc.PutBatch(bat)
 			return result, err
 
 		default:
@@ -103,7 +125,9 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 
 func (loopSingle *LoopSingle) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopSingle.ctr
-	mp := proc.ReceiveJoinMap(anal, loopSingle.JoinMapTag, false, 0)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(loopSingle.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil
 	}
@@ -119,8 +143,7 @@ func (loopSingle *LoopSingle) build(proc *process.Process, anal process.Analyze)
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopSingle, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopSingle, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -135,13 +158,11 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopSingle, proc *process
 		}
 	}
 	ctr.rbat.SetRowCount(ctr.rbat.RowCount() + bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *LoopSingle, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) probe(bat *batch.Batch, ap *LoopSingle, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -249,7 +270,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *LoopSingle, proc *process.Proc
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }

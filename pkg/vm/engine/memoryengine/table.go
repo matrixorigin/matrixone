@@ -562,6 +562,10 @@ func (t *Table) ApproxObjectsNum(ctx context.Context) int {
 	return 0
 }
 
-func (t *Table) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error) {
+func (t *Table) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
+	return nil, nil
+}
+
+func (t *Table) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	return nil, nil
 }

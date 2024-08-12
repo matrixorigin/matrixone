@@ -19,6 +19,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -92,7 +94,7 @@ func TestString(t *testing.T) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.arg.Free(tc.proc, false, nil)
 			tc.proc.FreeVectors()
-			tc.proc.Base.MessageBoard = tc.proc.Base.MessageBoard.Reset()
+			tc.proc.GetMessageBoard() = tc.proc.GetMessageBoard().Reset()
 		}
 	}
 
@@ -148,7 +150,7 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 		Ctx: ctx,
 		Ch:  make(chan *process.RegisterMessage, 10),
 	}
-	proc.Base.MessageBoard = process.NewMessageBoard()
+	proc.SetMessageBoard(message.NewMessageBoard())
 	return buildTestCase{
 		types:  ts,
 		flgs:   flgs,

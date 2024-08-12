@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -26,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -53,16 +56,16 @@ func ApplyRuntimeFilters(
 	ctx context.Context,
 	proc *process.Process,
 	tableDef *plan.TableDef,
-	blockInfos objectio.BlockInfoSlice,
+	relData engine.RelData,
 	exprs []*plan.Expr,
-	runtimeFilters []process.RuntimeFilterMessage,
-) ([]byte, error) {
+	runtimeFilters []message.RuntimeFilterMessage,
+) (engine.RelData, error) {
 	var err error
 	evaluators := make([]RuntimeFilterEvaluator, len(runtimeFilters))
 
 	for i, filter := range runtimeFilters {
 		switch filter.Typ {
-		case process.RuntimeFilter_IN:
+		case message.RuntimeFilter_IN:
 			vec := vector.NewVec(types.T_any.ToType())
 			err = vec.UnmarshalBinary(filter.Data)
 			if err != nil {
@@ -72,7 +75,7 @@ func ApplyRuntimeFilters(
 				InList: vec,
 			}
 
-		case process.RuntimeFilter_MIN_MAX:
+		case message.RuntimeFilter_MIN_MAX:
 			evaluators[i] = &RuntimeZonemapFilter{
 				Zm: filter.Data,
 			}
@@ -109,8 +112,8 @@ func ApplyRuntimeFilters(
 		return nil, err
 	}
 	curr := 1 // Skip the first block which is always the memtable
-	for i := 1; i < blockInfos.Len(); i++ {
-		blk := blockInfos.Get(i)
+	for i := 1; i < relData.DataCnt(); i++ {
+		blk := relData.GetBlockInfo(i)
 		location := blk.MetaLocation()
 
 		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
@@ -152,10 +155,9 @@ func ApplyRuntimeFilters(
 			continue
 		}
 
-		// store the block in ranges
-		blockInfos.Set(curr, blk)
+		relData.SetBlockInfo(curr, blk)
 		curr++
 	}
 
-	return blockInfos.Slice(0, curr), nil
+	return relData.DataSlice(0, curr), nil
 }

@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/spf13/cobra"
 	"path/filepath"
 	"strconv"
@@ -33,7 +35,8 @@ import (
 )
 
 const (
-	invalidId = 0x3f3f3f3f
+	invalidId    = 0xffffff
+	invalidLimit = 0xffffff
 
 	brief    = 0
 	standard = 1
@@ -41,30 +44,34 @@ const (
 )
 
 type ColumnJson struct {
-	Index   uint16 `json:"col_index"`
-	Ndv     uint32 `json:"ndv,omitempty"`
-	NullCnt uint32 `json:"null_cnt,omitempty"`
-	Zonemap string `json:"zonemap,omitempty"`
-	Data    string `json:"data,omitempty"`
+	Index       uint16 `json:"col_index"`
+	Ndv         uint32 `json:"ndv,omitempty"`
+	NullCnt     uint32 `json:"null_count,omitempty"`
+	DataSize    string `json:"data_size,omitempty"`
+	OriDataSize string `json:"original_data_size,omitempty"`
+	Zonemap     string `json:"zonemap,omitempty"`
+	Data        string `json:"data,omitempty"`
 }
 
 type BlockJson struct {
-	Index   uint16       `json:"blk_index"`
-	Rows    uint32       `json:"rows,omitempty"`
-	Cols    uint16       `json:"cols,omitempty"`
+	Index   uint16       `json:"block_index"`
+	Rows    uint32       `json:"row_count,omitempty"`
+	Cols    uint16       `json:"column_count,omitempty"`
 	Columns []ColumnJson `json:"columns,omitempty"`
 }
 
 type ObjectJson struct {
-	Name         string       `json:"name"`
-	Rows         uint32       `json:"rows,omitempty"`
-	Cols         uint16       `json:"cols,omitempty"`
-	BlkCnt       uint32       `json:"blk_cnt,omitempty"`
-	Size         string       `json:"size,omitempty"`
-	OriginalSize string       `json:"original_size,omitempty"`
-	Zonemap      string       `json:"zonemap,omitempty"`
-	Columns      []ColumnJson `json:"columns,omitempty"`
-	Blocks       []BlockJson  `json:"blocks,omitempty"`
+	Name        string       `json:"name"`
+	Rows        uint32       `json:"row_count,omitempty"`
+	Cols        uint16       `json:"column_count,omitempty"`
+	BlkCnt      uint32       `json:"block_count,omitempty"`
+	MetaSize    string       `json:"meta_size,omitempty"`
+	OriMetaSize string       `json:"original_meta_size,omitempty"`
+	DataSize    string       `json:"data_size,omitempty"`
+	OriDataSize string       `json:"original_data_size,omitempty"`
+	Zonemap     string       `json:"zonemap,omitempty"`
+	Columns     []ColumnJson `json:"columns,omitempty"`
+	Blocks      []BlockJson  `json:"blocks,omitempty"`
 }
 
 type tableStatJson struct {
@@ -130,6 +137,9 @@ func (c *MoInspectArg) PrepareCommand() *cobra.Command {
 	table := TableArg{}
 	moInspectCmd.AddCommand(table.PrepareCommand())
 
+	ckp := CheckpointArg{}
+	moInspectCmd.AddCommand(ckp.PrepareCommand())
+
 	return moInspectCmd
 }
 
@@ -143,7 +153,7 @@ func (c *MoInspectArg) String() string {
 
 func (c *MoInspectArg) Usage() (res string) {
 	res += "Offline Commands:\n"
-	res += fmt.Sprintf("  %-8v show object information\n", "obj")
+	res += fmt.Sprintf("  %-8v show object information\n", "object")
 
 	res += "\n"
 	res += "Online Commands:\n"
@@ -168,8 +178,8 @@ type ObjArg struct {
 
 func (c *ObjArg) PrepareCommand() *cobra.Command {
 	objCmd := &cobra.Command{
-		Use:   "obj",
-		Short: "obj",
+		Use:   "object",
+		Short: "object",
 		Long:  "Display information about a given object",
 		Run:   RunFactory(c),
 	}
@@ -190,7 +200,7 @@ func (c *ObjArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *ObjArg) String() string {
-	return "obj"
+	return "object"
 }
 
 func (c *ObjArg) Usage() (res string) {
@@ -200,10 +210,10 @@ func (c *ObjArg) Usage() (res string) {
 
 	res += "\n"
 	res += "Usage:\n"
-	res += "inspect obj [flags] [options]\n"
+	res += "inspect object [flags] [options]\n"
 
 	res += "\n"
-	res += "Use \"mo-tool inspect obj <command> --help\" for more information about a given command.\n"
+	res += "Use \"mo-tool inspect object <command> --help\" for more information about a given command.\n"
 
 	return
 }
@@ -218,6 +228,7 @@ type moObjStatArg struct {
 	dir    string
 	name   string
 	id     int
+	col    int
 	fs     fileservice.FileService
 	reader *objectio.ObjectReader
 	res    string
@@ -227,14 +238,15 @@ type moObjStatArg struct {
 func (c *moObjStatArg) PrepareCommand() *cobra.Command {
 	var statCmd = &cobra.Command{
 		Use:   "stat",
-		Short: "obj stat",
+		Short: "object stat",
 		Long:  "Display status about a given object",
 		Run:   RunFactory(c),
 	}
 
 	statCmd.SetUsageTemplate(c.Usage())
 
-	statCmd.Flags().IntP("id", "i", invalidId, "id")
+	statCmd.Flags().IntP("id", "i", invalidId, "block id")
+	statCmd.Flags().IntP("col", "c", invalidId, "column id")
 	statCmd.Flags().IntP("level", "l", brief, "level")
 	statCmd.Flags().StringP("name", "n", "", "name")
 	statCmd.Flags().BoolP("local", "", false, "local")
@@ -244,6 +256,7 @@ func (c *moObjStatArg) PrepareCommand() *cobra.Command {
 
 func (c *moObjStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.id, _ = cmd.Flags().GetInt("id")
+	c.col, _ = cmd.Flags().GetInt("col")
 	c.level, _ = cmd.Flags().GetInt("level")
 	c.local, _ = cmd.Flags().GetBool("local")
 	path, _ := cmd.Flags().GetString("name")
@@ -263,13 +276,13 @@ func (c *moObjStatArg) String() string {
 func (c *moObjStatArg) Usage() (res string) {
 	res += "Examples:\n"
 	res += "  # Display information about object\n"
-	res += "  inspect obj stat -n /your/path/obj-name\n"
+	res += "  inspect object stat -n /your/path/obj-name\n"
 	res += "\n"
 	res += "  # Display information about object block idx with level 1\n"
-	res += "  inspect obj stat -n /your/path/obj-name -i idx -l 1\n"
+	res += "  inspect object stat -n /your/path/obj-name -i idx -l 1\n"
 	res += "\n"
 	res += "  # Display information about object with local fs\n"
-	res += "  inspect obj stat -n /your/path/obj-name --local\n"
+	res += "  inspect object stat -n /your/path/obj-name --local\n"
 
 	res += "\n"
 	res += "Options:\n"
@@ -277,10 +290,12 @@ func (c *moObjStatArg) Usage() (res string) {
 	res += "    The path to the object file\n"
 	res += "  -i, --idx=invalidId:\n"
 	res += "    The sequence number of the block in the object\n"
+	res += "  -c, --col=invalidId:\n"
+	res += "    The sequence number of the column in the object\n"
 	res += "  -l, --level=0:\n"
 	res += "    The level of detail of the information, should be 0(brief), 1(standard), 2(detailed)\n"
 	res += "  --local=false:\n"
-	res += "    Whether it is a local file, if true, use local fs to read file\n"
+	res += "    If the file is downloaded from a standalone machine, you should use this flag\n"
 
 	return
 }
@@ -362,13 +377,17 @@ func (c *moObjStatArg) GetStat(ctx context.Context) (res string, err error) {
 		return
 	}
 
+	if c.level < standard && c.col != invalidId {
+		c.level = standard
+	}
+
+	if c.level < detailed && c.id != invalidId {
+		c.level = detailed
+	}
+
 	switch c.level {
 	case brief:
-		if c.id != invalidId {
-			res, err = c.GetStandardStat(&meta)
-		} else {
-			res, err = c.GetBriefStat(&meta)
-		}
+		res, err = c.GetBriefStat(&meta)
 	case standard:
 		res, err = c.GetStandardStat(&meta)
 	case detailed:
@@ -377,9 +396,25 @@ func (c *moObjStatArg) GetStat(ctx context.Context) (res string, err error) {
 	return
 }
 
+func (c *moObjStatArg) GetObjSize(data *objectio.ObjectDataMeta) []string {
+	var dataSize, oriDataSize uint32
+	header := data.BlockHeader()
+	cnt := header.ColumnCount()
+
+	for i := range cnt {
+		col := data.MustGetColumn(i)
+		dataSize += col.Location().Length()
+		oriDataSize += col.Location().OriginSize()
+	}
+
+	return []string{
+		formatBytes(dataSize),
+		formatBytes(oriDataSize),
+	}
+}
+
 func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err error) {
-	meta := *obj
-	data, ok := meta.DataMeta()
+	data, ok := (*obj).DataMeta()
 	if !ok {
 		err = moerr.NewInfoNoCtx("no data")
 		return
@@ -387,15 +422,18 @@ func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err e
 
 	header := data.BlockHeader()
 	ext := c.reader.GetMetaExtent()
+	size := c.GetObjSize(&data)
 
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	o := ObjectJson{
-		Name:         c.name,
-		Rows:         header.Rows(),
-		Cols:         header.ColumnCount(),
-		BlkCnt:       data.BlockCount(),
-		Size:         formatBytes(ext.Length()),
-		OriginalSize: formatBytes(ext.OriginSize()),
+		Name:        c.name,
+		Rows:        header.Rows(),
+		Cols:        header.ColumnCount(),
+		BlkCnt:      data.BlockCount(),
+		MetaSize:    formatBytes(ext.Length()),
+		OriMetaSize: formatBytes(ext.OriginSize()),
+		DataSize:    size[0],
+		OriDataSize: size[1],
 	}
 
 	data, err = json.MarshalIndent(o, "", "  ")
@@ -408,61 +446,51 @@ func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err e
 }
 
 func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, err error) {
-	meta := *obj
-	data, ok := meta.DataMeta()
+	data, ok := (*obj).DataMeta()
 	if !ok {
 		err = moerr.NewInfoNoCtx("no data")
 		return
 	}
 
-	var blocks []objectio.BlockObject
-	cnt := data.BlockCount()
-
-	if c.id != invalidId {
-		if uint32(c.id) > cnt {
-			err = moerr.NewInfoNoCtx(fmt.Sprintf("id %3d out of block count %3d", c.id, cnt))
-			return
-		}
-		blocks = append(blocks, data.GetBlockMeta(uint32(c.id)))
-	} else {
-		for i := range cnt {
-			blk := data.GetBlockMeta(i)
-			blocks = append(blocks, blk)
-		}
-	}
-
 	header := data.BlockHeader()
-	ext := c.reader.GetMetaExtent()
-	blks := make([]BlockJson, 0, len(blocks))
-	for _, blk := range blocks {
-		blkjson := BlockJson{
-			Index: blk.GetID(),
-			Rows:  blk.GetRows(),
-			Cols:  blk.GetColumnCount(),
-		}
-		blks = append(blks, blkjson)
-	}
 
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 	colCnt := header.ColumnCount()
-	cols := make([]ColumnJson, colCnt)
-	for i := range colCnt {
-		col := data.MustGetColumn(i)
-		cols[i] = ColumnJson{
-			Index:   i,
-			Zonemap: col.ZoneMap().String(),
+	if c.col != invalidId && c.col >= int(colCnt) {
+		return "", moerr.NewInfoNoCtx("invalid column count")
+	}
+	cols := make([]ColumnJson, 0, colCnt)
+	addColumn := func(idx uint16) {
+		col := data.MustGetColumn(idx)
+		cols = append(cols, ColumnJson{
+			Index:       idx,
+			DataSize:    formatBytes(col.Location().Length()),
+			OriDataSize: formatBytes(col.Location().OriginSize()),
+			Zonemap:     col.ZoneMap().String(),
+		})
+	}
+	if c.col != invalidId {
+		addColumn(uint16(c.col))
+	} else {
+		for i := range colCnt {
+			addColumn(i)
 		}
 	}
+
+	ext := c.reader.GetMetaExtent()
+	size := c.GetObjSize(&data)
+
 	o := ObjectJson{
-		Name:         c.name,
-		Rows:         header.Rows(),
-		Cols:         header.ColumnCount(),
-		BlkCnt:       cnt,
-		Size:         formatBytes(ext.Length()),
-		OriginalSize: formatBytes(ext.OriginSize()),
-		Blocks:       blks,
-		Columns:      cols,
+		Name:        c.name,
+		Rows:        header.Rows(),
+		Cols:        header.ColumnCount(),
+		BlkCnt:      data.BlockCount(),
+		MetaSize:    formatBytes(ext.Length()),
+		OriMetaSize: formatBytes(ext.OriginSize()),
+		DataSize:    size[0],
+		OriDataSize: size[1],
+		Columns:     cols,
 	}
 
 	data, err = json.MarshalIndent(o, "", "  ")
@@ -476,8 +504,7 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 }
 
 func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, err error) {
-	meta := *obj
-	data, ok := meta.DataMeta()
+	data, ok := (*obj).DataMeta()
 	if !ok {
 		err = moerr.NewInfoNoCtx("no data")
 		return
@@ -498,22 +525,26 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 		}
 	}
 
-	res += fmt.Sprintf("object %v has %3d blocks\n", c.name, cnt)
 	blks := make([]BlockJson, 0, len(blocks))
 	for _, blk := range blocks {
-		cnt := blk.GetColumnCount()
-		res += fmt.Sprintf("block %3d has %3d cloumns\n", blk.GetID(), cnt)
+		colCnt := blk.GetColumnCount()
 
-		var cols []ColumnJson
-		for i := range cnt {
-			col := blk.ColumnMeta(i)
-			column := ColumnJson{
-				Index:   i,
-				Ndv:     col.Ndv(),
-				NullCnt: col.NullCnt(),
-				Zonemap: col.ZoneMap().String(),
+		cols := make([]ColumnJson, 0, colCnt)
+		addColumn := func(idx uint16) {
+			col := data.MustGetColumn(idx)
+			cols = append(cols, ColumnJson{
+				Index:       idx,
+				DataSize:    formatBytes(col.Location().Length()),
+				OriDataSize: formatBytes(col.Location().OriginSize()),
+				Zonemap:     col.ZoneMap().String(),
+			})
+		}
+		if c.col != invalidId {
+			addColumn(uint16(c.col))
+		} else {
+			for i := range colCnt {
+				addColumn(i)
 			}
-			cols = append(cols, column)
 		}
 		blkjson := BlockJson{
 			Index:   blk.GetID(),
@@ -525,27 +556,33 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 	}
 
 	header := data.BlockHeader()
-	ext := c.reader.GetMetaExtent()
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	colCnt := header.ColumnCount()
 	cols := make([]ColumnJson, colCnt)
 	for i := range colCnt {
 		col := data.MustGetColumn(i)
 		cols[i] = ColumnJson{
-			Index:   i,
-			Zonemap: col.ZoneMap().String(),
+			Index:       i,
+			DataSize:    formatBytes(col.Location().Length()),
+			OriDataSize: formatBytes(col.Location().OriginSize()),
+			Zonemap:     col.ZoneMap().String(),
 		}
 	}
 
+	ext := c.reader.GetMetaExtent()
+	size := c.GetObjSize(&data)
+
 	o := ObjectJson{
-		Name:         c.name,
-		Rows:         header.Rows(),
-		Cols:         header.ColumnCount(),
-		BlkCnt:       cnt,
-		Size:         formatBytes(ext.Length()),
-		OriginalSize: formatBytes(ext.OriginSize()),
-		Blocks:       blks,
-		Columns:      cols,
+		Name:        c.name,
+		Rows:        header.Rows(),
+		Cols:        header.ColumnCount(),
+		BlkCnt:      data.BlockCount(),
+		MetaSize:    formatBytes(ext.Length()),
+		OriMetaSize: formatBytes(ext.OriginSize()),
+		DataSize:    size[0],
+		OriDataSize: size[1],
+		Blocks:      blks,
+		Columns:     cols,
 	}
 
 	data, err = json.MarshalIndent(o, "", "  ")
@@ -574,7 +611,7 @@ type objGetArg struct {
 func (c *objGetArg) PrepareCommand() *cobra.Command {
 	var getCmd = &cobra.Command{
 		Use:   "get",
-		Short: "obj get",
+		Short: "object get",
 		Long:  "Display data about a given object",
 		Run:   RunFactory(c),
 	}
@@ -612,10 +649,10 @@ func (c *objGetArg) String() string {
 func (c *objGetArg) Usage() (res string) {
 	res += "Examples:\n"
 	res += "  # Display the data of the idxth block of this object\n"
-	res += "  inspect obj get -n /your/path/obj-name -i idx\n"
+	res += "  inspect object get -n /your/path/obj-name -i idx\n"
 	res += "\n"
 	res += "  # Display the data of the specified row and column of the idxth block of this object\n"
-	res += "  inspect obj get -n /your/path/obj-name -i idx -c \"1,2,4\" -r\"0,50\"\n"
+	res += "  inspect object get -n /your/path/obj-name -i idx -c \"1,2,4\" -r\"0,50\"\n"
 
 	res += "\n"
 	res += "Options:\n"
@@ -628,7 +665,7 @@ func (c *objGetArg) Usage() (res string) {
 	res += "  -r, --row='':\n"
 	res += "    Specify the rows to display, should be \"left,right\", means [left,right)\n"
 	res += "  --local=false:\n"
-	res += "    Whether it is a local file, if true, use local fs to read file\n"
+	res += "    If the file is downloaded from a standalone machine, you should use this flag\n"
 
 	return
 }
@@ -929,6 +966,313 @@ func (c *tableStatArg) Run() (err error) {
 	}
 
 	c.res = string(data)
+
+	return
+}
+
+type CheckpointArg struct {
+}
+
+func (c *CheckpointArg) PrepareCommand() *cobra.Command {
+	checkpointCmd := &cobra.Command{
+		Use:   "checkpoint",
+		Short: "checkpoint",
+		Long:  "Display information about a given checkpoint",
+		Run:   RunFactory(c),
+	}
+
+	checkpointCmd.SetUsageTemplate(c.Usage())
+
+	stat := ckpStatArg{}
+	checkpointCmd.AddCommand(stat.PrepareCommand())
+
+	list := ckpListArg{}
+	checkpointCmd.AddCommand(list.PrepareCommand())
+
+	return checkpointCmd
+}
+
+func (c *CheckpointArg) FromCommand(cmd *cobra.Command) (err error) {
+	return nil
+}
+
+func (c *CheckpointArg) String() string {
+	return "table"
+}
+
+func (c *CheckpointArg) Usage() (res string) {
+	res += "Available Commands:\n"
+	res += fmt.Sprintf("  %-5v show table information\n", "stat")
+	res += fmt.Sprintf("  %-5v display checkpoint or table information\n", "list")
+
+	res += "\n"
+	res += "Usage:\n"
+	res += "inspect table [flags] [options]\n"
+
+	res += "\n"
+	res += "Use \"mo-tool inspect table <command> --help\" for more information about a given command.\n"
+
+	return
+}
+
+func (c *CheckpointArg) Run() error {
+	return nil
+}
+
+type ckpStatArg struct {
+	ctx   *inspectContext
+	cid   uint64
+	tid   uint64
+	limit int
+	all   bool
+	res   string
+}
+
+func (c *ckpStatArg) PrepareCommand() *cobra.Command {
+	ckpStatCmd := &cobra.Command{
+		Use:   "stat",
+		Short: "checkpoint stat",
+		Long:  "Display information about a given checkpoint",
+		Run:   RunFactory(c),
+	}
+
+	ckpStatCmd.SetUsageTemplate(c.Usage())
+
+	ckpStatCmd.Flags().IntP("cid", "c", invalidId, "checkpoint lsn")
+	ckpStatCmd.Flags().IntP("tid", "t", invalidId, "checkpoint tid")
+	ckpStatCmd.Flags().IntP("limit", "l", invalidLimit, "checkpoint limit")
+	ckpStatCmd.Flags().BoolP("all", "a", false, "checkpoint all tables")
+
+	return ckpStatCmd
+}
+
+func (c *ckpStatArg) FromCommand(cmd *cobra.Command) (err error) {
+	id, _ := cmd.Flags().GetInt("cid")
+	c.cid = uint64(id)
+	id, _ = cmd.Flags().GetInt("tid")
+	c.tid = uint64(id)
+	c.all, _ = cmd.Flags().GetBool("all")
+	c.limit, _ = cmd.Flags().GetInt("limit")
+	if cmd.Flag("ictx") != nil {
+		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	}
+	return nil
+}
+
+func (c *ckpStatArg) String() string {
+	return c.res
+}
+
+func (c *ckpStatArg) Usage() (res string) {
+	res += "Examples:\n"
+	res += "  # Display all table information for the given checkpoint\n"
+	res += "  inspect checkpoint stat -c ckp_lsn\n"
+	res += "  # Display information for the given table\n"
+	res += "  inspect checkpoint stat -c ckp_lsn -t tid\n"
+
+	res += "\n"
+	res += "Options:\n"
+	res += "  -c, --cid=invalidId:\n"
+	res += "    The lsn of checkpoint\n"
+	res += "  -t, --tid=invalidId:\n"
+	res += "    The id of table\n"
+	res += "  -l, --limit=invalidLimit:\n"
+	res += "    The limit length of the return value\n"
+	res += "  -a, --all=false:\n"
+	res += "    Show all tables\n"
+
+	return
+}
+
+func (c *ckpStatArg) Run() (err error) {
+	if c.ctx == nil {
+		return moerr.NewInfoNoCtx("it is an online command")
+	}
+	ctx := context.Background()
+	var checkpointJson *logtail.ObjectInfoJson
+	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	for _, entry := range entries {
+		if entry.LSN() == c.cid {
+			var data *logtail.CheckpointData
+			data, err = getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
+			if err != nil {
+				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
+			}
+			if c.all {
+				c.tid = 0
+			}
+			if checkpointJson, err = data.GetCheckpointMetaInfo(c.tid, c.limit); err != nil {
+				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
+			}
+		}
+	}
+
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	jsonData, err := json.MarshalIndent(checkpointJson, "", "  ")
+	if err != nil {
+		return
+	}
+	c.res = string(jsonData)
+
+	return
+}
+
+func getCkpData(ctx context.Context, entry *checkpoint.CheckpointEntry, fs *objectio.ObjectFS) (data *logtail.CheckpointData, err error) {
+	if data, err = entry.PrefetchMetaIdx(ctx, fs); err != nil {
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
+		return
+	}
+	if err = entry.ReadMetaIdx(ctx, fs, data); err != nil {
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
+		return
+	}
+	if err = entry.Prefetch(ctx, fs, data); err != nil {
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
+		return
+	}
+	if err = entry.Read(ctx, fs, data); err != nil {
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
+		return
+	}
+
+	return
+}
+
+type CkpEntry struct {
+	Index  int      `json:"index"`
+	LSN    string   `json:"lsn"`
+	Detail string   `json:"detail"`
+	Table  []uint64 `json:"table,omitempty"`
+}
+
+type CkpEntries struct {
+	Count       int        `json:"count"`
+	Checkpoints []CkpEntry `json:"checkpoints"`
+}
+
+type ckpListArg struct {
+	ctx   *inspectContext
+	cid   uint64
+	limit int
+	res   string
+}
+
+func (c *ckpListArg) PrepareCommand() *cobra.Command {
+	ckpStatCmd := &cobra.Command{
+		Use:   "list",
+		Short: "checkpoint list",
+		Long:  "Display all checkpoints",
+		Run:   RunFactory(c),
+	}
+
+	ckpStatCmd.SetUsageTemplate(c.Usage())
+	ckpStatCmd.Flags().IntP("cid", "c", invalidId, "checkpoint id")
+	ckpStatCmd.Flags().IntP("limit", "l", invalidId, "limit")
+
+	return ckpStatCmd
+}
+
+func (c *ckpListArg) FromCommand(cmd *cobra.Command) (err error) {
+	if cmd.Flag("ictx") != nil {
+		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	}
+	id, _ := cmd.Flags().GetInt("cid")
+	c.cid = uint64(id)
+	c.limit, _ = cmd.Flags().GetInt("limit")
+	return nil
+}
+
+func (c *ckpListArg) String() string {
+	return c.res
+}
+
+func (c *ckpListArg) Usage() (res string) {
+	res += "Examples:\n"
+	res += "  # Display all checkpoints in memory\n"
+	res += "  inspect checkpoint list\n"
+	res += "  # Display all tables for the given checkpoint\n"
+	res += "  inspect checkpoint list -c ckp_lsn\n"
+
+	res += "\n"
+	res += "Options:\n"
+	res += "  -c, --cid=invalidId:\n"
+	res += "    The lsn of checkpoint\n"
+	res += "  -l, --limit=invalidLimit:\n"
+	res += "    The limit length of the return value\n"
+	return
+}
+
+func (c *ckpListArg) Run() (err error) {
+	if c.ctx == nil {
+		return moerr.NewInfoNoCtx("it is an online command")
+	}
+	ctx := context.Background()
+	if c.cid == invalidId {
+		c.res, err = c.getCkpList()
+	} else {
+		c.res, err = c.getTableList(ctx)
+	}
+
+	return
+}
+
+func (c *ckpListArg) getCkpList() (res string, err error) {
+	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	ckpEntries := make([]CkpEntry, 0, len(entries))
+	for i, entry := range entries {
+		if i >= c.limit {
+			break
+		}
+		ckpEntries = append(ckpEntries, CkpEntry{
+			Index:  i,
+			LSN:    entry.LSNString(),
+			Detail: entry.String(),
+		})
+	}
+
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	ckpEntriesJson := CkpEntries{
+		Count:       len(ckpEntries),
+		Checkpoints: ckpEntries,
+	}
+	jsonData, err := json.MarshalIndent(ckpEntriesJson, "", "  ")
+	if err != nil {
+		return
+	}
+	res = string(jsonData)
+
+	return
+}
+
+type TableIds struct {
+	TableCnt int      `json:"table_count"`
+	Ids      []uint64 `json:"tables"`
+}
+
+func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
+	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	var ids []uint64
+	for _, entry := range entries {
+		if entry.LSN() != c.cid {
+			continue
+		}
+
+		data, _ := getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
+		ids = data.GetTableIds()
+	}
+	if c.limit < len(ids) {
+		ids = ids[:c.limit]
+	}
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	tables := TableIds{
+		TableCnt: len(ids),
+		Ids:      ids,
+	}
+	jsonData, err := json.MarshalIndent(tables, "", "  ")
+	if err != nil {
+		return
+	}
+	res = string(jsonData)
 
 	return
 }

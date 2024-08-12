@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -46,10 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	DefaultRpcBufferSize = 1 << 10
-)
-
 type (
 	TxnOperator = client.TxnOperator
 	TxnClient   = client.TxnClient
@@ -57,8 +54,12 @@ type (
 )
 
 type ComputationRunner interface {
+	// todo: remove the ts next day, that's useless.
 	Run(ts uint64) (*util.RunResult, error)
 }
+
+// compile.Compile should implement ComputationRunner to support Run method.
+var _ ComputationRunner = &compile.Compile{}
 
 // ComputationWrapper is the wrapper of the computation
 type ComputationWrapper interface {
@@ -175,6 +176,8 @@ type ExecResult interface {
 	GetUint64(ctx context.Context, rindex, cindex uint64) (uint64, error)
 
 	GetInt64(ctx context.Context, rindex, cindex uint64) (int64, error)
+
+	ColumnIsNull(ctx context.Context, rindex, cindex uint64) (bool, error)
 }
 
 func execResultArrayHasData(arr []ExecResult) bool {
@@ -366,6 +369,7 @@ type FeSession interface {
 	SetStaticTxnInfo(string)
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
+	GetMySQLParser() *mysql.MySQLParser
 	SessionLogger
 }
 
@@ -419,6 +423,26 @@ type ExecCtx struct {
 	resper            Responser
 	results           []ExecResult
 	isIssue3482       bool
+}
+
+func (execCtx *ExecCtx) Close() {
+	execCtx.reqCtx = nil
+	execCtx.prepareStmt = nil
+	execCtx.runResult = nil
+	execCtx.stmt = nil
+	execCtx.tenant = ""
+	execCtx.userName = ""
+	execCtx.sqlOfStmt = ""
+	execCtx.cw = nil
+	execCtx.runner = nil
+	execCtx.loadLocalWriter = nil
+	execCtx.proc = nil
+	execCtx.ses = nil
+	execCtx.cws = nil
+	execCtx.input = nil
+	execCtx.executeParamTypes = nil
+	execCtx.resper = nil
+	execCtx.results = nil
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -484,6 +508,12 @@ type feSessionImpl struct {
 	respr        Responser
 	//refreshed once
 	staticTxnInfo string
+	// mysql parser
+	mysqlParser mysql.MySQLParser
+}
+
+func (ses *feSessionImpl) GetMySQLParser() *mysql.MySQLParser {
+	return &ses.mysqlParser
 }
 
 func (ses *feSessionImpl) EnterFPrint(idx int) {
@@ -952,6 +982,7 @@ type MysqlReader interface {
 	MediaReader
 	Property
 	Read() ([]byte, error)
+	ReadLoadLocalPacket() ([]byte, error)
 	Free(buf []byte)
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 	Authenticate(ctx context.Context) error

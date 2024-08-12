@@ -18,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -37,7 +39,7 @@ func init() {
 				stepRegs:     make(map[int32][][2]int32),
 				metaTables:   make(map[string]struct{}),
 				lockTables:   make(map[uint64]*plan.LockTarget),
-				MessageBoard: process.NewMessageBoard(),
+				MessageBoard: message.NewMessageBoard(),
 			}
 		},
 		func(c *Compile) {
@@ -56,12 +58,12 @@ func init() {
 			WithEnableChecker(),
 	)
 
-	reuse.CreatePool[anaylzeModule](
-		func() *anaylzeModule {
-			return &anaylzeModule{}
+	reuse.CreatePool[analyzeModule](
+		func() *analyzeModule {
+			return &analyzeModule{}
 		},
-		func(a *anaylzeModule) { *a = anaylzeModule{} },
-		reuse.DefaultOptions[anaylzeModule]().
+		func(a *analyzeModule) { *a = analyzeModule{} },
+		reuse.DefaultOptions[analyzeModule]().
 			WithEnableChecker(),
 	)
 

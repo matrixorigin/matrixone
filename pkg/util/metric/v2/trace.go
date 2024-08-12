@@ -18,6 +18,19 @@ import "github.com/prometheus/client_golang/prometheus"
 
 // trace.go observe motrace, mometric those packages' behavior
 
+func initTraceMetrics() {
+	registry.MustRegister(traceCollectorDurationHistogram)
+	registry.MustRegister(traceCollectorDiscardCounter)
+	registry.MustRegister(traceCollectorCollectHungCounter)
+	registry.MustRegister(traceCollectorDiscardItemCounter)
+	registry.MustRegister(traceCollectorStatusCounter)
+	registry.MustRegister(traceNegativeCUCounter)
+	registry.MustRegister(traceETLMergeCounter)
+	registry.MustRegister(traceMOLoggerExportDataHistogram)
+	registry.MustRegister(traceCheckStorageUsageCounter)
+	registry.MustRegister(traceMOLoggerErrorCounter)
+}
+
 var (
 	traceCollectorDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -28,6 +41,8 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.0001, 2.0, 20),
 		}, []string{"type"})
 	TraceCollectorCollectDurationHistogram              = traceCollectorDurationHistogram.WithLabelValues("collect")
+	TraceCollectorConsumeDurationHistogram              = traceCollectorDurationHistogram.WithLabelValues("consume")
+	TraceCollectorConsumeDelayDurationHistogram         = traceCollectorDurationHistogram.WithLabelValues("consume_delay")
 	TraceCollectorGenerateAwareDurationHistogram        = traceCollectorDurationHistogram.WithLabelValues("generate_awake")
 	TraceCollectorGenerateAwareDiscardDurationHistogram = traceCollectorDurationHistogram.WithLabelValues("generate_awake_discard")
 	TraceCollectorGenerateDelayDurationHistogram        = traceCollectorDurationHistogram.WithLabelValues("generate_delay")
@@ -40,8 +55,35 @@ var (
 			Namespace: "mo",
 			Subsystem: "trace",
 			Name:      "collector_discard_total",
+			Help:      "Count of trace collector discard wait-generate total.",
+		}, []string{"type"})
+
+	traceCollectorCollectHungCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "collector_collect_hung_total",
+			Help:      "Count of trace collector hung collect total",
+		}, []string{"type"})
+
+	traceCollectorDiscardItemCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "collector_discard_item_total",
+			Help:      "Count of trace collector discard item total.",
+		}, []string{"type"})
+
+	traceCollectorStatusCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "collector_status_total",
 			Help:      "Count of trace collector discard total.",
 		}, []string{"type"})
+	TraceCollectorDisposedCounter = traceCollectorStatusCounter.WithLabelValues("disposed")
+	TraceCollectorTimeoutCounter  = traceCollectorStatusCounter.WithLabelValues("timeout")
+	TraceCollectorEmptyCounter    = traceCollectorStatusCounter.WithLabelValues("empty")
 
 	traceNegativeCUCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -85,12 +127,24 @@ var (
 			Name:      "check_storage_usage_total",
 			Help:      "Count of cron_task MetricStorageUsage.",
 		}, []string{"type"})
+
+	traceMOLoggerErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "mologger_error_total",
+			Help:      "Count of mologger error",
+		}, []string{"type"})
+	TraceMOLoggerErrorWriteItemCounter = traceMOLoggerErrorCounter.WithLabelValues("write_item")
+	TraceMOLoggerErrorFlushCounter     = traceMOLoggerErrorCounter.WithLabelValues("flush")
+	TraceMOLoggerErrorConnDBCounter    = traceMOLoggerErrorCounter.WithLabelValues("conn_db")
 )
 
 func GetTraceNegativeCUCounter(typ string) prometheus.Counter {
 	return traceNegativeCUCounter.WithLabelValues(typ)
 }
 
+// GetTraceCollectorDiscardCounter count wait-generate discard.
 func GetTraceCollectorDiscardCounter(typ string) prometheus.Counter {
 	return traceCollectorDiscardCounter.WithLabelValues(typ)
 }
@@ -103,4 +157,12 @@ func GetTraceCheckStorageUsageNewCounter() prometheus.Counter {
 }
 func GetTraceCheckStorageUsageNewIncCounter() prometheus.Counter {
 	return traceCheckStorageUsageCounter.WithLabelValues("inc")
+}
+
+func GetTraceCollectorDiscardItemCounter(typ string) prometheus.Counter {
+	return traceCollectorDiscardItemCounter.WithLabelValues(typ)
+}
+
+func GetTraceCollectorCollectHungCounter(typ string) prometheus.Counter {
+	return traceCollectorCollectHungCounter.WithLabelValues(typ)
 }

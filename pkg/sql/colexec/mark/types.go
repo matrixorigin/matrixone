@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -95,7 +96,7 @@ type container struct {
 	markVals  []bool
 	markNulls *nulls.Nulls
 
-	mp *process.JoinMap
+	mp *message.JoinMap
 
 	nullWithBatch *batch.Batch
 	rewriteCond   *plan.Expr
@@ -148,7 +149,9 @@ type MarkJoin struct {
 	OnList     []*plan.Expr
 	HashOnPK   bool
 	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (markJoin *MarkJoin) GetOperatorBase() *vm.OperatorBase {
@@ -188,6 +191,8 @@ func (markJoin *MarkJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 
 func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := markJoin.ctr
+	anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
+	allocSize := int64(0)
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
@@ -196,10 +201,15 @@ func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 
-		anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
+		allocSize += ctr.maxAllocSize
 		markJoin.ctr = nil
 	}
+
+	if markJoin.ProjectList != nil {
+		allocSize += markJoin.ProjectAllocSize
+		markJoin.FreeProjection(proc)
+	}
+	anal.Alloc(allocSize)
 }
 
 func (ctr *container) cleanExprExecutor() {

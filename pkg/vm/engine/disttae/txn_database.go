@@ -262,7 +262,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 				note = noteForAlterDel(id, name)
 			}
 			if _, err := txn.WriteBatch(
-				DELETE, note, accountId, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+				DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 				catalog.MO_CATALOG, catalog.MO_TABLES, bat, txn.tnStores[0]); err != nil {
 				bat.Clean(txn.proc.Mp())
 				return nil, err
@@ -273,7 +273,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			// The answer for forAlter as true is NO, because later a table with the same tableId will be created.
 			// The answer for forAlter as false is YES, because the table is really deleted, which is triggered by delete & truncate
 			txn.Lock()
-			txn.tablesInVain = append(txn.tablesInVain, tableOp{tableId: id, statementId: txn.statementID})
+			txn.tablesInVain[id] = txn.statementID
 			txn.Unlock()
 		}
 	}
@@ -290,7 +290,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 				note = noteForAlterDel(id, name)
 			}
 			if _, err = txn.WriteBatch(
-				DELETE, note, accountId, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+				DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, txn.tnStores[0]); err != nil {
 				bat.Clean(txn.proc.Mp())
 				return nil, err
@@ -443,7 +443,7 @@ func (db *txnDatabase) createWithID(
 		if useAlterNote {
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
 		}
-		rowidVec, err := txn.WriteBatch(INSERT, note, accountId, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		rowidVec, err := txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, txn.tnStores[0])
 		if err != nil {
 			bat.Clean(m)
@@ -462,7 +462,7 @@ func (db *txnDatabase) createWithID(
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
 		}
 		rowidVec, err := txn.WriteBatch(
-			INSERT, note, accountId, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+			INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, txn.tnStores[0])
 		if err != nil {
 			bat.Clean(m)

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -57,7 +58,7 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp  *process.JoinMap
+	mp  *message.JoinMap
 	bat *batch.Batch
 
 	maxAllocSize int64
@@ -75,7 +76,9 @@ type InnerJoin struct {
 	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (innerJoin *InnerJoin) GetOperatorBase() *vm.OperatorBase {
@@ -115,13 +118,13 @@ func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := innerJoin.ctr
+	anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 
-		anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 
 		if innerJoin.ctr.bat != nil {
@@ -130,6 +133,10 @@ func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err
 		}
 		innerJoin.ctr.lastrow = 0
 		innerJoin.ctr = nil
+	}
+	if innerJoin.ProjectList != nil {
+		anal.Alloc(innerJoin.ProjectAllocSize)
+		innerJoin.FreeProjection(proc)
 	}
 }
 

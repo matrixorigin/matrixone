@@ -16,6 +16,9 @@ package loopsemi
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -42,6 +45,13 @@ func (loopSemi *LoopSemi) Prepare(proc *process.Process) error {
 
 	if loopSemi.Cond != nil {
 		loopSemi.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopSemi.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if loopSemi.ProjectList != nil {
+		err = loopSemi.PrepareProjection(proc)
 	}
 	return err
 }
@@ -91,13 +101,25 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				loopSemi.ctr.buf = bat
 				loopSemi.ctr.lastrow = 0
+				anal.Input(loopSemi.ctr.buf, loopSemi.GetIsFirst())
 			}
 
-			err := ctr.probe(loopSemi, proc, anal, loopSemi.GetIsFirst(), loopSemi.GetIsLast(), &result)
+			err := ctr.probe(loopSemi, proc, &result)
+			if err != nil {
+				return result, err
+			}
 			if loopSemi.ctr.lastrow == 0 {
 				proc.PutBatch(loopSemi.ctr.buf)
 				loopSemi.ctr.buf = nil
 			}
+
+			if loopSemi.ProjectList != nil {
+				result.Batch, err = loopSemi.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, loopSemi.GetIsLast())
 			return result, err
 
 		default:
@@ -110,7 +132,9 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (loopSemi *LoopSemi) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopSemi.ctr
-	mp := proc.ReceiveJoinMap(anal, loopSemi.JoinMapTag, false, 0)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(loopSemi.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil
 	}
@@ -126,8 +150,7 @@ func (loopSemi *LoopSemi) build(proc *process.Process, anal process.Analyze) err
 	return nil
 }
 
-func (ctr *container) probe(ap *LoopSemi, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(ap.ctr.buf, isFirst)
+func (ctr *container) probe(ap *LoopSemi, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -145,7 +168,6 @@ func (ctr *container) probe(ap *LoopSemi, proc *process.Process, anal process.An
 	for i := ap.ctr.lastrow; i < count; i++ {
 		if rowCountIncrease >= colexec.DefaultBatchSize {
 			ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
-			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.ctr.lastrow = i
 			return nil
@@ -174,7 +196,6 @@ func (ctr *container) probe(ap *LoopSemi, proc *process.Process, anal process.An
 		}
 	}
 	ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	ap.ctr.lastrow = 0
 	return nil
