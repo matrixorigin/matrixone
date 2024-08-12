@@ -256,7 +256,6 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			[]string{
 				"{{ type }}",
 			},
-			axis.Unit("s"),
 		),
 
 		// ------------- next row ------------
@@ -265,7 +264,7 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			"Collector Metric Buffer",
 			3,
 			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_metric_buffer_total", ``) + `[$interval:1m])) by (type)`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_metric_buffer_total", ``) + `[$interval])) by (type)`,
 			},
 			[]string{
 				"{{ type }}",
