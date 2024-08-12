@@ -3553,6 +3553,9 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 		n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 	}
 
+	left = c.mergeShuffleScopesIfNeeded(left)
+	right = c.mergeShuffleScopesIfNeeded(right)
+
 	dop := plan2.GetShuffleDop(ncpu)
 	shuffleJoins := make([]*Scope, 0, len(c.cnList)*dop)
 	lnum := len(left)
