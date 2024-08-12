@@ -292,18 +292,6 @@ var writeDataToCSVFile = func(ep *ExportConfig, output []byte) error {
 	return nil
 }
 
-func appendBytes(writeByte, tmp, symbol []byte, enclosed byte, flag bool) []byte {
-	if flag && enclosed != 0 {
-		writeByte = append(writeByte, enclosed)
-	}
-	writeByte = append(writeByte, tmp...)
-	if flag && enclosed != 0 {
-		writeByte = append(writeByte, enclosed)
-	}
-	writeByte = append(writeByte, symbol...)
-	return writeByte
-}
-
 func formatJsonString(str string, flag bool, terminatedBy string) string {
 	if len(str) < 2 {
 		return "\"" + str + "\""
@@ -323,23 +311,25 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	closeby := ep.userConfig.Fields.EnclosedBy.Value
 	terminated := ep.userConfig.Fields.Terminated.Value
 	flag := ep.ColumnFlag
-	writeByte := make([]byte, 0)
+
+	buffer := &bytes.Buffer{}
+
 	for i := 0; i < bat.RowCount(); i++ {
 		for j, vec := range bat.Vecs {
 			if vec.GetNulls().Contains(uint64(i)) {
-				writeByte = appendBytes(writeByte, []byte("\\N"), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte("\\N"), symbol[j], closeby, flag[j], buffer)
 				continue
 			}
 			switch vec.GetType().Oid { //get col
 			case types.T_json:
 				val := types.DecodeJson(vec.GetBytesAt(i))
-				writeByte = appendBytes(writeByte, []byte(formatJsonString(val.String(), flag[j], terminated)), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(formatJsonString(val.String(), flag[j], terminated)), symbol[j], closeby, flag[j], buffer)
 			case types.T_bool:
 				val := vector.GetFixedAt[bool](vec, i)
 				if val {
-					writeByte = appendBytes(writeByte, []byte("true"), symbol[j], closeby, flag[j])
+					formatOutputString(ep, []byte("true"), symbol[j], closeby, flag[j], buffer)
 				} else {
-					writeByte = appendBytes(writeByte, []byte("false"), symbol[j], closeby, flag[j])
+					formatOutputString(ep, []byte("false"), symbol[j], closeby, flag[j], buffer)
 				}
 			case types.T_bit:
 				val := vector.GetFixedAt[uint64](vec, i)
@@ -347,92 +337,92 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				byteLength := (bitLength + 7) / 8
 				b := types.EncodeUint64(&val)[:byteLength]
 				slices.Reverse(b)
-				writeByte = appendBytes(writeByte, b, symbol[j], closeby, flag[j])
+				formatOutputString(ep, b, symbol[j], closeby, flag[j], buffer)
 			case types.T_int8:
 				val := vector.GetFixedAt[int8](vec, i)
-				writeByte = appendBytes(writeByte, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_int16:
 				val := vector.GetFixedAt[int16](vec, i)
-				writeByte = appendBytes(writeByte, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_int32:
 				val := vector.GetFixedAt[int32](vec, i)
-				writeByte = appendBytes(writeByte, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_int64:
 				val := vector.GetFixedAt[int64](vec, i)
-				writeByte = appendBytes(writeByte, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_uint8:
 				val := vector.GetFixedAt[uint8](vec, i)
-				writeByte = appendBytes(writeByte, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_uint16:
 				val := vector.GetFixedAt[uint16](vec, i)
-				writeByte = appendBytes(writeByte, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_uint32:
 				val := vector.GetFixedAt[uint32](vec, i)
-				writeByte = appendBytes(writeByte, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_uint64:
 				val := vector.GetFixedAt[uint64](vec, i)
-				writeByte = appendBytes(writeByte, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_float32:
 				val := vector.GetFixedAt[float32](vec, i)
 				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
-					writeByte = appendBytes(writeByte, []byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j])
+					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j], buffer)
 				} else {
-					writeByte = appendBytes(writeByte, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j])
+					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], buffer)
 				}
 			case types.T_float64:
 				val := vector.GetFixedAt[float64](vec, i)
 				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
-					writeByte = appendBytes(writeByte, []byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j])
+					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j], buffer)
 				} else {
-					writeByte = appendBytes(writeByte, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j])
+					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], buffer)
 				}
 			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 				value := addEscapeToString(vec.GetBytesAt(i))
-				writeByte = appendBytes(writeByte, value, symbol[j], closeby, true)
+				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_float32:
 				arrStr := types.BytesToArrayToString[float32](vec.GetBytesAt(i))
 				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr))
-				writeByte = appendBytes(writeByte, value, symbol[j], closeby, true)
+				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_float64:
 				arrStr := types.BytesToArrayToString[float64](vec.GetBytesAt(i))
 				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr))
-				writeByte = appendBytes(writeByte, value, symbol[j], closeby, true)
+				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_date:
 				val := vector.GetFixedAt[types.Date](vec, i)
-				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(val.String()), symbol[j], closeby, flag[j], buffer)
 			case types.T_datetime:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAt[types.Datetime](vec, i).String2(scale)
-				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_time:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAt[types.Time](vec, i).String2(scale)
-				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_timestamp:
 				scale := vec.GetType().Scale
 				timeZone := ses.GetTimeZone()
 				val := vector.GetFixedAt[types.Timestamp](vec, i).String2(timeZone, scale)
-				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_decimal64:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAt[types.Decimal64](vec, i).Format(scale)
-				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_decimal128:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAt[types.Decimal128](vec, i).Format(scale)
-				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_uuid:
 				val := vector.GetFixedAt[types.Uuid](vec, i).String()
-				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_Rowid:
 				val := vector.GetFixedAt[types.Rowid](vec, i)
-				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(val.String()), symbol[j], closeby, flag[j], buffer)
 			case types.T_Blockid:
 				val := vector.GetFixedAt[types.Blockid](vec, i)
-				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(val.String()), symbol[j], closeby, flag[j], buffer)
 			case types.T_enum:
 				val := vector.GetFixedAt[types.Enum](vec, i).String()
-				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
+				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			default:
 				ses.Error(ctx,
 					"Failed to construct byte due to unsupported type",
@@ -446,13 +436,19 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 		}
 	}
 
+	// copy data. byteBuffer.Bytes() is not able to pass to channel
+	reslen := buffer.Len()
+	result := make([]byte, reslen)
+	copy(result, buffer.Bytes())
+
 	ByteChan <- &BatchByte{
 		index:     index,
-		writeByte: writeByte,
+		writeByte: result,
 		err:       nil,
 	}
-	ses.writeCsvBytes.Add(int64(len(writeByte))) // statistic out traffic, CASE 2: select into
+	ses.writeCsvBytes.Add(int64(reslen)) // statistic out traffic, CASE 2: select into
 	bat.Clean(ses.GetMemPool())
+
 }
 
 func addEscapeToString(s []byte) []byte {
