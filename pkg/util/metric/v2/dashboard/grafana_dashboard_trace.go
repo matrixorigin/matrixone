@@ -246,6 +246,20 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			},
 			axis.Unit("s"),
 		),
+
+		c.withMultiGraph(
+			"Collector Queue Length",
+			3,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_trace_collector_queue_length", ``) + `)`,
+			},
+			[]string{
+				"{{ type }}",
+			},
+			axis.Unit("s"),
+		),
+
+		// ------------- next row ------------
 	)
 }
 

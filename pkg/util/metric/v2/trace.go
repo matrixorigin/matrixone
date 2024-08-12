@@ -24,6 +24,7 @@ func initTraceMetrics() {
 	registry.MustRegister(traceCollectorCollectHungCounter)
 	registry.MustRegister(traceCollectorDiscardItemCounter)
 	registry.MustRegister(traceCollectorStatusCounter)
+	registry.MustRegister(traceCollectorQueueLength)
 	registry.MustRegister(traceNegativeCUCounter)
 	registry.MustRegister(traceETLMergeCounter)
 	registry.MustRegister(traceMOLoggerExportDataHistogram)
@@ -84,6 +85,14 @@ var (
 	TraceCollectorDisposedCounter = traceCollectorStatusCounter.WithLabelValues("disposed")
 	TraceCollectorTimeoutCounter  = traceCollectorStatusCounter.WithLabelValues("timeout")
 	TraceCollectorEmptyCounter    = traceCollectorStatusCounter.WithLabelValues("empty")
+
+	traceCollectorQueueLength = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "collector_queue_length",
+			Help:      "The itmes that mologger collector queue hold.",
+		})
 
 	traceNegativeCUCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -166,3 +175,5 @@ func GetTraceCollectorDiscardItemCounter(typ string) prometheus.Counter {
 func GetTraceCollectorCollectHungCounter(typ string) prometheus.Counter {
 	return traceCollectorCollectHungCounter.WithLabelValues(typ)
 }
+
+func GetTraceCollectorQueueLength() prometheus.Gauge { return traceCollectorQueueLength }
