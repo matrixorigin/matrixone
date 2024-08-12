@@ -226,15 +226,6 @@ func EvalExpressionOnce(proc *process.Process, planExpr *plan.Expr, batches []*b
 	return vec.Dup(proc.Mp())
 }
 
-func ifAllArgsAreConstant(executor *FunctionExpressionExecutor) bool {
-	for _, paramE := range executor.parameterExecutor {
-		if _, ok := paramE.(*FixedVectorExpressionExecutor); !ok {
-			return false
-		}
-	}
-	return true
-}
-
 // FixedVectorExpressionExecutor
 // the content of its vector is fixed.
 // e.g.
@@ -278,7 +269,7 @@ type ParamExpressionExecutor struct {
 	typ  types.Type
 }
 
-func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *ParamExpressionExecutor) Eval(proc *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
 	val, err := proc.GetPrepareParamsAt(expr.pos)
 	if err != nil {
 		return nil, err
@@ -347,7 +338,7 @@ type VarExpressionExecutor struct {
 	typ    types.Type
 }
 
-func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *VarExpressionExecutor) Eval(proc *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
 	val, err := proc.GetResolveVariableFunc()(expr.name, expr.system, expr.global)
 	if err != nil {
 		return nil, err
@@ -1006,7 +997,7 @@ func GetExprZoneMap(
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
 						vec := proc.GetVector(types.T_any.ToType())
-						vec.UnmarshalBinary(data.Vec.Data)
+						_ = vec.UnmarshalBinary(data.Vec.Data)
 						vecs[rid] = vec
 					} else {
 						zms[expr.AuxId].Reset()
@@ -1059,7 +1050,7 @@ func GetExprZoneMap(
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
 						vec := proc.GetVector(types.T_any.ToType())
-						vec.UnmarshalBinary(data.Vec.Data)
+						_ = vec.UnmarshalBinary(data.Vec.Data)
 						vecs[rid] = vec
 					} else {
 						zms[expr.AuxId].Reset()
