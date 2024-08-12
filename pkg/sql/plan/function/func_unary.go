@@ -1126,6 +1126,15 @@ func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return fmt.Errorf("unexpected type for vector_embedding_model: %T", proxy)
 		}
 
+		ollamaModel, err1 := proc.GetResolveVariableFunc()("ollama_model", true, false)
+		if err1 != nil {
+			return err1
+		}
+		ollamaModelStr, ok := ollamaModel.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type for vector_embedding_model: %T", ollamaModel)
+		}
+
 		input := string(inputBytes)
 		var embeddingBytes []byte
 		switch modelStr {
@@ -1134,7 +1143,7 @@ func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			//if err != nil {
 			//	return err
 			//}
-			embedding, err := getOllamaSingleEmbedding(input, "llama3", proxyStr)
+			embedding, err := getOllamaSingleEmbedding(input, ollamaModelStr, proxyStr)
 			if err != nil {
 				return err
 			}
@@ -1163,6 +1172,15 @@ func EmbeddingDatalinkOp(parameters []*vector.Vector, result vector.FunctionResu
 	proxyStr, ok := proxy.(string)
 	if !ok {
 		return fmt.Errorf("unexpected type for vector_embedding_model: %T", proxy)
+	}
+
+	ollamaModel, err1 := proc.GetResolveVariableFunc()("ollama_model", true, false)
+	if err1 != nil {
+		return err1
+	}
+	ollamaModelStr, ok := ollamaModel.(string)
+	if !ok {
+		return fmt.Errorf("unexpected type for vector_embedding_model: %T", ollamaModel)
 	}
 
 	rowCount := uint64(length)
@@ -1222,7 +1240,7 @@ func EmbeddingDatalinkOp(parameters []*vector.Vector, result vector.FunctionResu
 		var embeddingBytes []byte
 		switch modelStr {
 		case "ollama":
-			embedding, err := getOllamaSingleEmbedding(input, "llama3", proxyStr)
+			embedding, err := getOllamaSingleEmbedding(input, ollamaModelStr, proxyStr)
 			if err != nil {
 				return err
 			}
