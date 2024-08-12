@@ -111,7 +111,7 @@ func (c *ContentWriter) FlushAndClose() (n int, err error) {
 		c.formatter.Flush()
 	}
 	// main flow
-	if !c.backoff.Count() {
+	if c.backoff == nil || c.backoff.Count() {
 		n, err = c.sqlFlusher.FlushBuffer(c.buf)
 	} else {
 		// case 1: metric collector is too much data to write

@@ -285,7 +285,7 @@ func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch 
 	}
 }
 
-const bufferInitSize = 16 * mpool.KB
+const bufferInitSize = 128 * mpool.KB
 
 func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, table.ExportRequests] {
 	return &mfsetETL{
