@@ -51,6 +51,8 @@ const (
 	ColDatabaseName
 	ColTableName
 	ColObjId
+
+	MaxColSnapshot
 )
 
 var (
@@ -176,7 +178,7 @@ func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
 	for i := 0; i < insTable.Length(); i++ {
 		tid := insTIDs[i]
 		name := string(insTableNames[i].GetByteSlice(insTableArea))
-		if name == "mo_snapshots" {
+		if name == catalog2.MO_SNAPSHOTS {
 			if sm.tid == 0 {
 				//for ut
 				sm.SetTid(tid)
@@ -313,10 +315,28 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 		snapshotSchemaTypes[ColLevel],
 		snapshotSchemaTypes[ColObjId],
 	}
-	for _, objectMap := range objects {
+	for tid, objectMap := range objects {
 		for _, object := range objectMap {
 			location := object.stats.ObjectLocation()
 			name := object.stats.ObjectName()
+			meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+			if err != nil {
+				return nil, err
+			}
+			dataMeta, ok := meta.DataMeta()
+			if !ok {
+				logutil.Warn("[GetSnapshot] dataMeta not found",
+					zap.Uint64("table id", tid),
+					zap.String("object name", name.String()))
+				continue
+			}
+			if dataMeta.BlockHeader().ColumnCount() != MaxColSnapshot {
+				logutil.Warn("[GetSnapshot] column count not match",
+					zap.Uint64("table id", tid),
+					zap.Uint16("column count", dataMeta.BlockHeader().ColumnCount()),
+					zap.String("object name", name.String()))
+				continue
+			}
 			for i := uint32(0); i < object.stats.BlkCnt(); i++ {
 				loc := objectio.BuildLocation(name, location.Extent(), 0, uint16(i))
 				blk := objectio.BlockInfo{
@@ -335,6 +355,17 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 					return nil, err
 				}
 				defer bat.Clean(mp)
+				if bat.Vecs[0].GetType().Oid.ToType() != colTypes[0] ||
+					bat.Vecs[1].GetType().Oid.ToType() != colTypes[1] ||
+					bat.Vecs[2].GetType().Oid.ToType() != colTypes[2] {
+					logutil.Warn("[GetSnapshot] column type not match",
+						zap.Uint64("table id", tid),
+						zap.String("object name", name.String()),
+						zap.String("column 0", bat.Vecs[0].GetType().Oid.String()),
+						zap.String("column 1", bat.Vecs[1].GetType().Oid.String()),
+						zap.String("column 2", bat.Vecs[2].GetType().Oid.String()))
+					continue
+				}
 				tsList := vector.MustFixedCol[int64](bat.Vecs[0])
 				typeList := vector.MustFixedCol[types.Enum](bat.Vecs[1])
 				acctList := vector.MustFixedCol[uint64](bat.Vecs[2])

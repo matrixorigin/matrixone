@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"math/bits"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -291,6 +292,17 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 		} else {
 			genericSort(col, os, blockidGreater)
 		}
+	case types.T_json:
+		data, area := vector.MustVarlenaRawData(vec)
+		col := struct {
+			data []types.Varlena
+			area []byte
+		}{data: data, area: area}
+		if !desc {
+			genericSort(col, os, jsonLess)
+		} else {
+			genericSort(col, os, jsonGreater)
+		}
 	}
 }
 
@@ -371,6 +383,33 @@ func varlenaLess(vs struct {
 	area []byte
 }, i, j int64) bool {
 	return vs.data[i].UnsafeGetString(vs.area) < vs.data[j].UnsafeGetString(vs.area)
+}
+
+func jsonLess(vs struct {
+	data []types.Varlena
+	area []byte
+}, i, j int64) bool {
+	left := types.DecodeJson(vs.data[i].GetByteSlice(vs.area))
+	right := types.DecodeJson(vs.data[j].GetByteSlice(vs.area))
+
+	cmp := bytejson.CompareByteJson(left, right)
+	if cmp != 0 {
+		return cmp < 0
+	}
+	return false
+}
+
+func jsonGreater(vs struct {
+	data []types.Varlena
+	area []byte
+}, i, j int64) bool {
+	left := types.DecodeJson(vs.data[i].GetByteSlice(vs.area))
+	right := types.DecodeJson(vs.data[j].GetByteSlice(vs.area))
+	cmp := bytejson.CompareByteJson(left, right)
+	if cmp != 0 {
+		return cmp > 0
+	}
+	return false
 }
 
 func varlenaGreater(vs struct {
