@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 var _ table.RowWriter = (*reactWriter)(nil)
@@ -69,6 +70,9 @@ func (rw *reactWriter) FlushAndClose() (int, error) {
 		for _, hook := range rw.afters {
 			hook(rw.ctx)
 		}
+		v2.TraceMOLoggerBufferReactWrite.Inc()
+	} else {
+		v2.TraceMOLoggerBufferReactWriteFailed.Inc()
 	}
 	// cleanup rw.afters
 	for idx := range rw.afters {
@@ -79,6 +83,10 @@ func (rw *reactWriter) FlushAndClose() (int, error) {
 }
 
 func (rw *reactWriter) SetBuffer(buf *bytes.Buffer, callback func(*bytes.Buffer)) {
+	v2.TraceMOLoggerBufferSetCallBack.Inc()
+	if callback == nil {
+		v2.TraceMOLoggerBufferSetCallBackNil.Inc()
+	}
 	rw.setter.SetBuffer(buf, callback)
 }
 

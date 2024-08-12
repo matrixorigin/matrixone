@@ -105,15 +105,22 @@ func (c *ContentWriter) FlushAndClose() (int, error) {
 	if err != nil {
 		n, err = c.csvFlusher.FlushBuffer(c.buf)
 		if err != nil {
+			v2.TraceMOLoggerBufferWriteFailed.Inc()
 			v2.TraceMOLoggerErrorFlushCounter.Inc()
 			return 0, err
+		} else {
+			v2.TraceMOLoggerBufferWriteCSV.Inc()
 		}
+	} else {
+		v2.TraceMOLoggerBufferWriteSQL.Inc()
 	}
 	c.sqlFlusher = nil
 	c.csvFlusher = nil
 	// release the buf.
 	if c.bufCallback != nil {
 		c.bufCallback(c.buf)
+	} else {
+		v2.TraceMOLoggerBufferNoFree.Inc()
 	}
 	c.buf = nil
 	c.formatter = nil

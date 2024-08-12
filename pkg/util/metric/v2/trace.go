@@ -158,8 +158,16 @@ var (
 			Name:      "mologger_metric_buffer_total",
 			Help:      "Count of mologger metric used buffer count",
 		}, []string{"type"})
-	TraceMOLoggerBufferAlloc = traceMOLoggerMetricBufferCounter.WithLabelValues("alloc")
-	TraceMOLoggerBufferFree  = traceMOLoggerMetricBufferCounter.WithLabelValues("free")
+	TraceMOLoggerBufferAlloc            = traceMOLoggerMetricBufferCounter.WithLabelValues("alloc")
+	TraceMOLoggerBufferFree             = traceMOLoggerMetricBufferCounter.WithLabelValues("free")
+	TraceMOLoggerBufferSetCallBack      = traceMOLoggerMetricBufferCounter.WithLabelValues("set_callback")
+	TraceMOLoggerBufferSetCallBackNil   = traceMOLoggerMetricBufferCounter.WithLabelValues("set_callback_nil")
+	TraceMOLoggerBufferNoFree           = traceMOLoggerMetricBufferCounter.WithLabelValues("no_free")
+	TraceMOLoggerBufferWriteSQL         = traceMOLoggerMetricBufferCounter.WithLabelValues("write_sql")
+	TraceMOLoggerBufferWriteCSV         = traceMOLoggerMetricBufferCounter.WithLabelValues("write_csv")
+	TraceMOLoggerBufferWriteFailed      = traceMOLoggerMetricBufferCounter.WithLabelValues("write_failed")
+	TraceMOLoggerBufferReactWrite       = traceMOLoggerMetricBufferCounter.WithLabelValues("react_write")
+	TraceMOLoggerBufferReactWriteFailed = traceMOLoggerMetricBufferCounter.WithLabelValues("react_write_failed")
 )
 
 func GetTraceNegativeCUCounter(typ string) prometheus.Counter {
