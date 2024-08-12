@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -178,21 +179,40 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 	if err != nil {
 		return
 	}
+
+	if execCtx.prepareColDef != nil && len(columns) != len(execCtx.prepareColDef) {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("expected %d col def packet, got %d", len(execCtx.prepareColDef), len(columns)))
+	}
+
 	//send columns
 	//column_count * Protocol::ColumnDefinition packets
 	cmd := ses.GetCmd()
-	for _, c := range columns {
+	for i, c := range columns {
 		mysqlc := c.(Column)
 		mrs.AddColumn(mysqlc)
 		/*
 			mysql COM_QUERY response: send the column definition per column
 		*/
-		err = resper.mysqlRrWr.WriteColumnDef(execCtx.reqCtx, mysqlc, int(cmd))
+		if execCtx.prepareColDef == nil {
+			err = resper.mysqlRrWr.WriteColumnDef(execCtx.reqCtx, mysqlc, int(cmd))
+			if err != nil {
+				return
+			}
+		} else {
+			err = resper.mysqlRrWr.(*MysqlProtocolImpl).appendPacket(execCtx.prepareColDef[i])
+			if err != nil {
+				return
+			}
+		}
+	}
+	if execCtx.prepareColDef != nil {
+		for _, colDef := range execCtx.prepareColDef {
+			err = resper.mysqlRrWr.(*MysqlProtocolImpl).appendPacket(colDef)
+		}
 		if err != nil {
 			return
 		}
 	}
-
 	/*
 		mysql COM_QUERY response: End after the column has been sent.
 		send EOF packet

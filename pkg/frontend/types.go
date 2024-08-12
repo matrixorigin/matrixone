@@ -117,6 +117,7 @@ type PrepareStmt struct {
 	PreparePlan    *plan.Plan
 	PrepareStmt    tree.Statement
 	ParamTypes     []byte
+	ColDefData     [][]byte
 	IsCloudNonuser bool
 	IsInsertValues bool
 	InsertBat      *batch.Batch
@@ -422,6 +423,7 @@ type ExecCtx struct {
 	executeParamTypes []byte
 	resper            Responser
 	results           []ExecResult
+	prepareColDef     [][]byte
 	isIssue3482       bool
 }
 
@@ -443,6 +445,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.executeParamTypes = nil
 	execCtx.resper = nil
 	execCtx.results = nil
+	execCtx.prepareColDef = nil
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.

@@ -652,15 +652,29 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		column := new(MysqlColumn)
 		column.SetName(columns[i].Name)
 		column.SetOrgName(columns[i].GetOriginCaseName())
-
+		column.SetTable(columns[i].TblName)
+		column.SetOrgTable(columns[i].TblName)
+		column.SetAutoIncr(columns[i].Typ.AutoIncr)
+		column.SetSchema(columns[i].DbName)
 		err = convertEngineTypeToMysqlType(ctx, types.T(columns[i].Typ.Id), column)
 		if err != nil {
 			return err
 		}
-
-		err = mp.SendColumnDefinitionPacket(ctx, column, cmd)
-		if err != nil {
-			return err
+		setColFlag(column)
+		setColLength(column, columns[i].Typ.Width)
+		setCharacter(column)
+		if types.T(columns[i].Typ.Id) == types.T_binary || types.T(columns[i].Typ.Id) == types.T_varbinary {
+			column.SetCharset(0x3f)
+		}
+		column.SetDecimal(columns[i].Typ.Scale)
+		convertMysqlTextTypeToBlobType(column)
+		if mp.capability&CLIENT_PROTOCOL_41 != 0 {
+			colDefPacket := mp.makeColumnDefinition41Payload(column, cmd)
+			err = mp.appendPacket(colDefPacket)
+			if err != nil {
+				return err
+			}
+			stmt.ColDefData = append(stmt.ColDefData, colDefPacket)
 		}
 	}
 	if numColumns > 0 {
