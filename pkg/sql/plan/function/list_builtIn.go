@@ -2981,6 +2981,16 @@ var supportedMathBuiltIns = []FuncNew{
 					return EmbeddingOp
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datalink},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return EmbeddingDatalinkOp
+				},
+			},
 		},
 	},
 
