@@ -439,15 +439,41 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	switch stmt.Level {
 	case tree.RESTORELEVELACCOUNT:
-		if err = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, snapshot.ts, restoreAccount); err != nil {
+		if err = restoreToAccount(ctx,
+			ses.GetService(),
+			bh, snapshotName,
+			toAccountId,
+			fkTableMap,
+			viewMap,
+			snapshot.ts,
+			restoreAccount); err != nil {
 			return err
 		}
 	case tree.RESTORELEVELDATABASE:
-		if err = restoreToDatabase(ctx, ses.GetService(), bh, snapshotName, dbName, toAccountId, fkTableMap, viewMap, snapshot.ts, restoreAccount); err != nil {
+		if err = restoreToDatabase(ctx,
+			ses.GetService(),
+			bh,
+			snapshotName,
+			dbName,
+			toAccountId,
+			fkTableMap,
+			viewMap,
+			snapshot.ts,
+			restoreAccount); err != nil {
 			return err
 		}
 	case tree.RESTORELEVELTABLE:
-		if err = restoreToTable(ctx, ses.GetService(), bh, snapshotName, dbName, tblName, toAccountId, fkTableMap, viewMap, snapshot.ts, restoreAccount); err != nil {
+		if err = restoreToTable(ctx,
+			ses.GetService(),
+			bh,
+			snapshotName,
+			dbName,
+			tblName,
+			toAccountId,
+			fkTableMap,
+			viewMap,
+			snapshot.ts,
+			restoreAccount); err != nil {
 			return err
 		}
 	}
