@@ -89,8 +89,11 @@ func (loopAnti *LoopAnti) Reset(proc *process.Process, pipelineFailed bool, err 
 
 	ctr.resetExprExecutor()
 	ctr.state = Build
-	ctr.bat.Clean(proc.Mp())
-	ctr.bat = nil
+
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.Mp())
+		ctr.bat = nil
+	}
 
 	if loopAnti.ProjectList != nil {
 		anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())

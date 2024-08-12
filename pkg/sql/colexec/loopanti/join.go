@@ -126,7 +126,7 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (loopAnti *LoopAnti) build(proc *process.Process, anal process.Analyze) error {
-	ctr := loopAnti.ctr
+	ctr := &loopAnti.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
 	mp := message.ReceiveJoinMap(loopAnti.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
