@@ -74,11 +74,13 @@ func (s StacktraceID) String() string {
 	if !ok {
 		panic("bad stack id")
 	}
+	return pcsToString(*(v.(*[]uintptr)))
+}
 
+func pcsToString(pcs []uintptr) string {
 	buf := new(strings.Builder)
 
-	pcs := v.(*[]uintptr)
-	frames := runtime.CallersFrames(*pcs)
+	frames := runtime.CallersFrames(pcs)
 	for {
 		frame, more := frames.Next()
 
