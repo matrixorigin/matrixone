@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -603,8 +604,20 @@ func restoreToDatabaseOrTable(
 		return
 	}
 
+	var createDbSql string
+
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 	restoreToTbl := tblName != ""
+
+	createDbSql, err = getCreateDatabaseSql(ctx, sid, bh, snapshotName, dbName)
+	if err != nil {
+		return
+	}
+
+	isSubDb := strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
+	if isSubDb && restoreToTbl {
+		return moerr.NewInternalError(ctx, "can't restore to table for sub db")
+	}
 
 	// if restore to db, delete the same name db first
 	if !restoreToTbl {
@@ -615,7 +628,11 @@ func restoreToDatabaseOrTable(
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to create database: %v", snapshotName, dbName))
-	if err = bh.Exec(toCtx, "create database if not exists "+dbName); err != nil {
+	if err = bh.Exec(toCtx, createDbSql); err != nil {
+		return
+	}
+
+	if isSubDb {
 		return
 	}
 
@@ -1135,6 +1152,29 @@ func getTableInfos(ctx context.Context, sid string, bh BackgroundExec, snapshotN
 		}
 	}
 	return tableInfos, nil
+}
+
+func getCreateDatabaseSql(ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	dbName string) (string, error) {
+
+	sql := fmt.Sprintf("show create database `%s`", dbName)
+	if len(snapshotName) > 0 {
+		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
+	}
+	getLogger(sid).Info(fmt.Sprintf("[%s] get create database `%s` sql: %s", snapshotName, dbName, sql))
+
+	// cols: database_name, create_sql
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	if err != nil {
+		return "", nil
+	}
+	if len(colsList) == 0 || len(colsList[0]) == 0 {
+		return "", moerr.NewBadDB(ctx, dbName)
+	}
+	return colsList[0][1], nil
 }
 
 func getTableInfo(ctx context.Context, sid string, bh BackgroundExec, snapshotName string, dbName, tblName string) (*tableInfo, error) {
