@@ -286,6 +286,7 @@ func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch 
 }
 
 const bufferInitSize = 128 * mpool.KB
+const backOffThreshold = mpool.MB / bufferInitSize
 
 func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, table.ExportRequests] {
 	return &mfsetETL{
@@ -294,8 +295,10 @@ func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFami
 			metricThreshold: c.opts.metricThreshold,
 			sampleThreshold: c.opts.sampleThreshold,
 		},
-		collector:  c,
-		bufferPool: &sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 0, bufferInitSize)) }},
+		collector: c,
+		// for backoff strategy
+		bufferPool:             &sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 0, bufferInitSize)) }},
+		bufferBackOffThreshold: backOffThreshold,
 	}
 }
 
@@ -305,6 +308,8 @@ type mfsetETL struct {
 	// bufferPool adapt backoff strategy
 	bufferPool  *sync.Pool
 	bufferCount atomic.Int32
+	// bufferBackOffThreshold check backoff case.
+	bufferBackOffThreshold int32
 }
 
 // GetBatch implements table.Table.GetBatch.
@@ -410,17 +415,15 @@ func (s *mfsetETL) getBuffer() *bytes.Buffer {
 	return s.bufferPool.Get().(*bytes.Buffer)
 }
 func (s *mfsetETL) putBuffer(b *bytes.Buffer) {
-	v2.TraceMOLoggerBufferFree.Inc()
-	s.bufferCount.Add(-1)
 	b.Reset()
 	s.bufferPool.Put(b)
+	v2.TraceMOLoggerBufferFree.Inc()
+	s.bufferCount.Add(-1)
 }
 
 var _ table.BackOff = (*mfsetETL)(nil)
 
-const backOffThreshold = mpool.MB / bufferInitSize
-
 // Count implement table.BackOff
 func (s *mfsetETL) Count() bool {
-	return s.bufferCount.Load() > backOffThreshold
+	return s.bufferCount.Load() > s.bufferBackOffThreshold
 }
