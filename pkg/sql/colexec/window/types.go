@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -48,10 +49,12 @@ type container struct {
 	ps      []int64 // index of partition by
 	os      []int64 // Sorted partitions
 	aggVecs []group.ExprEvalVector
+
+	vec *vector.Vector
 }
 
 type Window struct {
-	ctr         *container
+	ctr         container
 	WinSpecList []*plan.Expr
 	// sort and partition
 	Fs []*plan.OrderBySpec
@@ -94,37 +97,91 @@ func (window *Window) Release() {
 }
 
 func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	window.Free(proc, pipelineFailed, err)
-}
+	ctr := &window.ctr
 
-func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := window.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanAggVectors()
-		ctr.cleanOrderVectors()
-		window.ctr = nil
+	ctr.resetParam()
+	ctr.resetVectors()
+	if ctr.bat != nil {
+		ctr.bat.CleanOnlyData()
+	}
+	// It needs to free, because the result of agg eval is not reuse the vector
+	if ctr.vec != nil {
+		ctr.vec.Free(proc.Mp())
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &window.ctr
+
+	ctr.freeBatch(proc.Mp())
+	ctr.freeExes()
+	ctr.freeVector(proc.Mp())
+}
+
+func (ctr *container) resetParam() {
+	ctr.status = receive
+	ctr.desc = nil
+	ctr.nullsLast = nil
+	ctr.sels = nil
+	ctr.ps = nil
+	ctr.os = nil
+}
+
+func (ctr *container) resetVectors() {
+	for i := range ctr.orderVecs {
+		ctr.orderVecs[i].ResetForNextQuery()
+	}
+
+	for i := range ctr.aggVecs {
+		ctr.aggVecs[i].ResetForNextQuery()
+	}
+}
+
+func (ctr *container) freeBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
 	}
 }
 
-func (ctr *container) cleanOrderVectors() {
+func (ctr *container) freeAggFun() {
+	if ctr.bat != nil {
+		for _, a := range ctr.bat.Aggs {
+			if a != nil {
+				a.Free()
+			}
+		}
+	}
+}
+
+func (ctr *container) freeExes() {
 	for i := range ctr.orderVecs {
 		ctr.orderVecs[i].Free()
 	}
-	ctr.orderVecs = nil
-}
 
-func (ctr *container) cleanAggVectors() {
 	for i := range ctr.aggVecs {
 		ctr.aggVecs[i].Free()
 	}
-	ctr.aggVecs = nil
+}
+
+func (ctr *container) freeVector(mp *mpool.MPool) {
+	for _, e := range ctr.orderVecs {
+		for _, vec := range e.Vec {
+			if vec != nil {
+				vec.Free(mp)
+			}
+		}
+	}
+
+	for _, e := range ctr.aggVecs {
+		for _, vec := range e.Vec {
+			if vec != nil {
+				vec.Free(mp)
+			}
+		}
+	}
+
+	if ctr.vec != nil {
+		ctr.vec.Free(mp)
+	}
 }

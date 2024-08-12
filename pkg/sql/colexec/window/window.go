@@ -45,16 +45,18 @@ func (window *Window) OpType() vm.OpType {
 }
 
 func (window *Window) Prepare(proc *process.Process) (err error) {
-	window.ctr = new(container)
+	ctr := &window.ctr
 
-	ctr := window.ctr
-	ctr.aggVecs = make([]group.ExprEvalVector, len(window.Aggs))
-	for i, ag := range window.Aggs {
-		expressions := ag.GetArgExpressions()
-		if ctr.aggVecs[i], err = group.MakeEvalVector(proc, expressions); err != nil {
-			return err
+	if len(ctr.aggVecs) == 0 {
+		ctr.aggVecs = make([]group.ExprEvalVector, len(window.Aggs))
+		for i, ag := range window.Aggs {
+			expressions := ag.GetArgExpressions()
+			if ctr.aggVecs[i], err = group.MakeEvalVector(proc, expressions); err != nil {
+				return err
+			}
 		}
 	}
+
 	w := window.WinSpecList[0].Expr.(*plan.Expr_W).W
 	if len(w.PartitionBy) == 0 {
 		ctr.status = receiveAll
@@ -69,7 +71,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	var err error
-	ctr := window.ctr
+	ctr := &window.ctr
 	anal := proc.GetAnalyze(window.GetIdx(), window.GetParallelIdx(), window.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
@@ -82,27 +84,15 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, err
 				}
-
 				if result.Batch == nil {
 					ctr.status = eval
 					break
 				}
-				if ctr.bat == nil {
-					ctr.bat, err = result.Batch.Dup(proc.Mp())
-					if err != nil {
-						return result, err
-					}
-					continue
-				}
 				anal.Input(result.Batch, window.GetIsFirst())
-				for i := range result.Batch.Vecs {
-					n := result.Batch.Vecs[i].Length()
-					err = ctr.bat.Vecs[i].UnionBatch(result.Batch.Vecs[i], 0, n, makeFlagsOne(n), proc.Mp())
-					if err != nil {
-						return result, err
-					}
+				ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+				if err != nil {
+					return result, err
 				}
-				ctr.bat.AddRowCount(result.Batch.RowCount())
 			}
 		case receive:
 			result, err := window.GetChildren(0).Call(proc)
@@ -114,7 +104,10 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.status = eval
 				anal.Input(result.Batch, window.GetIsFirst())
-				ctr.bat, err = result.Batch.Dup(proc.Mp())
+				if ctr.bat != nil {
+					ctr.bat.CleanOnlyData()
+				}
+				ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 				if err != nil {
 					return result, err
 				}
@@ -141,13 +134,16 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			for i, w := range window.WinSpecList {
 				// sort and partitions
 				if window.Fs = makeOrderBy(w); window.Fs != nil {
-					ctr.orderVecs = make([]group.ExprEvalVector, len(window.Fs))
-					for j := range ctr.orderVecs {
-						ctr.orderVecs[j], err = group.MakeEvalVector(proc, []*plan.Expr{window.Fs[j].Expr})
-						if err != nil {
-							return result, err
+					if len(ctr.orderVecs) == 0 {
+						ctr.orderVecs = make([]group.ExprEvalVector, len(window.Fs))
+						for j := range ctr.orderVecs {
+							ctr.orderVecs[j], err = group.MakeEvalVector(proc, []*plan.Expr{window.Fs[j].Expr})
+							if err != nil {
+								return result, err
+							}
 						}
 					}
+
 					_, err = ctr.processOrder(i, window, ctr.bat, proc)
 					if err != nil {
 						return result, err
@@ -157,10 +153,9 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				if err = ctr.processFunc(i, window, proc, anal); err != nil {
 					return result, err
 				}
-
-				// clean
-				ctr.cleanOrderVectors()
 			}
+			// we can not reuse agg func
+			ctr.freeAggFun()
 
 			anal.Output(ctr.bat, window.GetIsLast())
 			if len(window.WinSpecList[0].Expr.(*plan.Expr_W).W.PartitionBy) == 0 {
@@ -169,7 +164,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.status = receive
 			}
 
-			result.Batch = ctr.bat
+			result.Batch = makeResultBatch(ctr.bat, ctr.vec)
 			result.Status = vm.ExecNext
 			return result, nil
 		case done:
@@ -178,6 +173,18 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 		}
 	}
+}
+
+func makeResultBatch(bat *batch.Batch, vec *vector.Vector) *batch.Batch {
+	r := batch.NewWithSize(len(bat.Vecs) + 1)
+	i := 0
+	for i < len(bat.Vecs) {
+		r.Vecs[i] = bat.Vecs[i]
+		i++
+	}
+	r.Vecs[i] = vec
+	r.SetRowCount(vec.Length())
+	return r
 }
 
 func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, anal process.Analyze) error {
@@ -197,7 +204,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			ctr.os = ctr.ps
 		}
 
-		vec := proc.GetVector(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType())
 		defer vec.Free(proc.Mp())
 		if err = vector.AppendFixedList(vec, ctr.os, nil, proc.Mp()); err != nil {
 			return err
@@ -262,16 +269,19 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 		}
 	}
 
-	vec, err := ctr.bat.Aggs[idx].Flush()
+	// result of agg eval is not reuse the vector
+	if ctr.vec != nil {
+		ctr.vec.Free(proc.Mp())
+	}
+	ctr.vec, err = ctr.bat.Aggs[idx].Flush()
 	if err != nil {
 		return err
 	}
 	if isWinOrder {
-		vec.SetNulls(nil)
+		ctr.vec.SetNulls(nil)
 	}
-	ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
-	if vec != nil {
-		anal.Alloc(int64(vec.Size()))
+	if ctr.vec != nil {
+		anal.Alloc(int64(ctr.vec.Size()))
 	}
 	ctr.os = nil
 	ctr.ps = nil
@@ -390,9 +400,21 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) (er
 
 	for i := range ctr.aggVecs {
 		for j := range ctr.aggVecs[i].Executor {
-			ctr.aggVecs[i].Vec[j], err = ctr.aggVecs[i].Executor[j].Eval(proc, input, nil)
+			vec, err := ctr.aggVecs[i].Executor[j].Eval(proc, input, nil)
 			if err != nil {
 				return err
+			}
+
+			if ctr.aggVecs[i].Vec[j] != nil {
+				ctr.aggVecs[i].Vec[j].CleanOnlyData()
+				if err = ctr.aggVecs[i].Vec[j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+					return err
+				}
+			} else {
+				ctr.aggVecs[i].Vec[j], err = vec.Dup(proc.Mp())
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -422,26 +444,37 @@ func makeOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
 	return w.OrderBy
 }
 
-func makeFlagsOne(n int) []uint8 {
-	t := make([]uint8, n)
-	for i := range t {
-		t[i]++
+func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (err error) {
+	input := []*batch.Batch{bat}
+
+	for i := range ctr.orderVecs {
+		for j := range ctr.orderVecs[i].Executor {
+			vec, err := ctr.orderVecs[i].Executor[j].Eval(proc, input, nil)
+			if err != nil {
+				return err
+			}
+
+			if ctr.orderVecs[i].Vec[j] != nil {
+				ctr.orderVecs[i].Vec[j].CleanOnlyData()
+				if err = ctr.orderVecs[i].Vec[j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+					return err
+				}
+			} else {
+				ctr.orderVecs[i].Vec[j], err = vec.Dup(proc.Mp())
+				if err != nil {
+					return err
+				}
+			}
+		}
 	}
-	return t
+	return nil
 }
 
 func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *process.Process) (bool, error) {
 	makeArgFs(ap)
 
-	var err error
-	input := []*batch.Batch{bat}
-	for i := range ctr.orderVecs {
-		for j := range ctr.orderVecs[i].Executor {
-			ctr.orderVecs[i].Vec[j], err = ctr.orderVecs[i].Executor[j].Eval(proc, input, nil)
-			if err != nil {
-				return false, err
-			}
-		}
+	if err := ctr.evalOrderVector(bat, proc); err != nil {
+		return false, err
 	}
 	if bat.RowCount() < 2 {
 		return false, nil

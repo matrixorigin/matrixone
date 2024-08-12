@@ -69,6 +69,14 @@ func (ev *ExprEvalVector) Free() {
 	}
 }
 
+func (ev *ExprEvalVector) ResetForNextQuery() {
+	for i := range ev.Executor {
+		if ev.Executor[i] != nil {
+			ev.Executor[i].ResetForNextQuery()
+		}
+	}
+}
+
 type container struct {
 	typ       int
 	state     vm.CtrState
