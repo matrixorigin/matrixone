@@ -21,42 +21,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
-type mpoolBased[T ReusableObject] struct {
+type mpoolBased[T any, P ReusableObject[T]] struct {
 	pool *mpool.MPool
-	opts *Options[T]
-	c    *checker[T]
+	opts *Options[T, P]
+	c    *checker[T, P]
 }
 
-func newMpoolBased[T ReusableObject](
+func newMpoolBased[T any, P ReusableObject[T]](
 	capacity int64,
-	opts *Options[T]) Pool[T] {
+	opts *Options[T, P]) Pool[T, P] {
 	opts.adjust()
+	c := newChecker[T, P](opts.enableChecker)
 	var v T
-	c := newChecker[T](opts.enableChecker)
-	mp, err := mpool.NewMPool(fmt.Sprintf("reuse-%s", v.TypeName()), opts.memCapacity, 0)
+	mp, err := mpool.NewMPool(fmt.Sprintf("reuse-%s", P(&v).TypeName()), opts.memCapacity, 0)
 	if err != nil {
 		panic(err)
 	}
-	return &mpoolBased[T]{
+	return &mpoolBased[T, P]{
 		pool: mp,
 		opts: opts,
 		c:    c,
 	}
 }
 
-func (p *mpoolBased[T]) Alloc() *T {
+func (p *mpoolBased[T, P]) Alloc() P {
 	var t T
 	data, err := p.pool.Alloc(int(unsafe.Sizeof(t)))
 	if err != nil {
 		panic(err)
 	}
-	v := (*T)(unsafe.Pointer(unsafe.SliceData(data)))
+	v := P(unsafe.Pointer(unsafe.SliceData(data)))
 	p.c.created(v)
 	p.c.got(v)
 	return v
 }
 
-func (p *mpoolBased[T]) Free(v *T) {
+func (p *mpoolBased[T, P]) Free(v P) {
 	p.c.free(v)
 	p.opts.release(v)
 	p.pool.Free(unsafe.Slice((*byte)(unsafe.Pointer(v)), unsafe.Sizeof(*v)))
