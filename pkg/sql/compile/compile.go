@@ -3556,7 +3556,7 @@ func (c *Compile) newMergeRemoteScopeByCN(ss []*Scope) []*Scope {
 			}
 		}
 		if len(currentSS) > 0 {
-			mergeScope := c.newMergeScopeByCN(currentSS, cn)
+			mergeScope := c.newMergeRemoteScope(currentSS, cn)
 			rs = append(rs, mergeScope)
 		}
 	}
