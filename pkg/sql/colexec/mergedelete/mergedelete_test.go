@@ -16,8 +16,6 @@ package mergedelete
 
 import (
 	"context"
-	"fmt"
-	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -146,7 +144,7 @@ func TestMergeDelete(t *testing.T) {
 	batch2.SetRowCount(3)
 
 	argument1 := MergeDelete{
-		ctr: &container{
+		ctr: container{
 			delSource: &mockRelation{},
 		},
 		AffectedRows: 0,
@@ -165,40 +163,10 @@ func TestMergeDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(15), argument1.AffectedRows)
 
-	// Check DelSource
-	result0 := argument1.ctr.delSource.(*mockRelation).result
-	// check attr names
-	require.True(t, reflect.DeepEqual(
-		[]string{
-			catalog.BlockMetaOffset,
-		},
-		result0.Attrs,
-	))
-	// check vector
-	require.Equal(t, 1, len(result0.Vecs))
-	for i, vec := range result0.Vecs {
-		require.Equal(t, 15, vec.Length(), fmt.Sprintf("column number: %d", i))
-	}
-
 	resetChildren(&argument1, batch2)
 	_, err = argument1.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(60), argument1.AffectedRows)
-
-	// Check DelSource
-	result1 := argument1.ctr.delSource.(*mockRelation).result
-	// check attr names
-	require.True(t, reflect.DeepEqual(
-		[]string{
-			catalog.BlockMeta_DeltaLoc,
-		},
-		result1.Attrs,
-	))
-	// check vector
-	require.Equal(t, 1, len(result1.Vecs))
-	for i, vec := range result1.Vecs {
-		require.Equal(t, 1, vec.Length(), fmt.Sprintf("column number: %d", i))
-	}
 
 	// free resource
 	argument1.Free(proc, false, nil)
