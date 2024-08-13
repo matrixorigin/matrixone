@@ -142,6 +142,20 @@ type accountRecord struct {
 	accountId   uint64
 }
 
+type subDbRestoreRecord struct {
+	dbName    string
+	Account   uint32
+	createSql string
+}
+
+func NewSubDbRestoreRecord(dbName string, account uint32, createSql string) *subDbRestoreRecord {
+	return &subDbRestoreRecord{
+		dbName:    dbName,
+		Account:   account,
+		createSql: createSql,
+	}
+}
+
 func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) error {
 	var err error
 	var snapshotLevel tree.SnapshotLevel
@@ -446,7 +460,9 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			fkTableMap,
 			viewMap,
 			snapshot.ts,
-			restoreAccount); err != nil {
+			restoreAccount,
+			false,
+			nil); err != nil {
 			return err
 		}
 	case tree.RESTORELEVELDATABASE:
@@ -459,7 +475,9 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			fkTableMap,
 			viewMap,
 			snapshot.ts,
-			restoreAccount); err != nil {
+			restoreAccount,
+			false,
+			nil); err != nil {
 			return err
 		}
 	case tree.RESTORELEVELTABLE:
@@ -544,6 +562,8 @@ func restoreToAccount(
 	viewMap map[string]*tableInfo,
 	snapshotTs int64,
 	restoreAccount uint32,
+	isRestoreCluster bool,
+	subDbToRestore []*subDbRestoreRecord,
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore account: %v, restore timestamp : %d", snapshotName, toAccountId, snapshotTs))
 
@@ -587,7 +607,9 @@ func restoreToAccount(
 			fkTableMap,
 			viewMap,
 			snapshotTs,
-			restoreAccount); err != nil {
+			restoreAccount,
+			isRestoreCluster,
+			subDbToRestore); err != nil {
 			return
 		}
 	}
@@ -614,7 +636,10 @@ func restoreToDatabase(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
 	snapshotTs int64,
-	restoreAccount uint32) (err error) {
+	restoreAccount uint32,
+	isRestoreCluster bool,
+	subDbToRestore []*subDbRestoreRecord,
+) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore db: %v, restore timestamp: %d", snapshotName, dbName, snapshotTs))
 	return restoreToDatabaseOrTable(ctx,
 		sid,
@@ -626,7 +651,9 @@ func restoreToDatabase(
 		fkTableMap,
 		viewMap,
 		snapshotTs,
-		restoreAccount)
+		restoreAccount,
+		isRestoreCluster,
+		subDbToRestore)
 }
 
 func restoreToTable(
@@ -652,7 +679,9 @@ func restoreToTable(
 		fkTableMap,
 		viewMap,
 		snapshotTs,
-		restoreAccount)
+		restoreAccount,
+		false,
+		nil)
 }
 
 func restoreToDatabaseOrTable(
@@ -666,7 +695,10 @@ func restoreToDatabaseOrTable(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
 	snapshotTs int64,
-	restoreAccount uint32) (err error) {
+	restoreAccount uint32,
+	isRestoreCluster bool,
+	subDbToRestore []*subDbRestoreRecord,
+) (err error) {
 	if needSkipDb(dbName) {
 		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v", snapshotName, dbName))
 		return
@@ -686,6 +718,14 @@ func restoreToDatabaseOrTable(
 	isSubDb := strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
 	if isSubDb && restoreToTbl {
 		return moerr.NewInternalError(toCtx, "can't restore to table for sub db")
+	}
+
+	if isRestoreCluster && isSubDb {
+		// if restore to cluster, and the db is sub db, skip restore
+		// append the sub db to restore list
+		subDbToRestore = append(subDbToRestore, NewSubDbRestoreRecord(dbName, toAccountId, createDbSql))
+		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore subscription db: %v, at restore cluster account %d", snapshotName, dbName, toAccountId))
+		return
 	}
 
 	// if current account is not to account id, and the db is sub db, skip restore
@@ -1440,14 +1480,13 @@ func fkTablesTopoSort(ctx context.Context, bh BackgroundExec, snapshotName strin
 	return
 }
 
-func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, snapshotTs int64) (err error) {
+func restoreToCluster(ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	snapshotName string,
+	snapshotTs int64,
+) (err error) {
 	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore cluster, restore timestamp: %d", snapshotName, snapshotTs))
-
-	// drop accounts
-	// err = getDropAccounts(ctx, bh, snapshotName, snapshotTs)
-	// if err != nil {
-	// 	return err
-	// }
 
 	// get restore accounts
 	var accounts []accountRecord
@@ -1456,11 +1495,13 @@ func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snap
 		return err
 	}
 
+	subDbToRestore := make([]*subDbRestoreRecord, 0)
+
 	// restore to each account
 	for _, account := range accounts {
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] cluster restore start to restore account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
-		if err = restoreAccountUsingClusterSnapshot(ctx, ses, bh, snapshotName, snapshotTs, account); err != nil {
+		if err = restoreAccountUsingClusterSnapshot(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore); err != nil {
 			return err
 		}
 
@@ -1471,7 +1512,14 @@ func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snap
 
 }
 
-func restoreAccountUsingClusterSnapshot(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, snapshotTs int64, account accountRecord) (err error) {
+func restoreAccountUsingClusterSnapshot(ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	snapshotName string,
+	snapshotTs int64,
+	account accountRecord,
+	subDbToRestore []*subDbRestoreRecord,
+) (err error) {
 	toAccountId := account.accountId
 
 	newSnapshot, err := insertSnapshotRecord(ctx, ses.GetService(), bh, snapshotName, snapshotTs, toAccountId, account.accountName)
@@ -1506,7 +1554,17 @@ func restoreAccountUsingClusterSnapshot(ctx context.Context, ses *Session, bh Ba
 	viewMap := make(map[string]*tableInfo)
 
 	// restore to account
-	if err = restoreToAccount(ctx, ses.GetService(), bh, newSnapshot, uint32(toAccountId), fkTableMap, viewMap, snapshotTs, uint32(toAccountId)); err != nil {
+	if err = restoreToAccount(ctx,
+		ses.GetService(),
+		bh,
+		newSnapshot,
+		uint32(toAccountId),
+		fkTableMap,
+		viewMap,
+		snapshotTs,
+		uint32(toAccountId),
+		true,
+		subDbToRestore); err != nil {
 		return err
 	}
 
@@ -1522,6 +1580,26 @@ func restoreAccountUsingClusterSnapshot(ctx context.Context, ses *Session, bh Ba
 		}
 	}
 
+	if len(subDbToRestore) > 0 {
+		for _, subDb := range subDbToRestore {
+			if err = restoreToDatabase(
+				ctx,
+				ses.GetService(),
+				bh,
+				newSnapshot,
+				subDb.dbName,
+				uint32(toAccountId),
+				nil,
+				nil,
+				snapshotTs,
+				uint32(toAccountId),
+				false,
+				nil); err != nil {
+				return err
+			}
+		}
+	}
+
 	deleteSnapshotRecord(ctx, ses.GetService(), bh, snapshotName, newSnapshot)
 
 	// checks if the given context has been canceled.
@@ -1531,7 +1609,12 @@ func restoreAccountUsingClusterSnapshot(ctx context.Context, ses *Session, bh Ba
 	return
 }
 
-func getRestoreAccounts(ctx context.Context, sid string, bh BackgroundExec, snapshotName string, snapshotTs int64) (accounts []accountRecord, err error) {
+func getRestoreAccounts(ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	snapshotTs int64,
+) (accounts []accountRecord, err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to get restore accounts", snapshotName))
 	var erArray []ExecResult
 

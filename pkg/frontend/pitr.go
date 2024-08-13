@@ -720,7 +720,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 			// collect views and tables during table restoration
 			viewMap := make(map[string]*tableInfo)
 
-			rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts, restoreAccount)
+			rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts, restoreAccount, false, nil)
 			if rtnErr != nil {
 				return rtnErr
 			}
