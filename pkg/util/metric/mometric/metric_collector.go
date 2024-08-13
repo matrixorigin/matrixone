@@ -425,5 +425,5 @@ var _ table.BackOff = (*mfsetETL)(nil)
 
 // Count implement table.BackOff
 func (s *mfsetETL) Count() bool {
-	return s.bufferCount.Load() > s.bufferBackOffThreshold
+	return s.bufferCount.Load() <= s.bufferBackOffThreshold
 }
