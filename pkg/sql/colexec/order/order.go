@@ -36,49 +36,12 @@ func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enou
 	}
 	all := s1 + s2
 
-	// Maybe a bug that bat.Cnt is not 1.
-	// can we instead the vec directly?
-	for i := 0; i < bat.VectorCount(); i++ {
-		vec := bat.GetVector(int32(i))
-		if vec.NeedDup() {
-			oldVec := bat.Vecs[i]
-			nv, errDup := oldVec.Dup(proc.Mp())
-			if errDup != nil {
-				return false, errDup
-			}
-			bat.ReplaceVector(oldVec, nv)
-			oldVec.Free(proc.Mp())
-		}
-	}
 	if ctr.batWaitForSort == nil {
 		ctr.batWaitForSort, err = bat.Dup(proc.Mp())
 		if err != nil {
 			return false, err
 		}
 	} else {
-		// XXX flat const vector here.
-		if ctr.batWaitForSort != nil {
-			if ctr.flatFn == nil {
-				ctr.flatFn = make([]func(v, w *vector.Vector) error, bat.VectorCount())
-			}
-
-			for i := 0; i < ctr.batWaitForSort.VectorCount(); i++ {
-				typ := *ctr.batWaitForSort.Vecs[i].GetType()
-				if ctr.batWaitForSort.Vecs[i].IsConst() {
-					if ctr.flatFn[i] == nil {
-						ctr.flatFn[i] = vector.GetUnionAllFunction(typ, proc.Mp())
-					}
-
-					v := ctr.batWaitForSort.Vecs[i]
-					ctr.batWaitForSort.Vecs[i] = proc.GetVector(typ)
-					err = ctr.flatFn[i](ctr.batWaitForSort.Vecs[i], v)
-					v.Free(proc.Mp())
-					if err != nil {
-						return false, err
-					}
-				}
-			}
-		}
 		ctr.batWaitForSort, err = ctr.batWaitForSort.Append(proc.Ctx, proc.Mp(), bat)
 		if err != nil {
 			return false, err
