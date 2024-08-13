@@ -16,6 +16,7 @@ package mergecte
 
 import (
 	"bytes"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -70,6 +71,7 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		if result.Batch == nil {
 			mergeCTE.ctr.status = sendLastTag
 		}
+		atomic.AddInt64(&result.Batch.Cnt, 1)
 		mergeCTE.ctr.bats = append(mergeCTE.ctr.bats, result.Batch)
 		fallthrough
 	case sendLastTag:
@@ -89,7 +91,7 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 				result.Status = vm.ExecStop
 				return result, nil
 			}
-
+			atomic.AddInt64(&result.Batch.Cnt, 1)
 			if result.Batch.Last() {
 				mergeCTE.ctr.curNodeCnt--
 				if mergeCTE.ctr.curNodeCnt == 0 {
