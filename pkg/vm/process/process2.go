@@ -16,6 +16,9 @@ package process
 
 import (
 	"context"
+	"sync/atomic"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,8 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"github.com/matrixorigin/matrixone/pkg/udf"
-	"sync/atomic"
-	"time"
 )
 
 // NewTopProcess creates a new top process for the query.
@@ -107,6 +108,28 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 		for i := range child.Reg.MergeReceivers {
 			child.Reg.MergeReceivers[i] = &WaitRegister{
 				Ch: make(chan *RegisterMessage, 1),
+			}
+		}
+	}
+
+	// todo: if there is no dispatch operation, we don't need to create the following channel. but OK for now.
+	child.DispatchNotifyCh = make(chan *WrapCs)
+	return child
+}
+
+// NewNoContextChildProc make a new child process without a context field.
+// This is used for the compile-process, which doesn't need to pass the context.
+func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channelBufferSize []int32, nilbatchCnt []int32) *Process {
+	child := &Process{
+		Base: proc.Base,
+	}
+
+	if dataEntryCount > 0 {
+		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
+		for i := range child.Reg.MergeReceivers {
+			child.Reg.MergeReceivers[i] = &WaitRegister{
+				Ch:          make(chan *RegisterMessage, channelBufferSize[i]),
+				NilBatchCnt: int(nilbatchCnt[i]),
 			}
 		}
 	}
