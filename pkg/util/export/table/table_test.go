@@ -29,7 +29,7 @@ import (
 )
 
 func init() {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
+	// Tips: Op 'time.Local = time.FixedZone(...)' would cause DATA RACE against to time.Now()
 }
 
 func TestNoopTableOptions_FormatDdl(t *testing.T) {
@@ -364,9 +364,9 @@ func TestColumnField_EncodedDatetime(t *testing.T) {
 		{
 			name: "Unix_Zero",
 			fields: fields{
-				cf: TimeField(time.Unix(0, 0)),
+				cf: TimeField(time.Unix(0, 0).UTC()),
 			},
-			wantT: time.Unix(0, 0),
+			wantT: time.Unix(0, 0).UTC(),
 			want:  "1970-01-01 00:00:00.000000",
 		},
 	}

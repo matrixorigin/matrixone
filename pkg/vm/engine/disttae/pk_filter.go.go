@@ -26,13 +26,13 @@ import (
 func newBlockReadPKFilter(
 	pkName string,
 	basePKFilter basePKFilter,
-) blockio.BlockReadFilter {
+) (f blockio.BlockReadFilter, err error) {
 	if !basePKFilter.valid {
-		return blockio.BlockReadFilter{}
+		return blockio.BlockReadFilter{}, nil
 	}
 
 	var readFilter blockio.BlockReadFilter
-	var sortedSearchFunc, unSortedSearchFunc func(*vector.Vector) []int32
+	var sortedSearchFunc, unSortedSearchFunc func(*vector.Vector) []int64
 
 	readFilter.HasFakePK = pkName == catalog.FakePrimaryKeyColName
 
@@ -111,7 +111,9 @@ func newBlockReadPKFilter(
 		var vec *vector.Vector
 		if vec, ok = basePKFilter.vec.(*vector.Vector); !ok {
 			vec = vector.NewVec(types.T_any.ToType())
-			vec.UnmarshalBinary(basePKFilter.vec.([]byte))
+			if err = vec.UnmarshalBinary(basePKFilter.vec.([]byte)); err != nil {
+				return blockio.BlockReadFilter{}, err
+			}
 		}
 
 		switch vec.GetType().Oid {
@@ -180,7 +182,9 @@ func newBlockReadPKFilter(
 		var vec *vector.Vector
 		if vec, ok = basePKFilter.vec.(*vector.Vector); !ok {
 			vec = vector.NewVec(types.T_any.ToType())
-			vec.UnmarshalBinary(basePKFilter.vec.([]byte))
+			if err = vec.UnmarshalBinary(basePKFilter.vec.([]byte)); err != nil {
+				return blockio.BlockReadFilter{}, err
+			}
 		}
 
 		sortedSearchFunc = vector.CollectOffsetsByPrefixInFactory(vec)
@@ -423,16 +427,16 @@ func newBlockReadPKFilter(
 	}
 
 	if sortedSearchFunc != nil {
-		readFilter.SortedSearchFunc = func(vecs []*vector.Vector) []int32 {
+		readFilter.SortedSearchFunc = func(vecs []*vector.Vector) []int64 {
 			return sortedSearchFunc(vecs[0])
 		}
-		readFilter.UnSortedSearchFunc = func(vecs []*vector.Vector) []int32 {
+		readFilter.UnSortedSearchFunc = func(vecs []*vector.Vector) []int64 {
 			return unSortedSearchFunc(vecs[0])
 		}
 		readFilter.Valid = true
-		return readFilter
+		return readFilter, nil
 	}
-	return readFilter
+	return readFilter, nil
 }
 
 func evalLiteralExpr2(expr *plan.Literal, oid types.T) (ret []byte, can bool) {

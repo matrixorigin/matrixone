@@ -142,7 +142,7 @@ func TestGroup(t *testing.T) {
 
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -175,7 +175,7 @@ func BenchmarkGroup(b *testing.B) {
 
 			tc.arg.Free(tc.proc, false, nil)
 			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-			tc.proc.FreeVectors()
+			tc.proc.Free()
 		}
 	}
 }

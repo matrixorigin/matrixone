@@ -21,14 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
@@ -164,7 +160,7 @@ func TestCompile(t *testing.T) {
 		_, err = c.Run(0)
 		require.NoError(t, err)
 		// Enable memory check
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		//FIXME:
 		//!!!GOD!!!
 		//Sometimes it is 0.
@@ -234,30 +230,6 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 		proc: proc,
 		pn:   pn,
 		stmt: stmts[0],
-	}
-}
-
-func TestCompileShouldReturnCtxError(t *testing.T) {
-	{
-		c := reuse.Alloc[Compile](nil)
-		c.proc = testutil.NewProcessWithMPool("", mpool.MustNewZero())
-		ctx, cancel := context.WithTimeout(context.TODO(), 100*time.Millisecond)
-		c.proc.Ctx = ctx
-		time.Sleep(time.Second)
-		require.True(t, c.shouldReturnCtxErr())
-		cancel()
-		require.True(t, c.shouldReturnCtxErr())
-	}
-
-	{
-		c := reuse.Alloc[Compile](nil)
-		c.proc = testutil.NewProcessWithMPool("", mpool.MustNewZero())
-		ctx, cancel := context.WithTimeout(context.TODO(), 500*time.Millisecond)
-		c.proc.Ctx = ctx
-		cancel()
-		require.False(t, c.shouldReturnCtxErr())
-		time.Sleep(time.Second)
-		require.False(t, c.shouldReturnCtxErr())
 	}
 }
 

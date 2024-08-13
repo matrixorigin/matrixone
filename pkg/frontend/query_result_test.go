@@ -24,6 +24,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -82,6 +83,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	//new session
 	ses := NewSession(context.TODO(), "", proto, testPool)
 	var c clock.Clock
+	catalog.SetupDefines("")
 	_ = ses.GetTxnHandler().CreateTempStorage(c)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,

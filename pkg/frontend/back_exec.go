@@ -21,6 +21,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -39,8 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 type backExec struct {
@@ -112,6 +112,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 		reqCtx: ctx,
 		ses:    back.backSes,
 	}
+	defer execCtx.Close()
 	return doComQueryInBack(back.backSes, &execCtx, userInput)
 }
 
@@ -166,6 +167,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 		reqCtx: ctx,
 		ses:    back.backSes,
 	}
+	defer execCtx.Close()
 	return doComQueryInBack(back.backSes, &execCtx, userInput)
 }
 
@@ -216,7 +218,7 @@ func doComQueryInBack(
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
 	userNameOnly := rootName
-	proc := process.New(
+	proc := process.NewTopProcess(
 		execCtx.reqCtx,
 		backSes.pool,
 		getGlobalPu().TxnClient,
@@ -297,6 +299,7 @@ func doComQueryInBack(
 		execCtx.stmt = nil
 		execCtx.cw = nil
 		execCtx.cws = nil
+		execCtx.runner = nil
 		for i := 0; i < len(cws); i++ {
 			cws[i].Free()
 		}
@@ -334,7 +337,7 @@ func doComQueryInBack(
 				return err
 			}
 		}
-
+		execCtx.txnOpt.Close()
 		execCtx.stmt = stmt
 		execCtx.isLastStmt = i >= len(cws)-1
 		execCtx.tenant = tenant
@@ -463,7 +466,7 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 		}
 		stmts = append(stmts, cmdFieldStmt)
 	} else {
-		stmts, err = parseSql(execCtx)
+		stmts, err = parseSql(execCtx, ses.GetMySQLParser())
 		if err != nil {
 			return nil, err
 		}
@@ -550,7 +553,7 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 		ses.ReplaceDerivedStmt(prevDerivedStmt)
 		//@todo we need to improve: make one session, one proc, one txnOperator
 		p := ses.GetTxnCompileCtx().GetProcess()
-		p.FreeVectors()
+		p.Free()
 		execCtx.proc = proc
 		ses.GetTxnHandler().SetOptionBits(prevOptionBits)
 		ses.GetTxnHandler().SetServerStatus(prevServerStatus)
@@ -978,7 +981,7 @@ func (sh *SqlHelper) GetCompilerContext() any {
 }
 
 func (sh *SqlHelper) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
-	return sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
+	return sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName, nil)
 }
 
 // Made for sequence func. nextval, setval.

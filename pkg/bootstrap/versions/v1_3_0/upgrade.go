@@ -96,6 +96,15 @@ func (v *versionHandle) HandleClusterUpgrade(
 			zap.Int64("time cost(ms)", duration.Milliseconds()),
 			zap.String("toVersion", v.Metadata().Version))
 	}
+
+	if needUpgradePubSub {
+		if err := UpgradePubSub(txn); err != nil {
+			getLogger(txn.Txn().TxnOptions().CN).Error("cluster UpgradePubSub error",
+				zap.Error(err),
+				zap.String("version", v.Metadata().Version))
+			return err
+		}
+	}
 	return nil
 }
 

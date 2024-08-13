@@ -27,34 +27,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
-type memPKFilter struct {
-	op             int
-	packed         [][]byte
-	isVec          bool
-	isValid        bool
-	iter           logtailreplay.RowsIter
-	delIterFactory func(blkId types.Blockid) logtailreplay.RowsIter
+type MemPKFilter struct {
+	op      int
+	packed  [][]byte
+	isVec   bool
+	isValid bool
+	TS      types.TS
+
+	SpecFactory func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec
 }
 
 func newMemPKFilter(
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
-	state *logtailreplay.PartitionState,
 	packerPool *fileservice.Pool[*types.Packer],
 	basePKFilter basePKFilter,
-) (filter memPKFilter) {
-	defer func() {
-		if filter.iter == nil {
-			filter.isValid = true
-			filter.iter = state.NewRowsIter(
-				types.TimestampToTS(ts),
-				nil,
-				false,
-			)
-		}
-	}()
+) (filter MemPKFilter, err error) {
+	//defer func() {
+	//	if filter.iter == nil {
+	//		filter.isValid = true
+	//		filter.iter = state.NewRowsIter(
+	//			types.TimestampToTS(ts),
+	//			nil,
+	//			false,
+	//		)
+	//	}
+	//}()
 
-	if tableDef.Pkey == nil || !basePKFilter.valid {
+	filter.TS = types.TimestampToTS(ts)
+
+	if !basePKFilter.valid || tableDef.Pkey == nil {
 		return
 	}
 
@@ -184,7 +186,9 @@ func newMemPKFilter(
 			packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
 		} else {
 			vec := vector.NewVec(types.T_any.ToType())
-			vec.UnmarshalBinary(basePKFilter.vec.([]byte))
+			if err = vec.UnmarshalBinary(basePKFilter.vec.([]byte)); err != nil {
+				return MemPKFilter{}, err
+			}
 			packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
 		}
 
@@ -211,11 +215,11 @@ func newMemPKFilter(
 		return
 	}
 
-	filter.iter, filter.delIterFactory = tryConstructPrimaryKeyIndexIter(ts, filter, state)
+	filter.tryConstructPrimaryKeyIndexIter(ts)
 	return
 }
 
-func (f *memPKFilter) String() string {
+func (f *MemPKFilter) String() string {
 	var buf bytes.Buffer
 	buf.WriteString(
 		fmt.Sprintf("InMemPKFilter{op: %d, isVec: %v, isValid: %v, val: %v, data(len=%d)",
@@ -224,13 +228,70 @@ func (f *memPKFilter) String() string {
 	return buf.String()
 }
 
-func (f *memPKFilter) SetNull() {
+func (f *MemPKFilter) SetNull() {
 	f.isValid = false
 }
 
-func (f *memPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
+func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 	f.packed = append(f.packed, val...)
 	f.op = op
 	f.isVec = isVec
 	f.isValid = true
+}
+
+func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(ts timestamp.Timestamp) {
+	if !f.isValid {
+		return
+	}
+
+	switch f.op {
+	case function.EQUAL, function.PREFIX_EQ:
+		//spec = logtailreplay.Prefix(f.packed[0])
+		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
+			return logtailreplay.Prefix(f.packed[0])
+		}
+
+	case function.IN, function.PREFIX_IN:
+		// may be it's better to iterate rows instead.
+		if len(f.packed) > 128 {
+			return
+		}
+		//spec = logtailreplay.InKind(f.packed, f.op)
+		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
+			return logtailreplay.InKind(f.packed, f.op)
+		}
+
+	case function.LESS_EQUAL, function.LESS_THAN:
+		//spec = logtailreplay.LessKind(f.packed[0], f.op == function.LESS_EQUAL)
+		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
+			return logtailreplay.LessKind(f.packed[0], f.op == function.LESS_EQUAL)
+		}
+
+	case function.GREAT_EQUAL, function.GREAT_THAN:
+		//spec = logtailreplay.GreatKind(f.packed[0], f.op == function.GREAT_EQUAL)
+		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
+			return logtailreplay.GreatKind(f.packed[0], f.op == function.GREAT_EQUAL)
+		}
+
+	case function.BETWEEN, rangeLeftOpen, rangeRightOpen, rangeBothOpen, function.PREFIX_BETWEEN:
+		var kind int
+		switch f.op {
+		case function.BETWEEN:
+			kind = 0
+		case rangeLeftOpen:
+			kind = 1
+		case rangeRightOpen:
+			kind = 2
+		case rangeBothOpen:
+			kind = 3
+		case function.PREFIX_BETWEEN:
+			kind = 4
+		}
+
+		//spec = logtailreplay.BetweenKind(f.packed[0], f.packed[1], kind)
+		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
+			return logtailreplay.BetweenKind(f.packed[0], f.packed[1], kind)
+		}
+	}
+
 }

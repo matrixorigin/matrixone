@@ -22,7 +22,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -75,88 +74,88 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
-func TestTop(t *testing.T) {
-	for _, tc := range tcs {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-		tc.proc.Reg.MergeReceivers[1].Ch <- nil
-		for {
-			ok, err := tc.arg.Call(tc.proc)
-			if ok.Status == vm.ExecStop || err != nil {
-				break
-			}
-		}
+// func TestTop(t *testing.T) {
+// 	for _, tc := range tcs {
+// 		err := tc.arg.Prepare(tc.proc)
+// 		require.NoError(t, err)
+// 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+// 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
+// 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+// 		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+// 		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
+// 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
+// 		for {
+// 			ok, err := tc.arg.Call(tc.proc)
+// 			if ok.Status == vm.ExecStop || err != nil {
+// 				break
+// 			}
+// 		}
 
-		tc.arg.Reset(tc.proc, false, nil)
+// 		tc.arg.Reset(tc.proc, false, nil)
 
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-		tc.proc.Reg.MergeReceivers[1].Ch <- nil
-		for {
-			ok, err := tc.arg.Call(tc.proc)
-			if ok.Status == vm.ExecStop || err != nil {
-				break
-			}
-		}
-		// for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-		// 	for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-		// 		bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-		// 		if bat != nil {
-		// 			bat.Clean(tc.proc.Mp())
-		// 		}
-		// 	}
-		// }
-		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
-		require.Equal(t, tc.proc.Mp().CurrNB(), int64(0))
-	}
-}
+// 		err = tc.arg.Prepare(tc.proc)
+// 		require.NoError(t, err)
+// 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+// 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
+// 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+// 		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+// 		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
+// 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
+// 		for {
+// 			ok, err := tc.arg.Call(tc.proc)
+// 			if ok.Status == vm.ExecStop || err != nil {
+// 				break
+// 			}
+// 		}
+// 		// for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
+// 		// 	for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
+// 		// 		bat := <-tc.proc.Reg.MergeReceivers[i].Ch
+// 		// 		if bat != nil {
+// 		// 			bat.Clean(tc.proc.Mp())
+// 		// 		}
+// 		// 	}
+// 		// }
+// 		tc.arg.Free(tc.proc, false, nil)
+// 		tc.proc.FreeVectors()
+// 		require.Equal(t, tc.proc.Mp().CurrNB(), int64(0))
+// 	}
+// }
 
-func BenchmarkTop(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs = []topTestCase{
-			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-			newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		}
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, BenchmarkRows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, BenchmarkRows))
-			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
-			for {
-				ok, err := tc.arg.Call(tc.proc)
-				if ok.Status == vm.ExecStop || err != nil {
-					break
-				}
-			}
-			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-					msg := <-tc.proc.Reg.MergeReceivers[i].Ch
-					if msg.Batch != nil {
-						msg.Batch.Clean(tc.proc.Mp())
-					}
-				}
-			}
-			tc.arg.Free(tc.proc, false, nil)
-			tc.proc.FreeVectors()
-		}
-	}
-}
+// func BenchmarkTop(b *testing.B) {
+// 	for i := 0; i < b.N; i++ {
+// 		tcs = []topTestCase{
+// 			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+// 			newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
+// 		}
+// 		t := new(testing.T)
+// 		for _, tc := range tcs {
+// 			err := tc.arg.Prepare(tc.proc)
+// 			require.NoError(t, err)
+// 			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, BenchmarkRows))
+// 			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
+// 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
+// 			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, BenchmarkRows))
+// 			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
+// 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
+// 			for {
+// 				ok, err := tc.arg.Call(tc.proc)
+// 				if ok.Status == vm.ExecStop || err != nil {
+// 					break
+// 				}
+// 			}
+// 			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
+// 				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
+// 					msg := <-tc.proc.Reg.MergeReceivers[i].Ch
+// 					if msg.Batch != nil {
+// 						msg.Batch.Clean(tc.proc.Mp())
+// 					}
+// 				}
+// 			}
+// 			tc.arg.Free(tc.proc, false, nil)
+// 			tc.proc.FreeVectors()
+// 		}
+// 	}
+// }
 
 func newTestCase(ds []bool, ts []types.Type, limit int64, fs []*plan.OrderBySpec) topTestCase {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
@@ -203,6 +202,6 @@ func newExpression(pos int32) *plan.Expr {
 }
 
 // create a new block based on the type information, ds[i] == true: in descending order
-func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
-}
+// func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+// 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+// }

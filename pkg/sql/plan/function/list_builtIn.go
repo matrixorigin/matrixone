@@ -5049,8 +5049,9 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{},
+				overloadId:      0,
+				args:            []types.T{},
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint32.ToType()
 				},
@@ -5070,8 +5071,9 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{},
+				overloadId:      0,
+				args:            []types.T{},
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -5091,8 +5093,9 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{},
+				overloadId:      0,
+				args:            []types.T{},
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -5112,8 +5115,9 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{},
+				overloadId:      0,
+				args:            []types.T{},
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint32.ToType()
 				},
@@ -5133,8 +5137,9 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{},
+				overloadId:      0,
+				args:            []types.T{},
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint32.ToType()
 				},
@@ -5154,8 +5159,9 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{},
+				overloadId:      0,
+				args:            []types.T{},
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -5175,8 +5181,9 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{},
+				overloadId:      0,
+				args:            []types.T{},
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -5796,6 +5803,26 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return CastNanoToTimestamp
+				},
+			},
+		},
+	},
+
+	// function `cast_range_value_unit`
+	{
+		functionId: CAST_RANGE_VALUE_UNIT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_uint8, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastRangeValueUnit
 				},
 			},
 		},

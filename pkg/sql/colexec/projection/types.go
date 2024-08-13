@@ -27,8 +27,8 @@ import (
 var _ vm.Operator = new(Projection)
 
 type Projection struct {
-	ctr *container
-	Es  []*plan.Expr
+	ctr         *container
+	ProjectList []*plan.Expr
 	vm.OperatorBase
 
 	maxAllocSize int

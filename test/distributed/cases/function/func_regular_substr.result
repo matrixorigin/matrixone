@@ -102,5 +102,5 @@ CREATE TABLE t(str1 VARCHAR(20), str2 CHAR(20));
 INSERT INTO t VALUES ('W * P', 'W + Z - O'), ('have has having', 'do does doing');
 INSERT INTO t VALUES ('XV*XZ', 'PP-ZZ-DXA'), ('aa bbb cc ddd', 'k ii lll oooo');
 SELECT REGEXP_SUBSTR(str1, '*'), REGEXP_SUBSTR(str2,'hav','hiv') FROM t;
-error parsing regexp: missing argument to repetition operator: `*`
+invalid argument cast to int, bad value hiv
 drop table t;

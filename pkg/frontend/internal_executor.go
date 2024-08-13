@@ -121,24 +121,12 @@ func (res *internalExecResult) Value(ctx context.Context, ridx uint64, cidx uint
 	return res.resultSet.GetValue(ctx, ridx, cidx)
 }
 
-func (res *internalExecResult) ValueByName(ctx context.Context, ridx uint64, col string) (interface{}, error) {
-	return res.resultSet.GetValueByName(ctx, ridx, col)
+func (res *internalExecResult) GetString(ctx context.Context, ridx uint64, cidx uint64) (string, error) {
+	return res.resultSet.GetString(ctx, ridx, cidx)
 }
 
-func (res *internalExecResult) StringValueByName(ctx context.Context, ridx uint64, col string) (string, error) {
-	if cidx, err := res.resultSet.columnName2Index(ctx, col); err != nil {
-		return "", err
-	} else {
-		return res.resultSet.GetString(ctx, ridx, cidx)
-	}
-}
-
-func (res *internalExecResult) Float64ValueByName(ctx context.Context, ridx uint64, col string) (float64, error) {
-	if cidx, err := res.resultSet.columnName2Index(ctx, col); err != nil {
-		return 0.0, err
-	} else {
-		return res.resultSet.GetFloat64(ctx, ridx, cidx)
-	}
+func (res *internalExecResult) GetFloat64(ctx context.Context, ridx uint64, cidx uint64) (float64, error) {
+	return res.resultSet.GetFloat64(ctx, ridx, cidx)
 }
 
 func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
@@ -161,6 +149,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 		reqCtx: ctx,
 		ses:    sess,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
 }
 
@@ -180,6 +169,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 		reqCtx: ctx,
 		ses:    sess,
 	}
+	defer tempExecCtx.Close()
 	err := doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
 	res.err = err
@@ -369,6 +359,11 @@ func (ip *internalProtocol) WritePrepareResponse(ctx context.Context, stmt *Prep
 }
 
 func (ip *internalProtocol) Read() ([]byte, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) ReadLoadLocalPacket() ([]byte, error) {
 	//TODO implement me
 	panic("implement me")
 }

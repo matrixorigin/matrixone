@@ -50,6 +50,7 @@
 /pkg/common @zhangxu19830126
 /pkg/common/mpool @m-schen
 /pkg/common/malloc @reusee
+/pkg/common/spool @reusee @m-schen
 /pkg/common/async @zhangxu19830126
 /pkg/common/bitmap @aunjgr
 /pkg/common/hashmap @aunjgr
@@ -98,7 +99,7 @@
 # pkg/lockservice
 /pkg/lockservice @zhangxu19830126
 
-# pkg/shardservice 
+# pkg/shardservice
 /pkg/shardservice @zhangxu19830126
 
 # pkg/logservice
@@ -131,7 +132,7 @@
 /pkg/sort @aunjgr @m-schen
 
 # pkg/bootstrap
-/pkg/bootstrap @daviszhen @zhangxu19830126 @qingxinhome
+/pkg/bootstrap @daviszhen @zhangxu19830126 @qingxinhome @LeftHandCold
 
 # pkg/sql
 /pkg/sql @aunjgr

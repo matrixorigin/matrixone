@@ -17,7 +17,6 @@ package lockop
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -123,11 +122,13 @@ func callNonBlocking(
 		return result, err
 	}
 
+	anal.Input(result.Batch, lockOp.IsFirst)
 	if result.Batch == nil {
 		return result, lockOp.ctr.rt.retryError
 	}
 	bat := result.Batch
 	if bat.IsEmpty() {
+		anal.Output(result.Batch, lockOp.IsLast)
 		return result, err
 	}
 
@@ -135,6 +136,7 @@ func callNonBlocking(
 		return result, err
 	}
 
+	anal.Output(result.Batch, lockOp.IsLast)
 	return result, nil
 }
 
@@ -192,6 +194,7 @@ func callBlocking(
 			bat := lockOp.ctr.rt.cachedBatches[0]
 			lockOp.ctr.rt.cachedBatches = lockOp.ctr.rt.cachedBatches[1:]
 			result.Batch = bat
+			anal.Output(result.Batch, lockOp.IsLast)
 			return result, nil
 		}
 	}
@@ -199,6 +202,7 @@ func callBlocking(
 	if lockOp.ctr.rt.step == stepEnd {
 		result.Status = vm.ExecStop
 		lockOp.cleanCachedBatch(proc)
+		anal.Output(result.Batch, lockOp.IsLast)
 		return result, lockOp.ctr.rt.retryError
 	}
 
@@ -624,8 +628,7 @@ func canRetryLock(txn client.TxnOperator, err error) bool {
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
-		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
-		errors.Is(err, context.DeadlineExceeded) {
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
 		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}

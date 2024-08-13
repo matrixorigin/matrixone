@@ -114,7 +114,7 @@ func getInternalProcessByUniqueID(
 		return nil, err
 	}
 	v, _ := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.LockService)
-	proc := process.New(
+	proc := process.NewTopProcess(
 		ctx,
 		mp,
 		txnClient,

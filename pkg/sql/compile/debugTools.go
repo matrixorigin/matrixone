@@ -73,6 +73,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Minus:                   "minus",
 	vm.Intersect:               "intersect",
 	vm.IntersectAll:            "intersect all",
+	vm.UnionAll:                "union all",
 	vm.HashBuild:               "hash build",
 	vm.ShuffleBuild:            "shuffle build",
 	vm.IndexBuild:              "index build",
@@ -156,7 +157,8 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 			remote := ""
 			for _, u := range s.RemoteReceivRegInfos {
 				if u.Idx == i {
-					remote = fmt.Sprintf("(%s)", u.Uuid)
+					uuidStr := u.Uuid.String()
+					remote = fmt.Sprintf("(%s)", uuidStr[len(uuidStr)-6:])
 					break
 				}
 			}
@@ -235,7 +237,8 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 						if i != 0 {
 							remoteChs += ", "
 						}
-						remoteChs += fmt.Sprintf("[addr: %s, uuid %s]", reg.NodeAddr, reg.Uuid)
+						uuidStr := reg.Uuid.String()
+						remoteChs += fmt.Sprintf("[addr: %s(%s)]", reg.NodeAddr, uuidStr[len(uuidStr)-6:])
 					}
 					str += fmt.Sprintf(" cross-cn receiver info: %s", remoteChs)
 				}
@@ -252,8 +255,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 		if ss[i].Proc != nil {
 			receiverStr = getReceiverStr(ss[i], ss[i].Proc.Reg.MergeReceivers)
 		}
-		str += fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v, Receiver: %s): [", i+1, magicShow(ss[i].Magic), ss[i].NodeInfo.Mcpu, receiverStr)
-
+		str += fmt.Sprintf("Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s): [", i+1, magicShow(ss[i].Magic), ss[i].NodeInfo.Addr, ss[i].NodeInfo.Mcpu, receiverStr)
 		vm.HandleAllOp(ss[i].RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 			if op.GetOperatorBase().NumChildren() != 0 {
 				str += " -> "

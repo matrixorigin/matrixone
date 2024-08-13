@@ -16,6 +16,11 @@ package testutil
 
 import (
 	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	logservice2 "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -59,8 +63,13 @@ type TestDisttaeEngine struct {
 	timestampWaiter client.TimestampWaiter
 }
 
-func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
-	fs fileservice.FileService, rpcAgent *MockRPCAgent, storage *TestTxnStorage) (*TestDisttaeEngine, error) {
+func NewTestDisttaeEngine(
+	ctx context.Context,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	rpcAgent *MockRPCAgent,
+	storage *TestTxnStorage,
+) (*TestDisttaeEngine, error) {
 	de := new(TestDisttaeEngine)
 	de.logtailReceiver = make(chan morpc.Message)
 	de.broken = make(chan struct{})
@@ -130,12 +139,21 @@ func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 	return de, err
 }
 
-func (de *TestDisttaeEngine) NewTxnOperator(ctx context.Context,
-	commitTS timestamp.Timestamp, opts ...client.TxnOption) (client.TxnOperator, error) {
+func (de *TestDisttaeEngine) NewTxnOperator(
+	ctx context.Context,
+	commitTS timestamp.Timestamp,
+	opts ...client.TxnOption,
+) (client.TxnOperator, error) {
 	op, err := de.txnClient.New(ctx, commitTS, opts...)
+	if err != nil {
+		return nil, err
+	}
 
-	op.AddWorkspace(de.txnOperator.GetWorkspace())
-	de.txnOperator.GetWorkspace().BindTxnOp(op)
+	ws := de.txnOperator.GetWorkspace().CloneSnapshotWS()
+	ws.BindTxnOp(op)
+	ws.(*disttae.Transaction).GetProc().GetTxnOperator().UpdateSnapshot(ctx, commitTS)
+	ws.(*disttae.Transaction).GetProc().GetTxnOperator().AddWorkspace(ws)
+	op.AddWorkspace(ws)
 
 	return op, err
 }
@@ -143,7 +161,7 @@ func (de *TestDisttaeEngine) NewTxnOperator(ctx context.Context,
 func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 	ts := de.Now()
 	ticker := time.NewTicker(time.Second)
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*60)
 	defer cancel()
 
 	done := false
@@ -153,9 +171,12 @@ func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 			return moerr.NewInternalErrorNoCtx("wait partition state waterline timeout")
 		case <-ticker.C:
 			latestAppliedTS := de.Engine.PushClient().LatestLogtailAppliedTime()
-			if latestAppliedTS.GreaterEq(ts) && de.Engine.PushClient().IsSubscriberReady() {
+			ready := de.Engine.PushClient().IsSubscriberReady()
+			if latestAppliedTS.GreaterEq(ts) && ready {
 				done = true
 			}
+			logutil.Infof("wait logtail, latestAppliedTS: %s, targetTS: %s, done: %v, subscriberReady: %v\n",
+				latestAppliedTS.ToStdTime().String(), ts.ToStdTime().String(), done, ready)
 		}
 	}
 
@@ -188,8 +209,11 @@ func (de *TestDisttaeEngine) analyzeDataObjects(state *logtailreplay.PartitionSt
 	return
 }
 
-func (de *TestDisttaeEngine) analyzeInmemRows(state *logtailreplay.PartitionState,
-	stats *PartitionStateStats, ts types.TS) (err error) {
+func (de *TestDisttaeEngine) analyzeInmemRows(
+	state *logtailreplay.PartitionState,
+	stats *PartitionStateStats,
+	ts types.TS,
+) (err error) {
 
 	distinct := make(map[objectio.Blockid]struct{})
 	iter := state.NewRowsIter(ts, nil, false)
@@ -214,8 +238,11 @@ func (de *TestDisttaeEngine) analyzeInmemRows(state *logtailreplay.PartitionStat
 	return
 }
 
-func (de *TestDisttaeEngine) analyzeCheckpoint(state *logtailreplay.PartitionState,
-	stats *PartitionStateStats, ts types.TS) (err error) {
+func (de *TestDisttaeEngine) analyzeCheckpoint(
+	state *logtailreplay.PartitionState,
+	stats *PartitionStateStats,
+	ts types.TS,
+) (err error) {
 
 	ckps := state.Checkpoints()
 	for x := range ckps {
@@ -230,14 +257,16 @@ func (de *TestDisttaeEngine) analyzeCheckpoint(state *logtailreplay.PartitionSta
 	return
 }
 
-func (de *TestDisttaeEngine) analyzeTombstone(state *logtailreplay.PartitionState,
-	stats *PartitionStateStats, ts types.TS) (outErr error) {
+func (de *TestDisttaeEngine) analyzeTombstone(
+	state *logtailreplay.PartitionState,
+	stats *PartitionStateStats,
+	ts types.TS,
+) (outErr error) {
 
 	iter, err := state.NewObjectsIter(ts, true)
 	if err != nil {
 		return nil
 	}
-
 	for iter.Next() {
 		disttae.ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 			loc, _, ok := state.GetBockDeltaLoc(blk.BlockID)
@@ -270,7 +299,9 @@ func (de *TestDisttaeEngine) analyzeTombstone(state *logtailreplay.PartitionStat
 	return
 }
 
-func (de *TestDisttaeEngine) SubscribeTable(ctx context.Context, dbID, tbID uint64, setSubscribed bool) (err error) {
+func (de *TestDisttaeEngine) SubscribeTable(
+	ctx context.Context, dbID, tbID uint64, setSubscribed bool,
+) (err error) {
 	ticker := time.NewTicker(time.Second)
 	timeout := 5
 
@@ -297,7 +328,9 @@ func (de *TestDisttaeEngine) SubscribeTable(ctx context.Context, dbID, tbID uint
 	return
 }
 
-func (de *TestDisttaeEngine) GetPartitionStateStats(ctx context.Context, databaseId, tableId uint64) (
+func (de *TestDisttaeEngine) GetPartitionStateStats(
+	ctx context.Context, databaseId, tableId uint64,
+) (
 	stats PartitionStateStats, err error) {
 
 	if err = de.waitLogtail(ctx); err != nil {
@@ -347,6 +380,75 @@ func (de *TestDisttaeEngine) Close(ctx context.Context) {
 	close(de.logtailReceiver)
 	de.cancel()
 	de.wg.Wait()
+}
+
+func (de *TestDisttaeEngine) GetTable(
+	ctx context.Context,
+	databaseName, tableName string,
+) (
+	database engine.Database,
+	relation engine.Relation,
+	txn client.TxnOperator,
+	err error,
+) {
+
+	if txn, err = de.NewTxnOperator(ctx, de.Now()); err != nil {
+		return nil, nil, nil, err
+	}
+
+	if database, err = de.Engine.Database(ctx, databaseName, txn); err != nil {
+		return nil, nil, nil, err
+	}
+
+	if relation, err = database.Relation(ctx, tableName, nil); err != nil {
+		return nil, nil, nil, err
+	}
+
+	return
+}
+
+func (de *TestDisttaeEngine) CreateDatabaseAndTable(
+	ctx context.Context,
+	databaseName, tableName string,
+	schema *catalog2.Schema,
+) (
+	database engine.Database,
+	table engine.Relation,
+	err error,
+) {
+
+	var txn client.TxnOperator
+
+	if txn, err = de.NewTxnOperator(ctx, de.Now()); err != nil {
+		return nil, nil, err
+	}
+
+	if err = de.Engine.Create(ctx, databaseName, txn); err != nil {
+		return nil, nil, err
+	}
+
+	if database, err = de.Engine.Database(ctx, databaseName, txn); err != nil {
+		return nil, nil, err
+	}
+
+	var engineTblDef []engine.TableDef
+	if engineTblDef, err = EngineTableDefBySchema(schema); err != nil {
+		return nil, nil, err
+	}
+
+	if err = database.Create(ctx, tableName, engineTblDef); err != nil {
+		return nil, nil, err
+	}
+
+	if table, err = database.Relation(ctx, tableName, nil); err != nil {
+		return nil, nil, err
+	}
+
+	if err = txn.Commit(ctx); err != nil {
+		return nil, nil, err
+	}
+
+	return
 }
 
 func initRuntime() {

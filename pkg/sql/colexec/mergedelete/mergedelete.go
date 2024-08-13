@@ -55,18 +55,18 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 		return vm.CancelResult, err
 	}
 
+	anal := proc.GetAnalyze(mergeDelete.GetIdx(), mergeDelete.GetParallelIdx(), mergeDelete.GetParallelMajor())
+	anal.Start()
+	defer anal.Stop()
+
 	var err error
 	var name string
 	ap := mergeDelete
 
-	result, err := mergeDelete.GetChildren(0).Call(proc)
+	result, err := vm.ChildrenCall(mergeDelete.Children[0], proc, anal)
 	if err != nil {
 		return result, err
 	}
-
-	anal := proc.GetAnalyze(mergeDelete.GetIdx(), mergeDelete.GetParallelIdx(), mergeDelete.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
 
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil

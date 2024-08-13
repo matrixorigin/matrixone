@@ -697,9 +697,8 @@ func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]objectio.BlockInfo, 
 				&sid,
 				location.Name().Num(),
 				location.ID()),
-			SegmentID: sid,
 			//non-appendable block
-			EntryState: false,
+			Appendable: false,
 		}
 		blkInfo.SetMetaLocation(location)
 		if w.sortIndex != -1 {

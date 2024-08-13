@@ -96,9 +96,7 @@ func (deletion *Deletion) Call(proc *process.Process) (vm.CallResult, error) {
 func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor())
 	anal.Start()
-	defer func() {
-		anal.Stop()
-	}()
+	defer anal.Stop()
 
 	var err error
 	if deletion.ctr.state == vm.Build {

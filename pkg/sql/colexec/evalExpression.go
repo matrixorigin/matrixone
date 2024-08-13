@@ -84,18 +84,10 @@ type ExpressionExecutor interface {
 	IsColumnExpr() bool
 }
 
-func NewExpressionExecutorsFromPlanExpressionsInRuntime(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
-	return newExpressionExecutorsFromPlanExpressions(proc, planExprs, true)
-}
-
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
-	return newExpressionExecutorsFromPlanExpressions(proc, planExprs, false)
-}
-
-func newExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr, inRuntime bool) (executors []ExpressionExecutor, err error) {
 	executors = make([]ExpressionExecutor, len(planExprs))
 	for i := range executors {
-		executors[i], err = newExpressionExecutor(proc, planExprs[i], inRuntime)
+		executors[i], err = NewExpressionExecutor(proc, planExprs[i])
 		if err != nil {
 			for j := 0; j < i; j++ {
 				executors[j].Free()
@@ -106,15 +98,7 @@ func newExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs 
 	return executors, err
 }
 
-func NewExpressionExecutorInRuntime(proc *process.Process, planExpr *plan.Expr) (ExpressionExecutor, error) {
-	return newExpressionExecutor(proc, planExpr, true)
-}
-
 func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (ExpressionExecutor, error) {
-	return newExpressionExecutor(proc, planExpr, false)
-}
-
-func newExpressionExecutor(proc *process.Process, planExpr *plan.Expr, inRuntime bool) (ExpressionExecutor, error) {
 	switch t := planExpr.Expr.(type) {
 	case *plan.Expr_Lit:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
@@ -171,8 +155,6 @@ func newExpressionExecutor(proc *process.Process, planExpr *plan.Expr, inRuntime
 		}
 
 		executor := NewFunctionExpressionExecutor()
-		executor.inRuntime = inRuntime
-		executor.overloadID = overloadID
 		executor.fid, _ = function.DecodeOverloadID(overloadID)
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		fn, fnFree := overload.GetExecuteMethod()
@@ -188,6 +170,58 @@ func newExpressionExecutor(proc *process.Process, planExpr *plan.Expr, inRuntime
 				return nil, paramErr
 			}
 			executor.SetParameter(i, subExecutor)
+		}
+
+		// IF all parameters here were constant. and this function can be folded.
+		// 	there is a better way to convert it as a FixedVectorExpressionExecutor.
+		if !overload.CannotFold() && !overload.IsRealTimeRelated() && ifAllArgsAreConstant(executor) {
+			for i := range executor.parameterExecutor {
+				fixExe := executor.parameterExecutor[i].(*FixedVectorExpressionExecutor)
+				executor.parameterResults[i] = fixExe.resultVector
+				if !fixExe.fixed {
+					executor.parameterResults[i].SetLength(1)
+				}
+			}
+
+			execLen := 1
+			if len(executor.parameterResults) > 0 {
+				firstParam := executor.parameterResults[0]
+				if !firstParam.IsConst() {
+					execLen = firstParam.Length()
+				}
+			}
+
+			if err = executor.resultVector.PreExtendAndReset(execLen); err != nil {
+				executor.Free()
+				return nil, err
+			}
+
+			err = executor.evalFn(executor.parameterResults, executor.resultVector, proc, execLen, nil)
+			if err == nil {
+				mp := proc.Mp()
+
+				result := executor.resultVector.GetResultVector()
+				fixed := NewFixedVectorExpressionExecutor(mp, false, nil)
+
+				if execLen == 1 {
+					// ToConst may returns a new pointer to the same memory.
+					// so we need to duplicate it.
+					constResult := result.ToConst(0, 1, mp)
+					defer constResult.Free(mp)
+					fixed.resultVector, err = constResult.Dup(mp)
+				} else {
+					fixed.fixed = true
+					fixed.resultVector = result
+					executor.resultVector.SetResultVector(nil)
+				}
+				executor.Free()
+				if err != nil {
+					return nil, err
+				}
+				return fixed, nil
+			}
+			executor.Free()
+			return nil, err
 		}
 
 		return executor, nil
@@ -231,10 +265,13 @@ func EvalExpressionOnce(proc *process.Process, planExpr *plan.Expr, batches []*b
 	return nv, nil
 }
 
-type FoldExpr struct {
-	overloadID int64
-	folded     bool
-	inRuntime  bool
+func ifAllArgsAreConstant(executor *FunctionExpressionExecutor) bool {
+	for _, paramE := range executor.parameterExecutor {
+		if _, ok := paramE.(*FixedVectorExpressionExecutor); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // FixedVectorExpressionExecutor
@@ -252,7 +289,6 @@ type FixedVectorExpressionExecutor struct {
 }
 
 type FunctionExpressionExecutor struct {
-	FoldExpr
 	m           *mpool.MPool
 	fid         int32
 	selectList1 []bool
@@ -451,49 +487,6 @@ func (expr *FunctionExpressionExecutor) Init(
 	return err
 }
 
-func (expr *FunctionExpressionExecutor) canFold(proc *process.Process) bool {
-	overload, _ := function.GetFunctionById(proc.Ctx, expr.overloadID)
-	if overload.CannotFold() {
-		return false
-	}
-
-	if expr.inRuntime {
-		for _, paramE := range expr.parameterExecutor {
-			if _, ok := paramE.(*ColumnExpressionExecutor); ok {
-				return false
-			}
-			if fe, ok := paramE.(*FunctionExpressionExecutor); ok {
-				if !fe.folded {
-					return false
-				}
-			}
-		}
-	} else {
-		if overload.IsRealTimeRelated() {
-			return false
-		}
-		for _, paramE := range expr.parameterExecutor {
-			if fe, ok := paramE.(*FunctionExpressionExecutor); ok {
-				if !fe.folded {
-					return false
-				}
-			}
-			if _, ok := paramE.(*FixedVectorExpressionExecutor); !ok {
-				return false
-			}
-		}
-	}
-
-	return true
-}
-
-func (expr *FunctionExpressionExecutor) getFolded() *vector.Vector {
-	if expr.resultVector != nil && expr.folded {
-		return expr.resultVector.GetResultVector()
-	}
-	return nil
-}
-
 func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
 	expr.parameterResults[0], err = expr.parameterExecutor[0].Eval(proc, batches, selectList)
 	if err != nil {
@@ -565,10 +558,6 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 }
 
 func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	if foldedVec := expr.getFolded(); foldedVec != nil {
-		return foldedVec, nil
-	}
-
 	var err error
 	if expr.fid == function.IFF {
 		err = expr.EvalIff(proc, batches, selectList)
@@ -589,35 +578,12 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
-	execLen := 1
-	canFold := expr.canFold(proc)
-	if canFold {
-		for i := range expr.parameterExecutor {
-			fixExe := expr.parameterExecutor[i].(*FixedVectorExpressionExecutor)
-			expr.parameterResults[i] = fixExe.resultVector
-			if !fixExe.fixed {
-				expr.parameterResults[i].SetLength(1)
-			}
-		}
-		if len(expr.parameterResults) > 0 {
-			firstParam := expr.parameterResults[0]
-			if !firstParam.IsConst() {
-				execLen = firstParam.Length()
-			}
-		}
-		if len(batches) > 0 && execLen < batches[0].RowCount() {
-			execLen = batches[0].RowCount()
-		}
-	} else {
-		execLen = batches[0].RowCount()
-	}
-
-	if err = expr.resultVector.PreExtendAndReset(execLen); err != nil {
+	if err = expr.resultVector.PreExtendAndReset(batches[0].RowCount()); err != nil {
 		return nil, err
 	}
 
-	if len(expr.selectList.SelectList) < execLen {
-		expr.selectList.SelectList = make([]bool, execLen)
+	if len(expr.selectList.SelectList) < batches[0].RowCount() {
+		expr.selectList.SelectList = make([]bool, batches[0].RowCount())
 	}
 	if selectList == nil {
 		expr.selectList.AnyNull = false
@@ -639,25 +605,9 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	}
 
 	if err = expr.evalFn(
-		expr.parameterResults, expr.resultVector, proc, execLen, &expr.selectList); err != nil {
+		expr.parameterResults, expr.resultVector, proc, batches[0].RowCount(), &expr.selectList); err != nil {
 		return nil, err
 	}
-
-	if canFold {
-		if execLen == 1 {
-			oldResult := expr.resultVector.GetResultVector()
-			constResult := oldResult.ToConst(0, 1, proc.Mp())
-			expr.resultVector.Free()
-			defer constResult.Free(proc.GetMPool())
-			newResult, err := constResult.Dup(proc.GetMPool())
-			if err != nil {
-				return nil, err
-			}
-			expr.resultVector.SetResultVector(newResult)
-		}
-		expr.folded = true
-	}
-
 	return expr.resultVector.GetResultVector(), nil
 }
 
@@ -751,7 +701,7 @@ func (expr *ColumnExpressionExecutor) IsColumnExpr() bool {
 }
 
 func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
-	if !expr.fixed && len(batches) > 0 {
+	if !expr.fixed {
 		expr.resultVector.SetLength(batches[0].RowCount())
 	}
 	return expr.resultVector, nil

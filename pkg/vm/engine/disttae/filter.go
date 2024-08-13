@@ -989,7 +989,7 @@ func TryFastFilterBlocks(
 	exprs []*plan.Expr,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	dirtyBlocks *map[types.Blockid]struct{},
+	//dirtyBlocks *map[types.Blockid]struct{},
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 	proc *process.Process,
@@ -1011,7 +1011,7 @@ func TryFastFilterBlocks(
 		seekOp,
 		snapshot,
 		uncommittedObjects,
-		dirtyBlocks,
+		//dirtyBlocks,
 		outBlocks,
 		fs,
 		proc,
@@ -1032,7 +1032,7 @@ func ExecuteBlockFilter(
 	seekOp SeekFirstBlockOp,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	dirtyBlocks *map[types.Blockid]struct{},
+	//dirtyBlocks *map[types.Blockid]struct{},
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 	proc *process.Process,
@@ -1062,10 +1062,6 @@ func ExecuteBlockFilter(
 			v2.TxnRangesFastPathBlkTotalSelectivityHistogram.Observe(float64(outBlocks.Len()-1) / totalBlocks)
 		}
 	}()
-
-	if !highSelectivityHint {
-		*dirtyBlocks = tbl.collectDirtyBlocks(snapshot, uncommittedObjects, txnOffset)
-	}
 
 	err = ForeachSnapshotObjects(
 		snapshotTS,
@@ -1163,36 +1159,20 @@ func ExecuteBlockFilter(
 				}
 				loc := objectio.BuildLocation(name, extent, rows, uint16(pos))
 				blk := objectio.BlockInfo{
-					BlockID:   *objectio.BuildObjectBlockid(name, uint16(pos)),
-					SegmentID: name.SegmentId(),
-					MetaLoc:   objectio.ObjectLocation(loc),
+					BlockID: *objectio.BuildObjectBlockid(name, uint16(pos)),
+					MetaLoc: objectio.ObjectLocation(loc),
 				}
 
 				blk.Sorted = obj.Sorted
-				blk.EntryState = obj.EntryState
+				blk.Appendable = obj.Appendable
 				blk.CommitTs = obj.CommitTS
-				if obj.HasDeltaLoc {
-					deltaLoc, commitTs, ok := snapshot.GetBockDeltaLoc(blk.BlockID)
-					if ok {
-						blk.DeltaLoc = deltaLoc
-						blk.CommitTs = commitTs
-					}
-				}
 
-				if len(*dirtyBlocks) > 0 { // may have deletes, check
-					if _, ok = (*dirtyBlocks)[blk.BlockID]; !ok {
-						blk.CanRemote = true
-					}
-					blk.CanRemote = false
-
-				} else if highSelectivityHint { // not collect dirty blocks, cannot judge
-					blk.CanRemote = false
-
-				} else { // collected but no deletes
-					blk.CanRemote = true
-				}
-
-				blk.PartitionNum = -1
+				//if obj.HasDeltaLoc {
+				//	_, commitTs, ok := snapshot.GetBockDeltaLoc(blk.BlockID)
+				//	if ok {
+				//		blk.CommitTs = commitTs
+				//	}
+				//}
 				outBlocks.AppendBlockInfo(blk)
 			}
 
