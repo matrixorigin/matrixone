@@ -176,7 +176,7 @@ func isSysTenant(tenant string) bool {
 func fetchSessions(ctx context.Context, tenant string, qc qclient.QueryClient) ([]*status.Session, error) {
 	var nodes []string
 	sysTenant := isSysTenant(tenant)
-	clusterservice.GetMOCluster().GetCNService(clusterservice.NewSelector(),
+	clusterservice.GetMOCluster().GetCNService(clusterservice.NewSelectAll(),
 		func(s metadata.CNService) bool {
 			nodes = append(nodes, s.QueryAddress)
 			return true
