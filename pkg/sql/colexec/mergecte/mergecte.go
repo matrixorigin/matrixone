@@ -71,7 +71,9 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		if result.Batch == nil {
 			mergeCTE.ctr.status = sendLastTag
 		}
-		atomic.AddInt64(&result.Batch.Cnt, 1)
+		if result.Batch != nil {
+			atomic.AddInt64(&result.Batch.Cnt, 1)
+		}
 		mergeCTE.ctr.bats = append(mergeCTE.ctr.bats, result.Batch)
 		fallthrough
 	case sendLastTag:
