@@ -165,11 +165,12 @@ var (
 	TraceMOLoggerBufferSetCallBack      = traceMOLoggerMetricBufferCounter.WithLabelValues("set_callback")
 	TraceMOLoggerBufferSetCallBackNil   = traceMOLoggerMetricBufferCounter.WithLabelValues("set_callback_nil")
 	TraceMOLoggerBufferNoFree           = traceMOLoggerMetricBufferCounter.WithLabelValues("no_free")
+	TraceMOLoggerBufferWriteSQLTry      = traceMOLoggerMetricBufferCounter.WithLabelValues("write_sql_try")
 	TraceMOLoggerBufferWriteSQL         = traceMOLoggerMetricBufferCounter.WithLabelValues("write_sql")
 	TraceMOLoggerBufferWriteCSV         = traceMOLoggerMetricBufferCounter.WithLabelValues("write_csv")
+	TraceMOLoggerBufferWriteBackOff     = traceMOLoggerMetricBufferCounter.WithLabelValues("write_backoff")
 	TraceMOLoggerBufferWriteFailed      = traceMOLoggerMetricBufferCounter.WithLabelValues("write_failed")
 	TraceMOLoggerBufferReactWrite       = traceMOLoggerMetricBufferCounter.WithLabelValues("react_write")
-	TraceMOLoggerBufferBackOff          = traceMOLoggerMetricBufferCounter.WithLabelValues("backoff")
 	TraceMOLoggerBufferReactWriteFailed = traceMOLoggerMetricBufferCounter.WithLabelValues("react_write_failed")
 )
 

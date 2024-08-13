@@ -112,10 +112,11 @@ func (c *ContentWriter) FlushAndClose() (n int, err error) {
 	}
 	// main flow
 	if c.backoff == nil || c.backoff.Count() {
+		v2.TraceMOLoggerBufferWriteSQLTry.Inc()
 		n, err = c.sqlFlusher.FlushBuffer(c.buf)
 	} else {
 		// case 1: metric collector is too much data to write
-		v2.TraceMOLoggerBufferBackOff.Inc()
+		v2.TraceMOLoggerBufferWriteBackOff.Inc()
 		err = errBackOff // trigger csv flusher
 	}
 	if err != nil {
