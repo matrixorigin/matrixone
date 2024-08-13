@@ -545,6 +545,7 @@ func decodeDeltaEntry(
 		if colCnt <= 0 {
 			return nil, moerr.NewInternalError(ctx, "invalid row entry")
 		}
+		//Two columns : rowid, pk col
 		row = make([]any, colCnt)
 
 		for rowIdx := 0; rowIdx < bat.Vecs[0].Length(); rowIdx++ {
