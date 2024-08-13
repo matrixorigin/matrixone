@@ -60,6 +60,14 @@ func TestInsertOperator(t *testing.T) {
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
 
+	database := mock_frontend.NewMockDatabase(ctrl)
+	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).AnyTimes()
+
+	relation := mock_frontend.NewMockRelation(ctrl)
+	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
+
 	proc := testutil.NewProc()
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
@@ -82,6 +90,7 @@ func TestInsertOperator(t *testing.T) {
 				SchemaName: "testDb",
 				ObjName:    "testTable",
 			},
+			Engine:          eng,
 			AddAffectedRows: true,
 			Attrs:           []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 		},
@@ -92,19 +101,26 @@ func TestInsertOperator(t *testing.T) {
 				IsLast:  false,
 			},
 		},
-		ctr: &container{
+		ctr: container{
 			state:  vm.Build,
 			source: &mockRelation{},
 		},
 	}
 	resetChildren(&argument1, batch1)
-	// err := argument1.Prepare(proc)
-	// require.NoError(t, err)
-	_, err := argument1.Call(proc)
+	err := argument1.Prepare(proc)
+	require.NoError(t, err)
+	_, err = argument1.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), argument1.affectedRows)
-	// result := argument1.InsertCtx.Rel.(*mockRelation).result
-	// require.Equal(t, result.Batch, batch.EmptyBatch)
+
+	argument1.Reset(proc, false, nil)
+
+	resetChildren(&argument1, batch1)
+	err = argument1.Prepare(proc)
+	require.NoError(t, err)
+	_, err = argument1.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), argument1.affectedRows)
 
 	argument1.Free(proc, false, nil)
 	argument1.GetChildren(0).Free(proc, false, nil)
