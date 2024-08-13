@@ -98,11 +98,9 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				if bat.IsEmpty() {
-					proc.PutBatch(bat)
 					continue
 				}
 				if ctr.mp == nil {
-					proc.PutBatch(bat)
 					continue
 				}
 				rightJoin.ctr.buf = bat
@@ -114,7 +112,6 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			if rightJoin.ctr.lastpos == 0 {
-				proc.PutBatch(rightJoin.ctr.buf)
 				rightJoin.ctr.buf = nil
 			} else if rightJoin.ctr.lastpos == startrow {
 				return result, moerr.NewInternalErrorNoCtx("right join hanging")
