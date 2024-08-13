@@ -671,6 +671,38 @@ drop database db09;
 -- @session
 -- @bvt:issue
 
+
+
+
+-- delete publication account
+drop database if exists db10;
+create database db10;
+use db10;
+drop table if exists table01;
+create table table01(col1 varchar(50), col2 bigint);
+insert into table01 values('database',23789324);
+insert into table01 values('fhuwehwfw',3829032);
+drop publication if exists pub10;
+create publication pub10 database db10 table table01 account acc01;
+-- @ignore:5,6
+show publications;
+-- @session:id=1&user=acc01:test_account&password=111
+drop database if exists sub10;
+create database sub10 from sys publication pub10;
+show databases;
+use sub10;
+show tables;
+select * from table01;
+-- @session
+drop account acc01;
+-- @ignore:5,6
+show publications;
+create account acc01 admin_name = 'test_account' identified by '111';
+-- @ignore:5,6
+show publications;
+drop publication pub10;
+drop database db10;
+
 drop account acc01;
 drop account acc02;
 drop account acc03;
