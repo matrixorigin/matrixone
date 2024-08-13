@@ -15,15 +15,15 @@
 package tree
 
 import (
+	"fmt"
 	"go/constant"
+	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // the AST for literals like string,numeric,bool and etc.
-type Constant interface {
-	Expr
-}
-
 type P_TYPE uint8
 
 const (
@@ -41,10 +41,21 @@ const (
 	P_nulltext
 )
 
+type P_KIND uint8
+
+const (
+	Unknown P_KIND = iota
+	Bool
+	Str
+	Int
+	Float
+)
+
 // the AST for the constant numeric value.
 type NumVal struct {
-	Constant
 	Value constant.Value
+
+	ValType P_TYPE
 
 	// negative is the sign label
 	negative bool
@@ -52,10 +63,131 @@ type NumVal struct {
 	// origString is the "original" string literals that should remain sign-less.
 	origString string
 
-	//converted result
-	resInt   int64
-	resFloat float64
-	ValType  P_TYPE
+	// converted result
+	resBool    bool
+	resInt64   int64
+	resUint64  uint64
+	resFloat64 float64
+}
+
+func (node *NumVal) Kind() P_KIND {
+	switch node.ValType {
+	case P_null:
+		return Unknown
+	case P_int64, P_uint64:
+		return Int
+	case P_float64:
+		return Float
+	default:
+		return Str
+	}
+}
+
+func NewNumValWithType2[T bool | int64 | uint64 | string](value constant.Value, val T, originString string, negative bool, typ P_TYPE) *NumVal {
+	nv := &NumVal{
+		Value:      value,
+		ValType:    typ,
+		negative:   negative,
+		origString: originString,
+	}
+
+	switch v := any(val).(type) {
+	case bool:
+		if typ != P_bool {
+			logutil.Fatalf("unexpected type %T", v)
+		}
+		nv.resBool = v
+	case int64:
+		if typ != P_int64 {
+			logutil.Fatalf("unexpected type %T", v)
+		}
+		nv.resInt64 = v
+	case uint64:
+		if typ != P_uint64 {
+			logutil.Fatalf("unexpected type %T", v)
+		}
+		nv.resUint64 = v
+	case float64:
+		if typ != P_float64 {
+			logutil.Fatalf("unexpected type %T", v)
+		}
+		nv.resFloat64 = v
+	case string:
+		// do nothing as val already store in origString
+	default:
+		logutil.Fatalf("unexpected type %T", v)
+	}
+
+	return nv
+}
+
+func (node *NumVal) GetBoolVal() bool {
+	switch node.ValType {
+	case P_bool:
+		return node.resBool
+	case P_null:
+		return false
+	default:
+		panic(fmt.Sprintf("%v not a Bool", node.ValType))
+	}
+}
+
+func (node *NumVal) GetStringVal() string {
+	switch node.ValType {
+	case P_null:
+		return ""
+	default:
+		return node.origString
+	}
+}
+
+// follow package constant Uint64Val
+func (node *NumVal) GetUint64() (uint64, bool) {
+	switch node.ValType {
+	case P_int64:
+		return uint64(node.resInt64), true
+	case P_uint64:
+		return node.resUint64, true
+	case P_null:
+		return 0, false
+	default:
+		panic(fmt.Sprintf("%v not a uint64", node.ValType))
+	}
+}
+
+// follow package constant Int64Val
+func (node *NumVal) GetInt64() (int64, bool) {
+	switch node.ValType {
+	case P_int64:
+		return node.resInt64, true
+	case P_null:
+		return 0, false
+	default:
+		panic(fmt.Sprintf("%v not a int64", node.ValType))
+	}
+}
+
+// follow package constant Float64Val
+// Float64Val returns the nearest Go float64 value of x and whether the result is exact;
+// x must be numeric or an [Unknown], but not [Complex]. For values too small (too close to 0)
+// to represent as float64, [Float64Val] silently underflows to 0. The result sign always
+// matches the sign of x, even for 0.
+// If x is [Unknown], the result is (0, false).
+func (node *NumVal) GetFloat64() (float64, bool) {
+	switch node.ValType {
+	case P_int64:
+		f := float64(node.resInt64)
+		return f, int64(f) == node.resInt64
+	case P_uint64:
+		f := float64(node.resUint64)
+		return f, uint64(f) == node.resUint64
+	case P_float64:
+		return node.resFloat64, true
+	case P_null:
+		return 0, false
+	default:
+		panic(fmt.Sprintf("%v not a float", node.ValType))
+	}
 }
 
 func (n *NumVal) OrigString() string {
@@ -67,14 +199,28 @@ func (n *NumVal) Format(ctx *FmtCtx) {
 		ctx.WriteValue(n.ValType, FormatString(n.origString))
 		return
 	}
-	switch n.Value.Kind() {
-	case constant.String:
-		ctx.WriteValue(n.ValType, n.origString)
-	case constant.Bool:
-		ctx.WriteString(strings.ToLower(n.Value.String()))
-	case constant.Unknown:
+
+	switch n.ValType {
+	case P_null:
 		ctx.WriteString("null")
+	case P_bool:
+		ctx.WriteString(strconv.FormatBool(n.resBool))
+	// case P_int64:
+	// 	ctx.WriteString(strconv.FormatInt(n.resInt64, 10))
+	// case P_uint64:
+	// 	ctx.WriteString(strconv.FormatUint(n.resUint64, 10))
+	default:
+		ctx.WriteValue(n.ValType, n.origString)
 	}
+
+	// switch n.Value.Kind() {
+	// case constant.String:
+	// 	ctx.WriteValue(n.ValType, n.origString)
+	// case constant.Bool:
+	// 	ctx.WriteString(strings.ToLower(n.Value.String()))
+	// case constant.Unknown:
+	// 	ctx.WriteString("null")
+	// }
 }
 
 // Accept implements NodeChecker Accept interface.
@@ -144,27 +290,8 @@ func NewNumValWithType(value constant.Value, origString string, negative bool, t
 	return numVal
 }
 
-func NewNumValWithResInt(value constant.Value, origString string, negative bool, resInt int64) *NumVal {
-	return &NumVal{
-		Value:      value,
-		origString: origString,
-		negative:   negative,
-		resInt:     resInt,
-	}
-}
-
-func NewNumValWithResFoalt(value constant.Value, origString string, negative bool, resFloat float64) *NumVal {
-	return &NumVal{
-		Value:      value,
-		origString: origString,
-		negative:   negative,
-		resFloat:   resFloat,
-	}
-}
-
 // StrVal represents a constant string value.
 type StrVal struct {
-	Constant
 	str string
 }
 
@@ -179,4 +306,8 @@ func (node *StrVal) Accept(v Visitor) (Expr, bool) {
 
 func NewStrVal(s string) *StrVal {
 	return &StrVal{str: s}
+}
+
+func (s *StrVal) String() string {
+	return s.str
 }
