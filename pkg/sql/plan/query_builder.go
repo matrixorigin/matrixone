@@ -2341,6 +2341,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				if detectedExprWhetherTimeRelated(filter) {
 					notCacheable = true
 				}
+				if err := checkGrouping(ctx.binder.GetContext(), filter); err != nil {
+					return 0, err
+				}
 			}
 
 			nodeID = builder.appendNode(&plan.Node{
