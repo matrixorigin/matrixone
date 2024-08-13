@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -59,6 +60,9 @@ func (dec *decoder) Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input 
 	out = &DecoderOutput{
 		ts: input.TS(),
 	}
+	out.sqlOfRows.Store([][]byte{})
+	out.sqlOfObjects.Store([][]byte{})
+	out.sqlOfDeletes.Store([][]byte{})
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	err := ants.Submit(func() {
@@ -108,6 +112,7 @@ func (dec *decoder) Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input 
 		defer it.Close()
 		rows, err2 := decodeDeltas(
 			ctx,
+			cdcCtx,
 			input.TS(),
 			it,
 			dec.fs,
@@ -250,6 +255,9 @@ func decodeRows(
 						Scale: pkCol.Typ.Scale,
 					}
 					deleteBuff, err = convertColIntoSql(ctx, pkEle, &ttype, deleteBuff)
+					if err != nil {
+						return nil, err
+					}
 				}
 				deleteBuff = appendByte(deleteBuff, ')')
 			} else {
@@ -264,6 +272,9 @@ func decodeRows(
 					Scale: pkCol.Typ.Scale,
 				}
 				deleteBuff, err = convertColIntoSql(ctx, pkColData, &ttype, deleteBuff)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 		} else {
@@ -447,10 +458,34 @@ func decodeObjects(
 
 func decodeDeltas(
 	ctx context.Context,
+	cdcCtx *disttae.TableCtx,
 	ts timestamp.Timestamp,
 	deltaIter logtailreplay.BlockDeltaIter,
 	fs fileservice.FileService,
 ) (res [][]byte, err error) {
+	timePrefix := fmt.Sprintf("/* %v, %v */ ", ts.String(), time.Now())
+	sbuf := strings.Builder{}
+	sbuf.WriteByte('(')
+	tableDef := cdcCtx.TableDef()
+	if len(tableDef.Pkey.Names) == 0 {
+		return nil, moerr.NewInternalError(ctx, "cdc table need primary key")
+	}
+	singlePkCol := false
+	if len(tableDef.Pkey.Names) == 1 {
+		singlePkCol = true
+	}
+	colName2Index := make(map[string]int)
+	for i, col := range tableDef.Cols {
+		colName2Index[col.Name] = i
+	}
+	for i, pkName := range tableDef.Pkey.Names {
+		if i > 0 {
+			sbuf.WriteByte(',')
+		}
+		sbuf.WriteString(pkName)
+	}
+	sbuf.WriteByte(')')
+	deletePrefix := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s IN ( ", cdcCtx.Db(), cdcCtx.Table(), sbuf.String())
 
 	var entRes [][]byte
 	dedup := make(map[[objectio.LocationLen]byte]struct{})
@@ -463,9 +498,17 @@ func decodeDeltas(
 			dedup[ent.DeltaLoc] = struct{}{}
 		}
 	}
-
+	fmt.Fprintln(os.Stderr, "-----delta count----", len(dedup))
 	for loc, _ := range dedup {
-		entRes, err = decodeDeltaEntry(ctx, loc[:], fs)
+		entRes, err = decodeDeltaEntry(
+			ctx,
+			loc[:],
+			fs,
+			singlePkCol,
+			tableDef,
+			timePrefix, deletePrefix,
+			colName2Index,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -478,6 +521,10 @@ func decodeDeltaEntry(
 	ctx context.Context,
 	loc []byte,
 	fs fileservice.FileService,
+	singlePkCol bool,
+	tableDef *plan.TableDef,
+	timePrefix, deletePrefix string,
+	colName2Index map[string]int,
 ) (res [][]byte, err error) {
 	bat, byCn, release, err := blockio.ReadBlockDelete(ctx, loc, fs)
 	if err != nil {
@@ -489,8 +536,86 @@ func decodeDeltaEntry(
 		"column cnt", len(bat.Vecs),
 		"row count", bat.Vecs[0].Length())
 	fmt.Fprintln(os.Stderr, "attrs", bat.Attrs)
-	if byCn {
 
+	if byCn {
+		firstDeleteRow := true
+		deleteBuff := make([]byte, 0, 1024)
+		var row []any
+		colCnt := len(bat.Vecs)
+		if colCnt <= 0 {
+			return nil, moerr.NewInternalError(ctx, "invalid row entry")
+		}
+		row = make([]any, colCnt)
+
+		for rowIdx := 0; rowIdx < bat.Vecs[0].Length(); rowIdx++ {
+			err = extractRowFromEveryVector(ctx, bat, 1, rowIdx, row)
+			if err != nil {
+				return nil, err
+			}
+			if len(deleteBuff) == 0 {
+				//fill delete prefix
+				deleteBuff = appendString(deleteBuff, timePrefix)
+				deleteBuff = appendString(deleteBuff, deletePrefix)
+			}
+
+			if !firstDeleteRow {
+				deleteBuff = appendByte(deleteBuff, ',')
+			} else {
+				firstDeleteRow = false
+			}
+
+			//decode primary key col from pk col data
+			if !singlePkCol {
+				//case 1: composed pk col
+				comPkCol := row[1]
+				pkTuple, pkTypes, err := types.UnpackWithSchema(comPkCol.([]byte))
+				if err != nil {
+					return nil, err
+				}
+				deleteBuff = appendByte(deleteBuff, '(')
+				for pkIdx, pkEle := range pkTuple {
+					//
+					if pkIdx > 0 {
+						deleteBuff = appendByte(deleteBuff, ',')
+					}
+					pkName := tableDef.Pkey.Names[pkIdx]
+					pkColIdx := colName2Index[pkName]
+					pkCol := tableDef.Cols[pkColIdx]
+					if pkTypes[pkIdx] != types.T(pkCol.Typ.Id) {
+						return nil, moerr.NewInternalError(ctx, "different pk col Type %v %v", pkTypes[pkIdx], pkCol.Typ.Id)
+					}
+					ttype := types.Type{
+						Oid:   types.T(pkCol.Typ.Id),
+						Width: pkCol.Typ.Width,
+						Scale: pkCol.Typ.Scale,
+					}
+					deleteBuff, err = convertColIntoSql(ctx, pkEle, &ttype, deleteBuff)
+					if err != nil {
+						return nil, err
+					}
+				}
+				deleteBuff = appendByte(deleteBuff, ')')
+			} else {
+				//case 2: sinle pk col
+				pkColData := row[1]
+				pkName := tableDef.Pkey.Names[0]
+				pkColIdx := colName2Index[pkName]
+				pkCol := tableDef.Cols[pkColIdx]
+				ttype := types.Type{
+					Oid:   types.T(pkCol.Typ.Id),
+					Width: pkCol.Typ.Width,
+					Scale: pkCol.Typ.Scale,
+				}
+				deleteBuff, err = convertColIntoSql(ctx, pkColData, &ttype, deleteBuff)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		if len(deleteBuff) != 0 {
+			deleteBuff = appendString(deleteBuff, ")")
+			res = append(res, copyBytes(deleteBuff))
+		}
 	}
 	return
 }

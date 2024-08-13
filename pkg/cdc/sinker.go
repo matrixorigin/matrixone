@@ -114,15 +114,41 @@ func (mysql *mysqlSink) connect() (err error) {
 }
 
 func (mysql *mysqlSink) Send(ctx context.Context, data *DecoderOutput) (err error) {
-	sqlOfRows := data.sqlOfRows.Load().([][]byte)
-	for _, row := range sqlOfRows {
-		_, err = mysql.conn.ExecContext(ctx, util.UnsafeBytesToString(row))
-		if err != nil {
-			return err
+	sendRows := func(info string, rows [][]byte) (serr error) {
+		fmt.Fprintln(os.Stderr, "----mysql sink----", info, len(rows))
+		for _, row := range rows {
+			if len(row) == 0 {
+				continue
+			}
+			plen := min(len(row), 200)
+			fmt.Fprintln(os.Stderr, "----mysql sink----", info, string(row[:plen]))
+			_, serr = mysql.conn.ExecContext(ctx, util.UnsafeBytesToString(row))
+			if serr != nil {
+				return serr
+			}
 		}
+		return
+	}
+	fmt.Fprintln(os.Stderr, "----mysql sink begin----")
+	defer fmt.Fprintln(os.Stderr, "----mysql sink end----")
+	sqlOfRows := data.sqlOfRows.Load().([][]byte)
+	err = sendRows("rows", sqlOfRows)
+	if err != nil {
+		return err
 	}
 
-	return nil
+	sqlOfObjects := data.sqlOfObjects.Load().([][]byte)
+	err = sendRows("objects", sqlOfObjects)
+	if err != nil {
+		return err
+	}
+
+	sqlOfDeletes := data.sqlOfDeletes.Load().([][]byte)
+	err = sendRows("deletes", sqlOfDeletes)
+	if err != nil {
+		return err
+	}
+	return
 }
 
 func (mysql *mysqlSink) Close() {
