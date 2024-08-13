@@ -1532,7 +1532,7 @@ func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.S
 	return arg
 }
 
-func constructShuffleGroupArg(ss []*Scope, node *plan.Node) *shuffle.Shuffle {
+func constructShuffleArgForGroup(ss []*Scope, node *plan.Node) *shuffle.Shuffle {
 	arg := shuffle.NewArgument()
 	hashCol, typ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
 	arg.ShuffleColIdx = hashCol.ColPos
