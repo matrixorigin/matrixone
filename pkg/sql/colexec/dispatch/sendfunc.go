@@ -16,7 +16,6 @@ package dispatch
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,10 +33,6 @@ import (
 func sendToAllLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	var refCountAdd int64
 	var err error
-
-	if ap.ctr.localRegsCnt == 1 {
-		logutil.Infof("dispatch send %v rows to %p", bat.RowCount(), ap.LocalRegs[0].Ch)
-	}
 
 	if !ap.RecSink {
 		refCountAdd = int64(ap.ctr.localRegsCnt - 1)

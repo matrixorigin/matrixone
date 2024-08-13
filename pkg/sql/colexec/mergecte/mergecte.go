@@ -16,9 +16,6 @@ package mergecte
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -68,10 +65,7 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Status = vm.ExecStop
 			return result, err
 		}
-		if result.Batch != nil {
-			logutil.Infof("receive batch in mergecte from 0 %v rows", result.Batch.RowCount())
-		}
-		// mergeCTE.ctr.buf = result.Batch
+
 		if result.Batch == nil {
 			mergeCTE.ctr.status = sendLastTag
 		}
@@ -88,11 +82,6 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				result.Status = vm.ExecStop
 				return result, err
-			}
-			if result.Batch != nil {
-				mergeop := mergeCTE.GetChildren(1).(*merge.Merge)
-				receivers := proc.Reg.MergeReceivers[mergeop.StartIDX:mergeop.EndIDX]
-				logutil.Infof("receive batch in mergecte from rest, channel %p, receive %v rows", receivers[0].Ch, result.Batch.RowCount())
 			}
 			if result.Batch == nil {
 				result.Batch = nil

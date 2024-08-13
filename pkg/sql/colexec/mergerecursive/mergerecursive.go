@@ -16,7 +16,6 @@ package mergerecursive
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -54,9 +53,6 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 		result, err = mergeRecursive.GetChildren(0).Call(proc)
 		if err != nil {
 			return result, err
-		}
-		if result.Batch != nil {
-			logutil.Infof("receive batch in mergerecursive %v rows", result.Batch.RowCount())
 		}
 		bat := result.Batch
 		if bat == nil || bat.End() {
