@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,9 +41,17 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	ap := arg
 	ap.ctr = new(container)
+	if arg.E == nil {
+		return nil
+	}
 
-	filterList := colexec.SplitAndExprs([]*plan.Expr{ap.E})
-	ap.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filterList)
+	var filterExpr *plan.Expr
+	filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(arg.E), proc, true, true)
+	if err != nil {
+		return err
+	}
+	ap.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
+
 	return err
 }
 
@@ -60,7 +69,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
-	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
+	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() || len(arg.ctr.executors) == 0 {
 		return result, nil
 	}
 	if arg.buf != nil {
