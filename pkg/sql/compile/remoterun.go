@@ -409,11 +409,6 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 		}
 		s.doSetRootOperator(ins)
 	}
-	if s.isShuffle() {
-		for _, rr := range s.Proc.Reg.MergeReceivers {
-			rr.Ch = make(chan *process.RegisterMessage, 16)
-		}
-	}
 	return nil
 }
 
