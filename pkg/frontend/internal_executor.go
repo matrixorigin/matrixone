@@ -505,6 +505,9 @@ func (ip *internalProtocol) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) e
 	defer ip.Unlock()
 	return ip.sendRows(mrs, cnt)
 }
+func (ip *internalProtocol) WriteColumnDefBytes(payload []byte) error {
+	return nil
+}
 
 func (ip *internalProtocol) ResetStatistics() {
 	ip.result.affectedRows = 0

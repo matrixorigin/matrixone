@@ -1007,6 +1007,7 @@ type MysqlWriter interface {
 	WriteERR(errorCode uint16, sqlState, errorMessage string) error
 	WriteLengthEncodedNumber(uint64) error
 	WriteColumnDef(context.Context, Column, int) error
+	WriteColumnDefBytes([]byte) error
 	WriteRow() error
 	WriteTextRow() error
 	WriteBinaryRow() error

@@ -199,7 +199,7 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 				return
 			}
 		} else {
-			err = resper.mysqlRrWr.(*MysqlProtocolImpl).appendPacket(execCtx.prepareColDef[i])
+			err = resper.mysqlRrWr.WriteColumnDefBytes(execCtx.prepareColDef[i])
 			if err != nil {
 				return
 			}

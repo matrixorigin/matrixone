@@ -2675,6 +2675,11 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 
 	return err
 }
+
+func (mp *MysqlProtocolImpl) WriteColumnDefBytes(payload []byte) error {
+	return mp.appendPacket(payload)
+}
+
 func (mp *MysqlProtocolImpl) UseConn(conn net.Conn) {
 	mp.tcpConn.UseConn(conn)
 }
