@@ -443,11 +443,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if s.ShuffleIdx > 0 { //shuffle join
 		buildScope := c.newJoinBuildScope(s, 1)
 		s.PreScopes = append(s.PreScopes, buildScope)
-		if s.BuildIdx > 1 {
-			probeScope := c.newJoinProbeScopeWithBidx(s)
-			s.PreScopes = append(s.PreScopes, probeScope)
-		}
-		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
+		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx]
 		return s, nil
 	}
 
@@ -703,17 +699,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 	}
 	return nil
-}
-
-func (s *Scope) isShuffle() bool {
-	// the pipeline is merge->group->xxx
-	if s != nil && s.RootOp != nil && s.RootOp.GetOperatorBase().NumChildren() > 0 {
-		op := vm.GetLeafOpParent(nil, s.RootOp)
-		if op.OpType() == vm.Group {
-			return op.(*group.Group).IsShuffle
-		}
-	}
-	return false
 }
 
 func (s *Scope) isRight() bool {
