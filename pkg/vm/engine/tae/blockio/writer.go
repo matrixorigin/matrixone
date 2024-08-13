@@ -17,6 +17,7 @@ package blockio
 import (
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -203,6 +204,7 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 		cnt, meta := w.objMetaBuilder.Build()
 		w.writer.WriteObjectMeta(ctx, cnt, meta)
 	}
+	v2.FSWriteSyncCounter.Add(1)
 	blocks, err := w.writer.WriteEnd(ctx)
 	if len(blocks) == 0 {
 		logutil.Debug("[WriteEnd]", common.OperationField(w.nameStr),

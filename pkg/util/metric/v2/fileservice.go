@@ -57,6 +57,26 @@ var (
 			Help:      "Total number of s3 dns resolve count.",
 		})
 
+	fsWriteCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "write_total",
+			Help:      "Total number of write count.",
+		}, []string{"type"})
+	FSWriteTransferPageCounter  = fsWriteCounter.WithLabelValues("transfer-page")
+	FSWriteTraceCounter         = fsWriteCounter.WithLabelValues("trace")
+	FSWriteSaveBatchCounter     = fsWriteCounter.WithLabelValues("save-batch")
+	FSWriteSaveMeta1Counter     = fsWriteCounter.WithLabelValues("save-meta1")
+	FSWriteTransferMapsCounter  = fsWriteCounter.WithLabelValues("transfer-maps")
+	FSWriteSyncCounter          = fsWriteCounter.WithLabelValues("sync")
+	FSWriteMergeCkpMetaCounter  = fsWriteCounter.WithLabelValues("merge-ckp-meta")
+	FSWriteSaveCkpCounter       = fsWriteCounter.WithLabelValues("save-ckp")
+	FSWriteSaveTableCounter     = fsWriteCounter.WithLabelValues("save-table")
+	FSWriteSaveFullTableCounter = fsWriteCounter.WithLabelValues("save-full-table")
+	FSWriteSaveMeta2Counter     = fsWriteCounter.WithLabelValues("save-meta2")
+	FSWriteSaveTableInfoCounter = fsWriteCounter.WithLabelValues("save-table-info")
+
 	fsReadCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",

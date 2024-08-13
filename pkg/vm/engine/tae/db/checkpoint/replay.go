@@ -17,6 +17,7 @@ package checkpoint
 import (
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sort"
 	"sync"
 	"time"
@@ -374,6 +375,8 @@ func MergeCkpMeta(
 	}
 
 	// TODO: checkpoint entry should maintain the location
+
+	v2.FSWriteMergeCkpMetaCounter.Add(1)
 	_, err = writer.WriteEnd(ctx)
 	return name, err
 }

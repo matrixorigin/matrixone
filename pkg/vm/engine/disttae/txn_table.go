@@ -2617,6 +2617,7 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 				}
 				buffer.CleanOnlyData()
 
+				v2.FSWriteTransferMapsCounter.Add(1)
 				_, err = writer.WriteEnd(ctx)
 				if err != nil {
 					return err
@@ -2641,6 +2642,7 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 		}
 		buffer.CleanOnlyData()
 
+		v2.FSWriteTransferMapsCounter.Add(1)
 		_, err = writer.WriteEnd(ctx)
 		if err != nil {
 			return err

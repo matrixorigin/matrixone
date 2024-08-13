@@ -336,6 +336,7 @@ func AddTransferPage(page *TransferHashPage, ioVector *fileservice.IOVector) err
 func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []*TransferHashPage, ioVector fileservice.IOVector) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	v2.FSWriteTransferPageCounter.Add(1)
 	err := fs.Write(ctx, ioVector)
 	if err != nil {
 		for _, page := range pages {
