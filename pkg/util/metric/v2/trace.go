@@ -30,7 +30,7 @@ func initTraceMetrics() {
 	registry.MustRegister(traceMOLoggerExportDataHistogram)
 	registry.MustRegister(traceCheckStorageUsageCounter)
 	registry.MustRegister(traceMOLoggerErrorCounter)
-	registry.MustRegister(traceMOLoggerMetricBufferCounter)
+	registry.MustRegister(traceMOLoggerBufferActionCounter)
 }
 
 var (
@@ -151,25 +151,25 @@ var (
 	TraceMOLoggerErrorFlushCounter     = traceMOLoggerErrorCounter.WithLabelValues("flush")
 	TraceMOLoggerErrorConnDBCounter    = traceMOLoggerErrorCounter.WithLabelValues("conn_db")
 
-	traceMOLoggerMetricBufferCounter = prometheus.NewCounterVec(
+	traceMOLoggerBufferActionCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
 			Subsystem: "trace",
-			Name:      "mologger_metric_buffer_total",
+			Name:      "mologger_buffer_action_total",
 			Help:      "Count of mologger metric used buffer count",
 		}, []string{"type"})
-	TraceMOLoggerBufferAlloc            = traceMOLoggerMetricBufferCounter.WithLabelValues("alloc")
-	TraceMOLoggerBufferFree             = traceMOLoggerMetricBufferCounter.WithLabelValues("free")
-	TraceMOLoggerBufferSetCallBack      = traceMOLoggerMetricBufferCounter.WithLabelValues("set_callback")
-	TraceMOLoggerBufferSetCallBackNil   = traceMOLoggerMetricBufferCounter.WithLabelValues("set_callback_nil")
-	TraceMOLoggerBufferNoFree           = traceMOLoggerMetricBufferCounter.WithLabelValues("no_free")
-	TraceMOLoggerBufferWriteSQLTry      = traceMOLoggerMetricBufferCounter.WithLabelValues("write_sql_try")
-	TraceMOLoggerBufferWriteSQL         = traceMOLoggerMetricBufferCounter.WithLabelValues("write_sql")
-	TraceMOLoggerBufferWriteCSV         = traceMOLoggerMetricBufferCounter.WithLabelValues("write_csv")
-	TraceMOLoggerBufferWriteBackOff     = traceMOLoggerMetricBufferCounter.WithLabelValues("write_backoff")
-	TraceMOLoggerBufferWriteFailed      = traceMOLoggerMetricBufferCounter.WithLabelValues("write_failed")
-	TraceMOLoggerBufferReactWrite       = traceMOLoggerMetricBufferCounter.WithLabelValues("react_write")
-	TraceMOLoggerBufferReactWriteFailed = traceMOLoggerMetricBufferCounter.WithLabelValues("react_write_failed")
+	TraceMOLoggerBufferMetricAlloc      = traceMOLoggerBufferActionCounter.WithLabelValues("metric_alloc")
+	TraceMOLoggerBufferMetricFree       = traceMOLoggerBufferActionCounter.WithLabelValues("metric_free")
+	TraceMOLoggerBufferNoCallback       = traceMOLoggerBufferActionCounter.WithLabelValues("no_callback")
+	TraceMOLoggerBufferSetCallBack      = traceMOLoggerBufferActionCounter.WithLabelValues("set_callback")
+	TraceMOLoggerBufferSetCallBackNil   = traceMOLoggerBufferActionCounter.WithLabelValues("set_callback_nil")
+	TraceMOLoggerBufferLoopWriteSQL     = traceMOLoggerBufferActionCounter.WithLabelValues("loop_write_sql")
+	TraceMOLoggerBufferLoopBackOff      = traceMOLoggerBufferActionCounter.WithLabelValues("loop_backoff")
+	TraceMOLoggerBufferWriteSQL         = traceMOLoggerBufferActionCounter.WithLabelValues("write_sql")
+	TraceMOLoggerBufferWriteCSV         = traceMOLoggerBufferActionCounter.WithLabelValues("write_csv")
+	TraceMOLoggerBufferWriteFailed      = traceMOLoggerBufferActionCounter.WithLabelValues("write_failed")
+	TraceMOLoggerBufferReactWrite       = traceMOLoggerBufferActionCounter.WithLabelValues("react_write")
+	TraceMOLoggerBufferReactWriteFailed = traceMOLoggerBufferActionCounter.WithLabelValues("react_write_failed")
 )
 
 func GetTraceNegativeCUCounter(typ string) prometheus.Counter {

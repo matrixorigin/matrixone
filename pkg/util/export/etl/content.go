@@ -110,15 +110,24 @@ func (c *ContentWriter) FlushAndClose() (n int, err error) {
 	if c.formatter != nil {
 		c.formatter.Flush()
 	}
+	if c.bufCallback != nil {
+		// release the buf.
+		defer c.bufCallback(c.buf)
+	}
+
 	// main flow
+	// Step 1/2: do sql flush.
 	if c.backoff == nil || c.backoff.Count() {
-		v2.TraceMOLoggerBufferWriteSQLTry.Inc()
+		v2.TraceMOLoggerBufferLoopWriteSQL.Inc()
 		n, err = c.sqlFlusher.FlushBuffer(c.buf)
 	} else {
-		// case 1: metric collector is too much data to write
-		v2.TraceMOLoggerBufferWriteBackOff.Inc()
-		err = errBackOff // trigger csv flusher
+		// what situation wil run this loop
+		// 1. metric collector has too much req in queue, ref metric_collector.go/mfsetETL.Count
+		v2.TraceMOLoggerBufferLoopBackOff.Inc()
+		// trigger csv flusher
+		err = errBackOff
 	}
+	// Step 2/2: do csv flush, if sql failed.
 	if err != nil {
 		n, err = c.csvFlusher.FlushBuffer(c.buf)
 		if err != nil {
@@ -131,17 +140,16 @@ func (c *ContentWriter) FlushAndClose() (n int, err error) {
 	} else {
 		v2.TraceMOLoggerBufferWriteSQL.Inc()
 	}
+
+	// nil all
+	if c.bufCallback == nil {
+		v2.TraceMOLoggerBufferNoCallback.Inc()
+	}
 	c.sqlFlusher = nil
 	c.csvFlusher = nil
-	// release the buf.
-	if c.bufCallback != nil {
-		c.bufCallback(c.buf)
-	} else {
-		v2.TraceMOLoggerBufferNoFree.Inc()
-	}
-	c.buf = nil
 	c.formatter = nil
 	c.bufCallback = nil
+	c.buf = nil
 	return n, nil
 }
 

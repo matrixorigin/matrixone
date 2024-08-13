@@ -410,14 +410,14 @@ func localTimeStr(value int64) string {
 }
 
 func (s *mfsetETL) getBuffer() *bytes.Buffer {
-	v2.TraceMOLoggerBufferAlloc.Inc()
+	v2.TraceMOLoggerBufferMetricAlloc.Inc()
 	s.bufferCount.Add(1)
 	return s.bufferPool.Get().(*bytes.Buffer)
 }
 func (s *mfsetETL) putBuffer(b *bytes.Buffer) {
 	b.Reset()
 	s.bufferPool.Put(b)
-	v2.TraceMOLoggerBufferFree.Inc()
+	v2.TraceMOLoggerBufferMetricFree.Inc()
 	s.bufferCount.Add(-1)
 }
 
