@@ -27,6 +27,7 @@ import (
 )
 
 const maxBatchSizeToSend = 64 * mpool.MB
+const defaultCacheBatchSize = 16
 
 var _ vm.Operator = new(MergeOrder)
 
@@ -37,7 +38,7 @@ const (
 )
 
 type MergeOrder struct {
-	ctr *container
+	ctr container
 
 	OrderBySpecs []*plan.OrderBySpec
 
@@ -97,34 +98,32 @@ func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, 
 }
 
 func (mergeOrder *MergeOrder) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := mergeOrder.ctr; ctr != nil {
-		mp := proc.Mp()
-		for i := range ctr.batchList {
-			if ctr.batchList[i] != nil {
-				ctr.batchList[i].Clean(mp)
-			}
+	mp := proc.Mp()
+	ctr := &mergeOrder.ctr
+	for i := range ctr.batchList {
+		if ctr.batchList[i] != nil {
+			ctr.batchList[i].Clean(mp)
 		}
-		for i := range ctr.orderCols {
-			if ctr.orderCols[i] != nil {
-				for j := range ctr.orderCols[i] {
-					if ctr.orderCols[i][j] != nil {
-						ctr.orderCols[i][j].Free(mp)
-					}
+	}
+	for i := range ctr.orderCols {
+		if ctr.orderCols[i] != nil {
+			for j := range ctr.orderCols[i] {
+				if ctr.orderCols[i][j] != nil {
+					ctr.orderCols[i][j].Free(mp)
 				}
 			}
 		}
-		for i := range ctr.executors {
-			if ctr.executors[i] != nil {
-				ctr.executors[i].Free()
-			}
-		}
-		ctr.executors = nil
-
-		if ctr.buf != nil {
-			ctr.buf.Clean(proc.Mp())
-			ctr.buf = nil
-		}
-
-		mergeOrder.ctr = nil
 	}
+	for i := range ctr.executors {
+		if ctr.executors[i] != nil {
+			ctr.executors[i].Free()
+		}
+	}
+	ctr.executors = nil
+
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
+	}
+
 }
