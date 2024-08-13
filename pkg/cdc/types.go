@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
@@ -26,32 +27,43 @@ import (
 Cdc process
 	logtail replayer
 =>  Queue[DecoderInput]
+=>  Partitioner.Partition
+=>  chan[DecoderInput]
 =>  Decoder.Decode
-=>  Queue[DecoderOutput]
+=>  chan[DecoderOutput]
 =>  Sinker.Sink
 =>  Sink.Send
 
 */
 
-type DecoderOutput struct {
-	ts           timestamp.Timestamp
-	sqlOfRows    atomic.Value
-	sqlOfObjects atomic.Value
-	sqlOfDeletes atomic.Value
+// Partitioner partition the entry from queue by table
+type Partitioner interface {
+	Partition(entry tools.Pair[*disttae.TableCtx, *disttae.DecoderInput])
+	Run(ctx context.Context)
 }
 
 // Decoder convert binary data into sql parts
 type Decoder interface {
 	Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input *disttae.DecoderInput) *DecoderOutput
+	Run(ctx context.Context)
+	TableId() uint64
 }
 
 // Sinker manages and drains the sql parts
 type Sinker interface {
-	Sink(ctx context.Context, cdcCtx *disttae.TableCtx, data *DecoderOutput) error
+	Sink(ctx context.Context, data *DecoderOutput) error
+	Run(ctx context.Context)
 }
 
 // Sink represents the destination mysql or matrixone
 type Sink interface {
 	Send(ctx context.Context, data *DecoderOutput) error
 	Close()
+}
+
+type DecoderOutput struct {
+	ts           timestamp.Timestamp
+	sqlOfRows    atomic.Value
+	sqlOfObjects atomic.Value
+	sqlOfDeletes atomic.Value
 }

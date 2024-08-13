@@ -23,8 +23,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,6 +37,7 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"go.uber.org/zap"
 )
 
 const (
@@ -208,15 +207,13 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
 
-	if err := createCdc(
+	err = createCdc(
 		ctx,
 		ses,
 		ts,
 		create,
-	); err != nil {
-		return err
-	}
-	return nil
+	)
+	return err
 }
 
 func createCdc(
@@ -285,6 +282,7 @@ func cdcTaskMetadata(cdcId string) pb.TaskMetadata {
 		},
 	}
 }
+
 func string2uint64(str string) (res uint64, err error) {
 	if str != "" {
 		res, err = strconv.ParseUint(str, 10, 64)
@@ -705,7 +703,6 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	}
 
 	inQueue := cdc2.NewMemQ[tools.Pair[*disttae.TableCtx, *disttae.DecoderInput]]()
-	outQueue := cdc2.NewMemQ[tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput]]()
 	cdc.cdcEngine = disttae.NewCdcEngine(
 		ctx,
 		cdc.cnUUID,
@@ -723,29 +720,6 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	if sinkTyp != MysqlSink && sinkTyp != MatrixoneSink {
 		return moerr.NewInternalError(ctx, "unsupported sink type: %s", sinkTyp)
 	}
-
-	var sinker cdc2.Sinker
-	//TODO: remove console
-	if strings.HasPrefix(strings.ToLower(sinkUri), "console://") {
-		sinker = cdc2.NewConsoleSinker()
-	} else {
-		//extract the info from the sink uri
-		userName, pwd, ip, port, err := extractUriInfo(ctx, sinkUri)
-		if err != nil {
-			return err
-		}
-		mysqlSink, err := cdc2.NewMysqlSink(userName, pwd, ip, port)
-		if err != nil {
-			return err
-		}
-
-		sinker = cdc2.NewMysqlSinker(mysqlSink)
-	}
-
-	//init cdc decoder or sinker
-	go cdc2.RunDecoder(ctx, inQueue, outQueue, cdc2.NewDecoder(cdc.cdcEngMp, fs))
-
-	go cdc2.RunSinker(ctx, outQueue, sinker)
 
 	err = disttae.InitLogTailPushModel(ctx, cdcEngine, cdc.cdcTsWaiter)
 	if err != nil {
@@ -769,7 +743,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	//TODO:add multiple tables
 	var dbId, tableId uint64
 	dbTables := make([]tools.Pair[string, string], 0)
-	dbTablIds := make([]tools.Pair[uint64, uint64], 0)
+	dbTableIds := make([]tools.Pair[uint64, uint64], 0)
 	tableList := strings.Split(tables, ",")
 	for _, table := range tableList {
 		//get dbid tableid for the table
@@ -777,24 +751,23 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 		if len(seps) != 2 {
 			return moerr.NewInternalError(ctx, "invalid tables format")
 		}
-		dbTablPair := tools.Pair[string, string]{
+		dbTablePair := tools.Pair[string, string]{
 			Key:   seps[0],
 			Value: seps[1],
 		}
-		dbTables = append(dbTables, dbTablPair)
-		sql = getSqlForDbIdAndTableId(cdc.cdcTask.AccountId, dbTablPair.Key, dbTablPair.Value)
+		dbTables = append(dbTables, dbTablePair)
+		sql = getSqlForDbIdAndTableId(cdc.cdcTask.AccountId, dbTablePair.Key, dbTablePair.Value)
 		res = cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 		if res.Error() != nil {
 			return res.Error()
 		}
 
 		if res.RowCount() < 1 {
-			return moerr.NewInternalError(ctx, "no table %s:%s", dbTablPair.Key, dbTablPair.Value)
+			return moerr.NewInternalError(ctx, "no table %s:%s", dbTablePair.Key, dbTablePair.Value)
 		} else if res.RowCount() > 1 {
-			return moerr.NewInternalError(ctx, "duplicate table %s:%s", dbTablPair.Key, dbTablPair.Value)
+			return moerr.NewInternalError(ctx, "duplicate table %s:%s", dbTablePair.Key, dbTablePair.Value)
 		}
 
-		//
 		dbId, err = res.U64Value(ctx, 0, 0)
 		if err != nil {
 			return err
@@ -804,15 +777,64 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 		if err != nil {
 			return err
 		}
-		dbTablIds = append(dbTablIds, tools.Pair[uint64, uint64]{
+
+		dbTableIds = append(dbTableIds, tools.Pair[uint64, uint64]{
 			Key:   dbId,
 			Value: tableId,
 		})
 	}
 
+	//                         + == inputCh == > decoder == interCh == > sinker -> remote db    // for table 1
+	// 	                       |
+	// inQueue -> partitioner -+ == inputCh == > decoder == interCh == > sinker -> remote db    // for table 2
+	//	                       |                                                                   ...
+	//	                       |                                                                   ...
+	// 						   + == inputCh == > decoder == interCh == > sinker -> remote db	// for table n
+
+	// make channels between partitioner and decoder
+	inputChs := make(map[uint64]chan tools.Pair[*disttae.TableCtx, *disttae.DecoderInput], len(dbTableIds))
+	for _, dbTableId := range dbTableIds {
+		tableId = dbTableId.Value
+		inputChs[tableId] = make(chan tools.Pair[*disttae.TableCtx, *disttae.DecoderInput])
+	}
+
+	// make channels between decoder and sinker
+	interChs := make(map[uint64]chan tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput], len(dbTableIds))
+	for _, dbTableId := range dbTableIds {
+		tableId = dbTableId.Value
+		interChs[tableId] = make(chan tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput])
+	}
+
+	// make partitioner
+	partitioner := cdc2.NewPartitioner(inQueue, inputChs)
+	go partitioner.Run(ctx)
+
+	// make decoders
+	decoders := make(map[uint64]cdc2.Decoder)
+	for _, dbTableId := range dbTableIds {
+		tableId = dbTableId.Value
+		decoder := cdc2.NewDecoder(cdc.cdcEngMp, fs, tableId, inputChs[tableId], interChs[tableId])
+		decoders[tableId] = decoder
+
+		go decoder.Run(ctx)
+	}
+
+	// make sinkers
+	sinkers := make(map[uint64]cdc2.Sinker)
+	for _, dbTableId := range dbTableIds {
+		tableId = dbTableId.Value
+		sinker, err := cdc2.NewSinker(ctx, sinkUri, interChs[tableId])
+		if err != nil {
+			return err
+		}
+		sinkers[tableId] = sinker
+
+		go sinker.Run(ctx)
+	}
+
 	ch := make(chan int, 1)
 	cdcTables := make([]*disttae.CdcRelation, 0)
-	for i, pair := range dbTablIds {
+	for i, pair := range dbTableIds {
 		cdcTbl := disttae.NewCdcRelation(
 			dbTables[i].Key,
 			dbTables[i].Value,

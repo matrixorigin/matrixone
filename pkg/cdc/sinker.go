@@ -19,22 +19,49 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
-var _ Sinker = new(consoleSinker)
+func NewSinker(ctx context.Context, sinkUri string, inputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput]) (Sinker, error) {
+	//TODO: remove console
+	if strings.HasPrefix(strings.ToLower(sinkUri), "console://") {
+		return NewConsoleSinker(inputCh), nil
+	}
 
-type consoleSinker struct{}
+	//extract the info from the sink uri
+	userName, pwd, ip, port, err := extractUriInfo(ctx, sinkUri)
+	if err != nil {
+		return nil, err
+	}
+	sink, err := NewMysqlSink(userName, pwd, ip, port)
+	if err != nil {
+		return nil, err
+	}
 
-func NewConsoleSinker() Sinker {
-	return &consoleSinker{}
+	return NewMysqlSinker(sink, inputCh), nil
 }
 
-func (s *consoleSinker) Sink(ctx context.Context, cdcCtx *disttae.TableCtx, data *DecoderOutput) error {
+var _ Sinker = new(consoleSinker)
+
+type consoleSinker struct {
+	inputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput]
+}
+
+func NewConsoleSinker(inputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput]) Sinker {
+	return &consoleSinker{
+		inputCh: inputCh,
+	}
+}
+
+func (s *consoleSinker) Sink(_ context.Context, data *DecoderOutput) error {
 	fmt.Fprintln(os.Stderr, "====console sinker====")
-	fmt.Fprintln(os.Stderr, cdcCtx.Db(), cdcCtx.DBId(), cdcCtx.Table(), cdcCtx.TableId(), data.ts)
+	//fmt.Fprintln(os.Stderr, cdcCtx.Db(), cdcCtx.DBId(), cdcCtx.Table(), cdcCtx.TableId(), data.ts)
 	if value, ok := data.sqlOfRows.Load().([][]byte); !ok {
 		fmt.Fprintln(os.Stderr, "no sqlOfrows")
 	} else {
@@ -68,18 +95,63 @@ func (s *consoleSinker) Sink(ctx context.Context, cdcCtx *disttae.TableCtx, data
 	return nil
 }
 
-type mysqlSinker struct {
-	mysql Sink
-}
+func (s *consoleSinker) Run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			break
 
-func NewMysqlSinker(mysql Sink) Sinker {
-	return &mysqlSinker{
-		mysql: mysql,
+		case entry := <-s.inputCh:
+			tableCtx := entry.Key
+			decodeOutput := entry.Value
+			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: {%v} [%v(%v)].[%v(%v)]\n",
+				decodeOutput.ts, tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+
+			err := s.Sink(ctx, decodeOutput)
+			if err != nil {
+				return
+			}
+		}
 	}
 }
 
-func (mysql *mysqlSinker) Sink(ctx context.Context, cdcCtx *disttae.TableCtx, data *DecoderOutput) error {
-	return mysql.mysql.Send(ctx, data)
+var _ Sinker = new(mysqlSinker)
+
+type mysqlSinker struct {
+	mysql   Sink
+	inputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput]
+}
+
+func NewMysqlSinker(mysql Sink, inputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput]) Sinker {
+	return &mysqlSinker{
+		mysql:   mysql,
+		inputCh: inputCh,
+	}
+}
+
+func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) error {
+	return s.mysql.Send(ctx, data)
+}
+
+func (s *mysqlSinker) Run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			break
+
+		case entry := <-s.inputCh:
+			tableCtx := entry.Key
+			decodeOutput := entry.Value
+			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: {%v} [%v(%v)].[%v(%v)]\n",
+				decodeOutput.ts, tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+
+			err := s.Sink(ctx, decodeOutput)
+			if err != nil {
+				return
+			}
+			// TODO update watermark
+		}
+	}
 }
 
 type mysqlSink struct {
@@ -99,21 +171,18 @@ func NewMysqlSink(
 		port:     port,
 	}
 	err := ret.connect()
-	if err != nil {
-		return nil, err
-	}
 	return ret, err
 }
 
-func (mysql *mysqlSink) connect() (err error) {
-	mysql.conn, err = openDbConn(mysql.user, mysql.password, mysql.ip, mysql.port)
+func (s *mysqlSink) connect() (err error) {
+	s.conn, err = openDbConn(s.user, s.password, s.ip, s.port)
 	if err != nil {
 		return err
 	}
 	return err
 }
 
-func (mysql *mysqlSink) Send(ctx context.Context, data *DecoderOutput) (err error) {
+func (s *mysqlSink) Send(ctx context.Context, data *DecoderOutput) (err error) {
 	sendRows := func(info string, rows [][]byte) (serr error) {
 		fmt.Fprintln(os.Stderr, "----mysql sink----", info, len(rows))
 		for _, row := range rows {
@@ -122,7 +191,7 @@ func (mysql *mysqlSink) Send(ctx context.Context, data *DecoderOutput) (err erro
 			}
 			plen := min(len(row), 200)
 			fmt.Fprintln(os.Stderr, "----mysql sink----", info, string(row[:plen]))
-			_, serr = mysql.conn.ExecContext(ctx, util.UnsafeBytesToString(row))
+			_, serr = s.conn.ExecContext(ctx, util.UnsafeBytesToString(row))
 			if serr != nil {
 				return serr
 			}
@@ -151,10 +220,10 @@ func (mysql *mysqlSink) Send(ctx context.Context, data *DecoderOutput) (err erro
 	return
 }
 
-func (mysql *mysqlSink) Close() {
-	if mysql.conn != nil {
-		_ = mysql.conn.Close()
-		mysql.conn = nil
+func (s *mysqlSink) Close() {
+	if s.conn != nil {
+		_ = s.conn.Close()
+		s.conn = nil
 	}
 }
 
@@ -163,4 +232,39 @@ type matrixoneSink struct {
 
 func (*matrixoneSink) Send(ctx context.Context, data *DecoderOutput) error {
 	return nil
+}
+
+func extractUriInfo(ctx context.Context, uri string) (user string, pwd string, ip string, port int, err error) {
+	slashIdx := strings.Index(uri, "//")
+	if slashIdx == -1 {
+		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 1")
+	}
+	atIdx := strings.Index(uri[slashIdx+2:], "@")
+	if atIdx == -1 {
+		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 2")
+	}
+	userPwd := uri[slashIdx+2:][:atIdx]
+	seps := strings.Split(userPwd, ":")
+	if len(seps) != 2 {
+		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 3")
+	}
+	user = seps[0]
+	pwd = seps[1]
+	ipPort := uri[slashIdx+2:][atIdx+1:]
+	seps = strings.Split(ipPort, ":")
+	if len(seps) != 2 {
+		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 4")
+	}
+	ip = seps[0]
+	portStr := seps[1]
+	var portInt int64
+	portInt, err = strconv.ParseInt(portStr, 10, 32)
+	if err != nil {
+		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 5 %v", portStr)
+	}
+	if portInt < 0 || portInt > 65535 {
+		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 6")
+	}
+	port = int(portInt)
+	return
 }

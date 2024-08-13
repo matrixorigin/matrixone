@@ -22,8 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,9 +30,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/panjf2000/ants/v2"
 )
 
 const (
@@ -44,14 +44,50 @@ const (
 var _ Decoder = new(decoder)
 
 type decoder struct {
-	mp *mpool.MPool
-	fs fileservice.FileService
+	mp       *mpool.MPool
+	fs       fileservice.FileService
+	tableId  uint64
+	inputCh  chan tools.Pair[*disttae.TableCtx, *disttae.DecoderInput]
+	outputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput]
 }
 
-func NewDecoder(mp *mpool.MPool, fs fileservice.FileService) Decoder {
+func NewDecoder(
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	tableId uint64,
+	inputCh chan tools.Pair[*disttae.TableCtx, *disttae.DecoderInput],
+	outputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput],
+) Decoder {
 	return &decoder{
-		mp: mp,
-		fs: fs,
+		mp:       mp,
+		fs:       fs,
+		tableId:  tableId,
+		inputCh:  inputCh,
+		outputCh: outputCh,
+	}
+}
+
+func (dec *decoder) TableId() uint64 {
+	return dec.TableId()
+}
+
+func (dec *decoder) Run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			break
+
+		case entry := <-dec.inputCh:
+			tableCtx := entry.Key
+			input := entry.Value
+			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Decoder: {%v} [%v(%v)].[%v(%v)]\n",
+				input.TS(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+
+			dec.outputCh <- tools.NewPair[*disttae.TableCtx, *DecoderOutput](tableCtx, dec.Decode(ctx, tableCtx, input))
+
+			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Decoder: {%v} [%v(%v)].[%v(%v)], entry pushed\n",
+				input.TS(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+		}
 	}
 }
 

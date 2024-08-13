@@ -1457,38 +1457,3 @@ func hashString(s string) string {
 	hashBytes := hash.Sum(nil)
 	return hex.EncodeToString(hashBytes)
 }
-
-func extractUriInfo(ctx context.Context, uri string) (user string, pwd string, ip string, port int, err error) {
-	slashIdx := strings.Index(uri, "//")
-	if slashIdx == -1 {
-		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 1")
-	}
-	atIdx := strings.Index(uri[slashIdx+2:], "@")
-	if atIdx == -1 {
-		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 2")
-	}
-	userPwd := uri[slashIdx+2:][:atIdx]
-	seps := strings.Split(userPwd, ":")
-	if len(seps) != 2 {
-		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 3")
-	}
-	user = seps[0]
-	pwd = seps[1]
-	ipPort := uri[slashIdx+2:][atIdx+1:]
-	seps = strings.Split(ipPort, ":")
-	if len(seps) != 2 {
-		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 4")
-	}
-	ip = seps[0]
-	portStr := seps[1]
-	var portInt int64
-	portInt, err = strconv.ParseInt(portStr, 10, 32)
-	if err != nil {
-		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 5 %v", portStr)
-	}
-	if portInt < 0 || portInt > 65535 {
-		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 6")
-	}
-	port = int(portInt)
-	return
-}

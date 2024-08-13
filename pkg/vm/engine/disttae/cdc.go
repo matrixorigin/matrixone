@@ -428,10 +428,7 @@ func (cdcTbl *CdcRelation) getPartitionState(
 func SubscribeCdcTable(ctx context.Context, cdcTbl *CdcRelation, dbId, tableId uint64) error {
 	//to subscribe the logtail for the table
 	_, err := cdcTbl.getPartitionState(ctx, dbId, tableId)
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 //func Transform(
