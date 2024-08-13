@@ -250,6 +250,9 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ParamTypes != nil {
 		prepareStmt.PrepareStmt = nil
 	}
+	if prepareStmt.ColDefData != nil {
+		prepareStmt.ColDefData = nil
+	}
 }
 
 var _ buf.Allocator = &SessionAllocator{}
