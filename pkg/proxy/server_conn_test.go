@@ -344,7 +344,7 @@ func (h *testHandler) handleShowVar() {
 		res.AddColumn(c)
 	}
 	for _, c := range columns {
-		if err := h.mysqlProto.SendColumnDefinitionPacket(context.TODO(), c.(frontend.Column), 3); err != nil {
+		if _, err := h.mysqlProto.SendColumnDefinitionPacket(context.TODO(), c.(frontend.Column), 3); err != nil {
 			_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
 			return
 		}
@@ -391,7 +391,7 @@ func (h *testHandler) handleShowGlobalVar() {
 		res.AddColumn(c)
 	}
 	for _, c := range columns {
-		if err := h.mysqlProto.SendColumnDefinitionPacket(context.TODO(), c.(frontend.Column), 3); err != nil {
+		if _, err := h.mysqlProto.SendColumnDefinitionPacket(context.TODO(), c.(frontend.Column), 3); err != nil {
 			_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
 			return
 		}
@@ -448,7 +448,7 @@ func (h *testHandler) handleShowProcesslist() {
 		res.AddColumn(c)
 	}
 	for _, c := range columns {
-		if err := h.mysqlProto.SendColumnDefinitionPacket(context.TODO(), c.(frontend.Column), 3); err != nil {
+		if _, err := h.mysqlProto.SendColumnDefinitionPacket(context.TODO(), c.(frontend.Column), 3); err != nil {
 			_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
 			return
 		}
