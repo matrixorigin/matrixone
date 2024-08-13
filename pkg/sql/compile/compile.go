@@ -4030,6 +4030,32 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		nodes[0].NeedExpandRanges = true
 		return nodes, nil, nil, nil
 	}
+
+	//TODO:: optimize for agg query.
+	//if len(n.AggList) > 0 && relData.DataCnt() > 1 {
+	//	newRelData := relData.BuildEmptyRelData()
+	//	newRelData.AppendBlockInfo(relData.GetBlockInfo(0))
+	//
+	//	tombstones, err := collectTombstones(c, n, rel)
+	//	if err != nil {
+	//		return nil, nil, nil, err
+	//	}
+
+	//	//For each blockinfo in relData, if blk has no tombstones, then compute the agg result,
+	//	//otherwise put it into newRelData.
+	//	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk objectio.BlockInfo) (bool, error) {
+	//		if tombstones.HasTombstones(blk.BlockID) {
+	//			newRelData.AppendBlockInfo(blk)
+	//			return true, nil
+	//		}
+	//		//TODO::compute the agg result.
+	//		return true, nil
+	//	})
+	//
+	//	//TODO:: substitute relData with newRelData.
+	//	//relData = newRelData
+	//}
+
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
 	expectedLen := relData.DataCnt()
