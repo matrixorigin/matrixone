@@ -41,14 +41,14 @@ func (loopJoin *LoopJoin) OpType() vm.OpType {
 func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 	var err error
 
-	if loopJoin.Cond != nil {
+	if loopJoin.Cond != nil && loopJoin.ctr.expr == nil {
 		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.Cond)
 		if err != nil {
 			return err
 		}
 	}
 
-	if loopJoin.ProjectList != nil {
+	if loopJoin.ProjectList != nil && loopJoin.ProjectExecutors == nil {
 		err = loopJoin.PrepareProjection(proc)
 	}
 	return err
