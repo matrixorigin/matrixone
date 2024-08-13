@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -368,6 +369,7 @@ type FeSession interface {
 	SetStaticTxnInfo(string)
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
+	GetMySQLParser() *mysql.MySQLParser
 	SessionLogger
 }
 
@@ -506,6 +508,12 @@ type feSessionImpl struct {
 	respr        Responser
 	//refreshed once
 	staticTxnInfo string
+	// mysql parser
+	mysqlParser mysql.MySQLParser
+}
+
+func (ses *feSessionImpl) GetMySQLParser() *mysql.MySQLParser {
+	return &ses.mysqlParser
 }
 
 func (ses *feSessionImpl) EnterFPrint(idx int) {
@@ -974,6 +982,7 @@ type MysqlReader interface {
 	MediaReader
 	Property
 	Read() ([]byte, error)
+	ReadLoadLocalPacket() ([]byte, error)
 	Free(buf []byte)
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 	Authenticate(ctx context.Context) error

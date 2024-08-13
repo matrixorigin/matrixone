@@ -237,3 +237,58 @@ pitr_id    pitr_name    create_account    create_time    modified_time    level 
 drop account if exists acc02;
 select * from mo_catalog.mo_pitr;
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+drop pitr if exists pitr01;
+create pitr pitr01 range 1 'h';
+drop pitr if exists pitr02;
+create pitr pitr02 range 1 'd';
+drop pitr if exists pitr03;
+create pitr pitr03 range 1 'mo';
+drop pitr if exists pitr04;
+create pitr pitr04 range 1 'y';
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr01    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    h
+pitr02    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    d
+pitr03    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    mo
+pitr04    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    y
+show pitr where ACCOUNT_NAME = 'sys';
+pitr_name    created_time    modified_time    pitr_level    account_name    database_name    table_name    pitr_length    pitr_unit
+pitr01    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    h
+pitr02    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    d
+pitr03    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    mo
+pitr04    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    y
+show pitr where ACCOUNT_NAME = 'sys' AND CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > CAST_RANGE_VALUE_UNIT(1, 'h');
+pitr_name    created_time    modified_time    pitr_level    account_name    database_name    table_name    pitr_length    pitr_unit
+pitr02    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    d
+pitr03    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    mo
+pitr04    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    y
+show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > 1;
+pitr_name    created_time    modified_time    pitr_level    account_name    database_name    table_name    pitr_length    pitr_unit
+pitr02    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    d
+pitr03    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    mo
+pitr04    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    y
+show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > CAST_RANGE_VALUE_UNIT(1, 'h');
+pitr_name    created_time    modified_time    pitr_level    account_name    database_name    table_name    pitr_length    pitr_unit
+pitr02    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    d
+pitr03    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    mo
+pitr04    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    y
+show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) >= CAST_RANGE_VALUE_UNIT(29, 'd');
+pitr_name    created_time    modified_time    pitr_level    account_name    database_name    table_name    pitr_length    pitr_unit
+pitr03    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    mo
+pitr04    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    y
+show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > CAST_RANGE_VALUE_UNIT(30, 'd');
+pitr_name    created_time    modified_time    pitr_level    account_name    database_name    table_name    pitr_length    pitr_unit
+pitr04    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    y
+show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) >= CAST_RANGE_VALUE_UNIT(30, 'd');
+pitr_name    created_time    modified_time    pitr_level    account_name    database_name    table_name    pitr_length    pitr_unit
+pitr03    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    mo
+pitr04    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    y
+show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > CAST_RANGE_VALUE_UNIT(11, 'mo');
+pitr_name    created_time    modified_time    pitr_level    account_name    database_name    table_name    pitr_length    pitr_unit
+pitr04    2024-08-07 07:17:11    2024-08-07 07:17:11    account    sys    *    *    1    y
+drop pitr if exists pitr01;
+drop pitr if exists pitr02;
+drop pitr if exists pitr03;
+drop pitr if exists pitr04;
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT

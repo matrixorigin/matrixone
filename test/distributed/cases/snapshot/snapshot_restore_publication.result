@@ -151,8 +151,8 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:15    sub_db2    2024-08-01 17:01:15    2
-pubname1    sys    db1    *    publish db1 database    2024-08-01 17:01:15    sub_db1    2024-08-01 17:01:15    2
+pubname2    sys    null    null    null    null    sub_db2    2024-08-09 16:01:24    2
+pubname1    sys    null    null    null    null    sub_db1    2024-08-09 16:01:24    2
 show databases like 'sub_db2';
 Database
 sub_db2
@@ -162,7 +162,7 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:15    sub_db2    2024-08-01 17:01:15    2
+pubname2    sys    null    null    null    null    sub_db2    2024-08-09 16:01:24    2
 restore account sys from snapshot snapshot3;
 select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 user_id    user_name    creator    owner    default_role
@@ -298,8 +298,8 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:17    sub_db2    2024-08-01 17:01:17    2
-pubname1    sys    db1    *    publish db1 database    2024-08-01 17:01:17    sub_db1    2024-08-01 17:01:17    2
+pubname2    sys    null    null    null    null    sub_db2    2024-08-09 16:01:26    2
+pubname1    sys    null    null    null    null    sub_db1    2024-08-09 16:01:26    2
 show databases like 'sub_db2';
 Database
 sub_db2
@@ -309,7 +309,7 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:17    sub_db2    2024-08-01 17:01:17    2
+pubname2    sys    null    null    null    null    sub_db2    2024-08-09 16:01:26    2
 drop snapshot snapshot4;
 drop account test_tenant_1;
 drop account test_tenant_2;
@@ -370,8 +370,8 @@ a
 3
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:19    sub_db2    2024-08-01 17:01:19    0
-pubname1    sys    db1    *    publish db1 database    2024-08-01 17:01:18    sub_db1    2024-08-01 17:01:18    2
+pubname2    sys    db2    *    publish db2 database    2024-08-09 16:01:27    sub_db2    2024-08-09 16:01:27    0
+pubname1    sys    null    null    null    null    sub_db1    2024-08-09 16:01:27    2
 create database sub_db2 from sys publication pubname2;
 use sub_db2;
 show tables;
@@ -413,8 +413,8 @@ Tables_in_sub_db1
 t1
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:19    sub_db2    2024-08-01 17:01:19    2
-pubname1    sys    db1    *    publish db1 database    2024-08-01 17:01:19    sub_db1    2024-08-01 17:01:18    0
+pubname2    sys    null    null    null    null    sub_db2    2024-08-09 16:01:27    2
+pubname1    sys    db1    *    publish db1 database    2024-08-09 16:01:27    sub_db1    2024-08-09 16:01:27    0
 show databases like 'sub_db2';
 Database
 sub_db2
@@ -424,7 +424,7 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:19    sub_db2    2024-08-01 17:01:19    2
+pubname2    sys    null    null    null    null    sub_db2    2024-08-09 16:01:27    2
 restore account sys from snapshot snapshot5;
 select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 user_id    user_name    creator    owner    default_role
@@ -446,8 +446,8 @@ show tables;
 internal error: there is no publication pubname1
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:19    sub_db2    2024-08-01 17:01:19    2
-pubname1    sys    db1    *    publish db1 database    2024-08-01 17:01:19    sub_db1    2024-08-01 17:01:18    2
+pubname2    sys    null    null    null    null    sub_db2    2024-08-09 16:01:27    2
+pubname1    sys    null    null    null    null    sub_db1    2024-08-09 16:01:27    2
 show databases like 'sub_db2';
 Database
 sub_db2
@@ -457,7 +457,7 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:19    sub_db2    2024-08-01 17:01:19    2
+pubname2    sys    null    null    null    null    sub_db2    2024-08-09 16:01:27    2
 drop snapshot snapshot5;
 drop snapshot snapshot6;
 drop account test_tenant_1;
