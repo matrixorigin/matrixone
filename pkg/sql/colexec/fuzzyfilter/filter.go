@@ -239,7 +239,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			if err != nil {
 				return result, err
 			}
-			
+
 			continue
 		case End:
 			result.Status = vm.ExecStop
