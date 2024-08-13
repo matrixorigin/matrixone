@@ -148,10 +148,6 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 			return err
 		}
 	}
-	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
-	}
 	ctr.rbat = ctr.batWaitForSort
 	result.Batch = ctr.batWaitForSort
 	ctr.batWaitForSort = nil
@@ -176,10 +172,8 @@ func (order *Order) OpType() vm.OpType {
 }
 
 func (order *Order) Prepare(proc *process.Process) (err error) {
-	order.ctr = new(container)
-	ctr := order.ctr
-	ctr.state = vm.Build
-	{
+	ctr := &order.ctr
+	if len(ctr.desc) == 0 {
 		ctr.desc = make([]bool, len(order.OrderBySpec))
 		ctr.nullsLast = make([]bool, len(order.OrderBySpec))
 		ctr.sortVectors = make([]*vector.Vector, len(order.OrderBySpec))
@@ -193,14 +187,14 @@ func (order *Order) Prepare(proc *process.Process) (err error) {
 				order.ctr.nullsLast[i] = order.ctr.desc[i]
 			}
 		}
-	}
 
-	ctr.sortVectors = make([]*vector.Vector, len(order.OrderBySpec))
-	ctr.sortExprExecutor = make([]colexec.ExpressionExecutor, len(order.OrderBySpec))
-	for i := range ctr.sortVectors {
-		ctr.sortExprExecutor[i], err = colexec.NewExpressionExecutor(proc, order.OrderBySpec[i].Expr)
-		if err != nil {
-			return err
+		ctr.sortVectors = make([]*vector.Vector, len(order.OrderBySpec))
+		ctr.sortExprExecutor = make([]colexec.ExpressionExecutor, len(order.OrderBySpec))
+		for i := range ctr.sortVectors {
+			ctr.sortExprExecutor[i], err = colexec.NewExpressionExecutor(proc, order.OrderBySpec[i].Expr)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -212,42 +206,45 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	ctr := order.ctr
+	ctr := &order.ctr
 	anal := proc.GetAnalyze(order.GetIdx(), order.GetParallelIdx(), order.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
 	}()
 
+	if ctr.rbat != nil {
+		//rbat is a big memory, just clean
+		ctr.rbat.Clean(proc.GetMPool())
+		ctr.rbat = nil
+	}
+
 	if ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(order.GetChildren(0), proc, anal)
+			input, err := vm.ChildrenCall(order.GetChildren(0), proc, anal)
 			if err != nil {
-				result.Status = vm.ExecStop
-				return result, err
+				return vm.CancelResult, err
 			}
-			if result.Batch == nil {
+			if input.Batch == nil {
 				ctr.state = vm.Eval
 				break
 			}
-			if result.Batch.IsEmpty() {
+			if input.Batch.IsEmpty() {
 				continue
 			}
 
-			anal.Input(result.Batch, order.IsFirst)
-			enoughToSend, err := ctr.appendBatch(proc, result.Batch)
+			anal.Input(input.Batch, order.IsFirst)
+			enoughToSend, err := ctr.appendBatch(proc, input.Batch)
 			if err != nil {
-				result.Status = vm.ExecStop
-				return result, err
+				return vm.CancelResult, err
 			}
 
 			if enoughToSend {
-				err := ctr.sortAndSend(proc, &result)
+				err := ctr.sortAndSend(proc, &input)
 				if err != nil {
-					result.Status = vm.ExecStop
-					return result, err
+					return vm.CancelResult, err
 				}
-				return result, nil
+				return input, nil
 			}
 		}
 	}
@@ -256,8 +253,7 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 	if ctr.state == vm.Eval {
 		err := ctr.sortAndSend(proc, &result)
 		if err != nil {
-			result.Status = vm.ExecStop
-			return result, err
+			return vm.CancelResult, err
 		}
 		ctr.state = vm.End
 		return result, nil
