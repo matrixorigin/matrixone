@@ -701,17 +701,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	return nil
 }
 
-func (s *Scope) isShuffle() bool {
-	// the pipeline is merge->group->xxx
-	if s != nil && s.RootOp != nil && s.RootOp.GetOperatorBase().NumChildren() > 0 {
-		op := vm.GetLeafOpParent(nil, s.RootOp)
-		if op.OpType() == vm.Group {
-			return op.(*group.Group).IsShuffle
-		}
-	}
-	return false
-}
-
 func (s *Scope) isRight() bool {
 	if s == nil {
 		return false
