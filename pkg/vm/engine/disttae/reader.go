@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -141,8 +140,9 @@ func (r *emptyReader) Read(
 	_ *plan.Expr,
 	_ *mpool.MPool,
 	_ engine.VectorPool,
-) (*batch.Batch, error) {
-	return nil, nil
+	_ *batch.Batch,
+) (bool, error) {
+	return true, nil
 }
 
 func prepareGatherStats(ctx context.Context) (context.Context, int64, int64) {
@@ -208,34 +208,34 @@ func (r *mergeReader) Read(
 	expr *plan.Expr,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
-) (*batch.Batch, error) {
+	bat *batch.Batch,
+) (bool, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	if len(r.rds) == 0 {
-		return nil, nil
+		return true, nil
 	}
 	for len(r.rds) > 0 {
-		bat, err := r.rds[0].Read(ctx, cols, expr, mp, vp)
+		isEnd, err := r.rds[0].Read(ctx, cols, expr, mp, vp, bat)
 		if err != nil {
 			for _, rd := range r.rds {
 				rd.Close()
 			}
-			return nil, err
+			return false, err
 		}
-		if bat == nil {
+		if isEnd {
 			r.rds = r.rds[1:]
+			continue
 		}
-		if bat != nil {
-			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-				logutil.Debug(testutil.OperatorCatchBatch("merge reader", bat))
-			}
-			return bat, nil
+		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+			logutil.Debug(testutil.OperatorCatchBatch("merge reader", bat))
 		}
+		return false, nil
 	}
-	return nil, nil
+	return true, nil
 }
 
 // -----------------------------------------------------------------
@@ -312,28 +312,20 @@ func (r *reader) Read(
 	expr *plan.Expr,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
-) (bat *batch.Batch, err error) {
+	bat *batch.Batch,
+) (isEnd bool, err error) {
+
+	var dataState engine.DataState
 
 	start := time.Now()
 	defer func() {
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
-		if bat == nil {
+		if err != nil || dataState == engine.End {
 			r.Close()
 		}
 	}()
 
 	r.tryUpdateColumns(cols)
-
-	bat = batch.NewWithSize(len(r.columns.colTypes))
-	bat.Attrs = append(bat.Attrs, cols...)
-
-	for i := 0; i < len(r.columns.colTypes); i++ {
-		if vp == nil {
-			bat.Vecs[i] = vector.NewVec(r.columns.colTypes[i])
-		} else {
-			bat.Vecs[i] = vp.GetVector(r.columns.colTypes[i])
-		}
-	}
 
 	blkInfo, state, err := r.source.Next(
 		ctx,
@@ -345,14 +337,16 @@ func (r *reader) Read(
 		vp,
 		bat)
 
+	dataState = state
+
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	if state == engine.End {
-		return nil, nil
+		return true, nil
 	}
 	if state == engine.InMem {
-		return bat, nil
+		return false, nil
 	}
 	//read block
 	filter := r.withFilterMixin.filterState.filter
@@ -369,7 +363,7 @@ func (r *reader) Read(
 		policy = fileservice.SkipMemoryCacheWrites
 	}
 
-	bat, err = blockio.BlockDataRead(
+	err = blockio.BlockDataRead(
 		statsCtx,
 		r.withFilterMixin.proc.GetService(),
 		blkInfo,
@@ -382,9 +376,10 @@ func (r *reader) Read(
 		filter,
 		r.fs, mp, vp, policy,
 		r.tableDef.Name,
+		bat,
 	)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 
 	if filter.Valid {
@@ -402,5 +397,5 @@ func (r *reader) Read(
 		logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
 	}
 
-	return bat, nil
+	return false, nil
 }

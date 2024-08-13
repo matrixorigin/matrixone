@@ -2313,11 +2313,26 @@ func (tbl *txnTable) readNewRowid(
 			blkMeta, columnMap, zms, vecs) {
 			continue
 		}
+
+		vp := tbl.proc.Load()
+		buildBatch := func() *batch.Batch {
+			result := batch.NewWithSize(len(colTypes))
+			for i, typ := range colTypes {
+				if vp == nil {
+					result.Vecs[i] = vector.NewVec(typ)
+				} else {
+					result.Vecs[i] = vp.GetVector(typ)
+				}
+			}
+			return result
+		}
+		bat := buildBatch()
+
 		// rowid + pk
-		bat, err := blockio.BlockDataRead(
+		err := blockio.BlockDataRead(
 			tbl.proc.Load().Ctx, tbl.proc.Load().GetService(), &blk, ds, columns, colTypes, tbl.db.op.SnapshotTS(),
 			nil, nil, blockio.BlockReadFilter{},
-			tbl.getTxn().engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(), fileservice.Policy(0), "",
+			tbl.getTxn().engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(), fileservice.Policy(0), "", bat,
 		)
 		if err != nil {
 			return rowid, false, err
