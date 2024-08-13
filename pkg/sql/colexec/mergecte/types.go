@@ -32,9 +32,11 @@ const (
 
 type container struct {
 	buf        *batch.Batch
+	bats       []*batch.Batch
 	nodeCnt    int32
 	curNodeCnt int32
 	status     int32
+	last       bool
 }
 
 type MergeCTE struct {
