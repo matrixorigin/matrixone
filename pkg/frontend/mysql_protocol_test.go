@@ -2917,6 +2917,11 @@ func (fp *testMysqlWriter) WriteColumnDef(ctx context.Context, column Column, i 
 	panic("implement me")
 }
 
+func (fp *testMysqlWriter) WriteColumnDefBytes(payload []byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (fp *testMysqlWriter) WriteRow() error {
 	//TODO implement me
 	panic("implement me")
