@@ -141,6 +141,10 @@ func (node *NumVal) GetStringVal() string {
 	}
 }
 
+func (n *NumVal) String() string {
+	return n.origString
+}
+
 // follow package constant Uint64Val
 func (node *NumVal) GetUint64() (uint64, bool) {
 	switch node.ValType {
@@ -190,8 +194,26 @@ func (node *NumVal) GetFloat64() (float64, bool) {
 	}
 }
 
-func (n *NumVal) OrigString() string {
-	return n.origString
+func (n *NumVal) Negative() bool {
+	return n.negative
+}
+
+func NewNumVal(value constant.Value, origString string, negative bool) *NumVal {
+	return &NumVal{
+		Value:      value,
+		origString: origString,
+		negative:   negative,
+	}
+}
+
+func NewNumValWithType(value constant.Value, origString string, negative bool, typ P_TYPE) *NumVal {
+	numVal := &NumVal{
+		Value:      value,
+		origString: origString,
+		negative:   negative,
+		ValType:    typ,
+	}
+	return numVal
 }
 
 func (n *NumVal) Format(ctx *FmtCtx) {
@@ -232,6 +254,28 @@ func (n *NumVal) Accept(v Visitor) (Expr, bool) {
 	return v.Exit(n)
 }
 
+// StrVal represents a constant string value.
+type StrVal struct {
+	str string
+}
+
+func (node *StrVal) Format(ctx *FmtCtx) {
+	ctx.WriteString(node.str)
+}
+
+// Accept implements NodeChecker Accept interface.
+func (node *StrVal) Accept(v Visitor) (Expr, bool) {
+	panic("unimplement StrVal Accept")
+}
+
+func NewStrVal(s string) *StrVal {
+	return &StrVal{str: s}
+}
+
+func (s *StrVal) String() string {
+	return s.str
+}
+
 func FormatString(str string) string {
 	var buffer strings.Builder
 	for i, ch := range str {
@@ -262,52 +306,4 @@ func FormatString(str string) string {
 	}
 	res := buffer.String()
 	return res
-}
-
-func (n *NumVal) String() string {
-	return n.origString
-}
-
-func (n *NumVal) Negative() bool {
-	return n.negative
-}
-
-func NewNumVal(value constant.Value, origString string, negative bool) *NumVal {
-	return &NumVal{
-		Value:      value,
-		origString: origString,
-		negative:   negative,
-	}
-}
-
-func NewNumValWithType(value constant.Value, origString string, negative bool, typ P_TYPE) *NumVal {
-	numVal := &NumVal{
-		Value:      value,
-		origString: origString,
-		negative:   negative,
-		ValType:    typ,
-	}
-	return numVal
-}
-
-// StrVal represents a constant string value.
-type StrVal struct {
-	str string
-}
-
-func (node *StrVal) Format(ctx *FmtCtx) {
-	ctx.WriteString(node.str)
-}
-
-// Accept implements NodeChecker Accept interface.
-func (node *StrVal) Accept(v Visitor) (Expr, bool) {
-	panic("unimplement StrVal Accept")
-}
-
-func NewStrVal(s string) *StrVal {
-	return &StrVal{str: s}
-}
-
-func (s *StrVal) String() string {
-	return s.str
 }

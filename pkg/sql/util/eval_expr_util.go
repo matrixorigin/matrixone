@@ -350,13 +350,13 @@ func setInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, vec *ve
 
 	case tree.P_hexnum:
 		var val uint64
-		if val, err = HexToInt(numVal.OrigString()); err != nil {
+		if val, err = HexToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendIntegerTimeStamp(int64(val))
 
 	case tree.P_char:
-		s := numVal.OrigString()
+		s := numVal.String()
 		if len(s) == 0 {
 			err = vector.AppendFixed[types.Timestamp](vec, 0, true, proc.GetMPool())
 		} else {
@@ -375,7 +375,7 @@ func setInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, vec *ve
 
 	case tree.P_bit:
 		var val uint64
-		if val, err = BinaryToInt(numVal.OrigString()); err != nil {
+		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendIntegerTimeStamp(int64(val))
@@ -411,7 +411,7 @@ func setInsertValueDateTime(proc *process.Process, numVal *tree.NumVal, vec *vec
 		canInsert = false
 
 	case tree.P_char:
-		s := numVal.OrigString()
+		s := numVal.String()
 		if len(s) == 0 {
 			err = vector.AppendFixed[types.Datetime](vec, 0, true, proc.GetMPool())
 		} else {
@@ -479,13 +479,13 @@ func setInsertValueTime(proc *process.Process, numVal *tree.NumVal, vec *vector.
 
 	case tree.P_hexnum:
 		var val uint64
-		if val, err = HexToInt(numVal.OrigString()); err != nil {
+		if val, err = HexToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendIntegerTime(int64(val))
 
 	case tree.P_char:
-		s := numVal.OrigString()
+		s := numVal.String()
 		if len(s) == 0 {
 			err = vector.AppendFixed[types.Time](vec, 0, true, proc.GetMPool())
 		} else {
@@ -500,7 +500,7 @@ func setInsertValueTime(proc *process.Process, numVal *tree.NumVal, vec *vector.
 
 	case tree.P_bit:
 		var val uint64
-		if val, err = BinaryToInt(numVal.OrigString()); err != nil {
+		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendIntegerTime(int64(val))
@@ -537,7 +537,7 @@ func setInsertValueDate(proc *process.Process, numVal *tree.NumVal, vec *vector.
 		canInsert = false
 
 	case tree.P_char:
-		s := numVal.OrigString()
+		s := numVal.String()
 		var val types.Date
 		if len(s) == 0 {
 			err = vector.AppendFixed[types.Date](vec, 0, true, proc.GetMPool())
@@ -586,7 +586,7 @@ func setInsertValueUuid(proc *process.Process, numVal *tree.NumVal, vec *vector.
 		canInsert = false
 
 	case tree.P_char:
-		s := numVal.OrigString()
+		s := numVal.String()
 		var val types.Uuid
 		val, err = types.ParseUuid(s)
 		if err != nil {
@@ -643,7 +643,7 @@ func setInsertValueBool(proc *process.Process, numVal *tree.NumVal, vec *vector.
 	case tree.P_bit:
 		canInsert = false
 	case tree.P_char:
-		originStr := numVal.OrigString()
+		originStr := numVal.String()
 		if len(originStr) == 4 && strings.ToLower(originStr) == "true" {
 			err = vector.AppendFixed[bool](vec, true, false, proc.Mp())
 		} else {
@@ -741,7 +741,7 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 		err = vector.AppendBytes(vec, val, false, proc.Mp())
 
 	case tree.P_int64, tree.P_uint64, tree.P_char, tree.P_decimal, tree.P_float64:
-		s := numVal.OrigString()
+		s := numVal.String()
 		var val []byte
 		val, err = checkStrLen(s)
 		if err != nil {
@@ -750,7 +750,7 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 		err = vector.AppendBytes(vec, val, false, proc.Mp())
 
 	case tree.P_hexnum:
-		s := numVal.OrigString()[2:]
+		s := numVal.String()[2:]
 		var val []byte
 		if val, err = hex.DecodeString(s); err != nil {
 			return
@@ -758,7 +758,7 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 		err = vector.AppendBytes(vec, val, false, proc.Mp())
 
 	case tree.P_bit:
-		s := numVal.OrigString()[2:]
+		s := numVal.String()[2:]
 		var val []byte
 		if val, err = DecodeBinaryString(s); err != nil {
 			return
@@ -781,7 +781,7 @@ func setInsertValueJSON(proc *process.Process, numVal *tree.NumVal, vec *vector.
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 	default:
 		var json bytejson.ByteJson
-		originStr := numVal.OrigString()
+		originStr := numVal.String()
 		json, err = types.ParseStringToByteJson(originStr)
 		if err != nil {
 			return false, err
@@ -863,7 +863,7 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 			if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
 				v = T(val)
 			} else {
-				v, err = floatNumToFixFloat[T](val, numVal.OrigString(), vec.GetType())
+				v, err = floatNumToFixFloat[T](val, numVal.String(), vec.GetType())
 				if err != nil {
 					return false, err
 				}
@@ -875,7 +875,7 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 
 	case tree.P_hexnum:
 		var val uint64
-		if val, err = HexToInt(numVal.OrigString()); err != nil {
+		if val, err = HexToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		if err = checkOverFlow[uint64, T](proc.Ctx, vec.GetType(), val, vec.GetNulls()); err != nil {
@@ -885,7 +885,7 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 
 	case tree.P_bit:
 		var val uint64
-		if val, err = BinaryToInt(numVal.OrigString()); err != nil {
+		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		if err = checkOverFlow[uint64, T](proc.Ctx, vec.GetType(), val, vec.GetNulls()); err != nil {
@@ -937,19 +937,19 @@ func setInsertValueDecimal64(proc *process.Process, numVal *tree.NumVal, vec *ve
 		err = appendWithUnSigned(uint64(val))
 
 	case tree.P_decimal, tree.P_char, tree.P_float64:
-		originStr := numVal.OrigString()
+		originStr := numVal.String()
 		err = appendWithStr(originStr)
 
 	case tree.P_hexnum:
 		var val uint64
-		if val, err = HexToInt(numVal.OrigString()); err != nil {
+		if val, err = HexToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendWithUnSigned(val)
 
 	case tree.P_bit:
 		var val uint64
-		if val, err = BinaryToInt(numVal.OrigString()); err != nil {
+		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendWithUnSigned(val)
@@ -999,19 +999,19 @@ func setInsertValueDecimal128(proc *process.Process, numVal *tree.NumVal, vec *v
 		err = appendWithUnSigned(uint64(val))
 
 	case tree.P_decimal, tree.P_char, tree.P_float64:
-		originStr := numVal.OrigString()
+		originStr := numVal.String()
 		err = appendWithStr(originStr)
 
 	case tree.P_hexnum:
 		var val uint64
-		if val, err = HexToInt(numVal.OrigString()); err != nil {
+		if val, err = HexToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendWithUnSigned(val)
 
 	case tree.P_bit:
 		var val uint64
-		if val, err = BinaryToInt(numVal.OrigString()); err != nil {
+		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return false, err
 		}
 		err = appendWithUnSigned(val)
@@ -1061,7 +1061,7 @@ func setInsertValueBit(proc *process.Process, numVal *tree.NumVal, vec *vector.V
 		err = vector.AppendFixed(vec, val, false, proc.Mp())
 
 	case tree.P_char:
-		s := numVal.OrigString()
+		s := numVal.String()
 		if len(s) > 8 {
 			err = moerr.NewInvalidInput(proc.Ctx, "data too long")
 			return
@@ -1118,7 +1118,7 @@ func setInsertValueBit(proc *process.Process, numVal *tree.NumVal, vec *vector.V
 
 	case tree.P_hexnum:
 		var val uint64
-		if val, err = HexToInt(numVal.OrigString()); err != nil {
+		if val, err = HexToInt(numVal.String()); err != nil {
 			return
 		} else if val > uint64(1<<width-1) {
 			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
@@ -1128,7 +1128,7 @@ func setInsertValueBit(proc *process.Process, numVal *tree.NumVal, vec *vector.V
 
 	case tree.P_bit:
 		var val uint64
-		if val, err = BinaryToInt(numVal.OrigString()); err != nil {
+		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return
 		} else if val > uint64(1<<width-1) {
 			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
@@ -1138,7 +1138,7 @@ func setInsertValueBit(proc *process.Process, numVal *tree.NumVal, vec *vector.V
 
 	case tree.P_ScoreBinary:
 		var val uint64
-		if val, err = ScoreBinaryToInt(numVal.OrigString()); err != nil {
+		if val, err = ScoreBinaryToInt(numVal.String()); err != nil {
 			return
 		} else if val > uint64(1<<width-1) {
 			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)

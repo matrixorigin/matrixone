@@ -6667,7 +6667,7 @@ func mustUnboxExprStr(e tree.Expr) string {
 	if e == nil {
 		return ""
 	}
-	return e.(*tree.NumVal).OrigString()
+	return e.(*tree.NumVal).String()
 }
 
 func Test_doAlterUser(t *testing.T) {
