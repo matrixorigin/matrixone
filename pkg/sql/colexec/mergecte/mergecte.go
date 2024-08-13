@@ -106,19 +106,6 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 				mergeCTE.ctr.bats = append(mergeCTE.ctr.bats, result.Batch)
 			}
 
-			//mergeCTE.ctr.buf = result.Batch
-			//if !mergeCTE.ctr.buf.Last() {
-			//	break
-			//}
-			//
-			//mergeCTE.ctr.buf.SetLast()
-			//mergeCTE.ctr.curNodeCnt--
-			//if mergeCTE.ctr.curNodeCnt == 0 {
-			//	mergeCTE.ctr.curNodeCnt = mergeCTE.ctr.nodeCnt
-			//	break
-			//} else {
-			//	proc.PutBatch(mergeCTE.ctr.buf)
-			//}
 		}
 	}
 

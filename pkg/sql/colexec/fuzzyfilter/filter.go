@@ -177,7 +177,6 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			}
 
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
@@ -186,11 +185,9 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 
 			err = fuzzyFilter.handleBuild(proc, pkCol)
 			if err != nil {
-				proc.PutBatch(bat)
 				return result, err
 			}
 
-			proc.PutBatch(bat)
 			continue
 
 		case HandleRuntimeFilter:
@@ -232,7 +229,6 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			}
 
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
@@ -241,11 +237,9 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			// arg.probeCnt += pkCol.Length()
 			err = fuzzyFilter.handleProbe(proc, pkCol)
 			if err != nil {
-				proc.PutBatch(bat)
 				return result, err
 			}
-
-			proc.PutBatch(bat)
+			
 			continue
 		case End:
 			result.Status = vm.ExecStop
