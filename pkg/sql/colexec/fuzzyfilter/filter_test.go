@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -37,8 +36,6 @@ type fuzzyTestCase struct {
 
 var (
 	rowCnts []float64
-
-	referM []float64
 
 	tcs []fuzzyTestCase
 )
@@ -201,15 +198,4 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) []*batch.Batch
 	pkAttr[0] = "pkCol"
 	bat.SetAttributes(pkAttr)
 	return []*batch.Batch{bat, nil}
-}
-
-func resetChildren(arg *FuzzyFilter, bats []*batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: bats,
-	}
-	valueScanArg.Prepare(nil)
-	arg.SetChildren(
-		[]vm.Operator{
-			valueScanArg,
-		})
 }
