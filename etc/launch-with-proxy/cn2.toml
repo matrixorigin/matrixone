@@ -29,6 +29,10 @@ disk-path = "mo-data/file-service-cache"
 name = "ETL"
 backend = "DISK-ETL"
 
+[observability]
+disableTrace = true
+disableMetric = true
+
 [cn]
 uuid = "dd1dccb5-4d3c-41f8-b482-5251dc7a41bf"
 port-base = 18200
@@ -40,8 +44,3 @@ type = "distributed-tae"
 port = 16002
 unix-socket = "/tmp/mysql2.sock"
 proxy-enabled = true
-
-[observability]
-enable-metric-to-prom = true
-enable-stmt-merge = true
-status-port = 7041
