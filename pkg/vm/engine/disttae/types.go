@@ -200,6 +200,12 @@ type Engine struct {
 
 	//for message on multiCN, use uuid to get the messageBoard
 	messageCenter *message.MessageCenter
+
+	timeFixed             bool
+	moCatalogCreatedTime  *vector.Vector
+	moDatabaseCreatedTime *vector.Vector
+	moTablesCreatedTime   *vector.Vector
+	moColumnsCreatedTime  *vector.Vector
 }
 
 func (txn *Transaction) String() string {
@@ -343,6 +349,10 @@ func (b *deletedBlocks) iter(fn func(*types.Blockid, []int64) bool) {
 
 func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int64) {
 	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
+}
+
+func (txn *Transaction) Readonly() bool {
+	return txn.readOnly.Load()
 }
 
 func (txn *Transaction) PPString() string {

@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -249,26 +248,35 @@ func NewReader(
 	expr *plan.Expr,
 	//orderedScan bool, // it should be included in filter or expr.
 	source engine.DataSource,
-) *reader {
+) (*reader, error) {
 
-	baseFilter := newBasePKFilter(
+	baseFilter, err := newBasePKFilter(
 		expr,
 		tableDef,
 		proc,
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	packerPool := e.packerPool
-	memFilter := newMemPKFilter(
+	memFilter, err := newMemPKFilter(
 		tableDef,
 		ts,
 		packerPool,
 		baseFilter,
 	)
+	if err != nil {
+		return nil, err
+	}
 
-	blockFilter := newBlockReadPKFilter(
+	blockFilter, err := newBlockReadPKFilter(
 		tableDef.Pkey.PkeyColName,
 		baseFilter,
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	r := &reader{
 		withFilterMixin: withFilterMixin{
@@ -284,7 +292,7 @@ func NewReader(
 	}
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
-	return r
+	return r, nil
 }
 
 func (r *reader) Close() error {
@@ -314,28 +322,19 @@ func (r *reader) Read(
 	vp engine.VectorPool,
 ) (bat *batch.Batch, err error) {
 
+	var dataState engine.DataState
+
 	start := time.Now()
 	defer func() {
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
-		if bat == nil {
+		if err != nil || dataState == engine.End {
 			r.Close()
 		}
 	}()
 
 	r.tryUpdateColumns(cols)
 
-	bat = batch.NewWithSize(len(r.columns.colTypes))
-	bat.Attrs = append(bat.Attrs, cols...)
-
-	for i := 0; i < len(r.columns.colTypes); i++ {
-		if vp == nil {
-			bat.Vecs[i] = vector.NewVec(r.columns.colTypes[i])
-		} else {
-			bat.Vecs[i] = vp.GetVector(r.columns.colTypes[i])
-		}
-	}
-
-	blkInfo, state, err := r.source.Next(
+	bat, blkInfo, state, err := r.source.Next(
 		ctx,
 		cols,
 		r.columns.colTypes,
@@ -343,16 +342,18 @@ func (r *reader) Read(
 		r.memFilter,
 		mp,
 		vp,
-		bat)
+	)
+
+	dataState = state
 
 	if err != nil {
-		return nil, err
+		return
 	}
 	if state == engine.End {
 		return nil, nil
 	}
 	if state == engine.InMem {
-		return bat, nil
+		return
 	}
 	//read block
 	filter := r.withFilterMixin.filterState.filter
@@ -402,5 +403,5 @@ func (r *reader) Read(
 		logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
 	}
 
-	return bat, nil
+	return
 }
