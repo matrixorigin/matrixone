@@ -42,14 +42,14 @@ func (loopAnti *LoopAnti) OpType() vm.OpType {
 func (loopAnti *LoopAnti) Prepare(proc *process.Process) error {
 	var err error
 
-	if loopAnti.Cond != nil {
+	if loopAnti.Cond != nil && loopAnti.ctr.expr == nil {
 		loopAnti.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopAnti.Cond)
 		if err != nil {
 			return err
 		}
 	}
 
-	if loopAnti.ProjectList != nil {
+	if loopAnti.ProjectList != nil && loopAnti.ProjectExecutors == nil {
 		err = loopAnti.PrepareProjection(proc)
 	}
 	return err
