@@ -98,10 +98,10 @@ func (intersectAll *IntersectAll) Call(proc *process.Process) (vm.CallResult, er
 }
 
 // build use all batches from proc.Reg.MergeReceiver[1](right relation) to build the hash map.
-func (intersetAll *IntersectAll) build(proc *process.Process, analyzer process.Analyze, isFirst bool) error {
-	ctr := intersetAll.ctr
+func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.Analyze, isFirst bool) error {
+	ctr := intersectAll.ctr
 	for {
-		input, err := intersetAll.GetChildren(1).Call(proc)
+		input, err := intersectAll.GetChildren(1).Call(proc)
 		if err != nil {
 			return err
 		}
@@ -150,10 +150,10 @@ func (intersetAll *IntersectAll) build(proc *process.Process, analyzer process.A
 // If a row of the batch appears in the hash table and the value of it in the ctr.counter is greater than 0，
 // send it to the next operator and counter--; else, continue.
 // if batch is the last one, return true, else return false.
-func (intersetAll *IntersectAll) probe(proc *process.Process, analyzer process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
-	ctr := intersetAll.ctr
+func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
+	ctr := intersectAll.ctr
 	for {
-		input, err := intersetAll.GetChildren(0).Call(proc)
+		input, err := intersectAll.GetChildren(0).Call(proc)
 		if err != nil {
 			return false, err
 		}
