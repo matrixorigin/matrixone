@@ -31,12 +31,15 @@ func (p tableIdPartitioner) Partition(entry tools.Pair[*disttae.TableCtx, *distt
 	p.outputChs[tableCtx.TableId()] <- entry
 }
 
-func (p tableIdPartitioner) Run(ctx context.Context) {
+func (p tableIdPartitioner) Run(ctx context.Context, ar *ActiveRoutine) {
 	for {
 		select {
 		case <-ctx.Done():
-			break
-
+			return
+		case <-ar.Pause:
+			return
+		case <-ar.Cancel:
+			return
 		default:
 			if !p.q.Empty() {
 				entry := p.q.Front()

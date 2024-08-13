@@ -96,6 +96,8 @@ const (
 	getCdcTaskIdWhere = "select task_id from mo_catalog.mo_cdc_task where account_id = %d and task_name = '%s'"
 
 	dropCdcMeta = "delete from mo_catalog.mo_cdc_task where account_id = %d and task_id = '%s'"
+
+	updateCdcMeta = "update mo_catalog.mo_cdc_task set state = '%s' where account_id = %d and task_id = '%s'"
 )
 
 func getSqlForNewCdcTask(
@@ -172,7 +174,7 @@ func getSqlForTables(
 	return fmt.Sprintf(getTables, pt.SourceAccount, pt.SourceDatabase, pt.SourceTable)
 }
 
-func getSqlForTaskId(ses *Session, all bool, taskName string) string {
+func getSqlForTaskIdAndName(ses *Session, all bool, taskName string) string {
 	if all {
 		return fmt.Sprintf(getCdcTaskId, ses.GetAccountId())
 	} else {
@@ -182,6 +184,10 @@ func getSqlForTaskId(ses *Session, all bool, taskName string) string {
 
 func getSqlForDropCdcMeta(ses *Session, taskId string) string {
 	return fmt.Sprintf(dropCdcMeta, ses.GetAccountId(), taskId)
+}
+
+func getSqlForUpdateCdcMeta(ses *Session, taskId string, status string) string {
+	return fmt.Sprintf(updateCdcMeta, status, ses.GetAccountId(), taskId)
 }
 
 const (
@@ -379,7 +385,7 @@ func splitPattern(pattern string) (*PatternTuple, error) {
 	return pt, nil
 }
 
-func string2tables(ctx context.Context, ses *Session, pattern string) (map[string]string, error) {
+func string2patterns(pattern string) ([]*PatternTuple, error) {
 	pts := make([]*PatternTuple, 0)
 	current := strings.Builder{}
 	inRegex := false
@@ -407,14 +413,15 @@ func string2tables(ctx context.Context, ses *Session, pattern string) (map[strin
 		}
 		pts = append(pts, pt)
 	}
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
+	return pts, nil
+}
+
+func patterns2tables(ctx context.Context, ses *Session, pts []*PatternTuple, bh BackgroundExec) (map[string]string, error) {
 	resMap := make(map[string]string)
 	for _, pt := range pts {
 		if pt.SourceAccount == "" {
 			pt.SourceAccount = ses.GetTenantName()
 		}
-
 		sql := getSqlForTables(pt)
 		bh.ClearExecResultSet()
 		err := bh.Exec(ctx, sql)
@@ -462,7 +469,6 @@ func string2tables(ctx context.Context, ses *Session, pattern string) (map[strin
 			}
 		}
 	}
-
 	return resMap, nil
 }
 
@@ -497,15 +503,23 @@ func saveCdcTask(
 	if err != nil {
 		return err
 	}
-	ssmap, err := string2tables(ctx, ses, create.Tables)
+	pts, err := string2patterns(create.Tables)
 	if err != nil {
 		return err
 	}
-	fmt.Println("KKKKKKK>", ssmap)
-	dat := time.Now().UTC()
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	tablesMap, err := patterns2tables(ctx, ses, pts, bh)
+	if err != nil {
+		return err
+	}
+	fmt.Println("=============>", tablesMap)
+	dat := time.Now().UTC()
 
 	//TODO: make it better
 	//Currently just for test
@@ -590,6 +604,10 @@ func RegisterCdcExecutor(
 			cnTxnClient,
 			cnEngine,
 		)
+		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
+		if err := attachToTask(ctx, T.GetID(), cdc); err != nil {
+			return err
+		}
 		err = cdc.Start(ctx)
 
 		return err
@@ -606,12 +624,13 @@ type CdcTask struct {
 	fileService     fileservice.FileService
 	createTxnClient func(bool) (client.TxnClient, client.TimestampWaiter, error)
 
-	cdcTask      *task.CreateCdcDetails
-	cdcTxnClient client.TxnClient
-	cdcTsWaiter  client.TimestampWaiter
-	cdcEngMp     *mpool.MPool
-	cdcEngine    engine.Engine
-	cdcTable     *disttae.CdcRelation
+	cdcTask       *task.CreateCdcDetails
+	cdcTxnClient  client.TxnClient
+	cdcTsWaiter   client.TimestampWaiter
+	cdcEngMp      *mpool.MPool
+	cdcEngine     engine.Engine
+	cdcTable      *disttae.CdcRelation
+	activeRoutine *cdc2.ActiveRoutine
 }
 
 func NewCdcTask(
@@ -807,7 +826,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 
 	// make partitioner
 	partitioner := cdc2.NewPartitioner(inQueue, inputChs)
-	go partitioner.Run(ctx)
+	go partitioner.Run(ctx, cdc.activeRoutine)
 
 	// make decoders
 	decoders := make(map[uint64]cdc2.Decoder)
@@ -816,7 +835,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 		decoder := cdc2.NewDecoder(cdc.cdcEngMp, fs, tableId, inputChs[tableId], interChs[tableId])
 		decoders[tableId] = decoder
 
-		go decoder.Run(ctx)
+		go decoder.Run(ctx, cdc.activeRoutine)
 	}
 
 	// make sinkers
@@ -829,7 +848,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 		}
 		sinkers[tableId] = sinker
 
-		go sinker.Run(ctx)
+		go sinker.Run(ctx, cdc.activeRoutine)
 	}
 
 	ch := make(chan int, 1)
@@ -864,15 +883,72 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	return nil
 }
 
-func handleDropCdc(ses *Session, execCtx *ExecCtx, st *tree.DropCDC) error {
-	return doDropCdc(execCtx.reqCtx, ses, st)
+func (cdc *CdcTask) Resume() error {
+	//TODO: DO SOMETHING
+	return nil
 }
 
-func doDropCdc(ctx context.Context, ses *Session, drop *tree.DropCDC) error {
+func (cdc *CdcTask) Pause() error {
+	close(cdc.activeRoutine.Pause)
+	return nil
+}
+
+func (cdc *CdcTask) Cancel() error {
+	close(cdc.activeRoutine.Cancel)
+	return nil
+}
+
+func handleDropCdc(ses *Session, execCtx *ExecCtx, st *tree.DropCDC) error {
+	return updateCdc(execCtx.reqCtx, ses, st)
+}
+
+func handlePauseCdc(ses *Session, execCtx *ExecCtx, st *tree.PauseCDC) error {
+	return updateCdc(execCtx.reqCtx, ses, st)
+}
+
+func handleResumeCdc(ses *Session, execCtx *ExecCtx, st *tree.ResumeCDC) error {
+	return updateCdc(execCtx.reqCtx, ses, st)
+}
+
+func updateCdc(ctx context.Context, ses *Session, st tree.Statement) error {
+	var err error
+	var sql string
+	var targetTaskStatus, targetTaskRequest task.TaskStatus
+	var targetCdcStatus string
+	var allowedTaskStatus task.TaskStatus
+
+	ts := getGlobalPu().TaskService
+	if ts == nil {
+		return moerr.NewInternalError(ctx,
+			"task service not ready yet, please try again later.")
+	}
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
-	sql := getSqlForTaskId(ses, drop.Option.All, drop.Option.TaskName)
-	err := bh.Exec(ctx, sql)
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	switch stmt := st.(type) {
+	case *tree.DropCDC:
+		sql = getSqlForTaskIdAndName(ses, stmt.Option.All, stmt.Option.TaskName)
+		targetTaskStatus, targetTaskRequest = task.TaskStatus_Canceled, task.TaskStatus_CancelRequested
+		targetCdcStatus = SyncStopped
+	case *tree.PauseCDC:
+		sql = getSqlForTaskIdAndName(ses, stmt.Option.All, stmt.Option.TaskName)
+		targetTaskStatus, targetTaskRequest = task.TaskStatus_Paused, task.TaskStatus_PauseRequested
+		allowedTaskStatus = task.TaskStatus_Running
+		targetCdcStatus = SyncStopped
+	case *tree.ResumeCDC:
+		sql = getSqlForTaskIdAndName(ses, false, stmt.TaskName)
+		targetTaskStatus, targetTaskRequest = task.TaskStatus_Running, task.TaskStatus_ResumeRequested
+		allowedTaskStatus = task.TaskStatus_Paused
+		targetCdcStatus = SyncRunning
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return err
 	}
@@ -892,57 +968,48 @@ func doDropCdc(ctx context.Context, ses *Session, drop *tree.DropCDC) error {
 			taskIds = append(taskIds, taskId)
 		}
 	} else {
-		return moerr.NewInternalError(ctx, "no cdc task drop")
+		return moerr.NewInternalError(ctx, "There is no any cdc task.")
 	}
-	bh.ClearExecResultSet()
+
+	daemonTasks, err := ts.QueryDaemonTask(ctx,
+		taskservice.WithAccountID(taskservice.EQ, ses.accountId),
+	)
+	if err != nil {
+		return err
+	}
+
 	for _, taskId := range taskIds {
-		ts := getGlobalPu().TaskService
-		if ts == nil {
-			return moerr.NewInternalError(ctx,
-				"task service not ready yet, please try again later.")
+		for idx := range daemonTasks {
+			daemonTask := &daemonTasks[idx]
+			if taskId == daemonTask.Details.Details.(*pb.Details_CreateCdc).CreateCdc.TaskId {
+				if daemonTask.TaskStatus == targetTaskStatus || daemonTask.TaskStatus == targetTaskRequest {
+					return nil
+				} else if targetTaskStatus != task.TaskStatus_Canceled && daemonTask.TaskStatus != allowedTaskStatus {
+					return moerr.NewInternalError(ctx,
+						"task can be resumed only if it is in %s state, now it is %s",
+						allowedTaskStatus,
+						daemonTask.TaskStatus)
+				}
+				daemonTask.TaskStatus = targetTaskRequest
+				if targetTaskStatus == task.TaskStatus_Canceled {
+					sql = getSqlForDropCdcMeta(ses, taskId)
+				} else {
+					sql = getSqlForUpdateCdcMeta(ses, taskId, targetCdcStatus)
+				}
+				bh.ClearExecResultSet()
+				err = bh.Exec(ctx, sql)
+				if err != nil {
+					return err
+				}
+			}
 		}
-		tasks, err := ts.QueryDaemonTask(ctx,
-			taskservice.WithTaskMetadataId(taskservice.EQ, taskId),
-			taskservice.WithAccountID(taskservice.EQ, ses.accountId),
-		)
-		if err != nil {
-			return err
-		}
-		if len(tasks) != 1 {
-			return moerr.NewInternalError(ctx, "no cdc task drop")
-		}
-		// Already in canceled status.
-		if tasks[0].TaskStatus == task.TaskStatus_Canceled || tasks[0].TaskStatus == task.TaskStatus_CancelRequested {
-			return nil
-		} else if tasks[0].TaskStatus == task.TaskStatus_Error {
-			return moerr.NewInternalError(ctx,
-				"task can not be canceled because it is in %s state", task.TaskStatus_Error)
-		}
-		tasks[0].TaskStatus = task.TaskStatus_CancelRequested
-		c, err := ts.UpdateDaemonTask(ctx, tasks)
-		if err != nil {
-			return err
-		}
-		if c != 1 {
-			return moerr.NewInternalError(ctx, "no cdc task drop")
-		}
-
-		c, err = ts.DeleteDaemonTask(ctx,
-			taskservice.WithTaskMetadataId(taskservice.EQ, taskId),
-			taskservice.WithAccountID(taskservice.EQ, ses.accountId),
-		)
-		if err != nil {
-			return err
-		}
-		if c != 1 {
-			return moerr.NewInternalError(ctx, "no cdc task drop")
-		}
-
-		sql = getSqlForDropCdcMeta(ses, taskId)
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
-		}
+	}
+	c, err := ts.UpdateDaemonTask(ctx, daemonTasks)
+	if err != nil {
+		return err
+	}
+	if c < 1 {
+		return moerr.NewInternalError(ctx, "update daemon task status failed.")
 	}
 	return nil
 }

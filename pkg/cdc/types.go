@@ -39,20 +39,20 @@ Cdc process
 // Partitioner partition the entry from queue by table
 type Partitioner interface {
 	Partition(entry tools.Pair[*disttae.TableCtx, *disttae.DecoderInput])
-	Run(ctx context.Context)
+	Run(ctx context.Context, ar *ActiveRoutine)
 }
 
 // Decoder convert binary data into sql parts
 type Decoder interface {
 	Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input *disttae.DecoderInput) *DecoderOutput
-	Run(ctx context.Context)
+	Run(ctx context.Context, ar *ActiveRoutine)
 	TableId() uint64
 }
 
 // Sinker manages and drains the sql parts
 type Sinker interface {
 	Sink(ctx context.Context, data *DecoderOutput) error
-	Run(ctx context.Context)
+	Run(ctx context.Context, ar *ActiveRoutine)
 }
 
 // Sink represents the destination mysql or matrixone

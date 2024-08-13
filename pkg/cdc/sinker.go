@@ -95,12 +95,15 @@ func (s *consoleSinker) Sink(_ context.Context, data *DecoderOutput) error {
 	return nil
 }
 
-func (s *consoleSinker) Run(ctx context.Context) {
+func (s *consoleSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 	for {
 		select {
 		case <-ctx.Done():
-			break
-
+			return
+		case <-ar.Pause:
+			return
+		case <-ar.Cancel:
+			return
 		case entry := <-s.inputCh:
 			tableCtx := entry.Key
 			decodeOutput := entry.Value
@@ -133,12 +136,15 @@ func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 	return s.mysql.Send(ctx, data)
 }
 
-func (s *mysqlSinker) Run(ctx context.Context) {
+func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 	for {
 		select {
 		case <-ctx.Done():
-			break
-
+			return
+		case <-ar.Pause:
+			return
+		case <-ar.Cancel:
+			return
 		case entry := <-s.inputCh:
 			tableCtx := entry.Key
 			decodeOutput := entry.Value

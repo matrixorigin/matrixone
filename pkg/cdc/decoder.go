@@ -71,12 +71,15 @@ func (dec *decoder) TableId() uint64 {
 	return dec.TableId()
 }
 
-func (dec *decoder) Run(ctx context.Context) {
+func (dec *decoder) Run(ctx context.Context, ar *ActiveRoutine) {
 	for {
 		select {
 		case <-ctx.Done():
-			break
-
+			return
+		case <-ar.Pause:
+			return
+		case <-ar.Cancel:
+			return
 		case entry := <-dec.inputCh:
 			tableCtx := entry.Key
 			input := entry.Value
