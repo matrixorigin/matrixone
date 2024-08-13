@@ -30,8 +30,6 @@ func initTraceMetrics() {
 	registry.MustRegister(traceMOLoggerExportDataHistogram)
 	registry.MustRegister(traceCheckStorageUsageCounter)
 	registry.MustRegister(traceMOLoggerErrorCounter)
-
-	// debug
 	registry.MustRegister(traceMOLoggerMetricBufferCounter)
 }
 

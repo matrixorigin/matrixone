@@ -232,11 +232,6 @@ func (r *bufferExportReq) handle() error {
 
 func (r *bufferExportReq) callback(err error) {}
 
-func (r *bufferExportReq) reset() {
-	r.batch = nil
-	r.b = nil
-}
-
 // getGenerateReq get req to do generate logic
 // return nil, if b.buffer is nil
 func (b *bufferHolder) getGenerateReq() generateReq {
@@ -613,7 +608,6 @@ type generateReq interface {
 type exportReq interface {
 	handle() error
 	callback(error)
-	reset()
 }
 
 // awakeBufferFactory frozen buffer, send GenRequest to awake
@@ -703,7 +697,6 @@ loop:
 			} else if err := req.handle(); err != nil {
 				req.callback(err)
 			}
-			req.reset()
 			v2.TraceCollectorExportDurationHistogram.Observe(time.Since(start).Seconds())
 		case <-c.stopCh:
 			c.mux.Lock()
