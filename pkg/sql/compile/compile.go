@@ -423,7 +423,6 @@ func (c *Compile) SetIsPrepare(isPrepare bool) {
 	c.isPrepare = isPrepare
 }
 
-/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query, current CN addr ", c.addr)
@@ -432,7 +431,7 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scope))
 }
-*/
+
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
@@ -459,7 +458,7 @@ func (c *Compile) runOnce() error {
 		_, _ = GetCompileService().removeRunningCompile(c)
 	}()
 
-	//c.printPipeline()
+	c.printPipeline()
 
 	for i := range c.scope {
 		wg.Add(1)
@@ -3514,17 +3513,22 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 	for i := range rs {
 		rs[i].IsJoin = true
 		rs[i].NodeInfo.Mcpu = c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
+	}
+
+	if c.IsTpQuery() || c.IsSingleScope(rs) {
+		// for tp join, can directly return
+		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
+		return rs
+	}
+
+	//construct build part
+	for i := range rs {
 		rs[i].BuildIdx = len(rs[i].Proc.Reg.MergeReceivers)
 		w := &process.WaitRegister{
 			Ctx: rs[i].Proc.Ctx,
 			Ch:  make(chan *process.RegisterMessage, 10),
 		}
 		rs[i].Proc.Reg.MergeReceivers = append(rs[i].Proc.Reg.MergeReceivers, w)
-	}
-
-	if c.IsTpQuery() {
-		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
-		return rs
 	}
 
 	idx := 0
