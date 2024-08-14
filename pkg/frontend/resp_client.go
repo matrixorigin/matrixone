@@ -46,7 +46,7 @@ func respClientWhenSuccess(ses *Session,
 	return err
 }
 
-func (resper *MysqlResp) respClientWithoutFlush(ses *Session,
+func (resper *MysqlResp) respClient(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	if execCtx.inMigration {
 		return nil
@@ -144,7 +144,7 @@ func (resper *MysqlResp) RespResult(execCtx *ExecCtx, bat *batch.Batch) (err err
 }
 
 func (resper *MysqlResp) RespPostMeta(execCtx *ExecCtx, meta any) (err error) {
-	return resper.respClientWithoutFlush(execCtx.ses.(*Session), execCtx)
+	return resper.respClient(execCtx.ses.(*Session), execCtx)
 }
 
 func (resper *MysqlResp) Close() {
