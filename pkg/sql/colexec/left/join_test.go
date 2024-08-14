@@ -57,22 +57,22 @@ var (
 
 func init() {
 	tcs = []joinTestCase{
-		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		newTestCase([]bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
 			[][]*plan.Expr{
 				{
-					newExpr(0, types.T_int8.ToType()),
+					newExpr(0, types.T_int32.ToType()),
 				},
 				{
-					newExpr(0, types.T_int8.ToType()),
+					newExpr(0, types.T_int32.ToType()),
 				},
 			}),
-		newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+		newTestCase([]bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
 			[][]*plan.Expr{
 				{
-					newExpr(0, types.T_int8.ToType()),
+					newExpr(0, types.T_int32.ToType()),
 				},
 				{
-					newExpr(0, types.T_int8.ToType()),
+					newExpr(0, types.T_int32.ToType()),
 				},
 			}),
 	}
@@ -115,6 +115,7 @@ func TestJoin(t *testing.T) {
 
 		resetChildren(tc.arg)
 		resetHashBuildChildren(tc.barg)
+		tc.proc.GetMessageBoard().Reset()
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		err = tc.barg.Prepare(tc.proc)
@@ -286,6 +287,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 			NeedAllocateSels: true,
 			NeedMergedBatch:  true,
 			JoinMapTag:       tag,
+			JoinMapRefCnt:    1,
 		},
 		resultBatch: resultBatch,
 	}
