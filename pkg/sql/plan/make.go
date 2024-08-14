@@ -373,7 +373,7 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 	}
 
 	astArgs := []tree.Expr{
-		tree.NewNumValWithType(constant.MakeString(targetType.Enumvalues), targetType.Enumvalues, false, tree.P_char),
+		tree.NewNumValWithType2(constant.MakeString(targetType.Enumvalues), targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char),
 	}
 
 	// bind ast function's args

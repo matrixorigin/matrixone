@@ -12405,7 +12405,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.VarAssignmentExpr{
 				Name:  strings.ToLower(yyDollar[1].str),
-				Value: tree.NewNumValWithType(constant.MakeString(yyDollar[2].str), yyDollar[2].str, false, tree.P_char),
+				Value: tree.NewNumValWithType2(constant.MakeString(yyDollar[2].str), yyDollar[2].str, yyDollar[2].str, false, tree.P_char),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -12416,7 +12416,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.VarAssignmentExpr{
 				Name:  strings.ToLower(yyDollar[1].str),
-				Value: tree.NewNumValWithType(constant.MakeString(yyDollar[2].str), yyDollar[2].str, false, tree.P_char),
+				Value: tree.NewNumValWithType2(constant.MakeString(yyDollar[2].str), yyDollar[2].str, yyDollar[2].str, false, tree.P_char),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -12427,8 +12427,8 @@ yydefault:
 		{
 			yyLOCAL = &tree.VarAssignmentExpr{
 				Name:     strings.ToLower(yyDollar[1].str),
-				Value:    tree.NewNumValWithType(constant.MakeString(yyDollar[2].str), yyDollar[2].str, false, tree.P_char),
-				Reserved: tree.NewNumValWithType(constant.MakeString(yyDollar[4].str), yyDollar[4].str, false, tree.P_char),
+				Value:    tree.NewNumValWithType2(constant.MakeString(yyDollar[2].str), yyDollar[2].str, yyDollar[2].str, false, tree.P_char),
+				Reserved: tree.NewNumValWithType2(constant.MakeString(yyDollar[4].str), yyDollar[4].str, yyDollar[4].str, false, tree.P_char),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -12450,7 +12450,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.VarAssignmentExpr{
 				Name:  strings.ToLower(yyDollar[1].str),
-				Value: tree.NewNumValWithType(constant.MakeString(yyDollar[2].str), yyDollar[2].str, false, tree.P_char),
+				Value: tree.NewNumValWithType2(constant.MakeString(yyDollar[2].str), yyDollar[2].str, yyDollar[2].str, false, tree.P_char),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -12470,7 +12470,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:2625
 		{
-			yyLOCAL = tree.NewNumValWithType(constant.MakeString(yyDollar[1].str), yyDollar[1].str, false, tree.P_char)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeString(yyDollar[1].str), yyDollar[1].str, yyDollar[1].str, false, tree.P_char)
 		}
 		yyVAL.union = yyLOCAL
 	case 301:
@@ -12478,7 +12478,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:2629
 		{
-			yyLOCAL = tree.NewNumValWithType(constant.MakeString(yyDollar[1].str), yyDollar[1].str, false, tree.P_char)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeString(yyDollar[1].str), yyDollar[1].str, yyDollar[1].str, false, tree.P_char)
 		}
 		yyVAL.union = yyLOCAL
 	case 302:
@@ -15852,7 +15852,7 @@ yydefault:
 			}
 			yyLOCAL = &tree.Interval{
 				Col:  yyDollar[3].unresolvedNameUnion(),
-				Val:  tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64),
+				Val:  tree.NewNumValWithType2(constant.MakeInt64(v), v, str, false, tree.P_int64),
 				Unit: yyDollar[7].str,
 			}
 		}
@@ -15877,7 +15877,7 @@ yydefault:
 				goto ret1
 			}
 			yyLOCAL = &tree.Sliding{
-				Val:  tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64),
+				Val:  tree.NewNumValWithType2(constant.MakeInt64(v), v, str, false, tree.P_int64),
 				Unit: yyDollar[5].str,
 			}
 		}
@@ -17552,8 +17552,8 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:6372
 		{
-			var Str = yyDollar[1].cstrUnion().Compare()
-			yyLOCAL = tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char)
+			var str = yyDollar[1].cstrUnion().Compare()
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeString(str), str, str, false, tree.P_char)
 		}
 		yyVAL.union = yyLOCAL
 	case 1001:
@@ -17584,8 +17584,8 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:6396
 		{
-			var Str = yyDollar[1].str
-			yyLOCAL = tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char)
+			var str = yyDollar[1].str
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeString(str), str, str, false, tree.P_char)
 		}
 		yyVAL.union = yyLOCAL
 	case 1004:
@@ -17593,8 +17593,8 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:6401
 		{
-			var Str = yyDollar[1].cstrUnion().Compare()
-			yyLOCAL = tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char)
+			var str = yyDollar[1].cstrUnion().Compare()
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeString(str), str, str, false, tree.P_char)
 		}
 		yyVAL.union = yyLOCAL
 	case 1005:
@@ -17612,7 +17612,7 @@ yydefault:
 		{
 			yyLOCAL = *tree.NewAccountIdentified(
 				tree.AccountIdentifiedByPassword,
-				tree.NewNumValWithType(constant.MakeString(yyDollar[3].str), yyDollar[3].str, false, tree.P_char),
+				tree.NewNumValWithType2(constant.MakeString(yyDollar[3].str), yyDollar[3].str, yyDollar[3].str, false, tree.P_char),
 			)
 		}
 		yyVAL.union = yyLOCAL
@@ -17645,7 +17645,7 @@ yydefault:
 		{
 			yyLOCAL = *tree.NewAccountIdentified(
 				tree.AccountIdentifiedWithSSL,
-				tree.NewNumValWithType(constant.MakeString(yyDollar[3].str), yyDollar[3].str, false, tree.P_char),
+				tree.NewNumValWithType2(constant.MakeString(yyDollar[3].str), yyDollar[3].str, yyDollar[3].str, false, tree.P_char),
 			)
 		}
 		yyVAL.union = yyLOCAL
@@ -18276,7 +18276,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.AccountIdentified{
 				Typ: tree.AccountIdentifiedByPassword,
-				Str: tree.NewNumValWithType(constant.MakeString(yyDollar[3].str), yyDollar[3].str, false, tree.P_char),
+				Str: tree.NewNumValWithType2(constant.MakeString(yyDollar[3].str), yyDollar[3].str, yyDollar[3].str, false, tree.P_char),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -18297,7 +18297,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.AccountIdentified{
 				Typ: tree.AccountIdentifiedWithSSL,
-				Str: tree.NewNumValWithType(constant.MakeString(yyDollar[3].str), yyDollar[3].str, false, tree.P_char),
+				Str: tree.NewNumValWithType2(constant.MakeString(yyDollar[3].str), yyDollar[3].str, yyDollar[3].str, false, tree.P_char),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -20528,11 +20528,11 @@ yydefault:
 		var yyLOCAL *tree.AtTimeStamp
 //line mysql_sql.y:8497
 		{
-			var Str = yyDollar[4].cstrUnion().Compare()
+			var str = yyDollar[4].cstrUnion().Compare()
 			yyLOCAL = &tree.AtTimeStamp{
 				Type:         tree.ATTIMESTAMPSNAPSHOT,
 				SnapshotName: yylex.(*Lexer).GetDbOrTblName(yyDollar[4].cstrUnion().Origin()),
-				Expr:         tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char),
+				Expr:         tree.NewNumValWithType2(constant.MakeString(str), str, str, false, tree.P_char),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -20544,7 +20544,7 @@ yydefault:
 			yyLOCAL = &tree.AtTimeStamp{
 				Type:         tree.ATTIMESTAMPSNAPSHOT,
 				SnapshotName: yyDollar[4].str,
-				Expr:         tree.NewNumValWithType(constant.MakeString(yyDollar[4].str), yyDollar[4].str, false, tree.P_char),
+				Expr:         tree.NewNumValWithType2(constant.MakeString(yyDollar[4].str), yyDollar[4].str, yyDollar[4].str, false, tree.P_char),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -21110,7 +21110,7 @@ yydefault:
 //line mysql_sql.y:8931
 		{
 			str := util.DealCommentString(yyDollar[2].str)
-			yyLOCAL = tree.NewAttributeComment(tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char))
+			yyLOCAL = tree.NewAttributeComment(tree.NewNumValWithType2(constant.MakeString(str), str, str, false, tree.P_char))
 		}
 		yyVAL.union = yyLOCAL
 	case 1366:
@@ -21790,7 +21790,7 @@ yydefault:
 //line mysql_sql.y:9352
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
-			es := tree.NewNumValWithType(constant.MakeString(yyDollar[5].str), yyDollar[5].str, false, tree.P_char)
+			es := tree.NewNumValWithType2(constant.MakeString(yyDollar[5].str), yyDollar[5].str, yyDollar[5].str, false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
 				FuncName: tree.NewCStr(yyDollar[1].str, 1),
@@ -22478,7 +22478,7 @@ yydefault:
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
 				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
-				Exprs:      append(yyDollar[4].exprsUnion(), tree.NewNumValWithType(constant.MakeString(yyDollar[6].str), yyDollar[6].str, false, tree.P_char)),
+				Exprs:      append(yyDollar[4].exprsUnion(), tree.NewNumValWithType2(constant.MakeString(yyDollar[6].str), yyDollar[6].str, yyDollar[6].str, false, tree.P_char)),
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[8].windowSpecUnion(),
 				OrderBy:    yyDollar[5].orderByUnion(),
@@ -22494,7 +22494,7 @@ yydefault:
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
 				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
-				Exprs:      append(yyDollar[4].exprsUnion(), tree.NewNumValWithType(constant.MakeString(yyDollar[6].str), yyDollar[6].str, false, tree.P_char)),
+				Exprs:      append(yyDollar[4].exprsUnion(), tree.NewNumValWithType2(constant.MakeString(yyDollar[6].str), yyDollar[6].str, yyDollar[6].str, false, tree.P_char)),
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[8].windowSpecUnion(),
 				OrderBy:    yyDollar[5].orderByUnion(),
@@ -22537,7 +22537,7 @@ yydefault:
 //line mysql_sql.y:9890
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
-			es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
+			es := tree.NewNumValWithType2(constant.MakeString("*"), "*", "*", false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
 				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
@@ -22640,7 +22640,7 @@ yydefault:
 //line mysql_sql.y:9965
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
-			es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
+			es := tree.NewNumValWithType2(constant.MakeString("*"), "*", "*", false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
 				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
@@ -22858,7 +22858,7 @@ yydefault:
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			str := strings.ToLower(yyDollar[3].str)
-			timeUinit := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
+			timeUinit := tree.NewNumValWithType2(constant.MakeString(str), str, str, false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
 				FuncName: tree.NewCStr(yyDollar[1].str, 1),
@@ -22951,9 +22951,9 @@ yydefault:
 //line mysql_sql.y:10195
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
-			arg0 := tree.NewNumValWithType(constant.MakeInt64(0), "0", false, tree.P_int64)
-			arg1 := tree.NewNumValWithType(constant.MakeString("both"), "both", false, tree.P_char)
-			arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
+			arg0 := tree.NewNumValWithType2(constant.MakeInt64(0), int64(0), "0", false, tree.P_int64)
+			arg1 := tree.NewNumValWithType2(constant.MakeString("both"), "both", "both", false, tree.P_char)
+			arg2 := tree.NewNumValWithType2(constant.MakeString(" "), " ", " ", false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
 				FuncName: tree.NewCStr(yyDollar[1].str, 1),
@@ -22967,8 +22967,8 @@ yydefault:
 //line mysql_sql.y:10207
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
-			arg0 := tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)
-			arg1 := tree.NewNumValWithType(constant.MakeString("both"), "both", false, tree.P_char)
+			arg0 := tree.NewNumValWithType2(constant.MakeInt64(1), int64(1), "1", false, tree.P_int64)
+			arg1 := tree.NewNumValWithType2(constant.MakeString("both"), "both", "both", false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
 				FuncName: tree.NewCStr(yyDollar[1].str, 1),
@@ -22982,10 +22982,10 @@ yydefault:
 //line mysql_sql.y:10218
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
-			arg0 := tree.NewNumValWithType(constant.MakeInt64(2), "2", false, tree.P_int64)
+			arg0 := tree.NewNumValWithType2(constant.MakeInt64(2), int64(2), "2", false, tree.P_int64)
 			str := strings.ToLower(yyDollar[3].str)
-			arg1 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
-			arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
+			arg1 := tree.NewNumValWithType2(constant.MakeString(str), str, str, false, tree.P_char)
+			arg2 := tree.NewNumValWithType2(constant.MakeString(" "), " ", " ", false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
 				FuncName: tree.NewCStr(yyDollar[1].str, 1),
@@ -22999,9 +22999,9 @@ yydefault:
 //line mysql_sql.y:10231
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
-			arg0 := tree.NewNumValWithType(constant.MakeInt64(3), "3", false, tree.P_int64)
+			arg0 := tree.NewNumValWithType2(constant.MakeInt64(3), int64(3), "3", false, tree.P_int64)
 			str := strings.ToLower(yyDollar[3].str)
-			arg1 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
+			arg1 := tree.NewNumValWithType2(constant.MakeString(str), str, str, false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
 				FuncName: tree.NewCStr(yyDollar[1].str, 1),
@@ -23070,7 +23070,7 @@ yydefault:
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			str := strings.ToLower(yyDollar[3].str)
-			arg1 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
+			arg1 := tree.NewNumValWithType2(constant.MakeString(str), str, str, false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
 				FuncName: tree.NewCStr(yyDollar[1].str, 1),
@@ -23193,7 +23193,7 @@ yydefault:
 		var yyLOCAL *tree.FuncExpr
 //line mysql_sql.y:10418
 		{
-			cn := tree.NewNumValWithType(constant.MakeString(yyDollar[5].str), yyDollar[5].str, false, tree.P_char)
+			cn := tree.NewNumValWithType2(constant.MakeString(yyDollar[5].str), yyDollar[5].str, yyDollar[5].str, false, tree.P_char)
 			es := yyDollar[3].exprsUnion()
 			es = append(es, cn)
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
@@ -23209,7 +23209,7 @@ yydefault:
 		var yyLOCAL *tree.FuncExpr
 //line mysql_sql.y:10430
 		{
-			val := tree.NewNumValWithType(constant.MakeString(yyDollar[2].str), yyDollar[2].str, false, tree.P_char)
+			val := tree.NewNumValWithType2(constant.MakeString(yyDollar[2].str), yyDollar[2].str, yyDollar[2].str, false, tree.P_char)
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
@@ -23223,7 +23223,7 @@ yydefault:
 		var yyLOCAL *tree.FuncExpr
 //line mysql_sql.y:10440
 		{
-			val := tree.NewNumValWithType(constant.MakeString(yyDollar[2].str), yyDollar[2].str, false, tree.P_char)
+			val := tree.NewNumValWithType2(constant.MakeString(yyDollar[2].str), yyDollar[2].str, yyDollar[2].str, false, tree.P_char)
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
@@ -23278,7 +23278,7 @@ yydefault:
 		var yyLOCAL *tree.FuncExpr
 //line mysql_sql.y:10479
 		{
-			val := tree.NewNumValWithType(constant.MakeString(yyDollar[2].str), yyDollar[2].str, false, tree.P_char)
+			val := tree.NewNumValWithType2(constant.MakeString(yyDollar[2].str), yyDollar[2].str, yyDollar[2].str, false, tree.P_char)
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
@@ -23361,7 +23361,7 @@ yydefault:
 				goto ret1
 			}
 			str := fmt.Sprintf("%v", yyDollar[2].item)
-			yyLOCAL = tree.NewNumValWithType(constant.MakeInt64(ival), str, false, tree.P_int64)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeInt64(ival), ival, str, false, tree.P_int64)
 		}
 		yyVAL.union = yyLOCAL
 	case 1621:
@@ -23381,7 +23381,7 @@ yydefault:
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			str := strings.ToLower(yyDollar[3].str)
-			arg2 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
+			arg2 := tree.NewNumValWithType2(constant.MakeString(str), str, str, false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
 				FuncName: tree.NewCStr(yyDollar[1].str, 1),
@@ -23851,9 +23851,9 @@ yydefault:
 			str := fmt.Sprintf("%v", yyDollar[1].item)
 			switch v := yyDollar[1].item.(type) {
 			case uint64:
-				yyLOCAL = tree.NewNumValWithType(constant.MakeUint64(v), str, false, tree.P_uint64)
+				yyLOCAL = tree.NewNumValWithType2(constant.MakeUint64(v), v, str, false, tree.P_uint64)
 			case int64:
-				yyLOCAL = tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64)
+				yyLOCAL = tree.NewNumValWithType2(constant.MakeInt64(v), v, str, false, tree.P_int64)
 			default:
 				yylex.Error("parse integral fail")
 				goto ret1
@@ -23866,7 +23866,7 @@ yydefault:
 //line mysql_sql.y:10877
 		{
 			fval := yyDollar[1].item.(float64)
-			yyLOCAL = tree.NewNumValWithType(constant.MakeFloat64(fval), yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeFloat64(fval), fval, yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
 		}
 		yyVAL.union = yyLOCAL
 	case 1717:
@@ -23874,7 +23874,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:10882
 		{
-			yyLOCAL = tree.NewNumValWithType(constant.MakeString(yyDollar[1].str), yyDollar[1].str, false, tree.P_decimal)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeString(yyDollar[1].str), yyDollar[1].str, yyDollar[1].str, false, tree.P_decimal)
 		}
 		yyVAL.union = yyLOCAL
 	case 1718:
@@ -23882,7 +23882,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:10888
 		{
-			yyLOCAL = tree.NewNumValWithType(constant.MakeString(yyDollar[1].str), yyDollar[1].str, false, tree.P_char)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeString(yyDollar[1].str), yyDollar[1].str, yyDollar[1].str, false, tree.P_char)
 		}
 		yyVAL.union = yyLOCAL
 	case 1719:
@@ -23893,9 +23893,9 @@ yydefault:
 			str := fmt.Sprintf("%v", yyDollar[1].item)
 			switch v := yyDollar[1].item.(type) {
 			case uint64:
-				yyLOCAL = tree.NewNumValWithType(constant.MakeUint64(v), str, false, tree.P_uint64)
+				yyLOCAL = tree.NewNumValWithType2(constant.MakeUint64(v), v, str, false, tree.P_uint64)
 			case int64:
-				yyLOCAL = tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64)
+				yyLOCAL = tree.NewNumValWithType2(constant.MakeInt64(v), v, str, false, tree.P_int64)
 			default:
 				yylex.Error("parse integral fail")
 				goto ret1
@@ -23908,7 +23908,7 @@ yydefault:
 //line mysql_sql.y:10905
 		{
 			fval := yyDollar[1].item.(float64)
-			yyLOCAL = tree.NewNumValWithType(constant.MakeFloat64(fval), yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeFloat64(fval), fval, yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
 		}
 		yyVAL.union = yyLOCAL
 	case 1721:
@@ -23916,7 +23916,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:10910
 		{
-			yyLOCAL = tree.NewNumValWithType(constant.MakeBool(true), "true", false, tree.P_bool)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeBool(true), true, "true", false, tree.P_bool)
 		}
 		yyVAL.union = yyLOCAL
 	case 1722:
@@ -23924,7 +23924,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:10914
 		{
-			yyLOCAL = tree.NewNumValWithType(constant.MakeBool(false), "false", false, tree.P_bool)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeBool(false), false, "false", false, tree.P_bool)
 		}
 		yyVAL.union = yyLOCAL
 	case 1723:
@@ -23932,7 +23932,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:10918
 		{
-			yyLOCAL = tree.NewNumValWithType(constant.MakeUnknown(), "null", false, tree.P_null)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeUnknown(), "null", "null", false, tree.P_null)
 		}
 		yyVAL.union = yyLOCAL
 	case 1724:
@@ -23940,7 +23940,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:10922
 		{
-			yyLOCAL = tree.NewNumValWithType(constant.MakeString(yyDollar[1].str), yyDollar[1].str, false, tree.P_hexnum)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeString(yyDollar[1].str), yyDollar[1].str, yyDollar[1].str, false, tree.P_hexnum)
 		}
 		yyVAL.union = yyLOCAL
 	case 1725:
@@ -23951,7 +23951,7 @@ yydefault:
 			if strings.HasPrefix(yyDollar[2].str, "0x") {
 				yyDollar[2].str = yyDollar[2].str[2:]
 			}
-			yyLOCAL = tree.NewNumValWithType(constant.MakeString(yyDollar[2].str), yyDollar[2].str, false, tree.P_bit)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeString(yyDollar[2].str), yyDollar[2].str, yyDollar[2].str, false, tree.P_bit)
 		}
 		yyVAL.union = yyLOCAL
 	case 1726:
@@ -23959,7 +23959,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:10933
 		{
-			yyLOCAL = tree.NewNumValWithType(constant.MakeString(yyDollar[1].str), yyDollar[1].str, false, tree.P_decimal)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeString(yyDollar[1].str), yyDollar[1].str, yyDollar[1].str, false, tree.P_decimal)
 		}
 		yyVAL.union = yyLOCAL
 	case 1727:
@@ -23967,7 +23967,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:10937
 		{
-			yyLOCAL = tree.NewNumValWithType(constant.MakeString(yyDollar[1].str), yyDollar[1].str, false, tree.P_bit)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeString(yyDollar[1].str), yyDollar[1].str, yyDollar[1].str, false, tree.P_bit)
 		}
 		yyVAL.union = yyLOCAL
 	case 1728:
@@ -23983,7 +23983,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:10945
 		{
-			yyLOCAL = tree.NewNumValWithType(constant.MakeString(yyDollar[2].str), yyDollar[2].str, false, tree.P_ScoreBinary)
+			yyLOCAL = tree.NewNumValWithType2(constant.MakeString(yyDollar[2].str), yyDollar[2].str, yyDollar[2].str, false, tree.P_ScoreBinary)
 		}
 		yyVAL.union = yyLOCAL
 	case 1730:
@@ -24860,7 +24860,7 @@ yydefault:
 			yyLOCAL = &tree.Declare{
 				Variables:  yyDollar[2].strsUnion(),
 				ColumnType: yyDollar[3].columnTypeUnion(),
-				DefaultVal: tree.NewNumValWithType(constant.MakeUnknown(), "null", false, tree.P_null),
+				DefaultVal: tree.NewNumValWithType2(constant.MakeUnknown(), "null", "null", false, tree.P_null),
 			}
 		}
 		yyVAL.union = yyLOCAL

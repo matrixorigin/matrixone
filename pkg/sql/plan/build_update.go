@@ -216,7 +216,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 						return 0, nil, err
 					}
 					exprs := []tree.Expr{
-						tree.NewNumValWithType(constant.MakeString(coldef.Typ.Enumvalues), coldef.Typ.Enumvalues, false, tree.P_char),
+						tree.NewNumValWithType2(constant.MakeString(coldef.Typ.Enumvalues), coldef.Typ.Enumvalues, coldef.Typ.Enumvalues, false, tree.P_char),
 						updateKey,
 					}
 					if updateKeyExpr.Typ.Id >= 20 && updateKeyExpr.Typ.Id <= 29 {

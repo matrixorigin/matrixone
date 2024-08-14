@@ -6660,7 +6660,7 @@ func TestSetGlobalSysVar(t *testing.T) {
 }
 
 func boxExprStr(s string) tree.Expr {
-	return tree.NewNumValWithType(constant.MakeString(s), s, false, tree.P_char)
+	return tree.NewNumValWithType2(constant.MakeString(s), s, s, false, tree.P_char)
 }
 
 func mustUnboxExprStr(e tree.Expr) string {

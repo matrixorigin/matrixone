@@ -83,7 +83,85 @@ func (node *NumVal) Kind() P_KIND {
 	}
 }
 
-func NewNumValWithType2[T bool | int64 | uint64 | string](value constant.Value, val T, originString string, negative bool, typ P_TYPE) *NumVal {
+func (node *NumVal) Bool() bool {
+	switch node.ValType {
+	case P_bool:
+		return node.resBool
+	case P_null:
+		return false
+	default:
+		panic(fmt.Sprintf("%v not a Bool", node.ValType))
+	}
+}
+
+func (n *NumVal) String() string {
+	return n.origString
+}
+
+// follow package constant Uint64Val
+func (node *NumVal) Uint64() (uint64, bool) {
+	switch node.ValType {
+	case P_int64:
+		return uint64(node.resInt64), true
+	case P_uint64:
+		return node.resUint64, true
+	case P_null:
+		return 0, false
+	default:
+		panic(fmt.Sprintf("%v not a uint64", node.ValType))
+	}
+}
+
+// follow package constant Int64Val
+func (node *NumVal) Int64() (int64, bool) {
+	switch node.ValType {
+	case P_int64:
+		return node.resInt64, true
+	case P_null:
+		return 0, false
+	default:
+		panic(fmt.Sprintf("%v not a int64", node.ValType))
+	}
+}
+
+// follow package constant Float64Val
+// Float64Val returns the nearest Go float64 value of x and whether the result is exact;
+// x must be numeric or an [Unknown], but not [Complex]. For values too small (too close to 0)
+// to represent as float64, [Float64Val] silently underflows to 0. The result sign always
+// matches the sign of x, even for 0.
+// If x is [Unknown], the result is (0, false).
+func (node *NumVal) Float64() (float64, bool) {
+	switch node.ValType {
+	case P_int64:
+		f := float64(node.resInt64)
+		return f, int64(f) == node.resInt64
+	case P_uint64:
+		f := float64(node.resUint64)
+		return f, uint64(f) == node.resUint64
+	case P_float64:
+		return node.resFloat64, true
+	case P_null:
+		return 0, false
+	default:
+		panic(fmt.Sprintf("%v not a float", node.ValType))
+	}
+}
+
+func (n *NumVal) Negative() bool {
+	return n.negative
+}
+
+func NewNumValWithType(value constant.Value, origString string, negative bool, typ P_TYPE) *NumVal {
+	numVal := &NumVal{
+		Value:      value,
+		origString: origString,
+		negative:   negative,
+		ValType:    typ,
+	}
+	return numVal
+}
+
+func NewNumValWithType2[T bool | int64 | uint64 | float64 | string](value constant.Value, val T, originString string, negative bool, typ P_TYPE) *NumVal {
 	nv := &NumVal{
 		Value:      value,
 		ValType:    typ,
@@ -119,101 +197,6 @@ func NewNumValWithType2[T bool | int64 | uint64 | string](value constant.Value, 
 	}
 
 	return nv
-}
-
-func (node *NumVal) GetBoolVal() bool {
-	switch node.ValType {
-	case P_bool:
-		return node.resBool
-	case P_null:
-		return false
-	default:
-		panic(fmt.Sprintf("%v not a Bool", node.ValType))
-	}
-}
-
-func (node *NumVal) GetStringVal() string {
-	switch node.ValType {
-	case P_null:
-		return ""
-	default:
-		return node.origString
-	}
-}
-
-func (n *NumVal) String() string {
-	return n.origString
-}
-
-// follow package constant Uint64Val
-func (node *NumVal) GetUint64() (uint64, bool) {
-	switch node.ValType {
-	case P_int64:
-		return uint64(node.resInt64), true
-	case P_uint64:
-		return node.resUint64, true
-	case P_null:
-		return 0, false
-	default:
-		panic(fmt.Sprintf("%v not a uint64", node.ValType))
-	}
-}
-
-// follow package constant Int64Val
-func (node *NumVal) GetInt64() (int64, bool) {
-	switch node.ValType {
-	case P_int64:
-		return node.resInt64, true
-	case P_null:
-		return 0, false
-	default:
-		panic(fmt.Sprintf("%v not a int64", node.ValType))
-	}
-}
-
-// follow package constant Float64Val
-// Float64Val returns the nearest Go float64 value of x and whether the result is exact;
-// x must be numeric or an [Unknown], but not [Complex]. For values too small (too close to 0)
-// to represent as float64, [Float64Val] silently underflows to 0. The result sign always
-// matches the sign of x, even for 0.
-// If x is [Unknown], the result is (0, false).
-func (node *NumVal) GetFloat64() (float64, bool) {
-	switch node.ValType {
-	case P_int64:
-		f := float64(node.resInt64)
-		return f, int64(f) == node.resInt64
-	case P_uint64:
-		f := float64(node.resUint64)
-		return f, uint64(f) == node.resUint64
-	case P_float64:
-		return node.resFloat64, true
-	case P_null:
-		return 0, false
-	default:
-		panic(fmt.Sprintf("%v not a float", node.ValType))
-	}
-}
-
-func (n *NumVal) Negative() bool {
-	return n.negative
-}
-
-func NewNumVal(value constant.Value, origString string, negative bool) *NumVal {
-	return &NumVal{
-		Value:      value,
-		origString: origString,
-		negative:   negative,
-	}
-}
-
-func NewNumValWithType(value constant.Value, origString string, negative bool, typ P_TYPE) *NumVal {
-	numVal := &NumVal{
-		Value:      value,
-		origString: origString,
-		negative:   negative,
-		ValType:    typ,
-	}
-	return numVal
 }
 
 func (n *NumVal) Format(ctx *FmtCtx) {
