@@ -17,13 +17,13 @@ package frontend
 import (
 	"context"
 	"fmt"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"sort"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	util "github.com/matrixorigin/matrixone/pkg/util/logservice"
 )
@@ -303,9 +303,9 @@ func handleShowLogserviceStores(execCtx *ExecCtx, ses *Session) error {
 		return err
 	}
 
-	var infoList []logserviceStoreInfo
+	infoList := make([]logserviceStoreInfo, 0, len(state.LogState.Stores))
 	for storeID, storeInfo := range state.LogState.Stores {
-		var rs replicas
+		rs := make(replicas, 0, len(storeInfo.Replicas))
 		for _, rep := range storeInfo.Replicas {
 			rs = append(rs, replica{shardID: rep.ShardID, replicaID: rep.ReplicaID})
 		}
@@ -379,13 +379,19 @@ func handleShowLogserviceSettings(execCtx *ExecCtx, ses *Session) error {
 
 	row = make([]any, 2)
 	row[0] = NonVotingLocality
-	var vs string
-	for k, v := range state.NonVotingLocality.Value {
-		vs += k + ":" + v + ";"
-	}
-	row[1] = vs
+	row[1] = formatLocalityValue(state.NonVotingLocality.Value)
 	mrs.AddRow(row)
 	return nil
+}
+
+func formatLocalityValue(vv map[string]string) string {
+	sep1 := ":"
+	sep2 := ";"
+	var vs string
+	for k, v := range vv {
+		vs += k + sep1 + v + sep2
+	}
+	return vs
 }
 
 func handleSetLogserviceSettings(execCtx *ExecCtx, ses *Session, stmt tree.Statement) error {
@@ -437,11 +443,19 @@ func setNonVotingReplicaNum(ctx context.Context, client logservice.CNHAKeeperCli
 	}
 	replicaNum := state.ClusterInfo.LogShards[0].NumberOfReplicas
 	storeNum := len(state.LogState.Stores)
+
+	// check if the non-voting replica locality is set already.
+	if len(state.NonVotingLocality.Value) == 0 {
+		return moerr.NewInternalError(ctx, "non-voting replica locality has not been set")
+	}
+
+	// check if there are enough stores to start all replicas.
 	if replicaNum+num > uint64(storeNum) {
 		return moerr.NewInternalError(ctx,
 			fmt.Sprintf("there are not enough log store number: only %d stores are avaiable",
 				uint64(storeNum)-replicaNum))
 	}
+
 	if err := client.UpdateNonVotingReplicaNum(ctx, num); err != nil {
 		return err
 	}

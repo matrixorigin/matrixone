@@ -94,6 +94,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 			TestGossipProbeInterval: cfg.GossipProbeInterval.Duration,
 			LogDB:                   logdb,
 			ExplicitHostname:        cfg.ExplicitHostname,
+			MembershipImmovable:     cfg.MembershipImmovable,
 		},
 		Gossip: config.GossipConfig{
 			BindAddress:      cfg.GossipListenAddr(),
@@ -139,10 +140,14 @@ type store struct {
 	}
 	shardSnapshotInfo shardSnapshotInfo
 	snapshotMgr       *snapshotManager
+
+	// onReplicaChanged is a called when the replicas on the store changes.
+	onReplicaChanged func(shardID uint64, replicaID uint64, typ ChangeType)
 }
 
 func newLogStore(cfg Config,
 	taskServiceGetter func() taskservice.TaskService,
+	onReplicaChanged func(shardID uint64, replicaID uint64, typ ChangeType),
 	rt runtime.Runtime) (*store, error) {
 	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg))
 	if err != nil {
@@ -166,6 +171,7 @@ func newLogStore(cfg Config,
 
 		shardSnapshotInfo: newShardSnapshotInfo(),
 		snapshotMgr:       newSnapshotManager(&cfg),
+		onReplicaChanged:  onReplicaChanged,
 	}
 	ls.mu.metadata = metadata.LogStore{UUID: cfg.UUID}
 	if err := ls.stopper.RunNamedTask("truncation-worker", func(ctx context.Context) {
@@ -276,6 +282,9 @@ func (l *store) startReplica(shardID uint64, replicaID uint64,
 		return err
 	}
 	l.addMetadata(shardID, replicaID, false)
+	if l.onReplicaChanged != nil {
+		l.onReplicaChanged(shardID, replicaID, AddReplica)
+	}
 	return nil
 }
 
@@ -296,6 +305,9 @@ func (l *store) startNonVotingReplica(shardID uint64, replicaID uint64,
 		return err
 	}
 	l.addMetadata(shardID, replicaID, true)
+	if l.onReplicaChanged != nil {
+		l.onReplicaChanged(shardID, replicaID, AddReplica)
+	}
 	return nil
 }
 
@@ -305,7 +317,13 @@ func (l *store) stopReplica(shardID uint64, replicaID uint64) error {
 			atomic.StoreUint64(&l.haKeeperReplicaID, 0)
 		}()
 	}
-	return l.nh.StopReplica(shardID, replicaID)
+	if err := l.nh.StopReplica(shardID, replicaID); err != nil {
+		return err
+	}
+	if l.onReplicaChanged != nil {
+		l.onReplicaChanged(shardID, replicaID, DelReplica)
+	}
+	return nil
 }
 
 func (l *store) requestLeaderTransfer(shardID uint64, targetReplicaID uint64) error {
@@ -379,8 +397,24 @@ func (l *store) removeReplica(shardID uint64, replicaID uint64, cci uint64) erro
 			return err
 		}
 		l.removeMetadata(shardID, replicaID)
+		if l.onReplicaChanged != nil {
+			l.onReplicaChanged(shardID, replicaID, DelReplica)
+		}
 		return nil
 	}
+}
+
+func (l *store) addLogShard(ctx context.Context, addLogShard pb.AddLogShard) error {
+	cmd := hakeeper.GetAddLogShardCmd(addLogShard)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if _, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("failed to propose add log shard",
+			zap.Uint64("shard ID", addLogShard.ShardID),
+			zap.Error(err),
+		)
+		return handleNotHAKeeperError(ctx, err)
+	}
+	return nil
 }
 
 func (l *store) retryWait() {
@@ -733,6 +767,36 @@ func (l *store) updateNonVotingLocality(ctx context.Context, locality pb.Localit
 	return nil
 }
 
+func (l *store) getLatestLsn(ctx context.Context, shardID uint64) (uint64, error) {
+	v, err := l.read(ctx, shardID, indexQuery{})
+	if err != nil {
+		return 0, err
+	}
+	return v.(uint64), nil
+}
+
+func (l *store) setRequiredLsn(ctx context.Context, shardID uint64, lsn Lsn) error {
+	session := l.nh.GetNoOPSession(shardID)
+	cmd := getSetRequiredLsnCmd(lsn)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		l.runtime.Logger().Error("propose set required lsn cmd failed", zap.Error(err))
+		return err
+	}
+	if result.Value > 0 {
+		l.runtime.Logger().Warn(fmt.Sprintf("shardID %d already set required to lsn %d", shardID, result.Value))
+	}
+	return nil
+}
+
+func (l *store) getRequiredLsn(ctx context.Context, shardID uint64) (uint64, error) {
+	v, err := l.read(ctx, shardID, requiredLsnQuery{})
+	if err != nil {
+		return 0, err
+	}
+	return v.(uint64), nil
+}
+
 func (l *store) decodeCmd(ctx context.Context, e raftpb.Entry) []byte {
 	if e.Type == raftpb.ApplicationEntry {
 		panic(moerr.NewInvalidState(ctx, "unexpected entry type"))
@@ -782,7 +846,8 @@ func (l *store) markEntries(ctx context.Context,
 			continue
 		}
 		if isUserUpdate(cmd) {
-			if parseLeaseHolderID(cmd) != leaseHolderID {
+			// we only check the leaseholder ID if the leasehold ID is 0.
+			if leaseHolderID != 0 && parseLeaseHolderID(cmd) != leaseHolderID {
 				// lease not match, skip
 				result = append(result, LogRecord{
 					Type: pb.LeaseRejected,

@@ -17,7 +17,6 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"reflect"
 	"time"
 
@@ -37,8 +36,6 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 			case pb.AddReplica:
 				s.handleAddReplica(cmd)
 			case pb.AddNonVotingReplica:
-				logutil.Infof("liubo: handle add non-voting replica %d, shard %d",
-					cmd.ConfigChange.Replica.ReplicaID, cmd.ConfigChange.Replica.ShardID)
 				s.handleAddNonVotingReplica(cmd)
 			case pb.RemoveReplica:
 				s.handleRemoveReplica(cmd)
@@ -47,8 +44,6 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 			case pb.StartReplica:
 				s.handleStartReplica(cmd)
 			case pb.StartNonVotingReplica:
-				logutil.Infof("liubo: handle start non-voting replica %d, shard %d",
-					cmd.ConfigChange.Replica.ReplicaID, cmd.ConfigChange.Replica.ShardID)
 				s.handleStartNonVotingReplica(cmd)
 			case pb.StopReplica:
 				s.handleStopReplica(cmd)
@@ -64,8 +59,12 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 		} else if cmd.GetCreateTaskService() != nil {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
+		} else if cmd.GetAddLogShard() != nil {
+			s.handleAddLogShard(cmd)
+		} else if cmd.GetBootstrapShard() != nil {
+			s.handleBootstrapShard(cmd)
 		} else {
-			panic("unknown schedule command type")
+			panic(fmt.Sprintf("unknown schedule command type: %+v", cmd))
 		}
 	}
 }
@@ -123,12 +122,20 @@ func (s *Service) handleStartNonVotingReplica(cmd pb.ScheduleCommand) {
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		if err := s.store.startHAKeeperNonVotingReplica(replicaID,
 			cmd.ConfigChange.InitialMembers, join); err != nil {
-			s.runtime.Logger().Error("failed to start HAKeeper replica", zap.Error(err))
+			s.runtime.Logger().Error("failed to start HAKeeper replica",
+				zap.Uint64("shard ID", shardID),
+				zap.Uint64("replica ID", replicaID),
+				zap.Error(err),
+			)
 		}
 	} else {
 		if err := s.store.startNonVotingReplica(shardID,
 			replicaID, cmd.ConfigChange.InitialMembers, join); err != nil {
-			s.runtime.Logger().Error("failed to start log replica", zap.Error(err))
+			s.runtime.Logger().Error("failed to start log replica",
+				zap.Uint64("shard ID", shardID),
+				zap.Uint64("replica ID", replicaID),
+				zap.Error(err),
+			)
 		}
 	}
 }

@@ -54,7 +54,7 @@ func init() {
 		},
 		func(b []byte) (any, error) {
 			record := &baseEntry{
-				meta: &meta{},
+				Meta: &Meta{},
 			}
 			err := record.Unmarshal(b)
 			return record, err
@@ -62,26 +62,38 @@ func init() {
 	)
 }
 
-type meta struct {
+type Meta struct {
 	metaType    MetaType
 	appended    uint64
 	addr        map[uint64]uint64
 	payloadSize uint64
 }
 
-func newMeta() *meta {
-	return &meta{addr: make(map[uint64]uint64), metaType: TNormal}
+func newMeta() *Meta {
+	return &Meta{addr: make(map[uint64]uint64), metaType: TNormal}
 }
-func (m *meta) SetType(t MetaType) {
+
+func (m *Meta) GetAddr() map[uint64]uint64 {
+	return m.addr
+}
+
+func (m *Meta) AddAddr(l uint64, s uint64) {
+	if m.addr == nil {
+		m.addr = make(map[uint64]uint64)
+	}
+	m.addr[l] = s
+}
+
+func (m *Meta) SetType(t MetaType) {
 	m.metaType = t
 }
-func (m *meta) GetType() MetaType {
+func (m *Meta) GetType() MetaType {
 	return m.metaType
 }
-func (m *meta) SetAppended(appended uint64) {
+func (m *Meta) SetAppended(appended uint64) {
 	m.appended = appended
 }
-func (m *meta) GetMinLsn() uint64 {
+func (m *Meta) GetMinLsn() uint64 {
 	min := uint64(0)
 	min = math.MaxUint64
 	for lsn := range m.addr {
@@ -91,7 +103,7 @@ func (m *meta) GetMinLsn() uint64 {
 	}
 	return min
 }
-func (m *meta) GetMaxLsn() uint64 {
+func (m *Meta) GetMaxLsn() uint64 {
 	max := uint64(0)
 	for lsn := range m.addr {
 		if lsn > max {
@@ -100,7 +112,7 @@ func (m *meta) GetMaxLsn() uint64 {
 	}
 	return max
 }
-func (m *meta) WriteTo(w io.Writer) (n int64, err error) {
+func (m *Meta) WriteTo(w io.Writer) (n int64, err error) {
 	metaType := uint8(m.metaType)
 	if _, err = w.Write(types.EncodeUint8(&metaType)); err != nil {
 		return
@@ -132,7 +144,7 @@ func (m *meta) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (m *meta) ReadFrom(r io.Reader) (n int64, err error) {
+func (m *Meta) ReadFrom(r io.Reader) (n int64, err error) {
 	metaType := uint8(0)
 	if _, err = r.Read(types.EncodeUint8(&metaType)); err != nil {
 		return
@@ -169,13 +181,13 @@ func (m *meta) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (m *meta) Unmarshal(buf []byte) error {
+func (m *Meta) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
 	_, err := m.ReadFrom(bbuf)
 	return err
 }
 
-func (m *meta) Marshal() (buf []byte, err error) {
+func (m *Meta) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = m.WriteTo(&bbuf); err != nil {
 		return
@@ -186,7 +198,7 @@ func (m *meta) Marshal() (buf []byte, err error) {
 
 type baseEntry struct {
 	EntryType, Version uint16
-	*meta
+	*Meta
 	entries []*entry.Entry
 	cmd     *ReplayCmd
 	payload []byte
@@ -212,12 +224,12 @@ func (r *baseEntry) WriteTo(w io.Writer) (n int64, err error) {
 		return 0, err
 	}
 	n += 2
-	n1, err := r.meta.WriteTo(w)
+	n1, err := r.Meta.WriteTo(w)
 	if err != nil {
 		return n, err
 	}
 	n += n1
-	switch r.meta.metaType {
+	switch r.Meta.metaType {
 	case TNormal:
 		for _, e := range r.entries {
 			n1, err = e.WriteTo(w)
@@ -239,7 +251,7 @@ func (r *baseEntry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (r *baseEntry) ReadFrom(reader io.Reader) (n int64, err error) {
-	n1, err := r.meta.ReadFrom(reader)
+	n1, err := r.Meta.ReadFrom(reader)
 	if err != nil {
 		return 0, err
 	}
@@ -266,7 +278,7 @@ type recordEntry struct {
 func newRecordEntry() *recordEntry {
 	return &recordEntry{
 		baseEntry: &baseEntry{
-			entries: make([]*entry.Entry, 0), meta: newMeta(),
+			entries: make([]*entry.Entry, 0), Meta: newMeta(),
 		},
 	}
 }
@@ -275,7 +287,7 @@ func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
 	return &recordEntry{
 		payload: r.Payload(),
 		baseEntry: &baseEntry{
-			meta: newMeta(),
+			Meta: newMeta(),
 		},
 		mashalMu: sync.RWMutex{}}
 }
@@ -283,7 +295,7 @@ func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
 func (r *recordEntry) replay(replayer *replayer) (addr *common.ClosedIntervals) {
 	lsns := make([]uint64, 0)
 	offset := int64(0)
-	for lsn := range r.meta.addr {
+	for lsn := range r.Meta.addr {
 		lsns = append(lsns, lsn)
 		e := entry.NewEmptyEntry()
 		n, err := e.UnmarshalBinary(r.baseEntry.payload[offset:])
@@ -298,7 +310,7 @@ func (r *recordEntry) replay(replayer *replayer) (addr *common.ClosedIntervals) 
 }
 func (r *recordEntry) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)
-	r.meta.addr[e.Lsn] = uint64(r.payloadSize)
+	r.Meta.addr[e.Lsn] = uint64(r.payloadSize)
 	r.payloadSize += uint64(e.GetSize())
 }
 
@@ -333,7 +345,7 @@ func (r *recordEntry) unmarshal() {
 
 func (r *recordEntry) readEntry(lsn uint64) *entry.Entry {
 	r.unmarshal()
-	offset := r.meta.addr[lsn]
+	offset := r.Meta.addr[lsn]
 	bbuf := bytes.NewBuffer(r.baseEntry.payload[offset:])
 	e := entry.NewEmptyEntry()
 	e.ReadFrom(bbuf)

@@ -341,7 +341,7 @@ func (l *store) getScheduleCommand(check bool,
 	}
 
 	if check {
-		return l.checker.Check(l.alloc, *state), nil
+		return l.checker.Check(l.alloc, *state, l.cfg.BootstrapConfig.StandbyEnabled), nil
 	}
 	m := bootstrap.NewBootstrapManager(state.ClusterInfo)
 	return m.Bootstrap(l.cfg.UUID, l.alloc, state.TNState, state.LogState)

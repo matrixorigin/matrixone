@@ -226,6 +226,18 @@ func parseUpdateNonVotingLocalityCmd(cmd []byte) pb.Locality {
 	return locality
 }
 
+func parseLogShardUpdateCmd(cmd []byte) pb.AddLogShard {
+	if parseCmdTag(cmd) != pb.LogShardUpdate {
+		panic("not a LogShardUpdate cmd")
+	}
+	payload := cmd[headerSize:]
+	var addLogShard pb.AddLogShard
+	if err := addLogShard.Unmarshal(payload); err != nil {
+		panic(err)
+	}
+	return addLogShard
+}
+
 func GetSetStateCmd(state pb.HAKeeperState) []byte {
 	cmd := make([]byte, headerSize+4)
 	binaryEnc.PutUint32(cmd, uint32(pb.SetStateUpdate))
@@ -334,6 +346,15 @@ func GetDeleteCNStoreCmd(cnStore pb.DeleteCNStore) []byte {
 	cmd := make([]byte, headerSize+cnStore.ProtoSize())
 	binaryEnc.PutUint32(cmd, uint32(pb.RemoveCNStore))
 	if _, err := cnStore.MarshalTo(cmd[headerSize:]); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+func GetAddLogShardCmd(addLogShard pb.AddLogShard) []byte {
+	cmd := make([]byte, headerSize+addLogShard.ProtoSize())
+	binaryEnc.PutUint32(cmd, uint32(pb.LogShardUpdate))
+	if _, err := addLogShard.MarshalTo(cmd[headerSize:]); err != nil {
 		panic(err)
 	}
 	return cmd
@@ -620,6 +641,35 @@ func (s *stateMachine) handleUpdateNonVotingLocality(cmd []byte) sm.Result {
 	return sm.Result{}
 }
 
+func (s *stateMachine) handleLogShardUpdate(cmd []byte) sm.Result {
+	addLogShard := parseLogShardUpdateCmd(cmd)
+	_, ok := s.state.LogState.Shards[addLogShard.ShardID]
+	if !ok {
+		s.state.LogState.Shards[addLogShard.ShardID] = pb.LogShardInfo{
+			ShardID: addLogShard.ShardID,
+		}
+		var exists bool
+		var numOfLogReplicas uint64
+		for _, logShardRec := range s.state.ClusterInfo.LogShards {
+			numOfLogReplicas = logShardRec.NumberOfReplicas
+			if logShardRec.ShardID == addLogShard.ShardID {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			s.state.ClusterInfo.LogShards = append(
+				s.state.ClusterInfo.LogShards,
+				metadata.LogShardRecord{
+					ShardID:          addLogShard.ShardID,
+					NumberOfReplicas: numOfLogReplicas,
+				},
+			)
+		}
+	}
+	return sm.Result{}
+}
+
 // FIXME: NextID should be set to K8SIDRangeEnd once HAKeeper state is
 // set to HAKeeperBootstrapping.
 func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
@@ -628,11 +678,17 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		return result
 	}
 	req := parseInitialClusterRequestCmd(cmd)
-	if req.NumOfLogShards != req.NumOfTNShards {
-		panic("DN:Log 1:1 mode is the only supported mode")
+
+	// The number of TN shard should only be 1.
+	// There is one corresponding Log shard with that TN shard.
+	// If there is more than one Log shard, to be exact, two Log shards,
+	// the second one is used to save data related with S3. The data in
+	// the second shard comes from the first one, but only related with S3.
+	if req.NumOfTNShards != 1 {
+		panic("only support 1 dn shards")
 	}
 
-	tnShards := make([]metadata.TNShardRecord, 0)
+	tnShards := make([]metadata.TNShardRecord, 0, 1)
 	logShards := make([]metadata.LogShardRecord, 0)
 	// HAKeeper shard is assigned ShardID 0
 	rec := metadata.LogShardRecord{
@@ -642,6 +698,7 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 	logShards = append(logShards, rec)
 
 	s.state.NextID++
+	tnShardAppended := false
 	for i := uint64(0); i < req.NumOfLogShards; i++ {
 		rec := metadata.LogShardRecord{
 			ShardID:          s.state.NextID,
@@ -650,12 +707,17 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		s.state.NextID++
 		logShards = append(logShards, rec)
 
+		if tnShardAppended {
+			continue
+		}
+
 		drec := metadata.TNShardRecord{
 			ShardID:    s.state.NextID,
 			LogShardID: rec.ShardID,
 		}
 		s.state.NextID++
 		tnShards = append(tnShards, drec)
+		tnShardAppended = true
 	}
 	s.state.ClusterInfo = pb.ClusterInfo{
 		TNShards:  tnShards,
@@ -731,6 +793,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleUpdateNonVotingReplicaNum(cmd), nil
 	case pb.UpdateNonVotingLocality:
 		return s.handleUpdateNonVotingLocality(cmd), nil
+	case pb.LogShardUpdate:
+		return s.handleLogShardUpdate(cmd), nil
 	default:
 		panic(moerr.NewInvalidInputNoCtxf("unknown haKeeper cmd '%v'", cmd))
 	}

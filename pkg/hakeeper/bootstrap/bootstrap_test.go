@@ -316,15 +316,54 @@ func TestSortLogStores(t *testing.T) {
 	cases := []struct {
 		logStores map[string]pb.LogStoreInfo
 		expected  []string
-	}{{
-		logStores: map[string]pb.LogStoreInfo{
-			"a": {Tick: 100},
-			"b": {Tick: 120},
-			"c": {Tick: 90},
-			"d": {Tick: 95},
+	}{
+		{
+			logStores: map[string]pb.LogStoreInfo{
+				"a": {Tick: 100},
+				"b": {Tick: 120},
+				"c": {Tick: 90},
+				"d": {Tick: 95},
+			},
+			expected: []string{"b", "a", "d", "c"},
 		},
-		expected: []string{"b", "a", "d", "c"},
-	}}
+		{
+			logStores: map[string]pb.LogStoreInfo{
+				"a": {
+					Tick: 100,
+					Locality: pb.Locality{
+						Value: map[string]string{"k1": "v1"},
+					},
+				},
+				"b": {Tick: 120},
+				"c": {Tick: 90},
+				"d": {Tick: 95},
+			},
+			expected: []string{"b", "d", "c", "a"},
+		},
+		{
+			logStores: map[string]pb.LogStoreInfo{
+				"a": {
+					Tick: 100,
+					Locality: pb.Locality{
+						Value: map[string]string{"k1": "v1"},
+					},
+				},
+				"b": {
+					Tick: 120,
+					Locality: pb.Locality{
+						Value: map[string]string{"k1": "v1"},
+					},
+				},
+				"c": {
+					Tick: 90,
+				},
+				"d": {
+					Tick: 95,
+				},
+			},
+			expected: []string{"d", "c", "b", "a"},
+		},
+	}
 
 	for _, c := range cases {
 		output := logStoresSortedByTick(c.logStores)

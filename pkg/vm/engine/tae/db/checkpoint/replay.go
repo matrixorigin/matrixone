@@ -134,7 +134,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	}
 	c.readDuration += time.Since(t0)
 
-	entries, maxGlobalEnd := replayCheckpointEntries(bat, checkpointVersion)
+	entries, maxGlobalEnd := ReplayCheckpointEntries(bat, checkpointVersion)
 	c.ckpEntries = entries
 
 	// step2. read checkpoint data, output is the ckpdatas
@@ -461,7 +461,7 @@ func MergeCkpMeta(
 	return name, err
 }
 
-func replayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entries []*CheckpointEntry, maxGlobalEnd types.TS) {
+func ReplayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entries []*CheckpointEntry, maxGlobalEnd types.TS) {
 	entries = make([]*CheckpointEntry, bat.Length())
 	for i := 0; i < bat.Length(); i++ {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)

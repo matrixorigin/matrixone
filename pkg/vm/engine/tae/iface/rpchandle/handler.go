@@ -144,4 +144,11 @@ type Handler interface {
 		req *db.DiskCleaner,
 		resp *apipb.SyncLogTailResp,
 	) (cb func(), err error)
+
+	HandleGetLatestCheckpoint(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.Checkpoint,
+		resp *apipb.CheckpointResp,
+	) (cb func(), err error)
 }

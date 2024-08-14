@@ -23,7 +23,9 @@ import (
 
 // selectStore selects the best store for a replica.
 func selectStore(
-	shardInfo logservice.LogShardInfo, workingStoreMap map[string]logservice.Locality, locality logservice.Locality,
+	shardInfo logservice.LogShardInfo,
+	workingStoreMap map[string]logservice.Locality,
+	locality logservice.Locality,
 ) string {
 	workingStores := make([]*util.Store, 0, len(workingStoreMap))
 	for id, loc := range workingStoreMap {

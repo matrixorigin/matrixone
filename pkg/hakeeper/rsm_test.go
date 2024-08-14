@@ -607,7 +607,14 @@ func TestSetTaskSchedulerState(t *testing.T) {
 
 func TestInitialClusterRequestCmd(t *testing.T) {
 	nextIDByKey := map[string]uint64{"a": 1, "b": 2}
-	cmd := GetInitialClusterRequestCmd(2, 2, 3, 10, nextIDByKey)
+	cmd := GetInitialClusterRequestCmd(
+		2,
+		2,
+		3,
+		10,
+		nextIDByKey,
+		nil,
+	)
 	req := parseInitialClusterRequestCmd(cmd)
 	assert.Equal(t, uint64(2), req.NumOfLogShards)
 	assert.Equal(t, uint64(2), req.NumOfTNShards)
@@ -618,7 +625,14 @@ func TestInitialClusterRequestCmd(t *testing.T) {
 
 func TestHandleInitialClusterRequestCmd(t *testing.T) {
 	nextIDByKey := map[string]uint64{"a": 1, "b": 2}
-	cmd := GetInitialClusterRequestCmd(2, 2, 3, K8SIDRangeEnd+10, nextIDByKey)
+	cmd := GetInitialClusterRequestCmd(
+		1,
+		1,
+		3,
+		K8SIDRangeEnd+10,
+		nextIDByKey,
+		nil,
+	)
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	result, err := rsm.Update(sm.Entry{Cmd: cmd})
 	require.NoError(t, err)
@@ -634,19 +648,11 @@ func TestHandleInitialClusterRequestCmd(t *testing.T) {
 				ShardID:          1,
 				NumberOfReplicas: 3,
 			},
-			{
-				ShardID:          3,
-				NumberOfReplicas: 3,
-			},
 		},
 		TNShards: []metadata.TNShardRecord{
 			{
 				ShardID:    2,
 				LogShardID: 1,
-			},
-			{
-				ShardID:    4,
-				LogShardID: 3,
 			},
 		},
 	}
@@ -1022,4 +1028,16 @@ func TestHandleUpdateNonVotingLocality(t *testing.T) {
 			"k1": "v1",
 		},
 	}, l)
+}
+
+func TestHandleLogShardUpdate(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	cmd := GetAddLogShardCmd(pb.AddLogShard{
+		ShardID: 10,
+	})
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	shards := tsm1.state.LogState.Shards
+	_, ok := shards[10]
+	assert.True(t, ok)
 }

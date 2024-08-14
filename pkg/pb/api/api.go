@@ -194,6 +194,14 @@ func (m *MergeCommitEntry) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
+func (m *CheckpointResp) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *CheckpointResp) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
 // To reduce memory consumption
 
 type TransferMaps []TransferMap

@@ -24,6 +24,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -144,6 +145,99 @@ func TestHandleStartReplica(t *testing.T) {
 	runServiceTest(t, false, false, fn)
 }
 
+func TestHandleAddNonVotingReplica(t *testing.T) {
+	store1, store2, err := getTestStores()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, store1.close())
+		require.NoError(t, store2.close())
+	}()
+
+	service1 := Service{
+		store:   store1,
+		runtime: runtime.DefaultRuntime(),
+	}
+	cmd := pb.ScheduleCommand{
+		ConfigChange: &pb.ConfigChange{
+			ChangeType: pb.AddNonVotingReplica,
+			Replica: pb.Replica{
+				UUID:      uuid.New().String(),
+				ShardID:   1,
+				ReplicaID: 3,
+				Epoch:     2,
+			},
+		},
+	}
+	service1.handleCommands([]pb.ScheduleCommand{cmd})
+	count, ok := checkReplicaCount(store1, 1)
+	require.True(t, ok)
+	assert.Equal(t, 2, count)
+	count, ok = checkNonVotingReplicaCount(store1, 1)
+	require.True(t, ok)
+	assert.Equal(t, 1, count)
+}
+
+func TestHandleStartNonVotingReplica(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := getStoreTestConfig()
+		cfg.GossipAddress = "0.0.0.0:33002"
+		cfg.GossipSeedAddresses = []string{"127.0.0.1:33002"}
+		cfg.GossipPort = 19010
+		cfg.GossipSeedAddresses = []string{
+			testGossipAddress,
+			"127.0.0.1:19010",
+		}
+		cfg.RaftAddress = "0.0.0.0:33000"
+		cfg.ServiceListenAddress = "0.0.0.0:33001"
+		cfg.ServiceAddress = "127.0.0.1:33001"
+		newStore, err := getTestStore(cfg, false, nil)
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, newStore.close())
+		}()
+		newService := Service{
+			store:   newStore,
+			runtime: runtime.DefaultRuntime(),
+		}
+
+		cmd := pb.ScheduleCommand{
+			ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.AddNonVotingReplica,
+				Replica: pb.Replica{
+					UUID:      newService.ID(),
+					ShardID:   1,
+					ReplicaID: 100,
+					Epoch:     1,
+				},
+			},
+		}
+		s.handleCommands([]pb.ScheduleCommand{cmd})
+		count, ok := checkReplicaCount(s.store, 1)
+		require.True(t, ok)
+		assert.Equal(t, 1, count)
+		count, ok = checkNonVotingReplicaCount(s.store, 1)
+		require.True(t, ok)
+		assert.Equal(t, 1, count)
+
+		cmd = pb.ScheduleCommand{
+			ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.StartNonVotingReplica,
+				Replica: pb.Replica{
+					UUID:      newService.ID(),
+					ShardID:   1,
+					ReplicaID: 100,
+				},
+			},
+		}
+		newService.handleCommands([]pb.ScheduleCommand{cmd})
+		mustHaveNonVotingReplica(t, s.store, 1, 100)
+		has, err := hasMetadataRec(s.store.cfg.DataDir, logMetadataFilename, 1, 100, newStore.cfg.FS)
+		require.NoError(t, err)
+		assert.True(t, has)
+	}
+	runServiceTest(t, false, true, fn)
+}
+
 func TestHandleStopReplica(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cmd := pb.ScheduleCommand{
@@ -245,6 +339,16 @@ func checkReplicaCount(s *store, shardID uint64) (int, bool) {
 	return 0, false
 }
 
+func checkNonVotingReplicaCount(s *store, shardID uint64) (int, bool) {
+	hb := s.getHeartbeatMessage()
+	for _, info := range hb.Replicas {
+		if info.ShardID == shardID {
+			return len(info.NonVotingReplicas), true
+		}
+	}
+	return 0, false
+}
+
 func TestHandleShutdown(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cmd := pb.ScheduleCommand{
@@ -281,4 +385,76 @@ func TestHandleShutdown(t *testing.T) {
 
 	}
 	runServiceTest(t, false, true, fn)
+}
+
+func TestServiceAddLogShard(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cmd := pb.ScheduleCommand{
+			AddLogShard: &pb.AddLogShard{
+				ShardID: 10,
+			},
+		}
+		s.handleCommands([]pb.ScheduleCommand{cmd})
+
+		req := pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		resp := s.handleGetCheckerState(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		assert.Equal(t, 1, len(resp.CheckerState.LogState.Shards))
+		_, ok := resp.CheckerState.LogState.Shards[10]
+		assert.True(t, ok)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceBootstrapShard(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg := getServiceTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	service, err := NewService(cfg,
+		newFS(),
+		nil,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service.Close())
+	}()
+
+	cmd := pb.ScheduleCommand{
+		BootstrapShard: &pb.BootstrapShard{
+			ShardID:   1,
+			ReplicaID: 100,
+			InitialMembers: map[uint64]string{
+				100: service.ID(),
+			},
+		},
+	}
+	service.handleCommands([]pb.ScheduleCommand{cmd})
+
+	done := false
+	for i := 0; i < 1000; i++ {
+		si, ok, err := GetShardInfo("", testServiceAddress, 1)
+		if err != nil || !ok {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		done = true
+		require.NoError(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, uint64(100), si.ReplicaID)
+		addr, ok := si.Replicas[si.ReplicaID]
+		assert.True(t, ok)
+		assert.Equal(t, testServiceAddress, addr)
+		break
+	}
+	if !done {
+		t.Fatalf("failed to get shard info")
+	}
 }

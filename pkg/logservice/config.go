@@ -156,6 +156,11 @@ type Config struct {
 	// but it is neither allowed to vote for leader, nor considered as a part of the
 	// quorum when replicating state.
 	IsNonVoting bool `toml:"is-non-voting"`
+	// MembershipImmovable indicates if keep the membership as the one in the
+	// snapshot. If it is true, all non-voting nodes and witness nodes will
+	// change to normal nodes when startup, otherwise, keep their roles as
+	// in snapshot. Default value is true.
+	MembershipImmovable bool `toml:"membership-immovable"`
 
 	RPC struct {
 		// MaxMessageSize is the max size for RPC message. The default value is 10MiB.
@@ -209,6 +214,9 @@ type Config struct {
 		} `toml:"restore"`
 		// NonVotingLocality is the locality for non-voting replicas.
 		NonVotingLocality string `toml:"non-voting-locality" user_setting:"advanced"`
+		// StandbyEnabled is true means that the standby cluster is enabled and there will
+		// be another new shard for the s3 data.
+		StandbyEnabled bool `toml:"standby-enabled" user_setting:"advanced"`
 	}
 
 	HAKeeperConfig struct {
@@ -295,9 +303,6 @@ func (c *Config) GetInitHAKeeperMembers() (map[uint64]dragonboat.Target, error) 
 			}
 			idn, err := strconv.ParseUint(id, 10, 64)
 			if err != nil {
-				return nil, moerr.NewBadConfigNoCtxf("replicateID '%v'", id)
-			}
-			if idn >= hakeeper.K8SIDRangeEnd || idn < hakeeper.K8SIDRangeStart {
 				return nil, moerr.NewBadConfigNoCtxf("replicateID '%v'", id)
 			}
 			result[idn] = target
@@ -421,6 +426,7 @@ func DefaultConfig() Config {
 		TruncateInterval:         toml.Duration{Duration: defaultTruncateInterval},
 		HAKeeperTruncateInterval: toml.Duration{Duration: defaultHAKeeperTruncateInterval},
 		IsNonVoting:              false,
+		MembershipImmovable:      true,
 		RPC: struct {
 			MaxMessageSize toml.ByteSize `toml:"max-message-size"`
 			EnableCompress bool          `toml:"enable-compress"`
@@ -442,6 +448,7 @@ func DefaultConfig() Config {
 				Force    bool   `toml:"force"`
 			} `toml:"restore"`
 			NonVotingLocality string `toml:"non-voting-locality" user_setting:"advanced"`
+			StandbyEnabled    bool   `toml:"standby-enabled" user_setting:"advanced"`
 		}(struct {
 			BootstrapCluster      bool
 			NumOfLogShards        uint64
@@ -453,6 +460,7 @@ func DefaultConfig() Config {
 				Force    bool
 			}
 			NonVotingLocality string
+			StandbyEnabled    bool
 		}{
 			BootstrapCluster:      true,
 			NumOfLogShards:        1,
@@ -467,6 +475,7 @@ func DefaultConfig() Config {
 				Force:    false,
 			},
 			NonVotingLocality: "",
+			StandbyEnabled:    false,
 		}),
 		HAKeeperConfig: struct {
 			TickPerSecond   int           `toml:"tick-per-second"`
@@ -578,13 +587,24 @@ type ClientConfig struct {
 	EnableCompress bool
 }
 
-// Validate validates the ClientConfig.
-func (c *ClientConfig) Validate() error {
+// ValidateClient validates the ClientConfig.
+func (c *ClientConfig) ValidateClient() error {
 	if c.LogShardID == 0 {
 		return moerr.NewBadConfigNoCtx("LogShardID value cannot be 0")
 	}
 	if c.TNReplicaID == 0 {
 		return moerr.NewBadConfigNoCtx("DNReplicaID value cannot be 0")
+	}
+	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
+		c.ServiceAddresses = []string{DefaultLogServiceServiceAddress}
+	}
+	return nil
+}
+
+// ValidateStandbyClient validates the ClientConfig.
+func (c *ClientConfig) ValidateStandbyClient() error {
+	if c.LogShardID == 0 {
+		return moerr.NewBadConfigNoCtx("LogShardID value cannot be 0")
 	}
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
 		c.ServiceAddresses = []string{DefaultLogServiceServiceAddress}

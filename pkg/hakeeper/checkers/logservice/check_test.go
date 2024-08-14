@@ -45,7 +45,7 @@ func TestCheck(t *testing.T) {
 	cases := []struct {
 		desc                string
 		cluster             pb.ClusterInfo
-		infos               pb.LogState
+		logState            pb.LogState
 		users               pb.TaskTableUser
 		removing            map[uint64][]uint64
 		adding              map[uint64][]uint64
@@ -53,6 +53,7 @@ func TestCheck(t *testing.T) {
 		nonVotingReplicaNum uint64
 		idStartFrom         uint64
 		expected            []*operator.Operator
+		standbyEnabled      bool
 	}{
 		// for normal replicas
 		{
@@ -63,7 +64,7 @@ func TestCheck(t *testing.T) {
 					NumberOfReplicas: 3,
 				}},
 			},
-			infos: pb.LogState{
+			logState: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
 					Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -117,7 +118,7 @@ func TestCheck(t *testing.T) {
 					NumberOfReplicas: 3,
 				}},
 			},
-			infos: pb.LogState{
+			logState: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
 					Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -184,7 +185,7 @@ func TestCheck(t *testing.T) {
 					NumberOfReplicas: 3,
 				}},
 			},
-			infos: pb.LogState{
+			logState: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
 					Replicas: map[uint64]string{1: "a", 2: "b"},
@@ -238,7 +239,7 @@ func TestCheck(t *testing.T) {
 					NumberOfReplicas: 3,
 				}},
 			},
-			infos: pb.LogState{
+			logState: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
 					Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -290,7 +291,7 @@ func TestCheck(t *testing.T) {
 					NumberOfReplicas: 3,
 				}},
 			},
-			infos: pb.LogState{
+			logState: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
 					Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -347,7 +348,7 @@ func TestCheck(t *testing.T) {
 					NumberOfReplicas: 3,
 				}},
 			},
-			infos: pb.LogState{
+			logState: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID: 1,
 					Replicas: map[uint64]string{
@@ -412,6 +413,223 @@ func TestCheck(t *testing.T) {
 					TaskUser: pb.TaskTableUser{Username: "abc"},
 				})},
 		},
+		{
+			desc: "bootstrapping for the shard that has no replicas",
+			cluster: pb.ClusterInfo{
+				TNShards: []metadata.TNShardRecord{{
+					ShardID:    1,
+					LogShardID: 1,
+				}},
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3,
+				}},
+			},
+			logState: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: {
+					ShardID:  1,
+					Replicas: map[uint64]string{},
+				}},
+				Stores: map[string]pb.LogStoreInfo{
+					"a": {
+						Tick:               expiredTick + 1,
+						Replicas:           []pb.LogReplicaInfo{},
+						TaskServiceCreated: true,
+					},
+					"b": {
+						Tick:               expiredTick + 1,
+						Replicas:           []pb.LogReplicaInfo{},
+						TaskServiceCreated: true,
+					},
+					"c": {
+						Tick:               expiredTick + 1,
+						Replicas:           []pb.LogReplicaInfo{},
+						TaskServiceCreated: true,
+					},
+				},
+			},
+			removing:    nil,
+			adding:      nil,
+			currentTick: 0,
+			expected: []*operator.Operator{
+				operator.NewOperator("", 1,
+					1, operator.BootstrapShard{
+						UUID:      "a",
+						ShardID:   1,
+						ReplicaID: 1,
+						InitialMembers: map[uint64]string{
+							1: "a",
+							2: "b",
+							3: "c",
+						},
+						Join: false,
+					},
+				),
+				operator.NewOperator("", 1,
+					1, operator.BootstrapShard{
+						UUID:      "b",
+						ShardID:   1,
+						ReplicaID: 2,
+						InitialMembers: map[uint64]string{
+							1: "a",
+							2: "b",
+							3: "c",
+						},
+						Join: false,
+					},
+				),
+				operator.NewOperator("", 1,
+					1, operator.BootstrapShard{
+						UUID:      "c",
+						ShardID:   1,
+						ReplicaID: 3,
+						InitialMembers: map[uint64]string{
+							1: "a",
+							2: "b",
+							3: "c",
+						},
+						Join: false,
+					},
+				),
+			},
+		},
+		{
+			desc:           "add new shard",
+			standbyEnabled: true,
+			cluster: pb.ClusterInfo{
+				TNShards: []metadata.TNShardRecord{{
+					ShardID:    2,
+					LogShardID: 1,
+				}},
+				LogShards: []metadata.LogShardRecord{
+					{
+						ShardID:          0,
+						NumberOfReplicas: 3,
+					},
+					{
+						ShardID:          1,
+						NumberOfReplicas: 3,
+					},
+				},
+			},
+			logState: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
+					0: {
+						ShardID: 0,
+						Replicas: map[uint64]string{
+							1: "a",
+							2: "b",
+							3: "c",
+						},
+						Epoch:    1,
+						LeaderID: 1,
+						Term:     1,
+					},
+					1: {
+						ShardID: 1,
+						Replicas: map[uint64]string{
+							1: "a",
+							2: "b",
+							3: "c",
+						},
+						Epoch:    1,
+						LeaderID: 1,
+						Term:     1,
+					},
+				},
+				Stores: map[string]pb.LogStoreInfo{
+					"a": {
+						Tick: expiredTick + 2,
+						Replicas: []pb.LogReplicaInfo{
+							{
+								LogShardInfo: pb.LogShardInfo{
+									ShardID:  0,
+									Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+									Epoch:    1,
+									LeaderID: 1,
+									Term:     1,
+								},
+								ReplicaID: 1,
+							},
+							{
+								LogShardInfo: pb.LogShardInfo{
+									ShardID:  1,
+									Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+									Epoch:    1,
+									LeaderID: 1,
+									Term:     1,
+								},
+								ReplicaID: 1,
+							},
+						},
+						TaskServiceCreated: true,
+					},
+					"b": {
+						Tick: expiredTick + 1,
+						Replicas: []pb.LogReplicaInfo{
+							{
+								LogShardInfo: pb.LogShardInfo{
+									ShardID:  0,
+									Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+									Epoch:    1,
+									LeaderID: 1,
+									Term:     1,
+								},
+								ReplicaID: 2,
+							},
+							{
+								LogShardInfo: pb.LogShardInfo{
+									ShardID:  1,
+									Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+									Epoch:    1,
+									LeaderID: 1,
+									Term:     1,
+								},
+								ReplicaID: 2,
+							},
+						},
+						TaskServiceCreated: true,
+					},
+					"c": {
+						Tick: expiredTick + 1,
+						Replicas: []pb.LogReplicaInfo{
+							{
+								LogShardInfo: pb.LogShardInfo{
+									ShardID:  0,
+									Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+									Epoch:    1,
+									LeaderID: 1,
+									Term:     1,
+								},
+								ReplicaID: 3,
+							},
+							{
+								LogShardInfo: pb.LogShardInfo{
+									ShardID:  1,
+									Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+									Epoch:    1,
+									LeaderID: 1,
+									Term:     1,
+								},
+								ReplicaID: 3,
+							},
+						},
+						TaskServiceCreated: true,
+					},
+				},
+			},
+			removing:    nil,
+			adding:      nil,
+			currentTick: 0,
+			expected: []*operator.Operator{
+				operator.NewOperator("", 1,
+					1, operator.AddLogShard{
+						UUID:    "a",
+						ShardID: 2,
+					},
+				),
+			},
+		},
 		// for non-voting replicas
 		{
 			desc: "shard 1 has no non-voting replicas, which expected as 1",
@@ -422,7 +640,7 @@ func TestCheck(t *testing.T) {
 				}},
 			},
 			nonVotingReplicaNum: 1,
-			infos: pb.LogState{
+			logState: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
 					Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -507,7 +725,7 @@ func TestCheck(t *testing.T) {
 				}},
 			},
 			nonVotingReplicaNum: 3,
-			infos: pb.LogState{
+			logState: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:           1,
 					Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -628,7 +846,7 @@ func TestCheck(t *testing.T) {
 				}},
 			},
 			nonVotingReplicaNum: 3,
-			infos: pb.LogState{
+			logState: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:           1,
 					Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -761,7 +979,7 @@ func TestCheck(t *testing.T) {
 				}},
 			},
 			nonVotingReplicaNum: 3,
-			infos: pb.LogState{
+			logState: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:           1,
 					Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -878,7 +1096,7 @@ func TestCheck(t *testing.T) {
 				}},
 			},
 			nonVotingReplicaNum: 3,
-			infos: pb.LogState{
+			logState: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:           1,
 					Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -1011,11 +1229,13 @@ func TestCheck(t *testing.T) {
 				c.users,
 				c.currentTick,
 			),
-			c.infos,
+			c.logState,
+			pb.TNState{},
 			executing,
 			executing,
 			c.nonVotingReplicaNum,
 			pb.Locality{},
+			c.standbyEnabled,
 		)
 		operators := lc.Check()
 

@@ -406,6 +406,27 @@ func (h *Handle) HandleCommitMerge(
 	return
 }
 
+func (h *Handle) HandleGetLatestCheckpoint(
+	_ context.Context,
+	_ txn.TxnMeta,
+	_ *db.Checkpoint,
+	resp *api.CheckpointResp,
+) (cb func(), err error) {
+	var locations string
+	data := h.db.BGCheckpointRunner.GetAllCheckpoints()
+	for i := range data {
+		locations += data[i].GetLocation().String()
+		locations += ":"
+		locations += fmt.Sprintf("%d", data[i].GetVersion())
+		locations += ";"
+		if resp.TruncateLsn < data[i].GetTruncateLsn() {
+			resp.TruncateLsn = data[i].GetTruncateLsn()
+		}
+	}
+	resp.Location = locations
+	return nil, err
+}
+
 func marshalTransferMaps(
 	ctx context.Context,
 	req *api.MergeCommitEntry,

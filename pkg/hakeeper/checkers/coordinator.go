@@ -53,7 +53,7 @@ func NewCoordinator(
 	}
 }
 
-func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.ScheduleCommand {
+func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, standbyEnabled bool) []pb.ScheduleCommand {
 	logState := state.LogState
 	tnState := state.TNState
 	cnState := state.CNState
@@ -92,7 +92,6 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.
 	// system health, try to keep alive.
 	executing := c.OperatorController.GetExecutingReplicas()
 	executingNonVoting := c.OperatorController.GetNonVotingExecutingReplicas()
-	// logutil.Infof("liubo: check executing %+v", executing)
 
 	operators := make([]*operator.Operator, 0)
 	commonFields := hakeeper.NewCheckerCommonFields(
@@ -107,10 +106,12 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.
 		logservice.NewLogServiceChecker(
 			commonFields,
 			logState,
+			tnState,
 			executing,
 			executingNonVoting,
 			state.NonVotingReplicaNum,
 			state.NonVotingLocality,
+			standbyEnabled,
 		),
 		tnservice.NewTNServiceChecker(commonFields, tnState),
 		cnservice.NewCNServiceChecker(commonFields, cnState),

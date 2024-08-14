@@ -36,34 +36,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	testServicePort        = 9000
-	testGossipPort         = 9010
-	testServiceAddress     = "127.0.0.1:9000"
-	testGossipAddress      = "127.0.0.1:9010"
-	dummyGossipSeedAddress = "127.0.0.1:9100"
-	testServerMaxMsgSize   = 1000
-)
-
-func getServiceTestConfig() Config {
-	c := DefaultConfig()
-	c.UUID = uuid.New().String()
-	c.RTTMillisecond = 10
-	c.GossipPort = testGossipPort
-	c.GossipSeedAddresses = []string{testGossipAddress, dummyGossipSeedAddress}
-	c.DeploymentID = 1
-	c.FS = vfs.NewStrictMem()
-	c.LogServicePort = testServicePort
-	c.DisableWorkers = true
-	c.UseTeeLogDB = true
-	c.RPC.MaxMessageSize = testServerMaxMsgSize
-
-	rt := runtime.ServiceRuntime("")
-	runtime.SetupServiceBasedRuntime(c.UUID, rt)
-	runtime.SetupServiceBasedRuntime("", rt)
-	return c
-}
-
 func runServiceTest(t *testing.T,
 	hakeeper bool, startReplica bool, fn func(*testing.T, *Service)) {
 	defer leaktest.AfterTest(t)()
@@ -1271,4 +1243,112 @@ func TestServiceHandleUpdateNonVotingLocality(t *testing.T) {
 		assert.Equal(t, "asia", v)
 	}
 	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceHandleGetLatestLsn(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		req := pb.Request{
+			Method: pb.CONNECT_RO,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				TNID:    100,
+			},
+		}
+		resp := s.handleConnect(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		data := make([]byte, 8)
+		cmd := getTestAppendCmd(req.LogRequest.TNID, data)
+		req = pb.Request{
+			Method: pb.APPEND,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
+		}
+		resp = s.handleAppend(ctx, req, cmd)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
+
+		req = pb.Request{
+			Method: pb.GET_LATEST_LSN,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
+		}
+		resp = s.handleGetLatestLsn(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
+	}
+	runServiceTest(t, false, true, fn)
+}
+
+func TestServiceRequiredLsn(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		req := pb.Request{
+			Method: pb.CONNECT_RO,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				TNID:    100,
+			},
+		}
+		resp := s.handleConnect(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		data := make([]byte, 8)
+		cmd := getTestAppendCmd(req.LogRequest.TNID, data)
+		req = pb.Request{
+			Method: pb.APPEND,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
+		}
+		resp = s.handleAppend(ctx, req, cmd)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
+
+		req = pb.Request{
+			Method: pb.SET_REQUIRED_LSN,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				Lsn:     4,
+			},
+		}
+		resp = s.handleSetRequiredLsn(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, uint64(0), resp.LogResponse.Lsn)
+
+		req = pb.Request{
+			Method: pb.GET_REQUIRED_LSN,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
+		}
+		resp = s.handleGetRequiredLsn(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
+	}
+	runServiceTest(t, false, true, fn)
+}
+
+func TestServiceLeaderID(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		req := pb.Request{
+			Method: pb.GET_LEADER_ID,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
+		}
+		resp := s.handleGetLeaderID(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, uint64(1), resp.LogResponse.LeaderID)
+	}
+	runServiceTest(t, false, true, fn)
 }

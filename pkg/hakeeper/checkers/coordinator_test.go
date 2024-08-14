@@ -688,13 +688,17 @@ func TestFixExpiredStore(t *testing.T) {
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
 		coordinator := NewCoordinator("", hakeeper.Config{})
-		output := coordinator.Check(c.idAlloc, pb.CheckerState{
-			Tick:                c.currentTick,
-			ClusterInfo:         c.cluster,
-			TNState:             c.tn,
-			LogState:            c.log,
-			NonVotingReplicaNum: c.nonVotingReplicaNum,
-		})
+		output := coordinator.Check(
+			c.idAlloc,
+			pb.CheckerState{
+				Tick:                c.currentTick,
+				ClusterInfo:         c.cluster,
+				TNState:             c.tn,
+				LogState:            c.log,
+				NonVotingReplicaNum: c.nonVotingReplicaNum,
+			},
+			false,
+		)
 		assert.Equal(t, c.expected, output)
 	}
 }
@@ -852,12 +856,16 @@ func TestFixZombie(t *testing.T) {
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
 		coordinator := NewCoordinator("", hakeeper.Config{})
-		output := coordinator.Check(c.idAlloc, pb.CheckerState{
-			Tick:        c.tick,
-			ClusterInfo: c.cluster,
-			TNState:     c.tn,
-			LogState:    c.log,
-		})
+		output := coordinator.Check(
+			c.idAlloc,
+			pb.CheckerState{
+				Tick:        c.tick,
+				ClusterInfo: c.cluster,
+				TNState:     c.tn,
+				LogState:    c.log,
+			},
+			false,
+		)
 		assert.Equal(t, c.expected, output)
 	}
 }
@@ -880,26 +888,38 @@ func TestOpExpiredAndThenCompleted(t *testing.T) {
 		},
 	}
 
-	assert.NotNil(t, coordinator.Check(idAlloc, pb.CheckerState{
-		Tick:        currentTick,
-		ClusterInfo: cluster,
-		LogState:    logState,
-	}))
-	assert.Nil(t, coordinator.Check(idAlloc, pb.CheckerState{
-		Tick:        currentTick,
-		ClusterInfo: cluster,
-		LogState:    logState,
-	}))
+	assert.NotNil(t, coordinator.Check(
+		idAlloc,
+		pb.CheckerState{
+			Tick:        currentTick,
+			ClusterInfo: cluster,
+			LogState:    logState,
+		},
+		false,
+	))
+	assert.Nil(t, coordinator.Check(
+		idAlloc,
+		pb.CheckerState{
+			Tick:        currentTick,
+			ClusterInfo: cluster,
+			LogState:    logState,
+		},
+		false,
+	))
 
 	ops := coordinator.OperatorController.GetOperators(1)
 	assert.Equal(t, 1, len(ops))
 	ops[0].SetStatus(operator.EXPIRED)
 
-	assert.NotNil(t, coordinator.Check(idAlloc, pb.CheckerState{
-		Tick:        currentTick,
-		ClusterInfo: cluster,
-		LogState:    logState,
-	}))
+	assert.NotNil(t, coordinator.Check(
+		idAlloc,
+		pb.CheckerState{
+			Tick:        currentTick,
+			ClusterInfo: cluster,
+			LogState:    logState,
+		},
+		false,
+	))
 	ops = coordinator.OperatorController.GetOperators(1)
 	assert.Equal(t, 1, len(ops))
 
@@ -914,9 +934,13 @@ func TestOpExpiredAndThenCompleted(t *testing.T) {
 		},
 	}
 
-	assert.Nil(t, coordinator.Check(idAlloc, pb.CheckerState{
-		Tick:        currentTick,
-		ClusterInfo: cluster,
-		LogState:    logState,
-	}))
+	assert.Nil(t, coordinator.Check(
+		idAlloc,
+		pb.CheckerState{
+			Tick:        currentTick,
+			ClusterInfo: cluster,
+			LogState:    logState,
+		},
+		false,
+	))
 }

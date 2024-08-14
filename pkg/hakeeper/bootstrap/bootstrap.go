@@ -165,6 +165,16 @@ func logStoresSortedByTick(logStores map[string]pb.LogStoreInfo) []string {
 	}
 
 	sort.Slice(uuidSlice, func(i, j int) bool {
+		// FIXME(volgariver6): currently, the locality of log stores should be empty,
+		// but it could not be empty actually.
+		if len(logStores[uuidSlice[i]].Locality.Value) == 0 &&
+			len(logStores[uuidSlice[j]].Locality.Value) > 0 {
+			return true
+		}
+		if len(logStores[uuidSlice[i]].Locality.Value) > 0 &&
+			len(logStores[uuidSlice[j]].Locality.Value) == 0 {
+			return false
+		}
 		return logStores[uuidSlice[i]].Tick > logStores[uuidSlice[j]].Tick
 	})
 

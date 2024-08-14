@@ -53,6 +53,11 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	numOfLogReplicas := cfg.BootstrapConfig.NumOfLogShardReplicas
 	nonVotingLocality := util.GetLocalityFromStr(cfg.BootstrapConfig.NonVotingLocality)
 
+	// If the standby mode is enabled, the number of log shard should be 2.
+	if cfg.BootstrapConfig.StandbyEnabled {
+		numOfLogShards++
+	}
+
 	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.LocalFileServiceName)
 	if err != nil {
 		s.runtime.SubLogger(runtime.SystemInit).Error("failed to get file service instance", zap.Error(err))

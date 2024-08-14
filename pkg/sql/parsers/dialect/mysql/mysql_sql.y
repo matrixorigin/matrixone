@@ -12233,7 +12233,7 @@ non_reserved_keyword:
 |   LESS
 |   LEVEL
 |   LINESTRING
-    LOGSERVICE
+|   LOGSERVICE
 |   LONGBLOB
 |   LONGTEXT
 |   LOCAL

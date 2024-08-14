@@ -67,6 +67,17 @@ func TestHAKeeperClientsCanBeCreated(t *testing.T) {
 	runServiceTest(t, true, true, fn)
 }
 
+func TestHAKeeperClientsCanBeCreatedWithRetry(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{testServiceAddress},
+		}
+		c := NewLogHAKeeperClientWithRetry(context.Background(), "", cfg)
+		assert.NoError(t, c.Close())
+	}
+	runServiceTest(t, true, true, fn)
+}
+
 func TestHAKeeperClientCanNotConnectToNonHAKeeperNode(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{

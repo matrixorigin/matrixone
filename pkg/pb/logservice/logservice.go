@@ -96,10 +96,9 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.QueryAddress = hb.QueryAddress
 	storeInfo.GossipAddress = hb.GossipAddress
 	storeInfo.GossipJoined = hb.GossipJoined
-	// TODO(liubo:)
-	// if hb.ConfigData != nil {
-	// 	storeInfo.ConfigData = hb.ConfigData
-	// }
+	if hb.ConfigData != nil {
+		storeInfo.ConfigData = hb.ConfigData
+	}
 	storeInfo.Resource = hb.Resource
 	storeInfo.CommitID = hb.CommitID
 	s.Stores[hb.UUID] = storeInfo
@@ -171,9 +170,9 @@ func (s *TNState) Update(hb TNStoreHeartbeat, tick uint64) {
 	storeInfo.LockServiceAddress = hb.LockServiceAddress
 	storeInfo.ShardServiceAddress = hb.ShardServiceAddress
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
-	// if hb.ConfigData != nil {
-	// 	storeInfo.ConfigData = hb.ConfigData
-	// }
+	if hb.ConfigData != nil {
+		storeInfo.ConfigData = hb.ConfigData
+	}
 	storeInfo.QueryAddress = hb.QueryAddress
 	s.Stores[hb.UUID] = storeInfo
 }
@@ -204,9 +203,9 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	storeInfo.GossipAddress = hb.GossipAddress
 	storeInfo.Replicas = hb.Replicas
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
-	// if hb.ConfigData != nil {
-	// 	storeInfo.ConfigData = hb.ConfigData
-	// }
+	if hb.ConfigData != nil {
+		storeInfo.ConfigData = hb.ConfigData
+	}
 	storeInfo.Locality = hb.Locality
 	s.Stores[hb.UUID] = storeInfo
 }
@@ -322,9 +321,9 @@ func (s *ProxyState) Update(hb ProxyHeartbeat, tick uint64) {
 	storeInfo.UUID = hb.UUID
 	storeInfo.Tick = tick
 	storeInfo.ListenAddress = hb.ListenAddress
-	// if hb.ConfigData != nil {
-	//	storeInfo.ConfigData = hb.ConfigData
-	// }
+	if hb.ConfigData != nil {
+		storeInfo.ConfigData = hb.ConfigData
+	}
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -335,7 +334,7 @@ func (l *Locality) Format() string {
 	if len(l.Value) == 0 {
 		return ""
 	}
-	var keys []string
+	keys := make([]string, 0, len(l.Value))
 	for k := range l.Value {
 		keys = append(keys, k)
 	}

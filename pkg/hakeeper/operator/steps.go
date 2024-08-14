@@ -369,3 +369,41 @@ func (a DeleteProxyStore) IsFinish(state ClusterState) bool {
 	}
 	return true
 }
+
+type AddLogShard struct {
+	UUID    string
+	ShardID uint64
+}
+
+func (a AddLogShard) String() string {
+	return fmt.Sprintf("add shard %d on %s", a.ShardID, a.UUID)
+}
+
+func (a AddLogShard) IsFinish(state ClusterState) bool {
+	_, ok := state.LogState.Shards[a.ShardID]
+	return ok
+}
+
+type BootstrapShard struct {
+	UUID           string
+	ShardID        uint64
+	ReplicaID      uint64
+	InitialMembers map[uint64]string
+	Join           bool
+}
+
+func (a BootstrapShard) String() string {
+	return fmt.Sprintf("boostraping shard %d", a.ShardID)
+}
+
+func (a BootstrapShard) IsFinish(state ClusterState) bool {
+	if _, ok := state.LogState.Stores[a.UUID]; !ok {
+		return true
+	}
+	for _, replicaInfo := range state.LogState.Stores[a.UUID].Replicas {
+		if replicaInfo.ShardID == a.ShardID {
+			return true
+		}
+	}
+	return false
+}

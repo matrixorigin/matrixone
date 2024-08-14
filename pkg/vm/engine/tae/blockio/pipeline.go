@@ -116,6 +116,14 @@ func MustGetPipeline(sid string) *IoPipeline {
 	return v.(*IoPipeline)
 }
 
+func GetPipeline(sid string) *IoPipeline {
+	v, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
+	if !ok {
+		return nil
+	}
+	return v.(*IoPipeline)
+}
+
 func makeName(location string) string {
 	return fmt.Sprintf("%s-%d", location, time.Now().UTC().Nanosecond())
 }

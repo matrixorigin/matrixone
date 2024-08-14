@@ -68,7 +68,7 @@ func NewObjectReader(
 	}
 	return &BlockReader{
 		reader: reader,
-		aio:    MustGetPipeline(sid),
+		aio:    GetPipeline(sid),
 	}, nil
 }
 
@@ -86,7 +86,7 @@ func NewFileReader(
 	}
 	return &BlockReader{
 		reader: reader,
-		aio:    MustGetPipeline(sid),
+		aio:    GetPipeline(sid),
 	}, nil
 }
 

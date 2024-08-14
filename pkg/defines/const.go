@@ -25,9 +25,10 @@ const (
 )
 
 const (
-	SharedFileServiceName = "SHARED"
-	LocalFileServiceName  = "LOCAL"
-	ETLFileServiceName    = "ETL"
+	SharedFileServiceName  = "SHARED"
+	LocalFileServiceName   = "LOCAL"
+	ETLFileServiceName     = "ETL"
+	StandbyFileServiceName = "STANDBY"
 )
 
 const (

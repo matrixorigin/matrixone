@@ -106,3 +106,15 @@ func (mc *memLogClient) GetTruncatedLsn(ctx context.Context) (logservice.Lsn, er
 func (mc *memLogClient) GetTSOTimestamp(ctx context.Context, count uint64) (uint64, error) {
 	return 0, nil
 }
+
+func (mc *memLogClient) GetLatestLsn(ctx context.Context) (logservice.Lsn, error) {
+	return 0, nil
+}
+
+func (mc *memLogClient) SetRequiredLsn(ctx context.Context, lsn logservice.Lsn) error {
+	return nil
+}
+
+func (mc *memLogClient) GetRequiredLsn(ctx context.Context) (logservice.Lsn, error) {
+	return 0, nil
+}

@@ -218,7 +218,7 @@ type Config struct {
 	TaeDir fileservice.FileService
 
 	// hakeeper client
-	HAkeeper logservice.CNHAKeeperClient
+	HAkeeper logservice.BRHAKeeperClient
 
 	Metas *Metas
 

@@ -156,6 +156,42 @@ func NewLogHAKeeperClient(
 	return newManagedHAKeeperClient(ctx, sid, cfg)
 }
 
+// NewLogHAKeeperClientWithRetry creates a HAKeeper client with retry.
+func NewLogHAKeeperClientWithRetry(
+	ctx context.Context, sid string, cfg HAKeeperClientConfig,
+) ClusterHAKeeperClient {
+	var c ClusterHAKeeperClient
+	createFn := func() error {
+		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+		defer cancel()
+		client, err := NewLogHAKeeperClient(ctx, sid, cfg)
+		if err != nil {
+			logutil.Errorf("failed to create HAKeeper client: %v", err)
+			return err
+		}
+		c = client
+		return nil
+	}
+	timer := time.NewTimer(time.Minute * 2)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+
+		case <-timer.C:
+			panic("failed to create HAKeeper client")
+
+		default:
+			if err := createFn(); err != nil {
+				time.Sleep(time.Second * 3)
+				continue
+			}
+			return c
+		}
+	}
+}
+
 // NewProxyHAKeeperClient creates a HAKeeper client to be used by a proxy service.
 //
 // NB: caller could specify options for morpc.Client via ctx.

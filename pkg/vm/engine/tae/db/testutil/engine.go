@@ -121,6 +121,7 @@ func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 }
 
 func (e *TestEngine) Close() error {
+	blockio.Stop("")
 	err := e.DB.Close()
 	return err
 }
@@ -151,6 +152,13 @@ func (e *TestEngine) ForceLongCheckpoint() {
 	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
 	assert.NoError(e.T, err)
 	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), false)
+	assert.NoError(e.T, err)
+}
+
+func (e *TestEngine) ForceLongCheckpointTruncate() {
+	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
+	assert.NoError(e.T, err)
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), true)
 	assert.NoError(e.T, err)
 }
 

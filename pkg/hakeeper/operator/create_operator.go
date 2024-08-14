@@ -55,6 +55,23 @@ func CreateStartReplica(brief, uuid string, shardID, replicaID uint64) *Operator
 		StartLogService{Replica{UUID: uuid, ShardID: shardID, ReplicaID: replicaID}})
 }
 
+func CreateBootstrapShard(
+	brief, uuid string, shardID, replicaID uint64, initialMembers map[uint64]string,
+) *Operator {
+	return NewOperator(
+		brief,
+		shardID,
+		0,
+		BootstrapShard{
+			UUID:           uuid,
+			ShardID:        shardID,
+			ReplicaID:      replicaID,
+			InitialMembers: initialMembers,
+			Join:           false,
+		},
+	)
+}
+
 func CreateStartNonVotingReplica(brief, uuid string, shardID, replicaID uint64) *Operator {
 	return NewOperator(brief, shardID, 0,
 		StartNonVotingLogService{Replica{UUID: uuid, ShardID: shardID, ReplicaID: replicaID}})
@@ -78,4 +95,16 @@ func JoinGossipClusterOp(brief, uuid string, existing []string) *Operator {
 
 func CreateDeleteProxyOp(brief, uuid string) *Operator {
 	return NewOperator(brief, 0, 0, DeleteProxyStore{StoreID: uuid})
+}
+
+func CreateAddShardOp(brief string, uuid string, shardID uint64) *Operator {
+	return NewOperator(
+		brief,
+		shardID,
+		0,
+		AddLogShard{
+			UUID:    uuid,
+			ShardID: shardID,
+		},
+	)
 }

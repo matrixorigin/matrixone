@@ -564,6 +564,14 @@ func (m *mockHKClient) GetBackupData(ctx context.Context) ([]byte, error) {
 	return nil, nil
 }
 
+func (m *mockHKClient) UpdateNonVotingReplicaNum(ctx context.Context, num uint64) error {
+	return nil
+}
+
+func (m *mockHKClient) UpdateNonVotingLocality(ctx context.Context, locality pb.Locality) error {
+	return nil
+}
+
 func (m *mockHKClient) SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
 	return pb.CommandBatch{}, nil
 }

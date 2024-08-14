@@ -182,7 +182,7 @@ func (info *driverInfo) tryAllocate(maxPendding uint64) (lsn uint64, err error) 
 func (info *driverInfo) logAppend(appender *driverAppender) {
 	info.addrMu.Lock()
 	array := make([]uint64, 0)
-	for key := range appender.entry.meta.addr {
+	for key := range appender.entry.Meta.addr {
 		array = append(array, key)
 	}
 	info.validLsn.Add(appender.logserviceLsn)

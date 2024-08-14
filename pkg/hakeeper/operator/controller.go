@@ -68,13 +68,17 @@ type ExecutingReplicas struct {
 	Adding   map[uint64][]uint64
 	Removing map[uint64][]uint64
 	Starting map[uint64][]uint64
+	// Bootstrapping records the shards that are in bootstrapping state
+	// and has not finished.
+	Bootstrapping map[uint64]struct{}
 }
 
 func (c *Controller) GetExecutingReplicas() ExecutingReplicas {
 	executing := ExecutingReplicas{
-		Adding:   make(map[uint64][]uint64),
-		Removing: make(map[uint64][]uint64),
-		Starting: make(map[uint64][]uint64),
+		Adding:        make(map[uint64][]uint64),
+		Removing:      make(map[uint64][]uint64),
+		Starting:      make(map[uint64][]uint64),
+		Bootstrapping: make(map[uint64]struct{}),
 	}
 	for shardID, operators := range c.operators {
 		for _, op := range operators {
@@ -86,6 +90,8 @@ func (c *Controller) GetExecutingReplicas() ExecutingReplicas {
 					executing.Adding[shardID] = append(executing.Adding[shardID], step.ReplicaID)
 				case StartLogService:
 					executing.Starting[shardID] = append(executing.Starting[shardID], step.ReplicaID)
+				case BootstrapShard:
+					executing.Bootstrapping[shardID] = struct{}{}
 				}
 			}
 		}
@@ -166,6 +172,10 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 
 func generateScheduleCommand(step OpStep) pb.ScheduleCommand {
 	switch st := step.(type) {
+	case AddLogShard:
+		return addLogShard(st)
+	case BootstrapShard:
+		return bootstrapShard(st)
 	case AddLogService:
 		return addLogService(st)
 	case AddNonVotingLogService:
@@ -433,6 +443,29 @@ func deleteProxyStore(st DeleteProxyStore) pb.ScheduleCommand {
 		ServiceType: pb.ProxyService,
 		DeleteProxyStore: &pb.DeleteProxyStore{
 			StoreID: st.StoreID,
+		},
+	}
+}
+
+func addLogShard(st AddLogShard) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID:        st.UUID,
+		ServiceType: pb.LogService,
+		AddLogShard: &pb.AddLogShard{
+			ShardID: st.ShardID,
+		},
+	}
+}
+
+func bootstrapShard(st BootstrapShard) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID:        st.UUID,
+		ServiceType: pb.LogService,
+		BootstrapShard: &pb.BootstrapShard{
+			ShardID:        st.ShardID,
+			ReplicaID:      st.ReplicaID,
+			InitialMembers: st.InitialMembers,
+			Join:           false,
 		},
 	}
 }
