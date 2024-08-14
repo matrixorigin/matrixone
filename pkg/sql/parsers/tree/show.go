@@ -35,6 +35,10 @@ type ShowCreateTable struct {
 func (node *ShowCreateTable) Format(ctx *FmtCtx) {
 	ctx.WriteString("show create table ")
 	node.Name.ToTableName().Format(ctx)
+	if node.AtTsExpr != nil {
+		ctx.WriteString(" ")
+		node.AtTsExpr.Format(ctx)
+	}
 }
 
 func (node *ShowCreateTable) GetStatementType() string { return "Show Create Table" }
@@ -54,6 +58,10 @@ type ShowCreateView struct {
 func (node *ShowCreateView) Format(ctx *FmtCtx) {
 	ctx.WriteString("show create view ")
 	node.Name.ToTableName().Format(ctx)
+	if node.AtTsExpr != nil {
+		ctx.WriteString(" ")
+		node.AtTsExpr.Format(ctx)
+	}
 }
 func (node *ShowCreateView) GetStatementType() string { return "Show Create View" }
 func (node *ShowCreateView) GetQueryType() string     { return QueryTypeOth }
@@ -67,6 +75,7 @@ type ShowCreateDatabase struct {
 	showImpl
 	IfNotExists bool
 	Name        string
+	AtTsExpr    *AtTimeStamp
 }
 
 func (node *ShowCreateDatabase) Format(ctx *FmtCtx) {
@@ -76,6 +85,10 @@ func (node *ShowCreateDatabase) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteByte(' ')
 	ctx.WriteString(string(node.Name))
+	if node.AtTsExpr != nil {
+		ctx.WriteString(" ")
+		node.AtTsExpr.Format(ctx)
+	}
 }
 func (node *ShowCreateDatabase) GetStatementType() string { return "Show Create View" }
 func (node *ShowCreateDatabase) GetQueryType() string     { return QueryTypeOth }
@@ -154,6 +167,10 @@ func (node *ShowDatabases) Format(ctx *FmtCtx) {
 	if node.Where != nil {
 		ctx.WriteByte(' ')
 		node.Where.Format(ctx)
+	}
+	if node.AtTsExpr != nil {
+		ctx.WriteByte(' ')
+		node.AtTsExpr.Format(ctx)
 	}
 }
 func (node *ShowDatabases) GetStatementType() string { return "Show Databases" }
@@ -363,6 +380,10 @@ func (node *ShowTables) Format(ctx *FmtCtx) {
 	if node.Where != nil {
 		ctx.WriteByte(' ')
 		node.Where.Format(ctx)
+	}
+	if node.AtTsExpr != nil {
+		ctx.WriteByte(' ')
+		node.AtTsExpr.Format(ctx)
 	}
 }
 func (node *ShowTables) GetStatementType() string { return "Show Tables" }

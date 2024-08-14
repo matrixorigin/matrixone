@@ -16,6 +16,9 @@ package projection
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -24,8 +27,11 @@ import (
 var _ vm.Operator = new(Projection)
 
 type Projection struct {
+	ctr         *container
+	ProjectList []*plan.Expr
 	vm.OperatorBase
-	colexec.Projection
+
+	maxAllocSize int
 }
 
 func (projection *Projection) GetOperatorBase() *vm.OperatorBase {
@@ -57,6 +63,12 @@ func (projection *Projection) Release() {
 	if projection != nil {
 		reuse.Free[Projection](projection, nil)
 	}
+}
+
+type container struct {
+	buf           *batch.Batch
+	projExecutors []colexec.ExpressionExecutor
+	uafs          []func(v, w *vector.Vector) error // vector.GetUnionAllFunction
 }
 
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {

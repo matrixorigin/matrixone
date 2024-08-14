@@ -33,7 +33,9 @@ type container struct {
 type Merge struct {
 	ctr      *container
 	SinkScan bool
-
+	Partial  bool  // false means listening on all merge receivers
+	StartIDX int32 // if partial, listening on receivers[start:end]
+	EndIDX   int32
 	vm.OperatorBase
 }
 
@@ -64,6 +66,13 @@ func NewArgument() *Merge {
 
 func (merge *Merge) WithSinkScan(sinkScan bool) *Merge {
 	merge.SinkScan = sinkScan
+	return merge
+}
+
+func (merge *Merge) WithPartial(start, end int32) *Merge {
+	merge.Partial = true
+	merge.StartIDX = start
+	merge.EndIDX = end
 	return merge
 }
 
