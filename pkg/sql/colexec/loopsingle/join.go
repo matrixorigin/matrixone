@@ -94,7 +94,9 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(loopSingle.Result))
 				for i, rp := range loopSingle.Result {
-					ctr.rbat.Vecs[i] = vector.NewVec(loopSingle.Typs[rp.Pos])
+					if rp.Rel != 0 {
+						ctr.rbat.Vecs[i] = vector.NewVec(loopSingle.Typs[rp.Pos])
+					}
 				}
 			} else {
 				ctr.rbat.CleanOnlyData()
@@ -249,7 +251,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *LoopSingle, proc *process.Proc
 	}
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			if err := vector.GetUnionAllFunction(*ctr.rbat.Vecs[i].GetType(), proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
+			if ctr.rbat.Vecs[i] == nil {
+				ctr.rbat.Vecs[i] = vector.NewVec(*bat.Vecs[rp.Pos].GetType())
+			}
+			if err := vector.GetUnionAllFunction(*bat.Vecs[rp.Pos].GetType(), proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
 				return err
 			}
 		}
