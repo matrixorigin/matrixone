@@ -719,7 +719,7 @@ func restoreToDatabaseOrTable(
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 	restoreToTbl := tblName != ""
 
-	createDbSql, err = getCreateDatabaseSql(toCtx, sid, bh, snapshotName, dbName)
+	createDbSql, err = getCreateDatabaseSql(ctx, sid, bh, snapshotName, dbName, restoreAccount)
 	if err != nil {
 		return
 	}
@@ -727,13 +727,13 @@ func restoreToDatabaseOrTable(
 	// if restore to table, check if the db is sub db
 	isSubDb := strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
 	if isSubDb && restoreToTbl {
-		return moerr.NewInternalError(toCtx, "can't restore to table for sub db")
+		return moerr.NewInternalError(ctx, "can't restore to table for sub db")
 	}
 
 	if isRestoreCluster && isSubDb {
 		// if restore to cluster, and the db is sub, append the sub db to restore list
 		getLogger(sid).Info(fmt.Sprintf("[%s] append sub db to restore list: %v, at restore cluster account %d", snapshotName, dbName, toAccountId))
-		key := genKey(string(toAccountId), dbName)
+		key := genKey(fmt.Sprint(restoreAccount), dbName)
 		subDbToRestore[key] = NewSubDbRestoreRecord(dbName, toAccountId, createDbSql)
 		return
 
@@ -788,7 +788,7 @@ func restoreToDatabaseOrTable(
 
 	if !restoreToTbl {
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create pub: %v", snapshotName, dbName))
-		if err = createPub(ctx, bh, snapshotName, dbName, toAccountId); err != nil {
+		if err = createPub(ctx, sid, bh, snapshotName, dbName, toAccountId); err != nil {
 			return
 		}
 	}
@@ -1324,18 +1324,20 @@ func getCreateDatabaseSql(ctx context.Context,
 	sid string,
 	bh BackgroundExec,
 	snapshotName string,
-	dbName string) (string, error) {
+	dbName string,
+	accountId uint32) (string, error) {
 
-	sql := fmt.Sprintf("show create database `%s`", dbName)
+	sql := "select datname, dat_createsql from mo_catalog.mo_database"
 	if len(snapshotName) > 0 {
 		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
 	}
+	sql += fmt.Sprintf(" where datname = '%s' and account_id = %d", dbName, accountId)
 	getLogger(sid).Info(fmt.Sprintf("[%s] get create database `%s` sql: %s", snapshotName, dbName, sql))
 
 	// cols: database_name, create_sql
 	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
 		return "", moerr.NewBadDB(ctx, dbName)
@@ -1735,10 +1737,18 @@ func dropDb(ctx context.Context, bh BackgroundExec, dbName string) (err error) {
 }
 
 // createPub create pub after the database is created
-func createPub(ctx context.Context, bh BackgroundExec, snapshotName, dbName string, toAccountId uint32) (err error) {
+func createPub(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName,
+	dbName string,
+	toAccountId uint32) (err error) {
 	// read pub info from mo_pubs
 	sql := fmt.Sprintf(getPubInfoWithSnapshotFormat, snapshotName, dbName)
 	bh.ClearExecResultSet()
+	getLogger(sid).Info(fmt.Sprintf("[%s] create pub: get pub info sql: %s", snapshotName, sql))
+
 	if err = bh.Exec(ctx, sql); err != nil {
 		return
 	}
@@ -1766,6 +1776,7 @@ func createPub(ctx context.Context, bh BackgroundExec, snapshotName, dbName stri
 		if ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1); err != nil {
 			return
 		}
+		getLogger(sid).Info(fmt.Sprintf("[%s] create pub: create pub sql: %s", snapshotName, pubInfo.GetCreateSql()))
 
 		if err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication)); err != nil {
 			return
