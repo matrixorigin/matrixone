@@ -17,6 +17,7 @@ package table_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -101,8 +102,7 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	if tableScan.Reader != nil {
 		e := tableScan.Reader.Close()
 		if e != nil {
-			panic("error to close reader")
-			// logutil.Errorf("error to close reader of table id=%d, err=%v", tableScan.TableID, e)
+			logutil.Errorf("close reader for table id=%d, err=%v", tableScan.TableID, e)
 		}
 	}
 	anal.Alloc(allocSize)
