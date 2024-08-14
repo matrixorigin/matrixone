@@ -15,6 +15,7 @@
 package function
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -205,7 +206,7 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 		return err
 	}
 
-	if op.simple {
+	if !op.simple {
 		if jsonVec.GetType().Oid == types.T_json {
 			fn = computeJsonSimple
 		} else {
@@ -245,6 +246,138 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 				}
 			} else {
 				if err = rs.AppendByteJson(out, false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// JSON_EXTRACT_STRING: extract a string value from a json object
+func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	var err error
+	var fn computeFn
+
+	jsonVec := parameters[0]
+	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	// build all paths
+	if err = op.buildPath(parameters, length); err != nil {
+		return err
+	}
+
+	if !op.simple {
+		return moerr.NewInvalidInput(proc.Ctx, "json_extract_value should use a path that retrives a single value")
+	}
+	if jsonVec.GetType().Oid == types.T_json {
+		fn = computeJsonSimple
+	} else {
+		fn = computeStringSimple
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
+		if jIsNull {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		paths := op.getPaths(i)
+		if len(paths) == 0 || paths[0] == nil {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		} else {
+			out, err := fn(jsonBytes, paths)
+			if err != nil {
+				return err
+			}
+			if out.IsNull() {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				if out.TYPE() == "STRING" {
+					outstr := out.GetString()
+					if err = rs.AppendBytes([]byte(outstr), false); err != nil {
+						return err
+					}
+				} else {
+					return moerr.NewInvalidInput(proc.Ctx, "expecting a path that retrives a single string value")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// JSON_EXTRACT_FLOAT64: extract a float64 value from a json object
+func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	var err error
+	var fn computeFn
+
+	jsonVec := parameters[0]
+	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
+	rs := vector.MustFunctionResult[float64](result)
+
+	// build all paths
+	if err = op.buildPath(parameters, length); err != nil {
+		return err
+	}
+	if !op.simple {
+		return moerr.NewInvalidInput(proc.Ctx, "json_extract_value should use a path that retrives a single value")
+	}
+
+	if jsonVec.GetType().Oid == types.T_json {
+		fn = computeJsonSimple
+	} else {
+		fn = computeStringSimple
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
+		if jIsNull {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		paths := op.getPaths(i)
+		if len(paths) == 0 || paths[0] == nil {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		} else {
+			out, err := fn(jsonBytes, paths)
+			if err != nil {
+				return err
+			}
+			if out.IsNull() {
+				if err = rs.Append(0, true); err != nil {
+					return err
+				}
+			} else {
+				var fv float64
+				// XXX: here we expect we can get a single numeric value, and we expect we can cast
+				// it to the target type. No error checking for overflow etc.  Seems this is what
+				// customer wants.  If this is not true, we should do a strict, type, range checked
+				// version and a try_json_extract_value version for the current behavior.
+				if out.TYPE() == "INTEGER" {
+					i64 := out.GetInt64()
+					fv = float64(i64)
+				} else if out.TYPE() == "FLOAT" {
+					fv = out.GetFloat64()
+				} else {
+					return moerr.NewInvalidInput(proc.Ctx, "expecting a path that retrives a single numeric value")
+				}
+				if err = rs.Append(fv, false); err != nil {
 					return err
 				}
 			}

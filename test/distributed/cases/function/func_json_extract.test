@@ -58,6 +58,7 @@ insert into json_table_1 values('{"key10": "value1", "key2": "value2"}'),('{"key
 select json_extract('{"a":"a1","b":"b1"}','$.*') from json_table_1;
 create view v1 as select json_extract('{"a":1}','$.a');
 desc v1;
+
 select json_extract('{"a":1}',null);
 select json_extract(null,'$');
 select json_extract(null,null);
@@ -87,3 +88,88 @@ select json_extract('[0,1,2]', '$[last-1]', '$[0]', '$[2]');
 select json_extract('[0,1,2]','$[4]');
 select json_extract('[0,1,2]','$[100]');
 select json_extract('[0,234,32432,423,5234,11443242,44242342424,23424323]','$[2000]');
+
+# json_extract_string/float64
+select json_extract_string('{"a":1,"b":2,"c":3}','$.a');
+select json_extract_string('{"a":1,"b":2,"c":3}','$.b');
+select json_extract_string('{"a":"x","b":"y","c":"z"}','$.a');
+select json_extract_string('{"a":"x","b":"y","c":"z"}','$.b');
+select json_extract_string('{"a":{"q":[1,2,3]}}','$.a.q[1]');
+select json_extract_string('[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}]','$[1].a');
+select json_extract_string('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}','$.a.q[1]');
+select json_extract_string('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}','$.a.q');
+select json_extract_string('[1,2,3]','$[*]');
+select json_extract_string('{"a":[1,2,3,{"b":4}]}','$.a[3].b');
+select json_extract_string('{"a":[1,2,3,{"b":4}]}','$.a[3].c');
+select json_extract_string('{"a":[1,2,3,{"b":4}],"c":5}','$.*');
+select json_extract_string('{"a":[1,2,3,{"a":4}]}','$**.a');
+select json_extract_string('{"a":[1,2,3,{"a":4}]}','$.a[*].a');
+select json_extract_string('{"a":1}','$[0]');
+select json_extract_string('{"a":1}','$[0].a');
+select json_extract_string('{"a":1}','$[0].b');
+select json_extract_string('{"a":1}','$[1]');
+select json_extract_string('{"af": [1, "2", {"aaf": "bb"}],"eab":"888"}','$**.f');
+select json_extract_string('{"a": [1, "2", {"a": "bb"}]}','$**.a');
+select json_extract_string('{"a":"a1","b":"b1"}','$.**');
+select json_extract_string('{"a":"a1","b":"b1"}','$**.1');
+
+
+select json_extract_float64('{"a":1,"b":2,"c":3}','$.a');
+select json_extract_float64('{"a":1,"b":2,"c":3}','$.b');
+select json_extract_float64('{"a":"x","b":"y","c":"z"}','$.a');
+select json_extract_float64('{"a":"x","b":"y","c":"z"}','$.b');
+select json_extract_float64('{"a":{"q":[1,2,3]}}','$.a.q[1]');
+select json_extract_float64('[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}]','$[1].a');
+select json_extract_float64('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}','$.a.q[1]');
+select json_extract_float64('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}','$.a.q');
+select json_extract_float64('[1,2,3]','$[*]');
+select json_extract_float64('{"a":[1,2,3,{"b":4}]}','$.a[3].b');
+select json_extract_float64('{"a":[1,2,3,{"b":4}]}','$.a[3].c');
+select json_extract_float64('{"a":[1,2,3,{"b":4}],"c":5}','$.*');
+select json_extract_float64('{"a":[1,2,3,{"a":4}]}','$**.a');
+select json_extract_float64('{"a":[1,2,3,{"a":4}]}','$.a[*].a');
+select json_extract_float64('{"a":1}','$[0]');
+select json_extract_float64('{"a":1}','$[0].a');
+select json_extract_float64('{"a":1}','$[0].b');
+select json_extract_float64('{"a":1}','$[1]');
+select json_extract_float64('{"af": [1, "2", {"aaf": "bb"}],"eab":"888"}','$**.f');
+select json_extract_float64('{"a": [1, "2", {"a": "bb"}]}','$**.a');
+select json_extract_float64('{"a":"a1","b":"b1"}','$.**');
+select json_extract_float64('{"a":"a1","b":"b1"}','$**.1');
+
+select json_extract_float64('{"a":123456789012345678901234567890,"b":2,"c":3}','$.a');
+select json_extract_float64('{"a":-123456789012345678901234567890,"b":2,"c":3}','$.a');
+select json_extract_float64('{"a":null,"b":2,"c":3}','$.a');
+select json_extract_float64('{"a":NaN,"b":2,"c":3}','$.a');
+select json_extract_float64('{"a":1e10,"b":2,"c":3}','$.a');
+select json_extract_float64('{"a":3.1415926535897e1,"b":2,"c":3}','$.a');
+
+drop table if exists jtags;
+create table jtags(id int, tags json, metrics json);
+insert into jtags values 
+(1, '{"tag1": "xxx", "tag2": "yyy1", "tag13": "zzz"}', '{"metric1": 1, "metric2": 1.0, "metric13": 1}'),
+(2, '{"tag1": "xxx", "tag2": "yyy2", "tag23": "zzz"}', '{"metric1": 2, "metric2": 2.0, "metric23": 2}'),
+(3, '{"tag1": "xxx", "tag2": "yyy3", "tag33": "zzz"}', '{"metric1": 3, "metric2": 3.0, "metric33": 3}'),
+(4, '{"tag1": "xxx", "tag2": "yyy4", "tag43": "zzz"}', '{"metric1": 4, "metric2": 4.0, "metric43": 4}'),
+(5, '{"tag1": "xxx", "tag2": "yyy5", "tag53": "zzz"}', '{"metric1": 5, "metric2": 5.0, "metric53": 5}'),
+(6, '{"tag1": "xxx", "tag2": "yyy6", "tag63": "zzz"}', '{"metric1": 6, "metric2": 6.0, "metric63": 6}'),
+(7, '{"tag1": "xxx", "tag2": "yyy7", "tag73": "zzz"}', '{"metric1": 7, "metric2": 7.0, "metric73": 7}'),
+(8, '{"tag1": "xxx", "tag2": "yyy8", "tag83": "zzz"}', '{"metric1": 8, "metric2": 8.0, "metric83": 8}'),
+(9, '{"tag1": "xxx", "tag2": "yyy9", "tag93": "zzz"}', '{"metric1": 9, "metric2": 9.0, "metric93": 9}');
+
+select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extract_float64(jtags.metrics, '$.metric33')) s33 from jtags;
+select count(json_extract_float64(jtags.metrics, '$.metric1')) c1, count(json_extract_float64(jtags.metrics, '$.metric33')) c33 from jtags;
+select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extract_float64(jtags.metrics, '$.metric33')) s33 from jtags
+where json_extract_string(jtags.tags, '$.tag1') = 'xxx';
+select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extract_float64(jtags.metrics, '$.metric33')) s33 from jtags
+where json_extract_string(jtags.tags, '$.tag2') = 'yyy3';
+select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extract_float64(jtags.metrics, '$.metric33')) s33 from jtags
+where json_extract_string(jtags.tags, '$.tag2') = 'yyy5';
+select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extract_float64(jtags.metrics, '$.metric33')) s33 from jtags
+where json_extract_string(jtags.tags, '$.tag33') = 'zzz';
+select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extract_float64(jtags.metrics, '$.metric33')) s33 from jtags
+where json_extract_string(jtags.tags, '$.tag53') = 'zzz';
+select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extract_float64(jtags.metrics, '$.metric33')) s33 from jtags
+where json_extract_string(jtags.tags, '$.tag35') = 'zzz';
+
+
