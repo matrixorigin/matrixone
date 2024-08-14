@@ -422,7 +422,7 @@ func (c *Compile) SetIsPrepare(isPrepare bool) {
 
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
-		fmt.Println("pipeline for tp query, current CN addr ", c.addr)
+		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)
 	} else {
 		fmt.Println("pipeline for ap query! current cn", c.addr, "sql: ", c.originSQL)
 	}
@@ -2147,20 +2147,27 @@ func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right 
 	connectRightArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	right[0].setRootOperator(connectRightArg)
 
+	merge0 := rs[0].RootOp.(*merge.Merge)
+	merge0.WithPartial(0, 1)
+	merge1 := merge.NewArgument().WithPartial(1, 2)
+
 	currentFirstFlag := c.anal.isFirst
 	switch nodeType {
 	case plan.Node_MINUS:
 		arg := minus.NewArgument()
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		rs[0].ReplaceLeafOp(arg)
+		rs[0].setRootOperator(arg)
+		arg.AppendChild(merge1)
 	case plan.Node_INTERSECT:
 		arg := intersect.NewArgument()
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		rs[0].ReplaceLeafOp(arg)
+		rs[0].setRootOperator(arg)
+		arg.AppendChild(merge1)
 	case plan.Node_INTERSECT_ALL:
 		arg := intersectall.NewArgument()
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		rs[0].ReplaceLeafOp(arg)
+		rs[0].setRootOperator(arg)
+		arg.AppendChild(merge1)
 	}
 	c.anal.isFirst = false
 	return rs
@@ -2177,21 +2184,33 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
+			merge0 := rs[i].RootOp.(*merge.Merge)
+			merge0.WithPartial(0, 1)
+			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := minus.NewArgument()
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs[i].ReplaceLeafOp(arg)
+			rs[i].setRootOperator(arg)
+			arg.AppendChild(merge1)
 		}
 	case plan.Node_INTERSECT:
 		for i := range rs {
+			merge0 := rs[i].RootOp.(*merge.Merge)
+			merge0.WithPartial(0, 1)
+			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := intersect.NewArgument()
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs[i].ReplaceLeafOp(arg)
+			rs[i].setRootOperator(arg)
+			arg.AppendChild(merge1)
 		}
 	case plan.Node_INTERSECT_ALL:
 		for i := range rs {
+			merge0 := rs[i].RootOp.(*merge.Merge)
+			merge0.WithPartial(0, 1)
+			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := intersectall.NewArgument()
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs[i].ReplaceLeafOp(arg)
+			rs[i].setRootOperator(arg)
+			arg.AppendChild(merge1)
 		}
 	}
 	c.anal.isFirst = false
@@ -2728,10 +2747,15 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	all := []*Scope{l, r}
 	rs := c.newMergeScope(all)
 
+	merge1 := rs.RootOp.(*merge.Merge)
+	merge1.WithPartial(0, 1)
+	merge2 := merge.NewArgument().WithPartial(1, 2)
+
 	currentFirstFlag := c.anal.isFirst
 	op := constructFuzzyFilter(n, ns[n.Children[0]], ns[n.Children[1]])
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(op)
+	op.AppendChild(merge2)
 	c.anal.isFirst = false
 
 	fuzzyCheck, err := newFuzzyCheck(n)
@@ -3125,13 +3149,8 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 		}
 		lockOpArg.SetBlock(block)
 		lockOpArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		if block {
-			lockOpArg.SetChildren(ss[i].RootOp.GetOperatorBase().Children)
-			ss[i].RootOp.Release()
-			ss[i].RootOp = lockOpArg
-		} else {
-			ss[i].doSetRootOperator(lockOpArg)
-		}
+		ss[i].doSetRootOperator(lockOpArg)
+
 	}
 	c.anal.isFirst = false
 	return ss, nil
@@ -3145,10 +3164,19 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
 		}
 	}
-
 	rs := newScope(Merge)
 	rs.NodeInfo = getEngineNode(c)
+	rs.NodeInfo.Mcpu = 1
 	rs.Proc = c.proc.NewNoContextChildProc(len(receivers))
+	for _, r := range receivers {
+		r.Ctx = rs.Proc.Ctx
+	}
+	rs.Proc.Reg.MergeReceivers = receivers
+
+	//for mergecte, children[0] receive from the first channel, and children[1] receive from the rest channels
+	mergeOp1 := merge.NewArgument()
+	mergeOp1.WithPartial(0, 1)
+	rs.setRootOperator(mergeOp1)
 
 	currentFirstFlag := c.anal.isFirst
 	mergecteArg := mergecte.NewArgument()
@@ -3156,10 +3184,11 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	rs.setRootOperator(mergecteArg)
 	c.anal.isFirst = false
 
-	for _, r := range receivers {
-		r.Ctx = rs.Proc.Ctx
-	}
-	rs.Proc.Reg.MergeReceivers = receivers
+	mergeOp2 := merge.NewArgument()
+	mergeOp2.WithPartial(1, int32(len(receivers)))
+	mergecteArg.AppendChild(mergeOp2)
+	c.anal.isFirst = false
+
 	return []*Scope{rs}, nil
 }
 
@@ -3174,17 +3203,18 @@ func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope
 	rs := newScope(Merge)
 	rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 	rs.Proc = c.proc.NewNoContextChildProc(len(receivers))
+	for _, r := range receivers {
+		r.Ctx = rs.Proc.Ctx
+	}
+	rs.Proc.Reg.MergeReceivers = receivers
 
+	mergeOp := merge.NewArgument()
+	rs.setRootOperator(mergeOp)
 	currentFirstFlag := c.anal.isFirst
 	mergeRecursiveArg := mergerecursive.NewArgument()
 	mergeRecursiveArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergeRecursiveArg)
 	c.anal.isFirst = false
-
-	for _, r := range receivers {
-		r.Ctx = rs.Proc.Ctx
-	}
-	rs.Proc.Reg.MergeReceivers = receivers
 	return []*Scope{rs}, nil
 }
 
