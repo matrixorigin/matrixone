@@ -94,8 +94,8 @@ func (node *NumVal) Bool() bool {
 	}
 }
 
-func (n *NumVal) String() string {
-	return n.origString
+func (node *NumVal) String() string {
+	return node.origString
 }
 
 // follow package constant Uint64Val
@@ -147,8 +147,8 @@ func (node *NumVal) Float64() (float64, bool) {
 	}
 }
 
-func (n *NumVal) Negative() bool {
-	return n.negative
+func (node *NumVal) Negative() bool {
+	return node.negative
 }
 
 func NewNumVal[T bool | int64 | uint64 | float64 | string](val T, originString string, negative bool, typ P_TYPE) *NumVal {
@@ -188,33 +188,33 @@ func NewNumVal[T bool | int64 | uint64 | float64 | string](val T, originString s
 	return nv
 }
 
-func (n *NumVal) Format(ctx *FmtCtx) {
-	if n.origString != "" {
-		ctx.WriteValue(n.ValType, FormatString(n.origString))
+func (node *NumVal) Format(ctx *FmtCtx) {
+	if node.origString != "" {
+		ctx.WriteValue(node.ValType, FormatString(node.origString))
 		return
 	}
 
-	switch n.ValType {
+	switch node.ValType {
 	case P_null:
 		ctx.WriteString("null")
 	case P_bool:
-		ctx.WriteString(strconv.FormatBool(n.resBool))
+		ctx.WriteString(strconv.FormatBool(node.resBool))
 	// case P_int64:
-	// 	ctx.WriteString(strconv.FormatInt(n.resInt64, 10))
+	// 	ctx.WriteString(strconv.FormatInt(node.resInt64, 10))
 	// case P_uint64:
-	// 	ctx.WriteString(strconv.FormatUint(n.resUint64, 10))
+	// 	ctx.WriteString(strconv.FormatUint(node.resUint64, 10))
 	default:
-		ctx.WriteValue(n.ValType, n.origString)
+		ctx.WriteValue(node.ValType, node.origString)
 	}
 }
 
 // Accept implements NodeChecker Accept interface.
-func (n *NumVal) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *NumVal) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	return v.Exit(n)
+	return v.Exit(node)
 }
 
 // StrVal represents a constant string value.
@@ -222,12 +222,12 @@ type StrVal struct {
 	str string
 }
 
-func (node *StrVal) Format(ctx *FmtCtx) {
-	ctx.WriteString(node.str)
+func (s *StrVal) Format(ctx *FmtCtx) {
+	ctx.WriteString(s.str)
 }
 
 // Accept implements NodeChecker Accept interface.
-func (node *StrVal) Accept(v Visitor) (Expr, bool) {
+func (s *StrVal) Accept(v Visitor) (Expr, bool) {
 	panic("unimplement StrVal Accept")
 }
 

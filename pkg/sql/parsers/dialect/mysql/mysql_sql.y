@@ -2579,22 +2579,22 @@ var_assignment:
     {
         $$ = &tree.VarAssignmentExpr{
             Name: strings.ToLower($1),
-            Value: tree.NewNumValWithType2($2, $2, false, tree.P_char),
+            Value: tree.NewNumVal($2, $2, false, tree.P_char),
         }
     }
 |   NAMES charset_name COLLATE DEFAULT
     {
         $$ = &tree.VarAssignmentExpr{
             Name: strings.ToLower($1),
-            Value: tree.NewNumValWithType2($2, $2, false, tree.P_char),
+            Value: tree.NewNumVal($2, $2, false, tree.P_char),
         }
     }
 |   NAMES charset_name COLLATE name_string
     {
         $$ = &tree.VarAssignmentExpr{
             Name: strings.ToLower($1),
-            Value: tree.NewNumValWithType2($2, $2, false, tree.P_char),
-            Reserved: tree.NewNumValWithType2($4, $4, false, tree.P_char),
+            Value: tree.NewNumVal($2, $2, false, tree.P_char),
+            Reserved: tree.NewNumVal($4, $4, false, tree.P_char),
         }
     }
 |   NAMES DEFAULT
@@ -2608,7 +2608,7 @@ var_assignment:
     {
         $$ = &tree.VarAssignmentExpr{
             Name: strings.ToLower($1),
-            Value: tree.NewNumValWithType2($2, $2, false, tree.P_char),
+            Value: tree.NewNumVal($2, $2, false, tree.P_char),
         }
     }
 |   charset_keyword DEFAULT
@@ -2622,11 +2622,11 @@ var_assignment:
 set_expr:
     ON
     {
-        $$ = tree.NewNumValWithType2($1, $1, false, tree.P_char)
+        $$ = tree.NewNumVal($1, $1, false, tree.P_char)
     }
 |   BINARY
     {
-        $$ = tree.NewNumValWithType2($1, $1, false, tree.P_char)
+        $$ = tree.NewNumVal($1, $1, false, tree.P_char)
     }
 |   expr_or_default
     {
@@ -5139,7 +5139,7 @@ interval:
         }
 		$$ = &tree.Interval{
 			Col: $3,
-			Val: tree.NewNumValWithType2(v, str, false, tree.P_int64),
+			Val: tree.NewNumVal(v, str, false, tree.P_int64),
 			Unit: $7,
 		}
 	}
@@ -5157,7 +5157,7 @@ sliding_opt:
             goto ret1
         }
 		$$ = &tree.Sliding{
-        	Val: tree.NewNumValWithType2(v, str, false, tree.P_int64),
+        	Val: tree.NewNumVal(v, str, false, tree.P_int64),
         	Unit: $5,
         }
 	}
@@ -6370,7 +6370,7 @@ account_name_or_param:
     ident
     {
         var str = $1.Compare()
-        $$ = tree.NewNumValWithType2(str, str, false, tree.P_char)
+        $$ = tree.NewNumVal(str, str, false, tree.P_char)
     }
 |   VALUE_ARG
     {
@@ -6394,12 +6394,12 @@ account_admin_name:
     STRING
     {
         var str = $1
-        $$ = tree.NewNumValWithType2(str, str, false, tree.P_char)
+        $$ = tree.NewNumVal(str, str, false, tree.P_char)
     }
 |	ident
 	{
 		var str = $1.Compare()
-        $$ = tree.NewNumValWithType2(str, str, false, tree.P_char)
+        $$ = tree.NewNumVal(str, str, false, tree.P_char)
 	}
 |   VALUE_ARG
     {
@@ -6411,7 +6411,7 @@ account_identified:
     {
         $$ = *tree.NewAccountIdentified(
             tree.AccountIdentifiedByPassword,
-            tree.NewNumValWithType2($3, $3, false, tree.P_char),
+            tree.NewNumVal($3, $3, false, tree.P_char),
         )
     }
 |   IDENTIFIED BY VALUE_ARG
@@ -6432,7 +6432,7 @@ account_identified:
     {
         $$ = *tree.NewAccountIdentified(
             tree.AccountIdentifiedWithSSL,
-            tree.NewNumValWithType2($3, $3, false, tree.P_char),
+            tree.NewNumVal($3, $3, false, tree.P_char),
         )
     }
 |   IDENTIFIED WITH VALUE_ARG
@@ -6984,7 +6984,7 @@ user_identified:
     {
     $$ = &tree.AccountIdentified{
         Typ: tree.AccountIdentifiedByPassword,
-        Str: tree.NewNumValWithType2($3, $3, false, tree.P_char),
+        Str: tree.NewNumVal($3, $3, false, tree.P_char),
     }
     }
 |   IDENTIFIED BY RANDOM PASSWORD
@@ -6997,7 +6997,7 @@ user_identified:
     {
     $$ = &tree.AccountIdentified{
         Typ: tree.AccountIdentifiedWithSSL,
-        Str: tree.NewNumValWithType2($3, $3, false, tree.P_char),
+        Str: tree.NewNumVal($3, $3, false, tree.P_char),
     }
     }
 
@@ -8498,7 +8498,7 @@ table_snapshot_opt:
         $$ = &tree.AtTimeStamp{
             Type: tree.ATTIMESTAMPSNAPSHOT,
             SnapshotName: yylex.(*Lexer).GetDbOrTblName($4.Origin()),
-            Expr: tree.NewNumValWithType2(str, str, false, tree.P_char),
+            Expr: tree.NewNumVal(str, str, false, tree.P_char),
         }
     }
 |   '{' SNAPSHOT '=' STRING '}'
@@ -8506,7 +8506,7 @@ table_snapshot_opt:
         $$ = &tree.AtTimeStamp{
            Type: tree.ATTIMESTAMPSNAPSHOT,
            SnapshotName: $4,
-           Expr: tree.NewNumValWithType2($4, $4, false, tree.P_char),
+           Expr: tree.NewNumVal($4, $4, false, tree.P_char),
         }
     }
 |   '{' MO_TS '=' expression '}'
@@ -8929,7 +8929,7 @@ column_attribute_elem:
 |   COMMENT_KEYWORD STRING
     {
     	str := util.DealCommentString($2)
-        $$ = tree.NewAttributeComment(tree.NewNumValWithType2(str, str, false, tree.P_char))
+        $$ = tree.NewAttributeComment(tree.NewNumVal(str, str, false, tree.P_char))
     }
 |   COLLATE collate_name
     {
@@ -9350,7 +9350,7 @@ simple_expr:
 |   CONVERT '(' expression USING charset_name ')'
     {
         name := tree.NewUnresolvedColName($1)
-        es := tree.NewNumValWithType2($5, $5, false, tree.P_char)
+        es := tree.NewNumVal($5, $5, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -9846,7 +9846,7 @@ function_call_aggregate:
 	        $$ = &tree.FuncExpr{
 	        Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-	        Exprs: append($4,tree.NewNumValWithType2($6, $6, false, tree.P_char)),
+	        Exprs: append($4,tree.NewNumVal($6, $6, false, tree.P_char)),
 	        Type: $3,
 	        WindowSpec: $8,
             OrderBy:$5,
@@ -9858,7 +9858,7 @@ function_call_aggregate:
 		$$ = &tree.FuncExpr{
 		Func: tree.FuncName2ResolvableFunctionReference(name),
         FuncName: tree.NewCStr($1, 1),
-		Exprs: append($4,tree.NewNumValWithType2($6, $6, false, tree.P_char)),
+		Exprs: append($4,tree.NewNumVal($6, $6, false, tree.P_char)),
 		Type: $3,
 		WindowSpec: $8,
 		OrderBy:$5,
@@ -9889,7 +9889,7 @@ function_call_aggregate:
 |   APPROX_COUNT '(' '*' ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
-        es := tree.NewNumValWithType2("*", "*", false, tree.P_char)
+        es := tree.NewNumVal("*", "*", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -9964,7 +9964,7 @@ function_call_aggregate:
 |   COUNT '(' '*' ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
-        es := tree.NewNumValWithType2("*", "*", false, tree.P_char)
+        es := tree.NewNumVal("*", "*", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -10129,7 +10129,7 @@ function_call_generic:
     {
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
-        timeUinit := tree.NewNumValWithType2(str, str, false, tree.P_char)
+        timeUinit := tree.NewNumVal(str, str, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -10194,9 +10194,9 @@ function_call_generic:
 |   TRIM '(' expression ')'
     {
         name := tree.NewUnresolvedColName($1)
-        arg0 := tree.NewNumValWithType2(int64(0), "0", false, tree.P_int64)
-        arg1 := tree.NewNumValWithType2("both", "both", false, tree.P_char)
-        arg2 := tree.NewNumValWithType2(" ", " ", false, tree.P_char)
+        arg0 := tree.NewNumVal(int64(0), "0", false, tree.P_int64)
+        arg1 := tree.NewNumVal("both", "both", false, tree.P_char)
+        arg2 := tree.NewNumVal(" ", " ", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -10206,8 +10206,8 @@ function_call_generic:
 |   TRIM '(' expression FROM expression ')'
     {
         name := tree.NewUnresolvedColName($1)
-        arg0 := tree.NewNumValWithType2(int64(1), "1", false, tree.P_int64)
-        arg1 := tree.NewNumValWithType2("both", "both", false, tree.P_char)
+        arg0 := tree.NewNumVal(int64(1), "1", false, tree.P_int64)
+        arg1 := tree.NewNumVal("both", "both", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -10217,10 +10217,10 @@ function_call_generic:
 |   TRIM '(' trim_direction FROM expression ')'
     {
         name := tree.NewUnresolvedColName($1)
-        arg0 := tree.NewNumValWithType2(int64(2), "2", false, tree.P_int64)
+        arg0 := tree.NewNumVal(int64(2), "2", false, tree.P_int64)
         str := strings.ToLower($3)
-        arg1 := tree.NewNumValWithType2(str, str, false, tree.P_char)
-        arg2 := tree.NewNumValWithType2(" ", " ", false, tree.P_char)
+        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
+        arg2 := tree.NewNumVal(" ", " ", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -10230,9 +10230,9 @@ function_call_generic:
 |   TRIM '(' trim_direction expression FROM expression ')'
     {
         name := tree.NewUnresolvedColName($1)
-        arg0 := tree.NewNumValWithType2(int64(3), "3", false, tree.P_int64)
+        arg0 := tree.NewNumVal(int64(3), "3", false, tree.P_int64)
         str := strings.ToLower($3)
-        arg1 := tree.NewNumValWithType2(str, str, false, tree.P_char)
+        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -10328,7 +10328,7 @@ function_call_nonkeyword:
 	{
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
-        arg1 := tree.NewNumValWithType2(str, str, false, tree.P_char)
+        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
 		$$ =  &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -10416,7 +10416,7 @@ function_call_keyword:
     }
 |   CHAR '(' expression_list USING charset_name ')'
     {
-        cn := tree.NewNumValWithType2($5, $5, false, tree.P_char)
+        cn := tree.NewNumVal($5, $5, false, tree.P_char)
         es := $3
         es = append(es, cn)
         name := tree.NewUnresolvedColName($1)
@@ -10428,7 +10428,7 @@ function_call_keyword:
     }
 |   DATE STRING
     {
-        val := tree.NewNumValWithType2($2, $2, false, tree.P_char)
+        val := tree.NewNumVal($2, $2, false, tree.P_char)
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -10438,7 +10438,7 @@ function_call_keyword:
     }
 |   TIME STRING
     {
-        val := tree.NewNumValWithType2($2, $2, false, tree.P_char)
+        val := tree.NewNumVal($2, $2, false, tree.P_char)
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -10477,7 +10477,7 @@ function_call_keyword:
     }
 |   TIMESTAMP STRING
     {
-        val := tree.NewNumValWithType2($2, $2, false, tree.P_char)
+        val := tree.NewNumVal($2, $2, false, tree.P_char)
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -10535,7 +10535,7 @@ datetime_scale:
             goto ret1
         }
         str := fmt.Sprintf("%v", $2)
-        $$ = tree.NewNumValWithType2(ival, str, false, tree.P_int64)
+        $$ = tree.NewNumVal(ival, str, false, tree.P_int64)
     }
 
 name_datetime_scale:
@@ -10593,7 +10593,7 @@ interval_expr:
     {
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
-        arg2 := tree.NewNumValWithType2(str, str, false, tree.P_char)
+        arg2 := tree.NewNumVal(str, str, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -10865,9 +10865,9 @@ num_literal:
         str := fmt.Sprintf("%v", $1)
         switch v := $1.(type) {
         case uint64:
-            $$ = tree.NewNumValWithType2(v, str, false, tree.P_uint64)
+            $$ = tree.NewNumVal(v, str, false, tree.P_uint64)
         case int64:
-            $$ = tree.NewNumValWithType2(v, str, false, tree.P_int64)
+            $$ = tree.NewNumVal(v, str, false, tree.P_int64)
         default:
             yylex.Error("parse integral fail")
             goto ret1
@@ -10876,26 +10876,26 @@ num_literal:
 |   FLOAT
     {
         fval := $1.(float64)
-        $$ = tree.NewNumValWithType2(fval, yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
+        $$ = tree.NewNumVal(fval, yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
     }
 |   DECIMAL_VALUE
     {
-        $$ = tree.NewNumValWithType2($1, $1, false, tree.P_decimal)
+        $$ = tree.NewNumVal($1, $1, false, tree.P_decimal)
     }
 
 literal:
     STRING
     {
-        $$ = tree.NewNumValWithType2($1, $1, false, tree.P_char)
+        $$ = tree.NewNumVal($1, $1, false, tree.P_char)
     }
 |   INTEGRAL
     {
         str := fmt.Sprintf("%v", $1)
         switch v := $1.(type) {
         case uint64:
-            $$ = tree.NewNumValWithType2(v, str, false, tree.P_uint64)
+            $$ = tree.NewNumVal(v, str, false, tree.P_uint64)
         case int64:
-            $$ = tree.NewNumValWithType2(v, str, false, tree.P_int64)
+            $$ = tree.NewNumVal(v, str, false, tree.P_int64)
         default:
             yylex.Error("parse integral fail")
             goto ret1
@@ -10904,38 +10904,38 @@ literal:
 |   FLOAT
     {
         fval := $1.(float64)
-        $$ = tree.NewNumValWithType2(fval, yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
+        $$ = tree.NewNumVal(fval, yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
     }
 |   TRUE
     {
-        $$ = tree.NewNumValWithType2(true, "true", false, tree.P_bool)
+        $$ = tree.NewNumVal(true, "true", false, tree.P_bool)
     }
 |   FALSE
     {
-        $$ = tree.NewNumValWithType2(false, "false", false, tree.P_bool)
+        $$ = tree.NewNumVal(false, "false", false, tree.P_bool)
     }
 |   NULL
     {
-        $$ = tree.NewNumValWithType2("null", "null", false, tree.P_null)
+        $$ = tree.NewNumVal("null", "null", false, tree.P_null)
     }
 |   HEXNUM
     {
-        $$ = tree.NewNumValWithType2($1, $1, false, tree.P_hexnum)
+        $$ = tree.NewNumVal($1, $1, false, tree.P_hexnum)
     }
 |   UNDERSCORE_BINARY HEXNUM
     {
         if strings.HasPrefix($2, "0x") {
             $2 = $2[2:]
         }
-        $$ = tree.NewNumValWithType2($2, $2, false, tree.P_bit)
+        $$ = tree.NewNumVal($2, $2, false, tree.P_bit)
     }
 |   DECIMAL_VALUE
     {
-        $$ = tree.NewNumValWithType2($1, $1, false, tree.P_decimal)
+        $$ = tree.NewNumVal($1, $1, false, tree.P_decimal)
     }
 |   BIT_LITERAL
     {
-        $$ = tree.NewNumValWithType2($1, $1, false, tree.P_bit)
+        $$ = tree.NewNumVal($1, $1, false, tree.P_bit)
     }
 |   VALUE_ARG
     {
@@ -10943,7 +10943,7 @@ literal:
     }
 |   UNDERSCORE_BINARY STRING
     {
-        $$ = tree.NewNumValWithType2($2, $2, false, tree.P_ScoreBinary)
+        $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinary)
     }
 
 
@@ -11649,7 +11649,7 @@ declare_stmt:
         $$ = &tree.Declare {
             Variables: $2,
             ColumnType: $3,
-            DefaultVal: tree.NewNumValWithType2("null", "null", false, tree.P_null),
+            DefaultVal: tree.NewNumVal("null", "null", false, tree.P_null),
         }
     }
     |
