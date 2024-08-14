@@ -4355,6 +4355,7 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
 		short = b
 	}
 	var lenLong, lenShort = len(long), len(short)
+	fmt.Println("xxxx", lenLong, lenShort, len(a), len(b))
 
 	if err = ret.PreExtend(lenLong+lenShort, mp); err != nil {
 		return err
@@ -4362,19 +4363,20 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
 
 	for i := range short {
 		idx := sort.Search(lenLong, func(j int) bool {
-			return cmp(long[j], short[i]) >= 0
+			return cmp(long[j], short[i]) > 0
 		})
 		if idx >= lenLong {
 			break
 		}
 
-		if cmp(short[i], long[idx]) == 0 {
+		if idx > 0 && cmp(short[i], long[idx-1]) == 0 {
 			if err = AppendFixed(ret, short[i], false, mp); err != nil {
 				return err
 			}
 		}
 
 		long = long[idx:]
+		lenLong = len(long)
 	}
 	return nil
 }
@@ -4469,19 +4471,20 @@ func Intersection2VectorVarlen(
 	for i := range shortCol {
 		shortBytes := shortCol[i].GetByteSlice(shortArea)
 		idx := sort.Search(lenLong, func(j int) bool {
-			return bytes.Compare(longCol[j].GetByteSlice(longArea), shortBytes) >= 0
+			return bytes.Compare(longCol[j].GetByteSlice(longArea), shortBytes) > 0
 		})
 		if idx >= lenLong {
 			break
 		}
 
-		if bytes.Equal(shortBytes, longCol[idx].GetByteSlice(longArea)) {
+		if idx > 0 && bytes.Equal(shortBytes, longCol[idx-1].GetByteSlice(longArea)) {
 			if err = AppendBytes(ret, shortBytes, false, mp); err != nil {
 				return err
 			}
 		}
 
 		longCol = longCol[idx:]
+		lenLong = len(longCol)
 	}
 	return nil
 }
