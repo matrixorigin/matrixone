@@ -372,7 +372,7 @@ func genPartitionAst(exprs tree.Exprs, partNum int64) tree.Expr {
 	}
 
 	numstr := fmt.Sprintf("%v", partNum)
-	divExpr := tree.NewNumValWithType2(partNum, numstr, false, tree.P_int64)
+	divExpr := tree.NewNumVal(partNum, numstr, false, tree.P_int64)
 	modOpExpr := tree.NewBinaryExpr(tree.MOD, absFuncExpr, divExpr)
 	return modOpExpr
 }
@@ -452,14 +452,14 @@ func buildListColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*tr
 
 		when := &tree.When{
 			Cond: conditionExpr,
-			Val:  tree.NewNumValWithType2(int64(i), fmt.Sprintf("%v", i), false, tree.P_int64),
+			Val:  tree.NewNumVal(int64(i), fmt.Sprintf("%v", i), false, tree.P_int64),
 		}
 		whens[i] = when
 	}
 	caseWhenExpr := &tree.CaseExpr{
 		Expr:  nil,
 		Whens: whens,
-		Else:  tree.NewNumValWithType2(int64(-1), fmt.Sprintf("%v", -1), false, tree.P_int64),
+		Else:  tree.NewNumVal(int64(-1), fmt.Sprintf("%v", -1), false, tree.P_int64),
 	}
 	return caseWhenExpr, nil
 }
@@ -482,7 +482,7 @@ func buildRangeCaseWhenExpr(pexpr tree.Expr, defs []*tree.Partition) (*tree.Case
 
 		var conditionExpr tree.Expr
 		if _, ok := valueExpr.(*tree.MaxValue); ok {
-			conditionExpr = tree.NewNumValWithType2(true, "true", false, tree.P_bool)
+			conditionExpr = tree.NewNumVal(true, "true", false, tree.P_bool)
 		} else {
 			LessThanExpr := tree.NewComparisonExpr(tree.LESS_THAN, pexpr, valueExpr)
 			conditionExpr = LessThanExpr
@@ -490,7 +490,7 @@ func buildRangeCaseWhenExpr(pexpr tree.Expr, defs []*tree.Partition) (*tree.Case
 
 		when := &tree.When{
 			Cond: conditionExpr,
-			Val:  tree.NewNumValWithType2(int64(i), fmt.Sprintf("%v", i), false, tree.P_int64),
+			Val:  tree.NewNumVal(int64(i), fmt.Sprintf("%v", i), false, tree.P_int64),
 		}
 		whens[i] = when
 	}
@@ -498,7 +498,7 @@ func buildRangeCaseWhenExpr(pexpr tree.Expr, defs []*tree.Partition) (*tree.Case
 	caseWhenExpr := &tree.CaseExpr{
 		Expr:  nil,
 		Whens: whens,
-		Else:  tree.NewNumValWithType2(int64(-1), fmt.Sprintf("%v", -1), false, tree.P_int64),
+		Else:  tree.NewNumVal(int64(-1), fmt.Sprintf("%v", -1), false, tree.P_int64),
 	}
 	return caseWhenExpr, nil
 }
@@ -519,7 +519,7 @@ func buildRangeColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*t
 			valueExpr := valuesLessThan.ValueList[j]
 			if j == len(valuesLessThan.ValueList)-1 {
 				if _, ok := valueExpr.(*tree.MaxValue); ok {
-					trueExpr := tree.NewNumValWithType2(true, "true", false, tree.P_bool)
+					trueExpr := tree.NewNumVal(true, "true", false, tree.P_bool)
 					tempExpr = trueExpr
 				} else {
 					lessThanExpr := tree.NewComparisonExpr(tree.LESS_THAN, columnsExpr[j], valueExpr)
@@ -529,7 +529,7 @@ func buildRangeColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*t
 			} else {
 				var firstExpr tree.Expr
 				if _, ok := valueExpr.(*tree.MaxValue); ok {
-					trueExpr := tree.NewNumValWithType2(true, "true", false, tree.P_bool)
+					trueExpr := tree.NewNumVal(true, "true", false, tree.P_bool)
 					firstExpr = trueExpr
 				} else {
 					lessThanExpr := tree.NewComparisonExpr(tree.LESS_THAN, columnsExpr[j], valueExpr)
@@ -538,7 +538,7 @@ func buildRangeColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*t
 
 				var middleExpr tree.Expr
 				if _, ok := valueExpr.(*tree.MaxValue); ok {
-					trueExpr := tree.NewNumValWithType2(true, "true", false, tree.P_bool)
+					trueExpr := tree.NewNumVal(true, "true", false, tree.P_bool)
 					middleExpr = trueExpr
 				} else {
 					equalExpr := tree.NewComparisonExpr(tree.EQUAL, columnsExpr[j], valueExpr)
@@ -551,14 +551,14 @@ func buildRangeColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*t
 
 		when := &tree.When{
 			Cond: tempExpr,
-			Val:  tree.NewNumValWithType2(int64(i), fmt.Sprintf("%v", i), false, tree.P_int64),
+			Val:  tree.NewNumVal(int64(i), fmt.Sprintf("%v", i), false, tree.P_int64),
 		}
 		whens[i] = when
 	}
 	caseWhenExpr := &tree.CaseExpr{
 		Expr:  nil,
 		Whens: whens,
-		Else:  tree.NewNumValWithType2(int64(-1), fmt.Sprintf("%v", -1), false, tree.P_int64),
+		Else:  tree.NewNumVal(int64(-1), fmt.Sprintf("%v", -1), false, tree.P_int64),
 	}
 	return caseWhenExpr, nil
 }
@@ -579,14 +579,14 @@ func buildListCaseWhenExpr(listExpr tree.Expr, defs []*tree.Partition) (*tree.Ca
 
 		when := &tree.When{
 			Cond: inExpr,
-			Val:  tree.NewNumValWithType2(int64(i), fmt.Sprintf("%v", i), false, tree.P_int64),
+			Val:  tree.NewNumVal(int64(i), fmt.Sprintf("%v", i), false, tree.P_int64),
 		}
 		whens[i] = when
 	}
 	caseWhenExpr := &tree.CaseExpr{
 		Expr:  nil,
 		Whens: whens,
-		Else:  tree.NewNumValWithType2(int64(-1), fmt.Sprintf("%v", -1), false, tree.P_int64),
+		Else:  tree.NewNumVal(int64(-1), fmt.Sprintf("%v", -1), false, tree.P_int64),
 	}
 	return caseWhenExpr, nil
 }

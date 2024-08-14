@@ -151,7 +151,7 @@ func (n *NumVal) Negative() bool {
 	return n.negative
 }
 
-func NewNumValWithType2[T bool | int64 | uint64 | float64 | string](val T, originString string, negative bool, typ P_TYPE) *NumVal {
+func NewNumVal[T bool | int64 | uint64 | float64 | string](val T, originString string, negative bool, typ P_TYPE) *NumVal {
 	nv := &NumVal{
 		ValType:    typ,
 		negative:   negative,

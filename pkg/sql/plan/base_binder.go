@@ -347,7 +347,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			return
 		}
 		astArgs := []tree.Expr{
-			tree.NewNumValWithType2(typ.Enumvalues, typ.Enumvalues, false, tree.P_char),
+			tree.NewNumVal(typ.Enumvalues, typ.Enumvalues, false, tree.P_char),
 		}
 
 		// bind ast function's args
@@ -495,7 +495,7 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bo
 	if astExpr.Else != nil {
 		args = append(args, astExpr.Else)
 	} else {
-		args = append(args, tree.NewNumValWithType2("", "", false, tree.P_null))
+		args = append(args, tree.NewNumVal("", "", false, tree.P_null))
 	}
 
 	return b.bindFuncExprImplByAstExpr("case", args, depth)
@@ -970,7 +970,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, moerr.NewInvalidArg(b.GetContext(), "nullif need two args", len(astArgs))
 		}
 		elseExpr := astArgs[0]
-		thenExpr := tree.NewNumValWithType2("", "", false, tree.P_null)
+		thenExpr := tree.NewNumVal("", "", false, tree.P_null)
 		whenExpr := tree.NewComparisonExpr(tree.EQUAL, astArgs[0], astArgs[1])
 		astArgs = []tree.Expr{whenExpr, thenExpr, elseExpr}
 		name = "case"
@@ -1009,7 +1009,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					// rewrite count(*) to starcount(col_name)
 					name = "starcount"
 
-					astArgs = []tree.Expr{tree.NewNumValWithType2(int64(1), "1", false, tree.P_int64)}
+					astArgs = []tree.Expr{tree.NewNumVal(int64(1), "1", false, tree.P_int64)}
 				}
 			}
 		}
