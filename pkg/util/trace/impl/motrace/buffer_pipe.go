@@ -138,7 +138,7 @@ type WriteFactoryConfig struct {
 func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, factory table.WriterFactory) any {
 	buf.Reset()
 	if len(in) == 0 {
-		return table.NewRowRequest(nil)
+		return table.NewRowRequest(nil, nil)
 	}
 
 	// Initialize aggregator
@@ -225,7 +225,7 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 
 	reqs := make(table.ExportRequests, 0, len(writerMap))
 	for _, ww := range writerMap {
-		reqs = append(reqs, table.NewRowRequest(ww))
+		reqs = append(reqs, table.NewRowRequest(ww, nil))
 	}
 
 	return reqs
