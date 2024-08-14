@@ -17,6 +17,7 @@ package table_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -97,6 +98,12 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	if tableScan.ProjectList != nil {
 		allocSize += tableScan.ProjectAllocSize
 		tableScan.FreeProjection(proc)
+	}
+	if tableScan.Reader != nil {
+		e := tableScan.Reader.Close()
+		if e != nil {
+			logutil.Errorf("close reader for table id=%d, err=%v", tableScan.TableID, e)
+		}
 	}
 	anal.Alloc(allocSize)
 }
