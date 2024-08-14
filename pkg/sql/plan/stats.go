@@ -828,14 +828,18 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	case plan.Node_TABLE_SCAN:
 		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
 		if node.ObjRef != nil && leafNode {
-			if len(node.BindingTags) > 0 {
-				builder.tag2Table[node.BindingTags[0]] = node.TableDef
+			if builder.isRestore {
+				node.Stats = DefaultHugeStats()
+			} else  {
+				if len(node.BindingTags) > 0 {
+					builder.tag2Table[node.BindingTags[0]] = node.TableDef
+				}
+				newStats := calcScanStats(node, builder)
+				if needResetHashMapStats {
+					resetHashMapStats(newStats)
+				}
+				node.Stats = newStats
 			}
-			newStats := calcScanStats(node, builder)
-			if needResetHashMapStats {
-				resetHashMapStats(newStats)
-			}
-			node.Stats = newStats
 		}
 
 	case plan.Node_FILTER:
@@ -1023,6 +1027,9 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
+	if builder.isRestore {
+		return DefaultHugeStats()
+	}
 	if builder.skipStats {
 		return DefaultStats()
 	}
@@ -1123,11 +1130,11 @@ func InternalTable(tableDef *TableDef) bool {
 
 func DefaultHugeStats() *plan.Stats {
 	stats := new(Stats)
-	stats.TableCnt = 10000000
-	stats.Cost = 10000000
-	stats.Outcnt = 10000000
+	stats.TableCnt = 100000000
+	stats.Cost = 100000000
+	stats.Outcnt = 100000000
 	stats.Selectivity = 1
-	stats.BlockNum = 1000
+	stats.BlockNum = 10000
 	return stats
 }
 

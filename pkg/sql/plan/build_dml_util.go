@@ -1272,6 +1272,10 @@ func buildInsertPlansWithRelatedHiddenTable(
 	var lastNodeId int32
 	var err error
 
+	if builder.isRestore {
+		checkInsertPkDupForHiddenIndexTable = false
+	}
+
 	multiTableIndexes := make(map[string]*MultiTableIndex)
 	if updateColLength == 0 {
 		for idx, indexdef := range tableDef.Indexes {
