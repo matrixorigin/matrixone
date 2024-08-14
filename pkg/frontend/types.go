@@ -117,6 +117,7 @@ type PrepareStmt struct {
 	PreparePlan    *plan.Plan
 	PrepareStmt    tree.Statement
 	ParamTypes     []byte
+	ColDefData     [][]byte
 	IsCloudNonuser bool
 	IsInsertValues bool
 	InsertBat      *batch.Batch
@@ -248,6 +249,9 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	if prepareStmt.ParamTypes != nil {
 		prepareStmt.PrepareStmt = nil
+	}
+	if prepareStmt.ColDefData != nil {
+		prepareStmt.ColDefData = nil
 	}
 }
 
@@ -422,6 +426,7 @@ type ExecCtx struct {
 	executeParamTypes []byte
 	resper            Responser
 	results           []ExecResult
+	prepareColDef     [][]byte
 	isIssue3482       bool
 }
 
@@ -443,6 +448,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.executeParamTypes = nil
 	execCtx.resper = nil
 	execCtx.results = nil
+	execCtx.prepareColDef = nil
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -1004,6 +1010,7 @@ type MysqlWriter interface {
 	WriteERR(errorCode uint16, sqlState, errorMessage string) error
 	WriteLengthEncodedNumber(uint64) error
 	WriteColumnDef(context.Context, Column, int) error
+	WriteColumnDefBytes([]byte) error
 	WriteRow() error
 	WriteTextRow() error
 	WriteBinaryRow() error
