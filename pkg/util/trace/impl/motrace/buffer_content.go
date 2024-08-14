@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -73,7 +74,7 @@ func NewContentBuffer(opts ...BufferOption) *ContentBuffer {
 
 func (b *ContentBuffer) reset() {
 	if b.buf == nil {
-		b.buf = bytes.NewBuffer(make([]byte, 0, b.sizeThreshold))
+		b.buf = bytes.NewBuffer(make([]byte, 0, mpool.MB))
 		if b.formatter == nil {
 			b.formatter = db_holder.NewCSVWriterWithBuffer(b.ctx, b.buf)
 		} else {
@@ -167,7 +168,7 @@ func (b *ContentBuffer) GetBufferType() string {
 	return b.bufferType
 }
 
-func (b *ContentBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
+func (b *ContentBuffer) GetBatch(ctx context.Context, _ *bytes.Buffer) any {
 	ctx, span := trace.Start(ctx, "GenBatch")
 	defer span.End()
 	b.mux.Lock()
@@ -190,10 +191,16 @@ func (b *ContentBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
 		}
 	}
 	b.checkWriteHook = b.checkWriteHook[:0]
+	if setter, ok := w.(table.BackOffSettable); ok {
+		setter.SetupBackOff(ContentBufferBackOff{})
+	}
 
+	incBuffer()
 	return &contentWriteRequest{
 		buffer: b.buf,
 		writer: w,
+		// add callback to release buffer
+		callback: descBuffer,
 	}
 }
 
@@ -202,12 +209,40 @@ var _ table.WriteRequest = (*contentWriteRequest)(nil)
 type contentWriteRequest struct {
 	buffer *bytes.Buffer
 	writer table.RowWriter
+	// callback to release buffer
+	callback func(buffer *bytes.Buffer)
 }
 
 func (c *contentWriteRequest) Handle() (int, error) {
 	if setter, ok := c.writer.(table.BufferSettable); ok && setter.NeedBuffer() {
 		// FIXME: too complicated.
-		setter.SetBuffer(c.buffer, nil)
+		setter.SetBuffer(c.buffer, c.callback)
 	}
 	return c.writer.FlushAndClose()
+}
+
+var bufferCount atomic.Int32
+var bufferBackOffThreshold int32
+
+func incBuffer() {
+	v2.TraceCollectorContentQueueLength.Inc()
+	bufferCount.Add(1)
+}
+
+func descBuffer(_ *bytes.Buffer) {
+	v2.TraceCollectorContentQueueLength.Desc()
+	bufferCount.Add(-1)
+}
+
+var _ table.BackOff = (*ContentBufferBackOff)(nil)
+
+type ContentBufferBackOff struct{}
+
+// Count implement table.BackOff
+func (b ContentBufferBackOff) Count() bool {
+	return bufferCount.Load() <= bufferBackOffThreshold
+}
+
+func init() {
+	bufferBackOffThreshold = 16
 }

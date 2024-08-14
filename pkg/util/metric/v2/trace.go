@@ -96,6 +96,7 @@ var (
 		}, []string{"type"})
 	TraceCollectorMoLoggerQueueLength = traceCollectorQueueLength.WithLabelValues("mologger")
 	TraceCollectorMetricQueueLength   = traceCollectorQueueLength.WithLabelValues("metric")
+	TraceCollectorContentQueueLength  = traceCollectorQueueLength.WithLabelValues("content")
 
 	traceNegativeCUCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -159,6 +160,7 @@ var (
 			Help:      "Count of mologger metric used buffer count",
 		}, []string{"type"})
 	TraceMOLoggerBufferMetricAlloc      = traceMOLoggerBufferActionCounter.WithLabelValues("metric_alloc")
+	TraceMOLoggerBufferContentAlloc     = traceMOLoggerBufferActionCounter.WithLabelValues("content_alloc")
 	TraceMOLoggerBufferMetricFree       = traceMOLoggerBufferActionCounter.WithLabelValues("metric_free")
 	TraceMOLoggerBufferNoCallback       = traceMOLoggerBufferActionCounter.WithLabelValues("no_callback")
 	TraceMOLoggerBufferSetCallBack      = traceMOLoggerBufferActionCounter.WithLabelValues("set_callback")
@@ -199,4 +201,6 @@ func GetTraceCollectorCollectHungCounter(typ string) prometheus.Counter {
 	return traceCollectorCollectHungCounter.WithLabelValues(typ)
 }
 
-func GetTraceCollectorQueueLength() prometheus.Gauge { return TraceCollectorMoLoggerQueueLength }
+func GetTraceCollectorMOLoggerQueueLength() prometheus.Gauge {
+	return TraceCollectorMoLoggerQueueLength
+}

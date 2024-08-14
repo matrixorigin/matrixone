@@ -566,7 +566,7 @@ loop:
 				time.Sleep(time.Millisecond)
 				continue
 			}
-			v2.GetTraceCollectorQueueLength().Set(float64(c.awakeQueue.Len()))
+			v2.GetTraceCollectorMOLoggerQueueLength().Set(float64(c.awakeQueue.Len()))
 			start := time.Now()
 			v2.TraceCollectorConsumeDelayDurationHistogram.Observe(start.Sub(startWait).Seconds())
 			c.mux.RLock()
