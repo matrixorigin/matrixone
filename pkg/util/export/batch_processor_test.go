@@ -40,7 +40,8 @@ import (
 )
 
 func init() {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
+	// Tips: Op 'time.Local = time.FixedZone(...)' would cause DATA RACE against to time.Now()
+
 	logutil.SetupMOLogger(&logutil.LogConfig{
 		Level:      zapcore.DebugLevel.String(),
 		Format:     "console",

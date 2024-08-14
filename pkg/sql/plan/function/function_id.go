@@ -349,6 +349,8 @@ const (
 
 	// be used: show snapshots
 	CAST_NANO_TO_TIMESTAMP
+	// be used: show pitr
+	CAST_RANGE_VALUE_UNIT
 
 	//Sequence function
 	NEXTVAL
@@ -666,6 +668,7 @@ var functionIdRegister = map[string]int32{
 	"cast_value_to_index":            CAST_VALUE_TO_INDEX,
 	"cast_index_value_to_index":      CAST_INDEX_VALUE_TO_INDEX,
 	"cast_nano_to_timestamp":         CAST_NANO_TO_TIMESTAMP,
+	"cast_range_value_unit":          CAST_RANGE_VALUE_UNIT,
 	"to_upper":                       UPPER,
 	"upper":                          UPPER,
 	"ucase":                          UPPER,

@@ -92,7 +92,6 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				if ctr.inBat.IsEmpty() {
-					proc.PutBatch(ctr.inBat)
 					ctr.inBat = nil
 					continue
 				}
@@ -168,7 +167,6 @@ func (ctr *container) emptyProbe(ap *LoopLeft, proc *process.Process, result *vm
 	ctr.probeIdx = 0
 	ctr.rbat.AddRowCount(ctr.inBat.RowCount())
 	result.Batch = ctr.rbat
-	proc.PutBatch(ctr.inBat)
 	ctr.inBat = nil
 	return nil
 }
@@ -281,7 +279,6 @@ func (ctr *container) probe(ap *LoopLeft, proc *process.Process, result *vm.Call
 	ctr.probeIdx = 0
 	ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
 	result.Batch = ctr.rbat
-	proc.PutBatch(ctr.inBat)
 	ctr.inBat = nil
 	return nil
 }

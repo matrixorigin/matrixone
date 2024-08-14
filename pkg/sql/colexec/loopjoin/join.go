@@ -92,12 +92,10 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				if ctr.inBat.IsEmpty() {
-					proc.PutBatch(ctr.inBat)
 					ctr.inBat = nil
 					continue
 				}
 				if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-					proc.PutBatch(ctr.inBat)
 					ctr.inBat = nil
 					continue
 				}
@@ -224,7 +222,6 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 	ctr.probeIdx = 0
 	ctr.rbat.SetRowCount(rowCountIncrease)
 	result.Batch = ctr.rbat
-	proc.PutBatch(ctr.inBat)
 	ctr.inBat = nil
 	return nil
 }

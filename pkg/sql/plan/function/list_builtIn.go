@@ -5848,6 +5848,26 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `cast_range_value_unit`
+	{
+		functionId: CAST_RANGE_VALUE_UNIT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_uint8, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastRangeValueUnit
+				},
+			},
+		},
+	},
+
 	// function `mo_table_rows`
 	{
 		functionId: MO_TABLE_ROWS,

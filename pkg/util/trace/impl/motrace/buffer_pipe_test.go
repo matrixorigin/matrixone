@@ -52,8 +52,9 @@ func noopReportError(context.Context, error, int) {}
 var dummyBaseTime time.Time
 
 func init() {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
-	dummyBaseTime = time.Unix(0, 0)
+	// Tips: Op 'time.Local = time.FixedZone(...)' would cause DATA RACE against to time.Now()
+
+	dummyBaseTime = time.Unix(0, 0).UTC()
 	SV := config.ObservabilityParameters{}
 	SV.SetDefaultValues("v0.test.0")
 	SV.TraceExportInterval = 15
@@ -85,7 +86,11 @@ func init() {
 	fmt.Println("Finish tests init.")
 }
 
-type dummyStringWriter struct{}
+type dummyStringWriter struct {
+	buf      *bytes.Buffer
+	callback func(*bytes.Buffer)
+	backoff  table.BackOff
+}
 
 func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
 	return fmt.Printf("dummyStringWriter: %s\n", s)
@@ -94,7 +99,23 @@ func (w *dummyStringWriter) WriteRow(row *table.Row) error {
 	fmt.Printf("dummyStringWriter: %v\n", row.ToStrings())
 	return nil
 }
+func (w *dummyStringWriter) SetBuffer(buf *bytes.Buffer, callback func(buffer *bytes.Buffer)) {
+	w.buf = buf
+	w.callback = callback
+}
+
+// NeedBuffer implements table.BufferSettable
+func (w *dummyStringWriter) NeedBuffer() bool { return true }
+func (w *dummyStringWriter) SetupBackOff(backoff table.BackOff) {
+	w.backoff = backoff
+}
 func (w *dummyStringWriter) FlushAndClose() (int, error) {
+	if w.backoff != nil {
+		_ = w.backoff.Count()
+	}
+	if w.callback != nil {
+		w.callback(w.buf)
+	}
 	return 0, nil
 }
 func (w *dummyStringWriter) GetContent() string    { return "" }

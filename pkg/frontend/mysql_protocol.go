@@ -345,7 +345,6 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 	//Reference the shared ResultColumns of the session among multi-thread.
 	sesMrs := execCtx.ses.GetMysqlResultSet()
 	mrs.Columns = sesMrs.Columns
-	mrs.Name2Index = sesMrs.Name2Index
 
 	//group row
 	mrs.Data = make([][]interface{}, countOfResultSet)
@@ -416,7 +415,8 @@ func (mp *MysqlProtocolImpl) WriteLengthEncodedNumber(u uint64) error {
 }
 
 func (mp *MysqlProtocolImpl) WriteColumnDef(ctx context.Context, column Column, i int) error {
-	return mp.SendColumnDefinitionPacket(ctx, column, i)
+	_, err := mp.SendColumnDefinitionPacket(ctx, column, i)
+	return err
 }
 
 func (mp *MysqlProtocolImpl) WriteRow() error {
@@ -445,7 +445,9 @@ func (mp *MysqlProtocolImpl) WritePrepareResponse(ctx context.Context, stmt *Pre
 func (mp *MysqlProtocolImpl) Read() ([]byte, error) {
 	return mp.tcpConn.Read()
 }
-
+func (mp *MysqlProtocolImpl) ReadLoadLocalPacket() ([]byte, error) {
+	return mp.tcpConn.ReadLoadLocalPacket()
+}
 func (mp *MysqlProtocolImpl) Free(buf []byte) {
 	mp.tcpConn.allocator.Free(buf)
 }
@@ -635,7 +637,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 			return err
 		}
 
-		err = mp.SendColumnDefinitionPacket(ctx, column, cmd)
+		_, err = mp.SendColumnDefinitionPacket(ctx, column, cmd)
 		if err != nil {
 			return err
 		}
@@ -647,19 +649,15 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	}
 
 	for i := 0; i < numColumns; i++ {
-		column := new(MysqlColumn)
-		column.SetName(columns[i].Name)
-		column.SetOrgName(columns[i].GetOriginCaseName())
-
-		err = convertEngineTypeToMysqlType(ctx, types.T(columns[i].Typ.Id), column)
+		column, err := colDef2MysqlColumn(ctx, columns[i])
 		if err != nil {
 			return err
 		}
-
-		err = mp.SendColumnDefinitionPacket(ctx, column, cmd)
+		colDefPacket, err := mp.SendColumnDefinitionPacket(ctx, column, cmd)
 		if err != nil {
 			return err
 		}
+		stmt.ColDefData = append(stmt.ColDefData, colDefPacket)
 	}
 	if numColumns > 0 {
 		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
@@ -1490,6 +1488,11 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	allowedPacketSize, err := ses.GetSessionSysVar("max_allowed_packet")
+	if err != nil {
+		return err
+	}
+	mp.tcpConn.allowedPacketSize = int(allowedPacketSize.(int64))
 	return nil
 }
 
@@ -2095,10 +2098,10 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 }
 
 // SendColumnDefinitionPacket the server send the column definition to the client
-func (mp *MysqlProtocolImpl) SendColumnDefinitionPacket(ctx context.Context, column Column, cmd int) error {
+func (mp *MysqlProtocolImpl) SendColumnDefinitionPacket(ctx context.Context, column Column, cmd int) ([]byte, error) {
 	mysqlColumn, ok := column.(*MysqlColumn)
 	if !ok {
-		return moerr.NewInternalError(ctx, "sendColumn need MysqlColumn")
+		return nil, moerr.NewInternalError(ctx, "sendColumn need MysqlColumn")
 	}
 
 	var data []byte
@@ -2106,7 +2109,7 @@ func (mp *MysqlProtocolImpl) SendColumnDefinitionPacket(ctx context.Context, col
 		data = mp.makeColumnDefinition41Payload(mysqlColumn, cmd)
 	}
 
-	return mp.appendPacket(data)
+	return data, mp.appendPacket(data)
 }
 
 // SendColumnCountPacket makes the column count packet
@@ -2126,7 +2129,7 @@ func (mp *MysqlProtocolImpl) sendColumns(ctx context.Context, mrs *MysqlResultSe
 			return err
 		}
 
-		err = mp.SendColumnDefinitionPacket(ctx, col, cmd)
+		_, err = mp.SendColumnDefinitionPacket(ctx, col, cmd)
 		if err != nil {
 			return err
 		}
@@ -2654,6 +2657,11 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 
 	return err
 }
+
+func (mp *MysqlProtocolImpl) WriteColumnDefBytes(payload []byte) error {
+	return mp.appendPacket(payload)
+}
+
 func (mp *MysqlProtocolImpl) UseConn(conn net.Conn) {
 	mp.tcpConn.UseConn(conn)
 }

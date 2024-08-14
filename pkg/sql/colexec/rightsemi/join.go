@@ -42,7 +42,7 @@ func (rightSemi *RightSemi) OpType() vm.OpType {
 
 func (rightSemi *RightSemi) Prepare(proc *process.Process) (err error) {
 	rightSemi.ctr = new(container)
-	rightSemi.ctr.InitReceiver(proc, false)
+	rightSemi.ctr.InitProc(proc)
 	rightSemi.ctr.vecs = make([]*vector.Vector, len(rightSemi.Conditions[0]))
 	rightSemi.ctr.evecs = make([]evalVector, len(rightSemi.Conditions[0]))
 	for i := range rightSemi.ctr.evecs {
@@ -94,20 +94,16 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
 			if ctr.batchRowCount == 0 {
-				proc.PutBatch(bat)
 				continue
 			}
 
 			if err = ctr.probe(bat, rightSemi, proc, analyze, rightSemi.GetIsFirst(), rightSemi.GetIsLast()); err != nil {
-				bat.Clean(proc.Mp())
 				return result, err
 			}
-			proc.PutBatch(bat)
 			continue
 
 		case SendLast:

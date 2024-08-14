@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
@@ -250,6 +251,13 @@ type Session struct {
 	// disableAgg co-operate with RecordStatement
 	// more can see Benchmark_RecordStatement_IsTrue()
 	disableAgg bool
+
+	// mysql parser
+	mysqlParser mysql.MySQLParser
+}
+
+func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
+	return &ses.mysqlParser
 }
 
 func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
@@ -708,10 +716,10 @@ func (ses *Session) UpdateDebugString() {
 	sb.WriteByte('|')
 	//account info
 	if ses.tenant != nil {
-		sb.WriteString(ses.tenant.String())
+		sb.WriteString(fmt.Sprintf("account %s:%s", ses.tenant.GetTenant(), ses.tenant.GetUser()))
 	} else {
 		acc := getDefaultAccount()
-		sb.WriteString(acc.String())
+		sb.WriteString(fmt.Sprintf("account %s:%s", acc.GetTenant(), acc.GetUser()))
 	}
 	sb.WriteByte('|')
 	//go routine id
@@ -1714,6 +1722,9 @@ func (ses *Session) log(ctx context.Context, level zapcore.Level, msg string, fi
 	ses.initLogger()
 	if ses.logLevel.Enabled(level) {
 		fields = append(fields, zap.String("session_info", ses.debugStr)) // not use ses.GetDebugStr() because this func may be locked.
+		if ses.tenant != nil {
+			fields = append(fields, zap.String("role", ses.tenant.GetDefaultRole()))
+		}
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
 		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
@@ -1728,6 +1739,9 @@ func (ses *Session) logf(ctx context.Context, level zapcore.Level, format string
 	if ses.logLevel.Enabled(level) {
 		fields := make([]zap.Field, 0, 5)
 		fields = append(fields, zap.String("session_info", ses.debugStr))
+		if ses.tenant != nil {
+			fields = append(fields, zap.String("role", ses.tenant.GetDefaultRole()))
+		}
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
 		ses.logger.Log(fmt.Sprintf(format, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
