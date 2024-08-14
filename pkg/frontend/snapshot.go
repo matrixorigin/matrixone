@@ -399,7 +399,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 	}
 
-	if needSkipDb(dbName) {
+	if len(dbName) > 0 && needSkipDb(dbName) {
 		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
 	}
 
@@ -425,8 +425,18 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	// restore cluster
 	if stmt.Level == tree.RESTORELEVELCLUSTER {
-		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts); err != nil {
+		// restore cluster
+		subDbToRestore := make([]*subDbRestoreRecord, 0)
+		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, subDbToRestore); err != nil {
 			return err
+		}
+
+		if len(subDbToRestore) > 0 {
+			for _, subDb := range subDbToRestore {
+				if err = restoreToSubDb(ctx, ses.GetService(), bh, snapshotName, subDb); err != nil {
+					return err
+				}
+			}
 		}
 		return
 	}
@@ -855,6 +865,22 @@ func restoreSystemDatabase(
 		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
 			return
 		}
+	}
+	return
+}
+
+func restoreToSubDb(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	subDb *subDbRestoreRecord) (err error) {
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore sub db: %v", snapshotName, subDb.dbName))
+
+	toCtx := defines.AttachAccountId(ctx, subDb.Account)
+	getLogger(sid).Info(fmt.Sprintf("[%s] account %d start to create sub db: %v, create db sql: %s", snapshotName, subDb.Account, subDb.dbName, subDb.createSql))
+	if err = bh.Exec(toCtx, subDb.createSql); err != nil {
+		return
 	}
 	return
 }
@@ -1487,6 +1513,7 @@ func restoreToCluster(ctx context.Context,
 	bh BackgroundExec,
 	snapshotName string,
 	snapshotTs int64,
+	subDbToRestore []*subDbRestoreRecord,
 ) (err error) {
 	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore cluster, restore timestamp: %d", snapshotName, snapshotTs))
 
@@ -1496,8 +1523,6 @@ func restoreToCluster(ctx context.Context,
 	if err != nil {
 		return err
 	}
-
-	subDbToRestore := make([]*subDbRestoreRecord, 0)
 
 	// restore to each account
 	for _, account := range accounts {
@@ -1579,26 +1604,6 @@ func restoreAccountUsingClusterSnapshot(ctx context.Context,
 	if len(viewMap) > 0 {
 		if err = restoreViews(ctx, ses, bh, newSnapshot, viewMap, uint32(toAccountId)); err != nil {
 			return err
-		}
-	}
-
-	if len(subDbToRestore) > 0 {
-		for _, subDb := range subDbToRestore {
-			if err = restoreToDatabase(
-				ctx,
-				ses.GetService(),
-				bh,
-				newSnapshot,
-				subDb.dbName,
-				uint32(toAccountId),
-				nil,
-				nil,
-				snapshotTs,
-				uint32(toAccountId),
-				false,
-				nil); err != nil {
-				return err
-			}
 		}
 	}
 
