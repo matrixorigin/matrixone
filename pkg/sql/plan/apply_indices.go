@@ -431,7 +431,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			idxTag := builder.genNewTag()
 
 			//idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
-			idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *scanSnapshot)
+			idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
 
 			builder.addNameByColRef(idxTag, idxTableDef)
 
@@ -667,7 +667,7 @@ END0:
 		idxTag := builder.genNewTag()
 
 		//idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *scanSnapshot)
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
 		builder.addNameByColRef(idxTag, idxTableDef)
 
 		var idxFilter *plan.Expr
@@ -814,7 +814,7 @@ END0:
 		idxTag := builder.genNewTag()
 		idxDef := node.TableDef.Indexes[idxPos]
 		//idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *scanSnapshot)
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
 		builder.addNameByColRef(idxTag, idxTableDef)
 
 		col.RelPos = idxTag
@@ -997,7 +997,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 		idxTag := builder.genNewTag()
 		//idxObjRef, idxTableDef := builder.compCtx.Resolve(leftChild.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(leftChild.ObjRef.SchemaName, idxDef.IndexTableName, *scanSnapshot)
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(leftChild.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
 		builder.addNameByColRef(idxTag, idxTableDef)
 
 		rfTag := builder.genNewMsgTag()
