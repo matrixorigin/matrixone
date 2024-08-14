@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1043,6 +1044,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	colMap := make(map[string]*ColDef)
 	defaultMap := make(map[string]string)
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
+	// ERIC
+	fullTextIndexInfos := make([]*tree.FullTextIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
 	dedupFkName := make(UnorderedSet[string])
@@ -1211,6 +1214,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				name := key.ColName.ColName()
 				indexs = append(indexs, name)
 			}
+			// ERIC
+		case *tree.FullTextIndex:
+			logutil.Infof("CREATE TABLE FULLTEXT Index")
+			err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
+			if err != nil {
+				return err
+			}
+
+			fullTextIndexInfos = append(fullTextIndexInfos, def)
+			for _, key := range def.KeyParts {
+				name := key.ColName.ColName()
+				indexs = append(indexs, name)
+			}
 		case *tree.ForeignKey:
 			if createTable.Temporary {
 				return moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
@@ -1254,7 +1270,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if fkData.IsSelfRefer {
 				fkDatasOfFKSelfRefer = append(fkDatasOfFKSelfRefer, fkData)
 			}
-		case *tree.CheckIndex, *tree.FullTextIndex:
+		case *tree.CheckIndex:
 			// unsupport in plan. will support in next version.
 			// return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		default:
@@ -1472,6 +1488,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		if colMap[str].Typ.Id == int32(types.T_blob) {
 			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
 		}
+		// ERIC TODO: FULL TEXT should be supported
 		if colMap[str].Typ.Id == int32(types.T_text) {
 			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
 		}
@@ -1492,6 +1509,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	// build index table
 	if len(uniqueIndexInfos) != 0 {
 		err = buildUniqueIndexTable(createTable, uniqueIndexInfos, colMap, pkeyName, ctx)
+		if err != nil {
+			return err
+		}
+	}
+	if len(fullTextIndexInfos) != 0 {
+		err = buildFullTextIndexTable(createTable, fullTextIndexInfos, colMap, pkeyName, ctx)
 		if err != nil {
 			return err
 		}
@@ -1563,6 +1586,12 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 	default:
 		return plan.ForeignKeyDef_RESTRICT
 	}
+}
+
+// ERIC
+func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
+	logutil.Infof("buildFullTextIndexTable.....")
+	return nil
 }
 
 func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
@@ -2649,6 +2678,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		}
 	}
 	// build index
+	var ftIdx *tree.FullTextIndex
 	var uIdx *tree.UniqueIndex
 	var sIdx *tree.Index
 	switch stmt.IndexCat {
@@ -2664,6 +2694,17 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			KeyParts:    stmt.KeyParts,
 			IndexOption: stmt.IndexOption,
 			KeyType:     stmt.IndexOption.IType,
+		}
+	case tree.INDEX_CATEGORY_FULLTEXT:
+		// TODO: ERIC
+		logutil.Infof("FULLTEXT INDEX: Name : %s", indexName)
+		for _, kp := range stmt.KeyParts {
+			logutil.Infof("FULLTEXT INDEX: Name : %s, keyParts: %s", indexName, kp.ColName.ColNameOrigin())
+		}
+		ftIdx = &tree.FullTextIndex{
+			Name:        indexName,
+			KeyParts:    stmt.KeyParts,
+			IndexOption: stmt.IndexOption,
 		}
 	default:
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
@@ -2686,6 +2727,12 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
 	if uIdx != nil {
 		if err := buildUniqueIndexTable(indexInfo, []*tree.UniqueIndex{uIdx}, colMap, oriPriKeyName, ctx); err != nil {
+			return nil, err
+		}
+		createIndex.TableExist = true
+	}
+	if ftIdx != nil {
+		if err := buildFullTextIndexTable(indexInfo, []*tree.FullTextIndex{ftIdx}, colMap, oriPriKeyName, ctx); err != nil {
 			return nil, err
 		}
 		createIndex.TableExist = true
@@ -3022,6 +3069,49 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
 				if err = buildUniqueIndexTable(indexInfo, []*tree.UniqueIndex{def}, colMap, oriPriKeyName, ctx); err != nil {
+					return nil, err
+				}
+
+				alterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AddIndex{
+						AddIndex: &plan.AlterTableAddIndex{
+							DbName:                databaseName,
+							TableName:             tableName,
+							OriginTablePrimaryKey: oriPriKeyName,
+							IndexInfo:             indexInfo,
+							IndexTableExist:       true,
+						},
+					},
+				}
+				// ERIC
+			case *tree.FullTextIndex:
+				err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
+				if err != nil {
+					return nil, err
+				}
+
+				indexName := def.Name
+				constrNames := map[string]bool{}
+				// Check not empty constraint name whether is duplicated.
+				for _, idx := range tableDef.Indexes {
+					nameLower := strings.ToLower(idx.IndexName)
+					constrNames[nameLower] = true
+				}
+
+				err = checkDuplicateConstraint(constrNames, indexName, false, ctx.GetContext())
+				if err != nil {
+					return nil, err
+				}
+				/* TODO: ERIC -- must have index name?
+				   if len(indexName) == 0 {
+				           // set empty constraint names(index and unique index)
+				           setEmptyUniqueIndexName(constrNames, def)
+				   }
+				*/
+
+				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
+				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
+				if err = buildFullTextIndexTable(indexInfo, []*tree.FullTextIndex{def}, colMap, oriPriKeyName, ctx); err != nil {
 					return nil, err
 				}
 
