@@ -33,14 +33,14 @@ import (
 func sendToAllLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	var refCountAdd int64
 	var err error
+
 	if !ap.RecSink {
 		refCountAdd = int64(ap.ctr.localRegsCnt - 1)
 		atomic.AddInt64(&bat.Cnt, refCountAdd)
 	}
 	var bats []*batch.Batch
 	if ap.RecSink {
-		bats = append(bats, bat)
-		for k := 1; k < len(ap.LocalRegs); k++ {
+		for k := 1; k < len(ap.LocalRegs)+1; k++ {
 			bat, err = bat.Dup(proc.Mp())
 			if err != nil {
 				return false, err

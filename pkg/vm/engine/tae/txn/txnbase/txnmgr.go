@@ -204,13 +204,13 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 		logutil.Warnf("StartTxn: %v", err)
 		return
 	}
-	if value, ok := mgr.IDMap.Load(util.UnsafeBytesToString(id)); !ok {
+	if value, ok := mgr.IDMap.Load(util.UnsafeBytesToString(id)); ok {
+		txn = value.(txnif.AsyncTxn)
+	} else {
 		store := mgr.TxnStoreFactory()
 		txn = mgr.TxnFactory(mgr, store, id, ts, ts)
 		store.BindTxn(txn)
 		mgr.IDMap.Store(util.UnsafeBytesToString(id), txn)
-	} else {
-		txn = value.(txnif.AsyncTxn)
 	}
 	return
 }
@@ -250,7 +250,7 @@ func (mgr *TxnManager) heartbeat(ctx context.Context) {
 		case <-heartbeatTicker.C:
 			op := mgr.newHeartbeatOpTxn(ctx)
 			op.Txn.(*Txn).Add(1)
-			_, err := mgr.PreparingSM.EnqueueRecevied(op)
+			_, err := mgr.PreparingSM.EnqueueReceived(op)
 			if err != nil {
 				panic(err)
 			}
@@ -277,7 +277,7 @@ func (mgr *TxnManager) newHeartbeatOpTxn(ctx context.Context) *OpTxn {
 }
 
 func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
-	_, err = mgr.PreparingSM.EnqueueRecevied(op)
+	_, err = mgr.PreparingSM.EnqueueReceived(op)
 	return
 }
 

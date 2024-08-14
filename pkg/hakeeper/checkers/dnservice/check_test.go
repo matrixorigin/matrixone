@@ -197,9 +197,10 @@ func mockTnShard(
 }
 
 func TestCheck(t *testing.T) {
+	InitCheckState("")
 	// clear all records, or other test would fail
 	defer func() {
-		waitingShards.clear()
+		getCheckState("").waitingShards.clear()
 	}()
 
 	staleTick := uint64(10)
@@ -331,7 +332,7 @@ func TestCheck(t *testing.T) {
 		// at the tick of `staleTick`, shard 14, 20:
 		//  14 - no command
 		//  20 - add replica after a while
-		bootstrapping = false
+		getCheckState("").bootstrapping = false
 		operators := Check("", idAlloc, config, cluster, tnState, pb.TaskTableUser{}, staleTick)
 		require.Equal(t, 0, len(operators))
 
