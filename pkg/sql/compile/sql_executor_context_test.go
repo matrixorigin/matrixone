@@ -78,10 +78,10 @@ func TestCompilerContext_Database(t *testing.T) {
 		engine: engine,
 	}
 
-	exists := c.DatabaseExists("", &plan.Snapshot{})
+	exists := c.DatabaseExists("", plan.Snapshot{})
 	require.Equal(t, exists, true)
 
-	_, err := c.GetDatabaseId("", &plan.Snapshot{})
+	_, err := c.GetDatabaseId("", plan.Snapshot{})
 	require.Nil(t, err)
 
 	sql := c.GetRootSql()

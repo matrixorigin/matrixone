@@ -27,7 +27,7 @@ import (
 func TestCheckInitiatingShards(t *testing.T) {
 	// clear all records, or other test would fail
 	defer func() {
-		getCheckState("").waitingShards.clear()
+		waitingShards.clear()
 	}()
 
 	nextReplicaID := uint64(100)
@@ -106,7 +106,7 @@ func TestCheckReportedState(t *testing.T) {
 }
 
 func TestInitialShards(t *testing.T) {
-	waitingShards := newInitialShards("")
+	waitingShards := newInitialShards()
 
 	// list all shard id
 	ids := waitingShards.listEligibleShards(func(tick uint64) bool {

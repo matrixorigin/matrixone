@@ -165,6 +165,9 @@ func (mo *MOServer) handleConn(conn net.Conn) {
 				return
 			}
 		}
+		if err != nil {
+			mo.rm.Closed(rs)
+		}
 	}()
 
 	rs, err = NewIOSession(conn, mo.pu)
@@ -186,6 +189,11 @@ func (mo *MOServer) handleConn(conn net.Conn) {
 }
 
 func (mo *MOServer) handleLoop(rs *Conn) {
+	defer func() {
+		if err := rs.Close(); err != nil {
+			logutil.Error("close session failed", zap.Error(err))
+		}
+	}()
 	if err := mo.handleMessage(rs); err != nil {
 		logutil.Error("handle session failed", zap.Error(err))
 	}

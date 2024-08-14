@@ -690,10 +690,8 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 				return rtnErr
 			}
 
-			restoreAccount := toAccountId
-
 			if srcAccountName != pitr.accountName {
-				// restore account to other account
+				// restore account to self
 				toAccountId, rtnErr = getAccountId(ctx, bh, string(stmt.AccountName))
 				if rtnErr != nil {
 					return rtnErr
@@ -720,7 +718,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 			// collect views and tables during table restoration
 			viewMap := make(map[string]*tableInfo)
 
-			rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts, restoreAccount)
+			rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts)
 			if rtnErr != nil {
 				return rtnErr
 			}

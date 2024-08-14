@@ -351,10 +351,6 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
 }
 
-func (txn *Transaction) Readonly() bool {
-	return txn.readOnly.Load()
-}
-
 func (txn *Transaction) PPString() string {
 
 	writesString := stringifySlice(txn.writes, func(a any) string {

@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -39,7 +38,8 @@ func (intersect *Intersect) Prepare(proc *process.Process) error {
 	var err error
 
 	intersect.ctr = new(container)
-	intersect.ctr.buf = nil
+	intersect.ctr.InitReceiver(proc, false)
+	intersect.ctr.btc = nil
 	intersect.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
 	if err != nil {
 		return err
@@ -56,11 +56,13 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 	analyze.Start()
 	defer analyze.Stop()
 
+	result := vm.NewCallResult()
+
 	for {
 		switch intersect.ctr.state {
 		case build:
-			if err := intersect.buildHashTable(proc, analyze, 1, intersect.GetIsFirst()); err != nil {
-				return vm.CancelResult, err
+			if err := intersect.ctr.buildHashTable(proc, analyze, 1, intersect.GetIsFirst()); err != nil {
+				return result, err
 			}
 			if intersect.ctr.hashTable != nil {
 				analyze.Alloc(intersect.ctr.hashTable.Size())
@@ -70,8 +72,7 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 		case probe:
 			var err error
 			isLast := false
-			result := vm.NewCallResult()
-			if isLast, err = intersect.probeHashTable(proc, analyze, 0, intersect.GetIsFirst(), intersect.GetIsLast(), &result); err != nil {
+			if isLast, err = intersect.ctr.probeHashTable(proc, analyze, 0, intersect.GetIsFirst(), intersect.GetIsLast(), &result); err != nil {
 				result.Status = vm.ExecStop
 				return result, err
 			}
@@ -83,33 +84,36 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 
 		case end:
-			return vm.CancelResult, nil
+			result.Batch = nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 	}
 }
 
 // build hash table
-func (intersect *Intersect) buildHashTable(proc *process.Process, analyse process.Analyze, idx int, isFirst bool) error {
-	c := intersect.ctr
+func (c *container) buildHashTable(proc *process.Process, analyse process.Analyze, idx int, isFirst bool) error {
 	for {
-		input, err := intersect.GetChildren(idx).Call(proc)
-		if err != nil {
-			return err
+		msg := c.ReceiveFromSingleReg(idx, analyse)
+		if msg.Err != nil {
+			return msg.Err
 		}
+		btc := msg.Batch
 
 		// last batch of block
-		if input.Batch == nil {
+		if btc == nil {
 			break
 		}
 
 		// empty batch
-		if input.Batch.IsEmpty() {
+		if btc.IsEmpty() {
+			proc.PutBatch(btc)
 			continue
 		}
 
-		analyse.Input(input.Batch, isFirst)
+		analyse.Input(btc, isFirst)
 
-		cnt := input.Batch.RowCount()
+		cnt := btc.RowCount()
 		itr := c.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
 			rowcnt := c.hashTable.GroupCount()
@@ -119,8 +123,9 @@ func (intersect *Intersect) buildHashTable(proc *process.Process, analyse proces
 				n = hashmap.UnitLimit
 			}
 
-			vs, zs, err := itr.Insert(i, n, input.Batch.Vecs)
+			vs, zs, err := itr.Insert(i, n, btc.Vecs)
 			if err != nil {
+				btc.Clean(proc.Mp())
 				return err
 			}
 
@@ -136,39 +141,42 @@ func (intersect *Intersect) buildHashTable(proc *process.Process, analyse proces
 				}
 			}
 		}
+		proc.PutBatch(btc)
 	}
 	return nil
 }
 
-func (intersect *Intersect) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
-	c := intersect.ctr
+func (c *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
 	for {
-		input, err := intersect.GetChildren(idx).Call(proc)
-		if err != nil {
-			return false, err
+		msg := c.ReceiveFromSingleReg(idx, analyze)
+		if msg.Err != nil {
+			return false, msg.Err
 		}
+		btc := msg.Batch
 
 		// last batch of block
-		if input.Batch == nil {
+		if btc == nil {
 			return true, nil
 		}
 
 		// empty batch
-		if input.Batch.IsEmpty() {
+		if btc.IsEmpty() {
+			proc.PutBatch(btc)
 			continue
 		}
 
-		analyze.Input(input.Batch, isFirst)
-		if c.buf == nil {
-			c.buf = batch.NewWithSize(len(input.Batch.Vecs))
-			for i := range input.Batch.Vecs {
-				c.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
-			}
+		analyze.Input(btc, isFirst)
+		if c.btc != nil {
+			proc.PutBatch(c.btc)
+			c.btc = nil
 		}
-		c.buf.CleanOnlyData()
+		c.btc = batch.NewWithSize(len(btc.Vecs))
+		for i := range btc.Vecs {
+			c.btc.Vecs[i] = proc.GetVector(*btc.Vecs[i].GetType())
+		}
 		needInsert := make([]uint8, hashmap.UnitLimit)
 		resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
-		cnt := input.Batch.RowCount()
+		cnt := btc.RowCount()
 		itr := c.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
 			n := cnt - i
@@ -179,7 +187,7 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyze proces
 			copy(needInsert, resetsNeedInsert)
 			insertcnt := 0
 
-			vs, zs := itr.Find(i, n, input.Batch.Vecs)
+			vs, zs := itr.Find(i, n, btc.Vecs)
 
 			for j, v := range vs {
 
@@ -202,20 +210,23 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyze proces
 				c.cnts[v-1][0] = 0
 				insertcnt++
 			}
-			c.buf.AddRowCount(insertcnt)
+			c.btc.AddRowCount(insertcnt)
 
 			if insertcnt > 0 {
-				for pos := range input.Batch.Vecs {
-					if err := c.buf.Vecs[pos].UnionBatch(input.Batch.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
+				for pos := range btc.Vecs {
+					if err := c.btc.Vecs[pos].UnionBatch(btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
+						btc.Clean(proc.Mp())
 						return false, err
 					}
 				}
 			}
 		}
 
-		analyze.Alloc(int64(c.buf.Size()))
-		analyze.Output(c.buf, isLast)
-		result.Batch = c.buf
+		proc.PutBatch(btc)
+		analyze.Alloc(int64(c.btc.Size()))
+		analyze.Output(c.btc, isLast)
+
+		result.Batch = c.btc
 		return false, nil
 	}
 }

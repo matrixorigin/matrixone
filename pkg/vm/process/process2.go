@@ -16,9 +16,6 @@ package process
 
 import (
 	"context"
-	"sync/atomic"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	"sync/atomic"
+	"time"
 )
 
 // NewTopProcess creates a new top process for the query.
@@ -96,8 +95,8 @@ func NewTopProcess(
 	return proc
 }
 
-// NewNoContextChildProc make a new child process without a context field.
-// This is used for the compile-process, which doesn't need to pass the context.
+// NewNoContextChildProc make a new child process without context field.
+// This is used for the compile process, which doesn't need to pass the context.
 func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 	child := &Process{
 		Base: proc.Base,
@@ -117,31 +116,8 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 	return child
 }
 
-// NewNoContextChildProc make a new child process without a context field.
-// This is used for the compile-process, which doesn't need to pass the context.
-func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channelBufferSize []int32, nilbatchCnt []int32) *Process {
-	child := &Process{
-		Base: proc.Base,
-	}
-
-	if dataEntryCount > 0 {
-		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
-		for i := range child.Reg.MergeReceivers {
-			child.Reg.MergeReceivers[i] = &WaitRegister{
-				Ch:          make(chan *RegisterMessage, channelBufferSize[i]),
-				NilBatchCnt: int(nilbatchCnt[i]),
-			}
-		}
-	}
-
-	// todo: if there is no dispatch operation, we don't need to create the following channel. but OK for now.
-	child.DispatchNotifyCh = make(chan *WrapCs)
-	return child
-}
-
 // NewContextChildProc make a new child and init its context field.
 // This is used for parallel execution, which will make a new child process to run a pipeline directly.
-// todo: I will remove this method next day, it's a waste to create a new context.
 func (proc *Process) NewContextChildProc(dataEntryCount int) *Process {
 	child := proc.NewNoContextChildProc(dataEntryCount)
 	child.BuildPipelineContext(proc.Ctx)
@@ -156,11 +132,10 @@ func (proc *Process) BuildPipelineContext(parentContext context.Context) context
 	proc.Ctx, proc.Cancel = context.WithCancel(parentContext)
 
 	// update the context held by this process's data producers.
+	mp := proc.Mp()
 	for _, sender := range proc.Reg.MergeReceivers {
 		sender.Ctx = proc.Ctx
-
-		// do not clean the channel here, because we cannot ensure that sender was not in progress.
-		//sender.CleanChannel(mp)
+		sender.CleanChannel(mp)
 	}
 	return proc.Ctx
 }
@@ -200,21 +175,6 @@ func (proc *Process) doPrepareForRunningWithoutPipeline() {
 // just for easy access.
 func GetQueryCtxFromProc(proc *Process) (context.Context, context.CancelFunc) {
 	return proc.Base.sqlContext.queryContext, proc.Base.sqlContext.queryCancel
-}
-
-// ReplacePipelineCtx replaces the pipeline context and cancel function for the process.
-// It's a very dangerous operation, should be used with caution.
-// And we only use it for the newly built pipeline by the pipeline's ParallelRun method.
-func ReplacePipelineCtx(proc *Process, ctx context.Context, cancel context.CancelFunc) {
-	proc.Ctx = ctx
-	proc.Cancel = cancel
-
-	for _, sender := range proc.Reg.MergeReceivers {
-		sender.Ctx = proc.Ctx
-
-		// do not clean the channel here, because we cannot ensure that sender was not in progress.
-		//sender.CleanChannel(mp)
-	}
 }
 
 // GetQueryContextError return error once top context or query context with error.

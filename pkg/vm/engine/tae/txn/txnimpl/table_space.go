@@ -178,8 +178,6 @@ func (space *tableSpace) prepareApplyANode(node *anode) error {
 		if appender.CheckFreeze() {
 			// freezed, try to find another ablock
 			appender.UnlockFreeze()
-			// Unref the appender, otherwise it can't be PrepareCompact(ed) successfully
-			appender.Close()
 			continue
 		}
 

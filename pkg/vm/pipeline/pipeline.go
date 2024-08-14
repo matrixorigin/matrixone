@@ -28,16 +28,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func New(tableID uint64, attrs []string, op vm.Operator) *Pipeline {
+func New(tableID uint64, attrs []string, op vm.Operator, reg *process.WaitRegister) *Pipeline {
 	return &Pipeline{
+		reg:     reg,
 		rootOp:  op,
 		attrs:   attrs,
 		tableID: tableID,
 	}
 }
 
-func NewMerge(op vm.Operator) *Pipeline {
+func NewMerge(op vm.Operator, reg *process.WaitRegister) *Pipeline {
 	return &Pipeline{
+		reg:    reg,
 		rootOp: op,
 	}
 }
@@ -50,6 +52,7 @@ func (p *Pipeline) String() string {
 }
 
 func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Process) (end bool, err error) {
+	p.waitRegister()
 
 	if tableScanOperator, ok := vm.GetLeafOp(p.rootOp).(*table_scan.TableScan); ok {
 		tableScanOperator.Reader = r
@@ -62,6 +65,7 @@ func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Proc
 }
 
 func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, err error) {
+	p.waitRegister()
 
 	if valueScanOperator, ok := vm.GetLeafOp(p.rootOp).(*value_scan.ValueScan); ok {
 		pipelineInputBatches := []*batch.Batch{bat}
@@ -75,7 +79,19 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 }
 
 func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
+	p.waitRegister()
+
 	return p.run(proc)
+}
+
+func (p *Pipeline) waitRegister() {
+	if p.reg == nil {
+		return
+	}
+	select {
+	case <-p.reg.Ctx.Done():
+	case <-p.reg.Ch:
+	}
 }
 
 func (p *Pipeline) run(proc *process.Process) (end bool, err error) {

@@ -19,10 +19,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
@@ -34,17 +32,9 @@ const (
 	started = state(1)
 )
 
-var (
-	basePort     = uint64(10000)
-	basePortStep = uint64(100)
-
-	clusterID atomic.Uint64
-)
-
 type cluster struct {
 	sync.RWMutex
 
-	id       uint64
 	state    state
 	files    []string
 	services []*operator
@@ -56,10 +46,9 @@ type cluster struct {
 		preStart  func(ServiceOperator)
 	}
 
-	ports struct {
-		servicePort int
-		raftPort    int
-		gossipPort  int
+	gen struct {
+		basePort         int
+		baseFrontendPort int
 	}
 }
 
@@ -67,7 +56,6 @@ func NewCluster(
 	opts ...Option,
 ) (Cluster, error) {
 	c := &cluster{
-		id:    clusterID.Add(1),
 		state: stopped,
 	}
 	for _, opt := range opts {
@@ -79,10 +67,6 @@ func NewCluster(
 		return nil, err
 	}
 	return c, nil
-}
-
-func (c *cluster) ID() uint64 {
-	return c.id
 }
 
 func (c *cluster) Start() error {
@@ -205,21 +189,26 @@ func (c *cluster) GetCNService(
 }
 
 func (c *cluster) adjust() {
+	c.gen.baseFrontendPort = 6001
+	c.gen.basePort = 18000
+
 	if c.options.cn == 0 {
 		c.options.cn = 1
 	}
 	if c.options.dataPath == "" {
 		c.options.dataPath = filepath.Join(
 			os.TempDir(),
-			fmt.Sprintf("mo-cluster-test-%d", time.Now().Nanosecond()),
+			fmt.Sprintf("%d", time.Now().Nanosecond()),
 		)
 		if err := os.MkdirAll(c.options.dataPath, 0755); err != nil {
 			panic(err)
 		}
 	}
-	c.ports.servicePort = getNextBasePort()
-	c.ports.raftPort = getNextBasePort()
-	c.ports.gossipPort = getNextBasePort()
+
+	if c.options.withProxy ||
+		c.options.cn > 1 {
+		c.gen.baseFrontendPort = 16001
+	}
 }
 
 func (c *cluster) createServiceOperators() error {
@@ -228,26 +217,10 @@ func (c *cluster) createServiceOperators() error {
 	}
 
 	for i, f := range c.files {
-		s, err := newService(
-			f,
-			i,
-			func(o *operator) {
-				if o.serviceType == metadata.ServiceType_LOG {
-					o.cfg.LogService.UpdateAddresses(
-						"127.0.0.1",
-						c.ports.servicePort,
-						c.ports.raftPort,
-						c.ports.gossipPort,
-					)
-					o.cfg.LogService.UUID = uuid.NewString()
-					o.cfg.LogService.BootstrapConfig.InitHAKeeperMembers = []string{"131072:" + o.cfg.LogService.UUID}
-				}
-			},
-		)
+		s, err := newService(f, i)
 		if err != nil {
 			return err
 		}
-
 		if c.options.preStart != nil {
 			c.options.preStart(s)
 		}
@@ -291,7 +264,6 @@ func (c *cluster) initLogServiceConfig() error {
 		fmt.Sprintf(
 			logConfig,
 			c.options.dataPath,
-			c.ports.servicePort,
 		))
 }
 
@@ -303,11 +275,9 @@ func (c *cluster) initTNServiceConfig() error {
 		fmt.Sprintf(
 			tnConfig,
 			c.options.dataPath,
-			c.ports.servicePort,
 			c.options.dataPath,
 			c.options.dataPath,
-			c.id,
-			getNextBasePort(),
+			c.getNextBasePort(),
 		))
 }
 
@@ -320,14 +290,12 @@ func (c *cluster) initCNServiceConfig() error {
 			fmt.Sprintf(
 				cnConfig,
 				c.options.dataPath,
-				c.ports.servicePort,
 				c.options.dataPath,
 				c.options.dataPath,
-				c.id,
 				i,
-				getNextBasePort(),
+				c.getNextBasePort(),
 				i,
-				getNextBasePort(),
+				c.getNextFrontPort(),
 				c.options.dataPath,
 				i,
 			))
@@ -344,14 +312,21 @@ func (c *cluster) initProxyServiceConfig() error {
 		fmt.Sprintf(
 			proxyConfig,
 			c.options.dataPath,
-			c.ports.servicePort,
 			c.options.dataPath,
 			c.options.dataPath,
 		))
 }
 
-func getNextBasePort() int {
-	return int(atomic.AddUint64(&basePort, basePortStep))
+func (c *cluster) getNextBasePort() int {
+	v := c.gen.basePort
+	c.gen.basePort += 100
+	return v
+}
+
+func (c *cluster) getNextFrontPort() int {
+	v := c.gen.baseFrontendPort
+	c.gen.baseFrontendPort++
+	return v
 }
 
 func genConfig(

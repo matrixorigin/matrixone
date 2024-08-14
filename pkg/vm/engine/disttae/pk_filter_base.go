@@ -15,6 +15,8 @@
 package disttae
 
 import (
+	"regexp"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -22,12 +24,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// TODO(ghs) workaround for special tables, remove later
+// FIXME(ghs) remove this specialPattern later
+var (
+	specialPattern *regexp.Regexp = regexp.MustCompile(`mo_tables|mo_database`)
+)
+
 func newBasePKFilter(
 	expr *plan.Expr,
 	tblDef *plan.TableDef,
 	proc *process.Process,
-) (filter basePKFilter, err error) {
-	if expr == nil {
+) (filter basePKFilter) {
+	if expr == nil || specialPattern.MatchString(tblDef.Name) {
 		return
 	}
 
@@ -43,29 +51,23 @@ func newBasePKFilter(
 		case "and":
 			var filters []basePKFilter
 			for idx := range exprImpl.F.Args {
-				ff, err := newBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
-				if err != nil {
-					return basePKFilter{}, err
-				}
+				ff := newBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
 				if ff.valid {
 					filters = append(filters, ff)
 				}
 			}
 
 			if len(filters) == 0 {
-				return basePKFilter{}, nil
+				return basePKFilter{}
 			}
 
 			for idx := 0; idx < len(filters)-1; {
 				f1 := filters[idx]
 				f2 := filters[idx+1]
-				ff, err := mergeFilters(f1, f2, function.AND, proc)
-				if err != nil {
-					return basePKFilter{}, err
-				}
+				ff := mergeFilters(f1, f2, function.AND, proc)
 
 				if !ff.valid {
-					return basePKFilter{}, nil
+					return basePKFilter{}
 				}
 
 				idx++
@@ -79,36 +81,30 @@ func newBasePKFilter(
 			}
 
 			ret := filters[len(filters)-1]
-			return ret, nil
+			return ret
 
 		case "or":
 			var filters []basePKFilter
 			for idx := range exprImpl.F.Args {
-				ff, err := newBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
-				if err != nil {
-					return basePKFilter{}, err
-				}
+				ff := newBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
 				if !ff.valid {
-					return basePKFilter{}, err
+					return basePKFilter{}
 				}
 
 				filters = append(filters, ff)
 			}
 
 			if len(filters) == 0 {
-				return basePKFilter{}, nil
+				return basePKFilter{}
 			}
 
 			for idx := 0; idx < len(filters)-1; {
 				f1 := filters[idx]
 				f2 := filters[idx+1]
-				ff, err := mergeFilters(f1, f2, function.OR, proc)
-				if err != nil {
-					return basePKFilter{}, nil
-				}
+				ff := mergeFilters(f1, f2, function.OR, proc)
 
 				if !ff.valid {
-					return basePKFilter{}, nil
+					return basePKFilter{}
 				}
 
 				idx++
@@ -122,7 +118,7 @@ func newBasePKFilter(
 			}
 
 			ret := filters[len(filters)-1]
-			return ret, nil
+			return ret
 
 		case ">=":
 			//a >= ?

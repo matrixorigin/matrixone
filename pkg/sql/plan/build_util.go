@@ -42,7 +42,7 @@ import (
 
 // reCheckifNeedLockWholeTable checks if the whole table needs to be locked based on the last node's statistics.
 // It returns true if the out count of the last node is greater than the maximum lock count, otherwise it returns false.
-func reCheckifNeedLockWholeTable(builder *QueryBuilder) {
+func reCheckifNeedLockWholeTable(builder *QueryBuilder, isRestore bool) {
 	lockService := builder.compCtx.GetProcess().Base.LockService
 	if lockService == nil {
 		// MockCompilerContext
@@ -55,7 +55,7 @@ func reCheckifNeedLockWholeTable(builder *QueryBuilder) {
 			continue
 		}
 		if !n.LockTargets[0].LockTable {
-			reCheckIfNeed := n.Stats.Outcnt > float64(lockconfig.MaxLockRowCount)
+			reCheckIfNeed := n.Stats.Outcnt > float64(lockconfig.MaxLockRowCount) || isRestore
 			if reCheckIfNeed {
 				logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
 				logutil.Infof("the outcnt stats is %f", n.Stats.Outcnt)

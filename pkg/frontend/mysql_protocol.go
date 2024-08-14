@@ -345,6 +345,7 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 	//Reference the shared ResultColumns of the session among multi-thread.
 	sesMrs := execCtx.ses.GetMysqlResultSet()
 	mrs.Columns = sesMrs.Columns
+	mrs.Name2Index = sesMrs.Name2Index
 
 	//group row
 	mrs.Data = make([][]interface{}, countOfResultSet)
@@ -444,9 +445,7 @@ func (mp *MysqlProtocolImpl) WritePrepareResponse(ctx context.Context, stmt *Pre
 func (mp *MysqlProtocolImpl) Read() ([]byte, error) {
 	return mp.tcpConn.Read()
 }
-func (mp *MysqlProtocolImpl) ReadLoadLocalPacket() ([]byte, error) {
-	return mp.tcpConn.ReadLoadLocalPacket()
-}
+
 func (mp *MysqlProtocolImpl) Free(buf []byte) {
 	mp.tcpConn.allocator.Free(buf)
 }
@@ -1491,11 +1490,6 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	allowedPacketSize, err := ses.GetSessionSysVar("max_allowed_packet")
-	if err != nil {
-		return err
-	}
-	mp.tcpConn.allowedPacketSize = int(allowedPacketSize.(int64))
 	return nil
 }
 

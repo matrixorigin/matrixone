@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -850,6 +851,28 @@ func TestEvalExprListToVec(t *testing.T) {
 	require.Zero(t, m.CurrNB())
 }
 
+func Test_removeIf(t *testing.T) {
+	strs := []string{"abc", "bc", "def"}
+
+	del1 := make(map[string]struct{})
+	del1["abc"] = struct{}{}
+	res1 := removeIf[string](strs, func(t string) bool {
+		return find[string](del1, t)
+	})
+	assert.Equal(t, []string{"bc", "def"}, res1)
+
+	del2 := make(map[string]struct{})
+	for _, str := range strs {
+		del2[str] = struct{}{}
+	}
+	res2 := removeIf[string](strs, func(t string) bool {
+		return find[string](del2, t)
+	})
+	assert.Equal(t, []string{}, res2)
+
+	assert.Equal(t, []string(nil), removeIf[string](nil, nil))
+}
+
 func Test_ConstructBasePKFilter(t *testing.T) {
 	m := mpool.MustNewNoFixed(t.Name())
 	proc := testutil.NewProcessWithMPool("", m)
@@ -1547,8 +1570,7 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 			x := 0
 			x++
 		}
-		basePKFilter, err := newBasePKFilter(expr, tableDef, proc)
-		require.NoError(t, err)
+		basePKFilter := newBasePKFilter(expr, tableDef, proc)
 		require.Equal(t, filters[i].valid, basePKFilter.valid, exprStrings[i])
 		if filters[i].valid {
 			require.Equal(t, filters[i].op, basePKFilter.op, exprStrings[i])

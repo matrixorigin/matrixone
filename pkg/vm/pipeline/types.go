@@ -85,6 +85,7 @@ type Pipeline struct {
 	// orders to be executed
 	// instructions vm.Instructions
 	rootOp vm.Operator
+	reg    *process.WaitRegister
 }
 
 // Cleanup do memory release work for whole pipeline.

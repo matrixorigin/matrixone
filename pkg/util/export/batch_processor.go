@@ -43,12 +43,7 @@ import (
 
 // defaultRingBufferSize need 2^N value
 // OLD Case: defaultQueueSize default length for collect Channel (value = 1310720)
-// NEW Case:
-// 1. [consume] one goroutine collect items ~= 1s / 50us = 20_000
-// 2. [generate] statement_info << query qps
-// 3. [generate] rawlog qps ~= [1000, 3000]
-// 4. [generate] metric 1ps = 60s / 15s = 4
-const defaultRingBufferSize = 2 << 13
+const defaultRingBufferSize = 1 << 20
 
 const LoggerNameMOCollector = "MOCollector"
 
@@ -566,7 +561,6 @@ loop:
 				time.Sleep(time.Millisecond)
 				continue
 			}
-			v2.GetTraceCollectorMOLoggerQueueLength().Set(float64(c.awakeQueue.Len()))
 			start := time.Now()
 			v2.TraceCollectorConsumeDelayDurationHistogram.Observe(start.Sub(startWait).Seconds())
 			c.mux.RLock()

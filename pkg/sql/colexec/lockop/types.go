@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -132,13 +133,15 @@ type hasNewVersionInRangeFunc func(
 	from, to timestamp.Timestamp) (bool, error)
 
 type state struct {
+	colexec.ReceiverOperator
+
 	parker               *types.Packer
 	retryError           error
 	defChanged           bool
 	step                 int
 	fetchers             []FetchLockRowsFunc
 	cachedBatches        []*batch.Batch
-	batchFetchFunc       func(proc *process.Process) (vm.CallResult, error)
+	batchFetchFunc       func(process.Analyze) *process.RegisterMessage
 	hasNewVersionInRange hasNewVersionInRangeFunc
 }
 

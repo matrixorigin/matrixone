@@ -368,19 +368,19 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		tcc.execCtx = &ExecCtx{reqCtx: ctx, ses: ses}
 		defDBName := tcc.DefaultDatabase()
 		convey.So(defDBName, convey.ShouldEqual, "")
-		convey.So(tcc.DatabaseExists("abc", &plan2.Snapshot{TS: ts}), convey.ShouldBeTrue)
+		convey.So(tcc.DatabaseExists("abc", plan2.Snapshot{TS: ts}), convey.ShouldBeTrue)
 
-		_, _, err := tcc.getRelation("abc", "t1", nil, &plan2.Snapshot{TS: ts})
+		_, _, err := tcc.getRelation("abc", "t1", nil, plan2.Snapshot{TS: ts})
 		convey.So(err, convey.ShouldBeNil)
 
-		object, tableRef := tcc.Resolve("abc", "t1", &plan2.Snapshot{TS: ts})
+		object, tableRef := tcc.Resolve("abc", "t1", plan2.Snapshot{TS: ts})
 		convey.So(object, convey.ShouldNotBeNil)
 		convey.So(tableRef, convey.ShouldNotBeNil)
 
-		pkd := tcc.GetPrimaryKeyDef("abc", "t1", &plan2.Snapshot{TS: ts})
+		pkd := tcc.GetPrimaryKeyDef("abc", "t1", plan2.Snapshot{TS: ts})
 		convey.So(len(pkd), convey.ShouldBeZeroValue)
 
-		stats, err := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Snapshot{TS: ts})
+		stats, err := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, plan2.Snapshot{TS: ts})
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(stats, convey.ShouldBeNil)
 	})

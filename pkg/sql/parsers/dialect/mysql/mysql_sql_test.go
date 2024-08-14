@@ -2988,26 +2988,6 @@ var (
 			input:  "restore cluster from pitr pitr01 '2021-01-01 00:00:00'",
 			output: "restore cluster from pitr pitr01 timestamp = 2021-01-01 00:00:00",
 		},
-		{
-			input:  "show create table t1 {snapshot = 'sp01'}",
-			output: "show create table t1 {snapshot = sp01}",
-		},
-		{
-			input:  "show create view test_view {snapshot = 'sp01'}",
-			output: "show create view test_view {snapshot = sp01}",
-		},
-		{
-			input:  "show create database db01 {snapshot = 'sp01'}",
-			output: "show create database db01 {snapshot = sp01}",
-		},
-		{
-			input:  "show tables {snapshot = 'sp01'}",
-			output: "show tables {snapshot = sp01}",
-		},
-		{
-			input:  "show databases {snapshot = 'sp01'}",
-			output: "show databases {snapshot = sp01}",
-		},
 	}
 )
 

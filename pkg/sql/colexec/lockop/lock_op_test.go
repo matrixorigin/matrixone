@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -531,13 +532,13 @@ func runLockBlockingOpTest(
 				batches2 = append(batches2, bat)
 			}
 			require.NoError(t, arg.Prepare(proc))
-			arg.ctr.rt.batchFetchFunc = func(*process.Process) (vm.CallResult, error) {
+			arg.ctr.rt.batchFetchFunc = func(process.Analyze) *process.RegisterMessage {
 				if len(batches) == 0 {
-					return vm.NewCallResult(), nil
+					return testutil.NewRegMsg(nil)
 				}
 				bat := batches[0]
 				batches = batches[1:]
-				return vm.CallResult{Batch: bat}, nil
+				return testutil.NewRegMsg(bat)
 			}
 
 			var err error
