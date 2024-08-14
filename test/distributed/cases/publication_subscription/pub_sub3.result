@@ -1,0 +1,47 @@
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop database if exists db01;
+create database db01;
+use db01;
+drop table if exists table01;
+create table table01 (col1 int unique key, col2 enum ('a','b','c'));
+insert into table01 values(1,'a');
+insert into table01 values(2, 'b');
+drop table if exists table02;
+create table table02 (col1 int primary key , col2 enum ('a','b','c'));
+insert into table02 values(1,'a');
+insert into table02 values(2, 'b');
+drop table if exists table03;
+create table table03(col1 int auto_increment, key key1(col1));
+insert into table03 values (1);
+insert into table03 values (2);
+drop publication if exists `add`;
+create publication `add` database db01 account all;
+drop publication if exists account;
+create publication account database db01 table table01,table02 account acc01;
+drop publication if exists `$$$`;
+create publication `$$$` database db01 account all;
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+$$$    db01    *    *        2024-08-14 18:08:30    null    
+account    db01    table01,table02    acc01        2024-08-14 18:08:30    null    
+add    db01    *    *        2024-08-14 18:08:30    null    
+drop database if exists sub01;
+create database sub01 from sys publication `add`;
+drop database if exists sub02;
+create database sub02 from sys publication account;
+drop database if exists sub03;
+create database sub03 from sys publication `$$$`;
+show subscriptions;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+$$$    sys    db01    *        2024-08-14 18:08:30    sub03    2024-08-14 18:08:31    0
+account    sys    db01    table01,table02        2024-08-14 18:08:30    sub02    2024-08-14 18:08:31    0
+add    sys    db01    *        2024-08-14 18:08:30    sub01    2024-08-14 18:08:30    0
+drop publication `add`;
+drop publication account;
+drop publication `$$$`;
+drop database db01;
+drop database sub01;
+drop database sub02;
+drop database sub03;
+drop account acc01;
