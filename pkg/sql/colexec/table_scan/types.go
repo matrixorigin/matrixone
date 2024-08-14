@@ -98,5 +98,12 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 		allocSize += tableScan.ProjectAllocSize
 		tableScan.FreeProjection(proc)
 	}
+	if tableScan.Reader != nil {
+		e := tableScan.Reader.Close()
+		if e != nil {
+			panic("error to close reader")
+			// logutil.Errorf("error to close reader of table id=%d, err=%v", tableScan.TableID, e)
+		}
+	}
 	anal.Alloc(allocSize)
 }
