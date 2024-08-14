@@ -1729,10 +1729,7 @@ func GetExplainColumns(ctx context.Context, explainColName string) ([]*plan2.Col
 	columns := make([]interface{}, len(cols))
 	var err error = nil
 	for i, col := range cols {
-		c := new(MysqlColumn)
-		c.SetName(col.Name)
-		c.SetOrgName(col.GetOriginCaseName())
-		err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
+		c, err := colDef2MysqlColumn(ctx, col)
 		if err != nil {
 			return nil, nil, err
 		}

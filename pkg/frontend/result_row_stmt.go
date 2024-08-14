@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -181,7 +180,7 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 	}
 
 	if execCtx.prepareColDef != nil && len(columns) != len(execCtx.prepareColDef) {
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("expected %d col def packet, got %d", len(execCtx.prepareColDef), len(columns)))
+		execCtx.prepareColDef = nil
 	}
 
 	//send columns
