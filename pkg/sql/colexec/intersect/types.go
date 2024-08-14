@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -68,6 +69,7 @@ func (intersect *Intersect) Release() {
 }
 
 type container struct {
+	colexec.ReceiverOperator
 
 	// operator state
 	state int
@@ -79,7 +81,7 @@ type container struct {
 	hashTable *hashmap.StrHashMap
 
 	// Result batch of intersec column execute operator
-	buf *batch.Batch
+	btc *batch.Batch
 }
 
 func (intersect *Intersect) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -93,9 +95,9 @@ func (intersect *Intersect) Free(proc *process.Process, pipelineFailed bool, err
 			ctr.hashTable.Free()
 			ctr.hashTable = nil
 		}
-		if ctr.buf != nil {
-			ctr.buf.Clean(proc.Mp())
-			ctr.buf = nil
+		if ctr.btc != nil {
+			ctr.btc.Clean(proc.Mp())
+			ctr.btc = nil
 		}
 		if ctr.cnts != nil {
 			for i := range ctr.cnts {
@@ -103,6 +105,8 @@ func (intersect *Intersect) Free(proc *process.Process, pipelineFailed bool, err
 			}
 			ctr.cnts = nil
 		}
+		ctr.FreeAllReg()
+
 		intersect.ctr = nil
 	}
 }

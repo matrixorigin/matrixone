@@ -248,35 +248,26 @@ func NewReader(
 	expr *plan.Expr,
 	//orderedScan bool, // it should be included in filter or expr.
 	source engine.DataSource,
-) (*reader, error) {
+) *reader {
 
-	baseFilter, err := newBasePKFilter(
+	baseFilter := newBasePKFilter(
 		expr,
 		tableDef,
 		proc,
 	)
-	if err != nil {
-		return nil, err
-	}
 
 	packerPool := e.packerPool
-	memFilter, err := newMemPKFilter(
+	memFilter := newMemPKFilter(
 		tableDef,
 		ts,
 		packerPool,
 		baseFilter,
 	)
-	if err != nil {
-		return nil, err
-	}
 
-	blockFilter, err := newBlockReadPKFilter(
+	blockFilter := newBlockReadPKFilter(
 		tableDef.Pkey.PkeyColName,
 		baseFilter,
 	)
-	if err != nil {
-		return nil, err
-	}
 
 	r := &reader{
 		withFilterMixin: withFilterMixin{
@@ -292,7 +283,7 @@ func NewReader(
 	}
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
-	return r, nil
+	return r
 }
 
 func (r *reader) Close() error {

@@ -284,7 +284,7 @@ func (h *Handle) HandlePreCommitWrite(
 		}
 	}
 	//evaluate all the txn requests.
-	return h.TryPrefetchTxn(ctx, meta)
+	return h.TryPrefechTxn(ctx, meta)
 }
 
 // HandlePreCommitWrite impls TxnStorage:Commit

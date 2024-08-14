@@ -21,7 +21,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -30,29 +29,24 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-var errBackOff = moerr.NewInternalErrorNoCtx("BackOff trigger")
-
 var _ table.RowWriter = (*ContentWriter)(nil)
 var _ table.BufferSettable = (*ContentWriter)(nil)
-var _ table.BackOffSettable = (*ContentWriter)(nil)
 
 // ContentWriter NO do gen op, just do the flush op.
 type ContentWriter struct {
 	ctx context.Context
 	tbl *table.Table
 
-	// formatter used in 'mode 1', more can see table.BufferSettable
-	formatter Formatter
-
-	// mode 1 & 2
+	// mode 1
 	buf         *bytes.Buffer
 	bufCallback func(*bytes.Buffer)
+
+	// mode 2
+	formatter Formatter
 
 	// main flow
 	sqlFlusher table.Flusher
 	csvFlusher table.Flusher
-
-	backoff table.BackOff
 }
 
 func NewContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher) *ContentWriter {
@@ -75,12 +69,6 @@ func (c *ContentWriter) SetBuffer(buf *bytes.Buffer, callback func(buffer *bytes
 // NeedBuffer implements table.BufferSettable
 func (c *ContentWriter) NeedBuffer() bool { return true }
 
-func (c *ContentWriter) SetupBackOff(backoff table.BackOff) {
-	c.backoff = backoff
-}
-
-// WriteRow serialize the row into buffer
-// It new a formatter to serialize the row.
 func (c *ContentWriter) WriteRow(row *table.Row) error {
 	if c.formatter == nil {
 		c.formatter = NewContentFormatter(c.ctx, c.buf)
@@ -102,54 +90,31 @@ func (c *ContentWriter) GetContentLength() int {
 	return c.buf.Len()
 }
 
-func (c *ContentWriter) FlushAndClose() (n int, err error) {
+func (c *ContentWriter) FlushAndClose() (int, error) {
 	if c.buf == nil {
 		return 0, nil
 	}
-	// mode 1 of table.BufferSettable
+	// mode 2
 	if c.formatter != nil {
 		c.formatter.Flush()
 	}
-	if c.bufCallback != nil {
-		// release the buf.
-		defer c.bufCallback(c.buf)
-	}
-
 	// main flow
-	// Step 1/2: do sql flush.
-	if c.backoff == nil || c.backoff.Count() {
-		v2.TraceMOLoggerBufferLoopWriteSQL.Inc()
-		n, err = c.sqlFlusher.FlushBuffer(c.buf)
-	} else {
-		// what situation wil run this loop
-		// 1. metric collector has too much req in queue, ref metric_collector.go/mfsetETL.Count
-		v2.TraceMOLoggerBufferLoopBackOff.Inc()
-		// trigger csv flusher
-		err = errBackOff
-	}
-	// Step 2/2: do csv flush, if sql failed.
+	n, err := c.sqlFlusher.FlushBuffer(c.buf)
 	if err != nil {
 		n, err = c.csvFlusher.FlushBuffer(c.buf)
 		if err != nil {
-			v2.TraceMOLoggerBufferWriteFailed.Inc()
 			v2.TraceMOLoggerErrorFlushCounter.Inc()
 			return 0, err
-		} else {
-			v2.TraceMOLoggerBufferWriteCSV.Inc()
 		}
-	} else {
-		v2.TraceMOLoggerBufferWriteSQL.Inc()
-	}
-
-	// nil all
-	if c.bufCallback == nil {
-		v2.TraceMOLoggerBufferNoCallback.Inc()
 	}
 	c.sqlFlusher = nil
 	c.csvFlusher = nil
-	c.formatter = nil
-	c.bufCallback = nil
+	// release the buf.
+	if c.bufCallback != nil {
+		c.bufCallback(c.buf)
+	}
 	c.buf = nil
+	c.formatter = nil
 	return n, nil
 }
 

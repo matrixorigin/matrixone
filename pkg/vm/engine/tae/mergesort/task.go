@@ -177,30 +177,31 @@ func CleanTransMapping(b api.TransferMaps) {
 	}
 }
 
-func AddSortPhaseMapping(m api.TransferMap, rowCnt int, mapping []int64) {
-	if mapping == nil {
-		for i := range rowCnt {
-			m[uint32(i)] = api.TransferDestPos{RowIdx: uint32(i)}
+func AddSortPhaseMapping(b api.TransferMaps, idx int, originRowCnt int, mapping []int64) {
+	// TODO: remove panic check
+	if mapping != nil {
+		if len(mapping) != originRowCnt {
+			panic(fmt.Sprintf("mapping length %d != originRowCnt %d", len(mapping), originRowCnt))
 		}
-		return
+		// mapping sortedVec[i] = originalVec[sortMapping[i]]
+		// transpose it, originalVec[sortMapping[i]] = sortedVec[i]
+		// [9 4 8 5 2 6 0 7 3 1](originalVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
+		// [0 1 2 3 4 5 6 7 8 9](sortedVec) -> [0 1 2 3 4 5 6 7 8 9](originalVec)
+		// TODO: use a more efficient way to transpose, in place
+		transposedMapping := make([]int64, len(mapping))
+		for sortedPos, originalPos := range mapping {
+			transposedMapping[originalPos] = int64(sortedPos)
+		}
+		mapping = transposedMapping
 	}
-
-	if len(mapping) != rowCnt {
-		panic(fmt.Sprintf("mapping length %d != originRowCnt %d", len(mapping), rowCnt))
-	}
-
-	// mapping sortedVec[i] = originalVec[sortMapping[i]]
-	// transpose it, sortedVec[sortMapping[i]] = originalVec[i]
-	// [9 4 8 5 2 6 0 7 3 1](originalVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
-	// [0 1 2 3 4 5 6 7 8 9](sortedVec) -> [0 1 2 3 4 5 6 7 8 9](originalVec)
-	// TODO: use a more efficient way to transpose, in place
-	transposedMapping := make([]uint32, len(mapping))
-	for sortedPos, originalPos := range mapping {
-		transposedMapping[originalPos] = uint32(sortedPos)
-	}
-
-	for i := range rowCnt {
-		m[uint32(i)] = api.TransferDestPos{RowIdx: transposedMapping[i]}
+	targetMapping := b[idx]
+	for origRow := 0; origRow < originRowCnt; origRow++ {
+		if mapping == nil {
+			// no sort phase, the mapping is 1:1, just use posInVecApplyDeletes
+			targetMapping[uint32(origRow)] = api.TransferDestPos{RowIdx: uint32(origRow)}
+		} else {
+			targetMapping[uint32(origRow)] = api.TransferDestPos{RowIdx: uint32(mapping[origRow])}
+		}
 	}
 }
 

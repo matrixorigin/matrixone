@@ -161,7 +161,7 @@ func (de *TestDisttaeEngine) NewTxnOperator(
 func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 	ts := de.Now()
 	ticker := time.NewTicker(time.Second)
-	ctx, cancel := context.WithTimeout(ctx, time.Second*60)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 	defer cancel()
 
 	done := false
@@ -171,12 +171,9 @@ func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 			return moerr.NewInternalErrorNoCtx("wait partition state waterline timeout")
 		case <-ticker.C:
 			latestAppliedTS := de.Engine.PushClient().LatestLogtailAppliedTime()
-			ready := de.Engine.PushClient().IsSubscriberReady()
-			if latestAppliedTS.GreaterEq(ts) && ready {
+			if latestAppliedTS.GreaterEq(ts) && de.Engine.PushClient().IsSubscriberReady() {
 				done = true
 			}
-			logutil.Infof("wait logtail, latestAppliedTS: %s, targetTS: %s, done: %v, subscriberReady: %v\n",
-				latestAppliedTS.ToStdTime().String(), ts.ToStdTime().String(), done, ready)
 		}
 	}
 

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -37,7 +38,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		schemaName = ctx.DefaultDatabase()
 	}
 
-	var snapshot *Snapshot
+	snapshot := Snapshot{TS: &timestamp.Timestamp{}}
 	_, tableDef := ctx.Resolve(schemaName, tableName, snapshot)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
@@ -279,7 +280,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if schemaName == "" {
 		schemaName = ctx.DefaultDatabase()
 	}
-	objRef, tableDef := ctx.Resolve(schemaName, tableName, nil)
+	objRef, tableDef := ctx.Resolve(schemaName, tableName, Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}

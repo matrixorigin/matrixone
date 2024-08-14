@@ -34,23 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func removeIf[T any](data []T, pred func(t T) bool) []T {
-	// from plan.RemoveIf
-	if len(data) == 0 {
-		return data
-	}
-	res := 0
-	for i := 0; i < len(data); i++ {
-		if !pred(data[i]) {
-			if res != i {
-				data[res] = data[i]
-			}
-			res++
-		}
-	}
-	return data[:res]
-}
-
 type ReadFilterSearchFuncType func([]*vector.Vector) []int64
 
 type BlockReadFilter struct {
@@ -74,21 +57,13 @@ func ReadDataByFilter(
 	mp *mpool.MPool,
 	tableName string,
 ) (sels []int64, err error) {
-	bat, rowidIdx, deleteMask, release, err := readBlockData(ctx, columns, colTypes, info, ts, fs, mp, nil, fileservice.Policy(0))
+	bat, release, err := LoadColumns(ctx, columns, colTypes, fs, info.MetaLocation(), mp, fileservice.Policy(0))
 	if err != nil {
 		return
 	}
 	defer release()
-	if rowidIdx >= 0 {
-		panic("use rowid to filter, seriouslly?")
-	}
 
 	sels = searchFunc(bat.Vecs)
-	if !deleteMask.IsEmpty() {
-		sels = removeIf(sels, func(i int64) bool {
-			return deleteMask.Contains(uint64(i))
-		})
-	}
 	sels, err = ds.ApplyTombstones(ctx, info.BlockID, sels)
 	if err != nil {
 		return
@@ -529,7 +504,7 @@ func readBlockData(
 		return
 	}
 
-	if info.Appendable {
+	if info.EntryState {
 		bat, deleteMask, err = readABlkColumns(idxes)
 	} else {
 		bat, _, err = readColumns(idxes)

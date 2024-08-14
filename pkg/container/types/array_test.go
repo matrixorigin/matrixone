@@ -15,10 +15,9 @@
 package types
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"reflect"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func TestBytesToArray(t *testing.T) {
@@ -201,7 +200,7 @@ func TestStringToArray(t *testing.T) {
 		args       args
 		wantResF32 []float32
 		wantResF64 []float64
-		wantErr    *moerr.Error
+		wantErr    error
 	}
 	tests := []testCase{
 		{

@@ -378,9 +378,19 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 	return modify, nil
 }
 
-func (tbl *txnTableDelegate) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
+func (tbl *txnTableDelegate) MergeObjects(
+	ctx context.Context,
+	objstats []objectio.ObjectStats,
+	policyName string,
+	targetObjSize uint32,
+) (*api.MergeCommitEntry, error) {
 	if tbl.isLocal() {
-		return tbl.origin.MergeObjects(ctx, objstats, targetObjSize)
+		return tbl.origin.MergeObjects(
+			ctx,
+			objstats,
+			policyName,
+			targetObjSize,
+		)
 	}
 
 	var entry api.MergeCommitEntry
@@ -393,6 +403,7 @@ func (tbl *txnTableDelegate) MergeObjects(ctx context.Context, objstats []object
 				os[i] = o.Marshal()
 			}
 			param.MergeObjectsParam.Objstats = os
+			param.MergeObjectsParam.PolicyName = policyName
 			param.MergeObjectsParam.TargetObjSize = targetObjSize
 		},
 		func(resp []byte) {
@@ -407,35 +418,6 @@ func (tbl *txnTableDelegate) MergeObjects(ctx context.Context, objstats []object
 		return nil, err
 	}
 	return &entry, nil
-}
-
-func (tbl *txnTableDelegate) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
-	if tbl.isLocal() {
-		return tbl.origin.GetNonAppendableObjectStats(
-			ctx,
-		)
-	}
-
-	var stats []objectio.ObjectStats
-	err := tbl.forwardRead(
-		ctx,
-		shardservice.ReadVisibleObjectStats,
-		func(param *shard.ReadParam) {},
-		func(resp []byte) {
-			if len(resp)%objectio.ObjectStatsLen != 0 {
-				panic("invalid resp")
-			}
-			size := len(resp) / objectio.ObjectStatsLen
-			stats = make([]objectio.ObjectStats, size)
-			for i := range size {
-				stats[i].UnMarshal(resp[i*objectio.ObjectStatsLen:])
-			}
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-	return stats, nil
 }
 
 func (tbl *txnTableDelegate) TableDefs(

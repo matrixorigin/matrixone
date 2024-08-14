@@ -40,9 +40,7 @@ func RunBaseClusterTests(
 	var c Cluster
 	basicOnce.Do(
 		func() {
-			c, err = NewCluster(
-				WithCNCount(3),
-			)
+			c, err = NewCluster(WithCNCount(3))
 			if err != nil {
 				return
 			}

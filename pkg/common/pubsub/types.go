@@ -23,7 +23,6 @@ const (
 	AccountAllOutput = "*"
 	TableAll         = "*"
 	Sep              = ","
-	PubAllAccounts   = "*"
 )
 
 type SubStatus int

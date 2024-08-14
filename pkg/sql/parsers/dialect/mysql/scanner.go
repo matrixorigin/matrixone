@@ -29,7 +29,9 @@ const eofChar = 0x100
 
 var scannerPool = sync.Pool{
 	New: func() any {
-		return &Scanner{}
+		return &Scanner{
+			strBuilder: new(bytes.Buffer),
+		}
 	},
 }
 
@@ -47,27 +49,22 @@ type Scanner struct {
 	PrePos      int
 	buf         string
 
-	strBuilder bytes.Buffer
-}
-
-func (s *Scanner) setSql(sql string) {
-	// This is a mysql scanner, so we set the dialect type to mysql
-	s.dialectType = dialect.MYSQL
-	s.LastToken = ""
-	s.LastError = nil
-	s.posVarIndex = 0
-	s.MysqlSpecialComment = nil
-	s.Pos = 0
-	s.Line = 0
-	s.Col = 0
-	s.PrePos = 0
-	s.buf = sql
-	s.strBuilder.Reset()
+	strBuilder *bytes.Buffer
 }
 
 func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
 	scanner := scannerPool.Get().(*Scanner)
-	scanner.setSql(sql)
+	scanner.dialectType = dialectType
+	scanner.LastToken = ""
+	scanner.LastError = nil
+	scanner.posVarIndex = 0
+	scanner.MysqlSpecialComment = nil
+	scanner.Pos = 0
+	scanner.Line = 0
+	scanner.Col = 0
+	scanner.PrePos = 0
+	scanner.buf = sql
+	scanner.strBuilder.Reset()
 	return scanner
 }
 
@@ -400,7 +397,7 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 		s.inc() // advance the first '$'
 	}
 	ch := s.cur()
-	buf := &s.strBuilder
+	buf := s.strBuilder
 	defer s.strBuilder.Reset()
 	for s.Pos < len(s.buf) {
 		if ch == delim {
@@ -432,7 +429,7 @@ func (s *Scanner) scanStringAddPlus(delim uint16, typ int) (int, string) {
 		s.inc() // advance the first '$'
 	}
 	ch := s.cur()
-	buf := &s.strBuilder
+	buf := s.strBuilder
 	defer s.strBuilder.Reset()
 	buf.WriteByte(byte('+'))
 	for s.Pos < len(s.buf) {

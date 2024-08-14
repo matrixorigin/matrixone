@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -132,4 +133,28 @@ func TestIeResult(t *testing.T) {
 	v, e := result.Value(context.TODO(), 0, 0)
 	require.NoError(t, e)
 	require.Equal(t, 42, v.(int))
+	v, e = result.ValueByName(context.TODO(), 0, "test")
+	require.NoError(t, e)
+	require.Equal(t, 42, v.(int))
+	str, e := result.StringValueByName(context.TODO(), 0, "test")
+	require.NoError(t, e)
+	require.Equal(t, "42", str)
+	str, e = result.StringValueByName(context.TODO(), 0, "tet")
+	require.Error(t, e)
+	require.Equal(t, "", str)
+}
+
+func DebugPrintInternalResult(ctx context.Context, res ie.InternalExecResult) string {
+	buf := &bytes.Buffer{}
+	for i := uint64(0); i < res.ColumnCount(); i++ {
+		col, _, _, _ := res.Column(context.TODO(), i)
+		buf.WriteString(col + ": ")
+		for j := uint64(0); j < res.RowCount(); j++ {
+			s, _ := res.StringValueByName(ctx, j, col)
+			buf.WriteString(" | ")
+			buf.WriteString(s)
+		}
+		buf.WriteString("\n")
+	}
+	return buf.String()
 }

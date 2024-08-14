@@ -454,6 +454,8 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 					}
 				}
 			}
+			// shuffle group can not follow shuffle join, need to reshuffle
+			n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reshuffle
 		}
 	}
 
@@ -550,7 +552,7 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 		}
 		if node.Stats.HashmapStats.HashmapSize <= threshHoldForHybirdShuffle {
 			node.Stats.HashmapStats.Shuffle = false
-			if parent.NodeType == plan.Node_AGG {
+			if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
 				parent.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
 			}
 		}

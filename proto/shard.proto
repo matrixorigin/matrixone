@@ -277,5 +277,6 @@ message PrimaryKeysMayBeModifiedParam {
 
 message MergeObjectsParam {
     repeated bytes objstats  = 1;
+    string policyName        = 2;
     uint32 targetObjSize     = 3;
 }

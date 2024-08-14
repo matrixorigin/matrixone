@@ -59,26 +59,3 @@ func JoinAccounts(accountMap map[int32]*AccountInfo) string {
 	slices.Sort(accountNames)
 	return strings.Join(accountNames, Sep)
 }
-
-func CanPubToAll(accountName, pubAllAccounts string) bool {
-	if pubAllAccounts == PubAllAccounts {
-		return true
-	}
-	return slices.Contains(SplitAccounts(pubAllAccounts), accountName)
-}
-
-func RemoveTable(oldTableListStr, tblName string) string {
-	if oldTableListStr == TableAll {
-		return TableAll
-	}
-
-	tableList := strings.Split(oldTableListStr, Sep)
-	newTableList := make([]string, 0, len(tableList))
-	for _, name := range tableList {
-		if name != tblName {
-			newTableList = append(newTableList, name)
-		}
-	}
-	slices.Sort(newTableList)
-	return strings.Join(newTableList, Sep)
-}

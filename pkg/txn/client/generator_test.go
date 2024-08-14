@@ -21,10 +21,10 @@ import (
 )
 
 func TestGenerateUUID(t *testing.T) {
-	gen := newUUIDTxnIDGenerator("")
+	gen := newUUIDTxnIDGenerator()
 	assert.NotEmpty(t, gen.Generate())
 
-	n := 1000000
+	n := 100000
 	ids := make(map[string]struct{}, n)
 	for i := 0; i < n; i++ {
 		id := string(gen.Generate())

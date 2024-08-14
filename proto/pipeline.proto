@@ -83,9 +83,6 @@ message Dispatch {
 
 message Merge {
   bool sinkScan = 1;
-  bool partial = 2;
-  int32 start_idx = 3;
-  int32 end_idx = 4;
 }
 
 message MultiArguemnt{
@@ -569,12 +566,10 @@ message Pipeline {
   NodeInfo node = 10;
   int32 push_down_info = 11;
   int32 children_count = 12;
-  repeated int32 channel_buffer_size = 13;
-  repeated int32 nil_batch_cnt = 14;
 
-  repeated UuidToRegIdx uuids_to_reg_idx = 15;
-  int32 build_idx = 16;
-  int32 shuffle_idx = 17;
+  repeated UuidToRegIdx uuids_to_reg_idx = 13;
+  int32 build_idx = 14;
+  int32 shuffle_idx = 15;
 }
 
 message WrapNode {

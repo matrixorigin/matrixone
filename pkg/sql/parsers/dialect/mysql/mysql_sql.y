@@ -4330,13 +4330,9 @@ show_create_stmt:
             AtTsExpr: $5,
         }
     }
-|   SHOW CREATE DATABASE not_exists_opt db_name table_snapshot_opt
+|   SHOW CREATE DATABASE not_exists_opt db_name
     {
-        $$ = &tree.ShowCreateDatabase{
-            IfNotExists: $4,
-            Name: $5,
-            AtTsExpr: $6,
-        }
+        $$ = &tree.ShowCreateDatabase{IfNotExists: $4, Name: $5}
     }
 |   SHOW CREATE PUBLICATION db_name
     {

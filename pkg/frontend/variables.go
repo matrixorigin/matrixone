@@ -957,7 +957,7 @@ type GlobalSysVarsMgr struct {
 
 // Get return sys vars of accountId
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context) (*SystemVariables, error) {
-	sysVarsMp, err := ses.getGlobalSysVars(ctx)
+	sysVars, err := ses.getGlobalSysVars(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -965,12 +965,10 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 	m.Lock()
 	defer m.Unlock()
 
-	if sysVars, ok := m.accountsGlobalSysVarsMap[accountId]; ok {
-		sysVars.mu.Lock()
-		sysVars.mp = sysVarsMp
-		sysVars.mu.Unlock()
+	if _, ok := m.accountsGlobalSysVarsMap[accountId]; ok {
+		m.accountsGlobalSysVarsMap[accountId].sysVars = sysVars
 	} else {
-		m.accountsGlobalSysVarsMap[accountId] = &SystemVariables{mp: sysVarsMp}
+		m.accountsGlobalSysVarsMap[accountId] = &SystemVariables{sysVars: sysVars}
 	}
 	return m.accountsGlobalSysVarsMap[accountId], nil
 }
@@ -989,32 +987,32 @@ var GSysVarsMgr = &GlobalSysVarsMgr{
 type SystemVariables struct {
 	mu sync.Mutex
 	// name -> value/default
-	mp map[string]interface{}
+	sysVars map[string]interface{}
 }
 
 // Clone returns a copy of sv
 func (sv *SystemVariables) Clone() *SystemVariables {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	mp := make(map[string]interface{}, len(sv.mp))
-	for name, value := range sv.mp {
-		mp[name] = value
+	sysVars := make(map[string]interface{}, len(sv.sysVars))
+	for name, value := range sv.sysVars {
+		sysVars[name] = value
 	}
-	return &SystemVariables{mp: mp}
+	return &SystemVariables{sysVars: sysVars}
 }
 
 func (sv *SystemVariables) Get(name string) interface{} {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
 	name = strings.ToLower(name)
-	return sv.mp[name]
+	return sv.sysVars[name]
 }
 
 func (sv *SystemVariables) Set(name string, value interface{}) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
 	name = strings.ToLower(name)
-	sv.mp[name] = value
+	sv.sysVars[name] = value
 }
 
 // definitions of system variables
@@ -1040,7 +1038,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("max_allowed_packet", 1024, 67108864, false),
+		Type:              InitSystemVariableIntType("max_allowed_packet", 1024, 1073741824, false),
 		Default:           int64(67108864),
 	},
 	"version_comment": {

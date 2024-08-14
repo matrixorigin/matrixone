@@ -21,7 +21,6 @@ import (
 	"math"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -31,7 +30,6 @@ import (
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 const CHAN_CAPACITY = 10000
@@ -285,9 +283,6 @@ func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch 
 	}
 }
 
-const bufferInitSize = 128 * mpool.KB
-const backOffThreshold = mpool.MB / bufferInitSize
-
 func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, table.ExportRequests] {
 	return &mfsetETL{
 		mfset: mfset{
@@ -296,20 +291,12 @@ func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFami
 			sampleThreshold: c.opts.sampleThreshold,
 		},
 		collector: c,
-		// for backoff strategy
-		bufferPool:             &sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 0, bufferInitSize)) }},
-		bufferBackOffThreshold: backOffThreshold,
 	}
 }
 
 type mfsetETL struct {
 	mfset
 	collector *metricFSCollector
-	// bufferPool adapt backoff strategy
-	bufferPool  *sync.Pool
-	bufferCount atomic.Int32
-	// bufferBackOffThreshold check backoff case.
-	bufferBackOffThreshold int32
 }
 
 // GetBatch implements table.Table.GetBatch.
@@ -324,7 +311,7 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 		if !exist {
 			w = s.collector.writerFactory.GetRowWriter(ctx, row.GetAccount(), row.Table, ts)
 			if setter, ok := (w).(table.BufferSettable); ok && setter.NeedBuffer() {
-				setter.SetBuffer(s.getBuffer(), s.putBuffer)
+				setter.SetBuffer(getBuffer(), func(buf *bytes.Buffer) { putBuffer(buf) })
 			}
 			writer[row.Table.GetName()] = w
 		}
@@ -395,7 +382,7 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 
 	reqs := make([]table.WriteRequest, 0, len(writer))
 	for _, w := range writer {
-		reqs = append(reqs, table.NewRowRequest(w, s /*table.BackOff*/))
+		reqs = append(reqs, table.NewRowRequest(w))
 	}
 
 	return reqs
@@ -409,21 +396,12 @@ func localTimeStr(value int64) string {
 	return time.UnixMicro(value).In(time.Local).Format("2006-01-02 15:04:05.000000")
 }
 
-func (s *mfsetETL) getBuffer() *bytes.Buffer {
-	v2.TraceMOLoggerBufferMetricAlloc.Inc()
-	s.bufferCount.Add(1)
-	return s.bufferPool.Get().(*bytes.Buffer)
+var bufferPool = sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 0, mpool.MB)) }}
+
+func getBuffer() *bytes.Buffer {
+	return bufferPool.Get().(*bytes.Buffer)
 }
-func (s *mfsetETL) putBuffer(b *bytes.Buffer) {
+func putBuffer(b *bytes.Buffer) {
 	b.Reset()
-	s.bufferPool.Put(b)
-	v2.TraceMOLoggerBufferMetricFree.Inc()
-	s.bufferCount.Add(-1)
-}
-
-var _ table.BackOff = (*mfsetETL)(nil)
-
-// Count implement table.BackOff
-func (s *mfsetETL) Count() bool {
-	return s.bufferCount.Load() <= s.bufferBackOffThreshold
+	bufferPool.Put(b)
 }

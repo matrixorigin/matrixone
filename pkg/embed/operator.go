@@ -73,7 +73,6 @@ type service interface {
 func newService(
 	file string,
 	index int,
-	adjust func(*operator),
 ) (*operator, error) {
 	cfg := newServiceConfig()
 	if err := parseConfigFromFile(file, &cfg); err != nil {
@@ -90,10 +89,6 @@ func newService(
 		sid:         cfg.mustGetServiceUUID(),
 		serviceType: cfg.mustGetServiceType(),
 	}
-	if adjust != nil {
-		adjust(op)
-	}
-	op.sid = op.cfg.mustGetServiceUUID()
 	return op, nil
 }
 

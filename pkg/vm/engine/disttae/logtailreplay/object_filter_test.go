@@ -12,16 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ctl
+package logtailreplay
 
 import (
 	"encoding/binary"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
+	"testing"
 )
 
 func TestOverlap(t *testing.T) {
@@ -39,12 +38,12 @@ func TestOverlap(t *testing.T) {
 		binary.LittleEndian.PutUint32(bs, 15)
 		index.UpdateZM(zm2, bs)
 
-		stats1 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSortKeyZoneMap(stats1, zm)
-		stats2 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSortKeyZoneMap(stats2, zm2)
+		info1 := ObjectInfo{}
+		objectio.SetObjectStatsSortKeyZoneMap(&info1.ObjectStats, zm)
+		info2 := ObjectInfo{}
+		objectio.SetObjectStatsSortKeyZoneMap(&info2.ObjectStats, zm2)
 
-		result, _ := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2})
+		result := NewOverlap(10).Filter([]ObjectInfo{info1, info2})
 		require.Equal(t, 2, len(result))
 	}
 
@@ -62,12 +61,12 @@ func TestOverlap(t *testing.T) {
 		binary.LittleEndian.PutUint32(bs, 15)
 		index.UpdateZM(zm2, bs)
 
-		stats1 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSortKeyZoneMap(stats1, zm)
-		stats2 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSortKeyZoneMap(stats2, zm2)
+		info1 := ObjectInfo{}
+		objectio.SetObjectStatsSortKeyZoneMap(&info1.ObjectStats, zm)
+		info2 := ObjectInfo{}
+		objectio.SetObjectStatsSortKeyZoneMap(&info2.ObjectStats, zm2)
 
-		result, _ := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2})
+		result := NewOverlap(10).Filter([]ObjectInfo{info1, info2})
 		require.Equal(t, 2, len(result))
 	}
 
@@ -85,12 +84,12 @@ func TestOverlap(t *testing.T) {
 		binary.LittleEndian.PutUint32(bs, 15)
 		index.UpdateZM(zm2, bs)
 
-		stats1 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSortKeyZoneMap(stats1, zm)
-		stats2 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSortKeyZoneMap(stats2, zm2)
+		info1 := ObjectInfo{}
+		objectio.SetObjectStatsSortKeyZoneMap(&info1.ObjectStats, zm)
+		info2 := ObjectInfo{}
+		objectio.SetObjectStatsSortKeyZoneMap(&info2.ObjectStats, zm2)
 
-		result, _ := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2})
+		result := NewOverlap(10).Filter([]ObjectInfo{info1, info2})
 		require.Equal(t, 2, len(result))
 	}
 
@@ -114,14 +113,14 @@ func TestOverlap(t *testing.T) {
 		binary.LittleEndian.PutUint32(bs, 15)
 		index.UpdateZM(zm3, bs)
 
-		stats1 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSortKeyZoneMap(stats1, zm)
-		stats2 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSortKeyZoneMap(stats2, zm2)
-		stats3 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSortKeyZoneMap(stats3, zm3)
+		info1 := ObjectInfo{}
+		objectio.SetObjectStatsSortKeyZoneMap(&info1.ObjectStats, zm)
+		info2 := ObjectInfo{}
+		objectio.SetObjectStatsSortKeyZoneMap(&info2.ObjectStats, zm2)
+		info3 := ObjectInfo{}
+		objectio.SetObjectStatsSortKeyZoneMap(&info3.ObjectStats, zm3)
 
-		result, _ := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2, *stats3})
+		result := NewOverlap(10).Filter([]ObjectInfo{info1, info2, info3})
 		require.Equal(t, 3, len(result))
 	}
 
@@ -145,14 +144,14 @@ func TestOverlap(t *testing.T) {
 		binary.LittleEndian.PutUint32(bs, 15)
 		index.UpdateZM(zm3, bs)
 
-		stats1 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSortKeyZoneMap(stats1, zm)
-		stats2 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSortKeyZoneMap(stats2, zm2)
-		stats3 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSortKeyZoneMap(stats3, zm3)
+		info1 := ObjectInfo{}
+		objectio.SetObjectStatsSortKeyZoneMap(&info1.ObjectStats, zm)
+		info2 := ObjectInfo{}
+		objectio.SetObjectStatsSortKeyZoneMap(&info2.ObjectStats, zm2)
+		info3 := ObjectInfo{}
+		objectio.SetObjectStatsSortKeyZoneMap(&info3.ObjectStats, zm3)
 
-		result, _ := NewOverlap(10).Filter([]objectio.ObjectStats{*stats1, *stats2, *stats3})
+		result := NewOverlap(10).Filter([]ObjectInfo{info1, info2, info3})
 		require.Equal(t, 2, len(result))
 	}
 }

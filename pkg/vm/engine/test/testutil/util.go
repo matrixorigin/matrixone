@@ -202,7 +202,7 @@ func NewDefaultTableReader(
 		snapshotTS,
 		expr,
 		source,
-	)
+	), nil
 }
 
 type EnginePack struct {
