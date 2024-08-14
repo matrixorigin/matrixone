@@ -220,8 +220,8 @@ drop database sub_db1;
 create database db4;
 use db4;
 create table t4(a int);
-create publication pubname4 database db4 comment 'publication to all tenant';
-create publication pubname4_1 database db4 comment 'publication to all tenant';
+create publication pubname4 database db4 account all comment 'publication to all tenant';
+create publication pubname4_1 database db4 account all comment 'publication to all tenant';
 create database sub_db4 from sys publication pubname4;
 show databases;
 Database
@@ -266,15 +266,13 @@ Tables_in_sub_db4
 t4
 create database sub_db4 from sys publication pubname4;
 create database sub_db4_1 from sys publication pubname4;
-create database sub_db4_2 from sys publication pubname4;
+internal error: publication pubname4 can only be subscribed once
 show databases;
 Database
 information_schema
 mo_catalog
 mysql
 sub_db4
-sub_db4_1
-sub_db4_2
 system
 system_metrics
 use sub_db4;
@@ -339,8 +337,6 @@ information_schema
 mo_catalog
 mysql
 sub_db4
-sub_db4_1
-sub_db4_2
 system
 system_metrics
 use sub_db4;
@@ -391,8 +387,6 @@ information_schema
 mo_catalog
 mysql
 sub_db4
-sub_db4_1
-sub_db4_2
 system
 system_metrics
 use sub_db4;
@@ -438,8 +432,6 @@ mysql
 system
 system_metrics
 drop database sub_db4;
-drop database sub_db4_1;
-drop database sub_db4_2;
 show databases;
 Database
 information_schema
@@ -450,19 +442,17 @@ system_metrics
 create database db1;
 create publication pubname5 database db1 account sys comment 'publication to sys tenant';
 create database sub_db5 from test_tenant_1 publication pubname5;
-create publication test_pubname database sub_db5 comment 'publication to all tenant';
+create publication test_pubname database sub_db5 account all comment 'publication to all tenant';
 internal error: database 'sub_db5' is not a user database
 drop publication pubname5;
 drop database sub_db5;
-create publication pubname5 database db1 comment 'publication to sys tenant';
+create publication pubname5 database db1 account sys comment 'publication to sys tenant';
 create database sub_db5 from test_tenant_1 publication pubname5;
 use sub_db5;
 create table t1 (a int);
 internal error: cannot create table in subscription database
 create view test_view as select 1;
 internal error: cannot create view in subscription database
-create database sub_db5 from test_tenant_1 publication pubname5;
-create database sub_db5 from test_tenant_1 publication pubname5;
 drop publication pubname5;
 drop database db1;
 show databases;
@@ -481,22 +471,6 @@ mo_debug
 mo_task
 mysql
 publish_subscribe
-system
-system_metrics
-drop database sub_db5;
-show databases;
-Database
-information_schema
-mo_catalog
-mysql
-system
-system_metrics
-drop database sub_db5;
-show databases;
-Database
-information_schema
-mo_catalog
-mysql
 system
 system_metrics
 create database db7;
@@ -530,12 +504,12 @@ null    null    200    yy
 null    null    300    zz
 select * from t1 union select * from t2;
 a    b
-100    xx
-200    yy
-300    zz
 1    a
 2    b
 3    c
+100    xx
+200    yy
+300    zz
 create database db1;
 use db1;
 create table t3 (a int, b varchar(225));
@@ -581,12 +555,12 @@ show create publication pubname6;
 Publication    Create Publication
 pubname6    CREATE PUBLICATION pubname6 DATABASE db6 ACCOUNT test_tenant_1
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-pubname6    db6    2024-02-27 19:16:04    null    test_tenant_1    publication to test_tenant_1
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pubname6    db6    *    test_tenant_1        2024-08-02 14:57:54    null    publication to test_tenant_1
 create database sub_db6 from sys publication pubname6;
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-pubname6    sys    db6    2024-02-27 19:16:04    sub_db6    2024-02-27 19:16:04
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pubname6    sys    db6    *    publication to test_tenant_1    2024-08-02 14:57:54    sub_db6    2024-08-02 14:57:54    0
 show create database sub_db6;
 Database    Create Database
 sub_db6    create database sub_db6 from sys publication pubname6
@@ -611,8 +585,8 @@ drop publication pubname7;
 drop database db7;
 drop database sub_db1;
 create database db100;
-create publication pubname8 database db100 commment 'publication failed';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 51 near " commment 'publication failed';";
+create publication pubname8 database db100 account all commment 'publication failed';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 63 near " commment 'publication failed';";
 drop database db100;
 create database sub_db7 from sys publication pubname7;
 internal error: there is no publication pubname7
@@ -631,47 +605,48 @@ drop database test_db;
 create database sub_db4 from no_exists publication pubname4;
 internal error: there is no publication account no_exists
 create publication test_pubname database mo_task account test_account comment 'publication to test_account tenant';
-internal error: invalid database name 'mo_task', not support publishing system database
+internal error: not existed account name 'test_account'
 create publication test_pubname database information_schema account test_account comment 'publication to test_account tenant';
-internal error: invalid database name 'information_schema', not support publishing system database
+internal error: not existed account name 'test_account'
 create publication test_pubname database mysql account test_account comment 'publication to test_account tenant';
-internal error: invalid database name 'mysql', not support publishing system database
+internal error: not existed account name 'test_account'
 create publication test_pubname database system_metrics account test_account comment 'publication to test_account tenant';
-internal error: invalid database name 'system_metrics', not support publishing system database
+internal error: not existed account name 'test_account'
 create publication test_pubname database system account test_account comment 'publication to test_account tenant';
-internal error: invalid database name 'system', not support publishing system database
+internal error: not existed account name 'test_account'
 create publication test_pubname database mo_catalog account test_account comment 'publication to test_account tenant';
-internal error: invalid database name 'mo_catalog', not support publishing system database
+internal error: not existed account name 'test_account'
 create database db5;
-create publication pubname5 database db5 comment 'publication to all tenant';
+create publication pubname5 database db5 account all comment 'publication to all tenant';
 create database sub_db5 from sys publication pubname5;
 internal error: can not subscribe to self
 drop publication pubname5;
 drop database db5;
 show publications;
-publication    database    create_time    update_time    sub_account    comments
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 show publications;
-publication    database    create_time    update_time    sub_account    comments
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 show publications;
-publication    database    create_time    update_time    sub_account    comments
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 show publications;
-publication    database    create_time    update_time    sub_account    comments
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 show publications;
-publication    database    create_time    update_time    sub_account    comments
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 show publications;
-publication    database    create_time    update_time    sub_account    comments
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pubname4    sys    null    null    null    null    sub_db4    2024-08-09 15:57:54    2
 drop account test_tenant_1;
 drop account test_tenant_2;
 drop account test_tenant_3;

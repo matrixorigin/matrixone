@@ -38,7 +38,7 @@ func (s *taeStorage) Write(
 	}
 }
 
-func HandleWrite[PReq unmashaler[Req], PResp mashaler[Resp], Req, Resp any](
+func HandleWrite[PReq unmarshaler[Req], PResp marshaller[Resp], Req, Resp any](
 	ctx context.Context,
 	meta txn.TxnMeta,
 	payload []byte,

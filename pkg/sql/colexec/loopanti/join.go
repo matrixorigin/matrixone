@@ -88,7 +88,6 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				if loopAnti.ctr.buf.RowCount() == 0 {
-					proc.PutBatch(loopAnti.ctr.buf)
 					loopAnti.ctr.buf = nil
 					continue
 				}
@@ -104,7 +103,6 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			if loopAnti.ctr.lastrow == 0 {
-				proc.PutBatch(loopAnti.ctr.buf)
 				loopAnti.ctr.buf = nil
 			}
 

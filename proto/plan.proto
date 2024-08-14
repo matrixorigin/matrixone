@@ -162,6 +162,7 @@ message SubscriptionMeta{
 	string db_name = 3; // pubDbName
 	string account_name = 4;// pubAccountName
 	string sub_name = 5; // subName(subscription side db name)
+	string tables = 6; // pubTables (separated by ',')
 }
 
 message Function {
@@ -478,7 +479,6 @@ enum ShuffleType {
 enum ShuffleMethod {
 	Normal = 0;
 	Reuse = 1;
-	Reshuffle = 2;
 }
 
 enum ShuffleTypeForMultiCN {

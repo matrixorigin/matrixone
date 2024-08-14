@@ -739,8 +739,7 @@ type DataSource interface {
 		memFilter any,
 		mp *mpool.MPool,
 		vp VectorPool,
-		bat *batch.Batch,
-	) (*objectio.BlockInfo, DataState, error)
+	) (*batch.Batch, *objectio.BlockInfo, DataState, error)
 
 	ApplyTombstones(
 		ctx context.Context,
@@ -851,7 +850,8 @@ type Relation interface {
 	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 
 	ApproxObjectsNum(ctx context.Context) int
-	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error)
+	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)
+	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
 }
 
 type Reader interface {

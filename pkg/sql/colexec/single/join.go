@@ -98,20 +98,17 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 				return result, nil
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
 			anal.Input(bat, singleJoin.GetIsFirst())
 			if ctr.mp == nil {
 				if err := ctr.emptyProbe(bat, singleJoin, proc, &result); err != nil {
-					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			} else {
 				if err := ctr.probe(bat, singleJoin, proc, &result); err != nil {
-					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
 				}
@@ -125,7 +122,6 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 				}
 			}
 			anal.Output(result.Batch, singleJoin.GetIsLast())
-			proc.PutBatch(bat)
 			return result, nil
 
 		default:

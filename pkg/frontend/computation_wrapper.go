@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -146,28 +145,10 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 	}
 	columns := make([]interface{}, len(cols))
 	for i, col := range cols {
-		c := new(MysqlColumn)
-		c.SetName(col.Name)
-		c.SetOrgName(col.GetOriginCaseName())
-		c.SetTable(col.TblName)
-		c.SetOrgTable(col.TblName)
-		c.SetAutoIncr(col.Typ.AutoIncr)
-		c.SetSchema(col.DbName)
-		err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
+		c, err := colDef2MysqlColumn(ctx, col)
 		if err != nil {
 			return nil, err
 		}
-		setColFlag(c)
-		setColLength(c, col.Typ.Width)
-		setCharacter(c)
-
-		// For binary/varbinary with mysql_type_varchar.Change the charset.
-		if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
-			c.SetCharset(0x3f)
-		}
-
-		c.SetDecimal(col.Typ.Scale)
-		convertMysqlTextTypeToBlobType(c)
 		columns[i] = c
 	}
 	return columns, err
@@ -340,7 +321,7 @@ func replacePlan(reqCtx context.Context, ses *Session, cwft *TxnComputationWrapp
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	for _, obj := range preparePlan.GetSchemas() {
-		newObj, newTableDef := ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
+		newObj, newTableDef := ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName, nil)
 		if newObj == nil {
 			return nil, nil, nil, originSQL, moerr.NewInternalError(reqCtx, "table '%s' in prepare statement '%s' does not exist anymore", obj.ObjName, stmtName)
 		}

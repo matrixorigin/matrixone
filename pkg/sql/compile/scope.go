@@ -185,7 +185,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	if s.DataSource.TableDef != nil {
 		id = s.DataSource.TableDef.TblId
 	}
-	p = pipeline.New(id, s.DataSource.Attributes, s.RootOp, s.Reg)
+	p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 	if s.DataSource.isConst {
 		_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 	} else {
@@ -298,7 +298,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 		}
 	}()
 
-	p := pipeline.NewMerge(s.RootOp, s.Reg)
+	p := pipeline.NewMerge(s.RootOp)
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		select {
 		case <-s.Proc.Ctx.Done():
@@ -356,7 +356,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
 
-	p := pipeline.New(0, nil, s.RootOp, s.Reg)
+	p := pipeline.New(0, nil, s.RootOp)
 	sender, err := s.remoteRun(c)
 
 	runErr := err
@@ -393,7 +393,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		// if codes run here, it means some error happens during build the parallel scope.
 		// we should do clean work for source-scope to avoid receiver hung.
 		if parallelScope == nil {
-			pipeline.NewMerge(s.RootOp, s.Reg).Cleanup(s.Proc, true, c.isPrepare, err)
+			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, true, c.isPrepare, err)
 		}
 	}()
 
@@ -421,6 +421,10 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		return err
 	}
 
+	if parallelScope != s {
+		setContextForParallelScope(parallelScope, s.Proc.Ctx, s.Proc.Cancel)
+	}
+
 	if parallelScope.Magic == Normal {
 		return parallelScope.Run(c)
 	}
@@ -439,11 +443,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if s.ShuffleIdx > 0 { //shuffle join
 		buildScope := c.newJoinBuildScope(s, 1)
 		s.PreScopes = append(s.PreScopes, buildScope)
-		if s.BuildIdx > 1 {
-			probeScope := c.newJoinProbeScopeWithBidx(s)
-			s.PreScopes = append(s.PreScopes, probeScope)
-		}
-		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
+		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx]
 		return s, nil
 	}
 
@@ -699,17 +699,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 	}
 	return nil
-}
-
-func (s *Scope) isShuffle() bool {
-	// the pipeline is merge->group->xxx
-	if s != nil && s.RootOp != nil && s.RootOp.GetOperatorBase().NumChildren() > 0 {
-		op := vm.GetLeafOpParent(nil, s.RootOp)
-		if op.OpType() == vm.Group {
-			return op.(*group.Group).IsShuffle
-		}
-	}
-	return false
 }
 
 func (s *Scope) isRight() bool {
@@ -1134,7 +1123,7 @@ func (s *Scope) replace(c *Compile) error {
 
 	delAffectedRows := uint64(0)
 	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond))
+		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond), NoAccountId)
 		if err != nil {
 			return err
 		}
@@ -1147,7 +1136,7 @@ func (s *Scope) replace(c *Compile) error {
 	} else {
 		sql = "insert " + c.sql[7:]
 	}
-	result, err := c.runSqlWithResult(sql)
+	result, err := c.runSqlWithResult(sql, NoAccountId)
 	if err != nil {
 		return err
 	}
