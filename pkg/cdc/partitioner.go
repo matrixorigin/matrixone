@@ -47,6 +47,11 @@ func (p tableIdPartitioner) Run(ctx context.Context, ar *ActiveRoutine) {
 				decoderInput := entry.Value
 				p.q.Pop()
 
+				//TODO:process heartbeat.to decoder? to sinker?
+				if decoderInput.IsHeartbeat() {
+					continue
+				}
+
 				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Partitioner: {%v} [%v(%v)].[%v(%v)]\n",
 					decoderInput.TS(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
 

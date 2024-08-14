@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,7 +39,6 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"go.uber.org/zap"
 )
 
 const (
@@ -802,6 +803,11 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 			Value: tableId,
 		})
 	}
+	//dbid 0, tableid 0 reserved for heartbeat
+	dbTableIds = append(dbTableIds, tools.Pair[uint64, uint64]{
+		Key:   0,
+		Value: 0,
+	})
 
 	//                         + == inputCh == > decoder == interCh == > sinker -> remote db    // for table 1
 	// 	                       |
@@ -854,6 +860,10 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	ch := make(chan int, 1)
 	cdcTables := make([]*disttae.CdcRelation, 0)
 	for i, pair := range dbTableIds {
+		//skip heartbeat
+		if pair.Key == 0 || pair.Value == 0 {
+			continue
+		}
 		cdcTbl := disttae.NewCdcRelation(
 			dbTables[i].Key,
 			dbTables[i].Value,

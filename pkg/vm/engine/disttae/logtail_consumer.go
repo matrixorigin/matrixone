@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"strings"
 	"sync"
@@ -1595,6 +1596,13 @@ func dispatchUpdateResponse(
 		recIndex := table.TbId % consumerNumber
 		recRoutines[recIndex].sendTableLogTail(list[index], receiveAt)
 	}
+
+	//update heartbeat
+	if e.IsCdcEngine() && len(list) == 0 {
+		idx := rand.Intn(consumerNumber)
+		recRoutines[idx].sendHeartbeat(*response.To, receiveAt)
+	}
+
 	// should update all the timestamp.
 	e.PushClient().receivedLogTailTime.updateTimestamp(consumerNumber, *response.To, receiveAt)
 	for _, rc := range recRoutines {
@@ -1683,6 +1691,15 @@ func (rc *routineController) close() {
 	rc.closeChan <- true
 }
 
+func (rc *routineController) sendHeartbeat(t timestamp.Timestamp, at time.Time) {
+	if l := len(rc.signalChan); l > rc.warningBufferLen {
+		rc.warningBufferLen = l
+		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
+	}
+
+	rc.signalChan <- cmdToConsumeHeartbeat{time: t, receiveAt: at}
+}
+
 func (c *PushClient) createRoutineToConsumeLogTails(
 	ctx context.Context, routineId int, signalBufferLength int, e TempEngine,
 ) routineController {
@@ -1756,6 +1773,10 @@ type cmdToConsumeUnSub struct {
 	log       *logtail.UnSubscribeResponse
 	receiveAt time.Time
 }
+type cmdToConsumeHeartbeat struct {
+	time      timestamp.Timestamp
+	receiveAt time.Time
+}
 
 func (cmd cmdToConsumeSub) action(ctx context.Context, e TempEngine, ctrl *routineController) error {
 	response := cmd.log
@@ -1786,6 +1807,10 @@ func (cmd cmdToConsumeUnSub) action(ctx context.Context, e TempEngine, ctrl *rou
 	//e.cleanMemoryTableWithTable(table.DbId, table.TbId)
 	e.PushClient().subscribed.setTableUnsubscribe(table.DbId, table.TbId)
 	return nil
+}
+
+func (cmd cmdToConsumeHeartbeat) action(ctx context.Context, e TempEngine, ctrl *routineController) error {
+	return updateHearbeat(ctx, e, cmd.time, cmd.receiveAt)
 }
 
 func consumeSubscribeResponse(
@@ -1944,6 +1969,23 @@ func updatePartitionOfPush(
 	}
 
 	return nil
+}
+
+// updateHearbeat notify the hearbeat to the cdc module
+func updateHearbeat(
+	ctx context.Context,
+	e TempEngine,
+	ts timestamp.Timestamp,
+	receiveAt time.Time,
+) (err error) {
+	tblCtx := TableCtx{}
+	decInput := DecoderInput{
+		isHearbeat: true,
+		ts:         ts,
+		receivedAt: receiveAt,
+	}
+	e.ToCdc(&tblCtx, &decInput)
+	return
 }
 
 // cdcReplayLogtailUnlock replays the logtail for cdc.
