@@ -30,19 +30,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func FilterRowIdForDel(proc *process.Process, bat *batch.Batch,
-	idx int, primaryKeyIdx int) (*batch.Batch, error) {
+func FilterRowIdForDel(proc *process.Process, retBat *batch.Batch, srcBat *batch.Batch,
+	idx int, primaryKeyIdx int) error {
 	sels := proc.Mp().GetSels()
 	defer proc.Mp().PutSels(sels)
-	retBat := batch.NewWithSize(2)
-	retBat.SetAttributes([]string{catalog.Row_ID, "pk"})
-	rowidVec := proc.GetVector(types.T_Rowid.ToType())
-	primaryVec := proc.GetVector(*bat.GetVector(int32(primaryKeyIdx)).GetType())
-	retBat.SetVector(0, rowidVec)
-	retBat.SetVector(1, primaryVec)
+	rowidVec := retBat.Vecs[0]
+	primaryVec := retBat.Vecs[1]
 	rowIdMap := make(map[types.Rowid]bool)
-	nulls := bat.Vecs[idx].GetNulls()
-	for i, r := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
+	nulls := srcBat.Vecs[idx].GetNulls()
+	for i, r := range vector.MustFixedCol[types.Rowid](srcBat.Vecs[idx]) {
 		if !nulls.Contains(uint64(i)) {
 			if rowIdMap[r] {
 				continue
@@ -53,20 +49,18 @@ func FilterRowIdForDel(proc *process.Process, bat *batch.Batch,
 	}
 	uf := vector.GetUnionOneFunction(types.T_Rowid.ToType(), proc.Mp())
 	for _, sel := range sels {
-		if err := uf(rowidVec, bat.Vecs[idx], sel); err != nil {
-			retBat.Clean(proc.Mp())
-			return nil, err
+		if err := uf(rowidVec, srcBat.Vecs[idx], sel); err != nil {
+			return err
 		}
 	}
-	uf = vector.GetUnionOneFunction(*bat.GetVector(int32(primaryKeyIdx)).GetType(), proc.Mp())
+	uf = vector.GetUnionOneFunction(*srcBat.GetVector(int32(primaryKeyIdx)).GetType(), proc.Mp())
 	for _, sel := range sels {
-		if err := uf(primaryVec, bat.Vecs[primaryKeyIdx], sel); err != nil {
-			retBat.Clean(proc.Mp())
-			return nil, err
+		if err := uf(primaryVec, srcBat.Vecs[primaryKeyIdx], sel); err != nil {
+			return err
 		}
 	}
 	retBat.SetRowCount(len(sels))
-	return retBat, nil
+	return nil
 }
 
 // GroupByPartitionForDeleteS3: Group data based on partition and return batch array with the same length as the number of partitions.

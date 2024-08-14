@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package projection
+package value_scan
 
 import (
 	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -29,37 +26,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	Rows = 10 // default rows
-)
-
 // add unit tests for cases
-type projectionTestCase struct {
-	arg   *Projection
-	types []types.Type
-	proc  *process.Process
+type valueScanTestCase struct {
+	arg  *ValueScan
+	proc *process.Process
 }
 
 var (
-	tcs []projectionTestCase
+	tcs []valueScanTestCase
 )
 
 func init() {
-	tcs = []projectionTestCase{
+	tcs = []valueScanTestCase{
 		{
 			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
-			types: []types.Type{
-				types.T_int8.ToType(),
-			},
-			arg: &Projection{
-				ProjectList: []*plan.Expr{
-					{
-						Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-						Typ: plan.Type{
-							Id: int32(types.T_int8),
-						},
-					},
-				},
+			arg: &ValueScan{
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -86,16 +67,16 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
-func TestProjection(t *testing.T) {
+func TestValueScan(t *testing.T) {
 	for _, tc := range tcs {
-		resetChildren(tc.arg)
+		resetBatchs(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		_, _ = tc.arg.Call(tc.proc)
 
 		tc.arg.Reset(tc.proc, false, nil)
 
-		resetChildren(tc.arg)
+		resetBatchs(tc.arg)
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		_, _ = tc.arg.Call(tc.proc)
@@ -105,9 +86,7 @@ func TestProjection(t *testing.T) {
 	}
 }
 
-func resetChildren(arg *Projection) {
+func resetBatchs(arg *ValueScan) {
 	bat := colexec.MakeMockBatchs()
-	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
-	arg.Children = nil
-	arg.AppendChild(op)
+	arg.Batchs = append(arg.Batchs, bat)
 }

@@ -30,7 +30,7 @@ var _ vm.Operator = new(Order)
 const maxBatchSizeToSort = 64 * mpool.MB
 
 type Order struct {
-	ctr *container
+	ctr container
 
 	OrderBySpec []*plan.OrderBySpec
 
@@ -83,30 +83,38 @@ type container struct {
 }
 
 func (order *Order) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	order.Free(proc, pipelineFailed, err)
+	order.cleanBatch(proc)
+	ctr := &order.ctr
+	ctr.state = vm.Build
+	for i := range ctr.sortExprExecutor {
+		if ctr.sortExprExecutor[i] != nil {
+			ctr.sortExprExecutor[i].ResetForNextQuery()
+		}
+	}
+	ctr.resultOrderList = nil
 }
 
 func (order *Order) Free(proc *process.Process, _ bool, err error) {
-	ctr := order.ctr
-	if ctr != nil {
-		for i := range ctr.sortExprExecutor {
-			if ctr.sortExprExecutor[i] != nil {
-				ctr.sortExprExecutor[i].Free()
-			}
+	order.cleanBatch(proc)
+	ctr := &order.ctr
+	for i := range ctr.sortExprExecutor {
+		if ctr.sortExprExecutor[i] != nil {
+			ctr.sortExprExecutor[i].Free()
 		}
+	}
+	ctr.sortExprExecutor = nil
+	ctr.resultOrderList = nil
+}
 
-		ctr.sortExprExecutor = nil
-
-		if ctr.batWaitForSort != nil {
-			ctr.batWaitForSort.Clean(proc.Mp())
-			ctr.batWaitForSort = nil
-		}
-		if ctr.rbat != nil {
-			ctr.rbat.Clean(proc.Mp())
-			ctr.rbat = nil
-		}
-		ctr.resultOrderList = nil
-
-		order.ctr = nil
+func (order *Order) cleanBatch(proc *process.Process) {
+	//big memory, just clean
+	ctr := &order.ctr
+	if ctr.batWaitForSort != nil {
+		ctr.batWaitForSort.Clean(proc.Mp())
+		ctr.batWaitForSort = nil
+	}
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(proc.Mp())
+		ctr.rbat = nil
 	}
 }

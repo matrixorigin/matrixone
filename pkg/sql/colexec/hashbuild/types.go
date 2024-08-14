@@ -34,7 +34,6 @@ const (
 	BuildHashMap = iota
 	HandleRuntimeFilter
 	SendJoinMap
-	End
 )
 
 type container struct {
@@ -44,7 +43,7 @@ type container struct {
 	multiSels          [][]int32
 	batches            []*batch.Batch
 	inputBatchRowCount int
-	tmpBatch           *batch.Batch
+	buf                *batch.Batch
 
 	executor []colexec.ExpressionExecutor
 	vecs     [][]*vector.Vector
@@ -56,7 +55,7 @@ type container struct {
 }
 
 type HashBuild struct {
-	ctr *container
+	ctr container
 	// need to generate a push-down filter expression
 	NeedExpr          bool
 	NeedHashMap       bool
@@ -103,21 +102,38 @@ func (hashBuild *HashBuild) Release() {
 }
 
 func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	hashBuild.Free(proc, pipelineFailed, err)
+	ctr := &hashBuild.ctr
+	ctr.state = BuildHashMap
+	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
+	if ctr.batches != nil {
+		ctr.batches = ctr.batches[:0]
+	}
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
+	ctr.intHashMap = nil
+	ctr.strHashMap = nil
+	if ctr.multiSels != nil {
+		ctr.multiSels = ctr.multiSels[:0]
+	}
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].ResetForNextQuery()
+		}
+	}
 }
 
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := hashBuild.ctr
+	ctr := &hashBuild.ctr
 	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
-	if ctr != nil {
-		ctr.batches = nil
-		ctr.intHashMap = nil
-		ctr.strHashMap = nil
-		ctr.multiSels = nil
-		ctr.cleanEvalVectors()
-		hashBuild.ctr = nil
-	}
+	ctr.batches = nil
+	ctr.buf = nil
+	ctr.intHashMap = nil
+	ctr.strHashMap = nil
+	ctr.multiSels = nil
+	ctr.cleanEvalVectors()
 }
 
 func (ctr *container) cleanEvalVectors() {

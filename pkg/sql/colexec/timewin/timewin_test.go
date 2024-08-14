@@ -12,61 +12,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package projection
+package timewin
 
 import (
 	"bytes"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-)
-
-const (
-	Rows = 10 // default rows
+	"testing"
 )
 
 // add unit tests for cases
-type projectionTestCase struct {
-	arg   *Projection
-	types []types.Type
-	proc  *process.Process
+type timeWinTestCase struct {
+	arg  *TimeWin
+	proc *process.Process
 }
 
 var (
-	tcs []projectionTestCase
+	tcs []timeWinTestCase
 )
 
 func init() {
-	tcs = []projectionTestCase{
+	tcs = []timeWinTestCase{
 		{
 			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
-			types: []types.Type{
-				types.T_int8.ToType(),
-			},
-			arg: &Projection{
-				ProjectList: []*plan.Expr{
-					{
-						Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-						Typ: plan.Type{
-							Id: int32(types.T_int8),
-						},
-					},
+			arg: &TimeWin{
+				WStart: true,
+				WEnd:   true,
+				Types: []types.Type{
+					types.T_datetime.ToType(),
 				},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
+				Aggs: []aggexec.AggFuncExecExpression{
+					aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(1)}, nil),
 				},
+				Ts:       newExpression(0),
+				Interval: makeInterval(),
 			},
 		},
 	}
@@ -86,7 +72,7 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
-func TestProjection(t *testing.T) {
+func TestTimeWin(t *testing.T) {
 	for _, tc := range tcs {
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
@@ -105,9 +91,27 @@ func TestProjection(t *testing.T) {
 	}
 }
 
-func resetChildren(arg *Projection) {
-	bat := colexec.MakeMockBatchs()
+func resetChildren(arg *TimeWin) {
+	bat := colexec.MakeMockTimeWinBatchs()
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
+}
+
+func newExpression(pos int32) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				ColPos: pos,
+			},
+		},
+	}
+}
+
+func makeInterval() *Interval {
+	return &Interval{
+		Typ: types.Second,
+		Val: 1,
+	}
 }

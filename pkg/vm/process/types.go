@@ -341,6 +341,8 @@ func (sp *StmtProfile) GetStmtId() uuid.UUID {
 type BaseProcess struct {
 	// sqlContext includes the client context and the query context.
 	sqlContext QueryBaseContext
+	// atRuntime indicates whether the process is running in runtime.
+	atRuntime bool
 
 	StmtProfile *StmtProfile
 	// Id, query id.
@@ -515,6 +517,14 @@ func (proc *Process) GetCloneTxnOperator() client.TxnOperator {
 
 func (proc *Process) GetTxnOperator() client.TxnOperator {
 	return proc.Base.TxnOperator
+}
+
+func (proc *Process) GetBaseProcessRunningStatus() bool {
+	return proc.Base.atRuntime
+}
+
+func (proc *Process) SetBaseProcessRunningStatus(status bool) {
+	proc.Base.atRuntime = status
 }
 
 // Operator Resource Analzyer

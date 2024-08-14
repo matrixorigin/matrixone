@@ -16,12 +16,9 @@ package indexbuild
 
 import (
 	"bytes"
-	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -40,7 +37,6 @@ func (indexBuild *IndexBuild) Prepare(proc *process.Process) (err error) {
 	if indexBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in index build!")
 	}
-	indexBuild.ctr = new(container)
 	return nil
 }
 
@@ -53,7 +49,7 @@ func (indexBuild *IndexBuild) Call(proc *process.Process) (vm.CallResult, error)
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
-	ctr := indexBuild.ctr
+	ctr := &indexBuild.ctr
 	for {
 		switch ctr.state {
 		case ReceiveBatch:
@@ -68,10 +64,6 @@ func (indexBuild *IndexBuild) Call(proc *process.Process) (vm.CallResult, error)
 			}
 			ctr.state = End
 		default:
-			if ctr.batch != nil {
-				proc.PutBatch(ctr.batch)
-				ctr.batch = nil
-			}
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -80,7 +72,6 @@ func (indexBuild *IndexBuild) Call(proc *process.Process) (vm.CallResult, error)
 }
 
 func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	var currentBatch *batch.Batch
 	for {
 		result, err := vm.ChildrenCall(indexBuild.GetChildren(0), proc, anal)
 		if err != nil {
@@ -89,23 +80,19 @@ func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.
 		if result.Batch == nil {
 			break
 		}
-		currentBatch = result.Batch
-		atomic.AddInt64(&currentBatch.Cnt, 1)
-		if currentBatch.IsEmpty() {
-			proc.PutBatch(currentBatch)
+		if result.Batch.IsEmpty() {
 			continue
 		}
 
-		anal.Input(currentBatch, isFirst)
-		anal.Alloc(int64(currentBatch.Size()))
-		ctr.batch, err = ctr.batch.AppendWithCopy(proc.Ctx, proc.Mp(), currentBatch)
+		anal.Input(result.Batch, isFirst)
+		anal.Alloc(int64(result.Batch.Size()))
+		ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 		if err != nil {
 			return err
 		}
-		proc.PutBatch(currentBatch)
 
 		// If read index table data exceeds the UpperLimit, abandon reading data from index table
-		if ctr.batch.RowCount() > int(indexBuild.RuntimeFilterSpec.UpperLimit) {
+		if ctr.buf.RowCount() > int(indexBuild.RuntimeFilterSpec.UpperLimit) {
 			// for index build, can exit early
 			return nil
 		}
@@ -129,7 +116,7 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
-	} else if ctr.batch == nil || ctr.batch.RowCount() == 0 {
+	} else if ctr.buf == nil || ctr.buf.RowCount() == 0 {
 		runtimeFilter.Typ = message.RuntimeFilter_DROP
 		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
@@ -137,15 +124,15 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 
 	inFilterCardLimit := ap.RuntimeFilterSpec.UpperLimit
 
-	if ctr.batch.RowCount() > int(inFilterCardLimit) {
+	if ctr.buf.RowCount() > int(inFilterCardLimit) {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	} else {
-		if len(ctr.batch.Vecs) != 1 {
+		if len(ctr.buf.Vecs) != 1 {
 			panic("there must be only 1 vector in index build batch")
 		}
-		vec := ctr.batch.Vecs[0]
+		vec := ctr.buf.Vecs[0]
 		vec.InplaceSort()
 		data, err := vec.MarshalBinary()
 		if err != nil {
