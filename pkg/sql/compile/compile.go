@@ -2230,21 +2230,13 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 	return []*Scope{rs}
 }
 
-func (c *Compile) isSingleParallelJoin(rs, buildScopes []*Scope) bool {
-	if c.IsTpQuery() {
-		return true
-	}
-	return false
-	//return c.IsSingleScope(rs) && len(buildScopes) == 1
-}
-
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
 		return c.compileShuffleJoin(node, left, right, probeScopes, buildScopes)
 	}
 	var rs []*Scope
 	rs, buildScopes = c.compileBroadcastJoin(node, left, right, probeScopes, buildScopes)
-	if c.isSingleParallelJoin(rs, buildScopes) {
+	if c.IsTpQuery() {
 		//construct join build operator for tp join
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, rs[0].RootOp), false, 1))
 		buildScopes[0].IsEnd = true
@@ -3496,7 +3488,7 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		rs[i].BuildIdx = len(rs[i].Proc.Reg.MergeReceivers)
 	}
 
-	if c.isSingleParallelJoin(rs, buildScopes) {
+	if c.IsTpQuery() {
 		// for tp join, can directly return
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 		return rs, buildScopes
