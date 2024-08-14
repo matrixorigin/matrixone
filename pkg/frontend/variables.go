@@ -3606,7 +3606,7 @@ type UserDefinedVar struct {
 	Sql   string
 }
 
-func autocommitValue(ctx context.Context, ses FeSession) (bool, error) {
+func autocommitValue(ses FeSession) (bool, error) {
 	value, err := ses.GetSessionSysVar("autocommit")
 	if err != nil {
 		return false, err
