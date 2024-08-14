@@ -716,10 +716,10 @@ func (ses *Session) UpdateDebugString() {
 	sb.WriteByte('|')
 	//account info
 	if ses.tenant != nil {
-		sb.WriteString(ses.tenant.String())
+		sb.WriteString(fmt.Sprintf("account %s:%s", ses.tenant.GetTenant(), ses.tenant.GetUser()))
 	} else {
 		acc := getDefaultAccount()
-		sb.WriteString(acc.String())
+		sb.WriteString(fmt.Sprintf("account %s:%s", acc.GetTenant(), acc.GetUser()))
 	}
 	sb.WriteByte('|')
 	//go routine id
