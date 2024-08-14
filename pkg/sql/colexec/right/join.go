@@ -70,7 +70,7 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	analyze := proc.GetAnalyze(rightJoin.GetIdx(), rightJoin.GetParallelIdx(), rightJoin.GetParallelMajor())
 	analyze.Start()
 	defer analyze.Stop()
-	ctr := rightJoin.ctr
+	ctr := &rightJoin.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
