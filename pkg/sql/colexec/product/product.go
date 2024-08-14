@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -39,8 +41,6 @@ func (product *Product) OpType() vm.OpType {
 }
 
 func (product *Product) Prepare(proc *process.Process) error {
-	ap := product
-	ap.ctr = new(container)
 	if product.ProjectList != nil {
 		return product.PrepareProjection(proc)
 	}
@@ -56,7 +56,7 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 	ap := product
-	ctr := ap.ctr
+	ctr := &ap.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
@@ -79,16 +79,25 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				if ctr.inBat.IsEmpty() {
-					proc.PutBatch(ctr.inBat)
-					ctr.inBat = nil
 					continue
 				}
 				if ctr.bat == nil {
-					proc.PutBatch(ctr.inBat)
-					ctr.inBat = nil
 					continue
 				}
 				anal.Input(ctr.inBat, product.GetIsFirst())
+			}
+
+			if ctr.rbat == nil {
+				ctr.rbat = batch.NewWithSize(len(product.Result))
+				for i, rp := range product.Result {
+					if rp.Rel == 0 {
+						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inBat.Vecs[rp.Pos].GetType())
+					} else {
+						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType())
+					}
+				}
+			} else {
+				ctr.rbat.CleanOnlyData()
 			}
 
 			if err := ctr.probe(ap, proc, &result); err != nil {
@@ -129,6 +138,7 @@ func (product *Product) build(proc *process.Process, anal process.Analyze) error
 			return err
 		}
 	}
+	mp.Free()
 	return nil
 }
 
