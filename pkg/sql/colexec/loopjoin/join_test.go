@@ -83,17 +83,15 @@ func TestJoin(t *testing.T) {
 		require.Equal(t, res.Batch == nil, true)
 		res, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		/*
-			require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
-			require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
-			for i := range res.Batch.Vecs {
-				vec1 := res.Batch.Vecs[i]
-				vec2 := tc.resultBatch.Vecs[i]
-				require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
-				require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
-				require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
-			}
-		*/
+		require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
+		require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
+		for i := range res.Batch.Vecs {
+			vec1 := res.Batch.Vecs[i]
+			vec2 := tc.resultBatch.Vecs[i]
+			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
+			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
+			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
+		}
 
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
@@ -111,17 +109,15 @@ func TestJoin(t *testing.T) {
 		require.Equal(t, res.Batch == nil, true)
 		res, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		/*
-			require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
-			require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
-			for i := range res.Batch.Vecs {
-				vec1 := res.Batch.Vecs[i]
-				vec2 := tc.resultBatch.Vecs[i]
-				require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
-				require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
-				require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
-			}
-		*/
+		require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
+		require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
+		for i := range res.Batch.Vecs {
+			vec1 := res.Batch.Vecs[i]
+			vec2 := tc.resultBatch.Vecs[i]
+			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
+			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
+			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
+		}
 
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
@@ -228,7 +224,8 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
-			Typs: ts,
+			Typs:            ts,
+			NeedMergedBatch: true,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,

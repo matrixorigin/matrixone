@@ -133,4 +133,7 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc.Mp())
 	}
+	if ctr.joinBat != nil {
+		ctr.joinBat.Clean(proc.Mp())
+	}
 }
