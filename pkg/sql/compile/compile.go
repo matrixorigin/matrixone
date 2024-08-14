@@ -413,10 +413,7 @@ func (c *Compile) IsSingleScope(ss []*Scope) bool {
 	if c.IsTpQuery() {
 		return true
 	}
-	if len(ss) > 1 {
-		return false
-	}
-	return ss[0].NodeInfo.Mcpu == 1
+	return len(ss) == 1 && ss[0].NodeInfo.Mcpu == 1
 }
 
 func (c *Compile) SetIsPrepare(isPrepare bool) {
@@ -2217,7 +2214,7 @@ func (c *Compile) isSingleParallelJoin(rs, buildScopes []*Scope) bool {
 	if c.IsTpQuery() {
 		return true
 	}
-	return c.IsSingleScope(rs) && c.IsSingleScope(buildScopes)
+	return c.IsSingleScope(rs) && len(buildScopes) == 1
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
