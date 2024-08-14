@@ -651,6 +651,9 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 
 	for i := 0; i < numColumns; i++ {
 		column, err := colDef2MysqlColumn(ctx, columns[i])
+		if err != nil {
+			return err
+		}
 		colDefPacket, err := mp.SendColumnDefinitionPacket(ctx, column, cmd)
 		if err != nil {
 			return err
