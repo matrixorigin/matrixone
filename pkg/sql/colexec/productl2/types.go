@@ -91,7 +91,7 @@ func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, er
 		productl2.ctr.rbat.CleanOnlyData()
 	}
 	if productl2.ctr.inBat != nil {
-		productl2.ctr.inBat.CleanOnlyData()
+		productl2.ctr.inBat = nil
 	}
 	if productl2.ProjectList != nil {
 		anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
@@ -121,7 +121,6 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 		ctr.rbat = nil
 	}
 	if ctr.inBat != nil {
-		ctr.inBat.Clean(mp)
 		ctr.inBat = nil
 	}
 }
