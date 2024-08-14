@@ -49,6 +49,17 @@ type backExec struct {
 
 func (back *backExec) Close() {
 	back.Clear()
+	tempExecCtx := ExecCtx{
+		ses:    back.backSes,
+		txnOpt: FeTxnOption{byRollback: true},
+	}
+	defer tempExecCtx.Close()
+	err := back.backSes.GetTxnHandler().Rollback(&tempExecCtx)
+	if err != nil {
+		back.backSes.Error(tempExecCtx.reqCtx,
+			"Failed to rollback txn in back session",
+			zap.Error(err))
+	}
 	back.backSes.Close()
 	back.backSes.Clear()
 	back.backSes = nil
@@ -841,7 +852,7 @@ func (backSes *backSession) GetDebugString() string {
 	if backSes.upstream != nil {
 		return backSes.upstream.GetDebugString()
 	}
-	return ""
+	return "backSes without upstream"
 }
 
 func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
@@ -865,10 +876,18 @@ func (backSes *backSession) GetUserDefinedVar(name string) (*UserDefinedVar, err
 	return nil, moerr.NewInternalError(context.Background(), "do not support user defined var in background exec")
 }
 
-func (backSes *backSession) GetSessionVar(ctx context.Context, name string) (interface{}, error) {
+func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 	switch strings.ToLower(name) {
 	case "autocommit":
 		return true, nil
+	case "lower_case_table_names":
+		lower := int64(0)
+		if backSes.upstream != nil {
+			if val, err := backSes.upstream.GetSessionSysVar("lower_case_table_names"); err != nil {
+				lower = val.(int64)
+			}
+		}
+		return lower, nil
 	}
 	return nil, nil
 }
