@@ -95,12 +95,10 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
 			if ctr.batchRowCount == 0 {
-				proc.PutBatch(bat)
 				continue
 			}
 
@@ -242,7 +240,6 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyze pro
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Process, analyze process.Analyze, isFirst bool, _ bool) error {
-	defer proc.PutBatch(bat)
 	analyze.Input(bat, isFirst)
 
 	if err := ctr.evalJoinCondition(bat, proc); err != nil {

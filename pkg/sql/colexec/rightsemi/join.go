@@ -94,20 +94,16 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
 			if ctr.batchRowCount == 0 {
-				proc.PutBatch(bat)
 				continue
 			}
 
 			if err = ctr.probe(bat, rightSemi, proc, analyze, rightSemi.GetIsFirst(), rightSemi.GetIsLast()); err != nil {
-				bat.Clean(proc.Mp())
 				return result, err
 			}
-			proc.PutBatch(bat)
 			continue
 
 		case SendLast:
