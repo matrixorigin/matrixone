@@ -1260,7 +1260,6 @@ func buildInsertPlansWithRelatedHiddenTable(
 	insertWithoutUniqueKeyMap map[string]bool, ifInsertFromUniqueColMap map[string]bool,
 ) error {
 	var lastNodeId int32
-	var err error
 
 	if builder.isRestore {
 		checkInsertPkDupForHiddenIndexTable = false
@@ -1490,9 +1489,6 @@ func buildInsertPlansWithRelatedHiddenTable(
 			}
 		default:
 			return moerr.NewInvalidInputNoCtx("Unsupported index algorithm: %s", multiTableIndex.IndexAlgo)
-		}
-		if err != nil {
-			return err
 		}
 	}
 
