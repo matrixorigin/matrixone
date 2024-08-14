@@ -2137,7 +2137,7 @@ func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*S
 }
 
 func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
+	rs := c.newScopeListOnCurrentCN(2, 1)
 	rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
 
 	connectLeftArg := connector.NewArgument().WithReg(rs[0].Proc.Reg.MergeReceivers[0])
