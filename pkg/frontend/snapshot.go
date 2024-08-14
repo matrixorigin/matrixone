@@ -731,13 +731,11 @@ func restoreToDatabaseOrTable(
 	}
 
 	if isRestoreCluster && isSubDb {
-		// if restore to cluster, and the db is sub db, skip restore
-		// append the sub db to restore list
-		if subDbToRestore != nil {
-			getLogger(sid).Info(fmt.Sprintf("[%s] append sub db to restore list: %v, at restore cluster account %d", snapshotName, dbName, toAccountId))
-			subDbToRestore = append(subDbToRestore, NewSubDbRestoreRecord(dbName, toAccountId, createDbSql))
-			return
-		}
+		// if restore to cluster, and the db is sub, append the sub db to restore list
+		getLogger(sid).Info(fmt.Sprintf("[%s] append sub db to restore list: %v, at restore cluster account %d", snapshotName, dbName, toAccountId))
+		subDbToRestore = append(subDbToRestore, NewSubDbRestoreRecord(dbName, toAccountId, createDbSql))
+		return
+
 	}
 
 	// if current account is not to account id, and the db is sub db, skip restore
