@@ -2233,7 +2233,8 @@ func (c *Compile) isSingleParallelJoin(rs, buildScopes []*Scope) bool {
 	if c.IsTpQuery() {
 		return true
 	}
-	return c.IsSingleScope(rs) && len(buildScopes) == 1
+	return false
+	//return c.IsSingleScope(rs) && len(buildScopes) == 1
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
@@ -3491,6 +3492,7 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		rs[i].Magic = Remote
 		rs[i].IsJoin = true
 		rs[i].NodeInfo.Mcpu = c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
+		rs[i].BuildIdx = len(rs[i].Proc.Reg.MergeReceivers)
 	}
 
 	if c.isSingleParallelJoin(rs, buildScopes) {
@@ -3501,7 +3503,6 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 
 	//construct build part
 	for i := range rs {
-		rs[i].BuildIdx = len(rs[i].Proc.Reg.MergeReceivers)
 		w := &process.WaitRegister{
 			Ctx: rs[i].Proc.Ctx,
 			Ch:  make(chan *process.RegisterMessage, 10),
