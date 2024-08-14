@@ -151,16 +151,6 @@ func (n *NumVal) Negative() bool {
 	return n.negative
 }
 
-func NewNumValWithType(value constant.Value, origString string, negative bool, typ P_TYPE) *NumVal {
-	numVal := &NumVal{
-		Value:      value,
-		origString: origString,
-		negative:   negative,
-		ValType:    typ,
-	}
-	return numVal
-}
-
 func NewNumValWithType2[T bool | int64 | uint64 | float64 | string](value constant.Value, val T, originString string, negative bool, typ P_TYPE) *NumVal {
 	nv := &NumVal{
 		Value:      value,

@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"go/constant"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -37,9 +36,9 @@ func NewGroupBinder(builder *QueryBuilder, ctx *BindContext, selectList tree.Sel
 func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if isRoot {
 		if numVal, ok := astExpr.(*tree.NumVal); ok {
-			switch numVal.Value.Kind() {
-			case constant.Int:
-				colPos, _ := constant.Int64Val(numVal.Value)
+			switch numVal.Kind() {
+			case tree.Int:
+				colPos, _ := numVal.Int64()
 				if colPos < 1 || int(colPos) > len(b.selectList) {
 					return nil, moerr.NewSyntaxError(b.GetContext(), "GROUP BY position %v is not in select list", colPos)
 				}

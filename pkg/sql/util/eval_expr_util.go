@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"go/constant"
 	"math"
 	"strconv"
 	"strings"
@@ -329,16 +328,16 @@ func setInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, vec *ve
 		err = vector.AppendFixed[types.Timestamp](vec, 0, true, proc.GetMPool())
 
 	case tree.P_int64:
-		val, ok := constant.Int64Val(numVal.Value)
+		val, ok := numVal.Int64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
 		err = appendIntegerTimeStamp(val)
 
 	case tree.P_uint64:
-		val, ok := constant.Uint64Val(numVal.Value)
+		val, ok := numVal.Uint64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
 		err = appendIntegerTimeStamp(int64(val))
 
@@ -458,16 +457,16 @@ func setInsertValueTime(proc *process.Process, numVal *tree.NumVal, vec *vector.
 		err = vector.AppendFixed[types.Time](vec, 0, true, proc.GetMPool())
 
 	case tree.P_int64:
-		val, ok := constant.Int64Val(numVal.Value)
+		val, ok := numVal.Int64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
 		err = appendIntegerTime(val)
 
 	case tree.P_uint64:
-		val, ok := constant.Uint64Val(numVal.Value)
+		val, ok := numVal.Uint64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
 		err = appendIntegerTime(int64(val))
 
@@ -615,20 +614,20 @@ func setInsertValueBool(proc *process.Process, numVal *tree.NumVal, vec *vector.
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 
 	case tree.P_bool:
-		val := constant.BoolVal(numVal.Value)
+		val := numVal.Bool()
 		err = vector.AppendFixed[bool](vec, val, false, proc.Mp())
 
 	case tree.P_int64:
-		val, ok := constant.Int64Val(numVal.Value)
+		val, ok := numVal.Int64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
 		err = vector.AppendFixed[bool](vec, val == 1, false, proc.Mp())
 
 	case tree.P_uint64:
-		val, ok := constant.Uint64Val(numVal.Value)
+		val, ok := numVal.Uint64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
 		err = vector.AppendFixed[bool](vec, val == 1, false, proc.Mp())
 
@@ -728,7 +727,7 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 
 	case tree.P_bool:
 		var s string
-		if constant.BoolVal(numVal.Value) {
+		if numVal.Bool() {
 			s = "1"
 		} else {
 			s = "0"
@@ -822,7 +821,7 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 
 	case tree.P_bool:
-		val := constant.BoolVal(numVal.Value)
+		val := numVal.Bool()
 		if val {
 			err = vector.AppendFixed(vec, T(1), false, proc.Mp())
 		} else {
@@ -831,9 +830,9 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 		vec.GetType()
 
 	case tree.P_int64:
-		val, ok := constant.Int64Val(numVal.Value)
+		val, ok := numVal.Int64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
 		err = checkOverFlow[int64, T](proc.Ctx, vec.GetType(), val, vec.GetNulls())
 		if err != nil {
@@ -842,9 +841,9 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 		err = vector.AppendFixed(vec, T(val), false, proc.Mp())
 
 	case tree.P_uint64:
-		val, ok := constant.Uint64Val(numVal.Value)
+		val, ok := numVal.Uint64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
 		err = checkOverFlow[uint64, T](proc.Ctx, vec.GetType(), val, vec.GetNulls())
 		if err != nil {
@@ -853,7 +852,7 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 		err = vector.AppendFixed(vec, T(val), false, proc.Mp())
 
 	case tree.P_float64:
-		val, ok := constant.Float64Val(numVal.Value)
+		val, ok := numVal.Float64()
 		if canInsert = ok; canInsert {
 			var v T
 			if err = checkOverFlow[float64, T](proc.Ctx, vec.GetType(), val,
@@ -923,16 +922,16 @@ func setInsertValueDecimal64(proc *process.Process, numVal *tree.NumVal, vec *ve
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 
 	case tree.P_int64:
-		val, ok := constant.Int64Val(numVal.Value)
+		val, ok := numVal.Int64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
 		err = appendWithUnSigned(uint64(val))
 
 	case tree.P_uint64:
-		val, ok := constant.Uint64Val(numVal.Value)
+		val, ok := numVal.Uint64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
 		err = appendWithUnSigned(uint64(val))
 
@@ -985,16 +984,16 @@ func setInsertValueDecimal128(proc *process.Process, numVal *tree.NumVal, vec *v
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 
 	case tree.P_int64:
-		val, ok := constant.Int64Val(numVal.Value)
+		val, ok := numVal.Int64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
 		err = appendWithUnSigned(uint64(val))
 
 	case tree.P_uint64:
-		val, ok := constant.Uint64Val(numVal.Value)
+		val, ok := numVal.Uint64()
 		if !ok {
-			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.Value.String())
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
 		err = appendWithUnSigned(uint64(val))
 
@@ -1055,7 +1054,7 @@ func setInsertValueBit(proc *process.Process, numVal *tree.NumVal, vec *vector.V
 
 	case tree.P_bool:
 		var val uint64
-		if constant.BoolVal(numVal.Value) {
+		if numVal.Bool() {
 			val = 1
 		}
 		err = vector.AppendFixed(vec, val, false, proc.Mp())
@@ -1079,8 +1078,8 @@ func setInsertValueBit(proc *process.Process, numVal *tree.NumVal, vec *vector.V
 
 	case tree.P_float64:
 		var val float64
-		if val, ok = constant.Float64Val(numVal.Value); !ok {
-			err = moerr.NewInvalidInput(proc.Ctx, "invalid float value '%s'", numVal.Value.String())
+		if val, ok = numVal.Float64(); !ok {
+			err = moerr.NewInvalidInput(proc.Ctx, "invalid float value '%s'", numVal.String())
 			return
 		} else if val < 0 {
 			err = moerr.NewInvalidInput(proc.Ctx, "unsupported negative value %v", val)
@@ -1093,8 +1092,8 @@ func setInsertValueBit(proc *process.Process, numVal *tree.NumVal, vec *vector.V
 
 	case tree.P_int64:
 		var val int64
-		if val, ok = constant.Int64Val(numVal.Value); !ok {
-			err = moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+		if val, ok = numVal.Int64(); !ok {
+			err = moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.String())
 			return
 		} else if val < 0 {
 			err = moerr.NewInvalidInput(proc.Ctx, "unsupported negative value %d", val)
@@ -1107,8 +1106,8 @@ func setInsertValueBit(proc *process.Process, numVal *tree.NumVal, vec *vector.V
 
 	case tree.P_uint64:
 		var val uint64
-		if val, ok = constant.Uint64Val(numVal.Value); !ok {
-			err = moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+		if val, ok = numVal.Uint64(); !ok {
+			err = moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.String())
 			return
 		} else if val > uint64(1<<width-1) {
 			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)

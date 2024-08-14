@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"go/constant"
 	"slices"
 	"strings"
 	"time"
@@ -931,11 +930,11 @@ func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublicat
 	like := ""
 	if sp.Like != nil {
 		right, ok := sp.Like.Right.(*tree.NumVal)
-		if !ok || right.Value.Kind() != constant.String {
+		if !ok || right.Kind() != tree.Str {
 			err = moerr.NewInternalError(ctx, "like clause must be a string")
 			return
 		}
-		like = constant.StringVal(right.Value)
+		like = right.String()
 	}
 
 	pubInfos, err := getPubInfos(ctx, bh, like)
@@ -1019,11 +1018,11 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 	like := ss.Like
 	if like != nil {
 		right, ok := like.Right.(*tree.NumVal)
-		if !ok || right.Value.Kind() != constant.String {
+		if !ok || right.Kind() != tree.Str {
 			err = moerr.NewInternalError(ctx, "like clause must be a string")
 			return
 		}
-		sql += fmt.Sprintf(" and pub_name like '%s' order by pub_name;", constant.StringVal(right.Value))
+		sql += fmt.Sprintf(" and pub_name like '%s' order by pub_name;", right.String())
 	} else {
 		sql += " order by sub_time desc, pub_time desc;"
 	}

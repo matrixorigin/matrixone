@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"go/constant"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -186,9 +185,9 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 	for _, order := range astExpr.OrderBy {
 		orderExpr := order.Expr
 		if numVal, ok := order.Expr.(*tree.NumVal); ok {
-			switch numVal.Value.Kind() {
-			case constant.Int:
-				colPos, _ := constant.Int64Val(numVal.Value)
+			switch numVal.Kind() {
+			case tree.Int:
+				colPos, _ := numVal.Int64()
 				if numVal.Negative() {
 					moerr.NewSyntaxError(b.GetContext(), "ORDER BY position %v is negative", colPos)
 				}

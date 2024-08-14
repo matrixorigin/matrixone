@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"go/constant"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -45,9 +44,9 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	}
 
 	if numVal, ok := astExpr.(*tree.NumVal); ok {
-		switch numVal.Value.Kind() {
-		case constant.Int:
-			colPos, _ := constant.Int64Val(numVal.Value)
+		switch numVal.Kind() {
+		case tree.Int:
+			colPos, _ := numVal.Int64()
 			if numVal.Negative() {
 				colPos = -colPos
 			}
