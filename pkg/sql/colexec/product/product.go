@@ -143,18 +143,6 @@ func (product *Product) build(proc *process.Process, anal process.Analyze) error
 }
 
 func (ctr *container) probe(ap *Product, proc *process.Process, result *vm.CallResult) error {
-	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
-	}
-	ctr.rbat = batch.NewWithSize(len(ap.Result))
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			ctr.rbat.Vecs[i] = proc.GetVector(*ctr.inBat.Vecs[rp.Pos].GetType())
-		} else {
-			ctr.rbat.Vecs[i] = proc.GetVector(*ctr.bat.Vecs[rp.Pos].GetType())
-		}
-	}
 	count := ctr.inBat.RowCount()
 	count2 := ctr.bat.RowCount()
 	var i, j int
@@ -183,8 +171,6 @@ func (ctr *container) probe(ap *Product, proc *process.Process, result *vm.CallR
 	ctr.probeIdx = 0
 	ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
 	result.Batch = ctr.rbat
-
-	proc.PutBatch(ctr.inBat)
 	ctr.inBat = nil
 	return nil
 }

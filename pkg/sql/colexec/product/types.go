@@ -97,6 +97,8 @@ func (product *Product) Reset(proc *process.Process, pipelineFailed bool, err er
 		anal.Alloc(product.ProjectAllocSize)
 		product.ResetProjection(proc)
 	}
+	product.ctr.state = Build
+	product.ctr.probeIdx = 0
 }
 
 func (product *Product) Free(proc *process.Process, pipelineFailed bool, err error) {
