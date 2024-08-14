@@ -36,7 +36,7 @@ type container struct {
 	buf    *batch.Batch
 }
 type Source struct {
-	ctr    *container
+	ctr    container
 	TblDef *plan.TableDef
 	Offset int64
 	Limit  int64
@@ -82,16 +82,22 @@ func (source *Source) Release() {
 }
 
 func (source *Source) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	source.Free(proc, pipelineFailed, err)
+	ctr := &source.ctr
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
+	ctr.status = retrieve
+	if source.ProjectList != nil {
+		anal := proc.GetAnalyze(source.GetIdx(), source.GetParallelIdx(), source.GetParallelMajor())
+		anal.Alloc(source.ProjectAllocSize)
+		source.ResetProjection(proc)
+	}
 }
 
 func (source *Source) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if source.ctr != nil {
-		if source.ctr.buf != nil {
-			source.ctr.buf.Clean(proc.Mp())
-			source.ctr.buf = nil
-		}
-		source.ctr = nil
+	ctr := &source.ctr
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
 	}
 	if source.ProjectList != nil {
 		anal := proc.GetAnalyze(source.GetIdx(), source.GetParallelIdx(), source.GetParallelMajor())

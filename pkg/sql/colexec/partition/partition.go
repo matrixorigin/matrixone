@@ -47,9 +47,11 @@ func (partition *Partition) OpType() vm.OpType {
 }
 
 func (partition *Partition) Prepare(proc *process.Process) (err error) {
-	partition.ctr = new(container)
-	ctr := partition.ctr
+	if len(partition.ctr.executors) > 0 {
+		return nil
+	}
 
+	ctr := &partition.ctr
 	ctr.batchList = make([]*batch.Batch, 0, 16)
 	ctr.orderCols = make([][]*vector.Vector, 0, 16)
 
@@ -73,7 +75,7 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
-	ctr := partition.ctr
+	ctr := &partition.ctr
 	for {
 		switch ctr.status {
 		case receive:
@@ -85,13 +87,13 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.indexList = make([]int64, len(ctr.batchList))
 				ctr.status = eval
 			} else {
-				bat, err := result.Batch.Dup(proc.Mp())
-				if err != nil {
+				// it does not modify result.Batch, but calculate result and copy to ctr.buf
+				ctr.batchList = append(ctr.batchList, result.Batch)
+
+				if err = ctr.evaluateOrderColumn(proc, ctr.i); err != nil {
 					return result, err
 				}
-				if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
-					return result, err
-				}
+				ctr.i++
 			}
 
 		case eval:
@@ -114,22 +116,28 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) mergeAndEvaluateOrderColumn(proc *process.Process, bat *batch.Batch) error {
-	ctr.batchList = append(ctr.batchList, bat)
-	ctr.orderCols = append(ctr.orderCols, nil)
-	return ctr.evaluateOrderColumn(proc, len(ctr.orderCols)-1)
-}
-
 func (ctr *container) evaluateOrderColumn(proc *process.Process, index int) error {
 	inputs := []*batch.Batch{ctr.batchList[index]}
 
-	ctr.orderCols[index] = make([]*vector.Vector, len(ctr.executors))
+	if len(ctr.orderCols) < index+1 {
+		ctr.orderCols = append(ctr.orderCols, make([]*vector.Vector, len(ctr.executors)))
+	}
 	for i := 0; i < len(ctr.executors); i++ {
-		vec, err := ctr.executors[i].EvalWithoutResultReusing(proc, inputs, nil)
+		vec, err := ctr.executors[i].Eval(proc, inputs, nil)
 		if err != nil {
 			return err
 		}
-		ctr.orderCols[index][i] = vec
+		if ctr.orderCols[index][i] != nil {
+			ctr.orderCols[index][i].CleanOnlyData()
+			if err = ctr.orderCols[index][i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+				return err
+			}
+		} else {
+			ctr.orderCols[index][i], err = vec.Dup(proc.Mp())
+			if err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -156,15 +164,14 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 
 func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) (sendOver bool, err error) {
 	if ctr.buf != nil {
-		proc.PutBatch(ctr.buf)
-		ctr.buf = nil
+		ctr.buf.CleanOnlyData()
+	} else {
+		ctr.buf = batch.NewWithSize(ctr.batchList[0].VectorCount())
+		for i := range ctr.buf.Vecs {
+			ctr.buf.Vecs[i] = vector.NewVec(*ctr.batchList[0].Vecs[i].GetType())
+		}
 	}
-	ctr.buf = batch.NewWithSize(ctr.batchList[0].VectorCount())
 	mp := proc.Mp()
-
-	for i := range ctr.buf.Vecs {
-		ctr.buf.Vecs[i] = proc.GetVector(*ctr.batchList[0].Vecs[i].GetType())
-	}
 
 	wholeLength, choice := 0, 0
 	hasSame := false
@@ -184,6 +191,7 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 		cols = ctr.orderCols[choice]
 
 		for j := range ctr.buf.Vecs {
+			// here copy
 			err = ctr.buf.Vecs[j].UnionOne(ctr.batchList[choice].Vecs[j], row, mp)
 			if err != nil {
 				return false, err
@@ -251,23 +259,11 @@ func (ctr *container) pickSameRow(row int64, cols []*vector.Vector) (batIndex in
 	return j, hasSame
 }
 
-func (ctr *container) removeBatch(_ *process.Process, index int) {
-	//bat := ctr.batchList[index]
-	//cols := ctr.orderCols[index]
-
-	//alreadyPut := make(map[*vector.Vector]bool, len(bat.Vecs))
-	//for i := range bat.Vecs {
-	//	proc.PutVector(bat.Vecs[i])
-	//	alreadyPut[bat.Vecs[i]] = true
-	//}
+func (ctr *container) removeBatch(proc *process.Process, index int) {
 	ctr.batchList = append(ctr.batchList[:index], ctr.batchList[index+1:]...)
 	ctr.indexList = append(ctr.indexList[:index], ctr.indexList[index+1:]...)
-
-	//for i := range cols {
-	//	if _, ok := alreadyPut[cols[i]]; ok {
-	//		continue
-	//	}
-	//	proc.PutVector(cols[i])
-	//}
+	for _, vec := range ctr.orderCols[index] {
+		vec.Free(proc.Mp())
+	}
 	ctr.orderCols = append(ctr.orderCols[:index], ctr.orderCols[index+1:]...)
 }

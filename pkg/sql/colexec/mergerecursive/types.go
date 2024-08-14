@@ -31,7 +31,7 @@ type container struct {
 }
 
 type MergeRecursive struct {
-	ctr *container
+	ctr container
 
 	vm.OperatorBase
 }
@@ -68,21 +68,8 @@ func (mergeRecursive *MergeRecursive) Release() {
 }
 
 func (mergeRecursive *MergeRecursive) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeRecursive.Free(proc, pipelineFailed, err)
+	mergeRecursive.ctr.last = false
 }
 
 func (mergeRecursive *MergeRecursive) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if mergeRecursive.ctr != nil {
-		for _, b := range mergeRecursive.ctr.bats {
-			if b != nil {
-				b.Clean(proc.Mp())
-			}
-			mergeRecursive.ctr.bats = nil
-		}
-		if mergeRecursive.ctr.buf != nil {
-			mergeRecursive.ctr.buf.Clean(proc.Mp())
-			mergeRecursive.ctr.buf = nil
-		}
-		mergeRecursive.ctr = nil
-	}
 }

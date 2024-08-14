@@ -16,8 +16,6 @@ package mergerecursive
 
 import (
 	"bytes"
-	"sync/atomic"
-
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -34,7 +32,6 @@ func (mergeRecursive *MergeRecursive) OpType() vm.OpType {
 }
 
 func (mergeRecursive *MergeRecursive) Prepare(proc *process.Process) error {
-	mergeRecursive.ctr = new(container)
 	return nil
 }
 
@@ -56,14 +53,12 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 		}
 		bat := result.Batch
 		if bat == nil || bat.End() {
-			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
 		if bat.Last() {
 			mergeRecursive.ctr.last = true
 		}
-		atomic.AddInt64(&bat.Cnt, 1)
 		mergeRecursive.ctr.bats = append(mergeRecursive.ctr.bats, bat)
 	}
 	mergeRecursive.ctr.buf = mergeRecursive.ctr.bats[0]
@@ -74,7 +69,6 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 	}
 
 	if mergeRecursive.ctr.buf.End() {
-		mergeRecursive.ctr.buf.Clean(proc.Mp())
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
