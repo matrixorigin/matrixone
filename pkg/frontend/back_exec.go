@@ -48,7 +48,6 @@ type backExec struct {
 }
 
 func (back *backExec) Close() {
-	back.Clear()
 	tempExecCtx := ExecCtx{
 		ses:    back.backSes,
 		txnOpt: FeTxnOption{byRollback: true},
@@ -60,6 +59,7 @@ func (back *backExec) Close() {
 			"Failed to rollback txn in back session",
 			zap.Error(err))
 	}
+	back.Clear()
 	back.backSes.Close()
 	back.backSes.Clear()
 	back.backSes = nil
