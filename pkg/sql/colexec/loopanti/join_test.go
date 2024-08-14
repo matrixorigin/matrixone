@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -201,10 +202,10 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 		},
 	}
 	resultBatch := batch.NewWithSize(len(rp))
-	resultBatch.SetRowCount(2)
+	resultBatch.SetRowCount(0)
+	bat := colexec.MakeMockBatchs()
 	for i := range rp {
-		bat := colexec.MakeMockBatchs()
-		resultBatch.Vecs[i] = bat.Vecs[rp[i]]
+		resultBatch.Vecs[i] = vector.NewVec(*bat.Vecs[rp[i]].GetType())
 	}
 	tag++
 	return joinTestCase{
@@ -226,7 +227,8 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
-			Typs: ts,
+			Typs:            ts,
+			NeedMergedBatch: true,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,

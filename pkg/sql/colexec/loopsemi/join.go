@@ -133,7 +133,7 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (loopSemi *LoopSemi) build(proc *process.Process, anal process.Analyze) error {
-	ctr := loopSemi.ctr
+	ctr := &loopSemi.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
 	mp := message.ReceiveJoinMap(loopSemi.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
@@ -149,6 +149,7 @@ func (loopSemi *LoopSemi) build(proc *process.Process, anal process.Analyze) err
 			return err
 		}
 	}
+	mp.Free()
 	return nil
 }
 
