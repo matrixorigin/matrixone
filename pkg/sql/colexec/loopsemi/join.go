@@ -92,11 +92,9 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				if bat.IsEmpty() {
-					proc.PutBatch(bat)
 					continue
 				}
 				if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-					proc.PutBatch(bat)
 					continue
 				}
 				loopSemi.ctr.buf = bat
@@ -109,7 +107,6 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			if loopSemi.ctr.lastrow == 0 {
-				proc.PutBatch(loopSemi.ctr.buf)
 				loopSemi.ctr.buf = nil
 			}
 
