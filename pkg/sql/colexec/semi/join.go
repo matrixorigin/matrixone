@@ -140,7 +140,6 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if err := ctr.probe(bat, semiJoin, proc, &probeResult); err != nil {
-				bat.Clean(proc.Mp())
 				return result, err
 			}
 

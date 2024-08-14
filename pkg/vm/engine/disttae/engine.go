@@ -681,7 +681,7 @@ func (e *Engine) BuildBlockReaders(
 			fs,
 			ts,
 			shard)
-		rd := NewReader(
+		rd, err := NewReader(
 			ctx,
 			proc,
 			e,
@@ -690,6 +690,9 @@ func (e *Engine) BuildBlockReaders(
 			expr,
 			ds,
 		)
+		if err != nil {
+			return nil, err
+		}
 		rd.scanType = scanType
 		rds = append(rds, rd)
 	}

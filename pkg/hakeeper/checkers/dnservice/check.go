@@ -26,7 +26,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
+type state struct {
 	// waitingShards makes check logic stateful.
 	waitingShards *initialShards
 
@@ -36,11 +36,27 @@ var (
 	// If bootstrapping is true, tn checker will construct create tn shard command immediately.
 	// This flag helps to accelarate cluster bootstrapping.
 	bootstrapping bool
-)
+}
 
-func init() {
-	waitingShards = newInitialShards()
-	bootstrapping = true
+func InitCheckState(
+	sid string,
+) {
+	s := &state{
+		waitingShards: newInitialShards(sid),
+		bootstrapping: true,
+	}
+
+	runtime.ServiceRuntime(sid).SetGlobalVariables("log_service_init_state", s)
+}
+
+func getCheckState(
+	sid string,
+) *state {
+	s, ok := runtime.ServiceRuntime(sid).GetGlobalVariables("log_service_init_state")
+	if !ok {
+		panic("log service init state not found: <" + sid + ">")
+	}
+	return s.(*state)
 }
 
 // Check checks tn state and generate operator for expired tn store.

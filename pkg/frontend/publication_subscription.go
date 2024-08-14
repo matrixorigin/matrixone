@@ -209,8 +209,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 
 	var subAccounts map[int32]*pubsub.AccountInfo
 	if cp.AccountsSet.All {
-		pubAllAccounts := pubsub.SplitAccounts(getGlobalPu().SV.PubAllAccounts)
-		if accountId != sysAccountID && !slices.Contains(pubAllAccounts, accountName) {
+		if accountId != sysAccountID && !pubsub.CanPubToAll(accountName, getGlobalPu().SV.PubAllAccounts) {
 			return moerr.NewInternalError(ctx, "only sys account and authorized normal accounts can publish to all accounts")
 		}
 		subAccounts = accIdInfoMap
@@ -363,8 +362,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	if ap.AccountsSet != nil {
 		switch {
 		case ap.AccountsSet.All:
-			pubAllAccounts := pubsub.SplitAccounts(getGlobalPu().SV.PubAllAccounts)
-			if !tenantInfo.IsSysTenant() && !slices.Contains(pubAllAccounts, tenantInfo.Tenant) {
+			if !tenantInfo.IsSysTenant() && !pubsub.CanPubToAll(tenantInfo.Tenant, getGlobalPu().SV.PubAllAccounts) {
 				return moerr.NewInternalError(ctx, "only sys account and authorized normal accounts can publish to all accounts")
 			}
 			newSubAccounts = accIdInfoMap
@@ -1049,6 +1047,14 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 		rs.AddColumn(column)
 	}
 	for _, subInfo := range subInfos {
+		var pubDbName, pubTables, pubComment, pubTime interface{}
+		if subInfo.Status == pubsub.SubStatusNormal {
+			pubDbName = subInfo.PubDbName
+			pubTables = subInfo.PubTables
+			pubComment = subInfo.PubComment
+			pubTime = subInfo.PubTime
+		}
+
 		var subName, subTime interface{}
 		if len(subInfo.SubName) > 0 {
 			subName = subInfo.SubName
@@ -1056,13 +1062,14 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 		if len(subInfo.SubTime) > 0 {
 			subTime = subInfo.SubTime
 		}
+
 		rs.AddRow([]interface{}{
 			subInfo.PubName,
 			subInfo.PubAccountName,
-			subInfo.PubDbName,
-			subInfo.PubTables,
-			subInfo.PubComment,
-			subInfo.PubTime,
+			pubDbName,
+			pubTables,
+			pubComment,
+			pubTime,
 			subName,
 			subTime,
 			int(subInfo.Status),
