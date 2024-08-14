@@ -1,5 +1,9 @@
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
+drop account if exists acc02;
+create account acc02 admin_name = 'test_account' identified by '111';
+drop account if exists acc03;
+create account acc03 admin_name = 'test_account' identified by '111';
 drop database if exists db01;
 create database db01;
 use db01;
@@ -23,9 +27,9 @@ drop publication if exists `$$$`;
 create publication `$$$` database db01 account all;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-$$$    db01    *    *        2024-08-14 18:08:30    null    
-account    db01    table01,table02    acc01        2024-08-14 18:08:30    null    
-add    db01    *    *        2024-08-14 18:08:30    null    
+$$$    db01    *    *        2024-08-14 18:34:51    null    
+account    db01    table01,table02    acc01        2024-08-14 18:34:51    null    
+add    db01    *    *        2024-08-14 18:34:51    null    
 drop database if exists sub01;
 create database sub01 from sys publication `add`;
 drop database if exists sub02;
@@ -34,9 +38,9 @@ drop database if exists sub03;
 create database sub03 from sys publication `$$$`;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-$$$    sys    db01    *        2024-08-14 18:08:30    sub03    2024-08-14 18:08:31    0
-account    sys    db01    table01,table02        2024-08-14 18:08:30    sub02    2024-08-14 18:08:31    0
-add    sys    db01    *        2024-08-14 18:08:30    sub01    2024-08-14 18:08:30    0
+$$$    sys    db01    *        2024-08-14 18:34:51    sub03    2024-08-14 18:34:51    0
+account    sys    db01    table01,table02        2024-08-14 18:34:51    sub02    2024-08-14 18:34:51    0
+add    sys    db01    *        2024-08-14 18:34:51    sub01    2024-08-14 18:34:51    0
 drop publication `add`;
 drop publication account;
 drop publication `$$$`;
@@ -44,4 +48,37 @@ drop database db01;
 drop database sub01;
 drop database sub02;
 drop database sub03;
+drop database if exists db02;
+create database db02;
+use db02;
+drop table if exists t1;
+create table t1 (a tinyint unsigned not null, primary key(a));
+insert into t1 values (255), (0xFC), (254), (253);
+drop table if exists t2;
+create table t2 ( a tinyint not null default 1, tinyint8 tinyint primary key);
+insert into t2 (tinyint8) values (-1),(127),(-128);
+drop table if exists t3;
+create table t3 ( a tinyint not null default 1, tinyint8 tinyint unsigned primary key);
+insert into t3 (tinyint8) values (0),(255), (0xFE), (253);
+drop publication if exists pub01;
+create publication pub01 database db02 account acc02 comment 'publish to acc01';
+drop publication if exists pub02;
+create publication pub02 database db02 account acc02, acc03 comment 'publish to acc01 and acc03';
+drop publication if exists pub03;
+create publication pub03 database db02 table t1, t2 account acc02 comment 'publish to acc02';
+drop database if exists sub02;
+create database sub02 from acc01 publication pub01;
+select * from mo_catalog.mo_subs;
+sub_account_id    sub_name    sub_time    pub_account_name    pub_name    pub_database    pub_tables    pub_time    pub_comment    status
+67    null    null    acc01    pub02    db02    *    2024-08-14 18:34:52    publish to acc01 and acc03    0
+66    null    null    acc01    pub02    db02    *    2024-08-14 18:34:52    publish to acc01 and acc03    0
+66    null    null    acc01    pub03    db02    t1,t2    2024-08-14 18:34:52    publish to acc02    0
+66    sub02    2024-08-14 18:34:52    acc01    pub01    db02    *    2024-08-14 18:34:52    publish to acc01    0
+drop database sub02;
+drop publication pub01;
+drop publication pub02;
+drop publication pub03;
+drop database db02;
 drop account acc01;
+drop account acc02;
+drop account acc03;
