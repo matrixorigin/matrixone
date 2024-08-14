@@ -46,7 +46,7 @@ type container struct {
 }
 
 type LoopSemi struct {
-	ctr        *container
+	ctr        container
 	Result     []int32
 	Cond       *plan.Expr
 	Typs       []types.Type
@@ -88,20 +88,27 @@ func (loopSemi *LoopSemi) Release() {
 }
 
 func (loopSemi *LoopSemi) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	loopSemi.Free(proc, pipelineFailed, err)
+	ctr := &loopSemi.ctr
+
+	ctr.resetExprExecutor()
+	ctr.state = Build
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.Mp())
+		ctr.bat = nil
+	}
+
+	if loopSemi.ProjectList != nil {
+		anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
+		anal.Alloc(loopSemi.ProjectAllocSize)
+		loopSemi.ResetProjection(proc)
+	}
 }
 
 func (loopSemi *LoopSemi) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := loopSemi.ctr; ctr != nil {
-		ctr.cleanBatch(proc.Mp())
-		ctr.cleanExprExecutor()
-		//if arg.ctr.buf != nil {
-		//proc.PutBatch(arg.ctr.buf)
-		//arg.ctr.buf = nil
-		//}
-		loopSemi.ctr.lastrow = 0
-		loopSemi.ctr = nil
-	}
+	ctr := &loopSemi.ctr
+
+	ctr.cleanBatch(proc.Mp())
+	ctr.cleanExprExecutor()
 
 	if loopSemi.ProjectList != nil {
 		anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
@@ -122,6 +129,12 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
+	}
+}
+
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
 }
 
