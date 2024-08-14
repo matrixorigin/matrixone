@@ -35,26 +35,15 @@ import (
 	"github.com/parquet-go/parquet-go/encoding"
 )
 
-func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
 	_, span := trace.Start(ctx, "scanParquetFile")
 	defer span.End()
-
-	bat := batch.New(false, param.Attrs)
-	for i := range param.Attrs {
-		col := param.Cols[i]
-
-		if col.Hidden {
-			continue
-		}
-
-		bat.Vecs[i] = proc.GetVector(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
-	}
 
 	if param.parqh == nil {
 		var err error
 		param.parqh, err = newParquetHandler(param)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
@@ -68,12 +57,7 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		param.parqh.batchCnt = min(n-o, maxParquetBatchCnt)
 	}
 
-	err := param.parqh.getData(bat, param, proc)
-	if err != nil {
-		return nil, err
-	}
-
-	return bat, nil
+	return param.parqh.getData(bat, param, proc)
 }
 
 var maxParquetBatchCnt int64 = 1000
@@ -575,14 +559,6 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 		length = vec.Length()
 	}
 
-	for i := range h.cols {
-		if !param.Cols[i].Hidden {
-			continue
-		}
-		col := param.Cols[i]
-		typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
-		bat.Vecs[i] = vector.NewConstNull(typ, length, proc.GetMPool())
-	}
 	bat.SetRowCount(length)
 
 	if finish {

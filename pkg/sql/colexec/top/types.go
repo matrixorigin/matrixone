@@ -15,7 +15,6 @@
 package top
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -47,7 +46,7 @@ type container struct {
 type Top struct {
 	Limit       *plan.Expr
 	TopValueTag int32
-	ctr         *container
+	ctr         container
 	Fs          []*plan.OrderBySpec
 
 	vm.OperatorBase
@@ -58,7 +57,7 @@ func (top *Top) GetOperatorBase() *vm.OperatorBase {
 }
 
 func init() {
-	reuse.CreatePool[Top](
+	reuse.CreatePool(
 		func() *Top {
 			return &Top{}
 		},
@@ -90,39 +89,55 @@ func (top *Top) WithFs(fs []*plan.OrderBySpec) *Top {
 
 func (top *Top) Release() {
 	if top != nil {
-		reuse.Free[Top](top, nil)
+		reuse.Free(top, nil)
 	}
 }
 
 func (top *Top) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	top.Free(proc, pipelineFailed, err)
+	top.ctr.reset()
 }
 
 func (top *Top) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := top.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-
-		for i := range ctr.executorsForOrderColumn {
-			if ctr.executorsForOrderColumn[i] != nil {
-				ctr.executorsForOrderColumn[i].Free()
-			}
-		}
-		ctr.executorsForOrderColumn = nil
-
-		if ctr.limitExecutor != nil {
-			ctr.limitExecutor.Free()
-			ctr.limitExecutor = nil
-		}
-		top.ctr = nil
-	}
+	top.ctr.free(proc)
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (ctr *container) reset() {
+
+	ctr.n = 0
+	ctr.state = 0
+	ctr.sels = ctr.sels[:0]
+	ctr.poses = ctr.poses[:0]
+	ctr.cmps = ctr.cmps[:0]
+
+	ctr.limit = 0
+	if ctr.limitExecutor != nil {
+		ctr.limitExecutor.ResetForNextQuery()
+	}
+
+	for _, executor := range ctr.executorsForOrderColumn {
+		if executor != nil {
+			executor.ResetForNextQuery()
+		}
+	}
+	ctr.desc = false
+	ctr.topValueZM = nil
 	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
+		ctr.bat.CleanOnlyData()
+	}
+
+}
+
+func (ctr *container) free(proc *process.Process) {
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.Mp())
+	}
+	for _, executor := range ctr.executorsForOrderColumn {
+		if executor != nil {
+			executor.Free()
+		}
+	}
+	if ctr.limitExecutor != nil {
+		ctr.limitExecutor.Free()
 	}
 }
 
