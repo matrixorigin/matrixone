@@ -148,6 +148,7 @@ func (loopJoin *LoopJoin) build(proc *process.Process, anal process.Analyze) err
 			return err
 		}
 	}
+	mp.Free()
 	return nil
 }
 

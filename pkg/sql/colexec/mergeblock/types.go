@@ -54,7 +54,7 @@ type MergeBlock struct {
 	Ref                 *plan.ObjectRef
 	PartitionTableNames []string
 	affectedRows        uint64
-	container           *Container
+	container           Container
 
 	vm.OperatorBase
 }
@@ -111,14 +111,12 @@ func (mergeBlock *MergeBlock) Release() {
 }
 
 func (mergeBlock *MergeBlock) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeBlock.Free(proc, pipelineFailed, err)
+	mergeBlock.resetMp(proc)
+	mergeBlock.affectedRows = 0
 }
 
 func (mergeBlock *MergeBlock) Free(proc *process.Process, pipelineFailed bool, err error) {
-	// for k := range mergeBlock.container.mp {
-	// 	mergeBlock.container.mp[k].Clean(proc.GetMPool())
-	// 	mergeBlock.container.mp[k] = nil
-	// }
+	mergeBlock.resetMp(proc)
 }
 
 func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
@@ -144,7 +142,7 @@ func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Proc
 			bat.Attrs = attrs
 			bat.Cnt = 1
 			for idx := 0; idx < len(attrs); idx++ {
-				bat.Vecs[idx] = proc.GetVector(typs[idx])
+				bat.Vecs[idx] = vector.NewVec(typs[idx])
 			}
 			mergeBlock.container.mp[i] = bat
 		}
@@ -153,7 +151,7 @@ func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Proc
 		bat.Attrs = attrs
 		bat.Cnt = 1
 		for idx := 0; idx < len(attrs); idx++ {
-			bat.Vecs[idx] = proc.GetVector(typs[idx])
+			bat.Vecs[idx] = vector.NewVec(typs[idx])
 		}
 		mergeBlock.container.mp[0] = bat
 	}
@@ -252,6 +250,20 @@ func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch) err
 		b.SetRowCount(b.Vecs[0].Length())
 	}
 	return nil
+}
+
+func (mergeBlock *MergeBlock) resetMp(proc *process.Process) {
+	for k := range mergeBlock.container.mp {
+		mergeBlock.container.mp[k].Clean(proc.GetMPool())
+		mergeBlock.container.mp[k] = nil
+		delete(mergeBlock.container.mp, k)
+	}
+	for k, bats := range mergeBlock.container.mp2 {
+		for _, bat := range bats {
+			bat.Clean(proc.GetMPool())
+		}
+		delete(mergeBlock.container.mp2, k)
+	}
 }
 
 func (mergeBlock *MergeBlock) AffectedRows() uint64 {
