@@ -2367,7 +2367,7 @@ func executeStmtWithWorkspace(ses FeSession,
 	if execCtx.inMigration {
 		autocommit = true
 	} else {
-		autocommit, err = autocommitValue(execCtx.reqCtx, ses)
+		autocommit, err = autocommitValue(ses)
 		if err != nil {
 			return err
 		}

@@ -111,7 +111,6 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 				if ap.ctr.lastrow == 0 {
-					proc.PutBatch(ap.ctr.bat)
 					ap.ctr.bat = nil
 				}
 			}
@@ -180,7 +179,6 @@ func (ctr *container) emptyProbe(ap *AntiJoin, proc *process.Process, anal proce
 	}
 
 	result.Batch = ctr.rbat
-	proc.PutBatch(ap.ctr.bat)
 	ap.ctr.lastrow = 0
 	ap.ctr.bat = nil
 	return nil

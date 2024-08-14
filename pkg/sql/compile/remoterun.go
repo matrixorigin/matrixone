@@ -409,11 +409,6 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 		}
 		s.doSetRootOperator(ins)
 	}
-	if s.isShuffle() {
-		for _, rr := range s.Proc.Reg.MergeReceivers {
-			rr.Ch = make(chan *process.RegisterMessage, 16)
-		}
-	}
 	return nil
 }
 
@@ -773,6 +768,9 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 	case *merge.Merge:
 		in.Merge = &pipeline.Merge{
 			SinkScan: t.SinkScan,
+			Partial:  t.Partial,
+			StartIdx: t.StartIDX,
+			EndIdx:   t.EndIDX,
 		}
 	case *mergerecursive.MergeRecursive:
 	case *mergegroup.MergeGroup:
@@ -1246,7 +1244,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = connector.NewArgument().
 			WithReg(ctx.root.getRegister(t.PipelineId, t.ConnectorIndex))
 	case vm.Merge:
-		op = merge.NewArgument()
+		t := opr.GetMerge()
+		mergeOp := merge.NewArgument()
+		mergeOp.SinkScan = t.SinkScan
+		mergeOp.Partial = t.Partial
+		mergeOp.StartIDX = t.StartIdx
+		mergeOp.EndIDX = t.EndIdx
+		op = mergeOp
 	case vm.MergeRecursive:
 		op = mergerecursive.NewArgument()
 	case vm.MergeGroup:
