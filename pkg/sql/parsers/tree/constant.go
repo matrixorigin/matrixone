@@ -151,9 +151,8 @@ func (n *NumVal) Negative() bool {
 	return n.negative
 }
 
-func NewNumValWithType2[T bool | int64 | uint64 | float64 | string](value constant.Value, val T, originString string, negative bool, typ P_TYPE) *NumVal {
+func NewNumValWithType2[T bool | int64 | uint64 | float64 | string](val T, originString string, negative bool, typ P_TYPE) *NumVal {
 	nv := &NumVal{
-		Value:      value,
 		ValType:    typ,
 		negative:   negative,
 		origString: originString,
@@ -207,15 +206,6 @@ func (n *NumVal) Format(ctx *FmtCtx) {
 	default:
 		ctx.WriteValue(n.ValType, n.origString)
 	}
-
-	// switch n.Value.Kind() {
-	// case constant.String:
-	// 	ctx.WriteValue(n.ValType, n.origString)
-	// case constant.Bool:
-	// 	ctx.WriteString(strings.ToLower(n.Value.String()))
-	// case constant.Unknown:
-	// 	ctx.WriteString("null")
-	// }
 }
 
 // Accept implements NodeChecker Accept interface.

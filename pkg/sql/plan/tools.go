@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"go/constant"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -31,7 +29,7 @@ const (
 
 func makeZeroRecursiveLevel() tree.SelectExpr {
 	return tree.SelectExpr{
-		Expr: tree.NewNumValWithType2(constant.MakeInt64(0), int64(0), "0", false, tree.P_int64),
+		Expr: tree.NewNumValWithType2(int64(0), "0", false, tree.P_int64),
 		As:   tree.NewCStr(moRecursiveLevelCol, 1),
 	}
 
@@ -39,7 +37,7 @@ func makeZeroRecursiveLevel() tree.SelectExpr {
 
 func makePlusRecursiveLevel(name string, lower int64) tree.SelectExpr {
 	a := tree.NewUnresolvedName(tree.NewCStr(name, lower), tree.NewCStr(moRecursiveLevelCol, 1))
-	b := tree.NewNumValWithType2(constant.MakeInt64(1), int64(1), "1", false, tree.P_int64)
+	b := tree.NewNumValWithType2(int64(1), "1", false, tree.P_int64)
 	return tree.SelectExpr{
 		Expr: tree.NewBinaryExpr(tree.PLUS, a, b),
 		As:   tree.NewCStr("", 1),
