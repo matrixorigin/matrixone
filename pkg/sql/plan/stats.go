@@ -830,7 +830,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		if node.ObjRef != nil && leafNode {
 			if builder.isRestore {
 				node.Stats = DefaultHugeStats()
-			} else  {
+			} else {
 				if len(node.BindingTags) > 0 {
 					builder.tag2Table[node.BindingTags[0]] = node.TableDef
 				}
