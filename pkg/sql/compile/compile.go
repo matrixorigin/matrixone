@@ -3459,6 +3459,7 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		rs = c.mergeScopesByCN(probeScopes)
 	}
 	for i := range rs {
+		rs[i].Magic = Remote
 		rs[i].IsJoin = true
 		rs[i].NodeInfo.Mcpu = c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
 	}
