@@ -915,6 +915,9 @@ func (backSes *backSession) log(ctx context.Context, level zapcore.Level, msg st
 	logger := backSes.getMOLogger()
 	if logger.Enabled(level) {
 		fields = append(fields, zap.String("session_info", backSes.GetDebugString()), zap.Bool("background", true))
+		if backSes.tenant != nil {
+			zap.String("role", backSes.tenant.GetDefaultRole())
+		}
 		fields = appendSessionField(fields, backSes)
 		fields = appendTraceField(fields, ctx)
 		logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
@@ -926,6 +929,9 @@ func (backSes *backSession) logf(ctx context.Context, level zapcore.Level, msg s
 	if logger.Enabled(level) {
 		fields := make([]zap.Field, 0, 5)
 		fields = append(fields, zap.String("session_info", backSes.GetDebugString()), zap.Bool("background", true))
+		if backSes.tenant != nil {
+			zap.String("role", backSes.tenant.GetDefaultRole())
+		}
 		fields = appendSessionField(fields, backSes)
 		fields = appendTraceField(fields, ctx)
 		logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)

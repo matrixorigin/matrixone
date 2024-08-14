@@ -281,6 +281,7 @@ func (rm *RoutineManager) Created(rs *Conn) error {
 		pro.receiveExtraInfo(rs)
 	}
 	rm.setRoutine(rs, pro.connectionID, routine)
+	ses.UpdateDebugString()
 	return nil
 }
 

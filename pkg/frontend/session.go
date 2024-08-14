@@ -1722,6 +1722,9 @@ func (ses *Session) log(ctx context.Context, level zapcore.Level, msg string, fi
 	ses.initLogger()
 	if ses.logLevel.Enabled(level) {
 		fields = append(fields, zap.String("session_info", ses.debugStr)) // not use ses.GetDebugStr() because this func may be locked.
+		if ses.tenant != nil {
+			zap.String("role", ses.tenant.GetDefaultRole())
+		}
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
 		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
@@ -1736,6 +1739,9 @@ func (ses *Session) logf(ctx context.Context, level zapcore.Level, format string
 	if ses.logLevel.Enabled(level) {
 		fields := make([]zap.Field, 0, 5)
 		fields = append(fields, zap.String("session_info", ses.debugStr))
+		if ses.tenant != nil {
+			zap.String("role", ses.tenant.GetDefaultRole())
+		}
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
 		ses.logger.Log(fmt.Sprintf(format, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
