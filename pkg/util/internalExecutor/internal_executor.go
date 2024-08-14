@@ -82,11 +82,9 @@ type InternalExecResult interface {
 	RowCount() uint64
 	Row(context.Context, uint64) ([]interface{}, error)
 	Value(context.Context, uint64, uint64) (interface{}, error)
-	StrValue(context.Context, uint64, uint64) (string, error)
-	U64Value(context.Context, uint64, uint64) (uint64, error)
-	ValueByName(context.Context, uint64, string) (interface{}, error)
-	StringValueByName(context.Context, uint64, string) (string, error)
-	Float64ValueByName(context.Context, uint64, string) (float64, error)
+	GetUint64(context.Context, uint64, uint64) (uint64, error)
+	GetFloat64(context.Context, uint64, uint64) (float64, error)
+	GetString(context.Context, uint64, uint64) (string, error)
 }
 
 type InternalExecutor interface {
