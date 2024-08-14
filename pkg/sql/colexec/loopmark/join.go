@@ -92,7 +92,6 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
@@ -113,7 +112,6 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 			anal.Output(result.Batch, loopMark.GetIsLast())
-			proc.PutBatch(bat)
 			return result, err
 
 		default:

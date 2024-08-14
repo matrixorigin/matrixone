@@ -129,7 +129,6 @@ func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		allocSize += ctr.maxAllocSize
 
 		if leftJoin.ctr.bat != nil {
-			proc.PutBatch(leftJoin.ctr.bat)
 			leftJoin.ctr.bat = nil
 		}
 		leftJoin.ctr.lastrow = 0
