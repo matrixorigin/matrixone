@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 package mergetop
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -43,7 +42,7 @@ type container struct {
 
 type MergeTop struct {
 	Limit *plan.Expr          // Limit store the number of mergeTop-operator
-	ctr   *container          // ctr stores the attributes needn't do Serialization work
+	ctr   container           // ctr stores the attributes needn't do Serialization work
 	Fs    []*plan.OrderBySpec // Fs store the order information
 
 	vm.OperatorBase
@@ -54,7 +53,7 @@ func (mergeTop *MergeTop) GetOperatorBase() *vm.OperatorBase {
 }
 
 func init() {
-	reuse.CreatePool[MergeTop](
+	reuse.CreatePool(
 		func() *MergeTop {
 			return &MergeTop{}
 		},
@@ -86,32 +85,46 @@ func (mergeTop *MergeTop) WithFs(fs []*plan.OrderBySpec) *MergeTop {
 
 func (mergeTop *MergeTop) Release() {
 	if mergeTop != nil {
-		reuse.Free[MergeTop](mergeTop, nil)
+		reuse.Free(mergeTop, nil)
 	}
 }
 
 func (mergeTop *MergeTop) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeTop.Free(proc, pipelineFailed, err)
+	mergeTop.ctr.reset()
 }
 
 func (mergeTop *MergeTop) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := mergeTop.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanExecutors()
-		mergeTop.ctr = nil
-	}
+	mergeTop.ctr.free(proc)
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (ctr *container) reset() {
+
+	ctr.n = 0
+	ctr.sels = ctr.sels[:0]
+	ctr.poses = ctr.poses[:0]
+	ctr.cmps = ctr.cmps[:0]
+
+	ctr.limit = 0
+	if ctr.limitExecutor != nil {
+		ctr.limitExecutor.ResetForNextQuery()
+	}
+
 	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
+		ctr.bat.CleanOnlyData()
+	}
+
+	for _, executor := range ctr.executorsForOrderList {
+		if executor != nil {
+			executor.ResetForNextQuery()
+		}
 	}
 }
 
-func (ctr *container) cleanExecutors() {
+func (ctr *container) free(proc *process.Process) {
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.Mp())
+	}
+
 	for i := range ctr.executorsForOrderList {
 		if ctr.executorsForOrderList[i] == nil {
 			continue
@@ -121,7 +134,6 @@ func (ctr *container) cleanExecutors() {
 
 	if ctr.limitExecutor != nil {
 		ctr.limitExecutor.Free()
-		ctr.limitExecutor = nil
 	}
 }
 

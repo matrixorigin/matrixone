@@ -88,10 +88,29 @@ func NewRegMsg(bat *batch.Batch) *RegisterMessage {
 
 // WaitRegister channel
 type WaitRegister struct {
-	// Ctx, context for data receiver.
+	// Ctx, context of data receiver's pipeline.
+	//
+	// todo:
+	// This must cause a race here, because the context was shared by multiple pipelines.
+	//
+	// Assume we have two pipelines,
+	// pipeline1 and pipeline2, pipeline1 will dispatch data to pipeline2.
+	// so they share the same WaitRegister.
+	// and all of the receiver pipeline2 is parallel type.
+	//
+	// see the function `setContextForParallelScope` in `pkg/sql/compile/compile2.go`,
+	// we will rebuild pipeline context sometimes for parallel-type pipeline.
+	//
+	// If pipeline1 run first, it will listen to the context of pipeline2 from WaitRegister,
+	// and then pipeline2 run, it will rebuild the context, and the context of pipeline2 will be changed.
+	// it's a race but maybe not a problem, because the receiver never receive data before the pipeline2 run.
+	//
+	// it's a better way to use a self context but not the pipeline context here.
+	// and the receiver shut down the context when it's done.
 	Ctx context.Context
-	// Ch, data receiver channel, receiver will wait for data from this channel.
+	// Ch, data receiver's channel, receiver will wait for data from this channel.
 	Ch chan *RegisterMessage
+
 	// how many nil batch this channel can receive, default 0 means every nil batch close channel
 	NilBatchCnt int
 }

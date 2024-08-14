@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,7 +40,7 @@ func (mergeTop *MergeTop) String(buf *bytes.Buffer) {
 		}
 		buf.WriteString(f.String())
 	}
-	buf.WriteString(fmt.Sprintf("], %v)", mergeTop.Limit))
+	fmt.Fprintf(buf, "], %v)", mergeTop.Limit)
 }
 
 func (mergeTop *MergeTop) OpType() vm.OpType {
@@ -47,31 +48,47 @@ func (mergeTop *MergeTop) OpType() vm.OpType {
 }
 
 func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
-	mergeTop.ctr = new(container)
-	mergeTop.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, mergeTop.Limit)
-	if err != nil {
-		return err
+
+	// limit executor
+	if mergeTop.ctr.limitExecutor == nil {
+		mergeTop.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, mergeTop.Limit)
+		if err != nil {
+			return err
+		}
 	}
 	vec, err := mergeTop.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
 	mergeTop.ctr.limit = vector.MustFixedCol[uint64](vec)[0]
-	if mergeTop.ctr.limit > 1024 {
-		mergeTop.ctr.sels = make([]int64, 0, 1024)
-	} else {
-		mergeTop.ctr.sels = make([]int64, 0, mergeTop.ctr.limit)
-	}
-	mergeTop.ctr.poses = make([]int32, 0, len(mergeTop.Fs))
 
-	ctr := mergeTop.ctr
-	ctr.executorsForOrderList = make([]colexec.ExpressionExecutor, len(mergeTop.Fs))
-	for i := range ctr.executorsForOrderList {
-		ctr.executorsForOrderList[i], err = colexec.NewExpressionExecutor(proc, mergeTop.Fs[i].Expr)
-		if err != nil {
-			return err
+	// sels
+	selsCap := int(mergeTop.ctr.limit)
+	if selsCap > 1024 {
+		selsCap = 1024
+	}
+	if c := cap(mergeTop.ctr.sels); c < selsCap {
+		mergeTop.ctr.sels = slices.Grow(mergeTop.ctr.sels, selsCap-c)
+	}
+	mergeTop.ctr.sels = mergeTop.ctr.sels[:0]
+
+	// poses
+	if c := cap(mergeTop.ctr.poses); c < len(mergeTop.Fs) {
+		mergeTop.ctr.poses = slices.Grow(mergeTop.ctr.poses, len(mergeTop.Fs)-c)
+	}
+	mergeTop.ctr.poses = mergeTop.ctr.poses[:0]
+
+	// executor for order list
+	if len(mergeTop.ctr.executorsForOrderList) != len(mergeTop.Fs) {
+		mergeTop.ctr.executorsForOrderList = make([]colexec.ExpressionExecutor, len(mergeTop.Fs))
+		for i := range mergeTop.ctr.executorsForOrderList {
+			mergeTop.ctr.executorsForOrderList[i], err = colexec.NewExpressionExecutor(proc, mergeTop.Fs[i].Expr)
+			if err != nil {
+				return err
+			}
 		}
 	}
+
 	return nil
 }
 
@@ -83,7 +100,6 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(mergeTop.GetIdx(), mergeTop.GetParallelIdx(), mergeTop.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := mergeTop.ctr
 	result := vm.NewCallResult()
 	if mergeTop.ctr.limit == 0 {
 		result.Batch = nil
@@ -91,19 +107,19 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
-	if end, err := ctr.build(mergeTop, proc, anal, mergeTop.GetIsFirst()); err != nil {
+	if end, err := mergeTop.ctr.build(mergeTop, proc, anal, mergeTop.GetIsFirst()); err != nil {
 		return result, err
 	} else if end {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 
-	if ctr.bat == nil {
+	if mergeTop.ctr.bat == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	err := ctr.eval(mergeTop.ctr.limit, proc, anal, mergeTop.GetIsLast(), &result)
+	err := mergeTop.ctr.eval(mergeTop.ctr.limit, proc, anal, mergeTop.GetIsLast(), &result)
 	if err == nil {
 		result.Status = vm.ExecStop
 		return result, nil

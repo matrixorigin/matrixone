@@ -44,7 +44,7 @@ type container struct {
 }
 
 type LoopSingle struct {
-	ctr        *container
+	ctr        container
 	Cond       *plan.Expr
 	Typs       []types.Type
 	Result     []colexec.ResultPos
@@ -86,15 +86,28 @@ func (loopSingle *LoopSingle) Release() {
 }
 
 func (loopSingle *LoopSingle) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	loopSingle.Free(proc, pipelineFailed, err)
+	ctr := &loopSingle.ctr
+
+	ctr.resetExprExecutor()
+	ctr.state = Build
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.Mp())
+		ctr.bat = nil
+	}
+
+	if loopSingle.ProjectList != nil {
+		anal := proc.GetAnalyze(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor())
+		anal.Alloc(loopSingle.ProjectAllocSize)
+		loopSingle.ResetProjection(proc)
+	}
 }
 
 func (loopSingle *LoopSingle) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := loopSingle.ctr; ctr != nil {
-		ctr.cleanBatch(proc.Mp())
-		ctr.cleanExprExecutor()
-		loopSingle.ctr = nil
-	}
+	ctr := &loopSingle.ctr
+
+	ctr.cleanBatch(proc.Mp())
+	ctr.cleanExprExecutor()
+
 	if loopSingle.ProjectList != nil {
 		anal := proc.GetAnalyze(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor())
 		anal.Alloc(loopSingle.ProjectAllocSize)
@@ -114,6 +127,12 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
+	}
+}
+
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
 }
 

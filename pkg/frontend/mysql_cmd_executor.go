@@ -33,6 +33,9 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -47,7 +50,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -67,8 +69,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 func createDropDatabaseErrorInfo() string {
@@ -381,6 +381,8 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		return roleName, nil
 	}
 
+	needRowsAndSizeTableTypes := []string{catalog.SystemOrdinaryRel, catalog.SystemMaterializedRel}
+
 	mrs := ses.GetMysqlResultSet()
 	for _, row := range ses.data {
 		tableName := string(row[0].([]byte))
@@ -393,12 +395,16 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		if err != nil {
 			return err
 		}
-		if row[3], err = r.Rows(ctx); err != nil {
-			return err
+
+		if slices.Contains(needRowsAndSizeTableTypes, r.GetTableDef(ctx).TableType) {
+			if row[3], err = r.Rows(ctx); err != nil {
+				return err
+			}
+			if row[5], err = r.Size(ctx, disttae.AllColumns); err != nil {
+				return err
+			}
 		}
-		if row[5], err = r.Size(ctx, disttae.AllColumns); err != nil {
-			return err
-		}
+
 		roleId := row[17].(uint32)
 		// role name
 		if tableName == catalog.MO_DATABASE || tableName == catalog.MO_TABLES || tableName == catalog.MO_COLUMNS {
@@ -802,7 +808,6 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 	}
 
 	rows := make([][]interface{}, 0, len(gSysVarsDefs))
-	//for name, value := range sysVars {
 	for name, def := range gSysVarsDefs {
 		if hasLike {
 			s := name
@@ -1907,7 +1912,7 @@ func checkModify(plan0 *plan.Plan, ses FeSession) bool {
 		return true
 	}
 	checkFn := func(db string, tableName string, tableId uint64, version uint32) bool {
-		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, tableName, plan.Snapshot{TS: &timestamp.Timestamp{}})
+		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, tableName, nil)
 		if tableDef == nil {
 			return true
 		}
@@ -1985,7 +1990,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		}
 		stmts = append(stmts, cmdFieldStmt)
 	} else {
-		stmts, err = parseSql(execCtx)
+		stmts, err = parseSql(execCtx, ses.GetMySQLParser())
 		if err != nil {
 			return nil, err
 		}
@@ -1997,13 +2002,13 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	return cws, nil
 }
 
-func parseSql(execCtx *ExecCtx) (stmts []tree.Statement, err error) {
+func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, err error) {
 	var v interface{}
 	v, err = execCtx.ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
 		v = int64(1)
 	}
-	stmts, err = parsers.Parse(execCtx.reqCtx, dialect.MYSQL, execCtx.input.getSql(), v.(int64))
+	stmts, err = p.Parse(execCtx.reqCtx, execCtx.input.getSql(), v.(int64))
 	if err != nil {
 		return nil, err
 	}
@@ -2132,7 +2137,7 @@ func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeS
 func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, mysqlRrWr MysqlRrWr, skipWrite bool, epoch uint64) (bool, time.Duration, time.Duration, error) {
 	var readTime, writeTime time.Duration
 	readStart := time.Now()
-	payload, err := mysqlRrWr.Read()
+	payload, err := mysqlRrWr.ReadLoadLocalPacket()
 	if err != nil {
 		if errors.Is(err, errorInvalidLength0) {
 			return skipWrite, readTime, writeTime, err
@@ -2347,6 +2352,7 @@ func executeStmtWithWorkspace(ses FeSession,
 	//1. start txn
 	//special BEGIN,COMMIT,ROLLBACK
 	beginStmt := false
+	execCtx.txnOpt.Close()
 	switch execCtx.stmt.(type) {
 	case *tree.BeginTransaction:
 		execCtx.txnOpt.byBegin = true
@@ -2364,7 +2370,7 @@ func executeStmtWithWorkspace(ses FeSession,
 	if execCtx.inMigration {
 		autocommit = true
 	} else {
-		autocommit, err = autocommitValue(execCtx.reqCtx, ses)
+		autocommit, err = autocommitValue(ses)
 		if err != nil {
 			return err
 		}
@@ -2481,7 +2487,7 @@ func dispatchStmt(ses FeSession,
 			//plan changed
 			//clear all cached plan and parse sql again
 			var stmts []tree.Statement
-			stmts, err = parseSql(execCtx)
+			stmts, err = parseSql(execCtx, ses.GetMySQLParser())
 			if err != nil {
 				return err
 			}
@@ -2862,6 +2868,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if ses.proc != nil {
 			ses.proc.Base.UnixTime = proc.Base.UnixTime
 		}
+		execCtx.txnOpt.Close()
 		execCtx.stmt = stmt
 		execCtx.isLastStmt = i >= len(cws)-1
 		execCtx.tenant = tenant

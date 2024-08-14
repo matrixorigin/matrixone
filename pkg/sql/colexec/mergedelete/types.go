@@ -31,7 +31,7 @@ type container struct {
 	partitionSources []engine.Relation
 }
 type MergeDelete struct {
-	ctr                 *container
+	ctr                 container
 	AddAffectedRows     bool
 	AffectedRows        uint64
 	Ref                 *plan.ObjectRef
@@ -93,7 +93,7 @@ func (mergeDelete *MergeDelete) Release() {
 }
 
 func (mergeDelete *MergeDelete) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeDelete.Free(proc, pipelineFailed, err)
+	mergeDelete.AffectedRows = 0
 }
 
 func (mergeDelete *MergeDelete) Free(proc *process.Process, pipelineFailed bool, err error) {

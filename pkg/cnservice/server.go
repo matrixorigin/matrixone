@@ -710,12 +710,13 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if s.cfg.Txn.PkDedupCount > 0 {
 			opts = append(opts, client.WithCheckDup())
 		}
+		traceService := trace.GetService(s.cfg.UUID)
 		opts = append(opts,
 			client.WithLockService(s.lockService),
 			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
 			client.WithTxnOpenedCallback([]func(op client.TxnOperator){
 				func(op client.TxnOperator) {
-					trace.GetService(s.cfg.UUID).TxnCreated(op)
+					traceService.TxnCreated(op)
 				},
 			}),
 		)
@@ -766,6 +767,7 @@ func (s *service) initShardService() {
 			shardservice.ReadReader:                   disttae.HandleShardingReadReader,
 			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
 			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
+			shardservice.ReadVisibleObjectStats:       disttae.HandleShardingReadVisibleObjectStats,
 		},
 		s.storeEngine,
 	)

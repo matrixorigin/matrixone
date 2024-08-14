@@ -134,8 +134,6 @@ type Scope struct {
 	// Proc contains the execution context.
 	Proc *process.Process
 
-	Reg *process.WaitRegister
-
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
 	BuildIdx   int
