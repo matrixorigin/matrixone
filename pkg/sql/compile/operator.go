@@ -397,9 +397,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		t := sourceOp.(*merge.Merge)
 		op := merge.NewArgument()
 		op.SinkScan = t.SinkScan
-		op.Partial = t.Partial
-		op.StartIDX = t.StartIDX
-		op.EndIDX = t.EndIDX
 		op.SetInfo(&info)
 		return op
 	case vm.MergeRecursive:
@@ -1531,7 +1528,7 @@ func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.S
 	return arg
 }
 
-func constructShuffleArgForGroup(ss []*Scope, node *plan.Node) *shuffle.Shuffle {
+func constructShuffleGroupArg(ss []*Scope, node *plan.Node) *shuffle.Shuffle {
 	arg := shuffle.NewArgument()
 	hashCol, typ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
 	arg.ShuffleColIdx = hashCol.ColPos

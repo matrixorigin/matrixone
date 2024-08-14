@@ -81,7 +81,7 @@ type Handler interface {
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req *apipb.MergeCommitEntry,
-		resp *apipb.TNStringResponse,
+		resp *db.InspectResp,
 	) error
 
 	HandleForceCheckpoint(

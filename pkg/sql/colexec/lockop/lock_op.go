@@ -17,6 +17,7 @@ package lockop
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -79,7 +80,9 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 	lockOp.ctr.rt.parker = types.NewPacker()
 	lockOp.ctr.rt.retryError = nil
 	lockOp.ctr.rt.step = stepLock
-
+	if lockOp.block {
+		lockOp.ctr.rt.InitReceiver(proc, true)
+	}
 	return nil
 }
 
@@ -176,11 +179,7 @@ func callBlocking(
 
 			// blocking lock node. Never pass the input batch into downstream operators before
 			// all lock are performed.
-			appendBat, err := bat.Dup(proc.GetMPool())
-			if err != nil {
-				return result, err
-			}
-			lockOp.ctr.rt.cachedBatches = append(lockOp.ctr.rt.cachedBatches, appendBat)
+			lockOp.ctr.rt.cachedBatches = append(lockOp.ctr.rt.cachedBatches, bat)
 		}
 	}
 
@@ -630,7 +629,8 @@ func canRetryLock(txn client.TxnOperator, err error) bool {
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
-		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+		errors.Is(err, context.DeadlineExceeded) {
 		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
@@ -874,6 +874,7 @@ func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error
 			}
 			lockOp.ctr.rt.retryError = nil
 			lockOp.cleanCachedBatch(proc)
+			lockOp.ctr.rt.FreeMergeTypeOperator(pipelineFailed)
 			lockOp.ctr.rt = nil
 		}
 		lockOp.ctr = nil
@@ -881,28 +882,29 @@ func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error
 
 }
 
-func (lockOp *LockOp) cleanCachedBatch(proc *process.Process) {
-	for _, bat := range lockOp.ctr.rt.cachedBatches {
-		bat.Clean(proc.Mp())
-	}
+func (lockOp *LockOp) cleanCachedBatch(_ *process.Process) {
+	// do not need clean,  only set nil
+	// for _, bat := range arg.ctr.rt.cachedBatches {
+	// 	bat.Clean(proc.Mp())
+	// }
 	lockOp.ctr.rt.cachedBatches = nil
 }
 
 func (lockOp *LockOp) getBatch(
-	proc *process.Process,
+	_ *process.Process,
 	anal process.Analyze,
 	isFirst bool) (*batch.Batch, error) {
 	fn := lockOp.ctr.rt.batchFetchFunc
 	if fn == nil {
-		fn = lockOp.GetChildren(0).Call
+		fn = lockOp.ctr.rt.ReceiveFromAllRegs
 	}
 
-	input, err := fn(proc)
-	if err != nil {
-		return nil, err
+	msg := fn(anal)
+	if msg.Err != nil {
+		return nil, msg.Err
 	}
-	anal.Input(input.Batch, isFirst)
-	return input.Batch, nil
+	anal.Input(msg.Batch, isFirst)
+	return msg.Batch, nil
 }
 
 func getRowsFilter(

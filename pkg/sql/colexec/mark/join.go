@@ -121,16 +121,19 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if bat.IsEmpty() {
+				proc.PutBatch(bat)
 				continue
 			}
 			anal.Input(bat, markJoin.GetIsFirst())
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
 				if err = ctr.emptyProbe(bat, markJoin, proc, &result); err != nil {
+					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			} else {
 				if err = ctr.probe(bat, markJoin, proc, &result); err != nil {
+					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
 				}
@@ -142,6 +145,7 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 			anal.Output(result.Batch, markJoin.GetIsLast())
+			proc.PutBatch(bat)
 			return result, nil
 
 		default:

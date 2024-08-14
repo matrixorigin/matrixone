@@ -759,7 +759,7 @@ func TestCompaction2(t *testing.T) {
 			view, _ := blk.GetColumnDataById(context.Background(), 3)
 			assert.NotNil(t, view)
 			view.Close()
-			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).Appendable())
+			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
 			it.Next()
 		}
 	}
@@ -774,8 +774,8 @@ func TestCompaction2(t *testing.T) {
 			view, _ := blk.GetColumnDataById(context.Background(), 3)
 			assert.NotNil(t, view)
 			view.Close()
-			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).Appendable())
-			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).GetObjectData().Appendable())
+			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
+			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).GetObjectData().IsAppendable())
 			it.Next()
 		}
 	}

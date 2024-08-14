@@ -444,7 +444,7 @@ func (c *DashboardCreator) initCloudCtrlPlaneFilterOptions(metaDatasource string
 }
 
 func (c *DashboardCreator) getLocalFilters() string {
-	return `instance=~"$instance"`
+	return ""
 }
 
 func (c *DashboardCreator) initLocalFilterOptions() {

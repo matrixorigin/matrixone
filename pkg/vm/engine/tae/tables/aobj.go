@@ -110,12 +110,6 @@ func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
 
 func (obj *aobject) PrepareCompact() bool {
 	if obj.RefCount() > 0 {
-		if obj.meta.Load().CheckPrintPrepareCompactLocked(1 * time.Second) {
-			if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
-				logutil.Infof("object ref count is %d", obj.RefCount())
-			}
-			obj.meta.Load().PrintPrepareCompactDebugLog()
-		}
 		return false
 	}
 

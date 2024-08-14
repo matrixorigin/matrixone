@@ -70,9 +70,3 @@ func (c *ClosureDeallocatorPool[T, P]) Get(args T) Deallocator {
 	closure.SetArgument(args)
 	return closure
 }
-
-func (c *ClosureDeallocatorPool[T, P]) Get2(fn func(*T) T) Deallocator {
-	closure := c.pool.Get().(*ClosureDeallocator[T, P])
-	closure.SetArgument(fn(&closure.argument))
-	return closure
-}

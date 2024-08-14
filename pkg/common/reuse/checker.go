@@ -29,7 +29,7 @@ var (
 
 type step int
 
-type checker[T any, P ReusableObject[T]] struct {
+type checker[T ReusableObject] struct {
 	enable bool
 	mu     struct {
 		sync.RWMutex
@@ -41,8 +41,8 @@ type checker[T any, P ReusableObject[T]] struct {
 	}
 }
 
-func newChecker[T any, P ReusableObject[T]](enable bool) *checker[T, P] {
-	c := &checker[T, P]{
+func newChecker[T ReusableObject](enable bool) *checker[T] {
+	c := &checker[T]{
 		enable: enable,
 	}
 	c.mu.m = make(map[uintptr]step)
@@ -51,7 +51,7 @@ func newChecker[T any, P ReusableObject[T]](enable bool) *checker[T, P] {
 	return c
 }
 
-func (c *checker[T, P]) created(v P) {
+func (c *checker[T]) created(v *T) {
 	if !enableChecker.Load() || !c.enable {
 		return
 	}
@@ -62,7 +62,7 @@ func (c *checker[T, P]) created(v P) {
 	c.mu.m[k] = idle
 }
 
-func (c *checker[T, P]) got(v P) {
+func (c *checker[T]) got(v *T) {
 	if !enableChecker.Load() || !c.enable {
 		return
 	}
@@ -87,7 +87,7 @@ func (c *checker[T, P]) got(v P) {
 	}
 }
 
-func (c *checker[T, P]) free(v P) {
+func (c *checker[T]) free(v *T) {
 	if !enableChecker.Load() || !c.enable {
 		return
 	}
@@ -113,7 +113,7 @@ func (c *checker[T, P]) free(v P) {
 	}
 }
 
-func (c *checker[T, P]) gc(v P) {
+func (c *checker[T]) gc(v *T) {
 	if !enableChecker.Load() || !c.enable {
 		return
 	}

@@ -16,13 +16,11 @@ package compile
 
 import (
 	"context"
-	"sync"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	txnClient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"time"
 )
 
 // todo: Move it to a CN level structure next day.
@@ -42,7 +40,9 @@ func GetCompileService() *ServiceOfCompile {
 //
 // It also tracks the currently active complies within a single CN.
 type ServiceOfCompile struct {
-	sync.Mutex
+	// lch is lock for the service.
+	// we use channel but not mutex to prevent users' cannot stop his query when the service is paused.
+	lch chan struct{}
 
 	// ongoing compiles with additional information.
 	aliveCompiles map[*Compile]compileAdditionalInformation
@@ -90,8 +90,10 @@ func (waiter queryDoneWaiter) clear() {
 
 func InitCompileService() *ServiceOfCompile {
 	srv := &ServiceOfCompile{
+		lch:           make(chan struct{}, 1),
 		aliveCompiles: make(map[*Compile]compileAdditionalInformation, 1024),
 	}
+	srv.lch <- struct{}{}
 	return srv
 }
 
@@ -111,37 +113,35 @@ func (srv *ServiceOfCompile) recordRunningCompile(runningCompile *Compile) error
 
 	queryCtx, queryCancel := process.GetQueryCtxFromProc(runningCompile.proc)
 
-	srv.Lock()
-	srv.aliveCompiles[runningCompile] = compileAdditionalInformation{
-		mustReturnError: nil,
-		queryCancel:     queryCancel,
-		queryDone:       runningCompile.queryStatus,
-	}
-	srv.Unlock()
+	select {
+	case <-srv.lch:
+		runningCompile.proc.SetBaseProcessRunningStatus(true)
+		srv.aliveCompiles[runningCompile] = compileAdditionalInformation{
+			mustReturnError: nil,
+			queryCancel:     queryCancel,
+			queryDone:       runningCompile.queryStatus,
+		}
+		srv.lch <- struct{}{}
+		return nil
 
-	err := queryCtx.Err()
-	if err != nil {
-		_, _ = srv.removeRunningCompile(runningCompile)
+	case <-queryCtx.Done():
+		return queryCtx.Err()
 	}
-	return err
 }
 
 func (srv *ServiceOfCompile) removeRunningCompile(c *Compile) (mustReturnError bool, err error) {
 	c.queryStatus.noticeQueryCompleted()
 	c.proc.SetBaseProcessRunningStatus(false)
 
-	srv.Lock()
-
-	// todo: because we don't deal with the mustReturnError now, I just ignore it.
-	//if item, ok := srv.aliveCompiles[c]; ok {
-	//	err = item.mustReturnError
-	//}
+	<-srv.lch
+	if item, ok := srv.aliveCompiles[c]; ok {
+		err = item.mustReturnError
+	}
 	delete(srv.aliveCompiles, c)
-	srv.Unlock()
-
 	c.queryStatus.clear()
-	//return err != nil, err
-	return false, nil
+	srv.lch <- struct{}{}
+
+	return err != nil, err
 }
 
 func (srv *ServiceOfCompile) putCompile(c *Compile) {
@@ -152,18 +152,18 @@ func (srv *ServiceOfCompile) putCompile(c *Compile) {
 }
 
 func (srv *ServiceOfCompile) aliveCompile() int {
-	srv.Lock()
+	<-srv.lch
 	l := len(srv.aliveCompiles)
-	srv.Unlock()
+	srv.lch <- struct{}{}
 	return l
 }
 
 func (srv *ServiceOfCompile) PauseService() {
-	srv.Lock()
+	<-srv.lch
 }
 
 func (srv *ServiceOfCompile) ResumeService() {
-	srv.Unlock()
+	srv.lch <- struct{}{}
 }
 
 func (srv *ServiceOfCompile) KillAllQueriesWithError(err error) {

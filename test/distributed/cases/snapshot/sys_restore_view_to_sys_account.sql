@@ -309,8 +309,6 @@ create snapshot sp06 for account sys;
 
 restore account sys from snapshot sp05;
 
-select * from partition01;
-select * from partition01 {snapshot = 'sp05'};
 select * from view01;
 select * from view01{snapshot = 'sp05'};
 
@@ -320,8 +318,6 @@ select * from view01{snapshot = 'sp05'};
 
 restore account sys from snapshot sp06;
 select * from view01;
-select * from partition01;
-select * from partition01 {snapshot = 'sp06'};
 select * from view01{snapshot = 'sp06'};
 
 drop view view01;

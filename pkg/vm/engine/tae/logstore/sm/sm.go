@@ -34,7 +34,7 @@ func NewStateMachine(wg *sync.WaitGroup, closed Closable, rQueue, ckpQueue Queue
 	}
 }
 
-func (sm *stateMachine) EnqueueReceived(item any) (any, error) {
+func (sm *stateMachine) EnqueueRecevied(item any) (any, error) {
 	return sm.receiveQueue.Enqueue(item)
 }
 

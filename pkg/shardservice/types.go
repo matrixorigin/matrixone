@@ -164,7 +164,6 @@ const (
 	ReadGetColumMetadataScanInfo = 7
 	ReadReader                   = 8
 	ReadMergeObjects             = 9
-	ReadVisibleObjectStats       = 10
 )
 
 type ReadRequest struct {

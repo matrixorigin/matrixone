@@ -25,14 +25,14 @@ import (
 // There are many places throughout the system where temporary objects need to
 // be created, and if these places are in our hot path, we need to consider using
 // a pool to reduce the number of temporary objects.
-type Pool[T any, P ReusableObject[T]] interface {
-	Alloc() P
-	Free(P)
+type Pool[T ReusableObject] interface {
+	Alloc() *T
+	Free(*T)
 }
 
 // Options options to create object pool
-type Options[T any, P ReusableObject[T]] struct {
-	release       func(P)
+type Options[T ReusableObject] struct {
+	release       func(*T)
 	enableChecker bool
 	memCapacity   int64
 
@@ -41,8 +41,7 @@ type Options[T any, P ReusableObject[T]] struct {
 }
 
 // ReusableObject all reusable objects must implements this interface
-type ReusableObject[T any] interface {
-	*T
+type ReusableObject interface {
 	// TypeName returns the name of the object type. We cannot use reflect.TypeOf to get
 	// the name of the object type, to avoid mem allocate.
 	// Outdated, may delete later.

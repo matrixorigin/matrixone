@@ -42,7 +42,7 @@ func newMemPKFilter(
 	ts timestamp.Timestamp,
 	packerPool *fileservice.Pool[*types.Packer],
 	basePKFilter basePKFilter,
-) (filter MemPKFilter, err error) {
+) (filter MemPKFilter) {
 	//defer func() {
 	//	if filter.iter == nil {
 	//		filter.isValid = true
@@ -186,9 +186,7 @@ func newMemPKFilter(
 			packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
 		} else {
 			vec := vector.NewVec(types.T_any.ToType())
-			if err = vec.UnmarshalBinary(basePKFilter.vec.([]byte)); err != nil {
-				return MemPKFilter{}, err
-			}
+			vec.UnmarshalBinary(basePKFilter.vec.([]byte))
 			packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
 		}
 

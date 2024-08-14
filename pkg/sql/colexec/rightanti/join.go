@@ -43,7 +43,7 @@ func (rightAnti *RightAnti) OpType() vm.OpType {
 
 func (rightAnti *RightAnti) Prepare(proc *process.Process) (err error) {
 	rightAnti.ctr = new(container)
-	rightAnti.ctr.InitProc(proc)
+	rightAnti.ctr.InitReceiver(proc, false)
 	rightAnti.ctr.vecs = make([]*vector.Vector, len(rightAnti.Conditions[0]))
 	rightAnti.ctr.evecs = make([]evalVector, len(rightAnti.Conditions[0]))
 	for i := range rightAnti.ctr.evecs {
@@ -95,10 +95,12 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if bat.IsEmpty() {
+				proc.PutBatch(bat)
 				continue
 			}
 
 			if ctr.batchRowCount == 0 {
+				proc.PutBatch(bat)
 				continue
 			}
 
@@ -240,6 +242,7 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyze pro
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Process, analyze process.Analyze, isFirst bool, _ bool) error {
+	defer proc.PutBatch(bat)
 	analyze.Input(bat, isFirst)
 
 	if err := ctr.evalJoinCondition(bat, proc); err != nil {

@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 )
 
@@ -187,7 +188,7 @@ func buildTestShowCreateTable(sql string) (string, error) {
 		return "", err
 	}
 
-	var snapshot *plan.Snapshot
+	snapshot := Snapshot{TS: &timestamp.Timestamp{}}
 	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false)
 	if err != nil {
 		return "", err

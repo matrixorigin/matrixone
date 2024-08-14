@@ -39,17 +39,17 @@ func (s *taeStorage) Read(
 	}
 }
 
-type unmarshaler[T any] interface {
+type unmashaler[T any] interface {
 	*T
 	encoding.BinaryUnmarshaler
 }
 
-type marshaller[T any] interface {
+type mashaler[T any] interface {
 	*T
 	encoding.BinaryMarshaler
 }
 
-func handleRead[PReq unmarshaler[Req], PResp marshaller[Resp], Req, Resp any](
+func handleRead[PReq unmashaler[Req], PResp mashaler[Resp], Req, Resp any](
 	ctx context.Context,
 	txnMeta txn.TxnMeta,
 	payload []byte,

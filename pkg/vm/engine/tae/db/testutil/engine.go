@@ -747,7 +747,7 @@ func (e *TestEngine) CheckReadCNCheckpoint() {
 
 func (e *TestEngine) CheckCollectDeleteInRange() {
 	txn, rel := e.GetRelation()
-	ForEachObject(e.T, rel, func(obj handle.Object) error {
+	ForEachObject(rel, func(obj handle.Object) error {
 		meta := obj.GetMeta().(*catalog.ObjectEntry)
 		deleteBat, _, err := meta.GetObjectData().CollectDeleteInRange(
 			context.Background(), types.TS{}, txn.GetStartTS(), false, common.DefaultAllocator,

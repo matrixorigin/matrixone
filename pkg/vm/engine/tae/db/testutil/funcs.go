@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -196,7 +197,7 @@ func CheckAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, ap
 
 func GetColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDelete bool) int {
 	rows := 0
-	ForEachColumnView(t, rel, colIdx, func(view *containers.Batch) (err error) {
+	ForEachColumnView(rel, colIdx, func(view *containers.Batch) (err error) {
 		if applyDelete {
 			view.Compact()
 		}
@@ -207,18 +208,17 @@ func GetColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 	return rows
 }
 
-func ForEachColumnView(t *testing.T, rel handle.Relation, colIdx int, fn func(view *containers.Batch) error) {
-	ForEachObject(t, rel, func(blk handle.Object) (err error) {
+func ForEachColumnView(rel handle.Relation, colIdx int, fn func(view *containers.Batch) error) {
+	ForEachObject(rel, func(blk handle.Object) (err error) {
 		blkCnt := blk.GetMeta().(*catalog.ObjectEntry).BlockCnt()
 		for i := 0; i < blkCnt; i++ {
 			view, err := blk.GetColumnDataById(context.Background(), uint16(i), colIdx, common.DefaultAllocator)
-			if err != nil {
-				t.Errorf("blk %v, %v", blk.String(), err)
-				return err
-			}
 			if view == nil {
-				logutil.Errorf("read nil batch blk %v", blk.String())
+				logutil.Warnf("blk %v", blk.String())
 				continue
+			}
+			if err != nil {
+				return err
 			}
 			defer view.Close()
 			err = fn(view)
@@ -230,15 +230,18 @@ func ForEachColumnView(t *testing.T, rel handle.Relation, colIdx int, fn func(vi
 	})
 }
 
-func ForEachObject(t *testing.T, rel handle.Relation, fn func(obj handle.Object) error) {
+func ForEachObject(rel handle.Relation, fn func(obj handle.Object) error) {
 	it := rel.MakeObjectIt()
 	var err error
 	for it.Next() {
 		obj := it.GetObject()
 		defer obj.Close()
 		if err = fn(obj); err != nil {
-			t.Error(err)
-			t.FailNow()
+			if errors.Is(err, handle.ErrIteratorEnd) {
+				return
+			} else {
+				panic(err)
+			}
 		}
 	}
 }

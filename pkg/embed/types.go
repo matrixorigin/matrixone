@@ -20,7 +20,6 @@ import (
 
 // Cluster is the mo cluster interface
 type Cluster interface {
-	ID() uint64
 	Start() error
 	Close() error
 	GetService(sid string) (ServiceOperator, error)

@@ -13,7 +13,6 @@
 // ordering for the Less method, so Push adds items while Pop removes the
 // highest-priority item from the queue. The Examples include such an
 // implementation; the file example_pq_test.go has the complete source.
-
 package mergesort
 
 // Init establishes the heap invariants required by the other routines in this package.

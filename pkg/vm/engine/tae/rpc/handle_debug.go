@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -339,8 +338,7 @@ func (h *Handle) HandleCommitMerge(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *api.MergeCommitEntry,
-	resp *api.TNStringResponse,
-) (err error) {
+	resp *db.InspectResp) (err error) {
 
 	defer func() {
 		if err != nil {
@@ -350,6 +348,7 @@ func (h *Handle) HandleCommitMerge(
 				zap.String("start-ts", req.StartTs.DebugString()),
 				zap.String("error", e.Display()))
 		}
+
 	}()
 	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
@@ -364,47 +363,19 @@ func (h *Handle) HandleCommitMerge(
 	}
 	merge.ActiveCNObj.RemoveActiveCNObj(ids)
 	if req.Err != "" {
-		resp.ReturnStr = req.Err
+		resp.Message = req.Err
 		err = moerr.NewInternalError(ctx, "merge err in cn: %s", req.Err)
 		return
 	}
 
 	defer func() {
 		if err != nil {
-			resp.ReturnStr = err.Error()
+			resp.Message = err.Error()
 			merge.CleanUpUselessFiles(req, h.db.Runtime.Fs.Service)
 		}
 	}()
 
-	transferMaps, err := marshalTransferMaps(ctx, req, h.db.Runtime.SID(), h.db.Runtime.Fs.Service)
-	if err != nil {
-		return err
-	}
-	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, transferMaps, h.db.Runtime)
-	if err != nil {
-		return
-	}
-	b := new(bytes.Buffer)
-	b.WriteString("merged success\n")
-	for _, o := range req.CreatedObjs {
-		stat := objectio.ObjectStats(o)
-		b.WriteString(fmt.Sprintf("%v, rows %v, blks %v, osize %v, csize %v",
-			stat.ObjectName().String(), stat.Rows(), stat.BlkCnt(),
-			common.HumanReadableBytes(int(stat.OriginSize())),
-			common.HumanReadableBytes(int(stat.Size())),
-		))
-		b.WriteByte('\n')
-	}
-	resp.ReturnStr = b.String()
-	return
-}
-
-func marshalTransferMaps(
-	ctx context.Context,
-	req *api.MergeCommitEntry,
-	sid string,
-	fs fileservice.FileService,
-) (api.TransferMaps, error) {
+	var booking api.TransferMaps
 	if len(req.BookingLoc) > 0 {
 		// load transfer info from s3
 		if req.Booking != nil {
@@ -412,7 +383,7 @@ func marshalTransferMaps(
 		}
 
 		blkCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[0]))
-		booking := make(api.TransferMaps, blkCnt)
+		booking = make(api.TransferMaps, blkCnt)
 		for i := range blkCnt {
 			rowCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[i+1]))
 			booking[i] = make(api.TransferMap, rowCnt)
@@ -420,13 +391,13 @@ func marshalTransferMaps(
 		req.BookingLoc = req.BookingLoc[blkCnt+1:]
 		locations := req.BookingLoc
 		for _, filepath := range locations {
-			reader, err := blockio.NewFileReader(sid, fs, filepath)
+			reader, err := blockio.NewFileReader(h.db.Runtime.SID(), h.db.Runtime.Fs.Service, filepath)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			bats, releases, err := reader.LoadAllColumns(ctx, nil, nil)
 			if err != nil {
-				return nil, err
+				return err
 			}
 
 			for _, bat := range bats {
@@ -445,13 +416,12 @@ func marshalTransferMaps(
 				}
 			}
 			releases()
-			_ = fs.Delete(ctx, filepath)
+			_ = h.db.Runtime.Fs.Service.Delete(ctx, filepath)
 		}
-		return booking, nil
 	} else if req.Booking != nil {
-		booking := make(api.TransferMaps, len(req.Booking.Mappings))
+		booking = make(api.TransferMaps, len(req.Booking.Mappings))
 		for i := range booking {
-			booking[i] = make(api.TransferMap, len(req.Booking.Mappings[i].M))
+			booking[i] = make(api.TransferMap)
 		}
 		for i, m := range req.Booking.Mappings {
 			for r, pos := range m.M {
@@ -462,7 +432,25 @@ func marshalTransferMaps(
 				}
 			}
 		}
-		return booking, nil
 	}
-	return nil, nil
+
+	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, booking, h.db.Runtime)
+	if err != nil {
+		return
+	}
+	if err == nil {
+		b := &bytes.Buffer{}
+		b.WriteString("merged success\n")
+		for _, o := range req.CreatedObjs {
+			stat := objectio.ObjectStats(o)
+			b.WriteString(fmt.Sprintf("%v, rows %v, blks %v, osize %v, csize %v",
+				stat.ObjectName().String(), stat.Rows(), stat.BlkCnt(),
+				common.HumanReadableBytes(int(stat.OriginSize())),
+				common.HumanReadableBytes(int(stat.Size())),
+			))
+			b.WriteByte('\n')
+		}
+		resp.Message = b.String()
+	}
+	return err
 }

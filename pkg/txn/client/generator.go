@@ -15,36 +15,19 @@
 package client
 
 import (
-	"encoding/binary"
-	"hash/fnv"
-	"sync/atomic"
-	"time"
+	"github.com/google/uuid"
 )
 
 var _ TxnIDGenerator = (*uuidTxnIDGenerator)(nil)
 
 type uuidTxnIDGenerator struct {
-	hash uint64
-	seq  uint64
 }
 
-func newUUIDTxnIDGenerator(sid string) TxnIDGenerator {
-	h := fnv.New64()
-	_, err := h.Write([]byte(sid))
-	if err != nil {
-		panic(err)
-	}
-
-	v := &uuidTxnIDGenerator{
-		hash: h.Sum64(),
-		seq:  uint64(time.Now().UnixNano()),
-	}
-	return v
+func newUUIDTxnIDGenerator() TxnIDGenerator {
+	return &uuidTxnIDGenerator{}
 }
 
 func (gen *uuidTxnIDGenerator) Generate() []byte {
-	var uuid [16]byte
-	binary.BigEndian.PutUint64(uuid[:8], gen.hash)
-	binary.BigEndian.PutUint64(uuid[8:], atomic.AddUint64(&gen.seq, 1))
-	return uuid[:]
+	id, _ := uuid.NewV7()
+	return id[:]
 }

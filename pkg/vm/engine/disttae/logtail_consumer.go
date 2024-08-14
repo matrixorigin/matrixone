@@ -763,7 +763,6 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 
 		err = c.subSysTables(ctx)
 		if err != nil {
-			c.pause(false)
 			logutil.Errorf("%s subscribe system tables failed, err %v", logTag, err)
 			continue
 		}
@@ -1375,7 +1374,7 @@ func waitServerReady(addr string) {
 
 	// If we still cannot connect to logtail server for serverTimeout, we consider
 	// it has something wrong happened and panic immediately.
-	serverTimeout := time.Minute * 10
+	serverTimeout := time.Minute * 5
 	serverFatal := time.NewTimer(serverTimeout)
 	defer serverFatal.Stop()
 

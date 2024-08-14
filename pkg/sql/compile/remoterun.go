@@ -204,8 +204,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.ChildrenCount = int32(len(s.Proc.Reg.MergeReceivers))
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
-			p.ChannelBufferSize = append(p.ChannelBufferSize, int32(cap(s.Proc.Reg.MergeReceivers[i].Ch)))
-			p.NilBatchCnt = append(p.NilBatchCnt, int32(s.Proc.Reg.MergeReceivers[i].NilBatchCnt))
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
 		}
 	}
@@ -371,7 +369,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		}
 		s.NodeInfo.Data = relData
 	}
-	s.Proc = proc.NewNoContextChildProcWithChannel(int(p.ChildrenCount), p.ChannelBufferSize, p.NilBatchCnt)
+	s.Proc = proc.NewNoContextChildProc(int(p.ChildrenCount))
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
@@ -408,6 +406,11 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 			return err
 		}
 		s.doSetRootOperator(ins)
+	}
+	if s.isShuffle() {
+		for _, rr := range s.Proc.Reg.MergeReceivers {
+			rr.Ch = make(chan *process.RegisterMessage, 16)
+		}
 	}
 	return nil
 }
@@ -768,9 +771,6 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 	case *merge.Merge:
 		in.Merge = &pipeline.Merge{
 			SinkScan: t.SinkScan,
-			Partial:  t.Partial,
-			StartIdx: t.StartIDX,
-			EndIdx:   t.EndIDX,
 		}
 	case *mergerecursive.MergeRecursive:
 	case *mergegroup.MergeGroup:
@@ -1244,13 +1244,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = connector.NewArgument().
 			WithReg(ctx.root.getRegister(t.PipelineId, t.ConnectorIndex))
 	case vm.Merge:
-		t := opr.GetMerge()
-		mergeOp := merge.NewArgument()
-		mergeOp.SinkScan = t.SinkScan
-		mergeOp.Partial = t.Partial
-		mergeOp.StartIDX = t.StartIdx
-		mergeOp.EndIDX = t.EndIdx
-		op = mergeOp
+		op = merge.NewArgument()
 	case vm.MergeRecursive:
 		op = mergerecursive.NewArgument()
 	case vm.MergeGroup:

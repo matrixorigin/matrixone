@@ -1815,7 +1815,7 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 }
 
 // databaseIsValid checks whether the database exists or not.
-func databaseIsValid(dbName string, ctx CompilerContext, snapshot *Snapshot) (string, error) {
+func databaseIsValid(dbName string, ctx CompilerContext, snapshot Snapshot) (string, error) {
 	connectDBFirst := false
 	if len(dbName) == 0 {
 		connectDBFirst = true

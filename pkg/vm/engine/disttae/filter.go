@@ -1164,7 +1164,7 @@ func ExecuteBlockFilter(
 				}
 
 				blk.Sorted = obj.Sorted
-				blk.Appendable = obj.Appendable
+				blk.EntryState = obj.EntryState
 				blk.CommitTs = obj.CommitTS
 
 				//if obj.HasDeltaLoc {
