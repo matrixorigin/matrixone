@@ -100,6 +100,7 @@ func TestJoin(t *testing.T) {
 
 		resetChildren(tc.arg)
 		resetHashBuildChildren(tc.barg)
+		tc.proc.GetMessageBoard().Reset()
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		err = tc.barg.Prepare(tc.proc)
@@ -235,7 +236,8 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 					IsLast:  false,
 				},
 			},
-			JoinMapTag: tag,
+			JoinMapTag:    tag,
+			JoinMapRefCnt: 1,
 		},
 		resultBatch: resultBatch,
 	}
