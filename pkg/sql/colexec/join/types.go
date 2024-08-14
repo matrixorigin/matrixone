@@ -128,7 +128,6 @@ func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err
 		anal.Alloc(ctr.maxAllocSize)
 
 		if innerJoin.ctr.bat != nil {
-			proc.PutBatch(innerJoin.ctr.bat)
 			innerJoin.ctr.bat = nil
 		}
 		innerJoin.ctr.lastrow = 0
