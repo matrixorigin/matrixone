@@ -42,7 +42,7 @@ type container struct {
 }
 
 type Productl2 struct {
-	ctr        *container
+	ctr        container
 	Typs       []types.Type
 	Result     []colexec.ResultPos
 	OnExpr     *plan.Expr
@@ -50,10 +50,6 @@ type Productl2 struct {
 
 	vm.OperatorBase
 	colexec.Projection
-}
-
-func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	productl2.Free(proc, pipelineFailed, err)
 }
 
 func (productl2 *Productl2) GetOperatorBase() *vm.OperatorBase {
@@ -87,13 +83,27 @@ func (productl2 *Productl2) Release() {
 	}
 }
 
-func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := productl2.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		productl2.ctr = nil
+func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if productl2.ctr.bat != nil {
+		productl2.ctr.bat.CleanOnlyData()
 	}
+	if productl2.ctr.rbat != nil {
+		productl2.ctr.rbat.CleanOnlyData()
+	}
+	if productl2.ctr.inBat != nil {
+		productl2.ctr.inBat = nil
+	}
+	if productl2.ProjectList != nil {
+		anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
+		anal.Alloc(productl2.ProjectAllocSize)
+		productl2.ResetProjection(proc)
+	}
+	productl2.ctr.state = Build
+	productl2.ctr.probeIdx = 0
+}
+
+func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err error) {
+	productl2.ctr.cleanBatch(proc.Mp())
 	if productl2.ProjectList != nil {
 		anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
 		anal.Alloc(productl2.ProjectAllocSize)
@@ -111,7 +121,6 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 		ctr.rbat = nil
 	}
 	if ctr.inBat != nil {
-		ctr.inBat.Clean(mp)
 		ctr.inBat = nil
 	}
 }
