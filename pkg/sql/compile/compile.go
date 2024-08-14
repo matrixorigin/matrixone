@@ -3480,10 +3480,13 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
 		}
 		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, false)
-		rs = []*Scope{c.newMergeScope(probeScopes)}
-	} else {
-		rs = c.mergeScopesByCN(probeScopes)
+		if len(probeScopes) > 1 {
+			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
+		}
 	}
+
+	rs = c.mergeScopesByCN(probeScopes)
+
 	for i := range rs {
 		rs[i].Magic = Remote
 		rs[i].IsJoin = true
