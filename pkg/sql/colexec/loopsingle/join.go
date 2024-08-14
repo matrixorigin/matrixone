@@ -42,11 +42,6 @@ func (loopSingle *LoopSingle) OpType() vm.OpType {
 func (loopSingle *LoopSingle) Prepare(proc *process.Process) error {
 	var err error
 
-	loopSingle.ctr.bat = batch.NewWithSize(len(loopSingle.Typs))
-	for i, typ := range loopSingle.Typs {
-		loopSingle.ctr.bat.Vecs[i] = vector.NewVec(typ)
-	}
-
 	if loopSingle.Cond != nil && loopSingle.ctr.expr == nil {
 		loopSingle.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopSingle.Cond)
 		if err != nil {
@@ -105,7 +100,7 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 				ctr.rbat.CleanOnlyData()
 			}
 
-			if ctr.bat.RowCount() == 0 {
+			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
 				err = ctr.emptyProbe(bat, loopSingle, proc, &probeResult)
 			} else {
 				err = ctr.probe(bat, loopSingle, proc, &probeResult)
@@ -131,7 +126,7 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 }
 
 func (loopSingle *LoopSingle) build(proc *process.Process, anal process.Analyze) error {
-	ctr := loopSingle.ctr
+	ctr := &loopSingle.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
 	mp := message.ReceiveJoinMap(loopSingle.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
@@ -147,6 +142,7 @@ func (loopSingle *LoopSingle) build(proc *process.Process, anal process.Analyze)
 			return err
 		}
 	}
+	mp.Free()
 	return nil
 }
 

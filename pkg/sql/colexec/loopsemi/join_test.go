@@ -243,6 +243,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 		resultBatch: resultBatch,
 	}
 }
+
 func resetChildren(arg *LoopSemi) {
 	bat := colexec.MakeMockBatchs()
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})

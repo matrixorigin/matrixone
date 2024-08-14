@@ -91,7 +91,7 @@ func TestJoin(t *testing.T) {
 			vec2 := tc.resultBatch.Vecs[i]
 			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
 			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
-			//require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
+			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
 		}
 
 		tc.arg.Reset(tc.proc, false, nil)
@@ -117,7 +117,7 @@ func TestJoin(t *testing.T) {
 			vec2 := tc.resultBatch.Vecs[i]
 			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
 			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
-			//require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
+			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
 		}
 
 		tc.arg.Reset(tc.proc, false, nil)
@@ -226,7 +226,8 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
-			Typs: ts,
+			Typs:            ts,
+			NeedMergedBatch: true,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
