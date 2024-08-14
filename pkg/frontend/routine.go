@@ -266,7 +266,6 @@ func (rt *Routine) handleRequest(req *Request) error {
 	//all offspring related to the request inherit the txnCtx
 	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration)
 	rt.setCancelRequestFunc(cancelRequestFunc)
-	ses.UpdateDebugString()
 	ses.ResetFPrints()
 	ses.EnterFPrint(0)
 	defer ses.ExitFPrint(0)
