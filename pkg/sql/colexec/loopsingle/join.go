@@ -91,7 +91,6 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
@@ -112,7 +111,6 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 				}
 			}
 			anal.Output(result.Batch, loopSingle.GetIsLast())
-			proc.PutBatch(bat)
 			return result, err
 
 		default:
