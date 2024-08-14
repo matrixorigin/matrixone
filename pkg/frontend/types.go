@@ -825,7 +825,7 @@ func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {
 	return ses.sesSysVars
 }
 
-func (ses *feSessionImpl) GetSessionSysVar(name string) (interface{}, error) {
+func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	name = strings.ToLower(name)
 	if _, ok := gSysVarsDefs[name]; !ok {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
