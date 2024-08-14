@@ -785,7 +785,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 	// restore according the restore level
 	switch restoreLevel {
 	case tree.RESTORELEVELCLUSTER:
-		if err = restoreToCluster(ctx, ses, bh, pitrName, ts); err != nil {
+		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, nil); err != nil {
 			return
 		}
 	case tree.RESTORELEVELACCOUNT:
