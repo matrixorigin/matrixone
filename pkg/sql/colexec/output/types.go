@@ -76,7 +76,7 @@ func (output *Output) Reset(proc *process.Process, pipelineFailed bool, err erro
 }
 
 func (output *Output) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if !pipelineFailed {
-		_ = output.Func(nil)
-	}
+	// if !pipelineFailed {
+	// _ = output.Func(nil)
+	// }
 }
