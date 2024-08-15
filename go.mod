@@ -22,6 +22,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/cockroachdb/errors v1.9.1
 	github.com/confluentinc/confluent-kafka-go/v2 v2.4.0
+	github.com/containerd/cgroups/v3 v3.0.1
 	github.com/docker/go-units v0.5.0
 	github.com/dolthub/maphash v0.1.0
 	github.com/elastic/gosigar v0.14.2
@@ -85,7 +86,6 @@ require (
 	github.com/andybalholm/brotli v1.0.5 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cilium/ebpf v0.9.1 // indirect
-	github.com/containerd/cgroups/v3 v3.0.1 // indirect
 	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
