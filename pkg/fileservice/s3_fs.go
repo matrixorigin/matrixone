@@ -332,6 +332,8 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 
+	globalProfiler.Sample(0, 1).Write.Add(1)
+
 	tp := reuse.Alloc[tracePoint](nil)
 	defer reuse.Free(tp, nil)
 	ctx = httptrace.WithClientTrace(ctx, tp.getClientTrace())

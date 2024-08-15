@@ -173,6 +173,8 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 
+	globalProfiler.Sample(0, 1).Write.Add(1)
+
 	var err error
 	var bytesWritten int
 	start := time.Now()

@@ -33,7 +33,8 @@ func init() {
 }
 
 type profileSamples struct {
-	Read atomic.Int64
+	Read  atomic.Int64
+	Write atomic.Int64
 }
 
 var _ malloc.SampleValues = new(profileSamples)
@@ -50,11 +51,15 @@ func (p *profileSamples) SampleTypes() []*profile.ValueType {
 		{
 			Type: "read",
 		},
+		{
+			Type: "write",
+		},
 	}
 }
 
 func (p *profileSamples) Values() []int64 {
 	return []int64{
 		p.Read.Load(),
+		p.Write.Load(),
 	}
 }
