@@ -16,7 +16,10 @@ package cache
 
 import (
 	"bytes"
+	"encoding/hex"
+	"fmt"
 	"sync"
+	"unsafe"
 
 	"github.com/tidwall/btree"
 
@@ -127,6 +130,15 @@ type TableItem struct {
 	PrimarySeqnum int
 	// clusterBy key
 	ClusterByIdx int
+}
+
+func (item *TableItem) String() string {
+	return fmt.Sprintln(
+		"item ptr", uintptr(unsafe.Pointer(item)),
+		"item pk",
+		hex.EncodeToString(item.CPKey),
+		"accId",
+		item.AccountId, item.DatabaseName, item.DatabaseId, item.Name, item.Id, item.Ts, item.deleted)
 }
 
 type noSliceTs struct {

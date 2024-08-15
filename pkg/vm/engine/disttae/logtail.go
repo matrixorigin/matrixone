@@ -68,7 +68,9 @@ func consumeEntry(
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			if cache != nil {
 				fmt.Fprintln(os.Stderr, "%%%%%> insert table into catalog cache")
+				cache.PrintTables2("before", "test")
 				cache.InsertTable(bat)
+				cache.PrintTables2("after", "test")
 			}
 		case catalog.MO_DATABASE_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
@@ -91,7 +93,9 @@ func consumeEntry(
 		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			fmt.Fprintln(os.Stderr, "%%%%%> delete table from catalog cache")
+			cache.PrintTables2("before", "test")
 			cache.DeleteTable(bat)
+			cache.PrintTables2("after", "test")
 		}
 	case catalog.MO_DATABASE_ID:
 		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {

@@ -15,7 +15,11 @@
 package cache
 
 import (
+	"fmt"
 	"testing"
+	"unsafe"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -24,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -369,4 +372,10 @@ func newTestDatabaseBatch(mp *mpool.MPool) *batch.Batch {
 	typs = append(typs, types.New(types.T_TS, 0, 0))
 	typs = append(typs, catalog.MoDatabaseTypes...)
 	return testutil.NewBatch(typs, false, Rows, mp)
+}
+
+func Test_x(t *testing.T) {
+	s := "abc"
+	p := &s
+	fmt.Println(uintptr(unsafe.Pointer(p)))
 }
