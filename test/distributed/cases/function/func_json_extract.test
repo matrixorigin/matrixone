@@ -182,3 +182,24 @@ select json_extract_string(a, '$.LINE') from json_tab;
 select a from json_tab where json_extract_string(a, '$.LINE') = 'BOARDLINE-0';
 select a from json_tab where json_extract_string(a, '$.LINE') = '"BOARDLINE-0"';
 drop database test;
+
+create database if not exists test;
+use test;
+CREATE TABLE test_json (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    json_data JSON NOT NULL
+);
+
+INSERT INTO test_json (json_data)
+VALUES
+    ('{"name": "Alice", "age": 25}'),
+    ('{"name": "Bob", "age": 30}'),
+    ('{"name": "Charlie", "age": 22}');
+
+SELECT
+    id,
+    json_data,
+    json_extract_string(json_data, '$.name') AS extracted_name
+FROM test_json;
+
+drop database test;
