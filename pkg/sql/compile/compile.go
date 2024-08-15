@@ -2236,7 +2236,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 	}
 	var rs []*Scope
 	rs, buildScopes = c.compileBroadcastJoin(node, left, right, probeScopes, buildScopes)
-	if c.IsTpQuery() {
+	if c.IsSingleScope(rs) && c.IsSingleScope(buildScopes) {
 		//construct join build operator for tp join
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, rs[0].RootOp, false, 1))
 		buildScopes[0].IsEnd = true
@@ -3470,7 +3470,7 @@ func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
 func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []*Scope, n *plan.Node, forceOneCN bool) ([]*Scope, []*Scope) {
 	var rs []*Scope
 
-	if c.IsTpQuery() {
+	if c.IsSingleScope(probeScopes) && c.IsSingleScope(buildScopes) {
 		// for tp join, can directly return
 		rs = probeScopes
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
