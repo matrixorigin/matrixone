@@ -42,21 +42,22 @@ func (rightAnti *RightAnti) OpType() vm.OpType {
 }
 
 func (rightAnti *RightAnti) Prepare(proc *process.Process) (err error) {
-	rightAnti.ctr = new(container)
-	rightAnti.ctr.InitProc(proc)
-	rightAnti.ctr.vecs = make([]*vector.Vector, len(rightAnti.Conditions[0]))
-	rightAnti.ctr.evecs = make([]evalVector, len(rightAnti.Conditions[0]))
-	for i := range rightAnti.ctr.evecs {
-		rightAnti.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, rightAnti.Conditions[0][i])
-		if err != nil {
-			return err
+	if len(rightAnti.ctr.tmpBatches) == 0 {
+		rightAnti.ctr.vecs = make([]*vector.Vector, len(rightAnti.Conditions[0]))
+		rightAnti.ctr.evecs = make([]evalVector, len(rightAnti.Conditions[0]))
+		for i := range rightAnti.ctr.evecs {
+			rightAnti.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, rightAnti.Conditions[0][i])
+			if err != nil {
+				return err
+			}
 		}
-	}
-	if rightAnti.Cond != nil {
-		rightAnti.ctr.expr, err = colexec.NewExpressionExecutor(proc, rightAnti.Cond)
+		if rightAnti.Cond != nil {
+			rightAnti.ctr.expr, err = colexec.NewExpressionExecutor(proc, rightAnti.Cond)
+		}
+		rightAnti.ctr.tmpBatches = make([]*batch.Batch, 2)
 	}
 
-	rightAnti.ctr.tmpBatches = make([]*batch.Batch, 2)
+	rightAnti.ctr.InitProc(proc)
 	return err
 }
 
@@ -68,7 +69,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 	analyze := proc.GetAnalyze(rightAnti.GetIdx(), rightAnti.GetParallelIdx(), rightAnti.GetParallelMajor())
 	analyze.Start()
 	defer analyze.Stop()
-	ctr := rightAnti.ctr
+	ctr := &rightAnti.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
@@ -139,7 +140,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (rightAnti *RightAnti) build(anal process.Analyze, proc *process.Process) {
-	ctr := rightAnti.ctr
+	ctr := &rightAnti.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
 	ctr.mp = message.ReceiveJoinMap(rightAnti.JoinMapTag, rightAnti.IsShuffle, rightAnti.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
@@ -189,14 +190,15 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyze pro
 
 	if len(sels) <= colexec.DefaultBatchSize {
 		if ctr.rbat != nil {
-			proc.PutBatch(ctr.rbat)
-			ctr.rbat = nil
-		}
-		ctr.rbat = batch.NewWithSize(len(ap.Result))
+			ctr.rbat.CleanOnlyData()
+		} else {
+			ctr.rbat = batch.NewWithSize(len(ap.Result))
 
-		for i, pos := range ap.Result {
-			ctr.rbat.Vecs[i] = proc.GetVector(ap.RightTypes[pos])
+			for i, pos := range ap.Result {
+				ctr.rbat.Vecs[i] = vector.NewVec(ap.RightTypes[pos])
+			}
 		}
+
 		for j, pos := range ap.Result {
 			for _, sel := range sels {
 				idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
@@ -215,7 +217,7 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyze pro
 		for k := range ap.ctr.buf {
 			ap.ctr.buf[k] = batch.NewWithSize(len(ap.Result))
 			for i, pos := range ap.Result {
-				ap.ctr.buf[k].Vecs[i] = proc.GetVector(ap.RightTypes[pos])
+				ap.ctr.buf[k].Vecs[i] = vector.NewVec(ap.RightTypes[pos])
 			}
 			var newsels []int32
 			if (k+1)*colexec.DefaultBatchSize <= len(sels) {
