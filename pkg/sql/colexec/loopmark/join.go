@@ -43,20 +43,14 @@ func (loopMark *LoopMark) OpType() vm.OpType {
 func (loopMark *LoopMark) Prepare(proc *process.Process) error {
 	var err error
 
-	loopMark.ctr = new(container)
-	loopMark.ctr.bat = batch.NewWithSize(len(loopMark.Typs))
-	for i, typ := range loopMark.Typs {
-		loopMark.ctr.bat.Vecs[i] = proc.GetVector(typ)
-	}
-
-	if loopMark.Cond != nil {
+	if loopMark.Cond != nil && loopMark.ctr.expr == nil {
 		loopMark.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopMark.Cond)
 		if err != nil {
 			return err
 		}
 	}
 
-	if loopMark.ProjectList != nil {
+	if loopMark.ProjectList != nil && loopMark.ProjectExecutors == nil {
 		err = loopMark.PrepareProjection(proc)
 	}
 	return err
@@ -70,8 +64,10 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := loopMark.ctr
+	ctr := &loopMark.ctr
+	input := vm.NewCallResult()
 	result := vm.NewCallResult()
+	probeResult := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
@@ -82,11 +78,11 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			var err error
-			result, err = loopMark.Children[0].Call(proc)
+			input, err = loopMark.Children[0].Call(proc)
 			if err != nil {
 				return result, err
 			}
-			bat := result.Batch
+			bat := input.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -94,23 +90,45 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 			if bat.IsEmpty() {
 				continue
 			}
-
 			anal.Input(bat, loopMark.GetIsFirst())
-			if ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(bat, loopMark, proc, &result)
+
+			if ctr.rbat == nil {
+				ctr.rbat = batch.NewWithSize(len(loopMark.Result))
+				for i, rp := range loopMark.Result {
+					if rp >= 0 {
+						ctr.rbat.Vecs[i] = vector.NewVec(*bat.Vecs[rp].GetType())
+						if err = vector.GetUnionAllFunction(*bat.Vecs[rp].GetType(), proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp]); err != nil {
+							return result, err
+						}
+					} else {
+						ctr.rbat.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+					}
+				}
 			} else {
-				err = ctr.probe(bat, loopMark, proc, &result)
+				ctr.rbat.CleanOnlyData()
+				for i, rp := range loopMark.Result {
+					if rp >= 0 {
+						if err = vector.GetUnionAllFunction(*bat.Vecs[rp].GetType(), proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp]); err != nil {
+							return result, err
+						}
+					}
+				}
+			}
+
+			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
+				err = ctr.emptyProbe(bat, loopMark, proc, &probeResult)
+			} else {
+				err = ctr.probe(bat, loopMark, proc, &probeResult)
 			}
 			if err != nil {
 				return result, err
 			}
 
-			if loopMark.ProjectList != nil {
-				result.Batch, err = loopMark.EvalProjection(result.Batch, proc)
-				if err != nil {
-					return result, err
-				}
+			result.Batch, err = loopMark.EvalProjection(probeResult.Batch, proc)
+			if err != nil {
+				return result, err
 			}
+
 			anal.Output(result.Batch, loopMark.GetIsLast())
 			return result, err
 
@@ -123,7 +141,7 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (loopMark *LoopMark) build(proc *process.Process, anal process.Analyze) error {
-	ctr := loopMark.ctr
+	ctr := &loopMark.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
 	mp := message.ReceiveJoinMap(loopMark.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
@@ -139,26 +157,20 @@ func (loopMark *LoopMark) build(proc *process.Process, anal process.Analyze) err
 			return err
 		}
 	}
+	mp.Free()
 	return nil
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopMark, proc *process.Process, result *vm.CallResult) (err error) {
-	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
-	}
-	ctr.rbat = batch.NewWithSize(len(ap.Result))
 	count := bat.RowCount()
 	for i, rp := range ap.Result {
-		if rp >= 0 {
-			typ := *bat.Vecs[rp].GetType()
-			ctr.rbat.Vecs[i] = proc.GetVector(typ)
-			if err = vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp]); err != nil {
-				return err
-			}
-		} else {
-			if ctr.rbat.Vecs[i], err = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp()); err != nil {
-				return err
+		if rp < 0 {
+			ctr.rbat.Vecs[i].SetClass(vector.CONSTANT)
+			if count > 0 {
+				err = vector.SetConstFixed(ctr.rbat.Vecs[i], false, count, proc.Mp())
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -168,15 +180,9 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopMark, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *LoopMark, proc *process.Process, result *vm.CallResult) error {
-	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
-	}
-	ctr.rbat = batch.NewWithSize(len(ap.Result))
 	markPos := -1
 	for i, pos := range ap.Result {
 		if pos == -1 {
-			ctr.rbat.Vecs[i] = proc.GetVector(types.T_bool.ToType())
 			if err := ctr.rbat.Vecs[i].PreExtend(bat.RowCount(), proc.Mp()); err != nil {
 				return err
 			}
@@ -230,12 +236,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *LoopMark, proc *process.Proces
 		}
 		if err != nil {
 			return err
-		}
-	}
-	for i, rp := range ap.Result {
-		if rp >= 0 {
-			ctr.rbat.Vecs[i] = bat.Vecs[rp]
-			bat.Vecs[rp] = nil
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
