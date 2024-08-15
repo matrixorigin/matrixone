@@ -129,6 +129,9 @@ type tunnel struct {
 		// inTransfer means a transfer of server connection is in progress.
 		inTransfer bool
 
+		// sc is the server connection which this tunnel holds. when the connection transfer,
+		// close the old one.
+		sc ServerConn
 		// clientConn is the connection between client and proxy.
 		clientConn *MySQLConn
 		// serverConn is the connection between server and proxy.
@@ -174,6 +177,7 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 			return t.ctx.Err()
 		}
 		t.cc = cc
+		t.mu.sc = sc
 		t.logger = t.logger.With(zap.Uint32("conn ID", cc.ConnID()))
 		t.mu.clientConn = newMySQLConn(
 			connClientName,
@@ -265,11 +269,17 @@ func (t *tunnel) kickoff() error {
 }
 
 // replaceServerConn replaces the CN server.
-func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, sync bool) {
+func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, sync bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// close the old ones.
 	_ = t.mu.serverConn.Close()
+	_ = t.mu.sc.Close()
+
+	// set the new ones.
 	t.mu.serverConn = newServerConn
+	t.mu.sc = newSC
 
 	if sync {
 		t.mu.csp.dst = t.mu.serverConn
@@ -355,12 +365,12 @@ func (t *tunnel) finishTransfer(start time.Time) {
 }
 
 func (t *tunnel) doReplaceConnection(ctx context.Context, sync bool) error {
-	newConn, err := t.getNewServerConn(ctx)
+	newSC, newConn, err := t.getNewServerConn(ctx)
 	if err != nil {
 		t.logger.Error("failed to get a new connection", zap.Error(err))
 		return err
 	}
-	t.replaceServerConn(newConn, sync)
+	t.replaceServerConn(newConn, newSC, sync)
 	t.counterSet.connMigrationSuccess.Add(1)
 	t.logger.Info("transfer to a new CN server",
 		zap.String("addr", newConn.RemoteAddr().String()))
@@ -429,9 +439,9 @@ func (t *tunnel) transferSync(ctx context.Context) error {
 
 // getNewServerConn selects a new CN server and connects to it then
 // returns the new connection.
-func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
+func (t *tunnel) getNewServerConn(ctx context.Context) (ServerConn, *MySQLConn, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	}
 	prevAddr := t.mu.serverConn.RemoteAddr().String()
 	t.logger.Info("build connection with new server", zap.String("prev addr", prevAddr))
@@ -441,9 +451,9 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
 			zap.String("prev addr", prevAddr),
 			zap.Error(err),
 		)
-		return nil, err
+		return nil, nil, err
 	}
-	return newMySQLConn(
+	return newConn, newMySQLConn(
 		connServerName,
 		newConn.RawConn(),
 		0,
