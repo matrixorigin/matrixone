@@ -19,19 +19,19 @@ import (
 )
 
 func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
-	ses.EnterFPrint(9)
-	defer ses.ExitFPrint(9)
+	ses.EnterFPrint(FPExecInFrontEnd)
+	defer ses.ExitFPrint(FPExecInFrontEnd)
 	//check transaction states
 	switch st := execCtx.stmt.(type) {
 	case *tree.BeginTransaction:
-		ses.EnterFPrint(10)
-		defer ses.ExitFPrint(10)
+		ses.EnterFPrint(FPBeginTxn)
+		defer ses.ExitFPrint(FPBeginTxn)
 		RecordStatementTxnID(execCtx.reqCtx, ses)
 	case *tree.CommitTransaction:
 	case *tree.RollbackTransaction:
 	case *tree.SetRole:
-		ses.EnterFPrint(11)
-		defer ses.ExitFPrint(11)
+		ses.EnterFPrint(FPSetRole)
+		defer ses.ExitFPrint(FPSetRole)
 		ses.InvalidatePrivilegeCache()
 		//switch role
 		err = handleSwitchRole(ses, execCtx, st)
@@ -39,8 +39,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 	case *tree.Use:
-		ses.EnterFPrint(12)
-		defer ses.ExitFPrint(12)
+		ses.EnterFPrint(FPUse)
+		defer ses.ExitFPrint(FPUse)
 		var uniqueCheckOnAuto string
 		dbName := st.Name.Compare()
 		//use database
@@ -65,8 +65,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 	case *tree.PrepareStmt:
-		ses.EnterFPrint(13)
-		defer ses.ExitFPrint(13)
+		ses.EnterFPrint(FPPrepareStmt)
+		defer ses.ExitFPrint(FPPrepareStmt)
 		execCtx.prepareStmt, err = handlePrepareStmt(ses, execCtx, st, execCtx.sqlOfStmt)
 		if err != nil {
 			return
@@ -77,8 +77,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 	case *tree.PrepareString:
-		ses.EnterFPrint(14)
-		defer ses.ExitFPrint(14)
+		ses.EnterFPrint(FPPrepareString)
+		defer ses.ExitFPrint(FPPrepareString)
 		execCtx.prepareStmt, err = handlePrepareString(ses, execCtx, st)
 		if err != nil {
 			return
@@ -89,114 +89,114 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 	case *tree.CreateConnector:
-		ses.EnterFPrint(15)
-		defer ses.ExitFPrint(15)
+		ses.EnterFPrint(FPCreateConnector)
+		defer ses.ExitFPrint(FPCreateConnector)
 		err = handleCreateConnector(execCtx.reqCtx, ses, st)
 		if err != nil {
 			return
 		}
 	case *tree.PauseDaemonTask:
-		ses.EnterFPrint(16)
-		defer ses.ExitFPrint(16)
+		ses.EnterFPrint(FPPauseDaemonTask)
+		defer ses.ExitFPrint(FPPauseDaemonTask)
 		err = handlePauseDaemonTask(execCtx.reqCtx, ses, st)
 		if err != nil {
 			return
 		}
 	case *tree.CancelDaemonTask:
-		ses.EnterFPrint(17)
-		defer ses.ExitFPrint(17)
+		ses.EnterFPrint(FPCancelDaemonTask)
+		defer ses.ExitFPrint(FPCancelDaemonTask)
 		err = handleCancelDaemonTask(execCtx.reqCtx, ses, st.TaskID)
 		if err != nil {
 			return
 		}
 	case *tree.ResumeDaemonTask:
-		ses.EnterFPrint(18)
-		defer ses.ExitFPrint(18)
+		ses.EnterFPrint(FPResumeDaemonTask)
+		defer ses.ExitFPrint(FPResumeDaemonTask)
 		err = handleResumeDaemonTask(execCtx.reqCtx, ses, st)
 		if err != nil {
 			return
 		}
 	case *tree.DropConnector:
-		ses.EnterFPrint(19)
-		defer ses.ExitFPrint(19)
+		ses.EnterFPrint(FPDropConnector)
+		defer ses.ExitFPrint(FPDropConnector)
 		err = handleDropConnector(execCtx.reqCtx, ses, st)
 		if err != nil {
 			return
 		}
 	case *tree.ShowConnectors:
-		ses.EnterFPrint(20)
-		defer ses.ExitFPrint(20)
+		ses.EnterFPrint(FPShowConnectors)
+		defer ses.ExitFPrint(FPShowConnectors)
 		if err = handleShowConnectors(execCtx.reqCtx, ses); err != nil {
 			return
 		}
 	case *tree.Deallocate:
-		ses.EnterFPrint(21)
-		defer ses.ExitFPrint(21)
+		ses.EnterFPrint(FPDeallocate)
+		defer ses.ExitFPrint(FPDeallocate)
 		err = handleDeallocate(ses, execCtx, st)
 		if err != nil {
 			return
 		}
 	case *tree.Reset:
-		ses.EnterFPrint(22)
-		defer ses.ExitFPrint(22)
+		ses.EnterFPrint(FPReset)
+		defer ses.ExitFPrint(FPReset)
 		err = handleReset(ses, execCtx, st)
 		if err != nil {
 			return
 		}
 	case *tree.SetVar:
-		ses.EnterFPrint(23)
-		defer ses.ExitFPrint(23)
+		ses.EnterFPrint(FPSetVar)
+		defer ses.ExitFPrint(FPSetVar)
 		err = handleSetVar(ses, execCtx, st, execCtx.sqlOfStmt)
 		if err != nil {
 			return
 		}
 	case *tree.ShowVariables:
-		ses.EnterFPrint(24)
-		defer ses.ExitFPrint(24)
+		ses.EnterFPrint(FPShowVariables)
+		defer ses.ExitFPrint(FPShowVariables)
 		err = handleShowVariables(ses, execCtx, st)
 		if err != nil {
 			return
 		}
 	case *tree.ShowErrors, *tree.ShowWarnings:
-		ses.EnterFPrint(25)
-		defer ses.ExitFPrint(25)
+		ses.EnterFPrint(FPShowErrors)
+		defer ses.ExitFPrint(FPShowErrors)
 		err = handleShowErrors(ses, execCtx)
 		if err != nil {
 			return
 		}
 	case *tree.AnalyzeStmt:
-		ses.EnterFPrint(26)
-		defer ses.ExitFPrint(26)
+		ses.EnterFPrint(FPAnalyzeStmt)
+		defer ses.ExitFPrint(FPAnalyzeStmt)
 		if err = handleAnalyzeStmt(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.ExplainStmt:
-		ses.EnterFPrint(27)
-		defer ses.ExitFPrint(27)
+		ses.EnterFPrint(FPExplainStmt)
+		defer ses.ExitFPrint(FPExplainStmt)
 		if err = handleExplainStmt(ses, execCtx, st); err != nil {
 			return
 		}
 	case *InternalCmdFieldList:
-		ses.EnterFPrint(28)
-		defer ses.ExitFPrint(28)
+		ses.EnterFPrint(FPInternalCmdFieldList)
+		defer ses.ExitFPrint(FPInternalCmdFieldList)
 		if err = handleCmdFieldList(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CreatePublication:
-		ses.EnterFPrint(29)
-		defer ses.ExitFPrint(29)
+		ses.EnterFPrint(FPCreatePublication)
+		defer ses.ExitFPrint(FPCreatePublication)
 		if err = handleCreatePublication(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.AlterPublication:
-		ses.EnterFPrint(30)
-		defer ses.ExitFPrint(30)
+		ses.EnterFPrint(FPAlterPublication)
+		defer ses.ExitFPrint(FPAlterPublication)
 		if err = handleAlterPublication(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropPublication:
-		ses.EnterFPrint(31)
-		defer ses.ExitFPrint(31)
+		ses.EnterFPrint(FPDropPublication)
+		defer ses.ExitFPrint(FPDropPublication)
 		if err = handleDropPublication(ses, execCtx, st); err != nil {
 			return
 		}
@@ -207,54 +207,54 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 	case *tree.ShowSubscriptions:
-		ses.EnterFPrint(32)
-		defer ses.ExitFPrint(32)
+		ses.EnterFPrint(FPShowSubscriptions)
+		defer ses.ExitFPrint(FPShowSubscriptions)
 		if err = handleShowSubscriptions(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CreateStage:
-		ses.EnterFPrint(33)
-		defer ses.ExitFPrint(33)
+		ses.EnterFPrint(FPCreateStage)
+		defer ses.ExitFPrint(FPCreateStage)
 		if err = handleCreateStage(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropStage:
-		ses.EnterFPrint(34)
-		defer ses.ExitFPrint(34)
+		ses.EnterFPrint(FPDropStage)
+		defer ses.ExitFPrint(FPDropStage)
 		if err = handleDropStage(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.AlterStage:
-		ses.EnterFPrint(35)
-		defer ses.ExitFPrint(35)
+		ses.EnterFPrint(FPAlterStage)
+		defer ses.ExitFPrint(FPAlterStage)
 		if err = handleAlterStage(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CreateAccount:
-		ses.EnterFPrint(36)
-		defer ses.ExitFPrint(36)
+		ses.EnterFPrint(FPCreateAccount)
+		defer ses.ExitFPrint(FPCreateAccount)
 		ses.InvalidatePrivilegeCache()
 		if err = handleCreateAccount(ses, execCtx, st, execCtx.proc); err != nil {
 			return
 		}
 	case *tree.DropAccount:
-		ses.EnterFPrint(37)
-		defer ses.ExitFPrint(37)
+		ses.EnterFPrint(FPDropAccount)
+		defer ses.ExitFPrint(FPDropAccount)
 		ses.InvalidatePrivilegeCache()
 		if err = handleDropAccount(ses, execCtx, st, execCtx.proc); err != nil {
 			return
 		}
 	case *tree.AlterAccount:
 		ses.InvalidatePrivilegeCache()
-		ses.EnterFPrint(38)
-		defer ses.ExitFPrint(38)
+		ses.EnterFPrint(FPAlterAccount)
+		defer ses.ExitFPrint(FPAlterAccount)
 		if err = handleAlterAccount(ses, execCtx, st, execCtx.proc); err != nil {
 			return
 		}
 	case *tree.AlterDataBaseConfig:
 		ses.InvalidatePrivilegeCache()
-		ses.EnterFPrint(39)
-		defer ses.ExitFPrint(39)
+		ses.EnterFPrint(FPAlterDataBaseConfig)
+		defer ses.ExitFPrint(FPAlterDataBaseConfig)
 		if st.IsAccountLevel {
 			if err = handleAlterAccountConfig(ses, execCtx, st); err != nil {
 				return
@@ -265,43 +265,43 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 			}
 		}
 	case *tree.CreateUser:
-		ses.EnterFPrint(40)
-		defer ses.ExitFPrint(40)
+		ses.EnterFPrint(FPCreateUser)
+		defer ses.ExitFPrint(FPCreateUser)
 		ses.InvalidatePrivilegeCache()
 		if err = handleCreateUser(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropUser:
-		ses.EnterFPrint(41)
-		defer ses.ExitFPrint(41)
+		ses.EnterFPrint(FPDropUser)
+		defer ses.ExitFPrint(FPDropUser)
 		ses.InvalidatePrivilegeCache()
 		if err = handleDropUser(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.AlterUser: //TODO
-		ses.EnterFPrint(42)
-		defer ses.ExitFPrint(42)
+		ses.EnterFPrint(FPAlterUser)
+		defer ses.ExitFPrint(FPAlterUser)
 		ses.InvalidatePrivilegeCache()
 		if err = handleAlterUser(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CreateRole:
-		ses.EnterFPrint(43)
-		defer ses.ExitFPrint(43)
+		ses.EnterFPrint(FPCreateRole)
+		defer ses.ExitFPrint(FPCreateRole)
 		ses.InvalidatePrivilegeCache()
 		if err = handleCreateRole(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropRole:
-		ses.EnterFPrint(44)
-		defer ses.ExitFPrint(44)
+		ses.EnterFPrint(FPDropRole)
+		defer ses.ExitFPrint(FPDropRole)
 		ses.InvalidatePrivilegeCache()
 		if err = handleDropRole(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CreateFunction:
-		ses.EnterFPrint(45)
-		defer ses.ExitFPrint(45)
+		ses.EnterFPrint(FPCreateFunction)
+		defer ses.ExitFPrint(FPCreateFunction)
 		if err = st.Valid(); err != nil {
 			return err
 		}
@@ -309,32 +309,32 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 	case *tree.DropFunction:
-		ses.EnterFPrint(46)
-		defer ses.ExitFPrint(46)
+		ses.EnterFPrint(FPDropFunction)
+		defer ses.ExitFPrint(FPDropFunction)
 		if err = handleDropFunction(ses, execCtx, st, execCtx.proc); err != nil {
 			return
 		}
 	case *tree.CreateProcedure:
-		ses.EnterFPrint(47)
-		defer ses.ExitFPrint(47)
+		ses.EnterFPrint(FPCreateProcedure)
+		defer ses.ExitFPrint(FPCreateProcedure)
 		if err = handleCreateProcedure(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropProcedure:
-		ses.EnterFPrint(48)
-		defer ses.ExitFPrint(48)
+		ses.EnterFPrint(FPDropProcedure)
+		defer ses.ExitFPrint(FPDropProcedure)
 		if err = handleDropProcedure(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CallStmt:
-		ses.EnterFPrint(49)
-		defer ses.ExitFPrint(49)
+		ses.EnterFPrint(FPCallStmt)
+		defer ses.ExitFPrint(FPCallStmt)
 		if err = handleCallProcedure(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.Grant:
-		ses.EnterFPrint(50)
-		defer ses.ExitFPrint(50)
+		ses.EnterFPrint(FPGrant)
+		defer ses.ExitFPrint(FPGrant)
 		ses.InvalidatePrivilegeCache()
 		switch st.Typ {
 		case tree.GrantTypeRole:
@@ -347,8 +347,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 			}
 		}
 	case *tree.Revoke:
-		ses.EnterFPrint(51)
-		defer ses.ExitFPrint(51)
+		ses.EnterFPrint(FPRevoke)
+		defer ses.ExitFPrint(FPRevoke)
 		ses.InvalidatePrivilegeCache()
 		switch st.Typ {
 		case tree.RevokeTypeRole:
@@ -361,41 +361,41 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 			}
 		}
 	case *tree.Kill:
-		ses.EnterFPrint(52)
-		defer ses.ExitFPrint(52)
+		ses.EnterFPrint(FPKill)
+		defer ses.ExitFPrint(FPKill)
 		ses.InvalidatePrivilegeCache()
 		if err = handleKill(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.ShowAccounts:
-		ses.EnterFPrint(53)
-		defer ses.ExitFPrint(53)
+		ses.EnterFPrint(FPShowAccounts)
+		defer ses.ExitFPrint(FPShowAccounts)
 		if err = handleShowAccounts(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.ShowCollation:
-		ses.EnterFPrint(54)
-		defer ses.ExitFPrint(54)
+		ses.EnterFPrint(FPShowCollation)
+		defer ses.ExitFPrint(FPShowCollation)
 		if err = handleShowCollation(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.ShowBackendServers:
-		ses.EnterFPrint(55)
-		defer ses.ExitFPrint(55)
+		ses.EnterFPrint(FPShowBackendServers)
+		defer ses.ExitFPrint(FPShowBackendServers)
 		if err = handleShowBackendServers(ses, execCtx); err != nil {
 			return
 		}
 	case *tree.SetTransaction:
-		ses.EnterFPrint(56)
-		defer ses.ExitFPrint(56)
+		ses.EnterFPrint(FPSetTransaction)
+		defer ses.ExitFPrint(FPSetTransaction)
 		//TODO: handle set transaction
 	case *tree.LockTableStmt:
 
 	case *tree.UnLockTableStmt:
 
 	case *tree.BackupStart:
-		ses.EnterFPrint(57)
-		defer ses.ExitFPrint(57)
+		ses.EnterFPrint(FPBackupStart)
+		defer ses.ExitFPrint(FPBackupStart)
 		if err = handleStartBackup(ses, execCtx, st); err != nil {
 			return
 		}
@@ -405,61 +405,65 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 	case *tree.CreateSnapShot:
-		ses.EnterFPrint(58)
-		defer ses.ExitFPrint(58)
+		ses.EnterFPrint(FPCreateSnapShot)
+		defer ses.ExitFPrint(FPCreateSnapShot)
 		//TODO: invalidate privilege cache
 		if err = handleCreateSnapshot(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropSnapShot:
-		ses.EnterFPrint(59)
-		defer ses.ExitFPrint(59)
+		ses.EnterFPrint(FPDropSnapShot)
+		defer ses.ExitFPrint(FPDropSnapShot)
 		//TODO: invalidate privilege cache
 		if err = handleDropSnapshot(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.RestoreSnapShot:
-		ses.EnterFPrint(60)
-		defer ses.ExitFPrint(60)
+		ses.EnterFPrint(FPRestoreSnapShot)
+		defer ses.ExitFPrint(FPRestoreSnapShot)
 		//TODO: invalidate privilege cache
 		if err = handleRestoreSnapshot(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.UpgradeStatement:
-		ses.EnterFPrint(61)
-		defer ses.ExitFPrint(61)
+		ses.EnterFPrint(FPUpgradeStatement)
+		defer ses.ExitFPrint(FPUpgradeStatement)
 		//TODO: invalidate privilege cache
 		if err = handleExecUpgrade(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CreatePitr:
-		ses.EnterFPrint(120)
-		defer ses.ExitFPrint(120)
+		ses.EnterFPrint(FPCreatePitr)
+		defer ses.ExitFPrint(FPCreatePitr)
 		//TODO: invalidate privilege cache
 		if err = handleCreatePitr(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropPitr:
-		ses.EnterFPrint(121)
-		defer ses.ExitFPrint(121)
+		ses.EnterFPrint(FPDropPitr)
+		defer ses.ExitFPrint(FPDropPitr)
 		//TODO: invalidate privilege cache
 		if err = handleDropPitr(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.AlterPitr:
-		ses.EnterFPrint(122)
-		defer ses.ExitFPrint(122)
+		ses.EnterFPrint(FPAlterPitr)
+		defer ses.ExitFPrint(FPAlterPitr)
 		//TODO: invalidate privilege cache
 		if err = handleAlterPitr(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.RestorePitr:
-		ses.EnterFPrint(123)
-		defer ses.ExitFPrint(123)
+		ses.EnterFPrint(FPRestorePitr)
+		defer ses.ExitFPrint(FPRestorePitr)
 		//TODO: invalidate privilege cache
 		if err = handleRestorePitr(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.SetConnectionID:
+		ses.EnterFPrint(FPSetConnectionID)
+		defer ses.ExitFPrint(FPSetConnectionID)
+		ses.SetConnectionID(st.ConnectionID)
 	case *tree.CreateCDC:
 	case *tree.PauseCDC:
 	case *tree.DropCDC:

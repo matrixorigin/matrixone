@@ -30,8 +30,8 @@ import (
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
 	var colDefs []*plan2.ColDef
-	ses.EnterFPrint(63)
-	defer ses.ExitFPrint(63)
+	ses.EnterFPrint(FPResultRowStmt)
+	defer ses.ExitFPrint(FPResultRowStmt)
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 
@@ -45,15 +45,15 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan())}
 
-		ses.EnterFPrint(64)
-		defer ses.ExitFPrint(64)
+		ses.EnterFPrint(FPResultRowStmtSelect1)
+		defer ses.ExitFPrint(FPResultRowStmtSelect1)
 		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
 		}
 
-		ses.EnterFPrint(65)
-		defer ses.ExitFPrint(65)
+		ses.EnterFPrint(FPResultRowStmtSelect2)
+		defer ses.ExitFPrint(FPResultRowStmtSelect2)
 		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
 		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		runBegin := time.Now()
@@ -89,15 +89,15 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 
-		ses.EnterFPrint(66)
-		defer ses.ExitFPrint(66)
+		ses.EnterFPrint(FPResultRowStmtExplainAnalyze1)
+		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze1)
 		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
 		}
 
-		ses.EnterFPrint(67)
-		defer ses.ExitFPrint(67)
+		ses.EnterFPrint(FPResultRowStmtExplainAnalyze2)
+		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze2)
 		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
 		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		runBegin := time.Now()
@@ -124,15 +124,15 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan())}
 
-		ses.EnterFPrint(68)
-		defer ses.ExitFPrint(68)
+		ses.EnterFPrint(FPResultRowStmtDefault1)
+		defer ses.ExitFPrint(FPResultRowStmtDefault1)
 		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
 		}
 
-		ses.EnterFPrint(69)
-		defer ses.ExitFPrint(69)
+		ses.EnterFPrint(FPResultRowStmtDefault2)
+		defer ses.ExitFPrint(FPResultRowStmtDefault2)
 		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
 		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		runBegin := time.Now()
@@ -217,8 +217,8 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 
 func (resper *MysqlResp) respStreamResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
-	ses.EnterFPrint(70)
-	defer ses.ExitFPrint(70)
+	ses.EnterFPrint(FPRespStreamResultRow)
+	defer ses.ExitFPrint(FPRespStreamResultRow)
 	if execCtx.inMigration {
 		return nil
 	}
@@ -290,8 +290,8 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 
 func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
-	ses.EnterFPrint(71)
-	defer ses.ExitFPrint(71)
+	ses.EnterFPrint(FPrespPrebuildResultRow)
+	defer ses.ExitFPrint(FPrespPrebuildResultRow)
 	if execCtx.inMigration {
 		return nil
 	}
@@ -305,8 +305,8 @@ func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
 
 func (resper *MysqlResp) respMixedResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
-	ses.EnterFPrint(72)
-	defer ses.ExitFPrint(72)
+	ses.EnterFPrint(FPrespMixedResultRow)
+	defer ses.ExitFPrint(FPrespMixedResultRow)
 	if execCtx.inMigration {
 		return nil
 	}
