@@ -164,7 +164,11 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.status = receive
 			}
 
-			result.Batch = makeResultBatch(ctr.bat, ctr.vec)
+			if ctr.rBat != nil {
+				result.Batch = ctr.resetResultBatch(ctr.bat, ctr.vec)
+			} else {
+				result.Batch = ctr.makeResultBatch(ctr.bat, ctr.vec)
+			}
 			result.Status = vm.ExecNext
 			return result, nil
 		case done:
@@ -175,16 +179,27 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func makeResultBatch(bat *batch.Batch, vec *vector.Vector) *batch.Batch {
-	r := batch.NewWithSize(len(bat.Vecs) + 1)
+func (ctr *container) makeResultBatch(bat *batch.Batch, vec *vector.Vector) *batch.Batch {
+	ctr.rBat = batch.NewWithSize(len(bat.Vecs) + 1)
 	i := 0
 	for i < len(bat.Vecs) {
-		r.Vecs[i] = bat.Vecs[i]
+		ctr.rBat.Vecs[i] = bat.Vecs[i]
 		i++
 	}
-	r.Vecs[i] = vec
-	r.SetRowCount(vec.Length())
-	return r
+	ctr.rBat.Vecs[i] = vec
+	ctr.rBat.SetRowCount(vec.Length())
+	return ctr.rBat
+}
+
+func (ctr *container) resetResultBatch(bat *batch.Batch, vec *vector.Vector) *batch.Batch {
+	i := 0
+	for i < len(bat.Vecs) {
+		ctr.rBat.Vecs[i] = bat.Vecs[i]
+		i++
+	}
+	ctr.rBat.Vecs[i] = vec
+	ctr.rBat.SetRowCount(vec.Length())
+	return ctr.rBat
 }
 
 func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, anal process.Analyze) error {

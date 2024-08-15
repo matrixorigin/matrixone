@@ -50,7 +50,8 @@ type container struct {
 	os      []int64 // Sorted partitions
 	aggVecs []group.ExprEvalVector
 
-	vec *vector.Vector
+	vec  *vector.Vector
+	rBat *batch.Batch
 }
 
 type Window struct {
