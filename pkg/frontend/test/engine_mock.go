@@ -272,17 +272,17 @@ func (mr *MockTombstonerMockRecorder) HasAnyTombstoneFile() *gomock.Call {
 }
 
 // HasTombstones mocks base method.
-func (m *MockTombstoner) HasTombstones() bool {
+func (m *MockTombstoner) HasTombstones(bid types.Blockid) bool {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HasTombstones")
+	ret := m.ctrl.Call(m, "HasTombstones", bid)
 	ret0, _ := ret[0].(bool)
 	return ret0
 }
 
 // HasTombstones indicates an expected call of HasTombstones.
-func (mr *MockTombstonerMockRecorder) HasTombstones() *gomock.Call {
+func (mr *MockTombstonerMockRecorder) HasTombstones(bid interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTombstones", reflect.TypeOf((*MockTombstoner)(nil).HasTombstones))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTombstones", reflect.TypeOf((*MockTombstoner)(nil).HasTombstones), bid)
 }
 
 // MarshalBinaryWithBuffer mocks base method.
@@ -1115,6 +1115,21 @@ func (mr *MockRelationMockRecorder) GetHideKeys(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHideKeys", reflect.TypeOf((*MockRelation)(nil).GetHideKeys), arg0)
 }
 
+// GetNonAppendableObjectStats mocks base method.
+func (m *MockRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetNonAppendableObjectStats", ctx)
+	ret0, _ := ret[0].([]objectio.ObjectStats)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetNonAppendableObjectStats indicates an expected call of GetNonAppendableObjectStats.
+func (mr *MockRelationMockRecorder) GetNonAppendableObjectStats(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNonAppendableObjectStats", reflect.TypeOf((*MockRelation)(nil).GetNonAppendableObjectStats), ctx)
+}
+
 // GetPrimaryKeys mocks base method.
 func (m *MockRelation) GetPrimaryKeys(arg0 context.Context) ([]*engine.Attribute, error) {
 	m.ctrl.T.Helper()
@@ -1170,21 +1185,6 @@ func (m *MockRelation) GetTableName() string {
 func (mr *MockRelationMockRecorder) GetTableName() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTableName", reflect.TypeOf((*MockRelation)(nil).GetTableName))
-}
-
-// GetVisibleObjectStats mocks base method.
-func (m *MockRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetNonAppendableObjectStats", ctx)
-	ret0, _ := ret[0].([]objectio.ObjectStats)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetVisibleObjectStats indicates an expected call of GetVisibleObjectStats.
-func (mr *MockRelationMockRecorder) GetNonAppendableObjectStats(ctx interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNonAppendableObjectStats", reflect.TypeOf((*MockRelation)(nil).GetNonAppendableObjectStats), ctx)
 }
 
 // MaxAndMinValues mocks base method.

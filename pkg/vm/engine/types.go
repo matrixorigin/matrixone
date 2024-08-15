@@ -606,7 +606,7 @@ type Tombstoner interface {
 	String() string
 	StringWithPrefix(string) string
 
-	HasTombstones() bool
+	HasTombstones(bid types.Blockid) bool
 
 	MarshalBinaryWithBuffer(w *bytes.Buffer) error
 	UnmarshalBinary(buf []byte) error
