@@ -859,7 +859,7 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 }
 
 func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	lockOp.cleanPacker()
+	lockOp.resetPacker()
 	lockOp.cleanCachedBatch(proc)
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.step = stepLock
@@ -877,6 +877,12 @@ func (lockOp *LockOp) cleanCachedBatch(proc *process.Process) {
 		bat.Clean(proc.Mp())
 	}
 	lockOp.ctr.cachedBatches = nil
+}
+
+func (lockOp *LockOp) resetPacker() {
+	if lockOp.ctr.parker != nil {
+		lockOp.ctr.parker.Reset()
+	}
 }
 
 func (lockOp *LockOp) cleanPacker() {
