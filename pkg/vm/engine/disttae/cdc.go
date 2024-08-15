@@ -244,6 +244,10 @@ func (cdcEng *CdcEngine) BuildBlockReaders(ctx context.Context, proc any, ts tim
 	panic("implement me")
 }
 
+func (cdcEng *CdcEngine) InQueue() Queue[tools.Pair[*TableCtx, *DecoderInput]] {
+	return cdcEng.inQueue
+}
+
 func NewCdcRelation(
 	db, table string,
 	accountId, dbId, tableId uint64,

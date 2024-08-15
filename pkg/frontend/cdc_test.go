@@ -54,7 +54,7 @@ func Test_newCdcSqlFormat(t *testing.T) {
 	wantSql := `insert into mo_catalog.mo_cdc_task values(3,"019111fd-aed1-70c0-8760-9abadd8f0f4a","task1","src uri","123","dst uri","mysql","456","ca path","cert path","key path","db1:t1","xfilter","op filters","error","common",123,"123",456,"456","conf path","2024-08-02 15:20:00","running",125,"125","xxx","yyy","","","","","")`
 	assert.Equal(t, wantSql, sql)
 
-	sql2 := getSqlForRetrivingNewCdcTask(3, id)
+	sql2 := getSqlForRetrievingCdcTask(3, id)
 	wantSql2 := `select sink_uri, sink_type, sink_password, tables from mo_catalog.mo_cdc_task where account_id = 3 and task_id = "019111fd-aed1-70c0-8760-9abadd8f0f4a"`
 	assert.Equal(t, wantSql2, sql2)
 }

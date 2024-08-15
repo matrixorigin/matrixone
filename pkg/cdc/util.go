@@ -21,6 +21,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"go.uber.org/zap"
 )
@@ -441,4 +443,28 @@ func NewCdcActiveRoutine() *ActiveRoutine {
 	activeRoutine.Cancel = make(chan struct{})
 	activeRoutine.Pause = make(chan struct{})
 	return activeRoutine
+}
+
+func TimestampToStr(ts timestamp.Timestamp) string {
+	return fmt.Sprintf("%d-%d", ts.PhysicalTime, ts.LogicalTime)
+}
+
+func StrToTimestamp(tsStr string) (ts timestamp.Timestamp, err error) {
+	splits := strings.Split(tsStr, "-")
+	if len(splits) != 2 {
+		err = moerr.NewInternalErrorNoCtx("strToTimestamp : invalid timestamp string %s", tsStr)
+		return
+	}
+
+	if ts.PhysicalTime, err = strconv.ParseInt(splits[0], 10, 64); err != nil {
+		return
+	}
+
+	logicalTime, err := strconv.ParseUint(splits[1], 10, 32)
+	if err != nil {
+		return
+	}
+
+	ts.LogicalTime = uint32(logicalTime)
+	return
 }

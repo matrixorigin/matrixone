@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -31,15 +32,18 @@ func (p tableIdPartitioner) Partition(entry tools.Pair[*disttae.TableCtx, *distt
 	p.outputChs[tableCtx.TableId()] <- entry
 }
 
-func (p tableIdPartitioner) Run(ctx context.Context, ar *ActiveRoutine) {
+func (p tableIdPartitioner) Run(_ context.Context, ar *ActiveRoutine) {
+	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Partitioner: start\n")
+	defer fmt.Fprintf(os.Stderr, "^^^^^ Partitioner: end\n")
+
 	for {
 		select {
-		case <-ctx.Done():
-			return
 		case <-ar.Pause:
 			return
+
 		case <-ar.Cancel:
 			return
+
 		default:
 			if !p.q.Empty() {
 				entry := p.q.Front()
@@ -49,16 +53,19 @@ func (p tableIdPartitioner) Run(ctx context.Context, ar *ActiveRoutine) {
 
 				//TODO:process heartbeat.to decoder? to sinker?
 				if decoderInput.IsHeartbeat() {
+					//_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Partitioner:{%s} heartbeat\n", decoderInput.TS().DebugString())
 					continue
 				}
 
-				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Partitioner: {%v} [%v(%v)].[%v(%v)]\n",
-					decoderInput.TS(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Partitioner: {%s} [%v(%v)].[%v(%v)]\n",
+					decoderInput.TS().DebugString(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
 
 				p.Partition(entry)
 
-				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Partitioner: {%v} [%v(%v)].[%v(%v)], entry pushed\n",
-					decoderInput.TS(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Partitioner: {%s} [%v(%v)].[%v(%v)], entry pushed\n",
+					decoderInput.TS().DebugString(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+			} else {
+				time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}

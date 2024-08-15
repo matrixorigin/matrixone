@@ -24,11 +24,18 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
-func NewSinker(ctx context.Context, sinkUri string, inputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput]) (Sinker, error) {
+func NewSinker(
+	ctx context.Context,
+	sinkUri string,
+	inputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput],
+	curWaterMark timestamp.Timestamp,
+	updateWatermarkFunc func(tableId uint64, watermark timestamp.Timestamp),
+) (Sinker, error) {
 	//TODO: remove console
 	if strings.HasPrefix(strings.ToLower(sinkUri), "console://") {
 		return NewConsoleSinker(inputCh), nil
@@ -44,7 +51,7 @@ func NewSinker(ctx context.Context, sinkUri string, inputCh chan tools.Pair[*dis
 		return nil, err
 	}
 
-	return NewMysqlSinker(sink, inputCh), nil
+	return NewMysqlSinker(sink, inputCh, curWaterMark, updateWatermarkFunc), nil
 }
 
 var _ Sinker = new(consoleSinker)
@@ -98,17 +105,17 @@ func (s *consoleSinker) Sink(_ context.Context, data *DecoderOutput) error {
 func (s *consoleSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 	for {
 		select {
-		case <-ctx.Done():
-			return
 		case <-ar.Pause:
 			return
+
 		case <-ar.Cancel:
 			return
+
 		case entry := <-s.inputCh:
 			tableCtx := entry.Key
 			decodeOutput := entry.Value
-			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: {%v} [%v(%v)].[%v(%v)]\n",
-				decodeOutput.ts, tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: {%s} [%v(%v)].[%v(%v)]\n",
+				decodeOutput.ts.DebugString(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
 
 			err := s.Sink(ctx, decodeOutput)
 			if err != nil {
@@ -121,14 +128,23 @@ func (s *consoleSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 var _ Sinker = new(mysqlSinker)
 
 type mysqlSinker struct {
-	mysql   Sink
-	inputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput]
+	mysql               Sink
+	inputCh             chan tools.Pair[*disttae.TableCtx, *DecoderOutput]
+	watermark           timestamp.Timestamp
+	updateWatermarkFunc func(tableId uint64, watermark timestamp.Timestamp)
 }
 
-func NewMysqlSinker(mysql Sink, inputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput]) Sinker {
+func NewMysqlSinker(
+	mysql Sink,
+	inputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput],
+	watermark timestamp.Timestamp,
+	updateWatermarkFunc func(tableId uint64, watermark timestamp.Timestamp),
+) Sinker {
 	return &mysqlSinker{
-		mysql:   mysql,
-		inputCh: inputCh,
+		mysql:               mysql,
+		inputCh:             inputCh,
+		watermark:           watermark,
+		updateWatermarkFunc: updateWatermarkFunc,
 	}
 }
 
@@ -137,25 +153,44 @@ func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 }
 
 func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
+	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: start\n")
+	defer func() {
+		s.mysql.Close()
+		_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: end\n")
+	}()
+
 	for {
 		select {
-		case <-ctx.Done():
-			return
 		case <-ar.Pause:
 			return
+
 		case <-ar.Cancel:
 			return
+
 		case entry := <-s.inputCh:
 			tableCtx := entry.Key
 			decodeOutput := entry.Value
-			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: {%v} [%v(%v)].[%v(%v)]\n",
-				decodeOutput.ts, tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+
+			if s.watermark.Greater(decodeOutput.ts) {
+				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: Unexpect watermark: %v, cur watermark: %v \n", decodeOutput.ts, s.watermark)
+				continue
+			}
+
+			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: {%s} [%v(%v)].[%v(%v)]\n",
+				decodeOutput.ts.DebugString(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
 
 			err := s.Sink(ctx, decodeOutput)
 			if err != nil {
-				return
+				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: {%s} [%v(%v)].[%v(%v)], sink error\n",
+					decodeOutput.ts.DebugString(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+				// TODO handle error
+				continue
 			}
-			// TODO update watermark
+			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: {%s} [%v(%v)].[%v(%v)], sink over\n",
+				decodeOutput.ts.DebugString(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+
+			s.watermark = decodeOutput.ts
+			s.updateWatermarkFunc(tableCtx.TableId(), s.watermark)
 		}
 	}
 }
