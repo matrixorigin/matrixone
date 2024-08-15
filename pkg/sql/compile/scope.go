@@ -939,11 +939,11 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			}
 			arg.Release()
 		case vm.Output:
-		case vm.Connector:
-		case vm.Dispatch:
 		default:
-			for j := range ss {
-				ss[j].setRootOperator(dupOperator(op, nil, j))
+			if op != s.RootOp {
+				for j := range ss {
+					ss[j].setRootOperator(dupOperator(op, nil, j))
+				}
 			}
 		}
 		return nil
