@@ -122,7 +122,7 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (product *Product) build(proc *process.Process, anal process.Analyze) error {
-	ctr := product.ctr
+	ctr := &product.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
 	mp := message.ReceiveJoinMap(product.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)

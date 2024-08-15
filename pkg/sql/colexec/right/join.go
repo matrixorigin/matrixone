@@ -139,7 +139,7 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (rightJoin *RightJoin) build(anal process.Analyze, proc *process.Process) {
-	ctr := rightJoin.ctr
+	ctr := &rightJoin.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
 	ctr.mp = message.ReceiveJoinMap(rightJoin.JoinMapTag, rightJoin.IsShuffle, rightJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
