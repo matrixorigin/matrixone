@@ -296,6 +296,8 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 		metric.FSReadDurationGetContent.Observe(time.Since(t0).Seconds())
 	}()
 
+	globalProfiler.Sample(0, 1).Read.Add(1)
+
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}

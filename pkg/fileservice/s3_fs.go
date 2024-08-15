@@ -425,6 +425,8 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return err
 	}
 
+	globalProfiler.Sample(0, 1).Read.Add(1)
+
 	ctx = WithEventLogger(ctx)
 	LogEvent(ctx, str_s3fs_read, vector)
 	defer func() {
