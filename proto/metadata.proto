@@ -127,6 +127,10 @@ message CNService {
   string QueryAddress           = 8;
   // CommitID is the git commit ID of the cn node.
   string CommitID = 9;
+  // CPUTotal is cpu quota
+  uint64 CPUTotal = 10;
+  // MemTotal is mem quota
+  uint64 MemTotal = 11;
 }
 
 // TNService tn service metadata
