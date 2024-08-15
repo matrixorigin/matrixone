@@ -105,7 +105,7 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(loopSemi.Result))
 				for i, pos := range loopSemi.Result {
-					ctr.rbat.Vecs[i] = proc.GetVector(*loopSemi.ctr.buf.Vecs[pos].GetType())
+					ctr.rbat.Vecs[i] = vector.NewVec(*loopSemi.ctr.buf.Vecs[pos].GetType())
 				}
 			} else {
 				ctr.rbat.CleanOnlyData()

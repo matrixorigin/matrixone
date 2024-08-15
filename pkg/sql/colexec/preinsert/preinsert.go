@@ -61,21 +61,19 @@ func (preInsert *PreInsert) initBuf(proc *proc, bat *batch.Batch) (err error) {
 	}
 	// if col is AutoIncr, genAutoIncrCol function may change the vector of this col, so wo should copy the vec from children vec
 	// and the other cols of preInsert.Attrs is stable, we just use the vecs of children's vecs, so just preInsert.ctr.buf.SetVector using bat.Vecs
-	for i, attr := range preInsert.Attrs {
-		if idx, ok := tableDef.Name2ColIndex[attr]; ok {
-			if tableDef.Cols[idx].Typ.AutoIncr {
-				if preInsert.ctr.buf.Vecs[i] != nil {
-					preInsert.ctr.buf.Vecs[i].Free(proc.Mp())
-					preInsert.ctr.buf.Vecs[i] = nil
-				}
-
-				preInsert.ctr.buf.Vecs[i], err = bat.Vecs[i].Dup(proc.Mp())
-				if err != nil {
-					return err
-				}
+	for idx := range preInsert.Attrs {
+		if tableDef.Cols[idx].Typ.AutoIncr {
+			typ := bat.Vecs[idx].GetType()
+			if preInsert.ctr.buf.Vecs[idx] != nil {
+				preInsert.ctr.buf.Vecs[idx].CleanOnlyData()
 			} else {
-				preInsert.ctr.buf.SetVector(int32(i), bat.Vecs[i])
+				preInsert.ctr.buf.Vecs[idx] = vector.NewVec(*typ)
 			}
+			if err := vector.GetUnionAllFunction(*typ, proc.Mp())(preInsert.ctr.buf.Vecs[idx], bat.Vecs[idx]); err != nil {
+				return err
+			}
+		} else {
+			preInsert.ctr.buf.SetVector(int32(idx), bat.Vecs[idx])
 		}
 	}
 	return err

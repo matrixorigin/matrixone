@@ -118,7 +118,7 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			if !ap.NeedMergedBatch {
 				// if do not need merged batch, free it now to save memory
 				for i := range ctr.batches {
-					proc.PutBatch(ctr.batches[i])
+					ctr.batches[i].Clean(proc.GetMPool())
 				}
 				ctr.batches = nil
 			}
@@ -299,7 +299,7 @@ func (ctr *container) buildHashmap(ap *ShuffleBuild, proc *process.Process) erro
 			if len(ap.ctr.uniqueJoinKeys) == 0 {
 				ap.ctr.uniqueJoinKeys = make([]*vector.Vector, len(ctr.executor))
 				for j, vec := range ctr.vecs[vecIdx1] {
-					ap.ctr.uniqueJoinKeys[j] = proc.GetVector(*vec.GetType())
+					ap.ctr.uniqueJoinKeys[j] = vector.NewVec(*vec.GetType())
 				}
 			}
 
