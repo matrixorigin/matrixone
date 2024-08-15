@@ -111,6 +111,7 @@ func (semiJoin *SemiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()
 	ctr.state = Build
+	ctr.skipProbe = false
 
 	if semiJoin.ProjectList != nil {
 		anal.Alloc(semiJoin.ProjectAllocSize + semiJoin.ctr.maxAllocSize)
