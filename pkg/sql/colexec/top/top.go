@@ -192,17 +192,21 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 			analyze.Alloc(int64(nv.Size()))
 		}
 	}
-	if ctr.bat == nil {
+
+	if len(ctr.cmps) == 0 {
 		mp := make(map[int]int)
 		for i, pos := range ctr.poses {
 			mp[int(pos)] = i
 		}
-		ctr.bat = batch.NewWithSize(len(bat.Vecs))
-		for i, vec := range bat.Vecs {
-			ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
+
+		if ctr.bat == nil {
+			ctr.bat = batch.NewWithSize(len(bat.Vecs))
+			for i, vec := range bat.Vecs {
+				ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
+			}
 		}
-		ctr.cmps = make([]compare.Compare, len(bat.Vecs))
-		for i := range ctr.cmps {
+
+		for i := 0; i < len(bat.Vecs); i++ {
 			var desc, nullsLast bool
 			if pos, ok := mp[i]; ok {
 				desc = ap.Fs[pos].Flag&plan.OrderBySpec_DESC != 0
@@ -214,9 +218,14 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 					nullsLast = desc
 				}
 			}
-			ctr.cmps[i] = compare.New(*bat.Vecs[i].GetType(), desc, nullsLast)
+			ctr.cmps = append(
+				ctr.cmps,
+				compare.New(*bat.Vecs[i].GetType(), desc, nullsLast),
+			)
 		}
+
 	}
+
 	err := ctr.processBatch(ap.ctr.limit, bat, proc)
 	return err
 }
