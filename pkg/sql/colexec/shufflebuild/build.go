@@ -299,7 +299,7 @@ func (ctr *container) buildHashmap(ap *ShuffleBuild, proc *process.Process) erro
 			if len(ap.ctr.uniqueJoinKeys) == 0 {
 				ap.ctr.uniqueJoinKeys = make([]*vector.Vector, len(ctr.executor))
 				for j, vec := range ctr.vecs[vecIdx1] {
-					ap.ctr.uniqueJoinKeys[j] = proc.GetVector(*vec.GetType())
+					ap.ctr.uniqueJoinKeys[j] = vector.NewVec(*vec.GetType())
 				}
 			}
 

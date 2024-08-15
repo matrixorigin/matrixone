@@ -188,8 +188,8 @@ func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
 
 	blockInfoBat := batch.NewWithSize(len(attrs))
 	blockInfoBat.Attrs = attrs
-	blockInfoBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
-	blockInfoBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
+	blockInfoBat.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+	blockInfoBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
 
 	if withStats {
 		blockInfoBat.Vecs[2], _ = vector.NewConstBytes(types.T_binary.ToType(),
