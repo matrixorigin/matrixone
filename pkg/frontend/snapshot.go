@@ -766,8 +766,7 @@ func restoreToDatabaseOrTable(
 		}
 		pubInfo, err2 := getPubInfo(toCtx, bh, pubName)
 		if err2 != nil {
-			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, pub %v not exists", snapshotName, dbName, pubName))
-			return
+			return err2
 		}
 
 		if pubInfo != nil {
@@ -777,6 +776,7 @@ func restoreToDatabaseOrTable(
 				return
 			}
 		}
+		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, dbName))
 		return
 	} else {
 		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbName)
@@ -878,10 +878,21 @@ func restoreToSubDb(
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore sub db: %v", snapshotName, subDb.dbName))
 
 	toCtx := defines.AttachAccountId(ctx, subDb.Account)
-	getLogger(sid).Info(fmt.Sprintf("[%s] account %d start to create sub db: %v, create db sql: %s", snapshotName, subDb.Account, subDb.dbName, subDb.createSql))
-	if err = bh.Exec(toCtx, subDb.createSql); err != nil {
+	pubName, err := extractPubNameFromCreateDbSql(toCtx, subDb.createSql)
+	if err != nil {
 		return
 	}
+	pubinfo, err := getPubInfo(toCtx, bh, pubName)
+	if err != nil {
+		return
+	}
+	if pubinfo != nil {
+		getLogger(sid).Info(fmt.Sprintf("[%s] account %d start to create sub db: %v, create db sql: %s", snapshotName, subDb.Account, subDb.dbName, subDb.createSql))
+		if err = bh.Exec(toCtx, subDb.createSql); err != nil {
+			return
+		}
+	}
+	getLogger(sid).Info(fmt.Sprintf("[%s] account %d skip restore sub db: %v, no publication", snapshotName, subDb.Account, subDb.dbName))
 	return
 }
 

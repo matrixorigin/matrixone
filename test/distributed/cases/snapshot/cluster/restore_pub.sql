@@ -164,7 +164,6 @@ show databases like 'sub_db4';
 
 restore cluster from snapshot cluster_sp;
 
-show databases;
 -- @ignore:5,6
 show publications;
 show databases like 'db1';
@@ -172,7 +171,6 @@ show databases like 'sub_db5';
 select * from sub_db5.t5;
 
 -- @session:id=1&user=acc01:test_account&password=111
-show databases;
 -- @ignore:5,6
 show publications;
 show databases like 'db2';
@@ -181,7 +179,6 @@ select * from sub_db1.t1;
 -- @session
 
 -- @session:id=2&user=acc02:test_account&password=111
-show databases;
 -- @ignore:5,6
 show publications;
 show databases like 'db3';
@@ -190,7 +187,6 @@ select * from sub_db2.t2;
 -- @session
 
 -- @session:id=3&user=acc03:test_account&password=111
-show databases;
 -- @ignore:5,6
 show publications;
 show databases like 'db4';
@@ -199,7 +195,6 @@ select * from sub_db3.t3;
 -- @session
 
 -- @session:id=4&user=acc04:test_account&password=111
-show databases;
 -- @ignore:5,6
 show publications;
 show databases like 'db5';
@@ -211,8 +206,9 @@ select * from sub_db4.t4;
 drop snapshot if exists cluster_sp;
 -- @ignore:1
 show snapshots;
+
 drop database if exists sub_db5;
-drop publication if exists pubname5;
+drop publication if exists pubname1;
 -- @ignore:5,6
 show publications;
 drop database if exists db1;
