@@ -206,7 +206,7 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 		return err
 	}
 
-	if !op.simple {
+	if op.simple {
 		if jsonVec.GetType().Oid == types.T_json {
 			fn = computeJsonSimple
 		} else {

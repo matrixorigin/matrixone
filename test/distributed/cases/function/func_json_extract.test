@@ -173,3 +173,12 @@ select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extrac
 where json_extract_string(jtags.tags, '$.tag35') = 'zzz';
 
 
+create database if not exists test;
+use test;
+create table json_tab (a json);
+insert into json_tab values ('{"CODE": "BOARDCODE-3", "LINE": "BOARDLINE-0", "PANEL": "BOARDPANEL-69"}');
+select * from json_tab;
+select json_extract_string(a, '$.LINE') from json_tab;
+select a from json_tab where json_extract_string(a, '$.LINE') = 'BOARDLINE-0';
+select a from json_tab where json_extract_string(a, '$.LINE') = '"BOARDLINE-0"';
+drop database test;

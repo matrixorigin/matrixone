@@ -18,7 +18,7 @@ json_extract({"a":{"q":[{"a":1},{"a":2},{"a":3}]}}, $.a.q)
 [{"a": 1}, {"a": 2}, {"a": 3}]
 select json_extract('[1,2,3]','$[*]');
 json_extract([1,2,3], $[*])
-null
+[1, 2, 3]
 select json_extract('{"a":[1,2,3,{"b":4}]}','$.a[3].b');
 json_extract({"a":[1,2,3,{"b":4}]}, $.a[3].b)
 4
@@ -26,69 +26,14 @@ select json_extract('{"a":[1,2,3,{"b":4}]}','$.a[3].c');
 json_extract({"a":[1,2,3,{"b":4}]}, $.a[3].c)
 null
 select json_extract('{"a":[1,2,3,{"b":4}],"c":5}','$.*');
-internal error: panic bytejson simple path should not contain *: 
-github.com/matrixorigin/matrixone/pkg/container/bytejson.ByteJson.querySimple
-	/Users/fengttt/m/matrixone/pkg/container/bytejson/bytejson.go:408
-github.com/matrixorigin/matrixone/pkg/container/bytejson.ByteJson.QuerySimple
-	/Users/fengttt/m/matrixone/pkg/container/bytejson/bytejson.go:443
-github.com/matrixorigin/matrixone/pkg/sql/plan/function.computeStringSimple
-	/Users/fengttt/m/matrixone/pkg/sql/plan/function/func_builtin_json.go:87
-github.com/matrixorigin/matrixone/pkg/sql/plan/function.(*opBuiltInJsonExtract).jsonExtract
-	/Users/fengttt/m/matrixone/pkg/sql/plan/function/func_builtin_json.go:239
-github.com/matrixorigin/matrixone/pkg/sql/colexec.NewExpressionExecutor
-	/Users/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:199
-github.com/matrixorigin/matrixone/pkg/sql/colexec.EvalExpressionOnce
-	/Users/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:234
-github.com/matrixorigin/matrixone/pkg/sql/plan/rule.(*ConstantFold).constantFold
-	/Users/fengttt/m/matrixone/pkg/sql/plan/rule/constant_fold.go:183
-github.com/matrixorigin/matrixone/pkg/sql/plan/rule.(*ConstantFold).Apply
-	/Users/fengttt/m/matrixone/pkg/sql/plan/rule/constant_fold.go:77
-github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).exploreNode
-	/Users/fengttt/m/matrixone/pkg/sql/plan/optimize.go:87
-github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).optimize
-	/Users/fengttt/m/matrixone/pkg/sql/plan/optimize.go:73
-github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).Optimize
-	/Users/fengttt/m/matrixone/pkg/sql/plan/optimize.go:65
-github.com/matrixorigin/matrixone/pkg/frontend.buildPlan
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:1881
-github.com/matrixorigin/matrixone/pkg/frontend.(*TxnComputationWrapper).Compile
-	/Users/fengttt/m/matrixone/pkg/frontend/computation_wrapper.go:205
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2600
-github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2500
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2469
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2426
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2317
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2281
-github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2877
-github.com/matrixorigin/matrixone/pkg/frontend.ExecRequest
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2952
-github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
-	/Users/fengttt/m/matrixone/pkg/frontend/routine.go:291
-github.com/matrixorigin/matrixone/pkg/frontend.(*RoutineManager).Handler
-	/Users/fengttt/m/matrixone/pkg/frontend/routine_manager.go:379
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleRequest
-	/Users/fengttt/m/matrixone/pkg/frontend/server.go:461
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleMessage
-	/Users/fengttt/m/matrixone/pkg/frontend/server.go:434
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleLoop
-	/Users/fengttt/m/matrixone/pkg/frontend/server.go:197
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleConn
-	/Users/fengttt/m/matrixone/pkg/frontend/server.go:188
-runtime.goexit
-	/usr/local/go/src/runtime/asm_arm64.s:1222
+json_extract({"a":[1,2,3,{"b":4}],"c":5}, $.*)
+[[1, 2, 3, {"b": 4}], 5]
 select json_extract('{"a":[1,2,3,{"a":4}]}','$**.a');
 json_extract({"a":[1,2,3,{"a":4}]}, $**.a)
-null
+[[1, 2, 3, {"a": 4}], 4]
 select json_extract('{"a":[1,2,3,{"a":4}]}','$.a[*].a');
 json_extract({"a":[1,2,3,{"a":4}]}, $.a[*].a)
-null
+4
 select json_extract('{"a":1}','$[0]');
 json_extract({"a":1}, $[0])
 {"a": 1}
@@ -106,7 +51,7 @@ json_extract({"af": [1, "2", {"aaf": "bb"}],"eab":"888"}, $**.f)
 null
 select json_extract('{"a": [1, "2", {"a": "bb"}]}','$**.a');
 json_extract({"a": [1, "2", {"a": "bb"}]}, $**.a)
-null
+[[1, "2", {"a": "bb"}], "bb"]
 select  json_extract('{"a":"a1","b":"b1"}','$.**');
 invalid input: invalid json path '$.**'
 select  json_extract('{"a":"a1","b":"b1"}','$**.1');
@@ -143,7 +88,7 @@ json_extract(t1.a, $.a.q)
 insert into t1(a,b) values ('[1,2,3]',6);
 select json_extract(t1.a,'$[*]') from t1 where t1.b=6;
 json_extract(t1.a, $[*])
-null
+[1, 2, 3]
 insert into t1(a,b) values ('{"a":[1,2,3,{"b":4}]}',7);
 select json_extract(t1.a,'$.a[3].b') from t1 where t1.b=7;
 json_extract(t1.a, $.a[3].b)
@@ -153,50 +98,15 @@ json_extract(t1.a, $.a[3].c)
 null
 insert into t1(a,b) values ('{"a":[1,2,3,{"b":4}],"c":5}',8);
 select json_extract(t1.a,'$.*') from t1 where t1.b=8;
-internal error: panic bytejson simple path should not contain *: 
-github.com/matrixorigin/matrixone/pkg/container/bytejson.ByteJson.querySimple
-	/Users/fengttt/m/matrixone/pkg/container/bytejson/bytejson.go:408
-github.com/matrixorigin/matrixone/pkg/container/bytejson.ByteJson.QuerySimple
-	/Users/fengttt/m/matrixone/pkg/container/bytejson/bytejson.go:443
-github.com/matrixorigin/matrixone/pkg/sql/plan/function.computeJsonSimple
-	/Users/fengttt/m/matrixone/pkg/sql/plan/function/func_builtin_json.go:79
-github.com/matrixorigin/matrixone/pkg/sql/plan/function.(*opBuiltInJsonExtract).jsonExtract
-	/Users/fengttt/m/matrixone/pkg/sql/plan/function/func_builtin_json.go:239
-github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
-	/Users/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:607
-github.com/matrixorigin/matrixone/pkg/sql/colexec.(*Projection).EvalProjection
-	/Users/fengttt/m/matrixone/pkg/sql/colexec/evalProjection.go:65
-github.com/matrixorigin/matrixone/pkg/sql/colexec/projection.(*Projection).Call
-	/Users/fengttt/m/matrixone/pkg/sql/colexec/projection/projection.go:69
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/Users/fengttt/m/matrixone/pkg/vm/types.go:259
-github.com/matrixorigin/matrixone/pkg/sql/colexec/output.(*Output).Call
-	/Users/fengttt/m/matrixone/pkg/sql/colexec/output/output.go:48
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).run
-	/Users/fengttt/m/matrixone/pkg/vm/pipeline/pipeline.go:107
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
-	/Users/fengttt/m/matrixone/pkg/vm/pipeline/pipeline.go:64
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
-	/Users/fengttt/m/matrixone/pkg/sql/compile/scope.go:205
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
-	/Users/fengttt/m/matrixone/pkg/sql/compile/scope.go:425
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).RemoteRun
-	/Users/fengttt/m/matrixone/pkg/sql/compile/scope.go:351
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).run
-	/Users/fengttt/m/matrixone/pkg/sql/compile/compile.go:357
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).runOnce.func2
-	/Users/fengttt/m/matrixone/pkg/sql/compile/compile.go:499
-github.com/panjf2000/ants/v2.(*goWorker).run.func1
-	/Users/fengttt/go/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/worker.go:67
-runtime.goexit
-	/usr/local/go/src/runtime/asm_arm64.s:1222
+json_extract(t1.a, $.*)
+[[1, 2, 3, {"b": 4}], 5]
 insert into t1(a,b) values ('{"a":[1,2,3,{"a":4}]}',9);
 select json_extract(t1.a,'$**.a') from t1 where t1.b=9;
 json_extract(t1.a, $**.a)
-null
+[[1, 2, 3, {"a": 4}], 4]
 select json_extract(t1.a,'$.a[*].a') from t1 where t1.b=9;
 json_extract(t1.a, $.a[*].a)
-null
+4
 drop table t1;
 create table t1 (a json);
 insert into t1(a) values ('{"a":1}'),('[1,2]'),('{"xa":1}');
@@ -215,63 +125,15 @@ drop table if exists json_table_1;
 create table json_table_1 (j1 json);
 insert into json_table_1 values('{"key10": "value1", "key2": "value2"}'),('{"key1": "@#$_%^&*()!@", "123456": "中文mo"}'),('{"芝士面包": "12abc", "123456": "中文mo"}'),('{"": "", "123456": "中文mo"}'),('{"a 1": "b 1", "123456": "中文mo"}'),('{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}'),('{"d1": [true,false]}'),('{}');
 select json_extract('{"a":"a1","b":"b1"}','$.*') from json_table_1;
-internal error: panic bytejson simple path should not contain *: 
-github.com/matrixorigin/matrixone/pkg/container/bytejson.ByteJson.querySimple
-	/Users/fengttt/m/matrixone/pkg/container/bytejson/bytejson.go:408
-github.com/matrixorigin/matrixone/pkg/container/bytejson.ByteJson.QuerySimple
-	/Users/fengttt/m/matrixone/pkg/container/bytejson/bytejson.go:443
-github.com/matrixorigin/matrixone/pkg/sql/plan/function.computeStringSimple
-	/Users/fengttt/m/matrixone/pkg/sql/plan/function/func_builtin_json.go:87
-github.com/matrixorigin/matrixone/pkg/sql/plan/function.(*opBuiltInJsonExtract).jsonExtract
-	/Users/fengttt/m/matrixone/pkg/sql/plan/function/func_builtin_json.go:239
-github.com/matrixorigin/matrixone/pkg/sql/colexec.NewExpressionExecutor
-	/Users/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:199
-github.com/matrixorigin/matrixone/pkg/sql/colexec.EvalExpressionOnce
-	/Users/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:234
-github.com/matrixorigin/matrixone/pkg/sql/plan/rule.(*ConstantFold).constantFold
-	/Users/fengttt/m/matrixone/pkg/sql/plan/rule/constant_fold.go:183
-github.com/matrixorigin/matrixone/pkg/sql/plan/rule.(*ConstantFold).Apply
-	/Users/fengttt/m/matrixone/pkg/sql/plan/rule/constant_fold.go:77
-github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).exploreNode
-	/Users/fengttt/m/matrixone/pkg/sql/plan/optimize.go:87
-github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).optimize
-	/Users/fengttt/m/matrixone/pkg/sql/plan/optimize.go:73
-github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).Optimize
-	/Users/fengttt/m/matrixone/pkg/sql/plan/optimize.go:65
-github.com/matrixorigin/matrixone/pkg/frontend.buildPlan
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:1881
-github.com/matrixorigin/matrixone/pkg/frontend.(*TxnComputationWrapper).Compile
-	/Users/fengttt/m/matrixone/pkg/frontend/computation_wrapper.go:205
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2600
-github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2500
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2469
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2426
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2317
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2281
-github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2877
-github.com/matrixorigin/matrixone/pkg/frontend.ExecRequest
-	/Users/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2952
-github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
-	/Users/fengttt/m/matrixone/pkg/frontend/routine.go:291
-github.com/matrixorigin/matrixone/pkg/frontend.(*RoutineManager).Handler
-	/Users/fengttt/m/matrixone/pkg/frontend/routine_manager.go:379
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleRequest
-	/Users/fengttt/m/matrixone/pkg/frontend/server.go:461
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleMessage
-	/Users/fengttt/m/matrixone/pkg/frontend/server.go:434
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleLoop
-	/Users/fengttt/m/matrixone/pkg/frontend/server.go:197
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleConn
-	/Users/fengttt/m/matrixone/pkg/frontend/server.go:188
-runtime.goexit
-	/usr/local/go/src/runtime/asm_arm64.s:1222
+json_extract({"a":"a1","b":"b1"}, $.*)
+["a1", "b1"]
+["a1", "b1"]
+["a1", "b1"]
+["a1", "b1"]
+["a1", "b1"]
+["a1", "b1"]
+["a1", "b1"]
+["a1", "b1"]
 create view v1 as select json_extract('{"a":1}','$.a');
 desc v1;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -319,21 +181,21 @@ json_extract([1,2,3], $[last-3])
 null
 select json_extract('[1,2,3]','$[0 to 2]');
 json_extract([1,2,3], $[0 to 2])
-null
+[1, 2, 3]
 select json_extract('[1,2,3]','$[0 to last]');
 json_extract([1,2,3], $[0 to last])
-null
+[1, 2, 3]
 select json_extract('[1,2,3]','$[0 to last-1]');
 json_extract([1,2,3], $[0 to last-1])
-null
+[1, 2]
 select json_extract('[1,2,3]','$[last-2 to last]');
 json_extract([1,2,3], $[last-2 to last])
-null
+[1, 2, 3]
 select json_extract('[1,2,3]','$[last-1 to last-2]');
 invalid input: invalid json path '$[last-1 to last-2]'
 select json_extract('[1,2,3]','$[last-8 to last-2]');
 json_extract([1,2,3], $[last-8 to last-2])
-null
+1
 select json_extract('[1,2,3]','$[last-2 to last-8]');
 invalid input: invalid json path '$[last-2 to last-8]'
 select json_extract('[1,2,3]','$[0 to last-8]');
@@ -523,3 +385,19 @@ select sum(json_extract_float64(jtags.metrics, '$.metric1')) s1, sum(json_extrac
 where json_extract_string(jtags.tags, '$.tag35') = 'zzz';
 s1    s33
 null    null
+create database if not exists test;
+use test;
+create table json_tab (a json);
+insert into json_tab values ('{"CODE": "BOARDCODE-3", "LINE": "BOARDLINE-0", "PANEL": "BOARDPANEL-69"}');
+select * from json_tab;
+a
+{"CODE": "BOARDCODE-3", "LINE": "BOARDLINE-0", "PANEL": "BOARDPANEL-69"}
+select json_extract_string(a, '$.LINE') from json_tab;
+json_extract_string(a, $.LINE)
+BOARDLINE-0
+select a from json_tab where json_extract_string(a, '$.LINE') = 'BOARDLINE-0';
+a
+{"CODE": "BOARDCODE-3", "LINE": "BOARDLINE-0", "PANEL": "BOARDPANEL-69"}
+select a from json_tab where json_extract_string(a, '$.LINE') = '"BOARDLINE-0"';
+a
+drop database test;
