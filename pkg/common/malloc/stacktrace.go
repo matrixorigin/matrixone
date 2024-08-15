@@ -17,7 +17,8 @@ package malloc
 import (
 	"hash/maphash"
 	"runtime"
-	"runtime/debug"
+	"strconv"
+	"strings"
 	"sync"
 	"unsafe"
 )
@@ -26,10 +27,6 @@ type StacktraceID uint64
 
 func GetStacktraceID(skip int) StacktraceID {
 	pcs := pcs1024Pool.Get().(*[]uintptr)
-	defer func() {
-		*pcs = (*pcs)[:cap(*pcs)]
-		pcs1024Pool.Put(pcs)
-	}()
 
 	n := runtime.Callers(2+skip, *pcs)
 	*pcs = (*pcs)[:n]
@@ -47,27 +44,58 @@ func GetStacktraceID(skip int) StacktraceID {
 	id := StacktraceID(hasher.Sum64())
 
 	if _, ok := stackIDToInfo.Load(id); ok {
+		// recycle
+		*pcs = (*pcs)[:cap(*pcs)]
+		pcs1024Pool.Put(pcs)
 		return id
 	}
 
-	info := debug.Stack()
-	stackIDToInfo.LoadOrStore(id, info)
+	_, loaded := stackIDToInfo.LoadOrStore(id, pcs)
+	if loaded {
+		// recycle
+		*pcs = (*pcs)[:cap(*pcs)]
+		pcs1024Pool.Put(pcs)
+	}
 
 	return id
 }
 
-var stackIDToInfo sync.Map
+var stackIDToInfo sync.Map // StacktraceID -> []uintptr
 
 var pcs1024Pool = sync.Pool{
 	New: func() any {
-		slice := make([]uintptr, 1024)
+		slice := make([]uintptr, 64)
 		return &slice
 	},
 }
 
 func (s StacktraceID) String() string {
-	if v, ok := stackIDToInfo.Load(s); ok {
-		return string(v.([]byte))
+	v, ok := stackIDToInfo.Load(s)
+	if !ok {
+		panic("bad stack id")
 	}
-	panic("bad stack id")
+	return pcsToString(*(v.(*[]uintptr)))
+}
+
+func pcsToString(pcs []uintptr) string {
+	buf := new(strings.Builder)
+
+	frames := runtime.CallersFrames(pcs)
+	for {
+		frame, more := frames.Next()
+
+		buf.WriteString(frame.Function)
+		buf.WriteString("\n")
+		buf.WriteString("\t")
+		buf.WriteString(frame.File)
+		buf.WriteString(":")
+		buf.WriteString(strconv.Itoa(frame.Line))
+		buf.WriteString("\n")
+
+		if !more {
+			break
+		}
+	}
+
+	return buf.String()
 }

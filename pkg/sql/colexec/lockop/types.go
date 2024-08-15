@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -62,15 +61,10 @@ type LockOptions struct {
 	hasNewVersionInRangeFunc hasNewVersionInRangeFunc
 }
 
-type container struct {
-	// state used for save lock op temp state.
-	rt *state
-}
-
 // LockOp lock op argument.
 type LockOp struct {
 	logger  *log.MOLogger
-	ctr     *container
+	ctr     state
 	engine  engine.Engine
 	targets []lockTarget
 	block   bool
@@ -133,15 +127,13 @@ type hasNewVersionInRangeFunc func(
 	from, to timestamp.Timestamp) (bool, error)
 
 type state struct {
-	colexec.ReceiverOperator
-
 	parker               *types.Packer
 	retryError           error
 	defChanged           bool
 	step                 int
 	fetchers             []FetchLockRowsFunc
 	cachedBatches        []*batch.Batch
-	batchFetchFunc       func(process.Analyze) *process.RegisterMessage
+	batchFetchFunc       func(proc *process.Process) (vm.CallResult, error)
 	hasNewVersionInRange hasNewVersionInRangeFunc
 }
 

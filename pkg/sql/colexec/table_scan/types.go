@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -95,7 +96,7 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 	allocSize += tableScan.ProjectAllocSize
 	tableScan.ResetProjection(proc)
 	anal.Alloc(allocSize)
-
+	tableScan.closeReader()
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -107,5 +108,15 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 		tableScan.ctr.msgReceiver.Free()
 		tableScan.ctr.msgReceiver = nil
 	}
-	tableScan.FreeProjection(proc)
+	tableScan.closeReader()
+}
+
+func (tableScan *TableScan) closeReader() {
+	if tableScan.Reader != nil {
+		e := tableScan.Reader.Close()
+		if e != nil {
+			logutil.Errorf("close reader for table id=%d, err=%v", tableScan.TableID, e)
+		}
+		tableScan.Reader = nil
+	}
 }

@@ -41,8 +41,44 @@ func (preInsert *PreInsert) OpType() vm.OpType {
 }
 
 func (preInsert *PreInsert) Prepare(_ *proc) error {
-	preInsert.ctr = new(container)
 	return nil
+}
+
+func (preInsert *PreInsert) initBuf(proc *proc, bat *batch.Batch) (err error) {
+	tableDef := preInsert.TableDef
+	if preInsert.ctr.buf != nil {
+		for i := len(preInsert.Attrs); i < len(preInsert.ctr.buf.Vecs); i++ {
+			preInsert.ctr.buf.Vecs[i].Free(proc.Mp())
+			preInsert.ctr.buf.SetVector(int32(i), nil)
+		}
+		preInsert.ctr.buf.Vecs = preInsert.ctr.buf.Vecs[:len(preInsert.Attrs)]
+		preInsert.ctr.buf.Attrs = preInsert.ctr.buf.Attrs[:len(preInsert.Attrs)]
+		preInsert.ctr.buf.SetRowCount(0)
+	} else {
+		preInsert.ctr.buf = batch.NewWithSize(len(preInsert.Attrs))
+		preInsert.ctr.buf.Attrs = make([]string, 0, len(preInsert.Attrs))
+		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, preInsert.Attrs...)
+	}
+	// if col is AutoIncr, genAutoIncrCol function may change the vector of this col, so wo should copy the vec from children vec
+	// and the other cols of preInsert.Attrs is stable, we just use the vecs of children's vecs, so just preInsert.ctr.buf.SetVector using bat.Vecs
+	for i, attr := range preInsert.Attrs {
+		if idx, ok := tableDef.Name2ColIndex[attr]; ok {
+			if tableDef.Cols[idx].Typ.AutoIncr {
+				if preInsert.ctr.buf.Vecs[i] != nil {
+					preInsert.ctr.buf.Vecs[i].Free(proc.Mp())
+					preInsert.ctr.buf.Vecs[i] = nil
+				}
+
+				preInsert.ctr.buf.Vecs[i], err = bat.Vecs[i].Dup(proc.Mp())
+				if err != nil {
+					return err
+				}
+			} else {
+				preInsert.ctr.buf.SetVector(int32(i), bat.Vecs[i])
+			}
+		}
+	}
+	return err
 }
 
 func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
@@ -64,26 +100,10 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
+	preInsert.initBuf(proc, bat)
 
-	if preInsert.ctr.buf != nil {
-		proc.PutBatch(preInsert.ctr.buf)
-		preInsert.ctr.buf = nil
-	}
-
-	preInsert.ctr.buf = batch.NewWithSize(len(preInsert.Attrs))
 	// keep shuffleIDX unchanged
 	preInsert.ctr.buf.ShuffleIDX = bat.ShuffleIDX
-	preInsert.ctr.buf.Attrs = make([]string, 0, len(preInsert.Attrs))
-	for idx := range preInsert.Attrs {
-		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, preInsert.Attrs[idx])
-		srcVec := bat.Vecs[idx]
-		vec := proc.GetVector(*srcVec.GetType())
-		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
-			vec.Free(proc.Mp())
-			return result, err
-		}
-		preInsert.ctr.buf.SetVector(int32(idx), vec)
-	}
 	preInsert.ctr.buf.AddRowCount(bat.RowCount())
 
 	if preInsert.HasAutoCol {
@@ -110,7 +130,7 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	if preInsert.IsUpdate {
 		idx := len(bat.Vecs) - 1
 		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.Row_ID)
-		rowIdVec := proc.GetVector(*bat.GetVector(int32(idx)).GetType())
+		rowIdVec := vector.NewVec(*bat.GetVector(int32(idx)).GetType())
 		err = rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
 		if err != nil {
 			rowIdVec.Free(proc.Mp())

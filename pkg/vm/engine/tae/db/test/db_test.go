@@ -633,7 +633,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		t.Log(db.Catalog.SimplePPString(3))
 		cntOfAblk := 0
 		cntOfblk := 0
-		testutil.ForEachObject(rel, func(blk handle.Object) (err error) {
+		testutil.ForEachObject(t, rel, func(blk handle.Object) (err error) {
 			if blk.IsAppendable() {
 				view, err := blk.GetColumnDataById(context.Background(), 0, 3, common.DefaultAllocator)
 				assert.NoError(t, err)
@@ -668,7 +668,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		cntOfAobj := 0
 		cntOfobj := 0
 		txn, rel = testutil.GetRelation(t, 0, db, "db", schema.Name)
-		testutil.ForEachObject(rel, func(obj handle.Object) (err error) {
+		testutil.ForEachObject(t, rel, func(obj handle.Object) (err error) {
 			if obj.IsAppendable() {
 				cntOfAobj++
 				return
@@ -4181,7 +4181,7 @@ func TestBlockRead(t *testing.T) {
 
 			info := &objectio.BlockInfo{
 				BlockID:    *objectio.NewBlockidWithObjectID(bid, 0),
-				EntryState: true,
+				Appendable: true,
 			}
 			metaloc := objStats.ObjectLocation()
 			metaloc.SetRows(schema.BlockMaxRows)
@@ -4263,7 +4263,7 @@ func TestBlockRead(t *testing.T) {
 			assert.Equal(t, 16, b4.Vecs[0].Length())
 
 			// read rowid column only
-			info.EntryState = false
+			info.Appendable = false
 			b5 := buildBatch([]types.Type{types.T_Rowid.ToType()})
 			err = blockio.BlockDataReadInner(
 				context.Background(), "", info,
@@ -7573,6 +7573,46 @@ func TestDedupSnapshot3(t *testing.T) {
 		require.Equal(t, totalRows, rows)
 	}
 	require.NoError(t, txn.Commit(context.Background()))
+}
+
+func TestSoftDeleteRollback(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 20
+	schema.Name = "testtable"
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	// flush the table
+	txn2, rel := tae.GetRelation()
+	metas := testutil.GetAllBlockMetas(rel)
+	task, err := jobs.NewFlushTableTailTask(nil, txn2, metas, tae.Runtime, types.MaxTs())
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	assert.NoError(t, err)
+	assert.NoError(t, txn2.Commit(context.Background()))
+
+	txn, rel := tae.GetRelation()
+	it := rel.MakeObjectIt()
+	var obj *catalog.ObjectEntry
+	for it.Next() {
+		obj = it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if obj.IsActive() && !obj.IsAppendable() {
+			break
+		}
+	}
+	t.Log(obj.ID().String())
+	require.NoError(t, txn.GetStore().SoftDeleteObject(obj.AsCommonID()))
+	require.NoError(t, txn.Rollback(ctx))
+
+	tae.CheckRowsByScan(50, false)
 }
 
 func TestDeduplication(t *testing.T) {

@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -54,9 +54,6 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Offset{
-				ctr: &container{
-					seen: 0,
-				},
 				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
@@ -73,9 +70,6 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Offset{
-				ctr: &container{
-					seen: 0,
-				},
 				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(10),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
@@ -92,9 +86,6 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Offset{
-				ctr: &container{
-					seen: 0,
-				},
 				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(12),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
@@ -162,10 +153,10 @@ func BenchmarkOffset(b *testing.B) {
 					types.T_int8.ToType(),
 				},
 				arg: &Offset{
-					ctr: &container{
+					ctr: container{
 						seen: 0,
 					},
-					OffsetExpr: plan2.MakePlan2Int64ConstExprWithType(8),
+					OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
 					OperatorBase: vm.OperatorBase{
 						OperatorInfo: vm.OperatorInfo{
 							Idx:     1,
@@ -199,12 +190,7 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 }
 
 func resetChildren(arg *Offset, bats []*batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: bats,
-	}
-	valueScanArg.Prepare(nil)
-	arg.SetChildren(
-		[]vm.Operator{
-			valueScanArg,
-		})
+	op := colexec.NewMockOperator().WithBatchs(bats)
+	arg.Children = nil
+	arg.AppendChild(op)
 }

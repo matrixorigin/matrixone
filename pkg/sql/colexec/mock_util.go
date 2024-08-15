@@ -108,6 +108,24 @@ func MakeMockBatchs() *batch.Batch {
 	return bat
 }
 
+func makeMockTimeWinVecs() []*vector.Vector {
+	vecs := make([]*vector.Vector, 2)
+	vecs[0] = testutil.MakeDatetimeVector([]string{
+		"2021-01-01 00:00:01", "2025-01-01 00:00:02",
+		"2021-01-01 00:00:03", "2025-01-01 00:00:04",
+	}, nil)
+	vecs[1] = testutil.MakeInt32Vector([]int32{1, 4, 5, 1000}, nil)
+	return vecs
+}
+
+func MakeMockTimeWinBatchs() *batch.Batch {
+	bat := batch.New(true, []string{"ts", "b"})
+	vecs := makeMockTimeWinVecs()
+	bat.Vecs = vecs
+	bat.SetRowCount(vecs[0].Length())
+	return bat
+}
+
 // new batchs with schema : (a int, b uuid, c varchar, d json, e date)
 func MakeMockBatchsWithRowID() *batch.Batch {
 	bat := batch.New(true, []string{catalog.Row_ID, "a", "b", "c", "d", "e"})

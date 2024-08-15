@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -689,8 +690,10 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 				return rtnErr
 			}
 
+			restoreAccount := toAccountId
+
 			if srcAccountName != pitr.accountName {
-				// restore account to self
+				// restore account to other account
 				toAccountId, rtnErr = getAccountId(ctx, bh, string(stmt.AccountName))
 				if rtnErr != nil {
 					return rtnErr
@@ -717,7 +720,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 			// collect views and tables during table restoration
 			viewMap := make(map[string]*tableInfo)
 
-			rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts)
+			rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts, restoreAccount)
 			if rtnErr != nil {
 				return rtnErr
 			}
@@ -850,13 +853,8 @@ func restoreToAccountWithPitr(
 			continue
 		}
 
-		// do some op to pub database
-		if err := checkPubAndDropPubRecord(ctx, sid, bh, pitrName, dbName); err != nil {
-			return err
-		}
-
 		getLogger(sid).Info(fmt.Sprintf("[%s]drop current exists db: %v", pitrName, dbName))
-		if err = bh.Exec(ctx, fmt.Sprintf("drop database if exists %s", dbName)); err != nil {
+		if err = dropDb(ctx, bh, dbName); err != nil {
 			return
 		}
 	}
@@ -1190,7 +1188,7 @@ func fkTablesTopoSortInPitrRestore(
 		return
 	}
 
-	g := topsort{next: make(map[string][]string)}
+	g := toposort{next: make(map[string][]string)}
 	for key, deps := range fkDeps {
 		g.addVertex(key)
 		for _, depTbl := range deps {
@@ -1252,7 +1250,7 @@ func restoreViewsWithPitr(
 		compCtx.SetSnapshot(oldSnapshot)
 	}()
 
-	g := topsort{next: make(map[string][]string)}
+	g := toposort{next: make(map[string][]string)}
 	for key, view := range viewMap {
 		stmts, err := parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1)
 		if err != nil {
@@ -1336,8 +1334,8 @@ func checkAndRestorePublicationRecordWithPitr(
 			// restore the publication record
 
 			// insert data
-			insertIntoSql := fmt.Sprintf(restorePubDbDataWithTsFmt, moCatalog, PubDbName, moCatalog, PubDbName, ts, dbName)
-			getLogger(sid).Info(fmt.Sprintf("[%s] start to restore db '%s' pub record, insert sql: %s", pitrName, PubDbName, insertIntoSql))
+			insertIntoSql := fmt.Sprintf(restorePubDbDataWithTsFmt, moCatalog, catalog.MO_PUBS, moCatalog, catalog.MO_PUBS, ts, dbName)
+			getLogger(sid).Info(fmt.Sprintf("[%s] start to restore db '%s' pub record, insert sql: %s", pitrName, catalog.MO_PUBS, insertIntoSql))
 
 			if err = bh.Exec(ctx, insertIntoSql); err != nil {
 				return

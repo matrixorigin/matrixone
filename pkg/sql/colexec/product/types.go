@@ -41,7 +41,7 @@ type container struct {
 }
 
 type Product struct {
-	ctr        *container
+	ctr        container
 	Typs       []types.Type
 	Result     []colexec.ResultPos
 	IsShuffle  bool
@@ -83,16 +83,26 @@ func (product *Product) Release() {
 }
 
 func (product *Product) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	product.Free(proc, pipelineFailed, err)
+	if product.ctr.bat != nil {
+		product.ctr.bat.CleanOnlyData()
+	}
+	if product.ctr.rbat != nil {
+		product.ctr.rbat.CleanOnlyData()
+	}
+	if product.ctr.inBat != nil {
+		product.ctr.inBat = nil
+	}
+	if product.ProjectList != nil {
+		anal := proc.GetAnalyze(product.GetIdx(), product.GetParallelIdx(), product.GetParallelMajor())
+		anal.Alloc(product.ProjectAllocSize)
+		product.ResetProjection(proc)
+	}
+	product.ctr.state = Build
+	product.ctr.probeIdx = 0
 }
 
 func (product *Product) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := product.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		product.ctr = nil
-	}
+	product.ctr.cleanBatch(proc.Mp())
 	if product.ProjectList != nil {
 		anal := proc.GetAnalyze(product.GetIdx(), product.GetParallelIdx(), product.GetParallelMajor())
 		anal.Alloc(product.ProjectAllocSize)
@@ -110,7 +120,6 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 		ctr.rbat = nil
 	}
 	if ctr.inBat != nil {
-		ctr.inBat.Clean(mp)
 		ctr.inBat = nil
 	}
 }

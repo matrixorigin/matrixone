@@ -397,6 +397,9 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		t := sourceOp.(*merge.Merge)
 		op := merge.NewArgument()
 		op.SinkScan = t.SinkScan
+		op.Partial = t.Partial
+		op.StartIDX = t.StartIDX
+		op.EndIDX = t.EndIDX
 		op.SetInfo(&info)
 		return op
 	case vm.MergeRecursive:
@@ -641,10 +644,9 @@ func constructDeletion(n *plan.Node, eg engine.Engine) (*deletion.Deletion, erro
 	return op, nil
 }
 
-func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.OnDuplicatekey {
+func constructOnduplicateKey(n *plan.Node, _ engine.Engine) *onduplicatekey.OnDuplicatekey {
 	oldCtx := n.OnDuplicateKey
 	op := onduplicatekey.NewArgument()
-	op.Engine = eg
 	op.OnDuplicateIdx = oldCtx.OnDuplicateIdx
 	op.OnDuplicateExpr = oldCtx.OnDuplicateExpr
 	op.Attrs = oldCtx.Attrs
@@ -1529,7 +1531,7 @@ func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.S
 	return arg
 }
 
-func constructShuffleGroupArg(ss []*Scope, node *plan.Node) *shuffle.Shuffle {
+func constructShuffleArgForGroup(ss []*Scope, node *plan.Node) *shuffle.Shuffle {
 	arg := shuffle.NewArgument()
 	hashCol, typ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
 	arg.ShuffleColIdx = hashCol.ColPos

@@ -63,7 +63,7 @@ func TestMergeBlock(t *testing.T) {
 			loc1.Name().Num(),
 			loc1.ID()),
 		//non-appendable block
-		EntryState: false,
+		Appendable: false,
 	}
 	blkInfo1.SetMetaLocation(loc1)
 
@@ -74,7 +74,7 @@ func TestMergeBlock(t *testing.T) {
 			loc2.Name().Num(),
 			loc2.ID()),
 		//non-appendable block
-		EntryState: false,
+		Appendable: false,
 	}
 	blkInfo2.SetMetaLocation(loc2)
 
@@ -85,7 +85,7 @@ func TestMergeBlock(t *testing.T) {
 			loc3.Name().Num(),
 			loc3.ID()),
 		//non-appendable block
-		EntryState: false,
+		Appendable: false,
 	}
 	blkInfo3.SetMetaLocation(loc3)
 
@@ -109,7 +109,7 @@ func TestMergeBlock(t *testing.T) {
 	batch1.SetRowCount(3)
 
 	argument1 := MergeBlock{
-		container: &Container{
+		container: Container{
 			source: &mockRelation{},
 			mp:     make(map[int]*batch.Batch),
 			mp2:    make(map[int][]*batch.Batch),
@@ -162,9 +162,6 @@ func TestMergeBlock(t *testing.T) {
 	//	}
 	//}
 	argument1.Free(proc, false, nil)
-	for k := range argument1.container.mp {
-		argument1.container.mp[k].Clean(proc.GetMPool())
-	}
 	argument1.GetChildren(0).Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
@@ -204,7 +201,7 @@ func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
 
 func TestArgument_GetMetaLocBat(t *testing.T) {
 	arg := MergeBlock{
-		container: &Container{
+		container: Container{
 			source: &mockRelation{},
 			mp:     make(map[int]*batch.Batch),
 			mp2:    make(map[int][]*batch.Batch),

@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -32,7 +31,7 @@ const (
 )
 
 type Intersect struct {
-	ctr *container
+	ctr container
 
 	vm.OperatorBase
 }
@@ -69,7 +68,6 @@ func (intersect *Intersect) Release() {
 }
 
 type container struct {
-	colexec.ReceiverOperator
 
 	// operator state
 	state int
@@ -81,32 +79,39 @@ type container struct {
 	hashTable *hashmap.StrHashMap
 
 	// Result batch of intersec column execute operator
-	btc *batch.Batch
+	buf *batch.Batch
 }
 
 func (intersect *Intersect) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	intersect.Free(proc, pipelineFailed, err)
+	ctr := &intersect.ctr
+	ctr.state = build
+	ctr.cleanHashMap()
+	ctr.putCnts(proc)
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
 }
 
 func (intersect *Intersect) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := intersect.ctr
-	if ctr != nil {
-		if ctr.hashTable != nil {
-			ctr.hashTable.Free()
-			ctr.hashTable = nil
-		}
-		if ctr.btc != nil {
-			ctr.btc.Clean(proc.Mp())
-			ctr.btc = nil
-		}
-		if ctr.cnts != nil {
-			for i := range ctr.cnts {
-				proc.Mp().PutSels(ctr.cnts[i])
-			}
-			ctr.cnts = nil
-		}
-		ctr.FreeAllReg()
-
-		intersect.ctr = nil
+	ctr := &intersect.ctr
+	ctr.cleanHashMap()
+	ctr.putCnts(proc)
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
 	}
+}
+
+func (ctr *container) cleanHashMap() {
+	if ctr.hashTable != nil {
+		ctr.hashTable.Free()
+		ctr.hashTable = nil
+	}
+}
+
+func (ctr *container) putCnts(proc *process.Process) {
+	for i := range ctr.cnts {
+		proc.Mp().PutSels(ctr.cnts[i])
+	}
+	ctr.cnts = nil
 }

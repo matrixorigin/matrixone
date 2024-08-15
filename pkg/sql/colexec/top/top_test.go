@@ -106,10 +106,9 @@ func BenchmarkTop(b *testing.B) {
 			newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
 			newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
 		}
-		t := new(testing.T)
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
+			require.NoError(b, err)
 
 			bats := []*batch.Batch{
 				newBatch(tc.types, tc.proc, BenchmarkRows),

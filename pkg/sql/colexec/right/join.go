@@ -44,19 +44,20 @@ func (rightJoin *RightJoin) OpType() vm.OpType {
 }
 
 func (rightJoin *RightJoin) Prepare(proc *process.Process) (err error) {
-	rightJoin.ctr = new(container)
-	rightJoin.ctr.vecs = make([]*vector.Vector, len(rightJoin.Conditions[0]))
-	rightJoin.ctr.InitReceiver(proc, false)
-	rightJoin.ctr.evecs = make([]evalVector, len(rightJoin.Conditions[0]))
-	for i := range rightJoin.Conditions[0] {
-		rightJoin.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, rightJoin.Conditions[0][i])
-		if err != nil {
-			return err
+	if len(rightJoin.ctr.vecs) == 0 {
+		rightJoin.ctr.vecs = make([]*vector.Vector, len(rightJoin.Conditions[0]))
+		rightJoin.ctr.evecs = make([]evalVector, len(rightJoin.Conditions[0]))
+		for i := range rightJoin.Conditions[0] {
+			rightJoin.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, rightJoin.Conditions[0][i])
+			if err != nil {
+				return err
+			}
+		}
+		if rightJoin.Cond != nil {
+			rightJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, rightJoin.Cond)
 		}
 	}
-	if rightJoin.Cond != nil {
-		rightJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, rightJoin.Cond)
-	}
+	rightJoin.ctr.InitProc(proc)
 	rightJoin.ctr.handledLast = false
 	return err
 }
@@ -69,7 +70,7 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	analyze := proc.GetAnalyze(rightJoin.GetIdx(), rightJoin.GetParallelIdx(), rightJoin.GetParallelMajor())
 	analyze.Start()
 	defer analyze.Stop()
-	ctr := rightJoin.ctr
+	ctr := &rightJoin.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
@@ -94,15 +95,12 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 				if bat == nil {
 					ctr.state = SendLast
-					rightJoin.rbat = nil
 					continue
 				}
 				if bat.IsEmpty() {
-					proc.PutBatch(bat)
 					continue
 				}
 				if ctr.mp == nil {
-					proc.PutBatch(bat)
 					continue
 				}
 				rightJoin.ctr.buf = bat
@@ -114,7 +112,6 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			if rightJoin.ctr.lastpos == 0 {
-				proc.PutBatch(rightJoin.ctr.buf)
 				rightJoin.ctr.buf = nil
 			} else if rightJoin.ctr.lastpos == startrow {
 				return result, moerr.NewInternalErrorNoCtx("right join hanging")
@@ -190,19 +187,7 @@ func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyze pro
 		sels = append(sels, int32(r))
 	}
 
-	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
-	}
-	ctr.rbat = batch.NewWithSize(len(ap.Result))
-
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			ctr.rbat.Vecs[i] = proc.GetVector(ap.LeftTypes[rp.Pos])
-		} else {
-			ctr.rbat.Vecs[i] = proc.GetVector(ap.RightTypes[rp.Pos])
-		}
-	}
+	ap.resetRBat()
 
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
@@ -227,18 +212,7 @@ func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyze pro
 
 func (ctr *container) probe(ap *RightJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(ap.ctr.buf, isFirst)
-	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
-	}
-	ctr.rbat = batch.NewWithSize(len(ap.Result))
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			ctr.rbat.Vecs[i] = proc.GetVector(*ap.ctr.buf.Vecs[rp.Pos].GetType())
-		} else {
-			ctr.rbat.Vecs[i] = proc.GetVector(ap.RightTypes[rp.Pos])
-		}
-	}
+	ap.resetRBat()
 
 	if err := ctr.evalJoinCondition(ap.ctr.buf, proc); err != nil {
 		return err
@@ -400,4 +374,21 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 		ctr.evecs[i].vec = vec
 	}
 	return nil
+}
+
+func (rightJoin *RightJoin) resetRBat() {
+	ctr := &rightJoin.ctr
+	if ctr.rbat != nil {
+		ctr.rbat.CleanOnlyData()
+	} else {
+		ctr.rbat = batch.NewWithSize(len(rightJoin.Result))
+
+		for i, rp := range rightJoin.Result {
+			if rp.Rel == 0 {
+				ctr.rbat.Vecs[i] = vector.NewVec(rightJoin.LeftTypes[rp.Pos])
+			} else {
+				ctr.rbat.Vecs[i] = vector.NewVec(rightJoin.RightTypes[rp.Pos])
+			}
+		}
+	}
 }

@@ -255,20 +255,13 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 //}
 
 func (w *S3Writer) Output(proc *process.Process, result *vm.CallResult) error {
-	bat := batch.NewWithSize(len(w.blockInfoBat.Attrs))
-	bat.SetAttributes(w.blockInfoBat.Attrs)
-
 	for i := range w.blockInfoBat.Attrs {
-		vec := proc.GetVector(*w.blockInfoBat.Vecs[i].GetType())
-		if err := vec.UnionBatch(w.blockInfoBat.Vecs[i], 0, w.blockInfoBat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
-			vec.Free(proc.Mp())
+		if err := result.Batch.Vecs[i].UnionBatch(w.blockInfoBat.Vecs[i], 0, w.blockInfoBat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
 			return err
 		}
-		bat.SetVector(int32(i), vec)
 	}
-	bat.SetRowCount(w.blockInfoBat.RowCount())
+	result.Batch.SetRowCount(w.blockInfoBat.RowCount())
 	w.ResetBlockInfoBat(proc)
-	result.Batch = bat
 	return nil
 }
 
@@ -698,7 +691,7 @@ func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]objectio.BlockInfo, 
 				location.Name().Num(),
 				location.ID()),
 			//non-appendable block
-			EntryState: false,
+			Appendable: false,
 		}
 		blkInfo.SetMetaLocation(location)
 		if w.sortIndex != -1 {
