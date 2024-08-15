@@ -346,6 +346,8 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 		Labels:                 cn.Labels,
 		QueryAddress:           cn.QueryAddress,
 		CommitID:               cn.CommitID,
+		CPUTotal:               cn.Resource.CPUTotal,
+		MemTotal:               cn.Resource.MemTotal,
 	}
 }
 
