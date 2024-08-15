@@ -40,20 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type TombstoneApplyPolicy uint64
-
-const (
-	Policy_SkipUncommitedInMemory = 1 << iota
-	Policy_SkipCommittedInMemory
-	Policy_SkipUncommitedS3
-	Policy_SkipCommittedS3
-)
-
-const (
-	Policy_CheckAll             = 0
-	Policy_CheckCommittedS3Only = Policy_SkipUncommitedInMemory | Policy_SkipCommittedInMemory | Policy_SkipUncommitedS3
-)
-
 const (
 	batchPrefetchSize = 1000
 )
@@ -80,7 +66,7 @@ func NewLocalDataSource(
 	txnOffset int,
 	rangesSlice objectio.BlockInfoSlice,
 	skipReadMem bool,
-	policy TombstoneApplyPolicy,
+	policy engine.TombstoneApplyPolicy,
 ) (source *LocalDataSource, err error) {
 
 	source = &LocalDataSource{}
@@ -141,16 +127,16 @@ func (rs *RemoteDataSource) Next(
 	_ any,
 	_ *mpool.MPool,
 	_ engine.VectorPool,
-	_ *batch.Batch) (*objectio.BlockInfo, engine.DataState, error) {
+) (*batch.Batch, *objectio.BlockInfo, engine.DataState, error) {
 
 	rs.batchPrefetch(seqNums)
 
 	if rs.cursor >= rs.data.DataCnt() {
-		return nil, engine.End, nil
+		return nil, nil, engine.End, nil
 	}
 	rs.cursor++
 	cur := rs.data.GetBlockInfo(rs.cursor - 1)
-	return &cur, engine.Persisted, nil
+	return nil, &cur, engine.Persisted, nil
 }
 
 func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
@@ -336,7 +322,7 @@ type LocalDataSource struct {
 	OrderBy  []*plan.OrderBySpec
 
 	filterZM        objectio.ZoneMap
-	tombstonePolicy TombstoneApplyPolicy
+	tombstonePolicy engine.TombstoneApplyPolicy
 }
 
 func (ls *LocalDataSource) String() string {
@@ -471,8 +457,7 @@ func (ls *LocalDataSource) Next(
 	filter any,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
-	bat *batch.Batch,
-) (*objectio.BlockInfo, engine.DataState, error) {
+) (*batch.Batch, *objectio.BlockInfo, engine.DataState, error) {
 
 	if ls.memPKFilter == nil {
 		ff := filter.(MemPKFilter)
@@ -480,45 +465,69 @@ func (ls *LocalDataSource) Next(
 	}
 
 	if len(cols) == 0 {
-		return nil, engine.End, nil
+		return nil, nil, engine.End, nil
 	}
 
 	// bathed prefetch block data and deletes
 	ls.batchPrefetch(seqNums)
 
+	buildBatch := func() *batch.Batch {
+		bat := batch.NewWithSize(len(types))
+		bat.Attrs = append(bat.Attrs, cols...)
+
+		for i := 0; i < len(types); i++ {
+			if vp == nil {
+				bat.Vecs[i] = vector.NewVec(types[i])
+			} else {
+				bat.Vecs[i] = vp.GetVector(types[i])
+			}
+		}
+		return bat
+	}
+
 	for {
 		switch ls.iteratePhase {
 		case engine.InMem:
+			bat := buildBatch()
+			freeBatch := func() {
+				if vp == nil {
+					bat.Clean(mp)
+				} else {
+					vp.PutBatch(bat)
+				}
+			}
 			err := ls.iterateInMemData(ctx, cols, types, seqNums, bat, mp, vp)
 			if err != nil {
-				return nil, engine.InMem, err
+				freeBatch()
+				return nil, nil, engine.InMem, err
 			}
 
 			if bat.RowCount() == 0 {
+				freeBatch()
 				ls.iteratePhase = engine.Persisted
 				continue
 			}
 
-			return nil, engine.InMem, nil
+			return bat, nil, engine.InMem, nil
 
 		case engine.Persisted:
 			if ls.rangesCursor >= ls.rangeSlice.Len() {
-				return nil, engine.End, nil
+				return nil, nil, engine.End, nil
 			}
 
 			ls.handleOrderBy()
 
 			if ls.rangesCursor >= ls.rangeSlice.Len() {
-				return nil, engine.End, nil
+				return nil, nil, engine.End, nil
 			}
 
 			blk := ls.rangeSlice.Get(ls.rangesCursor)
 			ls.rangesCursor++
 
-			return blk, engine.Persisted, nil
+			return nil, blk, engine.Persisted, nil
 
 		case engine.End:
-			return nil, ls.iteratePhase, nil
+			return nil, nil, ls.iteratePhase, nil
 		}
 	}
 }
@@ -826,17 +835,27 @@ func (ls *LocalDataSource) ApplyTombstones(
 
 	var err error
 
-	rowsOffset = ls.applyWorkspaceEntryDeletes(bid, rowsOffset, nil)
-	rowsOffset, err = ls.applyWorkspaceFlushedS3Deletes(bid, rowsOffset, nil)
-	if err != nil {
-		return nil, err
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
+		rowsOffset = ls.applyWorkspaceEntryDeletes(bid, rowsOffset, nil)
+	}
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 {
+		rowsOffset, err = ls.applyWorkspaceFlushedS3Deletes(bid, rowsOffset, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	rowsOffset = ls.applyWorkspaceRawRowIdDeletes(bid, rowsOffset, nil)
-	rowsOffset = ls.applyPStateInMemDeletes(bid, rowsOffset, nil)
-	rowsOffset, err = ls.applyPStatePersistedDeltaLocation(bid, rowsOffset, nil)
-	if err != nil {
-		return nil, err
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
+		rowsOffset = ls.applyWorkspaceRawRowIdDeletes(bid, rowsOffset, nil)
+	}
+	if ls.tombstonePolicy&engine.Policy_SkipCommittedInMemory == 0 {
+		rowsOffset = ls.applyPStateInMemDeletes(bid, rowsOffset, nil)
+	}
+	if ls.tombstonePolicy&engine.Policy_SkipCommittedS3 == 0 {
+		rowsOffset, err = ls.applyPStatePersistedDeltaLocation(bid, rowsOffset, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return rowsOffset, nil
@@ -849,21 +868,21 @@ func (ls *LocalDataSource) GetTombstones(
 	deletedRows = &nulls.Nulls{}
 	deletedRows.InitWithSize(8192)
 
-	if ls.tombstonePolicy&Policy_SkipUncommitedInMemory == 0 {
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
 		ls.applyWorkspaceEntryDeletes(bid, nil, deletedRows)
 	}
-	if ls.tombstonePolicy&Policy_SkipUncommitedS3 == 0 {
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 {
 		_, err = ls.applyWorkspaceFlushedS3Deletes(bid, nil, deletedRows)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if ls.tombstonePolicy&Policy_SkipUncommitedInMemory == 0 {
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
 		ls.applyWorkspaceRawRowIdDeletes(bid, nil, deletedRows)
 	}
 
-	if ls.tombstonePolicy&Policy_SkipCommittedInMemory == 0 {
+	if ls.tombstonePolicy&engine.Policy_SkipCommittedInMemory == 0 {
 		ls.applyPStateInMemDeletes(bid, nil, deletedRows)
 	}
 

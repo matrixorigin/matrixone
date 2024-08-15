@@ -249,7 +249,7 @@ func NewTxnClient(
 
 func (client *txnClient) adjust() {
 	if client.generator == nil {
-		client.generator = newUUIDTxnIDGenerator()
+		client.generator = newUUIDTxnIDGenerator(client.sid)
 	}
 	if runtime.ServiceRuntime(client.sid).Clock() == nil {
 		panic("txn clock not set")
@@ -392,6 +392,10 @@ func (client *txnClient) getTxnMode() txn.TxnMode {
 }
 
 func (client *txnClient) updateLastCommitTS(event TxnEvent) {
+	if event.Txn.CommitTS.IsEmpty() {
+		return
+	}
+
 	var old *timestamp.Timestamp
 	new := &event.Txn.CommitTS
 	for {

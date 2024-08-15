@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -213,7 +214,7 @@ func HandleShardingReadGetColumMetadataScanInfo(
 func HandleShardingReadReader(
 	ctx context.Context,
 	shard shard.TableShard,
-	engine engine.Engine,
+	e engine.Engine,
 	param shard.ReadParam,
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
@@ -221,7 +222,7 @@ func HandleShardingReadReader(
 	tbl, err := getTxnTable(
 		ctx,
 		param,
-		engine,
+		e,
 	)
 	if err != nil {
 		return nil, err
@@ -239,6 +240,7 @@ func HandleShardingReadReader(
 		int(param.ReaderParam.Num),
 		int(param.ReaderParam.TxnOffset),
 		param.ReaderParam.OrderedScan,
+		engine.Policy_CheckAll,
 	)
 	if err != nil {
 		return nil, err
@@ -324,7 +326,6 @@ func HandleShardingReadMergeObjects(
 	entry, err := tbl.MergeObjects(
 		ctx,
 		objstats,
-		param.MergeObjectsParam.PolicyName,
 		param.MergeObjectsParam.TargetObjSize,
 	)
 	if err != nil {
@@ -336,6 +337,38 @@ func HandleShardingReadMergeObjects(
 		return nil, err
 	}
 	return buffer.EncodeBytes(bys), nil
+}
+
+func HandleShardingReadVisibleObjectStats(
+	ctx context.Context,
+	shard shard.TableShard,
+	engine engine.Engine,
+	param shard.ReadParam,
+	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
+) ([]byte, error) {
+	tbl, err := getTxnTable(
+		ctx,
+		param,
+		engine,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	stats, err := tbl.GetNonAppendableObjectStats(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	b := new(bytes.Buffer)
+	size := len(stats)
+	marshalSize := size * (objectio.ObjectStatsLen)
+	b.Grow(marshalSize)
+	for _, stat := range stats {
+		b.Write(stat.Marshal())
+	}
+	return buffer.EncodeBytes(b.Bytes()), nil
 }
 
 func getTxnTable(

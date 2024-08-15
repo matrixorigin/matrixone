@@ -317,7 +317,18 @@ func TestTunnelReplaceConn(t *testing.T) {
 	require.NoError(t, scp.pause(ctx))
 
 	newServerProxy, newServer := net.Pipe()
-	tu.replaceServerConn(newMySQLConn("server", newServerProxy, 0, nil, nil, 0), false)
+	tu.replaceServerConn(
+		newMySQLConn(
+			"server",
+			newServerProxy,
+			0,
+			nil,
+			nil,
+			false, 0,
+		),
+		nil,
+		false,
+	)
 	require.NoError(t, tu.kickoff())
 
 	go func() {
@@ -353,8 +364,8 @@ func TestPipeCancelError(t *testing.T) {
 	logger := rt.Logger()
 	tun := newTunnel(ctx, logger, newCounterSet())
 
-	cc := newMySQLConn("client", clientProxy, 0, nil, nil, 0)
-	sc := newMySQLConn("server", serverProxy, 0, nil, nil, 0)
+	cc := newMySQLConn("client", clientProxy, 0, nil, nil, false, 0)
+	sc := newMySQLConn("server", serverProxy, 0, nil, nil, false, 0)
 	p := tun.newPipe(pipeClientToServer, cc, sc)
 	err := p.kickoff(ctx, nil)
 	require.EqualError(t, err, context.Canceled.Error())
@@ -383,8 +394,8 @@ func TestPipeStart(t *testing.T) {
 	logger := rt.Logger()
 	tun := newTunnel(ctx, logger, newCounterSet())
 
-	cc := newMySQLConn("client", clientProxy, 0, nil, nil, 0)
-	sc := newMySQLConn("server", serverProxy, 0, nil, nil, 0)
+	cc := newMySQLConn("client", clientProxy, 0, nil, nil, false, 0)
+	sc := newMySQLConn("server", serverProxy, 0, nil, nil, false, 0)
 	p := tun.newPipe(pipeClientToServer, cc, sc)
 
 	errCh := make(chan error)
@@ -427,8 +438,8 @@ func TestPipeStartAndPause(t *testing.T) {
 	logger := rt.Logger()
 	tun := newTunnel(ctx, logger, newCounterSet())
 
-	cc := newMySQLConn("client", clientProxy, 0, nil, nil, 0)
-	sc := newMySQLConn("server", serverProxy, 0, nil, nil, 0)
+	cc := newMySQLConn("client", clientProxy, 0, nil, nil, false, 0)
+	sc := newMySQLConn("server", serverProxy, 0, nil, nil, false, 0)
 	p := tun.newPipe(pipeClientToServer, cc, sc)
 
 	errCh := make(chan error, 2)
@@ -479,8 +490,8 @@ func TestPipeMultipleStartAndPause(t *testing.T) {
 	logger := rt.Logger()
 	tun := newTunnel(ctx, logger, newCounterSet())
 
-	cc := newMySQLConn("client", clientProxy, 0, nil, nil, 0)
-	sc := newMySQLConn("server", serverProxy, 0, nil, nil, 0)
+	cc := newMySQLConn("client", clientProxy, 0, nil, nil, false, 0)
+	sc := newMySQLConn("server", serverProxy, 0, nil, nil, false, 0)
 	p := tun.newPipe(pipeClientToServer, cc, sc)
 
 	const (
@@ -505,7 +516,7 @@ func TestPipeMultipleStartAndPause(t *testing.T) {
 
 	packetCh := make(chan []byte, queryCount)
 	go func() {
-		receiver := newMySQLConn("receiver", server, 0, nil, nil, 0)
+		receiver := newMySQLConn("receiver", server, 0, nil, nil, false, 0)
 		for {
 			ret, err := receiver.receive()
 			if err != nil {
@@ -617,7 +628,7 @@ func TestCanStartTransfer(t *testing.T) {
 			logger: logger,
 		}
 		tu.mu.scp = &pipe{}
-		tu.mu.scp.src = newMySQLConn("", nil, 0, nil, nil, 0)
+		tu.mu.scp.src = newMySQLConn("", nil, 0, nil, nil, false, 0)
 		tu.mu.scp.mu.inTxn = true
 		can := tu.canStartTransfer(false)
 		require.False(t, can)
@@ -629,7 +640,7 @@ func TestCanStartTransfer(t *testing.T) {
 		}
 		tu.mu.csp = &pipe{}
 		tu.mu.scp = &pipe{}
-		tu.mu.scp.src = newMySQLConn("", nil, 0, nil, nil, 0)
+		tu.mu.scp.src = newMySQLConn("", nil, 0, nil, nil, false, 0)
 		tu.mu.started = true
 		csp, scp := tu.getPipes()
 		now := time.Now()
@@ -673,8 +684,8 @@ func TestReplaceServerConn(t *testing.T) {
 	newServerProxy, newServer := net.Pipe()
 	newSC := newMockServerConn(newServerProxy)
 	require.NotNil(t, sc)
-	newServerC := newMySQLConn("new-server", newSC.RawConn(), 0, nil, nil, 0)
-	tu.replaceServerConn(newServerC, false)
+	newServerC := newMySQLConn("new-server", newSC.RawConn(), 0, nil, nil, false, 0)
+	tu.replaceServerConn(newServerC, newSC, false)
 	_, newMysqlSC := tu.getConns()
 	require.Equal(t, newServerC, newMysqlSC)
 	require.NoError(t, tu.kickoff())

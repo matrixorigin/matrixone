@@ -79,7 +79,6 @@ func newCNMergeTask(
 	ctx context.Context,
 	tbl *txnTable,
 	snapshot types.TS,
-	state *logtailreplay.PartitionState,
 	sortkeyPos int,
 	sortkeyIsPK bool,
 	targets []logtailreplay.ObjectInfo,
@@ -87,7 +86,7 @@ func newCNMergeTask(
 ) (*cnMergeTask, error) {
 	relData := NewEmptyBlockListRelationData()
 	relData.AppendBlockInfo(objectio.EmptyBlockInfo)
-	source, err := tbl.buildLocalDataSource(ctx, 0, relData, Policy_CheckAll)
+	source, err := tbl.buildLocalDataSource(ctx, 0, relData, engine.Policy_CheckAll)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +184,7 @@ func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.
 		// update delta location
 		obj := t.targets[objIdx]
 		blk.Sorted = obj.Sorted
-		blk.EntryState = obj.EntryState
+		blk.Appendable = obj.Appendable
 		blk.CommitTs = obj.CommitTS
 		return t.readblock(ctx, &blk)
 	}

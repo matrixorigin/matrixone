@@ -584,6 +584,20 @@ const (
 	TombstoneData
 )
 
+type TombstoneApplyPolicy uint64
+
+const (
+	Policy_SkipUncommitedInMemory = 1 << iota
+	Policy_SkipCommittedInMemory
+	Policy_SkipUncommitedS3
+	Policy_SkipCommittedS3
+)
+
+const (
+	Policy_CheckAll             = 0
+	Policy_CheckCommittedS3Only = Policy_SkipUncommitedInMemory | Policy_SkipCommittedInMemory | Policy_SkipUncommitedS3
+)
+
 type Tombstoner interface {
 	Type() TombstoneType
 	HasAnyInMemoryTombstone() bool
@@ -725,8 +739,7 @@ type DataSource interface {
 		memFilter any,
 		mp *mpool.MPool,
 		vp VectorPool,
-		bat *batch.Batch,
-	) (*objectio.BlockInfo, DataState, error)
+	) (*batch.Batch, *objectio.BlockInfo, DataState, error)
 
 	ApplyTombstones(
 		ctx context.Context,
@@ -818,7 +831,9 @@ type Relation interface {
 		relData RelData,
 		num int,
 		txnOffset int,
-		orderBy bool) ([]Reader, error)
+		orderBy bool,
+		policy TombstoneApplyPolicy,
+	) ([]Reader, error)
 
 	TableColumns(ctx context.Context) ([]*Attribute, error)
 
@@ -835,7 +850,8 @@ type Relation interface {
 	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 
 	ApproxObjectsNum(ctx context.Context) int
-	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error)
+	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)
+	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
 }
 
 type Reader interface {
