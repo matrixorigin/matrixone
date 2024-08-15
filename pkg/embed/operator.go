@@ -109,6 +109,12 @@ func (op *operator) ServiceType() metadata.ServiceType {
 	return op.serviceType
 }
 
+func (op *operator) RawService() interface{} {
+	op.RLock()
+	defer op.RUnlock()
+	return op.reset.svc
+}
+
 func (op *operator) Close() error {
 	op.Lock()
 	defer op.Unlock()
