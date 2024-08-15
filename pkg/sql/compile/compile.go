@@ -2236,7 +2236,10 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 	}
 	var rs []*Scope
 	rs, buildScopes = c.compileBroadcastJoin(node, left, right, probeScopes, buildScopes)
-	if c.IsSingleScope(rs) && c.IsSingleScope(buildScopes) {
+	if c.IsSingleScope(rs) {
+		if !c.IsSingleScope(buildScopes) {
+			panic("build scopes should be single parallel!")
+		}
 		//construct join build operator for tp join
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, rs[0].RootOp, false, 1))
 		buildScopes[0].IsEnd = true
@@ -3470,8 +3473,11 @@ func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
 func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []*Scope, n *plan.Node, forceOneCN bool) ([]*Scope, []*Scope) {
 	var rs []*Scope
 
-	if c.IsSingleScope(probeScopes) && c.IsSingleScope(buildScopes) {
-		// for tp join, can directly return
+	if c.IsSingleScope(probeScopes) {
+		if !c.IsSingleScope(buildScopes) {
+			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+		}
+		// for single parallel join, can directly return
 		rs = probeScopes
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 		return rs, buildScopes
@@ -3495,6 +3501,15 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		rs[i].IsJoin = true
 		rs[i].NodeInfo.Mcpu = c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
 		rs[i].BuildIdx = len(rs[i].Proc.Reg.MergeReceivers)
+	}
+
+	if c.IsSingleScope(rs) {
+		if !c.IsSingleScope(buildScopes) {
+			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+		}
+		// for single parallel join, can directly return
+		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
+		return rs, buildScopes
 	}
 
 	//construct build part
