@@ -68,18 +68,15 @@ func (lockOp *LockOp) OpType() vm.OpType {
 }
 
 func (lockOp *LockOp) Prepare(proc *process.Process) error {
-	lockOp.logger = getLogger(proc.GetService())
-	lockOp.ctr = new(container)
-	lockOp.ctr.rt = &state{}
-	lockOp.ctr.rt.fetchers = make([]FetchLockRowsFunc, 0, len(lockOp.targets))
-	for idx := range lockOp.targets {
-		lockOp.ctr.rt.fetchers = append(lockOp.ctr.rt.fetchers,
-			GetFetchRowsFunc(lockOp.targets[idx].primaryColumnType))
+	if len(lockOp.ctr.fetchers) == 0 {
+		lockOp.logger = getLogger(proc.GetService())
+		lockOp.ctr.fetchers = make([]FetchLockRowsFunc, 0, len(lockOp.targets))
+		for idx := range lockOp.targets {
+			lockOp.ctr.fetchers = append(lockOp.ctr.fetchers,
+				GetFetchRowsFunc(lockOp.targets[idx].primaryColumnType))
+		}
 	}
-	lockOp.ctr.rt.parker = types.NewPacker()
-	lockOp.ctr.rt.retryError = nil
-	lockOp.ctr.rt.step = stepLock
-
+	lockOp.ctr.parker = types.NewPacker()
 	return nil
 }
 
@@ -122,7 +119,7 @@ func callNonBlocking(
 
 	anal.Input(result.Batch, lockOp.IsFirst)
 	if result.Batch == nil {
-		return result, lockOp.ctr.rt.retryError
+		return result, lockOp.ctr.retryError
 	}
 	bat := result.Batch
 	if bat.IsEmpty() {
@@ -149,7 +146,7 @@ func callBlocking(
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
-	if lockOp.ctr.rt.step == stepLock {
+	if lockOp.ctr.step == stepLock {
 		for {
 			bat, err := lockOp.getBatch(proc, anal, isFirst)
 			if err != nil {
@@ -158,9 +155,9 @@ func callBlocking(
 
 			// no input batch any more, means all lock performed.
 			if bat == nil {
-				lockOp.ctr.rt.step = stepDownstream
-				if len(lockOp.ctr.rt.cachedBatches) == 0 {
-					lockOp.ctr.rt.step = stepEnd
+				lockOp.ctr.step = stepDownstream
+				if len(lockOp.ctr.cachedBatches) == 0 {
+					lockOp.ctr.step = stepEnd
 				}
 				break
 			}
@@ -180,32 +177,32 @@ func callBlocking(
 			if err != nil {
 				return result, err
 			}
-			lockOp.ctr.rt.cachedBatches = append(lockOp.ctr.rt.cachedBatches, appendBat)
+			lockOp.ctr.cachedBatches = append(lockOp.ctr.cachedBatches, appendBat)
 		}
 	}
 
-	if lockOp.ctr.rt.step == stepDownstream {
-		if lockOp.ctr.rt.retryError != nil {
-			lockOp.ctr.rt.step = stepEnd
-			return result, lockOp.ctr.rt.retryError
+	if lockOp.ctr.step == stepDownstream {
+		if lockOp.ctr.retryError != nil {
+			lockOp.ctr.step = stepEnd
+			return result, lockOp.ctr.retryError
 		}
 
-		if len(lockOp.ctr.rt.cachedBatches) == 0 {
-			lockOp.ctr.rt.step = stepEnd
+		if len(lockOp.ctr.cachedBatches) == 0 {
+			lockOp.ctr.step = stepEnd
 		} else {
-			bat := lockOp.ctr.rt.cachedBatches[0]
-			lockOp.ctr.rt.cachedBatches = lockOp.ctr.rt.cachedBatches[1:]
+			bat := lockOp.ctr.cachedBatches[0]
+			lockOp.ctr.cachedBatches = lockOp.ctr.cachedBatches[1:]
 			result.Batch = bat
 			anal.Output(result.Batch, lockOp.IsLast)
 			return result, nil
 		}
 	}
 
-	if lockOp.ctr.rt.step == stepEnd {
+	if lockOp.ctr.step == stepEnd {
 		result.Status = vm.ExecStop
 		lockOp.cleanCachedBatch(proc)
 		anal.Output(result.Batch, lockOp.IsLast)
-		return result, lockOp.ctr.rt.retryError
+		return result, lockOp.ctr.retryError
 	}
 
 	panic("BUG")
@@ -247,13 +244,13 @@ func performLock(
 			proc,
 			priVec,
 			target.primaryColumnType,
-			DefaultLockOptions(lockOp.ctr.rt.parker).
+			DefaultLockOptions(lockOp.ctr.parker).
 				WithLockMode(lock.LockMode_Exclusive).
-				WithFetchLockRowsFunc(lockOp.ctr.rt.fetchers[idx]).
+				WithFetchLockRowsFunc(lockOp.ctr.fetchers[idx]).
 				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
 				WithFilterRows(target.filter, filterCols).
 				WithLockTable(target.lockTable, target.changeDef).
-				WithHasNewVersionInRangeFunc(lockOp.ctr.rt.hasNewVersionInRange),
+				WithHasNewVersionInRangeFunc(lockOp.ctr.hasNewVersionInRange),
 		)
 		if lockOp.logger.Enabled(zap.DebugLevel) {
 			lockOp.logger.Debug("lock result",
@@ -287,19 +284,19 @@ func performLock(
 		if !needRetry && !refreshTS.IsEmpty() {
 			needRetry = true
 		}
-		if !lockOp.ctr.rt.defChanged {
-			lockOp.ctr.rt.defChanged = defChanged
+		if !lockOp.ctr.defChanged {
+			lockOp.ctr.defChanged = defChanged
 		}
 	}
 	// when a transaction needs to operate on many data, there may be multiple conflicts on the
 	// data, and if you go to retry every time a conflict occurs, you will also encounter conflicts
 	// when you retry. We need to return the conflict after all the locks have been added successfully,
 	// so that the retry will definitely succeed because all the locks have been put.
-	if needRetry && lockOp.ctr.rt.retryError == nil {
-		lockOp.ctr.rt.retryError = retryError
+	if needRetry && lockOp.ctr.retryError == nil {
+		lockOp.ctr.retryError = retryError
 	}
-	if lockOp.ctr.rt.defChanged {
-		lockOp.ctr.rt.retryError = retryWithDefChangedError
+	if lockOp.ctr.defChanged {
+		lockOp.ctr.retryError = retryWithDefChangedError
 	}
 	return nil
 }
@@ -862,37 +859,44 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 }
 
 func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	lockOp.Free(proc, pipelineFailed, err)
+	lockOp.resetPacker()
+	lockOp.cleanCachedBatch(proc)
+	lockOp.ctr.retryError = nil
+	lockOp.ctr.step = stepLock
+	lockOp.ctr.defChanged = false
 }
 
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if lockOp.ctr != nil {
-		if lockOp.ctr.rt != nil {
-			if lockOp.ctr.rt.parker != nil {
-				lockOp.ctr.rt.parker.Close()
-			}
-			lockOp.ctr.rt.retryError = nil
-			lockOp.cleanCachedBatch(proc)
-			lockOp.ctr.rt = nil
-		}
-		lockOp.ctr = nil
-	}
-
+	lockOp.cleanPacker()
+	lockOp.cleanCachedBatch(proc)
 }
 
 func (lockOp *LockOp) cleanCachedBatch(proc *process.Process) {
-	for _, bat := range lockOp.ctr.rt.cachedBatches {
+	for _, bat := range lockOp.ctr.cachedBatches {
 		bat.Clean(proc.Mp())
 	}
-	lockOp.ctr.rt.cachedBatches = nil
+	lockOp.ctr.cachedBatches = nil
+}
+
+func (lockOp *LockOp) resetPacker() {
+	if lockOp.ctr.parker != nil {
+		lockOp.ctr.parker.Reset()
+	}
+}
+
+func (lockOp *LockOp) cleanPacker() {
+	if lockOp.ctr.parker != nil {
+		lockOp.ctr.parker.Close()
+		lockOp.ctr.parker = nil
+	}
 }
 
 func (lockOp *LockOp) getBatch(
 	proc *process.Process,
 	anal process.Analyze,
 	isFirst bool) (*batch.Batch, error) {
-	fn := lockOp.ctr.rt.batchFetchFunc
+	fn := lockOp.ctr.batchFetchFunc
 	if fn == nil {
 		fn = lockOp.GetChildren(0).Call
 	}
