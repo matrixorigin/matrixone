@@ -27,7 +27,7 @@ import (
 var _ vm.Operator = new(Projection)
 
 type Projection struct {
-	ctr         *container
+	ctr         container
 	ProjectList []*plan.Expr
 	vm.OperatorBase
 
@@ -72,28 +72,21 @@ type container struct {
 }
 
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	// anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
-	// anal.Alloc(int64(projection.ProjectAllocSize))
-	// projection.ResetProjection(proc)
-	projection.Free(proc, pipelineFailed, err)
+	for i := range projection.ctr.projExecutors {
+		if projection.ctr.projExecutors[i] != nil {
+			projection.ctr.projExecutors[i].ResetForNextQuery()
+		}
+	}
+	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
+	anal.Alloc(int64(projection.maxAllocSize))
+	projection.maxAllocSize = 0
 }
 
 func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, err error) {
-	// projection.FreeProjection(proc)
-	if projection.ctr != nil {
-		for i := range projection.ctr.projExecutors {
-			if projection.ctr.projExecutors[i] != nil {
-				projection.ctr.projExecutors[i].Free()
-			}
+	for i := range projection.ctr.projExecutors {
+		if projection.ctr.projExecutors[i] != nil {
+			projection.ctr.projExecutors[i].Free()
 		}
-		projection.ctr.projExecutors = nil
-		if projection.ctr.buf != nil {
-			projection.ctr.buf.Clean(proc.Mp())
-			projection.ctr.buf = nil
-		}
-		projection.ctr = nil
 	}
-
-	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
-	anal.Alloc(int64(projection.maxAllocSize))
+	projection.ctr.projExecutors = nil
 }

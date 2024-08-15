@@ -219,7 +219,7 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch)
 		}
 		for i, delBatch := range delBatches {
 			collectBatchInfo(proc, deletion, delBatch, 0, i, 1)
-			proc.PutBatch(delBatch)
+			delBatch.Clean(proc.GetMPool())
 		}
 	} else {
 		collectBatchInfo(proc, deletion, srcBat, deletion.DeleteCtx.RowIdIdx, 0, delCtx.PrimaryKeyIdx)
