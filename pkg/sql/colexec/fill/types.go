@@ -148,13 +148,6 @@ func (ctr *container) freeBatch(mp *mpool.MPool) {
 }
 
 func (ctr *container) freeVectors(mp *mpool.MPool) {
-	for _, vec := range ctr.valVecs {
-		if vec != nil {
-			vec.Free(mp)
-		}
-	}
-	ctr.valVecs = nil
-
 	for _, vec := range ctr.prevVecs {
 		if vec != nil {
 			vec.Free(mp)

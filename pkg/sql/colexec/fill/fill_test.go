@@ -30,10 +30,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	Rows = 10 // default rows
-)
-
 // add unit tests for cases
 type fillTestCase struct {
 	arg  *Fill

@@ -58,7 +58,8 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 	case plan.Node_VALUE:
 		// the batch just for eval const value
 		b := batch.NewWithSize(1)
-		b.SetVector(0, proc.GetVector(types.T_varchar.ToType()))
+		defer b.Clean(proc.Mp())
+		b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
 		batch.SetLength(b, 1)
 		if len(ctr.exes) == 0 {
 			ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
@@ -76,7 +77,6 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 				return err
 			}
 		}
-		b.Clean(proc.Mp())
 		ctr.process = processValue
 	case plan.Node_PREV:
 		if len(ctr.prevVecs) == 0 {
@@ -306,7 +306,7 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.A
 				}
 			} else {
 				if ctr.prevVecs[i] == nil {
-					ctr.prevVecs[i] = proc.GetVector(*ctr.buf.Vecs[i].GetType())
+					ctr.prevVecs[i] = vector.NewVec(*ctr.buf.Vecs[i].GetType())
 					err = appendValue(ctr.prevVecs[i], ctr.buf.Vecs[i], j, proc)
 					if err != nil {
 						return result, err
