@@ -37,8 +37,10 @@ func (mergeCTE *MergeCTE) OpType() vm.OpType {
 }
 
 func (mergeCTE *MergeCTE) Prepare(proc *process.Process) error {
-	mergeCTE.ctr = new(container)
-
+	if mergeCTE.ctr.lastBat != nil {
+		return nil
+	}
+	mergeCTE.ctr.lastBat = makeRecursiveBatch(proc)
 	mergeCTE.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
 	mergeCTE.ctr.curNodeCnt = mergeCTE.ctr.nodeCnt
 	mergeCTE.ctr.status = sendInitial
@@ -56,10 +58,7 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result := vm.NewCallResult()
 	var err error
-	if mergeCTE.ctr.buf != nil {
-		proc.PutBatch(mergeCTE.ctr.buf)
-		mergeCTE.ctr.buf = nil
-	}
+
 	switch mergeCTE.ctr.status {
 	case sendInitial:
 		result, err = mergeCTE.GetChildren(0).Call(proc)
@@ -71,15 +70,12 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		if result.Batch == nil {
 			mergeCTE.ctr.status = sendLastTag
 		}
-		if result.Batch != nil {
-			atomic.AddInt64(&result.Batch.Cnt, 1)
-		}
 		mergeCTE.ctr.bats = append(mergeCTE.ctr.bats, result.Batch)
 		fallthrough
 	case sendLastTag:
 		if mergeCTE.ctr.status == sendLastTag {
 			mergeCTE.ctr.status = sendRecursive
-			mergeCTE.ctr.bats[0] = makeRecursiveBatch(proc)
+			mergeCTE.ctr.bats[0] = mergeCTE.ctr.lastBat
 		}
 	case sendRecursive:
 		for !mergeCTE.ctr.last {

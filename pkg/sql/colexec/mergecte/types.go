@@ -37,11 +37,12 @@ type container struct {
 	curNodeCnt int32
 	status     int32
 	last       bool
+	lastBat    *batch.Batch
 }
 
 type MergeCTE struct {
-	ctr *container
-
+	ctr container
+	
 	vm.OperatorBase
 }
 
@@ -77,16 +78,13 @@ func (mergeCTE *MergeCTE) Release() {
 }
 
 func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeCTE.Free(proc, pipelineFailed, err)
+	mergeCTE.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
+	mergeCTE.ctr.curNodeCnt = mergeCTE.ctr.nodeCnt
+	mergeCTE.ctr.status = sendInitial
 }
 
 func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if mergeCTE.ctr != nil {
-		if mergeCTE.ctr.buf != nil {
-			mergeCTE.ctr.buf.Clean(proc.Mp())
-			mergeCTE.ctr.buf = nil
-		}
-		mergeCTE.ctr = nil
+	if mergeCTE.ctr.lastBat != nil {
+		mergeCTE.ctr.lastBat.Clean(proc.Mp())
 	}
-
 }
