@@ -16,9 +16,10 @@ package agg
 
 import (
 	"bytes"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"math"
 )
 
 func RegisterMax2(id int64) {
@@ -135,6 +136,13 @@ func RegisterMax2(id int64) {
 		aggMaxOfBoolFill, aggMaxOfBoolFills, aggMaxOfBoolMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_enum.ToType(), MaxReturnType, true),
+		nil,
+		nil,
+		aggMaxInitResult[types.Enum],
+		aggMaxFill[types.Enum], aggMaxFills[types.Enum], aggMaxMerge[types.Enum], nil)
+
+	aggexec.RegisterAggFromFixedRetFixed(
 		aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), MaxReturnType, true),
 		nil,
 		nil,
@@ -155,7 +163,7 @@ func RegisterMax2(id int64) {
 		aggMaxInitResult[types.Decimal128],
 		aggMaxOfDecimal128Fill, aggMaxOfDecimal128Fills, aggMaxOfDecimal128Merge, nil)
 
-	varlenList := []types.T{types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_binary, types.T_varbinary}
+	varlenList := []types.T{types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink, types.T_binary, types.T_varbinary}
 	for _, t := range varlenList {
 		aggexec.RegisterAggFromBytesRetBytes(
 			aggexec.MakeSingleColumnAggInformation(id, t.ToType(), MaxReturnType, true),
@@ -175,7 +183,7 @@ var MaxSupportedTypes = []types.T{
 	types.T_decimal64, types.T_decimal128,
 	types.T_bool,
 	types.T_bit,
-	types.T_varchar, types.T_char, types.T_blob, types.T_text,
+	types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink,
 	types.T_uuid,
 	types.T_binary, types.T_varbinary,
 }

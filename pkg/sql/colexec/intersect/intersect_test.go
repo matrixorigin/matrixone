@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -29,7 +30,7 @@ import (
 
 type intersectTestCase struct {
 	proc   *process.Process
-	arg    *Argument
+	arg    *Intersect
 	cancel context.CancelFunc
 }
 
@@ -43,9 +44,9 @@ func TestIntersect(t *testing.T) {
 		{3, 4, 5}
 	*/
 	var end vm.CallResult
-	c, ctx := newIntersectTestCase(proc)
+	c, _ := newIntersectTestCase(proc)
 
-	setProcForTest(ctx, proc)
+	setProcForTest(proc, c.arg)
 	err := c.arg.Prepare(c.proc)
 	require.NoError(t, err)
 	cnt := 0
@@ -57,12 +58,10 @@ func TestIntersect(t *testing.T) {
 		require.Equal(t, 3, len(result.Vecs)) // 3 column
 	}
 	require.Equal(t, 1, cnt) // 1 row
-	c.proc.Reg.MergeReceivers[0].Ch <- nil
-	c.proc.Reg.MergeReceivers[1].Ch <- nil
 
 	c.arg.Reset(c.proc, false, nil)
 
-	setProcForTest(ctx, proc)
+	setProcForTest(proc, c.arg)
 	err = c.arg.Prepare(c.proc)
 	require.NoError(t, err)
 	cnt = 0
@@ -74,16 +73,18 @@ func TestIntersect(t *testing.T) {
 		require.Equal(t, 3, len(result.Vecs)) // 3 column
 	}
 	require.Equal(t, 1, cnt) // 1 row
-	c.proc.Reg.MergeReceivers[0].Ch <- nil
-	c.proc.Reg.MergeReceivers[1].Ch <- nil
+
+	for _, child := range c.arg.Children {
+		child.Free(proc, false, nil)
+	}
 	c.arg.Free(c.proc, false, nil)
-	proc.FreeVectors()
+	proc.Free()
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
 func newIntersectTestCase(proc *process.Process) (intersectTestCase, context.Context) {
 	ctx, cancel := context.WithCancel(context.Background())
-	arg := new(Argument)
+	arg := new(Intersect)
 	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 		Idx:     0,
 		IsFirst: false,
@@ -96,7 +97,11 @@ func newIntersectTestCase(proc *process.Process) (intersectTestCase, context.Con
 	}, ctx
 }
 
-func setProcForTest(ctx context.Context, proc *process.Process) {
+func setProcForTest(proc *process.Process, interset *Intersect) {
+	for _, child := range interset.Children {
+		child.Free(proc, false, nil)
+	}
+	interset.Children = nil
 	leftBatches := []*batch.Batch{
 		testutil.NewBatchWithVectors(
 			[]*vector.Vector{
@@ -127,27 +132,8 @@ func setProcForTest(ctx context.Context, proc *process.Process) {
 			}, nil),
 	}
 
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
-	{
-		c := make(chan *process.RegisterMessage, len(leftBatches)+10)
-		for i := range leftBatches {
-			c <- testutil.NewRegMsg(leftBatches[i])
-		}
-		c <- nil
-		proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-			Ctx: ctx,
-			Ch:  c,
-		}
-	}
-	{
-		c := make(chan *process.RegisterMessage, len(rightBatches)+10)
-		for i := range rightBatches {
-			c <- testutil.NewRegMsg(rightBatches[i])
-		}
-		c <- nil
-		proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-			Ctx: ctx,
-			Ch:  c,
-		}
-	}
+	leftChild := colexec.NewMockOperator().WithBatchs(leftBatches)
+	rightChild := colexec.NewMockOperator().WithBatchs(rightBatches)
+	interset.AppendChild(leftChild)
+	interset.AppendChild(rightChild)
 }

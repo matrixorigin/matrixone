@@ -47,13 +47,13 @@ var setEdge = true
 // Set is_called to true if it is false, if is_]called is true Advance last_seq_num.
 // Return advanced last_seq_num.
 
-func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
 
 	// Here is the transaction
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn := proc.TxnOperator
+	txn := proc.GetTxnOperator()
 	if txn == nil {
 		return moerr.NewInternalError(proc.Ctx, "Nextval: txn operator is nil")
 	}
@@ -76,7 +76,7 @@ func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			}
 			// set last val
 			if res != "" {
-				proc.SessionInfo.SeqLastValue[0] = res
+				proc.GetSessionInfo().SeqLastValue[0] = res
 			}
 		}
 	}
@@ -84,7 +84,7 @@ func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 }
 
 func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.TxnOperator) (string, error) {
-	db := proc.SessionInfo.Database
+	db := proc.GetSessionInfo().Database
 	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {
 		return "", err
@@ -103,10 +103,11 @@ func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.
 		return "", moerr.NewInternalError(proc.Ctx, "Table input is not a sequence")
 	}
 
-	values, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
+	_values, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
 	if err != nil {
 		return "", err
 	}
+	values := _values[0]
 	if values == nil {
 		return "", moerr.NewInternalError(proc.Ctx, "Failed to get sequence meta data.")
 	}
@@ -240,7 +241,7 @@ func advanceSeq[T constraints.Integer](lsn, minv, maxv, incrv T,
 }
 
 func setSeq[T constraints.Integer](proc *process.Process, setv T, rel engine.Relation, db, tbl string) (string, error) {
-	_, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("update `%s`.`%s` set last_seq_num = %d", db, tbl, setv))
+	_, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("update `%s`.`%s` set last_seq_num = %d", db, tbl, setv))
 	if err != nil {
 		return "", err
 	}
@@ -249,14 +250,14 @@ func setSeq[T constraints.Integer](proc *process.Process, setv T, rel engine.Rel
 	ress := fmt.Sprint(setv)
 
 	// Set Curvalues here. Add new slot to proc's related field.
-	proc.SessionInfo.SeqAddValues[tblId] = ress
+	proc.GetSessionInfo().SeqAddValues[tblId] = ress
 
 	return ress, nil
 }
 
 func setIsCalled[T constraints.Integer](proc *process.Process, rel engine.Relation, lsn T, db, tbl string) (string, error) {
 	// Set is called to true.
-	_, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("update `%s`.`%s` set is_called = true", db, tbl))
+	_, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("update `%s`.`%s` set is_called = true", db, tbl))
 	if err != nil {
 		return "", err
 	}
@@ -265,12 +266,12 @@ func setIsCalled[T constraints.Integer](proc *process.Process, rel engine.Relati
 	ress := fmt.Sprint(lsn)
 
 	// Set Curvalues here. Add new slot to proc's related field.
-	proc.SessionInfo.SeqAddValues[tblId] = ress
+	proc.GetSessionInfo().SeqAddValues[tblId] = ress
 
 	return ress, nil
 }
 
-func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	tblnames := vector.GenerateFunctionStrParameter(ivecs[0])
 	setnums := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -281,7 +282,7 @@ func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 
 	// Txn
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn := proc.TxnOperator
+	txn := proc.GetTxnOperator()
 	if txn == nil {
 		return moerr.NewInternalError(proc.Ctx, "Setval: txn operator is nil")
 	}
@@ -314,7 +315,7 @@ func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 }
 
 func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn client.TxnOperator, e engine.Engine) (string, error) {
-	db := proc.SessionInfo.Database
+	db := proc.GetSessionInfo().Database
 	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {
 		return "", err
@@ -324,10 +325,11 @@ func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn cl
 		return "", err
 	}
 
-	values, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
+	_values, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
 	if err != nil {
 		return "", err
 	}
+	values := _values[0]
 	if values == nil {
 		return "", moerr.NewInternalError(proc.Ctx, "Failed to get sequence meta data.")
 	}
@@ -405,7 +407,7 @@ func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn cl
 }
 
 func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled bool, rel engine.Relation, db, tbl string) (string, error) {
-	_, err := proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("update `%s`.`%s` set last_seq_num = %d", db, tbl, setv))
+	_, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("update `%s`.`%s` set last_seq_num = %d", db, tbl, setv))
 	if err != nil {
 		return "", err
 	}
@@ -414,29 +416,29 @@ func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled bo
 	if setisCalled {
 		tblId := rel.GetTableID(proc.Ctx)
 
-		proc.SessionInfo.SeqAddValues[tblId] = ress
+		proc.GetSessionInfo().SeqAddValues[tblId] = ress
 
 		// Only set lastvalue when it is already initialized.
-		if proc.SessionInfo.SeqLastValue[0] != "" {
-			proc.SessionInfo.SeqLastValue[0] = ress
+		if proc.GetSessionInfo().SeqLastValue[0] != "" {
+			proc.GetSessionInfo().SeqLastValue[0] = ress
 		}
 	}
 
 	return ress, nil
 }
 
-func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
 
 	// Here is the transaction
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn := proc.TxnOperator
+	txn := proc.GetTxnOperator()
 	if txn == nil {
 		return moerr.NewInternalError(proc.Ctx, "Currval: txn operator is nil")
 	}
 
-	dbHandler, err := e.Database(proc.Ctx, proc.SessionInfo.Database, txn)
+	dbHandler, err := e.Database(proc.Ctx, proc.GetSessionInfo().Database, txn)
 	if err != nil {
 		return
 	}
@@ -455,9 +457,9 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			}
 			tblId := rel.GetTableID(proc.Ctx)
 			// Get cur values here.
-			ss, exists := proc.SessionInfo.SeqCurValues[tblId]
+			ss, exists := proc.GetSessionInfo().SeqCurValues[tblId]
 			// If nextval called before this currval.Check add values
-			ss1, existsAdd := proc.SessionInfo.SeqAddValues[tblId]
+			ss1, existsAdd := proc.GetSessionInfo().SeqAddValues[tblId]
 			if !exists && !existsAdd {
 				err = moerr.NewInternalError(proc.Ctx, "Currvalue of %s in current session is not initialized", v)
 				return
@@ -476,9 +478,9 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return
 }
 
-func Lastval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func Lastval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	// Get last value
-	lastv := proc.SessionInfo.SeqLastValue[0]
+	lastv := proc.GetSessionInfo().SeqLastValue[0]
 	if lastv == "" {
 		return moerr.NewInternalError(proc.Ctx, "Last value of current session is not initialized.")
 	}

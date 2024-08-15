@@ -879,7 +879,7 @@ drop table table01;
 alter table table02 add column newC int first;
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n  `newc` INT DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col2` ENUM('a','b','c') DEFAULT NULL\n)
+table02    CREATE TABLE `table02` (\n  `newC` INT DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col2` ENUM('a','b','c') DEFAULT NULL\n)
 show create table table02 {snapshot = 'sp14'};
 Table    Create Table
 table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` ENUM('a','b','c') DEFAULT NULL\n)
@@ -1086,7 +1086,7 @@ col1    col2
 show columns from pri01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null
-col2    DECIMAL128(38)    YES        null
+col2    DECIMAL(38)    YES        null
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp18'} where reldatabase = 'db11';
 count(*)
 1

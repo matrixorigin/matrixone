@@ -16,15 +16,16 @@ package function
 
 import (
 	"bytes"
+	"strings"
+	"unicode/utf8"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
-	"unicode/utf8"
 )
 
 // LOCATE(substr, str)
-func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
 	substrVs := vector.GenerateFunctionStrParameter(parameters[0])
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])
@@ -46,7 +47,7 @@ func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResul
 }
 
 // LOCATE(substr, str, [position])
-func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
 	substrVs := vector.GenerateFunctionStrParameter(parameters[0])
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])

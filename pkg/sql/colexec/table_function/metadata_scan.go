@@ -34,17 +34,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func metadataScanPrepare(proc *process.Process, arg *Argument) (err error) {
-	arg.ctr = new(container)
-	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
+func metadataScanPrepare(proc *process.Process, tableFunction *TableFunction) (err error) {
+	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
 
-	for i := range arg.Attrs {
-		arg.Attrs[i] = strings.ToUpper(arg.Attrs[i])
+	for i := range tableFunction.Attrs {
+		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
 	}
 	return err
 }
 
-func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
+func metadataScan(_ int, proc *process.Process, tableFunction *TableFunction, result *vm.CallResult) (bool, error) {
 	var (
 		err         error
 		source, col *vector.Vector
@@ -61,11 +60,11 @@ func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 		return true, nil
 	}
 
-	source, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
+	source, err = tableFunction.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return false, err
 	}
-	col, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat})
+	col, err = tableFunction.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return false, err
 	}
@@ -77,7 +76,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 	}
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	db, err := e.Database(proc.Ctx, dbname, proc.TxnOperator)
+	db, err := e.Database(proc.Ctx, dbname, proc.GetTxnOperator())
 	if err != nil {
 		return false, moerr.NewInternalError(proc.Ctx, "get database failed in metadata scan")
 	}
@@ -92,7 +91,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 		return false, err
 	}
 
-	rbat, err = genRetBatch(*proc, arg, metaInfos)
+	rbat, err = genRetBatch(*proc, tableFunction, metaInfos)
 	if err != nil {
 		return false, err
 	}
@@ -105,21 +104,21 @@ func handleDataSource(source, col *vector.Vector) (string, string, string, error
 	if source.Length() != 1 || col.Length() != 1 {
 		return "", "", "", moerr.NewInternalErrorNoCtx("wrong input len")
 	}
-	strs := strings.Split(source.UnsafeGetStringAt(0), ".")
+	strs := strings.Split(source.GetStringAt(0), ".")
 	if len(strs) != 2 {
 		return "", "", "", moerr.NewInternalErrorNoCtx("wrong len of db and tbl input")
 	}
-	return strs[0], strs[1], col.UnsafeGetStringAt(0), nil
+	return strs[0], strs[1], col.GetStringAt(0), nil
 }
 
-func genRetBatch(proc process.Process, arg *Argument, metaInfos []*plan.MetadataScanInfo) (*batch.Batch, error) {
-	retBat, err := initMetadataInfoBat(proc, arg)
+func genRetBatch(proc process.Process, tableFunction *TableFunction, metaInfos []*plan.MetadataScanInfo) (*batch.Batch, error) {
+	retBat, err := initMetadataInfoBat(proc, tableFunction)
 	if err != nil {
 		return nil, err
 	}
 
 	for i := range metaInfos {
-		fillMetadataInfoBat(retBat, proc, arg, metaInfos[i])
+		fillMetadataInfoBat(retBat, proc, tableFunction, metaInfos[i])
 	}
 
 	retBat.AddRowCount(len(metaInfos))
@@ -127,11 +126,11 @@ func genRetBatch(proc process.Process, arg *Argument, metaInfos []*plan.Metadata
 	return retBat, nil
 }
 
-func initMetadataInfoBat(proc process.Process, arg *Argument) (*batch.Batch, error) {
-	retBat := batch.New(false, arg.Attrs)
+func initMetadataInfoBat(proc process.Process, tableFunction *TableFunction) (*batch.Batch, error) {
+	retBat := batch.New(false, tableFunction.Attrs)
 	retBat.Cnt = 1
 
-	for i, a := range arg.Attrs {
+	for i, a := range tableFunction.Attrs {
 		idx, ok := plan.MetadataScanInfo_MetadataScanInfoType_value[a]
 		if !ok {
 			return nil, moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", a)
@@ -144,12 +143,12 @@ func initMetadataInfoBat(proc process.Process, arg *Argument) (*batch.Batch, err
 	return retBat, nil
 }
 
-func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument, info *plan.MetadataScanInfo) error {
+func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, tableFunction *TableFunction, info *plan.MetadataScanInfo) error {
 	mp := proc.GetMPool()
 	zm := index.ZM(info.ZoneMap)
 	zmNull := !zm.IsInited()
 
-	for i, colname := range arg.Attrs {
+	for i, colname := range tableFunction.Attrs {
 		idx, ok := plan.MetadataScanInfo_MetadataScanInfoType_value[colname]
 		if !ok {
 			opBat.Clean(proc.GetMPool())

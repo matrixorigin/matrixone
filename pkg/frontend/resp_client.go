@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"math"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,7 +30,7 @@ func setResponse(ses *Session, isLastStmt bool, rspLen uint64) *Response {
 // response the client
 func respClientWhenSuccess(ses *Session,
 	execCtx *ExecCtx) (err error) {
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	err = execCtx.resper.RespPostMeta(execCtx, nil)
@@ -45,9 +46,9 @@ func respClientWhenSuccess(ses *Session,
 	return err
 }
 
-func (resper *MysqlResp) respClientWithoutFlush(ses *Session,
+func (resper *MysqlResp) respClient(ses *Session,
 	execCtx *ExecCtx) (err error) {
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	switch execCtx.stmt.StmtKind().RespType() {
@@ -93,7 +94,9 @@ func (resper *MysqlResp) GetStr(id PropertyID) string {
 	return resper.mysqlRrWr.GetStr(id)
 }
 
-func (resper *MysqlResp) SetU32(PropertyID, uint32) {}
+func (resper *MysqlResp) SetU32(id PropertyID, v uint32) {
+	resper.mysqlRrWr.SetU32(id, v)
+}
 
 func (resper *MysqlResp) GetU32(id PropertyID) uint32 {
 	return resper.mysqlRrWr.GetU32(id)
@@ -143,7 +146,7 @@ func (resper *MysqlResp) RespResult(execCtx *ExecCtx, bat *batch.Batch) (err err
 }
 
 func (resper *MysqlResp) RespPostMeta(execCtx *ExecCtx, meta any) (err error) {
-	return resper.respClientWithoutFlush(execCtx.ses.(*Session), execCtx)
+	return resper.respClient(execCtx.ses.(*Session), execCtx)
 }
 
 func (resper *MysqlResp) Close() {
@@ -162,6 +165,7 @@ const (
 type NullResp struct {
 	username string
 	database string
+	sync.Mutex
 }
 
 func (resper *NullResp) MysqlRrWr() MysqlRrWr {
@@ -170,6 +174,11 @@ func (resper *NullResp) MysqlRrWr() MysqlRrWr {
 }
 
 func (resper *NullResp) GetStr(id PropertyID) string {
+	if resper == nil {
+		return ""
+	}
+	resper.Lock()
+	defer resper.Unlock()
 	switch id {
 	case DBNAME:
 		return resper.database
@@ -182,6 +191,11 @@ func (resper *NullResp) GetStr(id PropertyID) string {
 	}
 }
 func (resper *NullResp) SetStr(id PropertyID, val string) {
+	if resper == nil {
+		return
+	}
+	resper.Lock()
+	defer resper.Unlock()
 	switch id {
 	case DBNAME:
 		resper.database = val
@@ -227,7 +241,7 @@ func (resper *NullResp) RespPostMeta(execCtx *ExecCtx, a any) error {
 	if ses, ok := execCtx.ses.(*Session); ok && execCtx.stmt != nil {
 		switch execCtx.stmt.(type) {
 		case *tree.Select:
-			if len(execCtx.proc.SessionInfo.SeqAddValues) != 0 {
+			if len(execCtx.proc.GetSessionInfo().SeqAddValues) != 0 {
 				ses.AddSeqValues(execCtx.proc)
 			}
 			ses.SetSeqLastValue(execCtx.proc)

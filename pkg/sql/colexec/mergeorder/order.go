@@ -16,6 +16,7 @@ package mergeorder
 
 import (
 	"bytes"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -28,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "merge_order"
+const opName = "merge_order"
 
 func (ctr *container) mergeAndEvaluateOrderColumn(proc *process.Process, bat *batch.Batch) error {
 	ctr.batchList = append(ctr.batchList, bat)
@@ -47,7 +48,7 @@ func (ctr *container) evaluateOrderColumn(proc *process.Process, index int) erro
 
 	ctr.orderCols[index] = make([]*vector.Vector, len(ctr.executors))
 	for i := 0; i < len(ctr.executors); i++ {
-		vec, err := ctr.executors[i].EvalWithoutResultReusing(proc, inputs)
+		vec, err := ctr.executors[i].EvalWithoutResultReusing(proc, inputs, nil)
 		if err != nil {
 			return err
 		}
@@ -164,9 +165,9 @@ func (ctr *container) removeBatch(proc *process.Process, index int) {
 	ctr.orderCols = append(ctr.orderCols[:index], ctr.orderCols[index+1:]...)
 }
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
-	ap := arg
+func (mergeOrder *MergeOrder) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
+	ap := mergeOrder
 	buf.WriteString(": mergeorder([")
 	for i, f := range ap.OrderBySpecs {
 		if i > 0 {
@@ -177,18 +178,20 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	ctr := arg.ctr
-	arg.ctr.InitReceiver(proc, true)
+func (mergeOrder *MergeOrder) OpType() vm.OpType {
+	return vm.MergeOrder
+}
 
-	length := 2 * len(proc.Reg.MergeReceivers)
-	ctr.batchList = make([]*batch.Batch, 0, length)
-	ctr.orderCols = make([][]*vector.Vector, 0, length)
+func (mergeOrder *MergeOrder) Prepare(proc *process.Process) (err error) {
+	mergeOrder.ctr = new(container)
+	ctr := mergeOrder.ctr
 
-	arg.ctr.executors = make([]colexec.ExpressionExecutor, len(arg.OrderBySpecs))
-	for i := range arg.ctr.executors {
-		arg.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, arg.OrderBySpecs[i].Expr)
+	ctr.batchList = make([]*batch.Batch, 0, 16)
+	ctr.orderCols = make([][]*vector.Vector, 0, 16)
+
+	mergeOrder.ctr.executors = make([]colexec.ExpressionExecutor, len(mergeOrder.OrderBySpecs))
+	for i := range mergeOrder.ctr.executors {
+		mergeOrder.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, mergeOrder.OrderBySpecs[i].Expr)
 		if err != nil {
 			return err
 		}
@@ -196,13 +199,13 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	ctr := arg.ctr
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	ctr := mergeOrder.ctr
+	anal := proc.GetAnalyze(mergeOrder.GetIdx(), mergeOrder.GetParallelIdx(), mergeOrder.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
@@ -210,11 +213,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.status {
 		case receiving:
-			msg := ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = vm.ChildrenCall(mergeOrder.GetChildren(0), proc, anal)
+			if err != nil {
+				return result, err
 			}
-			if msg.Batch == nil {
+
+			if result.Batch == nil {
 				// if number of block is less than 2, no need to do merge sort.
 				ctr.status = normalSending
 
@@ -225,13 +229,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					if err = ctr.evaluateOrderColumn(proc, 0); err != nil {
 						return result, err
 					}
-					ctr.generateCompares(arg.OrderBySpecs)
+					ctr.generateCompares(mergeOrder.OrderBySpecs)
 					ctr.indexList = make([]int64, len(ctr.batchList))
 				}
 				continue
 			}
 
-			bat := msg.Batch
+			bat := result.Batch
+			atomic.AddInt64(&bat.Cnt, 1)
 			if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
 				return result, err
 			}
@@ -258,6 +263,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				result.Status = vm.ExecStop
 				return result, err
 			}
+			result.Status = vm.ExecHasMore
 			return result, err
 		}
 	}

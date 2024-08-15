@@ -22,21 +22,55 @@ import (
 )
 
 type Config struct {
+	// !! REMEMBER TO CHANGE patchConfig WHEN ADDING FIELDS
+
+	// Allocator controls which allocator to use
+	Allocator *string `toml:"allocator"`
+
 	// CheckFraction controls the fraction of checked deallocations
 	// On average, 1 / fraction of deallocations will be checked for double free or missing free
-	CheckFraction uint32 `toml:"check-fraction"`
+	CheckFraction *uint32 `toml:"check-fraction"`
+
+	// FullStackFraction controls the fraction of full stack collecting in profile sampling
+	// On average, 1 / fraction of allocations will be sampled with full stack information
+	FullStackFraction *uint32 `toml:"full-stack-fraction"`
 
 	// EnableMetrics indicates whether to expose metrics to prometheus
-	EnableMetrics bool `toml:"enable-metrics"`
+	EnableMetrics *bool `toml:"enable-metrics"`
 }
 
 var defaultConfig = func() *atomic.Pointer[Config] {
 	ret := new(atomic.Pointer[Config])
-	ret.Store(new(Config))
+
+	// default config
+	ret.Store(&Config{
+		CheckFraction:     ptrTo(uint32(4096)),
+		EnableMetrics:     ptrTo(true),
+		FullStackFraction: ptrTo(uint32(10)),
+	})
+
 	return ret
 }()
 
-func SetDefaultConfig(c Config) {
-	defaultConfig.Store(&c)
-	logutil.Info("malloc: set default config", zap.Any("config", c))
+func patchConfig(config Config, delta Config) Config {
+	if delta.CheckFraction != nil {
+		config.CheckFraction = delta.CheckFraction
+	}
+	if delta.EnableMetrics != nil {
+		config.EnableMetrics = delta.EnableMetrics
+	}
+	if delta.FullStackFraction != nil {
+		config.FullStackFraction = delta.FullStackFraction
+	}
+	if delta.Allocator != nil {
+		config.Allocator = delta.Allocator
+	}
+	return config
+}
+
+func SetDefaultConfig(delta Config) {
+	config := *defaultConfig.Load()
+	config = patchConfig(config, delta)
+	defaultConfig.Store(&config)
+	logutil.Info("malloc: set default config", zap.Any("config", delta))
 }

@@ -65,6 +65,18 @@ func withRebalancePolicy(policy RebalancePolicy) tunnelOption {
 	}
 }
 
+func withRealConn() tunnelOption {
+	return func(t *tunnel) {
+		t.realConn = true
+	}
+}
+
+func withConnCacheEnabled(v bool) tunnelOption {
+	return func(t *tunnel) {
+		t.connCacheEnabled = v
+	}
+}
+
 type transferType int
 
 const (
@@ -94,8 +106,15 @@ type tunnel struct {
 	rebalancer *rebalancer
 	// transferProactive means that the connection transfer is more proactive.
 	rebalancePolicy RebalancePolicy
-
+	// connCacheEnabled indicates if the connection cache is enabled.
+	connCacheEnabled bool
+	// transferType is the type for transferring: rebalancing and scaling.
 	transferType transferType
+	// realConn indicates the connection in the tunnel is a real network
+	// connection but not a net.Pipe. It is used for testing. If it does NOt
+	// run in testing, the Close() method does not to be called, as it is
+	// closed in goetty module.
+	realConn bool
 
 	// transferIntent indicates that this tunnel was tried to transfer to
 	// other servers, but not safe to. Set it to true to do the transfer
@@ -156,8 +175,24 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 		}
 		t.cc = cc
 		t.logger = t.logger.With(zap.Uint32("conn ID", cc.ConnID()))
-		t.mu.clientConn = newMySQLConn(connClientName, cc.RawConn(), 0, t.reqC, t.respC, cc.ConnID())
-		t.mu.serverConn = newMySQLConn(connServerName, sc.RawConn(), 0, t.reqC, t.respC, sc.ConnID())
+		t.mu.clientConn = newMySQLConn(
+			connClientName,
+			cc.RawConn(),
+			0,
+			t.reqC,
+			t.respC,
+			t.connCacheEnabled,
+			cc.ConnID(),
+		)
+		t.mu.serverConn = newMySQLConn(
+			connServerName,
+			sc.RawConn(),
+			0,
+			t.reqC,
+			t.respC,
+			t.connCacheEnabled,
+			sc.ConnID(),
+		)
 
 		// Create the pipes from client to server and server to client.
 		t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
@@ -408,7 +443,15 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
 		)
 		return nil, err
 	}
-	return newMySQLConn(connServerName, newConn.RawConn(), 0, t.reqC, t.respC, newConn.ConnID()), nil
+	return newMySQLConn(
+		connServerName,
+		newConn.RawConn(),
+		0,
+		t.reqC,
+		t.respC,
+		t.connCacheEnabled,
+		newConn.ConnID(),
+	), nil
 }
 
 func (t *tunnel) getTransferType() transferType {
@@ -430,10 +473,13 @@ func (t *tunnel) Close() error {
 		close(t.respC)
 
 		cc, sc := t.getConns()
-		if cc != nil {
+		// cc.Close() just only close the raw net connection, and it
+		// is closed in goetty module, so do NOT need to close it here:
+		// cc, sc := t.getConns()
+		if cc != nil && !t.realConn {
 			_ = cc.Close()
 		}
-		if sc != nil {
+		if !t.connCacheEnabled && sc != nil {
 			_ = sc.Close()
 		}
 	})
@@ -576,7 +622,10 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 				rotated = false
 			}
 
-			p.mu.inTxn = checkTxnStatus(buf)
+			inTxn, ok := checkTxnStatus(buf)
+			if ok {
+				p.mu.inTxn = inTxn
+			}
 			if !p.mu.inTxn && p.tun.transferIntent.Load() && !rotated {
 				peer.wg.Add(1)
 				p.transferred = true
@@ -741,7 +790,11 @@ func handleEOFPacket(msg []byte) bool {
 	return txnStatus(binary.LittleEndian.Uint16(msg[7:]))
 }
 
-func checkTxnStatus(msg []byte) bool {
+// the first return value is the txn status, and the second return value
+// indicates if we can get the txn status from the packet. If it is a ERROR
+// packet, the second return value is false.
+func checkTxnStatus(msg []byte) (bool, bool) {
+	ok := true
 	inTxn := true
 	// For the server->client pipe, we get the transaction status from the
 	// OK and EOF packet, which is used in connection transfer. If the session
@@ -750,6 +803,8 @@ func checkTxnStatus(msg []byte) bool {
 		inTxn = handleOKPacket(msg)
 	} else if isEOFPacket(msg) {
 		inTxn = handleEOFPacket(msg)
+	} else if isErrPacket(msg) {
+		ok = false
 	}
-	return inTxn
+	return inTxn, ok
 }

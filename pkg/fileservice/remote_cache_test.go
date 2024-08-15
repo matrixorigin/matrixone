@@ -97,70 +97,76 @@ func TestRemoteCache(t *testing.T) {
 
 func runTestWithTwoFileServices(t *testing.T, fn func(sf1 *cacheFs, sf2 *cacheFs)) {
 	defer leaktest.AfterTest(t)()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	address1 := fmt.Sprintf("unix:///tmp/sock1-%d.sock", time.Now().Nanosecond())
-	if err := os.RemoveAll(address1[7:]); err != nil {
-		panic(err)
-	}
-	address2 := fmt.Sprintf("unix:///tmp/sock2-%d.sock", time.Now().Nanosecond())
-	if err := os.RemoveAll(address2[7:]); err != nil {
-		panic(err)
-	}
 
-	create := func(selfAddr, pairAddr string) *cacheFs {
-		dir := t.TempDir()
-		ctx := context.Background()
-		qt, err := client.NewQueryClient("", morpc.Config{})
-		assert.NoError(t, err)
-		assert.NotNil(t, qt)
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			address1 := fmt.Sprintf("unix:///tmp/sock1-%d.sock", time.Now().Nanosecond())
+			if err := os.RemoveAll(address1[7:]); err != nil {
+				panic(err)
+			}
+			address2 := fmt.Sprintf("unix:///tmp/sock2-%d.sock", time.Now().Nanosecond())
+			if err := os.RemoveAll(address2[7:]); err != nil {
+				panic(err)
+			}
 
-		keyRouter := &mockKeyRouter[query.CacheKey]{target: pairAddr}
-		cacheCfg := CacheConfig{
-			RemoteCacheEnabled: true,
-			KeyRouterFactory: func() client.KeyRouter[query.CacheKey] {
-				return keyRouter
-			},
-			QueryClient: qt,
-		}
-		cacheCfg.setDefaults()
-		cacheCfg.SetRemoteCacheCallback()
-		fs, err := NewLocalFS(ctx, "local-"+selfAddr, dir, cacheCfg, nil)
-		assert.Nil(t, err)
-		assert.NotNil(t, fs)
-		qs, err := queryservice.NewQueryService("", selfAddr, morpc.Config{})
-		assert.NoError(t, err)
-		qs.AddHandleFunc(query.CmdMethod_GetCacheData,
-			func(ctx context.Context, req *query.Request, resp *query.Response) error {
-				wr := &query.WrappedResponse{
-					Response: resp,
+			create := func(selfAddr, pairAddr string) *cacheFs {
+				dir := t.TempDir()
+				ctx := context.Background()
+				qt, err := client.NewQueryClient("", morpc.Config{})
+				assert.NoError(t, err)
+				assert.NotNil(t, qt)
+
+				keyRouter := &mockKeyRouter[query.CacheKey]{target: pairAddr}
+				cacheCfg := CacheConfig{
+					RemoteCacheEnabled: true,
+					KeyRouterFactory: func() client.KeyRouter[query.CacheKey] {
+						return keyRouter
+					},
+					QueryClient: qt,
 				}
-				err = HandleRemoteRead(ctx, fs, req, wr)
-				if err != nil {
-					return err
-				}
-				qs.SetReleaseFunc(resp, wr.ReleaseFunc)
-				return nil
-			},
-			false,
-		)
-		err = qs.Start()
-		assert.NoError(t, err)
+				cacheCfg.setDefaults()
+				cacheCfg.SetRemoteCacheCallback()
+				fs, err := NewLocalFS(ctx, "local-"+selfAddr, dir, cacheCfg, nil)
+				assert.Nil(t, err)
+				assert.NotNil(t, fs)
+				qs, err := queryservice.NewQueryService("", selfAddr, morpc.Config{})
+				assert.NoError(t, err)
+				qs.AddHandleFunc(query.CmdMethod_GetCacheData,
+					func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+						wr := &query.WrappedResponse{
+							Response: resp,
+						}
+						err = HandleRemoteRead(ctx, fs, req, wr)
+						if err != nil {
+							return err
+						}
+						qs.SetReleaseFunc(resp, wr.ReleaseFunc)
+						return nil
+					},
+					false,
+				)
+				err = qs.Start()
+				assert.NoError(t, err)
 
-		rc := NewRemoteCache(qt, func() client.KeyRouter[query.CacheKey] { return keyRouter })
-		assert.NotNil(t, rc)
-		return &cacheFs{qs: qs, rc: rc, fs: fs, qt: qt}
-	}
+				rc := NewRemoteCache(qt, func() client.KeyRouter[query.CacheKey] { return keyRouter })
+				assert.NotNil(t, rc)
+				return &cacheFs{qs: qs, rc: rc, fs: fs, qt: qt}
+			}
 
-	cf1 := create(address1, address2)
-	defer func() {
-		assert.NoError(t, cf1.qs.Close())
-		assert.NoError(t, cf1.qt.Close())
-	}()
-	cf2 := create(address2, address1)
-	defer func() {
-		assert.NoError(t, cf2.qs.Close())
-		assert.NoError(t, cf2.qt.Close())
-	}()
+			cf1 := create(address1, address2)
+			defer func() {
+				assert.NoError(t, cf1.qs.Close())
+				assert.NoError(t, cf1.qt.Close())
+			}()
+			cf2 := create(address2, address1)
+			defer func() {
+				assert.NoError(t, cf2.qs.Close())
+				assert.NoError(t, cf2.qt.Close())
+			}()
 
-	fn(cf1, cf2)
+			fn(cf1, cf2)
+		},
+	)
 }

@@ -1,0 +1,1257 @@
+drop account if exists fk_show_column;
+create account fk_show_column admin_name 'root' identified by '111';
+desc	mo_catalog.mo_database                ;
+Field    Type    Null    Key    Default    Extra    Comment
+dat_id    BIGINT UNSIGNED(0)    YES        null        
+datname    VARCHAR(5000)    YES    PRI    null        
+dat_catalog_name    VARCHAR(5000)    YES        null        
+dat_createsql    VARCHAR(5000)    YES        null        
+owner    INT UNSIGNED(0)    YES        null        
+creator    INT UNSIGNED(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
+dat_type    VARCHAR(32)    YES        null        
+desc	mo_catalog.mo_tables                  ;
+Field    Type    Null    Key    Default    Extra    Comment
+rel_id    BIGINT UNSIGNED(0)    YES        null        
+relname    VARCHAR(5000)    YES    PRI    null        
+reldatabase    VARCHAR(5000)    YES    PRI    null        
+reldatabase_id    BIGINT UNSIGNED(0)    YES        null        
+relpersistence    VARCHAR(5000)    YES        null        
+relkind    VARCHAR(5000)    YES        null        
+rel_comment    VARCHAR(5000)    YES        null        
+rel_createsql    TEXT(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+creator    INT UNSIGNED(0)    YES        null        
+owner    INT UNSIGNED(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
+partitioned    TINYINT(0)    YES        null        
+partition_info    BLOB(0)    YES        null        
+viewdef    VARCHAR(5000)    YES        null        
+constraint    VARCHAR(5000)    YES        null        
+rel_version    INT UNSIGNED(0)    YES        null        
+catalog_version    INT UNSIGNED(0)    YES        null        
+desc	mo_catalog.mo_columns                 ;
+Field    Type    Null    Key    Default    Extra    Comment
+att_uniq_name    VARCHAR(256)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
+att_database_id    BIGINT UNSIGNED(0)    YES        null        
+att_database    VARCHAR(256)    YES    PRI    null        
+att_relname_id    BIGINT UNSIGNED(0)    YES        null        
+att_relname    VARCHAR(256)    YES    PRI    null        
+attname    VARCHAR(256)    YES    PRI    null        
+atttyp    VARCHAR(256)    YES        null        
+attnum    INT(0)    YES        null        
+att_length    INT(0)    YES        null        
+attnotnull    TINYINT(0)    YES        null        
+atthasdef    TINYINT(0)    YES        null        
+att_default    VARCHAR(2048)    YES        null        
+attisdropped    TINYINT(0)    YES        null        
+att_constraint_type    CHAR(1)    YES        null        
+att_is_unsigned    TINYINT(0)    YES        null        
+att_is_auto_increment    TINYINT(0)    YES        null        
+att_comment    VARCHAR(2048)    YES        null        
+att_is_hidden    TINYINT(0)    YES        null        
+attr_has_update    TINYINT(0)    YES        null        
+attr_update    VARCHAR(2048)    YES        null        
+attr_is_clusterby    TINYINT(0)    YES        null        
+attr_seqnum    SMALLINT UNSIGNED(0)    YES        null        
+attr_enum    VARCHAR(65535)    YES        null        
+desc	mo_catalog.mo_account                 ;
+Field    Type    Null    Key    Default    Extra    Comment
+account_id    INT(32)    NO    PRI    null    auto_increment    
+account_name    VARCHAR(300)    YES    UNI    null        
+admin_name    VARCHAR(300)    YES        null        
+status    VARCHAR(300)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+comments    VARCHAR(256)    YES        null        
+version    BIGINT UNSIGNED(64)    YES        null    auto_increment    
+suspended_time    TIMESTAMP(0)    YES        null        
+create_version    VARCHAR(50)    YES        '1.2.0'        
+desc	mo_catalog.mo_user                    ;
+Field    Type    Null    Key    Default    Extra    Comment
+user_id    INT(32)    NO    PRI    null    auto_increment    
+user_host    VARCHAR(100)    YES        null        
+user_name    VARCHAR(300)    YES    UNI    null        
+authentication_string    VARCHAR(100)    YES        null        
+status    VARCHAR(8)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+expired_time    TIMESTAMP(0)    YES        null        
+login_type    VARCHAR(16)    YES        null        
+creator    INT(32)    YES        null        
+owner    INT(32)    YES        null        
+default_role    INT(32)    YES        null        
+desc	mo_catalog.mo_role                    ;
+Field    Type    Null    Key    Default    Extra    Comment
+role_id    INT(32)    NO    PRI    null    auto_increment    
+role_name    VARCHAR(300)    YES    UNI    null        
+creator    INT(32)    YES        null        
+owner    INT(32)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+comments    TEXT(0)    YES        null        
+desc	mo_catalog.mo_user_grant              ;
+Field    Type    Null    Key    Default    Extra    Comment
+role_id    INT(32)    NO    PRI    null        
+user_id    INT(32)    NO    PRI    null        
+granted_time    TIMESTAMP(0)    YES        null        
+with_grant_option    BOOL(0)    YES        null        
+desc	mo_catalog.mo_role_grant              ;
+Field    Type    Null    Key    Default    Extra    Comment
+granted_id    INT(32)    NO    PRI    null        
+grantee_id    INT(32)    NO    PRI    null        
+operation_role_id    INT(32)    YES        null        
+operation_user_id    INT(32)    YES        null        
+granted_time    TIMESTAMP(0)    YES        null        
+with_grant_option    BOOL(0)    YES        null        
+desc	mo_catalog.mo_role_privs              ;
+Field    Type    Null    Key    Default    Extra    Comment
+role_id    INT(32)    NO    PRI    null        
+role_name    VARCHAR(100)    YES        null        
+obj_type    VARCHAR(16)    NO    PRI    null        
+obj_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+privilege_id    INT(32)    NO    PRI    null        
+privilege_name    VARCHAR(100)    YES        null        
+privilege_level    VARCHAR(100)    NO    PRI    null        
+operation_user_id    INT UNSIGNED(32)    YES        null        
+granted_time    TIMESTAMP(0)    YES        null        
+with_grant_option    BOOL(0)    YES        null        
+desc	mo_catalog.mo_user_defined_function   ;
+Field    Type    Null    Key    Default    Extra    Comment
+function_id    INT(32)    NO    PRI    null    auto_increment    
+name    VARCHAR(100)    YES    UNI    null        
+owner    INT UNSIGNED(32)    YES        null        
+args    JSON(0)    YES        null        
+retType    VARCHAR(20)    YES        null        
+body    TEXT(0)    YES        null        
+language    VARCHAR(20)    YES        null        
+db    VARCHAR(100)    YES        null        
+definer    VARCHAR(50)    YES        null        
+modified_time    TIMESTAMP(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+type    VARCHAR(10)    YES        null        
+security_type    VARCHAR(10)    YES        null        
+comment    VARCHAR(5000)    YES        null        
+character_set_client    VARCHAR(64)    YES        null        
+collation_connection    VARCHAR(64)    YES        null        
+database_collation    VARCHAR(64)    YES        null        
+desc	mo_catalog.mo_stored_procedure        ;
+Field    Type    Null    Key    Default    Extra    Comment
+proc_id    INT(32)    NO    PRI    null    auto_increment    
+name    VARCHAR(100)    YES    UNI    null        
+creator    INT UNSIGNED(32)    YES        null        
+args    TEXT(0)    YES        null        
+body    TEXT(0)    YES        null        
+db    VARCHAR(100)    YES        null        
+definer    VARCHAR(50)    YES        null        
+modified_time    TIMESTAMP(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+type    VARCHAR(10)    YES        null        
+security_type    VARCHAR(10)    YES        null        
+comment    VARCHAR(5000)    YES        null        
+character_set_client    VARCHAR(64)    YES        null        
+collation_connection    VARCHAR(64)    YES        null        
+database_collation    VARCHAR(64)    YES        null        
+desc	mo_catalog.mo_mysql_compatibility_mode;
+Field    Type    Null    Key    Default    Extra    Comment
+configuration_id    INT(32)    NO    PRI    null    auto_increment    
+account_id    INT(32)    YES        null        
+account_name    VARCHAR(300)    YES        null        
+dat_name    VARCHAR(5000)    YES        null        
+variable_name    VARCHAR(300)    YES        null        
+variable_value    VARCHAR(5000)    YES        null        
+system_variables    BOOL(0)    YES        null        
+desc	mo_catalog.mo_increment_columns       ;
+Field    Type    Null    Key    Default    Extra    Comment
+table_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+col_name    VARCHAR(770)    NO    PRI    null        
+col_index    INT(32)    YES        null        
+offset    BIGINT UNSIGNED(64)    YES        null        
+step    BIGINT UNSIGNED(64)    YES        null        
+desc	mo_catalog.mo_indexes                 ;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT UNSIGNED(64)    NO    PRI    null        
+table_id    BIGINT UNSIGNED(64)    NO        null        
+database_id    BIGINT UNSIGNED(64)    NO        null        
+name    VARCHAR(64)    NO        null        
+type    VARCHAR(11)    NO        null        
+algo    VARCHAR(11)    YES        null        
+algo_table_type    VARCHAR(11)    YES        null        
+algo_params    VARCHAR(2048)    YES        null        
+is_visible    TINYINT(8)    NO        null        
+hidden    TINYINT(8)    NO        null        
+comment    VARCHAR(2048)    NO        null        
+column_name    VARCHAR(256)    NO    PRI    null        
+ordinal_position    INT UNSIGNED(32)    NO        null        
+options    TEXT(0)    YES        null        
+index_table_name    VARCHAR(5000)    YES        null        
+desc	mo_catalog.mo_table_partitions        ;
+Field    Type    Null    Key    Default    Extra    Comment
+table_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+database_id    BIGINT UNSIGNED(64)    NO        null        
+number    SMALLINT UNSIGNED(16)    NO        null        
+name    VARCHAR(64)    NO    PRI    null        
+partition_type    VARCHAR(50)    NO        null        
+partition_expression    VARCHAR(2048)    YES        null        
+description_utf8    TEXT(0)    YES        null        
+comment    VARCHAR(2048)    NO        null        
+options    TEXT(0)    YES        null        
+partition_table_name    VARCHAR(1024)    NO        null        
+desc	mo_catalog.mo_pubs                    ;
+Field    Type    Null    Key    Default    Extra    Comment
+pub_name    VARCHAR(64)    NO    PRI    null        
+database_name    VARCHAR(5000)    YES        null        
+database_id    BIGINT UNSIGNED(64)    YES        null        
+all_table    BOOL(0)    YES        null        
+table_list    TEXT(0)    YES        null        
+account_list    TEXT(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+update_time    TIMESTAMP(0)    YES        null        
+owner    INT UNSIGNED(32)    YES        null        
+creator    INT UNSIGNED(32)    YES        null        
+comment    TEXT(0)    YES        null        
+desc	mo_catalog.mo_stages                  ;
+Field    Type    Null    Key    Default    Extra    Comment
+stage_id    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
+stage_name    VARCHAR(64)    YES    UNI    null        
+url    TEXT(0)    YES        null        
+stage_credentials    TEXT(0)    YES        null        
+stage_status    VARCHAR(64)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+comment    TEXT(0)    YES        null        
+desc	mo_catalog.mo_sessions                ;
+Field    Type    Null    Key    Default    Extra    Comment
+node_id    VARCHAR(65535)    YES        null        
+conn_id    INT UNSIGNED(0)    YES        null        
+session_id    VARCHAR(65535)    YES        null        
+account    VARCHAR(65535)    YES        null        
+user    VARCHAR(65535)    YES        null        
+host    VARCHAR(65535)    YES        null        
+db    VARCHAR(65535)    YES        null        
+session_start    VARCHAR(65535)    YES        null        
+command    VARCHAR(65535)    YES        null        
+info    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+statement_id    VARCHAR(65535)    YES        null        
+statement_type    VARCHAR(65535)    YES        null        
+query_type    VARCHAR(65535)    YES        null        
+sql_source_type    VARCHAR(65535)    YES        null        
+query_start    VARCHAR(65535)    YES        null        
+client_host    VARCHAR(65535)    YES        null        
+role    VARCHAR(65535)    YES        null        
+proxy_host    VARCHAR(65535)    YES        null        
+desc	mo_catalog.mo_configurations          ;
+Field    Type    Null    Key    Default    Extra    Comment
+node_type    VARCHAR(65535)    YES        null        
+node_id    VARCHAR(65535)    YES        null        
+name    VARCHAR(65535)    YES        null        
+current_value    VARCHAR(65535)    YES        null        
+default_value    VARCHAR(65535)    YES        null        
+internal    VARCHAR(65535)    YES        null        
+desc	mo_catalog.mo_locks                   ;
+Field    Type    Null    Key    Default    Extra    Comment
+cn_id    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+table_id    VARCHAR(65535)    YES        null        
+lock_key    VARCHAR(65535)    YES        null        
+lock_content    VARCHAR(65535)    YES        null        
+lock_mode    VARCHAR(65535)    YES        null        
+lock_status    VARCHAR(65535)    YES        null        
+lock_wait    VARCHAR(65535)    YES        null        
+desc	mo_catalog.mo_variables               ;
+Field    Type    Null    Key    Default    Extra    Comment
+configuration_id    INT(32)    NO        null        
+account_id    INT(32)    YES        null        
+account_name    VARCHAR(300)    YES        null        
+dat_name    VARCHAR(5000)    YES        null        
+variable_name    VARCHAR(300)    YES        null        
+variable_value    VARCHAR(5000)    YES        null        
+system_variables    BOOL(0)    YES        null        
+desc	mo_catalog.mo_transactions            ;
+Field    Type    Null    Key    Default    Extra    Comment
+cn_id    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+create_ts    VARCHAR(65535)    YES        null        
+snapshot_ts    VARCHAR(65535)    YES        null        
+prepared_ts    VARCHAR(65535)    YES        null        
+commit_ts    VARCHAR(65535)    YES        null        
+txn_mode    VARCHAR(65535)    YES        null        
+isolation    VARCHAR(65535)    YES        null        
+user_txn    VARCHAR(65535)    YES        null        
+txn_status    VARCHAR(65535)    YES        null        
+table_id    VARCHAR(65535)    YES        null        
+lock_key    VARCHAR(65535)    YES        null        
+lock_content    VARCHAR(65535)    YES        null        
+lock_mode    VARCHAR(65535)    YES        null        
+desc	mo_catalog.mo_cache                   ;
+Field    Type    Null    Key    Default    Extra    Comment
+node_type    VARCHAR(65535)    YES        null        
+node_id    VARCHAR(65535)    YES        null        
+type    VARCHAR(65535)    YES        null        
+used    BIGINT UNSIGNED(0)    YES        null        
+free    BIGINT UNSIGNED(0)    YES        null        
+hit_ratio    FLOAT(0)    YES        null        
+desc	mo_catalog.mo_foreign_keys            ;
+Field    Type    Null    Key    Default    Extra    Comment
+constraint_name    VARCHAR(5000)    NO    PRI    null        
+constraint_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+db_name    VARCHAR(5000)    NO    PRI    null        
+db_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+table_name    VARCHAR(5000)    NO    PRI    null        
+table_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+column_name    VARCHAR(256)    NO    PRI    null        
+column_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+refer_db_name    VARCHAR(5000)    NO    PRI    null        
+refer_db_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+refer_table_name    VARCHAR(5000)    NO    PRI    null        
+refer_table_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+refer_column_name    VARCHAR(256)    NO    PRI    null        
+refer_column_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+on_delete    VARCHAR(128)    NO        null        
+on_update    VARCHAR(128)    NO        null        
+desc	mo_catalog.mo_snapshots               ;
+Field    Type    Null    Key    Default    Extra    Comment
+snapshot_id    UUID(0)    YES    UNI    null        
+sname    VARCHAR(64)    NO    PRI    null        
+ts    BIGINT(64)    YES        null        
+level    ENUM('cluster','account','database','table')    YES        null        
+account_name    VARCHAR(300)    YES        null        
+database_name    VARCHAR(5000)    YES        null        
+table_name    VARCHAR(5000)    YES        null        
+obj_id    BIGINT UNSIGNED(64)    YES        null        
+show columns from	mo_catalog.mo_database                ;
+Field    Type    Null    Key    Default    Extra    Comment
+dat_id    BIGINT UNSIGNED(0)    YES        null        
+datname    VARCHAR(5000)    YES    PRI    null        
+dat_catalog_name    VARCHAR(5000)    YES        null        
+dat_createsql    VARCHAR(5000)    YES        null        
+owner    INT UNSIGNED(0)    YES        null        
+creator    INT UNSIGNED(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
+dat_type    VARCHAR(32)    YES        null        
+show columns from	mo_catalog.mo_tables                  ;
+Field    Type    Null    Key    Default    Extra    Comment
+rel_id    BIGINT UNSIGNED(0)    YES        null        
+relname    VARCHAR(5000)    YES    PRI    null        
+reldatabase    VARCHAR(5000)    YES    PRI    null        
+reldatabase_id    BIGINT UNSIGNED(0)    YES        null        
+relpersistence    VARCHAR(5000)    YES        null        
+relkind    VARCHAR(5000)    YES        null        
+rel_comment    VARCHAR(5000)    YES        null        
+rel_createsql    TEXT(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+creator    INT UNSIGNED(0)    YES        null        
+owner    INT UNSIGNED(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
+partitioned    TINYINT(0)    YES        null        
+partition_info    BLOB(0)    YES        null        
+viewdef    VARCHAR(5000)    YES        null        
+constraint    VARCHAR(5000)    YES        null        
+rel_version    INT UNSIGNED(0)    YES        null        
+catalog_version    INT UNSIGNED(0)    YES        null        
+show columns from	mo_catalog.mo_columns                 ;
+Field    Type    Null    Key    Default    Extra    Comment
+att_uniq_name    VARCHAR(256)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
+att_database_id    BIGINT UNSIGNED(0)    YES        null        
+att_database    VARCHAR(256)    YES    PRI    null        
+att_relname_id    BIGINT UNSIGNED(0)    YES        null        
+att_relname    VARCHAR(256)    YES    PRI    null        
+attname    VARCHAR(256)    YES    PRI    null        
+atttyp    VARCHAR(256)    YES        null        
+attnum    INT(0)    YES        null        
+att_length    INT(0)    YES        null        
+attnotnull    TINYINT(0)    YES        null        
+atthasdef    TINYINT(0)    YES        null        
+att_default    VARCHAR(2048)    YES        null        
+attisdropped    TINYINT(0)    YES        null        
+att_constraint_type    CHAR(1)    YES        null        
+att_is_unsigned    TINYINT(0)    YES        null        
+att_is_auto_increment    TINYINT(0)    YES        null        
+att_comment    VARCHAR(2048)    YES        null        
+att_is_hidden    TINYINT(0)    YES        null        
+attr_has_update    TINYINT(0)    YES        null        
+attr_update    VARCHAR(2048)    YES        null        
+attr_is_clusterby    TINYINT(0)    YES        null        
+attr_seqnum    SMALLINT UNSIGNED(0)    YES        null        
+attr_enum    VARCHAR(65535)    YES        null        
+show columns from	mo_catalog.mo_account                 ;
+Field    Type    Null    Key    Default    Extra    Comment
+account_id    INT(32)    NO    PRI    null    auto_increment    
+account_name    VARCHAR(300)    YES    UNI    null        
+admin_name    VARCHAR(300)    YES        null        
+status    VARCHAR(300)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+comments    VARCHAR(256)    YES        null        
+version    BIGINT UNSIGNED(64)    YES        null    auto_increment    
+suspended_time    TIMESTAMP(0)    YES        null        
+create_version    VARCHAR(50)    YES        '1.2.0'        
+show columns from	mo_catalog.mo_user                    ;
+Field    Type    Null    Key    Default    Extra    Comment
+user_id    INT(32)    NO    PRI    null    auto_increment    
+user_host    VARCHAR(100)    YES        null        
+user_name    VARCHAR(300)    YES    UNI    null        
+authentication_string    VARCHAR(100)    YES        null        
+status    VARCHAR(8)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+expired_time    TIMESTAMP(0)    YES        null        
+login_type    VARCHAR(16)    YES        null        
+creator    INT(32)    YES        null        
+owner    INT(32)    YES        null        
+default_role    INT(32)    YES        null        
+show columns from	mo_catalog.mo_role                    ;
+Field    Type    Null    Key    Default    Extra    Comment
+role_id    INT(32)    NO    PRI    null    auto_increment    
+role_name    VARCHAR(300)    YES    UNI    null        
+creator    INT(32)    YES        null        
+owner    INT(32)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+comments    TEXT(0)    YES        null        
+show columns from	mo_catalog.mo_user_grant              ;
+Field    Type    Null    Key    Default    Extra    Comment
+role_id    INT(32)    NO    PRI    null        
+user_id    INT(32)    NO    PRI    null        
+granted_time    TIMESTAMP(0)    YES        null        
+with_grant_option    BOOL(0)    YES        null        
+show columns from	mo_catalog.mo_role_grant              ;
+Field    Type    Null    Key    Default    Extra    Comment
+granted_id    INT(32)    NO    PRI    null        
+grantee_id    INT(32)    NO    PRI    null        
+operation_role_id    INT(32)    YES        null        
+operation_user_id    INT(32)    YES        null        
+granted_time    TIMESTAMP(0)    YES        null        
+with_grant_option    BOOL(0)    YES        null        
+show columns from	mo_catalog.mo_role_privs              ;
+Field    Type    Null    Key    Default    Extra    Comment
+role_id    INT(32)    NO    PRI    null        
+role_name    VARCHAR(100)    YES        null        
+obj_type    VARCHAR(16)    NO    PRI    null        
+obj_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+privilege_id    INT(32)    NO    PRI    null        
+privilege_name    VARCHAR(100)    YES        null        
+privilege_level    VARCHAR(100)    NO    PRI    null        
+operation_user_id    INT UNSIGNED(32)    YES        null        
+granted_time    TIMESTAMP(0)    YES        null        
+with_grant_option    BOOL(0)    YES        null        
+show columns from	mo_catalog.mo_user_defined_function   ;
+Field    Type    Null    Key    Default    Extra    Comment
+function_id    INT(32)    NO    PRI    null    auto_increment    
+name    VARCHAR(100)    YES    UNI    null        
+owner    INT UNSIGNED(32)    YES        null        
+args    JSON(0)    YES        null        
+retType    VARCHAR(20)    YES        null        
+body    TEXT(0)    YES        null        
+language    VARCHAR(20)    YES        null        
+db    VARCHAR(100)    YES        null        
+definer    VARCHAR(50)    YES        null        
+modified_time    TIMESTAMP(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+type    VARCHAR(10)    YES        null        
+security_type    VARCHAR(10)    YES        null        
+comment    VARCHAR(5000)    YES        null        
+character_set_client    VARCHAR(64)    YES        null        
+collation_connection    VARCHAR(64)    YES        null        
+database_collation    VARCHAR(64)    YES        null        
+show columns from	mo_catalog.mo_stored_procedure        ;
+Field    Type    Null    Key    Default    Extra    Comment
+proc_id    INT(32)    NO    PRI    null    auto_increment    
+name    VARCHAR(100)    YES    UNI    null        
+creator    INT UNSIGNED(32)    YES        null        
+args    TEXT(0)    YES        null        
+body    TEXT(0)    YES        null        
+db    VARCHAR(100)    YES        null        
+definer    VARCHAR(50)    YES        null        
+modified_time    TIMESTAMP(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+type    VARCHAR(10)    YES        null        
+security_type    VARCHAR(10)    YES        null        
+comment    VARCHAR(5000)    YES        null        
+character_set_client    VARCHAR(64)    YES        null        
+collation_connection    VARCHAR(64)    YES        null        
+database_collation    VARCHAR(64)    YES        null        
+show columns from	mo_catalog.mo_mysql_compatibility_mode;
+Field    Type    Null    Key    Default    Extra    Comment
+configuration_id    INT(32)    NO    PRI    null    auto_increment    
+account_id    INT(32)    YES        null        
+account_name    VARCHAR(300)    YES        null        
+dat_name    VARCHAR(5000)    YES        null        
+variable_name    VARCHAR(300)    YES        null        
+variable_value    VARCHAR(5000)    YES        null        
+system_variables    BOOL(0)    YES        null        
+show columns from	mo_catalog.mo_increment_columns       ;
+Field    Type    Null    Key    Default    Extra    Comment
+table_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+col_name    VARCHAR(770)    NO    PRI    null        
+col_index    INT(32)    YES        null        
+offset    BIGINT UNSIGNED(64)    YES        null        
+step    BIGINT UNSIGNED(64)    YES        null        
+show columns from	mo_catalog.mo_indexes                 ;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT UNSIGNED(64)    NO    PRI    null        
+table_id    BIGINT UNSIGNED(64)    NO        null        
+database_id    BIGINT UNSIGNED(64)    NO        null        
+name    VARCHAR(64)    NO        null        
+type    VARCHAR(11)    NO        null        
+algo    VARCHAR(11)    YES        null        
+algo_table_type    VARCHAR(11)    YES        null        
+algo_params    VARCHAR(2048)    YES        null        
+is_visible    TINYINT(8)    NO        null        
+hidden    TINYINT(8)    NO        null        
+comment    VARCHAR(2048)    NO        null        
+column_name    VARCHAR(256)    NO    PRI    null        
+ordinal_position    INT UNSIGNED(32)    NO        null        
+options    TEXT(0)    YES        null        
+index_table_name    VARCHAR(5000)    YES        null        
+show columns from	mo_catalog.mo_table_partitions        ;
+Field    Type    Null    Key    Default    Extra    Comment
+table_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+database_id    BIGINT UNSIGNED(64)    NO        null        
+number    SMALLINT UNSIGNED(16)    NO        null        
+name    VARCHAR(64)    NO    PRI    null        
+partition_type    VARCHAR(50)    NO        null        
+partition_expression    VARCHAR(2048)    YES        null        
+description_utf8    TEXT(0)    YES        null        
+comment    VARCHAR(2048)    NO        null        
+options    TEXT(0)    YES        null        
+partition_table_name    VARCHAR(1024)    NO        null        
+show columns from	mo_catalog.mo_pubs                    ;
+Field    Type    Null    Key    Default    Extra    Comment
+pub_name    VARCHAR(64)    NO    PRI    null        
+database_name    VARCHAR(5000)    YES        null        
+database_id    BIGINT UNSIGNED(64)    YES        null        
+all_table    BOOL(0)    YES        null        
+table_list    TEXT(0)    YES        null        
+account_list    TEXT(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+update_time    TIMESTAMP(0)    YES        null        
+owner    INT UNSIGNED(32)    YES        null        
+creator    INT UNSIGNED(32)    YES        null        
+comment    TEXT(0)    YES        null        
+show columns from	mo_catalog.mo_stages                  ;
+Field    Type    Null    Key    Default    Extra    Comment
+stage_id    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
+stage_name    VARCHAR(64)    YES    UNI    null        
+url    TEXT(0)    YES        null        
+stage_credentials    TEXT(0)    YES        null        
+stage_status    VARCHAR(64)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+comment    TEXT(0)    YES        null        
+show columns from	mo_catalog.mo_sessions                ;
+Field    Type    Null    Key    Default    Extra    Comment
+node_id    VARCHAR(65535)    YES        null        
+conn_id    INT UNSIGNED(0)    YES        null        
+session_id    VARCHAR(65535)    YES        null        
+account    VARCHAR(65535)    YES        null        
+user    VARCHAR(65535)    YES        null        
+host    VARCHAR(65535)    YES        null        
+db    VARCHAR(65535)    YES        null        
+session_start    VARCHAR(65535)    YES        null        
+command    VARCHAR(65535)    YES        null        
+info    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+statement_id    VARCHAR(65535)    YES        null        
+statement_type    VARCHAR(65535)    YES        null        
+query_type    VARCHAR(65535)    YES        null        
+sql_source_type    VARCHAR(65535)    YES        null        
+query_start    VARCHAR(65535)    YES        null        
+client_host    VARCHAR(65535)    YES        null        
+role    VARCHAR(65535)    YES        null        
+proxy_host    VARCHAR(65535)    YES        null        
+show columns from	mo_catalog.mo_configurations          ;
+Field    Type    Null    Key    Default    Extra    Comment
+node_type    VARCHAR(65535)    YES        null        
+node_id    VARCHAR(65535)    YES        null        
+name    VARCHAR(65535)    YES        null        
+current_value    VARCHAR(65535)    YES        null        
+default_value    VARCHAR(65535)    YES        null        
+internal    VARCHAR(65535)    YES        null        
+show columns from	mo_catalog.mo_locks                   ;
+Field    Type    Null    Key    Default    Extra    Comment
+cn_id    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+table_id    VARCHAR(65535)    YES        null        
+lock_key    VARCHAR(65535)    YES        null        
+lock_content    VARCHAR(65535)    YES        null        
+lock_mode    VARCHAR(65535)    YES        null        
+lock_status    VARCHAR(65535)    YES        null        
+lock_wait    VARCHAR(65535)    YES        null        
+show columns from	mo_catalog.mo_variables               ;
+Field    Type    Null    Key    Default    Extra    Comment
+configuration_id    INT(32)    NO        null        
+account_id    INT(32)    YES        null        
+account_name    VARCHAR(300)    YES        null        
+dat_name    VARCHAR(5000)    YES        null        
+variable_name    VARCHAR(300)    YES        null        
+variable_value    VARCHAR(5000)    YES        null        
+system_variables    BOOL(0)    YES        null        
+show columns from	mo_catalog.mo_transactions            ;
+Field    Type    Null    Key    Default    Extra    Comment
+cn_id    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+create_ts    VARCHAR(65535)    YES        null        
+snapshot_ts    VARCHAR(65535)    YES        null        
+prepared_ts    VARCHAR(65535)    YES        null        
+commit_ts    VARCHAR(65535)    YES        null        
+txn_mode    VARCHAR(65535)    YES        null        
+isolation    VARCHAR(65535)    YES        null        
+user_txn    VARCHAR(65535)    YES        null        
+txn_status    VARCHAR(65535)    YES        null        
+table_id    VARCHAR(65535)    YES        null        
+lock_key    VARCHAR(65535)    YES        null        
+lock_content    VARCHAR(65535)    YES        null        
+lock_mode    VARCHAR(65535)    YES        null        
+show columns from	mo_catalog.mo_cache                   ;
+Field    Type    Null    Key    Default    Extra    Comment
+node_type    VARCHAR(65535)    YES        null        
+node_id    VARCHAR(65535)    YES        null        
+type    VARCHAR(65535)    YES        null        
+used    BIGINT UNSIGNED(0)    YES        null        
+free    BIGINT UNSIGNED(0)    YES        null        
+hit_ratio    FLOAT(0)    YES        null        
+show columns from	mo_catalog.mo_foreign_keys            ;
+Field    Type    Null    Key    Default    Extra    Comment
+constraint_name    VARCHAR(5000)    NO    PRI    null        
+constraint_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+db_name    VARCHAR(5000)    NO    PRI    null        
+db_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+table_name    VARCHAR(5000)    NO    PRI    null        
+table_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+column_name    VARCHAR(256)    NO    PRI    null        
+column_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+refer_db_name    VARCHAR(5000)    NO    PRI    null        
+refer_db_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+refer_table_name    VARCHAR(5000)    NO    PRI    null        
+refer_table_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+refer_column_name    VARCHAR(256)    NO    PRI    null        
+refer_column_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+on_delete    VARCHAR(128)    NO        null        
+on_update    VARCHAR(128)    NO        null        
+show columns from	mo_catalog.mo_snapshots           ;
+Field    Type    Null    Key    Default    Extra    Comment
+snapshot_id    UUID(0)    YES    UNI    null        
+sname    VARCHAR(64)    NO    PRI    null        
+ts    BIGINT(64)    YES        null        
+level    ENUM('cluster','account','database','table')    YES        null        
+account_name    VARCHAR(300)    YES        null        
+database_name    VARCHAR(5000)    YES        null        
+table_name    VARCHAR(5000)    YES        null        
+obj_id    BIGINT UNSIGNED(64)    YES        null        
+desc	mo_catalog.mo_database                ;
+Field    Type    Null    Key    Default    Extra    Comment
+dat_id    BIGINT UNSIGNED(0)    YES        null        
+datname    VARCHAR(5000)    YES    PRI    null        
+dat_catalog_name    VARCHAR(5000)    YES        null        
+dat_createsql    VARCHAR(5000)    YES        null        
+owner    INT UNSIGNED(0)    YES        null        
+creator    INT UNSIGNED(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
+dat_type    VARCHAR(32)    YES        null        
+desc	mo_catalog.mo_tables                  ;
+Field    Type    Null    Key    Default    Extra    Comment
+rel_id    BIGINT UNSIGNED(0)    YES        null        
+relname    VARCHAR(5000)    YES    PRI    null        
+reldatabase    VARCHAR(5000)    YES    PRI    null        
+reldatabase_id    BIGINT UNSIGNED(0)    YES        null        
+relpersistence    VARCHAR(5000)    YES        null        
+relkind    VARCHAR(5000)    YES        null        
+rel_comment    VARCHAR(5000)    YES        null        
+rel_createsql    TEXT(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+creator    INT UNSIGNED(0)    YES        null        
+owner    INT UNSIGNED(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
+partitioned    TINYINT(0)    YES        null        
+partition_info    BLOB(0)    YES        null        
+viewdef    VARCHAR(5000)    YES        null        
+constraint    VARCHAR(5000)    YES        null        
+rel_version    INT UNSIGNED(0)    YES        null        
+catalog_version    INT UNSIGNED(0)    YES        null        
+desc	mo_catalog.mo_columns                 ;
+Field    Type    Null    Key    Default    Extra    Comment
+att_uniq_name    VARCHAR(256)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
+att_database_id    BIGINT UNSIGNED(0)    YES        null        
+att_database    VARCHAR(256)    YES    PRI    null        
+att_relname_id    BIGINT UNSIGNED(0)    YES        null        
+att_relname    VARCHAR(256)    YES    PRI    null        
+attname    VARCHAR(256)    YES    PRI    null        
+atttyp    VARCHAR(256)    YES        null        
+attnum    INT(0)    YES        null        
+att_length    INT(0)    YES        null        
+attnotnull    TINYINT(0)    YES        null        
+atthasdef    TINYINT(0)    YES        null        
+att_default    VARCHAR(2048)    YES        null        
+attisdropped    TINYINT(0)    YES        null        
+att_constraint_type    CHAR(1)    YES        null        
+att_is_unsigned    TINYINT(0)    YES        null        
+att_is_auto_increment    TINYINT(0)    YES        null        
+att_comment    VARCHAR(2048)    YES        null        
+att_is_hidden    TINYINT(0)    YES        null        
+attr_has_update    TINYINT(0)    YES        null        
+attr_update    VARCHAR(2048)    YES        null        
+attr_is_clusterby    TINYINT(0)    YES        null        
+attr_seqnum    SMALLINT UNSIGNED(0)    YES        null        
+attr_enum    VARCHAR(65535)    YES        null        
+desc	mo_catalog.mo_account                 ;
+no such table mo_catalog.mo_account
+desc	mo_catalog.mo_user                    ;
+Field    Type    Null    Key    Default    Extra    Comment
+user_id    INT(32)    NO    PRI    null    auto_increment    
+user_host    VARCHAR(100)    YES        null        
+user_name    VARCHAR(300)    YES    UNI    null        
+authentication_string    VARCHAR(100)    YES        null        
+status    VARCHAR(8)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+expired_time    TIMESTAMP(0)    YES        null        
+login_type    VARCHAR(16)    YES        null        
+creator    INT(32)    YES        null        
+owner    INT(32)    YES        null        
+default_role    INT(32)    YES        null        
+desc	mo_catalog.mo_role                    ;
+Field    Type    Null    Key    Default    Extra    Comment
+role_id    INT(32)    NO    PRI    null    auto_increment    
+role_name    VARCHAR(300)    YES    UNI    null        
+creator    INT(32)    YES        null        
+owner    INT(32)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+comments    TEXT(0)    YES        null        
+desc	mo_catalog.mo_user_grant              ;
+Field    Type    Null    Key    Default    Extra    Comment
+role_id    INT(32)    NO    PRI    null        
+user_id    INT(32)    NO    PRI    null        
+granted_time    TIMESTAMP(0)    YES        null        
+with_grant_option    BOOL(0)    YES        null        
+desc	mo_catalog.mo_role_grant              ;
+Field    Type    Null    Key    Default    Extra    Comment
+granted_id    INT(32)    NO    PRI    null        
+grantee_id    INT(32)    NO    PRI    null        
+operation_role_id    INT(32)    YES        null        
+operation_user_id    INT(32)    YES        null        
+granted_time    TIMESTAMP(0)    YES        null        
+with_grant_option    BOOL(0)    YES        null        
+desc	mo_catalog.mo_role_privs              ;
+Field    Type    Null    Key    Default    Extra    Comment
+role_id    INT(32)    NO    PRI    null        
+role_name    VARCHAR(100)    YES        null        
+obj_type    VARCHAR(16)    NO    PRI    null        
+obj_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+privilege_id    INT(32)    NO    PRI    null        
+privilege_name    VARCHAR(100)    YES        null        
+privilege_level    VARCHAR(100)    NO    PRI    null        
+operation_user_id    INT UNSIGNED(32)    YES        null        
+granted_time    TIMESTAMP(0)    YES        null        
+with_grant_option    BOOL(0)    YES        null        
+desc	mo_catalog.mo_user_defined_function   ;
+Field    Type    Null    Key    Default    Extra    Comment
+function_id    INT(32)    NO    PRI    null    auto_increment    
+name    VARCHAR(100)    YES    UNI    null        
+owner    INT UNSIGNED(32)    YES        null        
+args    JSON(0)    YES        null        
+retType    VARCHAR(20)    YES        null        
+body    TEXT(0)    YES        null        
+language    VARCHAR(20)    YES        null        
+db    VARCHAR(100)    YES        null        
+definer    VARCHAR(50)    YES        null        
+modified_time    TIMESTAMP(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+type    VARCHAR(10)    YES        null        
+security_type    VARCHAR(10)    YES        null        
+comment    VARCHAR(5000)    YES        null        
+character_set_client    VARCHAR(64)    YES        null        
+collation_connection    VARCHAR(64)    YES        null        
+database_collation    VARCHAR(64)    YES        null        
+desc	mo_catalog.mo_stored_procedure        ;
+Field    Type    Null    Key    Default    Extra    Comment
+proc_id    INT(32)    NO    PRI    null    auto_increment    
+name    VARCHAR(100)    YES    UNI    null        
+creator    INT UNSIGNED(32)    YES        null        
+args    TEXT(0)    YES        null        
+body    TEXT(0)    YES        null        
+db    VARCHAR(100)    YES        null        
+definer    VARCHAR(50)    YES        null        
+modified_time    TIMESTAMP(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+type    VARCHAR(10)    YES        null        
+security_type    VARCHAR(10)    YES        null        
+comment    VARCHAR(5000)    YES        null        
+character_set_client    VARCHAR(64)    YES        null        
+collation_connection    VARCHAR(64)    YES        null        
+database_collation    VARCHAR(64)    YES        null        
+desc	mo_catalog.mo_mysql_compatibility_mode;
+Field    Type    Null    Key    Default    Extra    Comment
+configuration_id    INT(32)    NO    PRI    null    auto_increment    
+account_id    INT(32)    YES        null        
+account_name    VARCHAR(300)    YES        null        
+dat_name    VARCHAR(5000)    YES        null        
+variable_name    VARCHAR(300)    YES        null        
+variable_value    VARCHAR(5000)    YES        null        
+system_variables    BOOL(0)    YES        null        
+desc	mo_catalog.mo_increment_columns       ;
+Field    Type    Null    Key    Default    Extra    Comment
+table_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+col_name    VARCHAR(770)    NO    PRI    null        
+col_index    INT(32)    YES        null        
+offset    BIGINT UNSIGNED(64)    YES        null        
+step    BIGINT UNSIGNED(64)    YES        null        
+desc	mo_catalog.mo_indexes                 ;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT UNSIGNED(64)    NO    PRI    null        
+table_id    BIGINT UNSIGNED(64)    NO        null        
+database_id    BIGINT UNSIGNED(64)    NO        null        
+name    VARCHAR(64)    NO        null        
+type    VARCHAR(11)    NO        null        
+algo    VARCHAR(11)    YES        null        
+algo_table_type    VARCHAR(11)    YES        null        
+algo_params    VARCHAR(2048)    YES        null        
+is_visible    TINYINT(8)    NO        null        
+hidden    TINYINT(8)    NO        null        
+comment    VARCHAR(2048)    NO        null        
+column_name    VARCHAR(256)    NO    PRI    null        
+ordinal_position    INT UNSIGNED(32)    NO        null        
+options    TEXT(0)    YES        null        
+index_table_name    VARCHAR(5000)    YES        null        
+desc	mo_catalog.mo_table_partitions        ;
+Field    Type    Null    Key    Default    Extra    Comment
+table_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+database_id    BIGINT UNSIGNED(64)    NO        null        
+number    SMALLINT UNSIGNED(16)    NO        null        
+name    VARCHAR(64)    NO    PRI    null        
+partition_type    VARCHAR(50)    NO        null        
+partition_expression    VARCHAR(2048)    YES        null        
+description_utf8    TEXT(0)    YES        null        
+comment    VARCHAR(2048)    NO        null        
+options    TEXT(0)    YES        null        
+partition_table_name    VARCHAR(1024)    NO        null        
+desc	mo_catalog.mo_pubs                    ;
+Field    Type    Null    Key    Default    Extra    Comment
+pub_name    VARCHAR(64)    NO    PRI    null        
+database_name    VARCHAR(5000)    YES        null        
+database_id    BIGINT UNSIGNED(64)    YES        null        
+all_table    BOOL(0)    YES        null        
+table_list    TEXT(0)    YES        null        
+account_list    TEXT(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+update_time    TIMESTAMP(0)    YES        null        
+owner    INT UNSIGNED(32)    YES        null        
+creator    INT UNSIGNED(32)    YES        null        
+comment    TEXT(0)    YES        null        
+desc	mo_catalog.mo_stages                  ;
+Field    Type    Null    Key    Default    Extra    Comment
+stage_id    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
+stage_name    VARCHAR(64)    YES    UNI    null        
+url    TEXT(0)    YES        null        
+stage_credentials    TEXT(0)    YES        null        
+stage_status    VARCHAR(64)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+comment    TEXT(0)    YES        null        
+desc	mo_catalog.mo_sessions                ;
+Field    Type    Null    Key    Default    Extra    Comment
+node_id    VARCHAR(65535)    YES        null        
+conn_id    INT UNSIGNED(0)    YES        null        
+session_id    VARCHAR(65535)    YES        null        
+account    VARCHAR(65535)    YES        null        
+user    VARCHAR(65535)    YES        null        
+host    VARCHAR(65535)    YES        null        
+db    VARCHAR(65535)    YES        null        
+session_start    VARCHAR(65535)    YES        null        
+command    VARCHAR(65535)    YES        null        
+info    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+statement_id    VARCHAR(65535)    YES        null        
+statement_type    VARCHAR(65535)    YES        null        
+query_type    VARCHAR(65535)    YES        null        
+sql_source_type    VARCHAR(65535)    YES        null        
+query_start    VARCHAR(65535)    YES        null        
+client_host    VARCHAR(65535)    YES        null        
+role    VARCHAR(65535)    YES        null        
+proxy_host    VARCHAR(65535)    YES        null        
+desc	mo_catalog.mo_configurations          ;
+Field    Type    Null    Key    Default    Extra    Comment
+node_type    VARCHAR(65535)    YES        null        
+node_id    VARCHAR(65535)    YES        null        
+name    VARCHAR(65535)    YES        null        
+current_value    VARCHAR(65535)    YES        null        
+default_value    VARCHAR(65535)    YES        null        
+internal    VARCHAR(65535)    YES        null        
+desc	mo_catalog.mo_locks                   ;
+Field    Type    Null    Key    Default    Extra    Comment
+cn_id    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+table_id    VARCHAR(65535)    YES        null        
+lock_key    VARCHAR(65535)    YES        null        
+lock_content    VARCHAR(65535)    YES        null        
+lock_mode    VARCHAR(65535)    YES        null        
+lock_status    VARCHAR(65535)    YES        null        
+lock_wait    VARCHAR(65535)    YES        null        
+desc	mo_catalog.mo_variables               ;
+Field    Type    Null    Key    Default    Extra    Comment
+configuration_id    INT(32)    NO        null    auto_increment    
+account_id    INT(32)    YES        null        
+account_name    VARCHAR(300)    YES        null        
+dat_name    VARCHAR(5000)    YES        null        
+variable_name    VARCHAR(300)    YES        null        
+variable_value    VARCHAR(5000)    YES        null        
+system_variables    BOOL(0)    YES        null        
+desc	mo_catalog.mo_transactions            ;
+Field    Type    Null    Key    Default    Extra    Comment
+cn_id    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+create_ts    VARCHAR(65535)    YES        null        
+snapshot_ts    VARCHAR(65535)    YES        null        
+prepared_ts    VARCHAR(65535)    YES        null        
+commit_ts    VARCHAR(65535)    YES        null        
+txn_mode    VARCHAR(65535)    YES        null        
+isolation    VARCHAR(65535)    YES        null        
+user_txn    VARCHAR(65535)    YES        null        
+txn_status    VARCHAR(65535)    YES        null        
+table_id    VARCHAR(65535)    YES        null        
+lock_key    VARCHAR(65535)    YES        null        
+lock_content    VARCHAR(65535)    YES        null        
+lock_mode    VARCHAR(65535)    YES        null        
+desc	mo_catalog.mo_cache                   ;
+Field    Type    Null    Key    Default    Extra    Comment
+node_type    VARCHAR(65535)    YES        null        
+node_id    VARCHAR(65535)    YES        null        
+type    VARCHAR(65535)    YES        null        
+used    BIGINT UNSIGNED(0)    YES        null        
+free    BIGINT UNSIGNED(0)    YES        null        
+hit_ratio    FLOAT(0)    YES        null        
+desc	mo_catalog.mo_foreign_keys            ;
+Field    Type    Null    Key    Default    Extra    Comment
+constraint_name    VARCHAR(5000)    NO    PRI    null        
+constraint_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+db_name    VARCHAR(5000)    NO    PRI    null        
+db_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+table_name    VARCHAR(5000)    NO    PRI    null        
+table_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+column_name    VARCHAR(256)    NO    PRI    null        
+column_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+refer_db_name    VARCHAR(5000)    NO    PRI    null        
+refer_db_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+refer_table_name    VARCHAR(5000)    NO    PRI    null        
+refer_table_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+refer_column_name    VARCHAR(256)    NO    PRI    null        
+refer_column_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+on_delete    VARCHAR(128)    NO        null        
+on_update    VARCHAR(128)    NO        null        
+desc	mo_catalog.mo_snapshots               ;
+Field    Type    Null    Key    Default    Extra    Comment
+snapshot_id    UUID(0)    YES    UNI    null        
+sname    VARCHAR(64)    NO    PRI    null        
+ts    BIGINT(64)    YES        null        
+level    ENUM('cluster','account','database','table')    YES        null        
+account_name    VARCHAR(300)    YES        null        
+database_name    VARCHAR(5000)    YES        null        
+table_name    VARCHAR(5000)    YES        null        
+obj_id    BIGINT UNSIGNED(64)    YES        null        
+show columns from	mo_catalog.mo_database                ;
+Field    Type    Null    Key    Default    Extra    Comment
+dat_id    BIGINT UNSIGNED(0)    YES        null        
+datname    VARCHAR(5000)    YES    PRI    null        
+dat_catalog_name    VARCHAR(5000)    YES        null        
+dat_createsql    VARCHAR(5000)    YES        null        
+owner    INT UNSIGNED(0)    YES        null        
+creator    INT UNSIGNED(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
+dat_type    VARCHAR(32)    YES        null        
+show columns from	mo_catalog.mo_tables                  ;
+Field    Type    Null    Key    Default    Extra    Comment
+rel_id    BIGINT UNSIGNED(0)    YES        null        
+relname    VARCHAR(5000)    YES    PRI    null        
+reldatabase    VARCHAR(5000)    YES    PRI    null        
+reldatabase_id    BIGINT UNSIGNED(0)    YES        null        
+relpersistence    VARCHAR(5000)    YES        null        
+relkind    VARCHAR(5000)    YES        null        
+rel_comment    VARCHAR(5000)    YES        null        
+rel_createsql    TEXT(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+creator    INT UNSIGNED(0)    YES        null        
+owner    INT UNSIGNED(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
+partitioned    TINYINT(0)    YES        null        
+partition_info    BLOB(0)    YES        null        
+viewdef    VARCHAR(5000)    YES        null        
+constraint    VARCHAR(5000)    YES        null        
+rel_version    INT UNSIGNED(0)    YES        null        
+catalog_version    INT UNSIGNED(0)    YES        null        
+show columns from	mo_catalog.mo_columns                 ;
+Field    Type    Null    Key    Default    Extra    Comment
+att_uniq_name    VARCHAR(256)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
+att_database_id    BIGINT UNSIGNED(0)    YES        null        
+att_database    VARCHAR(256)    YES    PRI    null        
+att_relname_id    BIGINT UNSIGNED(0)    YES        null        
+att_relname    VARCHAR(256)    YES    PRI    null        
+attname    VARCHAR(256)    YES    PRI    null        
+atttyp    VARCHAR(256)    YES        null        
+attnum    INT(0)    YES        null        
+att_length    INT(0)    YES        null        
+attnotnull    TINYINT(0)    YES        null        
+atthasdef    TINYINT(0)    YES        null        
+att_default    VARCHAR(2048)    YES        null        
+attisdropped    TINYINT(0)    YES        null        
+att_constraint_type    CHAR(1)    YES        null        
+att_is_unsigned    TINYINT(0)    YES        null        
+att_is_auto_increment    TINYINT(0)    YES        null        
+att_comment    VARCHAR(2048)    YES        null        
+att_is_hidden    TINYINT(0)    YES        null        
+attr_has_update    TINYINT(0)    YES        null        
+attr_update    VARCHAR(2048)    YES        null        
+attr_is_clusterby    TINYINT(0)    YES        null        
+attr_seqnum    SMALLINT UNSIGNED(0)    YES        null        
+attr_enum    VARCHAR(65535)    YES        null        
+show columns from	mo_catalog.mo_account                 ;
+no such table mo_catalog.mo_account
+show columns from	mo_catalog.mo_user                    ;
+Field    Type    Null    Key    Default    Extra    Comment
+user_id    INT(32)    NO    PRI    null    auto_increment    
+user_host    VARCHAR(100)    YES        null        
+user_name    VARCHAR(300)    YES    UNI    null        
+authentication_string    VARCHAR(100)    YES        null        
+status    VARCHAR(8)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+expired_time    TIMESTAMP(0)    YES        null        
+login_type    VARCHAR(16)    YES        null        
+creator    INT(32)    YES        null        
+owner    INT(32)    YES        null        
+default_role    INT(32)    YES        null        
+show columns from	mo_catalog.mo_role                    ;
+Field    Type    Null    Key    Default    Extra    Comment
+role_id    INT(32)    NO    PRI    null    auto_increment    
+role_name    VARCHAR(300)    YES    UNI    null        
+creator    INT(32)    YES        null        
+owner    INT(32)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+comments    TEXT(0)    YES        null        
+show columns from	mo_catalog.mo_user_grant              ;
+Field    Type    Null    Key    Default    Extra    Comment
+role_id    INT(32)    NO    PRI    null        
+user_id    INT(32)    NO    PRI    null        
+granted_time    TIMESTAMP(0)    YES        null        
+with_grant_option    BOOL(0)    YES        null        
+show columns from	mo_catalog.mo_role_grant              ;
+Field    Type    Null    Key    Default    Extra    Comment
+granted_id    INT(32)    NO    PRI    null        
+grantee_id    INT(32)    NO    PRI    null        
+operation_role_id    INT(32)    YES        null        
+operation_user_id    INT(32)    YES        null        
+granted_time    TIMESTAMP(0)    YES        null        
+with_grant_option    BOOL(0)    YES        null        
+show columns from	mo_catalog.mo_role_privs              ;
+Field    Type    Null    Key    Default    Extra    Comment
+role_id    INT(32)    NO    PRI    null        
+role_name    VARCHAR(100)    YES        null        
+obj_type    VARCHAR(16)    NO    PRI    null        
+obj_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+privilege_id    INT(32)    NO    PRI    null        
+privilege_name    VARCHAR(100)    YES        null        
+privilege_level    VARCHAR(100)    NO    PRI    null        
+operation_user_id    INT UNSIGNED(32)    YES        null        
+granted_time    TIMESTAMP(0)    YES        null        
+with_grant_option    BOOL(0)    YES        null        
+show columns from	mo_catalog.mo_user_defined_function   ;
+Field    Type    Null    Key    Default    Extra    Comment
+function_id    INT(32)    NO    PRI    null    auto_increment    
+name    VARCHAR(100)    YES    UNI    null        
+owner    INT UNSIGNED(32)    YES        null        
+args    JSON(0)    YES        null        
+retType    VARCHAR(20)    YES        null        
+body    TEXT(0)    YES        null        
+language    VARCHAR(20)    YES        null        
+db    VARCHAR(100)    YES        null        
+definer    VARCHAR(50)    YES        null        
+modified_time    TIMESTAMP(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+type    VARCHAR(10)    YES        null        
+security_type    VARCHAR(10)    YES        null        
+comment    VARCHAR(5000)    YES        null        
+character_set_client    VARCHAR(64)    YES        null        
+collation_connection    VARCHAR(64)    YES        null        
+database_collation    VARCHAR(64)    YES        null        
+show columns from	mo_catalog.mo_stored_procedure        ;
+Field    Type    Null    Key    Default    Extra    Comment
+proc_id    INT(32)    NO    PRI    null    auto_increment    
+name    VARCHAR(100)    YES    UNI    null        
+creator    INT UNSIGNED(32)    YES        null        
+args    TEXT(0)    YES        null        
+body    TEXT(0)    YES        null        
+db    VARCHAR(100)    YES        null        
+definer    VARCHAR(50)    YES        null        
+modified_time    TIMESTAMP(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+type    VARCHAR(10)    YES        null        
+security_type    VARCHAR(10)    YES        null        
+comment    VARCHAR(5000)    YES        null        
+character_set_client    VARCHAR(64)    YES        null        
+collation_connection    VARCHAR(64)    YES        null        
+database_collation    VARCHAR(64)    YES        null        
+show columns from	mo_catalog.mo_mysql_compatibility_mode;
+Field    Type    Null    Key    Default    Extra    Comment
+configuration_id    INT(32)    NO    PRI    null    auto_increment    
+account_id    INT(32)    YES        null        
+account_name    VARCHAR(300)    YES        null        
+dat_name    VARCHAR(5000)    YES        null        
+variable_name    VARCHAR(300)    YES        null        
+variable_value    VARCHAR(5000)    YES        null        
+system_variables    BOOL(0)    YES        null        
+show columns from	mo_catalog.mo_increment_columns       ;
+Field    Type    Null    Key    Default    Extra    Comment
+table_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+col_name    VARCHAR(770)    NO    PRI    null        
+col_index    INT(32)    YES        null        
+offset    BIGINT UNSIGNED(64)    YES        null        
+step    BIGINT UNSIGNED(64)    YES        null        
+show columns from	mo_catalog.mo_indexes                 ;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT UNSIGNED(64)    NO    PRI    null        
+table_id    BIGINT UNSIGNED(64)    NO        null        
+database_id    BIGINT UNSIGNED(64)    NO        null        
+name    VARCHAR(64)    NO        null        
+type    VARCHAR(11)    NO        null        
+algo    VARCHAR(11)    YES        null        
+algo_table_type    VARCHAR(11)    YES        null        
+algo_params    VARCHAR(2048)    YES        null        
+is_visible    TINYINT(8)    NO        null        
+hidden    TINYINT(8)    NO        null        
+comment    VARCHAR(2048)    NO        null        
+column_name    VARCHAR(256)    NO    PRI    null        
+ordinal_position    INT UNSIGNED(32)    NO        null        
+options    TEXT(0)    YES        null        
+index_table_name    VARCHAR(5000)    YES        null        
+show columns from	mo_catalog.mo_table_partitions        ;
+Field    Type    Null    Key    Default    Extra    Comment
+table_id    BIGINT UNSIGNED(64)    NO    PRI    null        
+database_id    BIGINT UNSIGNED(64)    NO        null        
+number    SMALLINT UNSIGNED(16)    NO        null        
+name    VARCHAR(64)    NO    PRI    null        
+partition_type    VARCHAR(50)    NO        null        
+partition_expression    VARCHAR(2048)    YES        null        
+description_utf8    TEXT(0)    YES        null        
+comment    VARCHAR(2048)    NO        null        
+options    TEXT(0)    YES        null        
+partition_table_name    VARCHAR(1024)    NO        null        
+show columns from	mo_catalog.mo_pubs                    ;
+Field    Type    Null    Key    Default    Extra    Comment
+pub_name    VARCHAR(64)    NO    PRI    null        
+database_name    VARCHAR(5000)    YES        null        
+database_id    BIGINT UNSIGNED(64)    YES        null        
+all_table    BOOL(0)    YES        null        
+table_list    TEXT(0)    YES        null        
+account_list    TEXT(0)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+update_time    TIMESTAMP(0)    YES        null        
+owner    INT UNSIGNED(32)    YES        null        
+creator    INT UNSIGNED(32)    YES        null        
+comment    TEXT(0)    YES        null        
+show columns from	mo_catalog.mo_stages                  ;
+Field    Type    Null    Key    Default    Extra    Comment
+stage_id    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
+stage_name    VARCHAR(64)    YES    UNI    null        
+url    TEXT(0)    YES        null        
+stage_credentials    TEXT(0)    YES        null        
+stage_status    VARCHAR(64)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+comment    TEXT(0)    YES        null        
+show columns from	mo_catalog.mo_sessions                ;
+Field    Type    Null    Key    Default    Extra    Comment
+node_id    VARCHAR(65535)    YES        null        
+conn_id    INT UNSIGNED(0)    YES        null        
+session_id    VARCHAR(65535)    YES        null        
+account    VARCHAR(65535)    YES        null        
+user    VARCHAR(65535)    YES        null        
+host    VARCHAR(65535)    YES        null        
+db    VARCHAR(65535)    YES        null        
+session_start    VARCHAR(65535)    YES        null        
+command    VARCHAR(65535)    YES        null        
+info    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+statement_id    VARCHAR(65535)    YES        null        
+statement_type    VARCHAR(65535)    YES        null        
+query_type    VARCHAR(65535)    YES        null        
+sql_source_type    VARCHAR(65535)    YES        null        
+query_start    VARCHAR(65535)    YES        null        
+client_host    VARCHAR(65535)    YES        null        
+role    VARCHAR(65535)    YES        null        
+proxy_host    VARCHAR(65535)    YES        null        
+show columns from	mo_catalog.mo_configurations          ;
+Field    Type    Null    Key    Default    Extra    Comment
+node_type    VARCHAR(65535)    YES        null        
+node_id    VARCHAR(65535)    YES        null        
+name    VARCHAR(65535)    YES        null        
+current_value    VARCHAR(65535)    YES        null        
+default_value    VARCHAR(65535)    YES        null        
+internal    VARCHAR(65535)    YES        null        
+show columns from	mo_catalog.mo_locks                   ;
+Field    Type    Null    Key    Default    Extra    Comment
+cn_id    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+table_id    VARCHAR(65535)    YES        null        
+lock_key    VARCHAR(65535)    YES        null        
+lock_content    VARCHAR(65535)    YES        null        
+lock_mode    VARCHAR(65535)    YES        null        
+lock_status    VARCHAR(65535)    YES        null        
+lock_wait    VARCHAR(65535)    YES        null        
+show columns from	mo_catalog.mo_variables               ;
+Field    Type    Null    Key    Default    Extra    Comment
+configuration_id    INT(32)    NO        null    auto_increment    
+account_id    INT(32)    YES        null        
+account_name    VARCHAR(300)    YES        null        
+dat_name    VARCHAR(5000)    YES        null        
+variable_name    VARCHAR(300)    YES        null        
+variable_value    VARCHAR(5000)    YES        null        
+system_variables    BOOL(0)    YES        null        
+show columns from	mo_catalog.mo_transactions            ;
+Field    Type    Null    Key    Default    Extra    Comment
+cn_id    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+create_ts    VARCHAR(65535)    YES        null        
+snapshot_ts    VARCHAR(65535)    YES        null        
+prepared_ts    VARCHAR(65535)    YES        null        
+commit_ts    VARCHAR(65535)    YES        null        
+txn_mode    VARCHAR(65535)    YES        null        
+isolation    VARCHAR(65535)    YES        null        
+user_txn    VARCHAR(65535)    YES        null        
+txn_status    VARCHAR(65535)    YES        null        
+table_id    VARCHAR(65535)    YES        null        
+lock_key    VARCHAR(65535)    YES        null        
+lock_content    VARCHAR(65535)    YES        null        
+lock_mode    VARCHAR(65535)    YES        null        
+show columns from	mo_catalog.mo_cache                   ;
+Field    Type    Null    Key    Default    Extra    Comment
+node_type    VARCHAR(65535)    YES        null        
+node_id    VARCHAR(65535)    YES        null        
+type    VARCHAR(65535)    YES        null        
+used    BIGINT UNSIGNED(0)    YES        null        
+free    BIGINT UNSIGNED(0)    YES        null        
+hit_ratio    FLOAT(0)    YES        null        
+show columns from	mo_catalog.mo_foreign_keys            ;
+Field    Type    Null    Key    Default    Extra    Comment
+constraint_name    VARCHAR(5000)    NO    PRI    null        
+constraint_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+db_name    VARCHAR(5000)    NO    PRI    null        
+db_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+table_name    VARCHAR(5000)    NO    PRI    null        
+table_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+column_name    VARCHAR(256)    NO    PRI    null        
+column_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+refer_db_name    VARCHAR(5000)    NO    PRI    null        
+refer_db_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+refer_table_name    VARCHAR(5000)    NO    PRI    null        
+refer_table_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+refer_column_name    VARCHAR(256)    NO    PRI    null        
+refer_column_id    BIGINT UNSIGNED(64)    NO    PRI    0        
+on_delete    VARCHAR(128)    NO        null        
+on_update    VARCHAR(128)    NO        null        
+show columns from	mo_catalog.mo_snapshots           ;
+Field    Type    Null    Key    Default    Extra    Comment
+snapshot_id    UUID(0)    YES    UNI    null        
+sname    VARCHAR(64)    NO    PRI    null        
+ts    BIGINT(64)    YES        null        
+level    ENUM('cluster','account','database','table')    YES        null        
+account_name    VARCHAR(300)    YES        null        
+database_name    VARCHAR(5000)    YES        null        
+table_name    VARCHAR(5000)    YES        null        
+obj_id    BIGINT UNSIGNED(64)    YES        null        
+drop account if exists fk_show_column;

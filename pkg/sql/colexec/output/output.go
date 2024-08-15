@@ -21,31 +21,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "output"
+const opName = "output"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (output *Output) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": sql output")
 }
 
-func (arg *Argument) Prepare(_ *process.Process) error {
+func (output *Output) OpType() vm.OpType {
+	return vm.Output
+}
+
+func (output *Output) Prepare(_ *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	ap := arg
-	result, err := arg.GetChildren(0).Call(proc)
+	anal := proc.GetAnalyze(output.GetIdx(), output.GetParallelIdx(), output.GetParallelMajor())
+	anal.Start()
+	defer anal.Stop()
+
+	result, err := vm.ChildrenCall(output.GetChildren(0), proc, anal)
 	if err != nil {
 		return result, err
 	}
-
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
 
 	if result.Batch == nil {
 		result.Status = vm.ExecStop
@@ -57,7 +60,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	bat := result.Batch
 
-	if err := ap.Func(bat); err != nil {
+	if err = output.Func(bat); err != nil {
 		result.Status = vm.ExecStop
 		return result, err
 	}

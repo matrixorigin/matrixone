@@ -18,13 +18,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -36,12 +42,10 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu   int
-	Id     string `json:"id"`
-	Addr   string `json:"address"`
-	Header objectio.InfoHeader
-	Data   []byte `json:"payload"`
-	// Rel              Relation // local relation
+	Mcpu             int
+	Id               string `json:"id"`
+	Addr             string `json:"address"`
+	Data             RelData
 	NeedExpandRanges bool
 }
 
@@ -53,7 +57,7 @@ type Attribute struct {
 	IsRowId bool
 	// Column ID
 	ID uint64
-	// Name name of attribute
+	// Name name of attribute, letter case: origin
 	Name string
 	// Alg compression algorithm
 	Alg compress.T
@@ -118,7 +122,7 @@ func (node IndexT) ToString() string {
 }
 
 const (
-	Invalid IndexT = iota
+	Empty IndexT = iota
 	ZoneMap
 	BsiIndex
 )
@@ -572,6 +576,176 @@ func (def *StreamConfigsDef) ToPBVersion() ConstraintPB {
 	}
 }
 
+type TombstoneType uint8
+
+const (
+	InvalidTombstoneData TombstoneType = iota
+	TombstoneWithDeltaLoc
+	TombstoneData
+)
+
+type Tombstoner interface {
+	Type() TombstoneType
+	HasAnyInMemoryTombstone() bool
+	HasAnyTombstoneFile() bool
+
+	String() string
+	StringWithPrefix(string) string
+
+	HasTombstones() bool
+
+	MarshalBinaryWithBuffer(w *bytes.Buffer) error
+	UnmarshalBinary(buf []byte) error
+
+	PrefetchTombstones(srvId string, fs fileservice.FileService, bid []objectio.Blockid)
+
+	// it applies the block related in-memory tombstones to the rowsOffset
+	// `bid` is the block id
+	// `rowsOffset` is the input rows offset to apply
+	// `deleted` is the rows that are deleted from this apply
+	// `left` is the rows that are left after this apply
+	ApplyInMemTombstones(
+		bid types.Blockid,
+		rowsOffset []int64,
+		deleted *nulls.Nulls,
+	) (left []int64)
+
+	// it applies the block related tombstones from the persisted tombstone file
+	// to the rowsOffset
+	ApplyPersistedTombstones(
+		ctx context.Context,
+		bid types.Blockid,
+		rowsOffset []int64,
+		mask *nulls.Nulls,
+		apply func(
+			ctx2 context.Context,
+			loc objectio.Location,
+			cts types.TS,
+			rowsOffset []int64,
+			deleted *nulls.Nulls) (left []int64, err error),
+	) (left []int64, err error)
+
+	// a.merge(b) => a = a U b
+	// a and b must be sorted ascendingly
+	// a.Type() must be equal to b.Type()
+	Merge(other Tombstoner) error
+
+	// in-memory tombstones must be sorted ascendingly
+	// it should be called after all in-memory tombstones are added
+	SortInMemory()
+}
+
+type RelDataType uint8
+
+const (
+	RelDataEmpty RelDataType = iota
+	RelDataShardIDList
+	RelDataBlockList
+)
+
+type RelData interface {
+	// general interface
+
+	GetType() RelDataType
+	String() string
+	MarshalBinary() ([]byte, error)
+	UnmarshalBinary(buf []byte) error
+	AttachTombstones(tombstones Tombstoner) error
+	GetTombstones() Tombstoner
+	DataSlice(begin, end int) RelData
+
+	// GroupByPartitionNum TODO::remove it after refactor of partition table.
+	GroupByPartitionNum() map[int16]RelData
+	BuildEmptyRelData() RelData
+	DataCnt() int
+
+	// specified interface
+
+	// for memory engine shard id list
+	GetShardIDList() []uint64
+	GetShardID(i int) uint64
+	SetShardID(i int, id uint64)
+	AppendShardID(id uint64)
+
+	// for block info list
+	GetBlockInfoSlice() objectio.BlockInfoSlice
+	GetBlockInfo(i int) objectio.BlockInfo
+	SetBlockInfo(i int, blk objectio.BlockInfo)
+	AppendBlockInfo(blk objectio.BlockInfo)
+}
+
+// ForRangeShardID [begin, end)
+func ForRangeShardID(
+	begin, end int,
+	relData RelData,
+	onShardID func(shardID uint64) (bool, error)) error {
+	slice := relData.GetShardIDList()
+
+	for idx := begin; idx < end; idx++ {
+		if ok, err := onShardID(slice[idx]); !ok || err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ForRangeBlockInfo [begin, end)
+func ForRangeBlockInfo(
+	begin, end int,
+	relData RelData,
+	onBlock func(blk objectio.BlockInfo) (bool, error)) error {
+	slice := relData.GetBlockInfoSlice()
+	slice = slice.Slice(begin, end)
+	sliceLen := slice.Len()
+
+	for i := 0; i < sliceLen; i++ {
+		if ok, err := onBlock(*slice.Get(i)); !ok || err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+type DataState uint8
+
+const (
+	InMem DataState = iota
+	Persisted
+	End
+)
+
+type DataSource interface {
+	Next(
+		ctx context.Context,
+		cols []string,
+		types []types.Type,
+		seqNums []uint16,
+		memFilter any,
+		mp *mpool.MPool,
+		vp VectorPool,
+	) (*batch.Batch, *objectio.BlockInfo, DataState, error)
+
+	ApplyTombstones(
+		ctx context.Context,
+		bid objectio.Blockid,
+		rowsOffset []int64,
+	) ([]int64, error)
+
+	GetTombstones(
+		ctx context.Context, bid objectio.Blockid,
+	) (deletedRows *nulls.Nulls, err error)
+
+	SetOrderBy(orderby []*plan.OrderBySpec)
+
+	GetOrderBy() []*plan.OrderBySpec
+
+	SetFilterZM(zm objectio.ZoneMap)
+
+	Close()
+}
+
 type Ranges interface {
 	GetBytes(i int) []byte
 
@@ -593,7 +767,13 @@ var _ Ranges = (*objectio.BlockInfoSlice)(nil)
 type Relation interface {
 	Statistics
 
-	Ranges(context.Context, []*plan.Expr) (Ranges, error)
+	// Ranges Parameters:
+	// first parameter: Context
+	// second parameter: Slice of expressions used to filter the data.
+	// third parameter: Transaction offset used to specify the starting position for reading data.
+	Ranges(context.Context, []*plan.Expr, int) (RelData, error)
+
+	CollectTombstones(ctx context.Context, txnOffset int) (Tombstoner, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 
@@ -618,7 +798,7 @@ type Relation interface {
 	// only ConstraintDef can be modified
 	UpdateConstraint(context.Context, *ConstraintDef) error
 
-	AlterTable(ctx context.Context, c *ConstraintDef, constraint [][]byte) error
+	AlterTable(context.Context, *ConstraintDef, []*api.AlterTableReq) error
 
 	// Support renaming tables within explicit transactions (CN worspace)
 	TableRenameInTxn(ctx context.Context, constraint [][]byte) error
@@ -630,8 +810,14 @@ type Relation interface {
 
 	GetDBID(context.Context) uint64
 
-	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
-	NewReader(context.Context, int, *plan.Expr, []byte, bool) ([]Reader, error)
+	BuildReaders(
+		ctx context.Context,
+		proc any,
+		expr *plan.Expr,
+		relData RelData,
+		num int,
+		txnOffset int,
+		orderBy bool) ([]Reader, error)
 
 	TableColumns(ctx context.Context) ([]*Attribute, error)
 
@@ -648,7 +834,8 @@ type Relation interface {
 	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 
 	ApproxObjectsNum(ctx context.Context) int
-	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error)
+	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)
+	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
 }
 
 type Reader interface {
@@ -706,7 +893,14 @@ type Engine interface {
 	// since implementations may update hints after engine had initialized
 	Hints() Hints
 
-	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]Reader, error)
+	BuildBlockReaders(
+		ctx context.Context,
+		proc any,
+		ts timestamp.Timestamp,
+		expr *plan.Expr,
+		def *plan.TableDef,
+		relData RelData,
+		num int) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)
@@ -723,6 +917,8 @@ type Engine interface {
 	Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo
 
 	GetMessageCenter() any
+
+	GetService() string
 }
 
 type VectorPool interface {
@@ -742,4 +938,166 @@ type EntireEngine struct {
 
 func IsMemtable(tblRange []byte) bool {
 	return bytes.Equal(tblRange, objectio.EmptyBlockInfoBytes)
+}
+
+type EmptyRelationData struct{}
+
+func BuildEmptyRelData() RelData {
+	return &EmptyRelationData{}
+}
+
+func (rd *EmptyRelationData) String() string {
+	return fmt.Sprintf("RelData[%d]", RelDataEmpty)
+}
+
+func (rd *EmptyRelationData) GetShardIDList() []uint64 {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetShardID(i int) uint64 {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) SetShardID(i int, id uint64) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) AppendShardID(id uint64) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetBlockInfoSlice() objectio.BlockInfoSlice {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetBlockInfo(i int) objectio.BlockInfo {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) SetBlockInfo(i int, blk objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) AppendBlockInfo(blk objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetType() RelDataType {
+	return RelDataEmpty
+}
+
+func (rd *EmptyRelationData) MarshalBinary() ([]byte, error) {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) UnmarshalBinary(buf []byte) error {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) AttachTombstones(tombstones Tombstoner) error {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) GetTombstones() Tombstoner {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) ForeachDataBlk(begin, end int, f func(blk any) error) error {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) GetDataBlk(i int) any {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) SetDataBlk(i int, blk any) {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) DataSlice(begin, end int) RelData {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) GroupByPartitionNum() map[int16]RelData {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) AppendDataBlk(blk any) {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) BuildEmptyRelData() RelData {
+	return &EmptyRelationData{}
+}
+
+func (rd *EmptyRelationData) DataCnt() int {
+	return 0
+}
+
+type forceBuildRemoteDSConfig struct {
+	sync.Mutex
+	force  bool
+	tblIds []uint64
+}
+
+var forceBuildRemoteDS forceBuildRemoteDSConfig
+
+type forceShuffleReaderConfig struct {
+	sync.Mutex
+	force  bool
+	tblIds []uint64
+	blkCnt int
+}
+
+var forceShuffleReader forceShuffleReaderConfig
+
+func SetForceBuildRemoteDS(force bool, tbls []string) {
+	forceBuildRemoteDS.Lock()
+	defer forceBuildRemoteDS.Unlock()
+
+	forceBuildRemoteDS.tblIds = make([]uint64, len(tbls))
+	for i, tbl := range tbls {
+		id, err := strconv.Atoi(tbl)
+		if err != nil {
+			logutil.Errorf("SetForceBuildRemoteDS: invalid table id %s", tbl)
+			return
+		}
+
+		forceBuildRemoteDS.tblIds[i] = uint64(id)
+	}
+
+	forceBuildRemoteDS.force = force
+}
+
+func GetForceBuildRemoteDS() (bool, []uint64) {
+	forceBuildRemoteDS.Lock()
+	defer forceBuildRemoteDS.Unlock()
+
+	return forceBuildRemoteDS.force, forceBuildRemoteDS.tblIds
+}
+
+func SetForceShuffleReader(force bool, tbls []string, blkCnt int) {
+	forceShuffleReader.Lock()
+	defer forceShuffleReader.Unlock()
+
+	forceShuffleReader.tblIds = make([]uint64, len(tbls))
+	for i, tbl := range tbls {
+		id, err := strconv.Atoi(tbl)
+		if err != nil {
+			logutil.Errorf("SetForceBuildRemoteDS: invalid table id %s", tbl)
+			return
+		}
+
+		forceShuffleReader.tblIds[i] = uint64(id)
+	}
+
+	forceShuffleReader.force = force
+	forceShuffleReader.blkCnt = blkCnt
+}
+
+func GetForceShuffleReader() (bool, []uint64, int) {
+	forceShuffleReader.Lock()
+	defer forceShuffleReader.Unlock()
+
+	return forceShuffleReader.force, forceShuffleReader.tblIds, forceShuffleReader.blkCnt
 }

@@ -20,7 +20,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -50,6 +53,7 @@ const (
 	Parallel
 	CreateDatabase
 	CreateTable
+	CreateView
 	CreateIndex
 	DropDatabase
 	DropTable
@@ -122,20 +126,38 @@ type Scope struct {
 	PreScopes []*Scope
 	// NodeInfo contains the information about the remote node.
 	NodeInfo engine.Node
+	// TxnOffset represents the transaction's write offset, specifying the starting position for reading data.
+	TxnOffset int
 	// Instructions contains command list of this scope.
-	Instructions vm.Instructions
+	// Instructions vm.Instructions
+	RootOp vm.Operator
 	// Proc contains the execution context.
 	Proc *process.Process
-
-	Reg *process.WaitRegister
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
 	BuildIdx   int
-	ShuffleCnt int
+	ShuffleIdx int
 
 	PartialResults     []any
 	PartialResultTypes []types.T
+}
+
+func canScopeOpRemote(rootOp vm.Operator) bool {
+	if rootOp == nil {
+		return true
+	}
+	if vm.CannotRemote(rootOp) {
+		return false
+	}
+	numChildren := rootOp.GetOperatorBase().NumChildren()
+	for idx := 0; idx < numChildren; idx++ {
+		res := canScopeOpRemote(rootOp.GetOperatorBase().GetChildren(idx))
+		if !res {
+			return false
+		}
+	}
+	return true
 }
 
 // canRemote checks whether the current scope can be executed remotely.
@@ -154,11 +176,11 @@ func (s *Scope) canRemote(c *Compile, checkAddr bool) bool {
 	// some operators cannot be remote.
 	// todo: it is not a good way to check the operator type here.
 	//  cannot generate this remote pipeline if the operator type is not supported.
-	for _, op := range s.Instructions {
-		if op.CannotRemote() {
-			return false
-		}
+
+	if !canScopeOpRemote(s.RootOp) {
+		return false
 	}
+
 	for _, pre := range s.PreScopes {
 		if !pre.canRemote(c, false) {
 			return false
@@ -179,36 +201,37 @@ type scopeContext struct {
 	regs     map[*process.WaitRegister]int32
 }
 
-// anaylze information
-type anaylze struct {
-	// curr is the current index of plan
-	curr      int
+// analyzeModule information
+type analyzeModule struct {
+	// curNodeIdx is the current Node index when compilePlanScope
+	curNodeIdx int
+	// isFirst is the first opeator in pipeline for plan Node
 	isFirst   bool
 	qry       *plan.Query
 	analInfos []*process.AnalyzeInfo
 }
 
-func (a *anaylze) S3IOInputCount(idx int, count int64) {
+func (a *analyzeModule) S3IOInputCount(idx int, count int64) {
 	atomic.AddInt64(&a.analInfos[idx].S3IOInputCount, count)
 }
 
-func (a *anaylze) S3IOOutputCount(idx int, count int64) {
+func (a *analyzeModule) S3IOOutputCount(idx int, count int64) {
 	atomic.AddInt64(&a.analInfos[idx].S3IOOutputCount, count)
 }
 
-func (a *anaylze) Nodes() []*process.AnalyzeInfo {
+func (a *analyzeModule) Nodes() []*process.AnalyzeInfo {
 	return a.analInfos
 }
 
-func (a anaylze) TypeName() string {
-	return "compile.anaylze"
+func (a analyzeModule) TypeName() string {
+	return "compile.analyzeModule"
 }
 
-func newAnaylze() *anaylze {
-	return reuse.Alloc[anaylze](nil)
+func newAnalyzeModule() *analyzeModule {
+	return reuse.Alloc[analyzeModule](nil)
 }
 
-func (a *anaylze) release() {
+func (a *analyzeModule) release() {
 	// there are 3 situations to release analyzeInfo
 	// 1 is free analyzeInfo of Local CN when release analyze
 	// 2 is free analyzeInfo of remote CN before transfer back
@@ -217,7 +240,7 @@ func (a *anaylze) release() {
 	for i := range a.analInfos {
 		reuse.Free[process.AnalyzeInfo](a.analInfos[i], nil)
 	}
-	reuse.Free[anaylze](a, nil)
+	reuse.Free[analyzeModule](a, nil)
 }
 
 // Compile contains all the information needed for compilation.
@@ -245,14 +268,19 @@ type Compile struct {
 	sql       string
 	originSQL string
 
-	anal *anaylze
+	// queryStatus is a structure to record query has done.
+	queryStatus queryDoneWaiter
+
+	anal *analyzeModule
 	// e db engine instance.
-	e   engine.Engine
-	ctx context.Context
+	e engine.Engine
+
 	// proc stores the execution context.
 	proc *process.Process
+	// TxnOffset read starting offset position within the transaction during the execute current statement
+	TxnOffset int
 
-	MessageBoard *process.MessageBoard
+	MessageBoard *message.MessageBoard
 
 	cnList engine.Nodes
 	// ast
@@ -270,7 +298,7 @@ type Compile struct {
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
 
-	buildPlanFunc func() (*plan2.Plan, error)
+	buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)
 	startAt       time.Time
 	// use for duplicate check
 	fuzzys []*fuzzyCheck
@@ -281,6 +309,8 @@ type Compile struct {
 	disableRetry bool
 
 	lastAllocID int32
+
+	isPrepare bool
 }
 
 type RemoteReceivRegInfo struct {

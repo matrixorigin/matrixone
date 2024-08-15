@@ -25,41 +25,51 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "source"
+const opName = "source"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (source *Source) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": source scan")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (source *Source) OpType() vm.OpType {
+	return vm.Source
+}
+
+func (source *Source) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "SourcePrepare")
 	defer span.End()
 
-	arg.attrs = make([]string, len(arg.TblDef.Cols))
-	arg.types = make([]types.Type, len(arg.TblDef.Cols))
-	arg.Configs = make(map[string]interface{})
-	for i, col := range arg.TblDef.Cols {
-		arg.attrs[i] = col.Name
-		arg.types[i] = types.Type{
+	source.attrs = make([]string, len(source.TblDef.Cols))
+	source.types = make([]types.Type, len(source.TblDef.Cols))
+	source.Configs = make(map[string]interface{})
+	for i, col := range source.TblDef.Cols {
+		source.attrs[i] = col.GetOriginCaseName()
+		source.types[i] = types.Type{
 			Oid:   types.T(col.Typ.Id),
 			Scale: col.Typ.Scale,
 			Width: col.Typ.Width,
 		}
 	}
-	for _, def := range arg.TblDef.Defs {
+	for _, def := range source.TblDef.Defs {
 		switch v := def.Def.(type) {
 		case *plan.TableDef_DefType_Properties:
 			for _, x := range v.Properties.Properties {
-				arg.Configs[x.Key] = x.Value
+				source.Configs[x.Key] = x.Value
 			}
 		}
 	}
 
+	if source.ProjectList != nil {
+		err := source.PrepareProjection(proc)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (source *Source) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
@@ -67,26 +77,30 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	_, span := trace.Start(proc.Ctx, "SourceCall")
 	defer span.End()
 
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if source.ctr.buf != nil {
+		proc.PutBatch(source.ctr.buf)
+		source.ctr.buf = nil
 	}
 	result := vm.NewCallResult()
 	var err error
 
-	switch arg.status {
+	switch source.ctr.status {
 	case retrieve:
-		arg.buf, err = mokafka.RetrieveData(proc.Ctx, proc.SessionInfo.SourceInMemScanBatch, arg.Configs, arg.attrs, arg.types, arg.Offset, arg.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
+		source.ctr.buf, err = mokafka.RetrieveData(proc.Ctx, proc.GetSessionInfo().SourceInMemScanBatch, source.Configs, source.attrs, source.types, source.Offset, source.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
 		if err != nil {
 			result.Status = vm.ExecStop
 			return result, err
 		}
-		arg.status = end
-		result.Batch = arg.buf
+		source.ctr.status = end
+		result.Batch = source.ctr.buf
 		result.Status = vm.ExecNext
 	case end:
 		result.Status = vm.ExecStop
 	}
 
-	return result, nil
+	if source.ProjectList != nil {
+		result.Batch, err = source.EvalProjection(result.Batch, proc)
+	}
+
+	return result, err
 }

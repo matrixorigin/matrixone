@@ -30,8 +30,8 @@ import (
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
 	var colDefs []*plan2.ColDef
-	ses.EnterFPrint(63)
-	defer ses.ExitFPrint(63)
+	ses.EnterFPrint(FPResultRowStmt)
+	defer ses.ExitFPrint(FPResultRowStmt)
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 
@@ -45,15 +45,15 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan())}
 
-		ses.EnterFPrint(64)
-		defer ses.ExitFPrint(64)
+		ses.EnterFPrint(FPResultRowStmtSelect1)
+		defer ses.ExitFPrint(FPResultRowStmtSelect1)
 		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
 		}
 
-		ses.EnterFPrint(65)
-		defer ses.ExitFPrint(65)
+		ses.EnterFPrint(FPResultRowStmtSelect2)
+		defer ses.ExitFPrint(FPResultRowStmtSelect2)
 		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
 		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		runBegin := time.Now()
@@ -73,7 +73,12 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 	case *tree.ExplainAnalyze:
 		queryPlan := execCtx.cw.Plan()
-		explainColName := plan2.GetPlanTitle(queryPlan.GetQuery())
+		txnHaveDDL := false
+		ws := ses.proc.GetTxnOperator().GetWorkspace()
+		if ws != nil {
+			txnHaveDDL = ws.GetHaveDDL()
+		}
+		explainColName := plan2.GetPlanTitle(queryPlan.GetQuery(), txnHaveDDL)
 		colDefs, columns, err = GetExplainColumns(execCtx.reqCtx, explainColName)
 		if err != nil {
 			ses.Error(execCtx.reqCtx,
@@ -84,15 +89,15 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 
-		ses.EnterFPrint(66)
-		defer ses.ExitFPrint(66)
+		ses.EnterFPrint(FPResultRowStmtExplainAnalyze1)
+		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze1)
 		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
 		}
 
-		ses.EnterFPrint(67)
-		defer ses.ExitFPrint(67)
+		ses.EnterFPrint(FPResultRowStmtExplainAnalyze2)
+		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze2)
 		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
 		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		runBegin := time.Now()
@@ -119,15 +124,15 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan())}
 
-		ses.EnterFPrint(68)
-		defer ses.ExitFPrint(68)
+		ses.EnterFPrint(FPResultRowStmtDefault1)
+		defer ses.ExitFPrint(FPResultRowStmtDefault1)
 		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
 		}
 
-		ses.EnterFPrint(69)
-		defer ses.ExitFPrint(69)
+		ses.EnterFPrint(FPResultRowStmtDefault2)
+		defer ses.ExitFPrint(FPResultRowStmtDefault2)
 		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
 		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		runBegin := time.Now()
@@ -156,7 +161,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 }
 
 func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx, columns []any) (err error) {
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	//!!!carefully to use
@@ -173,26 +178,37 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 	if err != nil {
 		return
 	}
+
+	if execCtx.prepareColDef != nil && len(columns) != len(execCtx.prepareColDef) {
+		execCtx.prepareColDef = nil
+	}
+
 	//send columns
 	//column_count * Protocol::ColumnDefinition packets
 	cmd := ses.GetCmd()
-	for _, c := range columns {
+	for i, c := range columns {
 		mysqlc := c.(Column)
 		mrs.AddColumn(mysqlc)
 		/*
 			mysql COM_QUERY response: send the column definition per column
 		*/
-		err = resper.mysqlRrWr.WriteColumnDef(execCtx.reqCtx, mysqlc, int(cmd))
-		if err != nil {
-			return
+		if execCtx.prepareColDef == nil {
+			err = resper.mysqlRrWr.WriteColumnDef(execCtx.reqCtx, mysqlc, int(cmd))
+			if err != nil {
+				return
+			}
+		} else {
+			err = resper.mysqlRrWr.WriteColumnDefBytes(execCtx.prepareColDef[i])
+			if err != nil {
+				return
+			}
 		}
 	}
-
 	/*
 		mysql COM_QUERY response: End after the column has been sent.
 		send EOF packet
 	*/
-	err = resper.mysqlRrWr.WriteEOFIF(0, ses.GetTxnHandler().GetServerStatus())
+	err = resper.mysqlRrWr.WriteEOFIFAndNoFlush(0, ses.GetTxnHandler().GetServerStatus())
 	if err != nil {
 		return
 	}
@@ -201,18 +217,19 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 
 func (resper *MysqlResp) respStreamResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
-	ses.EnterFPrint(70)
-	defer ses.ExitFPrint(70)
-	if execCtx.skipRespClient {
+	ses.EnterFPrint(FPRespStreamResultRow)
+	defer ses.ExitFPrint(FPRespStreamResultRow)
+	if execCtx.inMigration {
 		return nil
 	}
+
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
-		if len(execCtx.proc.SessionInfo.SeqAddValues) != 0 {
+		if len(execCtx.proc.GetSessionInfo().SeqAddValues) != 0 {
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
-		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
 		if err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -221,7 +238,12 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 
 	case *tree.ExplainAnalyze:
 		queryPlan := execCtx.cw.Plan()
-		explainColName := plan2.GetPlanTitle(queryPlan.GetQuery())
+		txnHaveDDL := false
+		ws := ses.proc.GetTxnOperator().GetWorkspace()
+		if ws != nil {
+			txnHaveDDL = ws.GetHaveDDL()
+		}
+		explainColName := plan2.GetPlanTitle(queryPlan.GetQuery(), txnHaveDDL)
 		//if it is the plan from the EXECUTE,
 		// replace the plan by the plan generated by the PREPARE
 		if len(execCtx.cw.ParamVals()) != 0 {
@@ -251,13 +273,13 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 			return
 		}
 
-		err = resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err = resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
 		if err != nil {
 			return
 		}
 
 	default:
-		err = resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err = resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
 		if err != nil {
 			return
 		}
@@ -268,9 +290,9 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 
 func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
-	ses.EnterFPrint(71)
-	defer ses.ExitFPrint(71)
-	if execCtx.skipRespClient {
+	ses.EnterFPrint(FPrespPrebuildResultRow)
+	defer ses.ExitFPrint(FPrespPrebuildResultRow)
+	if execCtx.inMigration {
 		return nil
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
@@ -283,9 +305,9 @@ func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
 
 func (resper *MysqlResp) respMixedResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
-	ses.EnterFPrint(72)
-	defer ses.ExitFPrint(72)
-	if execCtx.skipRespClient {
+	ses.EnterFPrint(FPrespMixedResultRow)
+	defer ses.ExitFPrint(FPrespMixedResultRow)
+	if execCtx.inMigration {
 		return nil
 	}
 	//!!!the columnDef has been sent after the compiling ends. It should not be sent here again.
@@ -297,7 +319,8 @@ func (resper *MysqlResp) respMixedResultRow(ses *Session,
 			zap.Error(err))
 		return err
 	}
-	err = resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+
+	err = resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
 	if err != nil {
 		return
 	}

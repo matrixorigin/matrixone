@@ -57,8 +57,8 @@ func TestPreInsertNormal(t *testing.T) {
 	}).AnyTimes()
 
 	proc := testutil.NewProc()
-	proc.TxnClient = txnClient
-	proc.SessionInfo.StorageEngine = eng
+	proc.Base.TxnClient = txnClient
+	proc.Base.SessionInfo.StorageEngine = eng
 	batch1 := &batch.Batch{
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{3}),
@@ -70,7 +70,8 @@ func TestPreInsertNormal(t *testing.T) {
 		Cnt: 1,
 	}
 	batch1.SetRowCount(3)
-	argument1 := Argument{
+	argument1 := PreInsert{
+		ctr:        &container{},
 		SchemaName: "testDb",
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{
@@ -110,7 +111,7 @@ func TestPreInsertNormal(t *testing.T) {
 	}
 
 	argument1.Free(proc, false, nil)
-	proc.FreeVectors()
+	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
@@ -133,9 +134,9 @@ func TestPreInsertNullCheck(t *testing.T) {
 	}).AnyTimes()
 
 	proc := testutil.NewProc()
-	proc.TxnClient = txnClient
+	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
-	proc.SessionInfo.StorageEngine = eng
+	proc.Base.SessionInfo.StorageEngine = eng
 	batch2 := &batch.Batch{
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
@@ -144,7 +145,8 @@ func TestPreInsertNullCheck(t *testing.T) {
 		Cnt:   1,
 	}
 	batch2.SetRowCount(3)
-	argument2 := Argument{
+	argument2 := PreInsert{
+		ctr:        &container{},
 		SchemaName: "testDb",
 		Attrs:      []string{"int64_column_primary"},
 		TableDef: &plan.TableDef{
@@ -172,11 +174,13 @@ func TestPreInsertNullCheck(t *testing.T) {
 	require.Error(t, err2, "should return error when insert null into primary key column")
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
+func resetChildren(arg *PreInsert, bat *batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: []*batch.Batch{bat},
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: []*batch.Batch{bat},
-			},
+			valueScanArg,
 		})
 }

@@ -237,8 +237,11 @@ func (bat *Batch) PPString(num int) string {
 }
 
 func (bat *Batch) Close() {
-	for _, vec := range bat.Vecs {
-		vec.Close()
+	for i, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Close()
+			bat.Vecs[i] = nil
+		}
 	}
 }
 

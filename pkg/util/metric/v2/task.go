@@ -41,6 +41,14 @@ var (
 	TaskShowAccountsGetUsageDurationHistogram      = taskShortDurationHistogram.WithLabelValues("show_accounts_get_storage_usage")
 	TaskShowAccountsTotalDurationHistogram         = taskShortDurationHistogram.WithLabelValues("show_accounts_total_duration")
 
+	TransferPageFlushLatencyHistogram = taskShortDurationHistogram.WithLabelValues("transfer_page_flush_latency")
+	TransferPageMergeLatencyHistogram = taskShortDurationHistogram.WithLabelValues("transfer_page_merge_latency")
+
+	TransferMemLatencyHistogram            = taskShortDurationHistogram.WithLabelValues("transfer_mem_latency")
+	TransferDiskLatencyHistogram           = taskShortDurationHistogram.WithLabelValues("transfer_disk_latency")
+	TransferPageSinceBornDurationHistogram = taskShortDurationHistogram.WithLabelValues("transfer_page_since_born_duration")
+	TransferTableRunTTLDurationHistogram   = taskShortDurationHistogram.WithLabelValues("transfer_table_run_ttl_duration")
+
 	taskLongDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
@@ -129,4 +137,26 @@ var (
 			Name:      "storage_usage_cache_size",
 			Help:      "Size of the storage usage cache used",
 		})
+)
+
+var (
+	transferPageHitHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "transfer_page_hit_count",
+		Help:      "The total number of transfer hit counter.",
+	}, []string{"type"})
+
+	//TransferPageMemHitHistogram   = transferPageHitHistogram.WithLabelValues("memory")
+	//TransferPageDiskHitHistogram  = transferPageHitHistogram.WithLabelValues("disk")
+	TransferPageTotalHitHistogram = transferPageHitHistogram.WithLabelValues("total")
+)
+
+var (
+	TransferPageRowHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "transfer_page_row",
+		Help:      "The total number of transfer row.",
+	})
 )

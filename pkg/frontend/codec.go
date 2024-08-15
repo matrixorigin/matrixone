@@ -16,12 +16,10 @@ package frontend
 
 import (
 	"context"
-	"io"
-
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"io"
 )
 
 var (

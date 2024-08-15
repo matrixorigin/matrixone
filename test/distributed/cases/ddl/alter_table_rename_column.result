@@ -8,10 +8,10 @@ alter table samecolumn01 rename column col2 to newcolumn;
 Duplicate column name 'newcolumn'
 show create table samecolumn01;
 Table    Create Table
-samecolumn01    CREATE TABLE `samecolumn01` (\n  `newcolumn` INT DEFAULT NULL,\n  `col2` CHAR(1) DEFAULT NULL\n)
+samecolumn01    CREATE TABLE `samecolumn01` (\n  `newColumn` INT DEFAULT NULL,\n  `col2` CHAR(1) DEFAULT NULL\n)
 show columns from samecolumn01;
 Field    Type    Null    Key    Default    Extra    Comment
-newcolumn    INT(32)    YES        null        
+newColumn    INT(32)    YES        null        
 col2    CHAR(1)    YES        null        
 drop table samecolumn01;
 drop table if exists rename01;
@@ -19,13 +19,13 @@ create table rename01 (col1 int, col2 decimal);
 alter table rename01 rename column col1 to col1New;
 show create table rename01;
 Table    Create Table
-rename01    CREATE TABLE `rename01` (\n  `col1new` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+rename01    CREATE TABLE `rename01` (\n  `col1New` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
 show columns from rename01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1new    INT(32)    YES        null        
-col2    DECIMAL128(38)    YES        null        
+col1New    INT(32)    YES        null        
+col2    DECIMAL(38)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'name01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 drop table rename01;
 drop table if exists rename02;
 create table rename02 (`colcolcol1` int, `colcolcol2` binary);
@@ -47,7 +47,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 colcolcol1    INT(32)    YES        null        
 colcolcol2    BINARY(1)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 rename02    colcolcol1    INT    YES
 rename02    colcolcol2    BINARY    YES
 drop table rename02;
@@ -65,7 +65,7 @@ alter table rename03 rename column col1 to col1New;
 alter table rename03 rename column col3 to col3New;
 show create table rename03;
 Table    Create Table
-rename03    CREATE TABLE `rename03` (\n  `col1new` INT DEFAULT NULL,\n  `col2` INT DEFAULT NULL,\n  `col3new` VARCHAR(20) DEFAULT NULL\n)
+rename03    CREATE TABLE `rename03` (\n  `col1New` INT DEFAULT NULL,\n  `col2` INT DEFAULT NULL,\n  `col3New` VARCHAR(20) DEFAULT NULL\n)
 insert into rename03 (col1, col2, col3) values (3,4,'121131312');
 Unknown column 'col1' in 'rename03'
 insert into rename03 (col1New, col2, col3New) values (3,4,'121131312');
@@ -85,14 +85,14 @@ col1new    col2    col3new
 100    2    cfewquier
 show columns from rename03;
 Field    Type    Null    Key    Default    Extra    Comment
-col1new    INT(32)    YES        null        
+col1New    INT(32)    YES        null        
 col2    INT(32)    YES        null        
-col3new    VARCHAR(20)    YES        null        
+col3New    VARCHAR(20)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename03' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
-rename03    col1new    INT    YES
+table_name    COLUMN_NAME    data_type    is_nullable
+rename03    col1New    INT    YES
 rename03    col2    INT    YES
-rename03    col3new    VARCHAR    YES
+rename03    col3New    VARCHAR    YES
 drop table rename03;
 drop table if exists rename04;
 create table rename04(a int,b int);
@@ -100,7 +100,7 @@ insert into rename04 values(1,1);
 alter table rename04 rename column a to newA;
 show create table rename04;
 Table    Create Table
-rename04    CREATE TABLE `rename04` (\n  `newa` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL\n)
+rename04    CREATE TABLE `rename04` (\n  `newA` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL\n)
 update rename04 set newA = 100 where b = 1;
 select * from rename04;
 newa    b
@@ -108,7 +108,7 @@ newa    b
 alter table rename04 rename column newA to newnewA;
 show create table rename04;
 Table    Create Table
-rename04    CREATE TABLE `rename04` (\n  `newnewa` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL\n)
+rename04    CREATE TABLE `rename04` (\n  `newnewA` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL\n)
 insert into rename04 values (1, 3);
 insert into rename04 values (1289,232);
 update rename04 set a = 10000 where b = 1;
@@ -128,12 +128,12 @@ newnewa    b
 10000    1
 show columns from rename04;
 Field    Type    Null    Key    Default    Extra    Comment
-newnewa    INT(32)    YES        null        
+newnewA    INT(32)    YES        null        
 b    INT(32)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename04' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 rename04    b    INT    YES
-rename04    newnewa    INT    YES
+rename04    newnewA    INT    YES
 drop table rename04;
 drop table if exists rename06;
 create table rename06(col1 int);
@@ -155,7 +155,7 @@ alter table rename06 rename column col1 to `数据库系统`;
 alter table rename06 rename column col1 to `数据操作，数据收集7327323467dhhjfkrnfe`;
 Unknown column 'col1' in 'rename06'
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename06' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 rename06    数据库系统    INT    YES
 show columns from rename06;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -174,10 +174,10 @@ insert into primary01 values (3287, 89384038);
 alter table primary01 rename column col1 to col1New;
 show create table primary01;
 Table    Create Table
-primary01    CREATE TABLE `primary01` (\n  `col1new` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1new`)\n)
+primary01    CREATE TABLE `primary01` (\n  `col1New` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1New`)\n)
 insert into primary01 values (-2839, 8239802839.00000000);
 insert into primary01 (col1New, col2) values (3287, 3293892.3232);
-Duplicate entry '3287' for key 'col1new'
+Duplicate entry '3287' for key 'col1[Nn]ew'
 delete from primary01 where col1New = -2839;
 update primary01 set col1 = 2873892 where col1New = 2389324;
 internal error: column 'col1' not found in table 
@@ -188,12 +188,12 @@ col1new    col2
 2873892    32784329
 show columns from primary01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1new    INT(32)    NO    PRI    null        
-col2    DECIMAL128(38)    YES        null        
+col1New    INT(32)    NO    PRI    null        
+col2    DECIMAL(38)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
-primary01    col1new    INT    NO
-primary01    col2    DECIMAL128    YES
+table_name    COLUMN_NAME    data_type    is_nullable
+primary01    col1New    INT    NO
+primary01    col2    DECIMAL    YES
 drop table primary01;
 drop table if exists foreign01;
 create table foreign01(col1 int primary key,
@@ -227,10 +227,10 @@ alter table foreign01 rename column col1 to col1New;
 alter table foreign02 rename column col1 to `Colnewcolumn`;
 show create table foreign01;
 Table    Create Table
-foreign01    CREATE TABLE `foreign01` (\n  `col1new` INT NOT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  PRIMARY KEY (`col1new`)\n)
+foreign01    CREATE TABLE `foreign01` (\n  `col1New` INT NOT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  PRIMARY KEY (`col1New`)\n)
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n  `colnewcolumn` INT DEFAULT NULL,\n  `col2` INT DEFAULT NULL,\n  `col3` INT NOT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `c1` FOREIGN KEY (`colnewcolumn`) REFERENCES `foreign01` (`col1new`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n  `Colnewcolumn` INT DEFAULT NULL,\n  `col2` INT DEFAULT NULL,\n  `col3` INT NOT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `c1` FOREIGN KEY (`Colnewcolumn`) REFERENCES `foreign01` (`col1New`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 alter table foreign01 change col2 col2New varchar(100);
 alter table foreign02 change col2 col2new double after col3;
 insert into foreign01 values(3,'bcguwgheinwqneku678',2,2);
@@ -253,32 +253,32 @@ colnewcolumn    col3    col2new
 1    1    1.0
 show create table foreign01;
 Table    Create Table
-foreign01    CREATE TABLE `foreign01` (\n  `col1new` INT NOT NULL,\n  `col2new` VARCHAR(100) DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  PRIMARY KEY (`col1new`)\n)
+foreign01    CREATE TABLE `foreign01` (\n  `col1New` INT NOT NULL,\n  `col2New` VARCHAR(100) DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  PRIMARY KEY (`col1New`)\n)
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n  `colnewcolumn` INT DEFAULT NULL,\n  `col3` INT NOT NULL,\n  `col2new` DOUBLE DEFAULT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `c1` FOREIGN KEY (`colnewcolumn`) REFERENCES `foreign01` (`col1new`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n  `Colnewcolumn` INT DEFAULT NULL,\n  `col3` INT NOT NULL,\n  `col2new` DOUBLE DEFAULT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `c1` FOREIGN KEY (`Colnewcolumn`) REFERENCES `foreign01` (`col1New`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show columns from foreign01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1new    INT(32)    NO    PRI    null        
-col2new    VARCHAR(100)    YES        null        
+col1New    INT(32)    NO    PRI    null        
+col2New    VARCHAR(100)    YES        null        
 col3    INT(32)    YES        null        
 col4    BIGINT(64)    YES        null        
 show columns from foreign02;
 Field    Type    Null    Key    Default    Extra    Comment
-colnewcolumn    INT(32)    YES    MUL    null        
+Colnewcolumn    INT(32)    YES    MUL    null        
 col3    INT(32)    NO    PRI    null        
 col2new    DOUBLE(0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
-foreign01    col1new    INT    NO
-foreign01    col2new    VARCHAR    YES
+table_name    COLUMN_NAME    data_type    is_nullable
+foreign01    col1New    INT    NO
+foreign01    col2New    VARCHAR    YES
 foreign01    col3    INT    YES
 foreign01    col4    BIGINT    YES
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
+foreign02    Colnewcolumn    INT    YES
 foreign02    col2new    DOUBLE    YES
 foreign02    col3    INT    NO
-foreign02    colnewcolumn    INT    YES
 drop table foreign02;
 drop table foreign01;
 drop table if exists index01;
@@ -297,11 +297,11 @@ a    b    c    d
 alter table index01 rename column b to bNew;
 show create table index01;
 Table    Create Table
-index01    CREATE TABLE `index01` (\n  `a` INT NOT NULL,\n  `bnew` CHAR(10) DEFAULT NULL,\n  `c` DATE DEFAULT NULL,\n  `d` DECIMAL(7,2) DEFAULT NULL,\n  UNIQUE KEY `a` (`a`,`bnew`)\n)
+index01    CREATE TABLE `index01` (\n  `a` INT NOT NULL,\n  `bNew` CHAR(10) DEFAULT NULL,\n  `c` DATE DEFAULT NULL,\n  `d` DECIMAL(7,2) DEFAULT NULL,\n  UNIQUE KEY `a` (`a`,`bNew`)\n)
 show index from index01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 index01    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-index01    0    a    2    bnew    A    0    NULL    NULL    YES                    YES    NULL
+index01    0    a    2    bNew    A    0    NULL    NULL    YES                    YES    NULL
 insert into index01 (a, b, c, d) values (5, 'bh', '1999-01-01', 3000);
 Unknown column 'b' in 'index01'
 insert into index01 (a, bnew, c, d) values (5, 'bh', '1999-01-01', 3000);
@@ -328,15 +328,15 @@ a    bnew    c    d
 show columns from index01;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    MUL    null        
-bnew    CHAR(10)    YES        null        
+bNew    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL64(7)    YES        null        
+d    DECIMAL(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 index01    a    INT    NO
-index01    bnew    CHAR    YES
+index01    bNew    CHAR    YES
 index01    c    DATE    YES
-index01    d    DECIMAL64    YES
+index01    d    DECIMAL    YES
 drop table index01;
 drop table if exists index02;
 CREATE TABLE index02(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), INDEX(a, b), KEY(c));
@@ -351,7 +351,7 @@ a    b    c    d
 alter table index02 rename column b to bNewNew;
 show create table index02;
 Table    Create Table
-index02    CREATE TABLE `index02` (\n  `a` INT NOT NULL,\n  `bnewnew` CHAR(10) DEFAULT NULL,\n  `c` DATE DEFAULT NULL,\n  `d` DECIMAL(7,2) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `a` (`a`,`bnewnew`),\n  KEY `c` (`c`)\n)
+index02    CREATE TABLE `index02` (\n  `a` INT NOT NULL,\n  `bNewNew` CHAR(10) DEFAULT NULL,\n  `c` DATE DEFAULT NULL,\n  `d` DECIMAL(7,2) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `a` (`a`,`bNewNew`),\n  KEY `c` (`c`)\n)
 insert into index02 values (4, 'ab', '2000-10-10', 10000);
 insert into index02 values (5, 'gh', '1999-12-31', 20000);
 delete from index02 where bnewnew = 'ab';
@@ -364,21 +364,21 @@ a    bnewnew    c    d
 show index from index02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 index02    1    a    1    a    A    0    NULL    NULL                        YES    NULL
-index02    1    a    2    bnewnew    A    0    NULL    NULL    YES                    YES    NULL
+index02    1    a    2    bNewNew    A    0    NULL    NULL    YES                    YES    NULL
 index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    NULL
 index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
 show columns from index02;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
-bnewnew    CHAR(10)    YES        null        
+bNewNew    CHAR(10)    YES        null        
 c    DATE(0)    YES    MUL    null        
-d    DECIMAL64(7)    YES        null        
+d    DECIMAL(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 index02    a    INT    NO
-index02    bnewnew    CHAR    YES
+index02    bNewNew    CHAR    YES
 index02    c    DATE    YES
-index02    d    DECIMAL64    YES
+index02    d    DECIMAL    YES
 select * from index02;
 a    bnewnew    c    d
 2    ac    1981-02-20    1600.00
@@ -391,7 +391,7 @@ alter table cluster01 rename column a to `NewA`;
 alter table cluster01 rename column `newa` to `NewAAAAAAAA`;
 show create table cluster01;
 Table    Create Table
-cluster01    CREATE TABLE `cluster01` (\n  `newaaaaaaaa` TINYINT NOT NULL,\n  `b` SMALLINT DEFAULT NULL,\n  `c` INT UNSIGNED DEFAULT NULL,\n  `d` BIGINT NOT NULL,\n  PRIMARY KEY (`newaaaaaaaa`)\n)
+cluster01    CREATE TABLE `cluster01` (\n  `NewAAAAAAAA` TINYINT NOT NULL,\n  `b` SMALLINT DEFAULT NULL,\n  `c` INT UNSIGNED DEFAULT NULL,\n  `d` BIGINT NOT NULL,\n  PRIMARY KEY (`NewAAAAAAAA`)\n)
 insert into cluster01 (a, b, c, d) values (-32, 32832, 8329, 893434);
 Unknown column 'a' in 'cluster01'
 insert into cluster01 (NewAAAAAAAA, b, c, d) values (-32, 32, 8329, 893434);
@@ -401,16 +401,16 @@ newaaaaaaaa    b    c    d
 -32    32    8329    893434
 show columns from cluster01;
 Field    Type    Null    Key    Default    Extra    Comment
-newaaaaaaaa    TINYINT(8)    NO    PRI    null        
+NewAAAAAAAA    TINYINT(8)    NO    PRI    null        
 b    SMALLINT(16)    YES        null        
 c    INT UNSIGNED(32)    YES        null        
 d    BIGINT(64)    NO        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
+cluster01    NewAAAAAAAA    TINYINT    NO
 cluster01    b    SMALLINT    YES
 cluster01    c    INT UNSIGNED    YES
 cluster01    d    BIGINT    NO
-cluster01    newaaaaaaaa    TINYINT    NO
 drop table cluster01;
 drop table if exists temporary01;
 create table temporary01 (col1 int, col2 decimal);
@@ -425,22 +425,22 @@ uuuyggbbjbj    col2
 -32893    -89232
 show columns from temporary01;
 Field    Type    Null    Key    Default    Extra    Comment
-uuuyggbbjbj    INT(32)    YES        null        
-col2    DECIMAL128(38)    YES        null        
+UUUYGGBBJBJ    INT(32)    YES        null        
+col2    DECIMAL(38)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'temporary01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
-temporary01    col2    DECIMAL128    YES
-temporary01    uuuyggbbjbj    INT    YES
+table_name    COLUMN_NAME    data_type    is_nullable
+temporary01    UUUYGGBBJBJ    INT    YES
+temporary01    col2    DECIMAL    YES
 drop table temporary01;
 drop table if exists ex_table_2_1;
 create external table ex_table_2_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 alter table ex_table_2_1 rename column num_col1 to newnum_col1;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. error field terminator at line 13 column 109 near " '""' LINES TERMINATED BY '\\n'";
+invalid input: cannot insert/update/delete from external table
 alter table ex_table_2_1 rename column num_col2 to `shurhenwjkrferveg`;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. error field terminator at line 13 column 109 near " '""' LINES TERMINATED BY '\\n'";
+invalid input: cannot insert/update/delete from external table
 show create table ex_table_2_1;
 Table    Create Table
-ex_table_2_1    CREATE EXTERNAL TABLE `ex_table_2_1` (\n  `num_col1` TINYINT DEFAULT NULL,\n  `num_col2` SMALLINT DEFAULT NULL,\n  `num_col3` INT DEFAULT NULL,\n  `num_col4` BIGINT DEFAULT NULL,\n  `num_col5` TINYINT UNSIGNED DEFAULT NULL,\n  `num_col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `num_col7` INT UNSIGNED DEFAULT NULL,\n  `num_col8` BIGINT UNSIGNED DEFAULT NULL,\n  `num_col9` FLOAT(5,3) DEFAULT NULL,\n  `num_col10` DOUBLE(6,5) DEFAULT NULL,\n  `num_col11` DECIMAL(38,19) DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n'
+ex_table_2_1    CREATE EXTERNAL TABLE `ex_table_2_1` (\n  `num_col1` TINYINT DEFAULT NULL,\n  `num_col2` SMALLINT DEFAULT NULL,\n  `num_col3` INT DEFAULT NULL,\n  `num_col4` BIGINT DEFAULT NULL,\n  `num_col5` TINYINT UNSIGNED DEFAULT NULL,\n  `num_col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `num_col7` INT UNSIGNED DEFAULT NULL,\n  `num_col8` BIGINT UNSIGNED DEFAULT NULL,\n  `num_col9` FLOAT(5,3) DEFAULT NULL,\n  `num_col10` DOUBLE(6,5) DEFAULT NULL,\n  `num_col11` DECIMAL(38,19) DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='csv','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n'
 select * from ex_table_2_1;
 internal error: the input value 'abc' is not int8 type for column 0
 drop table if exists view01;
@@ -494,10 +494,10 @@ alter table rename01 rename column col1 to newRename;
 alter table rename01 rename column newRename to `newNewRename`;
 show create table rename01;
 Table    Create Table
-rename01    CREATE TABLE `rename01` (\n  `newnewrename` INT DEFAULT NULL\n)
+rename01    CREATE TABLE `rename01` (\n  `newNewRename` INT DEFAULT NULL\n)
 show columns from rename01;
 Field    Type    Null    Key    Default    Extra    Comment
-newnewrename    INT(32)    YES        null        
+newNewRename    INT(32)    YES        null        
 drop table rename01;
 drop role role_r1;
 drop user role_u1;

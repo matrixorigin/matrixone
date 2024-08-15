@@ -54,7 +54,7 @@ func (s *service) initDistributedTAE(
 	colexec.NewServer(hakeeper)
 
 	// start I/O pipeline
-	blockio.Start()
+	blockio.Start(s.cfg.UUID)
 
 	// engine
 	distributeTaeMp, err := mpool.NewMPool("distributed_tae", 0, mpool.NoFixed)
@@ -63,12 +63,13 @@ func (s *service) initDistributedTAE(
 	}
 	s.storeEngine = disttae.New(
 		ctx,
+		s.cfg.UUID,
 		distributeTaeMp,
 		fs,
 		client,
 		hakeeper,
 		s.gossipNode.StatsKeyRouter(),
-		s.cfg.LogtailUpdateStatsThreshold,
+		s.cfg.LogtailUpdateWorkerFactor,
 	)
 	pu.StorageEngine = s.storeEngine
 
@@ -79,7 +80,7 @@ func (s *service) initDistributedTAE(
 		return err
 	}
 
-	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	ss, ok := runtime.ServiceRuntime(s.cfg.UUID).GetGlobalVariables(runtime.StatusServer)
 	if ok {
 		statusServer := ss.(*status.Server)
 		statusServer.SetTxnClient(s.cfg.UUID, client)
@@ -91,6 +92,7 @@ func (s *service) initDistributedTAE(
 	if err != nil {
 		return err
 	}
+	s.initProcessCodecService()
 	s.initInternalSQlExecutor(internalExecutorMp)
 	s.initShardService()
 	return nil

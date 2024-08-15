@@ -36,7 +36,7 @@ const (
 
 // add unit tests for cases
 type orderTestCase struct {
-	arg   *Argument
+	arg   *Order
 	types []types.Type
 	proc  *process.Process
 }
@@ -93,7 +93,7 @@ func TestOrder(t *testing.T) {
 		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -125,8 +125,8 @@ func BenchmarkOrder(b *testing.B) {
 func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 	return orderTestCase{
 		types: ts,
-		proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
-		arg: &Argument{
+		proc:  testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+		arg: &Order{
 			OrderBySpec: fs,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
@@ -157,12 +157,14 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
+func resetChildren(arg *Order, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: bats,
-			},
+			valueScanArg,
 		})
 	arg.ctr.state = vm.Build
 }

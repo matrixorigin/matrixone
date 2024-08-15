@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -36,7 +35,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	if err != nil {
 		return nil, err
 	}
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 
 	queryBindCtx := NewBindContext(builder, nil)
 	lastNodeId, err := deleteToSelect(builder, queryBindCtx, stmt, true, tblInfo)
@@ -89,7 +88,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 			partTableIds := make([]uint64, tableDef.Partition.PartitionNum)
 			partTableNames := make([]string, tableDef.Partition.PartitionNum)
 			for j, partition := range tableDef.Partition.Partitions {
-				_, partTableDef := ctx.Resolve(tblInfo.objRef[i].SchemaName, partition.PartitionTableName, Snapshot{TS: &timestamp.Timestamp{}})
+				_, partTableDef := ctx.Resolve(tblInfo.objRef[i].SchemaName, partition.PartitionTableName, nil)
 				partTableIds[j] = partTableDef.TblId
 				partTableNames[j] = partition.PartitionTableName
 			}
@@ -117,7 +116,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	}
 
 	reduceSinkSinkScanNodes(query)
-	ReCalcQueryStats(builder, query)
+	builder.tempOptimizeForDML()
 	reCheckifNeedLockWholeTable(builder)
 	query.StmtType = plan.Query_DELETE
 	return &Plan{

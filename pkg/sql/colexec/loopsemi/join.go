@@ -16,6 +16,9 @@ package loopsemi
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,39 +27,50 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "loop_semi"
+const opName = "loop_semi"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (loopSemi *LoopSemi) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": ⨝ ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (loopSemi *LoopSemi) OpType() vm.OpType {
+	return vm.LoopSemi
+}
+
+func (loopSemi *LoopSemi) Prepare(proc *process.Process) error {
 	var err error
 
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
+	loopSemi.ctr = new(container)
 
-	if arg.Cond != nil {
-		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+	if loopSemi.Cond != nil {
+		loopSemi.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopSemi.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if loopSemi.ProjectList != nil {
+		err = loopSemi.PrepareProjection(proc)
 	}
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := arg.ctr
+	ctr := loopSemi.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := loopSemi.build(proc, anal); err != nil {
 				return result, err
 			}
 			if ctr.bat == nil {
@@ -67,34 +81,42 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			if arg.bat == nil {
-				msg := ctr.ReceiveFromSingleReg(0, anal)
-				if msg.Err != nil {
-					return result, msg.Err
+			if loopSemi.ctr.buf == nil {
+				result, err = loopSemi.Children[0].Call(proc)
+				if err != nil {
+					return result, err
 				}
-
-				bat := msg.Batch
+				bat := result.Batch
 				if bat == nil {
 					ctr.state = End
 					continue
 				}
 				if bat.IsEmpty() {
-					proc.PutBatch(bat)
 					continue
 				}
 				if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-					proc.PutBatch(bat)
 					continue
 				}
-				arg.bat = bat
-				arg.lastrow = 0
+				loopSemi.ctr.buf = bat
+				loopSemi.ctr.lastrow = 0
+				anal.Input(loopSemi.ctr.buf, loopSemi.GetIsFirst())
 			}
 
-			err := ctr.probe(arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
-			if arg.lastrow == 0 {
-				proc.PutBatch(arg.bat)
-				arg.bat = nil
+			err := ctr.probe(loopSemi, proc, &result)
+			if err != nil {
+				return result, err
 			}
+			if loopSemi.ctr.lastrow == 0 {
+				loopSemi.ctr.buf = nil
+			}
+
+			if loopSemi.ProjectList != nil {
+				result.Batch, err = loopSemi.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, loopSemi.GetIsLast())
 			return result, err
 
 		default:
@@ -105,55 +127,53 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+func (loopSemi *LoopSemi) build(proc *process.Process, anal process.Analyze) error {
+	ctr := loopSemi.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(loopSemi.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	if mp == nil {
+		return nil
+	}
+	batches := mp.GetBatches()
 	var err error
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat == nil {
-			break
-		}
-		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+	//maybe optimize this in the future
+	for i := range batches {
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err
 		}
-		proc.PutBatch(bat)
 	}
 	return nil
 }
 
-func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(ap.bat, isFirst)
+func (ctr *container) probe(ap *LoopSemi, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
 	}
 	ctr.rbat = batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
-		ctr.rbat.Vecs[i] = proc.GetVector(*ap.bat.Vecs[pos].GetType())
+		ctr.rbat.Vecs[i] = proc.GetVector(*ap.ctr.buf.Vecs[pos].GetType())
 	}
-	count := ap.bat.RowCount()
+	count := ap.ctr.buf.RowCount()
 	if ctr.joinBat == nil {
-		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(ap.bat, proc.Mp())
+		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(ap.ctr.buf, proc.Mp())
 	}
 
 	rowCountIncrease := 0
-	for i := ap.lastrow; i < count; i++ {
+	for i := ap.ctr.lastrow; i < count; i++ {
 		if rowCountIncrease >= colexec.DefaultBatchSize {
 			ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
-			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
-			ap.lastrow = i
+			ap.ctr.lastrow = i
 			return nil
 		}
-		if err := colexec.SetJoinBatchValues(ctr.joinBat, ap.bat, int64(i),
+		if err := colexec.SetJoinBatchValues(ctr.joinBat, ap.ctr.buf, int64(i),
 			ctr.bat.RowCount(), ctr.cfs); err != nil {
 			return err
 		}
-		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
+		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat}, nil)
 		if err != nil {
 			return err
 		}
@@ -163,7 +183,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			b, null := rs.GetValue(k)
 			if !null && b {
 				for k, pos := range ap.Result {
-					if err = ctr.rbat.Vecs[k].UnionOne(ap.bat.Vecs[pos], int64(i), proc.Mp()); err != nil {
+					if err = ctr.rbat.Vecs[k].UnionOne(ap.ctr.buf.Vecs[pos], int64(i), proc.Mp()); err != nil {
 						return err
 					}
 				}
@@ -173,8 +193,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 		}
 	}
 	ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
-	ap.lastrow = 0
+	ap.ctr.lastrow = 0
 	return nil
 }

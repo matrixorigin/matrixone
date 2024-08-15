@@ -15,19 +15,16 @@
 package tree
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func Test_CStr(t *testing.T) {
 	c1 := NewCStr("Hello", 1)
-	assert.Equal(t, "hello", c1.ToLower())
+	assert.Equal(t, "hello", c1.Compare())
 	assert.Equal(t, "Hello", c1.Origin())
 	assert.Equal(t, false, c1.Empty())
-	c2 := NewCStr("Hello", 1)
-	assert.Equal(t, "hello", c2.ToLower())
-	c2.SetConfig(1)
-	assert.Equal(t, "hello", c2.Compare())
-	c2.SetConfig(0)
+	c2 := NewCStr("Hello", 0)
 	assert.Equal(t, "Hello", c2.Compare())
 }

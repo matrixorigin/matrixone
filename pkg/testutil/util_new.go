@@ -37,14 +37,14 @@ import (
 
 func NewProcess() *process.Process {
 	mp := mpool.MustNewZeroNoFixed()
-	return NewProcessWithMPool(mp)
+	return NewProcessWithMPool("", mp)
 }
 
-func SetupAutoIncrService() {
-	rt := runtime.ProcessLevelRuntime()
+func SetupAutoIncrService(sid string) {
+	rt := runtime.ServiceRuntime(sid)
 	if rt == nil {
 		rt = runtime.DefaultRuntime()
-		runtime.SetupProcessLevelRuntime(rt)
+		runtime.SetupServiceBasedRuntime(sid, rt)
 	}
 	rt.SetGlobalVariables(
 		runtime.AutoIncrementService,
@@ -54,9 +54,9 @@ func SetupAutoIncrService() {
 			incrservice.Config{}))
 }
 
-func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
-	SetupAutoIncrService()
-	proc := process.New(
+func NewProcessWithMPool(sid string, mp *mpool.MPool) *process.Process {
+	SetupAutoIncrService(sid)
+	proc := process.NewTopProcess(
 		context.Background(),
 		mp,
 		nil, // no txn client can be set
@@ -68,11 +68,11 @@ func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
 		nil,
 		nil,
 	)
-	proc.Lim.Size = 1 << 20
-	proc.Lim.BatchRows = 1 << 20
-	proc.Lim.BatchSize = 1 << 20
-	proc.Lim.ReaderSize = 1 << 20
-	proc.SessionInfo.TimeZone = time.Local
+	proc.Base.Lim.Size = 1 << 20
+	proc.Base.Lim.BatchRows = 1 << 20
+	proc.Base.Lim.BatchSize = 1 << 20
+	proc.Base.Lim.ReaderSize = 1 << 20
+	proc.Base.SessionInfo.TimeZone = time.Local
 	return proc
 }
 
@@ -248,7 +248,7 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 		}
 		return NewDecimal128Vector(n, typ, m, random, nil)
 	case types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		if vs, ok := Values.([]string); ok {
 			return NewStringVector(n, typ, m, random, vs)
 		}
@@ -758,6 +758,30 @@ func NewTimeVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []stri
 			v = rand.Int()
 		}
 		if err := vector.AppendFixed(vec, types.Time(v), false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func NewEnumVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []uint16) *vector.Vector {
+	vec := vector.NewVec(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vector.AppendFixed(vec, types.Enum(vs[i]), false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 1; i <= n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vector.AppendFixed(vec, types.Enum(v), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

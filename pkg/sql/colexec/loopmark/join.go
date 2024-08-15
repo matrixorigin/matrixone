@@ -16,6 +16,9 @@ package loopmark
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -26,69 +29,89 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "loop_mark"
+const opName = "loop_mark"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (loopMark *LoopMark) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": loop mark join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (loopMark *LoopMark) OpType() vm.OpType {
+	return vm.LoopMark
+}
+
+func (loopMark *LoopMark) Prepare(proc *process.Process) error {
 	var err error
 
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
-	arg.ctr.bat = batch.NewWithSize(len(arg.Typs))
-	for i, typ := range arg.Typs {
-		arg.ctr.bat.Vecs[i] = proc.GetVector(typ)
+	loopMark.ctr = new(container)
+	loopMark.ctr.bat = batch.NewWithSize(len(loopMark.Typs))
+	for i, typ := range loopMark.Typs {
+		loopMark.ctr.bat.Vecs[i] = proc.GetVector(typ)
 	}
 
-	if arg.Cond != nil {
-		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+	if loopMark.Cond != nil {
+		loopMark.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopMark.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if loopMark.ProjectList != nil {
+		err = loopMark.PrepareProjection(proc)
 	}
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := arg.ctr
+	ctr := loopMark.ctr
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := loopMark.build(proc, anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
 			var err error
-			msg := ctr.ReceiveFromSingleReg(0, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = loopMark.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-
-			bat := msg.Batch
+			bat := result.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
+
+			anal.Input(bat, loopMark.GetIsFirst())
 			if ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(bat, arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
+				err = ctr.emptyProbe(bat, loopMark, proc, &result)
 			} else {
-				err = ctr.probe(bat, arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
+				err = ctr.probe(bat, loopMark, proc, &result)
 			}
-			proc.PutBatch(bat)
+			if err != nil {
+				return result, err
+			}
+
+			if loopMark.ProjectList != nil {
+				result.Batch, err = loopMark.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, loopMark.GetIsLast())
 			return result, err
 
 		default:
@@ -99,28 +122,27 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+func (loopMark *LoopMark) build(proc *process.Process, anal process.Analyze) error {
+	ctr := loopMark.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(loopMark.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	if mp == nil {
+		return nil
+	}
+	batches := mp.GetBatches()
 	var err error
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat == nil {
-			break
-		}
-		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+	//maybe optimize this in the future
+	for i := range batches {
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err
 		}
-		proc.PutBatch(bat)
 	}
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (err error) {
-	anal.Input(bat, isFirst)
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopMark, proc *process.Process, result *vm.CallResult) (err error) {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -141,14 +163,11 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
-
 	result.Batch = ctr.rbat
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) probe(bat *batch.Batch, ap *LoopMark, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -177,7 +196,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			ctr.bat.RowCount(), ctr.cfs); err != nil {
 			return err
 		}
-		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
+		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat}, nil)
 		if err != nil {
 			return err
 		}
@@ -220,7 +239,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }

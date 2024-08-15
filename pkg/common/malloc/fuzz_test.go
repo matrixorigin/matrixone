@@ -17,7 +17,6 @@ package malloc
 import (
 	"testing"
 	"time"
-	"unsafe"
 )
 
 func fuzzAllocator(
@@ -31,26 +30,45 @@ func fuzzAllocator(
 			return
 		}
 
+		// allocate
 		size := i % (8 * GB)
-		ptr, dec := allocator.Allocate(size)
-		defer dec.Deallocate(ptr)
+		slice, dec, err := allocator.Allocate(size, NoHints)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// length
+		if len(slice) != int(size) {
+			t.Fatal()
+		}
+		// deallocate
+		defer dec.Deallocate(NoHints)
 
-		slice := unsafe.Slice((*byte)(ptr), size)
+		// read
 		for _, i := range slice {
 			if i != 0 {
 				t.Fatal()
 			}
 		}
+		// write
 		for i := range slice {
 			slice[i] = uint8(i)
 		}
+		// read
 		for i, j := range slice {
 			if j != uint8(i) {
 				t.Fatal()
 			}
 		}
 
-		time.Sleep(time.Duration(i) % (time.Millisecond * 50))
+		// slice
+		slice = slice[:len(slice)/2]
+		for i, j := range slice {
+			if j != uint8(i) {
+				t.Fatal()
+			}
+		}
+
+		time.Sleep(time.Duration(i) % (time.Microsecond * 50))
 
 	})
 }

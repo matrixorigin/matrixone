@@ -15,73 +15,78 @@
 package preinsert
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(PreInsert)
 
 type proc = process.Process
 
-type Argument struct {
-	Ctx context.Context
+type container struct {
+	buf *batch.Batch
+}
+type PreInsert struct {
+	ctr *container
 
 	HasAutoCol bool
+	IsUpdate   bool
 	SchemaName string
 	TableDef   *pb.TableDef
-	Attrs      []string
-	IsUpdate   bool
+	// letter case: origin
+	Attrs []string
 
 	EstimatedRowCount int64
-
-	buf *batch.Batch
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (preInsert *PreInsert) GetOperatorBase() *vm.OperatorBase {
+	return &preInsert.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[PreInsert](
+		func() *PreInsert {
+			return &PreInsert{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *PreInsert) {
+			*a = PreInsert{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[PreInsert]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (preInsert PreInsert) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *PreInsert {
+	return reuse.Alloc[PreInsert](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (preInsert *PreInsert) Release() {
+	if preInsert != nil {
+		reuse.Free[PreInsert](preInsert, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (preInsert *PreInsert) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	preInsert.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
+func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if preInsert.ctr != nil {
+		if preInsert.ctr.buf != nil {
+			preInsert.ctr.buf.Clean(proc.Mp())
+			preInsert.ctr = nil
+		}
+		preInsert.ctr = nil
 	}
+
 }

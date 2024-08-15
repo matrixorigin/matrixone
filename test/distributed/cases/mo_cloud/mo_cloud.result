@@ -41,48 +41,48 @@ SELECT `stat_ts`, sum(`stu`) as value FROM(SELECT concat(DATE_FORMAT(date_add(`s
 stat_ts    value
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='engines' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 name    data_type    maximum    minimum
-engine    VARCHAR(64)    null    null
-support    VARCHAR(8)    null    null
-comment    VARCHAR(160)    null    null
-transactions    VARCHAR(3)    null    null
-xa    VARCHAR(3)    null    null
-savepoints    VARCHAR(3)    null    null
+ENGINE    VARCHAR(64)    null    null
+SUPPORT    VARCHAR(8)    null    null
+COMMENT    VARCHAR(160)    null    null
+TRANSACTIONS    VARCHAR(3)    null    null
+XA    VARCHAR(3)    null    null
+SAVEPOINTS    VARCHAR(3)    null    null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='key_column_usage' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 name    data_type    maximum    minimum
-constraint_catalog    VARCHAR(64)    null    null
-constraint_schema    VARCHAR(64)    null    null
-constraint_name    VARCHAR(64)    null    null
-table_catalog    VARCHAR(64)    null    null
-table_schema    VARCHAR(64)    null    null
-table_name    VARCHAR(64)    null    null
-column_name    VARCHAR(64)    null    null
-ordinal_position    INT UNSIGNED(32)    null    null
-position_in_unique_constraint    INT UNSIGNED(32)    null    null
-referenced_table_schema    VARCHAR(64)    null    null
-referenced_table_name    VARCHAR(64)    null    null
-referenced_column_name    VARCHAR(64)    null    null
+CONSTRAINT_CATALOG    VARCHAR(64)    null    null
+CONSTRAINT_SCHEMA    VARCHAR(64)    null    null
+CONSTRAINT_NAME    VARCHAR(64)    null    null
+TABLE_CATALOG    VARCHAR(64)    null    null
+TABLE_SCHEMA    VARCHAR(64)    null    null
+TABLE_NAME    VARCHAR(64)    null    null
+COLUMN_NAME    VARCHAR(64)    null    null
+ORDINAL_POSITION    INT UNSIGNED(32)    null    null
+POSITION_IN_UNIQUE_CONSTRAINT    INT UNSIGNED(32)    null    null
+REFERENCED_TABLE_SCHEMA    VARCHAR(64)    null    null
+REFERENCED_TABLE_NAME    VARCHAR(64)    null    null
+REFERENCED_COLUMN_NAME    VARCHAR(64)    null    null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='keywords' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 name    data_type    maximum    minimum
-word    VARCHAR(64)    null    null
-reserved    INT UNSIGNED(32)    null    null
+WORD    VARCHAR(64)    null    null
+RESERVED    INT UNSIGNED(32)    null    null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='parameters' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 name    data_type    maximum    minimum
-specific_catalog    VARCHAR(64)    null    null
-specific_schema    VARCHAR(64)    null    null
-specific_name    VARCHAR(64)    null    null
-ordinal_position    BIGINT UNSIGNED(64)    null    null
-parameter_mode    VARCHAR(5)    null    null
-parameter_name    VARCHAR(64)    null    null
-data_type    TEXT(0)    null    null
-character_maximum_length    BIGINT(64)    null    null
-character_octet_length    BIGINT(64)    null    null
-numeric_precision    INT UNSIGNED(32)    null    null
-numeric_scale    BIGINT(64)    null    null
-datetime_precision    INT UNSIGNED(32)    null    null
-character_set_name    VARCHAR(64)    null    null
-collation_name    VARCHAR(64)    null    null
-dtd_identifier    TEXT(0)    null    null
-routine_type    VARCHAR(64)    null    null
+SPECIFIC_CATALOG    VARCHAR(64)    null    null
+SPECIFIC_SCHEMA    VARCHAR(64)    null    null
+SPECIFIC_NAME    VARCHAR(64)    null    null
+ORDINAL_POSITION    BIGINT UNSIGNED(64)    null    null
+PARAMETER_MODE    VARCHAR(5)    null    null
+PARAMETER_NAME    VARCHAR(64)    null    null
+DATA_TYPE    TEXT(0)    null    null
+CHARACTER_MAXIMUM_LENGTH    BIGINT(64)    null    null
+CHARACTER_OCTET_LENGTH    BIGINT(64)    null    null
+NUMERIC_PRECISION    INT UNSIGNED(32)    null    null
+NUMERIC_SCALE    BIGINT(64)    null    null
+DATETIME_PRECISION    INT UNSIGNED(32)    null    null
+CHARACTER_SET_NAME    VARCHAR(64)    null    null
+COLLATION_NAME    VARCHAR(64)    null    null
+DTD_IDENTIFIER    TEXT(0)    null    null
+ROUTINE_TYPE    VARCHAR(64)    null    null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mo_catalog' and att_relname='mo_columns' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 invalid input: mo_table_col_max has bad input table mo_columns
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mo_sample_data_tpch_sf1' and att_relname='lineitem' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
@@ -91,90 +91,90 @@ SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_t
 name    data_type    maximum    minimum
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='columns_priv' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 name    data_type    maximum    minimum
-host    CHAR(255)    null    null
-db    CHAR(64)    null    null
-user    CHAR(32)    null    null
-table_name    CHAR(64)    null    null
-column_name    CHAR(64)    null    null
-timestamp    TIMESTAMP(0)    null    null
-column_priv    VARCHAR(10)    null    null
+Host    CHAR(255)    null    null
+Db    CHAR(64)    null    null
+User    CHAR(32)    null    null
+Table_name    CHAR(64)    null    null
+Column_name    CHAR(64)    null    null
+Timestamp    TIMESTAMP(0)    null    null
+Column_priv    VARCHAR(10)    null    null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='db' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 name    data_type    maximum    minimum
-host    CHAR(255)    null    null
-db    CHAR(64)    null    null
-user    CHAR(32)    null    null
-select_priv    VARCHAR(10)    null    null
-insert_priv    VARCHAR(10)    null    null
-update_priv    VARCHAR(10)    null    null
-delete_priv    VARCHAR(10)    null    null
-create_priv    VARCHAR(10)    null    null
-drop_priv    VARCHAR(10)    null    null
-grant_priv    VARCHAR(10)    null    null
-references_priv    VARCHAR(10)    null    null
-index_priv    VARCHAR(10)    null    null
-alter_priv    VARCHAR(10)    null    null
-create_tmp_table_priv    VARCHAR(10)    null    null
-lock_tables_priv    VARCHAR(10)    null    null
-create_view_priv    VARCHAR(10)    null    null
-show_view_priv    VARCHAR(10)    null    null
-create_routine_priv    VARCHAR(10)    null    null
-alter_routine_priv    VARCHAR(10)    null    null
-execute_priv    VARCHAR(10)    null    null
-event_priv    VARCHAR(10)    null    null
-trigger_priv    VARCHAR(10)    null    null
+Host    CHAR(255)    null    null
+Db    CHAR(64)    null    null
+User    CHAR(32)    null    null
+Select_priv    VARCHAR(10)    null    null
+Insert_priv    VARCHAR(10)    null    null
+Update_priv    VARCHAR(10)    null    null
+Delete_priv    VARCHAR(10)    null    null
+Create_priv    VARCHAR(10)    null    null
+Drop_priv    VARCHAR(10)    null    null
+Grant_priv    VARCHAR(10)    null    null
+References_priv    VARCHAR(10)    null    null
+Index_priv    VARCHAR(10)    null    null
+Alter_priv    VARCHAR(10)    null    null
+Create_tmp_table_priv    VARCHAR(10)    null    null
+Lock_tables_priv    VARCHAR(10)    null    null
+Create_view_priv    VARCHAR(10)    null    null
+Show_view_priv    VARCHAR(10)    null    null
+Create_routine_priv    VARCHAR(10)    null    null
+Alter_routine_priv    VARCHAR(10)    null    null
+Execute_priv    VARCHAR(10)    null    null
+Event_priv    VARCHAR(10)    null    null
+Trigger_priv    VARCHAR(10)    null    null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='procs_priv' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 name    data_type    maximum    minimum
-host    CHAR(255)    null    null
-db    CHAR(64)    null    null
-user    CHAR(32)    null    null
-routine_name    CHAR(64)    null    null
-routine_type    VARCHAR(10)    null    null
-grantor    VARCHAR(288)    null    null
-proc_priv    VARCHAR(10)    null    null
-timestamp    TIMESTAMP(0)    null    null
+Host    CHAR(255)    null    null
+Db    CHAR(64)    null    null
+User    CHAR(32)    null    null
+Routine_name    CHAR(64)    null    null
+Routine_type    VARCHAR(10)    null    null
+Grantor    VARCHAR(288)    null    null
+Proc_priv    VARCHAR(10)    null    null
+Timestamp    TIMESTAMP(0)    null    null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='tables_priv' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 name    data_type    maximum    minimum
-host    CHAR(255)    null    null
-db    CHAR(64)    null    null
-user    CHAR(32)    null    null
-table_name    CHAR(64)    null    null
-grantor    VARCHAR(288)    null    null
-timestamp    TIMESTAMP(0)    null    null
-table_priv    VARCHAR(10)    null    null
-column_priv    VARCHAR(10)    null    null
+Host    CHAR(255)    null    null
+Db    CHAR(64)    null    null
+User    CHAR(32)    null    null
+Table_name    CHAR(64)    null    null
+Grantor    VARCHAR(288)    null    null
+Timestamp    TIMESTAMP(0)    null    null
+Table_priv    VARCHAR(10)    null    null
+Column_priv    VARCHAR(10)    null    null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='user' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 name    data_type    maximum    minimum
-host    CHAR(255)    null    null
-user    CHAR(32)    null    null
-select_priv    VARCHAR(10)    null    null
-insert_priv    VARCHAR(10)    null    null
-update_priv    VARCHAR(10)    null    null
-delete_priv    VARCHAR(10)    null    null
-create_priv    VARCHAR(10)    null    null
-drop_priv    VARCHAR(10)    null    null
-reload_priv    VARCHAR(10)    null    null
-shutdown_priv    VARCHAR(10)    null    null
-process_priv    VARCHAR(10)    null    null
-file_priv    VARCHAR(10)    null    null
-grant_priv    VARCHAR(10)    null    null
-references_priv    VARCHAR(10)    null    null
-index_priv    VARCHAR(10)    null    null
-alter_priv    VARCHAR(10)    null    null
-show_db_priv    VARCHAR(10)    null    null
-super_priv    VARCHAR(10)    null    null
-create_tmp_table_priv    VARCHAR(10)    null    null
-lock_tables_priv    VARCHAR(10)    null    null
-execute_priv    VARCHAR(10)    null    null
-repl_slave_priv    VARCHAR(10)    null    null
-repl_client_priv    VARCHAR(10)    null    null
-create_view_priv    VARCHAR(10)    null    null
-show_view_priv    VARCHAR(10)    null    null
-create_routine_priv    VARCHAR(10)    null    null
-alter_routine_priv    VARCHAR(10)    null    null
-create_user_priv    VARCHAR(10)    null    null
-event_priv    VARCHAR(10)    null    null
-trigger_priv    VARCHAR(10)    null    null
-create_tablespace_priv    VARCHAR(10)    null    null
+Host    CHAR(255)    null    null
+User    CHAR(32)    null    null
+Select_priv    VARCHAR(10)    null    null
+Insert_priv    VARCHAR(10)    null    null
+Update_priv    VARCHAR(10)    null    null
+Delete_priv    VARCHAR(10)    null    null
+Create_priv    VARCHAR(10)    null    null
+Drop_priv    VARCHAR(10)    null    null
+Reload_priv    VARCHAR(10)    null    null
+Shutdown_priv    VARCHAR(10)    null    null
+Process_priv    VARCHAR(10)    null    null
+File_priv    VARCHAR(10)    null    null
+Grant_priv    VARCHAR(10)    null    null
+References_priv    VARCHAR(10)    null    null
+Index_priv    VARCHAR(10)    null    null
+Alter_priv    VARCHAR(10)    null    null
+Show_db_priv    VARCHAR(10)    null    null
+Super_priv    VARCHAR(10)    null    null
+Create_tmp_table_priv    VARCHAR(10)    null    null
+Lock_tables_priv    VARCHAR(10)    null    null
+Execute_priv    VARCHAR(10)    null    null
+Repl_slave_priv    VARCHAR(10)    null    null
+Repl_client_priv    VARCHAR(10)    null    null
+Create_view_priv    VARCHAR(10)    null    null
+Show_view_priv    VARCHAR(10)    null    null
+Create_routine_priv    VARCHAR(10)    null    null
+Alter_routine_priv    VARCHAR(10)    null    null
+Create_user_priv    VARCHAR(10)    null    null
+Event_priv    VARCHAR(10)    null    null
+Trigger_priv    VARCHAR(10)    null    null
+Create_tablespace_priv    VARCHAR(10)    null    null
 ssl_type    VARCHAR(10)    null    null
 ssl_cipher    BLOB(0)    null    null
 x509_issuer    BLOB(0)    null    null
@@ -189,12 +189,12 @@ password_expired    VARCHAR(10)    null    null
 password_last_changed    TIMESTAMP(0)    null    null
 password_lifetime    SMALLINT UNSIGNED(16)    null    null
 account_locked    VARCHAR(10)    null    null
-create_role_priv    VARCHAR(10)    null    null
-drop_role_priv    VARCHAR(10)    null    null
-password_reuse_history    SMALLINT UNSIGNED(16)    null    null
-password_reuse_time    SMALLINT UNSIGNED(16)    null    null
-password_require_current    VARCHAR(10)    null    null
-user_attributes    JSON(0)    null    null
+Create_role_priv    VARCHAR(10)    null    null
+Drop_role_priv    VARCHAR(10)    null    null
+Password_reuse_history    SMALLINT UNSIGNED(16)    null    null
+Password_reuse_time    SMALLINT UNSIGNED(16)    null    null
+Password_require_current    VARCHAR(10)    null    null
+User_attributes    JSON(0)    null    null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='system_metrics' and att_relname='metric' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 name    data_type    maximum    minimum
 metric_name    VARCHAR(1024)    null    null
@@ -217,38 +217,38 @@ count(*)
 0
 SHOW CREATE TABLE information_schema.engines;
 Table    Create Table
-engines    CREATE TABLE `engines` (\n  `engine` VARCHAR(64) DEFAULT NULL,\n  `support` VARCHAR(8) DEFAULT NULL,\n  `comment` VARCHAR(160) DEFAULT NULL,\n  `transactions` VARCHAR(3) DEFAULT NULL,\n  `xa` VARCHAR(3) DEFAULT NULL,\n  `savepoints` VARCHAR(3) DEFAULT NULL\n)
+engines    CREATE TABLE `engines` (\n  `ENGINE` VARCHAR(64) DEFAULT NULL,\n  `SUPPORT` VARCHAR(8) DEFAULT NULL,\n  `COMMENT` VARCHAR(160) DEFAULT NULL,\n  `TRANSACTIONS` VARCHAR(3) DEFAULT NULL,\n  `XA` VARCHAR(3) DEFAULT NULL,\n  `SAVEPOINTS` VARCHAR(3) DEFAULT NULL\n)
 SHOW CREATE TABLE information_schema.key_column_usage;
 Table    Create Table
-key_column_usage    CREATE TABLE `key_column_usage` (\n  `constraint_catalog` VARCHAR(64) DEFAULT NULL,\n  `constraint_schema` VARCHAR(64) DEFAULT NULL,\n  `constraint_name` VARCHAR(64) DEFAULT NULL,\n  `table_catalog` VARCHAR(64) DEFAULT NULL,\n  `table_schema` VARCHAR(64) DEFAULT NULL,\n  `table_name` VARCHAR(64) DEFAULT NULL,\n  `column_name` VARCHAR(64) DEFAULT NULL,\n  `ordinal_position` INT UNSIGNED DEFAULT NULL,\n  `position_in_unique_constraint` INT UNSIGNED DEFAULT NULL,\n  `referenced_table_schema` VARCHAR(64) DEFAULT NULL,\n  `referenced_table_name` VARCHAR(64) DEFAULT NULL,\n  `referenced_column_name` VARCHAR(64) DEFAULT NULL\n)
+key_column_usage    CREATE TABLE `key_column_usage` (\n  `CONSTRAINT_CATALOG` VARCHAR(64) DEFAULT NULL,\n  `CONSTRAINT_SCHEMA` VARCHAR(64) DEFAULT NULL,\n  `CONSTRAINT_NAME` VARCHAR(64) DEFAULT NULL,\n  `TABLE_CATALOG` VARCHAR(64) DEFAULT NULL,\n  `TABLE_SCHEMA` VARCHAR(64) DEFAULT NULL,\n  `TABLE_NAME` VARCHAR(64) DEFAULT NULL,\n  `COLUMN_NAME` VARCHAR(64) DEFAULT NULL,\n  `ORDINAL_POSITION` INT UNSIGNED DEFAULT NULL,\n  `POSITION_IN_UNIQUE_CONSTRAINT` INT UNSIGNED DEFAULT NULL,\n  `REFERENCED_TABLE_SCHEMA` VARCHAR(64) DEFAULT NULL,\n  `REFERENCED_TABLE_NAME` VARCHAR(64) DEFAULT NULL,\n  `REFERENCED_COLUMN_NAME` VARCHAR(64) DEFAULT NULL\n)
 SHOW CREATE TABLE information_schema.keywords;
 Table    Create Table
-keywords    CREATE TABLE `keywords` (\n  `word` VARCHAR(64) DEFAULT NULL,\n  `reserved` INT UNSIGNED DEFAULT NULL\n)
+keywords    CREATE TABLE `keywords` (\n  `WORD` VARCHAR(64) DEFAULT NULL,\n  `RESERVED` INT UNSIGNED DEFAULT NULL\n)
 SHOW CREATE TABLE information_schema.parameters;
 Table    Create Table
-parameters    CREATE TABLE `parameters` (\n  `specific_catalog` VARCHAR(64) DEFAULT NULL,\n  `specific_schema` VARCHAR(64) DEFAULT NULL,\n  `specific_name` VARCHAR(64) DEFAULT NULL,\n  `ordinal_position` BIGINT UNSIGNED DEFAULT NULL,\n  `parameter_mode` VARCHAR(5) DEFAULT NULL,\n  `parameter_name` VARCHAR(64) DEFAULT NULL,\n  `data_type` TEXT DEFAULT NULL,\n  `character_maximum_length` BIGINT DEFAULT NULL,\n  `character_octet_length` BIGINT DEFAULT NULL,\n  `numeric_precision` INT UNSIGNED DEFAULT NULL,\n  `numeric_scale` BIGINT DEFAULT NULL,\n  `datetime_precision` INT UNSIGNED DEFAULT NULL,\n  `character_set_name` VARCHAR(64) DEFAULT NULL,\n  `collation_name` VARCHAR(64) DEFAULT NULL,\n  `dtd_identifier` TEXT DEFAULT NULL,\n  `routine_type` VARCHAR(64) DEFAULT NULL\n)
+parameters    CREATE TABLE `parameters` (\n  `SPECIFIC_CATALOG` VARCHAR(64) DEFAULT NULL,\n  `SPECIFIC_SCHEMA` VARCHAR(64) DEFAULT NULL,\n  `SPECIFIC_NAME` VARCHAR(64) DEFAULT NULL,\n  `ORDINAL_POSITION` BIGINT UNSIGNED DEFAULT NULL,\n  `PARAMETER_MODE` VARCHAR(5) DEFAULT NULL,\n  `PARAMETER_NAME` VARCHAR(64) DEFAULT NULL,\n  `DATA_TYPE` TEXT DEFAULT NULL,\n  `CHARACTER_MAXIMUM_LENGTH` BIGINT DEFAULT NULL,\n  `CHARACTER_OCTET_LENGTH` BIGINT DEFAULT NULL,\n  `NUMERIC_PRECISION` INT UNSIGNED DEFAULT NULL,\n  `NUMERIC_SCALE` BIGINT DEFAULT NULL,\n  `DATETIME_PRECISION` INT UNSIGNED DEFAULT NULL,\n  `CHARACTER_SET_NAME` VARCHAR(64) DEFAULT NULL,\n  `COLLATION_NAME` VARCHAR(64) DEFAULT NULL,\n  `DTD_IDENTIFIER` TEXT DEFAULT NULL,\n  `ROUTINE_TYPE` VARCHAR(64) DEFAULT NULL\n)
 SHOW CREATE TABLE mo_catalog.mo_columns;
 Table    Create Table
-mo_columns    CREATE TABLE `mo_columns` (\n  `att_uniq_name` VARCHAR(256) DEFAULT NULL,\n  `account_id` INT UNSIGNED DEFAULT NULL,\n  `att_database_id` BIGINT UNSIGNED DEFAULT NULL,\n  `att_database` VARCHAR(256) DEFAULT NULL,\n  `att_relname_id` BIGINT UNSIGNED DEFAULT NULL,\n  `att_relname` VARCHAR(256) DEFAULT NULL,\n  `attname` VARCHAR(256) DEFAULT NULL,\n  `atttyp` VARCHAR(256) DEFAULT NULL,\n  `attnum` INT DEFAULT NULL,\n  `att_length` INT DEFAULT NULL,\n  `attnotnull` TINYINT DEFAULT NULL,\n  `atthasdef` TINYINT DEFAULT NULL,\n  `att_default` VARCHAR(2048) DEFAULT NULL,\n  `attisdropped` TINYINT DEFAULT NULL,\n  `att_constraint_type` CHAR(1) DEFAULT NULL,\n  `att_is_unsigned` TINYINT DEFAULT NULL,\n  `att_is_auto_increment` TINYINT DEFAULT NULL,\n  `att_comment` VARCHAR(2048) DEFAULT NULL,\n  `att_is_hidden` TINYINT DEFAULT NULL,\n  `attr_has_update` TINYINT DEFAULT NULL,\n  `attr_update` VARCHAR(2048) DEFAULT NULL,\n  `attr_is_clusterby` TINYINT DEFAULT NULL,\n  `attr_seqnum` SMALLINT UNSIGNED DEFAULT NULL,\n  `attr_enum` VARCHAR(65535) DEFAULT NULL,\n  PRIMARY KEY (`att_uniq_name`)\n)
+mo_columns    CREATE TABLE `mo_columns` (\n  `att_uniq_name` VARCHAR(256) DEFAULT NULL,\n  `account_id` INT UNSIGNED DEFAULT NULL,\n  `att_database_id` BIGINT UNSIGNED DEFAULT NULL,\n  `att_database` VARCHAR(256) DEFAULT NULL,\n  `att_relname_id` BIGINT UNSIGNED DEFAULT NULL,\n  `att_relname` VARCHAR(256) DEFAULT NULL,\n  `attname` VARCHAR(256) DEFAULT NULL,\n  `atttyp` VARCHAR(256) DEFAULT NULL,\n  `attnum` INT DEFAULT NULL,\n  `att_length` INT DEFAULT NULL,\n  `attnotnull` TINYINT DEFAULT NULL,\n  `atthasdef` TINYINT DEFAULT NULL,\n  `att_default` VARCHAR(2048) DEFAULT NULL,\n  `attisdropped` TINYINT DEFAULT NULL,\n  `att_constraint_type` CHAR(1) DEFAULT NULL,\n  `att_is_unsigned` TINYINT DEFAULT NULL,\n  `att_is_auto_increment` TINYINT DEFAULT NULL,\n  `att_comment` VARCHAR(2048) DEFAULT NULL,\n  `att_is_hidden` TINYINT DEFAULT NULL,\n  `attr_has_update` TINYINT DEFAULT NULL,\n  `attr_update` VARCHAR(2048) DEFAULT NULL,\n  `attr_is_clusterby` TINYINT DEFAULT NULL,\n  `attr_seqnum` SMALLINT UNSIGNED DEFAULT NULL,\n  `attr_enum` VARCHAR(65535) DEFAULT NULL,\n  PRIMARY KEY (`account_id`,`att_database`,`att_relname`,`attname`)\n)
 SHOW CREATE TABLE mo_sample_data_tpch_sf1.lineitem;
 invalid database mo_sample_data_tpch_sf1
 SHOW CREATE TABLE mo_sample_data_tpch_sf1.supplier;
 invalid database mo_sample_data_tpch_sf1
 SHOW CREATE TABLE mysql.columns_priv;
 Table    Create Table
-columns_priv    CREATE TABLE `columns_priv` (\n  `host` CHAR(255) NOT NULL DEFAULT '',\n  `db` CHAR(64) NOT NULL DEFAULT '',\n  `user` CHAR(32) NOT NULL DEFAULT '',\n  `table_name` CHAR(64) NOT NULL DEFAULT '',\n  `column_name` CHAR(64) NOT NULL DEFAULT '',\n  `timestamp` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  `column_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  PRIMARY KEY (`host`,`db`,`user`,`table_name`,`column_name`)\n)
+columns_priv    CREATE TABLE `columns_priv` (\n  `Host` CHAR(255) NOT NULL DEFAULT '',\n  `Db` CHAR(64) NOT NULL DEFAULT '',\n  `User` CHAR(32) NOT NULL DEFAULT '',\n  `Table_name` CHAR(64) NOT NULL DEFAULT '',\n  `Column_name` CHAR(64) NOT NULL DEFAULT '',\n  `Timestamp` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  `Column_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  PRIMARY KEY (`Host`,`Db`,`User`,`Table_name`,`Column_name`)\n)
 SHOW CREATE TABLE mysql.db;
 Table    Create Table
-db    CREATE TABLE `db` (\n  `host` CHAR(255) NOT NULL DEFAULT '',\n  `db` CHAR(64) NOT NULL DEFAULT '',\n  `user` CHAR(32) NOT NULL DEFAULT '',\n  `select_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `insert_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `update_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `delete_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `drop_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `grant_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `references_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `index_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `alter_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_tmp_table_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `lock_tables_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_view_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `show_view_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_routine_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `alter_routine_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `execute_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `event_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `trigger_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  PRIMARY KEY (`host`,`db`,`user`),\n  KEY `user` (`user`)\n)
+db    CREATE TABLE `db` (\n  `Host` CHAR(255) NOT NULL DEFAULT '',\n  `Db` CHAR(64) NOT NULL DEFAULT '',\n  `User` CHAR(32) NOT NULL DEFAULT '',\n  `Select_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Insert_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Update_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Delete_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Create_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Drop_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Grant_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `References_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Index_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Alter_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Create_tmp_table_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Lock_tables_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Create_view_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Show_view_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Create_routine_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Alter_routine_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Execute_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Event_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Trigger_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  PRIMARY KEY (`Host`,`Db`,`User`),\n  KEY `user` (`User`)\n)
 SHOW CREATE TABLE mysql.procs_priv;
 Table    Create Table
-procs_priv    CREATE TABLE `procs_priv` (\n  `host` CHAR(255) NOT NULL DEFAULT '',\n  `db` CHAR(64) NOT NULL DEFAULT '',\n  `user` CHAR(32) NOT NULL DEFAULT '',\n  `routine_name` CHAR(64) NOT NULL DEFAULT '',\n  `routine_type` VARCHAR(10) NOT NULL,\n  `grantor` VARCHAR(288) NOT NULL DEFAULT '',\n  `proc_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  `timestamp` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`host`,`db`,`user`,`routine_name`,`routine_type`),\n  KEY `grantor` (`grantor`)\n)
+procs_priv    CREATE TABLE `procs_priv` (\n  `Host` CHAR(255) NOT NULL DEFAULT '',\n  `Db` CHAR(64) NOT NULL DEFAULT '',\n  `User` CHAR(32) NOT NULL DEFAULT '',\n  `Routine_name` CHAR(64) NOT NULL DEFAULT '',\n  `Routine_type` VARCHAR(10) NOT NULL,\n  `Grantor` VARCHAR(288) NOT NULL DEFAULT '',\n  `Proc_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  `Timestamp` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`Host`,`Db`,`User`,`Routine_name`,`Routine_type`),\n  KEY `grantor` (`Grantor`)\n)
 SHOW CREATE TABLE mysql.tables_priv;
 Table    Create Table
-tables_priv    CREATE TABLE `tables_priv` (\n  `host` CHAR(255) NOT NULL DEFAULT '',\n  `db` CHAR(64) NOT NULL DEFAULT '',\n  `user` CHAR(32) NOT NULL DEFAULT '',\n  `table_name` CHAR(64) NOT NULL DEFAULT '',\n  `grantor` VARCHAR(288) NOT NULL DEFAULT '',\n  `timestamp` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  `table_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  `column_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  PRIMARY KEY (`host`,`db`,`user`,`table_name`),\n  KEY `grantor` (`grantor`)\n)
+tables_priv    CREATE TABLE `tables_priv` (\n  `Host` CHAR(255) NOT NULL DEFAULT '',\n  `Db` CHAR(64) NOT NULL DEFAULT '',\n  `User` CHAR(32) NOT NULL DEFAULT '',\n  `Table_name` CHAR(64) NOT NULL DEFAULT '',\n  `Grantor` VARCHAR(288) NOT NULL DEFAULT '',\n  `Timestamp` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  `Table_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  `Column_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  PRIMARY KEY (`Host`,`Db`,`User`,`Table_name`),\n  KEY `grantor` (`Grantor`)\n)
 SHOW CREATE TABLE mysql.user;
 Table    Create Table
-user    CREATE TABLE `user` (\n  `host` CHAR(255) NOT NULL DEFAULT '',\n  `user` CHAR(32) NOT NULL DEFAULT '',\n  `select_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `insert_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `update_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `delete_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `drop_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `reload_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `shutdown_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `process_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `file_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `grant_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `references_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `index_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `alter_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `show_db_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `super_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_tmp_table_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `lock_tables_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `execute_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `repl_slave_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `repl_client_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_view_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `show_view_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_routine_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `alter_routine_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_user_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `event_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `trigger_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_tablespace_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `ssl_type` VARCHAR(10) NOT NULL DEFAULT '',\n  `ssl_cipher` BLOB NOT NULL,\n  `x509_issuer` BLOB NOT NULL,\n  `x509_subject` BLOB NOT NULL,\n  `max_questions` INT UNSIGNED NOT NULL DEFAULT '0',\n  `max_updates` INT UNSIGNED NOT NULL DEFAULT '0',\n  `max_connections` INT UNSIGNED NOT NULL DEFAULT '0',\n  `max_user_connections` INT UNSIGNED NOT NULL DEFAULT '0',\n  `plugin` CHAR(64) NOT NULL DEFAULT 'caching_sha2_password',\n  `authentication_string` TEXT DEFAULT NULL,\n  `password_expired` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `password_last_changed` TIMESTAMP NULL DEFAULT NULL,\n  `password_lifetime` SMALLINT UNSIGNED DEFAULT NULL,\n  `account_locked` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_role_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `drop_role_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `password_reuse_history` SMALLINT UNSIGNED DEFAULT NULL,\n  `password_reuse_time` SMALLINT UNSIGNED DEFAULT NULL,\n  `password_require_current` VARCHAR(10) DEFAULT NULL,\n  `user_attributes` JSON DEFAULT NULL,\n  PRIMARY KEY (`host`,`user`)\n)
+user    CREATE TABLE `user` (\n  `Host` CHAR(255) NOT NULL DEFAULT '',\n  `User` CHAR(32) NOT NULL DEFAULT '',\n  `Select_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Insert_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Update_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Delete_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Create_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Drop_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Reload_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Shutdown_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Process_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `File_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Grant_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `References_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Index_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Alter_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Show_db_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Super_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Create_tmp_table_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Lock_tables_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Execute_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Repl_slave_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Repl_client_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Create_view_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Show_view_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Create_routine_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Alter_routine_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Create_user_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Event_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Trigger_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Create_tablespace_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `ssl_type` VARCHAR(10) NOT NULL DEFAULT '',\n  `ssl_cipher` BLOB NOT NULL,\n  `x509_issuer` BLOB NOT NULL,\n  `x509_subject` BLOB NOT NULL,\n  `max_questions` INT UNSIGNED NOT NULL DEFAULT '0',\n  `max_updates` INT UNSIGNED NOT NULL DEFAULT '0',\n  `max_connections` INT UNSIGNED NOT NULL DEFAULT '0',\n  `max_user_connections` INT UNSIGNED NOT NULL DEFAULT '0',\n  `plugin` CHAR(64) NOT NULL DEFAULT 'caching_sha2_password',\n  `authentication_string` TEXT DEFAULT NULL,\n  `password_expired` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `password_last_changed` TIMESTAMP NULL DEFAULT NULL,\n  `password_lifetime` SMALLINT UNSIGNED DEFAULT NULL,\n  `account_locked` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Create_role_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Drop_role_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `Password_reuse_history` SMALLINT UNSIGNED DEFAULT NULL,\n  `Password_reuse_time` SMALLINT UNSIGNED DEFAULT NULL,\n  `Password_require_current` VARCHAR(10) DEFAULT NULL,\n  `User_attributes` JSON DEFAULT NULL,\n  PRIMARY KEY (`Host`,`User`)\n)
 SHOW CREATE TABLE system_metrics.metric;
 Table    Create Table
 metric    CREATE TABLE `metric` (\n  `metric_name` VARCHAR(1024) DEFAULT 'sys' COMMENT 'metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...',\n  `collecttime` DATETIME(6) NOT NULL COMMENT 'metric data collect time',\n  `value` DOUBLE DEFAULT '0.0' COMMENT 'metric value',\n  `node` VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node uuid',\n  `role` VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',\n  `account` VARCHAR(1024) DEFAULT 'sys' COMMENT 'account name',\n  `type` VARCHAR(1024) NOT NULL COMMENT 'sql type, like: insert, select, ...'\n) COMMENT='metric data[mo_no_del_hint]' CLUSTER BY (`collecttime`, `metric_name`, `account`)
@@ -311,63 +311,63 @@ count(*)
 0
 DESC `information_schema`.`character_sets` ;
 Field    Type    Null    Key    Default    Extra    Comment
-character_set_name    VARCHAR(64)    YES        null        
-default_collate_name    VARCHAR(64)    YES        null        
-description    VARCHAR(2048)    YES        null        
-maxlen    INT UNSIGNED(32)    YES        null        
+CHARACTER_SET_NAME    VARCHAR(64)    YES        null        
+DEFAULT_COLLATE_NAME    VARCHAR(64)    YES        null        
+DESCRIPTION    VARCHAR(2048)    YES        null        
+MAXLEN    INT UNSIGNED(32)    YES        null        
 DESC `information_schema`.`engines` ;
 Field    Type    Null    Key    Default    Extra    Comment
-engine    VARCHAR(64)    YES        null        
-support    VARCHAR(8)    YES        null        
-comment    VARCHAR(160)    YES        null        
-transactions    VARCHAR(3)    YES        null        
-xa    VARCHAR(3)    YES        null        
-savepoints    VARCHAR(3)    YES        null        
+ENGINE    VARCHAR(64)    YES        null        
+SUPPORT    VARCHAR(8)    YES        null        
+COMMENT    VARCHAR(160)    YES        null        
+TRANSACTIONS    VARCHAR(3)    YES        null        
+XA    VARCHAR(3)    YES        null        
+SAVEPOINTS    VARCHAR(3)    YES        null        
 DESC `information_schema`.`key_column_usage` ;
 Field    Type    Null    Key    Default    Extra    Comment
-constraint_catalog    VARCHAR(64)    YES        null        
-constraint_schema    VARCHAR(64)    YES        null        
-constraint_name    VARCHAR(64)    YES        null        
-table_catalog    VARCHAR(64)    YES        null        
-table_schema    VARCHAR(64)    YES        null        
-table_name    VARCHAR(64)    YES        null        
-column_name    VARCHAR(64)    YES        null        
-ordinal_position    INT UNSIGNED(32)    YES        null        
-position_in_unique_constraint    INT UNSIGNED(32)    YES        null        
-referenced_table_schema    VARCHAR(64)    YES        null        
-referenced_table_name    VARCHAR(64)    YES        null        
-referenced_column_name    VARCHAR(64)    YES        null        
+CONSTRAINT_CATALOG    VARCHAR(64)    YES        null        
+CONSTRAINT_SCHEMA    VARCHAR(64)    YES        null        
+CONSTRAINT_NAME    VARCHAR(64)    YES        null        
+TABLE_CATALOG    VARCHAR(64)    YES        null        
+TABLE_SCHEMA    VARCHAR(64)    YES        null        
+TABLE_NAME    VARCHAR(64)    YES        null        
+COLUMN_NAME    VARCHAR(64)    YES        null        
+ORDINAL_POSITION    INT UNSIGNED(32)    YES        null        
+POSITION_IN_UNIQUE_CONSTRAINT    INT UNSIGNED(32)    YES        null        
+REFERENCED_TABLE_SCHEMA    VARCHAR(64)    YES        null        
+REFERENCED_TABLE_NAME    VARCHAR(64)    YES        null        
+REFERENCED_COLUMN_NAME    VARCHAR(64)    YES        null        
 DESC `information_schema`.`keywords` ;
 Field    Type    Null    Key    Default    Extra    Comment
-word    VARCHAR(64)    YES        null        
-reserved    INT UNSIGNED(32)    YES        null        
+WORD    VARCHAR(64)    YES        null        
+RESERVED    INT UNSIGNED(32)    YES        null        
 DESC `information_schema`.`parameters` ;
 Field    Type    Null    Key    Default    Extra    Comment
-specific_catalog    VARCHAR(64)    YES        null        
-specific_schema    VARCHAR(64)    YES        null        
-specific_name    VARCHAR(64)    YES        null        
-ordinal_position    BIGINT UNSIGNED(64)    YES        null        
-parameter_mode    VARCHAR(5)    YES        null        
-parameter_name    VARCHAR(64)    YES        null        
-data_type    TEXT(0)    YES        null        
-character_maximum_length    BIGINT(64)    YES        null        
-character_octet_length    BIGINT(64)    YES        null        
-numeric_precision    INT UNSIGNED(32)    YES        null        
-numeric_scale    BIGINT(64)    YES        null        
-datetime_precision    INT UNSIGNED(32)    YES        null        
-character_set_name    VARCHAR(64)    YES        null        
-collation_name    VARCHAR(64)    YES        null        
-dtd_identifier    TEXT(0)    YES        null        
-routine_type    VARCHAR(64)    YES        null        
+SPECIFIC_CATALOG    VARCHAR(64)    YES        null        
+SPECIFIC_SCHEMA    VARCHAR(64)    YES        null        
+SPECIFIC_NAME    VARCHAR(64)    YES        null        
+ORDINAL_POSITION    BIGINT UNSIGNED(64)    YES        null        
+PARAMETER_MODE    VARCHAR(5)    YES        null        
+PARAMETER_NAME    VARCHAR(64)    YES        null        
+DATA_TYPE    TEXT(0)    YES        null        
+CHARACTER_MAXIMUM_LENGTH    BIGINT(64)    YES        null        
+CHARACTER_OCTET_LENGTH    BIGINT(64)    YES        null        
+NUMERIC_PRECISION    INT UNSIGNED(32)    YES        null        
+NUMERIC_SCALE    BIGINT(64)    YES        null        
+DATETIME_PRECISION    INT UNSIGNED(32)    YES        null        
+CHARACTER_SET_NAME    VARCHAR(64)    YES        null        
+COLLATION_NAME    VARCHAR(64)    YES        null        
+DTD_IDENTIFIER    TEXT(0)    YES        null        
+ROUTINE_TYPE    VARCHAR(64)    YES        null        
 DESC `mo_catalog`.`mo_columns` ;
 Field    Type    Null    Key    Default    Extra    Comment
-att_uniq_name    VARCHAR(256)    YES    PRI    null        
-account_id    INT UNSIGNED(0)    YES        null        
+att_uniq_name    VARCHAR(256)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 att_database_id    BIGINT UNSIGNED(0)    YES        null        
-att_database    VARCHAR(256)    YES        null        
+att_database    VARCHAR(256)    YES    PRI    null        
 att_relname_id    BIGINT UNSIGNED(0)    YES        null        
-att_relname    VARCHAR(256)    YES        null        
-attname    VARCHAR(256)    YES        null        
+att_relname    VARCHAR(256)    YES    PRI    null        
+attname    VARCHAR(256)    YES    PRI    null        
 atttyp    VARCHAR(256)    YES        null        
 attnum    INT(0)    YES        null        
 att_length    INT(0)    YES        null        
@@ -399,90 +399,90 @@ DESC `mo_sample_data_tpch_sf1`.`supplier` ;
 invalid database mo_sample_data_tpch_sf1
 DESC `mysql`.`columns_priv` ;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-db    CHAR(64)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-table_name    CHAR(64)    NO    PRI    ''        
-column_name    CHAR(64)    NO    PRI    ''        
-timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
-column_priv    VARCHAR(10)    NO        ''        
+Host    CHAR(255)    NO    PRI    ''        
+Db    CHAR(64)    NO    PRI    ''        
+User    CHAR(32)    NO    PRI    ''        
+Table_name    CHAR(64)    NO    PRI    ''        
+Column_name    CHAR(64)    NO    PRI    ''        
+Timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
+Column_priv    VARCHAR(10)    NO        ''        
 DESC `mysql`.`db` ;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-db    CHAR(64)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-select_priv    VARCHAR(10)    NO        'N'        
-insert_priv    VARCHAR(10)    NO        'N'        
-update_priv    VARCHAR(10)    NO        'N'        
-delete_priv    VARCHAR(10)    NO        'N'        
-create_priv    VARCHAR(10)    NO        'N'        
-drop_priv    VARCHAR(10)    NO        'N'        
-grant_priv    VARCHAR(10)    NO        'N'        
-references_priv    VARCHAR(10)    NO        'N'        
-index_priv    VARCHAR(10)    NO        'N'        
-alter_priv    VARCHAR(10)    NO        'N'        
-create_tmp_table_priv    VARCHAR(10)    NO        'N'        
-lock_tables_priv    VARCHAR(10)    NO        'N'        
-create_view_priv    VARCHAR(10)    NO        'N'        
-show_view_priv    VARCHAR(10)    NO        'N'        
-create_routine_priv    VARCHAR(10)    NO        'N'        
-alter_routine_priv    VARCHAR(10)    NO        'N'        
-execute_priv    VARCHAR(10)    NO        'N'        
-event_priv    VARCHAR(10)    NO        'N'        
-trigger_priv    VARCHAR(10)    NO        'N'        
+Host    CHAR(255)    NO    PRI    ''        
+Db    CHAR(64)    NO    PRI    ''        
+User    CHAR(32)    NO    PRI    ''        
+Select_priv    VARCHAR(10)    NO        'N'        
+Insert_priv    VARCHAR(10)    NO        'N'        
+Update_priv    VARCHAR(10)    NO        'N'        
+Delete_priv    VARCHAR(10)    NO        'N'        
+Create_priv    VARCHAR(10)    NO        'N'        
+Drop_priv    VARCHAR(10)    NO        'N'        
+Grant_priv    VARCHAR(10)    NO        'N'        
+References_priv    VARCHAR(10)    NO        'N'        
+Index_priv    VARCHAR(10)    NO        'N'        
+Alter_priv    VARCHAR(10)    NO        'N'        
+Create_tmp_table_priv    VARCHAR(10)    NO        'N'        
+Lock_tables_priv    VARCHAR(10)    NO        'N'        
+Create_view_priv    VARCHAR(10)    NO        'N'        
+Show_view_priv    VARCHAR(10)    NO        'N'        
+Create_routine_priv    VARCHAR(10)    NO        'N'        
+Alter_routine_priv    VARCHAR(10)    NO        'N'        
+Execute_priv    VARCHAR(10)    NO        'N'        
+Event_priv    VARCHAR(10)    NO        'N'        
+Trigger_priv    VARCHAR(10)    NO        'N'        
 DESC `mysql`.`procs_priv` ;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-db    CHAR(64)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-routine_name    CHAR(64)    NO    PRI    ''        
-routine_type    VARCHAR(10)    NO    PRI    null        
-grantor    VARCHAR(288)    NO    MUL    ''        
-proc_priv    VARCHAR(10)    NO        ''        
-timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
+Host    CHAR(255)    NO    PRI    ''        
+Db    CHAR(64)    NO    PRI    ''        
+User    CHAR(32)    NO    PRI    ''        
+Routine_name    CHAR(64)    NO    PRI    ''        
+Routine_type    VARCHAR(10)    NO    PRI    null        
+Grantor    VARCHAR(288)    NO    MUL    ''        
+Proc_priv    VARCHAR(10)    NO        ''        
+Timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
 DESC `mysql`.`tables_priv` ;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-db    CHAR(64)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-table_name    CHAR(64)    NO    PRI    ''        
-grantor    VARCHAR(288)    NO    MUL    ''        
-timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
-table_priv    VARCHAR(10)    NO        ''        
-column_priv    VARCHAR(10)    NO        ''        
+Host    CHAR(255)    NO    PRI    ''        
+Db    CHAR(64)    NO    PRI    ''        
+User    CHAR(32)    NO    PRI    ''        
+Table_name    CHAR(64)    NO    PRI    ''        
+Grantor    VARCHAR(288)    NO    MUL    ''        
+Timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
+Table_priv    VARCHAR(10)    NO        ''        
+Column_priv    VARCHAR(10)    NO        ''        
 DESC `mysql`.`user` ;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-select_priv    VARCHAR(10)    NO        'N'        
-insert_priv    VARCHAR(10)    NO        'N'        
-update_priv    VARCHAR(10)    NO        'N'        
-delete_priv    VARCHAR(10)    NO        'N'        
-create_priv    VARCHAR(10)    NO        'N'        
-drop_priv    VARCHAR(10)    NO        'N'        
-reload_priv    VARCHAR(10)    NO        'N'        
-shutdown_priv    VARCHAR(10)    NO        'N'        
-process_priv    VARCHAR(10)    NO        'N'        
-file_priv    VARCHAR(10)    NO        'N'        
-grant_priv    VARCHAR(10)    NO        'N'        
-references_priv    VARCHAR(10)    NO        'N'        
-index_priv    VARCHAR(10)    NO        'N'        
-alter_priv    VARCHAR(10)    NO        'N'        
-show_db_priv    VARCHAR(10)    NO        'N'        
-super_priv    VARCHAR(10)    NO        'N'        
-create_tmp_table_priv    VARCHAR(10)    NO        'N'        
-lock_tables_priv    VARCHAR(10)    NO        'N'        
-execute_priv    VARCHAR(10)    NO        'N'        
-repl_slave_priv    VARCHAR(10)    NO        'N'        
-repl_client_priv    VARCHAR(10)    NO        'N'        
-create_view_priv    VARCHAR(10)    NO        'N'        
-show_view_priv    VARCHAR(10)    NO        'N'        
-create_routine_priv    VARCHAR(10)    NO        'N'        
-alter_routine_priv    VARCHAR(10)    NO        'N'        
-create_user_priv    VARCHAR(10)    NO        'N'        
-event_priv    VARCHAR(10)    NO        'N'        
-trigger_priv    VARCHAR(10)    NO        'N'        
-create_tablespace_priv    VARCHAR(10)    NO        'N'        
+Host    CHAR(255)    NO    PRI    ''        
+User    CHAR(32)    NO    PRI    ''        
+Select_priv    VARCHAR(10)    NO        'N'        
+Insert_priv    VARCHAR(10)    NO        'N'        
+Update_priv    VARCHAR(10)    NO        'N'        
+Delete_priv    VARCHAR(10)    NO        'N'        
+Create_priv    VARCHAR(10)    NO        'N'        
+Drop_priv    VARCHAR(10)    NO        'N'        
+Reload_priv    VARCHAR(10)    NO        'N'        
+Shutdown_priv    VARCHAR(10)    NO        'N'        
+Process_priv    VARCHAR(10)    NO        'N'        
+File_priv    VARCHAR(10)    NO        'N'        
+Grant_priv    VARCHAR(10)    NO        'N'        
+References_priv    VARCHAR(10)    NO        'N'        
+Index_priv    VARCHAR(10)    NO        'N'        
+Alter_priv    VARCHAR(10)    NO        'N'        
+Show_db_priv    VARCHAR(10)    NO        'N'        
+Super_priv    VARCHAR(10)    NO        'N'        
+Create_tmp_table_priv    VARCHAR(10)    NO        'N'        
+Lock_tables_priv    VARCHAR(10)    NO        'N'        
+Execute_priv    VARCHAR(10)    NO        'N'        
+Repl_slave_priv    VARCHAR(10)    NO        'N'        
+Repl_client_priv    VARCHAR(10)    NO        'N'        
+Create_view_priv    VARCHAR(10)    NO        'N'        
+Show_view_priv    VARCHAR(10)    NO        'N'        
+Create_routine_priv    VARCHAR(10)    NO        'N'        
+Alter_routine_priv    VARCHAR(10)    NO        'N'        
+Create_user_priv    VARCHAR(10)    NO        'N'        
+Event_priv    VARCHAR(10)    NO        'N'        
+Trigger_priv    VARCHAR(10)    NO        'N'        
+Create_tablespace_priv    VARCHAR(10)    NO        'N'        
 ssl_type    VARCHAR(10)    NO        ''        
 ssl_cipher    BLOB(0)    NO        null        
 x509_issuer    BLOB(0)    NO        null        
@@ -497,12 +497,12 @@ password_expired    VARCHAR(10)    NO        'N'
 password_last_changed    TIMESTAMP(0)    YES        null        
 password_lifetime    SMALLINT UNSIGNED(16)    YES        null        
 account_locked    VARCHAR(10)    NO        'N'        
-create_role_priv    VARCHAR(10)    NO        'N'        
-drop_role_priv    VARCHAR(10)    NO        'N'        
-password_reuse_history    SMALLINT UNSIGNED(16)    YES        null        
-password_reuse_time    SMALLINT UNSIGNED(16)    YES        null        
-password_require_current    VARCHAR(10)    YES        null        
-user_attributes    JSON(0)    YES        null        
+Create_role_priv    VARCHAR(10)    NO        'N'        
+Drop_role_priv    VARCHAR(10)    NO        'N'        
+Password_reuse_history    SMALLINT UNSIGNED(16)    YES        null        
+Password_reuse_time    SMALLINT UNSIGNED(16)    YES        null        
+Password_require_current    VARCHAR(10)    YES        null        
+User_attributes    JSON(0)    YES        null        
 DESC `system_metrics`.`metric` ;
 Field    Type    Null    Key    Default    Extra    Comment
 metric_name    VARCHAR(1024)    YES        'sys'        metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...
@@ -655,6 +655,7 @@ mysql    user    r    accountadmin
 system    statement_info    r    accountadmin
 system_metrics    metric    r    accountadmin
 system_metrics    server_connections    v    accountadmin
+system_metrics    server_snapshot_usage    v    accountadmin
 system_metrics    server_storage_usage    v    accountadmin
 system_metrics    sql_statement_cu    r    accountadmin
 system_metrics    sql_statement_duration_total    v    accountadmin
@@ -664,14 +665,14 @@ system_metrics    sql_transaction_errors    v    accountadmin
 system_metrics    sql_transaction_total    v    accountadmin
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='information_schema';
 name    owner
-columns    accountadmin
-processlist    accountadmin
-schemata    accountadmin
 tables    accountadmin
 partitions    accountadmin
 views    accountadmin
 statistics    accountadmin
 referential_constraints    accountadmin
+columns    accountadmin
+processlist    accountadmin
+schemata    accountadmin
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mo_sample_data_tpch_sf1';
 name    owner
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mysql';
@@ -687,17 +688,14 @@ sql_transaction_errors    accountadmin
 sql_statement_duration_total    accountadmin
 server_connections    accountadmin
 server_storage_usage    accountadmin
+server_snapshot_usage    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='information_schema';
 name    rows    size    owner
-key_column_usage    0    0    accountadmin
-profiling    0    0    accountadmin
-user_privileges    0    0    accountadmin
-character_sets    0    0    accountadmin
 triggers    0    0    accountadmin
 engines    0    0    accountadmin
 routines    0    0    accountadmin
 parameters    0    0    accountadmin
-keywords    747    45171    accountadmin
+keywords    747    23904    accountadmin
 schema_privileges    0    0    accountadmin
 table_privileges    0    0    accountadmin
 column_privileges    0    0    accountadmin
@@ -705,16 +703,20 @@ collations    0    0    accountadmin
 table_constraints    0    0    accountadmin
 events    0    0    accountadmin
 files    0    0    accountadmin
+key_column_usage    0    0    accountadmin
+profiling    0    0    accountadmin
+user_privileges    0    0    accountadmin
+character_sets    0    0    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mo_sample_data_tpch_sf1';
 name    rows    size    owner
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mysql';
 name    rows    size    owner
-user    0    0    accountadmin
-db    0    0    accountadmin
 procs_priv    0    0    accountadmin
 columns_priv    0    0    accountadmin
 tables_priv    0    0    accountadmin
 role_edges    0    0    accountadmin
+user    0    0    accountadmin
+db    0    0    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='system';
 name    rows    size    owner
 statement_info    0    0    accountadmin

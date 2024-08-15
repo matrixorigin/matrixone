@@ -16,79 +16,96 @@ package productl2
 
 import (
 	"bytes"
+	"math"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 )
 
-const argName = "product_l2"
+const opName = "product_l2"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (productl2 *Productl2) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": product_l2 join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
+func (productl2 *Productl2) OpType() vm.OpType {
+	return vm.ProductL2
+}
+
+func (productl2 *Productl2) Prepare(proc *process.Process) error {
+	ap := productl2
 	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
+	if productl2.ProjectList != nil {
+		return productl2.PrepareProjection(proc)
+	}
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ap := arg
+	ap := productl2
 	ctr := ap.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := productl2.build(proc, anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
-			if ctr.inBat != nil {
-				if err := ctr.probe(ap, proc, anal, arg.GetIsLast(), &result); err != nil {
+			if ctr.inBat == nil {
+				result, err = productl2.Children[0].Call(proc)
+				if err != nil {
 					return result, err
 				}
-				return result, nil
-			}
-			msg := ctr.ReceiveFromSingleReg(0, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+
+				ctr.inBat = result.Batch
+				if ctr.inBat == nil {
+					ctr.state = End
+					continue
+				}
+				if ctr.inBat.IsEmpty() {
+					proc.PutBatch(ctr.inBat)
+					ctr.inBat = nil
+					continue
+				}
+				if ctr.bat == nil {
+					proc.PutBatch(ctr.inBat)
+					ctr.inBat = nil
+					continue
+				}
+				anal.Input(ctr.inBat, productl2.GetIsFirst())
 			}
 
-			ctr.inBat = msg.Batch
-			if ctr.inBat == nil {
-				ctr.state = End
-				continue
-			}
-			if ctr.inBat.IsEmpty() {
-				proc.PutBatch(ctr.inBat)
-				ctr.inBat = nil
-				continue
-			}
-			if ctr.bat == nil {
-				proc.PutBatch(ctr.inBat)
-				ctr.inBat = nil
-				continue
-			}
-			anal.Input(ctr.inBat, arg.GetIsFirst())
-			if err := ctr.probe(ap, proc, anal, arg.GetIsLast(), &result); err != nil {
+			if err := ctr.probe(ap, proc, &result); err != nil {
 				return result, err
 			}
+
+			if productl2.ProjectList != nil {
+				var err error
+				result.Batch, err = productl2.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, productl2.GetIsLast())
 			return result, nil
 
 		default:
@@ -99,22 +116,22 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+func (productl2 *Productl2) build(proc *process.Process, anal process.Analyze) error {
+	ctr := productl2.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(productl2.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	if mp == nil {
+		return nil
+	}
+	batches := mp.GetBatches()
 	var err error
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat == nil {
-			break
-		}
-		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+	//maybe optimize this in the future
+	for i := range batches {
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err
 		}
-		proc.PutBatch(bat)
 	}
 	return nil
 }
@@ -134,7 +151,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 //	}
 //)
 
-func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -177,7 +194,9 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
 		case types.T_array_float32:
 			tblEmbeddingF32IsNull := ctr.inBat.Vecs[tblColPos].IsNull(uint64(j))
-			tblEmbeddingF32 = types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			if !tblEmbeddingF32IsNull {
+				tblEmbeddingF32 = types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			}
 
 			//// NOTE: make sure you normalize_l2 probe vector once.
 			//normalizeTblEmbeddingPtrF32 = arrayF32Pool.Get().(*[]float32)
@@ -190,12 +209,12 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			//_ = moarray.NormalizeL2[float32](tblEmbeddingF32, normalizeTblEmbeddingF32)
 
 			for i = 0; i < buildCount; i++ {
-				clusterEmbeddingF32IsNull := ctr.bat.Vecs[centroidColPos].IsNull(uint64(i))
-				clusterEmbeddingF32 = types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				if tblEmbeddingF32IsNull || clusterEmbeddingF32IsNull {
+				if tblEmbeddingF32IsNull || ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
 					leastDistance = 0
 					leastClusterIndex = i
 				} else {
+					clusterEmbeddingF32 = types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+
 					dist, err := moarray.L2DistanceSq[float32](clusterEmbeddingF32, tblEmbeddingF32)
 					if err != nil {
 						return err
@@ -211,7 +230,9 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			//arrayF32Pool.Put(normalizeTblEmbeddingPtrF32)
 		case types.T_array_float64:
 			tblEmbeddingF64IsNull := ctr.inBat.Vecs[tblColPos].IsNull(uint64(j))
-			tblEmbeddingF64 = types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			if !tblEmbeddingF64IsNull {
+				tblEmbeddingF64 = types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			}
 
 			//normalizeTblEmbeddingPtrF64 = arrayF64Pool.Get().(*[]float64)
 			//normalizeTblEmbeddingF64 = *normalizeTblEmbeddingPtrF64
@@ -223,12 +244,12 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			//_ = moarray.NormalizeL2[float64](tblEmbeddingF64, normalizeTblEmbeddingF64)
 
 			for i = 0; i < buildCount; i++ {
-				clusterEmbeddingF64IsNull := ctr.bat.Vecs[centroidColPos].IsNull(uint64(i))
-				clusterEmbeddingF64 = types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				if tblEmbeddingF64IsNull || clusterEmbeddingF64IsNull {
+				if tblEmbeddingF64IsNull || ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
 					leastDistance = 0
 					leastClusterIndex = i
 				} else {
+					clusterEmbeddingF64 = types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+
 					dist, err := moarray.L2DistanceSq[float64](clusterEmbeddingF64, tblEmbeddingF64)
 					if err != nil {
 						return err
@@ -255,7 +276,6 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 		}
 
 		if ctr.rbat.Vecs[0].Length() >= colexec.DefaultBatchSize {
-			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
 			ctr.probeIdx = j + 1
@@ -265,7 +285,6 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	// ctr.rbat.AddRowCount(count * count2)
 	ctr.probeIdx = 0
 	ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 
 	proc.PutBatch(ctr.inBat)

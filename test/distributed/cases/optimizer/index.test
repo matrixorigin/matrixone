@@ -1,4 +1,3 @@
-SET experimental_master_index = 1;
 
 drop database if exists d1;
 create database d1;
@@ -64,6 +63,9 @@ insert into t1 select result, result from generate_series(1,10000)g;
 -- @separator:table
 select mo_ctl('dn','flush','d1.t1');
 select * from t1 where b in (1,2) for update;
+create view v1 as select (case when a in (1,2,3) then 'y' else 'n' end) as a from t1;
+select count(a) from v1;
+drop table t1;
+create table t1(a int unsigned, b int, c varchar, primary key(a, c));
+select a from t1 where a = current_account_id() or (a = 0 and c in ('mo_catalog'));
 drop database if exists d1;
-
-SET experimental_master_index = 0;

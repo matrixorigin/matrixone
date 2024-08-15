@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"go.uber.org/zap"
 	"math"
 	"sync"
@@ -69,7 +70,10 @@ const (
 	WriterQueryResult
 	WriterGC
 	WriterETL
+	WriterTmp
 )
+
+const ObjectSizeLimit = 3 * mpool.GB
 
 func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.FileService) (*objectWriterV1, error) {
 	var name ObjectName
@@ -85,6 +89,8 @@ func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.Fil
 		name = BuildDiskCleanerName()
 	case WriterETL:
 		name = BuildETLName()
+	case WriterTmp:
+		name = BuildTmpName()
 	}
 	writer := &objectWriterV1{
 		seqnums:       NewSeqnums(nil),
@@ -211,8 +217,9 @@ func (w *objectWriterV1) UpdateBlockZM(tye DataMetaType, blkIdx int, seqnum uint
 	w.blocks[tye][blkIdx].meta.ColumnMeta(seqnum).SetZoneMap(zm)
 }
 
-func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte) (err error) {
+func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte, typ uint8) (err error) {
 	w.blocks[SchemaData][blkIdx].bloomFilter = buf
+	w.blocks[SchemaData][blkIdx].meta.BlockHeader().SetBloomFilterType(typ)
 	return
 }
 
@@ -390,16 +397,25 @@ func (w *objectWriterV1) getMaxIndex(blocks []blockData) uint16 {
 	return uint16(maxIndex)
 }
 
-func (w *objectWriterV1) writerBlocks(blocks []blockData) {
+// writerBlocks writes blocks to object file
+// If the compressed data exceeds 3G,
+// an error of limited writing is returned
+func (w *objectWriterV1) writerBlocks(blocks []blockData) error {
 	maxIndex := w.getMaxIndex(blocks)
+	size := uint64(0)
 	for idx := uint16(0); idx < maxIndex; idx++ {
 		for _, block := range blocks {
 			if block.meta.BlockHeader().ColumnCount() <= idx {
 				continue
 			}
 			w.buffer.Write(block.data[idx])
+			size += uint64(len(block.data[idx]))
 		}
 	}
+	if size > ObjectSizeLimit {
+		return moerr.NewErrTooLargeObjectSizeNoCtx(size)
+	}
+	return nil
 }
 
 func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([]BlockObject, error) {
@@ -498,7 +514,10 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 
 	// writer data
 	for i := range w.blocks {
-		w.writerBlocks(w.blocks[i])
+		err = w.writerBlocks(w.blocks[i])
+		if err != nil {
+			return nil, err
+		}
 	}
 	// writer bloom filter
 	for i := range bloomFilterDatas {
@@ -541,14 +560,15 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	return blockObjects, err
 }
 
-// Sync is for testing
 func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error {
 	var err error
 	w.buffer.SetDataOptions(items...)
 	defer func() {
 		if err != nil {
 			w.buffer = nil
-			logutil.Error("[DoneWithErr] Write Sync error", zap.Error(err))
+			logutil.Error("[DoneWithErr] Write Sync error",
+				zap.Error(err),
+				zap.String("file name", w.fileName))
 		}
 	}()
 	// if a compact task is rollbacked, it may leave a written file in fs

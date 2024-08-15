@@ -20,7 +20,7 @@ import (
 
 func (res Result) Close() {
 	for _, rows := range res.Batches {
-		rows.Clean(res.mp)
+		rows.Clean(res.Mp)
 	}
 }
 

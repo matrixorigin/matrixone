@@ -53,16 +53,17 @@ func (s *service) initRemote() {
 			morpc.WithDisconnectAfterRead(s.cfg.disconnectAfterRead))
 	}
 
-	rpcClient, err := NewClient(s.cfg.RPC)
+	rpcClient, err := NewClient(s.cfg.ServiceID, s.cfg.RPC)
 	if err != nil {
 		panic(err)
 	}
 
 	s.activeTxnHolder = newMapBasedTxnHandler(
 		s.serviceID,
+		s.logger,
 		s.fsp,
 		func(sid string) (bool, error) {
-			ok, err := validateService(s.cfg.RemoteLockTimeout.Duration, sid, s.remote.client)
+			ok, err := validateService(s.cfg.RemoteLockTimeout.Duration, sid, s.remote.client, s.logger)
 			if err == nil {
 				return ok, nil
 			}
@@ -125,9 +126,11 @@ func (s *service) initRemote() {
 	)
 
 	rpcServer, err := NewServer(
+		s.cfg.ServiceID,
 		s.cfg.ListenAddress,
 		s.cfg.RPC,
-		s.option.serverOpts...)
+		s.option.serverOpts...,
+	)
 	if err != nil {
 		panic(err)
 	}
@@ -176,7 +179,7 @@ func (s *service) handleRemoteLock(
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows) {
-		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
+		writeResponse(ctx, s.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
 		return
 	}
 
@@ -185,7 +188,7 @@ func (s *service) handleRemoteLock(
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale
 		// lock table binding.
-		writeResponse(ctx, cancel, resp, err, cs)
+		writeResponse(ctx, s.logger, cancel, resp, err, cs)
 		return
 	}
 
@@ -193,11 +196,11 @@ func (s *service) handleRemoteLock(
 	txn.Lock()
 	defer txn.Unlock()
 	if !bytes.Equal(txn.txnID, req.Lock.TxnID) {
-		writeResponse(ctx, cancel, resp, ErrTxnNotFound, cs)
+		writeResponse(ctx, s.logger, cancel, resp, ErrTxnNotFound, cs)
 		return
 	}
 	if txn.deadlockFound {
-		writeResponse(ctx, cancel, resp, ErrDeadLockDetected, cs)
+		writeResponse(ctx, s.logger, cancel, resp, ErrDeadLockDetected, cs)
 		return
 	}
 
@@ -222,7 +225,7 @@ func (s *service) handleRemoteLock(
 		func(result pb.Result, err error) {
 			e = err
 			resp.Lock.Result = result
-			writeResponse(ctx, cancel, resp, err, cs)
+			writeResponse(ctx, s.logger, cancel, resp, err, cs)
 		})
 }
 
@@ -233,7 +236,7 @@ func (s *service) handleForwardLock(
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows) {
-		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
+		writeResponse(ctx, s.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
 		return
 	}
 
@@ -244,7 +247,7 @@ func (s *service) handleForwardLock(
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale
 		// lock table binding.
-		writeResponse(ctx, cancel, resp, err, cs)
+		writeResponse(ctx, s.logger, cancel, resp, err, cs)
 		return
 	}
 
@@ -252,12 +255,12 @@ func (s *service) handleForwardLock(
 	txn.Lock()
 	if !bytes.Equal(txn.txnID, req.Lock.TxnID) {
 		txn.Unlock()
-		writeResponse(ctx, cancel, resp, ErrTxnNotFound, cs)
+		writeResponse(ctx, s.logger, cancel, resp, ErrTxnNotFound, cs)
 		return
 	}
 	if txn.deadlockFound {
 		txn.Unlock()
-		writeResponse(ctx, cancel, resp, ErrDeadLockDetected, cs)
+		writeResponse(ctx, s.logger, cancel, resp, ErrDeadLockDetected, cs)
 		return
 	}
 
@@ -283,7 +286,7 @@ func (s *service) handleForwardLock(
 			txn.Unlock()
 			e = err
 			resp.Lock.Result = result
-			writeResponse(ctx, cancel, resp, err, cs)
+			writeResponse(ctx, s.logger, cancel, resp, err, cs)
 		})
 }
 
@@ -298,11 +301,11 @@ func (s *service) handleRemoteUnlock(
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale lock
 		// table binding.
-		writeResponse(ctx, cancel, resp, err, cs)
+		writeResponse(ctx, s.logger, cancel, resp, err, cs)
 		return
 	}
 	err = s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS, req.Unlock.Mutations...)
-	writeResponse(ctx, cancel, resp, err, cs)
+	writeResponse(ctx, s.logger, cancel, resp, err, cs)
 }
 
 func (s *service) handleValidateService(
@@ -314,7 +317,7 @@ func (s *service) handleValidateService(
 	resp.ValidateService = pb.ValidateServiceResponse{
 		OK: s.serviceID == req.ValidateService.ServiceID,
 	}
-	writeResponse(ctx, cancel, resp, nil, cs)
+	writeResponse(ctx, s.logger, cancel, resp, nil, cs)
 }
 
 func (s *service) handleGetActiveTxn(
@@ -330,7 +333,7 @@ func (s *service) handleGetActiveTxn(
 			return true
 		})
 	}
-	writeResponse(ctx, cancel, resp, nil, cs)
+	writeResponse(ctx, s.logger, cancel, resp, nil, cs)
 }
 
 func (s *service) handleRemoteGetLock(
@@ -344,7 +347,7 @@ func (s *service) handleRemoteGetLock(
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale lock
 		// table binding.
-		writeResponse(ctx, cancel, resp, err, cs)
+		writeResponse(ctx, s.logger, cancel, resp, err, cs)
 		return
 	}
 
@@ -360,7 +363,7 @@ func (s *service) handleRemoteGetLock(
 			})
 			resp.GetTxnLock.WaitingList = values
 		})
-	writeResponse(ctx, cancel, resp, err, cs)
+	writeResponse(ctx, s.logger, cancel, resp, err, cs)
 }
 
 func (s *service) handleRemoteGetWaitingList(
@@ -373,7 +376,7 @@ func (s *service) handleRemoteGetWaitingList(
 	case s.fetchWhoWaitingListC <- who{ctx: ctx, cancel: cancel, cs: cs, resp: resp, txnID: req.GetWaitingList.Txn.TxnID}:
 		return
 	default:
-		writeResponse(ctx, cancel, resp, ErrDeadLockDetected, cs)
+		writeResponse(ctx, s.logger, cancel, resp, ErrDeadLockDetected, cs)
 	}
 }
 
@@ -386,12 +389,12 @@ func (s *service) handleKeepRemoteLock(
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
-		writeResponse(ctx, cancel, resp, err, cs)
+		writeResponse(ctx, s.logger, cancel, resp, err, cs)
 		return
 	}
 
 	s.activeTxnHolder.keepRemoteActiveTxn(req.KeepRemoteLock.ServiceID)
-	writeResponse(ctx, cancel, resp, nil, cs)
+	writeResponse(ctx, s.logger, cancel, resp, nil, cs)
 }
 
 func (s *service) getLocalLockTable(
@@ -433,7 +436,7 @@ func (s *service) getLocalLockTable(
 		uuid := getUUIDFromServiceIdentifier(s.serviceID)
 		uuidRequest := getUUIDFromServiceIdentifier(bind.ServiceID)
 		if strings.EqualFold(uuid, uuidRequest) {
-			getLogger().Warn("stale bind found, handle remote lock on remote lock table instance",
+			s.logger.Warn("stale bind found, handle remote lock on remote lock table instance",
 				zap.String("bind", bind.DebugString()))
 			// only remove old bind lock table
 			s.tableGroups.removeWithFilter(
@@ -443,7 +446,7 @@ func (s *service) getLocalLockTable(
 			return nil, ErrLockTableBindChanged
 		}
 
-		getLogger().Fatal("get local lock table, but found remote lock table, ip reused between two cns.",
+		s.logger.Fatal("get local lock table, but found remote lock table, ip reused between two cns.",
 			zap.String("request", req.DebugString()),
 			zap.String("serviceID", s.serviceID),
 			zap.String("request-lock-table", req.LockTable.DebugString()),
@@ -492,7 +495,7 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 				timeoutTxns,
 				s.cfg.RemoteLockTimeout.Duration)
 			if len(timeoutTxns) > 0 {
-				getLogger().Warn("found orphans txns",
+				s.logger.Warn("found orphans txns",
 					bytesArrayField("txns", timeoutTxns))
 				for _, txnID := range timeoutTxns {
 					s.Unlock(ctx, txnID, timestamp.Timestamp{})
@@ -552,7 +555,7 @@ func (s *service) handleFetchWhoWaitingMe(ctx context.Context) {
 				false,
 				"")
 			if txn == nil {
-				writeResponse(w.ctx, w.cancel, w.resp, nil, w.cs)
+				writeResponse(w.ctx, s.logger, w.cancel, w.resp, nil, w.cs)
 				continue
 			}
 			txn.fetchWhoWaitingMe(
@@ -564,7 +567,7 @@ func (s *service) handleFetchWhoWaitingMe(ctx context.Context) {
 					return true
 				},
 				s.getLockTable)
-			writeResponse(w.ctx, w.cancel, w.resp, nil, w.cs)
+			writeResponse(w.ctx, s.logger, w.cancel, w.resp, nil, w.cs)
 		}
 	}
 }

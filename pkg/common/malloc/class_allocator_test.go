@@ -14,10 +14,42 @@
 
 package malloc
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 func TestClassAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
-		return NewClassAllocator(1)
+		return NewShardedAllocator(
+			runtime.GOMAXPROCS(0),
+			func() Allocator {
+				return NewClassAllocator(NewFixedSizeMmapAllocator)
+			},
+		)
+	})
+}
+
+func BenchmarkClassAllocator(b *testing.B) {
+	for _, n := range benchNs {
+		benchmarkAllocator(b, func() Allocator {
+			return NewShardedAllocator(
+				runtime.GOMAXPROCS(0),
+				func() Allocator {
+					return NewClassAllocator(NewFixedSizeMmapAllocator)
+				},
+			)
+		}, n)
+	}
+}
+
+func FuzzClassAllocator(f *testing.F) {
+	fuzzAllocator(f, func() Allocator {
+		return NewShardedAllocator(
+			runtime.GOMAXPROCS(0),
+			func() Allocator {
+				return NewClassAllocator(NewFixedSizeMmapAllocator)
+			},
+		)
 	})
 }

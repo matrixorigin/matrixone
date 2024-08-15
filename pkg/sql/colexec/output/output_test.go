@@ -34,7 +34,7 @@ const (
 
 // add unit tests for cases
 type outputTestCase struct {
-	arg   *Argument
+	arg   *Output
 	types []types.Type
 	proc  *process.Process
 }
@@ -50,11 +50,11 @@ func sqlOutput(_ *batch.Batch) error {
 func init() {
 	tcs = []outputTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
-			arg: &Argument{
+			arg: &Output{
 				Data: nil,
 				Func: sqlOutput,
 				OperatorBase: vm.OperatorBase{
@@ -110,7 +110,7 @@ func TestOutput(t *testing.T) {
 		require.NoError(t, err)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -120,11 +120,13 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
+func resetChildren(arg *Output, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: bats,
-			},
+			valueScanArg,
 		})
 }

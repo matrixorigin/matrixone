@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -167,15 +168,12 @@ func MakeAgg(
 	if ok {
 		return exec
 	}
-
 	if _, ok = singleAgg[aggID]; ok && len(param) == 1 {
 		return makeSingleAgg(mg, aggID, isDistinct, param[0])
 	}
-
 	if _, ok = multiAgg[aggID]; ok && len(param) > 0 {
 		return makeMultiAgg(mg, aggID, isDistinct, param)
 	}
-
 	panic(fmt.Sprintf("unexpected aggID %d and param types %v.", aggID, param))
 }
 
@@ -246,27 +244,22 @@ func makeSpecialAggExec(
 	mg AggMemoryManager,
 	id int64, isDistinct bool, params ...types.Type) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
-		if id == aggIdOfCountColumn {
+		switch id {
+		case aggIdOfCountColumn:
 			return makeCount(mg, false, id, isDistinct, params[0]), true, nil
-		}
-		if id == aggIdOfCountStar {
+		case aggIdOfCountStar:
 			return makeCount(mg, true, id, isDistinct, params[0]), true, nil
-		}
-		if id == aggIdOfMedian {
+		case aggIdOfMedian:
 			exec, err := makeMedian(mg, id, isDistinct, params[0])
 			return exec, true, err
-		}
-		if id == aggIdOfGroupConcat {
+		case aggIdOfGroupConcat:
 			return makeGroupConcat(mg, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true, nil
-		}
-		if id == aggIdOfApproxCount {
+		case aggIdOfApproxCount:
 			return makeApproxCount(mg, id, params[0]), true, nil
-		}
-		if id == aggIdOfClusterCenters {
+		case aggIdOfClusterCenters:
 			exec, err := makeClusterCenters(mg, id, isDistinct, params[0])
 			return exec, true, err
-		}
-		if id == winIdOfRowNumber || id == winIdOfRank || id == winIdOfDenseRank {
+		case winIdOfRowNumber, winIdOfRank, winIdOfDenseRank:
 			exec, err := makeWindowExec(mg, id, isDistinct)
 			return exec, true, err
 		}

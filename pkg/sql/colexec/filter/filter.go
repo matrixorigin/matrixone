@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,53 +30,70 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "filter"
+const opName = "filter"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
-	buf.WriteString(fmt.Sprintf("filter(%s)", arg.E))
+func (filter *Filter) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
+	buf.WriteString(fmt.Sprintf("filter(%s)", filter.E))
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
+func (filter *Filter) OpType() vm.OpType {
+	return vm.Filter
+}
 
-	filterList := colexec.SplitAndExprs([]*plan.Expr{arg.E})
-	arg.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filterList)
+func (filter *Filter) Prepare(proc *process.Process) (err error) {
+	filter.ctr = new(container)
+	var filterExpr *plan.Expr
+
+	if filter.exeExpr == nil && filter.E == nil {
+		return nil
+	}
+
+	if filter.exeExpr == nil {
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.E), proc, true, true)
+	} else {
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.exeExpr), proc, true, true)
+	}
+	if err != nil {
+		return err
+	}
+	filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	result, err := arg.GetChildren(0).Call(proc)
-	if err != nil {
-		return result, err
-	}
-
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(filter.GetIdx(), filter.GetParallelIdx(), filter.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
-	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
+	result, err := vm.ChildrenCall(filter.GetChildren(0), proc, anal)
+	if err != nil {
+		return result, err
+	}
+	anal.Input(result.Batch, filter.IsFirst)
+
+	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() || len(filter.ctr.executors) == 0 {
 		return result, nil
 	}
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if filter.ctr.buf != nil {
+		proc.PutBatch(filter.ctr.buf)
+		filter.ctr.buf = nil
 	}
-	arg.buf = result.Batch
+	filter.ctr.buf = result.Batch
 
-	anal.Input(arg.buf, arg.GetIsFirst())
+	anal.Input(filter.ctr.buf, filter.GetIsFirst())
 
 	var sels []int64
-	for i := range arg.ctr.executors {
-		if arg.buf.IsEmpty() {
+	for i := range filter.ctr.executors {
+		if filter.ctr.buf.IsEmpty() {
 			break
 		}
 
-		vec, err := arg.ctr.executors[i].Eval(proc, []*batch.Batch{arg.buf})
+		vec, err := filter.ctr.executors[i].Eval(proc, []*batch.Batch{filter.ctr.buf}, nil)
 		if err != nil {
 			result.Batch = nil
 			return result, err
@@ -93,11 +111,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
-				arg.buf, err = tryDupBatch(proc, arg.buf)
+				filter.ctr.buf, err = tryDupBatch(proc, filter.ctr.buf)
 				if err != nil {
 					return result, err
 				}
-				arg.buf.Shrink(nil, false)
+				filter.ctr.buf.Shrink(nil, false)
 			}
 		} else {
 			if sels == nil {
@@ -121,11 +139,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 				}
 			}
-			arg.buf, err = tryDupBatch(proc, arg.buf)
+			filter.ctr.buf, err = tryDupBatch(proc, filter.ctr.buf)
 			if err != nil {
 				return result, err
 			}
-			arg.buf.Shrink(sels, false)
+			filter.ctr.buf.Shrink(sels, false)
 		}
 	}
 
@@ -135,16 +153,17 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	// bad design here. should compile a pipeline like `-> restrict -> output (just do clean work or memory reuse) -> `
 	// but not use the IsEnd flag to do the clean work.
-	if arg.IsEnd {
+	if filter.IsEnd {
 		result.Batch = nil
 	} else {
-		anal.Output(arg.buf, arg.GetIsLast())
-		if arg.buf == result.Batch {
-			arg.buf = nil
+		anal.Output(filter.ctr.buf, filter.GetIsLast())
+		if filter.ctr.buf == result.Batch {
+			filter.ctr.buf = nil
 		} else {
-			result.Batch = arg.buf
+			result.Batch = filter.ctr.buf
 		}
 	}
+
 	return result, nil
 }
 

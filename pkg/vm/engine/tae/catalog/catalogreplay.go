@@ -14,6 +14,8 @@
 package catalog
 
 import (
+	"fmt"
+
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
 	"go.uber.org/zap"
+)
+
+const (
+	Backup_Object_Offset uint16 = 1000
 )
 
 //#region Replay related
@@ -65,11 +71,6 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 	catalog.OnReplayDBID(cmd.ID.DbID)
 	var err error
 	un := cmd.mvccNode
-	if un.Is1PC() {
-		if err := un.ApplyCommit(cmd.mvccNode.Txn.GetID()); err != nil {
-			panic(err)
-		}
-	}
 
 	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
 	if err != nil {
@@ -191,12 +192,6 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
 
 	un := cmd.mvccNode
-	if un.Is1PC() {
-		if err := un.ApplyCommit(cmd.mvccNode.Txn.GetID()); err != nil {
-			panic(err)
-		}
-	}
-
 	if err != nil {
 		tbl = NewReplayTableEntry()
 		tbl.ID = cmd.ID.TableID
@@ -368,38 +363,44 @@ func (catalog *Catalog) onReplayUpdateObject(
 	if err != nil {
 		panic(err)
 	}
-	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
+	rel, err := db.GetTableEntryByID(cmd.ID.TableID)
 	if err != nil {
 		logutil.Debugf("tbl %d-%d", cmd.ID.DbID, cmd.ID.TableID)
 		logutil.Info(catalog.SimplePPString(3))
 		panic(err)
 	}
-	obj, err := tbl.GetObjectByID(cmd.ID.ObjectID())
-	un := cmd.mvccNode
-	if un.Is1PC() {
-		if err := un.ApplyCommit(cmd.mvccNode.Txn.GetID()); err != nil {
-			panic(err)
-		}
-	}
-	if err != nil {
+	var obj *ObjectEntry
+	if cmd.mvccNode.CreatedAt.Equal(&txnif.UncommitTS) {
 		obj = NewReplayObjectEntry()
-		obj.ID = *cmd.ID.ObjectID()
-		obj.table = tbl
-		obj.Insert(un)
-		obj.ObjectNode = cmd.node
-		tbl.AddEntryLocked(obj)
-	} else {
-		node := obj.SearchNodeLocked(un)
-		if node == nil {
-			obj.Insert(un)
-		} else {
-			node.BaseNode.Update(un.BaseNode)
-		}
+		obj.table = rel
+		obj.ObjectNode = *cmd.node
+		obj.SortHint = catalog.NextObject()
+		obj.EntryMVCCNode = *cmd.mvccNode.EntryMVCCNode
+		obj.CreateNode = *cmd.mvccNode.TxnMVCCNode
+		cmd.mvccNode.TxnMVCCNode = &obj.CreateNode
+		cmd.mvccNode.EntryMVCCNode = &obj.EntryMVCCNode
+		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
+		obj.remainingRows = &common.FixedSampleIII[int]{}
+		obj.ObjectState = ObjectState_Create_ApplyCommit
+		rel.AddEntryLocked(obj)
 	}
+	if cmd.mvccNode.DeletedAt.Equal(&txnif.UncommitTS) {
+		obj, err = rel.GetObjectByID(cmd.ID.ObjectID())
+		if err != nil {
+			panic(fmt.Sprintf("obj %v not existed, table:\n%v", cmd.ID.String(), rel.StringWithLevel(3)))
+		}
+		obj.EntryMVCCNode = *cmd.mvccNode.EntryMVCCNode
+		obj.DeleteNode = *cmd.mvccNode.TxnMVCCNode
+		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
+		cmd.mvccNode.TxnMVCCNode = &obj.DeleteNode
+		cmd.mvccNode.EntryMVCCNode = &obj.EntryMVCCNode
+		obj.ObjectState = ObjectState_Delete_ApplyCommit
+	}
+
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {
-		deleteAt := obj.GetDeleteAtLocked()
+		deleteAt := obj.GetDeleteAt()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
 			obj.objData.UpgradeAllDeleteChain()
@@ -444,33 +445,58 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	obj, _ := rel.GetObjectByID(objid)
-	if obj == nil {
-		obj = NewReplayObjectEntry()
-		obj.ID = *objid
-		obj.table = rel
-		obj.ObjectNode = &ObjectNode{
+	newObject := func() *ObjectEntry {
+		object := NewReplayObjectEntry()
+		object.table = rel
+		object.ObjectNode = ObjectNode{
 			state:    state,
 			sorted:   state == ES_NotAppendable,
 			SortHint: catalog.NextObject(),
 		}
+		object.EntryMVCCNode = *entryNode
+		object.ObjectMVCCNode = *objNode
+		object.CreateNode = *txnNode
+		object.remainingRows = &common.FixedSampleIII[int]{}
+		object.ObjectState = ObjectState_Create_ApplyCommit
+		return object
+	}
+	var obj *ObjectEntry
+	if entryNode.CreatedAt.Equal(&txnNode.End) {
+		obj = newObject()
 		rel.AddEntryLocked(obj)
 	}
-	un := &MVCCNode[*ObjectMVCCNode]{
-		EntryMVCCNode: entryNode,
-		BaseNode:      objNode,
-		TxnMVCCNode:   txnNode,
+	if entryNode.DeletedAt.Equal(&txnNode.End) {
+		obj, err = rel.GetObjectByID(objid)
+		if err != nil {
+			panic(fmt.Sprintf("obj %v, [%v %v %v] not existed, table:\n%v", objid.String(),
+				entryNode.String(), objNode.String(),
+				txnNode.String(), rel.StringWithLevel(3)))
+		}
+		obj.EntryMVCCNode = *entryNode
+		obj.ObjectMVCCNode = *objNode
+		obj.DeleteNode = *txnNode
+		obj.ObjectState = ObjectState_Delete_ApplyCommit
 	}
-	node := obj.SearchNodeLocked(un)
-	if node == nil {
-		obj.Insert(un)
-	} else {
-		node.BaseNode.Update(un.BaseNode)
+	if !entryNode.CreatedAt.Equal(&txnNode.End) && !entryNode.DeletedAt.Equal(&txnNode.End) {
+		// In back up, aobj is replaced with naobj and its DeleteAt is removed.
+		// Before back up, txnNode.End equals DeleteAt of naobj.
+		// After back up, DeleteAt is empty.
+		if objid.Offset() == Backup_Object_Offset && entryNode.DeletedAt.IsEmpty() {
+			obj = newObject()
+			rel.AddEntryLocked(obj)
+			logutil.Warnf("obj %v, tbl %v-%d delete %v, create %v, end %v",
+				objid.String(), rel.fullName, rel.ID, entryNode.CreatedAt.ToString(),
+				entryNode.DeletedAt.ToString(), txnNode.End.ToString())
+		} else {
+			panic(fmt.Sprintf("logic error: obj %v, tbl %v-%d create %v, delete %v, end %v",
+				objid.String(), rel.fullName, rel.ID, entryNode.CreatedAt.ToString(),
+				entryNode.DeletedAt.ToString(), txnNode.End.ToString()))
+		}
 	}
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {
-		deleteAt := obj.GetDeleteAtLocked()
+		deleteAt := obj.GetDeleteAt()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
 			obj.objData.UpgradeAllDeleteChain()
@@ -478,64 +504,6 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	}
 }
 
-// Before ckp version 10 and IOET_WALTxnCommand_Object, object info doesn't exist.
-// Replay Object by block.
-// Original Size, Compressed Size and Block Number is skipped.
-func (catalog *Catalog) replayObjectByBlock(
-	tbl *TableEntry,
-	blkID types.Blockid,
-	state EntryState,
-	start, end types.TS,
-	metaLocation objectio.Location,
-	needApplyCommit bool,
-	create, delete bool,
-	txn txnif.TxnReader,
-	dataFactory DataFactory) {
-	ObjectID := blkID.Object()
-	obj, _ := tbl.GetObjectByID(ObjectID)
-	// create
-	if create {
-		if obj == nil {
-			obj = NewObjectEntryByMetaLocation(
-				tbl,
-				ObjectID,
-				start, end, state, metaLocation, dataFactory.MakeObjectFactory())
-			tbl.AddEntryLocked(obj)
-		}
-	}
-	// delete
-	if delete {
-		node := obj.SearchNodeLocked(
-			&MVCCNode[*ObjectMVCCNode]{
-				TxnMVCCNode: &txnbase.TxnMVCCNode{
-					Start: start,
-				},
-			},
-		)
-		if node == nil {
-			node = obj.GetLatestNodeLocked().CloneData()
-			node.Start = start
-			node.Prepare = end
-			node.End = end
-			if node.BaseNode.IsEmpty() {
-				node.BaseNode = NewObjectInfoWithMetaLocation(metaLocation, ObjectID)
-			}
-			obj.Insert(node)
-			node.DeletedAt = end
-		}
-	}
-	_, blkOffset := blkID.Offsets()
-	obj.tryUpdateBlockCnt(int(blkOffset) + 1)
-	if obj.objData == nil {
-		obj.objData = dataFactory.MakeObjectFactory()(obj)
-	} else {
-		deleteAt := obj.GetDeleteAtLocked()
-		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
-			obj.objData.TryUpgrade()
-			obj.objData.UpgradeAllDeleteChain()
-		}
-	}
-}
 func (catalog *Catalog) onReplayUpdateBlock(
 	cmd *EntryCommand[*MetadataMVCCNode, *BlockNode],
 	dataFactory DataFactory,
@@ -580,7 +548,7 @@ func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.
 		txnNode := txnbase.ReadTuple(insTxn, i)
 		catalog.onReplayCreateBlock(dbid, tid, sid, &blkID, state, metaLoc, deltaLoc, txnNode, dataFactory)
 	}
-	for i := 0; i < del.Length(); i++ {
+	for i := range del.Length() {
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 		rid := del.GetVectorByName(AttrRowID).Get(i).(types.Rowid)
@@ -641,29 +609,7 @@ func (catalog *Catalog) onReplayDeleteBlock(
 	deltaloc objectio.Location,
 	txnNode *txnbase.TxnMVCCNode,
 ) {
-	// catalog.OnReplayBlockID(blkid)
-	db, err := catalog.GetDatabaseByID(dbid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-	rel, err := db.GetTableEntryByID(tid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-	catalog.replayObjectByBlock(
-		rel,
-		*blkid,
-		ES_Appendable, // state is not used when delete
-		txnNode.Start,
-		txnNode.End,
-		metaloc,
-		false,
-		false,
-		true,
-		nil,
-		nil)
+	panic("logic error")
 }
 func (catalog *Catalog) ReplayTableRows() {
 	rows := uint64(0)

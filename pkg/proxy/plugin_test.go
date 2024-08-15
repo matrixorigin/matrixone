@@ -50,7 +50,7 @@ type mockRouter struct {
 	refreshCount int
 }
 
-func (r *mockRouter) Route(ctx context.Context, ci clientInfo, f func(string) bool) (*CNServer, error) {
+func (r *mockRouter) Route(ctx context.Context, sid string, ci clientInfo, f func(string) bool) (*CNServer, error) {
 	if r.mockRouteFn != nil {
 		return r.mockRouteFn(ctx, ci)
 	}
@@ -72,7 +72,7 @@ func (r *mockRouter) Refresh(sync bool) {
 func TestPluginRouter_Route(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	tests := []struct {
 		name              string
 		mockRouteFn       func(ctx context.Context, ci clientInfo) (*CNServer, error)
@@ -176,8 +176,8 @@ func TestPluginRouter_Route(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &mockPlugin{mockRecommendCNFn: tt.mockRecommendCNFn}
 			r := &mockRouter{mockRouteFn: tt.mockRouteFn}
-			pr := newPluginRouter(r, p)
-			cn, err := pr.Route(context.TODO(), clientInfo{}, tt.filter)
+			pr := newPluginRouter("", r, p)
+			cn, err := pr.Route(context.TODO(), "", clientInfo{}, tt.filter)
 			if tt.expectErr {
 				require.Error(t, err)
 				require.Nil(t, cn)
@@ -193,7 +193,7 @@ func TestPluginRouter_Route(t *testing.T) {
 func TestRPCPlugin(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	tests := []struct {
 		name       string
 		response   *plugin.Recommendation
@@ -225,9 +225,12 @@ func TestRPCPlugin(t *testing.T) {
 			addr := "unix:///tmp/plugin.sock"
 			s, err := morpc.NewRPCServer("test-plugin-server",
 				addr,
-				morpc.NewMessageCodec(func() morpc.Message {
-					return &plugin.Request{}
-				}),
+				morpc.NewMessageCodec(
+					"",
+					func() morpc.Message {
+						return &plugin.Request{}
+					},
+				),
 			)
 			require.NoError(t, err)
 			s.RegisterRequestHandler(func(ctx context.Context, msg morpc.RPCMessage, sequence uint64, cs morpc.ClientSession) error {
@@ -243,7 +246,7 @@ func TestRPCPlugin(t *testing.T) {
 			defer func() {
 				require.NoError(t, s.Close())
 			}()
-			p, err := newRPCPlugin(addr, time.Second)
+			p, err := newRPCPlugin("", addr, time.Second)
 			defer func() {
 				require.NoError(t, p.Close())
 			}()

@@ -136,9 +136,10 @@ func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {
 }
 
 func (e *ObjectMVCCNode) CloneAll() *ObjectMVCCNode {
-	return &ObjectMVCCNode{
+	obj := &ObjectMVCCNode{
 		ObjectStats: *e.ObjectStats.Clone(),
 	}
+	return obj
 }
 func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
 	return &ObjectMVCCNode{
@@ -185,9 +186,15 @@ func (e *ObjectMVCCNode) IsEmpty() bool {
 	return e.Size() == 0
 }
 
-func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch) {
-	if e == nil || e.IsEmpty() {
-		objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(sid)) // when replay, sid is get from object name
+func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch, empty bool) {
+	if empty {
+		stats := objectio.NewObjectStats()
+		objectio.SetObjectStatsObjectName(stats, objectio.BuildObjectNameWithObjectID(sid)) // when replay, sid is get from object name
+		batch.GetVectorByName(ObjectAttr_ObjectStats).Append(stats[:], false)
+		return
+	}
+	if e.IsEmpty() {
+		panic("logic error")
 	}
 	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(e.ObjectStats[:], false)
 }
@@ -206,7 +213,7 @@ type ObjectNode struct {
 	SortHint uint64 // sort object by create time, make iteration on object determined
 	sorted   bool   // deprecated
 
-	remainingRows common.FixedSampleIII[int]
+	remainingRows *common.FixedSampleIII[int]
 }
 
 const (

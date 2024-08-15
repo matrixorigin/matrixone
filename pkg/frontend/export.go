@@ -127,9 +127,13 @@ func initExportFileParam(ep *ExportConfig, mrs *MysqlResultSet) {
 		ep.Symbol[i] = []byte(ep.userConfig.Fields.Terminated.Value)
 	}
 	ep.Symbol[n-1] = []byte(ep.userConfig.Lines.TerminatedBy.Value)
-	ep.ColumnFlag = make([]bool, len(mrs.Name2Index))
+	columnsSet := make(map[string]int)
+	for i := 0; i < len(mrs.Columns); i++ {
+		columnsSet[mrs.Columns[i].Name()] = i
+	}
+	ep.ColumnFlag = make([]bool, len(mrs.Columns))
 	for i := 0; i < len(ep.userConfig.ForceQuote); i++ {
-		col, ok := mrs.Name2Index[ep.userConfig.ForceQuote[i]]
+		col, ok := columnsSet[ep.userConfig.ForceQuote[i]]
 		if ok {
 			ep.ColumnFlag[col] = true
 		}
@@ -467,7 +471,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				} else {
 					writeByte = appendBytes(writeByte, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j])
 				}
-			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 				value := addEscapeToString(vec.GetBytesAt(i))
 				writeByte = appendBytes(writeByte, value, symbol[j], closeby, true)
 			case types.T_array_float32:
@@ -503,7 +507,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				val := vector.GetFixedAt[types.Decimal128](vec, i).Format(scale)
 				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
 			case types.T_uuid:
-				val := vector.GetFixedAt[types.Uuid](vec, i).ToString()
+				val := vector.GetFixedAt[types.Uuid](vec, i).String()
 				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
 			case types.T_Rowid:
 				val := vector.GetFixedAt[types.Rowid](vec, i)
@@ -512,8 +516,8 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				val := vector.GetFixedAt[types.Blockid](vec, i)
 				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
 			case types.T_enum:
-				val := vector.GetFixedAt[types.Blockid](vec, i)
-				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
+				val := vector.GetFixedAt[types.Enum](vec, i).String()
+				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
 			default:
 				ses.Error(ctx,
 					"Failed to construct byte due to unsupported type",
@@ -718,6 +722,14 @@ func exportDataToCSVFile(oq *ExportConfig) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_UUID:
+			value, err := oq.mrs.GetString(oq.ctx, 0, i)
+			if err != nil {
+				return err
+			}
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i]); err != nil {
+				return err
+			}
+		case defines.MYSQL_TYPE_ENUM:
 			value, err := oq.mrs.GetString(oq.ctx, 0, i)
 			if err != nil {
 				return err

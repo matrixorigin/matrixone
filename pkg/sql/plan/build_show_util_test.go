@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 )
 
@@ -81,7 +80,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				KEY IDX_RoundId (ROUND_ID),
 				KEY IDX_UserId_EndTime (USER_ID,END_TIME)
 				)`,
-			want: "CREATE TABLE `t_log` (\n  `log_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,\n  `round_id` BIGINT UNSIGNED NOT NULL,\n  `user_id` INT UNSIGNED NOT NULL,\n  `user_ip` INT UNSIGNED DEFAULT NULL,\n  `end_time` DATETIME NOT NULL,\n  `user_type` INT DEFAULT NULL,\n  `app_id` INT DEFAULT NULL,\n  PRIMARY KEY (`log_id`,`end_time`),\n  KEY `idx_endtime` (`end_time`),\n  KEY `idx_roundid` (`round_id`),\n  KEY `idx_userid_endtime` (`user_id`,`end_time`)\n)",
+			want: "CREATE TABLE `t_log` (\n  `LOG_ID` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,\n  `ROUND_ID` BIGINT UNSIGNED NOT NULL,\n  `USER_ID` INT UNSIGNED NOT NULL,\n  `USER_IP` INT UNSIGNED DEFAULT NULL,\n  `END_TIME` DATETIME NOT NULL,\n  `USER_TYPE` INT DEFAULT NULL,\n  `APP_ID` INT DEFAULT NULL,\n  PRIMARY KEY (`LOG_ID`,`END_TIME`),\n  KEY `idx_endtime` (`END_TIME`),\n  KEY `idx_roundid` (`ROUND_ID`),\n  KEY `idx_userid_endtime` (`USER_ID`,`END_TIME`)\n)",
 		},
 		{
 			name: "test5",
@@ -95,7 +94,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				UNIQUE KEY uk1 (name),
 				UNIQUE KEY uk2 (email)
 				);`,
-			want: "CREATE TABLE `example_table` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) NOT NULL DEFAULT 'default_name',\n  `email` VARCHAR(255) DEFAULT NULL,\n  `created_at` TIMESTAMP DEFAULT current_timestamp(),\n  `updated_at` TIMESTAMP DEFAULT current_timestamp() ON UPDATE current_timestamp(),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk1` (`name`),\n  UNIQUE KEY `uk2` (`email`)\n)",
+			want: "CREATE TABLE `example_table` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) NOT NULL DEFAULT 'default_name',\n  `email` VARCHAR(255) DEFAULT NULL,\n  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk1` (`name`),\n  UNIQUE KEY `uk2` (`email`)\n)",
 		},
 		{
 			name: "test6",
@@ -144,7 +143,7 @@ func Test_SingleShowCreateTable(t *testing.T) {
 				UNIQUE KEY uk1 (name),
 				UNIQUE KEY uk2 (email)
 				);`,
-			want: "CREATE TABLE `example_table` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) NOT NULL DEFAULT 'default_name',\n  `email` VARCHAR(255) DEFAULT NULL,\n  `created_at` TIMESTAMP DEFAULT current_timestamp(),\n  `updated_at` TIMESTAMP DEFAULT current_timestamp() ON UPDATE current_timestamp(),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk1` (`name`),\n  UNIQUE KEY `uk2` (`email`)\n)",
+			want: "CREATE TABLE `example_table` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) NOT NULL DEFAULT 'default_name',\n  `email` VARCHAR(255) DEFAULT NULL,\n  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk1` (`name`),\n  UNIQUE KEY `uk2` (`email`)\n)",
 		},
 	}
 
@@ -163,7 +162,7 @@ func Test_SingleShowCreateTable(t *testing.T) {
 }
 
 func buildTestCreateTableStmt(opt Optimizer, sql string) (*TableDef, error) {
-	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
+	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -188,8 +187,8 @@ func buildTestShowCreateTable(sql string) (string, error) {
 		return "", err
 	}
 
-	snapshot := Snapshot{TS: &timestamp.Timestamp{}}
-	showSQL, err := ConstructCreateTableSQL(nil, tableDef, snapshot, &mock.ctxt)
+	var snapshot *plan.Snapshot
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false)
 	if err != nil {
 		return "", err
 	}

@@ -160,6 +160,7 @@ func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
 	if err := fs.Read(ctx, ioVec); err != nil {
 		return nil, err
 	}
+	defer ioVec.Release()
 
 	var data pb.BackupData
 	if err := data.Unmarshal(ioVec.Entries[0].Data); err != nil {

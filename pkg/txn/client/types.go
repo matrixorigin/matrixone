@@ -66,7 +66,7 @@ type TxnClient interface {
 	New(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (TxnOperator, error)
 	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 	// be from a CN coordinator txn operator.
-	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
+	NewWithSnapshot(snapshot txn.CNTxnSnapshot) (TxnOperator, error)
 	// Close closes client.sender
 	Close() error
 	// RefreshExpressionEnabled return true if refresh expression feature enabled
@@ -118,7 +118,7 @@ type TxnOperator interface {
 	// can be used to recover the transaction operation handle at a non-CN coordinator
 	// node, or it can be used to pass information back to the transaction coordinator
 	// after the non-CN coordinator completes the transaction operation.
-	Snapshot() ([]byte, error)
+	Snapshot() (txn.CNTxnSnapshot, error)
 	// UpdateSnapshot in some scenarios, we need to boost the snapshotTimestamp to eliminate
 	// the w-w conflict.
 	// If ts is empty, it will use the latest commit timestamp which is received from DN.
@@ -238,6 +238,8 @@ type TimestampWaiter interface {
 }
 
 type Workspace interface {
+	Readonly() bool
+
 	// StartStatement tag a statement is running
 	StartStatement()
 	// EndStatement tag end a statement is completed
@@ -265,6 +267,12 @@ type Workspace interface {
 	CloneSnapshotWS() Workspace
 
 	BindTxnOp(op TxnOperator)
+
+	SetHaveDDL(flag bool)
+	GetHaveDDL() bool
+
+	// debug & test
+	PPString() string
 }
 
 // TxnOverview txn overview include meta and status

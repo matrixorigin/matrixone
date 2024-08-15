@@ -199,7 +199,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		return err
 	}
 	request := value.(RPCMessage)
-	s.metrics.inputBytesCounter.Add(float64(request.Message.Size()))
+	s.metrics.inputBytesCounter.Add(float64(request.Message.ProtoSize()))
 	if ce := s.logger.Check(zap.DebugLevel, "received request"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddress()),
@@ -571,6 +571,10 @@ func (cs *clientSession) disconnected() {
 	case cs.disconnectedC <- struct{}{}:
 	default:
 	}
+}
+
+func (cs *clientSession) SessionCtx() context.Context {
+	return cs.ctx
 }
 
 func (cs *clientSession) cleanSend() {

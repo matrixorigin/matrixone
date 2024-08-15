@@ -24,7 +24,7 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
@@ -78,7 +78,7 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return lhs.Le(rhs)
 		})
 
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		return opBetweenBytes(parameters, rs, proc, length)
 	}
 

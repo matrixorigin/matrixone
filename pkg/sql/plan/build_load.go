@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -29,6 +30,78 @@ import (
 const (
 	LoadParallelMinSize = 1 << 20
 )
+
+func getNormalExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, map[string]int32, *TableDef, error) {
+	var externalProject []*Expr
+	colToIndex := make(map[string]int32, 0)
+	for i, col := range tableDef.Cols {
+		if col.Name != catalog.FakePrimaryKeyColName {
+			colExpr := &plan.Expr{
+				Typ: tableDef.Cols[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(i),
+						Name:   tblName + "." + tableDef.Cols[i].Name,
+					},
+				},
+			}
+			externalProject = append(externalProject, colExpr)
+			colToIndex[col.Name] = int32(i)
+		}
+	}
+	return externalProject, colToIndex, colToIndex, tableDef, nil
+}
+
+func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, map[string]int32, *TableDef, error) {
+	var externalProject []*Expr
+	colToIndex := make(map[string]int32, 0)
+	tbColToDataCol := make(map[string]int32, 0)
+	var newCols []*ColDef
+
+	newTableDef := DeepCopyTableDef(tableDef, true)
+	colPos := 0
+	for i, col := range stmt.Param.Tail.ColumnList {
+		switch realCol := col.(type) {
+		case *tree.UnresolvedName:
+			colName := realCol.ColName()
+			if _, ok := newTableDef.Name2ColIndex[colName]; !ok {
+				return nil, nil, nil, nil, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", colName)
+			}
+			tbColIdx := newTableDef.Name2ColIndex[colName]
+			colExpr := &plan.Expr{
+				Typ: newTableDef.Cols[tbColIdx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(colPos),
+						Name:   tblName + "." + colName,
+					},
+				},
+			}
+			externalProject = append(externalProject, colExpr)
+			colToIndex[colName] = int32(colPos)
+			colPos++
+			tbColToDataCol[colName] = int32(i)
+			newCols = append(newCols, newTableDef.Cols[tbColIdx])
+		case *tree.VarExpr:
+			//NOTE:variable like '@abc' will be passed by.
+			name := realCol.Name
+			tbColToDataCol[name] = -1 // when in external call, can use len of the map to check load data row whether valid
+		default:
+			return nil, nil, nil, nil, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
+		}
+	}
+
+	newTableDef.Cols = newCols
+	return externalProject, colToIndex, tbColToDataCol, newTableDef, nil
+}
+
+func getExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, map[string]int32, *TableDef, error) {
+	if len(stmt.Param.Tail.ColumnList) == 0 {
+		return getNormalExternalProject(stmt, ctx, tableDef, tblName)
+	} else {
+		return getExternalWithColListProject(stmt, ctx, tableDef, tblName)
+	}
+}
 
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
@@ -54,20 +127,16 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	objRef := tblInfo.objRef[0]
 
 	tableDef.Name2ColIndex = map[string]int32{}
-	var externalProject []*Expr
-	for i := 0; i < len(tableDef.Cols); i++ {
-		idx := int32(i)
-		tableDef.Name2ColIndex[tableDef.Cols[i].Name] = idx
-		colExpr := &plan.Expr{
-			Typ: tableDef.Cols[i].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					ColPos: idx,
-					Name:   tblName + "." + tableDef.Cols[i].Name,
-				},
-			},
+	for i, col := range tableDef.Cols {
+		if col.Name != catalog.FakePrimaryKeyColName {
+			tableDef.Name2ColIndex[col.Name] = int32(i)
 		}
-		externalProject = append(externalProject, colExpr)
+	}
+	originTableDef := tableDef
+	// load with columnlist will copy a new tableDef
+	externalProject, colToIndex, tbColToDataCol, tableDef, err := getExternalProject(stmt, ctx, tableDef, tblName)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
@@ -77,8 +146,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if stmt.Param.FileSize < LoadParallelMinSize {
 		stmt.Param.Parallel = false
 	}
-	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.LoadFile = true
+	stmt.Param.Tail.ColumnList = nil
 	if stmt.Param.ScanType != tree.INLINE {
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
@@ -87,7 +156,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		tableDef.Createsql = string(json_byte)
 	}
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
 	terminated := ","
 	enclosedBy := []byte("\"")
@@ -115,14 +184,15 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
 		ExternScan: &plan.ExternScan{
-			Type:         int32(stmt.Param.ScanType),
-			Data:         stmt.Param.Data,
-			Format:       stmt.Param.Format,
-			IgnoredLines: uint64(stmt.Param.Tail.IgnoredLines),
-			EnclosedBy:   enclosedBy,
-			Terminated:   terminated,
-			EscapedBy:    escapedBy,
-			JsonType:     stmt.Param.JsonData,
+			Type:           int32(stmt.Param.ScanType),
+			Data:           stmt.Param.Data,
+			Format:         stmt.Param.Format,
+			IgnoredLines:   uint64(stmt.Param.Tail.IgnoredLines),
+			EnclosedBy:     enclosedBy,
+			Terminated:     terminated,
+			EscapedBy:      escapedBy,
+			JsonType:       stmt.Param.JsonData,
+			TbColToDataCol: tbColToDataCol,
 		},
 	}
 	lastNodeId := builder.appendNode(externalScanNode, bindCtx)
@@ -132,7 +202,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		NodeType: plan.Node_PROJECT,
 		Stats:    &plan.Stats{},
 	}
-	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, tableDef)
+
+	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, originTableDef, colToIndex)
+
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +212,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		stmt.Param.Parallel = false
 	}
 	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) != tree.NOCOMPRESS || stmt.Local) {
-		projectNode.ProjectList = makeCastExpr(stmt, fileName, tableDef)
+		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode)
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 	builder.qry.LoadTag = true
@@ -150,7 +222,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		builder,
 		bindCtx,
 		lastNodeId,
-		tableDef,
+		originTableDef,
 		true,
 		false,
 		-1,
@@ -161,8 +233,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	// append hidden column to tableDef
-	newTableDef := DeepCopyTableDef(tableDef, true)
-	err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil)
+	newTableDef := DeepCopyTableDef(originTableDef, true)
+	err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -187,6 +259,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
+	builder.tempOptimizeForDML()
 	query.StmtType = plan.Query_INSERT
 
 	pn := &Plan{
@@ -231,69 +304,38 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	return param.Filepath, nil
 }
 
-func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef) (bool, error) {
+func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef, colToIndex map[string]int32) (bool, error) {
 	tblName := string(stmt.Table.ObjectName)
-	colToIndex := make(map[int32]string, 0)
 	ifExistAutoPkCol := false
-	if len(stmt.Param.Tail.ColumnList) == 0 {
-		for i := 0; i < len(tableDef.Cols); i++ {
-			colToIndex[int32(i)] = tableDef.Cols[i].Name
-		}
-	} else {
-		for i, col := range stmt.Param.Tail.ColumnList {
-			switch realCol := col.(type) {
-			case *tree.UnresolvedName:
-				if _, ok := tableDef.Name2ColIndex[realCol.Parts[0]]; !ok {
-					return ifExistAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.Parts[0])
-				}
-				colToIndex[int32(i)] = realCol.Parts[0]
-			case *tree.VarExpr:
-				//NOTE:variable like '@abc' will be passed by.
-			default:
-				return ifExistAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
-			}
-		}
-	}
 	node.ProjectList = make([]*plan.Expr, len(tableDef.Cols))
-	projectVec := make([]*plan.Expr, len(tableDef.Cols))
-	for i := 0; i < len(tableDef.Cols); i++ {
-		tmp := &plan.Expr{
-			Typ: tableDef.Cols[i].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					ColPos: int32(i),
-					Name:   tblName + "." + tableDef.Cols[i].Name,
-				},
-			},
-		}
-		projectVec[i] = tmp
-	}
-	for i := 0; i < len(tableDef.Cols); i++ {
-		if v, ok := colToIndex[int32(i)]; ok {
-			node.ProjectList[tableDef.Name2ColIndex[v]] = projectVec[i]
-		}
-	}
 	var tmp *plan.Expr
-	//var err error
+
 	for i := 0; i < len(tableDef.Cols); i++ {
-		if node.ProjectList[i] != nil {
+		if colListId, ok := colToIndex[tableDef.Cols[i].Name]; ok {
+			tmp = &plan.Expr{
+				Typ: tableDef.Cols[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(colListId),
+						Name:   tblName + "." + tableDef.Cols[i].Name,
+					},
+				},
+			}
+			node.ProjectList[i] = tmp
 			continue
 		}
 
-		if tableDef.Cols[i].Default.Expr == nil || tableDef.Cols[i].Default.NullAbility {
-			tmp = makePlan2NullConstExprWithType()
-		} else {
-			tmp = &plan.Expr{
-				Typ:  tableDef.Cols[i].Default.Expr.Typ,
-				Expr: tableDef.Cols[i].Default.Expr.Expr,
-			}
+		defExpr, err := getDefaultExpr(ctx.GetContext(), tableDef.Cols[i])
+		if err != nil {
+			return false, err
 		}
-		node.ProjectList[i] = tmp
 
+		node.ProjectList[i] = defExpr
 		if tableDef.Cols[i].Typ.AutoIncr && tableDef.Cols[i].Name == tableDef.Pkey.PkeyColName {
 			ifExistAutoPkCol = true
 		}
 	}
+
 	return ifExistAutoPkCol, nil
 }
 
@@ -312,7 +354,7 @@ func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
 		}
 
 		expr2, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
-		if !ok || expr2.Parts[0] != "nullif" {
+		if !ok || expr2.ColName() != "nullif" {
 			param.Tail.Assignments[i].Expr = nil
 			return nil
 		}
@@ -326,9 +368,10 @@ func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
 		if !ok {
 			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func second param is not NumVal form")
 		}
-		for j := 0; j < len(param.Tail.Assignments[i].Names); j++ {
-			col := param.Tail.Assignments[i].Names[j].Parts[0]
-			if col != expr3.Parts[0] {
+
+		for _, name := range param.Tail.Assignments[i].Names {
+			col := name.ColName()
+			if col != expr3.ColName() {
 				return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param must equal to colName")
 			}
 			param.NullMap[col] = append(param.NullMap[col], strings.ToLower(expr4.String()))
@@ -374,25 +417,22 @@ func getCompressType(param *tree.ExternParam, filepath string) string {
 	}
 }
 
-func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef) []*plan.Expr {
+func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *plan.Node) []*plan.Expr {
 	ret := make([]*plan.Expr, 0)
 	stringTyp := &plan.Type{
 		Id: int32(types.T_varchar),
 	}
 	for i := 0; i < len(tableDef.Cols); i++ {
-		typ := tableDef.Cols[i].Typ
-		expr := &plan.Expr{
-			Typ: *stringTyp,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: int32(i),
-				},
-			},
+		typ := node.ProjectList[i].Typ
+		expr := node.ProjectList[i].Expr
+		planExpr := &plan.Expr{
+			Typ:  *stringTyp,
+			Expr: expr,
 		}
 
-		expr, _ = makePlan2CastExpr(stmt.Param.Ctx, expr, typ)
-		ret = append(ret, expr)
+		planExpr, _ = makePlan2CastExpr(stmt.Param.Ctx, planExpr, typ)
+		ret = append(ret, planExpr)
 	}
+
 	return ret
 }

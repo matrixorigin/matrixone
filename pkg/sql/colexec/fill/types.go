@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Fill)
 
 const (
 	receiveBat    = 0
@@ -37,7 +37,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
 
 	// value
 	valVecs []*vector.Vector
@@ -54,8 +53,8 @@ type container struct {
 	status    int
 	subStatus int
 	colIdx    int
-	buf       *batch.Batch
 	idx       int
+	buf       *batch.Batch
 
 	// linear
 	nullIdx int
@@ -63,62 +62,68 @@ type container struct {
 	exes    []colexec.ExpressionExecutor
 	done    bool
 
-	process func(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error)
+	process func(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error)
 }
 
-type Argument struct {
+type Fill struct {
 	ctr *container
 
 	ColLen   int
 	FillType plan.Node_FillType
 	FillVal  []*plan.Expr
 	AggIds   []int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (fill *Fill) GetOperatorBase() *vm.OperatorBase {
+	return &fill.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Fill](
+		func() *Fill {
+			return &Fill{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Fill) {
+			*a = Fill{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Fill]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (fill Fill) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Fill {
+	return reuse.Alloc[Fill](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (fill *Fill) Release() {
+	if fill != nil {
+		reuse.Free[Fill](fill, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	fill.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := fill.ctr
 	if ctr != nil {
-		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExes()
 
-		arg.ctr = nil
+		fill.ctr = nil
+	}
+	if fill.ProjectList != nil {
+		anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
+		anal.Alloc(fill.ProjectAllocSize)
+		fill.FreeProjection(proc)
 	}
 }
 

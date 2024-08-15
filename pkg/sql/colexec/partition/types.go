@@ -25,14 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Partition)
 
 const (
 	receive = iota
 	eval
 )
 
-type Argument struct {
+type Partition struct {
 	ctr *container
 
 	OrderBySpecs []*plan.OrderBySpec
@@ -40,39 +40,38 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (partition *Partition) GetOperatorBase() *vm.OperatorBase {
+	return &partition.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Partition](
+		func() *Partition {
+			return &Partition{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Partition) {
+			*a = Partition{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Partition]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (partition Partition) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Partition {
+	return reuse.Alloc[Partition](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (partition *Partition) Release() {
+	if partition != nil {
+		reuse.Free[Partition](partition, nil)
 	}
 }
 
 type container struct {
-	colexec.ReceiverOperator
 
 	// operator status
 	status int
@@ -90,12 +89,12 @@ type container struct {
 	buf *batch.Batch
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (partition *Partition) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	partition.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := arg.ctr; ctr != nil {
+func (partition *Partition) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if ctr := partition.ctr; ctr != nil {
 		mp := proc.Mp()
 
 		for i := range ctr.batchList {
@@ -125,6 +124,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			ctr.buf = nil
 		}
 
-		arg.ctr = nil
+		partition.ctr = nil
 	}
 }

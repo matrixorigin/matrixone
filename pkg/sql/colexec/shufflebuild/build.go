@@ -17,6 +17,9 @@ package shufflebuild
 import (
 	"bytes"
 	"runtime"
+	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,26 +30,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "shuffle_build"
+const opName = "shuffle_build"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (shuffleBuild *ShuffleBuild) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": shuffle build ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	if arg.RuntimeFilterSpec == nil {
+func (shuffleBuild *ShuffleBuild) OpType() vm.OpType {
+	return vm.ShuffleBuild
+}
+
+func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
+	if shuffleBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
 	}
-	arg.RuntimeFilterSpec.Handled = false
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, true)
+	shuffleBuild.ctr = new(container)
 
-	arg.ctr.vecs = make([][]*vector.Vector, 0)
-	ctr := arg.ctr
-	ctr.executor = make([]colexec.ExpressionExecutor, len(arg.Conditions))
+	shuffleBuild.ctr.vecs = make([][]*vector.Vector, 0)
+	ctr := shuffleBuild.ctr
+	ctr.executor = make([]colexec.ExpressionExecutor, len(shuffleBuild.Conditions))
 	ctr.keyWidth = 0
-	for i, expr := range arg.Conditions {
+	for i, expr := range shuffleBuild.Conditions {
 		typ := expr.Typ
 		width := types.T(typ.Id).TypeLen()
 		// todo : for varlena type, always go strhashmap
@@ -54,7 +59,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 			width = 128
 		}
 		ctr.keyWidth += width
-		ctr.executor[i], err = colexec.NewExpressionExecutor(proc, arg.Conditions[i])
+		ctr.executor[i], err = colexec.NewExpressionExecutor(proc, shuffleBuild.Conditions[i])
 		if err != nil {
 			return err
 		}
@@ -70,26 +75,27 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		}
 	}
 
-	arg.ctr.batches = make([]*batch.Batch, 0)
+	shuffleBuild.ctr.batches = make([]*batch.Batch, 0)
 
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(shuffleBuild.GetIdx(), shuffleBuild.GetParallelIdx(), shuffleBuild.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
 	result := vm.NewCallResult()
-	ap := arg
+	ap := shuffleBuild
 	ctr := ap.ctr
 	for {
 		switch ctr.state {
 		case ReceiveBatch:
-			err := ctr.collectBuildBatches(ap, proc, anal, arg.GetIsFirst())
+			err := ctr.collectBuildBatches(ap, proc, anal, shuffleBuild.GetIsFirst())
 			if err != nil {
 				return result, err
 			}
@@ -115,44 +121,22 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			} else if ap.ctr.strHashMap != nil {
 				anal.Alloc(ap.ctr.strHashMap.Size())
 			}
-			ctr.state = SendHashMap
+			ctr.state = SendJoinMap
 
-		case SendHashMap:
-			result.Batch = batch.NewWithSize(0)
-
+		case SendJoinMap:
+			if ap.JoinMapTag <= 0 {
+				panic("wrong joinmap message tag!")
+			}
+			var jm *message.JoinMap
 			if ctr.inputBatchRowCount > 0 {
-				var jm *hashmap.JoinMap
-				if ctr.keyWidth <= 8 {
-					jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
-				} else {
-					jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
+				jm = message.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
+				if ap.NeedMergedBatch {
+					jm.SetRowCount(int64(ctr.inputBatchRowCount))
 				}
-				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-				result.Batch.AuxData = jm
-				ctr.intHashMap = nil
-				ctr.strHashMap = nil
-				ctr.multiSels = nil
-			} else {
-				ctr.cleanHashMap()
+				jm.IncRef(1)
 			}
+			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, IsShuffle: true, ShuffleIdx: ap.ShuffleIdx, Tag: ap.JoinMapTag}, proc.GetMessageBoard())
 
-			// this is just a dummy batch to indicate that the batch is must not empty.
-			// we should make sure this batch can be sent to the next join operator in other pipelines.
-			if result.Batch.IsEmpty() {
-				result.Batch.AddRowCount(1)
-			}
-
-			ctr.state = SendBatch
-			return result, nil
-		case SendBatch:
-			if ctr.batchIdx >= len(ctr.batches) {
-				ctr.state = End
-			} else {
-				result.Batch = ctr.batches[ctr.batchIdx]
-				ctr.batchIdx++
-			}
-			return result, nil
-		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -186,19 +170,21 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 	return nil
 }
 
-func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	var err error
+func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
-	var msg *process.RegisterMessage
 	for {
-		msg = ctr.ReceiveFromAllRegs(anal)
-		if msg.Err != nil {
-			return msg.Err
+		result, err := vm.ChildrenCall(shuffleBuild.Children[0], proc, anal)
+		if err != nil {
+			return err
 		}
-		currentBatch = msg.Batch
+		if result.Batch == nil {
+			break
+		}
+		currentBatch = result.Batch
 		if currentBatch == nil {
 			break
 		}
+		atomic.AddInt64(&currentBatch.Cnt, 1)
 		if currentBatch.IsEmpty() {
 			proc.PutBatch(currentBatch)
 			continue
@@ -206,6 +192,7 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 
 		anal.Input(currentBatch, isFirst)
 		anal.Alloc(int64(currentBatch.Size()))
+
 		ctr.inputBatchRowCount += currentBatch.RowCount()
 		err = ctr.mergeIntoBatches(currentBatch, proc)
 		if err != nil {
@@ -219,7 +206,7 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 	return nil
 }
 
-func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
+func (ctr *container) buildHashmap(ap *ShuffleBuild, proc *process.Process) error {
 	if len(ctr.batches) == 0 {
 		return nil
 	}
@@ -295,11 +282,7 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 			return err
 		}
 		for k, v := range vals[:n] {
-			if zvals[k] == 0 {
-				ctr.hasNull = true
-				continue
-			}
-			if v == 0 {
+			if zvals[k] == 0 || v == 0 {
 				continue
 			}
 			ai := int64(v) - 1
@@ -356,20 +339,15 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 	return nil
 }
 
-func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
+func (ctr *container) handleRuntimeFilter(ap *ShuffleBuild, proc *process.Process) error {
 	if ap.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
 	}
-	// only shuffle build operator with parallelIdx = 0 send this runtime filter
-	if ap.GetParallelIdx() != 0 {
-		ap.RuntimeFilterSpec.Handled = true
-		return nil
-	}
 	//only support runtime filter pass for now in shuffle join
-	var runtimeFilter process.RuntimeFilterMessage
+	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
-	runtimeFilter.Typ = process.RuntimeFilter_PASS
-	proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+	runtimeFilter.Typ = message.RuntimeFilter_PASS
+	message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 	return nil
 }
 
@@ -378,7 +356,7 @@ func (ctr *container) evalJoinCondition(proc *process.Process) error {
 		tmpVes := make([]*vector.Vector, len(ctr.executor))
 		ctr.vecs = append(ctr.vecs, tmpVes)
 		for idx2 := range ctr.executor {
-			vec, err := ctr.executor[idx2].Eval(proc, []*batch.Batch{ctr.batches[idx1]})
+			vec, err := ctr.executor[idx2].Eval(proc, []*batch.Batch{ctr.batches[idx1]}, nil)
 			if err != nil {
 				return err
 			}

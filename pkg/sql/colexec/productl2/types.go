@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Productl2)
 
 const (
 	Build = iota
@@ -34,66 +34,70 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
-	state int
-	bat   *batch.Batch // build batch
-	rbat  *batch.Batch
-	inBat *batch.Batch // probe batch
-
+	state    int
 	probeIdx int
+	bat      *batch.Batch // build batch
+	rbat     *batch.Batch
+	inBat    *batch.Batch // probe batch
 }
 
-type Argument struct {
-	ctr    *container
-	Typs   []types.Type
-	Result []colexec.ResultPos
-	OnExpr *plan.Expr
+type Productl2 struct {
+	ctr        *container
+	Typs       []types.Type
+	Result     []colexec.ResultPos
+	OnExpr     *plan.Expr
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	productl2.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (productl2 *Productl2) GetOperatorBase() *vm.OperatorBase {
+	return &productl2.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Productl2](
+		func() *Productl2 {
+			return &Productl2{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Productl2) {
+			*a = Productl2{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Productl2]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (productl2 Productl2) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Productl2 {
+	return reuse.Alloc[Productl2](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (productl2 *Productl2) Release() {
+	if productl2 != nil {
+		reuse.Free[Productl2](productl2, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := productl2.ctr
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
-		ctr.FreeAllReg()
-		arg.ctr = nil
+		productl2.ctr = nil
+	}
+	if productl2.ProjectList != nil {
+		anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
+		anal.Alloc(productl2.ProjectAllocSize)
+		productl2.FreeProjection(proc)
 	}
 }
 

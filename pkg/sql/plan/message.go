@@ -16,7 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
 func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32) int32 {
@@ -80,12 +80,33 @@ func (builder *QueryBuilder) handleMessgaeFromTopToScan(nodeID int32) {
 	}
 
 	msgTag := builder.genNewMsgTag()
-	msgHeader := &plan.MsgHeader{MsgTag: msgTag, MsgType: int32(process.MsgTopValue)}
+	msgHeader := &plan.MsgHeader{MsgTag: msgTag, MsgType: int32(message.MsgTopValue)}
 	node.SendMsgList = append(node.SendMsgList, msgHeader)
 	scanNode.RecvMsgList = append(scanNode.RecvMsgList, msgHeader)
 	scanNode.OrderBy = append(scanNode.OrderBy, DeepCopyOrderBy(node.OrderBy[0]))
 }
 
+func (builder *QueryBuilder) handleHashMapMessages(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			builder.handleHashMapMessages(child)
+		}
+	}
+	if node.NodeType != plan.Node_JOIN {
+		return
+	}
+	//index join and non equal join don't need to send hashmap
+	if node.JoinType == plan.Node_INDEX {
+		return
+	}
+
+	msgTag := builder.genNewMsgTag()
+	msgHeader := &plan.MsgHeader{MsgTag: msgTag, MsgType: int32(message.MsgJoinMap)}
+	node.SendMsgList = append(node.SendMsgList, msgHeader)
+}
+
 func (builder *QueryBuilder) handleMessgaes(nodeID int32) {
 	builder.handleMessgaeFromTopToScan(nodeID)
+	builder.handleHashMapMessages(nodeID)
 }

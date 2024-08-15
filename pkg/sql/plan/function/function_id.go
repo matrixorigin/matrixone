@@ -220,6 +220,10 @@ const (
 	VAR_POP
 	VAR_SAMPLE
 
+	// Date and Time functions
+	LAST_DAY
+	MAKEDATE
+
 	DATE
 	TIME
 	DAY
@@ -277,6 +281,11 @@ const (
 	JSON_EXTRACT
 	JSON_QUOTE
 	JSON_UNQUOTE
+	JSON_ROW
+	JQ
+	TRY_JQ
+	WASM
+	TRY_WASM
 	FORMAT
 	SLEEP
 	INSTR
@@ -338,6 +347,8 @@ const (
 
 	// be used: show snapshots
 	CAST_NANO_TO_TIMESTAMP
+	// be used: show pitr
+	CAST_RANGE_VALUE_UNIT
 
 	//Sequence function
 	NEXTVAL
@@ -569,6 +580,12 @@ var functionIdRegister = map[string]int32{
 	"collation":                      COLLATION,
 	"json_extract":                   JSON_EXTRACT,
 	"json_quote":                     JSON_QUOTE,
+	"json_unquote":                   JSON_UNQUOTE,
+	"json_row":                       JSON_ROW,
+	"jq":                             JQ,
+	"try_jq":                         TRY_JQ,
+	"wasm":                           WASM,
+	"try_wasm":                       TRY_WASM,
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
 	"dense_rank":                     DENSE_RANK,
@@ -590,6 +607,8 @@ var functionIdRegister = map[string]int32{
 	"datediff":                       DATEDIFF,
 	"timestampdiff":                  TIMESTAMPDIFF,
 	"timediff":                       TIMEDIFF,
+	"last_day":                       LAST_DAY,
+	"makedate":                       MAKEDATE,
 	"reg_match":                      REG_MATCH,
 	"not_reg_match":                  NOT_REG_MATCH,
 	"regexp_instr":                   REGEXP_INSTR,
@@ -612,7 +631,6 @@ var functionIdRegister = map[string]int32{
 	"locate":                         LOCATE,
 	"curdate":                        CURRENT_DATE,
 	"current_date":                   CURRENT_DATE,
-	"json_unquote":                   JSON_UNQUOTE,
 	"ascii":                          ASCII,
 	"replace":                        REPLACE,
 	"mo_table_rows":                  MO_TABLE_ROWS,
@@ -646,6 +664,7 @@ var functionIdRegister = map[string]int32{
 	"cast_value_to_index":            CAST_VALUE_TO_INDEX,
 	"cast_index_value_to_index":      CAST_INDEX_VALUE_TO_INDEX,
 	"cast_nano_to_timestamp":         CAST_NANO_TO_TIMESTAMP,
+	"cast_range_value_unit":          CAST_RANGE_VALUE_UNIT,
 	"to_upper":                       UPPER,
 	"upper":                          UPPER,
 	"ucase":                          UPPER,

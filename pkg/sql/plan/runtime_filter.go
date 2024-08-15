@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -28,20 +29,23 @@ const (
 	InFilterSelectivityLimit = 0.05
 )
 
-func GetInFilterCardLimit() int32 {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_in")
+func GetInFilterCardLimit(sid string) int32 {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables("runtime_filter_limit_in")
 	if ok {
 		return int32(v.(int64))
 	}
 	return InFilterCardLimitNonPK
 }
 
-func GetInFilterCardLimitOnPK(tableCnt float64) int32 {
+func GetInFilterCardLimitOnPK(
+	sid string,
+	tableCnt float64,
+) int32 {
 	upper := tableCnt * InFilterSelectivityLimit
 	if upper > InFilterCardLimitPK {
 		upper = InFilterCardLimitPK
 	}
-	lower := float64(GetInFilterCardLimit())
+	lower := float64(GetInFilterCardLimit(sid))
 	if upper < lower {
 		upper = lower
 	}
@@ -50,9 +54,14 @@ func GetInFilterCardLimitOnPK(tableCnt float64) int32 {
 
 func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
+	sid := builder.compCtx.GetProcess().GetService()
 
 	for _, childID := range node.Children {
 		builder.generateRuntimeFilters(childID)
+	}
+
+	if builder.isMasterIndexInnerJoin(node) {
+		return
 	}
 
 	// Build runtime filters only for broadcast join
@@ -123,9 +132,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 
 	rfTag := builder.genNewMsgTag()
 
-	type_tuple := types.New(types.T_tuple, 0, 0)
 	for i := range probeExprs {
-		args := []types.Type{makeTypeByPlan2Expr(probeExprs[i]), type_tuple}
+		exprType := makeTypeByPlan2Expr(probeExprs[i])
+		args := []types.Type{exprType, exprType}
 		_, err := function.GetFunctionByName(builder.GetContext(), "in", args)
 		if err != nil {
 			//don't support this type
@@ -166,9 +175,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 
 		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0])))
 		col := probeExprs[0].GetCol()
-		inLimit := GetInFilterCardLimit()
+		inLimit := GetInFilterCardLimit(sid)
 		if leftChild.TableDef.Pkey != nil && leftChild.TableDef.Cols[col.ColPos].Name == leftChild.TableDef.Pkey.PkeyColName {
-			inLimit = GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt)
+			inLimit = GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
 		}
 		buildExpr := &plan.Expr{
 			Typ: buildExprs[0].Typ,
@@ -256,6 +265,63 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 
 	buildExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", buildArgs)
 
-	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt), buildExpr))
+	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt), buildExpr))
 	recalcStatsByRuntimeFilter(leftChild, node, builder)
+}
+
+func (builder *QueryBuilder) isMasterIndexInnerJoin(node *plan.Node) bool {
+	// In Master Index, INNER Joins in the query plan should not have runtime filters, as it sets
+	// input rows to 0 for right child, which is not expected.
+	// https://github.com/matrixorigin/matrixone/issues/14876#issuecomment-2148824892
+	if !(node.JoinType == plan.Node_INNER && len(node.Children) == 2) {
+		return false
+	}
+
+	leftChild := builder.qry.Nodes[node.Children[0]]
+	rightChild := builder.qry.Nodes[node.Children[1]]
+
+	if leftChild.TableDef == nil || leftChild.TableDef.Cols == nil || len(leftChild.TableDef.Cols) != 3 {
+		return false
+	}
+
+	if rightChild.TableDef == nil || rightChild.TableDef.Cols == nil || len(rightChild.TableDef.Cols) != 3 {
+		return false
+	}
+
+	// In Master Index, both the children are from the same master index table.
+	if leftChild.TableDef.Name != rightChild.TableDef.Name {
+		return false
+	}
+
+	// Check if left child is a master/secondary index table
+	//TODO: verify if Cols will contain  __mo_cpkey
+	for _, column := range leftChild.TableDef.Cols {
+		if column.Name == catalog.MasterIndexTablePrimaryColName {
+			continue
+		}
+		if column.Name == catalog.MasterIndexTableIndexColName {
+			continue
+		}
+		if column.Name == catalog.Row_ID {
+			continue
+		}
+		return false
+	}
+
+	// Check if right child is a master/secondary index table
+	for _, column := range rightChild.TableDef.Cols {
+		if column.Name == catalog.MasterIndexTablePrimaryColName {
+			continue
+		}
+		if column.Name == catalog.MasterIndexTableIndexColName {
+			continue
+		}
+		if column.Name == catalog.Row_ID {
+			continue
+		}
+		return false
+	}
+
+	return true
+
 }

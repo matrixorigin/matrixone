@@ -18,9 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"sync/atomic"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,115 +25,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/util"
-	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"io"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 const DefaultBatchSize = 8192
-
-// New creates a new Process.
-// A process stores the execution context.
-func New(
-	ctx context.Context,
-	m *mpool.MPool,
-	txnClient client.TxnClient,
-	txnOperator client.TxnOperator,
-	fileService fileservice.FileService,
-	lockService lockservice.LockService,
-	queryClient qclient.QueryClient,
-	hakeeper logservice.CNHAKeeperClient,
-	udfService udf.Service,
-	aicm *defines.AutoIncrCacheManager) *Process {
-	return &Process{
-		mp:           m,
-		Ctx:          ctx,
-		TxnClient:    txnClient,
-		TxnOperator:  txnOperator,
-		FileService:  fileService,
-		IncrService:  incrservice.GetAutoIncrementService(ctx),
-		UnixTime:     time.Now().UnixNano(),
-		LastInsertID: new(uint64),
-		LockService:  lockService,
-		Aicm:         aicm,
-		vp: &vectorPool{
-			vecs:  make(map[uint8][]*vector.Vector),
-			Limit: VectorLimit,
-		},
-		valueScanBatch: make(map[[16]byte]*batch.Batch),
-		QueryClient:    queryClient,
-		Hakeeper:       hakeeper,
-		UdfService:     udfService,
-		logger:         util.GetLogger(), // TODO: set by input
-	}
-}
-
-func NewWithAnalyze(p *Process, ctx context.Context, regNumber int, anals []*AnalyzeInfo) *Process {
-	proc := NewFromProc(p, ctx, regNumber)
-	proc.AnalInfos = make([]*AnalyzeInfo, len(anals))
-	copy(proc.AnalInfos, anals)
-	return proc
-}
-
-// NewFromProc create a new Process based on another process.
-func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
-	proc := new(Process)
-	newctx, cancel := context.WithCancel(ctx)
-	proc.Id = p.Id
-	proc.vp = p.vp
-	proc.mp = p.Mp()
-	proc.prepareBatch = p.prepareBatch
-	proc.prepareExprList = p.prepareExprList
-	proc.Lim = p.Lim
-	proc.TxnClient = p.TxnClient
-	proc.TxnOperator = p.TxnOperator
-	proc.AnalInfos = p.AnalInfos
-	proc.SessionInfo = p.SessionInfo
-	proc.FileService = p.FileService
-	proc.IncrService = p.IncrService
-	proc.QueryClient = p.QueryClient
-	proc.Hakeeper = p.Hakeeper
-	proc.UdfService = p.UdfService
-	proc.UnixTime = p.UnixTime
-	proc.LastInsertID = p.LastInsertID
-	proc.LockService = p.LockService
-	proc.Aicm = p.Aicm
-	proc.LoadTag = p.LoadTag
-	proc.MessageBoard = p.MessageBoard
-	proc.StmtProfile = p.StmtProfile
-
-	proc.prepareParams = p.prepareParams
-	proc.resolveVariableFunc = p.resolveVariableFunc
-
-	proc.logger = p.logger
-
-	// reg and cancel
-	proc.Ctx = newctx
-	proc.Cancel = cancel
-	proc.Reg.MergeReceivers = make([]*WaitRegister, regNumber)
-	for i := 0; i < regNumber; i++ {
-		proc.Reg.MergeReceivers[i] = &WaitRegister{
-			Ctx: newctx,
-			Ch:  make(chan *RegisterMessage, 1),
-		}
-	}
-	proc.DispatchNotifyCh = make(chan WrapCs)
-	proc.LoadLocalReader = p.LoadLocalReader
-	proc.WaitPolicy = p.WaitPolicy
-	return proc
-}
 
 func (wreg *WaitRegister) CleanChannel(m *mpool.MPool) {
 	for len(wreg.Ch) > 0 {
@@ -147,28 +50,12 @@ func (wreg *WaitRegister) CleanChannel(m *mpool.MPool) {
 	}
 }
 
-func (wreg *WaitRegister) MarshalBinary() ([]byte, error) {
-	return nil, nil
-}
-
-func (wreg *WaitRegister) UnmarshalBinary(_ []byte) error {
-	return nil
-}
-
-func (proc *Process) MarshalBinary() ([]byte, error) {
-	return nil, nil
-}
-
-func (proc *Process) UnmarshalBinary(_ []byte) error {
-	return nil
-}
-
 func (proc *Process) QueryId() string {
-	return proc.Id
+	return proc.Base.Id
 }
 
 func (proc *Process) SetQueryId(id string) {
-	proc.Id = id
+	proc.Base.Id = id
 }
 
 // XXX MPOOL
@@ -184,66 +71,92 @@ func (proc *Process) GetMPool() *mpool.MPool {
 	if proc == nil {
 		return xxxProcMp
 	}
-	return proc.mp
+	return proc.Base.mp
 }
 
 func (proc *Process) Mp() *mpool.MPool {
 	return proc.GetMPool()
 }
 
+func (proc *Process) GetService() string {
+	if proc == nil {
+		return ""
+	}
+	if ls := proc.GetLockService(); ls != nil {
+		return ls.GetConfig().ServiceID
+	}
+	return ""
+}
+
+func (proc *Process) GetLim() Limitation {
+	return proc.Base.Lim
+}
+
+func (proc *Process) GetQueryClient() qclient.QueryClient {
+	return proc.Base.QueryClient
+}
+
+func (proc *Process) GetFileService() fileservice.FileService {
+	return proc.Base.FileService
+}
+
+func (proc *Process) GetUnixTime() int64 {
+	return proc.Base.UnixTime
+}
+
+func (proc *Process) GetIncrService() incrservice.AutoIncrementService {
+	return proc.Base.IncrService
+}
+
+func (proc *Process) GetLoadLocalReader() *io.PipeReader {
+	return proc.Base.LoadLocalReader
+}
+
+func (proc *Process) GetLockService() lockservice.LockService {
+	return proc.Base.LockService
+}
+
+func (proc *Process) GetWaitPolicy() lock.WaitPolicy {
+	return proc.Base.WaitPolicy
+}
+
+func (proc *Process) GetHaKeeper() logservice.CNHAKeeperClient {
+	return proc.Base.Hakeeper
+}
+
 func (proc *Process) GetPrepareParams() *vector.Vector {
-	return proc.prepareParams
+	return proc.Base.prepareParams
 }
 
 func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
-	proc.prepareParams = prepareParams
+	proc.Base.prepareParams = prepareParams
 }
 
 func (proc *Process) SetPrepareBatch(bat *batch.Batch) {
-	proc.prepareBatch = bat
+	proc.Base.prepareBatch = bat
 }
 
 func (proc *Process) GetPrepareBatch() *batch.Batch {
-	return proc.prepareBatch
+	return proc.Base.prepareBatch
 }
 
 func (proc *Process) SetPrepareExprList(exprList any) {
-	proc.prepareExprList = exprList
+	proc.Base.prepareExprList = exprList
 }
 
 func (proc *Process) GetPrepareExprList() any {
-	return proc.prepareExprList
+	return proc.Base.prepareExprList
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {
 	return proc.Mp().Cap() < size
 }
 
-func (proc *Process) SetInputBatch(bat *batch.Batch) {
-	proc.Reg.InputBatch = bat
-}
-
-func (proc *Process) InputBatch() *batch.Batch {
-	return proc.Reg.InputBatch
-}
-
-func (proc *Process) ResetContextFromParent(parent context.Context) context.Context {
-	newctx, cancel := context.WithCancel(parent)
-
-	proc.Ctx = newctx
-	proc.Cancel = cancel
-
-	for i := range proc.Reg.MergeReceivers {
-		proc.Reg.MergeReceivers[i].Ctx = newctx
-	}
-	return newctx
-}
-
 func (proc *Process) GetAnalyze(idx, parallelIdx int, parallelMajor bool) Analyze {
-	if idx >= len(proc.AnalInfos) || idx < 0 {
-		return &analyze{analInfo: nil, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
+	if idx >= len(proc.Base.AnalInfos) || idx < 0 {
+		return &operatorAnalyzer{analInfo: nil, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
 	}
-	return &analyze{analInfo: proc.AnalInfos[idx], wait: 0, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
+	return &operatorAnalyzer{analInfo: proc.Base.AnalInfos[idx], wait: 0, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
 }
 
 func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {
@@ -259,20 +172,16 @@ func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Null
 	return vec, nil
 }
 
-func (proc *Process) WithSpanContext(sc trace.SpanContext) {
-	proc.Ctx = trace.ContextWithSpanContext(proc.Ctx, sc)
-}
-
 func (proc *Process) CopyValueScanBatch(src *Process) {
-	proc.valueScanBatch = src.valueScanBatch
+	proc.Base.valueScanBatch = src.Base.valueScanBatch
 }
 
 func (proc *Process) SetVectorPoolSize(limit int) {
-	proc.vp.Limit = limit
+	proc.Base.vp.modifyCapacity(limit, proc.Mp())
 }
 
 func (proc *Process) CopyVectorPool(src *Process) {
-	proc.vp = src.vp
+	proc.Base.vp = src.Base.vp
 }
 
 func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch.Batch, error) {
@@ -320,111 +229,22 @@ func (proc *Process) AppendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Ba
 	return dst, length, nil
 }
 
-func (proc *Process) PutBatch(bat *batch.Batch) {
-	if bat == batch.EmptyBatch {
-		return
-	}
-	if atomic.LoadInt64(&bat.Cnt) == 0 {
-		panic("put batch with zero cnt")
-	}
-	if atomic.AddInt64(&bat.Cnt, -1) > 0 {
-		return
-	}
-	for _, vec := range bat.Vecs {
-		if vec != nil {
-			// very large vectors should not put back into pool, which cause these memory can not release.
-			// XXX I left the old logic here. But it's unreasonable to use the number of rows to determine if a vector's size.
-			// use Allocated() may suitable.
-			if vec.IsConst() || vec.NeedDup() || vec.Allocated() > 8192*64 {
-				vec.Free(proc.mp)
-				bat.ReplaceVector(vec, nil)
-				continue
-			}
-
-			if !proc.vp.putVector(vec) {
-				vec.Free(proc.mp)
-			}
-			bat.ReplaceVector(vec, nil)
-		}
-	}
-	for _, agg := range bat.Aggs {
-		if agg != nil {
-			agg.Free()
-		}
-	}
-	bat.Vecs = nil
-	bat.Attrs = nil
-	bat.SetRowCount(0)
-}
-
-func (proc *Process) FreeVectors() {
-	proc.vp.freeVectors(proc.Mp())
-}
-
-func (proc *Process) PutVector(vec *vector.Vector) {
-	if !proc.vp.putVector(vec) {
-		vec.Free(proc.Mp())
-	}
-}
-
-func (proc *Process) GetVector(typ types.Type) *vector.Vector {
-	if vec := proc.vp.getVector(typ); vec != nil {
-		vec.Reset(typ)
-		return vec
-	}
-	return vector.NewVec(typ)
-}
-
-func (vp *vectorPool) freeVectors(mp *mpool.MPool) {
-	vp.Lock()
-	defer vp.Unlock()
-	for k, vecs := range vp.vecs {
-		for _, vec := range vecs {
-			vec.Free(mp)
-		}
-		delete(vp.vecs, k)
-	}
-}
-
-func (vp *vectorPool) putVector(vec *vector.Vector) bool {
-	vp.Lock()
-	defer vp.Unlock()
-	key := uint8(vec.GetType().Oid)
-	if len(vp.vecs[key]) >= vp.Limit {
-		return false
-	}
-	vp.vecs[key] = append(vp.vecs[key], vec)
-	return true
-}
-
-func (vp *vectorPool) getVector(typ types.Type) *vector.Vector {
-	vp.Lock()
-	defer vp.Unlock()
-	key := uint8(typ.Oid)
-	if vecs := vp.vecs[key]; len(vecs) > 0 {
-		vec := vecs[len(vecs)-1]
-		vp.vecs[key] = vecs[:len(vecs)-1]
-		return vec
-	}
-	return nil
-}
-
 // log do logging.
 // just for Info/Error/Warn/Debug/Fatal
 func (proc *Process) log(ctx context.Context, level zapcore.Level, msg string, fields ...zap.Field) {
-	if proc.SessionInfo.LogLevel.Enabled(level) {
+	if proc.Base.SessionInfo.LogLevel.Enabled(level) {
 		fields = appendSessionField(fields, proc)
 		fields = appendTraceField(fields, ctx)
-		proc.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
+		proc.Base.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
 	}
 }
 
 func (proc *Process) logf(ctx context.Context, level zapcore.Level, msg string, args ...any) {
-	if proc.SessionInfo.LogLevel.Enabled(level) {
+	if proc.Base.SessionInfo.LogLevel.Enabled(level) {
 		fields := make([]zap.Field, 0, 5)
 		fields = appendSessionField(fields, proc)
 		fields = appendTraceField(fields, ctx)
-		proc.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
+		proc.Base.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
 	}
 }
 
@@ -471,9 +291,9 @@ func (proc *Process) Debugf(ctx context.Context, msg string, args ...any) {
 // appendSessionField append session id, transaction id and statement id to the fields
 func appendSessionField(fields []zap.Field, proc *Process) []zap.Field {
 	if proc != nil {
-		fields = append(fields, logutil.SessionIdField(uuid.UUID(proc.SessionInfo.SessionId).String()))
-		if p := proc.StmtProfile; p != nil {
-			fields = append(fields, logutil.StatementIdField(uuid.UUID(p.stmtId).String()))
+		fields = append(fields, logutil.SessionIdField(proc.Base.SessionInfo.SessionId.String()))
+		if p := proc.GetStmtProfile(); p != nil {
+			fields = append(fields, logutil.StatementIdField(p.stmtId.String()))
 			fields = append(fields, logutil.TxnIdField(hex.EncodeToString(p.txnId[:])))
 		}
 	}

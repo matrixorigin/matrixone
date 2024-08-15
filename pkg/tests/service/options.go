@@ -68,6 +68,7 @@ const (
 	defaultRPCStreamPoisonTime        = 5 * time.Second
 	defaultLogtailCollectInterval     = 50 * time.Millisecond
 	defaultLogtailResponseSendTimeout = 10 * time.Second
+	defaultPullWorkerPoolSize         = 50
 )
 
 // Options are params for creating test cluster.
@@ -111,6 +112,7 @@ type Options struct {
 		logtailRPCStreamPoisonTIme time.Duration
 		logtailCollectInterval     time.Duration
 		logtailResponseSendTimeout time.Duration
+		pullWorkerPoolSize         int64
 	}
 
 	cn struct {
@@ -203,6 +205,9 @@ func (opt *Options) validate() {
 	}
 	if opt.logtailPushServer.logtailResponseSendTimeout <= 0 {
 		opt.logtailPushServer.logtailResponseSendTimeout = defaultLogtailResponseSendTimeout
+	}
+	if opt.logtailPushServer.pullWorkerPoolSize <= 0 {
+		opt.logtailPushServer.pullWorkerPoolSize = defaultPullWorkerPoolSize
 	}
 }
 
@@ -384,6 +389,12 @@ func (opt Options) WithLogtailCollectInterval(interval time.Duration) Options {
 // WithLogtailResponseSendTimeout sets response send timeout for logtail push server.
 func (opt Options) WithLogtailResponseSendTimeout(timeout time.Duration) Options {
 	opt.logtailPushServer.logtailResponseSendTimeout = timeout
+	return opt
+}
+
+// WithLogtailResponseSendTimeout sets response send timeout for logtail push server.
+func (opt Options) WithPullWorkerPoolSize(s int64) Options {
+	opt.logtailPushServer.pullWorkerPoolSize = s
 	return opt
 }
 

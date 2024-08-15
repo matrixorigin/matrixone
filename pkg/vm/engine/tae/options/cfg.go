@@ -24,8 +24,10 @@ const (
 	defaultRpcMaxMessageSize      = 16 * mpool.KB
 	defaultRpcEnableChecksum      = true
 	defaultLogtailCollectInterval = 50 * time.Millisecond
-	defaultResponseSendTimeout    = 30 * time.Second
+	defaultResponseSendTimeout    = time.Minute
 	defaultRpcStreamPoisonTime    = 5 * time.Second
+	// The default value of PullWorkerPoolSize.
+	defaultPullWorkerPoolSize = 50
 )
 
 type StorageCfg struct {
@@ -35,6 +37,7 @@ type StorageCfg struct {
 
 type CheckpointCfg struct {
 	FlushInterval             time.Duration `toml:"flush-inerterval"`
+	TransferInterval          time.Duration `toml:"transfer-interval"`
 	MetadataCheckInterval     time.Duration `toml:"metadata-check-inerterval"`
 	MinCount                  int64         `toml:"checkpoint-min-count"`
 	ScanInterval              time.Duration `toml:"scan-interval"`
@@ -87,6 +90,10 @@ type LogtailServerCfg struct {
 	RPCStreamPoisonTime    time.Duration
 	LogtailCollectInterval time.Duration
 	ResponseSendTimeout    time.Duration
+	// PullWorkerPoolSize is the size of the pull worker pool.
+	// Means there are x pull workers working at most.
+	// Default value is defaultPullWorkerPoolSize=50.
+	PullWorkerPoolSize int64
 }
 
 func NewDefaultLogtailServerCfg() *LogtailServerCfg {
@@ -96,6 +103,7 @@ func NewDefaultLogtailServerCfg() *LogtailServerCfg {
 		RPCStreamPoisonTime:    defaultRpcStreamPoisonTime,
 		LogtailCollectInterval: defaultLogtailCollectInterval,
 		ResponseSendTimeout:    defaultResponseSendTimeout,
+		PullWorkerPoolSize:     defaultPullWorkerPoolSize,
 	}
 }
 
@@ -111,5 +119,8 @@ func (l *LogtailServerCfg) Validate() {
 	}
 	if l.ResponseSendTimeout <= 0 {
 		l.ResponseSendTimeout = defaultResponseSendTimeout
+	}
+	if l.PullWorkerPoolSize <= 0 {
+		l.PullWorkerPoolSize = defaultPullWorkerPoolSize
 	}
 }

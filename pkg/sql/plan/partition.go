@@ -17,10 +17,10 @@ package plan
 import (
 	"context"
 	"fmt"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"go/constant"
 	"strings"
 
+	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -110,9 +110,9 @@ func (p *partitionExprChecker) extractColumns(ctx context.Context, _ *plan.Table
 		return nil
 	}
 
-	colInfo := findColumnByName(columnNameExpr.Parts[0], p.tableInfo)
+	colInfo := findColumnByName(columnNameExpr.ColName(), p.tableInfo)
 	if colInfo == nil {
-		return moerr.NewBadFieldError(ctx, columnNameExpr.Parts[0], "partition function")
+		return moerr.NewBadFieldError(ctx, columnNameExpr.ColNameOrigin(), "partition function")
 	}
 
 	p.columns = append(p.columns, colInfo)
@@ -239,7 +239,7 @@ func checkColumnsPartitionType(ctx context.Context, tbInfo *TableDef, pi *plan.P
 			// When partitioning by [LINEAR] KEY, it is possible to use columns of any valid MySQL data type other than TEXT or BLOB
 			// as partitioning keys, because MySQL's internal key-hashing functions produce the correct data type from these types.
 			// See https://dev.mysql.com/doc/refman/8.0/en/partitioning-limitations.html
-			if t == types.T_blob || t == types.T_text || t == types.T_json {
+			if t == types.T_blob || t == types.T_text || t == types.T_json || t == types.T_datalink {
 				return moerr.NewBlobFieldInPartFunc(ctx)
 			}
 		} else {
@@ -252,7 +252,7 @@ func checkColumnsPartitionType(ctx context.Context, tbInfo *TableDef, pi *plan.P
 			//	TEXT and BLOB columns are not supported as partitioning columns.
 			// See https://dev.mysql.com/doc/refman/8.0/en/partitioning-columns.html
 			if t == types.T_float32 || t == types.T_float64 || t == types.T_decimal64 || t == types.T_decimal128 ||
-				t == types.T_timestamp || t == types.T_blob || t == types.T_text || t == types.T_json || t == types.T_enum {
+				t == types.T_timestamp || t == types.T_blob || t == types.T_text || t == types.T_json || t == types.T_enum || t == types.T_datalink {
 				return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, colName)
 			}
 		}
@@ -360,13 +360,13 @@ func getPrimaryKeyAndUniqueKey(defs tree.TableDefs) (primaryKeys []*tree.Unresol
 // This method is used to generate partition ast for key partition and hash partition
 // For example: abs (hash_value (col3))% 4
 func genPartitionAst(exprs tree.Exprs, partNum int64) tree.Expr {
-	hashFuncName := tree.SetUnresolvedName(strings.ToLower("hash_value"))
+	hashFuncName := tree.NewUnresolvedColName("hash_value")
 	hashfuncExpr := &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(hashFuncName),
 		Exprs: exprs,
 	}
 
-	absFuncName := tree.SetUnresolvedName(strings.ToLower("abs"))
+	absFuncName := tree.NewUnresolvedColName("abs")
 	absFuncExpr := &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(absFuncName),
 		Exprs: tree.Exprs{hashfuncExpr},

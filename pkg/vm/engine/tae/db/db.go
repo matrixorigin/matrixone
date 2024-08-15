@@ -25,7 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -134,7 +134,7 @@ func (db *DB) ForceCheckpoint(
 func (db *DB) ForceGlobalCheckpoint(
 	ctx context.Context,
 	ts types.TS,
-	flushDuration time.Duration) (err error) {
+	flushDuration, versionInterval time.Duration) (err error) {
 	// FIXME: cannot disable with a running job
 	db.BGCheckpointRunner.DisableCheckpoint()
 	defer db.BGCheckpointRunner.EnableCheckpoint()
@@ -145,7 +145,7 @@ func (db *DB) ForceGlobalCheckpoint(
 	if err != nil {
 		return err
 	}
-	if err = db.BGCheckpointRunner.ForceGlobalCheckpointSynchronously(ctx, ts, 0); err != nil {
+	if err = db.BGCheckpointRunner.ForceGlobalCheckpointSynchronously(ctx, ts, versionInterval); err != nil {
 		return err
 	}
 	logutil.Infof("[Force Global Checkpoint] takes %v", time.Since(t0))

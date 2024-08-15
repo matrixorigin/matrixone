@@ -15,67 +15,71 @@
 package preinsertsecondaryindex
 
 import (
-	"context"
-
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type Argument struct {
-	Ctx          context.Context
+type container struct {
+	buf *batch.Batch
+}
+type PreInsertSecIdx struct {
+	ctr          *container
 	PreInsertCtx *plan.PreInsertUkCtx
 
 	packer util.PackerList
 
-	buf *batch.Batch
-
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (preInsertSecIdx *PreInsertSecIdx) GetOperatorBase() *vm.OperatorBase {
+	return &preInsertSecIdx.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[PreInsertSecIdx](
+		func() *PreInsertSecIdx {
+			return &PreInsertSecIdx{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *PreInsertSecIdx) {
+			*a = PreInsertSecIdx{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[PreInsertSecIdx]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (preInsertSecIdx PreInsertSecIdx) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *PreInsertSecIdx {
+	return reuse.Alloc[PreInsertSecIdx](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (preInsertSecIdx *PreInsertSecIdx) Release() {
+	if preInsertSecIdx != nil {
+		reuse.Free[PreInsertSecIdx](preInsertSecIdx, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (preInsertSecIdx *PreInsertSecIdx) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	preInsertSecIdx.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
+func (preInsertSecIdx *PreInsertSecIdx) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if preInsertSecIdx.ctr != nil {
+		if preInsertSecIdx.ctr.buf != nil {
+			preInsertSecIdx.ctr.buf.Clean(proc.Mp())
+			preInsertSecIdx.ctr.buf = nil
+		}
+		preInsertSecIdx.ctr = nil
 	}
-	arg.packer.Free()
+
+	preInsertSecIdx.packer.Free()
 }

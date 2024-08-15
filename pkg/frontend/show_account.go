@@ -61,8 +61,7 @@ const (
 		"		mo_catalog.mo_database AS md" +
 		"	ON " +
 		"		mt.account_id = md.account_id AND" +
-		"		mt.relkind IN ('v','e','r','cluster') AND" +
-		"		md.dat_type != 'subscription'" +
+		"		mt.relkind IN ('v','e','r','cluster') " +
 		"	GROUP BY" +
 		"		mt.account_id" +
 		")," +
@@ -158,11 +157,11 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 	txnOperator := ses.txnHandler.GetTxn()
 
 	// create a new proc for `handler`
-	proc := process.New(ctx, ses.proc.GetMPool(),
-		ses.proc.TxnClient, txnOperator,
-		ses.proc.FileService, ses.proc.LockService,
-		ses.proc.QueryClient, ses.proc.Hakeeper,
-		ses.proc.UdfService, ses.proc.Aicm,
+	proc := process.NewTopProcess(ctx, ses.proc.GetMPool(),
+		ses.proc.Base.TxnClient, txnOperator,
+		ses.proc.Base.FileService, ses.proc.Base.LockService,
+		ses.proc.Base.QueryClient, ses.proc.Base.Hakeeper,
+		ses.proc.Base.UdfService, ses.proc.Base.Aicm,
 	)
 
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpStorageUsage, whichTN, payload, responseUnmarshaler)
@@ -195,8 +194,13 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 	return result.Data.([]any)[0], tried, nil
 }
 
-func handleStorageUsageResponse_V0(ctx context.Context, fs fileservice.FileService,
-	usage *db.StorageUsageResp_V0, logger SessionLogger) (map[int64]uint64, error) {
+func handleStorageUsageResponse_V0(
+	ctx context.Context,
+	sid string,
+	fs fileservice.FileService,
+	usage *db.StorageUsageResp_V0,
+	logger SessionLogger,
+) (map[int64]uint64, error) {
 	result := make(map[int64]uint64, 0)
 	for idx := range usage.CkpEntries {
 		version := usage.CkpEntries[idx].Version
@@ -210,7 +214,7 @@ func handleStorageUsageResponse_V0(ctx context.Context, fs fileservice.FileServi
 			return map[int64]uint64{}, nil
 		}
 
-		ckpData, err := logtail.LoadSpecifiedCkpBatch(ctx, location, version, logtail.StorageUsageInsIDX, fs)
+		ckpData, err := logtail.LoadSpecifiedCkpBatch(ctx, sid, location, version, logtail.StorageUsageInsIDX, fs)
 		if err != nil {
 			return nil, err
 		}
@@ -331,7 +335,7 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64
 		}
 
 		// step 3: handling these pulled data
-		return handleStorageUsageResponse_V0(ctx, fs, usage, ses.GetLogger())
+		return handleStorageUsageResponse_V0(ctx, ses.GetService(), fs, usage, ses.GetLogger())
 
 	} else {
 		usage, ok := response.(*db.StorageUsageResp)
@@ -507,10 +511,22 @@ func getAccountInfo(ctx context.Context,
 	if err != nil {
 		return nil, nil, err
 	}
-
-	rsOfMoAccount = bh.GetExecResultBatches()
+	//the resultBatches referred outside this function far away
+	rsOfMoAccount = Copy[*batch.Batch](bh.GetExecResultBatches())
 	if len(rsOfMoAccount) == 0 {
 		return nil, nil, moerr.NewInternalError(ctx, "no account info")
+	}
+
+	//copy rsOfMoAccount from backgroundExec
+	//the original batches to be released at the ClearExecResultBatches or the backgroundExec.Close
+	//the rsOfMoAccount to be released at the end of the doShowAccounts
+	for i := 0; i < len(rsOfMoAccount); i++ {
+		originBat := rsOfMoAccount[i]
+
+		rsOfMoAccount[i], err = originBat.Dup(mp)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	batchCount := len(rsOfMoAccount)
@@ -533,7 +549,6 @@ func getAccountInfo(ctx context.Context,
 
 		backSes := bh.(*backExec)
 		backSes.backSes.allResultSet[0].Columns = backSes.backSes.allResultSet[0].Columns[idxOfAccountId+1:]
-		delete(backSes.backSes.allResultSet[0].Name2Index, "account_id")
 		backSes.backSes.rs.ResultCols = backSes.backSes.rs.ResultCols[idxOfAccountId+1:]
 	}
 

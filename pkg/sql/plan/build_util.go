@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -27,11 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -46,7 +43,7 @@ import (
 // reCheckifNeedLockWholeTable checks if the whole table needs to be locked based on the last node's statistics.
 // It returns true if the out count of the last node is greater than the maximum lock count, otherwise it returns false.
 func reCheckifNeedLockWholeTable(builder *QueryBuilder) {
-	lockService := builder.compCtx.GetProcess().LockService
+	lockService := builder.compCtx.GetProcess().Base.LockService
 	if lockService == nil {
 		// MockCompilerContext
 		return
@@ -208,6 +205,12 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 		case defines.MYSQL_TYPE_BLOB:
 			return plan.Type{Id: int32(types.T_blob)}, nil
 		case defines.MYSQL_TYPE_TEXT:
+			//NOTE: This is an important part where datatype is assigned to the column
+			fstr := strings.ToLower(n.InternalType.FamilyString)
+			if fstr == "datalink" {
+				return plan.Type{Id: int32(types.T_datalink)}, nil
+			}
+
 			return plan.Type{Id: int32(types.T_text)}, nil
 		case defines.MYSQL_TYPE_JSON:
 			return plan.Type{Id: int32(types.T_json)}, nil
@@ -252,13 +255,14 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 		}
 	}
 
+	colNameOrigin := col.Name.ColNameOrigin()
 	if typ.Id == int32(types.T_json) {
 		if expr != nil && !isNullAstExpr(expr) {
-			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("JSON column '%s' cannot have default value", col.Name.Parts[0]))
+			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("JSON column '%s' cannot have default value", colNameOrigin))
 		}
 	}
 	if !nullAbility && isNullAstExpr(expr) {
-		return nil, moerr.NewInvalidInput(proc.Ctx, "invalid default value for column '%s'", col.Name.Parts[0])
+		return nil, moerr.NewInvalidInput(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
 	}
 
 	if expr == nil {
@@ -277,7 +281,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 
 	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
 		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" {
-			return nil, moerr.NewInvalidInput(proc.Ctx, "invalid default value for column '%s'", col.Name.Parts[0])
+			return nil, moerr.NewInvalidInput(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
 		}
 	}
 
@@ -287,7 +291,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	}
 
 	// try to calculate default value, return err if fails
-	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false)
+	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +336,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 		return nil, err
 	}
 	defer executor.Free()
-	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -655,268 +659,4 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 		ret = append(ret, sql)
 	}
 	return ret, nil
-}
-
-func rewriteForCreateTableLike(stmt *tree.CreateTable, ctx CompilerContext) (newStmt tree.Statement, err error) {
-	oldTable := stmt.LikeTableName
-	newTable := stmt.Table
-
-	tblName := formatStr(string(oldTable.ObjectName))
-	dbName := formatStr(string(oldTable.SchemaName))
-	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, Snapshot{TS: &timestamp.Timestamp{}})
-	if err != nil {
-		return nil, err
-	}
-
-	_, tableDef := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
-	if tableDef == nil {
-		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
-	}
-	if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel || tableDef.TableType == catalog.SystemClusterRel {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
-	}
-
-	var createStr string
-	if tableDef.TableType == catalog.SystemOrdinaryRel {
-		createStr = fmt.Sprintf("CREATE TABLE `%s` (", formatStr(string(newTable.ObjectName)))
-	} else if tblName == catalog.MO_DATABASE || tblName == catalog.MO_TABLES || tblName == catalog.MO_COLUMNS {
-		createStr = fmt.Sprintf("CREATE TABLE `%s` (", formatStr(string(newTable.ObjectName)))
-	}
-
-	rowCount := 0
-	var pkDefs []string
-	colIdToName := make(map[uint64]string)
-	for _, col := range tableDef.Cols {
-		if col.Hidden {
-			continue
-		}
-		colName := col.Name
-		colIdToName[col.ColId] = col.Name
-		if colName == catalog.Row_ID {
-			continue
-		}
-
-		nullOrNot := "NOT NULL"
-		// col.Default must be not nil
-		if len(col.Default.OriginString) > 0 {
-			if !col.Primary {
-				nullOrNot = "DEFAULT " + formatStr(col.Default.OriginString)
-			}
-		} else if col.Default.NullAbility {
-			nullOrNot = "DEFAULT NULL"
-		}
-
-		if col.Typ.AutoIncr {
-			nullOrNot = "NOT NULL AUTO_INCREMENT"
-		}
-
-		var hasAttrComment string
-		if col.Comment != "" {
-			hasAttrComment = " COMMENT '" + col.Comment + "'"
-		}
-
-		if rowCount == 0 {
-			createStr += "\n"
-		} else {
-			createStr += ",\n"
-		}
-		typ := types.T(col.Typ.Id).ToType()
-		typeStr := typ.String()
-		if typ.Oid.IsDecimal() { //after decimal fix,remove this
-			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
-		}
-		if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary ||
-			typ.Oid.IsArrayRelate() || typ.Oid == types.T_bit {
-			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
-		}
-		if typ.Oid.IsFloat() && col.Typ.Scale != -1 {
-			typeStr += fmt.Sprintf("(%d,%d)", col.Typ.Width, col.Typ.Scale)
-		}
-
-		if typ.Oid.IsEnum() {
-			enums := strings.Split(col.Typ.GetEnumvalues(), ",")
-			typeStr += "("
-			for i, enum := range enums {
-				typeStr += fmt.Sprintf("'%s'", enum)
-				if i < len(enums)-1 {
-					typeStr += ","
-				}
-			}
-			typeStr += ")"
-		}
-
-		updateOpt := ""
-		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
-			updateOpt = " ON UPDATE " + col.OnUpdate.OriginString
-		}
-		createStr += fmt.Sprintf("`%s` %s %s%s%s", formatStr(colName), typeStr, nullOrNot, updateOpt, hasAttrComment)
-		rowCount++
-		if col.Primary {
-			pkDefs = append(pkDefs, colName)
-		}
-	}
-
-	// If it is a composite primary key, get the component columns of the composite primary key
-	if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
-		pkDefs = append(pkDefs, tableDef.Pkey.Names...)
-	}
-
-	if len(pkDefs) != 0 {
-		pkStr := "PRIMARY KEY ("
-		for i, def := range pkDefs {
-			if i == len(pkDefs)-1 {
-				pkStr += fmt.Sprintf("`%s`", formatStr(def))
-			} else {
-				pkStr += fmt.Sprintf("`%s`,", formatStr(def))
-			}
-		}
-		pkStr += ")"
-		if rowCount != 0 {
-			createStr += ",\n"
-		}
-		createStr += pkStr
-	}
-
-	if tableDef.Indexes != nil {
-
-		// We only print distinct index names. This is used to avoid printing the same index multiple times for IVFFLAT or
-		// other multi-table indexes.
-		indexNames := make(map[string]bool)
-
-		for _, indexdef := range tableDef.Indexes {
-			if _, ok := indexNames[indexdef.IndexName]; ok {
-				continue
-			} else {
-				indexNames[indexdef.IndexName] = true
-			}
-
-			var indexStr string
-			if indexdef.Unique {
-				indexStr = "UNIQUE KEY "
-			} else {
-				indexStr = "KEY "
-			}
-			indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
-			if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
-				indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
-			}
-			indexStr += "("
-			i := 0
-			for _, part := range indexdef.Parts {
-				if catalog.IsAlias(part) {
-					continue
-				}
-				if i > 0 {
-					indexStr += ","
-				}
-
-				indexStr += fmt.Sprintf("`%s`", formatStr(part))
-				i++
-			}
-
-			indexStr += ")"
-			if indexdef.IndexAlgoParams != "" {
-				var paramList string
-				paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
-				if err != nil {
-					return nil, err
-				}
-				indexStr += paramList
-			}
-			if indexdef.Comment != "" {
-				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
-				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
-			}
-			if rowCount != 0 {
-				createStr += ",\n"
-			}
-			createStr += indexStr
-		}
-	}
-
-	for _, fk := range tableDef.Fkeys {
-		colNames := make([]string, len(fk.Cols))
-		for i, colId := range fk.Cols {
-			colNames[i] = colIdToName[colId]
-		}
-
-		var fkTableDef *TableDef
-
-		//fk self reference
-		if fk.ForeignTbl == 0 {
-			fkTableDef = tableDef
-		} else {
-			_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
-		}
-
-		fkColIdToName := make(map[uint64]string)
-		for _, col := range fkTableDef.Cols {
-			fkColIdToName[col.ColId] = col.Name
-		}
-		fkColNames := make([]string, len(fk.ForeignCols))
-		for i, colId := range fk.ForeignCols {
-			fkColNames[i] = fkColIdToName[colId]
-		}
-
-		if rowCount != 0 {
-			createStr += ",\n"
-		}
-		createStr += fmt.Sprintf("CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
-			formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
-	}
-
-	if rowCount != 0 {
-		createStr += "\n"
-	}
-	createStr += ")"
-
-	var comment string
-	var partition string
-	for _, def := range tableDef.Defs {
-		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
-			for _, kv := range proDef.Properties.Properties {
-				if kv.Key == catalog.SystemRelAttr_Comment {
-					comment = " COMMENT='" + kv.Value + "'"
-				}
-			}
-		}
-	}
-
-	if tableDef.Partition != nil {
-		partition = ` ` + tableDef.Partition.PartitionMsg
-	}
-
-	createStr += comment
-	createStr += partition
-
-	if tableDef.ClusterBy != nil {
-		clusterby := " CLUSTER BY ("
-		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-			//multi column clusterby
-			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
-			for i, cbName := range cbNames {
-				if i != 0 {
-					clusterby += fmt.Sprintf(", `%s`", formatStr(cbName))
-				} else {
-					clusterby += fmt.Sprintf("`%s`", formatStr(cbName))
-				}
-			}
-		} else {
-			//single column cluster by
-			clusterby += fmt.Sprintf("`%s`", formatStr(tableDef.ClusterBy.Name))
-		}
-		clusterby += ")"
-		createStr += clusterby
-	}
-
-	var buf bytes.Buffer
-	for _, ch := range createStr {
-		if ch == '"' {
-			buf.WriteRune('"')
-		}
-		buf.WriteRune(ch)
-	}
-	sql := buf.String()
-	return getRewriteSQLStmt(ctx, sql)
 }

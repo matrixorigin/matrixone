@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )

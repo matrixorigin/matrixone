@@ -34,26 +34,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func processlistPrepare(proc *process.Process, arg *Argument) error {
-	arg.ctr.state = dataProducing
-	if len(arg.Args) > 0 {
+func processlistPrepare(proc *process.Process, tableFunction *TableFunction) error {
+	tableFunction.ctr.state = dataProducing
+	if len(tableFunction.Args) > 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "processlist: no argument is required")
 	}
-	for i := range arg.Attrs {
-		arg.Attrs[i] = strings.ToUpper(arg.Attrs[i])
+	for i := range tableFunction.Attrs {
+		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
 	}
 	return nil
 }
 
-func processlist(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
-	switch arg.ctr.state {
+func processlist(_ int, proc *process.Process, tableFunction *TableFunction, result *vm.CallResult) (bool, error) {
+	switch tableFunction.ctr.state {
 	case dataProducing:
-		sessions, err := fetchSessions(proc.Ctx, proc.SessionInfo.Account, proc.QueryClient)
+		sessions, err := fetchSessions(proc.Ctx, proc.GetSessionInfo().Account, proc.Base.QueryClient)
 		if err != nil {
 			return false, err
 		}
-		bat := batch.NewWithSize(len(arg.Attrs))
-		for i, a := range arg.Attrs {
+		bat := batch.NewWithSize(len(tableFunction.Attrs))
+		for i, a := range tableFunction.Attrs {
 			idx, ok := status.SessionField_value[a]
 			if !ok {
 				return false, moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", a)
@@ -62,11 +62,11 @@ func processlist(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 			tp := plan2.SessionsColTypes[idx]
 			bat.Vecs[i] = proc.GetVector(tp)
 		}
-		bat.Attrs = arg.Attrs
+		bat.Attrs = tableFunction.Attrs
 
 		mp := proc.GetMPool()
 		for _, session := range sessions {
-			for i, col := range arg.Attrs {
+			for i, col := range tableFunction.Attrs {
 				switch status.SessionField(status.SessionField_value[col]) {
 				case status.SessionField_NODE_ID:
 					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.NodeID), false, mp); err != nil {
@@ -156,14 +156,14 @@ func processlist(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 		}
 		bat.SetRowCount(bat.Vecs[0].Length())
 		result.Batch = bat
-		arg.ctr.state = dataFinished
+		tableFunction.ctr.state = dataFinished
 		return false, nil
 
 	case dataFinished:
 		result.Batch = nil
 		return true, nil
 	default:
-		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
+		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", tableFunction.ctr.state)
 	}
 }
 
@@ -173,10 +173,14 @@ func isSysTenant(tenant string) bool {
 }
 
 // fetchSessions get sessions all nodes which the tenant has privilege to access.
-func fetchSessions(ctx context.Context, tenant string, qc qclient.QueryClient) ([]*status.Session, error) {
+func fetchSessions(
+	ctx context.Context,
+	tenant string,
+	qc qclient.QueryClient,
+) ([]*status.Session, error) {
 	var nodes []string
 	sysTenant := isSysTenant(tenant)
-	clusterservice.GetMOCluster().GetCNService(clusterservice.NewSelector(),
+	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(clusterservice.NewSelectAll(),
 		func(s metadata.CNService) bool {
 			nodes = append(nodes, s.QueryAddress)
 			return true

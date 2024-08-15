@@ -54,6 +54,8 @@ func init() {
 	registry.MustRegister(HeartbeatFailureCounter)
 	registry.MustRegister(HeartbeatRecvHistogram)
 	registry.MustRegister(HeartbeatRecvFailureCounter)
+	registry.MustRegister(statsTriggerCounter)
+	registry.MustRegister(StatsUpdateBlockCounter)
 }
 
 func initMemMetrics() {
@@ -61,6 +63,7 @@ func initMemMetrics() {
 	registry.MustRegister(MemTotalCrossPoolFreeCounter)
 	registry.MustRegister(memMPoolHighWaterMarkGauge)
 	registry.MustRegister(mallocCounter)
+	registry.MustRegister(mallocGauge)
 }
 
 func initTaskMetrics() {
@@ -73,6 +76,8 @@ func initTaskMetrics() {
 	registry.MustRegister(taskGeneratedStuffCounter)
 	registry.MustRegister(taskSelectivityCounter)
 
+	registry.MustRegister(transferPageHitHistogram)
+	registry.MustRegister(TransferPageRowHistogram)
 	registry.MustRegister(TaskMergeTransferPageLengthGauge)
 
 	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
@@ -89,8 +94,8 @@ func initFileServiceMetrics() {
 
 	registry.MustRegister(ioMergerCounter)
 	registry.MustRegister(ioMergerDuration)
-	registry.MustRegister(fsMallocLiveObjects)
 	registry.MustRegister(fsReadWriteDuration)
+	registry.MustRegister(FSObjectStorageOperations)
 }
 
 func initLogtailMetrics() {
@@ -106,7 +111,9 @@ func initLogtailMetrics() {
 	registry.MustRegister(logTailSendDurationHistogram)
 	registry.MustRegister(LogTailLoadCheckpointDurationHistogram)
 
-	registry.MustRegister(LogTailCollectDurationHistogram)
+	registry.MustRegister(LogTailPushCollectionDurationHistogram)
+	registry.MustRegister(LogTailPullCollectionPhase1DurationHistogram)
+	registry.MustRegister(LogTailPullCollectionPhase2DurationHistogram)
 	registry.MustRegister(LogTailSubscriptionCounter)
 	registry.MustRegister(txnTNSideDurationHistogram)
 }
@@ -138,6 +145,7 @@ func initTxnMetrics() {
 	registry.MustRegister(txnCNCommittedLocationQuantityGauge)
 
 	registry.MustRegister(txnRangesSelectivityHistogram)
+	registry.MustRegister(txnTNDeduplicateDurationHistogram)
 }
 
 func initRPCMetrics() {
@@ -160,11 +168,6 @@ func initRPCMetrics() {
 
 }
 
-func initTraceMetrics() {
-	registry.MustRegister(traceCollectorDurationHistogram)
-	registry.MustRegister(traceNegativeCUCounter)
-}
-
 func initProxyMetrics() {
 	registry.MustRegister(proxyConnectCounter)
 	registry.MustRegister(proxyDisconnectCounter)
@@ -180,10 +183,15 @@ func initFrontendMetrics() {
 	registry.MustRegister(acceptConnDurationHistogram)
 	registry.MustRegister(routineCounter)
 	registry.MustRegister(requestCounter)
+	registry.MustRegister(resolveDurationHistogram)
+	registry.MustRegister(createAccountDurationHistogram)
+	registry.MustRegister(pubSubDurationHistogram)
+	registry.MustRegister(sqlLengthHistogram)
 }
 
 func initPipelineMetrics() {
 	registry.MustRegister(PipelineServerDurationHistogram)
+	registry.MustRegister(pipelineStreamCounter)
 }
 
 func getDurationBuckets() []float64 {

@@ -32,6 +32,7 @@ func ToCNBatch(tnBat *Batch) *batch.Batch {
 	for i, vec := range tnBat.Vecs {
 		cnBat.Vecs[i] = vec.GetDownstreamVector()
 	}
+	cnBat.SetRowCount(tnBat.Length())
 	return cnBat
 }
 
@@ -126,7 +127,7 @@ func getNonNullValue(col *movec.Vector, row uint32) any {
 	case types.T_Blockid:
 		return movec.GetFixedAt[types.Blockid](col, int(row))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return col.GetBytesAt(int(row))
 	default:
 		//return vector.ErrVecTypeNotSupport
@@ -218,7 +219,7 @@ func UpdateValue(col *movec.Vector, row uint32, val any, isNull bool, mp *mpool.
 		GenericUpdateFixedValue[types.Blockid](col, row, val, isNull, mp)
 	case types.T_varchar, types.T_char, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		GenericUpdateBytes(col, row, val, isNull, mp)
 	default:
 		panic(moerr.NewInternalErrorNoCtx("%v not supported", col.GetType()))
@@ -767,11 +768,11 @@ func ForeachWindowVarlen(
 	slice, area := movec.MustVarlenaRawData(vec)
 	slice = slice[start : start+length]
 	if sels.IsEmpty() {
-		for i, v := range slice {
+		for i := range slice {
 			var val []byte
 			isNull := vec.IsNull(uint64(i + start))
 			if !isNull {
-				val = v.GetByteSlice(area)
+				val = slice[i].GetByteSlice(area)
 			}
 			if op != nil {
 				if err = op(val, isNull, i+start); err != nil {

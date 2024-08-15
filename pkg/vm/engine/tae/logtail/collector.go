@@ -434,7 +434,7 @@ func (d *dirtyCollector) tryCompactTree(
 			var calibration int
 			calibration, err = obj.GetObjectData().RunCalibration()
 			if err != nil {
-				logutil.Warnf("get object rows failed, obj %v, err: %v", obj.ID.String(), err)
+				logutil.Warnf("get object rows failed, obj %v, err: %v", obj.ID().String(), err)
 				continue
 			}
 			if calibration == 0 {

@@ -35,7 +35,7 @@ type QueryService interface {
 	// Close closes the service.
 	Close() error
 	// AddHandleFunc add message handler.
-	AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool)
+	AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error, async bool)
 	// SetReleaseFunc sets the release handler.
 	SetReleaseFunc(resp *pb.Response, f func())
 }
@@ -65,7 +65,7 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config) (QueryS
 		func() *pb.Request { return &pb.Request{} },
 		func() *pb.Response { return &pb.Response{} })
 
-	h, err := morpc.NewMessageHandler(serviceName, address, cfg, pool,
+	h, err := morpc.NewMessageHandler(serviceID, serviceName, address, cfg, pool,
 		morpc.WithHandlerRespReleaseFunc[*pb.Request, *pb.Response](func(m morpc.Message) {
 			resp := m.(*pb.Response)
 			if resp.CmdMethod == pb.CmdMethod_GetCacheData {
@@ -89,7 +89,7 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config) (QueryS
 }
 
 // AddHandleFunc implements the QueryService interface.
-func (s *queryService) AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool) {
+func (s *queryService) AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error, async bool) {
 	s.handler.RegisterMethod(uint32(method), h, async)
 }
 
@@ -101,8 +101,8 @@ func (s *queryService) SetReleaseFunc(resp *pb.Response, f func()) {
 }
 
 func (s *queryService) initHandleFunc() {
-	s.AddHandleFunc(pb.CmdMethod_GetProtocolVersion, handleGetProtocolVersion, false)
-	s.AddHandleFunc(pb.CmdMethod_SetProtocolVersion, handleSetProtocolVersion, false)
+	s.AddHandleFunc(pb.CmdMethod_GetProtocolVersion, s.handleGetProtocolVersion(), false)
+	s.AddHandleFunc(pb.CmdMethod_SetProtocolVersion, s.handleSetProtocolVersion(), false)
 	s.AddHandleFunc(pb.CmdMethod_CoreDumpConfig, handleCoreDumpConfig, false)
 }
 

@@ -16,7 +16,9 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -77,11 +79,11 @@ type CompilerContext interface {
 	// Default database/schema in context
 	DefaultDatabase() string
 	// check if database exist
-	DatabaseExists(name string, snapshot Snapshot) bool
+	DatabaseExists(name string, snapshot *Snapshot) bool
 	// get table definition by database/schema
-	Resolve(schemaName string, tableName string, snapshot Snapshot) (*ObjectRef, *TableDef)
+	Resolve(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef)
 	// get table definition by table id
-	ResolveById(tableId uint64, snapshot Snapshot) (*ObjectRef, *TableDef)
+	ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef)
 	// get the value of variable
 	ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	// get the list of the account id
@@ -89,9 +91,9 @@ type CompilerContext interface {
 	// get the relevant information of udf
 	ResolveUdf(name string, args []*Expr) (*function.Udf, error)
 	// get the definition of primary key
-	GetPrimaryKeyDef(dbName string, tableName string, snapshot Snapshot) []*ColDef
+	GetPrimaryKeyDef(dbName string, tableName string, snapshot *Snapshot) []*ColDef
 	// get needed info for stats by table
-	Stats(obj *ObjectRef, snapshot Snapshot) (*pb.StatsInfo, error)
+	Stats(obj *ObjectRef, snapshot *Snapshot) (*pb.StatsInfo, error)
 	// get origin sql string of the root
 	GetRootSql() string
 	// get username of current session
@@ -99,8 +101,11 @@ type CompilerContext interface {
 	GetAccountId() (uint32, error)
 	// GetContext get raw context.Context
 	GetContext() context.Context
+
+	// SetContext set raw context.Context
+	SetContext(ctx context.Context)
 	// GetDatabaseId Get database id
-	GetDatabaseId(dbName string, snapshot Snapshot) (uint64, error)
+	GetDatabaseId(dbName string, snapshot *Snapshot) (uint64, error)
 
 	GetProcess() *process.Process
 
@@ -110,7 +115,7 @@ type CompilerContext interface {
 	// return: yes or no, dbName, viewName
 	GetBuildingAlterView() (bool, string, string)
 	GetStatsCache() *StatsCache
-	GetSubscriptionMeta(dbName string, snapshot Snapshot) (*SubscriptionMeta, error)
+	GetSubscriptionMeta(dbName string, snapshot *Snapshot) (*SubscriptionMeta, error)
 	CheckSubscriptionValid(subName, accName string, pubName string) error
 	SetQueryingSubscription(meta *SubscriptionMeta)
 	GetQueryingSubscription() *SubscriptionMeta
@@ -129,6 +134,8 @@ type CompilerContext interface {
 	SetSnapshot(snapshot *Snapshot)
 	GetViews() []string
 	SetViews(views []string)
+
+	GetLowerCaseTableNames() int64
 }
 
 type Optimizer interface {
@@ -169,6 +176,7 @@ type QueryBuilder struct {
 	mysqlCompatible    bool
 	haveOnDuplicateKey bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
 	isForUpdate        bool // if it's a query plan for update
+	isRestore          bool
 
 	deleteNode     map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 	skipStats      bool
@@ -193,6 +201,9 @@ type OptimizerHints struct {
 	runtimeFilter              int
 	joinOrdering               int
 	forceOneCN                 int
+	execType                   int
+	disableRightJoin           int
+	printShuffle               int
 }
 
 type CTERef struct {
@@ -279,6 +290,9 @@ type BindContext struct {
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
 	views []string
+
+	// lower is sys var lower_case_table_names
+	lower int64
 }
 
 type NameTuple struct {
@@ -334,6 +348,7 @@ type WhereBinder struct {
 
 type GroupBinder struct {
 	baseBinder
+	selectList tree.SelectExprs
 }
 
 type HavingBinder struct {
@@ -381,15 +396,17 @@ const (
 )
 
 type Binding struct {
-	tag            int32
-	nodeId         int32
-	db             string
-	table          string
-	tableID        uint64
-	cols           []string
-	colIsHidden    []bool
-	types          []*plan.Type
-	refCnts        []uint
+	tag     int32
+	nodeId  int32
+	db      string
+	table   string
+	tableID uint64
+	// lower case
+	cols        []string
+	colIsHidden []bool
+	types       []*plan.Type
+	refCnts     []uint
+	// lower case
 	colIdByName    map[string]int32
 	isClusterTable bool
 	defaults       []string
@@ -410,4 +427,50 @@ type OriginTableMessageForFuzzy struct {
 type MultiTableIndex struct {
 	IndexAlgo string
 	IndexDefs map[string]*plan.IndexDef
+}
+
+type RemapInfo struct {
+	step           int32
+	node           *plan.Node
+	tip            string
+	colRefCnt      map[[2]int32]int
+	colRefBool     map[[2]int32]bool
+	sinkColRef     map[[2]int32]int
+	remapping      *ColRefRemapping
+	interRemapping *ColRefRemapping
+	srcExprIdx     int
+}
+
+func (info *RemapInfo) String() string {
+	if info == nil {
+		return "empty RemapInfo"
+	}
+
+	sb := strings.Builder{}
+	sb.WriteString("colRefCnt:")
+	for k, v := range info.colRefCnt {
+		sb.WriteString(fmt.Sprintf("[%v : %v]", k, v))
+	}
+	sb.WriteString("colRefBool:")
+	for k, v := range info.colRefBool {
+		sb.WriteString(fmt.Sprintf("[%v : %v]", k, v))
+	}
+	sb.WriteString("sinkColRef:")
+	for k, v := range info.sinkColRef {
+		sb.WriteString(fmt.Sprintf("[%v : %v]", k, v))
+	}
+	sb.WriteString(info.remapping.String())
+	sb.WriteString(info.interRemapping.String())
+
+	return fmt.Sprintf(
+		"step %d nodeId %d nodeType %s tip %s "+
+			"%s "+
+			"srcExprIdx %d ",
+		info.step,
+		info.node.NodeId,
+		info.node.NodeType,
+		info.tip,
+		sb.String(),
+		info.srcExprIdx,
+	)
 }

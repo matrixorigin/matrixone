@@ -94,13 +94,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			tmpScope := b.GetContext().Value(defines.VarScopeKey{}).(*[]map[string]interface{})
 			for i := len(*tmpScope) - 1; i >= 0; i-- {
 				curScope := (*tmpScope)[i]
-				if _, ok := curScope[strings.ToLower(exprImpl.Parts[0])]; ok {
+				if _, ok := curScope[exprImpl.ColName()]; ok {
 					typ := types.T_text.ToType()
 					expr = &Expr{
 						Typ: makePlan2Type(&typ),
 						Expr: &plan.Expr_V{
 							V: &plan.VarRef{
-								Name:   exprImpl.Parts[0],
+								Name:   exprImpl.ColName(),
 								System: false,
 								Global: false,
 							},
@@ -283,12 +283,11 @@ const (
 
 func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	if b.ctx == nil {
-		return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", astExpr.Parts[0])
+		return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", astExpr.ColNameOrigin())
 	}
-	astStr := tree.String(astExpr, dialect.MYSQL)
 
-	col := astExpr.Parts[0]
-	table := astExpr.Parts[1]
+	col := astExpr.ColName()
+	table := astExpr.TblName()
 	name := tree.String(astExpr, dialect.MYSQL)
 
 	if b.ctx.timeTag > 0 && (col == TimeWindowStart || col == TimeWindowEnd) {
@@ -303,7 +302,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				},
 			},
 		}
-		b.ctx.timeByAst[astStr] = colPos
+		b.ctx.timeByAst[name] = colPos
 		b.ctx.times = append(b.ctx.times, expr)
 		return
 	}
@@ -949,7 +948,7 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	if !ok {
 		return nil, moerr.NewNYI(b.GetContext(), "function expr '%v'", astExpr)
 	}
-	funcName := funcRef.Parts[0]
+	funcName := funcRef.ColName()
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
 		if b.ctx.timeTag > 0 {
@@ -1141,7 +1140,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 
 		if !strings.Contains(sql, "select") {
 			sql = "select " + sql
-			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1, 0)
+			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
 			if err != nil {
 				return nil, err
 			}
@@ -1150,7 +1149,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 				return nil, err
 			}
 		} else {
-			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1, 0)
+			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
 			if err != nil {
 				return nil, err
 			}
@@ -1207,9 +1206,9 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {
-	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "in", "prefix_in", "serial", "serial_full":
+	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
 		if proc != nil {
-			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false)
+			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false, true)
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}
@@ -1221,7 +1220,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 		}
 
 		fnArgs := retExpr.GetF().Args
-		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false)
+		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false, true)
 		if err != nil {
 			goto between_fallback
 		}
@@ -1229,28 +1228,34 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 
 		lit0 := arg1.GetLit()
 		if arg1.Typ.Id == int32(types.T_any) || lit0 == nil {
-			goto between_fallback
+			if !containsDynamicParam(arg1) {
+				goto between_fallback
+			}
 		}
 
-		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false)
+		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false, true)
 		if err != nil {
 			goto between_fallback
 		}
 		fnArgs[2] = arg2
 
-		lit1 := arg1.GetLit()
-		if arg1.Typ.Id == int32(types.T_any) || lit1 == nil {
-			goto between_fallback
+		lit1 := arg2.GetLit()
+		if arg2.Typ.Id == int32(types.T_any) || lit1 == nil {
+			if !containsDynamicParam(arg2) {
+				goto between_fallback
+			}
 		}
 
 		rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{arg1, arg2})
-		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false)
+		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
 		rangeCheckVal := rangeCheckRes.GetLit()
 		if rangeCheckVal == nil || !rangeCheckVal.GetBval() {
-			goto between_fallback
+			if !containsDynamicParam(arg1) && !containsDynamicParam(arg2) {
+				goto between_fallback
+			}
 		}
 
-		retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false)
+		retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
 	}
 
 	return retExpr, nil
@@ -1270,7 +1275,7 @@ between_fallback:
 	if err != nil {
 		return nil, err
 	}
-	retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false)
+	retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1513,6 +1518,84 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return nil, err
 			}
 		}
+
+	case "in", "not_in":
+		//if all the expr in the in list can safely cast to left type, we call it safe
+		if rightList := args[1].GetList(); rightList != nil {
+			typLeft := makeTypeByPlan2Expr(args[0])
+			var inExprList, orExprList []*plan.Expr
+
+			for _, rightVal := range rightList.List {
+				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
+					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
+					if err != nil {
+						return nil, err
+					}
+					inExprList = append(inExprList, inExpr)
+				} else {
+					orExprList = append(orExprList, rightVal)
+				}
+			}
+
+			var newExpr *plan.Expr
+
+			if len(inExprList) > 1 {
+				leftType := makeTypeByPlan2Expr(args[0])
+				argsType := []types.Type{leftType, leftType}
+				fGet, err := function.GetFunctionByName(ctx, name, argsType)
+				if err != nil {
+					return nil, err
+				}
+
+				funcID := fGet.GetEncodedOverloadID()
+				returnType := fGet.GetReturnType()
+				rightList.List = inExprList
+				exprType := makePlan2Type(&returnType)
+				exprType.NotNullable = function.DeduceNotNullable(funcID, args)
+				newExpr = &Expr{
+					Typ: exprType,
+					Expr: &plan.Expr_F{
+						F: &plan.Function{
+							Func: getFunctionObjRef(funcID, name),
+							Args: args,
+						},
+					},
+				}
+			} else if len(inExprList) > 0 {
+				orExprList = append(inExprList, orExprList...)
+			}
+
+			//expand the in list to col=a or col=b or ......
+			if name == "in" {
+				for _, expr := range orExprList {
+					tmpExpr, _ := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
+					if newExpr == nil {
+						newExpr = tmpExpr
+					} else {
+						newExpr, _ = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{newExpr, tmpExpr})
+					}
+				}
+			} else {
+				for _, expr := range orExprList {
+					tmpExpr, _ := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
+					if newExpr == nil {
+						newExpr = tmpExpr
+					} else {
+						newExpr, _ = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{newExpr, tmpExpr})
+					}
+				}
+			}
+
+			return newExpr, nil
+		}
+	case "last_day":
+		if len(args) != 1 {
+			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+		}
+	case "makedate":
+		if len(args) != 2 {
+			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+		}
 	}
 
 	// get args(exprs) & types
@@ -1559,13 +1642,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	// rewrite some cast rule:  expr:  int32Col > 10,
 	// old rule: cast(int32Col as int64) >10 ,   new rule: int32Col > (cast 10 as int32)
 	switch name {
-	case "=", "<", "<=", ">", ">=", "<>", "like":
+	case "=", "<", "<=", ">", ">=", "<>":
 		// if constant's type higher than column's type
 		// and constant's value in range of column's type, then no cast was needed
-		switch leftExpr := args[0].Expr.(type) {
+		switch args[0].Expr.(type) {
 		case *plan.Expr_Lit:
 			if args[1].GetCol() != nil {
-				if checkNoNeedCast(argsType[0], argsType[1], leftExpr.Lit) {
+				if checkNoNeedCast(argsType[0], argsType[1], args[0]) {
 					argsCastType = []types.Type{argsType[1], argsType[1]}
 					// need to update function id
 					fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
@@ -1576,7 +1659,22 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				}
 			}
 		case *plan.Expr_Col:
-			if checkNoNeedCast(argsType[1], argsType[0], args[1].GetLit()) {
+			if checkNoNeedCast(argsType[1], argsType[0], args[1]) {
+				argsCastType = []types.Type{argsType[0], argsType[0]}
+				fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
+				if err != nil {
+					return nil, err
+				}
+				funcID = fGet.GetEncodedOverloadID()
+			}
+		}
+
+	case "like":
+		// if constant's type higher than column's type
+		// and constant's value in range of column's type, then no cast was needed
+		switch args[0].Expr.(type) {
+		case *plan.Expr_Col:
+			if argsType[0].IsVarlen() && checkNoNeedCast(argsType[1], argsType[0], args[1]) {
 				argsCastType = []types.Type{argsType[0], argsType[0]}
 				fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 				if err != nil {
@@ -1587,74 +1685,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 
 	case "between":
-		if checkNoNeedCast(argsType[1], argsType[0], args[1].GetLit()) && checkNoNeedCast(argsType[2], argsType[0], args[2].GetLit()) {
+		if checkNoNeedCast(argsType[1], argsType[0], args[1]) && checkNoNeedCast(argsType[2], argsType[0], args[2]) {
 			argsCastType = []types.Type{argsType[0], argsType[0], argsType[0]}
 			fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 			if err != nil {
 				return nil, err
 			}
 			funcID = fGet.GetEncodedOverloadID()
-		}
-
-	case "in", "not_in":
-		//if all the expr in the in list can safely cast to left type, we call it safe
-		if rightList := args[1].GetList(); rightList != nil {
-			typLeft := makeTypeByPlan2Expr(args[0])
-			var inExprList, orExprList []*plan.Expr
-
-			for _, rightVal := range rightList.List {
-				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal.GetLit()) {
-					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
-					if err != nil {
-						return nil, err
-					}
-					inExprList = append(inExprList, inExpr)
-				} else {
-					orExprList = append(orExprList, rightVal)
-				}
-			}
-
-			var newExpr *plan.Expr
-
-			if len(inExprList) > 1 {
-				rightList.List = inExprList
-				typ := makePlan2Type(&returnType)
-				typ.NotNullable = function.DeduceNotNullable(funcID, args)
-				newExpr = &Expr{
-					Expr: &plan.Expr_F{
-						F: &plan.Function{
-							Func: getFunctionObjRef(funcID, name),
-							Args: args,
-						},
-					},
-					Typ: typ,
-				}
-			} else if len(inExprList) > 0 {
-				orExprList = append(inExprList, orExprList...)
-			}
-
-			//expand the in list to col=a or col=b or ......
-			if name == "in" {
-				for _, expr := range orExprList {
-					tmpExpr, _ := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
-					if newExpr == nil {
-						newExpr = tmpExpr
-					} else {
-						newExpr, _ = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{newExpr, tmpExpr})
-					}
-				}
-			} else {
-				for _, expr := range orExprList {
-					tmpExpr, _ := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
-					if newExpr == nil {
-						newExpr = tmpExpr
-					} else {
-						newExpr, _ = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{newExpr, tmpExpr})
-					}
-				}
-			}
-
-			return newExpr, nil
 		}
 
 	case "timediff":

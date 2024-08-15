@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -39,7 +38,7 @@ func AddColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alter
 
 	specNewColumn := spec.Column
 	// Check whether added column has existed.
-	newColName := specNewColumn.Name.Parts[0]
+	newColName := specNewColumn.Name.ColName()
 	if col := FindColumn(tableDef.Cols, newColName); col != nil {
 		return moerr.NewErrDupFieldName(ctx.GetContext(), newColName)
 	}
@@ -84,7 +83,8 @@ func handleAddColumnPosition(ctx context.Context, tableDef *TableDef, newCol *Co
 }
 
 func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable, specNewColumn *tree.ColumnTableDef, colType plan.Type) (*ColDef, error) {
-	newColName := specNewColumn.Name.Parts[0]
+	newColName := specNewColumn.Name.ColName()
+	newColNameOrigin := specNewColumn.Name.ColNameOrigin()
 	// Check if the new column name is valid and conflicts with internal hidden columns
 	err := CheckColumnNameValid(ctx.GetContext(), newColName)
 	if err != nil {
@@ -98,9 +98,10 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		//Default:  originalCol.Default,
 		//Comment:  originalCol.Comment,
 		//OnUpdate: originalCol.OnUpdate,
-		Name: newColName,
-		Typ:  colType,
-		Alg:  plan.CompressType_Lz4,
+		Name:       newColName,
+		OriginName: newColNameOrigin,
+		Typ:        colType,
+		Alg:        plan.CompressType_Lz4,
 	}
 
 	hasDefaultValue := false
@@ -127,7 +128,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		case *tree.AttributeComment:
 			comment := attribute.CMT.String()
 			if getNumOfCharacters(comment) > maxLengthOfColumnComment {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", specNewColumn.Name.Parts[0])
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", newColNameOrigin)
 			}
 			newCol.Comment = comment
 		case *tree.AttributeAutoIncrement:
@@ -142,11 +143,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 				return nil, err
 			}
 			uniqueIndex := &tree.UniqueIndex{
-				KeyParts: []*tree.KeyPart{
-					{
-						ColName: specNewColumn.Name,
-					},
-				},
+				KeyParts: []*tree.KeyPart{{ColName: specNewColumn.Name}},
 			}
 
 			constrNames := map[string]bool{}
@@ -189,7 +186,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 
 	hasDefaultValue = defaultValue.Expr != nil
 	if auto_incr && hasDefaultValue {
-		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), specNewColumn.Name.Parts[0])
+		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
 	}
 	if !hasDefaultValue {
 		defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
@@ -225,6 +222,9 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 	if colType.GetId() == int32(types.T_text) {
 		return moerr.NewNotSupported(ctx, "text type in primary key")
 	}
+	if colType.GetId() == int32(types.T_datalink) {
+		return moerr.NewNotSupported(ctx, "datalink type in primary key")
+	}
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))
 	}
@@ -241,6 +241,9 @@ func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName s
 	if colType.GetId() == int32(types.T_text) {
 		return moerr.NewNotSupported(ctx, "text type in primary key")
 	}
+	if colType.GetId() == int32(types.T_datalink) {
+		return moerr.NewNotSupported(ctx, "datalink type in primary key")
+	}
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))
 	}
@@ -250,7 +253,7 @@ func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName s
 func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey *tree.UniqueIndex) (*plan.IndexDef, error) {
 	indexName := uniKey.GetIndexName()
 	if strings.EqualFold(indexName, PrimaryKeyName) {
-		return nil, moerr.NewErrWrongNameForIndex(ctx, uniKey.GetIndexName())
+		return nil, moerr.NewErrWrongNameForIndex(ctx, indexName)
 	}
 
 	indexTableName, err := util.BuildIndexTableName(ctx, true)
@@ -260,7 +263,7 @@ func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey 
 
 	indexParts := make([]string, 0)
 	for _, keyPart := range uniKey.KeyParts {
-		name := keyPart.ColName.Parts[0]
+		name := keyPart.ColName.ColName()
 		indexParts = append(indexParts, name)
 	}
 	if len(indexParts) > MaxKeyParts {
@@ -294,16 +297,16 @@ func findPositionRelativeColumn(ctx context.Context, cols []*ColDef, pos *tree.C
 	} else if pos.Typ == tree.ColumnPositionAfter {
 		relcolIndex := -1
 		for i, col := range cols {
-			if col.Name == pos.RelativeColumn.Parts[0] {
+			if col.Name == pos.RelativeColumn.ColName() {
 				relcolIndex = i
 				break
 			}
 		}
 		if relcolIndex == -1 {
-			return -1, moerr.NewBadFieldError(ctx, pos.RelativeColumn.Parts[0], "Columns Set")
+			return -1, moerr.NewBadFieldError(ctx, pos.RelativeColumn.ColNameOrigin(), "Columns Set")
 		}
 		// the insertion position is after the above column.
-		position = int(relcolIndex + 1)
+		position = relcolIndex + 1
 	}
 	return position, nil
 }
@@ -370,12 +373,9 @@ func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dro
 func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *TableDef) error {
 	for i := 0; i < len(tbInfo.Indexes); i++ {
 		indexInfo := tbInfo.Indexes[i]
-		for j := 0; j < len(indexInfo.Parts); j++ {
-			if catalog.ResolveAlias(indexInfo.Parts[j]) == colName {
-				indexInfo.Parts = append(indexInfo.Parts[:j], indexInfo.Parts[j+1:]...)
-				break
-			}
-		}
+		indexInfo.Parts = RemoveIf[string](indexInfo.Parts, func(t string) bool {
+			return catalog.ResolveAlias(t) == colName
+		})
 		if indexInfo.Unique {
 			// handle unique index
 			if len(indexInfo.Parts) == 0 {
@@ -419,12 +419,9 @@ func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo 
 	if tbInfo.Pkey != nil && tbInfo.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return nil
 	} else {
-		for i := 0; i < len(tbInfo.Pkey.Names); i++ {
-			if tbInfo.Pkey.Names[i] == colName {
-				tbInfo.Pkey.Names = append(tbInfo.Pkey.Names[:i], tbInfo.Pkey.Names[i+1:]...)
-				break
-			}
-		}
+		tbInfo.Pkey.Names = RemoveIf[string](tbInfo.Pkey.Names, func(t string) bool {
+			return t == colName
+		})
 
 		if len(tbInfo.Pkey.Names) == 0 {
 			tbInfo.Pkey = nil
@@ -457,7 +454,7 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 	}
 
 	for _, referredTblId := range tbInfo.RefChildTbls {
-		_, refTableDef := ctx.ResolveById(referredTblId, Snapshot{TS: &timestamp.Timestamp{}})
+		_, refTableDef := ctx.ResolveById(referredTblId, nil)
 		if refTableDef == nil {
 			return moerr.NewInternalError(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
 		}
@@ -491,14 +488,9 @@ func checkDropColumnWithPartition(ctx context.Context, tbInfo *TableDef, colName
 
 // checkModifyNewColumn Check the position information of the newly formed column and place the new column in the target location
 func handleDropColumnPosition(ctx context.Context, tableDef *TableDef, col *ColDef) error {
-	targetPos := -1
-	for i := 0; i < len(tableDef.Cols); i++ {
-		if tableDef.Cols[i].Name == col.Name {
-			targetPos = i
-			break
-		}
-	}
-	tableDef.Cols = append(tableDef.Cols[:targetPos], tableDef.Cols[targetPos+1:]...)
+	tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(t *ColDef) bool {
+		return t.Name == col.Name
+	})
 	return nil
 }
 
@@ -512,17 +504,9 @@ func handleDropColumnWithClusterBy(ctx context.Context, copyTableDef *TableDef, 
 		} else {
 			clNames = []string{clusterBy.Name}
 		}
-		deleteIndex := -1
-		for j, part := range clNames {
-			if part == originCol.Name {
-				deleteIndex = j
-				break
-			}
-		}
-
-		if deleteIndex != -1 {
-			clNames = append(clNames[:deleteIndex], clNames[deleteIndex+1:]...)
-		}
+		clNames = RemoveIf[string](clNames, func(t string) bool {
+			return t == originCol.Name
+		})
 
 		if len(clNames) == 0 {
 			copyTableDef.ClusterBy = nil

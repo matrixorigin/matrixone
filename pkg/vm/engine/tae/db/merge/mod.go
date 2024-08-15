@@ -35,6 +35,7 @@ import (
 )
 
 var StopMerge atomic.Bool
+var DisableDeltaLocMerge atomic.Bool
 
 type CNMergeScheduler interface {
 	SendMergeTask(ctx context.Context, task *api.MergeTaskEntry) error
@@ -143,7 +144,7 @@ func (e *ActiveCNObjMap) String() string {
 func (e *ActiveCNObjMap) AddActiveCNObj(entries []*catalog.ObjectEntry) {
 	e.Lock()
 	for _, entry := range entries {
-		e.o[entry.ID] = activeEntry{
+		e.o[*entry.ID()] = activeEntry{
 			entry.GetTable().ID,
 			time.Now(),
 		}
@@ -163,7 +164,7 @@ func (e *ActiveCNObjMap) CheckOverlapOnCNActive(entries []*catalog.ObjectEntry) 
 	e.Lock()
 	defer e.Unlock()
 	for _, entry := range entries {
-		if _, ok := e.o[entry.ID]; ok {
+		if _, ok := e.o[*entry.ID()]; ok {
 			return true
 		}
 	}
@@ -176,9 +177,8 @@ func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if len(entry.BookingLoc) != 0 {
-		loc := objectio.Location(entry.BookingLoc)
-		_ = fs.Delete(ctx, loc.Name().String())
+	for _, filepath := range entry.BookingLoc {
+		_ = fs.Delete(ctx, filepath)
 	}
 	if len(entry.CreatedObjs) != 0 {
 		for _, obj := range entry.CreatedObjs {
@@ -199,7 +199,7 @@ const (
 )
 
 type Policy interface {
-	OnObject(obj *catalog.ObjectEntry)
+	OnObject(obj *catalog.ObjectEntry, force bool)
 	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
 	ResetForTable(*catalog.TableEntry)
 	SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any)

@@ -178,7 +178,8 @@ func TestHandleCNHeartbeat(t *testing.T) {
 	assert.NoError(t, err)
 
 	hb := pb.CNStoreHeartbeat{
-		UUID: "uuid1",
+		UUID:     "uuid1",
+		CommitID: "c123",
 	}
 	data, err := hb.Marshal()
 	require.NoError(t, err)
@@ -190,6 +191,7 @@ func TestHandleCNHeartbeat(t *testing.T) {
 	cninfo, ok := s.Stores[hb.UUID]
 	assert.True(t, ok)
 	assert.Equal(t, uint64(3), cninfo.Tick)
+	assert.Equal(t, hb.CommitID, cninfo.CommitID)
 }
 
 func TestGetIDCmd(t *testing.T) {

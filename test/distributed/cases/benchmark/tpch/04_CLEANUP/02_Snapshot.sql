@@ -1,4 +1,3 @@
--- @bvt:issue#16501
 -- account level snapshot
 select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
 select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
@@ -84,4 +83,3 @@ select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
--- @bvt:issue

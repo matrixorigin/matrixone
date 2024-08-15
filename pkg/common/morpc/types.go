@@ -33,7 +33,7 @@ type Message interface {
 	// DebugString return debug string
 	DebugString() string
 	// Size size of message after marshal
-	Size() int
+	ProtoSize() int
 	// MarshalTo marshal to target byte slice
 	MarshalTo(data []byte) (int, error)
 	// Unmarshal unmarshal from data
@@ -105,6 +105,8 @@ type RPCClient interface {
 type ClientSession interface {
 	// Close close the client session
 	Close() error
+	// SessionCtx get the session context, if session is closed the context will be canceled.
+	SessionCtx() context.Context
 	// Write writing the response message to the client.
 	Write(ctx context.Context, response Message) error
 	// AsyncWrite only put message into write queue, and return immediately.
@@ -246,7 +248,7 @@ type MethodBasedMessage interface {
 type HandlerOption[REQ, RESP MethodBasedMessage] func(*methodBasedServer[REQ, RESP])
 
 // HandleFunc request handle func
-type HandleFunc[REQ, RESP MethodBasedMessage] func(context.Context, REQ, RESP) error
+type HandleFunc[REQ, RESP MethodBasedMessage] func(context.Context, REQ, RESP, *Buffer) error
 
 // MethodBasedServer receives and handle requests from MethodBasedClient.
 type MethodBasedServer[REQ, RESP MethodBasedMessage] interface {
@@ -257,7 +259,7 @@ type MethodBasedServer[REQ, RESP MethodBasedMessage] interface {
 	// RegisterMethod register request handler func
 	RegisterMethod(method uint32, handleFunc HandleFunc[REQ, RESP], async bool) MethodBasedServer[REQ, RESP]
 	// Handle handle at local
-	Handle(ctx context.Context, req REQ) RESP
+	Handle(ctx context.Context, req REQ, buf *Buffer) RESP
 }
 
 // MethodBasedClient is used for sending request by method.

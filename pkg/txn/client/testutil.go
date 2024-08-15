@@ -29,9 +29,9 @@ import (
 
 // RunTxnTests runs txn tests.
 func RunTxnTests(fn func(TxnClient, rpc.TxnSender), opts ...TxnClientCreateOption) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	ts := newTestTxnSender()
-	c := NewTxnClient(ts, opts...)
+	c := NewTxnClient("", ts, opts...)
 	c.Resume()
 	fn(c, ts)
 }
@@ -40,9 +40,9 @@ func RunTxnTests(fn func(TxnClient, rpc.TxnSender), opts ...TxnClientCreateOptio
 func NewTestTxnOperator(
 	ctx context.Context,
 ) (TxnOperator, func()) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	ts := newTestTxnSender()
-	c := NewTxnClient(ts)
+	c := NewTxnClient("", ts)
 	c.Resume()
 	txnOp, err := c.New(ctx, timestamp.Timestamp{})
 	if err != nil {

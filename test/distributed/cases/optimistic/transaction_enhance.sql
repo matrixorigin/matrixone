@@ -46,12 +46,10 @@ create table atomic_table_11(c1 int,c2 varchar(25));
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
 begin;
 drop table atomic_table_11;
--- @bvt:issue#9429
 -- @session:id=2&user=sys:dump&password=111
 insert into atomic_table_11 values (6,"a");
 select * from atomic_table_11;
 -- @session
--- @bvt:issue
 commit;
 select * from atomic_table_11;
 
@@ -60,14 +58,12 @@ create table atomic_table_11(c1 int,c2 varchar(25));
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
 begin;
 drop table atomic_table_11;
--- @bvt:issue#9429
 -- @session:id=2&user=sys:dump&password=111
 insert into atomic_table_11 values (6,"a");
 select * from atomic_table_11;
 -- @session
 rollback ;
 select * from atomic_table_11;
--- @bvt:issue
 drop table if exists atomic_table_11;
 create table atomic_table_11(c1 int,c2 varchar(25));
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
@@ -177,12 +173,12 @@ insert into atomic_table_14 values (3,"a"),(4,"b"),(5,"c");
 start transaction ;
 alter table atomic_table_14 add  index key1(c1);
 -- @session:id=2&user=sys:dump&password=111
+use transaction_enhance;
 drop table atomic_table_14;
 -- @session
--- @bvt:issue#9429
+use transaction_enhance;
 insert into atomic_table_14 values (6,"a"),(7,"b");
 select * from atomic_table_14;
--- @bvt:issue
 commit;
 select * from atomic_table_14;
 

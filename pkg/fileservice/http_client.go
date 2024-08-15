@@ -23,16 +23,22 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/ncruces/go-dns"
 	"go.uber.org/zap"
 )
 
 var (
-	connectTimeout      = time.Second
-	readWriteTimeout    = time.Second
+	connectTimeout      = time.Second * 5
+	readWriteTimeout    = time.Second * 20
 	maxIdleConns        = 100
 	maxIdleConnsPerHost = 100
-	maxConnsPerHost     = 1000
+	maxConnsPerHost     = 100
 	idleConnTimeout     = 180 * time.Second
+)
+
+var dnsResolver = dns.NewCachingResolver(
+	net.DefaultResolver,
+	dns.MaxCacheEntries(128),
 )
 
 func newHTTPClient(args ObjectStorageArguments) *http.Client {
@@ -41,7 +47,7 @@ func newHTTPClient(args ObjectStorageArguments) *http.Client {
 	dialer := &net.Dialer{
 		Timeout:   connectTimeout,
 		KeepAlive: 5 * time.Second,
-		//TODO custom resolver?
+		Resolver:  dnsResolver,
 	}
 
 	// transport
@@ -54,7 +60,6 @@ func newHTTPClient(args ObjectStorageArguments) *http.Client {
 		MaxConnsPerHost:       maxConnsPerHost,
 		TLSHandshakeTimeout:   connectTimeout,
 		ResponseHeaderTimeout: readWriteTimeout,
-		ExpectContinueTimeout: readWriteTimeout,
 		ForceAttemptHTTP2:     true,
 	}
 

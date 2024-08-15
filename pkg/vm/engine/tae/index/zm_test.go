@@ -225,6 +225,7 @@ func TestVectorZM(t *testing.T) {
 	vec.Free(m)
 
 	zm = NewZM(types.T_uint16, 0)
+	vec = vector.NewVecFromReuse()
 	vec, err = ZMToVector(zm, vec, m)
 
 	require.NoError(t, err)
@@ -274,7 +275,7 @@ func TestZMNull(t *testing.T) {
 }
 
 func TestZmStringCompose(t *testing.T) {
-	packer := types.NewPacker(mpool.MustNewNoFixed("TestZmCompose"))
+	packer := types.NewPacker()
 	packer.EncodeStringType([]byte("0123456789.0123456789.0123456789."))
 	packer.EncodeInt32(42)
 

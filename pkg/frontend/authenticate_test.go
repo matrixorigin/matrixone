@@ -19,16 +19,14 @@ import (
 	"context"
 	"fmt"
 	"go/constant"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -2347,38 +2345,42 @@ func Test_determineRevokePrivilege(t *testing.T) {
 	convey.Convey("revoke privilege [ObjectType: Table] AdminRole succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-		var stmts []*tree.RevokePrivilege
+		// var stmts []*tree.RevokePrivilege
 
-		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+		// XXX FIXME: Go compiler is correct -- this test is busted.
+		// we are looping over nil.
+		// for _, stmt := range stmts {
+		// 	priv := determinePrivilegeSetOfStatement(stmt)
+		//	ses := newSes(priv, ctrl)
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-			convey.So(err, convey.ShouldBeNil)
-			convey.So(ok, convey.ShouldBeTrue)
-		}
+		//	ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		//	convey.So(err, convey.ShouldBeNil)
+		//	convey.So(ok, convey.ShouldBeTrue)
+		// }
 	})
 	convey.Convey("revoke privilege [ObjectType: Table] not AdminRole fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-		var stmts []*tree.RevokePrivilege
+		// var stmts []*tree.RevokePrivilege
 
-		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
-			ses.tenant = &TenantInfo{
-				Tenant:        "xxx",
-				User:          "xxx",
-				DefaultRole:   "xxx",
-				TenantID:      1001,
-				UserID:        1001,
-				DefaultRoleID: 1001,
-			}
+		// XXX FIXME: Go compiler is correct -- this test is busted.
+		// we are looping over nil.
+		// for _, stmt := range stmts {
+		// 	priv := determinePrivilegeSetOfStatement(stmt)
+		// 	ses := newSes(priv, ctrl)
+		// 	ses.tenant = &TenantInfo{
+		// 		Tenant:        "xxx",
+		// 		User:          "xxx",
+		// 		DefaultRole:   "xxx",
+		// 		TenantID:      1001,
+		// 		UserID:        1001,
+		// 		DefaultRoleID: 1001,
+		// 	}
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-			convey.So(err, convey.ShouldBeNil)
-			convey.So(ok, convey.ShouldBeFalse)
-		}
+		// 	ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		// 	convey.So(err, convey.ShouldBeNil)
+		// 	convey.So(ok, convey.ShouldBeFalse)
+		// }
 	})
 }
 
@@ -5868,8 +5870,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 			proc: proc,
 		}
@@ -5910,8 +5912,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -5962,8 +5964,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -6642,13 +6644,9 @@ func TestSetGlobalSysVar(t *testing.T) {
 		convey.So(value, convey.ShouldEqual, 0)
 
 		// new session, both GetSession/GlobalSysVar equal 0
-		sql = getSqlForGetSystemVariablesWithAccount(sysAccountID)
-		mrs = newMrsForSystemVariablesOfAccount([][]interface{}{
-			{"autocommit", "0"},
-		})
-		bh.sql2result[sql] = mrs
-
 		ses2 := newSes(nil, ctrl)
+		ses2.sesSysVars.mp["autocommit"] = 0
+		ses2.gSysVars.mp["autocommit"] = 0
 		value, err = ses2.GetSessionSysVar("autocommit")
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, 0)
@@ -7409,9 +7407,10 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
-		mrs := newMrsForCheckTenant([][]interface{}{
-			{0, "0", "open", 0},
+		sql := getAccountIdNamesSql
+		mrs := newMrsForGetAllAccounts([][]interface{}{
+			{uint64(0), "sys", "open", uint64(1), nil},
+			{uint64(1), "acc", "open", uint64(1), nil},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -7421,6 +7420,12 @@ func Test_doDropAccount(t *testing.T) {
 		for _, sql = range getSqlForDropAccount() {
 			bh.sql2result[sql] = nil
 		}
+
+		sql = getPubInfoSql + " order by update_time desc, created_time desc"
+		bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
+
+		sql = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs where 1=1 and sub_account_id = 1"
+		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
 
 		sql = "show databases;"
 		bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{})
@@ -7462,9 +7467,8 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
-		mrs := newMrsForCheckTenant([][]interface{}{})
-		bh.sql2result[sql] = mrs
+		sql := getAccountIdNamesSql
+		bh.sql2result[sql] = newMrsForGetAllAccounts([][]interface{}{})
 
 		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
@@ -7509,9 +7513,8 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
-		mrs := newMrsForCheckTenant([][]interface{}{})
-		bh.sql2result[sql] = mrs
+		sql := getAccountIdNamesSql
+		bh.sql2result[sql] = newMrsForGetAllAccounts([][]interface{}{})
 
 		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
@@ -7703,14 +7706,18 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	ctx = defines.AttachAccountId(ctx, 0)
-	ioses := mock_frontend.NewMockIOSession(ctrl)
-	ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-	ioses.EXPECT().Ref().AnyTimes()
-	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
 
-	ses := NewSession(ctx, proto, nil)
+	ioses, err := NewIOSession(serverConn, pu)
+	if err != nil {
+		panic(err)
+	}
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+	ses := NewSession(ctx, "", proto, nil)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,
@@ -8098,6 +8105,146 @@ func newMrsForCheckDatabaseTable(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+func newMrsForGetAllAccounts(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("account_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("account_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col3 := &MysqlColumn{}
+	col3.SetName("status")
+	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col4 := &MysqlColumn{}
+	col4.SetName("version")
+	col4.SetColumnType(defines.MYSQL_TYPE_LONG)
+
+	col5 := &MysqlColumn{}
+	col5.SetName("suspended_time")
+	col5.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForSqlForGetPubs(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("pub_name")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col2 := &MysqlColumn{}
+	col2.SetName("database_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col3 := &MysqlColumn{}
+	col3.SetName("database_id")
+	col3.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	col4 := &MysqlColumn{}
+	col4.SetName("table_list")
+	col4.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	col5 := &MysqlColumn{}
+	col5.SetName("account_list")
+	col5.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	col6 := &MysqlColumn{}
+	col6.SetName("created_time")
+	col6.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col7 := &MysqlColumn{}
+	col7.SetName("update_time")
+	col7.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col8 := &MysqlColumn{}
+	col8.SetName("owner")
+	col8.SetColumnType(defines.MYSQL_TYPE_LONG)
+	col9 := &MysqlColumn{}
+	col9.SetName("creator")
+	col9.SetColumnType(defines.MYSQL_TYPE_LONG)
+	col10 := &MysqlColumn{}
+	col10.SetName("account_list")
+	col10.SetColumnType(defines.MYSQL_TYPE_TEXT)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+	mrs.AddColumn(col6)
+	mrs.AddColumn(col7)
+	mrs.AddColumn(col8)
+	mrs.AddColumn(col9)
+	mrs.AddColumn(col10)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForSqlForGetSubs(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("sub_account_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONG)
+	col2 := &MysqlColumn{}
+	col2.SetName("sub_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col3 := &MysqlColumn{}
+	col3.SetName("sub_time")
+	col3.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col4 := &MysqlColumn{}
+	col4.SetName("pub_account_name")
+	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col5 := &MysqlColumn{}
+	col5.SetName("pub_name")
+	col5.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col6 := &MysqlColumn{}
+	col6.SetName("pub_database")
+	col6.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col7 := &MysqlColumn{}
+	col7.SetName("pub_tables")
+	col7.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	col8 := &MysqlColumn{}
+	col8.SetName("pub_time")
+	col8.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col9 := &MysqlColumn{}
+	col9.SetName("pub_comment")
+	col9.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col10 := &MysqlColumn{}
+	col10.SetName("status")
+	col10.SetColumnType(defines.MYSQL_TYPE_TINY)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+	mrs.AddColumn(col6)
+	mrs.AddColumn(col7)
+	mrs.AddColumn(col8)
+	mrs.AddColumn(col9)
+	mrs.AddColumn(col10)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func newMrsForCheckTenant(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
@@ -8201,27 +8348,6 @@ func newMrsForPrivilegeWGO(rows [][]interface{}) *MysqlResultSet {
 	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	mrs.AddColumn(col1)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
-}
-
-func newMrsForSystemVariablesOfAccount(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("variable_name")
-	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-
-	col2 := &MysqlColumn{}
-	col2.SetName("variable_value")
-	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-
-	mrs.AddColumn(col1)
-	mrs.AddColumn(col2)
 
 	for _, row := range rows {
 		mrs.AddRow(row)
@@ -8445,576 +8571,6 @@ func Test_DropDatabaseOfAccount(t *testing.T) {
 		convey.So(has("system"), convey.ShouldBeTrue)
 		convey.So(has("mo_catalog"), convey.ShouldBeFalse)
 	})
-}
-
-func TestGetSqlForGetDbIdAndType(t *testing.T) {
-	ctx := context.TODO()
-	kases := []struct {
-		pubName string
-		want    string
-		err     bool
-	}{
-		{
-			pubName: "abc",
-			want:    "select dat_id,dat_type from mo_catalog.mo_database where datname = 'abc' and account_id = 0;",
-			err:     false,
-		},
-		{
-			pubName: "abc\t",
-			want:    "",
-			err:     true,
-		},
-	}
-	for _, k := range kases {
-		sql, err := getSqlForGetDbIdAndType(ctx, k.pubName, true, 0)
-		require.Equal(t, k.err, err != nil)
-		require.Equal(t, k.want, sql)
-	}
-}
-
-func TestGetSqlForInsertIntoMoPubs(t *testing.T) {
-	ctx := context.TODO()
-	kases := []struct {
-		pubName      string
-		databaseName string
-		err          bool
-	}{
-		{
-			pubName:      "abc",
-			databaseName: "abc",
-			err:          false,
-		},
-		{
-			pubName:      "abc\t",
-			databaseName: "abc",
-			err:          true,
-		},
-		{
-			pubName:      "abc",
-			databaseName: "abc\t",
-			err:          true,
-		},
-	}
-	for _, k := range kases {
-		_, err := getSqlForInsertIntoMoPubs(ctx, k.pubName, k.databaseName, 0, false, "", "", 1, 1, "", true)
-		require.Equal(t, k.err, err != nil)
-	}
-}
-
-func TestDoCreatePublication(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	ctx := context.Background()
-	ses := newTestSession(t, ctrl)
-	defer ses.Close()
-
-	tenant := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          rootName,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        rootID,
-		DefaultRoleID: moAdminRoleID,
-	}
-	ses.SetTenantInfo(tenant)
-
-	sa := &tree.CreatePublication{
-		Name:     "pub1",
-		Database: "db1",
-		Comment:  "124",
-		AccountsSet: &tree.AccountsSetOption{
-			SetAccounts: tree.IdentifierList{"a1", "a2"},
-		},
-	}
-	sql1, err := getSqlForGetDbIdAndType(ctx, string(sa.Database), true, 0)
-	require.NoError(t, err)
-	bh := &backgroundExecTest{}
-	bh.init()
-	sql2, err := getSqlForInsertIntoMoPubs(ctx, string(sa.Name), string(sa.Database), 0, true, "", "a1, a2", tenant.GetDefaultRoleID(), tenant.GetUserID(), sa.Comment, true)
-	require.NoError(t, err)
-	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-	defer bhStub.Reset()
-
-	bh.sql2result["begin;"] = nil
-	bh.sql2result[sql1] = &MysqlResultSet{
-		Columns: []Column{
-			&MysqlColumn{
-				ColumnImpl: ColumnImpl{
-					name:       "dat_id",
-					columnType: defines.MYSQL_TYPE_VARCHAR,
-				},
-			},
-			&MysqlColumn{
-				ColumnImpl: ColumnImpl{
-					name:       "dat_type",
-					columnType: defines.MYSQL_TYPE_VARCHAR,
-				},
-			},
-		},
-		Data: [][]interface{}{{0, ""}},
-	}
-	bh.sql2result[sql2] = nil
-	bh.sql2result["commit;"] = nil
-	bh.sql2result["rollback;"] = nil
-
-	err = doCreatePublication(ctx, ses, sa)
-	require.NoError(t, err)
-}
-
-func TestDoDropPublication(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	ctx := context.Background()
-	ses := newTestSession(t, ctrl)
-	defer ses.Close()
-
-	tenant := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          rootName,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        rootID,
-		DefaultRoleID: moAdminRoleID,
-	}
-	ses.SetTenantInfo(tenant)
-
-	sa := &tree.DropPublication{
-		Name: "pub1",
-	}
-	sql1, err := getSqlForGetPubInfo(ctx, string(sa.Name), true)
-	require.NoError(t, err)
-	sql2, err := getSqlForDropPubInfo(ctx, string(sa.Name), true)
-	require.NoError(t, err)
-	bh := &backgroundExecTest{}
-	bh.init()
-	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-	defer bhStub.Reset()
-
-	bh.sql2result["begin;"] = nil
-	bh.sql2result[sql1] = &MysqlResultSet{
-		Data: [][]any{{"db1", 0, "a1, a2", "124"}},
-	}
-	bh.sql2result[sql2] = nil
-	bh.sql2result["commit;"] = nil
-	bh.sql2result["rollback;"] = nil
-
-	err = doDropPublication(ctx, ses, sa)
-	require.NoError(t, err)
-
-}
-
-func TestDoAlterPublication(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	ctx := context.Background()
-	ses := newTestSession(t, ctrl)
-	defer ses.Close()
-
-	tenant := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          rootName,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        rootID,
-		DefaultRoleID: moAdminRoleID,
-	}
-	ses.SetTenantInfo(tenant)
-	columns := []Column{
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "account_list",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "comment",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "database_name",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "database_id",
-				columnType: defines.MYSQL_TYPE_LONGLONG,
-			},
-		},
-	}
-	dbColumns := []Column{
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "dat_id",
-				columnType: defines.MYSQL_TYPE_LONGLONG,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "dat_type",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-	}
-	kases := []struct {
-		pubName     string
-		dbName      string
-		dbId        uint64
-		dbType      string
-		comment     string
-		accountsSet *tree.AccountsSetOption
-		accountList string
-		data        [][]any
-		err         bool
-	}{
-		{
-			pubName: "pub1",
-			comment: "124",
-			accountsSet: &tree.AccountsSetOption{
-				All: true,
-			},
-			accountList: "121",
-			data:        [][]any{{"all", "121", "db1", 1}},
-			err:         false,
-		},
-		{
-			pubName: "pub1",
-			comment: "124",
-			accountsSet: &tree.AccountsSetOption{
-				AddAccounts: tree.IdentifierList{
-					tree.Identifier("a1"),
-				},
-			},
-			accountList: "a0",
-			data:        [][]any{{"a0", "121", "db1", 1}},
-			err:         false,
-		},
-		{
-			pubName: "pub1",
-			comment: "124",
-			accountsSet: &tree.AccountsSetOption{
-				SetAccounts: tree.IdentifierList{
-					tree.Identifier("a1"),
-				},
-			},
-			accountList: "a0",
-			data:        [][]any{{"a0", "121", "db1", 1}},
-			err:         false,
-		},
-		{
-			pubName: "pub1",
-			comment: "124",
-			accountsSet: &tree.AccountsSetOption{
-				DropAccounts: tree.IdentifierList{
-					tree.Identifier("a1"),
-				},
-			},
-			accountList: "all",
-			data:        [][]any{{"all", "121", "db1", 1}},
-			err:         true,
-		},
-		{
-			pubName: "pub1",
-			comment: "124",
-			dbName:  "db2",
-			dbId:    2,
-			dbType:  "",
-			data:    [][]any{{"all", "121", "db1", 1}},
-			err:     false,
-		},
-		{
-			pubName: "pub1",
-			comment: "124",
-			dbName:  "db2",
-			dbId:    2,
-			dbType:  "",
-			accountsSet: &tree.AccountsSetOption{
-				AddAccounts: tree.IdentifierList{
-					tree.Identifier("a1"),
-				},
-			},
-			accountList: "a0,a1",
-			data:        [][]any{{"a0", "121", "db1", 1}},
-			err:         false,
-		},
-	}
-
-	for _, kase := range kases {
-		sa := &tree.AlterPublication{
-			Name:        tree.Identifier(kase.pubName),
-			Comment:     kase.comment,
-			AccountsSet: kase.accountsSet,
-			DbName:      kase.dbName,
-		}
-		sql1, err := getSqlForGetPubInfo(ctx, string(sa.Name), true)
-		require.NoError(t, err)
-
-		sql3, err := getSqlForGetDbIdAndType(ctx, kase.dbName, true, 0)
-		require.NoError(t, err)
-
-		sql2, err := getSqlForUpdatePubInfo(ctx, string(sa.Name), kase.accountList, sa.Comment, kase.dbName, kase.dbId, true)
-		require.NoError(t, err)
-
-		bh := &backgroundExecTest{}
-		bh.init()
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		bh.sql2result["begin;"] = nil
-		bh.sql2result[sql1] = &MysqlResultSet{
-			Data:    kase.data,
-			Columns: columns,
-		}
-		bh.sql2result[sql2] = nil
-		bh.sql2result[sql3] = &MysqlResultSet{
-			Data:    [][]any{{kase.dbId, kase.dbType}},
-			Columns: dbColumns,
-		}
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		err = doAlterPublication(ctx, ses, sa)
-		if kase.err {
-			require.Error(t, err)
-		} else {
-			require.NoError(t, err)
-		}
-	}
-
-}
-
-func TestCheckSubscriptionValid(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	ses := newTestSession(t, ctrl)
-	_ = ses.SetGlobalSysVar(context.TODO(), "lower_case_table_names", int64(1))
-	defer ses.Close()
-
-	bh := &backgroundExecTest{}
-	bh.init()
-
-	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-	defer bhStub.Reset()
-
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-	pu.SV.SetDefaultValues()
-	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-	rm, _ := NewRoutineManager(ctx)
-	ses.rm = rm
-
-	proc := testutil.NewProcess()
-	proc.FileService = getGlobalPu().FileService
-	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
-		proc: proc,
-	}
-	ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
-
-	columns := [][]Column{
-		{
-			&MysqlColumn{
-				ColumnImpl: ColumnImpl{
-					name:       "account_id",
-					columnType: defines.MYSQL_TYPE_LONGLONG,
-				},
-			},
-			&MysqlColumn{
-				ColumnImpl: ColumnImpl{
-					name:       "status",
-					columnType: defines.MYSQL_TYPE_VARCHAR,
-				},
-			},
-		},
-		{
-			&MysqlColumn{
-				ColumnImpl: ColumnImpl{
-					name:       "database_name",
-					columnType: defines.MYSQL_TYPE_VARCHAR,
-				},
-			},
-			&MysqlColumn{
-				ColumnImpl: ColumnImpl{
-					name:       "all_account",
-					columnType: defines.MYSQL_TYPE_BOOL,
-				},
-			},
-			&MysqlColumn{
-				ColumnImpl: ColumnImpl{
-					name:       "account_list",
-					columnType: defines.MYSQL_TYPE_VARCHAR,
-				},
-			},
-		},
-	}
-
-	kases := []struct {
-		createSql string
-
-		accName   string
-		pubName   string
-		pubExists bool
-		accExists bool
-
-		subName string
-
-		accId     uint32
-		accStatus string
-
-		databaseName string
-		accountList  string
-
-		sqls  []string
-		datas [][][]interface{}
-
-		err bool
-	}{
-		{
-			createSql: "create database sub1 from acc0 publication",
-			accName:   "acc0",
-			pubName:   "",
-			subName:   "sub1",
-			accId:     1,
-			err:       true,
-		},
-		{
-			createSql: "create database sub1 from sys publication pub1",
-			accName:   "sys",
-			pubName:   "pub1",
-			subName:   "sub1",
-			accId:     0,
-			accStatus: "",
-			err:       true,
-		},
-		{
-			createSql: "create database sub1 from acc0 publication pub1",
-			accName:   "acc0",
-			pubName:   "pub1",
-			subName:   "sub1",
-			pubExists: true,
-			accExists: true,
-			accId:     1,
-			accStatus: "",
-
-			databaseName: "t1",
-			accountList:  "all",
-
-			sqls: []string{},
-			err:  false,
-		},
-		{
-			createSql: "create database sub1 from acc0 publication pub1",
-			accName:   "acc0",
-			pubName:   "pub1",
-			subName:   "sub1",
-			pubExists: true,
-			accExists: true,
-			accId:     1,
-			accStatus: "",
-
-			databaseName: "t1",
-			accountList:  "sys",
-
-			sqls: []string{},
-			err:  false,
-		},
-		{
-			createSql: "create database sub1 from acc0 publication pub1",
-			accName:   "acc0",
-			pubName:   "pub1",
-			subName:   "sub1",
-			pubExists: true,
-			accExists: false,
-			accId:     1,
-			accStatus: "",
-
-			databaseName: "t1",
-			accountList:  "sys",
-
-			sqls: []string{},
-			err:  true,
-		},
-		{
-			createSql: "create database sub1 from acc0 publication pub1",
-			accName:   "acc0",
-			pubName:   "pub1",
-			subName:   "sub1",
-			pubExists: true,
-			accExists: true,
-			accId:     1,
-			accStatus: tree.AccountStatusSuspend.String(),
-
-			databaseName: "t1",
-			accountList:  "sys",
-
-			sqls: []string{},
-			err:  true,
-		},
-		{
-			createSql: "create database sub1 from acc0 publication pub1",
-			accName:   "acc0",
-			pubName:   "pub1",
-			subName:   "sub1",
-			pubExists: false,
-			accExists: true,
-			accId:     1,
-			accStatus: tree.AccountStatusSuspend.String(),
-
-			databaseName: "t1",
-			accountList:  "sys",
-
-			sqls: []string{},
-			err:  true,
-		},
-	}
-
-	initData := func(idx int) {
-		sql1, _ := getSqlForAccountIdAndStatus(ctx, kases[idx].accName, true)
-		sql2, _ := getSqlForPubInfoForSub(ctx, kases[idx].pubName, true)
-		kases[idx].sqls = []string{
-			sql1, sql2,
-		}
-		kases[idx].datas = [][][]interface{}{
-			{{kases[idx].accId, kases[idx].accStatus}},
-			{{kases[idx].databaseName, kases[idx].accountList}},
-		}
-
-		if !kases[idx].accExists {
-			kases[idx].datas[0] = nil
-		}
-		if !kases[idx].pubExists {
-			kases[idx].datas[1] = nil
-		}
-	}
-
-	for idx := range kases {
-		initData(idx)
-
-		bh := &backgroundExecTest{}
-		bh.init()
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-		for i := range kases[idx].sqls {
-			bh.sql2result[kases[idx].sqls[i]] = &MysqlResultSet{
-				Data:    kases[idx].datas[i],
-				Columns: columns[i],
-			}
-		}
-
-		_, err := checkSubscriptionValid(ctx, ses, kases[idx].createSql)
-		if kases[idx].err {
-			require.Error(t, err)
-		} else {
-			require.NoError(t, err)
-		}
-	}
-
 }
 
 func TestDoCheckRole(t *testing.T) {
@@ -11062,26 +10618,19 @@ func TestUpload(t *testing.T) {
 	convey.Convey("call upload func", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-		ioses := mock_frontend.NewMockIOSession(ctrl)
 		proc := testutil.NewProc()
-		cnt := 0
-		ioses.EXPECT().Read(gomock.Any()).DoAndReturn(func(options goetty.ReadOptions) (pkt any, err error) {
-			if cnt == 0 {
-				pkt = &Packet{Length: 5, Payload: []byte("def add(a, b):\n"), SequenceID: 1}
-			} else if cnt == 1 {
-				pkt = &Packet{Length: 5, Payload: []byte("  return a + b"), SequenceID: 2}
-			} else {
-				err = moerr.NewInvalidInput(context.TODO(), "length 0")
-			}
-			cnt++
-			return
-		}).AnyTimes()
-		proto := &testMysqlWriter{
-			ioses: ioses,
-		}
+		clientConn, serverConn := net.Pipe()
+		defer clientConn.Close()
+		defer serverConn.Close()
+		go writeExceptResult(clientConn, []*Packet{
+			{Length: 5, Payload: []byte("def add(a, b):\n"), SequenceID: 1},
+			{Length: 5, Payload: []byte("  return a + b"), SequenceID: 2},
+			{Length: 0, Payload: []byte(""), SequenceID: 3},
+		})
+
 		fs, err := fileservice.NewLocalFS(context.TODO(), defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
 		convey.So(err, convey.ShouldBeNil)
-		proc.FileService = fs
+		proc.Base.FileService = fs
 
 		//parameter
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -11089,12 +10638,16 @@ func TestUpload(t *testing.T) {
 		assert.Nil(t, err)
 		pu.SV.SetDefaultValues()
 		pu.SV.SaveQueryResult = "on"
-		if err != nil {
-			assert.Nil(t, err)
-		}
 		//file service
 		pu.FileService = fs
 		setGlobalPu(pu)
+
+		ioses, err := NewIOSession(serverConn, pu)
+		assert.Nil(t, err)
+		proto := &testMysqlWriter{
+			ioses: ioses,
+		}
+
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
 				respr: NewMysqlResp(proto),
@@ -11464,7 +11017,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11525,7 +11078,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11586,7 +11139,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11651,7 +11204,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11716,7 +11269,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11782,7 +11335,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11848,7 +11401,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),

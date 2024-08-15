@@ -38,4 +38,4 @@ endpoint = "http://minio:9000"
 key-prefix = "server/etl"
 
 [observability]
-statusPort = 7001
+status-port = 7001

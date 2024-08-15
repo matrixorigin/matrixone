@@ -35,7 +35,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 		return nil, err
 	}
 	// new logic
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	queryBindCtx := NewBindContext(builder, nil)
 	lastNodeId, updatePlanCtxs, err := selectUpdateTables(builder, queryBindCtx, stmt, tblInfo)
 	if err != nil {
@@ -89,7 +89,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	}
 	query.DetectSqls = detectSqls
 	reduceSinkSinkScanNodes(query)
-	ReCalcQueryStats(builder, query)
+	builder.tempOptimizeForDML()
 	reCheckifNeedLockWholeTable(builder)
 	query.StmtType = plan.Query_UPDATE
 	return &Plan{
@@ -186,7 +186,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		// append  table.* to project list
 		rowIdPos := -1
 		for idx, col := range tableDef.Cols {
-			e, _ := tree.NewUnresolvedName(builder.GetContext(), alias, col.Name)
+			e := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: e,
 			})
@@ -221,13 +221,13 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 					}
 					if updateKeyExpr.Typ.Id >= 20 && updateKeyExpr.Typ.Id <= 29 {
 						updateKey = &tree.FuncExpr{
-							Func:  tree.FuncName2ResolvableFunctionReference(tree.SetUnresolvedName(moEnumCastIndexValueToIndexFun)),
+							Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastIndexValueToIndexFun)),
 							Type:  tree.FUNC_TYPE_DEFAULT,
 							Exprs: exprs,
 						}
 					} else {
 						updateKey = &tree.FuncExpr{
-							Func:  tree.FuncName2ResolvableFunctionReference(tree.SetUnresolvedName(moEnumCastValueToIndexFun)),
+							Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastValueToIndexFun)),
 							Type:  tree.FUNC_TYPE_DEFAULT,
 							Exprs: exprs,
 						}

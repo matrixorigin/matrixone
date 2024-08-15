@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -53,14 +52,18 @@ var testFunc = func(
 	return false, nil
 }
 
+var (
+	sid = ""
+)
+
 func TestCallLockOpWithNoConflict(t *testing.T) {
 	runLockNonBlockingOpTest(
 		t,
 		[]uint64{1},
 		[][]int32{{0, 1, 2}},
-		func(proc *process.Process, arg *Argument) {
+		func(proc *process.Process, arg *LockOp) {
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.hasNewVersionInRange = testFunc
+			arg.ctr.rt.hasNewVersionInRange = testFunc
 			result, err := arg.Call(proc)
 			require.NoError(t, err)
 
@@ -81,14 +84,14 @@ func TestCallLockOpWithConflict(t *testing.T) {
 		t,
 		[]uint64{tableID},
 		[][]int32{{0, 1, 2}},
-		func(proc *process.Process, arg *Argument) {
+		func(proc *process.Process, arg *LockOp) {
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.hasNewVersionInRange = testFunc
+			arg.ctr.rt.hasNewVersionInRange = testFunc
 
-			arg.rt.parker.Reset()
-			arg.rt.parker.EncodeInt32(0)
-			conflictRow := arg.rt.parker.Bytes()
-			_, err := proc.LockService.Lock(
+			arg.ctr.rt.parker.Reset()
+			arg.ctr.rt.parker.EncodeInt32(0)
+			conflictRow := arg.ctr.rt.parker.Bytes()
+			_, err := proc.GetLockService().Lock(
 				proc.Ctx,
 				tableID,
 				[][]byte{conflictRow},
@@ -109,8 +112,8 @@ func TestCallLockOpWithConflict(t *testing.T) {
 					assert.Equal(t, types.BuildTS(math.MaxInt64, 1), v)
 				}
 			}()
-			require.NoError(t, lockservice.WaitWaiters(proc.LockService, 0, tableID, conflictRow, 1))
-			require.NoError(t, proc.LockService.Unlock(proc.Ctx, []byte("txn01"), timestamp.Timestamp{PhysicalTime: math.MaxInt64}))
+			require.NoError(t, lockservice.WaitWaiters(proc.GetLockService(), 0, tableID, conflictRow, 1))
+			require.NoError(t, proc.GetLockService().Unlock(proc.Ctx, []byte("txn01"), timestamp.Timestamp{PhysicalTime: math.MaxInt64}))
 			<-c
 		},
 		client.WithEnableRefreshExpression(),
@@ -123,14 +126,14 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 		t,
 		[]uint64{tableID},
 		[][]int32{{0, 1, 2}},
-		func(proc *process.Process, arg *Argument) {
+		func(proc *process.Process, arg *LockOp) {
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.hasNewVersionInRange = testFunc
+			arg.ctr.rt.hasNewVersionInRange = testFunc
 
-			arg.rt.parker.Reset()
-			arg.rt.parker.EncodeInt32(0)
-			conflictRow := arg.rt.parker.Bytes()
-			_, err := proc.LockService.Lock(
+			arg.ctr.rt.parker.Reset()
+			arg.ctr.rt.parker.EncodeInt32(0)
+			conflictRow := arg.ctr.rt.parker.Bytes()
+			_, err := proc.GetLockService().Lock(
 				proc.Ctx,
 				tableID,
 				[][]byte{conflictRow},
@@ -141,7 +144,8 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				arg2 := &Argument{
+				arg2 := &LockOp{
+					ctr: &container{},
 					OperatorBase: vm.OperatorBase{
 						OperatorInfo: vm.OperatorInfo{
 							Idx:     1,
@@ -150,14 +154,14 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 						},
 					},
 				}
-				arg2.rt = &state{}
-				arg2.rt.retryError = nil
+				arg2.ctr.rt = &state{}
+				arg2.ctr.rt.retryError = nil
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
-				arg2.rt.hasNewVersionInRange = testFunc
-				valueScan := arg.GetChildren(0).(*value_scan.Argument)
+				arg2.ctr.rt.hasNewVersionInRange = testFunc
+				valueScan := arg.GetChildren(0).(*value_scan.ValueScan)
 				resetChildren(arg2, valueScan.Batchs[0])
-				defer arg2.rt.parker.FreeMem()
+				defer arg2.ctr.rt.parker.Close()
 
 				_, err = arg2.Call(proc)
 				assert.NoError(t, err)
@@ -167,8 +171,8 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 				require.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
 			}()
-			require.NoError(t, lockservice.WaitWaiters(proc.LockService, 0, tableID, conflictRow, 1))
-			require.NoError(t, proc.LockService.Unlock(proc.Ctx, []byte("txn01"), timestamp.Timestamp{PhysicalTime: math.MaxInt64}))
+			require.NoError(t, lockservice.WaitWaiters(proc.GetLockService(), 0, tableID, conflictRow, 1))
+			require.NoError(t, proc.GetLockService().Unlock(proc.Ctx, []byte("txn01"), timestamp.Timestamp{PhysicalTime: math.MaxInt64}))
 			<-c
 		},
 	)
@@ -180,26 +184,26 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 		t,
 		[]uint64{tableID},
 		[][]int32{{0, 1, 2}},
-		func(proc *process.Process, arg *Argument) {
+		func(proc *process.Process, arg *LockOp) {
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.hasNewVersionInRange = testFunc
+			arg.ctr.rt.hasNewVersionInRange = testFunc
 
-			arg.rt.parker.Reset()
-			arg.rt.parker.EncodeInt32(0)
-			conflictRow := arg.rt.parker.Bytes()
+			arg.ctr.rt.parker.Reset()
+			arg.ctr.rt.parker.EncodeInt32(0)
+			conflictRow := arg.ctr.rt.parker.Bytes()
 
 			// txn01 commit
-			_, err := proc.LockService.Lock(
+			_, err := proc.GetLockService().Lock(
 				proc.Ctx,
 				tableID,
 				[][]byte{conflictRow},
 				[]byte("txn01"),
 				lock.LockOptions{})
 			require.NoError(t, err)
-			require.NoError(t, proc.LockService.Unlock(proc.Ctx, []byte("txn01"), timestamp.Timestamp{PhysicalTime: math.MaxInt64}))
+			require.NoError(t, proc.GetLockService().Unlock(proc.Ctx, []byte("txn01"), timestamp.Timestamp{PhysicalTime: math.MaxInt64}))
 
 			// txn02 abort
-			_, err = proc.LockService.Lock(
+			_, err = proc.GetLockService().Lock(
 				proc.Ctx,
 				tableID,
 				[][]byte{conflictRow},
@@ -210,7 +214,8 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				arg2 := &Argument{
+				arg2 := &LockOp{
+					ctr: &container{},
 					OperatorBase: vm.OperatorBase{
 						OperatorInfo: vm.OperatorInfo{
 							Idx:     1,
@@ -219,14 +224,14 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 						},
 					},
 				}
-				arg2.rt = &state{}
-				arg2.rt.retryError = nil
+				arg2.ctr.rt = &state{}
+				arg2.ctr.rt.retryError = nil
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
-				arg2.rt.hasNewVersionInRange = testFunc
-				valueScan := arg.GetChildren(0).(*value_scan.Argument)
+				arg2.ctr.rt.hasNewVersionInRange = testFunc
+				valueScan := arg.GetChildren(0).(*value_scan.ValueScan)
 				resetChildren(arg2, valueScan.Batchs[0])
-				defer arg2.rt.parker.FreeMem()
+				defer arg2.ctr.rt.parker.Close()
 
 				_, err = arg2.Call(proc)
 				assert.NoError(t, err)
@@ -236,8 +241,8 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 				require.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
 			}()
-			require.NoError(t, lockservice.WaitWaiters(proc.LockService, 0, tableID, conflictRow, 1))
-			require.NoError(t, proc.LockService.Unlock(proc.Ctx, []byte("txn02"), timestamp.Timestamp{}))
+			require.NoError(t, lockservice.WaitWaiters(proc.GetLockService(), 0, tableID, conflictRow, 1))
+			require.NoError(t, proc.GetLockService().Unlock(proc.Ctx, []byte("txn02"), timestamp.Timestamp{}))
 			<-c
 		},
 	)
@@ -249,26 +254,26 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 		t,
 		[]uint64{tableID},
 		[][]int32{{0, 1, 2}},
-		func(proc *process.Process, arg *Argument) {
+		func(proc *process.Process, arg *LockOp) {
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.hasNewVersionInRange = testFunc
+			arg.ctr.rt.hasNewVersionInRange = testFunc
 
-			arg.rt.parker.Reset()
-			arg.rt.parker.EncodeInt32(0)
-			conflictRow := arg.rt.parker.Bytes()
+			arg.ctr.rt.parker.Reset()
+			arg.ctr.rt.parker.EncodeInt32(0)
+			conflictRow := arg.ctr.rt.parker.Bytes()
 
 			// txn01 commit
-			_, err := proc.LockService.Lock(
+			_, err := proc.GetLockService().Lock(
 				proc.Ctx,
 				tableID,
 				[][]byte{conflictRow},
 				[]byte("txn01"),
 				lock.LockOptions{})
 			require.NoError(t, err)
-			require.NoError(t, proc.LockService.Unlock(proc.Ctx, []byte("txn01"), timestamp.Timestamp{PhysicalTime: math.MaxInt64 - 1}))
+			require.NoError(t, proc.GetLockService().Unlock(proc.Ctx, []byte("txn01"), timestamp.Timestamp{PhysicalTime: math.MaxInt64 - 1}))
 
 			// txn02 abort
-			_, err = proc.LockService.Lock(
+			_, err = proc.GetLockService().Lock(
 				proc.Ctx,
 				tableID,
 				[][]byte{conflictRow},
@@ -279,7 +284,8 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				arg2 := &Argument{
+				arg2 := &LockOp{
+					ctr: &container{},
 					OperatorBase: vm.OperatorBase{
 						OperatorInfo: vm.OperatorInfo{
 							Idx:     1,
@@ -288,16 +294,16 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 						},
 					},
 				}
-				arg2.rt = &state{}
-				arg2.rt.retryError = nil
+				arg2.ctr.rt = &state{}
+				arg2.ctr.rt.retryError = nil
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
-				arg2.rt.hasNewVersionInRange = testFunc
-				valueScan := arg.GetChildren(0).(*value_scan.Argument)
+				arg2.ctr.rt.hasNewVersionInRange = testFunc
+				valueScan := arg.GetChildren(0).(*value_scan.ValueScan)
 				resetChildren(arg2, valueScan.Batchs[0])
-				defer arg2.rt.parker.FreeMem()
+				defer arg2.ctr.rt.parker.Close()
 
-				proc.TxnOperator.TxnRef().SnapshotTS = timestamp.Timestamp{PhysicalTime: math.MaxInt64}
+				proc.GetTxnOperator().TxnRef().SnapshotTS = timestamp.Timestamp{PhysicalTime: math.MaxInt64}
 
 				_, err = arg2.Call(proc)
 				assert.NoError(t, err)
@@ -306,8 +312,8 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 				_, err = arg2.Call(proc)
 				require.NoError(t, err)
 			}()
-			require.NoError(t, lockservice.WaitWaiters(proc.LockService, 0, tableID, conflictRow, 1))
-			require.NoError(t, proc.LockService.Unlock(proc.Ctx, []byte("txn02"), timestamp.Timestamp{}))
+			require.NoError(t, lockservice.WaitWaiters(proc.GetLockService(), 0, tableID, conflictRow, 1))
+			require.NoError(t, proc.GetLockService().Unlock(proc.Ctx, []byte("txn02"), timestamp.Timestamp{}))
 			<-c
 		},
 	)
@@ -322,10 +328,10 @@ func TestLockWithBlocking(t *testing.T) {
 		nil,
 		func(
 			proc *process.Process,
-			arg *Argument,
+			arg *LockOp,
 			idx int,
 			isFirst, isLast bool) (bool, error) {
-			arg.rt.hasNewVersionInRange = testFunc
+			arg.ctr.rt.hasNewVersionInRange = testFunc
 			arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 				Idx:     idx,
 				IsFirst: isFirst,
@@ -337,15 +343,15 @@ func TestLockWithBlocking(t *testing.T) {
 				end.Batch.Clean(proc.GetMPool())
 			}
 			if end.Status == vm.ExecStop {
-				if arg.rt.parker != nil {
-					arg.rt.parker.FreeMem()
+				if arg.ctr.rt.parker != nil {
+					arg.ctr.rt.parker.Close()
 				}
 			}
 			return end.Status == vm.ExecStop, nil
 		},
-		func(arg *Argument, proc *process.Process) {
+		func(arg *LockOp, proc *process.Process) {
 			arg.Free(proc, false, nil)
-			proc.FreeVectors()
+			proc.Free()
 		},
 	)
 }
@@ -358,14 +364,14 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 		tableID,
 		values,
 		func(proc *process.Process) {
-			parker := types.NewPacker(proc.Mp())
-			defer parker.FreeMem()
+			parker := types.NewPacker()
+			defer parker.Close()
 
 			parker.Reset()
 			parker.EncodeInt32(1)
 			conflictRow := parker.Bytes()
 
-			_, err := proc.LockService.Lock(
+			_, err := proc.GetLockService().Lock(
 				proc.Ctx,
 				tableID,
 				[][]byte{conflictRow},
@@ -374,8 +380,8 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			require.NoError(t, err)
 
 			go func() {
-				require.NoError(t, lockservice.WaitWaiters(proc.LockService, 0, tableID, conflictRow, 1))
-				require.NoError(t, proc.LockService.Unlock(
+				require.NoError(t, lockservice.WaitWaiters(proc.GetLockService(), 0, tableID, conflictRow, 1))
+				require.NoError(t, proc.GetLockService().Unlock(
 					proc.Ctx,
 					[]byte("txn01"),
 					timestamp.Timestamp{PhysicalTime: math.MaxInt64}))
@@ -383,10 +389,10 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 		},
 		func(
 			proc *process.Process,
-			arg *Argument,
+			arg *LockOp,
 			idx int,
 			isFirst, isLast bool) (bool, error) {
-			arg.rt.hasNewVersionInRange = testFunc
+			arg.ctr.rt.hasNewVersionInRange = testFunc
 			arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 				Idx:     idx,
 				IsFirst: isFirst,
@@ -395,19 +401,19 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			ok, err := arg.Call(proc)
 			return ok.Status == vm.ExecStop, err
 		},
-		func(arg *Argument, proc *process.Process) {
-			require.True(t, moerr.IsMoErrCode(arg.rt.retryError, moerr.ErrTxnNeedRetry))
-			for _, bat := range arg.rt.cachedBatches {
+		func(arg *LockOp, proc *process.Process) {
+			require.True(t, moerr.IsMoErrCode(arg.ctr.rt.retryError, moerr.ErrTxnNeedRetry))
+			for _, bat := range arg.ctr.rt.cachedBatches {
 				bat.Clean(proc.Mp())
 			}
 			arg.Free(proc, false, nil)
-			proc.FreeVectors()
+			proc.Free()
 		},
 	)
 }
 
 func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
-	tw := client.NewTimestampWaiter()
+	tw := client.NewTimestampWaiter(runtime.GetLogger(""))
 	stopper := stopper.NewStopper("")
 	stopper.RunTask(func(ctx context.Context) {
 		for {
@@ -423,9 +429,9 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 		t,
 		[]uint64{1},
 		[][]int32{{0, 1, 2}},
-		func(proc *process.Process, arg *Argument) {
+		func(proc *process.Process, arg *LockOp) {
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.hasNewVersionInRange = func(
+			arg.ctr.rt.hasNewVersionInRange = func(
 				proc *process.Process,
 				rel engine.Relation,
 				tableID uint64,
@@ -437,8 +443,8 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 
 			_, err := arg.Call(proc)
 			require.NoError(t, err)
-			require.Error(t, arg.rt.retryError)
-			require.True(t, moerr.IsMoErrCode(arg.rt.retryError, moerr.ErrTxnNeedRetry))
+			require.Error(t, arg.ctr.rt.retryError)
+			require.True(t, moerr.IsMoErrCode(arg.ctr.rt.retryError, moerr.ErrTxnNeedRetry))
 		},
 		client.WithTimestampWaiter(tw),
 	)
@@ -449,7 +455,7 @@ func runLockNonBlockingOpTest(
 	t *testing.T,
 	tables []uint64,
 	values [][]int32,
-	fn func(*process.Process, *Argument),
+	fn func(*process.Process, *LockOp),
 	opts ...client.TxnClientCreateOption) {
 	runLockOpTest(
 		t,
@@ -494,8 +500,8 @@ func runLockBlockingOpTest(
 	table uint64,
 	values [][]int32,
 	beforeFunc func(proc *process.Process),
-	fn func(proc *process.Process, arg *Argument, idx int, isFirst, isLast bool) (bool, error),
-	checkFunc func(*Argument, *process.Process),
+	fn func(proc *process.Process, arg *LockOp, idx int, isFirst, isLast bool) (bool, error),
+	checkFunc func(*LockOp, *process.Process),
 	opts ...client.TxnClientCreateOption) {
 	runLockOpTest(
 		t,
@@ -525,13 +531,13 @@ func runLockBlockingOpTest(
 				batches2 = append(batches2, bat)
 			}
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.batchFetchFunc = func(process.Analyze) *process.RegisterMessage {
+			arg.ctr.rt.batchFetchFunc = func(*process.Process) (vm.CallResult, error) {
 				if len(batches) == 0 {
-					return testutil.NewRegMsg(nil)
+					return vm.NewCallResult(), nil
 				}
 				bat := batches[0]
 				batches = batches[1:]
-				return testutil.NewRegMsg(bat)
+				return vm.CallResult{Batch: bat}, nil
 			}
 
 			var err error
@@ -555,55 +561,64 @@ func runLockOpTest(
 	fn func(*process.Process),
 	opts ...client.TxnClientCreateOption) {
 	defer leaktest.AfterTest(t)()
-	lockservice.RunLockServicesForTest(
-		zap.DebugLevel,
-		[]string{"s1"},
-		time.Second,
-		func(_ lockservice.LockTableAllocator, services []lockservice.LockService) {
-			runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, services[0])
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			runtime.SetupServiceBasedRuntime("s1", rt)
 
-			// TODO: remove
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-			defer cancel()
+			lockservice.RunLockServicesForTest(
+				zap.DebugLevel,
+				[]string{"s1"},
+				time.Second,
+				func(_ lockservice.LockTableAllocator, services []lockservice.LockService) {
+					rt.SetGlobalVariables(runtime.LockService, services[0])
 
-			s, err := rpc.NewSender(rpc.Config{}, runtime.ProcessLevelRuntime())
-			require.NoError(t, err)
+					// TODO: remove
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					defer cancel()
 
-			opts = append(opts, client.WithLockService(services[0]))
-			c := client.NewTxnClient(s, opts...)
-			c.Resume()
-			defer func() {
-				assert.NoError(t, c.Close())
-			}()
-			txnOp, err := c.New(ctx, timestamp.Timestamp{})
-			require.NoError(t, err)
+					s, err := rpc.NewSender(rpc.Config{}, rt)
+					require.NoError(t, err)
 
-			proc := process.New(
-				ctx,
-				mpool.MustNewZero(),
-				c,
-				txnOp,
+					opts = append(opts, client.WithLockService(services[0]))
+					c := client.NewTxnClient(sid, s, opts...)
+					c.Resume()
+					defer func() {
+						assert.NoError(t, c.Close())
+					}()
+					txnOp, err := c.New(ctx, timestamp.Timestamp{})
+					require.NoError(t, err)
+
+					proc := process.NewTopProcess(
+						ctx,
+						mpool.MustNewZero(),
+						c,
+						txnOp,
+						nil,
+						services[0],
+						nil,
+						nil,
+						nil,
+						nil)
+					require.Equal(t, int64(0), proc.Mp().CurrNB())
+					defer func() {
+						require.Equal(t, int64(0), proc.Mp().CurrNB())
+					}()
+					fn(proc)
+				},
 				nil,
-				services[0],
-				nil,
-				nil,
-				nil,
-				nil)
-			require.Equal(t, int64(0), proc.Mp().CurrNB())
-			defer func() {
-				require.Equal(t, int64(0), proc.Mp().CurrNB())
-			}()
-			fn(proc)
+			)
 		},
-		nil,
 	)
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
+func resetChildren(arg *LockOp, bat *batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: []*batch.Batch{bat},
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: []*batch.Batch{bat},
-			},
+			valueScanArg,
 		})
 }

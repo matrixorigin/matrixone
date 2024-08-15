@@ -39,7 +39,7 @@ func handleTxnTrace(
 			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
 		}
 
-		err := trace.GetService().Enable(params[1])
+		err := trace.GetService(proc.GetService()).Enable(params[1])
 		if err != nil {
 			return Result{}, err
 		}
@@ -49,7 +49,7 @@ func handleTxnTrace(
 			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
 		}
 
-		err := trace.GetService().Disable(params[1])
+		err := trace.GetService(proc.GetService()).Disable(params[1])
 		if err != nil {
 			return Result{}, err
 		}
@@ -61,11 +61,11 @@ func handleTxnTrace(
 
 		var err error
 		if params[1] == trace.FeatureTraceTxn {
-			err = trace.GetService().ClearTxnFilters()
+			err = trace.GetService(proc.GetService()).ClearTxnFilters()
 		} else if params[1] == trace.FeatureTraceData {
-			err = trace.GetService().ClearTableFilters()
+			err = trace.GetService(proc.GetService()).ClearTableFilters()
 		} else if params[1] == trace.FeatureTraceStatement {
-			err = trace.GetService().ClearStatementFilters()
+			err = trace.GetService(proc.GetService()).ClearStatementFilters()
 		}
 
 		if err != nil {
@@ -82,11 +82,11 @@ func handleTxnTrace(
 
 		var err error
 		if params[1] == trace.FeatureTraceTxn {
-			err = trace.GetService().RefreshTxnFilters()
+			err = trace.GetService(proc.GetService()).RefreshTxnFilters()
 		} else if params[1] == trace.FeatureTraceData {
-			err = trace.GetService().RefreshTableFilters()
+			err = trace.GetService(proc.GetService()).RefreshTableFilters()
 		} else if params[1] == trace.FeatureTraceStatement {
-			err = trace.GetService().RefreshStatementFilters()
+			err = trace.GetService(proc.GetService()).RefreshStatementFilters()
 		}
 
 		if err != nil {
@@ -104,7 +104,7 @@ func handleTxnTrace(
 			columns = params[2:]
 		}
 
-		err := trace.GetService().AddTableFilter(table, columns)
+		err := trace.GetService(proc.GetService()).AddTableFilter(table, columns)
 		if err != nil {
 			return Result{}, err
 		}
@@ -115,7 +115,7 @@ func handleTxnTrace(
 			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
 		}
 
-		err := trace.GetService().AddTxnFilter(params[1], params[2])
+		err := trace.GetService(proc.GetService()).AddTxnFilter(params[1], params[2])
 		if err != nil {
 			return Result{}, err
 		}
@@ -126,7 +126,7 @@ func handleTxnTrace(
 			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
 		}
 
-		err := trace.GetService().AddStatementFilter(params[1], params[2])
+		err := trace.GetService(proc.GetService()).AddStatementFilter(params[1], params[2])
 		if err != nil {
 			return Result{}, err
 		}
@@ -136,7 +136,7 @@ func handleTxnTrace(
 		if len(params) != 2 {
 			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
 		}
-		value, err := trace.GetService().DecodeHexComplexPK(params[1])
+		value, err := trace.GetService(proc.GetService()).DecodeHexComplexPK(params[1])
 		if err != nil {
 			return Result{}, err
 		}

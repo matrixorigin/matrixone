@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 var (
@@ -120,7 +121,7 @@ func GetOrInitDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 			return err
 		}
 		dsn :=
-			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=10s&writeTimeout=15s&timeout=15s&maxAllowedPacket=0&disable_txn_trace=1",
+			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=10s&writeTimeout=15s&timeout=15s&maxAllowedPacket=67108864&disable_txn_trace=1",
 				dbUser.UserName,
 				dbUser.Password,
 				dbAddress)
@@ -199,10 +200,13 @@ func putBuffer(buf *bytes.Buffer) {
 	}
 }
 
+var _ table.RowWriter = (*CSVWriter)(nil)
+
 type CSVWriter struct {
 	ctx       context.Context
 	formatter *csv.Writer
 	buf       *bytes.Buffer
+	release   func(buffer *bytes.Buffer)
 }
 
 func NewCSVWriter(ctx context.Context) *CSVWriter {
@@ -214,8 +218,34 @@ func NewCSVWriter(ctx context.Context) *CSVWriter {
 		ctx:       ctx,
 		buf:       buf,
 		formatter: writer,
+		release:   putBuffer,
 	}
 	return w
+}
+
+func NewCSVWriterWithBuffer(ctx context.Context, buf *bytes.Buffer) *CSVWriter {
+	writer := csv.NewWriter(buf)
+
+	w := &CSVWriter{
+		ctx:       ctx,
+		buf:       buf,
+		formatter: writer,
+		release:   nil,
+	}
+	return w
+}
+func (w *CSVWriter) WriteRow(row *table.Row) error { return w.WriteStrings(row.ToStrings()) }
+func (w *CSVWriter) GetContentLength() int         { w.formatter.Flush(); return w.buf.Len() }
+
+// FlushAndClose implements RowWriter, but NO Close action.
+func (w *CSVWriter) FlushAndClose() (int, error) {
+	w.formatter.Flush()
+	return w.GetContentLength(), nil
+}
+
+func (w *CSVWriter) ResetBuffer(buf *bytes.Buffer) {
+	w.buf = buf
+	w.formatter = csv.NewWriter(buf)
 }
 
 func (w *CSVWriter) WriteStrings(record []string) error {
@@ -230,13 +260,18 @@ func (w *CSVWriter) GetContent() string {
 	return w.buf.String()
 }
 
+func (w *CSVWriter) Flush() { w.formatter.Flush() }
+
 func (w *CSVWriter) Release() {
 	if w.buf != nil {
-		w.buf.Reset()
+		if w.release != nil {
+			// fix: need to release the !nil buffer
+			defer w.release(w.buf)
+		}
 		w.buf = nil
 		w.formatter = nil
 	}
-	putBuffer(w.buf)
+	w.release = nil
 }
 
 func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table) error {
@@ -260,6 +295,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 	csvData := csvWriter.GetContent()
 
 	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s FIELDS TERMINATED BY ','", csvData, tbl.Database, tbl.Table)
+	v2.TraceMOLoggerExportSqlHistogram.Observe(float64(len(loadSQL)))
 
 	// Use the transaction to execute the SQL command
 

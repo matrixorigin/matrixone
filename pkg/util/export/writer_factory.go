@@ -15,6 +15,7 @@
 package export
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"time"
@@ -22,24 +23,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 var _ table.RowWriter = (*reactWriter)(nil)
 var _ table.AfterWrite = (*reactWriter)(nil)
+var _ table.BufferSettable = (*reactWriter)(nil)
 
 // reactWriter implement table.AfterWrite, it can react before/after FlushAndClose
 type reactWriter struct {
 	ctx context.Context
 	w   table.RowWriter
+	// implement table.BufferSettable
+	setter table.BufferSettable
 
 	// implement AfterWrite
-	afters []table.CheckWriteHook
+	afters []table.AckHook
 }
 
 func newWriter(ctx context.Context, w table.RowWriter) *reactWriter {
+	var setter table.BufferSettable = nil
+	if s, ok := w.(table.BufferSettable); ok && s.NeedBuffer() {
+		setter = s
+	}
 	return &reactWriter{
 		ctx: ctx,
 		w:   w,
+		// implement table.BufferSettable
+		setter: setter,
 	}
 }
 
@@ -51,17 +62,43 @@ func (rw *reactWriter) GetContent() string {
 	return rw.w.GetContent()
 }
 
+func (rw *reactWriter) GetContentLength() int { return rw.w.GetContentLength() }
+
 func (rw *reactWriter) FlushAndClose() (int, error) {
 	n, err := rw.w.FlushAndClose()
 	if err == nil {
 		for _, hook := range rw.afters {
 			hook(rw.ctx)
 		}
+		v2.TraceMOLoggerBufferReactWrite.Inc()
+	} else {
+		v2.TraceMOLoggerBufferReactWriteFailed.Inc()
 	}
+	// cleanup rw.afters
+	for idx := range rw.afters {
+		rw.afters[idx] = nil
+	}
+	rw.afters = nil
 	return n, err
 }
 
-func (rw *reactWriter) AddAfter(hook table.CheckWriteHook) {
+func (rw *reactWriter) SetBuffer(buf *bytes.Buffer, callback func(*bytes.Buffer)) {
+	v2.TraceMOLoggerBufferSetCallBack.Inc()
+	if callback == nil {
+		v2.TraceMOLoggerBufferSetCallBackNil.Inc()
+	}
+	rw.setter.SetBuffer(buf, callback)
+}
+
+func (rw *reactWriter) NeedBuffer() bool { return rw.setter != nil }
+
+func (rw *reactWriter) SetupBackOff(backoff table.BackOff) {
+	if s, ok := rw.w.(table.BackOffSettable); ok {
+		s.SetupBackOff(backoff)
+	}
+}
+
+func (rw *reactWriter) AddAfter(hook table.AckHook) {
 	rw.afters = append(rw.afters, hook)
 }
 
@@ -79,7 +116,9 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ena
 			}
 			cw := etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))
 			if enableSqlWriter {
-				return newWriter(ctx, etl.NewSqlWriter(ctx, tbl, cw))
+				// return newWriter(ctx, etl.NewSqlWriter(ctx, tbl, cw))
+				// new version
+				return newWriter(ctx, etl.NewContentWriter(ctx, tbl, cw))
 			} else {
 				return newWriter(ctx, cw)
 			}

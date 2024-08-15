@@ -25,36 +25,45 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "offset"
+const opName = "offset"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
-	buf.WriteString(fmt.Sprintf("offset(%v)", arg.OffsetExpr))
+func (offset *Offset) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
+	buf.WriteString(fmt.Sprintf("offset(%v)", offset.OffsetExpr))
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (offset *Offset) OpType() vm.OpType {
+	return vm.Offset
+}
+
+func (offset *Offset) Prepare(proc *process.Process) error {
 	var err error
-	if arg.offsetExecutor == nil {
-		arg.offsetExecutor, err = colexec.NewExpressionExecutor(proc, arg.OffsetExpr)
+	offset.ctr = new(container)
+	if offset.ctr.offsetExecutor == nil {
+		offset.ctr.offsetExecutor, err = colexec.NewExpressionExecutor(proc, offset.OffsetExpr)
 		if err != nil {
 			return err
 		}
 	}
-	vec, err := arg.offsetExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	vec, err := offset.ctr.offsetExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
-	arg.offset = uint64(vector.MustFixedCol[int64](vec)[0])
+	offset.ctr.offset = uint64(vector.MustFixedCol[uint64](vec)[0])
 
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	result, err := arg.GetChildren(0).Call(proc)
+	anal := proc.GetAnalyze(offset.GetIdx(), offset.GetParallelIdx(), offset.GetParallelMajor())
+	anal.Start()
+	defer anal.Stop()
+
+	result, err := vm.ChildrenCall(offset.GetChildren(0), proc, anal)
 	if err != nil {
 		return result, err
 	}
@@ -62,24 +71,21 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
-	anal.Input(bat, arg.GetIsFirst())
+	anal.Input(bat, offset.GetIsFirst())
 
-	if arg.Seen > arg.offset {
+	if offset.ctr.seen > offset.ctr.offset {
 		return result, nil
 	}
 	length := bat.RowCount()
-	if arg.Seen+uint64(length) > arg.offset {
-		sels := newSels(int64(arg.offset-arg.Seen), int64(length)-int64(arg.offset-arg.Seen), proc)
-		arg.Seen += uint64(length)
+	if offset.ctr.seen+uint64(length) > offset.ctr.offset {
+		sels := newSels(int64(offset.ctr.offset-offset.ctr.seen), int64(length)-int64(offset.ctr.offset-offset.ctr.seen), proc)
+		offset.ctr.seen += uint64(length)
 		bat.Shrink(sels, false)
 		proc.Mp().PutSels(sels)
 		result.Batch = bat
 		return result, nil
 	}
-	arg.Seen += uint64(length)
+	offset.ctr.seen += uint64(length)
 	result.Batch = batch.EmptyBatch
 	return result, nil
 }

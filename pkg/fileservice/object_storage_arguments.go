@@ -31,6 +31,7 @@ type ObjectStorageArguments struct {
 	SharedConfigProfile  string `toml:"shared-config-profile"`
 	NoDefaultCredentials bool   `toml:"no-default-credentials"`
 	NoBucketValidation   bool   `toml:"no-bucket-validation"`
+	Concurrency          int64  `toml:"concurrency"`
 
 	// s3
 	Bucket    string   `toml:"bucket"`
@@ -83,6 +84,11 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 			b, err := strconv.ParseBool(value)
 			if err == nil {
 				o.NoDefaultCredentials = b
+			}
+		case "concurrency":
+			n, err := strconv.ParseInt(value, 10, 64)
+			if err == nil {
+				o.Concurrency = n
 			}
 
 		case "bucket":

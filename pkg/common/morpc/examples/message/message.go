@@ -36,7 +36,7 @@ func (tm *ExampleMessage) DebugString() string {
 	return ""
 }
 
-func (tm *ExampleMessage) Size() int {
+func (tm *ExampleMessage) ProtoSize() int {
 	return 4 + 8 + len(tm.Content)
 }
 

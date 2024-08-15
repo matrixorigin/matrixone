@@ -202,7 +202,7 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 func (s *stateMachine) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
 	// FIXME: memory recycling when necessary
-	data := make([]byte, s.state.Size())
+	data := make([]byte, s.state.ProtoSize())
 	n, err := s.state.MarshalToSizedBuffer(data)
 	if err != nil {
 		return err

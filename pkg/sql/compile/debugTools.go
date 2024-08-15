@@ -48,6 +48,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Anti:                    "anti",
 	vm.Single:                  "single",
 	vm.Mark:                    "mark",
+	vm.IndexJoin:               "index join",
 	vm.LoopJoin:                "loop join",
 	vm.LoopLeft:                "loop left",
 	vm.LoopSemi:                "loop semi",
@@ -72,6 +73,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Minus:                   "minus",
 	vm.Intersect:               "intersect",
 	vm.IntersectAll:            "intersect all",
+	vm.UnionAll:                "union all",
 	vm.HashBuild:               "hash build",
 	vm.ShuffleBuild:            "shuffle build",
 	vm.IndexBuild:              "index build",
@@ -86,6 +88,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.TableScan:               "tablescan",
 	vm.ValueScan:               "valuescan",
 	vm.TableFunction:           "tablefunction",
+	vm.OnDuplicateKey:          "on duplicate key",
 }
 
 var debugMagicNames = map[magicType]string{
@@ -154,7 +157,8 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 			remote := ""
 			for _, u := range s.RemoteReceivRegInfos {
 				if u.Idx == i {
-					remote = fmt.Sprintf("(%s)", u.Uuid)
+					uuidStr := u.Uuid.String()
+					remote = fmt.Sprintf("(%s)", uuidStr[len(uuidStr)-6:])
 					break
 				}
 			}
@@ -190,21 +194,21 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 	}
 
 	// explain the operator information
-	showInstruction := func(instruction vm.Instruction, mp map[*process.WaitRegister]int) string {
-		id := instruction.Op
+	showOperator := func(op vm.Operator, mp map[*process.WaitRegister]int) string {
+		id := op.OpType()
 		name, ok := debugInstructionNames[id]
 		if ok {
 			str := name
 			if id == vm.Connector {
 				var receiver = "unknown"
-				arg := instruction.Arg.(*connector.Argument)
+				arg := op.(*connector.Connector)
 				if receiverId, okk := mp[arg.Reg]; okk {
 					receiver = fmt.Sprintf("%d", receiverId)
 				}
 				str += fmt.Sprintf(" to MergeReceiver %s", receiver)
 			}
 			if id == vm.Dispatch {
-				arg := instruction.Arg.(*dispatch.Argument)
+				arg := op.(*dispatch.Dispatch)
 				chs := ""
 				for i := range arg.LocalRegs {
 					if i != 0 {
@@ -233,7 +237,8 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 						if i != 0 {
 							remoteChs += ", "
 						}
-						remoteChs += fmt.Sprintf("[addr: %s, uuid %s]", reg.NodeAddr, reg.Uuid)
+						uuidStr := reg.Uuid.String()
+						remoteChs += fmt.Sprintf("[addr: %s(%s)]", reg.NodeAddr, uuidStr[len(uuidStr)-6:])
 					}
 					str += fmt.Sprintf(" cross-cn receiver info: %s", remoteChs)
 				}
@@ -250,13 +255,15 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 		if ss[i].Proc != nil {
 			receiverStr = getReceiverStr(ss[i], ss[i].Proc.Reg.MergeReceivers)
 		}
-		str += fmt.Sprintf("Scope %d (Magic: %s, Receiver: %s): [", i+1, magicShow(ss[i].Magic), receiverStr)
-		for j, instruction := range ss[i].Instructions {
-			if j != 0 {
+		str += fmt.Sprintf("Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s): [", i+1, magicShow(ss[i].Magic), ss[i].NodeInfo.Addr, ss[i].NodeInfo.Mcpu, receiverStr)
+		vm.HandleAllOp(ss[i].RootOp, func(parentOp vm.Operator, op vm.Operator) error {
+			if op.GetOperatorBase().NumChildren() != 0 {
 				str += " -> "
 			}
-			str += showInstruction(instruction, rmp)
-		}
+			str += showOperator(op, rmp)
+			return nil
+		})
+
 		str += "]"
 		if ss[i].DataSource != nil {
 			str += gapNextLine()

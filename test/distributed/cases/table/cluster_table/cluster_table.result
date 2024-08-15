@@ -93,7 +93,7 @@ name    data_type    maximum    minimum
 statement_id    VARCHAR(36)    null    null
 account    VARCHAR(300)    null    null
 response_at    DATETIME(0)    null    null
-cu    DECIMAL128(23)    null    null
+cu    DECIMAL(23)    null    null
 account_id    INT UNSIGNED(32)    null    null
 use mo_catalog;
 select * from cluster_table_1;
@@ -105,7 +105,7 @@ name    data_type    maximum    minimum
 statement_id    VARCHAR(36)    null    null
 account    VARCHAR(300)    null    null
 response_at    DATETIME(0)    null    null
-cu    DECIMAL128(23)    null    null
+cu    DECIMAL(23)    null    null
 account_id    INT UNSIGNED(32)    null    null
 insert into cluster_table_1 values(200,200, 0);
 insert into cluster_table_1 values(100,100, 0);

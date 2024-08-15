@@ -16,14 +16,13 @@ package dispatch
 
 import (
 	"context"
-	"hash/crc32"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -31,21 +30,17 @@ import (
 )
 
 // common sender: send to all LocalReceiver
-func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func sendToAllLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	var refCountAdd int64
 	var err error
+
 	if !ap.RecSink {
 		refCountAdd = int64(ap.ctr.localRegsCnt - 1)
 		atomic.AddInt64(&bat.Cnt, refCountAdd)
-		if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
-			jm.IncRef(refCountAdd)
-			jm.SetDupCount(int64(ap.ctr.localRegsCnt))
-		}
 	}
 	var bats []*batch.Batch
 	if ap.RecSink {
-		bats = append(bats, bat)
-		for k := 1; k < len(ap.LocalRegs); k++ {
+		for k := 1; k < len(ap.LocalRegs)+1; k++ {
 			bat, err = bat.Dup(proc.Mp())
 			if err != nil {
 				return false, err
@@ -78,7 +73,7 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 }
 
 // common sender: send to all RemoteReceiver
-func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	if !ap.ctr.prepared {
 		end, err := ap.waitRemoteRegsReady(proc)
 		if err != nil {
@@ -94,9 +89,21 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 		if errEncode != nil {
 			return false, errEncode
 		}
-		for _, r := range ap.ctr.remoteReceivers {
-			if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
+
+		for i := 0; i < len(ap.ctr.remoteReceivers); i++ {
+			remove, err := sendBatchToClientSession(proc.Ctx, encodeData, ap.ctr.remoteReceivers[i])
+			if err != nil {
 				return false, err
+			}
+
+			if remove {
+				ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers[:i], ap.ctr.remoteReceivers[i+1:]...)
+				ap.ctr.remoteRegsCnt--
+				ap.ctr.aliveRegCnt--
+				if ap.ctr.remoteRegsCnt == 0 {
+					return true, nil
+				}
+				i--
 			}
 		}
 	}
@@ -104,7 +111,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	return false, nil
 }
 
-func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) (err error) {
+func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIndex uint32) (err error) {
 	for i, reg := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if regIndex == batIndex {
@@ -134,8 +141,14 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 					err = errEncode
 					break
 				}
-				if err = sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
+				if remove, errSend := sendBatchToClientSession(proc.Ctx, encodeData, r); errSend != nil {
+					err = errSend
 					break
+				} else {
+					if remove {
+						err = moerr.NewInternalError(proc.Ctx, "dispatch remote receiver has been closed.")
+						break
+					}
 				}
 			}
 		}
@@ -148,7 +161,7 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 	return err
 }
 
-func sendBatToLocalMatchedReg(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
+func sendBatToLocalMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
 	localRegsCnt := uint32(ap.ctr.localRegsCnt)
 	for i, reg := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
@@ -169,7 +182,7 @@ func sendBatToLocalMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 	return nil
 }
 
-func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
+func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
 	localRegsCnt := uint32(ap.ctr.localRegsCnt)
 	atomic.AddInt64(&bat.Cnt, 1)
 	defer atomic.AddInt64(&bat.Cnt, -1)
@@ -197,8 +210,12 @@ func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 				if errEncode != nil {
 					return errEncode
 				}
-				if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
+				if remove, err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
 					return err
+				} else {
+					if remove {
+						return moerr.NewInternalError(proc.Ctx, "dispatch remote receiver has been closed.")
+					}
 				}
 			}
 		}
@@ -207,7 +224,7 @@ func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 }
 
 // shuffle to all receiver (include LocalReceiver and RemoteReceiver)
-func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func shuffleToAllFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	if !ap.ctr.prepared {
 		end, err := ap.waitRemoteRegsReady(proc)
 		if err != nil {
@@ -230,7 +247,7 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 }
 
 // send to all receiver (include LocalReceiver and RemoteReceiver)
-func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func sendToAllFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	end, remoteErr := sendToAllRemoteFunc(bat, ap, proc)
 	if remoteErr != nil || end {
 		return end, remoteErr
@@ -242,7 +259,7 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool,
 // common sender: send to any LocalReceiver
 // if the reg which you want to send to is closed
 // send it to next one.
-func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func sendToAnyLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	for {
 		sendto := ap.ctr.sendCnt % ap.ctr.localRegsCnt
 		reg := ap.LocalRegs[sendto]
@@ -268,7 +285,7 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 // common sender: send to any RemoteReceiver
 // if the reg which you want to send to is closed
 // send it to next one.
-func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	if !ap.ctr.prepared {
 		end, err := ap.waitRemoteRegsReady(proc)
 		if err != nil {
@@ -297,8 +314,10 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 		regIdx := ap.ctr.sendCnt % ap.ctr.remoteRegsCnt
 		reg := ap.ctr.remoteReceivers[regIdx]
 
-		if err := sendBatchToClientSession(proc.Ctx, encodeData, reg); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrStreamClosed) {
+		if remove, err := sendBatchToClientSession(proc.Ctx, encodeData, reg); err != nil {
+			return false, err
+		} else {
+			if remove {
 				ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers[:regIdx], ap.ctr.remoteReceivers[regIdx+1:]...)
 				ap.ctr.remoteRegsCnt--
 				ap.ctr.aliveRegCnt--
@@ -307,17 +326,16 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 				}
 				ap.ctr.sendCnt++
 				continue
-			} else {
-				return false, err
 			}
 		}
+
 		ap.ctr.sendCnt++
 		return false, nil
 	}
 }
 
 // Make sure enter this function LocalReceiver and RemoteReceiver are both not equal 0
-func sendToAnyFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func sendToAnyFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	toLocal := (ap.ctr.sendCnt % ap.ctr.aliveRegCnt) < ap.ctr.localRegsCnt
 	if toLocal {
 		allclosed, err := sendToAnyLocalFunc(bat, ap, proc)
@@ -343,8 +361,15 @@ func sendToAnyFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool,
 
 }
 
-func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs process.WrapCs) error {
-	checksum := crc32.ChecksumIEEE(encodeBatData)
+func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs *process.WrapCs) (receiverSafeDone bool, err error) {
+	wcs.Lock()
+	defer wcs.Unlock()
+
+	if wcs.ReceiverDone {
+		wcs.Err <- nil
+		return true, nil
+	}
+
 	if len(encodeBatData) <= maxMessageSizeToMoRpc {
 		msg := cnclient.AcquireMessage()
 		{
@@ -352,12 +377,11 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs pro
 			msg.Data = encodeBatData
 			msg.Cmd = pipeline.Method_BatchMessage
 			msg.Sid = pipeline.Status_Last
-			msg.Checksum = checksum
 		}
-		if err := wcs.Cs.Write(ctx, msg); err != nil {
-			return err
+		if err = wcs.Cs.Write(ctx, msg); err != nil {
+			return false, err
 		}
-		return nil
+		return false, nil
 	}
 
 	start := 0
@@ -374,25 +398,19 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs pro
 			msg.Data = encodeBatData[start:end]
 			msg.Cmd = pipeline.Method_BatchMessage
 			msg.Sid = sid
-			msg.Checksum = checksum
 		}
 
-		if err := wcs.Cs.Write(ctx, msg); err != nil {
-			return err
+		if err = wcs.Cs.Write(ctx, msg); err != nil {
+			return false, err
 		}
 		start = end
 	}
-	return nil
+	return false, nil
 }
 
 // success count is always no greater than refcnt
 func handleUnsent(proc *process.Process, bat *batch.Batch, refCnt int64, successCnt int64) {
 	diff := successCnt - refCnt
 	atomic.AddInt64(&bat.Cnt, diff)
-	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
-		jm.IncRef(diff)
-		jm.SetDupCount(diff)
-	}
-
 	proc.PutBatch(bat)
 }

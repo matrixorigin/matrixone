@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(LoopLeft)
 
 const (
 	Build = iota
@@ -35,8 +35,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state    int
 	probeIdx int
 	bat      *batch.Batch
@@ -47,54 +45,62 @@ type container struct {
 	cfs      []func(*vector.Vector, *vector.Vector, int64, int) error
 }
 
-type Argument struct {
-	ctr    *container
-	Typs   []types.Type
-	Cond   *plan.Expr
-	Result []colexec.ResultPos
+type LoopLeft struct {
+	ctr        *container
+	Typs       []types.Type
+	Cond       *plan.Expr
+	Result     []colexec.ResultPos
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (loopLeft *LoopLeft) GetOperatorBase() *vm.OperatorBase {
+	return &loopLeft.OperatorBase
 }
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[LoopLeft](
+		func() *LoopLeft {
+			return &LoopLeft{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *LoopLeft) {
+			*a = LoopLeft{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[LoopLeft]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (loopLeft LoopLeft) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *LoopLeft {
+	return reuse.Alloc[LoopLeft](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (loopLeft *LoopLeft) Release() {
+	if loopLeft != nil {
+		reuse.Free[LoopLeft](loopLeft, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (loopLeft *LoopLeft) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	loopLeft.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := arg.ctr; ctr != nil {
+func (loopLeft *LoopLeft) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if ctr := loopLeft.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
-		arg.ctr = nil
+		loopLeft.ctr = nil
+	}
+
+	if loopLeft.ProjectList != nil {
+		anal := proc.GetAnalyze(loopLeft.GetIdx(), loopLeft.GetParallelIdx(), loopLeft.GetParallelMajor())
+		anal.Alloc(loopLeft.ProjectAllocSize)
+		loopLeft.FreeProjection(proc)
 	}
 }
 

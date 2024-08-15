@@ -205,7 +205,7 @@ func (rpb *rangePartitionBuilder) buildAddPartition(ctx context.Context, partiti
 
 	//------------------------------------------------------------------------------------------------------------------
 	// Regenerate the syntax tree for the partition by clause
-	ast, err := mysql.ParseOne(ctx, "create table t1() "+partitionInfo.PartitionMsg, 1, 0)
+	ast, err := mysql.ParseOne(ctx, "create table t1() "+partitionInfo.PartitionMsg, 1)
 	if err != nil {
 		return err
 	}

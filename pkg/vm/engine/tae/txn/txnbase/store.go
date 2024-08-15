@@ -102,10 +102,10 @@ func (store *NoopTxnStore) GetObject(id *common.ID) (obj handle.Object, err erro
 	return
 }
 
-func (store *NoopTxnStore) CreateObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
+func (store *NoopTxnStore) CreateObject(dbId, tid uint64) (obj handle.Object, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ bool, _ *objectio.CreateObjOpt) (obj handle.Object, err error) {
+func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	return
 }
 func (store *NoopTxnStore) UpdateMetaLoc(id *common.ID, un objectio.Location) (err error) {
@@ -162,7 +162,7 @@ func (store *NoopTxnStore) HasCatalogChanges() bool                      { retur
 func (store *NoopTxnStore) ObserveTxn(
 	visitDatabase func(db any),
 	visitTable func(tbl any),
-	rotateTable func(dbName, tblName string, dbid, tid uint64),
+	rotateTable func(aid uint32, dbName, tblName string, dbid, tid uint64, pkSeqnum uint16),
 	visitMetadata func(block any),
 	visitObject func(any),
 	visitAppend func(bat any),

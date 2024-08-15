@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 func TestInsertIndexMetadata(t *testing.T) {
@@ -38,7 +39,7 @@ func TestInsertIndexMetadata(t *testing.T) {
 
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	proc := testutil.NewProc()
-	proc.TxnOperator = txnOperator
+	proc.Base.TxnOperator = txnOperator
 
 	mockEngine := mock_frontend.NewMockEngine(ctrl)
 	mockEngine.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -48,7 +49,7 @@ func TestInsertIndexMetadata(t *testing.T) {
 	mockEngine.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, txnOperator).Return(catalog_database, nil).AnyTimes()
 
 	indexes_relation := mock_frontend.NewMockRelation(ctrl)
-	indexes_relation.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	indexes_relation.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	indexes_relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	indexes_relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
@@ -78,7 +79,7 @@ func TestInsertIndexMetadata(t *testing.T) {
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 
-	indexes_relation.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
+	//indexes_relation.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
 	catalog_database.EXPECT().Relation(gomock.Any(), catalog.MO_INDEXES, gomock.Any()).Return(indexes_relation, nil).AnyTimes()
 	//---------------------------------------------------------------------------------------------------------------------------
 	mock_emp_Relation := mock_frontend.NewMockRelation(ctrl)
@@ -129,7 +130,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 
 	proc := testutil.NewProc()
-	proc.TxnOperator = txnOperator
+	proc.Base.TxnOperator = txnOperator
 
 	mockEngine := mock_frontend.NewMockEngine(ctrl)
 	mockEngine.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -140,7 +141,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	mockEngine.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, txnOperator).Return(catalog_database, nil).AnyTimes()
 
 	indexes_relation := mock_frontend.NewMockRelation(ctrl)
-	indexes_relation.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	indexes_relation.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	indexes_relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	indexes_relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
@@ -170,7 +171,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 
-	indexes_relation.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
+	//indexes_relation.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
 	catalog_database.EXPECT().Relation(gomock.Any(), catalog.MO_INDEXES, gomock.Any()).Return(indexes_relation, nil).AnyTimes()
 	//---------------------------------------------------------------------------------------------------------------------------
 

@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -613,7 +612,7 @@ func makeBetweenExprFromDateFormat(equalFunc *plan.Function, dateformatFunc *pla
 	if err != nil {
 		return nil
 	}
-	begin, err = ConstantFold(batch.EmptyForConstFoldBatch, begin, builder.compCtx.GetProcess(), false)
+	begin, err = ConstantFold(batch.EmptyForConstFoldBatch, begin, builder.compCtx.GetProcess(), false, true)
 	if err != nil {
 		return nil
 	}
@@ -851,11 +850,17 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.joinOrdering = value
 	case "forceOneCN":
 		builder.optimizerHints.forceOneCN = value
+	case "execType":
+		builder.optimizerHints.execType = value
+	case "disableRightJoin":
+		builder.optimizerHints.disableRightJoin = value
+	case "printShuffle":
+		builder.optimizerHints.printShuffle = value
 	}
 }
 
 func (builder *QueryBuilder) parseOptimizeHints() {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("optimizer_hints")
+	v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints")
 	if !ok {
 		return
 	}
@@ -866,5 +871,26 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 	kvs := strings.Split(str, ",")
 	for i := range kvs {
 		handleOptimizerHints(kvs[i], builder)
+	}
+}
+
+func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
+	rootID, _ = builder.pushdownFilters(rootID, nil, false)
+	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
+	builder.mergeFiltersOnCompositeKey(rootID)
+	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
+	builder.optimizeDateFormatExpr(rootID)
+	builder.optimizeLikeExpr(rootID)
+	ReCalcNodeStats(rootID, builder, false, true, true)
+	rewriteFilterListByStats(builder.GetContext(), rootID, builder)
+	return rootID
+}
+
+// plan for dml  don't go optimizer, which cause some problem, and this need refactoring
+// this is a temp solution to work around some bugs
+func (builder *QueryBuilder) tempOptimizeForDML() {
+	for _, rootID := range builder.qry.Steps {
+		ReCalcNodeStats(rootID, builder, true, false, true)
+		builder.handleHashMapMessages(rootID)
 	}
 }

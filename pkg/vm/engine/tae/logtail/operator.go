@@ -26,12 +26,10 @@ type BoundTableOperator struct {
 	visitor catalog.Processor
 	dbID    uint64
 	tableID uint64
-	scope   Scope
 }
 
 func NewBoundTableOperator(catalog *catalog.Catalog,
 	reader *Reader,
-	scope Scope,
 	dbID, tableID uint64,
 	visitor catalog.Processor) *BoundTableOperator {
 	return &BoundTableOperator{
@@ -40,23 +38,13 @@ func NewBoundTableOperator(catalog *catalog.Catalog,
 		visitor: visitor,
 		tableID: tableID,
 		dbID:    dbID,
-		scope:   scope,
 	}
 }
 
 // Run takes a RespBuilder to visit every table/Object/block touched by all txn
 // in the Reader. During the visiting, RespBuiler will fetch information to return logtail entry
 func (c *BoundTableOperator) Run() error {
-	switch c.scope {
-	case ScopeDatabases:
-		return c.processDatabases()
-	case ScopeTables, ScopeColumns:
-		return c.processTables()
-	case ScopeUserTables:
-		return c.processTableData()
-	default:
-		panic("unknown logtail collect scope")
-	}
+	return c.processTableData()
 }
 
 // For normal user table, pick out all dirty blocks and call OnBlock
@@ -88,43 +76,6 @@ func (c *BoundTableOperator) processTableData() error {
 		err = c.visitor.OnTombstone(deletes)
 		if err != nil {
 			return err
-		}
-	}
-	return nil
-}
-
-// For mo_database, iterate over all database and call OnBlock.
-// TODO: avoid iterating all. For now it is acceptable because all catalog is in
-// memory and ddl is much smaller than dml
-func (c *BoundTableOperator) processDatabases() error {
-	if !c.reader.HasCatalogChanges() {
-		return nil
-	}
-	dbIt := c.catalog.MakeDBIt(true)
-	for ; dbIt.Valid(); dbIt.Next() {
-		dbentry := dbIt.Get().GetPayload()
-		if err := c.visitor.OnDatabase(dbentry); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// For mo_table and mo_columns, iterate over all tables and call OnTable
-// TODO: avoid iterating all. For now it is acceptable because all catalog is in
-// memory and ddl is much smaller than dml
-func (c *BoundTableOperator) processTables() error {
-	if !c.reader.HasCatalogChanges() {
-		return nil
-	}
-	dbIt := c.catalog.MakeDBIt(true)
-	for ; dbIt.Valid(); dbIt.Next() {
-		db := dbIt.Get().GetPayload()
-		tblIt := db.MakeTableIt(true)
-		for ; tblIt.Valid(); tblIt.Next() {
-			if err := c.visitor.OnTable(tblIt.Get().GetPayload()); err != nil {
-				return err
-			}
 		}
 	}
 	return nil

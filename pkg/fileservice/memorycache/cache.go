@@ -16,76 +16,77 @@ package memorycache
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache"
 	cache "github.com/matrixorigin/matrixone/pkg/pb/query"
 )
 
+type Cache struct {
+	size      atomic.Int64
+	l         *lrucache.LRU[cache.CacheKey, *Data]
+	allocator malloc.Allocator
+}
+
 func NewCache(
-	capacity int64,
-	postSet func(key cache.CacheKey, value CacheData),
-	postGet func(key cache.CacheKey, value CacheData),
-	postEvict func(key cache.CacheKey, value CacheData),
+	capacity fscache.CapacityFunc,
+	postSet func(key cache.CacheKey, value fscache.Data),
+	postGet func(key cache.CacheKey, value fscache.Data),
+	postEvict func(key cache.CacheKey, value fscache.Data),
 	allocator malloc.Allocator,
 ) *Cache {
-	var c Cache
+
+	c := &Cache{
+		allocator: allocator,
+	}
 
 	setFunc := func(key cache.CacheKey, value *Data) {
-		var r RCBytes
-
 		value.acquire()
 		if postSet != nil {
-			r.d = value
-			r.size = &c.size
-			postSet(key, r)
+			postSet(key, value)
 		}
 	}
-	getFunc := func(key cache.CacheKey, value *Data) {
-		var r RCBytes
 
+	getFunc := func(key cache.CacheKey, value *Data) {
 		value.acquire()
 		if postGet != nil {
-			r.d = value
-			r.size = &c.size
-			postGet(key, r)
+			postGet(key, value)
 		}
 	}
+
 	evictFunc := func(key cache.CacheKey, value *Data) {
-		var r RCBytes
-
-		value.release(&c.size)
+		value.Release()
 		if postEvict != nil {
-			r.d = value
-			r.size = &c.size
-			postEvict(key, r)
+			postEvict(key, value)
 		}
 	}
+
 	c.l = lrucache.New(capacity, setFunc, getFunc, evictFunc)
-	c.allocator = allocator
-	return &c
+
+	return c
 }
 
-func (c *Cache) Alloc(n int) CacheData {
-	d := newData(c.allocator, n, &c.size)
-	return RCBytes{d: d, size: &c.size}
+func (c *Cache) Alloc(n int) fscache.Data {
+	c.l.EnsureNBytes(n)
+	data := newData(c.allocator, n, &c.size)
+	return data
 }
 
-func (c *Cache) Get(ctx context.Context, key cache.CacheKey) (CacheData, bool) {
-	var r RCBytes
+func (c *Cache) Get(ctx context.Context, key cache.CacheKey) (fscache.Data, bool) {
+	return c.l.Get(ctx, key)
+}
 
-	v, ok := c.l.Get(ctx, key)
-	if ok { // find the value, set the value to the return value
-		r.d = v
-		r.size = &c.size
+func (c *Cache) Set(ctx context.Context, key cache.CacheKey, value fscache.Data) error {
+	data := value.(*Data)
+	// freeze
+	var freeze malloc.Freezer
+	if data.deallocator.As(&freeze) {
+		freeze.Freeze()
 	}
-	return r, ok
-}
-
-func (c *Cache) Set(ctx context.Context, key cache.CacheKey, value CacheData) error {
-	if r, ok := value.(RCBytes); ok {
-		c.l.Set(ctx, key, r.d)
-	}
+	// set
+	c.l.Set(ctx, key, data)
 	return nil
 }
 

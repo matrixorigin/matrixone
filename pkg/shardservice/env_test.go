@@ -24,19 +24,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap/zapcore"
+)
+
+var (
+	sid = ""
 )
 
 func TestHasCN(t *testing.T) {
 	initTestCluster("cn1")
-	e := NewEnv("")
+	e := NewEnv(sid, "")
 	require.True(t, e.HasCN("cn1"))
 	require.False(t, e.HasCN("cn2"))
 }
 
 func TestAvailable(t *testing.T) {
 	initTestCluster("cn1:tenant:1,cn2:tenant:2,cn3")
-	e := NewEnv("tenant")
+	e := NewEnv(sid, "tenant")
 	require.True(t, e.Available(1, "cn1"))
 	require.False(t, e.Available(2, "cn1"))
 	require.False(t, e.Available(1, "cn2"))
@@ -46,10 +49,15 @@ func TestAvailable(t *testing.T) {
 func initTestCluster(
 	services string,
 ) ([]metadata.CNService, metadata.TNService) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntimeWithLevel(zapcore.InfoLevel))
+	runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
 	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	cnInfo := strings.Split(services, ",")
 	cns := make([]metadata.CNService, 0, len(cnInfo))
+	tn := metadata.TNService{
+		ServiceID:           "tn",
+		ShardServiceAddress: testSockets,
+	}
+	runtime.SetupServiceBasedRuntime(tn.ServiceID, runtime.ServiceRuntime(sid))
 	for _, info := range cnInfo {
 		cn := metadata.CNService{}
 		if !strings.Contains(info, ":") {
@@ -64,21 +72,21 @@ func initTestCluster(
 			time.Now().Nanosecond(), cn.ServiceID)
 
 		cns = append(cns, cn)
+
+		runtime.SetupServiceBasedRuntime(cn.ServiceID, runtime.ServiceRuntime(sid))
 	}
 
-	tn := metadata.TNService{
-		ServiceID:           "tn",
-		ShardServiceAddress: testSockets,
-	}
-	cluster := clusterservice.NewMOCluster(
-		nil,
-		0,
-		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices(
-			cns,
-			[]metadata.TNService{tn},
-		),
-	)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
+	runtime.ServiceRuntime(sid).SetGlobalVariables(
+		runtime.ClusterService,
+		clusterservice.NewMOCluster(
+			sid,
+			nil,
+			0,
+			clusterservice.WithDisableRefresh(),
+			clusterservice.WithServices(
+				cns,
+				[]metadata.TNService{tn},
+			),
+		))
 	return cns, tn
 }

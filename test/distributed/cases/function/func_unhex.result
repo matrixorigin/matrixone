@@ -8,11 +8,11 @@ SELECT unhex('');
 unhex()
 
 SELECT unhex(NULL);
-unhex(NULL)
-NULL
+unhex(null)
+null
 SELECT unhex('invalid');
 unhex(invalid)
-NULL
+null
 SELECT hex(unhex('616263'));
 hex(unhex(616263))
 616263

@@ -125,14 +125,11 @@ func (interpreter *Interpreter) GetSimpleExprValueWithSpVar(e tree.Expr) (interf
 	if err != nil {
 		return nil, err
 	}
-	retStmt, err := parsers.ParseOne(interpreter.ctx, dialect.MYSQL, "select "+interpreter.GetExprString(newExpr), 1, 0)
+	retStmt, err := parsers.ParseOne(interpreter.ctx, dialect.MYSQL, "select "+interpreter.GetExprString(newExpr), 1)
 	if err != nil {
 		return nil, err
 	}
 	retExpr := retStmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
-	if err != nil {
-		return nil, err
-	}
 	return GetSimpleExprValue(interpreter.ctx, retExpr, interpreter.ses)
 }
 
@@ -185,16 +182,16 @@ func (interpreter *Interpreter) MatchExpr(expr tree.Expr) (tree.Expr, error) {
 	case *tree.FuncExpr:
 	case *tree.UnresolvedName:
 		// change column name to var name
-		val, err := interpreter.GetSpVar(e.Parts[0])
+		val, err := interpreter.GetSpVar(e.ColName())
 		if err != nil {
 			return nil, err
 		}
 		retName := &tree.UnresolvedName{
-			NumParts: e.NumParts,
-			Star:     e.Star,
-			Parts:    e.Parts,
+			NumParts:  e.NumParts,
+			Star:      e.Star,
+			CStrParts: e.CStrParts,
 		}
-		retName.Parts[0] = fmt.Sprintf("%v", val)
+		retName.CStrParts[0] = tree.NewCStr(fmt.Sprintf("%v", val), 1)
 		return retName, nil
 	default:
 		return e, nil

@@ -48,7 +48,7 @@ func newOpBuiltInRegexp() *opBuiltInRegexp {
 	}
 }
 
-func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
@@ -65,10 +65,10 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return op.regMap.regularMatchForLikeOp(v2, v1)
-	})
+	}, selectList)
 }
 
-func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
@@ -85,7 +85,7 @@ func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.Fu
 
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return op.regMap.regularMatchForLikeOp(bytes.ToLower(v2), bytes.ToLower(v1))
-	})
+	}, selectList)
 }
 
 func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], rs *vector.FunctionResult[bool], length int,
@@ -280,27 +280,27 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 	return false, nil
 }
 
-func (op *opBuiltInRegexp) builtInRegMatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opBuiltInRegexp) builtInRegMatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryStrStrToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 string) (bool, error) {
 		reg, err := op.regMap.getRegularMatcher(v2)
 		if err != nil {
 			return false, err
 		}
 		return reg.MatchString(v1), nil
-	})
+	}, selectList)
 }
 
-func (op *opBuiltInRegexp) builtInNotRegMatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opBuiltInRegexp) builtInNotRegMatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryStrStrToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 string) (bool, error) {
 		reg, err := op.regMap.getRegularMatcher(v2)
 		if err != nil {
 			return false, err
 		}
 		return !reg.MatchString(v1), nil
-	})
+	}, selectList)
 }
 
-func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -377,7 +377,7 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 	return nil
 }
 
-func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -386,7 +386,7 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 	case 2:
 		return opBinaryStrStrToFixedWithErrorCheck[int64](parameters, result, proc, length, func(v1, v2 string) (int64, error) {
 			return op.regMap.regularInstr(v2, v1, 1, 1, 0)
-		})
+		}, selectList)
 
 	case 3:
 		positions := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
@@ -464,7 +464,7 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 	return nil
 }
 
-func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
@@ -473,7 +473,7 @@ func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result
 		return opBinaryStrStrToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 string) (bool, error) {
 			match, err := op.regMap.regularLike(v2, v1, "c")
 			return match, err
-		})
+		}, selectList)
 	} else if len(parameters) == 3 {
 		if parameters[2].IsConstNull() {
 			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
@@ -503,7 +503,7 @@ func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result
 	return nil
 }
 
-func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0]) // expr
 	p2 := vector.GenerateFunctionStrParameter(parameters[1]) // pat
 	p3 := vector.GenerateFunctionStrParameter(parameters[2]) // repl

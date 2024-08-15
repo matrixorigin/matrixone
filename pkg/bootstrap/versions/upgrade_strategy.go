@@ -132,7 +132,7 @@ type UpgradeEntry struct {
 func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error {
 	exist, err := u.CheckFunc(txn, accountId)
 	if err != nil {
-		getLogger().Error("execute upgrade entry check error", zap.Error(err), zap.String("upgrade entry", u.String()))
+		getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry check error", zap.Error(err), zap.String("upgrade entry", u.String()))
 		return err
 	}
 
@@ -143,7 +143,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		if u.PreSql != "" {
 			res, err := txn.Exec(u.PreSql, executor.StatementOption{}.WithAccountID(accountId))
 			if err != nil {
-				getLogger().Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
+				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 				return err
 			}
 			res.Close()
@@ -152,7 +152,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		// 2. Second, Execute upgrade sql
 		res, err := txn.Exec(u.UpgSql, executor.StatementOption{}.WithAccountID(accountId))
 		if err != nil {
-			getLogger().Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
+			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 			return err
 		}
 		res.Close()
@@ -161,7 +161,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		if u.PostSql != "" {
 			res, err = txn.Exec(u.PostSql, executor.StatementOption{}.WithAccountID(accountId))
 			if err != nil {
-				getLogger().Error("execute upgrade entry post-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
+				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry post-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 				return err
 			}
 			res.Close()

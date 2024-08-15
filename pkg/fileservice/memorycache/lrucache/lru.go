@@ -20,11 +20,11 @@ import (
 	"sync/atomic"
 
 	"github.com/dolthub/maphash"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache/internal/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
 func New[K comparable, V BytesLike](
-	capacity int64,
+	capacity fscache.CapacityFunc,
 	postSet func(keySet K, valSet V),
 	postGet func(key K, value V),
 	postEvict func(keyEvicted K, valEvicted V),
@@ -63,28 +63,27 @@ func New[K comparable, V BytesLike](
 		l.shards[i].postGet = postGet
 		l.shards[i].postEvict = postEvict
 		l.shards[i].evicts = newList[K, V]()
-		l.shards[i].capacity = capacity / int64(len(l.shards))
-		if l.shards[i].capacity < 1 {
-			l.shards[i].capacity = 1
+		l.shards[i].capacity = func() int64 {
+			ret := capacity() / int64(len(l.shards))
+			if ret < 1 {
+				ret = 1
+			}
+			return ret
 		}
-		l.shards[i].kv = hashmap.New[K, lruItem[K, V]](0)
+		l.shards[i].kv = make(map[K]*lruItem[K, V])
 	}
 	return &l
 }
 
 func (l *LRU[K, V]) Set(ctx context.Context, key K, value V) {
-	var s *shard[K, V]
-
 	h := l.hash(key)
-	s = &l.shards[h%uint64(len(l.shards))]
-	s.Set(ctx, h, key, value)
+	s := &l.shards[h%uint64(len(l.shards))]
+	s.Set(ctx, key, value)
 }
 
 func (l *LRU[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
-	var s *shard[K, V]
-
 	h := l.hash(key)
-	s = &l.shards[h%uint64(len(l.shards))]
+	s := &l.shards[h%uint64(len(l.shards))]
 	return s.Get(ctx, h, key)
 }
 
@@ -99,7 +98,7 @@ func (l *LRU[K, V]) DeletePaths(ctx context.Context, paths []string) {
 }
 
 func (l *LRU[K, V]) Capacity() int64 {
-	return l.capacity
+	return l.capacity()
 }
 
 func (l *LRU[K, V]) Used() int64 {
@@ -107,9 +106,22 @@ func (l *LRU[K, V]) Used() int64 {
 }
 
 func (l *LRU[K, V]) Available() int64 {
-	return l.capacity - atomic.LoadInt64(&l.size)
+	return l.capacity() - atomic.LoadInt64(&l.size)
 }
 
 func (l *LRU[K, V]) hash(k K) uint64 {
 	return l.hasher.Hash(k)
+}
+
+func (l *LRU[K, V]) EnsureNBytes(n int) {
+	want := int64(n * 2)
+	for {
+		for i := 0; i < len(l.shards); i++ {
+			if l.Available() > want {
+				return
+			}
+			shard := &l.shards[i]
+			shard.evictOne()
+		}
+	}
 }

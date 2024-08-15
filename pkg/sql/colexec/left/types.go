@@ -15,7 +15,6 @@
 package left
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,10 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(LeftJoin)
 
 const (
 	Build = iota
@@ -40,14 +40,11 @@ type evalVector struct {
 }
 
 type container struct {
-	colexec.ReceiverOperator
-
-	state int
-
-	inBuckets []uint8
+	state   int
+	lastrow int
 
 	batches       []*batch.Batch
-	batchRowCount int
+	batchRowCount int64
 	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
@@ -61,80 +58,87 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *hashmap.JoinMap
+	mp *message.JoinMap
 
 	maxAllocSize int64
+	bat          *batch.Batch
 }
 
-type Argument struct {
+type LeftJoin struct {
 	ctr        *container
 	Result     []colexec.ResultPos
 	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
-	bat        *batch.Batch
-	lastrow    int
 
 	HashOnPK           bool
 	IsShuffle          bool
+	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+	JoinMapTag         int32
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (leftJoin *LeftJoin) GetOperatorBase() *vm.OperatorBase {
+	return &leftJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[LeftJoin](
+		func() *LeftJoin {
+			return &LeftJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *LeftJoin) {
+			*a = LeftJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[LeftJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (leftJoin LeftJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *LeftJoin {
+	return reuse.Alloc[LeftJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (leftJoin *LeftJoin) Release() {
+	if leftJoin != nil {
+		reuse.Free[LeftJoin](leftJoin, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (leftJoin *LeftJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	leftJoin.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := leftJoin.ctr
+	anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
+	allocSize := int64(0)
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.cleanEvalVectors()
-		ctr.FreeAllReg()
 
-		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
+		allocSize += ctr.maxAllocSize
 
-		arg.ctr = nil
+		if leftJoin.ctr.bat != nil {
+			leftJoin.ctr.bat = nil
+		}
+		leftJoin.ctr.lastrow = 0
+		leftJoin.ctr = nil
 	}
-	if arg.bat != nil {
-		proc.PutBatch(arg.bat)
-		arg.bat = nil
+	if leftJoin.ProjectList != nil {
+		allocSize += leftJoin.ProjectAllocSize
+		leftJoin.FreeProjection(proc)
 	}
+	anal.Alloc(allocSize)
 }
 
 func (ctr *container) cleanExprExecutor() {
@@ -145,9 +149,6 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
-	for i := range ctr.batches {
-		proc.PutBatch(ctr.batches[i])
-	}
 	ctr.batches = nil
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)

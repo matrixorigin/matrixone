@@ -100,7 +100,7 @@ func main() {
 		morun.WithClock(clock.NewHLCClock(func() int64 {
 			return time.Now().UTC().UnixNano()
 		}, 0)))
-	morun.SetupProcessLevelRuntime(dr)
+	morun.SetupServiceBasedRuntime("", dr)
 	err, _ = motrace.Init(ctx, motrace.EnableTracer(true))
 	if err != nil {
 		panic(err)
@@ -122,7 +122,7 @@ func mergeAll(ctx context.Context, fs *fileservice.LocalETLFS) {
 	defer span.End()
 	var err error
 	var merge *export.Merge
-	merge, err = export.NewMerge(ctx, export.WithTable(motrace.SingleStatementTable), export.WithFileService(fs))
+	merge, err = export.NewMerge(ctx, "", export.WithTable(motrace.SingleStatementTable), export.WithFileService(fs))
 	if err != nil {
 		logutil.Infof("[%v] failed to NewMerge: %v", "All", err)
 	}
@@ -141,7 +141,7 @@ func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *table.Ta
 	var err error
 	ctx, span := trace.Start(ctx, "mergeTable")
 	defer span.End()
-	merge, err := export.NewMerge(ctx, export.WithTable(table), export.WithFileService(fs))
+	merge, err := export.NewMerge(ctx, "", export.WithTable(table), export.WithFileService(fs))
 	logutil.Infof("[%v] create merge task, err: %v", table.GetName(), err)
 	ts, err := time.Parse("2006-01-02 15:04:05", "2023-01-03 00:00:00")
 	logutil.Infof("[%v] create ts: %v, err: %v", table.GetName(), ts, err)

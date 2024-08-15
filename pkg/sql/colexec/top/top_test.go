@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -37,7 +38,7 @@ const (
 
 // add unit tests for cases
 type topTestCase struct {
-	arg   *Argument
+	arg   *Top
 	types []types.Type
 	proc  *process.Process
 }
@@ -94,7 +95,7 @@ func TestTop(t *testing.T) {
 		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -119,7 +120,7 @@ func BenchmarkTop(b *testing.B) {
 			_, _ = tc.arg.Call(tc.proc)
 			tc.arg.Free(tc.proc, false, nil)
 			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-			tc.proc.FreeVectors()
+			tc.proc.Free()
 		}
 	}
 }
@@ -127,10 +128,10 @@ func BenchmarkTop(b *testing.B) {
 func newTestCase(m *mpool.MPool, ts []types.Type, limit int64, fs []*plan.OrderBySpec) topTestCase {
 	return topTestCase{
 		types: ts,
-		proc:  testutil.NewProcessWithMPool(m),
-		arg: &Argument{
+		proc:  testutil.NewProcessWithMPool("", m),
+		arg: &Top{
 			Fs:    fs,
-			Limit: plan2.MakePlan2Int64ConstExprWithType(limit),
+			Limit: plan2.MakePlan2Uint64ConstExprWithType(uint64(limit)),
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
@@ -158,11 +159,13 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
+func resetChildren(arg *Top, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: bats,
-			},
+			valueScanArg,
 		})
 }

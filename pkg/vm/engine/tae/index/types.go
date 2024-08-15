@@ -24,6 +24,7 @@ import (
 var (
 	ErrNotFound  = moerr.NewInternalErrorNoCtx("tae index: key not found")
 	ErrDuplicate = moerr.NewInternalErrorNoCtx("tae index: key duplicate")
+	ErrPrefix    = moerr.NewInternalErrorNoCtx("tae index: prefix filter error")
 )
 
 const (
@@ -31,6 +32,11 @@ const (
 	PBF
 	HBF
 )
+
+type PrefixFn struct {
+	Id uint8
+	Fn func([]byte) []byte
+}
 
 type SecondaryIndex interface {
 	Insert(key []byte, offset uint32) (err error)

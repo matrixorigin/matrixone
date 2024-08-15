@@ -38,6 +38,7 @@ type tableCache struct {
 
 func newTableCache(
 	ctx context.Context,
+	sid string,
 	tableID uint64,
 	cols []AutoColumn,
 	cfg Config,
@@ -45,7 +46,7 @@ func newTableCache(
 	txnOp client.TxnOperator,
 	committed bool) (incrTableCache, error) {
 	c := &tableCache{
-		logger:  getLogger(),
+		logger:  getLogger(sid).Named("incrservice"),
 		tableID: tableID,
 		cols:    cols,
 	}
@@ -55,12 +56,14 @@ func newTableCache(
 	for _, col := range cols {
 		cc, err := newColumnCache(
 			ctx,
+			sid,
 			tableID,
 			col,
 			cfg,
 			committed,
 			allocator,
-			txnOp)
+			txnOp,
+		)
 		if err != nil {
 			return nil, err
 		}

@@ -32,29 +32,29 @@ func GetGlobalSeqNum() uint64 {
 	return GlobalSeqNum.Load()
 }
 
-type IdAlloctor struct {
+type IdAllocator struct {
 	id atomic.Uint64
 }
 
-func NewIdAlloctor(from uint64) *IdAlloctor {
+func NewIdAllocator(from uint64) *IdAllocator {
 	if from == 0 {
 		panic("should not be 0")
 	}
 
-	alloc := &IdAlloctor{}
+	alloc := &IdAllocator{}
 	alloc.id.Store(from - 1)
 	return alloc
 }
 
-func (alloc *IdAlloctor) Alloc() uint64 {
+func (alloc *IdAllocator) Alloc() uint64 {
 	return alloc.id.Add(1)
 }
 
-func (alloc *IdAlloctor) Get() uint64 {
+func (alloc *IdAllocator) Get() uint64 {
 	return alloc.id.Load()
 }
 
-func (alloc *IdAlloctor) SetStart(start uint64) {
+func (alloc *IdAllocator) SetStart(start uint64) {
 	alloc.id.Store(start)
 }
 

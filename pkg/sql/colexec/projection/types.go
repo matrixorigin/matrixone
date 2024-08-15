@@ -24,71 +24,72 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Projection)
 
-type Argument struct {
-	ctr *container
-	Es  []*plan.Expr
-	buf *batch.Batch
+type Projection struct {
+	ctr         *container
+	ProjectList []*plan.Expr
 	vm.OperatorBase
 
 	maxAllocSize int
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (projection *Projection) GetOperatorBase() *vm.OperatorBase {
+	return &projection.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Projection](
+		func() *Projection {
+			return &Projection{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Projection) {
+			*a = Projection{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Projection]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (projection Projection) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Projection {
+	return reuse.Alloc[Projection](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (projection *Projection) Release() {
+	if projection != nil {
+		reuse.Free[Projection](projection, nil)
 	}
 }
 
 type container struct {
+	buf           *batch.Batch
 	projExecutors []colexec.ExpressionExecutor
 	uafs          []func(v, w *vector.Vector) error // vector.GetUnionAllFunction
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	projection.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		for i := range arg.ctr.projExecutors {
-			if arg.ctr.projExecutors[i] != nil {
-				arg.ctr.projExecutors[i].Free()
+func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if projection.ctr != nil {
+		for i := range projection.ctr.projExecutors {
+			if projection.ctr.projExecutors[i] != nil {
+				projection.ctr.projExecutors[i].Free()
 			}
 		}
-		arg.ctr.projExecutors = nil
-		arg.ctr = nil
+		projection.ctr.projExecutors = nil
+		if projection.ctr.buf != nil {
+			projection.ctr.buf.Clean(proc.Mp())
+			projection.ctr.buf = nil
+		}
+		projection.ctr = nil
 	}
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
-	}
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Alloc(int64(arg.maxAllocSize))
+
+	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
+	anal.Alloc(int64(projection.maxAllocSize))
 }

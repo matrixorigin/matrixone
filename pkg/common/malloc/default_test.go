@@ -20,20 +20,20 @@ import (
 
 func TestDefaultAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
-		return NewDefault(nil)
+		return GetDefault(nil)
 	})
 }
 
 func BenchmarkDefaultAllocator(b *testing.B) {
 	for _, n := range benchNs {
 		benchmarkAllocator(b, func() Allocator {
-			return NewDefault(nil)
+			return GetDefault(nil)
 		}, n)
 	}
 }
 
 func FuzzDefaultAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
-		return NewDefault(nil)
+		return GetDefault(nil)
 	})
 }

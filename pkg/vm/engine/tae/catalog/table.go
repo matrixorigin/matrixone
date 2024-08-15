@@ -46,12 +46,12 @@ func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn 
 type TableEntry struct {
 	*BaseEntryImpl[*TableMVCCNode]
 	*TableNode
-	Stats   *common.TableCompactStat
-	ID      uint64
-	db      *DBEntry
-	entries map[types.Objectid]*common.GenericDLNode[*ObjectEntry]
+	Stats *common.TableCompactStat
+	ID    uint64
+	db    *DBEntry
+	// entries map[types.Objectid]*ObjectListNode
 	//link.head and link.tail is nil when create tableEntry object.
-	link      *common.GenericSortedDList[*ObjectEntry]
+	link      *ObjectList
 	tableData data.Table
 	rows      atomic.Uint64
 	// used for the next flush table tail.
@@ -97,10 +97,10 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 		ID: tableId,
 		BaseEntryImpl: NewBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		db:         db,
-		TableNode:  &TableNode{},
-		link:       common.NewGenericSortedDList((*ObjectEntry).Less),
-		entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		db:        db,
+		TableNode: &TableNode{},
+		link:      NewObjectList(),
+		// entries:    make(map[types.Objectid]*ObjectListNode),
 		deleteList: btree.NewBTreeGOptions(DeleteEntry.Less, opts),
 		Stats:      common.NewTableCompactStat(),
 	}
@@ -120,21 +120,9 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e.TableNode.schema.Store(schema)
 	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{Schema: schema})
 
-	var sid types.Uuid
-	if schema.Name == SystemDBSchema.Name {
-		if DefaultTableDataFactory != nil {
-			e.tableData = DefaultTableDataFactory(e) // TODO(aptend): add data handle
-		}
-		sid = SystemObject_DB_ID
-	} else if schema.Name == SystemTableSchema.Name {
-		sid = SystemObject_Table_ID
-	} else if schema.Name == SystemColumnSchema.Name {
-		sid = SystemObject_Columns_ID
-	} else {
-		panic("not supported")
+	if DefaultTableDataFactory != nil {
+		e.tableData = DefaultTableDataFactory(e)
 	}
-	objectEntry := NewSysObjectEntry(e, sid)
-	e.AddEntryLocked(objectEntry)
 	return e
 }
 
@@ -144,11 +132,11 @@ func NewReplayTableEntry() *TableEntry {
 	}
 	e := &TableEntry{
 		BaseEntryImpl: NewBaseEntry(func() *TableMVCCNode { return &TableMVCCNode{} }),
-		link:          common.NewGenericSortedDList((*ObjectEntry).Less),
+		link:          NewObjectList(),
 		TableNode:     &TableNode{},
-		entries:       make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
-		deleteList:    btree.NewBTreeGOptions(DeleteEntry.Less, opts),
-		Stats:         common.NewTableCompactStat(),
+		// entries:       make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		deleteList: btree.NewBTreeGOptions(DeleteEntry.Less, opts),
+		Stats:      common.NewTableCompactStat(),
 	}
 	return e
 }
@@ -163,9 +151,9 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		TableNode:  node,
-		link:       common.NewGenericSortedDList((*ObjectEntry).Less),
-		entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		TableNode: node,
+		link:      NewObjectList(),
+		// entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
 		deleteList: btree.NewBTreeGOptions(DeleteEntry.Less, opts),
 		Stats:      common.NewTableCompactStat(),
 	}
@@ -181,7 +169,7 @@ func (entry *TableEntry) GetDeleteList() *btree.BTreeG[DeleteEntry] {
 }
 func (entry *TableEntry) TryGetTombstone(oid objectio.ObjectId) data.Tombstone {
 	pivot := DeleteEntry{ObjectID: oid}
-	tombstone, ok := entry.deleteList.Get(pivot)
+	tombstone, ok := entry.deleteList.Copy().Get(pivot)
 	if !ok {
 		return nil
 	}
@@ -189,8 +177,8 @@ func (entry *TableEntry) TryGetTombstone(oid objectio.ObjectId) data.Tombstone {
 }
 
 func (entry *TableEntry) GetOrCreateTombstone(obj *ObjectEntry, factory TombstoneFactory) data.Tombstone {
-	pivot := DeleteEntry{ObjectID: obj.ID}
-	delete, ok := entry.deleteList.Get(pivot)
+	pivot := DeleteEntry{ObjectID: *obj.ID()}
+	delete, ok := entry.deleteList.Copy().Get(pivot)
 	if ok {
 		return delete.Tombstone
 	}
@@ -223,35 +211,11 @@ func (entry *TableEntry) RemoveRows(delta uint64) uint64 {
 }
 
 func (entry *TableEntry) GetObjectByID(id *types.Objectid) (obj *ObjectEntry, err error) {
-	entry.RLock()
-	defer entry.RUnlock()
-	node := entry.entries[*id]
-	if node == nil {
-		return nil, moerr.GetOkExpectedEOB()
-	}
-	return node.GetPayload(), nil
-}
-func (entry *TableEntry) GetObjectsByID(id *types.Segmentid) (obj []*ObjectEntry, err error) {
-	entry.RLock()
-	defer entry.RUnlock()
-	for nodeID, node := range entry.entries {
-		if nodeID.Segment().Eq(*id) {
-			if obj == nil {
-				obj = make([]*ObjectEntry, 0)
-			}
-			obj = append(obj, node.GetPayload())
-		}
-	}
-	if obj == nil {
-		return nil, moerr.GetOkExpectedEOB()
-	}
-	return obj, nil
+	return entry.link.GetObjectByID(id)
 }
 
-func (entry *TableEntry) MakeObjectIt(reverse bool) *common.GenericSortedDListIt[*ObjectEntry] {
-	entry.RLock()
-	defer entry.RUnlock()
-	return common.NewGenericSortedDListIt(entry.RWMutex, entry.link, reverse)
+func (entry *TableEntry) MakeObjectIt(reverse bool) btree.IterG[*ObjectEntry] {
+	return entry.link.tree.Load().Iter()
 }
 
 func (entry *TableEntry) CreateObject(
@@ -279,25 +243,12 @@ func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	defer entry.RUnlock()
 	return newTableCmd(id, cmdType, entry), nil
 }
-
-func (entry *TableEntry) Set1PC() {
-	entry.GetLatestNodeLocked().Set1PC()
-}
-func (entry *TableEntry) Is1PC() bool {
-	return entry.GetLatestNodeLocked().Is1PC()
-}
-func (entry *TableEntry) AddEntryLocked(objectEntry *ObjectEntry) {
-	n := entry.link.Insert(objectEntry)
-	entry.entries[objectEntry.ID] = n
+func (entry *TableEntry) AddEntryLocked(obj *ObjectEntry) {
+	entry.link.Set(obj, true)
 }
 
 func (entry *TableEntry) deleteEntryLocked(objectEntry *ObjectEntry) error {
-	if n, ok := entry.entries[objectEntry.ID]; !ok {
-		return moerr.GetOkExpectedEOB()
-	} else {
-		entry.link.Delete(n)
-		delete(entry.entries, objectEntry.ID)
-	}
+	entry.link.deleteEntryLocked(objectEntry.SortHint)
 	return nil
 }
 
@@ -363,11 +314,11 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 		return w.String()
 	}
 	it := entry.MakeObjectIt(true)
-	for it.Valid() {
-		objectEntry := it.Get().GetPayload()
+	defer it.Release()
+	for it.Next() {
+		objectEntry := it.Item()
 		_ = w.WriteByte('\n')
 		_, _ = w.WriteString(objectEntry.PPString(level, depth+1, prefix))
-		it.Next()
 	}
 	if level > common.PPL2 {
 		_ = w.WriteByte('\n')
@@ -377,9 +328,7 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 			w.WriteString(prefix)
 			objID := it2.Item().ObjectID
 			w.WriteString(fmt.Sprintf("Tombstone[%s]\n", objID.String()))
-			it2.Item().GetObject().(*ObjectEntry).RLock()
-			w.WriteString(it2.Item().StringLocked(level, depth+1, prefix))
-			it2.Item().GetObject().(*ObjectEntry).RUnlock()
+			w.WriteString(it2.Item().String(level, depth+1, prefix))
 		}
 	}
 	return w.String()
@@ -396,6 +345,7 @@ type TableStat struct {
 func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat TableStat, w bytes.Buffer) {
 
 	it := entry.MakeObjectIt(true)
+	defer it.Release()
 	zonemapKind := common.ZonemapPrintKindNormal
 	if schema := entry.GetLastestSchemaLocked(); schema.HasSortKey() && strings.HasPrefix(schema.GetSingleSortKey().Name, "__") {
 		zonemapKind = common.ZonemapPrintKindCompose
@@ -411,8 +361,8 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat
 		needCount = math.MaxInt
 	}
 
-	for ; it.Valid(); it.Next() {
-		objectEntry := it.Get().GetPayload()
+	for it.Next() {
+		objectEntry := it.Item()
 		if !objectEntry.IsActive() {
 			continue
 		}
@@ -433,7 +383,7 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat
 		}
 		if level > common.PPL0 {
 			_ = w.WriteByte('\n')
-			_, _ = w.WriteString(objectEntry.ID.String())
+			_, _ = w.WriteString(objectEntry.ID().String())
 			_ = w.WriteByte('\n')
 			_, _ = w.WriteString("    ")
 			_, _ = w.WriteString(objectEntry.StatsString(zonemapKind))
@@ -499,14 +449,14 @@ func (entry *TableEntry) GetTableData() data.Table { return entry.tableData }
 
 func (entry *TableEntry) LastAppendableObject() (obj *ObjectEntry) {
 	it := entry.MakeObjectIt(false)
-	for it.Valid() {
-		itObj := it.Get().GetPayload()
+	defer it.Release()
+	for ok := it.Last(); ok; ok = it.Prev() {
+		itObj := it.Item()
 		dropped := itObj.HasDropCommitted()
 		if itObj.IsAppendable() && !dropped {
 			obj = itObj
 			break
 		}
-		it.Next()
 	}
 	return obj
 }
@@ -525,11 +475,11 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		}
 	}()
 	objIt := entry.MakeObjectIt(true)
-	for objIt.Valid() {
-		objectEntry := objIt.Get().GetPayload()
+	defer objIt.Release()
+	for objIt.Next() {
+		objectEntry := objIt.Item()
 		if err := processor.OnObject(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				objIt.Next()
 				continue
 			}
 			return err
@@ -537,7 +487,6 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		if err := processor.OnPostObject(objectEntry); err != nil {
 			return err
 		}
-		objIt.Next()
 	}
 	tombstones := entry.deleteList.Copy().Items()
 	for _, deletes := range tombstones {
@@ -550,20 +499,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 }
 
 func (entry *TableEntry) DropObjectEntry(id *types.Objectid, txn txnif.AsyncTxn) (deleted *ObjectEntry, err error) {
-	obj, err := entry.GetObjectByID(id)
-	if err != nil {
-		return
-	}
-	obj.Lock()
-	defer obj.Unlock()
-	needWait, waitTxn := obj.NeedWaitCommittingLocked(txn.GetStartTS())
-	if needWait {
-		obj.Unlock()
-		waitTxn.GetTxnState(true)
-		obj.Lock()
-	}
-	var isNewNode bool
-	isNewNode, err = obj.DropEntryLocked(txn)
+	obj, isNewNode, err := entry.link.DropObjectByID(id, txn)
 	if err == nil && isNewNode {
 		deleted = obj
 	}

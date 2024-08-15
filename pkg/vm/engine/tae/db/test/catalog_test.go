@@ -43,10 +43,10 @@ func TestCatalog1(t *testing.T) {
 	schema := catalog.MockSchema(1, 0)
 	txn, _, rel := testutil.CreateRelationNoCommit(t, db, testutil.DefaultTestDB, schema, true)
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
-	obj, err := rel.CreateNonAppendableObject(false, nil)
+	obj, err := rel.CreateNonAppendableObject(nil)
 	assert.Nil(t, err)
+	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, txn.Commit(context.Background()))
-	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
 	txn, rel = testutil.GetDefaultRelation(t, db, schema.Name)
 	sobj, err := rel.GetObject(obj.GetID())
@@ -61,12 +61,12 @@ func TestCatalog1(t *testing.T) {
 		_, rel = testutil.GetDefaultRelation(t, db, schema.Name)
 		it := rel.MakeObjectIt()
 		cnt := 0
-		for it.Valid() {
+		for it.Next() {
 			object := it.GetObject()
 			cnt++
 			t.Log(object.GetMeta().(*catalog.ObjectEntry).String())
-			it.Next()
 		}
+		it.Close()
 		assert.Equal(t, 1, cnt)
 	}
 }

@@ -57,6 +57,18 @@ var (
 	MakeTextVector = func(values []string, nsp []uint64) *vector.Vector {
 		return makeStringVector(values, nsp, textType)
 	}
+
+	MakeUUIDVector = func(values []types.Uuid, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, uuidType)
+	}
+
+	MakeJsonVector = func(values []string, nsp []uint64) *vector.Vector {
+		return makeJsonVector(values, nsp)
+	}
+
+	MakeDatetimeVector = func(values []string, nsp []uint64) *vector.Vector {
+		return makeDatetimeVector(values, nsp)
+	}
 )
 
 // functions to make a scalar vector for test.
@@ -94,6 +106,57 @@ func makeStringVector(values []string, nsp []uint64, typ types.Type) *vector.Vec
 		err = vector.AppendStringList(vec, values, nil, TestUtilMp)
 		vec.SetNulls(nulls.Build(len(values), nsp...))
 	}
+	if err != nil {
+		panic(err)
+	}
+
+	return vec
+}
+
+func makeJsonVector(values []string, nsp []uint64) *vector.Vector {
+	var err error
+
+	newVals := make([][]byte, len(values))
+	for i := range values {
+		json, err := types.ParseStringToByteJson(values[i])
+		if err != nil {
+			panic(err)
+		}
+		newVals[i], err = types.EncodeJson(json)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	vec := vector.NewVec(jsonType)
+	if nsp == nil {
+		err = vector.AppendBytesList(vec, newVals, nil, TestUtilMp)
+	} else {
+		err = vector.AppendBytesList(vec, newVals, nil, TestUtilMp)
+		vec.SetNulls(nulls.Build(len(values), nsp...))
+	}
+	if err != nil {
+		panic(err)
+	}
+
+	return vec
+}
+
+func makeDatetimeVector(values []string, nsp []uint64) *vector.Vector {
+	var err error
+
+	newVals := make([]types.Datetime, len(values))
+	for i := range values {
+		dt, err := types.ParseDatetime(values[i], 0)
+		if err != nil {
+			panic(err)
+		}
+		newVals[i] = dt
+	}
+
+	vec := vector.NewVec(datetimeType)
+	err = vector.AppendFixedList(vec, newVals, nil, TestUtilMp)
+	vec.SetNulls(nulls.Build(len(values), nsp...))
 	if err != nil {
 		panic(err)
 	}

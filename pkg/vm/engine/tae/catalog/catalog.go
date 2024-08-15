@@ -43,8 +43,6 @@ const (
 	SnapshotAttr_BlockMaxRow    = "block_max_row"
 	SnapshotAttr_ObjectMaxBlock = "Object_max_block"
 	SnapshotAttr_SchemaExtra    = "schema_extra"
-	AccountIDDbNameTblName      = "account_id_db_name_tbl_name"
-	AccountIDDbName             = "account_id_db_name"
 	ObjectAttr_ObjectStats      = "object_stats"
 	ObjectAttr_State            = "state"
 	ObjectAttr_Sorted           = "sorted"
@@ -59,7 +57,7 @@ type DataFactory interface {
 }
 
 type Catalog struct {
-	*IDAlloctor
+	*IDAllocator
 	*sync.RWMutex
 
 	usageMemo any
@@ -72,11 +70,11 @@ type Catalog struct {
 
 func MockCatalog() *Catalog {
 	catalog := &Catalog{
-		RWMutex:    new(sync.RWMutex),
-		IDAlloctor: NewIDAllocator(),
-		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
-		nameNodes:  make(map[string]*nodeList[*DBEntry]),
-		link:       common.NewGenericSortedDList((*DBEntry).Less),
+		RWMutex:     new(sync.RWMutex),
+		IDAllocator: NewIDAllocator(),
+		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
+		nameNodes:   make(map[string]*nodeList[*DBEntry]),
+		link:        common.NewGenericSortedDList((*DBEntry).Less),
 	}
 	catalog.InitSystemDB()
 	return catalog
@@ -84,12 +82,12 @@ func MockCatalog() *Catalog {
 
 func OpenCatalog(usageMemo any) (*Catalog, error) {
 	catalog := &Catalog{
-		RWMutex:    new(sync.RWMutex),
-		IDAlloctor: NewIDAllocator(),
-		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
-		nameNodes:  make(map[string]*nodeList[*DBEntry]),
-		link:       common.NewGenericSortedDList((*DBEntry).Less),
-		usageMemo:  usageMemo,
+		RWMutex:     new(sync.RWMutex),
+		IDAllocator: NewIDAllocator(),
+		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
+		nameNodes:   make(map[string]*nodeList[*DBEntry]),
+		link:        common.NewGenericSortedDList((*DBEntry).Less),
+		usageMemo:   usageMemo,
 	}
 	catalog.InitSystemDB()
 	return catalog, nil
@@ -151,9 +149,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		return nil
 	}
 	processor.ObjectFn = func(se *ObjectEntry) error {
-		se.RLock()
-		needGC := se.DeleteBeforeLocked(ts) && !se.InMemoryDeletesExistedLocked()
-		se.RUnlock()
+		needGC := se.DeleteBefore(ts) && !se.InMemoryDeletesExistedLocked()
 		needGC = needGC && se.IsDeletesFlushedBefore(ts)
 		if needGC {
 			tbl := se.table
@@ -162,14 +158,18 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		return nil
 	}
 	processor.TombstoneFn = func(t data.Tombstone) error {
-		obj := t.GetObject().(*ObjectEntry)
-		obj.RLock()
-		needGC := obj.DeleteBeforeLocked(ts) && !obj.InMemoryDeletesExistedLocked()
-		obj.RUnlock()
-		needGC = needGC && obj.IsDeletesFlushedBefore(ts)
+		obj := t.GetObject().(*ObjectEntry).GetLatestNode()
+		var needGC bool
+		if obj == nil {
+			needGC = true
+			obj = t.GetObject().(*ObjectEntry)
+		} else {
+			needGC = obj.DeleteBefore(ts) && !obj.InMemoryDeletesExistedLocked()
+			needGC = needGC && obj.IsDeletesFlushedBefore(ts)
+		}
 		if needGC {
 			tbl := obj.table
-			tbl.GCTombstone(obj.ID)
+			tbl.GCTombstone(*obj.ID())
 		}
 		return nil
 	}

@@ -15,7 +15,6 @@
 package join
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,10 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(InnerJoin)
 
 const (
 	Build = iota
@@ -40,14 +40,11 @@ type evalVector struct {
 }
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state int
 
-	inBuckets []uint8
-
 	batches       []*batch.Batch
-	batchRowCount int
+	batchRowCount int64
+	lastrow       int
 	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
@@ -61,79 +58,84 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *hashmap.JoinMap
+	mp  *message.JoinMap
+	bat *batch.Batch
 
 	maxAllocSize int64
 }
 
-type Argument struct {
+type InnerJoin struct {
 	ctr        *container
 	Result     []colexec.ResultPos
 	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
-	bat        *batch.Batch
-	lastrow    int
 
 	HashOnPK           bool
 	IsShuffle          bool
+	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+	JoinMapTag         int32
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (innerJoin *InnerJoin) GetOperatorBase() *vm.OperatorBase {
+	return &innerJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[InnerJoin](
+		func() *InnerJoin {
+			return &InnerJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *InnerJoin) {
+			*a = InnerJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[InnerJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (innerJoin InnerJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *InnerJoin {
+	return reuse.Alloc[InnerJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (innerJoin *InnerJoin) Release() {
+	if innerJoin != nil {
+		reuse.Free[InnerJoin](innerJoin, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	innerJoin.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := innerJoin.ctr
+	anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 
-		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 
-		arg.ctr = nil
+		if innerJoin.ctr.bat != nil {
+			innerJoin.ctr.bat = nil
+		}
+		innerJoin.ctr.lastrow = 0
+		innerJoin.ctr = nil
 	}
-	if arg.bat != nil {
-		proc.PutBatch(arg.bat)
-		arg.bat = nil
+	if innerJoin.ProjectList != nil {
+		anal.Alloc(innerJoin.ProjectAllocSize)
+		innerJoin.FreeProjection(proc)
 	}
 }
 
@@ -145,9 +147,6 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
-	for i := range ctr.batches {
-		proc.PutBatch(ctr.batches[i])
-	}
 	ctr.batches = nil
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)

@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -270,9 +271,9 @@ type Config struct {
 
 	PythonUdfClient pythonservice.ClientConfig `toml:"python-udf-client"`
 
-	// LogtailUpdateStatsThreshold is the number that logtail entries received
-	// to trigger stats updating.
-	LogtailUpdateStatsThreshold int `toml:"logtail-update-stats-threshold"`
+	// LogtailUpdateWorkerFactor is the times of CPU number of this node
+	// to start update workers.
+	LogtailUpdateWorkerFactor int `toml:"logtail-update-worker-factor"`
 
 	// Whether to automatically upgrade when system startup
 	AutomaticUpgrade       bool `toml:"auto-upgrade"`
@@ -394,9 +395,9 @@ func (c *Config) Validate() error {
 
 	// pessimistic mode implies primary key check
 	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic || c.PrimaryKeyCheck {
-		config.CNPrimaryCheck = true
+		config.CNPrimaryCheck.Store(true)
 	} else {
-		config.CNPrimaryCheck = false
+		config.CNPrimaryCheck.Store(false)
 	}
 
 	if c.LargestEntryLimit > 0 {
@@ -405,12 +406,12 @@ func (c *Config) Validate() error {
 
 	if c.MaxPreparedStmtCount > 0 {
 		if c.MaxPreparedStmtCount > maxForMaxPreparedStmtCount {
-			frontend.MaxPrepareNumberInOneSession = maxForMaxPreparedStmtCount
+			frontend.MaxPrepareNumberInOneSession.Store(uint32(maxForMaxPreparedStmtCount))
 		} else {
-			frontend.MaxPrepareNumberInOneSession = c.MaxPreparedStmtCount
+			frontend.MaxPrepareNumberInOneSession.Store(uint32(c.MaxPreparedStmtCount))
 		}
 	} else {
-		frontend.MaxPrepareNumberInOneSession = 100000
+		frontend.MaxPrepareNumberInOneSession.Store(100000)
 	}
 	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
 
@@ -420,13 +421,19 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.LogtailUpdateWorkerFactor == 0 {
+		c.LogtailUpdateWorkerFactor = 4
+	}
+
 	if !metadata.ValidStateString(c.InitWorkState) {
 		c.InitWorkState = metadata.WorkState_Working.String()
 	}
 
 	// TODO: remove this if rc is stable
-	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.EnableCheckInvalidRCErrors,
-		c.Txn.EnableCheckRCInvalidError)
+	moruntime.ServiceRuntime(c.UUID).SetGlobalVariables(
+		moruntime.EnableCheckInvalidRCErrors,
+		c.Txn.EnableCheckRCInvalidError,
+	)
 	return nil
 }
 
@@ -630,6 +637,7 @@ type service struct {
 	// udfService is used to handle non-sql udf
 	udfService       udf.Service
 	bootstrapService bootstrap.Service
+	incrservice      incrservice.AutoIncrementService
 
 	stopper *stopper.Stopper
 	aicm    *defines.AutoIncrCacheManager
@@ -655,6 +663,7 @@ type service struct {
 		// counter recording the total number of running pipelines,
 		// details are not recorded for simplicity as suggested by @nnsgmsone
 		counter atomic.Int64
+		client  cnclient.PipelineClient
 	}
 }
 

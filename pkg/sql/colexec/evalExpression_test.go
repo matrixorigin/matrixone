@@ -37,7 +37,7 @@ func TestFixedExpressionExecutor(t *testing.T) {
 
 	emptyBatch := &batch.Batch{}
 	emptyBatch.SetRowCount(10)
-	vec, err := conExprExecutor.Eval(proc, []*batch.Batch{emptyBatch})
+	vec, err := conExprExecutor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
 	require.NoError(t, err)
 	curr1 := proc.Mp().CurrNB()
 	{
@@ -46,7 +46,7 @@ func TestFixedExpressionExecutor(t *testing.T) {
 		require.Equal(t, int64(218311), vector.MustFixedCol[int64](vec)[0])
 		require.Equal(t, false, vec.GetNulls().Contains(0))
 	}
-	_, err = conExprExecutor.Eval(proc, []*batch.Batch{emptyBatch})
+	_, err = conExprExecutor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
 	require.NoError(t, err)
 	require.Equal(t, curr1, proc.Mp().CurrNB()) // check memory reuse
 	conExprExecutor.Free()
@@ -67,7 +67,7 @@ func TestFixedExpressionExecutor(t *testing.T) {
 	require.NoError(t, err)
 
 	emptyBatch.SetRowCount(5)
-	vec, err = typExpressionExecutor.Eval(proc, []*batch.Batch{emptyBatch})
+	vec, err = typExpressionExecutor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
 	require.NoError(t, err)
 	{
 		require.Equal(t, 5, vec.Length())
@@ -101,7 +101,7 @@ func TestColumnExpressionExecutor(t *testing.T) {
 		[]types.Type{types.T_int8.ToType(), types.T_int16.ToType(), types.T_int32.ToType(), types.T_int64.ToType()},
 		true, 10, proc.Mp())
 	curr := proc.Mp().CurrNB()
-	vec, err := colExprExecutor.Eval(proc, []*batch.Batch{bat})
+	vec, err := colExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
 	require.NoError(t, err)
 	{
 		require.Equal(t, types.T_int32.ToType(), *vec.GetType())
@@ -123,7 +123,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		currStart := proc.Mp().CurrNB()
 		fExprExecutor := &FunctionExpressionExecutor{}
 		err := fExprExecutor.Init(proc, 2, types.T_int64.ToType(),
-			func(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+			func(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *function.FunctionSelectList) error {
 				v1 := vector.GenerateFunctionFixedTypeParameter[int64](params[0])
 				v2 := vector.GenerateFunctionFixedTypeParameter[int64](params[1])
 				rs := vector.MustFunctionResult[int64](result)
@@ -166,7 +166,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		fExprExecutor.SetParameter(0, executor1)
 		fExprExecutor.SetParameter(1, executor2)
 
-		vec, err := fExprExecutor.Eval(proc, []*batch.Batch{bat})
+		vec, err := fExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
 		require.NoError(t, err)
 		curr3 := proc.Mp().CurrNB()
 		{
@@ -175,11 +175,11 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 			require.Equal(t, int64(101), vector.MustFixedCol[int64](vec)[0]) // 1+100
 			require.Equal(t, int64(102), vector.MustFixedCol[int64](vec)[1]) // 2+100
 		}
-		_, err = fExprExecutor.Eval(proc, []*batch.Batch{bat})
+		_, err = fExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
 		require.NoError(t, err)
 		require.Equal(t, curr3, proc.Mp().CurrNB())
 		fExprExecutor.Free()
-		proc.FreeVectors()
+		proc.Free()
 		require.Equal(t, currStart, proc.Mp().CurrNB())
 	}
 
@@ -211,7 +211,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		_, ok := executor.(*FixedVectorExpressionExecutor)
 		require.Equal(t, true, ok)
 		executor.Free()
-		proc.FreeVectors()
+		proc.Free()
 		require.Equal(t, currNb, proc.Mp().CurrNB())
 	}
 }

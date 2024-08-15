@@ -16,9 +16,10 @@ package agg
 
 import (
 	"bytes"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"math"
 )
 
 func RegisterMin2(id int64) {
@@ -135,6 +136,13 @@ func RegisterMin2(id int64) {
 		aggMinOfBoolFill, aggMinOfBoolFills, aggMinOfBoolMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_enum.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[types.Enum],
+		aggMinFill[types.Enum], aggMinFills[types.Enum], aggMinMerge[types.Enum], nil)
+
+	aggexec.RegisterAggFromFixedRetFixed(
 		aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), MinReturnType, true),
 		nil,
 		nil,
@@ -155,7 +163,7 @@ func RegisterMin2(id int64) {
 		aggMinInitResult[types.Decimal128],
 		aggMinOfDecimal128Fill, aggMinOfDecimal128Fills, aggMinOfDecimal128Merge, nil)
 
-	varlenList := []types.T{types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_binary, types.T_varbinary}
+	varlenList := []types.T{types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink, types.T_binary, types.T_varbinary}
 	for _, t := range varlenList {
 		aggexec.RegisterAggFromBytesRetBytes(
 			aggexec.MakeSingleColumnAggInformation(id, t.ToType(), MinReturnType, true),
@@ -175,7 +183,7 @@ var MinSupportedTypes = []types.T{
 	types.T_decimal64, types.T_decimal128,
 	types.T_bool,
 	types.T_bit,
-	types.T_varchar, types.T_char, types.T_blob, types.T_text,
+	types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink,
 	types.T_uuid,
 	types.T_binary, types.T_varbinary,
 }

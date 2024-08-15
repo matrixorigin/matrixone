@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(LoopSemi)
 
 const (
 	Build = iota
@@ -35,67 +35,78 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state   int
+	lastrow int
 	bat     *batch.Batch
 	rbat    *batch.Batch
 	joinBat *batch.Batch
+	buf     *batch.Batch
 	expr    colexec.ExpressionExecutor
 	cfs     []func(*vector.Vector, *vector.Vector, int64, int) error
 }
 
-type Argument struct {
-	ctr     *container
-	Result  []int32
-	Cond    *plan.Expr
-	Typs    []types.Type
-	bat     *batch.Batch
-	lastrow int
+type LoopSemi struct {
+	ctr        *container
+	Result     []int32
+	Cond       *plan.Expr
+	Typs       []types.Type
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (loopSemi *LoopSemi) GetOperatorBase() *vm.OperatorBase {
+	return &loopSemi.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[LoopSemi](
+		func() *LoopSemi {
+			return &LoopSemi{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *LoopSemi) {
+			*a = LoopSemi{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[LoopSemi]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (loopSemi LoopSemi) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *LoopSemi {
+	return reuse.Alloc[LoopSemi](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (loopSemi *LoopSemi) Release() {
+	if loopSemi != nil {
+		reuse.Free[LoopSemi](loopSemi, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (loopSemi *LoopSemi) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	loopSemi.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := arg.ctr; ctr != nil {
+func (loopSemi *LoopSemi) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if ctr := loopSemi.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
-		arg.ctr = nil
+		//if arg.ctr.buf != nil {
+		//proc.PutBatch(arg.ctr.buf)
+		//arg.ctr.buf = nil
+		//}
+		loopSemi.ctr.lastrow = 0
+		loopSemi.ctr = nil
+	}
+
+	if loopSemi.ProjectList != nil {
+		anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
+		anal.Alloc(loopSemi.ProjectAllocSize)
+		loopSemi.FreeProjection(proc)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
@@ -30,8 +31,10 @@ const (
 	defaultTimeout = time.Second * 10
 )
 
-func GetService() ShardService {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ShardService)
+func GetService(
+	sid string,
+) ShardService {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.ShardService)
 	if !ok {
 		return &service{}
 	}
@@ -62,9 +65,14 @@ type ShardServer interface {
 // ShardService is sharding service. Each CN node holds an instance of the
 // ShardService.
 type ShardService interface {
+	// GetConfig returns the configuration of the shard service.
+	Config() Config
 	// Read read data from shards.
 	Read(ctx context.Context, req ReadRequest, opts ReadOptions) error
-
+	// HasLocalReplica returns whether the shard has a local replica.
+	HasLocalReplica(tableID, shardID uint64) bool
+	// HasAllLocalReplicas returns whether all shards of the table have local replicas.
+	HasAllLocalReplicas(tableID uint64) bool
 	// GetShardInfo returns the metadata of the shards corresponding to the table.
 	GetShardInfo(table uint64) (uint64, pb.Policy, bool, error)
 	// Create creates table shards metadata in current txn. And create shard
@@ -75,7 +83,8 @@ type ShardService interface {
 	// Delete deletes table shards metadata in current txn. Table shards need
 	// to be deleted if table deleted. Nothing happened if txn aborted.
 	Delete(ctx context.Context, table uint64, txnOp client.TxnOperator) error
-
+	// ReplicaCount returns the number of running replicas on current cn.
+	ReplicaCount() int64
 	// Close close the service
 	Close() error
 }
@@ -106,8 +115,9 @@ type ReadFunc func(
 	ctx context.Context,
 	shard pb.TableShard,
 	engine engine.Engine,
-	payload []byte,
+	param pb.ReadParam,
 	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
 ) ([]byte, error)
 
 // ShardStorage is used to store metadata for Table Shards, handle read operations for
@@ -129,7 +139,7 @@ type ShardStorage interface {
 	// Ensure that subsequent reads have full log tail data.
 	WaitLogAppliedAt(ctx context.Context, ts timestamp.Timestamp) error
 	// Read read data with the given timestamp
-	Read(ctx context.Context, shard pb.TableShard, method int, payload []byte, ts timestamp.Timestamp) ([]byte, error)
+	Read(ctx context.Context, shard pb.TableShard, method int, param pb.ReadParam, ts timestamp.Timestamp, buffer *morpc.Buffer) ([]byte, error)
 }
 
 var (
@@ -144,15 +154,22 @@ type ReadOptions struct {
 }
 
 const (
-	ReadData   = 0
-	ReadRanges = 1
-	ReadStats  = 2
-	ReadRows   = 3
+	ReadData                     = 0
+	ReadRanges                   = 1
+	ReadStats                    = 2
+	ReadRows                     = 3
+	ReadSize                     = 4
+	ReadApproxObjectsNum         = 5
+	ReadPrimaryKeysMayBeModified = 6
+	ReadGetColumMetadataScanInfo = 7
+	ReadReader                   = 8
+	ReadMergeObjects             = 9
+	ReadVisibleObjectStats       = 10
 )
 
 type ReadRequest struct {
 	TableID uint64
 	Method  int
-	Data    []byte
+	Param   pb.ReadParam
 	Apply   func([]byte)
 }

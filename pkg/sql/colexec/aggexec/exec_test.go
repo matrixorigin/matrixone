@@ -15,12 +15,13 @@
 package aggexec
 
 import (
+	"sync"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
-	"sync"
-	"testing"
 )
 
 var uniqueAggIdForTest int64 = 100
@@ -158,8 +159,8 @@ func TestSingleAggFuncExec1(t *testing.T) {
 	{
 		executor.Free()
 		// memory check.
-		for _, v := range inputs {
-			v.Free(mg.Mp())
+		for i := 1; i < len(inputs); i++ {
+			inputs[i].Free(mg.Mp())
 		}
 		require.Equal(t, int64(0), mg.Mp().CurrNB())
 	}
@@ -254,12 +255,20 @@ func TestMultiAggFuncExec1(t *testing.T) {
 		var err error
 
 		// prepare the input data.
-		vec1 := vector.NewVec(inputType1)
-		require.NoError(t, vector.AppendFixedList[int64](vec1, []int64{0, 1}, []bool{true, false}, mg.Mp()))
-		vec2 := vector.NewVec(inputType2)
-		require.NoError(t, vector.AppendFixedList[bool](vec2, []bool{false, true}, nil, mg.Mp()))
-		inputs[0] = [2]*vector.Vector{vec1, vec2}
-		inputs[1] = [2]*vector.Vector{vec1, vec2}
+		{
+			vec1 := vector.NewVec(inputType1)
+			require.NoError(t, vector.AppendFixedList[int64](vec1, []int64{0, 1}, []bool{true, false}, mg.Mp()))
+			vec2 := vector.NewVec(inputType2)
+			require.NoError(t, vector.AppendFixedList[bool](vec2, []bool{false, true}, nil, mg.Mp()))
+			inputs[0] = [2]*vector.Vector{vec1, vec2}
+		}
+		{
+			vec1 := vector.NewVec(inputType1)
+			require.NoError(t, vector.AppendFixedList[int64](vec1, []int64{0, 1}, []bool{true, false}, mg.Mp()))
+			vec2 := vector.NewVec(inputType2)
+			require.NoError(t, vector.AppendFixedList[bool](vec2, []bool{false, true}, nil, mg.Mp()))
+			inputs[1] = [2]*vector.Vector{vec1, vec2}
+		}
 
 		inputs[2] = [2]*vector.Vector{nil, nil}
 		inputs[2][0] = vector.NewConstNull(inputType1, 2, mg.Mp())

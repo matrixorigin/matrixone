@@ -19,14 +19,59 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func Parse(ctx context.Context, sql string, lower int64, useOrigin int64) ([]tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql, lower, useOrigin)
+type MySQLParser struct {
+	scanner Scanner
+	lexer   Lexer
+	// use this will save some memory allocation
+	// parser  yyParserImpl
+}
+
+func (p *MySQLParser) Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
+	p.scanner.setSql(sql)
+	p.lexer.setScanner(&p.scanner, lower)
+
+	/*
+		The following can potentially save some memory allocation, but it exposes too much
+		of yyParser internals, which is really yacc's business, not ours.
+		I don't think it's worth it.
+
+		p.parser.yySymType = &yySymType{}
+		for i := 0; i < len(p.parser.stack); i++ {
+			p.parser.stack[i] = yySymType{}
+		}
+		p.parser.char = 0
+	*/
+
+	if yyParse(&p.lexer) != 0 {
+		for _, s := range p.lexer.stmts {
+			s.Free()
+		}
+		return nil, p.lexer.scanner.LastError
+	}
+	if len(p.lexer.stmts) == 0 {
+		/**
+		For CORNER CASE like:
+
+		mysql> -- MySQL dump 10.13  Distrib 8.1.0, for macos11.7 (arm64)
+
+		the input will be stripped to empty string, and the parser will return 0 stmts.
+		but, the mysql server responds ok to the client.
+		so, we return an EmptyStmt that does nothing beside responding ok.
+		*/
+		return []tree.Statement{&tree.EmptyStmt{}}, nil
+	}
+	return p.lexer.stmts, nil
+}
+
+func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
+	lexer := NewLexer(dialect.MYSQL, sql, lower)
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
@@ -49,8 +94,8 @@ func Parse(ctx context.Context, sql string, lower int64, useOrigin int64) ([]tre
 	return lexer.stmts, nil
 }
 
-func ParseOne(ctx context.Context, sql string, lower int64, useOrigin int64) (tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql, lower, useOrigin)
+func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, error) {
+	lexer := NewLexer(dialect.MYSQL, sql, lower)
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
@@ -69,16 +114,21 @@ type Lexer struct {
 	stmts      []tree.Statement
 	paramIndex int
 	lower      int64
-	useOrigin  int64
 }
 
-func NewLexer(dialectType dialect.DialectType, sql string, lower int64, useOrigin int64) *Lexer {
+func NewLexer(dialectType dialect.DialectType, sql string, lower int64) *Lexer {
 	return &Lexer{
 		scanner:    NewScanner(dialectType, sql),
 		paramIndex: 0,
 		lower:      lower,
-		useOrigin:  useOrigin,
 	}
+}
+
+func (l *Lexer) setScanner(s *Scanner, lower int64) {
+	l.scanner = s
+	l.stmts = nil
+	l.paramIndex = 0
+	l.lower = lower
 }
 
 func (l *Lexer) GetParamIndex() int {
@@ -100,6 +150,19 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	lval.str = str
 	return typ
 }
+
+func (l *Lexer) GetDbOrTblName(origin string) string {
+	if l.lower == 1 {
+		return strings.ToLower(origin)
+	}
+	return origin
+}
+
+func (l *Lexer) GetDbOrTblNameCStr(origin string) *tree.CStr {
+	return tree.NewCStr(origin, l.lower)
+}
+
+var CaseInsensitiveDbs = []string{"information_schema", "mysql"}
 
 func (l *Lexer) Error(err string) {
 	errMsg := fmt.Sprintf("You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. %s", err)

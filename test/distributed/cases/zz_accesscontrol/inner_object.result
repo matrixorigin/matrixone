@@ -60,9 +60,9 @@ Trigger    Event    Table    Statement    Timing    Created    sql_mode    Defin
 use mo_catalog;
 show columns from mo_tables;
 Field    Type    Null    Key    Default    Extra    Comment
-rel_id    BIGINT UNSIGNED(0)    YES    PRI    null        
-relname    VARCHAR(5000)    YES        null        
-reldatabase    VARCHAR(5000)    YES        null        
+rel_id    BIGINT UNSIGNED(0)    YES        null        
+relname    VARCHAR(5000)    YES    PRI    null        
+reldatabase    VARCHAR(5000)    YES    PRI    null        
 reldatabase_id    BIGINT UNSIGNED(0)    YES        null        
 relpersistence    VARCHAR(5000)    YES        null        
 relkind    VARCHAR(5000)    YES        null        
@@ -71,7 +71,7 @@ rel_createsql    TEXT(0)    YES        null
 created_time    TIMESTAMP(0)    YES        null        
 creator    INT UNSIGNED(0)    YES        null        
 owner    INT UNSIGNED(0)    YES        null        
-account_id    INT UNSIGNED(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 partitioned    TINYINT(0)    YES        null        
 partition_info    BLOB(0)    YES        null        
 viewdef    VARCHAR(5000)    YES        null        
@@ -84,7 +84,7 @@ system    create database system
 system_metrics    create database system_metrics
 information_schema    create database information_schema
 mysql    create database mysql
-mo_catalog    
+mo_catalog
 select relname from mo_tables where relname="sql_statement_total";
 relname
 sql_statement_total
@@ -260,7 +260,7 @@ drop role if exists revoke_role_1;
 set global enable_privilege_cache = on;
 desc mo_catalog.mo_stages;
 Field    Type    Null    Key    Default    Extra    Comment
-stage_id    INT UNSIGNED(32)    NO    PRI    null        
+stage_id    INT UNSIGNED(32)    NO    PRI    null    auto_increment
 stage_name    VARCHAR(64)    YES    UNI    null        
 url    TEXT(0)    YES        null        
 stage_credentials    TEXT(0)    YES        null        

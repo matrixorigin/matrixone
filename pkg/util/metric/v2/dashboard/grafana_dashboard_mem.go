@@ -104,18 +104,34 @@ func (c *DashboardCreator) initMpoolAllocatorRow() dashboard.Option {
 }
 
 func (c *DashboardCreator) initMallocRow() dashboard.Option {
-	return dashboard.Row(
-		"malloc",
-		c.withMultiGraph(
-			"allocate and free bytes",
+	makeGraph := func(prefix string) row.Option {
+		name := prefix
+		if name == "" {
+			name = "all"
+		}
+		return c.withMultiGraph(
+			name,
 			4,
 			[]string{
-				`sum(` + c.getMetricWithFilter("mo_mem_malloc_counter", `type="allocate"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_mem_malloc_counter", `type="free"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_malloc_counter", `type="`+prefix+`allocate"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_malloc_gauge", `type="`+prefix+`inuse"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_malloc_counter", `type="`+prefix+`allocate-objects"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_malloc_gauge", `type="`+prefix+`inuse-objects"`) + `)`,
 			},
 			[]string{
-				"allocat",
-				"free",
-			}),
+				prefix + "allocate bytes",
+				prefix + "inuse bytes",
+				prefix + "allocate objects",
+				prefix + "inuse objects",
+			},
+		)
+	}
+	return dashboard.Row(
+		"malloc",
+		makeGraph(""),
+		makeGraph("memory-cache-"),
+		makeGraph("io-"),
+		makeGraph("bytes-"),
+		makeGraph("session-"),
 	)
 }

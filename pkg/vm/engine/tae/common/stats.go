@@ -15,7 +15,6 @@
 package common
 
 import (
-	"encoding/hex"
 	"fmt"
 	"math"
 	"math/rand"
@@ -23,9 +22,55 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
 )
+
+type TempDelCacheEntry struct {
+	Bat     *batch.Batch
+	Release func()
+}
+
+type DeletesCollectRecorder struct {
+	LoadCost   time.Duration
+	BisectCost time.Duration
+	MemCost    time.Duration
+	TempCache  map[string]TempDelCacheEntry
+}
+
+type DeletesCollectBoard struct {
+	DeletesCollectRecorder
+	LoadMax, BisectMax, MemMax time.Duration
+	LoadCnt                    int
+}
+
+func (r *DeletesCollectBoard) Add(other *DeletesCollectRecorder) {
+	r.LoadCost += other.LoadCost
+	r.BisectCost += other.BisectCost
+	r.MemCost += other.MemCost
+
+	if other.LoadCost > r.LoadMax {
+		r.LoadMax = other.LoadCost
+	}
+	if other.BisectCost > r.BisectMax {
+		r.BisectMax = other.BisectCost
+	}
+	if other.MemCost > r.MemMax {
+		r.MemMax = other.MemCost
+	}
+	if other.LoadCost > 0 {
+		r.LoadCnt++
+	}
+}
+
+func (r *DeletesCollectBoard) String() string {
+	return fmt.Sprintf(
+		"LoadCost:%v BisectCost:%v MemCost:%v LoadMax:%v BisectMax:%v MemMax:%v LoadCnt:%v",
+		r.LoadCost, r.BisectCost, r.MemCost, r.LoadMax, r.BisectMax, r.MemMax, r.LoadCnt)
+}
+
+type RecorderKey struct{}
 
 const (
 	DefaultMinOsizeQualifiedMB   = 110   // MB
@@ -497,12 +542,6 @@ func HumanReadableBytes(bytes int) string {
 		return fmt.Sprintf("%.2fMB", float64(bytes)/1024/1024)
 	}
 	return fmt.Sprintf("%.2fGB", float64(bytes)/1024/1024/1024)
-}
-
-func ShortObjId(x types.Objectid) string {
-	var shortuuid [12]byte
-	hex.Encode(shortuuid[:], x[10:16])
-	return string(shortuuid[:])
 }
 
 func moveAvg[T Number](prev, now T, f float64) T {

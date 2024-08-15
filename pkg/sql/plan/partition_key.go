@@ -16,12 +16,13 @@ package plan
 
 import (
 	"context"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 // keyPartitionBuilder processes key partition
@@ -149,7 +150,7 @@ func chooseAvailableUniqueKey(ctx context.Context, tableDef *TableDef, uniqueInd
 		for i, keyPart := range uniqueIndex.KeyParts {
 			// if the unique key column were not defined as NOT NULL, then the previous statement would fail.
 			// See: https://dev.mysql.com/doc/refman/8.0/en/partitioning-key.html
-			if ok := checkTableColumnsNotNull(tableDef, keyPart.ColName.Parts[0]); !ok {
+			if ok := checkTableColumnsNotNull(tableDef, keyPart.ColName.ColName()); !ok {
 				isNotNullCheckErr = true
 				isOK = false
 			}

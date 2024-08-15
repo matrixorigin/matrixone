@@ -16,11 +16,12 @@ package logservice
 
 import (
 	"fmt"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"strconv"
 	"strings"
 	"time"
+
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
@@ -370,6 +371,19 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+func (c *Config) UpdateAddresses(
+	host string,
+	servicePort int,
+	raftPort int,
+	gossipPort int,
+) {
+	c.ServiceHost = host
+	c.ServiceAddress = fmt.Sprintf("0.0.0.0:%d", servicePort)
+	c.RaftAddress = fmt.Sprintf("0.0.0.0:%d", raftPort)
+	c.GossipAddress = fmt.Sprintf("0.0.0.0:%d", gossipPort)
+	c.GossipSeedAddresses = []string{fmt.Sprintf("%s:%d", host, gossipPort)}
 }
 
 func DefaultConfig() Config {

@@ -29,7 +29,7 @@ import (
 )
 
 var MoCtlTNCmdSender = func(ctx context.Context, proc *process.Process, requests []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
-	txnOp := proc.TxnOperator
+	txnOp := proc.GetTxnOperator()
 	if txnOp == nil {
 		return nil, moerr.NewInternalError(ctx, "ctl: txn operator is nil")
 	}
@@ -96,10 +96,13 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 	if err != nil {
 		return err
 	}
-	if command == InspectMethod || command == MergeObjectsMethod {
+	if command == InspectMethod {
 		obj := res.Data.([]any)[0].(*db.InspectResp)
 		err = rs.AppendBytes([]byte(obj.ConsoleString()), false)
 		return err
+	}
+	if command == MergeObjectsMethod {
+		return rs.AppendBytes(res.Data.([]byte), false)
 	}
 	err = rs.AppendBytes(json.Pretty(res), false)
 	return err

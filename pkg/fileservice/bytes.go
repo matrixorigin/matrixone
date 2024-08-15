@@ -15,16 +15,12 @@
 package fileservice
 
 import (
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
-	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
 type Bytes struct {
 	bytes       []byte
-	ptr         unsafe.Pointer
 	deallocator malloc.Deallocator
 }
 
@@ -36,15 +32,14 @@ func (b Bytes) Bytes() []byte {
 	return b.bytes
 }
 
-func (b Bytes) Slice(length int) memorycache.CacheData {
+func (b Bytes) Slice(length int) fscache.Data {
 	b.bytes = b.bytes[:length]
 	return b
 }
 
 func (b Bytes) Release() {
 	if b.deallocator != nil {
-		b.deallocator.Deallocate(b.ptr)
-		metric.FSMallocLiveObjectsBytes.Dec()
+		b.deallocator.Deallocate(malloc.NoHints)
 	}
 }
 
@@ -54,12 +49,13 @@ type bytesAllocator struct {
 
 var _ CacheDataAllocator = new(bytesAllocator)
 
-func (b *bytesAllocator) Alloc(size int) memorycache.CacheData {
-	ptr, dec := b.allocator.Allocate(uint64(size))
-	metric.FSMallocLiveObjectsBytes.Inc()
+func (b *bytesAllocator) Alloc(size int) fscache.Data {
+	slice, dec, err := b.allocator.Allocate(uint64(size), malloc.NoHints)
+	if err != nil {
+		panic(err)
+	}
 	return Bytes{
-		bytes:       unsafe.Slice((*byte)(ptr), size),
-		ptr:         ptr,
+		bytes:       slice,
 		deallocator: dec,
 	}
 }

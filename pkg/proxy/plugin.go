@@ -16,25 +16,27 @@ package proxy
 
 import (
 	"context"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plugin"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 // pluginRouter is a router implementation that uses external plugin to select CN server.
 type pluginRouter struct {
+	sid string
 	// Router is a delegated impl that is used when plugin flags a Bypass action
 	Router
 	// plugin is the plugin that is used to select CN server
 	plugin Plugin
 }
 
-func newPluginRouter(r Router, p Plugin) *pluginRouter {
+func newPluginRouter(sid string, r Router, p Plugin) *pluginRouter {
 	return &pluginRouter{
+		sid:    sid,
 		Router: r,
 		plugin: p,
 	}
@@ -42,7 +44,7 @@ func newPluginRouter(r Router, p Plugin) *pluginRouter {
 
 // Route implements Router.Route.
 func (r *pluginRouter) Route(
-	ctx context.Context, ci clientInfo, filter func(prevAddr string) bool,
+	ctx context.Context, sid string, ci clientInfo, filter func(uuid string) bool,
 ) (*CNServer, error) {
 	re, err := r.plugin.RecommendCN(ctx, ci)
 	if err != nil {
@@ -61,7 +63,7 @@ func (r *pluginRouter) Route(
 		}
 		// selected CN should be filtered out, fall back to the delegated router
 		if filter != nil && filter(re.CN.SQLAddress) {
-			return r.Router.Route(ctx, ci, filter)
+			return r.Router.Route(ctx, sid, ci, filter)
 		}
 		hash, err := ci.labelInfo.getHash()
 		if err != nil {
@@ -80,7 +82,7 @@ func (r *pluginRouter) Route(
 		return nil, withCode(moerr.NewInfoNoCtx(re.Message),
 			codeAuthFailed)
 	case plugin.Bypass:
-		return r.Router.Route(ctx, ci, filter)
+		return r.Router.Route(ctx, r.sid, ci, filter)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unknown recommended action %d", re.Action)
 	}
@@ -98,10 +100,13 @@ type rpcPlugin struct {
 	timeout time.Duration
 }
 
-func newRPCPlugin(backend string, timeout time.Duration) (*rpcPlugin, error) {
-	codec := morpc.NewMessageCodec(func() morpc.Message {
-		return &plugin.Response{}
-	})
+func newRPCPlugin(sid string, backend string, timeout time.Duration) (*rpcPlugin, error) {
+	codec := morpc.NewMessageCodec(
+		sid,
+		func() morpc.Message {
+			return &plugin.Response{}
+		},
+	)
 	backendOpts := []morpc.BackendOption{
 		morpc.WithBackendConnectTimeout(timeout),
 		morpc.WithBackendHasPayloadResponse(),

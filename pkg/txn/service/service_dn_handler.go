@@ -27,8 +27,8 @@ import (
 func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
 
-	util.LogTxnHandleRequest(request)
-	defer util.LogTxnHandleResult(response)
+	util.LogTxnHandleRequest(s.logger, request)
+	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.PrepareResponse = &txn.TxnPrepareResponse{}
 
@@ -81,8 +81,8 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 func (s *service) GetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
 
-	util.LogTxnHandleRequest(request)
-	defer util.LogTxnHandleResult(response)
+	util.LogTxnHandleRequest(s.logger, request)
+	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.GetStatusResponse = &txn.TxnGetStatusResponse{}
 
@@ -106,8 +106,8 @@ func (s *service) GetStatus(ctx context.Context, request *txn.TxnRequest, respon
 func (s *service) CommitTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
 
-	util.LogTxnHandleRequest(request)
-	defer util.LogTxnHandleResult(response)
+	util.LogTxnHandleRequest(s.logger, request)
+	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.CommitTNShardResponse = &txn.TxnCommitTNShardResponse{}
 
@@ -161,8 +161,8 @@ func (s *service) CommitTNShard(ctx context.Context, request *txn.TxnRequest, re
 func (s *service) RollbackTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
 
-	util.LogTxnHandleRequest(request)
-	defer util.LogTxnHandleResult(response)
+	util.LogTxnHandleRequest(s.logger, request)
+	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.RollbackTNShardResponse = &txn.TxnRollbackTNShardResponse{}
 

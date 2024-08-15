@@ -472,7 +472,7 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 			merge = newMerge(len(w.Bats), sort.Decimal128Less, getFixedCols[types.Decimal128](w.Bats, pos), nulls)
 		case types.T_uuid:
 			merge = newMerge(len(w.Bats), sort.UuidLess, getFixedCols[types.Uuid](w.Bats, pos), nulls)
-		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 			merge = newMerge(len(w.Bats), sort.GenericLess[string], getStrCols(w.Bats, pos), nulls)
 			//TODO: check if we need T_array here? T_json is missing here.
 			// Update Oct 20 2023: I don't think it is necessary to add T_array here. Keeping this comment,
@@ -561,7 +561,7 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 	// Use uuid as segment id
 	// TODO: multiple 64m file in one segment
 	obj := Get().GenerateObject()
-	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	s3, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
@@ -697,9 +697,8 @@ func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]objectio.BlockInfo, 
 				&sid,
 				location.Name().Num(),
 				location.ID()),
-			SegmentID: sid,
 			//non-appendable block
-			EntryState: false,
+			Appendable: false,
 		}
 		blkInfo.SetMetaLocation(location)
 		if w.sortIndex != -1 {

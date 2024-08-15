@@ -133,7 +133,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	assert.Nil(t, err)
 	entries = append(entries, createDbEntries...)
 	//create table from "dbtest"
-	defs, err := SchemaToDefs(schema)
+	defs, err := catalog.SchemaToDefs(schema)
 	for i := 0; i < len(defs); i++ {
 		if attrdef, ok := defs[i].(*engine.AttributeDef); ok {
 			attrdef.Attr.Default = &plan.Default{
@@ -314,7 +314,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 	entries = append(entries, createDbEntries...)
 	//create table from "dbtest"
-	defs, err := SchemaToDefs(schema)
+	defs, err := catalog.SchemaToDefs(schema)
 	for i := 0; i < len(defs); i++ {
 		if attrdef, ok := defs[i].(*engine.AttributeDef); ok {
 			attrdef.Attr.Default = &plan.Default{
@@ -441,7 +441,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	rows := 0
 	it := tbH.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		for j := 0; j < blk.BlkCnt(); j++ {
 			cv, err := blk.GetColumnDataByName(context.Background(), uint16(j), schema.ColDefs[1].Name, common.DefaultAllocator)
@@ -449,21 +449,19 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 			defer cv.Close()
 			rows += cv.Length()
 		}
-		it.Next()
 	}
 	_ = it.Close()
 	assert.Equal(t, taeBat.Length(), rows)
 
-	var physicals []*containers.BlockView
+	var physicals []*containers.Batch
 	it = tbH.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		for j := 0; j < blk.BlkCnt(); j++ {
 			bv, err := blk.GetColumnDataByNames(context.Background(), uint16(j), []string{hideDef[0].Name, schema.GetPrimaryKey().GetName()}, common.DefaultAllocator)
 			assert.NoError(t, err)
 			physicals = append(physicals, bv)
 		}
-		it.Next()
 	}
 	_ = it.Close()
 
@@ -478,8 +476,8 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 	for _, view := range physicals {
 		bat := batch.New(true, []string{hideDef[0].Name, schema.GetPrimaryKey().GetName()})
-		bat.Vecs[0], _ = view.GetColumnData(2).GetDownstreamVector().Window(0, 5)
-		bat.Vecs[1], _ = view.GetColumnData(1).GetDownstreamVector().Window(0, 5)
+		bat.Vecs[0], _ = view.Vecs[0].GetDownstreamVector().Window(0, 5)
+		bat.Vecs[1], _ = view.Vecs[1].GetDownstreamVector().Window(0, 5)
 		_, err := writer.WriteTombstoneBatch(bat)
 		assert.Nil(t, err)
 	}
@@ -489,28 +487,28 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	delLoc1 := blockio.EncodeLocation(
 		writer.GetName(),
 		blocks[0].GetExtent(),
-		uint32(physicals[0].GetColumnData(2).Length()),
+		uint32(physicals[0].Vecs[0].Length()),
 		blocks[0].GetID(),
 	).String()
 	assert.Nil(t, err)
 	delLoc2 := blockio.EncodeLocation(
 		writer.GetName(),
 		blocks[1].GetExtent(),
-		uint32(physicals[1].GetColumnData(2).Length()),
+		uint32(physicals[1].Vecs[0].Length()),
 		blocks[1].GetID(),
 	).String()
 	assert.Nil(t, err)
 	delLoc3 := blockio.EncodeLocation(
 		writer.GetName(),
 		blocks[2].GetExtent(),
-		uint32(physicals[2].GetColumnData(2).Length()),
+		uint32(physicals[2].Vecs[0].Length()),
 		blocks[2].GetID(),
 	).String()
 	assert.Nil(t, err)
 	delLoc4 := blockio.EncodeLocation(
 		writer.GetName(),
 		blocks[3].GetExtent(),
-		uint32(physicals[3].GetColumnData(2).Length()),
+		uint32(physicals[3].Vecs[0].Length()),
 		blocks[3].GetID(),
 	).String()
 	assert.Nil(t, err)
@@ -559,16 +557,15 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	rows = 0
 	it = tbH.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		for j := 0; j < blk.BlkCnt(); j++ {
 			cv, err := blk.GetColumnDataByName(context.Background(), uint16(j), schema.ColDefs[1].Name, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer cv.Close()
-			cv.ApplyDeletes()
+			cv.Compact()
 			rows += cv.Length()
 		}
-		it.Next()
 	}
 	assert.Equal(t, len(taeBats)*taeBats[0].Length()-5*len(taeBats), rows)
 	err = txnR.Commit(context.Background())
@@ -629,7 +626,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	assert.Nil(t, err)
 
 	//create table from "dbtest"
-	defs, err := SchemaToDefs(schema)
+	defs, err := catalog.SchemaToDefs(schema)
 	for i := 0; i < len(defs); i++ {
 		if attrdef, ok := defs[i].(*engine.AttributeDef); ok {
 			attrdef.Attr.Default = &plan.Default{
@@ -748,7 +745,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	assert.NoError(t, err)
 
 	it := tbH.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		for j := 0; j < blk.BlkCnt(); j++ {
 			cv, err := blk.GetColumnDataByName(context.Background(), uint16(j), schema.ColDefs[1].Name, common.DefaultAllocator)
@@ -756,7 +753,6 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 			defer cv.Close()
 			assert.Equal(t, 100, cv.Length())
 		}
-		it.Next()
 	}
 	_ = it.Close()
 
@@ -764,8 +760,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	hideCol, err := GetHideKeysOfTable(tbH)
 	assert.NoError(t, err)
 
-	it = tbH.MakeObjectIt()
-	blk := it.GetObject()
+	blk := testutil.GetOneObject(tbH)
 	cv, err := blk.GetColumnDataByName(context.Background(), 0, hideCol[0].Name, common.DefaultAllocator)
 	assert.NoError(t, err)
 	defer cv.Close()
@@ -776,8 +771,8 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 
 	assert.NoError(t, txn.Commit(context.Background()))
 	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
-	delBat.Vecs[0], _ = cv.GetData().GetDownstreamVector().Window(0, 20)
-	delBat.Vecs[1], _ = pk.GetData().GetDownstreamVector().Window(0, 20)
+	delBat.Vecs[0], _ = cv.Vecs[0].GetDownstreamVector().Window(0, 20)
+	delBat.Vecs[1], _ = pk.Vecs[0].GetDownstreamVector().Window(0, 20)
 
 	//delete 20 rows
 	deleteTxn := mock1PCTxn(handle.db)
@@ -813,16 +808,15 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	assert.NoError(t, err)
 
 	it = tbH.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		for j := 0; j < blk.BlkCnt(); j++ {
 			v, err := blk.GetColumnDataByName(context.Background(), uint16(j), schema.ColDefs[1].Name, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer v.Close()
-			v.ApplyDeletes()
+			v.Compact()
 			assert.Equal(t, 80, v.Length())
 		}
-		it.Next()
 	}
 	it.Close()
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -882,7 +876,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	assert.Nil(t, err)
 
 	//create table from "dbtest"
-	defs, err := SchemaToDefs(schema)
+	defs, err := catalog.SchemaToDefs(schema)
 	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
 		NullAbility: true,
 		Expr: &plan.Expr{
@@ -1020,7 +1014,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	assert.NoError(t, err)
 
 	it := tbH.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		for j := 0; j < blk.BlkCnt(); j++ {
 			v, err := blk.GetColumnDataByName(context.Background(), uint16(j), schema.ColDefs[1].Name, common.DefaultAllocator)
@@ -1028,26 +1022,22 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 			defer v.Close()
 			assert.Equal(t, 100, v.Length())
 		}
-		it.Next()
 	}
 	_ = it.Close()
 
 	// read row ids
 	hideCol, err := GetHideKeysOfTable(tbH)
 	assert.NoError(t, err)
-	it = tbH.MakeObjectIt()
-	cv, err := it.GetObject().GetColumnDataByName(context.Background(), 0, hideCol[0].Name, common.DefaultAllocator)
+	cv, err := testutil.GetOneObject(tbH).GetColumnDataByName(context.Background(), 0, hideCol[0].Name, common.DefaultAllocator)
 	assert.NoError(t, err)
 	defer cv.Close()
-	pk, err := it.GetObject().GetColumnDataByName(context.Background(), 0, schema.GetPrimaryKey().GetName(), common.DefaultAllocator)
+	pk, err := testutil.GetOneObject(tbH).GetColumnDataByName(context.Background(), 0, schema.GetPrimaryKey().GetName(), common.DefaultAllocator)
 	assert.NoError(t, err)
 	defer pk.Close()
 
-	_ = it.Close()
-
 	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
-	delBat.Vecs[0] = cv.GetData().GetDownstreamVector()
-	delBat.Vecs[1] = pk.GetData().GetDownstreamVector()
+	delBat.Vecs[0] = cv.Vecs[0].GetDownstreamVector()
+	delBat.Vecs[1] = pk.Vecs[0].GetDownstreamVector()
 
 	assert.NoError(t, txn.Commit(ctx))
 
@@ -1118,16 +1108,15 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	assert.NoError(t, err)
 
 	it = tbH.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		obj := it.GetObject()
 		for j := 0; j < obj.BlkCnt(); j++ {
 			v, err := obj.GetColumnDataByName(context.Background(), uint16(0), schema.ColDefs[1].Name, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer v.Close()
-			v.ApplyDeletes()
+			v.Compact()
 			assert.Equal(t, 80, v.Length())
 		}
-		it.Next()
 	}
 	_ = it.Close()
 	assert.NoError(t, txn.Commit(ctx))
@@ -1186,7 +1175,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	assert.Nil(t, err)
 
 	//create table from "dbtest"
-	defs, err := SchemaToDefs(schema)
+	defs, err := catalog.SchemaToDefs(schema)
 	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
 		NullAbility: true,
 		Expr: &plan.Expr{
@@ -1344,7 +1333,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	tbH, err = dbH.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
 	it := tbH.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		obj := it.GetObject()
 		for j := 0; j < obj.BlkCnt(); j++ {
 			v, err := it.GetObject().GetColumnDataByName(context.Background(), uint16(0), schema.ColDefs[1].Name, common.DefaultAllocator)
@@ -1352,14 +1341,12 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 			defer v.Close()
 			assert.Equal(t, 100, v.Length())
 		}
-		it.Next()
 	}
 	_ = it.Close()
 
 	hideCol, err := GetHideKeysOfTable(tbH)
 	assert.NoError(t, err)
-	it = tbH.MakeObjectIt()
-	v, err := it.GetObject().GetColumnDataByName(context.Background(), 0, hideCol[0].Name, common.DefaultAllocator)
+	v, err := testutil.GetOneObject(tbH).GetColumnDataByName(context.Background(), 0, hideCol[0].Name, common.DefaultAllocator)
 	assert.NoError(t, err)
 	defer v.Close()
 
@@ -1369,8 +1356,8 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 
 	_ = it.Close()
 	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
-	delBat.Vecs[0] = v.GetData().GetDownstreamVector()
-	delBat.Vecs[1] = pk.GetData().GetDownstreamVector()
+	delBat.Vecs[0] = v.Vecs[0].GetDownstreamVector()
+	delBat.Vecs[1] = pk.Vecs[0].GetDownstreamVector()
 
 	assert.NoError(t, txn.Commit(ctx))
 
@@ -1442,16 +1429,15 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	assert.NoError(t, err)
 
 	it = tbH.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		obj := it.GetObject()
 		for j := 0; j < obj.BlkCnt(); j++ {
 			v, err := obj.GetColumnDataByName(context.Background(), uint16(j), schema.ColDefs[1].Name, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer v.Close()
-			v.ApplyDeletes()
+			v.Compact()
 			assert.Equal(t, 80, v.Length())
 		}
-		it.Next()
 	}
 	_ = it.Close()
 
@@ -1548,7 +1534,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Wait()
 
 	//create table from "dbtest"
-	defs, err := SchemaToDefs(schema)
+	defs, err := catalog.SchemaToDefs(schema)
 	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
 		NullAbility: true,
 		Expr: &plan.Expr{
@@ -1674,7 +1660,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		assert.NoError(t, err)
 
 		it := tbH.MakeObjectIt()
-		for it.Valid() {
+		for it.Next() {
 			obj := it.GetObject()
 			for j := 0; j < obj.BlkCnt(); j++ {
 				v, err := obj.GetColumnDataByName(context.Background(), 0, schema.ColDefs[1].Name, common.DefaultAllocator)
@@ -1682,7 +1668,6 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 				defer v.Close()
 				assert.Equal(t, 100, v.Length())
 			}
-			it.Next()
 		}
 		_ = it.Close()
 		txn.Commit(ctx)
@@ -1711,20 +1696,17 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		hideCol, err := GetHideKeysOfTable(tbH)
 		assert.NoError(t, err)
 
-		it := tbH.MakeObjectIt()
-		v, err := it.GetObject().GetColumnDataByName(context.Background(), 0, hideCol[0].Name, common.DefaultAllocator)
+		v, err := testutil.GetOneObject(tbH).GetColumnDataByName(context.Background(), 0, hideCol[0].Name, common.DefaultAllocator)
 		assert.NoError(t, err)
 		defer v.Close()
 
-		pk, err := it.GetObject().GetColumnDataByName(context.Background(), 0, schema.GetPrimaryKey().GetName(), common.DefaultAllocator)
+		pk, err := testutil.GetOneObject(tbH).GetColumnDataByName(context.Background(), 0, schema.GetPrimaryKey().GetName(), common.DefaultAllocator)
 		assert.NoError(t, err)
 		defer pk.Close()
 
-		_ = it.Close()
-
 		delBat = batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
-		delBat.Vecs[0] = v.GetData().GetDownstreamVector()
-		delBat.Vecs[1] = pk.GetData().GetDownstreamVector()
+		delBat.Vecs[0] = v.Vecs[0].GetDownstreamVector()
+		delBat.Vecs[1] = pk.Vecs[0].GetDownstreamVector()
 
 		assert.NoError(t, txn.Commit(ctx))
 	}
@@ -1766,16 +1748,15 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		assert.NoError(t, err)
 
 		it := tbH.MakeObjectIt()
-		for it.Valid() {
+		for it.Next() {
 			obj := it.GetObject()
 			for j := 0; j < obj.BlkCnt(); j++ {
 				v, err := obj.GetColumnDataByName(context.Background(), uint16(0), schema.ColDefs[1].Name, common.DefaultAllocator)
 				assert.NoError(t, err)
 				defer v.Close()
-				v.ApplyDeletes()
+				v.Compact()
 				assert.Equal(t, 80, v.Length())
 			}
-			it.Next()
 		}
 		_ = it.Close()
 
@@ -1843,11 +1824,10 @@ func TestApplyDeltaloc(t *testing.T) {
 	assert.NoError(t, err)
 	var metas []*catalog.ObjectEntry
 	it := rel.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		meta := blk.GetMeta().(*catalog.ObjectEntry)
 		metas = append(metas, meta)
-		it.Next()
 	}
 	assert.NoError(t, txn0.Commit(context.Background()))
 
@@ -1969,16 +1949,15 @@ func TestApplyDeltaloc(t *testing.T) {
 	it = rel.MakeObjectIt()
 	for _, def := range schema.ColDefs {
 		length := 0
-		for it.Valid() {
+		for it.Next() {
 			blk := it.GetObject()
 			meta := blk.GetMeta().(*catalog.ObjectEntry)
 			for j := 0; j < blk.BlkCnt(); j++ {
 				view, err := meta.GetObjectData().GetColumnDataById(context.Background(), txn0, schema, uint16(j), def.Idx, common.DefaultAllocator)
 				assert.NoError(t, err)
-				view.ApplyDeletes()
-				length += view.GetData().Length()
+				view.Compact()
+				length += view.Length()
 			}
-			it.Next()
 		}
 		assert.Equal(t, 0, length)
 	}

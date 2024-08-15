@@ -36,8 +36,14 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bindingByTag:   make(map[int32]*Binding),
 		bindingByTable: make(map[string]*Binding),
 		bindingByCol:   make(map[string]*Binding),
+		lower:          1,
 		parent:         parent,
 	}
+
+	if builder != nil {
+		bc.lower = builder.compCtx.GetLowerCaseTableNames()
+	}
+
 	if parent != nil {
 		bc.defaultDatabase = parent.defaultDatabase
 		bc.normalCTE = parent.normalCTE
@@ -254,7 +260,7 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 			if !isSysAccount && binding.isClusterTable && util.IsClusterTableAttribute(col) {
 				continue
 			}
-			expr, _ := tree.NewUnresolvedName(ctx, table, col)
+			expr := tree.NewUnresolvedName(tree.NewCStr(table, bc.lower), tree.NewCStr(col, 1))
 			exprs = append(exprs, tree.SelectExpr{Expr: expr})
 			names = append(names, col)
 		}
@@ -280,7 +286,7 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 				continue
 			}
 			if !visitedUsingCols[col] {
-				expr, _ := tree.NewUnresolvedName(ctx, root.binding.table, col)
+				expr := tree.NewUnresolvedName(tree.NewCStr(root.binding.table, bc.lower), tree.NewCStr(col, 1))
 				*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
 				*names = append(*names, col)
 			}
@@ -303,7 +309,7 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 			handledUsingCols = append(handledUsingCols, using.col)
 			visitedUsingCols[using.col] = true
 
-			expr, _ := tree.NewUnresolvedName(ctx, using.table, using.col)
+			expr := tree.NewUnresolvedName(tree.NewCStr(using.table, bc.lower), tree.NewCStr(using.col, 1))
 			*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
 			*names = append(*names, using.col)
 		}
@@ -399,7 +405,7 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 
 	case *tree.UnresolvedName:
 		if !exprImpl.Star && exprImpl.NumParts == 1 {
-			col := exprImpl.Parts[0]
+			col := exprImpl.ColName()
 			if expandAlias == AliasBeforeColumn {
 				if selectItem, ok := bc.aliasMap[col]; ok {
 					return selectItem.astExpr, nil
@@ -409,10 +415,10 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 			if binding, ok := bc.bindingByCol[col]; ok {
 				if binding != nil {
 					exprImpl.NumParts = 2
-					exprImpl.Parts[1] = binding.table
+					exprImpl.CStrParts[1] = tree.NewCStr(binding.table, bc.lower)
 					return astExpr, nil
 				} else {
-					return nil, moerr.NewInvalidInput(bc.binder.GetContext(), "ambiguouse column reference to '%s'", col)
+					return nil, moerr.NewInvalidInput(bc.binder.GetContext(), "ambiguouse column reference to '%s'", exprImpl.ColNameOrigin())
 				}
 			}
 

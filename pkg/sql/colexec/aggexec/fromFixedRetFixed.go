@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -122,6 +123,8 @@ func newSingleAggFuncExec1NewVersion(
 		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Blockid](mg, info, impl)
 	case types.T_uuid:
 		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Uuid](mg, info, impl)
+	case types.T_enum:
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Enum](mg, info, impl)
 	}
 	panic(fmt.Sprintf("unsupported result type %s for single column agg executor1", info.retType))
 }
@@ -236,6 +239,11 @@ func newSingleAggFuncExec1NewVersionWithKnownResultType[to types.FixedSizeTExcep
 
 	case types.T_uuid:
 		e := &singleAggFuncExecNew1[types.Uuid, to]{}
+		e.init(mg, info, impl)
+		return e
+
+	case types.T_enum:
+		e := &singleAggFuncExecNew1[types.Enum, to]{}
 		e.init(mg, info, impl)
 		return e
 	}

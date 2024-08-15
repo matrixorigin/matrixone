@@ -27,7 +27,6 @@ import (
 
 const (
 	ivfFlatIndexFlag = "experimental_ivf_index"
-	masterIndexFlag  = "experimental_master_index"
 )
 
 func (s *Scope) handleUniqueIndexTable(c *Compile,
@@ -71,12 +70,6 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 func (s *Scope) handleMasterIndexTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
-	if ok, err := s.isExperimentalEnabled(c, masterIndexFlag); err != nil {
-		return err
-	} else if !ok {
-		return moerr.NewInternalErrorNoCtx("Master index is not enabled")
-	}
-
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
@@ -105,7 +98,7 @@ func (s *Scope) handleIndexColCount(c *Compile, indexDef *plan.IndexDef, qryData
 		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name)
-	rs, err := c.runSqlWithResult(countTotalSql)
+	rs, err := c.runSqlWithResult(countTotalSql, NoAccountId)
 	if err != nil {
 		return 0, err
 	}

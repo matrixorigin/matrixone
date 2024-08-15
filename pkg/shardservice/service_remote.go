@@ -25,7 +25,7 @@ import (
 )
 
 func (s *service) initRemote() {
-	s.remote.cluster = clusterservice.GetMOCluster()
+	s.remote.cluster = clusterservice.GetMOCluster(s.cfg.ServiceID)
 	s.remote.pool = morpc.NewMessagePool(
 		func() *pb.Request {
 			return &pb.Request{}
@@ -38,6 +38,7 @@ func (s *service) initRemote() {
 	s.initRemoteClient()
 
 	svr, err := morpc.NewMessageHandler(
+		s.cfg.ServiceID,
 		"shard-service",
 		s.cfg.ListenAddress,
 		s.cfg.RPC,
@@ -61,6 +62,7 @@ func (s *service) initRemote() {
 
 func (s *service) initRemoteClient() {
 	c, err := morpc.NewMethodBasedClient(
+		s.cfg.ServiceID,
 		"shard-service",
 		s.cfg.RPC,
 		s.remote.pool,
@@ -108,13 +110,15 @@ func (s *service) handleRemoteRead(
 	ctx context.Context,
 	req *pb.Request,
 	resp *pb.Response,
+	buffer *morpc.Buffer,
 ) error {
 	value, err := s.doRead(
 		ctx,
 		req.ShardRead.Shard,
 		req.ShardRead.ReadAt,
 		int(req.ShardRead.Method),
-		req.ShardRead.Payload,
+		req.ShardRead.Param,
+		buffer,
 	)
 	if err != nil {
 		return err
@@ -178,14 +182,14 @@ func (s *service) unwrapError(
 func (s *service) newReadRequest(
 	shard pb.TableShard,
 	method int,
-	payload []byte,
+	param pb.ReadParam,
 	readAt timestamp.Timestamp,
 ) *pb.Request {
 	req := s.remote.pool.AcquireRequest()
 	req.RPCMethod = pb.Method_ShardRead
 	req.ShardRead.Shard = shard
 	req.ShardRead.Method = uint32(method)
-	req.ShardRead.Payload = payload
+	req.ShardRead.Param = param
 	req.ShardRead.CN = shard.Replicas[0].CN
 	req.ShardRead.ReadAt = readAt
 	return req

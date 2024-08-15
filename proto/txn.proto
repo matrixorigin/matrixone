@@ -24,6 +24,8 @@ import "metadata.proto";
 import "lock.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = true;
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
 
 // TxnIsolation txn txn isolation
 enum TxnIsolation {

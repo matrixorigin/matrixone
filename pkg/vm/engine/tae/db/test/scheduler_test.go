@@ -55,8 +55,7 @@ func TestCheckpoint1(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		it := rel.MakeObjectIt()
-		blk := it.GetObject()
+		blk := testutil.GetOneObject(rel)
 		err := blk.RangeDelete(0, 3, 3, handle.DT_Normal, common.DefaultAllocator)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
@@ -73,11 +72,11 @@ func TestCheckpoint1(t *testing.T) {
 		processor.ObjectFn = objectFn
 		err := db.Catalog.RecurLoop(processor)
 		assert.NoError(t, err)
-		return blockCnt == 2+3
+		return blockCnt == 2
 	}
 	testutils.WaitExpect(1000, fn)
 	fn()
-	assert.Equal(t, 2+3, blockCnt)
+	assert.Equal(t, 2, blockCnt)
 }
 
 func TestCheckpoint2(t *testing.T) {
@@ -140,8 +139,7 @@ func TestCheckpoint2(t *testing.T) {
 		assert.Nil(t, err)
 		rel, err := db.GetRelationByName(schema1.Name)
 		assert.Nil(t, err)
-		it := rel.MakeObjectIt()
-		blk := it.GetObject()
+		blk := testutil.GetOneObject(rel)
 		meta = blk.GetMeta().(*catalog.ObjectEntry)
 		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, []*catalog.ObjectEntry{meta}, tae.Runtime, txn.GetStartTS())
 		assert.Nil(t, err)

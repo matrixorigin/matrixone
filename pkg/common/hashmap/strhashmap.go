@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
@@ -40,20 +39,20 @@ func NewStrMap(hasNull bool, m *mpool.MPool) (*StrHashMap, error) {
 		return nil, err
 	}
 	return &StrHashMap{
-		m:             m,
-		hashMap:       mp,
-		hasNull:       hasNull,
-		values:        make([]uint64, UnitLimit),
-		zValues:       make([]int64, UnitLimit),
-		keys:          make([][]byte, UnitLimit),
-		strHashStates: make([][3]uint64, UnitLimit),
+		m:       m,
+		hashMap: mp,
+		hasNull: hasNull,
 	}, nil
 }
 
 func (m *StrHashMap) NewIterator() Iterator {
 	return &strHashmapIterator{
-		mp: m,
-		m:  m.m,
+		mp:            m,
+		m:             m.m,
+		values:        make([]uint64, UnitLimit),
+		zValues:       make([]int64, UnitLimit),
+		keys:          make([][]byte, UnitLimit),
+		strHashStates: make([][3]uint64, UnitLimit),
 	}
 }
 
@@ -93,88 +92,18 @@ func (m *StrHashMap) Cardinality() uint64 {
 	return m.hashMap.Cardinality()
 }
 
-// InsertValue insert a value, return true if it is new, otherwise false
-// never handle null
-func (m *StrHashMap) InsertValue(val any) (bool, error) {
-	defer func() { m.keys[0] = m.keys[0][:0] }()
-	switch v := val.(type) {
-	case uint8:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case uint16:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case uint32:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case uint64:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case int8:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case int16:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case int32:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case int64:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case float32:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case float64:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case []byte:
-		length := uint16(len(v))
-		m.keys[0] = append(m.keys[0], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
-		m.keys[0] = append(m.keys[0], v...)
-	case types.Date:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case types.Datetime:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case types.Timestamp:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case types.Decimal64:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case types.Decimal128:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case types.Uuid:
-		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case string:
-		m.keys[0] = append(m.keys[0], []byte(v)...)
-	}
-	if l := len(m.keys[0]); l < 16 {
-		m.keys[0] = append(m.keys[0], hashtable.StrKeyPadding[l:]...)
-	}
-	if err := m.hashMap.InsertStringBatch(m.strHashStates, m.keys[:1], m.values[:1], m.m); err != nil {
-		return false, err
-	}
-	if m.values[0] > m.rows {
-		m.rows++
-		return true, nil
-	}
-	return false, nil
-}
-
-// Insert a row from multiple columns into the hashmap, return true if it is new, otherwise false
-func (m *StrHashMap) Insert(vecs []*vector.Vector, row int) (bool, error) {
-	defer func() { m.keys[0] = m.keys[0][:0] }()
-	m.encodeHashKeys(vecs, row, 1)
-	if err := m.hashMap.InsertStringBatch(m.strHashStates, m.keys[:1], m.values[:1], m.m); err != nil {
-		return false, err
-	}
-	if m.values[0] > m.rows {
-		m.rows++
-		return true, nil
-	}
-	return false, nil
-}
-
-func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
+func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
 		if vec.GetType().IsFixedLen() {
-			fillGroupStr(m, vec, count, vec.GetType().TypeSize(), start, 0, len(vecs))
+			fillGroupStr(itr, vec, count, vec.GetType().TypeSize(), start, 0, len(vecs))
 		} else {
-			fillStringGroupStr(m, vec, count, start, len(vecs))
+			fillStringGroupStr(itr, vec, count, start, len(vecs))
 		}
 	}
+	keys := itr.keys
 	for i := 0; i < count; i++ {
-		if l := len(m.keys[i]); l < 16 {
-			m.keys[i] = append(m.keys[i], hashtable.StrKeyPadding[l:]...)
+		if l := len(keys[i]); l < 16 {
+			keys[i] = append(keys[i], hashtable.StrKeyPadding[l:]...)
 		}
 	}
 }
@@ -186,31 +115,32 @@ func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 // for NULL value, just only one byte, give one byte(1)
 // these are the rules of multi-cols
 // for one col, just give the value bytes
-func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int, lenCols int) {
+func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, start int, lenCols int) {
+	keys := itr.keys
 	if vec.IsConstNull() {
-		if m.hasNull {
+		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
-				m.keys[i] = append(m.keys[i], byte(1))
+				keys[i] = append(keys[i], byte(1))
 			}
 		} else {
 			for i := 0; i < n; i++ {
-				m.zValues[i] = 0
+				itr.zValues[i] = 0
 			}
 		}
 		return
 	}
 	if !vec.GetNulls().Any() {
-		if m.hasNull {
+		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
 				bytes := vec.GetBytesAt(i + start)
 				// for "a"，"bc" and "ab","c", we need to distinct
 				// this is not null value
-				m.keys[i] = append(m.keys[i], 0)
+				keys[i] = append(keys[i], 0)
 				// give the length
 				length := uint16(len(bytes))
-				m.keys[i] = append(m.keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+				keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
 				// append the ture value bytes
-				m.keys[i] = append(m.keys[i], bytes...)
+				keys[i] = append(keys[i], bytes...)
 			}
 		} else {
 			for i := 0; i < n; i++ {
@@ -218,131 +148,108 @@ func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int, len
 				// for "a"，"bc" and "ab","c", we need to distinct
 				// give the length
 				length := uint16(len(bytes))
-				m.keys[i] = append(m.keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+				keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
 				// append the ture value bytes
-				m.keys[i] = append(m.keys[i], bytes...)
+				keys[i] = append(keys[i], bytes...)
 			}
 		}
 	} else {
 		nsp := vec.GetNulls()
 		for i := 0; i < n; i++ {
 			hasNull := nsp.Contains(uint64(i + start))
-			if m.hasNull {
+			if itr.mp.hasNull {
 				if hasNull {
-					m.keys[i] = append(m.keys[i], byte(1))
+					keys[i] = append(keys[i], byte(1))
 				} else {
 					bytes := vec.GetBytesAt(i + start)
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// this is not null value
-					m.keys[i] = append(m.keys[i], 0)
+					keys[i] = append(keys[i], 0)
 					// give the length
 					length := uint16(len(bytes))
-					m.keys[i] = append(m.keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+					keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
 					// append the ture value bytes
-					m.keys[i] = append(m.keys[i], bytes...)
+					keys[i] = append(keys[i], bytes...)
 				}
 			} else {
 				if hasNull {
-					m.zValues[i] = 0
+					itr.zValues[i] = 0
 					continue
 				}
 				bytes := vec.GetBytesAt(i + start)
 				// for "a"，"bc" and "ab","c", we need to distinct
 				// give the length
 				length := uint16(len(bytes))
-				m.keys[i] = append(m.keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+				keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
 				// append the ture value bytes
-				m.keys[i] = append(m.keys[i], bytes...)
+				keys[i] = append(keys[i], bytes...)
 			}
 		}
 	}
 }
 
-func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, scale int32, lenCols int) {
+func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, start int, scale int32, lenCols int) {
+	keys := itr.keys
 	if vec.IsConstNull() {
-		if m.hasNull {
+		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
-				m.keys[i] = append(m.keys[i], byte(1))
+				keys[i] = append(keys[i], byte(1))
 			}
 		} else {
 			for i := 0; i < n; i++ {
-				m.zValues[i] = 0
+				itr.zValues[i] = 0
 			}
 		}
 		return
 	}
 	if vec.IsConst() {
 		data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), sz)
-		if m.hasNull {
+		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
-				m.keys[i] = append(m.keys[i], 0)
-				m.keys[i] = append(m.keys[i], data...)
+				keys[i] = append(keys[i], 0)
+				keys[i] = append(keys[i], data...)
 			}
 		} else {
 			for i := 0; i < n; i++ {
-				m.keys[i] = append(m.keys[i], data...)
+				keys[i] = append(keys[i], data...)
 			}
 		}
 		return
 	}
 	data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), (n+start)*sz)
 	if !vec.GetNulls().Any() {
-		if m.hasNull {
+		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
 				bytes := data[(i+start)*sz : (i+start+1)*sz]
-				m.keys[i] = append(m.keys[i], 0)
-				m.keys[i] = append(m.keys[i], bytes...)
+				keys[i] = append(keys[i], 0)
+				keys[i] = append(keys[i], bytes...)
 			}
 		} else {
 			for i := 0; i < n; i++ {
 				bytes := data[(i+start)*sz : (i+start+1)*sz]
-				m.keys[i] = append(m.keys[i], bytes...)
+				keys[i] = append(keys[i], bytes...)
 			}
 		}
 	} else {
 		nsp := vec.GetNulls()
 		for i := 0; i < n; i++ {
 			isNull := nsp.Contains(uint64(i + start))
-			if m.hasNull {
+			if itr.mp.hasNull {
 				if isNull {
-					m.keys[i] = append(m.keys[i], 1)
+					keys[i] = append(keys[i], 1)
 				} else {
 					bytes := data[(i+start)*sz : (i+start+1)*sz]
-					m.keys[i] = append(m.keys[i], 0)
-					m.keys[i] = append(m.keys[i], bytes...)
+					keys[i] = append(keys[i], 0)
+					keys[i] = append(keys[i], bytes...)
 				}
 			} else {
 				if isNull {
-					m.zValues[i] = 0
+					itr.zValues[i] = 0
 					continue
 				}
 				bytes := data[(i+start)*sz : (i+start+1)*sz]
-				m.keys[i] = append(m.keys[i], bytes...)
+				keys[i] = append(keys[i], bytes...)
 			}
 		}
 	}
-}
-
-func (m *StrHashMap) Dup(pool *mpool.MPool) *StrHashMap {
-	val := &StrHashMap{
-		hasNull: m.hasNull,
-		rows:    m.rows,
-
-		keys:          make([][]byte, len(m.keys)),
-		values:        make([]uint64, len(m.values)),
-		zValues:       make([]int64, len(m.zValues)),
-		strHashStates: make([][3]uint64, len(m.strHashStates)),
-		m:             pool,
-	}
-	copy(val.values, m.values)
-	copy(val.zValues, m.zValues)
-	copy(val.strHashStates, m.strHashStates)
-	for i, key := range m.keys {
-		val.keys[i] = make([]byte, len(key))
-		copy(val.keys[i], key)
-	}
-	if m.hashMap != nil {
-		val.hashMap = m.hashMap.Dup()
-	}
-	return val
 }

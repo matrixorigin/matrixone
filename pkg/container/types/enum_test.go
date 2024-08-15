@@ -26,7 +26,7 @@ func TestParseEnum(t *testing.T) {
 		name  string
 		enums []string
 		value string
-		want  uint16
+		want  Enum
 	}{
 		{
 			name:  "test01",
@@ -102,7 +102,7 @@ func TestParseEnumIndex(t *testing.T) {
 	cases := []struct {
 		name  string
 		enums []string
-		index uint16
+		index Enum
 		want  string
 	}{
 		{

@@ -244,7 +244,7 @@ func vector2DataVector(v *vector.Vector) (*udf.DataVector, error) {
 				dv.Data[i] = &udf.Data{Val: &udf.Data_DoubleVal{DoubleVal: val}}
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		p := vector.GenerateFunctionStrParameter(v)
 		for i := 0; i < size; i++ {
 			val, isNull := p.GetStrValue(uint64(i))
@@ -265,7 +265,7 @@ func vector2DataVector(v *vector.Vector) (*udf.DataVector, error) {
 		for i := 0; i < size; i++ {
 			val, isNull := p.GetValue(uint64(i))
 			if !isNull {
-				dv.Data[i] = &udf.Data{Val: &udf.Data_StringVal{StringVal: val.ToString()}}
+				dv.Data[i] = &udf.Data{Val: &udf.Data_StringVal{StringVal: val.String()}}
 			}
 		}
 	case types.T_time:
@@ -482,7 +482,7 @@ func writeResponse(response *udf.Response, result vector.FunctionResultWrapper) 
 				return err
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		res := vector.MustFunctionResult[types.Varlena](result)
 		for i := 0; i < length; i++ {
 			data := getDataFromDataVector(response.Vector, i)
@@ -719,7 +719,7 @@ func (d *DefaultPkgReader) Get(ctx context.Context, path string) (io.ReadCloser,
 	errGroup = new(errgroup.Group)
 	errGroup.Go(func() error {
 		defer writer.Close()
-		return d.Proc.FileService.Read(ctx, ioVector)
+		return d.Proc.GetFileService().Read(ctx, ioVector)
 	})
 
 	return reader, nil

@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Top)
 
 type container struct {
 	n     int // result vector number
@@ -35,7 +35,7 @@ type container struct {
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare
 
-	limit         int64
+	limit         uint64
 	limitExecutor colexec.ExpressionExecutor
 
 	executorsForOrderColumn []colexec.ExpressionExecutor
@@ -44,7 +44,7 @@ type container struct {
 	bat                     *batch.Batch
 }
 
-type Argument struct {
+type Top struct {
 	Limit       *plan.Expr
 	TopValueTag int32
 	ctr         *container
@@ -53,53 +53,53 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (top *Top) GetOperatorBase() *vm.OperatorBase {
+	return &top.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Top](
+		func() *Top {
+			return &Top{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Top) {
+			*a = Top{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Top]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (top Top) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Top {
+	return reuse.Alloc[Top](nil)
 }
 
-func (arg *Argument) WithLimit(limit *plan.Expr) *Argument {
-	arg.Limit = limit
-	return arg
+func (top *Top) WithLimit(limit *plan.Expr) *Top {
+	top.Limit = limit
+	return top
 }
 
-func (arg *Argument) WithFs(fs []*plan.OrderBySpec) *Argument {
-	arg.Fs = fs
-	return arg
+func (top *Top) WithFs(fs []*plan.OrderBySpec) *Top {
+	top.Fs = fs
+	return top
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (top *Top) Release() {
+	if top != nil {
+		reuse.Free[Top](top, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (top *Top) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	top.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (top *Top) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := top.ctr
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
@@ -115,7 +115,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			ctr.limitExecutor.Free()
 			ctr.limitExecutor = nil
 		}
-		arg.ctr = nil
+		top.ctr = nil
 	}
 }
 

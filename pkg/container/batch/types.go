@@ -18,10 +18,9 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
 var (
@@ -118,7 +117,7 @@ func (m *EncodeBatch) unmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) err
 		size := types.DecodeInt32(buf[:4])
 		buf = buf[4:]
 
-		vecs[i] = new(vector.Vector)
+		vecs[i] = vector.NewVecFromReuse()
 		if mp == nil {
 			if err := vecs[i].UnmarshalBinary(buf[:size]); err != nil {
 				return err
@@ -182,7 +181,7 @@ type Batch struct {
 	ShuffleIDX int32 //used only in shuffle
 	// reference count, default is 1
 	Cnt int64
-	// Attrs column name list
+	// Attrs column name list, letter case: origin
 	Attrs []string
 	// Vecs col data
 	Vecs []*vector.Vector
@@ -191,6 +190,4 @@ type Batch struct {
 
 	// row count of batch, to instead of old len(Zs).
 	rowCount int
-
-	AuxData any // hash table etc.
 }

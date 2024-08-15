@@ -546,10 +546,8 @@ func testObjectInfo(tc TestCase, t *testing.T) {
 	tae := initTestEngine(tc, t)
 	defer tae.Close()
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.CheckObjectInfo(true)
 
 	tae.ForceCheckpoint()
 	tae.Restart(context.TODO())
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.CheckObjectInfo(false)
 }

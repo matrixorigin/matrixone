@@ -31,7 +31,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(MergeBlock)
 
 type Container struct {
 	// mp is used to store the metaLoc Batch.
@@ -44,7 +44,7 @@ type Container struct {
 	partitionSources []engine.Relation
 }
 
-type Argument struct {
+type MergeBlock struct {
 	// // 1. main table
 	// Tbl engine.Relation
 	// // 2. partition sub tables
@@ -59,69 +59,69 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (mergeBlock *MergeBlock) GetOperatorBase() *vm.OperatorBase {
+	return &mergeBlock.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[MergeBlock](
+		func() *MergeBlock {
+			return &MergeBlock{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *MergeBlock) {
+			*a = MergeBlock{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[MergeBlock]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (mergeBlock MergeBlock) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *MergeBlock {
+	return reuse.Alloc[MergeBlock](nil)
 }
 
-func (arg *Argument) WithObjectRef(ref *plan.ObjectRef) *Argument {
-	arg.Ref = ref
-	return arg
+func (mergeBlock *MergeBlock) WithObjectRef(ref *plan.ObjectRef) *MergeBlock {
+	mergeBlock.Ref = ref
+	return mergeBlock
 }
 
-func (arg *Argument) WithEngine(eng engine.Engine) *Argument {
-	arg.Engine = eng
-	return arg
+func (mergeBlock *MergeBlock) WithEngine(eng engine.Engine) *MergeBlock {
+	mergeBlock.Engine = eng
+	return mergeBlock
 }
 
-func (arg *Argument) WithParitionNames(names []string) *Argument {
-	arg.PartitionTableNames = append(arg.PartitionTableNames, names...)
-	return arg
+func (mergeBlock *MergeBlock) WithParitionNames(names []string) *MergeBlock {
+	mergeBlock.PartitionTableNames = append(mergeBlock.PartitionTableNames, names...)
+	return mergeBlock
 }
 
-func (arg *Argument) WithAddAffectedRows(addAffectedRows bool) *Argument {
-	arg.AddAffectedRows = addAffectedRows
-	return arg
+func (mergeBlock *MergeBlock) WithAddAffectedRows(addAffectedRows bool) *MergeBlock {
+	mergeBlock.AddAffectedRows = addAffectedRows
+	return mergeBlock
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (mergeBlock *MergeBlock) Release() {
+	if mergeBlock != nil {
+		reuse.Free[MergeBlock](mergeBlock, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (mergeBlock *MergeBlock) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	mergeBlock.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	// for k := range arg.container.mp {
-	// 	arg.container.mp[k].Clean(proc.GetMPool())
-	// 	arg.container.mp[k] = nil
+func (mergeBlock *MergeBlock) Free(proc *process.Process, pipelineFailed bool, err error) {
+	// for k := range mergeBlock.container.mp {
+	// 	mergeBlock.container.mp[k].Clean(proc.GetMPool())
+	// 	mergeBlock.container.mp[k] = nil
 	// }
 }
 
-func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
+func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 	var typs []types.Type
 	// exclude the table id column
 	attrs := src.Attrs[1:]
@@ -137,16 +137,16 @@ func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 	}
 
 	// If the target is a partition table
-	if len(arg.container.partitionSources) > 0 {
+	if len(mergeBlock.container.partitionSources) > 0 {
 		// 'i' aligns with partition number
-		for i := range arg.container.partitionSources {
+		for i := range mergeBlock.container.partitionSources {
 			bat := batch.NewWithSize(len(attrs))
 			bat.Attrs = attrs
 			bat.Cnt = 1
 			for idx := 0; idx < len(attrs); idx++ {
 				bat.Vecs[idx] = proc.GetVector(typs[idx])
 			}
-			arg.container.mp[i] = bat
+			mergeBlock.container.mp[i] = bat
 		}
 	} else {
 		bat := batch.NewWithSize(len(attrs))
@@ -155,11 +155,11 @@ func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 		for idx := 0; idx < len(attrs); idx++ {
 			bat.Vecs[idx] = proc.GetVector(typs[idx])
 		}
-		arg.container.mp[0] = bat
+		mergeBlock.container.mp[0] = bat
 	}
 }
 
-func splitObjectStats(arg *Argument, proc *process.Process,
+func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 	bat *batch.Batch, blkVec *vector.Vector, tblIdx []int16,
 ) error {
 	// bat comes from old CN, no object stats vec in it.
@@ -167,7 +167,7 @@ func splitObjectStats(arg *Argument, proc *process.Process,
 	// construct the object stats from block info here.
 	needLoad := bat.Attrs[len(bat.Attrs)-1] != catalog.ObjectMeta_ObjectStats
 
-	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		logutil.Error("get fs failed when split object stats. ", zap.Error(err))
 		return err
@@ -190,7 +190,7 @@ func splitObjectStats(arg *Argument, proc *process.Process,
 			continue
 		}
 
-		destVec := arg.container.mp[int(tblIdx[idx])].Vecs[1]
+		destVec := mergeBlock.container.mp[int(tblIdx[idx])].Vecs[1]
 
 		if needLoad {
 			// comes from old version cn
@@ -211,20 +211,20 @@ func splitObjectStats(arg *Argument, proc *process.Process,
 	return nil
 }
 
-func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
+func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch) error {
 	// meta loc and object stats
-	arg.GetMetaLocBat(bat, proc)
+	mergeBlock.GetMetaLocBat(bat, proc)
 	tblIdx := vector.MustFixedCol[int16](bat.GetVector(0))
 	blkInfosVec := bat.GetVector(1)
 
 	hasObject := false
 	for i := range tblIdx { // append s3 writer returned blk info
 		if tblIdx[i] >= 0 {
-			if arg.AddAffectedRows {
+			if mergeBlock.AddAffectedRows {
 				blkInfo := objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
-				arg.affectedRows += uint64(blkInfo.MetaLocation().Rows())
+				mergeBlock.affectedRows += uint64(blkInfo.MetaLocation().Rows())
 			}
-			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0],
+			vector.AppendBytes(mergeBlock.container.mp[int(tblIdx[i])].Vecs[0],
 				blkInfosVec.GetBytesAt(i), false, proc.GetMPool())
 			hasObject = true
 		} else { // append data
@@ -234,26 +234,26 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 				return err
 			}
 			newBat.Cnt = 1
-			if arg.AddAffectedRows {
-				arg.affectedRows += uint64(newBat.RowCount())
+			if mergeBlock.AddAffectedRows {
+				mergeBlock.affectedRows += uint64(newBat.RowCount())
 			}
-			arg.container.mp2[idx] = append(arg.container.mp2[idx], newBat)
+			mergeBlock.container.mp2[idx] = append(mergeBlock.container.mp2[idx], newBat)
 		}
 	}
 
 	// exist blk info, split it
 	if hasObject {
-		if err := splitObjectStats(arg, proc, bat, blkInfosVec, tblIdx); err != nil {
+		if err := splitObjectStats(mergeBlock, proc, bat, blkInfosVec, tblIdx); err != nil {
 			return err
 		}
 	}
 
-	for _, b := range arg.container.mp {
+	for _, b := range mergeBlock.container.mp {
 		b.SetRowCount(b.Vecs[0].Length())
 	}
 	return nil
 }
 
-func (arg *Argument) AffectedRows() uint64 {
-	return arg.affectedRows
+func (mergeBlock *MergeBlock) AffectedRows() uint64 {
+	return mergeBlock.affectedRows
 }

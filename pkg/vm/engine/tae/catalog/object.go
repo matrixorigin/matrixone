@@ -18,30 +18,47 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type ObjectDataFactory = func(meta *ObjectEntry) data.Object
 type TombstoneFactory = func(meta *ObjectEntry) data.Tombstone
 type ObjectEntry struct {
-	ID     types.Objectid
-	blkCnt int
-	*BaseEntryImpl[*ObjectMVCCNode]
+	EntryMVCCNode
+	ObjectMVCCNode
+
+	CreateNode txnbase.TxnMVCCNode
+	DeleteNode txnbase.TxnMVCCNode
+
 	table *TableEntry
-	*ObjectNode
-	objData data.Object
+	ObjectNode
+	objData     data.Object
+	ObjectState uint8
+
+	HasPrintedPrepareComapct atomic.Bool
 }
 
+func (entry *ObjectEntry) ID() *objectio.ObjectId {
+	return entry.ObjectStats.ObjectName().ObjectId()
+}
+func (entry *ObjectEntry) GetDeleteAt() types.TS {
+	return entry.DeletedAt
+}
+func (entry *ObjectEntry) GetCreatedAt() types.TS {
+	return entry.CreatedAt
+}
 func (entry *ObjectEntry) GetLoaded() bool {
 	stats := entry.GetObjectStats()
 	return stats.Rows() != 0
@@ -74,14 +91,140 @@ func (entry *ObjectEntry) GetCompSize() int {
 	stats := entry.GetObjectStats()
 	return int(stats.Size())
 }
+func (entry *ObjectEntry) GetLastMVCCNode() *txnbase.TxnMVCCNode {
+	if !entry.DeleteNode.Start.IsEmpty() {
+		return &entry.DeleteNode
+	}
+	return &entry.CreateNode
+}
+func (entry *ObjectEntry) Clone() *ObjectEntry {
+	obj := &ObjectEntry{
+		ObjectMVCCNode: ObjectMVCCNode{
+			ObjectStats: *entry.ObjectStats.Clone(),
+		},
+		EntryMVCCNode: entry.EntryMVCCNode,
+		CreateNode:    entry.CreateNode,
+		DeleteNode:    entry.DeleteNode,
+		table:         entry.table,
+		ObjectNode: ObjectNode{
+			state:         entry.state,
+			IsLocal:       entry.IsLocal,
+			SortHint:      entry.SortHint,
+			sorted:        entry.sorted,
+			remainingRows: entry.remainingRows,
+		},
+		objData:     entry.objData,
+		ObjectState: entry.ObjectState,
+	}
+	return obj
+}
+func (entry *ObjectEntry) GetCommandMVCCNode() *MVCCNode[*ObjectMVCCNode] {
+	return &MVCCNode[*ObjectMVCCNode]{
+		TxnMVCCNode:   entry.GetLastMVCCNode(),
+		BaseNode:      &entry.ObjectMVCCNode,
+		EntryMVCCNode: &entry.EntryMVCCNode,
+	}
+}
+func (entry *ObjectEntry) GetDropEntry(txn txnif.TxnReader) (dropped *ObjectEntry, isNewNode bool) {
+	dropped = entry.Clone()
+	dropped.ObjectState = ObjectState_Delete_Active
+	dropped.DeletedAt = txnif.UncommitTS
+	dropped.DeleteNode = *txnbase.NewTxnMVCCNodeWithTxn(txn)
+	dropped.GetObjectData().UpdateMeta(dropped)
+	if entry.CreateNode.Txn != nil && txn.GetID() == entry.CreateNode.Txn.GetID() {
+		return
+	}
+	isNewNode = true
+	return
+}
+func (entry *ObjectEntry) GetUpdateEntry(txn txnif.TxnReader, stats *objectio.ObjectStats) (dropped *ObjectEntry, isNewNode bool) {
+	dropped = entry.Clone()
+	node := dropped.GetLastMVCCNode()
+	dropped.ObjectStats = *stats
+	dropped.GetObjectData().UpdateMeta(dropped)
+	if node.Txn != nil && txn.GetID() == node.Txn.GetID() {
+		return
+	}
+	isNewNode = true
+	dropped.DeleteNode = *txnbase.NewTxnMVCCNodeWithTxn(txn)
+	return
+}
+
+func (entry *ObjectEntry) GetSortedEntry() (sorted *ObjectEntry) {
+	sorted = entry.Clone()
+	sorted.sorted = true
+	sorted.GetObjectData().UpdateMeta(sorted)
+	return
+}
+func (entry *ObjectEntry) DeleteBefore(ts types.TS) bool {
+	deleteTS := entry.GetDeleteAt()
+	if deleteTS.IsEmpty() {
+		return false
+	}
+	return deleteTS.Less(&ts)
+}
+func (entry *ObjectEntry) GetLatestNode() *ObjectEntry {
+	return entry.table.link.GetLastestNode(entry.SortHint)
+}
+func (entry *ObjectEntry) ApplyCommit(tid string) error {
+	lastNode := entry.table.link.GetLastestNode(entry.SortHint)
+	if lastNode == nil {
+		panic("logic error")
+	}
+	var newNode *ObjectEntry
+	switch lastNode.ObjectState {
+	case ObjectState_Create_PrepareCommit:
+		newNode = lastNode.Clone()
+		newNode.ObjectState = ObjectState_Create_ApplyCommit
+	case ObjectState_Delete_PrepareCommit:
+		newNode = lastNode.Clone()
+		newNode.ObjectState = ObjectState_Delete_ApplyCommit
+	default:
+		panic(fmt.Sprintf("invalid object state %v", lastNode.ObjectState))
+	}
+	ts, err := newNode.GetLastMVCCNode().ApplyCommit(tid)
+	if err != nil {
+		return err
+	}
+	err = newNode.EntryMVCCNode.ApplyCommit(ts)
+	if err != nil {
+		return err
+	}
+	entry.objData.UpdateMeta(newNode)
+	entry.table.link.Update(newNode, lastNode)
+	return nil
+}
+func (entry *ObjectEntry) ApplyRollback() error { panic("not support") }
+func (entry *ObjectEntry) PrepareCommit() error {
+	lastNode := entry.table.link.GetLastestNode(entry.SortHint)
+	if lastNode == nil {
+		panic("logic error")
+	}
+	var newNode *ObjectEntry
+	switch lastNode.ObjectState {
+	case ObjectState_Create_Active:
+		newNode = lastNode.Clone()
+		newNode.ObjectState = ObjectState_Create_PrepareCommit
+	case ObjectState_Delete_Active:
+		newNode = lastNode.Clone()
+		newNode.ObjectState = ObjectState_Delete_PrepareCommit
+	default:
+		panic(fmt.Sprintf("invalid object state %v", lastNode.ObjectState))
+	}
+	_, err := newNode.GetLastMVCCNode().PrepareCommit()
+	if err != nil {
+		return err
+	}
+	entry.objData.UpdateMeta(newNode)
+	entry.table.link.Update(newNode, lastNode)
+	return nil
+}
 func (entry *ObjectEntry) IsDeletesFlushedBefore(ts types.TS) bool {
-	entry.RLock()
-	defer entry.RUnlock()
-	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
+	tombstone := entry.GetTable().TryGetTombstone(*entry.ID())
 	if tombstone == nil {
 		return true
 	}
-	persistedTS := tombstone.GetDeltaCommitedTSLocked()
+	persistedTS := tombstone.GetDeltaCommitedTS()
 	return persistedTS.Less(&ts)
 }
 func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) string {
@@ -108,13 +251,15 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 }
 
 func (entry *ObjectEntry) InMemoryDeletesExisted() bool {
-	entry.RLock()
-	defer entry.RUnlock()
-	return entry.InMemoryDeletesExistedLocked()
+	tombstone := entry.GetTable().TryGetTombstone(*entry.ID())
+	if tombstone != nil {
+		return tombstone.InMemoryDeletesExisted()
+	}
+	return false
 }
 
 func (entry *ObjectEntry) InMemoryDeletesExistedLocked() bool {
-	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
+	tombstone := entry.GetTable().TryGetTombstone(*entry.ID())
 	if tombstone != nil {
 		return tombstone.InMemoryDeletesExistedLocked()
 	}
@@ -128,16 +273,19 @@ func NewObjectEntry(
 	dataFactory ObjectDataFactory,
 ) *ObjectEntry {
 	e := &ObjectEntry{
-		ID: *id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
 		table: table,
-		ObjectNode: &ObjectNode{
-			state:    state,
-			SortHint: table.GetDB().catalog.NextObject(),
+		ObjectNode: ObjectNode{
+			state:         state,
+			SortHint:      table.GetDB().catalog.NextObject(),
+			remainingRows: &common.FixedSampleIII[int]{},
 		},
+		EntryMVCCNode: EntryMVCCNode{
+			CreatedAt: txnif.UncommitTS,
+		},
+		CreateNode:  *txnbase.NewTxnMVCCNodeWithTxn(txn),
+		ObjectState: ObjectState_Create_Active,
 	}
-	e.CreateWithTxn(txn, NewObjectInfoWithObjectID(id))
+	objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(id))
 	if dataFactory != nil {
 		e.objData = dataFactory(e)
 	}
@@ -153,17 +301,20 @@ func NewObjectEntryByMetaLocation(
 	dataFactory ObjectDataFactory,
 ) *ObjectEntry {
 	e := &ObjectEntry{
-		ID: *id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
 		table: table,
-		ObjectNode: &ObjectNode{
-			state:    state,
-			sorted:   state == ES_NotAppendable,
-			SortHint: table.GetDB().catalog.NextObject(),
+		ObjectNode: ObjectNode{
+			state:         state,
+			sorted:        state == ES_NotAppendable,
+			SortHint:      table.GetDB().catalog.NextObject(),
+			remainingRows: &common.FixedSampleIII[int]{},
 		},
+		EntryMVCCNode: EntryMVCCNode{
+			CreatedAt: end,
+		},
+		CreateNode:  *txnbase.NewTxnMVCCNodeWithStartEnd(start, end),
+		ObjectState: ObjectState_Create_ApplyCommit,
 	}
-	e.CreateWithStartAndEnd(start, end, NewObjectInfoWithMetaLocation(metalocation, id))
+	objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(id))
 	if dataFactory != nil {
 		e.objData = dataFactory(e)
 	}
@@ -171,58 +322,30 @@ func NewObjectEntryByMetaLocation(
 }
 
 func NewReplayObjectEntry() *ObjectEntry {
-	e := &ObjectEntry{
-		BaseEntryImpl: NewBaseEntry(
-			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
-	}
+	e := &ObjectEntry{}
 	return e
 }
 
 func NewStandaloneObject(table *TableEntry, ts types.TS) *ObjectEntry {
 	e := &ObjectEntry{
-		ID: *objectio.NewObjectid(),
-		BaseEntryImpl: NewBaseEntry(
-			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
 		table: table,
-		ObjectNode: &ObjectNode{
-			state:   ES_Appendable,
-			IsLocal: true,
+		ObjectNode: ObjectNode{
+			state:         ES_Appendable,
+			IsLocal:       true,
+			remainingRows: &common.FixedSampleIII[int]{},
 		},
-	}
-	e.CreateWithTS(ts, &ObjectMVCCNode{*objectio.NewObjectStats()})
-	return e
-}
-
-func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
-	e := &ObjectEntry{
-		BaseEntryImpl: NewBaseEntry(
-			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
-		table: table,
-		ObjectNode: &ObjectNode{
-			state: ES_Appendable,
+		EntryMVCCNode: EntryMVCCNode{
+			CreatedAt: ts,
 		},
+		CreateNode:  *txnbase.NewTxnMVCCNodeWithTS(ts),
+		ObjectState: ObjectState_Create_ApplyCommit,
 	}
-	e.CreateWithTS(types.SystemDBTS, &ObjectMVCCNode{*objectio.NewObjectStats()})
-	var bid types.Blockid
-	schema := table.GetLastestSchemaLocked()
-	if schema.Name == SystemTableSchema.Name {
-		bid = SystemBlock_Table_ID
-	} else if schema.Name == SystemDBSchema.Name {
-		bid = SystemBlock_DB_ID
-	} else if schema.Name == SystemColumnSchema.Name {
-		bid = SystemBlock_Columns_ID
-	} else {
-		panic("not supported")
-	}
-	e.ID = *bid.Object()
+	objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(objectio.NewObjectid()))
 	return e
 }
 
 func (entry *ObjectEntry) GetLocation() objectio.Location {
-	entry.RLock()
-	defer entry.RUnlock()
-	node := entry.GetLatestNodeLocked()
-	location := node.BaseNode.ObjectStats.ObjectLocation()
+	location := entry.ObjectStats.ObjectLocation()
 	return location
 }
 func (entry *ObjectEntry) InitData(factory DataFactory) {
@@ -237,179 +360,25 @@ func (entry *ObjectEntry) HasPersistedData() bool {
 }
 func (entry *ObjectEntry) GetObjectData() data.Object { return entry.objData }
 func (entry *ObjectEntry) GetObjectStats() (stats objectio.ObjectStats) {
-	entry.RLock()
-	defer entry.RUnlock()
-	entry.LoopChainLocked(func(node *MVCCNode[*ObjectMVCCNode]) bool {
-		if !node.BaseNode.IsEmpty() {
-			stats = node.BaseNode.ObjectStats
-			return false
-		}
-		return true
-	})
-	return
+	return entry.ObjectStats
 }
 
-func (entry *ObjectEntry) CheckAndLoad() error {
-	s := entry.GetObjectStats()
-	if s.Rows() == 0 {
-		ins := time.Now()
-		defer func() {
-			v2.GetObjectStatsDurationHistogram.Observe(time.Since(ins).Seconds())
-		}()
-		_, err := entry.LoadObjectInfoForLastNode()
-		// logutil.Infof("yyyyyy loaded %v %v", common.ShortObjId(entry.ID), err)
-		return err
+func (entry *ObjectEntry) Less(b *ObjectEntry) bool {
+	if entry.SortHint != b.SortHint {
+		return entry.SortHint < b.SortHint
 	}
-	return nil
-}
-
-func (entry *ObjectEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[*ObjectMVCCNode]) (needPrefetch bool) {
-	lastNode := nodes[0]
-	for _, n := range nodes {
-		if n.Start.Greater(&lastNode.Start) {
-			lastNode = n
-		}
-	}
-	if !lastNode.BaseNode.IsEmpty() {
-		return
-	}
-	if entry.nodeHasPersistedData(lastNode) {
-		needPrefetch = true
-	}
-
-	return
-}
-func (entry *ObjectEntry) nodeHasPersistedData(node *MVCCNode[*ObjectMVCCNode]) bool {
-	if !entry.IsAppendable() {
-		return true
-	}
-	return node.HasDropCommitted()
-}
-func (entry *ObjectEntry) SetObjectStatsForPreviousNode(nodes []*MVCCNode[*ObjectMVCCNode]) {
-	if entry.IsAppendable() || len(nodes) <= 1 {
-		return
-	}
-	lastNode := nodes[0]
-	for _, n := range nodes {
-		if n.Start.Greater(&lastNode.Start) {
-			lastNode = n
-		}
-	}
-	stat := lastNode.BaseNode.ObjectStats
-	entry.Lock()
-	for _, n := range nodes {
-		if n.BaseNode.IsEmpty() {
-			n.BaseNode.ObjectStats = *stat.Clone()
-		}
-	}
-	entry.Unlock()
-}
-
-func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.ObjectStats, error) {
-	stats := *objectio.NewObjectStats()
-
-	entry.RLock()
-	entry.LoopChainLocked(func(n *MVCCNode[*ObjectMVCCNode]) bool {
-		if !n.BaseNode.IsEmpty() {
-			stats = *n.BaseNode.ObjectStats.Clone()
-			return false
-		}
-		return true
-	})
-	entry.RUnlock()
-	if stats.Rows() != 0 {
-		return stats, nil
-	}
-	metaLoc := entry.GetLatestCommittedNodeLocked().BaseNode.ObjectStats.ObjectLocation()
-
-	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, entry.objData.GetFs().Service)
-	if err != nil {
-		return *objectio.NewObjectStats(), err
-	}
-	objectio.SetObjectStatsObjectName(&stats, metaLoc.Name())
-	objectio.SetObjectStatsExtent(&stats, metaLoc.Extent())
-	objectDataMeta := objMeta.MustDataMeta()
-	objectio.SetObjectStatsRowCnt(&stats, objectDataMeta.BlockHeader().Rows())
-	objectio.SetObjectStatsBlkCnt(&stats, objectDataMeta.BlockCount())
-	objectio.SetObjectStatsSize(&stats, metaLoc.Extent().End()+objectio.FooterSize)
-	schema := entry.table.schema.Load()
-	originSize := uint32(0)
-	for _, col := range schema.ColDefs {
-		if col.IsPhyAddr() {
-			continue
-		}
-		colmata := objectDataMeta.MustGetColumn(uint16(col.SeqNum))
-		originSize += colmata.Location().OriginSize()
-	}
-	objectio.SetObjectStatsOriginSize(&stats, originSize)
-	if schema.HasSortKey() {
-		col := schema.GetSingleSortKey()
-		objectio.SetObjectStatsSortKeyZoneMap(&stats, objectDataMeta.MustGetColumn(col.SeqNum).ZoneMap())
-	}
-	return stats, nil
-}
-
-func (entry *ObjectEntry) LoadObjectInfoForLastNode() (stats objectio.ObjectStats, err error) {
-	entry.RLock()
-	startTS := entry.GetLatestCommittedNodeLocked().Start
-	entry.RUnlock()
-
-	stats, err = entry.LoadObjectInfoWithTxnTS(startTS)
-	if err == nil {
-		entry.Lock()
-		entry.GetLatestNodeLocked().BaseNode.ObjectStats = stats
-		entry.Unlock()
-	}
-	return stats, nil
-}
-
-// for test
-func (entry *ObjectEntry) GetInMemoryObjectInfo() *ObjectMVCCNode {
-	return entry.BaseEntryImpl.GetLatestCommittedNodeLocked().BaseNode
-}
-
-func (entry *ObjectEntry) Less(b *ObjectEntry) int {
-	if entry.SortHint < b.SortHint {
-		return -1
-	} else if entry.SortHint > b.SortHint {
-		return 1
-	}
-	return 0
+	return entry.ObjectState < b.ObjectState
 }
 
 func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.ObjectStats) (isNewNode bool, err error) {
-	entry.Lock()
-	defer entry.Unlock()
-	needWait, txnToWait := entry.NeedWaitCommittingLocked(txn.GetStartTS())
-	if needWait {
-		entry.Unlock()
-		txnToWait.GetTxnState(true)
-		entry.Lock()
-	}
-	err = entry.CheckConflictLocked(txn)
-	if err != nil {
-		return
-	}
-	baseNode := NewObjectInfoWithObjectStats(stats)
-	var node *MVCCNode[*ObjectMVCCNode]
-	isNewNode, node = entry.getOrSetUpdateNodeLocked(txn)
-	node.BaseNode.Update(baseNode)
-	return
+	return entry.table.link.UpdateObjectInfo(entry, txn, stats)
 }
 
 func (entry *ObjectEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmdType := IOET_WALTxnCommand_Object
-	entry.RLock()
-	defer entry.RUnlock()
 	return newObjectCmd(id, cmdType, entry), nil
 }
 
-func (entry *ObjectEntry) Set1PC() {
-	entry.GetLatestNodeLocked().Set1PC()
-}
-func (entry *ObjectEntry) Is1PC() bool {
-	return entry.GetLatestNodeLocked().Is1PC()
-}
 func (entry *ObjectEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevel(level)))
@@ -418,18 +387,6 @@ func (entry *ObjectEntry) PPString(level common.PPLevel, depth int, prefix strin
 	}
 	return w.String()
 }
-func (entry *ObjectEntry) PPStringLocked(level common.PPLevel, depth int, prefix string) string {
-	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevelLocked(level)))
-	if level == common.PPL0 {
-		return w.String()
-	}
-	return w.String()
-}
-
-func (entry *ObjectEntry) StringLocked() string {
-	return entry.StringWithLevelLocked(common.PPL1)
-}
 
 func (entry *ObjectEntry) Repr() string {
 	id := entry.AsCommonID()
@@ -437,53 +394,45 @@ func (entry *ObjectEntry) Repr() string {
 }
 
 func (entry *ObjectEntry) String() string {
-	entry.RLock()
-	defer entry.RUnlock()
-	return entry.StringLocked()
+	return entry.StringWithLevel(common.PPL1)
 }
 
 func (entry *ObjectEntry) StringWithLevel(level common.PPLevel) string {
-	entry.RLock()
-	defer entry.RUnlock()
-	return entry.StringWithLevelLocked(level)
-}
-
-func (entry *ObjectEntry) StringWithLevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
-		return fmt.Sprintf("[%s-%s]OBJ[%s][C@%s,D@%s]",
-			entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAtLocked().ToString())
+		return fmt.Sprintf("[%s-%s]OBJ[%s]%v",
+			entry.state.Repr(), entry.ObjectNode.String(), entry.ID().String(), entry.EntryMVCCNode.String())
 	}
-	return fmt.Sprintf("[%s-%s]OBJ[%s]%s", entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.BaseEntryImpl.StringLocked())
-}
+	s := fmt.Sprintf("[%s-%s]OBJ[%s]%v%v", entry.state.Repr(), entry.ObjectNode.String(), entry.ID().String(), entry.EntryMVCCNode.String(), entry.ObjectMVCCNode.String())
+	if !entry.DeleteNode.IsEmpty() {
+		s = fmt.Sprintf("%s -> %s", s, entry.DeleteNode.String())
+	}
 
+	s = fmt.Sprintf("%s -> %s", s, entry.CreateNode.String())
+	return s
+}
+func (entry *ObjectEntry) IsVisible(txn txnif.TxnReader) bool {
+	needWait, txnToWait := entry.GetLastMVCCNode().NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		txnToWait.GetTxnState(true)
+		entry = entry.GetLatestNode()
+	}
+	if !entry.DeleteNode.Start.IsEmpty() && entry.DeleteNode.IsVisible(txn) {
+		return false
+	}
+	return entry.CreateNode.IsVisible(txn)
+}
 func (entry *ObjectEntry) BlockCnt() int {
 	if entry.IsAppendable() {
 		return 1
 	}
-	cnt := entry.getBlockCntFromStats()
-	if cnt != 0 {
-		return int(cnt)
-	}
-	return entry.blkCnt
+	return int(entry.getBlockCntFromStats())
 }
 
 func (entry *ObjectEntry) getBlockCntFromStats() (blkCnt uint32) {
-	entry.RLock()
-	defer entry.RUnlock()
-	node := entry.GetLatestNodeLocked()
-	if node == nil {
+	if entry.ObjectMVCCNode.IsEmpty() {
 		return
 	}
-	if node.BaseNode.IsEmpty() {
-		return
-	}
-	return node.BaseNode.ObjectStats.BlkCnt()
-}
-
-func (entry *ObjectEntry) tryUpdateBlockCnt(cnt int) {
-	if entry.blkCnt < cnt {
-		entry.blkCnt = cnt
-	}
+	return entry.ObjectStats.BlkCnt()
 }
 
 func (entry *ObjectEntry) IsAppendable() bool {
@@ -491,16 +440,10 @@ func (entry *ObjectEntry) IsAppendable() bool {
 }
 
 func (entry *ObjectEntry) SetSorted() {
-	// modifing Object interface to supporte a borned sorted obj is verbose
-	// use Lock instead, the contention won't be intense
-	entry.Lock()
-	defer entry.Unlock()
-	entry.sorted = true
+	entry.table.link.SetSorted(entry.SortHint)
 }
 
 func (entry *ObjectEntry) IsSorted() bool {
-	entry.RLock()
-	defer entry.RUnlock()
 	return entry.sorted
 }
 
@@ -511,7 +454,7 @@ func (entry *ObjectEntry) GetTable() *TableEntry {
 // GetNonAppendableBlockCnt Non-appendable Object only can contain non-appendable blocks;
 // Appendable Object can contain both of appendable blocks and non-appendable blocks
 func (entry *ObjectEntry) GetNonAppendableBlockCnt() int {
-	return entry.blkCnt
+	return entry.BlockCnt()
 }
 
 func (entry *ObjectEntry) AsCommonID() *common.ID {
@@ -519,23 +462,48 @@ func (entry *ObjectEntry) AsCommonID() *common.ID {
 		DbID:    entry.GetTable().GetDB().ID,
 		TableID: entry.GetTable().ID,
 	}
-	id.SetObjectID(&entry.ID)
+	id.SetObjectID(entry.ID())
 	return id
 }
-
+func (entry *ObjectEntry) IsCommitted() bool { return entry.GetLastMVCCNode().IsCommitted() }
+func (entry *ObjectEntry) GetLatestCommittedNode() *txnbase.TxnMVCCNode {
+	if !entry.DeleteNode.Start.IsEmpty() && entry.DeleteNode.IsCommitted() {
+		return &entry.DeleteNode
+	}
+	if entry.CreateNode.IsCommitted() {
+		return &entry.CreateNode
+	}
+	return nil
+}
 func (entry *ObjectEntry) GetCatalog() *Catalog { return entry.table.db.catalog }
 
 func (entry *ObjectEntry) PrepareRollback() (err error) {
-	var isEmpty bool
-	if isEmpty, err = entry.BaseEntryImpl.PrepareRollback(); err != nil {
-		return
+	lastNode := entry.table.link.GetLastestNode(entry.SortHint)
+	if lastNode == nil {
+		panic("logic error")
 	}
-	if isEmpty {
-		if err = entry.GetTable().RemoveEntry(entry); err != nil {
-			return
-		}
+	switch lastNode.ObjectState {
+	case ObjectState_Create_Active:
+		entry.table.link.Delete(lastNode)
+	case ObjectState_Delete_Active:
+		newEntry := entry.Clone()
+		newEntry.DeleteNode.Reset()
+		newEntry.ObjectState = ObjectState_Create_ApplyCommit
+		entry.table.link.Update(newEntry, entry)
+	default:
+		panic(fmt.Sprintf("invalid object state %v", lastNode.ObjectState))
 	}
 	return
+}
+
+func (entry *ObjectEntry) HasDropCommitted() bool {
+	if entry.DeleteNode.IsEmpty() {
+		return false
+	}
+	return entry.DeleteNode.IsCommitted()
+}
+func (entry *ObjectEntry) IsCreatingOrAborted() bool {
+	return entry.CreateNode.IsActive()
 }
 
 // IsActive is coarse API: no consistency check
@@ -547,19 +515,19 @@ func (entry *ObjectEntry) IsActive() bool {
 	return !entry.HasDropCommitted()
 }
 
-func (entry *ObjectEntry) TreeMaxDropCommitEntry() BaseEntry {
+func (entry *ObjectEntry) TreeMaxDropCommitEntry() (BaseEntry, *ObjectEntry) {
 	table := entry.GetTable()
 	db := table.GetDB()
 	if db.HasDropCommittedLocked() {
-		return db.BaseEntryImpl
+		return db.BaseEntryImpl, nil
 	}
 	if table.HasDropCommittedLocked() {
-		return table.BaseEntryImpl
+		return table.BaseEntryImpl, nil
 	}
-	if entry.HasDropCommittedLocked() {
-		return entry.BaseEntryImpl
+	if entry.HasDropCommitted() {
+		return nil, entry
 	}
-	return nil
+	return nil, nil
 }
 
 // GetTerminationTS is coarse API: no consistency check
@@ -592,31 +560,21 @@ func (entry *ObjectEntry) GetSchemaLocked() *Schema {
 // 2. at least one committed node
 // Note: Soft deleted nobjects might have in memory deletes to be flushed.
 func (entry *ObjectEntry) PrepareCompact() bool {
-	entry.RLock()
-	defer entry.RUnlock()
 	return entry.PrepareCompactLocked()
 }
 
 func (entry *ObjectEntry) PrepareCompactLocked() bool {
-	if entry.HasUncommittedNodeLocked() {
-		return false
-	}
-	if !entry.HasCommittedNodeLocked() {
-		return false
-	}
-	return true
+	return entry.IsCommitted()
+}
+
+func (entry *ObjectEntry) HasDropIntent() bool {
+	return !entry.DeletedAt.IsEmpty()
 }
 
 // for old flushed objects, stats may be empty
 func (entry *ObjectEntry) ObjectPersisted() bool {
-	entry.RLock()
-	defer entry.RUnlock()
-	if entry.IsEmptyLocked() {
-		return false
-	}
 	if entry.IsAppendable() {
-		lastNode := entry.GetLatestNodeLocked()
-		return lastNode.HasDropIntent()
+		return entry.HasDropIntent()
 	} else {
 		return true
 	}
@@ -626,23 +584,14 @@ func (entry *ObjectEntry) ObjectPersisted() bool {
 // aobj has persisted data after it is dropped
 // obj always has persisted data
 func (entry *ObjectEntry) HasCommittedPersistedData() bool {
-	entry.RLock()
-	defer entry.RUnlock()
 	if entry.IsAppendable() {
-		lastNode := entry.GetLatestNodeLocked()
-		return lastNode.HasDropCommitted()
+		return entry.HasDropCommitted()
 	} else {
-		return entry.HasCommittedNodeLocked()
+		return entry.IsCommitted()
 	}
 }
 func (entry *ObjectEntry) MustGetObjectStats() (objectio.ObjectStats, error) {
-	entry.RLock()
-	baseNode := entry.GetLatestNodeLocked().BaseNode
-	entry.RUnlock()
-	if baseNode.IsEmpty() {
-		return entry.LoadObjectInfoForLastNode()
-	}
-	return baseNode.ObjectStats, nil
+	return entry.GetObjectStats(), nil
 }
 
 func (entry *ObjectEntry) GetPKZoneMap(
@@ -655,18 +604,78 @@ func (entry *ObjectEntry) GetPKZoneMap(
 	}
 	return stats.SortKeyZoneMap(), nil
 }
+
+func (entry *ObjectEntry) CheckPrintPrepareCompact() bool {
+
+	return entry.CheckPrintPrepareCompactLocked(30 * time.Minute)
+}
+
+func (entry *ObjectEntry) CheckPrintPrepareCompactLocked(duration time.Duration) bool {
+	startTS := entry.GetLastMVCCNode().GetStart()
+	return startTS.Physical() < time.Now().UTC().UnixNano()-duration.Nanoseconds()
+}
+
+func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {
+	if entry.HasPrintedPrepareComapct.Load() {
+		return
+	}
+	entry.HasPrintedPrepareComapct.Store(true)
+	s := fmt.Sprintf("prepare compact failed, obj %v", entry.PPString(3, 0, ""))
+	lastNode := entry.GetLastMVCCNode()
+	startTS := lastNode.GetStart()
+	if lastNode.Txn != nil {
+		s = fmt.Sprintf("%s txn is %x.", s, lastNode.Txn.GetID())
+	}
+	it := entry.GetTable().MakeObjectIt(false)
+	defer it.Release()
+	for it.Next() {
+		obj := it.Item()
+		if obj.CreateNode.Start.Equal(&startTS) || (!obj.DeleteNode.IsEmpty() && obj.DeleteNode.Start.Equal(&startTS)) {
+			s = fmt.Sprintf("%s %v.", s, obj.PPString(3, 0, ""))
+		}
+	}
+	logutil.Infof(s)
+}
+
 func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
 	stats := objectio.NewObjectStats()
 	objectio.SetObjectStatsSize(stats, uint32(size))
 	// to make sure pass the stats empty check
 	objectio.SetObjectStatsRowCnt(stats, uint32(1))
-
+	ts := types.BuildTS(time.Now().UnixNano(), 0)
 	e := &ObjectEntry{
-		BaseEntryImpl: NewBaseEntry(
-			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
-		table:      tbl,
-		ObjectNode: &ObjectNode{},
+		table: tbl,
+		ObjectNode: ObjectNode{
+			remainingRows: &common.FixedSampleIII[int]{},
+		},
+		EntryMVCCNode: EntryMVCCNode{
+			CreatedAt: ts,
+		},
+		ObjectMVCCNode: ObjectMVCCNode{*stats},
+		CreateNode:     *txnbase.NewTxnMVCCNodeWithTS(ts),
+		ObjectState:    ObjectState_Create_ApplyCommit,
 	}
-	e.CreateWithTS(types.BuildTS(time.Now().UnixNano(), 0), &ObjectMVCCNode{*stats})
 	return e
+}
+
+func (entry *ObjectEntry) GetMVCCNodeInRange(start, end types.TS) (nodes []*txnbase.TxnMVCCNode) {
+	needWait, txn := entry.GetLastMVCCNode().NeedWaitCommitting(end.Next())
+	if needWait {
+		txn.GetTxnState(true)
+	}
+	in, _ := entry.CreateNode.PreparedIn(start, end)
+	if in {
+		nodes = []*txnbase.TxnMVCCNode{&entry.CreateNode}
+	}
+	if !entry.DeleteNode.IsEmpty() {
+		in, _ := entry.DeleteNode.PreparedIn(start, end)
+		if in {
+			if nodes == nil {
+				nodes = []*txnbase.TxnMVCCNode{&entry.DeleteNode}
+			} else {
+				nodes = append(nodes, &entry.DeleteNode)
+			}
+		}
+	}
+	return nodes
 }

@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"math/rand"
@@ -24,7 +25,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,8 +36,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -45,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -267,7 +268,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
-		return v.Parts[0], nil
+		return v.ColName(), nil
 	}
 
 	var err error
@@ -305,6 +306,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 		reqCtx: execCtx.reqCtx,
 		ses:    ses,
 	}
+	defer tempExecCtx.Close()
 	err = executeStmtInSameSession(tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect)
 	if err != nil {
 		return nil, err
@@ -344,7 +346,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 	var planExpr *plan.Expr
 	oid := resultVec.GetType().Oid
 	if oid == types.T_decimal64 || oid == types.T_decimal128 {
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false)
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
 		planExpr, err = binder.BindExpr(e, 0, false)
@@ -361,9 +363,9 @@ func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interfa
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
-		return v.Parts[0], nil
+		return v.ColName(), nil
 	default:
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false)
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
 		planExpr, err := binder.BindExpr(e, 0, false)
@@ -372,9 +374,10 @@ func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interfa
 		}
 		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
 		// Here the evalExpr may execute some function that needs engine.Engine.
-		ses.txnCompileCtx.GetProcess().Ctx = attachValue(ses.txnCompileCtx.GetProcess().Ctx,
-			defines.EngineKey{},
-			ses.GetTxnHandler().GetStorage())
+		ses.txnCompileCtx.GetProcess().ReplaceTopCtx(
+			attachValue(ses.txnCompileCtx.GetProcess().GetTopContext(),
+				defines.EngineKey{},
+				ses.GetTxnHandler().GetStorage()))
 
 		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 		if err != nil {
@@ -416,7 +419,7 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, e
 		return vector.MustFixedCol[float32](vec)[0], nil
 	case types.T_float64:
 		return vector.MustFixedCol[float64](vec)[0], nil
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		return vec.GetStringAt(0), nil
 	case types.T_array_float32:
 		return vector.GetArrayAt[float32](vec, 0), nil
@@ -434,7 +437,7 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, e
 		return byteJson.String(), nil
 	case types.T_uuid:
 		val := vector.MustFixedCol[types.Uuid](vec)[0]
-		return val.ToString(), nil
+		return val.String(), nil
 	case types.T_date:
 		val := vector.MustFixedCol[types.Date](vec)[0]
 		return val.String(), nil
@@ -476,9 +479,7 @@ func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement,
 	var stmtStr string
 	stm := ses.GetStmtInfo()
 	if stm == nil {
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
-		stmt.Format(fmtCtx)
-		stmtStr = fmtCtx.String()
+		stmtStr = ses.GetSqlOfStmt()
 	} else {
 		stmtStr = stm.Statement
 	}
@@ -491,6 +492,9 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	switch resper := ses.GetResponser().(type) {
 	case *MysqlResp:
 		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
+		if outBytes == 0 && outPacket == 0 {
+			ses.Warnf(ctx, "unexpected protocol closed")
+		}
 	default:
 
 	}
@@ -499,9 +503,14 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
 		err = nil // make sure: it is nil for EndStatement
 	} else {
-		txnId := ses.GetStaticTxnId()
-		ses.Error(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err),
-			logutil.TxnIdField(hex.EncodeToString(txnId[:])))
+		ses.Error(
+			ctx,
+			"query trace status",
+			logutil.StatementField(str),
+			logutil.StatusField(status.String()),
+			logutil.ErrorField(err),
+			logutil.TxnInfoField(ses.GetStaticTxnInfo()),
+		)
 	}
 
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
@@ -513,20 +522,8 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	ses.SetTStmt(nil)
 }
 
-var logger *log.MOLogger
-var loggerOnce sync.Once
-
-func getLogger() *log.MOLogger {
-	loggerOnce.Do(initLogger)
-	return logger
-}
-
-func initLogger() {
-	rt := moruntime.ProcessLevelRuntime()
-	if rt == nil {
-		rt = moruntime.DefaultRuntime()
-	}
-	logger = rt.Logger().Named("frontend")
+func getLogger(sid string) *log.MOLogger {
+	return moruntime.GetLogger(sid)
 }
 
 // appendSessionField append session id, transaction id and statement id to the fields
@@ -761,23 +758,61 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 	bat.SetRowCount(cnt)
 	for colIdx, typ := range colTyps {
 		bat.Vecs[colIdx] = vector.NewVec(typ)
+		nsp := nulls.NewWithSize(cnt)
+
 		switch typ.Oid {
 		case types.T_varchar:
 			vData := make([]string, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				if val, ok := row[colIdx].(string); ok {
 					vData[rowIdx] = val
 				} else {
 					vData[rowIdx] = fmt.Sprintf("%v", row[colIdx])
 				}
 			}
-			err := vector.AppendStringList(bat.Vecs[colIdx], vData, nil, pool)
+			if err = vector.AppendStringList(bat.Vecs[colIdx], vData, nil, pool); err != nil {
+				return nil, nil, err
+			}
+		case types.T_text:
+			vData := make([][]byte, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				if val, ok := row[colIdx].([]byte); ok {
+					vData[rowIdx] = val
+				} else {
+					vData[rowIdx] = ([]byte)(fmt.Sprintf("%v", row[colIdx]))
+				}
+			}
+			if err = vector.AppendBytesList(bat.Vecs[colIdx], vData, nil, pool); err != nil {
+				return nil, nil, err
+			}
+		case types.T_int8:
+			vData := make([]int8, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(int8)
+			}
+			err := vector.AppendFixedList[int8](bat.Vecs[colIdx], vData, nil, pool)
 			if err != nil {
 				return nil, nil, err
 			}
 		case types.T_int16:
 			vData := make([]int16, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(int16)
 			}
 			err := vector.AppendFixedList[int16](bat.Vecs[colIdx], vData, nil, pool)
@@ -787,6 +822,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_int32:
 			vData := make([]int32, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(int32)
 			}
 			err := vector.AppendFixedList[int32](bat.Vecs[colIdx], vData, nil, pool)
@@ -796,6 +835,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_int64:
 			vData := make([]int64, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(int64)
 			}
 			err := vector.AppendFixedList[int64](bat.Vecs[colIdx], vData, nil, pool)
@@ -805,6 +848,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_float64:
 			vData := make([]float64, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(float64)
 			}
 			err := vector.AppendFixedList[float64](bat.Vecs[colIdx], vData, nil, pool)
@@ -814,6 +861,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_float32:
 			vData := make([]float32, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(float32)
 			}
 			err := vector.AppendFixedList[float32](bat.Vecs[colIdx], vData, nil, pool)
@@ -823,6 +874,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_date:
 			vData := make([]types.Date, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(types.Date)
 			}
 			err := vector.AppendFixedList[types.Date](bat.Vecs[colIdx], vData, nil, pool)
@@ -832,6 +887,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_time:
 			vData := make([]types.Time, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(types.Time)
 			}
 			err := vector.AppendFixedList[types.Time](bat.Vecs[colIdx], vData, nil, pool)
@@ -841,6 +900,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_datetime:
 			vData := make([]types.Datetime, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(types.Datetime)
 			}
 			err := vector.AppendFixedList[types.Datetime](bat.Vecs[colIdx], vData, nil, pool)
@@ -850,6 +913,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_timestamp:
 			vData := make([]types.Timestamp, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				switch val := row[colIdx].(type) {
 				case types.Timestamp:
 					vData[rowIdx] = val
@@ -865,9 +932,24 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			if err != nil {
 				return nil, nil, err
 			}
+		case types.T_enum:
+			vData := make([]types.Enum, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(types.Enum)
+			}
+			err := vector.AppendFixedList[types.Enum](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
 		default:
 			return nil, nil, moerr.NewInternalErrorNoCtx("unsupported type %d", typ.Oid)
 		}
+
+		bat.Vecs[colIdx].SetNulls(nsp)
 	}
 	return bat, planColDefs, nil
 }
@@ -901,6 +983,16 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 				Id: int32(types.T_varchar),
 			}
 			tType = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+		case defines.MYSQL_TYPE_TEXT:
+			pType = plan.Type{
+				Id: int32(types.T_text),
+			}
+			tType = types.New(types.T_text, types.MaxVarcharLen, 0)
+		case defines.MYSQL_TYPE_TINY:
+			pType = plan.Type{
+				Id: int32(types.T_int8),
+			}
+			tType = types.New(types.T_int8, 0, 0)
 		case defines.MYSQL_TYPE_SHORT:
 			pType = plan.Type{
 				Id: int32(types.T_int16),
@@ -1015,6 +1107,7 @@ func skipClientQuit(info string) bool {
 // if the stmt is not nil, we neglect the sql.
 type UserInput struct {
 	sql           string
+	hashedSql     string
 	stmt          tree.Statement
 	sqlSourceType []string
 	isRestore     bool
@@ -1026,6 +1119,14 @@ type UserInput struct {
 
 func (ui *UserInput) getSql() string {
 	return ui.sql
+}
+
+func (ui *UserInput) genHash() {
+	ui.hashedSql = hashString(ui.sql)
+}
+
+func (ui *UserInput) getHash() string {
+	return ui.hashedSql
 }
 
 // getStmt if the stmt is not nil, we neglect the sql.
@@ -1092,6 +1193,26 @@ func (ui *UserInput) getSqlSourceType(i int) string {
 		sqlType = ui.sqlSourceType[i]
 	}
 	return sqlType
+}
+
+const (
+	issue3482SqlPrefix    = "load data local infile '/data/customer/sutpc_001/data_csv"
+	issue3482SqlPrefixLen = len(issue3482SqlPrefix)
+)
+
+// !!!NOTE!!! For debug
+// https://github.com/matrixorigin/MO-Cloud/issues/3482
+// TODO: remove it in the future
+func (ui *UserInput) isIssue3482Sql() bool {
+	if ui == nil {
+		return false
+	}
+	sql := ui.getSql()
+	sqlLen := len(sql)
+	if sqlLen <= issue3482SqlPrefixLen {
+		return false
+	}
+	return strings.HasPrefix(sql, issue3482SqlPrefix)
 }
 
 func unboxExprStr(ctx context.Context, expr tree.Expr) (string, error) {
@@ -1190,25 +1311,25 @@ func splitKey(key string) (string, string) {
 	return parts[0], ""
 }
 
-type topsort struct {
+type toposort struct {
 	next map[string][]string
 }
 
-func (g *topsort) addVertex(v string) {
+func (g *toposort) addVertex(v string) {
 	if _, ok := g.next[v]; ok {
 		return
 	}
 	g.next[v] = make([]string, 0)
 }
 
-func (g *topsort) addEdge(from, to string) {
+func (g *toposort) addEdge(from, to string) {
 	if _, ok := g.next[from]; !ok {
 		g.next[from] = make([]string, 0)
 	}
 	g.next[from] = append(g.next[from], to)
 }
 
-func (g *topsort) sort() (ans []string, err error) {
+func (g *toposort) sort() (ans []string, err error) {
 	inDegree := make(map[string]uint)
 	for u := range g.next {
 		inDegree[u] = 0
@@ -1298,4 +1419,68 @@ func ToRequest(payload []byte) *Request {
 	}
 
 	return req
+}
+
+// CancelCheck checks if the given context has been canceled.
+// If the context is canceled, it returns the context's error.
+func CancelCheck(Ctx context.Context) error {
+	select {
+	case <-Ctx.Done():
+		return Ctx.Err()
+	default:
+		return nil
+	}
+}
+
+func checkMoreResultSet(status uint16, isLastStmt bool) uint16 {
+	if !isLastStmt {
+		status |= SERVER_MORE_RESULTS_EXISTS
+	}
+	return status
+}
+
+func Copy[T any](src []T) []T {
+	if src == nil {
+		return nil
+	}
+	if len(src) == 0 {
+		return []T{}
+	}
+	dst := make([]T, len(src))
+	copy(dst, src)
+	return dst
+}
+
+func hashString(s string) string {
+	hash := sha256.New()
+	hash.Write(util.UnsafeStringToBytes(s))
+	hashBytes := hash.Sum(nil)
+	return hex.EncodeToString(hashBytes)
+}
+
+func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, error) {
+	var err error
+	c := new(MysqlColumn)
+	c.SetName(col.Name)
+	c.SetOrgName(col.GetOriginCaseName())
+	c.SetTable(col.TblName)
+	c.SetOrgTable(col.TblName)
+	c.SetAutoIncr(col.Typ.AutoIncr)
+	c.SetSchema(col.DbName)
+	err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
+	if err != nil {
+		return nil, err
+	}
+	setColFlag(c)
+	setColLength(c, col.Typ.Width)
+	setCharacter(c)
+
+	// For binary/varbinary with mysql_type_varchar.Change the charset.
+	if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
+		c.SetCharset(0x3f)
+	}
+
+	c.SetDecimal(col.Typ.Scale)
+	convertMysqlTextTypeToBlobType(c)
+	return c, nil
 }

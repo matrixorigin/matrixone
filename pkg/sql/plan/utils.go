@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -563,8 +565,8 @@ func deduceNewFilterList(filters, onList []*plan.Expr) []*plan.Expr {
 }
 
 func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
-	col1, _, _, _ := extractColRefAndLiteralsInFilter(expr1)
-	col2, _, _, _ := extractColRefAndLiteralsInFilter(expr2)
+	col1, _, _, _, _ := extractColRefAndLiteralsInFilter(expr1)
+	col2, _, _, _, _ := extractColRefAndLiteralsInFilter(expr2)
 	if col1 == nil || col2 == nil {
 		return false
 	}
@@ -583,10 +585,16 @@ func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
 	return false
 }
 
-func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType types.T, literals []*Const, colFnName string) {
+func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType types.T, literals []*Const, colFnName string, hasDynamicParam bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) == 0 {
 		return
+	}
+	for i := range fn.Args {
+		if containsDynamicParam(fn.Args[i]) {
+			hasDynamicParam = true
+			break
+		}
 	}
 
 	col = fn.Args[0].GetCol()
@@ -628,7 +636,7 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 		switch exprImpl.F.Func.ObjName {
 		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "in", "prefix_in":
 			switch e := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec:
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List:
 				return extractColRefInFilter(exprImpl.F.Args[0])
 			case *plan.Expr_F:
 				switch e.F.Func.ObjName {
@@ -767,7 +775,7 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 	filter = replaceColRefWithNull(DeepCopyExpr(filter))
 
-	filter, err := ConstantFold(batch.EmptyForConstFoldBatch, filter, proc, false)
+	filter, err := ConstantFold(batch.EmptyForConstFoldBatch, filter, proc, false, true)
 	if err != nil {
 		return false
 	}
@@ -966,7 +974,7 @@ func GetColumnsByExpr(
 
 func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
 	if len(bat.Vecs) == 0 { //that's constant expr
-		e, err := ConstantFold(bat, expr, proc, false)
+		e, err := ConstantFold(bat, expr, proc, false, true)
 		if err != nil {
 			return false, err
 		}
@@ -984,7 +992,7 @@ func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc
 		}
 		defer executor.Free()
 
-		vec, err := executor.Eval(proc, []*batch.Batch{bat})
+		vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			return false, err
 		}
@@ -1086,7 +1094,7 @@ func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
 func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsConst bool) ([]*plan.Expr, error) {
 	newExprs := DeepCopyExprList(exprs)
 	for i := range newExprs {
-		foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], proc, varAndParamIsConst)
+		foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], proc, varAndParamIsConst, true)
 		if err != nil {
 			return nil, err
 		}
@@ -1097,7 +1105,7 @@ func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsCo
 	return newExprs, nil
 }
 
-func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
+func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
 	if expr.Typ.Id == int32(types.T_interval) {
 		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
 	}
@@ -1105,12 +1113,20 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	// If it is Expr_List, perform constant folding on its elements
 	if elist := expr.GetList(); elist != nil {
 		exprList := elist.List
+		cannotFold := false
 		for i := range exprList {
-			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst)
+			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst, foldInExpr)
 			if err != nil {
 				return nil, err
 			}
 			exprList[i] = foldExpr
+			if foldExpr.GetLit() == nil {
+				cannotFold = true
+			}
+		}
+
+		if cannotFold || !foldInExpr {
+			return expr, nil
 		}
 
 		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
@@ -1146,17 +1162,23 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if err != nil {
 		return nil, err
 	}
-	if f.CannotFold() || f.IsRealTimeRelated() {
+	if f.CannotFold() {
+		return expr, nil
+	}
+	if f.IsRealTimeRelated() && !varAndParamIsConst {
 		return expr, nil
 	}
 	isVec := false
 	for i := range fn.Args {
-		foldExpr, errFold := ConstantFold(bat, fn.Args[i], proc, varAndParamIsConst)
+		foldExpr, errFold := ConstantFold(bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr)
 		if errFold != nil {
 			return nil, errFold
 		}
 		fn.Args[i] = foldExpr
 		isVec = isVec || foldExpr.GetVec() != nil
+	}
+	if f.IsAgg() || f.IsWin() {
+		return expr, nil
 	}
 	if !rule.IsConstant(expr, varAndParamIsConst) {
 		return expr, nil
@@ -1236,8 +1258,13 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // checkNoNeedCast
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
-func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
-	if constExpr == nil {
+func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
+	if constExpr.GetP() != nil && columnT.IsNumeric() {
+		return true
+	}
+
+	lit := constExpr.GetLit()
+	if lit == nil {
 		return false
 	}
 
@@ -1246,11 +1273,11 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 		return true
 	}
 	switch constT.Oid {
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		switch columnT.Oid {
 		case types.T_char, types.T_varchar:
 			return constT.Width <= columnT.Width
-		case types.T_text:
+		case types.T_text, types.T_datalink:
 			return true
 		default:
 			return false
@@ -1271,7 +1298,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 		}
 
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		val, valOk := constExpr.Value.(*plan.Literal_I64Val)
+		val, valOk := lit.Value.(*plan.Literal_I64Val)
 		if !valOk {
 			return false
 		}
@@ -1308,7 +1335,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 		}
 
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		val_u, valOk := constExpr.Value.(*plan.Literal_U64Val)
+		val_u, valOk := lit.Value.(*plan.Literal_U64Val)
 		if !valOk {
 			return false
 		}
@@ -1779,19 +1806,27 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 		out.WriteString(fmt.Sprintf("%sExpr_P(%d)", prefix, t.P.Pos))
 	case *plan.Expr_T:
 		out.WriteString(fmt.Sprintf("%sExpr_T(%s)", prefix, t.T.String()))
+	case *plan.Expr_Vec:
+		out.WriteString(fmt.Sprintf("%sExpr_Vec(len=%d)", prefix, t.Vec.Len))
 	default:
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}
+	out.WriteString(fmt.Sprintf("%sExpr_Selectivity(%v)", prefix, expr.Selectivity))
 }
 
 // databaseIsValid checks whether the database exists or not.
-func databaseIsValid(dbName string, ctx CompilerContext, snapshot Snapshot) (string, error) {
+func databaseIsValid(dbName string, ctx CompilerContext, snapshot *Snapshot) (string, error) {
 	connectDBFirst := false
 	if len(dbName) == 0 {
 		connectDBFirst = true
 	}
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
+	}
+
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
 	}
 
 	if len(dbName) == 0 || !ctx.DatabaseExists(dbName, snapshot) {
@@ -2021,12 +2056,8 @@ func MakeIntervalExpr(num int64, str string) *Expr {
 }
 
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
-	rightType := plan.Type{Id: int32(types.T_tuple)}
-	if matchPrefix {
-		rightType = left.Typ
-	}
 	rightArg := &plan.Expr{
-		Typ: rightType,
+		Typ: left.Typ,
 		Expr: &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
 				Len:  length,
@@ -2137,4 +2168,44 @@ func GetRowSizeFromTableDef(tableDef *TableDef, ignoreHiddenKey bool) float64 {
 		}
 	}
 	return float64(size)
+}
+
+type UnorderedSet[T ~string | ~int] map[T]int
+
+func (set UnorderedSet[T]) Insert(val T) {
+	set[val] = 0
+}
+
+func (set UnorderedSet[T]) Find(val T) bool {
+	if _, ok := set[val]; ok {
+		return ok
+	}
+	return false
+}
+
+// RemoveIf removes the elements that pred is true.
+func RemoveIf[T any](data []T, pred func(t T) bool) []T {
+	if len(data) == 0 {
+		return data
+	}
+	res := 0
+	for i := 0; i < len(data); i++ {
+		if !pred(data[i]) {
+			if res != i {
+				data[res] = data[i]
+			}
+			res++
+		}
+	}
+	return data[:res]
+}
+
+func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
+	if len(data) == 0 {
+		return false
+	}
+	if _, exists := data[val]; exists {
+		return true
+	}
+	return false
 }

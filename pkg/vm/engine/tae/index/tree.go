@@ -24,23 +24,7 @@ import (
 
 var _ SecondaryIndex = new(simpleARTMap)
 
-type IndexMVCCChain struct {
-	MVCC []uint32
-}
-
-func NewIndexMVCCChain() *IndexMVCCChain {
-	return &IndexMVCCChain{
-		MVCC: make([]uint32, 0),
-	}
-}
-
-func (chain *IndexMVCCChain) Insert(node uint32) {
-	chain.MVCC = append(chain.MVCC, node)
-}
-
-func (chain *IndexMVCCChain) GetRows() []uint32 {
-	return chain.MVCC
-}
+type Positions []uint32
 
 type simpleARTMap struct {
 	tree art.Tree
@@ -55,13 +39,12 @@ func NewSimpleARTMap() *simpleARTMap {
 func (art *simpleARTMap) Size() int { return art.tree.Size() }
 
 func (art *simpleARTMap) Insert(key []byte, offset uint32) (err error) {
-	chain := NewIndexMVCCChain()
-	chain.Insert(offset)
-	old, _ := art.tree.Insert(key, chain)
+	positions := Positions{offset}
+	old, _ := art.tree.Insert(key, positions)
 	if old != nil {
-		oldChain := old.(*IndexMVCCChain)
-		oldChain.Insert(offset)
-		art.tree.Insert(key, old)
+		oldPositions := old.(Positions)
+		oldPositions = append(oldPositions, offset)
+		art.tree.Insert(key, oldPositions)
 	}
 	return
 }
@@ -72,13 +55,12 @@ func (art *simpleARTMap) BatchInsert(
 	startRow uint32,
 ) (err error) {
 	op := func(v []byte, _ bool, i int) error {
-		chain := NewIndexMVCCChain()
-		chain.Insert(startRow)
-		old, _ := art.tree.Insert(v, chain)
+		positions := Positions{startRow}
+		old, _ := art.tree.Insert(v, positions)
 		if old != nil {
-			oldChain := old.(*IndexMVCCChain)
-			oldChain.Insert(startRow)
-			art.tree.Insert(v, old)
+			oldPositions := old.(Positions)
+			oldPositions = append(oldPositions, startRow)
+			art.tree.Insert(v, oldPositions)
 		}
 		startRow++
 		return nil
@@ -96,8 +78,8 @@ func (art *simpleARTMap) Search(key []byte) ([]uint32, error) {
 	if !found {
 		return nil, ErrNotFound
 	}
-	chain := v.(*IndexMVCCChain)
-	return chain.GetRows(), nil
+	positions := v.(Positions)
+	return positions, nil
 }
 
 func (art *simpleARTMap) String() string {
@@ -108,7 +90,7 @@ func (art *simpleARTMap) String() string {
 		if err != nil {
 			break
 		}
-		s = fmt.Sprintf("%sNode: %v:%v\n", s, n.Key(), n.Value().(*IndexMVCCChain).GetRows())
+		s = fmt.Sprintf("%sNode: %v:%v\n", s, n.Key(), n.Value().(Positions))
 	}
 	s = fmt.Sprintf("%s)", s)
 	return s

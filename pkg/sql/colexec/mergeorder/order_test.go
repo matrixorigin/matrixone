@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,7 +40,8 @@ const (
 
 // add unit tests for cases
 type orderTestCase struct {
-	arg    *Argument
+	arg    *MergeOrder
+	marg   *merge.Merge
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
@@ -82,8 +85,11 @@ func TestOrder(t *testing.T) {
 	}
 
 	for tci, tc := range tcs {
-		err := tc.arg.Prepare(tc.proc)
+		err := tc.marg.Prepare(tc.proc)
 		require.NoError(t, err)
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		tc.arg.SetChildren([]vm.Operator{tc.marg})
 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newIntBatch(tc.types, tc.proc, Rows, tc.arg.OrderBySpecs))
 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
@@ -143,7 +149,7 @@ func TestOrder(t *testing.T) {
 				}
 			}
 		}
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		tc.arg.Free(tc.proc, false, nil)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -184,7 +190,7 @@ func BenchmarkOrder(b *testing.B) {
 }
 
 func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
@@ -198,7 +204,7 @@ func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 	return orderTestCase{
 		types: ts,
 		proc:  proc,
-		arg: &Argument{
+		arg: &MergeOrder{
 			OrderBySpecs: fs,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
@@ -209,6 +215,7 @@ func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 			},
 		},
 		cancel: cancel,
+		marg:   &merge.Merge{},
 	}
 }
 

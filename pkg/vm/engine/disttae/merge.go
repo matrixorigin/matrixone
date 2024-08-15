@@ -16,7 +16,12 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -25,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -35,11 +39,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var gTaskID atomic.Uint64
+
 type cnMergeTask struct {
-	host *txnTable
+	taskId uint64 // only unique in a process
+	host   *txnTable
 	// txn
 	snapshot types.TS // start ts, fixed
-	state    *logtailreplay.PartitionState
+	ds       engine.DataSource
 	proc     *process.Process
 
 	// schema
@@ -56,7 +63,8 @@ type cnMergeTask struct {
 	targets []logtailreplay.ObjectInfo
 
 	// commit things
-	commitEntry *api.MergeCommitEntry
+	commitEntry  *api.MergeCommitEntry
+	transferMaps api.TransferMaps
 
 	// auxiliaries
 	fs fileservice.FileService
@@ -71,23 +79,28 @@ func newCNMergeTask(
 	ctx context.Context,
 	tbl *txnTable,
 	snapshot types.TS,
-	state *logtailreplay.PartitionState,
 	sortkeyPos int,
 	sortkeyIsPK bool,
 	targets []logtailreplay.ObjectInfo,
 	targetObjSize uint32,
 ) (*cnMergeTask, error) {
+	relData := NewEmptyBlockListRelationData()
+	relData.AppendBlockInfo(objectio.EmptyBlockInfo)
+	source, err := tbl.buildLocalDataSource(ctx, 0, relData, Policy_CheckAll)
+	if err != nil {
+		return nil, err
+	}
+
 	proc := tbl.proc.Load()
 	attrs := make([]string, 0, len(tbl.seqnums))
 	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
 		attrs = append(attrs, tbl.tableDef.Cols[i].Name)
 	}
-	fs := proc.FileService
+	fs := proc.Base.FileService
 
 	blkCnts := make([]int, len(targets))
 	blkIters := make([]*StatsBlkIter, len(targets))
 	for i, objInfo := range targets {
-		objInfo := objInfo
 		blkCnts[i] = int(objInfo.BlkCnt())
 
 		loc := objInfo.ObjectLocation()
@@ -98,11 +111,11 @@ func newCNMergeTask(
 
 		blkIters[i] = NewStatsBlkIter(&objInfo.ObjectStats, meta.MustDataMeta())
 	}
-
 	return &cnMergeTask{
+		taskId:      gTaskID.Add(1),
 		host:        tbl,
 		snapshot:    snapshot,
-		state:       state,
+		ds:          source,
 		proc:        proc,
 		version:     tbl.version,
 		colseqnums:  tbl.seqnums,
@@ -118,6 +131,10 @@ func newCNMergeTask(
 		targetObjSize: targetObjSize,
 		doTransfer:    !strings.Contains(tbl.comment, catalog.MO_COMMENT_NO_DEL_HINT),
 	}, nil
+}
+
+func (t *cnMergeTask) Name() string {
+	return fmt.Sprintf("[MT-%d]%d-%s", t.taskId, t.host.tableId, t.host.tableName)
 }
 
 func (t *cnMergeTask) DoTransfer() bool {
@@ -167,15 +184,8 @@ func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.
 		// update delta location
 		obj := t.targets[objIdx]
 		blk.Sorted = obj.Sorted
-		blk.EntryState = obj.EntryState
+		blk.Appendable = obj.Appendable
 		blk.CommitTs = obj.CommitTS
-		if obj.HasDeltaLoc {
-			deltaLoc, commitTs, ok := t.state.GetBockDeltaLoc(blk.BlockID)
-			if ok {
-				blk.DeltaLoc = deltaLoc
-				blk.CommitTs = commitTs
-			}
-		}
 		return t.readblock(ctx, &blk)
 	}
 	return nil, nil, nil, mergesort.ErrNoMoreBlocks
@@ -186,6 +196,17 @@ func (t *cnMergeTask) GetCommitEntry() *api.MergeCommitEntry {
 		return t.prepareCommitEntry()
 	}
 	return t.commitEntry
+}
+
+func (t *cnMergeTask) InitTransferMaps(blkCnt int) {
+	t.transferMaps = make(api.TransferMaps, blkCnt)
+	for i := range t.transferMaps {
+		t.transferMaps[i] = make(api.TransferMap, t.GetBlockMaxRows())
+	}
+}
+
+func (t *cnMergeTask) GetTransferMaps() api.TransferMaps {
+	return t.transferMaps
 }
 
 // impl DisposableVecPool
@@ -200,10 +221,10 @@ func (t *cnMergeTask) GetMPool() *mpool.MPool {
 
 func (t *cnMergeTask) HostHintName() string { return "CN" }
 
-func (t *cnMergeTask) GetTotalSize() uint32 {
-	totalSize := uint32(0)
+func (t *cnMergeTask) GetTotalSize() uint64 {
+	totalSize := uint64(0)
 	for _, obj := range t.targets {
-		totalSize += obj.OriginSize()
+		totalSize += uint64(obj.OriginSize())
 	}
 	return totalSize
 }
@@ -237,42 +258,13 @@ func (t *cnMergeTask) PrepareNewWriter() *blockio.BlockWriter {
 // readblock reads block data. there is no rowid column, no ablk
 func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfo) (bat *batch.Batch, dels *nulls.Nulls, release func(), err error) {
 	// read data
-	bat, release, err = blockio.LoadColumns(ctx, t.colseqnums, t.coltypes, t.fs, info.MetaLocation(), t.proc.GetMPool(), fileservice.Policy(0))
+	bat, dels, release, err = blockio.BlockDataReadNoCopy(
+		ctx, "", info, t.ds, t.colseqnums, t.coltypes,
+		info.CommitTs, t.fs, t.proc.GetMPool(), nil, fileservice.Policy(0))
 	if err != nil {
+		logutil.Infof("read block data failed: %v", err.Error())
 		return
 	}
-
-	// read tombstone on disk
-	if !info.DeltaLocation().IsEmpty() {
-		obat, byCN, delRelease, err2 := blockio.ReadBlockDelete(ctx, info.DeltaLocation(), t.fs)
-		if err2 != nil {
-			err = err2
-			return
-		}
-		defer delRelease()
-		if byCN {
-			dels = blockio.EvalDeleteRowsByTimestampForDeletesPersistedByCN(obat, t.snapshot, info.CommitTs)
-		} else {
-			dels = blockio.EvalDeleteRowsByTimestamp(obat, t.snapshot, &info.BlockID)
-		}
-	}
-
-	if dels == nil {
-		dels = nulls.NewWithSize(128)
-	}
-	deltalocDel := dels.Count()
-	// read tombstone in memory
-	iter := t.state.NewRowsIter(t.snapshot, &info.BlockID, true)
-	for iter.Next() {
-		entry := iter.Entry()
-		_, offset := entry.RowID.Decode()
-		dels.Add(uint64(offset))
-	}
-	iter.Close()
-	if dels.Count() > 0 {
-		logutil.Infof("mergeblocks read block %v, %d deleted(%d from disk)", info.BlockID.ShortStringEx(), dels.Count(), deltalocDel)
-	}
-
 	bat.SetAttributes(t.colattrs)
 	return
 }

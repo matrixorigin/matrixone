@@ -471,7 +471,7 @@ func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) 
 func (store *txnStore) ObserveTxn(
 	visitDatabase func(db any),
 	visitTable func(tbl any),
-	rotateTable func(dbName, tblName string, dbid, tid uint64),
+	rotateTable func(aid uint32, dbName, tblName string, dbid, tid uint64, pkSeqnum uint16),
 	visitMetadata func(block any),
 	visitObject func(obj any),
 	visitAppend func(bat any),
@@ -483,9 +483,15 @@ func (store *txnStore) ObserveTxn(
 		dbName := db.entry.GetName()
 		dbid := db.entry.ID
 		for _, tbl := range db.tables {
-			tblName := tbl.GetLocalSchema().Name
-			tid := tbl.entry.ID
-			rotateTable(dbName, tblName, dbid, tid)
+			schema := tbl.GetLocalSchema()
+			pkseq := uint16(60001)
+			if schema.HasPKOrFakePK() { // view table has no pk or fake pk
+				pkseq = schema.GetPrimaryKey().SeqNum
+			}
+			rotateTable(schema.AcInfo.TenantID,
+				dbName, schema.Name,
+				dbid, tbl.entry.ID,
+				pkseq)
 			if tbl.createEntry != nil || tbl.dropEntry != nil {
 				visitTable(tbl.entry)
 			}
@@ -610,20 +616,20 @@ func (store *txnStore) GetObject(id *common.ID) (obj handle.Object, err error) {
 	return db.GetObject(id)
 }
 
-func (store *txnStore) CreateObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
+func (store *txnStore) CreateObject(dbId, tid uint64) (obj handle.Object, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateObject(tid, is1PC)
+	return db.CreateObject(tid)
 }
 
-func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, is1PC bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
+func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateNonAppendableObject(tid, is1PC, opt)
+	return db.CreateNonAppendableObject(tid, opt)
 }
 
 func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
@@ -780,11 +786,6 @@ func (store *txnStore) PrepareWAL() (err error) {
 	}
 
 	t1 := time.Now()
-	for _, db := range store.dbs {
-		if err = db.Apply1PCCommit(); err != nil {
-			return
-		}
-	}
 	t2 := time.Now()
 	if t2.Sub(t1) > time.Millisecond*500 {
 		logutil.Warn(

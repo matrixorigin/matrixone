@@ -35,3 +35,11 @@ type Iterator interface {
 	Next()
 	GetError() error
 }
+type BtreeIterator interface {
+	sync.Locker
+	RLock()
+	RUnlock()
+	io.Closer
+	Next() bool
+	GetError() error
+}

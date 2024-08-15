@@ -24,12 +24,12 @@ import (
 )
 
 func TestString(t *testing.T) {
-	arg := Argument{FuncName: "unnest"}
+	arg := TableFunction{FuncName: "unnest"}
 	arg.String(bytes.NewBuffer(nil))
 }
 
 func TestCall(t *testing.T) {
-	arg := Argument{FuncName: "unnest",
+	arg := TableFunction{FuncName: "unnest",
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
 				Idx:     0,
@@ -58,7 +58,7 @@ func TestCall(t *testing.T) {
 }
 
 func TestPrepare(t *testing.T) {
-	arg := Argument{FuncName: "unnest",
+	arg := TableFunction{FuncName: "unnest",
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
 				Idx:     0,

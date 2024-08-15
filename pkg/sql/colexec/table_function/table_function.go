@@ -26,28 +26,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "table_function"
+const opName = "table_function"
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	tblArg := arg
+	anal := proc.GetAnalyze(tableFunction.GetIdx(), tableFunction.GetParallelIdx(), tableFunction.GetParallelMajor())
+	anal.Start()
+	defer anal.Stop()
+
+	tblArg := tableFunction
 	var (
 		f bool
 		e error
 	)
-	idx := arg.GetIdx()
+	idx := tableFunction.GetIdx()
 
-	result, err := arg.GetChildren(0).Call(proc)
+	result, err := vm.ChildrenCall(tableFunction.GetChildren(0), proc, anal)
 	if err != nil {
 		return result, err
 	}
-
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	anal.Input(result.Batch, tableFunction.IsFirst)
 
 	switch tblArg.FuncName {
 	case "unnest":
@@ -82,25 +83,25 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, e
 	}
 
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if tableFunction.ctr.buf != nil {
+		proc.PutBatch(tableFunction.ctr.buf)
+		tableFunction.ctr.buf = nil
 	}
-	arg.buf = result.Batch
-	if arg.buf == nil {
+	tableFunction.ctr.buf = result.Batch
+	if tableFunction.ctr.buf == nil {
 		result.Status = vm.ExecStop
 		return result, e
 	}
-	if arg.buf.IsEmpty() {
+	if tableFunction.ctr.buf.IsEmpty() {
 		return result, e
 	}
 
-	if arg.buf.VectorCount() != len(tblArg.retSchema) {
+	if tableFunction.ctr.buf.VectorCount() != len(tblArg.ctr.retSchema) {
 		result.Status = vm.ExecStop
 		return result, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.FuncName)
 	}
-	for i := range tblArg.retSchema {
-		if arg.buf.GetVector(int32(i)).GetType().Oid != tblArg.retSchema[i].Oid {
+	for i := range tblArg.ctr.retSchema {
+		if tableFunction.ctr.buf.GetVector(int32(i)).GetType().Oid != tblArg.ctr.retSchema[i].Oid {
 			result.Status = vm.ExecStop
 			return result, moerr.NewInternalError(proc.Ctx, "table function %s return type mismatch", tblArg.FuncName)
 		}
@@ -113,20 +114,24 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	return result, e
 }
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
-	buf.WriteString(arg.FuncName)
+func (tableFunction *TableFunction) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
+	buf.WriteString(tableFunction.FuncName)
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	tblArg := arg
+func (tableFunction *TableFunction) OpType() vm.OpType {
+	return vm.TableFunction
+}
+
+func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
+	tblArg := tableFunction
 	tblArg.ctr = new(container)
 
 	retSchema := make([]types.Type, len(tblArg.Rets))
 	for i := range tblArg.Rets {
 		retSchema[i] = dupType(&tblArg.Rets[i].Typ)
 	}
-	tblArg.retSchema = retSchema
+	tblArg.ctr.retSchema = retSchema
 
 	switch tblArg.FuncName {
 	case "unnest":

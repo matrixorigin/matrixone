@@ -62,9 +62,8 @@ func TestMergeBlock(t *testing.T) {
 			&sid1,
 			loc1.Name().Num(),
 			loc1.ID()),
-		SegmentID: sid1,
 		//non-appendable block
-		EntryState: false,
+		Appendable: false,
 	}
 	blkInfo1.SetMetaLocation(loc1)
 
@@ -74,9 +73,8 @@ func TestMergeBlock(t *testing.T) {
 			&sid2,
 			loc2.Name().Num(),
 			loc2.ID()),
-		SegmentID: sid2,
 		//non-appendable block
-		EntryState: false,
+		Appendable: false,
 	}
 	blkInfo2.SetMetaLocation(loc2)
 
@@ -86,9 +84,8 @@ func TestMergeBlock(t *testing.T) {
 			&sid3,
 			loc3.Name().Num(),
 			loc3.ID()),
-		SegmentID: sid3,
 		//non-appendable block
-		EntryState: false,
+		Appendable: false,
 	}
 	blkInfo3.SetMetaLocation(loc3)
 
@@ -111,7 +108,7 @@ func TestMergeBlock(t *testing.T) {
 	}
 	batch1.SetRowCount(3)
 
-	argument1 := Argument{
+	argument1 := MergeBlock{
 		container: &Container{
 			source: &mockRelation{},
 			mp:     make(map[int]*batch.Batch),
@@ -169,16 +166,18 @@ func TestMergeBlock(t *testing.T) {
 		argument1.container.mp[k].Clean(proc.GetMPool())
 	}
 	argument1.GetChildren(0).Free(proc, false, nil)
-	proc.FreeVectors()
+	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
+func resetChildren(arg *MergeBlock, bat *batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: []*batch.Batch{bat},
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: []*batch.Batch{bat},
-			},
+			valueScanArg,
 		})
 }
 
@@ -204,7 +203,7 @@ func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
 }
 
 func TestArgument_GetMetaLocBat(t *testing.T) {
-	arg := Argument{
+	arg := MergeBlock{
 		container: &Container{
 			source: &mockRelation{},
 			mp:     make(map[int]*batch.Batch),
@@ -245,7 +244,7 @@ func TestArgument_GetMetaLocBat(t *testing.T) {
 		arg.container.mp[k].Clean(proc.GetMPool())
 	}
 
-	proc.FreeVectors()
+	proc.Free()
 	bat.Clean(proc.GetMPool())
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }

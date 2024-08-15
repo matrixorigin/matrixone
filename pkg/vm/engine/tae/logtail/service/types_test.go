@@ -45,11 +45,6 @@ func TestTableID(t *testing.T) {
 			tb:       mockTable(1, 2, 1),
 			evaluate: require.NotEqual,
 		},
-		{
-			ta:       mockTable(1, 1, 1),
-			tb:       mockTable(1, 1, 2),
-			evaluate: require.NotEqual,
-		},
 	}
 
 	for _, c := range cases {

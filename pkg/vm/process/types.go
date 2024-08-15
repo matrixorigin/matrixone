@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"go.uber.org/zap/zapcore"
@@ -44,10 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-)
-
-const (
-	VectorLimit = 32
 )
 
 // Analyze analyzes information for operator
@@ -90,17 +88,35 @@ func NewRegMsg(bat *batch.Batch) *RegisterMessage {
 
 // WaitRegister channel
 type WaitRegister struct {
+	// Ctx, context of data receiver's pipeline.
+	//
+	// todo:
+	// This must cause a race here, because the context was shared by multiple pipelines.
+	//
+	// Assume we have two pipelines,
+	// pipeline1 and pipeline2, pipeline1 will dispatch data to pipeline2.
+	// so they share the same WaitRegister.
+	// and all of the receiver pipeline2 is parallel type.
+	//
+	// see the function `setContextForParallelScope` in `pkg/sql/compile/compile2.go`,
+	// we will rebuild pipeline context sometimes for parallel-type pipeline.
+	//
+	// If pipeline1 run first, it will listen to the context of pipeline2 from WaitRegister,
+	// and then pipeline2 run, it will rebuild the context, and the context of pipeline2 will be changed.
+	// it's a race but maybe not a problem, because the receiver never receive data before the pipeline2 run.
+	//
+	// it's a better way to use a self context but not the pipeline context here.
+	// and the receiver shut down the context when it's done.
 	Ctx context.Context
-	Ch  chan *RegisterMessage
+	// Ch, data receiver's channel, receiver will wait for data from this channel.
+	Ch chan *RegisterMessage
+
+	// how many nil batch this channel can receive, default 0 means every nil batch close channel
+	NilBatchCnt int
 }
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
 type Register struct {
-	// Ss, temporarily stores the row number list in the execution of operators,
-	// and it can be reused in the future execution.
-	Ss [][]int64
-	// InputBatch, stores the result of the previous operator.
-	InputBatch *batch.Batch
 	// MergeReceivers, receives result of multi previous operators from other pipelines
 	// e.g. merge operator.
 	MergeReceivers []*WaitRegister
@@ -150,7 +166,7 @@ type SessionInfo struct {
 	SessionId            uuid.UUID
 }
 
-// AnalyzeInfo  analyze information for query
+// AnalyzeInfo  operatorAnalyzer information for query
 type AnalyzeInfo struct {
 	// NodeId, index of query's node list
 	NodeId int32
@@ -322,114 +338,108 @@ func (sp *StmtProfile) GetStmtId() uuid.UUID {
 	return sp.stmtId
 }
 
+type BaseProcess struct {
+	// sqlContext includes the client context and the query context.
+	sqlContext QueryBaseContext
+
+	StmtProfile *StmtProfile
+	// Id, query id.
+	Id              string
+	Lim             Limitation
+	vp              *cachedVectorPool
+	mp              *mpool.MPool
+	prepareBatch    *batch.Batch
+	prepareExprList any
+	valueScanBatch  map[[16]byte]*batch.Batch
+	// unix timestamp
+	UnixTime            int64
+	TxnClient           client.TxnClient
+	AnalInfos           []*AnalyzeInfo
+	SessionInfo         SessionInfo
+	FileService         fileservice.FileService
+	LockService         lockservice.LockService
+	IncrService         incrservice.AutoIncrementService
+	LoadTag             bool
+	LastInsertID        *uint64
+	LoadLocalReader     *io.PipeReader
+	Aicm                *defines.AutoIncrCacheManager
+	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	prepareParams       *vector.Vector
+	QueryClient         qclient.QueryClient
+	Hakeeper            logservice.CNHAKeeperClient
+	UdfService          udf.Service
+	WaitPolicy          lock.WaitPolicy
+	messageBoard        *message.MessageBoard
+	logger              *log.MOLogger
+	TxnOperator         client.TxnOperator
+	CloneTxnOperator    client.TxnOperator
+}
+
 // Process contains context used in query execution
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
 type Process struct {
-	StmtProfile *StmtProfile
-	// Id, query id.
-	Id  string
-	Reg Register
-	Lim Limitation
+	// BaseProcess is the common part of one process, and it's shared by all its children processes.
+	Base *BaseProcess
+	Reg  Register
 
-	vp              *vectorPool
-	mp              *mpool.MPool
-	prepareBatch    *batch.Batch
-	prepareExprList any
-
-	valueScanBatch map[[16]byte]*batch.Batch
-
-	// unix timestamp
-	UnixTime int64
-
-	TxnClient client.TxnClient
-
-	TxnOperator client.TxnOperator
-
-	AnalInfos []*AnalyzeInfo
-
-	SessionInfo SessionInfo
-
-	Ctx context.Context
-
+	// Ctx and Cancel are pipeline's context and cancel function.
+	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
+	Ctx    context.Context
 	Cancel context.CancelFunc
 
-	FileService fileservice.FileService
-	LockService lockservice.LockService
-	IncrService incrservice.AutoIncrementService
-
-	LoadTag bool
-
-	LastInsertID *uint64
-
-	LoadLocalReader *io.PipeReader
-
-	DispatchNotifyCh chan WrapCs
-
-	Aicm *defines.AutoIncrCacheManager
-
-	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	prepareParams       *vector.Vector
-
-	QueryClient qclient.QueryClient
-
-	Hakeeper logservice.CNHAKeeperClient
-
-	UdfService udf.Service
-
-	WaitPolicy lock.WaitPolicy
-
-	MessageBoard *MessageBoard
-
-	logger *log.MOLogger
-}
-
-type vectorPool struct {
-	sync.Mutex
-	vecs map[uint8][]*vector.Vector
-
-	// max vector count limit for each type in pool.
-	Limit int
+	// TODO: move to dispatch operator.
+	DispatchNotifyCh chan *WrapCs
 }
 
 type sqlHelper interface {
 	GetCompilerContext() any
-	ExecSql(string) ([]interface{}, error)
+	ExecSql(string) ([][]interface{}, error)
 	GetSubscriptionMeta(string) (sub *plan.SubscriptionMeta, err error)
 }
 
 type WrapCs struct {
-	MsgId uint64
-	Uid   uuid.UUID
-	Cs    morpc.ClientSession
-	Err   chan error
+	sync.RWMutex
+	ReceiverDone bool
+	MsgId        uint64
+	Uid          uuid.UUID
+	Cs           morpc.ClientSession
+	Err          chan error
+}
+
+func (proc *Process) GetMessageBoard() *message.MessageBoard {
+	return proc.Base.messageBoard
+}
+
+func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
+	proc.Base.messageBoard = mb
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
-	proc.StmtProfile = sp
+	proc.Base.StmtProfile = sp
 }
 
 func (proc *Process) GetStmtProfile() *StmtProfile {
-	if proc.StmtProfile != nil {
-		return proc.StmtProfile
+	if proc.Base.StmtProfile != nil {
+		return proc.Base.StmtProfile
 	}
 	return &StmtProfile{}
 }
 
 func (proc *Process) InitSeq() {
-	proc.SessionInfo.SeqCurValues = make(map[uint64]string)
-	proc.SessionInfo.SeqLastValue = make([]string, 1)
-	proc.SessionInfo.SeqLastValue[0] = ""
-	proc.SessionInfo.SeqAddValues = make(map[uint64]string)
-	proc.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
+	proc.Base.SessionInfo.SeqCurValues = make(map[uint64]string)
+	proc.Base.SessionInfo.SeqLastValue = make([]string, 1)
+	proc.Base.SessionInfo.SeqLastValue[0] = ""
+	proc.Base.SessionInfo.SeqAddValues = make(map[uint64]string)
+	proc.Base.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
 }
 
 func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
-	proc.valueScanBatch[key] = batch
+	proc.Base.valueScanBatch[key] = batch
 }
 
 func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
-	bat, ok := proc.valueScanBatch[key]
+	bat, ok := proc.Base.valueScanBatch[key]
 	if ok {
 		bat.SetCnt(1000) // make sure this batch wouldn't be cleaned
 		return bat
@@ -439,71 +449,76 @@ func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
 }
 
 func (proc *Process) CleanValueScanBatchs() {
-	for k, bat := range proc.valueScanBatch {
-		bat.SetCnt(1)
-		bat.Clean(proc.Mp())
-		delete(proc.valueScanBatch, k)
-	}
-}
-
-func (proc *Process) GetValueScanBatchs() []*batch.Batch {
-	var bats []*batch.Batch
-
-	for k, bat := range proc.valueScanBatch {
+	mp := proc.Mp()
+	for k, bat := range proc.Base.valueScanBatch {
 		if bat != nil {
-			bats = append(bats, bat)
+			bat.SetCnt(1)
+			bat.Clean(mp)
 		}
-		delete(proc.valueScanBatch, k)
+		// todo: why not remake the map after all clean ?
+		delete(proc.Base.valueScanBatch, k)
 	}
-	return bats
 }
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
-	if i < 0 || i >= proc.prepareParams.Length() {
+	if i < 0 || i >= proc.Base.prepareParams.Length() {
 		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
-	if proc.prepareParams.IsNull(uint64(i)) {
+	if proc.Base.prepareParams.IsNull(uint64(i)) {
 		return nil, nil
 	} else {
-		val := proc.prepareParams.GetRawBytesAt(i)
+		val := proc.Base.prepareParams.GetRawBytesAt(i)
 		return val, nil
 	}
 }
 
 func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
-	proc.resolveVariableFunc = f
+	proc.Base.resolveVariableFunc = f
 }
 
 func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
-	return proc.resolveVariableFunc
+	return proc.Base.resolveVariableFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
-	if proc.LastInsertID != nil {
-		atomic.StoreUint64(proc.LastInsertID, num)
+	if proc.Base.LastInsertID != nil {
+		atomic.StoreUint64(proc.Base.LastInsertID, num)
 	}
 }
 
 func (proc *Process) GetSessionInfo() *SessionInfo {
-	return &proc.SessionInfo
+	return &proc.Base.SessionInfo
 }
 
 func (proc *Process) GetLastInsertID() uint64 {
-	if proc.LastInsertID != nil {
-		num := atomic.LoadUint64(proc.LastInsertID)
+	if proc.Base.LastInsertID != nil {
+		num := atomic.LoadUint64(proc.Base.LastInsertID)
 		return num
 	}
 	return 0
 }
 
 func (proc *Process) SetCacheForAutoCol(name string) {
-	aicm := proc.Aicm
+	aicm := proc.Base.Aicm
 	aicm.Mu.Lock()
 	defer aicm.Mu.Unlock()
 	aicm.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: 0, MaxNum: aicm.MaxSize, Step: 1}
 }
 
-type analyze struct {
+func (proc *Process) SetCloneTxnOperator(op client.TxnOperator) {
+	proc.Base.CloneTxnOperator = op
+}
+
+func (proc *Process) GetCloneTxnOperator() client.TxnOperator {
+	return proc.Base.CloneTxnOperator
+}
+
+func (proc *Process) GetTxnOperator() client.TxnOperator {
+	return proc.Base.TxnOperator
+}
+
+// Operator Resource Analzyer
+type operatorAnalyzer struct {
 	parallelMajor        bool
 	parallelIdx          int
 	start                time.Time

@@ -85,7 +85,7 @@ func TestGetWithNoBind(t *testing.T) {
 		time.Hour,
 		func(a *lockTableAllocator) {
 			assert.Equal(t,
-				pb.LockTable{Valid: true, ServiceID: "s1", Table: 1, OriginTable: 1, Version: 1},
+				pb.LockTable{Valid: true, ServiceID: "s1", Table: 1, OriginTable: 1, Version: a.version},
 				a.Get("s1", 0, 1, 0, pb.Sharding_None))
 		})
 }
@@ -98,7 +98,7 @@ func TestGetWithAlreadyBind(t *testing.T) {
 			// register s1 first
 			a.Get("s1", 0, 1, 0, pb.Sharding_None)
 			assert.Equal(t,
-				pb.LockTable{Valid: true, ServiceID: "s1", Table: 1, OriginTable: 1, Version: 1},
+				pb.LockTable{Valid: true, ServiceID: "s1", Table: 1, OriginTable: 1, Version: a.version},
 				a.Get("s2", 0, 1, 0, pb.Sharding_None))
 		})
 }
@@ -112,7 +112,7 @@ func TestGetWithBindInvalid(t *testing.T) {
 			a.Get("s1", 0, 1, 0, pb.Sharding_None)
 			a.disableTableBinds(a.getServiceBinds("s1"))
 			assert.Equal(t,
-				pb.LockTable{Valid: true, ServiceID: "s2", Table: 1, OriginTable: 1, Version: 2},
+				pb.LockTable{Valid: true, ServiceID: "s2", Table: 1, OriginTable: 1, Version: a.version + 1},
 				a.Get("s2", 0, 1, 0, pb.Sharding_None))
 		})
 }
@@ -131,7 +131,7 @@ func TestGetWithBindAndServiceBothInvalid(t *testing.T) {
 			a.getServiceBinds("s2").disable()
 
 			assert.Equal(t,
-				pb.LockTable{Valid: false, ServiceID: "s1", Table: 1, OriginTable: 1, Version: 1},
+				pb.LockTable{Valid: false, ServiceID: "s1", Table: 1, OriginTable: 1, Version: a.version},
 				a.Get("s2", 0, 1, 0, pb.Sharding_None))
 		})
 }
@@ -142,7 +142,7 @@ func TestCheckTimeoutServiceTask(t *testing.T) {
 		time.Millisecond,
 		func(a *lockTableAllocator) {
 			// create s1 bind
-			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			a.Get("s2", 0, 1, 0, pb.Sharding_None)
 
 			for {
 				bind := a.GetLatest(0, 1)
@@ -160,7 +160,7 @@ func TestKeepaliveBind(t *testing.T) {
 		t,
 		interval,
 		func(a *lockTableAllocator) {
-			c, err := NewClient(morpc.Config{})
+			c, err := NewClient("", morpc.Config{})
 			require.NoError(t, err)
 			defer func() {
 				assert.NoError(t, c.Close())
@@ -176,8 +176,11 @@ func TestKeepaliveBind(t *testing.T) {
 					time.Second,
 					bind,
 					c,
-					func(lt pb.LockTable) {}))
-			k := NewLockTableKeeper("s1", c, interval/5, interval/5, m, &service{})
+					func(lt pb.LockTable) {},
+					runtime.DefaultRuntime().Logger(),
+				),
+			)
+			k := NewLockTableKeeper("s1", c, interval/5, interval/5, m, &service{logger: runtime.GetLogger("")})
 
 			binds := a.getServiceBinds("s1")
 			assert.NotNil(t, binds)
@@ -328,15 +331,18 @@ func BenchmarkValid(b *testing.B) {
 
 func runValidBenchmark(b *testing.B, name string, tables int) {
 	b.Run(name, func(b *testing.B) {
-		runtime.SetupProcessLevelRuntime(runtime.NewRuntime(
-			metadata.ServiceType_CN,
+		runtime.SetupServiceBasedRuntime(
 			"",
-			logutil.GetPanicLoggerWithLevel(zap.InfoLevel),
-			runtime.WithClock(clock.NewHLCClock(func() int64 {
-				return time.Now().UTC().UnixNano()
-			}, 0))))
+			runtime.NewRuntime(
+				metadata.ServiceType_CN,
+				"",
+				logutil.GetPanicLoggerWithLevel(zap.InfoLevel),
+				runtime.WithClock(clock.NewHLCClock(func() int64 {
+					return time.Now().UTC().UnixNano()
+				}, 0))),
+		)
 		testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
-		a := NewLockTableAllocator(testSockets, time.Hour, morpc.Config{})
+		a := NewLockTableAllocator("", testSockets, time.Hour, morpc.Config{})
 		defer func() {
 			assert.NoError(b, a.Close())
 		}()
@@ -365,33 +371,40 @@ func runLockTableAllocatorTest(
 	fn func(*lockTableAllocator),
 	opts ...AllocatorOption,
 ) {
-	reuse.RunReuseTests(func() {
-		defer leaktest.AfterTest(t)()
-		testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
-		require.NoError(t, os.RemoveAll(testSockets[7:]))
-		runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-		cluster := clusterservice.NewMOCluster(
-			nil,
-			0,
-			clusterservice.WithDisableRefresh(),
-			clusterservice.WithServices(
-				[]metadata.CNService{
-					{
-						ServiceID:          "s1",
-						LockServiceAddress: testSockets,
-					},
-				},
-				[]metadata.TNService{
-					{
-						LockServiceAddress: testSockets,
-					},
-				}))
-		runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			reuse.RunReuseTests(func() {
+				defer leaktest.AfterTest(t)()
+				testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
+				require.NoError(t, os.RemoveAll(testSockets[7:]))
+				cluster := clusterservice.NewMOCluster(
+					sid,
+					nil,
+					0,
+					clusterservice.WithDisableRefresh(),
+					clusterservice.WithServices(
+						[]metadata.CNService{
+							{
+								ServiceID:          "s1",
+								LockServiceAddress: testSockets,
+							},
+						},
+						[]metadata.TNService{
+							{
+								LockServiceAddress: testSockets,
+							},
+						}))
+				runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
 
-		a := NewLockTableAllocator(testSockets, timeout, morpc.Config{}, opts...)
-		defer func() {
-			assert.NoError(t, a.Close())
-		}()
-		fn(a.(*lockTableAllocator))
-	})
+				a := NewLockTableAllocator(sid, testSockets, timeout, morpc.Config{}, opts...)
+				defer func() {
+					assert.NoError(t, a.Close())
+				}()
+				fn(a.(*lockTableAllocator))
+			})
+		},
+	)
+
 }

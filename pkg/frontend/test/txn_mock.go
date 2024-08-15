@@ -320,7 +320,7 @@ func (mr *MockTxnClientMockRecorder) New(ctx, commitTS interface{}, options ...i
 }
 
 // NewWithSnapshot mocks base method.
-func (m *MockTxnClient) NewWithSnapshot(snapshot []byte) (client.TxnOperator, error) {
+func (m *MockTxnClient) NewWithSnapshot(snapshot txn.CNTxnSnapshot) (client.TxnOperator, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "NewWithSnapshot", snapshot)
 	ret0, _ := ret[0].(client.TxnOperator)
@@ -752,10 +752,10 @@ func (mr *MockTxnOperatorMockRecorder) SetFootPrints(prints interface{}) *gomock
 }
 
 // Snapshot mocks base method.
-func (m *MockTxnOperator) Snapshot() ([]byte, error) {
+func (m *MockTxnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Snapshot")
-	ret0, _ := ret[0].([]byte)
+	ret0, _ := ret[0].(txn.CNTxnSnapshot)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -1121,6 +1121,20 @@ func (mr *MockWorkspaceMockRecorder) EndStatement() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EndStatement", reflect.TypeOf((*MockWorkspace)(nil).EndStatement))
 }
 
+// GetHaveDDL mocks base method.
+func (m *MockWorkspace) GetHaveDDL() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetHaveDDL")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// GetHaveDDL indicates an expected call of GetHaveDDL.
+func (mr *MockWorkspaceMockRecorder) GetHaveDDL() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHaveDDL", reflect.TypeOf((*MockWorkspace)(nil).GetHaveDDL))
+}
+
 // GetSQLCount mocks base method.
 func (m *MockWorkspace) GetSQLCount() uint64 {
 	m.ctrl.T.Helper()
@@ -1175,6 +1189,34 @@ func (mr *MockWorkspaceMockRecorder) IncrStatementID(ctx, commit interface{}) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IncrStatementID", reflect.TypeOf((*MockWorkspace)(nil).IncrStatementID), ctx, commit)
 }
 
+// PPString mocks base method.
+func (m *MockWorkspace) PPString() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PPString")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// PPString indicates an expected call of PPString.
+func (mr *MockWorkspaceMockRecorder) PPString() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PPString", reflect.TypeOf((*MockWorkspace)(nil).PPString))
+}
+
+// Readonly mocks base method.
+func (m *MockWorkspace) Readonly() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Readonly")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// Readonly indicates an expected call of Readonly.
+func (mr *MockWorkspaceMockRecorder) Readonly() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Readonly", reflect.TypeOf((*MockWorkspace)(nil).Readonly))
+}
+
 // Rollback mocks base method.
 func (m *MockWorkspace) Rollback(ctx context.Context) error {
 	m.ctrl.T.Helper()
@@ -1201,6 +1243,18 @@ func (m *MockWorkspace) RollbackLastStatement(ctx context.Context) error {
 func (mr *MockWorkspaceMockRecorder) RollbackLastStatement(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RollbackLastStatement", reflect.TypeOf((*MockWorkspace)(nil).RollbackLastStatement), ctx)
+}
+
+// SetHaveDDL mocks base method.
+func (m *MockWorkspace) SetHaveDDL(flag bool) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetHaveDDL", flag)
+}
+
+// SetHaveDDL indicates an expected call of SetHaveDDL.
+func (mr *MockWorkspaceMockRecorder) SetHaveDDL(flag interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetHaveDDL", reflect.TypeOf((*MockWorkspace)(nil).SetHaveDDL), flag)
 }
 
 // StartStatement mocks base method.

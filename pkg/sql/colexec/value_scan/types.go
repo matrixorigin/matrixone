@@ -17,60 +17,71 @@ package value_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(ValueScan)
 
-type Argument struct {
+type container struct {
+	idx int
+}
+type ValueScan struct {
+	ctr    *container
 	Batchs []*batch.Batch
-	idx    int
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (valueScan *ValueScan) GetOperatorBase() *vm.OperatorBase {
+	return &valueScan.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[ValueScan](
+		func() *ValueScan {
+			return &ValueScan{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *ValueScan) {
+			*a = ValueScan{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[ValueScan]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (valueScan ValueScan) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *ValueScan {
+	return reuse.Alloc[ValueScan](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (valueScan *ValueScan) Release() {
+	if valueScan != nil {
+		reuse.Free[ValueScan](valueScan, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (valueScan *ValueScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	valueScan.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	for _, bat := range arg.Batchs {
+func (valueScan *ValueScan) Free(proc *process.Process, pipelineFailed bool, err error) {
+	for _, bat := range valueScan.Batchs {
 		if bat != nil {
 			bat.Clean(proc.Mp())
 		}
 	}
-	arg.Batchs = nil
-	arg.idx = 0
+	valueScan.Batchs = nil
+	if valueScan.ctr != nil {
+		valueScan.ctr.idx = 0
+		valueScan.ctr = nil
+	}
+	if valueScan.ProjectList != nil {
+		valueScan.FreeProjection(proc)
+	}
 }

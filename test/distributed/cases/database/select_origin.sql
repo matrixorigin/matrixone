@@ -1,12 +1,10 @@
 create table tt(aa int, bb int, cc int);
 insert into tt values (1, 1, 1);
-set keep_user_target_list_in_result = 0;
 select * from tt;
 select aa from tt;
 select aA from tt;
 select count(*) from tt;
 select COUNT(*)  from tt;
-set keep_user_target_list_in_result = 1;
 select aa from tt;
 select aA from tt;
 select AA from tt;
@@ -14,7 +12,6 @@ select Aa from tt;
 select count(*) from tt;
 select COUNT(*)  from tt;
 select cOuNt(*)  from tt;
-set keep_user_target_list_in_result = 0;
 drop table tt;
 
 drop table if exists t1;
@@ -30,7 +27,6 @@ select * from t1;
 select coalesCE(Aa, 1) from t1;
 select coalEsCE(aA, 1) from t1;
 select cOAlesce(bB, '1') from t1;
-set keep_user_target_list_in_result = 1;
 select * from t1;
 select coalesCE(Aa, 1) from t1;
 select coalEsCE(aA, 1) from t1;

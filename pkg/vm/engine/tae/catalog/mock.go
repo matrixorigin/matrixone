@@ -126,8 +126,7 @@ func newMockTableHandle(catalog *Catalog, txn txnif.AsyncTxn, entry *TableEntry)
 }
 
 func (it *mockObjIt) GetError() error          { return nil }
-func (it *mockObjIt) Valid() bool              { return false }
-func (it *mockObjIt) Next()                    {}
+func (it *mockObjIt) Next() bool               { return false }
 func (it *mockObjIt) Close() error             { return nil }
 func (it *mockObjIt) GetObject() handle.Object { return nil }
 

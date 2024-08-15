@@ -18,18 +18,19 @@ import (
 	"context"
 	goErrors "errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"io"
 	"time"
 
 	"github.com/lni/dragonboat/v4/logger"
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"go.uber.org/zap"
 )
 
 var _ ie.InternalExecutor = &logOutputExecutor{}
@@ -56,6 +57,7 @@ func (w *dummyStringWriter) WriteRow(row *table.Row) error {
 	return nil
 }
 func (w *dummyStringWriter) GetContent() string          { return "" }
+func (w *dummyStringWriter) GetContentLength() int       { return 0 }
 func (w *dummyStringWriter) FlushAndClose() (int, error) { return 0, nil }
 
 type dummyFSWriterFactory struct{}

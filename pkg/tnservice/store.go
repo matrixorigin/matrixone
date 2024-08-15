@@ -162,7 +162,7 @@ func NewService(
 	}
 
 	// start I/O pipeline
-	blockio.Start()
+	blockio.Start(cfg.UUID)
 
 	s := &store{
 		cfg:                 cfg,
@@ -259,7 +259,7 @@ func (s *store) Close() error {
 		err = errors.Join(err, ts.Close())
 	}
 	// stop I/O pipeline
-	blockio.Stop()
+	blockio.Stop(s.cfg.UUID)
 	return err
 }
 
@@ -320,7 +320,16 @@ func (s *store) createReplica(shard metadata.TNShard) error {
 					continue
 				}
 
-				err = r.start(service.NewTxnService(shard, storage, s.sender, s.cfg.Txn.ZombieTimeout.Duration, s.lockTableAllocator))
+				err = r.start(
+					service.NewTxnService(
+						s.cfg.UUID,
+						shard,
+						storage,
+						s.sender,
+						s.cfg.Txn.ZombieTimeout.Duration,
+						s.lockTableAllocator,
+					),
+				)
 				if err != nil {
 					r.logger.Fatal("start DNShard failed",
 						zap.Error(err))
@@ -396,9 +405,11 @@ func (s *store) initClocker() error {
 
 func (s *store) initLockTableAllocator() error {
 	s.lockTableAllocator = lockservice.NewLockTableAllocator(
+		s.cfg.UUID,
 		s.lockServiceListenAddr(),
 		s.cfg.LockService.KeepBindTimeout.Duration,
-		s.cfg.RPC)
+		s.cfg.RPC,
+	)
 	return nil
 }
 
@@ -409,7 +420,7 @@ func (s *store) initShardServer() error {
 
 	s.cfg.ShardService.RPC = s.cfg.RPC
 	s.cfg.ShardService.ListenAddress = s.shardServiceListenAddr()
-	s.shardServer = shardservice.NewShardServer(s.cfg.ShardService)
+	s.shardServer = shardservice.NewShardServer(s.cfg.ShardService, s.rt.Logger())
 	return nil
 }
 
@@ -426,7 +437,7 @@ func (s *store) initHAKeeperClient() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HAKeeper.DiscoveryTimeout.Duration)
 	defer cancel()
-	client, err := logservice.NewTNHAKeeperClient(ctx, s.cfg.HAKeeper.ClientConfig)
+	client, err := logservice.NewTNHAKeeperClient(ctx, s.cfg.UUID, s.cfg.HAKeeper.ClientConfig)
 	if err != nil {
 		return err
 	}
@@ -436,9 +447,12 @@ func (s *store) initHAKeeperClient() error {
 }
 
 func (s *store) initClusterService() {
-	s.moCluster = clusterservice.NewMOCluster(s.hakeeperClient,
-		s.cfg.Cluster.RefreshInterval.Duration)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, s.moCluster)
+	s.moCluster = clusterservice.NewMOCluster(
+		s.cfg.UUID,
+		s.hakeeperClient,
+		s.cfg.Cluster.RefreshInterval.Duration,
+	)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.ClusterService, s.moCluster)
 }
 
 // initQueryService
@@ -465,7 +479,7 @@ func (s *store) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_GetLatestBind, s.handleGetLatestBind, false)
 }
 
-func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.GetCacheInfoResponse = new(query.GetCacheInfoResponse)
 	perfcounter.GetCacheStats(func(infos []*query.CacheInfo) {
 		for _, info := range infos {
@@ -478,7 +492,7 @@ func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp
 	return nil
 }
 
-func (s *store) handleGetLatestBind(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *store) handleGetLatestBind(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.GetLatestBind = &query.GetLatestBindResponse{
 		Bind: s.lockTableAllocator.GetLatest(
 			req.GetLatestBind.GroupID,
@@ -489,7 +503,7 @@ func (s *store) handleGetLatestBind(ctx context.Context, req *query.Request, res
 }
 
 func (s *store) setupStatusServer() {
-	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	ss, ok := runtime.ServiceRuntime(s.cfg.UUID).GetGlobalVariables(runtime.StatusServer)
 	if ok {
 		ss.(*status.Server).SetHAKeeperClient(s.hakeeperClient)
 	}

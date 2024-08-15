@@ -28,7 +28,7 @@ import (
 
 const maxBatchSizeToSend = 64 * mpool.MB
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(MergeOrder)
 
 const (
 	receiving = iota
@@ -36,7 +36,7 @@ const (
 	pickUpSending
 )
 
-type Argument struct {
+type MergeOrder struct {
 	ctr *container
 
 	OrderBySpecs []*plan.OrderBySpec
@@ -44,40 +44,38 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (mergeOrder *MergeOrder) GetOperatorBase() *vm.OperatorBase {
+	return &mergeOrder.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[MergeOrder](
+		func() *MergeOrder {
+			return &MergeOrder{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *MergeOrder) {
+			*a = MergeOrder{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[MergeOrder]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (mergeOrder MergeOrder) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *MergeOrder {
+	return reuse.Alloc[MergeOrder](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (mergeOrder *MergeOrder) Release() {
+	if mergeOrder != nil {
+		reuse.Free[MergeOrder](mergeOrder, nil)
 	}
 }
 
 type container struct {
-	colexec.ReceiverOperator
-
 	// operator status
 	status int
 
@@ -94,12 +92,12 @@ type container struct {
 	buf *batch.Batch
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	mergeOrder.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := arg.ctr; ctr != nil {
+func (mergeOrder *MergeOrder) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if ctr := mergeOrder.ctr; ctr != nil {
 		mp := proc.Mp()
 		for i := range ctr.batchList {
 			if ctr.batchList[i] != nil {
@@ -127,6 +125,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			ctr.buf = nil
 		}
 
-		arg.ctr = nil
+		mergeOrder.ctr = nil
 	}
 }

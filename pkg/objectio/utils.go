@@ -127,11 +127,11 @@ func WriteBytes(b []byte, w io.Writer) (n int64, err error) {
 
 func ReadString(r io.Reader) (str string, n int64, err error) {
 	strLen := uint32(0)
-	if _, err = r.Read(types.EncodeUint32(&strLen)); err != nil {
+	if _, err = io.ReadFull(r, types.EncodeUint32(&strLen)); err != nil {
 		return
 	}
 	buf := make([]byte, strLen)
-	if _, err = r.Read(buf); err != nil {
+	if _, err = io.ReadFull(r, buf); err != nil {
 		return
 	}
 	str = string(buf)
@@ -141,11 +141,11 @@ func ReadString(r io.Reader) (str string, n int64, err error) {
 
 func ReadBytes(r io.Reader) (buf []byte, n int64, err error) {
 	strLen := uint32(0)
-	if _, err = r.Read(types.EncodeUint32(&strLen)); err != nil {
+	if _, err = io.ReadFull(r, types.EncodeUint32(&strLen)); err != nil {
 		return
 	}
 	buf = make([]byte, strLen)
-	if _, err = r.Read(buf); err != nil {
+	if _, err = io.ReadFull(r, buf); err != nil {
 		return
 	}
 	n = 4 + int64(strLen)
@@ -225,7 +225,7 @@ func ConstructRowidColumnTo(
 func ConstructRowidColumnToWithSels(
 	vec *vector.Vector,
 	id *Blockid,
-	sels []int32,
+	sels []int64,
 	mp *mpool.MPool,
 ) (err error) {
 	if err = vec.PreExtend(len(sels), mp); err != nil {
@@ -367,7 +367,7 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 		}
 		return NewDecimal128Vector(n, typ, m, random, nil)
 	case types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		if vs, ok := Values.([]string); ok {
 			return NewStringVector(n, typ, m, random, vs)
 		}
@@ -403,10 +403,10 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 		}
 		return NewBlockidVector(n, typ, m, random, nil)
 	case types.T_enum:
-		if vs, ok := Values.([]uint16); ok {
-			return NewUInt16Vector(n, typ, m, random, vs)
+		if vs, ok := Values.([]types.Enum); ok {
+			return NewEnumVector(n, typ, m, random, vs)
 		}
-		return NewUInt16Vector(n, typ, m, random, nil)
+		return NewEnumVector(n, typ, m, random, nil)
 	default:
 		panic(moerr.NewInternalErrorNoCtx("unsupport vector's type '%v", typ))
 	}
@@ -877,6 +877,31 @@ func NewTimeVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []stri
 			v = rand.Int()
 		}
 		if err := vector.AppendFixed(vec, types.Time(v), false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func NewEnumVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Enum) *vector.Vector {
+	vec := vector.NewVec(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+
+	for i := 0; i < n; i++ {
+		v := uint16(i)
+		if random {
+			v = uint16(rand.Int())
+		}
+		if err := vector.AppendFixed(vec, v, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

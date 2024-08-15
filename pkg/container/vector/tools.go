@@ -77,6 +77,12 @@ func InefficientMustBytesCol(v *Vector) [][]byte {
 //	for i := range vs {
 //		vs[i].UnsafeGetString(area)
 //	}
+//
+// todo:
+// There is a bug here.
+// If the vector is reused, that is, the initial value of Varlena is not 0,
+// it will cause the UnsafeGetString method to panic. This is because what is stored here is the offset of the last value.
+// and InefficientMustBytesCol has a same bug.
 func InefficientMustStrCol(v *Vector) []string {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
@@ -180,12 +186,12 @@ func extend(v *Vector, rows int, m *mpool.MPool) error {
 			return err
 		}
 		v.data = ndata[:cap(ndata)]
-		v.setupColFromData()
+		v.setupFromData()
 	}
 	return nil
 }
 
-func (v *Vector) setupColFromData() {
+func (v *Vector) setupFromData() {
 	if v.GetType().IsVarlen() {
 		v.col.setFromVector(v)
 	} else {
@@ -264,13 +270,13 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 }
 
 func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
-	rvec := &Vector{
-		area:         vec.Area,
-		length:       int(vec.Len),
-		typ:          ProtoTypeToType(vec.Type),
-		cantFreeData: true,
-		cantFreeArea: true,
-	}
+	rvec := NewVecFromReuse()
+	rvec.area = vec.Area
+	rvec.length = int(vec.Len)
+	rvec.typ = ProtoTypeToType(vec.Type)
+	rvec.cantFreeData = true
+	rvec.cantFreeArea = true
+
 	if vec.IsConst {
 		rvec.class = CONSTANT
 	} else {
@@ -283,7 +289,7 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 		return rvec, nil
 	}
 	rvec.data = vec.Data
-	rvec.setupColFromData()
+	rvec.setupFromData()
 	return rvec, nil
 }
 

@@ -50,6 +50,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp,
 		types.T_array_float32, types.T_array_float64,
+		types.T_datalink,
 	},
 
 	types.T_bool: {
@@ -59,6 +60,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_bit: {
@@ -71,6 +73,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_int8: {
@@ -83,6 +86,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_int16: {
@@ -95,6 +99,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_int32: {
@@ -107,6 +112,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_int64: {
@@ -119,6 +125,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_uint8: {
@@ -131,6 +138,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_uint16: {
@@ -143,6 +151,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_uint32: {
@@ -155,6 +164,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_uint64: {
@@ -167,6 +177,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_float32: {
@@ -178,6 +189,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_float64: {
@@ -189,6 +201,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_date: {
@@ -197,6 +210,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_datetime: {
@@ -206,6 +220,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_timestamp: {
@@ -215,6 +230,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_time: {
@@ -226,6 +242,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_binary, types.T_varbinary,
 		types.T_bit,
+		types.T_datalink,
 	},
 
 	types.T_decimal64: {
@@ -237,6 +254,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_time, types.T_timestamp,
+		types.T_datalink,
 	},
 
 	types.T_decimal128: {
@@ -247,6 +265,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_char: {
@@ -262,6 +281,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_varchar: {
@@ -278,6 +298,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
+		types.T_datalink,
 	},
 
 	types.T_binary: {
@@ -292,6 +313,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_varbinary, types.T_binary,
+		types.T_datalink,
 	},
 
 	types.T_varbinary: {
@@ -306,6 +328,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_blob: {
@@ -322,6 +345,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
+		types.T_datalink,
 	},
 
 	types.T_text: {
@@ -339,14 +363,31 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
 	},
+	types.T_datalink: {
+		types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_bool,
+		types.T_json,
+		types.T_uuid,
+		types.T_text,
+		types.T_date, types.T_datetime,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary,
+		types.T_array_float32, types.T_array_float64,
+		types.T_datalink,
+	},
 
 	types.T_json: {
-		types.T_char, types.T_varchar, types.T_text,
+		types.T_char, types.T_varchar, types.T_text, types.T_datalink,
 	},
 
 	types.T_uuid: {
 		types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
 	},
 
 	types.T_TS: {
@@ -360,7 +401,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_enum: {
 		types.T_enum, types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128,
 		types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
 	},
 
 	types.T_array_float32: {
@@ -383,7 +424,7 @@ func IfTypeCastSupported(sourceType, targetType types.T) bool {
 	return false
 }
 
-func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	var err error
 	// Cast Parameter1 as Type Parameter2
 	fromType := parameters[0].GetType()
@@ -391,88 +432,88 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	from := parameters[0]
 	switch fromType.Oid {
 	case types.T_any: // scalar null
-		err = scalarNullToOthers(proc.Ctx, *toType, result, length)
+		err = scalarNullToOthers(proc.Ctx, *toType, result, length, selectList)
 	case types.T_bool:
 		s := vector.GenerateFunctionFixedTypeParameter[bool](from)
-		err = boolToOthers(proc.Ctx, s, *toType, result, length)
+		err = boolToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_bit:
 		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
-		err = bitToOthers(proc.Ctx, s, *toType, result, length)
+		err = bitToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_int8:
 		s := vector.GenerateFunctionFixedTypeParameter[int8](from)
-		err = int8ToOthers(proc.Ctx, s, *toType, result, length)
+		err = int8ToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_int16:
 		s := vector.GenerateFunctionFixedTypeParameter[int16](from)
-		err = int16ToOthers(proc.Ctx, s, *toType, result, length)
+		err = int16ToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_int32:
 		s := vector.GenerateFunctionFixedTypeParameter[int32](from)
-		err = int32ToOthers(proc.Ctx, s, *toType, result, length)
+		err = int32ToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_int64:
 		s := vector.GenerateFunctionFixedTypeParameter[int64](from)
-		err = int64ToOthers(proc.Ctx, s, *toType, result, length)
+		err = int64ToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_uint8:
 		s := vector.GenerateFunctionFixedTypeParameter[uint8](from)
-		err = uint8ToOthers(proc.Ctx, s, *toType, result, length)
+		err = uint8ToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_uint16:
 		s := vector.GenerateFunctionFixedTypeParameter[uint16](from)
-		err = uint16ToOthers(proc.Ctx, s, *toType, result, length)
+		err = uint16ToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_uint32:
 		s := vector.GenerateFunctionFixedTypeParameter[uint32](from)
-		err = uint32ToOthers(proc.Ctx, s, *toType, result, length)
+		err = uint32ToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_uint64:
 		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
-		err = uint64ToOthers(proc.Ctx, s, *toType, result, length)
+		err = uint64ToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_float32:
 		s := vector.GenerateFunctionFixedTypeParameter[float32](from)
-		err = float32ToOthers(proc.Ctx, s, *toType, result, length)
+		err = float32ToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_float64:
 		s := vector.GenerateFunctionFixedTypeParameter[float64](from)
-		err = float64ToOthers(proc.Ctx, s, *toType, result, length)
+		err = float64ToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_decimal64:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
-		err = decimal64ToOthers(proc.Ctx, s, *toType, result, length)
+		err = decimal64ToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_decimal128:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
-		err = decimal128ToOthers(proc.Ctx, s, *toType, result, length)
+		err = decimal128ToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_date:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Date](from)
-		err = dateToOthers(proc, s, *toType, result, length)
+		err = dateToOthers(proc, s, *toType, result, length, selectList)
 	case types.T_datetime:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Datetime](from)
-		err = datetimeToOthers(proc, s, *toType, result, length)
+		err = datetimeToOthers(proc, s, *toType, result, length, selectList)
 	case types.T_time:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Time](from)
-		err = timeToOthers(proc.Ctx, s, *toType, result, length)
+		err = timeToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_timestamp:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from)
-		err = timestampToOthers(proc, s, *toType, result, length)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		err = timestampToOthers(proc, s, *toType, result, length, selectList)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = strTypeToOthers(proc, s, *toType, result, length)
+		err = strTypeToOthers(proc, s, *toType, result, length, selectList)
 	case types.T_array_float32, types.T_array_float64:
 		//NOTE: Don't mix T_array and T_varchar.
 		// T_varchar will have "[1,2,3]" string
 		// T_array will have "@@@#@!#@!@#!" binary.
 		s := vector.GenerateFunctionStrParameter(from)
-		err = arrayTypeToOthers(proc, s, *toType, result, length)
+		err = arrayTypeToOthers(proc, s, *toType, result, length, selectList)
 	case types.T_uuid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Uuid](from)
-		err = uuidToOthers(proc.Ctx, s, *toType, result, length)
+		err = uuidToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_TS:
 		s := vector.GenerateFunctionFixedTypeParameter[types.TS](from)
-		err = tsToOthers(proc.Ctx, s, *toType, result, length)
+		err = tsToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_Rowid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Rowid](from)
-		err = rowidToOthers(proc.Ctx, s, *toType, result, length)
+		err = rowidToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_Blockid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Blockid](from)
-		err = blockidToOthers(proc.Ctx, s, *toType, result, length)
+		err = blockidToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_json:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = jsonToOthers(proc.Ctx, s, *toType, result, length)
+		err = jsonToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_enum:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Enum](from)
-		err = enumToOthers(proc.Ctx, s, *toType, result, length)
+		err = enumToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	default:
 		// XXX we set the function here to adapt to the BVT cases.
 		err = formatCastError(proc.Ctx, from, *toType, "")
@@ -481,154 +522,154 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 }
 
 func scalarNullToOthers(ctx context.Context,
-	totype types.Type, result vector.FunctionResultWrapper, length int) error {
+	totype types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch totype.Oid {
 	case types.T_bool:
-		return appendNulls[bool](result, length)
+		return appendNulls[bool](result, length, selectList)
 	case types.T_bit:
-		return appendNulls[uint64](result, length)
+		return appendNulls[uint64](result, length, selectList)
 	case types.T_int8:
-		return appendNulls[int8](result, length)
+		return appendNulls[int8](result, length, selectList)
 	case types.T_int16:
-		return appendNulls[int16](result, length)
+		return appendNulls[int16](result, length, selectList)
 	case types.T_int32:
-		return appendNulls[int32](result, length)
+		return appendNulls[int32](result, length, selectList)
 	case types.T_int64:
-		return appendNulls[int64](result, length)
+		return appendNulls[int64](result, length, selectList)
 	case types.T_uint8:
-		return appendNulls[uint8](result, length)
+		return appendNulls[uint8](result, length, selectList)
 	case types.T_uint16:
-		return appendNulls[uint16](result, length)
+		return appendNulls[uint16](result, length, selectList)
 	case types.T_uint32:
-		return appendNulls[uint32](result, length)
+		return appendNulls[uint32](result, length, selectList)
 	case types.T_uint64:
-		return appendNulls[uint64](result, length)
+		return appendNulls[uint64](result, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_json,
-		types.T_array_float32, types.T_array_float64:
-		return appendNulls[types.Varlena](result, length)
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		return appendNulls[types.Varlena](result, length, selectList)
 	case types.T_float32:
-		return appendNulls[float32](result, length)
+		return appendNulls[float32](result, length, selectList)
 	case types.T_float64:
-		return appendNulls[float64](result, length)
+		return appendNulls[float64](result, length, selectList)
 	case types.T_decimal64:
-		return appendNulls[types.Decimal64](result, length)
+		return appendNulls[types.Decimal64](result, length, selectList)
 	case types.T_decimal128:
-		return appendNulls[types.Decimal128](result, length)
+		return appendNulls[types.Decimal128](result, length, selectList)
 	case types.T_date:
-		return appendNulls[types.Date](result, length)
+		return appendNulls[types.Date](result, length, selectList)
 	case types.T_datetime:
-		return appendNulls[types.Datetime](result, length)
+		return appendNulls[types.Datetime](result, length, selectList)
 	case types.T_time:
-		return appendNulls[types.Time](result, length)
+		return appendNulls[types.Time](result, length, selectList)
 	case types.T_timestamp:
-		return appendNulls[types.Timestamp](result, length)
+		return appendNulls[types.Timestamp](result, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from NULL to %s", totype))
 }
 
 func boolToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[bool],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return rs.DupFromParameter(source, length)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return boolToInteger(source, rs, length)
+		return boolToInteger(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary,
-		types.T_varbinary, types.T_blob, types.T_text:
+		types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return boolToStr(source, rs, length, toType)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return boolToInteger(source, rs, length)
+		return boolToInteger(source, rs, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return boolToInteger(source, rs, length)
+		return boolToInteger(source, rs, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return boolToInteger(source, rs, length)
+		return boolToInteger(source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return boolToInteger(source, rs, length)
+		return boolToInteger(source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return boolToInteger(source, rs, length)
+		return boolToInteger(source, rs, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return boolToInteger(source, rs, length)
+		return boolToInteger(source, rs, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return boolToInteger(source, rs, length)
+		return boolToInteger(source, rs, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return boolToInteger(source, rs, length)
+		return boolToInteger(source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from bool to %s", toType))
 }
 
 func bitToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[uint64],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
-		return numericToBool(source, rs, length)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length)
+		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return unsignedToDecimal64(source, rs, length)
+		return unsignedToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return unsignedToDecimal128(source, rs, length)
+		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return bitToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length)
+		return integerToTime(ctx, source, rs, length, selectList)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return integerToTimestamp(source, rs, length)
+		return integerToTimestamp(source, rs, length, selectList)
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
-		return integerToEnum(ctx, source, rs, length)
+		return integerToEnum(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
 }
@@ -638,557 +679,557 @@ func bitToOthers(ctx context.Context,
 // uint and float are the same.
 func int8ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[int8],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
-		return numericToBool(source, rs, length)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length)
+		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return rs.DupFromParameter(source, length)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return signedToDecimal64(source, rs, length)
+		return signedToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return signedToDecimal128(source, rs, length)
+		return signedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return signedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length)
+		return integerToTime(ctx, source, rs, length, selectList)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return integerToTimestamp(source, rs, length)
+		return integerToTimestamp(source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int8 to %s", toType))
 }
 
 func int16ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[int16],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
-		return numericToBool(source, rs, length)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length)
+		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
 		return rs.DupFromParameter(source, length)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return signedToDecimal64(source, rs, length)
+		return signedToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return signedToDecimal128(source, rs, length)
+		return signedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return signedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length)
+		return integerToTime(ctx, source, rs, length, selectList)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return integerToTimestamp(source, rs, length)
+		return integerToTimestamp(source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int16 to %s", toType))
 }
 
 func int32ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[int32],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
-		return numericToBool(source, rs, length)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length)
+		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
 		return rs.DupFromParameter(source, length)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return signedToDecimal64(source, rs, length)
+		return signedToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return signedToDecimal128(source, rs, length)
+		return signedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return signedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length)
+		return integerToTime(ctx, source, rs, length, selectList)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return integerToTimestamp(source, rs, length)
+		return integerToTimestamp(source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int32 to %s", toType))
 }
 
 func int64ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[int64],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
-		return numericToBool(source, rs, length)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length)
+		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
 		return rs.DupFromParameter(source, length)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return signedToDecimal64(source, rs, length)
+		return signedToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return signedToDecimal128(source, rs, length)
+		return signedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return signedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length)
+		return integerToTime(ctx, source, rs, length, selectList)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return integerToTimestamp(source, rs, length)
+		return integerToTimestamp(source, rs, length, selectList)
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
-		return integerToEnum(ctx, source, rs, length)
+		return integerToEnum(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int64 to %s", toType))
 }
 
 func uint8ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[uint8],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
-		return numericToBool(source, rs, length)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length)
+		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
 		return rs.DupFromParameter(source, length)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return unsignedToDecimal64(source, rs, length)
+		return unsignedToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return unsignedToDecimal128(source, rs, length)
+		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length)
+		return integerToTime(ctx, source, rs, length, selectList)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return integerToTimestamp(source, rs, length)
+		return integerToTimestamp(source, rs, length, selectList)
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
-		return integerToEnum(ctx, source, rs, length)
+		return integerToEnum(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint8 to %s", toType))
 }
 
 func uint16ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[uint16],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
-		return numericToBool(source, rs, length)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length)
+		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
 		return rs.DupFromParameter(source, length)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return unsignedToDecimal64(source, rs, length)
+		return unsignedToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return unsignedToDecimal128(source, rs, length)
+		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length)
+		return integerToTime(ctx, source, rs, length, selectList)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return integerToTimestamp(source, rs, length)
+		return integerToTimestamp(source, rs, length, selectList)
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
-		return integerToEnum(ctx, source, rs, length)
+		return integerToEnum(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint16 to %s", toType))
 }
 
 func uint32ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[uint32],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
-		return numericToBool(source, rs, length)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length)
+		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
 		return rs.DupFromParameter(source, length)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return unsignedToDecimal64(source, rs, length)
+		return unsignedToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return unsignedToDecimal128(source, rs, length)
+		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length)
+		return integerToTime(ctx, source, rs, length, selectList)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return integerToTimestamp(source, rs, length)
+		return integerToTimestamp(source, rs, length, selectList)
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
-		return integerToEnum(ctx, source, rs, length)
+		return integerToEnum(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint32 to %s", toType))
 }
 
 func uint64ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[uint64],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
-		return numericToBool(source, rs, length)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length)
+		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
 		return rs.DupFromParameter(source, length)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return unsignedToDecimal64(source, rs, length)
+		return unsignedToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return unsignedToDecimal128(source, rs, length)
+		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length)
+		return integerToTime(ctx, source, rs, length, selectList)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return integerToTimestamp(source, rs, length)
+		return integerToTimestamp(source, rs, length, selectList)
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
-		return integerToEnum(ctx, source, rs, length)
+		return integerToEnum(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint64 to %s", toType))
 }
 
 func float32ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[float32],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
-		return numericToBool(source, rs, length)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length)
+		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
-			return floatToFixFloat(ctx, source, rs, length)
+			return floatToFixFloat(ctx, source, rs, length, selectList)
 		}
 		return rs.DupFromParameter(source, length)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
 		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
-			return floatToFixFloat(ctx, source, rs, length)
+			return floatToFixFloat(ctx, source, rs, length, selectList)
 		}
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return floatToDecimal64(source, rs, length)
+		return floatToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return floatToDecimal128(source, rs, length)
+		return floatToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return floatToStr(ctx, source, rs, length, toType)
 	}
@@ -1197,58 +1238,58 @@ func float32ToOthers(ctx context.Context,
 
 func float64ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[float64],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
-		return numericToBool(source, rs, length)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length)
+		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return floatToInteger(ctx, source, rs, length)
+		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
-			return floatToFixFloat(ctx, source, rs, length)
+			return floatToFixFloat(ctx, source, rs, length, selectList)
 		}
-		return numericToNumeric(ctx, source, rs, length)
+		return numericToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
 		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
-			return floatToFixFloat(ctx, source, rs, length)
+			return floatToFixFloat(ctx, source, rs, length, selectList)
 		}
 		return rs.DupFromParameter(source, length)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return floatToDecimal64(source, rs, length)
+		return floatToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return floatToDecimal128(source, rs, length)
+		return floatToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return floatToStr(ctx, source, rs, length, toType)
 	}
@@ -1257,32 +1298,32 @@ func float64ToOthers(ctx context.Context,
 
 func dateToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Date],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return dateToSigned(source, rs, length)
+		return dateToSigned(source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return dateToSigned(source, rs, length)
+		return dateToSigned(source, rs, length, selectList)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
 		return rs.DupFromParameter(source, length)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return dateToTime(source, rs, length)
+		return dateToTime(source, rs, length, selectList)
 	case types.T_timestamp:
 		zone := time.Local
 		if proc != nil {
-			zone = proc.SessionInfo.TimeZone
+			zone = proc.GetSessionInfo().TimeZone
 		}
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return dateToTimestamp(source, rs, length, zone)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		return dateToDatetime(source, rs, length)
+		return dateToDatetime(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return dateToStr(proc.Ctx, source, rs, length, toType)
 	}
@@ -1291,24 +1332,24 @@ func dateToOthers(proc *process.Process,
 
 func datetimeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Datetime],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return datetimeToInt32(proc.Ctx, source, rs, length)
+		return datetimeToInt32(proc.Ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return datetimeToInt64(source, rs, length)
+		return datetimeToInt64(source, rs, length, selectList)
 	case types.T_timestamp:
 		zone := time.Local
 		if proc != nil {
-			zone = proc.SessionInfo.TimeZone
+			zone = proc.GetSessionInfo().TimeZone
 		}
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return datetimeToTimestamp(source, rs, length, zone)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
-		return datetimeToDate(source, rs, length)
+		return datetimeToDate(source, rs, length, selectList)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		v := source.GetSourceVector()
@@ -1316,36 +1357,36 @@ func datetimeToOthers(proc *process.Process,
 		return rs.DupFromParameter(source, length)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return datetimeToTime(source, rs, length)
+		return datetimeToTime(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return datetimeToStr(proc.Ctx, source, rs, length, toType)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return datetimeToDecimal64(proc.Ctx, source, rs, length)
+		return datetimeToDecimal64(proc.Ctx, source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return datetimeToDecimal128(proc.Ctx, source, rs, length)
+		return datetimeToDecimal128(proc.Ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from datetime to %s", toType))
 }
 
 func timestampToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Timestamp],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	zone := time.Local
 	if proc != nil {
-		zone = proc.SessionInfo.TimeZone
+		zone = proc.GetSessionInfo().TimeZone
 	}
 
 	switch toType.Oid {
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return timestampToInt32(proc.Ctx, source, rs, length)
+		return timestampToInt32(proc.Ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return timestampToInt64(source, rs, length)
+		return timestampToInt64(source, rs, length, selectList)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
 		return timestampToDate(proc.Ctx, source, rs, length, zone)
@@ -1358,82 +1399,82 @@ func timestampToOthers(proc *process.Process,
 		v.SetType(toType)
 		return rs.DupFromParameter(source, length)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return timestampToStr(proc.Ctx, source, rs, length, zone, toType)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return timestampToDecimal64(proc.Ctx, source, rs, length)
+		return timestampToDecimal64(proc.Ctx, source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return timestampToDecimal128(proc.Ctx, source, rs, length)
+		return timestampToDecimal128(proc.Ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from timestamp to %s", toType))
 }
 
 func timeToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Time],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return timeToInteger(ctx, source, rs, length)
+		return timeToInteger(ctx, source, rs, length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return timeToInteger(ctx, source, rs, length)
+		return timeToInteger(ctx, source, rs, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return timeToInteger(ctx, source, rs, length)
+		return timeToInteger(ctx, source, rs, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return timeToInteger(ctx, source, rs, length)
+		return timeToInteger(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return timeToInteger(ctx, source, rs, length)
+		return timeToInteger(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return timeToInteger(ctx, source, rs, length)
+		return timeToInteger(ctx, source, rs, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return timeToInteger(ctx, source, rs, length)
+		return timeToInteger(ctx, source, rs, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return timeToInteger(ctx, source, rs, length)
+		return timeToInteger(ctx, source, rs, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return timeToInteger(ctx, source, rs, length)
+		return timeToInteger(ctx, source, rs, length, selectList)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
-		return timeToDate(source, rs, length)
+		return timeToDate(source, rs, length, selectList)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		return timeToDatetime(source, rs, length)
+		return timeToDatetime(source, rs, length, selectList)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		v := source.GetSourceVector()
 		v.SetType(toType)
 		return rs.DupFromParameter(source, length)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return timeToStr(ctx, source, rs, length, toType)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return timeToDecimal64(ctx, source, rs, length)
+		return timeToDecimal64(ctx, source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return timeToDecimal128(ctx, source, rs, length)
+		return timeToDecimal128(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from time to %s", toType))
 }
 
 func decimal64ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Decimal64],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return decimal64ToBit(ctx, source, rs, int(toType.Width), length)
+		return decimal64ToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		return decimal64ToFloat(ctx, source, rs, length, 32)
@@ -1442,28 +1483,28 @@ func decimal64ToOthers(ctx context.Context,
 		return decimal64ToFloat(ctx, source, rs, length, 64)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return decimal64ToSigned(ctx, source, rs, 8, length)
+		return decimal64ToSigned(ctx, source, rs, 8, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return decimal64ToSigned(ctx, source, rs, 16, length)
+		return decimal64ToSigned(ctx, source, rs, 16, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return decimal64ToSigned(ctx, source, rs, 32, length)
+		return decimal64ToSigned(ctx, source, rs, 32, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return decimal64ToSigned(ctx, source, rs, 64, length)
+		return decimal64ToSigned(ctx, source, rs, 64, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return decimal64ToUnsigned(ctx, source, rs, 8, length)
+		return decimal64ToUnsigned(ctx, source, rs, 8, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return decimal64ToUnsigned(ctx, source, rs, 16, length)
+		return decimal64ToUnsigned(ctx, source, rs, 16, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return decimal64ToUnsigned(ctx, source, rs, 32, length)
+		return decimal64ToUnsigned(ctx, source, rs, 32, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return decimal64ToUnsigned(ctx, source, rs, 64, length)
+		return decimal64ToUnsigned(ctx, source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		if source.GetType().Scale == toType.Scale && source.GetType().Width >= toType.Width {
@@ -1474,18 +1515,18 @@ func decimal64ToOthers(ctx context.Context,
 			v.SetType(toType)
 			return nil
 		}
-		return decimal64ToDecimal64(source, rs, length)
+		return decimal64ToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return decimal64ToDecimal128Array(source, rs, length)
+		return decimal64ToDecimal128Array(source, rs, length, selectList)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return decimal64ToTimestamp(source, rs, length)
+		return decimal64ToTimestamp(source, rs, length, selectList)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return decimal64ToTime(source, rs, length)
+		return decimal64ToTime(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return decimal64ToStr(ctx, source, rs, length, toType)
 	}
@@ -1494,38 +1535,38 @@ func decimal64ToOthers(ctx context.Context,
 
 func decimal128ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Decimal128],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return decimal128ToBit(ctx, source, rs, int(toType.Width), length)
+		return decimal128ToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return decimal128ToSigned(ctx, source, rs, 8, length)
+		return decimal128ToSigned(ctx, source, rs, 8, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return decimal128ToSigned(ctx, source, rs, 16, length)
+		return decimal128ToSigned(ctx, source, rs, 16, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return decimal128ToSigned(ctx, source, rs, 32, length)
+		return decimal128ToSigned(ctx, source, rs, 32, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return decimal128ToSigned(ctx, source, rs, 64, length)
+		return decimal128ToSigned(ctx, source, rs, 64, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return decimal128ToUnsigned(ctx, source, rs, 8, length)
+		return decimal128ToUnsigned(ctx, source, rs, 8, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return decimal128ToUnsigned(ctx, source, rs, 16, length)
+		return decimal128ToUnsigned(ctx, source, rs, 16, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return decimal128ToUnsigned(ctx, source, rs, 32, length)
+		return decimal128ToUnsigned(ctx, source, rs, 32, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return decimal128ToUnsigned(ctx, source, rs, 64, length)
+		return decimal128ToUnsigned(ctx, source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return decimal128ToDecimal64(ctx, source, rs, length)
+		return decimal128ToDecimal64(ctx, source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		if source.GetType().Scale == toType.Scale && source.GetType().Width >= toType.Width {
@@ -1536,7 +1577,7 @@ func decimal128ToOthers(ctx context.Context,
 			v.SetType(toType)
 			return nil
 		}
-		return decimal128ToDecimal128(source, rs, length)
+		return decimal128ToDecimal128(source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		return decimal128ToFloat(ctx, source, rs, length, 32)
@@ -1545,12 +1586,12 @@ func decimal128ToOthers(ctx context.Context,
 		return decimal128ToFloat(ctx, source, rs, length, 64)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return decimal128ToTime(source, rs, length)
+		return decimal128ToTime(source, rs, length, selectList)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return decimal128ToTimestamp(source, rs, length)
+		return decimal128ToTimestamp(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return decimal128ToStr(ctx, source, rs, length, toType)
 	}
@@ -1559,7 +1600,7 @@ func decimal128ToOthers(ctx context.Context,
 
 func strTypeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	ctx := proc.Ctx
 
 	fromType := source.GetType()
@@ -1584,70 +1625,70 @@ func strTypeToOthers(proc *process.Process,
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return strToBit(ctx, source, rs, int(toType.Width), length)
+		return strToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return strToSigned(ctx, source, rs, 8, length)
+		return strToSigned(ctx, source, rs, 8, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return strToSigned(ctx, source, rs, 16, length)
+		return strToSigned(ctx, source, rs, 16, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return strToSigned(ctx, source, rs, 32, length)
+		return strToSigned(ctx, source, rs, 32, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return strToSigned(ctx, source, rs, 64, length)
+		return strToSigned(ctx, source, rs, 64, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return strToUnsigned(ctx, source, rs, 8, length)
+		return strToUnsigned(ctx, source, rs, 8, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return strToUnsigned(ctx, source, rs, 16, length)
+		return strToUnsigned(ctx, source, rs, 16, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return strToUnsigned(ctx, source, rs, 32, length)
+		return strToUnsigned(ctx, source, rs, 32, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return strToUnsigned(ctx, source, rs, 64, length)
+		return strToUnsigned(ctx, source, rs, 64, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return strToFloat(ctx, source, rs, 32, length)
+		return strToFloat(ctx, source, rs, 32, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return strToFloat(ctx, source, rs, 64, length)
+		return strToFloat(ctx, source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return strToDecimal64(source, rs, length)
+		return strToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return strToDecimal128(source, rs, length)
+		return strToDecimal128(source, rs, length, selectList)
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
-		return strToBool(source, rs, length)
+		return strToBool(source, rs, length, selectList)
 	case types.T_json:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return strToJson(source, rs, length)
+		return strToJson(source, rs, length, selectList)
 	case types.T_uuid:
 		rs := vector.MustFunctionResult[types.Uuid](result)
-		return strToUuid(source, rs, length)
+		return strToUuid(source, rs, length, selectList)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
-		return strToDate(source, rs, length)
+		return strToDate(source, rs, length, selectList)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		return strToDatetime(source, rs, length)
+		return strToDatetime(source, rs, length, selectList)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return strToTime(source, rs, length)
+		return strToTime(source, rs, length, selectList)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		zone := time.Local
 		if proc != nil {
-			zone = proc.SessionInfo.TimeZone
+			zone = proc.GetSessionInfo().TimeZone
 		}
-		return strToTimestamp(source, rs, zone, length)
+		return strToTimestamp(source, rs, zone, length, selectList)
 	case types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(ctx, source, rs, length, toType)
 	case types.T_array_float32:
@@ -1662,7 +1703,7 @@ func strTypeToOthers(proc *process.Process,
 
 func arrayTypeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	ctx := proc.Ctx
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	fromType := source.GetType()
@@ -1689,10 +1730,10 @@ func arrayTypeToOthers(proc *process.Process,
 
 func uuidToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Uuid],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return uuidToStr(ctx, source, rs, length, toType)
 	}
@@ -1701,7 +1742,7 @@ func uuidToOthers(ctx context.Context,
 
 func tsToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.TS],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	if toType.Oid == types.T_TS {
 		rs := vector.MustFunctionResult[types.TS](result)
 		return rs.DupFromParameter(source, length)
@@ -1711,7 +1752,7 @@ func tsToOthers(ctx context.Context,
 
 func rowidToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Rowid],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	if toType.Oid == types.T_Rowid {
 		rs := vector.MustFunctionResult[types.Rowid](result)
 		return rs.DupFromParameter(source, length)
@@ -1721,7 +1762,7 @@ func rowidToOthers(ctx context.Context,
 
 func blockidToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Blockid],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	if toType.Oid == types.T_Blockid {
 		rs := vector.MustFunctionResult[types.Blockid](result)
 		return rs.DupFromParameter(source, length)
@@ -1731,25 +1772,28 @@ func blockidToOthers(ctx context.Context,
 
 func jsonToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Varlena],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return jsonToStr(ctx, source, rs, length)
+		return jsonToStr(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from json to %s", toType))
 }
 
 func enumToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Enum],
-	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128:
 		rs := vector.MustFunctionResult[uint16](result)
-		return enumToUint16(source, rs, length)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		return enumToUint16(source, rs, length, selectList)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return enumToStr(ctx, source, rs, length)
+		return enumToStr(ctx, source, rs, length, selectList)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return rs.DupFromParameter(source, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from enum to %s", toType.String()))
 }
@@ -1781,7 +1825,7 @@ func integerToFixFloat[T1, T2 constraints.Integer | constraints.Float](
 
 func floatToFixFloat[T1, T2 constraints.Float](
 	ctx context.Context,
-	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length int) error {
+	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length int, selectList *FunctionSelectList) error {
 
 	pow := math.Pow10(int(to.GetType().Scale))
 	max_value := math.Pow10(int(to.GetType().Width - to.GetType().Scale))
@@ -1831,7 +1875,7 @@ func floatNumToFixFloat[T1 constraints.Float](
 // XXX do not use it to cast float to integer, please use floatToInteger
 func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](
 	ctx context.Context,
-	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length int) error {
+	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	var dftValue T2
 	times := uint64(length)
@@ -1864,7 +1908,7 @@ func numericToBit[T constraints.Integer | constraints.Float](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[uint64], bitSize int,
-	length int) error {
+	length int, selectList *FunctionSelectList) error {
 	for i := 0; i < length; i++ {
 		v, null := from.GetValue(uint64(i))
 		if null {
@@ -1895,7 +1939,7 @@ func numericToBit[T constraints.Integer | constraints.Float](
 func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2],
-	length int) error {
+	length int, selectList *FunctionSelectList) error {
 	var i uint64
 	var dftValue T2
 	times := uint64(length)
@@ -1919,7 +1963,7 @@ func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 
 func numericToBool[T constraints.Integer | constraints.Float](
 	from vector.FunctionParameterWrapper[T],
-	to *vector.FunctionResult[bool], length int) error {
+	to *vector.FunctionResult[bool], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -1979,7 +2023,7 @@ func boolToStr(
 
 func boolToInteger[T constraints.Integer](
 	from vector.FunctionParameterWrapper[bool],
-	to *vector.FunctionResult[T], length int) error {
+	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft T
@@ -2052,7 +2096,7 @@ func bitToStr(
 				b = append(b, byte(0))
 			}
 		}
-		if len(b) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+		if len(b) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 			return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 				"%v is larger than Dest length %v", v, toType.Width))
 		}
@@ -2065,7 +2109,7 @@ func bitToStr(
 
 func signedToDecimal64[T1 constraints.Signed](
 	from vector.FunctionParameterWrapper[T1],
-	to *vector.FunctionResult[types.Decimal64], length int) error {
+	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
@@ -2088,7 +2132,7 @@ func signedToDecimal64[T1 constraints.Signed](
 
 func signedToDecimal128[T1 constraints.Signed](
 	from vector.FunctionParameterWrapper[T1],
-	to *vector.FunctionResult[types.Decimal128], length int) error {
+	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal128
@@ -2115,7 +2159,7 @@ func signedToDecimal128[T1 constraints.Signed](
 
 func unsignedToDecimal64[T1 constraints.Unsigned](
 	from vector.FunctionParameterWrapper[T1],
-	to *vector.FunctionResult[types.Decimal64], length int) error {
+	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
@@ -2139,7 +2183,7 @@ func unsignedToDecimal64[T1 constraints.Unsigned](
 
 func unsignedToDecimal128[T1 constraints.Unsigned](
 	from vector.FunctionParameterWrapper[T1],
-	to *vector.FunctionResult[types.Decimal128], length int) error {
+	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal128
@@ -2163,7 +2207,7 @@ func unsignedToDecimal128[T1 constraints.Unsigned](
 
 func floatToDecimal64[T constraints.Float](
 	from vector.FunctionParameterWrapper[T],
-	to *vector.FunctionResult[types.Decimal64], length int) error {
+	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
@@ -2190,7 +2234,7 @@ func floatToDecimal64[T constraints.Float](
 
 func floatToDecimal128[T constraints.Float](
 	from vector.FunctionParameterWrapper[T],
-	to *vector.FunctionResult[types.Decimal128], length int) error {
+	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal128
@@ -2252,7 +2296,7 @@ func signedToStr[T constraints.Integer](
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
@@ -2300,7 +2344,7 @@ func unsignedToStr[T constraints.Unsigned](
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
@@ -2350,7 +2394,7 @@ func floatToStr[T constraints.Float](
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
@@ -2364,7 +2408,7 @@ func floatToStr[T constraints.Float](
 
 func integerToTimestamp[T constraints.Integer](
 	from vector.FunctionParameterWrapper[T],
-	to *vector.FunctionResult[types.Timestamp], length int) error {
+	to *vector.FunctionResult[types.Timestamp], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Timestamp
@@ -2388,7 +2432,7 @@ func integerToTimestamp[T constraints.Integer](
 func integerToTime[T constraints.Integer](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[T],
-	to *vector.FunctionResult[types.Time], length int) error {
+	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Time
@@ -2419,7 +2463,7 @@ func integerToTime[T constraints.Integer](
 func integerToEnum[T constraints.Integer](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[T],
-	to *vector.FunctionResult[types.Enum], length int) error {
+	to *vector.FunctionResult[types.Enum], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Enum
@@ -2448,7 +2492,7 @@ func integerToEnum[T constraints.Integer](
 
 func dateToSigned[T int32 | int64](
 	from vector.FunctionParameterWrapper[types.Date],
-	to *vector.FunctionResult[T], length int) error {
+	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	for i = 0; i < uint64(length); i++ {
 		v, null := from.GetValue(i)
@@ -2468,7 +2512,7 @@ func dateToSigned[T int32 | int64](
 
 func dateToTime(
 	from vector.FunctionParameterWrapper[types.Date],
-	to *vector.FunctionResult[types.Time], length int) error {
+	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -2488,7 +2532,7 @@ func dateToTime(
 
 func datetimeToTime(
 	from vector.FunctionParameterWrapper[types.Datetime],
-	to *vector.FunctionResult[types.Time], length int) error {
+	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	totype := to.GetType()
@@ -2531,7 +2575,7 @@ func dateToTimestamp(
 func datetimeToInt32(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Datetime],
-	to *vector.FunctionResult[int32], length int) error {
+	to *vector.FunctionResult[int32], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -2555,7 +2599,7 @@ func datetimeToInt32(
 
 func datetimeToInt64(
 	from vector.FunctionParameterWrapper[types.Datetime],
-	to *vector.FunctionResult[int64], length int) error {
+	to *vector.FunctionResult[int64], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -2577,7 +2621,7 @@ func datetimeToInt64(
 func datetimeToDecimal64(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Datetime],
-	to *vector.FunctionResult[types.Decimal64], length int) error {
+	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
@@ -2603,7 +2647,7 @@ func datetimeToDecimal64(
 func datetimeToDecimal128(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Datetime],
-	to *vector.FunctionResult[types.Decimal128], length int) error {
+	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal128
@@ -2649,7 +2693,7 @@ func datetimeToTimestamp(
 
 func dateToDatetime(
 	from vector.FunctionParameterWrapper[types.Date],
-	to *vector.FunctionResult[types.Datetime], length int) error {
+	to *vector.FunctionResult[types.Datetime], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -2692,7 +2736,7 @@ func timestampToDatetime(
 
 func timeToDatetime(
 	from vector.FunctionParameterWrapper[types.Time],
-	to *vector.FunctionResult[types.Datetime], length int) error {
+	to *vector.FunctionResult[types.Datetime], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	totype := to.GetType()
@@ -2713,7 +2757,7 @@ func timeToDatetime(
 
 func datetimeToDate(
 	from vector.FunctionParameterWrapper[types.Datetime],
-	to *vector.FunctionResult[types.Date], length int) error {
+	to *vector.FunctionResult[types.Date], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -2734,7 +2778,7 @@ func datetimeToDate(
 func timestampToInt32(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Timestamp],
-	to *vector.FunctionResult[int32], length int) error {
+	to *vector.FunctionResult[int32], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	for i = 0; i < uint64(length); i++ {
 		v, null := from.GetValue(i)
@@ -2757,7 +2801,7 @@ func timestampToInt32(
 
 func timestampToInt64(
 	from vector.FunctionParameterWrapper[types.Timestamp],
-	to *vector.FunctionResult[int64], length int) error {
+	to *vector.FunctionResult[int64], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	for i = 0; i < uint64(length); i++ {
 		v, null := from.GetValue(i)
@@ -2803,7 +2847,7 @@ func timestampToDate(
 func timestampToDecimal64(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Timestamp],
-	to *vector.FunctionResult[types.Decimal64], length int) error {
+	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
@@ -2833,7 +2877,7 @@ func timestampToDecimal64(
 func timestampToDecimal128(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Timestamp],
-	to *vector.FunctionResult[types.Decimal128], length int) error {
+	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal128
@@ -2863,7 +2907,7 @@ func timestampToDecimal128(
 func timeToInteger[T constraints.Integer](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Time],
-	to *vector.FunctionResult[T], length int) error {
+	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft T
@@ -2889,7 +2933,7 @@ func timeToInteger[T constraints.Integer](
 
 func timeToDate(
 	from vector.FunctionParameterWrapper[types.Time],
-	to *vector.FunctionResult[types.Date], length int) error {
+	to *vector.FunctionResult[types.Date], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -2943,7 +2987,7 @@ func dateToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -2992,7 +3036,7 @@ func datetimeToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -3042,7 +3086,7 @@ func timestampToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -3091,7 +3135,7 @@ func timeToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -3106,7 +3150,7 @@ func timeToStr(
 func timeToDecimal64(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Time],
-	to *vector.FunctionResult[types.Decimal64], length int) error {
+	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
@@ -3138,7 +3182,7 @@ func timeToDecimal64(
 func timeToDecimal128(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Time],
-	to *vector.FunctionResult[types.Decimal128], length int) error {
+	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal128
@@ -3170,7 +3214,7 @@ func timeToDecimal128(
 func decimal64ToSigned[T constraints.Signed](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[T], bitSize int, length int) error {
+	to *vector.FunctionResult[T], bitSize int, length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	fromTyp := from.GetType()
@@ -3201,7 +3245,7 @@ func decimal64ToSigned[T constraints.Signed](
 func decimal128ToSigned[T constraints.Signed](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal128],
-	to *vector.FunctionResult[T], bitSize int, length int) error {
+	to *vector.FunctionResult[T], bitSize int, length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	fromTyp := from.GetType()
@@ -3233,7 +3277,7 @@ func decimal64ToUnsigned[T constraints.Unsigned](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[T], bitSize int,
-	length int) error {
+	length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	fromType := from.GetType()
@@ -3265,7 +3309,7 @@ func decimal128ToUnsigned[T constraints.Unsigned](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[T], bitSize int,
-	length int) error {
+	length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	fromType := from.GetType()
@@ -3295,7 +3339,7 @@ func decimal128ToUnsigned[T constraints.Unsigned](
 
 func decimal64ToTime(
 	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[types.Time], length int) error {
+	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	fromtype := from.GetType()
@@ -3321,7 +3365,7 @@ func decimal64ToTime(
 
 func decimal128ToTime(
 	from vector.FunctionParameterWrapper[types.Decimal128],
-	to *vector.FunctionResult[types.Time], length int) error {
+	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	fromtype := from.GetType()
@@ -3347,7 +3391,7 @@ func decimal128ToTime(
 
 func decimal64ToTimestamp(
 	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[types.Timestamp], length int) error {
+	to *vector.FunctionResult[types.Timestamp], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -3368,7 +3412,7 @@ func decimal64ToTimestamp(
 
 func decimal128ToTimestamp(
 	from vector.FunctionParameterWrapper[types.Decimal128],
-	to *vector.FunctionResult[types.Timestamp], length int) error {
+	to *vector.FunctionResult[types.Timestamp], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -3471,7 +3515,7 @@ func decimal128ToFloat[T constraints.Float](
 
 func decimal64ToDecimal64(
 	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[types.Decimal64], length int) error {
+	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
@@ -3509,7 +3553,7 @@ func decimal64ToDecimal64(
 
 func decimal64ToDecimal128Array(
 	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[types.Decimal128], length int) error {
+	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	fromtype := from.GetType()
@@ -3604,7 +3648,7 @@ func decimal64ToDecimal128Array(
 func decimal128ToDecimal64(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal128],
-	to *vector.FunctionResult[types.Decimal64], length int) error {
+	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
@@ -3632,7 +3676,7 @@ func decimal128ToDecimal64(
 
 func decimal128ToDecimal128(
 	from vector.FunctionParameterWrapper[types.Decimal128],
-	to *vector.FunctionResult[types.Decimal128], length int) error {
+	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal128
@@ -3705,7 +3749,7 @@ func decimal64ToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
 			}
@@ -3754,7 +3798,7 @@ func decimal128ToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
 			}
@@ -3769,7 +3813,7 @@ func decimal128ToStr(
 func decimal64ToBit(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[uint64], bitSize int, length int) error {
+	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
 	for i := 0; i < length; i++ {
 		v, null := from.GetValue(uint64(i))
 		if null {
@@ -3795,7 +3839,7 @@ func decimal64ToBit(
 func decimal128ToBit(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal128],
-	to *vector.FunctionResult[uint64], bitSize int, length int) error {
+	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
 	for i := 0; i < length; i++ {
 		v, null := from.GetValue(uint64(i))
 		if null {
@@ -3822,7 +3866,7 @@ func strToSigned[T constraints.Signed](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int) error {
+	length int, selectList *FunctionSelectList) error {
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
@@ -3877,7 +3921,7 @@ func strToUnsigned[T constraints.Unsigned](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int) error {
+	length int, selectList *FunctionSelectList) error {
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
@@ -3923,7 +3967,7 @@ func strToFloat[T constraints.Float](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int) error {
+	length int, selectList *FunctionSelectList) error {
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
@@ -3986,7 +4030,7 @@ func strToFloat[T constraints.Float](
 
 func strToDecimal64(
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Decimal64], length int,
+	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList,
 ) error {
 	var i uint64
 	var l = uint64(length)
@@ -4025,7 +4069,7 @@ func strToDecimal64(
 
 func strToDecimal128(
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Decimal128], length int,
+	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList,
 ) error {
 	var i uint64
 	var l = uint64(length)
@@ -4064,7 +4108,7 @@ func strToDecimal128(
 
 func strToBool(
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[bool], length int) error {
+	to *vector.FunctionResult[bool], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	var l = uint64(length)
 	for i = 0; i < l; i++ {
@@ -4089,7 +4133,7 @@ func strToBool(
 
 func strToUuid(
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Uuid], length int) error {
+	to *vector.FunctionResult[types.Uuid], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Uuid
@@ -4113,9 +4157,18 @@ func strToUuid(
 	return nil
 }
 
+func ConvertJsonBytes(inBytes []byte) ([]byte, error) {
+	s := convertByteSliceToString(inBytes)
+	json, err := types.ParseStringToByteJson(s)
+	if err != nil {
+		return nil, err
+	}
+	return types.EncodeJson(json)
+}
+
 func strToJson(
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Varlena], length int) error {
+	to *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	var l = uint64(length)
 	for i = 0; i < l; i++ {
@@ -4125,12 +4178,7 @@ func strToJson(
 				return err
 			}
 		} else {
-			s := convertByteSliceToString(v)
-			json, err := types.ParseStringToByteJson(s)
-			if err != nil {
-				return err
-			}
-			val, err := types.EncodeJson(json)
+			val, err := ConvertJsonBytes(v)
 			if err != nil {
 				return err
 			}
@@ -4144,7 +4192,7 @@ func strToJson(
 
 func strToDate(
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Date], length int) error {
+	to *vector.FunctionResult[types.Date], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Date
@@ -4170,7 +4218,7 @@ func strToDate(
 
 func strToTime(
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Time], length int) error {
+	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Time
@@ -4197,7 +4245,7 @@ func strToTime(
 
 func strToDatetime(
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Datetime], length int) error {
+	to *vector.FunctionResult[types.Datetime], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Datetime
@@ -4225,7 +4273,7 @@ func strToDatetime(
 func strToTimestamp(
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Timestamp],
-	zone *time.Location, length int) error {
+	zone *time.Location, length int, selectList *FunctionSelectList) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Timestamp
@@ -4313,7 +4361,7 @@ func strToStr(
 func strToBit(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[uint64], bitSize int, length int) error {
+	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
 	for i := 0; i < length; i++ {
 		v, null := from.GetStrValue(uint64(i))
 		if null {
@@ -4450,7 +4498,7 @@ func uuidToStr(
 	if toType.Oid == types.T_binary && toType.Scale == -1 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetValue(i)
-			v1 := []byte(v.ToString())
+			v1 := []byte(v.String())
 			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
 				return err
 			}
@@ -4464,7 +4512,7 @@ func uuidToStr(
 				return err
 			}
 		} else {
-			result := []byte(v.ToString())
+			result := []byte(v.String())
 			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
 				if int32(len(result)) > toType.Width {
 					return moerr.NewDataTruncatedNoCtx("Uuid", "truncated for binary/varbinary")
@@ -4481,9 +4529,9 @@ func uuidToStr(
 					return moerr.NewDataTruncatedNoCtx("Uuid", "truncated for char/varchar")
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
-					"%v is larger than Dest length %v", v.ToString(), toType.Width))
+					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
 				return err
@@ -4496,7 +4544,7 @@ func uuidToStr(
 func jsonToStr(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Varlena], length int) error {
+	to *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	toType := to.GetType()
 	for i = 0; i < uint64(length); i++ {
@@ -4511,7 +4559,7 @@ func jsonToStr(
 			if err != nil {
 				return err
 			}
-			if len(val) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(val) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", val, toType.Width))
 			}
@@ -4525,7 +4573,7 @@ func jsonToStr(
 
 func enumToUint16(
 	from vector.FunctionParameterWrapper[types.Enum],
-	to *vector.FunctionResult[uint16], length int) error {
+	to *vector.FunctionResult[uint16], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	for i = 0; i < uint64(length); i++ {
 		v, null := from.GetValue(i)
@@ -4545,7 +4593,7 @@ func enumToUint16(
 func enumToStr(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Enum],
-	to *vector.FunctionResult[types.Varlena], length int) error {
+	to *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	toType := to.GetType()
 	for i = 0; i < uint64(length); i++ {
@@ -4556,7 +4604,7 @@ func enumToStr(
 			}
 		} else {
 			result := strconv.FormatUint(uint64(v), 10)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
@@ -4923,7 +4971,7 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 	return nil
 }
 
-func appendNulls[T types.FixedSizeT](result vector.FunctionResultWrapper, length int) error {
+func appendNulls[T types.FixedSizeT](result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	if r, ok := result.(*vector.FunctionResult[types.Varlena]); ok {
 		var i uint64
 		for i = 0; i < uint64(length); i++ {

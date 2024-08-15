@@ -15,7 +15,6 @@
 package mark
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,10 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(MarkJoin)
 
 const (
 	Build = iota
@@ -58,18 +58,11 @@ type evalVector struct {
 // we will give more one bool type vector as a marker col
 // so if you use mark join result, remember to get the last vector,that's what you want
 type container struct {
-	colexec.ReceiverOperator
-
 	// here, we will have three states:
 	// Build：we will use the right table to build a hashtable
 	// Probe: we will use the left table data to probe the hashtable
 	// End: Join working is over
 	state int
-
-	// in the probe stage, when we invoke func find to find rows in the hashtable,it will modify the
-	// inBuckets Slice, inBuckets[i] means the i-th row is whether in the bucket
-	// 0 means no, 1 means yes
-	inBuckets []uint8
 
 	// store the all batch from the build table
 	bat     *batch.Batch
@@ -103,7 +96,7 @@ type container struct {
 	markVals  []bool
 	markNulls *nulls.Nulls
 
-	mp *hashmap.JoinMap
+	mp *message.JoinMap
 
 	nullWithBatch *batch.Batch
 	rewriteCond   *plan.Expr
@@ -122,7 +115,7 @@ type container struct {
 // remember that we may use partition stragey, for example, if the origin table has data squence
 // like 1,2,3,4. If we use the hash method, after using hash function,assume that we get 13,14,15,16.
 // and we divide them into 3 buckets. so 13%3 = 1,so 3 is in the 1-th bucket and so on like this
-type Argument struct {
+type MarkJoin struct {
 	// container means the local parameters defined by the operator constructor
 	ctr *container
 	// the five attributes below are passed by the outside
@@ -153,49 +146,53 @@ type Argument struct {
 	Typs []types.Type
 	Cond *plan.Expr
 
-	OnList   []*plan.Expr
-	HashOnPK bool
+	OnList     []*plan.Expr
+	HashOnPK   bool
+	JoinMapTag int32
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (markJoin *MarkJoin) GetOperatorBase() *vm.OperatorBase {
+	return &markJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[MarkJoin](
+		func() *MarkJoin {
+			return &MarkJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *MarkJoin) {
+			*a = MarkJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[MarkJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (markJoin MarkJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *MarkJoin {
+	return reuse.Alloc[MarkJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (markJoin *MarkJoin) Release() {
+	if markJoin != nil {
+		reuse.Free[MarkJoin](markJoin, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (markJoin *MarkJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	markJoin.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := markJoin.ctr
+	anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
+	allocSize := int64(0)
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
@@ -203,12 +200,16 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanEqVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 
-		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
-		arg.ctr = nil
+		allocSize += ctr.maxAllocSize
+		markJoin.ctr = nil
 	}
+
+	if markJoin.ProjectList != nil {
+		allocSize += markJoin.ProjectAllocSize
+		markJoin.FreeProjection(proc)
+	}
+	anal.Alloc(allocSize)
 }
 
 func (ctr *container) cleanExprExecutor() {

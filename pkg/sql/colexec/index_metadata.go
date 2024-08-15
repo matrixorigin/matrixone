@@ -131,7 +131,7 @@ func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Databa
 		return nil
 	}
 
-	relIndex, err := GetNewRelation(eg, catalog.MO_CATALOG, catalog.MO_INDEXES, proc.TxnOperator, ctx)
+	relIndex, err := GetNewRelation(eg, catalog.MO_CATALOG, catalog.MO_INDEXES, proc.GetTxnOperator(), ctx)
 	if err != nil {
 		return err
 	}
@@ -158,7 +158,7 @@ func InsertOneIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Dat
 		return err
 	}
 	tableId := relation.GetTableID(ctx)
-	relIndex, err := GetNewRelation(eg, catalog.MO_CATALOG, catalog.MO_INDEXES, proc.TxnOperator, ctx)
+	relIndex, err := GetNewRelation(eg, catalog.MO_CATALOG, catalog.MO_INDEXES, proc.GetTxnOperator(), ctx)
 	if err != nil {
 		return err
 	}

@@ -16,7 +16,6 @@ package proxy
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -24,8 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/matrixorigin/matrixone/pkg/version"
+	"go.uber.org/zap"
 )
 
 var statsFamilyName = "proxy counter"
@@ -43,6 +44,7 @@ type Server struct {
 	haKeeperClient logservice.ProxyHAKeeperClient
 	// configData will be sent to HAKeeper.
 	configData *util.ConfigData
+	test       bool
 }
 
 // NewServer creates the proxy server.
@@ -74,7 +76,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	if s.haKeeperClient == nil {
 		ctx, cancel := context.WithTimeout(ctx, time.Second*3)
 		defer cancel()
-		s.haKeeperClient, err = logservice.NewProxyHAKeeperClient(ctx, config.HAKeeper.ClientConfig)
+		s.haKeeperClient, err = logservice.NewProxyHAKeeperClient(ctx, config.UUID, config.HAKeeper.ClientConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -84,7 +86,15 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	stats.Register(statsFamilyName, stats.WithLogExporter(logExporter))
 
 	s.stopper = stopper.NewStopper("mo-proxy", stopper.WithLogger(s.runtime.Logger().RawLogger()))
-	h, err := newProxyHandler(ctx, s.runtime, s.config, s.stopper, s.counterSet, s.haKeeperClient)
+	h, err := newProxyHandler(
+		ctx,
+		s.runtime,
+		s.config,
+		s.stopper,
+		s.counterSet,
+		s.haKeeperClient,
+		s.test,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +123,13 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 
 // Start starts the proxy server.
 func (s *Server) Start() error {
-	return s.app.Start()
+	err := s.app.Start()
+	if err != nil {
+		s.runtime.Logger().Error("proxy server start failed", zap.Error(err))
+	} else {
+		s.runtime.Logger().Info("proxy server started")
+	}
+	return err
 }
 
 // Close closes the proxy server.

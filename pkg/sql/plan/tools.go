@@ -37,8 +37,8 @@ func makeZeroRecursiveLevel() tree.SelectExpr {
 
 }
 
-func makePlusRecursiveLevel(name string) tree.SelectExpr {
-	a := tree.SetUnresolvedName(name, moRecursiveLevelCol)
+func makePlusRecursiveLevel(name string, lower int64) tree.SelectExpr {
+	a := tree.NewUnresolvedName(tree.NewCStr(name, lower), tree.NewCStr(moRecursiveLevelCol, 1))
 	b := tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)
 	return tree.SelectExpr{
 		Expr: tree.NewBinaryExpr(tree.PLUS, a, b),

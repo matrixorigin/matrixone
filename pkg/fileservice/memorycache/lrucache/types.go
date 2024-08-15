@@ -18,24 +18,24 @@ import (
 	"sync"
 
 	"github.com/dolthub/maphash"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache/internal/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
 type LRU[K comparable, V BytesLike] struct {
 	size     int64
-	capacity int64
+	capacity fscache.CapacityFunc
 	shards   []shard[K, V]
 	hasher   maphash.Hasher[K]
 }
 
 type shard[K comparable, V BytesLike] struct {
 	sync.RWMutex
-	capacity  int64
+	capacity  fscache.CapacityFunc
 	size      int64
 	totalSize *int64
 	evicts    *list[K, V]
 	pool      *pool[K, V]
-	kv        *hashmap.Map[K, lruItem[K, V]]
+	kv        map[K]*lruItem[K, V]
 	postSet   func(key K, value V)
 	postGet   func(key K, value V)
 	postEvict func(key K, value V)
@@ -60,7 +60,6 @@ func (b Bytes) SetBytes() {
 }
 
 type lruItem[K comparable, V BytesLike] struct {
-	h       uint64
 	Key     K
 	Value   V
 	Size    int64

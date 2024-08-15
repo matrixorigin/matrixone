@@ -36,7 +36,7 @@ func newAppender(aobj *aobject) *objectAppender {
 }
 
 func (appender *objectAppender) GetMeta() any {
-	return appender.obj.meta
+	return appender.obj.meta.Load()
 }
 
 func (appender *objectAppender) LockFreeze() {
@@ -50,11 +50,11 @@ func (appender *objectAppender) CheckFreeze() bool {
 }
 
 func (appender *objectAppender) GetID() *common.ID {
-	return appender.obj.meta.AsCommonID()
+	return appender.obj.meta.Load().AsCommonID()
 }
 
 func (appender *objectAppender) IsAppendable() bool {
-	return appender.rows+appender.placeholder < appender.obj.meta.GetSchema().BlockMaxRows
+	return appender.rows+appender.placeholder < appender.obj.meta.Load().GetSchema().BlockMaxRows
 }
 
 func (appender *objectAppender) Close() {
@@ -70,7 +70,7 @@ func (appender *objectAppender) IsSameColumns(other any) bool {
 func (appender *objectAppender) PrepareAppend(
 	rows uint32,
 	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
-	left := appender.obj.meta.GetSchema().BlockMaxRows - appender.rows - appender.placeholder
+	left := appender.obj.meta.Load().GetSchema().BlockMaxRows - appender.rows - appender.placeholder
 	if left == 0 {
 		// n = rows
 		return
@@ -96,7 +96,7 @@ func (appender *objectAppender) ReplayAppend(
 		return
 	}
 	// TODO: Remove ReplayAppend
-	appender.obj.meta.GetTable().AddRows(uint64(bat.Length()))
+	appender.obj.meta.Load().GetTable().AddRows(uint64(bat.Length()))
 	return
 }
 func (appender *objectAppender) ApplyAppend(

@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -36,7 +37,7 @@ const (
 
 // add unit tests for cases
 type limitTestCase struct {
-	arg   *Argument
+	arg   *Limit
 	types []types.Type
 	proc  *process.Process
 }
@@ -48,13 +49,12 @@ var (
 func init() {
 	tcs = []limitTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
-			arg: &Argument{
-				Seen:      0,
-				LimitExpr: plan2.MakePlan2Int64ConstExprWithType(8),
+			arg: &Limit{
+				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -65,13 +65,12 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
-			arg: &Argument{
-				Seen:      0,
-				LimitExpr: plan2.MakePlan2Int64ConstExprWithType(10),
+			arg: &Limit{
+				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(10),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -82,13 +81,15 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
-			arg: &Argument{
-				Seen:      0,
-				LimitExpr: plan2.MakePlan2Int64ConstExprWithType(12),
+			arg: &Limit{
+				ctr: &container{
+					seen: 0,
+				},
+				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(12),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -141,7 +142,7 @@ func TestLimit(t *testing.T) {
 		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -150,12 +151,11 @@ func BenchmarkLimit(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []limitTestCase{
 			{
-				proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+				proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 				types: []types.Type{
 					types.T_int8.ToType(),
 				},
-				arg: &Argument{
-					Seen:      0,
+				arg: &Limit{
 					LimitExpr: plan2.MakePlan2Int64ConstExprWithType(8),
 				},
 			},
@@ -182,11 +182,13 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
+func resetChildren(arg *Limit, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: bats,
-			},
+			valueScanArg,
 		})
 }

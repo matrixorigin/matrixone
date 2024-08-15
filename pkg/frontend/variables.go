@@ -596,7 +596,7 @@ func (svet SystemVariableEnumType) String() string {
 
 func (svet SystemVariableEnumType) Convert(value interface{}) (interface{}, error) {
 	cv1 := func(x int) (interface{}, error) {
-		if x >= 0 && x <= len(svet.id2TagName) {
+		if x >= 0 && x < len(svet.id2TagName) {
 			return svet.id2TagName[x], nil
 		}
 		return nil, errorConvertToEnumFailed
@@ -957,16 +957,20 @@ type GlobalSysVarsMgr struct {
 
 // Get return sys vars of accountId
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context) (*SystemVariables, error) {
+	sysVarsMp, err := ses.getGlobalSysVars(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	m.Lock()
 	defer m.Unlock()
-	// get from gSysVarsDefs && table if absent
-	if _, ok := m.accountsGlobalSysVarsMap[accountId]; !ok {
-		sysVars, err := ses.getGlobalSysVars(ctx)
-		if err != nil {
-			return nil, err
-		}
 
-		m.accountsGlobalSysVarsMap[accountId] = &SystemVariables{sysVars: sysVars}
+	if sysVars, ok := m.accountsGlobalSysVarsMap[accountId]; ok {
+		sysVars.mu.Lock()
+		sysVars.mp = sysVarsMp
+		sysVars.mu.Unlock()
+	} else {
+		m.accountsGlobalSysVarsMap[accountId] = &SystemVariables{mp: sysVarsMp}
 	}
 	return m.accountsGlobalSysVarsMap[accountId], nil
 }
@@ -985,32 +989,32 @@ var GSysVarsMgr = &GlobalSysVarsMgr{
 type SystemVariables struct {
 	mu sync.Mutex
 	// name -> value/default
-	sysVars map[string]interface{}
+	mp map[string]interface{}
 }
 
 // Clone returns a copy of sv
 func (sv *SystemVariables) Clone() *SystemVariables {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	sysVars := make(map[string]interface{}, len(sv.sysVars))
-	for name, value := range sv.sysVars {
-		sysVars[name] = value
+	mp := make(map[string]interface{}, len(sv.mp))
+	for name, value := range sv.mp {
+		mp[name] = value
 	}
-	return &SystemVariables{sysVars: sysVars}
+	return &SystemVariables{mp: mp}
 }
 
 func (sv *SystemVariables) Get(name string) interface{} {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
 	name = strings.ToLower(name)
-	return sv.sysVars[name]
+	return sv.mp[name]
 }
 
 func (sv *SystemVariables) Set(name string, value interface{}) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
 	name = strings.ToLower(name)
-	sv.sysVars[name] = value
+	sv.mp[name] = value
 }
 
 // definitions of system variables
@@ -1036,7 +1040,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("max_allowed_packet", 1024, 1073741824, false),
+		Type:              InitSystemVariableIntType("max_allowed_packet", 1024, 67108864, false),
 		Default:           int64(67108864),
 	},
 	"version_comment": {
@@ -3497,14 +3501,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("disable_txn_trace"),
 		Default:           int64(0),
 	},
-	"keep_user_target_list_in_result": {
-		Name:              "keep_user_target_list_in_result",
-		Scope:             ScopeBoth,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("keep_user_target_list_in_result", 0, 2, false),
-		Default:           int64(1),
-	},
 	"experimental_ivf_index": {
 		Name:              "experimental_ivf_index",
 		Scope:             ScopeBoth,
@@ -3513,12 +3509,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int64(0),
 	},
-	"experimental_master_index": {
-		Name:              "experimental_master_index",
-		Scope:             ScopeBoth,
+	"disable_agg_statement": {
+		Name:              "disable_agg_statement",
+		Scope:             ScopeSession,
 		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableBoolType("experimental_master_index"),
+		SetVarHintApplies: true,
+		Type:              InitSystemVariableBoolType("disable_agg_statement"),
 		Default:           int64(0),
 	},
 }
@@ -3612,7 +3608,7 @@ type UserDefinedVar struct {
 	Sql   string
 }
 
-func autocommitValue(ctx context.Context, ses FeSession) (bool, error) {
+func autocommitValue(ses FeSession) (bool, error) {
 	value, err := ses.GetSessionSysVar("autocommit")
 	if err != nil {
 		return false, err

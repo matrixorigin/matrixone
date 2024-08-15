@@ -386,7 +386,7 @@ func TestExpr_B(t *testing.T) {
 }
 
 func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -473,7 +473,7 @@ func TestTime(t *testing.T) {
 	bat.SetRowCount(1)
 	executor, err := colexec.NewExpressionExecutor(testutil.NewProc(), e)
 	require.NoError(t, err)
-	r, err := executor.Eval(testutil.NewProc(), []*batch.Batch{bat})
+	r, err := executor.Eval(testutil.NewProc(), []*batch.Batch{bat}, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, r.Length())
 }
@@ -485,7 +485,7 @@ func TestDatetime(t *testing.T) {
 	bat.SetRowCount(1)
 	executor, err := colexec.NewExpressionExecutor(testutil.NewProc(), e)
 	require.NoError(t, err)
-	r, err := executor.Eval(testutil.NewProc(), []*batch.Batch{bat})
+	r, err := executor.Eval(testutil.NewProc(), []*batch.Batch{bat}, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, r.Length())
 }
@@ -496,7 +496,7 @@ func TestTimestamp(t *testing.T) {
 	bat.SetRowCount(1)
 	executor, err := colexec.NewExpressionExecutor(testutil.NewProc(), e)
 	require.NoError(t, err)
-	r, err := executor.Eval(testutil.NewProc(), []*batch.Batch{bat})
+	r, err := executor.Eval(testutil.NewProc(), []*batch.Batch{bat}, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, r.Length())
 }
@@ -507,7 +507,7 @@ func TestDate(t *testing.T) {
 	bat.SetRowCount(1)
 	executor, err := colexec.NewExpressionExecutor(testutil.NewProc(), e)
 	require.NoError(t, err)
-	r, err := executor.Eval(testutil.NewProc(), []*batch.Batch{bat})
+	r, err := executor.Eval(testutil.NewProc(), []*batch.Batch{bat}, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, r.Length())
 }

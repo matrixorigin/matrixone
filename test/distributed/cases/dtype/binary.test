@@ -608,10 +608,8 @@ insert into text_01 select '123','7834','commmmmmment';
 insert into text_01 values ('789',' 23:50:00','20');
 select * from text_01;
 select cast(t2 as binary(100)) from text_01;
--- @bvt:issue#8818
 select cast(t1 as binary(20)) from text_01;
 select cast(t1 as varbinary(20)) from text_01;
--- @bvt:issue
 select cast(t2 as varbinary(100)) from text_01;
 select cast(t3 as varbinary(1)) from text_01;
 select cast(t3 as binary) from text_01;
@@ -627,10 +625,8 @@ select * from blob_01;
 
 select cast(b1 as varbinary(20)) from blob_01;
 select cast(b1 as binary(20)) from blob_01;
--- @bvt:issue#8818
 select cast(b2 as binary(100)) from blob_01;
 select cast(b2 as varbinary(100)) from blob_01;
--- @bvt:issue
 select cast(b3 as varbinary(1)) from blob_01;
 select cast(b3 as binary) from blob_01;
 drop table blob_01;
@@ -664,10 +660,8 @@ select binary(null);
 select binary(' ');
 select binary('&**');
 
--- @bvt:issue#8818
 select binary('数据库');
 select binary('hello你好呀');
--- @bvt:issue
 drop database test;
 
 create database test;

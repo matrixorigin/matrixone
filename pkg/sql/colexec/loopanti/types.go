@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(LoopAnti)
 
 const (
 	Build = iota
@@ -36,66 +36,76 @@ const (
 
 type container struct {
 	state   int
+	lastrow int
 	bat     *batch.Batch
 	rbat    *batch.Batch
 	joinBat *batch.Batch
 	expr    colexec.ExpressionExecutor
 	cfs     []func(*vector.Vector, *vector.Vector, int64, int) error
-	colexec.ReceiverOperator
+	buf     *batch.Batch
 }
 
-type Argument struct {
-	ctr     *container
-	Result  []int32
-	Cond    *plan.Expr
-	Typs    []types.Type
-	bat     *batch.Batch
-	lastrow int
+type LoopAnti struct {
+	ctr        *container
+	Result     []int32
+	Cond       *plan.Expr
+	Typs       []types.Type
+	JoinMapTag int32
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (loopAnti *LoopAnti) GetOperatorBase() *vm.OperatorBase {
+	return &loopAnti.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[LoopAnti](
+		func() *LoopAnti {
+			return &LoopAnti{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *LoopAnti) {
+			*a = LoopAnti{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[LoopAnti]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (loopAnti LoopAnti) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *LoopAnti {
+	return reuse.Alloc[LoopAnti](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (loopAnti *LoopAnti) Release() {
+	if loopAnti != nil {
+		reuse.Free[LoopAnti](loopAnti, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (loopAnti *LoopAnti) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	loopAnti.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := arg.ctr; ctr != nil {
+func (loopAnti *LoopAnti) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if ctr := loopAnti.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
-		arg.ctr = nil
+		//	if arg.ctr.buf != nil {
+		//	proc.PutBatch(arg.ctr.buf)
+		//	arg.ctr.buf = nil
+		//}
+		loopAnti.ctr.lastrow = 0
+		loopAnti.ctr = nil
+	}
+	if loopAnti.ProjectList != nil {
+		anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
+		anal.Alloc(loopAnti.ProjectAllocSize)
+		loopAnti.FreeProjection(proc)
 	}
 }
 

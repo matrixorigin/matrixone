@@ -1,5 +1,4 @@
 -- 0.  insert, update, delete
-SET experimental_master_index = 1;
 
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
@@ -485,4 +484,3 @@ select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c
 --+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 --38 rows in set (0.01 sec)
 
-SET experimental_master_index = 0;

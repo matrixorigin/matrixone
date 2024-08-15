@@ -161,6 +161,8 @@ const (
 	ErrDuplicateKeyName                         uint16 = 20470
 	ErrFKNoReferencedRow2                       uint16 = 20471
 	ErrBlobCantHaveDefault                      uint16 = 20472
+	ErrCantCompileForPrepare                    uint16 = 20473
+	ErrTableMustHaveAVisibleColumn              uint16 = 20474
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -221,6 +223,7 @@ const (
 	ErrRetryForCNRollingRestart   uint16 = 20634
 	ErrNewTxnInCNRollingRestart   uint16 = 20635
 	ErrPrevCheckpointNotFinished  uint16 = 20636
+	ErrCantDelGCChecker           uint16 = 20637
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -277,6 +280,9 @@ const (
 	// Group 11: sharding
 	ErrReplicaNotFound uint16 = 21101
 	ErrReplicaNotMatch uint16 = 21102
+
+	// Group 12: The error code that rarely appears
+	ErrTooLargeObjectSize uint16 = 22001
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -403,6 +409,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDuplicateKeyName:                         {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "Duplicate foreign key constraint name '%-.192s'"},
 	ErrFKNoReferencedRow2:                       {ER_NO_REFERENCED_ROW_2, []string{"23000"}, "Cannot add or update a child row: a foreign key constraint fails"},
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{MySQLDefaultSqlState}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
+	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
 
 	// Group 5: rpc timeout
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -450,6 +457,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRetryForCNRollingRestart:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "retry for CN rolling restart"},
 	ErrNewTxnInCNRollingRestart:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "new txn in CN rolling restart"},
 	ErrPrevCheckpointNotFinished:  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "prev checkpoint not finished"},
+	ErrCantCompileForPrepare:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not compile for prepare"},
+	ErrCantDelGCChecker:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can't delete gc checker"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
@@ -500,6 +509,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// Group 11: sharding
 	ErrReplicaNotFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot find the shard replica %s"},
 	ErrReplicaNotMatch: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "shard replica not match current %s, received %s"},
+
+	// Group 12: The error code that rarely appears
+	ErrTooLargeObjectSize: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "objectio: too large object size %d"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -1401,6 +1413,14 @@ func NewErrFKNoReferencedRow2(ctx context.Context) *Error {
 
 func NewErrBlobCantHaveDefault(ctx context.Context, arg any) *Error {
 	return newError(ctx, ErrBlobCantHaveDefault, arg)
+}
+
+func NewCantCompileForPrepare(ctx context.Context) *Error {
+	return newError(ctx, ErrCantCompileForPrepare)
+}
+
+func NewTableMustHaveVisibleColumn(ctx context.Context) *Error {
+	return newError(ctx, ErrTableMustHaveAVisibleColumn)
 }
 
 var contextFunc atomic.Value

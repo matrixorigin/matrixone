@@ -17,6 +17,7 @@ package plan
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
@@ -29,7 +30,7 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 		return
 	}
 
-	if node.TableDef.Pkey == nil || len(node.TableDef.Pkey.Names) == 1 {
+	if node.TableDef.Pkey == nil {
 		return
 	}
 
@@ -42,6 +43,7 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDef, tableTag int32, filters ...*plan.Expr) []*plan.Expr {
 	pkIdx := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
 	col2filter := make(map[int32]int)
+	numParts := len(tableDef.Pkey.Names)
 
 	for i, expr := range filters {
 		fn := expr.GetF()
@@ -60,15 +62,27 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			}
 
 			col2filter[col.ColPos] = i
+		} else if fn.Func.ObjName == "in" {
+			if fn.Args[0].GetCol() == nil {
+				continue
+			}
+
+			col := fn.Args[0].GetCol()
+			if _, ok := col2filter[col.ColPos]; ok {
+				continue
+			}
+
+			col2filter[col.ColPos] = i
 		} else if fn.Func.ObjName == "or" {
 			var orArgs []*plan.Expr
 			flattenLogicalExpressions(expr, "or", &orArgs)
 
 			newOrArgs := make([]*plan.Expr, 0, len(orArgs))
 			var inArgs []*plan.Expr
-			var firstPkFilter *plan.Expr
+			var firstEquiExpr *plan.Expr
 			pkFnName := "in"
 
+			currColPos := int32(-1)
 			for _, subExpr := range orArgs {
 				subFn := subExpr.GetF()
 				if subFn == nil {
@@ -76,9 +90,11 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 					continue
 				}
 
-				if subFn.Func.ObjName == "=" {
-					newArgs := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, subExpr)
-					subExpr = newArgs[0]
+				if subFn.Func.ObjName == "=" || subFn.Func.ObjName == "in" {
+					if numParts > 1 {
+						newArgs := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, subExpr)
+						subExpr = newArgs[0]
+					}
 				} else if subFn.Func.ObjName == "and" {
 					var andArgs []*plan.Expr
 					flattenLogicalExpressions(subExpr, "and", &andArgs)
@@ -92,23 +108,32 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				}
 
 				mergedFn := subExpr.GetF()
-				if mergedFn == nil || mergedFn.GetArgs()[0].GetCol() == nil || mergedFn.GetArgs()[0].GetCol().ColPos != pkIdx ||
-					!isRuntimeConstExpr(mergedFn.GetArgs()[1]) {
+				if mergedFn == nil || len(mergedFn.Args) != 2 || mergedFn.Args[0].GetCol() == nil || !isRuntimeConstExpr(mergedFn.Args[1]) {
+					newOrArgs = append(newOrArgs, subExpr)
+					continue
+				}
+
+				if currColPos == -1 {
+					currColPos = mergedFn.Args[0].GetCol().ColPos
+				} else if currColPos != mergedFn.Args[0].GetCol().ColPos {
 					newOrArgs = append(newOrArgs, subExpr)
 					continue
 				}
 
 				if len(inArgs) == 0 {
-					firstPkFilter = subExpr
+					firstEquiExpr = subExpr
 				}
 
 				switch mergedFn.Func.ObjName {
 				case "=":
-					inArgs = append(inArgs, mergedFn.GetArgs()[1])
+					inArgs = append(inArgs, mergedFn.Args[1])
 
 				case "prefix_eq":
-					inArgs = append(inArgs, mergedFn.GetArgs()[1])
+					inArgs = append(inArgs, mergedFn.Args[1])
 					pkFnName = "prefix_in"
+
+				case "in":
+					inArgs = append(inArgs, mergedFn.Args[1].GetList().List...)
 
 				default:
 					newOrArgs = append(newOrArgs, subExpr)
@@ -116,38 +141,57 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			}
 
 			if len(inArgs) == 1 {
-				newOrArgs = append(newOrArgs, firstPkFilter)
+				newOrArgs = append(newOrArgs, firstEquiExpr)
 			} else if len(inArgs) > 1 {
-				pkExpr := firstPkFilter.GetF().Args[0]
-				rightType := plan.Type{Id: int32(types.T_tuple)}
-				if pkFnName == "prefix_in" {
-					rightType = pkExpr.Typ
-				}
+				leftExpr := firstEquiExpr.GetF().Args[0]
+				leftType := makeTypeByPlan2Expr(leftExpr)
+				argsType := []types.Type{leftType, leftType}
+				fGet, _ := function.GetFunctionByName(builder.GetContext(), pkFnName, argsType)
 
-				inExpr, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), pkFnName, []*plan.Expr{
-					pkExpr,
+				funcID := fGet.GetEncodedOverloadID()
+				returnType := fGet.GetReturnType()
+				exprType := makePlan2Type(&returnType)
+				args := []*plan.Expr{
+					leftExpr,
 					{
-						Typ: rightType,
+						Typ: leftExpr.Typ,
 						Expr: &plan.Expr_List{
 							List: &plan.ExprList{
 								List: inArgs,
 							},
 						},
 					},
-				})
+				}
+				exprType.NotNullable = function.DeduceNotNullable(funcID, args)
+				inExpr := &plan.Expr{
+					Typ: exprType,
+					Expr: &plan.Expr_F{
+						F: &plan.Function{
+							Func: getFunctionObjRef(funcID, pkFnName),
+							Args: args,
+						},
+					},
+				}
 
 				newOrArgs = append(newOrArgs, inExpr)
 			}
 
 			if len(newOrArgs) == 1 {
 				filters[i] = newOrArgs[0]
+				colPos := firstEquiExpr.GetF().Args[0].GetCol().ColPos
+				if colPos != pkIdx {
+					col2filter[colPos] = i
+				}
 			} else {
 				fn.Args = newOrArgs
 			}
 		}
 	}
 
-	numParts := len(tableDef.Pkey.Names)
+	if numParts == 1 {
+		return filters
+	}
+
 	filterIdx := make([]int, 0, numParts)
 	for _, part := range tableDef.Pkey.Names {
 		colIdx := tableDef.Name2ColIndex[part]
@@ -157,18 +201,16 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 
 		filterIdx = append(filterIdx, idx)
+		if filters[idx].GetF().Func.ObjName == "in" {
+			break
+		}
 	}
 
 	if len(filterIdx) == 0 {
 		return filters
 	}
 
-	serialArgs := make([]*plan.Expr, len(filterIdx))
-	for i := range filterIdx {
-		serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
-	}
-	rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", serialArgs)
-
+	var compositePKFilter *plan.Expr
 	pkExpr := &plan.Expr{
 		Typ: tableDef.Cols[pkIdx].Typ,
 		Expr: &plan.Expr_Col{
@@ -179,14 +221,54 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		},
 	}
 
-	funcName := "="
-	if len(filterIdx) < numParts {
-		funcName = "prefix_eq"
+	lastFilter := filters[filterIdx[len(filterIdx)-1]]
+	if lastFilter.GetF().Func.ObjName == "in" {
+		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
+		for i := 0; i < len(filterIdx)-1; i++ {
+			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
+		}
+
+		inArgs := make([]*plan.Expr, len(lastFilter.GetF().Args[1].GetList().List))
+		for i, lastArg := range lastFilter.GetF().Args[1].GetList().List {
+			tmpSerialArgs := DeepCopyExprList(serialArgs)
+			tmpSerialArgs = append(tmpSerialArgs, lastArg)
+			rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
+			inArgs[i] = rightArg
+		}
+
+		funcName := "in"
+		if len(filterIdx) < numParts {
+			funcName = "prefix_in"
+		}
+
+		compositePKFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
+			pkExpr,
+			{
+				Typ: pkExpr.Typ,
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{
+						List: inArgs,
+					},
+				},
+			},
+		})
+	} else {
+		serialArgs := make([]*plan.Expr, len(filterIdx))
+		for i := range filterIdx {
+			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
+		}
+		rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", serialArgs)
+
+		funcName := "="
+		if len(filterIdx) < numParts {
+			funcName = "prefix_eq"
+		}
+
+		compositePKFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
+			pkExpr,
+			rightArg,
+		})
 	}
-	compositePKFilter, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
-		pkExpr,
-		rightArg,
-	})
 
 	hitFilterSet := make(map[int]bool)
 	for i := range filterIdx {

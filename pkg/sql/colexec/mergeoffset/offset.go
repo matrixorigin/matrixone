@@ -25,83 +25,76 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "merge_offset"
+const opName = "merge_offset"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
-	buf.WriteString(fmt.Sprintf("mergeOffset(%v)", arg.Offset))
+func (mergeOffset *MergeOffset) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
+	buf.WriteString(fmt.Sprintf("mergeOffset(%v)", mergeOffset.Offset))
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (mergeOffset *MergeOffset) OpType() vm.OpType {
+	return vm.MergeOffset
+}
+
+func (mergeOffset *MergeOffset) Prepare(proc *process.Process) error {
 	var err error
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, true)
-	if arg.ctr.offsetExecutor == nil {
-		arg.ctr.offsetExecutor, err = colexec.NewExpressionExecutor(proc, arg.Offset)
+	mergeOffset.ctr = new(container)
+	if mergeOffset.ctr.offsetExecutor == nil {
+		mergeOffset.ctr.offsetExecutor, err = colexec.NewExpressionExecutor(proc, mergeOffset.Offset)
 		if err != nil {
 			return err
 		}
 	}
-	vec, err := arg.ctr.offsetExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	vec, err := mergeOffset.ctr.offsetExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
-	arg.ctr.offset = uint64(vector.MustFixedCol[int64](vec)[0])
+	mergeOffset.ctr.offset = uint64(vector.MustFixedCol[uint64](vec)[0])
 
-	arg.ctr.seen = 0
+	mergeOffset.ctr.seen = 0
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (mergeOffset *MergeOffset) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(mergeOffset.GetIdx(), mergeOffset.GetParallelIdx(), mergeOffset.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
-	result := vm.NewCallResult()
-	var msg *process.RegisterMessage
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
-	}
-
 	for {
-		msg = arg.ctr.ReceiveFromAllRegs(anal)
-		if msg.Err != nil {
-			// WTF, nil?
-			result.Status = vm.ExecStop
-			return result, msg.Err
+		result, err := mergeOffset.GetChildren(0).Call(proc)
+		if err != nil {
+			return result, err
 		}
 
-		if msg.Batch == nil {
-			result.Batch = nil
-			result.Status = vm.ExecStop
-			return result, nil
+		if result.Batch == nil {
+			return result, err
 		}
 
-		arg.buf = msg.Batch
-		anal.Input(arg.buf, arg.GetIsFirst())
-		if arg.ctr.seen > arg.ctr.offset {
-			anal.Output(arg.buf, arg.GetIsLast())
-			result.Batch = arg.buf
+		anal.Input(result.Batch, mergeOffset.GetIsFirst())
+		if mergeOffset.ctr.seen > mergeOffset.ctr.offset {
+			anal.Output(result.Batch, mergeOffset.GetIsLast())
 			return result, nil
 		}
-		length := arg.buf.RowCount()
+		length := result.Batch.RowCount()
 		// bat = PartOne + PartTwo, and PartTwo is required.
-		if arg.ctr.seen+uint64(length) > arg.ctr.offset {
-			sels := newSels(int64(arg.ctr.offset-arg.ctr.seen), int64(length)-int64(arg.ctr.offset-arg.ctr.seen), proc)
-			arg.ctr.seen += uint64(length)
-			arg.buf.Shrink(sels, false)
+		if mergeOffset.ctr.seen+uint64(length) > mergeOffset.ctr.offset {
+			sels := newSels(int64(mergeOffset.ctr.offset-mergeOffset.ctr.seen), int64(length)-int64(mergeOffset.ctr.offset-mergeOffset.ctr.seen), proc)
+			mergeOffset.ctr.seen += uint64(length)
+			buf, err := result.Batch.Dup(proc.GetMPool())
+			if err != nil {
+				return result, err
+			}
+			buf.Shrink(sels, false)
 			proc.Mp().PutSels(sels)
-			anal.Output(arg.buf, arg.GetIsLast())
-			result.Batch = arg.buf
+			anal.Output(buf, mergeOffset.GetIsLast())
+			result.Batch = buf
 			return result, nil
 		}
-		arg.ctr.seen += uint64(length)
-		proc.PutBatch(arg.buf)
+		mergeOffset.ctr.seen += uint64(length)
 	}
 }
 

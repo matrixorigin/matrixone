@@ -19,31 +19,26 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"go.uber.org/automaxprocs/maxprocs"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	struntime "runtime"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/gossip"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -53,23 +48,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"go.uber.org/automaxprocs/maxprocs"
+	"go.uber.org/zap"
 )
 
 var (
-	configFile   = flag.String("cfg", "", "toml configuration used to start mo-service")
-	launchFile   = flag.String("launch", "", "toml configuration used to launch mo cluster")
-	versionFlag  = flag.Bool("version", false, "print version information")
-	daemon       = flag.Bool("daemon", false, "run mo-service in daemon mode")
-	withProxy    = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
-	maxProcessor = flag.Int("max-processor", 0, "set max processor for go runtime")
-	globalEtlFS  fileservice.FileService
+	configFile        = flag.String("cfg", "", "toml configuration used to start mo-service")
+	launchFile        = flag.String("launch", "", "toml configuration used to launch mo cluster")
+	versionFlag       = flag.Bool("version", false, "print version information")
+	daemon            = flag.Bool("daemon", false, "run mo-service in daemon mode")
+	withProxy         = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
+	maxProcessor      = flag.Int("max-processor", 0, "set max processor for go runtime")
+	globalEtlFS       fileservice.FileService
+	globalServiceType string
+	globalNodeId      string
 )
 
 func init() {
@@ -173,23 +171,18 @@ func startService(
 	if err := cfg.resolveGossipSeedAddresses(); err != nil {
 		return err
 	}
-	setupProcessLevelRuntime(cfg, stopper)
-
-	malloc.SetDefaultConfig(cfg.Malloc)
-
-	setupStatusServer(runtime.ProcessLevelRuntime())
-
-	goroutine.StartLeakCheck(stopper, cfg.Goroutine)
-
 	st, err := cfg.getServiceType()
 	if err != nil {
 		return err
 	}
 
-	uuid, err := getNodeUUID(ctx, st, cfg)
-	if err != nil {
-		return err
-	}
+	setupServiceRuntime(cfg, stopper)
+
+	malloc.SetDefaultConfig(cfg.Malloc)
+
+	setupStatusServer(runtime.ServiceRuntime(cfg.mustGetServiceUUID()))
+
+	goroutine.StartLeakCheck(stopper, cfg.Goroutine)
 
 	var gossipNode *gossip.Node
 	if st == metadata.ServiceType_CN {
@@ -208,7 +201,7 @@ func startService(
 		}
 	}
 
-	fs, err := cfg.createFileService(ctx, st, uuid)
+	fs, err := cfg.createFileService(ctx, st, cfg.mustGetServiceUUID())
 	if err != nil {
 		return err
 	}
@@ -217,12 +210,14 @@ func startService(
 	if err != nil {
 		return err
 	}
-	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, uuid); err != nil {
+	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, cfg.mustGetServiceUUID()); err != nil {
 		return err
 	}
 
 	if globalEtlFS == nil {
 		globalEtlFS = etlFS
+		globalServiceType = st.String()
+		globalNodeId = cfg.mustGetServiceUUID()
 	}
 
 	switch st {
@@ -253,7 +248,7 @@ func startCNService(
 	// start up system module to do some calculation.
 	system.Run(stopper)
 
-	if err := waitClusterCondition(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
+	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitAnyShardReady); err != nil {
 		return err
 	}
 	serviceWG.Add(1)
@@ -287,10 +282,7 @@ func startCNService(
 			}
 		}
 		if err := s.Close(); err != nil {
-			panic(err)
-		}
-		if err := cnclient.CloseCNClient(); err != nil {
-			panic(err)
+			logutil.GetGlobalLogger().Error("failed to close cn service", zap.Error(err))
 		}
 	})
 }
@@ -301,11 +293,7 @@ func startTNService(
 	fileService fileservice.FileService,
 	shutdownC chan struct{},
 ) error {
-	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
-		return err
-	}
-	r, err := getRuntime(metadata.ServiceType_TN, cfg, stopper)
-	if err != nil {
+	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
 	serviceWG.Add(1)
@@ -318,7 +306,7 @@ func startTNService(
 		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := tnservice.NewService(
 			&c,
-			r,
+			mustGetRuntime(cfg),
 			fileService,
 			shutdownC,
 			tnservice.WithConfigData(commonConfigKVMap))
@@ -331,7 +319,7 @@ func startTNService(
 
 		<-ctx.Done()
 		if err := s.Close(); err != nil {
-			panic(err)
+			logutil.GetGlobalLogger().Error("failed to close tn service", zap.Error(err))
 		}
 	})
 }
@@ -346,7 +334,7 @@ func startLogService(
 	commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 	s, err := logservice.NewService(lscfg, fileService,
 		shutdownC,
-		logservice.WithRuntime(runtime.ProcessLevelRuntime()),
+		logservice.WithRuntime(runtime.ServiceRuntime(lscfg.UUID)),
 		logservice.WithConfigData(commonConfigKVMap))
 	if err != nil {
 		panic(err)
@@ -366,14 +354,14 @@ func startLogService(
 
 		<-ctx.Done()
 		if err := s.Close(); err != nil {
-			panic(err)
+			logutil.GetGlobalLogger().Error("failed to close log service", zap.Error(err))
 		}
 	})
 }
 
 // startProxyService starts the proxy service.
 func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
-	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
 	serviceWG.Add(1)
@@ -382,7 +370,7 @@ func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
 		s, err := proxy.NewServer(
 			ctx,
 			cfg.getProxyConfig(),
-			proxy.WithRuntime(runtime.ProcessLevelRuntime()),
+			proxy.WithRuntime(runtime.ServiceRuntime(cfg.getProxyConfig().UUID)),
 		)
 		if err != nil {
 			panic(err)
@@ -392,14 +380,14 @@ func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
 		}
 		<-ctx.Done()
 		if err := s.Close(); err != nil {
-			panic(err)
+			logutil.GetGlobalLogger().Error("failed to close proxy service", zap.Error(err))
 		}
 	})
 }
 
 // startPythonUdfService starts the python udf service.
 func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
-	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
 	serviceWG.Add(1)
@@ -414,33 +402,9 @@ func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
 		}
 		<-ctx.Done()
 		if err := s.Close(); err != nil {
-			panic(err)
+			logutil.GetGlobalLogger().Error("failed to close python udf service", zap.Error(err))
 		}
 	})
-}
-
-func getNodeUUID(ctx context.Context, st metadata.ServiceType, cfg *Config) (UUID string, err error) {
-	switch st {
-	case metadata.ServiceType_CN:
-		// validate node_uuid
-		var uuidErr error
-		var nodeUUID uuid.UUID
-		if nodeUUID, uuidErr = uuid.Parse(cfg.CN.UUID); uuidErr != nil {
-			nodeUUID, _ = uuid.NewV7()
-		}
-		if err := util.SetUUIDNodeID(ctx, nodeUUID[:]); err != nil {
-			return "", moerr.ConvertPanicError(ctx, err)
-		}
-		UUID = nodeUUID.String()
-	case metadata.ServiceType_TN:
-		UUID = cfg.getTNServiceConfig().UUID
-	case metadata.ServiceType_LOG:
-		UUID = cfg.LogService.UUID
-	case metadata.ServiceType_PYTHON_UDF:
-		UUID = cfg.PythonUdfServerConfig.UUID
-	}
-	UUID = strings.ReplaceAll(UUID, " ", "_") // remove space in UUID for filename
-	return
 }
 
 func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, stopper *stopper.Stopper, fs fileservice.FileService, UUID string) error {
@@ -455,12 +419,12 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	}
 
 	selector := clusterservice.NewSelector().SelectByLabel(SV.LabelSelector, clusterservice.Contain)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.BackgroundCNSelector, selector)
+	mustGetRuntime(cfg).SetGlobalVariables(runtime.BackgroundCNSelector, selector)
 
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, !SV.DisableSqlWriter)
 		initWG.Add(1)
-		collector := export.NewMOCollector(ctx, export.WithOBCollectorConfig(&SV.OBCollectorConfig))
+		collector := export.NewMOCollector(ctx, cfg.mustGetServiceUUID(), export.WithOBCollectorConfig(&SV.OBCollectorConfig))
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
 			err, act := motrace.InitWithConfig(ctx,
 				&SV,
@@ -489,7 +453,10 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	}
 	if !SV.DisableMetric || SV.EnableMetricToProm {
 		stopper.RunNamedTask("metric", func(ctx context.Context) {
-			if act := mometric.InitMetric(ctx, nil, &SV, UUID, nodeRole, mometric.WithWriterFactory(writerFactory)); !act {
+			if act := mometric.InitMetric(ctx, nil, &SV, UUID, nodeRole,
+				mometric.WithWriterFactory(writerFactory),
+				mometric.WithFrontendServerStarted(frontend.MoServerIsStarted),
+			); !act {
 				return
 			}
 			<-ctx.Done()

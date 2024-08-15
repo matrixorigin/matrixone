@@ -22,77 +22,79 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(MergeDelete)
 
-type Argument struct {
+type container struct {
+	// 1. single table's delete (main table)
+	delSource engine.Relation
+	// 2. partition sub tables
+	partitionSources []engine.Relation
+}
+type MergeDelete struct {
+	ctr                 *container
 	AddAffectedRows     bool
 	AffectedRows        uint64
 	Ref                 *plan.ObjectRef
 	Engine              engine.Engine
 	PartitionTableNames []string
 
-	// 1. single table's delete (main table)
-	delSource engine.Relation
-	// 2. partition sub tables
-	partitionSources []engine.Relation
-
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (mergeDelete *MergeDelete) GetOperatorBase() *vm.OperatorBase {
+	return &mergeDelete.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[MergeDelete](
+		func() *MergeDelete {
+			return &MergeDelete{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *MergeDelete) {
+			*a = MergeDelete{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[MergeDelete]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (mergeDelete MergeDelete) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *MergeDelete {
+	return reuse.Alloc[MergeDelete](nil)
 }
 
-func (arg *Argument) WithObjectRef(ref *plan.ObjectRef) *Argument {
-	arg.Ref = ref
-	return arg
+func (mergeDelete *MergeDelete) WithObjectRef(ref *plan.ObjectRef) *MergeDelete {
+	mergeDelete.Ref = ref
+	return mergeDelete
 }
 
-func (arg *Argument) WithParitionNames(names []string) *Argument {
-	arg.PartitionTableNames = append(arg.PartitionTableNames, names...)
-	return arg
+func (mergeDelete *MergeDelete) WithParitionNames(names []string) *MergeDelete {
+	mergeDelete.PartitionTableNames = append(mergeDelete.PartitionTableNames, names...)
+	return mergeDelete
 }
 
-func (arg *Argument) WithEngine(eng engine.Engine) *Argument {
-	arg.Engine = eng
-	return arg
+func (mergeDelete *MergeDelete) WithEngine(eng engine.Engine) *MergeDelete {
+	mergeDelete.Engine = eng
+	return mergeDelete
 }
 
-func (arg *Argument) WithAddAffectedRows(addAffectedRows bool) *Argument {
-	arg.AddAffectedRows = addAffectedRows
-	return arg
+func (mergeDelete *MergeDelete) WithAddAffectedRows(addAffectedRows bool) *MergeDelete {
+	mergeDelete.AddAffectedRows = addAffectedRows
+	return mergeDelete
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (mergeDelete *MergeDelete) Release() {
+	if mergeDelete != nil {
+		reuse.Free[MergeDelete](mergeDelete, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (mergeDelete *MergeDelete) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	mergeDelete.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+func (mergeDelete *MergeDelete) Free(proc *process.Process, pipelineFailed bool, err error) {
 }

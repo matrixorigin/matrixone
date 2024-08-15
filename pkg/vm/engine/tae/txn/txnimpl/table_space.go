@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -159,7 +160,7 @@ func (space *tableSpace) prepareApplyANode(node *anode) error {
 	for appended < node.Rows() {
 		appender, err := space.tableHandle.GetAppender()
 		if moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound) {
-			objH, err := space.table.CreateObject(true)
+			objH, err := space.table.CreateObject()
 			if err != nil {
 				return err
 			}
@@ -177,6 +178,8 @@ func (space *tableSpace) prepareApplyANode(node *anode) error {
 		if appender.CheckFreeze() {
 			// freezed, try to find another ablock
 			appender.UnlockFreeze()
+			// Unref the appender, otherwise it can't be PrepareCompact(ed) successfully
+			appender.Close()
 			continue
 		}
 
@@ -193,10 +196,10 @@ func (space *tableSpace) prepareApplyANode(node *anode) error {
 		appender.UnlockFreeze()
 		/// ------- Attach AppendNode Successfully -----
 
-		objID := appender.GetMeta().(*catalog.ObjectEntry).ID
+		objID := appender.GetMeta().(*catalog.ObjectEntry).ID()
 		col := space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 		defer col.Close()
-		blkID := objectio.NewBlockidWithObjectID(&objID, 0)
+		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		if err = objectio.ConstructRowidColumnTo(
 			col.GetDownstreamVector(),
 			blkID,
@@ -244,11 +247,11 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 			return true
 		}
 		entry := space.nobj.GetMeta().(*catalog.ObjectEntry)
-		return !entry.ID.Eq(*sid)
+		return !entry.ID().Eq(*sid)
 	}
 
 	if shouldCreateNewObj() {
-		space.nobj, err = space.table.CreateNonAppendableObject(false, new(objectio.CreateObjOpt).WithId(sid))
+		space.nobj, err = space.table.CreateNonAppendableObject(new(objectio.CreateObjOpt).WithId(sid))
 		if err != nil {
 			return
 		}
@@ -280,7 +283,7 @@ func (space *tableSpace) CloseAppends() {
 }
 
 // Append appends batch of data into anode.
-func (space *tableSpace) Append(data *containers.Batch) (err error) {
+func (space *tableSpace) Append(data *containers.Batch) (dur float64, err error) {
 	if space.appendable == nil {
 		space.registerANode()
 	}
@@ -296,6 +299,7 @@ func (space *tableSpace) Append(data *containers.Batch) (err error) {
 		}
 		dedupType := space.table.store.txn.GetDedupType()
 		if schema.HasPK() && dedupType == txnif.FullDedup {
+			now := time.Now()
 			if err = space.index.BatchInsert(
 				data.Attrs[schema.GetSingleSortKeyIdx()],
 				data.Vecs[schema.GetSingleSortKeyIdx()],
@@ -305,6 +309,7 @@ func (space *tableSpace) Append(data *containers.Batch) (err error) {
 				false); err != nil {
 				break
 			}
+			dur += time.Since(now).Seconds()
 		}
 		offset += appended
 		space.rows += appended
@@ -476,7 +481,7 @@ func (space *tableSpace) GetColumnDataByIds(
 	obj *catalog.ObjectEntry,
 	colIdxes []int,
 	mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
+) (view *containers.Batch, err error) {
 	n := space.nodes[0]
 	return n.GetColumnDataByIds(colIdxes, mp)
 }
@@ -486,7 +491,7 @@ func (space *tableSpace) GetColumnDataById(
 	obj *catalog.ObjectEntry,
 	colIdx int,
 	mp *mpool.MPool,
-) (view *containers.ColumnView, err error) {
+) (view *containers.Batch, err error) {
 	n := space.nodes[0]
 	return n.GetColumnDataById(ctx, colIdx, mp)
 }

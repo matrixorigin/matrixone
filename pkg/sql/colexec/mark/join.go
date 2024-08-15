@@ -16,6 +16,9 @@ package mark
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -28,30 +31,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "mark_join"
+const opName = "mark_join"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (markJoin *MarkJoin) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": mark join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (markJoin *MarkJoin) OpType() vm.OpType {
+	return vm.Mark
+}
+
+func (markJoin *MarkJoin) Prepare(proc *process.Process) error {
 	var err error
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
-	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-	arg.ctr.evecs = make([]evalVector, len(arg.Conditions[0]))
-	arg.ctr.vecs = make([]*vector.Vector, len(arg.Conditions[0]))
-	arg.ctr.bat = batch.NewWithSize(len(arg.Typs))
-	for i, typ := range arg.Typs {
-		arg.ctr.bat.Vecs[i] = proc.GetVector(typ)
+	markJoin.ctr = new(container)
+	markJoin.ctr.evecs = make([]evalVector, len(markJoin.Conditions[0]))
+	markJoin.ctr.vecs = make([]*vector.Vector, len(markJoin.Conditions[0]))
+	markJoin.ctr.bat = batch.NewWithSize(len(markJoin.Typs))
+	for i, typ := range markJoin.Typs {
+		markJoin.ctr.bat.Vecs[i] = proc.GetVector(typ)
 	}
 
-	arg.ctr.buildEqVec = make([]*vector.Vector, len(arg.Conditions[1]))
-	arg.ctr.buildEqEvecs = make([]evalVector, len(arg.Conditions[1]))
+	markJoin.ctr.buildEqVec = make([]*vector.Vector, len(markJoin.Conditions[1]))
+	markJoin.ctr.buildEqEvecs = make([]evalVector, len(markJoin.Conditions[1]))
 
-	if arg.Cond != nil {
-		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+	if markJoin.Cond != nil {
+		markJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, markJoin.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if markJoin.ProjectList != nil {
+		err = markJoin.PrepareProjection(proc)
 	}
 	return err
 }
@@ -79,54 +91,57 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 //	    2.2.2 if condEq is condFalse in JoinMap
 //				check eq and non-eq conds in nullSels to determine condState. (same as 2.2.1.3)
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := arg.ctr
+	ctr := markJoin.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(arg, proc, anal); err != nil {
+			if err := markJoin.build(markJoin, proc, anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
-			msg := ctr.ReceiveFromSingleReg(0, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = markJoin.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-
-			bat := msg.Batch
+			bat := result.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
+			anal.Input(bat, markJoin.GetIsFirst())
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-				if err = ctr.emptyProbe(bat, arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
-					bat.Clean(proc.Mp())
+				if err = ctr.emptyProbe(bat, markJoin, proc, &result); err != nil {
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			} else {
-				if err = ctr.probe(bat, arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
-					bat.Clean(proc.Mp())
+				if err = ctr.probe(bat, markJoin, proc, &result); err != nil {
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			}
-			proc.PutBatch(bat)
+			if markJoin.ProjectList != nil {
+				result.Batch, err = markJoin.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, markJoin.GetIsLast())
 			return result, nil
 
 		default:
@@ -137,33 +152,30 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
+func (markJoin *MarkJoin) build(ap *MarkJoin, proc *process.Process, anal process.Analyze) error {
+	ctr := markJoin.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(markJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	if mp == nil {
+		return nil
 	}
-	bat := msg.Batch
-	if bat != nil && bat.AuxData != nil {
-		ctr.mp = bat.DupJmAuxData()
-		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
-	}
-	return nil
-}
-
-func (ctr *container) receiveBatch(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
-	}
-	bat := msg.Batch
+	batches := mp.GetBatches()
 	var err error
-	if bat != nil {
-		ctr.evalNullSels(bat)
-		ctr.nullWithBatch, err = DumpBatch(bat, proc, ctr.nullSels)
+	//maybe optimize this in the future
+	for i := range batches {
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err
 		}
-		if err = ctr.evalJoinBuildCondition(bat, proc); err != nil {
+	}
+	if ctr.bat != nil {
+		ctr.evalNullSels(ctr.bat)
+		ctr.nullWithBatch, err = DumpBatch(ctr.bat, proc, ctr.nullSels)
+		if err != nil {
+			return err
+		}
+		if err = ctr.evalJoinBuildCondition(ctr.bat, proc); err != nil {
 			return err
 		}
 		ctr.rewriteCond = colexec.RewriteFilterExprList(ap.OnList)
@@ -171,21 +183,12 @@ func (ctr *container) receiveBatch(ap *Argument, proc *process.Process, anal pro
 			proc.PutBatch(ctr.bat)
 			ctr.bat = nil
 		}
-		ctr.bat = bat
 	}
 	return nil
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	err := ctr.receiveHashMap(anal)
-	if err != nil {
-		return err
-	}
-	return ctr.receiveBatch(ap, proc, anal)
-}
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *MarkJoin, proc *process.Process, result *vm.CallResult) (err error) {
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (err error) {
-	anal.Input(bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -205,14 +208,12 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 
 	result.Batch = ctr.rbat
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) probe(bat *batch.Batch, ap *MarkJoin, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -237,16 +238,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		copy(ctr.inBuckets, hashmap.OneUInt8s)
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := itr.Find(i, n, ctr.vecs)
 		var condState otyp
 		// var condNonEq otyp
 		// var condEq otyp
 		var err error
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 {
-				continue
-			}
 			if zvals[k] == 0 { // 2.1 : probe tuple has null
 				condState, err = ctr.EvalEntire(bat, ctr.bat, i+k, proc, ctr.rewriteCond)
 				if err != nil {
@@ -296,7 +293,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }
@@ -304,7 +300,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 // store the results of the calculation on the probe side of the equation condition
 func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, proc *process.Process) error {
 	for i := range ctr.evecs {
-		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat})
+		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			ctr.cleanEvalVectors()
 			return err
@@ -318,7 +314,7 @@ func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, proc *process.Pro
 // store the results of the calculation on the build side of the equation condition
 func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, proc *process.Process) error {
 	for i := range ctr.buildEqEvecs {
-		vec, err := ctr.buildEqEvecs[i].executor.Eval(proc, []*batch.Batch{bat})
+		vec, err := ctr.buildEqEvecs[i].executor.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			ctr.cleanEvalVectors()
 			return err
@@ -330,7 +326,7 @@ func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, proc *process.Pro
 }
 
 // calculate the state of non-equal conditions for those tuples in JoinMap
-func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint64, k int, i int, proc *process.Process, bat *batch.Batch) (otyp, error) {
+func (ctr *container) nonEqJoinInMap(ap *MarkJoin, mSels [][]int32, vals []uint64, k int, i int, proc *process.Process, bat *batch.Batch) (otyp, error) {
 	if ap.Cond != nil {
 		condState := condFalse
 		if ap.HashOnPK {
@@ -348,7 +344,7 @@ func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint6
 				1, ctr.cfs2); err != nil {
 				return condUnkown, err
 			}
-			vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
+			vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
 			if err != nil {
 				return condUnkown, err
 			}
@@ -376,7 +372,7 @@ func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint6
 					1, ctr.cfs2); err != nil {
 					return condUnkown, err
 				}
-				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
+				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
 				if err != nil {
 					return condUnkown, err
 				}
@@ -406,7 +402,7 @@ func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.
 	if err := colexec.SetJoinBatchValues(ctr.joinBat, pbat, int64(idx), ctr.bat.RowCount(), ctr.cfs); err != nil {
 		return condUnkown, err
 	}
-	vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
+	vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat}, nil)
 	if err != nil {
 		return condUnkown, err
 	}
@@ -430,8 +426,7 @@ func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.
 
 // collect the idx of tuple which contains null values
 func (ctr *container) evalNullSels(bat *batch.Batch) {
-	joinMap := bat.AuxData.(*hashmap.JoinMap)
-	jmSels := joinMap.Sels()
+	jmSels := ctr.mp.Sels()
 	selsMap := make(map[int32]bool)
 	for _, sel := range jmSels {
 		for _, i := range sel {

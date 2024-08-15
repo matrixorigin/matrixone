@@ -22,46 +22,52 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "merge_block"
+const opName = "merge_block"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (mergeBlock *MergeBlock) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": MergeS3BlocksMetaLoc ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
+func (mergeBlock *MergeBlock) OpType() vm.OpType {
+	return vm.MergeBlock
+}
+
+func (mergeBlock *MergeBlock) Prepare(proc *process.Process) error {
+	ap := mergeBlock
 	ap.container = new(Container)
 	ap.container.mp = make(map[int]*batch.Batch)
 	ap.container.mp2 = make(map[int][]*batch.Batch)
 
-	ref := arg.Ref
-	eng := arg.Engine
-	partitionNames := arg.PartitionTableNames
+	ref := mergeBlock.Ref
+	eng := mergeBlock.Engine
+	partitionNames := mergeBlock.PartitionTableNames
 	rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
 	if err != nil {
 		return err
 	}
-	arg.container.source = rel
-	arg.container.partitionSources = partitionRels
+	mergeBlock.container.source = rel
+	mergeBlock.container.partitionSources = partitionRels
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
+	anal := proc.GetAnalyze(mergeBlock.GetIdx(), mergeBlock.GetParallelIdx(), mergeBlock.GetParallelMajor())
+	anal.Start()
+	defer anal.Stop()
+
 	var err error
-	ap := arg
-	result, err := arg.GetChildren(0).Call(proc)
+	ap := mergeBlock
+
+	result, err := vm.ChildrenCall(mergeBlock.GetChildren(0), proc, anal)
 	if err != nil {
 		return result, err
 	}
-
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	anal.Input(result.Batch, mergeBlock.IsFirst)
 
 	if result.Batch == nil {
 		result.Status = vm.ExecStop
@@ -114,5 +120,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		ap.container.mp2[0] = ap.container.mp2[0][:0]
 	}
 
+	anal.Output(result.Batch, mergeBlock.IsLast)
 	return result, nil
 }

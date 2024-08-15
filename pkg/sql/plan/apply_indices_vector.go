@@ -87,9 +87,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, p
 		scanSnapshot = &Snapshot{}
 	}
 
-	idxObjRefs[0], idxTableDefs[0] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, *scanSnapshot)
-	idxObjRefs[1], idxTableDefs[1] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, *scanSnapshot)
-	idxObjRefs[2], idxTableDefs[2] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, *scanSnapshot)
+	idxObjRefs[0], idxTableDefs[0] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, scanSnapshot)
+	idxObjRefs[1], idxTableDefs[1] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, scanSnapshot)
+	idxObjRefs[2], idxTableDefs[2] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, scanSnapshot)
 
 	builder.addNameByColRef(idxTags["meta.scan"], idxTableDefs[0])
 	builder.addNameByColRef(idxTags["centroids.scan"], idxTableDefs[1])
@@ -285,10 +285,10 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2Dist(builder *QueryBuilder
 	}
 
 	// 4.3 CAST( 1 AS BIGINT)
-	arg1 := makePlan2Int64ConstExprWithType(1)
+	arg1 := makePlan2Uint64ConstExprWithType(1)
 
 	// 4.4 CAST(@var AS BIGINT)
-	targetType := types.T_int64.ToType()
+	targetType := types.T_uint64.ToType()
 	planTargetType := makePlan2Type(&targetType)
 	arg2, err := appendCastBeforeExpr(builder.GetContext(), probeLimitValueExpr, planTargetType)
 	if err != nil {

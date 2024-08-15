@@ -51,5 +51,5 @@ func (factory *DataFactory) MakeObjectFactory() catalog.ObjectDataFactory {
 }
 
 func (factory *DataFactory) MakeTombstoneFactory() catalog.TombstoneFactory {
-	return DefaultTOmbstoneFactory
+	return DefaultTombstoneFactory
 }

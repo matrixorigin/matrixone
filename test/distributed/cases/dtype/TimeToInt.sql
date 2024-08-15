@@ -255,7 +255,6 @@ select col1 * col2 from time01;
 select col1 + col2 from time01;
 select col1 - col2 from time01;
 select col2 % col1 from time01;
-
 drop table time01;
 
 -- modify time_zone to UTC
@@ -357,3 +356,6 @@ select col2 % col1 from timestamp01;
 drop table timestamp01;
 
 drop database test;
+
+# reset
+SET TIME_ZONE = "SYSTEM";

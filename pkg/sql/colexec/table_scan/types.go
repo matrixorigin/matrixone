@@ -17,79 +17,93 @@ package table_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(TableScan)
 
-type Argument struct {
-	msgReceiver    *process.MessageReceiver
-	TopValueMsgTag int32
-	OrderBy        []*plan.OrderBySpec
-	Reader         engine.Reader
-	Attrs          []string
-	TableID        uint64
-
-	buf    *batch.Batch
-	tmpBuf *batch.Batch
-
+type container struct {
 	maxAllocSize int
+	buf          *batch.Batch
+	msgReceiver  *message.MessageReceiver
+}
+type TableScan struct {
+	ctr            *container
+	TopValueMsgTag int32
+	Reader         engine.Reader
+	// letter case: origin
+	Attrs   []string
+	TableID uint64
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (tableScan *TableScan) GetOperatorBase() *vm.OperatorBase {
+	return &tableScan.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[TableScan](
+		func() *TableScan {
+			return &TableScan{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *TableScan) {
+			*a = TableScan{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[TableScan]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (tableScan TableScan) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *TableScan {
+	return reuse.Alloc[TableScan](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (tableScan *TableScan) Release() {
+	if tableScan != nil {
+		reuse.Free[TableScan](tableScan, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
+func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
+	anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
+	allocSize := int64(0)
+	if tableScan.ctr != nil {
+		if tableScan.ctr.buf != nil {
+			tableScan.ctr.buf.Clean(proc.Mp())
+			tableScan.ctr.buf = nil
+		}
+		allocSize += int64(tableScan.ctr.maxAllocSize)
+		if tableScan.ctr.msgReceiver != nil {
+			tableScan.ctr.msgReceiver.Free()
+			tableScan.ctr.msgReceiver = nil
+		}
+		tableScan.ctr = nil
 	}
 
-	if arg.tmpBuf != nil {
-		arg.tmpBuf.Clean(proc.Mp())
-		arg.tmpBuf = nil
+	if tableScan.ProjectList != nil {
+		allocSize += tableScan.ProjectAllocSize
+		tableScan.FreeProjection(proc)
 	}
-
-	if arg.msgReceiver != nil {
-		arg.msgReceiver.Free()
+	if tableScan.Reader != nil {
+		e := tableScan.Reader.Close()
+		if e != nil {
+			logutil.Errorf("close reader for table id=%d, err=%v", tableScan.TableID, e)
+		}
 	}
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Alloc(int64(arg.maxAllocSize))
+	anal.Alloc(allocSize)
 }

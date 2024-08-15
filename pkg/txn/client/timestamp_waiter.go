@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -31,6 +32,7 @@ const (
 )
 
 type timestampWaiter struct {
+	logger    *log.MOLogger
 	stopper   stopper.Stopper
 	notifiedC chan timestamp.Timestamp
 	latestTS  atomic.Pointer[timestamp.Timestamp]
@@ -43,10 +45,13 @@ type timestampWaiter struct {
 }
 
 // NewTimestampWaiter create timestamp waiter
-func NewTimestampWaiter() TimestampWaiter {
+func NewTimestampWaiter(
+	logger *log.MOLogger,
+) TimestampWaiter {
 	tw := &timestampWaiter{
+		logger: logger,
 		stopper: *stopper.NewStopper("timestamp-waiter",
-			stopper.WithLogger(util.GetLogger().RawLogger())),
+			stopper.WithLogger(logger.RawLogger())),
 		notifiedC: make(chan timestamp.Timestamp, maxNotifiedCount),
 	}
 	tw.mu.cancelC = make(chan struct{}, 1)
@@ -77,7 +82,7 @@ func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timest
 }
 
 func (tw *timestampWaiter) NotifyLatestCommitTS(ts timestamp.Timestamp) {
-	util.LogTxnPushedTimestampUpdated(ts)
+	util.LogTxnPushedTimestampUpdated(tw.logger, ts)
 	tw.notifiedC <- ts
 }
 
@@ -95,7 +100,7 @@ func (tw *timestampWaiter) Pause() {
 	close(tw.mu.cancelC)
 	tw.mu.cancelC = nil
 	tw.removeWaitersLocked()
-	util.LogTimestampWaiterCanceled()
+	util.LogTimestampWaiterCanceled(tw.logger)
 }
 
 func (tw *timestampWaiter) Resume() {

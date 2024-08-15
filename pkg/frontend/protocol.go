@@ -17,12 +17,9 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
-
-	"github.com/fagongzi/goetty/v2"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"go.uber.org/zap"
 )
 
 // Response Categories
@@ -46,8 +43,6 @@ const (
 type Request struct {
 	//the command type from the client
 	cmd CommandType
-	// sequence num
-	seq uint8
 	//the data from the client
 	data interface{}
 }
@@ -83,6 +78,8 @@ type Response struct {
 	*/
 	affectedRows, lastInsertId uint64
 	warnings                   uint16
+	isIssue3482                bool
+	loadLocalFile              string
 }
 
 func NewResponse(category int, affectedRows, lastInsertId uint64, warnings, status uint16, cmd int, d interface{}) *Response {
@@ -137,12 +134,6 @@ func (mp *MysqlProtocolImpl) UpdateCtx(ctx context.Context) {
 	mp.ctx = ctx
 }
 
-func (mp *MysqlProtocolImpl) incDebugCount(i int) {
-	if i >= 0 && i < len(mp.debugCount) {
-		atomic.AddUint64(&mp.debugCount[i], 1)
-	}
-}
-
 func (mp *MysqlProtocolImpl) setQuit(b bool) bool {
 	return mp.quit.Swap(b)
 }
@@ -182,7 +173,7 @@ func (mp *MysqlProtocolImpl) IsEstablished() bool {
 }
 
 func (mp *MysqlProtocolImpl) SetEstablished() {
-	getLogger().Debug("SWITCH ESTABLISHED to true", zap.String(ConnectionInfoKey, mp.GetDebugString()))
+	getLogger(mp.sid).Debug("SWITCH ESTABLISHED to true", zap.String(ConnectionInfoKey, mp.GetDebugString()))
 	mp.established.Store(true)
 }
 
@@ -191,7 +182,7 @@ func (mp *MysqlProtocolImpl) IsTlsEstablished() bool {
 }
 
 func (mp *MysqlProtocolImpl) SetTlsEstablished() {
-	getLogger().Debug("SWITCH TLS_ESTABLISHED to true", zap.String(ConnectionInfoKey, mp.GetDebugString()))
+	getLogger(mp.sid).Debug("SWITCH TLS_ESTABLISHED to true", zap.String(ConnectionInfoKey, mp.GetDebugString()))
 	mp.tlsEstablished.Store(true)
 }
 
@@ -218,7 +209,7 @@ func (mp *MysqlProtocolImpl) safeQuit() {
 	}
 }
 
-func (mp *MysqlProtocolImpl) GetTcpConnection() goetty.IOSession {
+func (mp *MysqlProtocolImpl) GetTcpConnection() *Conn {
 	return mp.tcpConn
 }
 
@@ -287,16 +278,4 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 	default:
 		return moerr.NewInternalError(ctx, "unsupported response:%d ", resp.category)
 	}
-}
-
-func (mp *MysqlProtocolImpl) DisableAutoFlush() {
-	mp.disableAutoFlush = true
-}
-
-func (mp *MysqlProtocolImpl) EnableAutoFlush() {
-	mp.disableAutoFlush = false
-}
-
-func (mp *MysqlProtocolImpl) Flush() error {
-	return nil
 }

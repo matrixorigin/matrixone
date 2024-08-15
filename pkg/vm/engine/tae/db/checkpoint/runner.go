@@ -89,9 +89,9 @@ type tableAndSize struct {
 // A: A checkpoint runner organizes and manages	all checkpoint-related behaviors. It roughly
 //    does the following things:
 //    - Manage the life cycle of all checkpoints and provide some query interfaces.
-//    - A cron job periodically collects and analyzes dirty blocks, and flushes eligibl dirty
+//    - A cron job periodically collects and analyzes dirty blocks, and flushes eligible dirty
 //      blocks to the remote storage
-//    - The cron job peridically test whether a new checkpoint can be created. If it is not
+//    - The cron job periodically test whether a new checkpoint can be created. If it is not
 //      satisfied, it will wait for next trigger. Otherwise, it will start the process of
 //      creating a checkpoint.
 
@@ -155,11 +155,11 @@ type tableAndSize struct {
 //    8. Schedule to remove stale checkpoint meta objects
 
 // Q: How to boot from the checkpoints?
-// A: When a meta version is created, it contains all information of the previouse version. So we always
+// A: When a meta version is created, it contains all information of the previous version. So we always
 //
 //	delete the stale versions when a new version is created. Over time, the number of objects under
 //	`ckp/` is small.
-//	1. List all meta objects under `ckp/`. Get the latest meta object and read all checkpoint informations
+//	1. List all meta objects under `ckp/`. Get the latest meta object and read all checkpoint information
 //	   from the meta object.
 //	2. Apply the latest global checkpoint
 //	3. Apply the incremental checkpoint start from the version right after the global checkpoint to the
@@ -198,7 +198,7 @@ type runner struct {
 
 	ctx context.Context
 
-	// logtail sourcer
+	// logtail source
 	source    logtail.Collector
 	catalog   *catalog.Catalog
 	rt        *dbutils.Runtime
@@ -229,6 +229,11 @@ type runner struct {
 	gcCheckpointQueue          sm.Queue
 
 	objMemSizeList []tableAndSize
+
+	checkpointMetaFiles struct {
+		sync.RWMutex
+		files map[string]struct{}
+	}
 
 	onceStart sync.Once
 	onceStop  sync.Once
@@ -273,6 +278,7 @@ func NewRunner(
 	r.globalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onGlobalCheckpointEntries)
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
+	r.checkpointMetaFiles.files = make(map[string]struct{})
 	return r
 }
 
@@ -294,6 +300,28 @@ func (r *runner) String() string {
 	_, _ = fmt.Fprintf(&buf, "checkpointSize=%v, ", r.options.checkpointSize)
 	_, _ = fmt.Fprintf(&buf, ">")
 	return buf.String()
+}
+
+func (r *runner) AddCheckpointMetaFile(name string) {
+	r.checkpointMetaFiles.Lock()
+	defer r.checkpointMetaFiles.Unlock()
+	r.checkpointMetaFiles.files[name] = struct{}{}
+}
+
+func (r *runner) RemoveCheckpointMetaFile(name string) {
+	r.checkpointMetaFiles.Lock()
+	defer r.checkpointMetaFiles.Unlock()
+	delete(r.checkpointMetaFiles.files, name)
+}
+
+func (r *runner) GetCheckpointMetaFiles() map[string]struct{} {
+	r.checkpointMetaFiles.RLock()
+	defer r.checkpointMetaFiles.RUnlock()
+	files := make(map[string]struct{})
+	for k, v := range r.checkpointMetaFiles.files {
+		files[k] = v
+	}
+	return files
 }
 
 // Only used in UT
@@ -371,7 +399,7 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	now := time.Now()
 	entry := r.MaxCheckpoint()
-	// In some unit tests, ckp is managed manually, and ckp deletiton (CleanPenddingCheckpoint)
+	// In some unit tests, ckp is managed manually, and ckp deletion (CleanPendingCheckpoint)
 	// can be called when the queue still has unexecuted task.
 	// Add `entry == nil` here as protective codes
 	if entry == nil || entry.GetState() != ST_Running {
@@ -533,11 +561,16 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 
 	// TODO: checkpoint entry should maintain the location
 	_, err = writer.WriteEnd(r.ctx)
+	if err != nil {
+		return
+	}
+	fileName := blockio.EncodeCheckpointMetadataFileNameWithoutDir(PrefixMetadata, start, end)
+	r.AddCheckpointMetaFile(fileName)
 	return
 }
 
 func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.Field, err error) {
-	factory := logtail.IncrementalCheckpointDataFactory(entry.start, entry.end, true, false)
+	factory := logtail.IncrementalCheckpointDataFactory(r.rt.SID(), entry.start, entry.end, true, false)
 	data, err := factory(r.catalog)
 	if err != nil {
 		return
@@ -557,7 +590,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.F
 }
 
 func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string, err error) {
-	factory := logtail.BackupCheckpointDataFactory(entry.start, entry.end)
+	factory := logtail.BackupCheckpointDataFactory(r.rt.SID(), entry.start, entry.end)
 	data, err := factory(r.catalog)
 	if err != nil {
 		return
@@ -584,7 +617,7 @@ func (r *runner) doGlobalCheckpoint(
 	)
 	now := time.Now()
 
-	entry = NewCheckpointEntry(types.TS{}, end.Next(), ET_Global)
+	entry = NewCheckpointEntry(r.rt.SID(), types.TS{}, end.Next(), ET_Global)
 	entry.ckpLSN = ckpLSN
 	entry.truncateLSN = truncateLSN
 
@@ -612,7 +645,7 @@ func (r *runner) doGlobalCheckpoint(
 		}
 	}()
 
-	factory := logtail.GlobalCheckpointDataFactory(entry.end, interval)
+	factory := logtail.GlobalCheckpointDataFactory(r.rt.SID(), entry.end, interval)
 	data, err := factory(r.catalog)
 	if err != nil {
 		errPhase = "collect"
@@ -723,7 +756,7 @@ func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
 	if count < r.options.minCount {
 		return
 	}
-	entry := NewCheckpointEntry(start, end, ET_Incremental)
+	entry := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
 	r.tryAddNewIncrementalCheckpointEntry(entry)
 }
 
@@ -848,7 +881,7 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 	scopes := make([]common.ID, 0, len(metas))
 	for _, meta := range metas {
 		if !meta.GetObjectData().PrepareCompact() {
-			logutil.Infof("[FlushTabletail] %d-%s / %s false prepareCompact ", table.ID, table.GetLastestSchemaLocked().Name, meta.ID.String())
+			logutil.Infof("[FlushTabletail] %d-%s / %s false prepareCompact ", table.ID, table.GetLastestSchemaLocked().Name, meta.ID().String())
 			return moerr.GetOkExpectedEOB()
 		}
 		scopes = append(scopes, *meta.AsCommonID())
@@ -1092,7 +1125,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 		ckpStart = global.GetEnd()
 		checkpointed = global.GetEnd()
 	}
-	pivot := NewCheckpointEntry(newStart, newStart, ET_Incremental)
+	pivot := NewCheckpointEntry(r.rt.SID(), newStart, newStart, ET_Incremental)
 
 	// For debug
 	// checkpoints := make([]*CheckpointEntry, 0)

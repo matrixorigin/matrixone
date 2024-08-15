@@ -48,7 +48,7 @@ type merger[T any] struct {
 	buffer *batch.Batch
 
 	bats   []releasableBatch
-	rowIdx []int64
+	rowIdx []uint32
 
 	objCnt           int
 	objBlkCnts       []int
@@ -69,11 +69,12 @@ type merger[T any] struct {
 
 func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, mustColFunc func(*vector.Vector) []T) Merger {
 	size := host.GetObjectCnt()
+	rowSizeU64 := host.GetTotalSize() / uint64(host.GetTotalRowCnt())
 	m := &merger[T]{
 		host:       host,
 		objCnt:     size,
 		bats:       make([]releasableBatch, size),
-		rowIdx:     make([]int64, size),
+		rowIdx:     make([]uint32, size),
 		cols:       make([][]T, size),
 		deletes:    make([]*nulls.Nulls, size),
 		nulls:      make([]*nulls.Nulls, size),
@@ -85,7 +86,7 @@ func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos 
 		rowPerBlk:     host.GetBlockMaxRows(),
 		stats: mergeStats{
 			totalRowCnt:   host.GetTotalRowCnt(),
-			rowSize:       host.GetTotalSize() / host.GetTotalRowCnt(),
+			rowSize:       uint32(rowSizeU64),
 			targetObjSize: host.GetTargetObjSize(),
 			blkPerObj:     host.GetObjectMaxBlocks(),
 		},
@@ -97,7 +98,7 @@ func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos 
 		totalBlkCnt += cnt
 	}
 	if host.DoTransfer() {
-		initTransferMapping(host.GetCommitEntry(), totalBlkCnt)
+		host.InitTransferMaps(totalBlkCnt)
 	}
 
 	return m
@@ -133,7 +134,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 	}
 	defer releaseF()
 
-	commitEntry := m.host.GetCommitEntry()
+	transferMaps := m.host.GetTransferMaps()
 	for m.heap.Len() != 0 {
 		select {
 		case <-ctx.Done():
@@ -150,17 +151,17 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		}
 		rowIdx := m.rowIdx[objIdx]
 		for i := range m.buffer.Vecs {
-			err := m.buffer.Vecs[i].UnionOne(m.bats[objIdx].bat.Vecs[i], rowIdx, m.host.GetMPool())
+			err := m.buffer.Vecs[i].UnionOne(m.bats[objIdx].bat.Vecs[i], int64(rowIdx), m.host.GetMPool())
 			if err != nil {
 				return err
 			}
 		}
 
 		if m.host.DoTransfer() {
-			commitEntry.Booking.Mappings[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1].M[int32(rowIdx)] = api.TransDestPos{
-				ObjIdx: int32(m.stats.objCnt),
-				BlkIdx: int32(uint32(m.stats.objBlkCnt)),
-				RowIdx: int32(m.stats.blkRowCnt),
+			transferMaps[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1][rowIdx] = api.TransferDestPos{
+				ObjIdx: uint8(m.stats.objCnt),
+				BlkIdx: uint16(m.stats.objBlkCnt),
+				RowIdx: uint32(m.stats.blkRowCnt),
 			}
 		}
 
@@ -260,7 +261,7 @@ func (m *merger[T]) loadBlk(ctx context.Context, objIdx uint32) (bool, error) {
 
 func (m *merger[T]) pushNewElem(ctx context.Context, objIdx uint32) error {
 	m.rowIdx[objIdx]++
-	if m.rowIdx[objIdx] >= int64(len(m.cols[objIdx])) {
+	if m.rowIdx[objIdx] >= uint32(len(m.cols[objIdx])) {
 		if ok, err := m.loadBlk(ctx, objIdx); !ok {
 			return err
 		}

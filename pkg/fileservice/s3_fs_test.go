@@ -965,6 +965,7 @@ func TestS3PrefetchFile(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, data[:i], vec.Entries[0].Data)
 		assert.Equal(t, lastHit+1, pcSet.FileService.Cache.Disk.Hit.Load())
+		vec.Release()
 		lastHit++
 	}
 

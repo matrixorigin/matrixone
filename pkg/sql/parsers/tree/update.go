@@ -170,9 +170,9 @@ type ExParam struct {
 	LoadFile    bool
 	Local       bool
 	QueryResult bool
-	SysTable    bool
 	Parallel    bool
 	Strict      bool
+	ExtTab      bool // means table is created by syntax, create external table
 }
 
 type S3Parameter struct {

@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 )
@@ -41,7 +42,7 @@ func TestDiskCache(t *testing.T) {
 	})
 
 	// new
-	cache, err := NewDiskCache(ctx, dir, 1<<20, nil)
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false)
 	assert.Nil(t, err)
 
 	// update
@@ -117,6 +118,7 @@ func TestDiskCache(t *testing.T) {
 		assert.Equal(t, []byte("a"), bs)
 		assert.False(t, vec.Entries[1].done)
 		assert.False(t, vec.Entries[2].done)
+		vec.Release()
 	}
 	testRead(cache)
 
@@ -124,14 +126,14 @@ func TestDiskCache(t *testing.T) {
 	testRead(cache)
 
 	// new cache instance and read
-	cache, err = NewDiskCache(ctx, dir, 1<<20, nil)
+	cache, err = NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false)
 	assert.Nil(t, err)
 	testRead(cache)
 
 	assert.Equal(t, 1, numWritten)
 
 	// new cache instance and update
-	cache, err = NewDiskCache(ctx, dir, 1<<20, nil)
+	cache, err = NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false)
 	assert.Nil(t, err)
 	testUpdate(cache)
 
@@ -149,7 +151,7 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
-	cache, err := NewDiskCache(ctx, dir, 4096, nil)
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(4096), nil, false)
 	assert.Nil(t, err)
 
 	// update
@@ -195,23 +197,25 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	assert.Equal(t, int64(3), counterSet.FileService.Cache.Disk.WriteFile.Load())
 	assert.Equal(t, int64(2), counterSet.FileService.Cache.Disk.Evict.Load())
 
-	err = cache.Read(ctx, &IOVector{
+	vec := &IOVector{
 		FilePath: "foo",
 		Entries: []IOEntry{
 			{
 				Size: 3,
 			},
 		},
-	})
+	}
+	err = cache.Read(ctx, vec)
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.Hit.Load())
+	vec.Release()
 
 }
 
 func TestDiskCacheFileCache(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
-	cache, err := NewDiskCache(ctx, dir, 1<<20, nil)
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false)
 	assert.Nil(t, err)
 
 	vector := IOVector{
@@ -259,6 +263,7 @@ func TestDiskCacheFileCache(t *testing.T) {
 	assert.Equal(t, []byte("fo"), readVector.Entries[0].Data)
 	assert.Equal(t, []byte("ob"), readVector.Entries[1].Data)
 	assert.Equal(t, []byte("ar"), readVector.Entries[2].Data)
+	readVector.Release()
 
 }
 
@@ -269,11 +274,11 @@ func TestDiskCacheDirSize(t *testing.T) {
 
 	dir := t.TempDir()
 	capacity := 1 << 20
-	cache, err := NewDiskCache(ctx, dir, capacity, nil)
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(int64(capacity)), nil, false)
 	assert.Nil(t, err)
 
 	data := bytes.Repeat([]byte("a"), capacity/128)
-	for i := 0; i < capacity/len(data)*64; i++ {
+	for i := 0; i < capacity/len(data)*2; i++ {
 		err := cache.Update(ctx, &IOVector{
 			FilePath: fmt.Sprintf("%v", i),
 			Entries: []IOEntry{
@@ -326,8 +331,9 @@ func benchmarkDiskCacheWriteThenRead(
 	cache, err := NewDiskCache(
 		ctx,
 		dir,
-		10<<30,
+		fscache.ConstCapacity(10<<30),
 		nil,
+		false,
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -417,8 +423,9 @@ func benchmarkDiskCacheReadRandomOffsetAtLargeFile(
 	cache, err := NewDiskCache(
 		ctx,
 		dir,
-		8<<30,
+		fscache.ConstCapacity(8<<30),
 		nil,
+		false,
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -484,8 +491,9 @@ func BenchmarkDiskCacheMultipleIOEntries(b *testing.B) {
 	cache, err := NewDiskCache(
 		ctx,
 		dir,
-		8<<30,
+		fscache.ConstCapacity(8<<30),
 		nil,
+		false,
 	)
 	if err != nil {
 		b.Fatal(err)

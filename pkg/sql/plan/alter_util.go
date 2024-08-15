@@ -15,9 +15,9 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -156,6 +156,16 @@ func checkIsAddableColumn(tableDef *TableDef, colName string, colType *plan.Type
 func FindColumn(cols []*ColDef, name string) *ColDef {
 	for _, col := range cols {
 		if strings.EqualFold(col.Name, name) {
+			return col
+		}
+	}
+	return nil
+}
+
+// FindColumnByOriginName finds column in cols by origin name.
+func FindColumnByOriginName(cols []*ColDef, originName string) *ColDef {
+	for _, col := range cols {
+		if col.GetOriginCaseName() == originName {
 			return col
 		}
 	}

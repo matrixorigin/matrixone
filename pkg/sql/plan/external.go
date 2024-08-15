@@ -190,7 +190,7 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 		}
 	}
 
-	param.FileService = builder.compCtx.GetProcess().FileService
+	param.FileService = builder.compCtx.GetProcess().GetFileService()
 	param.Ctx = builder.compCtx.GetProcess().Ctx
 	_, spanReadDir := trace.Start(param.Ctx, "ReCalcNodeStats.ReadDir")
 	fileList, fileSize, err := ReadDir(param)
@@ -209,6 +209,11 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 	var cost float64
 	for i := range fileSize {
 		cost += float64(fileSize[i])
+	}
+
+	//special handle for query result
+	if strings.HasPrefix(param.Filepath, "SHARED:/query_result/") {
+		return DefaultStats()
 	}
 
 	//read one line

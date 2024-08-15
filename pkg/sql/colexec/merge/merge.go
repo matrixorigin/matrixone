@@ -22,36 +22,44 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "merge"
+const opName = "merge"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (merge *Merge) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": union all ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, true)
+func (merge *Merge) OpType() vm.OpType {
+	return vm.Merge
+}
+
+func (merge *Merge) Prepare(proc *process.Process) error {
+	merge.ctr = new(container)
+	if merge.Partial {
+		merge.ctr.InitReceiver(proc, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
+	} else {
+		merge.ctr.InitReceiver(proc, proc.Reg.MergeReceivers)
+	}
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(merge.GetIdx(), merge.GetParallelIdx(), merge.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if merge.ctr.buf != nil {
+		proc.PutBatch(merge.ctr.buf)
+		merge.ctr.buf = nil
 	}
 
 	for {
-		msg = arg.ctr.ReceiveFromAllRegs(anal)
+		msg = merge.ctr.ReceiveFromAllRegs(anal)
 		if msg.Err != nil {
 			result.Status = vm.ExecStop
 			return result, msg.Err
@@ -61,16 +69,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 		}
 
-		arg.buf = msg.Batch
-		if arg.buf.Last() && arg.SinkScan {
-			proc.PutBatch(arg.buf)
+		merge.ctr.buf = msg.Batch
+		if merge.ctr.buf.Last() && merge.SinkScan {
+			proc.PutBatch(merge.ctr.buf)
 			continue
 		}
 		break
 	}
 
-	anal.Input(arg.buf, arg.GetIsFirst())
-	anal.Output(arg.buf, arg.GetIsLast())
-	result.Batch = arg.buf
+	anal.Input(merge.ctr.buf, merge.GetIsFirst())
+	anal.Output(merge.ctr.buf, merge.GetIsLast())
+	result.Batch = merge.ctr.buf
 	return result, nil
 }

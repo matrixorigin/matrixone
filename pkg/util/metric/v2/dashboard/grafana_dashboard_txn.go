@@ -43,7 +43,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnMpoolRow(),
 			c.initTxnOnPrepareWALRow(),
 			c.initTxnBeforeCommitRow(),
-			c.initTxnDequeuePreparedRow(),
+			c.initTxnTNDeduplicateDurationRow(),
 			c.initTxnTableRangesRow(),
 			c.initTxnRangesSelectivityRow(),
 			c.initTxnRangesCountRow(),
@@ -292,16 +292,22 @@ func (c *DashboardCreator) initTxnOnPrepareWALRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initTxnDequeuePreparedRow() dashboard.Option {
+func (c *DashboardCreator) initTxnTNDeduplicateDurationRow() dashboard.Option {
 	return dashboard.Row(
-		"txn dequeue prepared duration",
-		c.getHistogram(
-			"txn dequeue prepared duration",
-			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="dequeue_prepared"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
+		"Txn TN Deduplication Duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter("mo_txn_tn_deduplicate_duration_seconds_bucket", `type="append_deduplicate"`),
+				c.getMetricWithFilter("mo_txn_tn_deduplicate_duration_seconds_bucket", `type="prePrepare_deduplicate"`),
+			},
+			[]string{
+				"append_deduplicate",
+				"prePrepare_deduplicate",
+			},
+			[]float64{0.80, 0.90, 0.95, 0.99},
+			[]float32{3, 3, 3, 3},
 			axis.Unit("s"),
-			axis.Min(0)),
+			axis.Min(0))...,
 	)
 }
 

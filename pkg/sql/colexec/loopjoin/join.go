@@ -16,6 +16,9 @@ package loopjoin
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,40 +27,50 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "loop_join"
+const opName = "loop_join"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (loopJoin *LoopJoin) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": loop join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (loopJoin *LoopJoin) OpType() vm.OpType {
+	return vm.LoopJoin
+}
+
+func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 	var err error
 
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
+	loopJoin.ctr = new(container)
 
-	if arg.Cond != nil {
-		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+	if loopJoin.Cond != nil {
+		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if loopJoin.ProjectList != nil {
+		err = loopJoin.PrepareProjection(proc)
 	}
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := arg.ctr
+	ctr := loopJoin.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := loopJoin.build(proc, anal); err != nil {
 				return result, err
 			}
 			if ctr.bat == nil {
@@ -68,31 +81,39 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			if ctr.inBat != nil {
-				err = ctr.probe(arg, proc, anal, arg.GetIsLast(), &result)
+			if ctr.inBat == nil {
+				result, err = loopJoin.Children[0].Call(proc)
+				if err != nil {
+					return result, err
+				}
+				ctr.inBat = result.Batch
+				if ctr.inBat == nil {
+					ctr.state = End
+					continue
+				}
+				if ctr.inBat.IsEmpty() {
+					ctr.inBat = nil
+					continue
+				}
+				if ctr.bat == nil || ctr.bat.RowCount() == 0 {
+					ctr.inBat = nil
+					continue
+				}
+				anal.Input(ctr.inBat, loopJoin.GetIsFirst())
+			}
+
+			err = ctr.probe(loopJoin, proc, &result)
+			if err != nil {
 				return result, err
 			}
-			msg := ctr.ReceiveFromSingleReg(0, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+
+			if loopJoin.ProjectList != nil {
+				result.Batch, err = loopJoin.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
 			}
-			ctr.inBat = msg.Batch
-			if ctr.inBat == nil {
-				ctr.state = End
-				continue
-			}
-			if ctr.inBat.IsEmpty() {
-				proc.PutBatch(ctr.inBat)
-				ctr.inBat = nil
-				continue
-			}
-			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-				proc.PutBatch(ctr.inBat)
-				ctr.inBat = nil
-				continue
-			}
-			anal.Input(ctr.inBat, arg.GetIsFirst())
-			err = ctr.probe(arg, proc, anal, arg.GetIsLast(), &result)
+			anal.Output(result.Batch, loopJoin.GetIsLast())
 			return result, err
 		default:
 			result.Batch = nil
@@ -102,27 +123,27 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+func (loopJoin *LoopJoin) build(proc *process.Process, anal process.Analyze) error {
+	ctr := loopJoin.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	if mp == nil {
+		return nil
+	}
+	batches := mp.GetBatches()
 	var err error
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat == nil {
-			break
-		}
-		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+	//maybe optimize this in the future
+	for i := range batches {
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err
 		}
-		proc.PutBatch(bat)
 	}
 	return nil
 }
 
-func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -146,7 +167,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			ctr.bat.RowCount(), ctr.cfs); err != nil {
 			return err
 		}
-		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
+		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat}, nil)
 		if err != nil {
 			return err
 		}
@@ -191,7 +212,6 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			}
 		}
 		if rowCountIncrease >= colexec.DefaultBatchSize {
-			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ctr.rbat.SetRowCount(rowCountIncrease)
 			ctr.probeIdx = i + 1
@@ -201,9 +221,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 
 	ctr.probeIdx = 0
 	ctr.rbat.SetRowCount(rowCountIncrease)
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
-	proc.PutBatch(ctr.inBat)
 	ctr.inBat = nil
 	return nil
 }

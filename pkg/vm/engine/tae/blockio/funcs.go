@@ -47,10 +47,11 @@ func LoadColumnsData(
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs, policy); err != nil {
 		return
 	}
+	bat = batch.NewWithSize(len(cols))
 	release = func() {
 		objectio.ReleaseIOVector(ioVectors)
+		bat.Clean(m)
 	}
-	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
 		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
@@ -85,6 +86,7 @@ func LoadColumnsData2(
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, nil, fs, policy); err != nil {
 		return
 	}
+	vectors = make([]containers.Vector, len(cols))
 	defer func() {
 		if needCopy {
 			objectio.ReleaseIOVector(ioVectors)
@@ -92,10 +94,12 @@ func LoadColumnsData2(
 		}
 		release = func() {
 			objectio.ReleaseIOVector(ioVectors)
+			for _, vec := range vectors {
+				vec.Close()
+			}
 		}
 	}()
 	var obj any
-	vectors = make([]containers.Vector, len(cols))
 	for i := range cols {
 		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
 		if err != nil {

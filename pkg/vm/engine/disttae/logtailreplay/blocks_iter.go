@@ -16,11 +16,13 @@ package logtailreplay
 
 import (
 	"bytes"
+	"fmt"
+
+	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/tidwall/btree"
 )
 
 type ObjectsIter interface {
@@ -30,8 +32,9 @@ type ObjectsIter interface {
 }
 
 type objectsIter struct {
-	ts   types.TS
-	iter btree.IterG[ObjectEntry]
+	onlyVisible bool
+	ts          types.TS
+	iter        btree.IterG[ObjectEntry]
 }
 
 // not accurate!  only used by stats
@@ -39,14 +42,16 @@ func (p *PartitionState) ApproxObjectsNum() int {
 	return p.dataObjects.Len()
 }
 
-func (p *PartitionState) NewObjectsIter(ts types.TS) (ObjectsIter, error) {
+func (p *PartitionState) NewObjectsIter(ts types.TS, onlyVisible bool) (ObjectsIter, error) {
 	if ts.Less(&p.minTS) {
-		return nil, moerr.NewTxnStaleNoCtx()
+		msg := fmt.Sprintf("(%s<%s)", ts.ToString(), p.minTS.ToString())
+		return nil, moerr.NewTxnStaleNoCtx(msg)
 	}
 	iter := p.dataObjects.Copy().Iter()
 	ret := &objectsIter{
-		ts:   ts,
-		iter: iter,
+		onlyVisible: onlyVisible,
+		ts:          ts,
+		iter:        iter,
 	}
 	return ret, nil
 }
@@ -56,7 +61,7 @@ var _ ObjectsIter = new(objectsIter)
 func (b *objectsIter) Next() bool {
 	for b.iter.Next() {
 		entry := b.iter.Item()
-		if !entry.Visible(b.ts) {
+		if b.onlyVisible && !entry.Visible(b.ts) {
 			// not visible
 			continue
 		}
@@ -88,9 +93,9 @@ type dirtyBlocksIter struct {
 }
 
 func (p *PartitionState) NewDirtyBlocksIter() BlocksIter {
-	iter := p.dirtyBlocks.Copy().Iter()
+	//iter := p.dirtyBlocks.Copy().Iter()
 	ret := &dirtyBlocksIter{
-		iter: iter,
+		iter: btree.IterG[types.Blockid]{},
 	}
 	return ret
 }
@@ -200,4 +205,25 @@ func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, b
 		}
 	}
 	return ObjectInfo{}, false
+}
+
+type BlockDeltaInfo struct {
+	//the commit ts of location.
+	Cts types.TS
+	Loc objectio.Location
+}
+
+func (p *PartitionState) GetTombstoneDeltaLocs(mp map[types.Blockid]BlockDeltaInfo) (err error) {
+	iter := p.blockDeltas.Copy().Iter()
+	defer iter.Release()
+
+	for ok := iter.First(); ok; ok = iter.Next() {
+		item := iter.Item()
+		mp[item.BlockID] = BlockDeltaInfo{
+			Loc: item.DeltaLoc[:],
+			Cts: item.CommitTs,
+		}
+	}
+
+	return nil
 }

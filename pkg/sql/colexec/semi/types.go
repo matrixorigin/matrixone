@@ -15,7 +15,6 @@
 package semi
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,10 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(SemiJoin)
 
 const (
 	Build = iota
@@ -40,14 +40,10 @@ type evalVector struct {
 }
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state int
 
-	inBuckets []uint8
-
 	batches       []*batch.Batch
-	batchRowCount int
+	batchRowCount int64
 	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
@@ -61,13 +57,13 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp        *hashmap.JoinMap
+	mp        *message.JoinMap
 	skipProbe bool
 
 	maxAllocSize int64
 }
 
-type Argument struct {
+type SemiJoin struct {
 	ctr        *container
 	Result     []int32
 	Typs       []types.Type
@@ -76,60 +72,67 @@ type Argument struct {
 
 	HashOnPK           bool
 	IsShuffle          bool
+	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-
+	JoinMapTag         int32
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (semiJoin *SemiJoin) GetOperatorBase() *vm.OperatorBase {
+	return &semiJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[SemiJoin](
+		func() *SemiJoin {
+			return &SemiJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *SemiJoin) {
+			*a = SemiJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[SemiJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (semiJoin SemiJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *SemiJoin {
+	return reuse.Alloc[SemiJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (semiJoin *SemiJoin) Release() {
+	if semiJoin != nil {
+		reuse.Free[SemiJoin](semiJoin, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (semiJoin *SemiJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	semiJoin.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := semiJoin.ctr
+	anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
+	allocSize := int64(0)
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 
-		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
+		allocSize += ctr.maxAllocSize
 
-		arg.ctr = nil
+		semiJoin.ctr = nil
 	}
+	if semiJoin.ProjectList != nil {
+		allocSize += semiJoin.ProjectAllocSize
+		semiJoin.FreeProjection(proc)
+	}
+	anal.Alloc(allocSize)
 }
 
 func (ctr *container) cleanExprExecutor() {
@@ -140,9 +143,6 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
-	for i := range ctr.batches {
-		proc.PutBatch(ctr.batches[i])
-	}
 	ctr.batches = nil
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)

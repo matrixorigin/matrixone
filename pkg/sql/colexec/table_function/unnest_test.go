@@ -31,7 +31,7 @@ import (
 )
 
 type unnestTestCase struct {
-	arg      *Argument
+	arg      *TableFunction
 	proc     *process.Process
 	jsons    []string
 	paths    []string
@@ -120,7 +120,7 @@ func init() {
 }
 
 func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers []bool, jsonType string, success bool) unnestTestCase {
-	proc := testutil.NewProcessWithMPool(m)
+	proc := testutil.NewProcessWithMPool("", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
 		for j := range defaultColDefs {
@@ -133,7 +133,7 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 
 	ret := unnestTestCase{
 		proc: proc,
-		arg: &Argument{
+		arg: &TableFunction{
 			Attrs:    attrs,
 			Rets:     colDefs,
 			FuncName: "unnest",
@@ -312,12 +312,14 @@ func appendOtherExprs(ret []*plan.Expr, paths []string, outers []bool) []*plan.E
 	return ret
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
+func resetChildren(arg *TableFunction, bat *batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: []*batch.Batch{bat},
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: []*batch.Batch{bat},
-			},
+			valueScanArg,
 		})
 }
 

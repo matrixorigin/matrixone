@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Group)
 
 const (
 	H8 = iota
@@ -71,6 +71,7 @@ func (ev *ExprEvalVector) Free() {
 
 type container struct {
 	typ       int
+	state     vm.CtrState
 	inserted  []uint8
 	zInserted []uint8
 
@@ -85,28 +86,29 @@ type container struct {
 	keyWidth          int
 	groupVecsNullable bool
 
-	bat   *batch.Batch
-	state vm.CtrState
+	bat *batch.Batch
 }
 
-type Argument struct {
+type Group struct {
 	ctr          *container
 	IsShuffle    bool // is shuffle group
+	NeedEval     bool // need to projection the aggregate column
 	PreAllocSize uint64
-	NeedEval     bool         // need to projection the aggregate column
-	Exprs        []*plan.Expr // group Expressions
-	Types        []types.Type
-	Aggs         []aggexec.AggFuncExecExpression
+
+	Exprs []*plan.Expr // group Expressions
+	Types []types.Type
+	Aggs  []aggexec.AggFuncExecExpression
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (group *Group) GetOperatorBase() *vm.OperatorBase {
+	return &group.OperatorBase
 }
 
-func (arg *Argument) AnyDistinctAgg() bool {
-	for _, agg := range arg.Aggs {
+func (group *Group) AnyDistinctAgg() bool {
+	for _, agg := range group.Aggs {
 		if agg.IsDistinct() {
 			return true
 		}
@@ -115,60 +117,65 @@ func (arg *Argument) AnyDistinctAgg() bool {
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Group](
+		func() *Group {
+			return &Group{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Group) {
+			*a = Group{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Group]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (group Group) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Group {
+	return reuse.Alloc[Group](nil)
 }
 
-func (arg *Argument) WithExprs(exprs []*plan.Expr) *Argument {
-	arg.Exprs = exprs
-	return arg
+func (group *Group) WithExprs(exprs []*plan.Expr) *Group {
+	group.Exprs = exprs
+	return group
 }
 
-func (arg *Argument) WithTypes(types []types.Type) *Argument {
-	arg.Types = types
-	return arg
+func (group *Group) WithTypes(types []types.Type) *Group {
+	group.Types = types
+	return group
 }
 
-func (arg *Argument) WithAggsNew(aggs []aggexec.AggFuncExecExpression) *Argument {
-	arg.Aggs = aggs
-	return arg
+func (group *Group) WithAggsNew(aggs []aggexec.AggFuncExecExpression) *Group {
+	group.Aggs = aggs
+	return group
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (group *Group) Release() {
+	if group != nil {
+		reuse.Free[Group](group, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	group.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := group.ctr
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
 		ctr.cleanAggVectors()
 		ctr.cleanGroupVectors()
-		arg.ctr = nil
+		group.ctr = nil
+	}
+	if group.ProjectList != nil {
+		anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
+		anal.Alloc(group.ProjectAllocSize)
+		group.FreeProjection(proc)
 	}
 }
 

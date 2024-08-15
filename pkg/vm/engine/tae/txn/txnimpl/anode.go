@@ -129,7 +129,7 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 
 func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	col := n.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
-	blkID := objectio.NewBlockidWithObjectID(&n.meta.ID, 0)
+	blkID := objectio.NewBlockidWithObjectID(n.meta.ID(), 0)
 	if err = objectio.ConstructRowidColumnTo(
 		col.GetDownstreamVector(),
 		blkID, startRow, length,
@@ -144,19 +144,19 @@ func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 }
 
 func (n *anode) FillBlockView(
-	view *containers.BlockView, colIdxes []int, mp *mpool.MPool,
+	view *containers.Batch, colIdxes []int, mp *mpool.MPool,
 ) (err error) {
 	for _, colIdx := range colIdxes {
 		orig := n.data.Vecs[colIdx]
-		view.SetData(colIdx, orig.CloneWindow(0, orig.Length(), mp))
+		view.AddVector(n.data.Attrs[colIdx], orig.CloneWindow(0, orig.Length(), mp))
 	}
-	view.DeleteMask = n.data.Deletes
+	view.Deletes = n.data.Deletes
 	return
 }
-func (n *anode) FillColumnView(view *containers.ColumnView, mp *mpool.MPool) (err error) {
-	orig := n.data.Vecs[view.ColIdx]
-	view.SetData(orig.CloneWindow(0, orig.Length(), mp))
-	view.DeleteMask = n.data.Deletes
+func (n *anode) FillColumnView(view *containers.Batch, idx int, mp *mpool.MPool) (err error) {
+	orig := n.data.GetVectorByName(n.table.schema.ColDefs[idx].Name)
+	view.AddVector(n.table.schema.ColDefs[idx].Name, orig.CloneWindow(0, orig.Length(), mp))
+	view.Deletes = n.data.Deletes
 	return
 }
 
@@ -214,17 +214,17 @@ func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
 
 func (n *anode) GetColumnDataByIds(
 	colIdxes []int, mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
-	view = containers.NewBlockView()
+) (view *containers.Batch, err error) {
+	view = containers.NewBatch()
 	err = n.FillBlockView(view, colIdxes, mp)
 	return
 }
 
 func (n *anode) GetColumnDataById(
 	ctx context.Context, colIdx int, mp *mpool.MPool,
-) (view *containers.ColumnView, err error) {
-	view = containers.NewColumnView(colIdx)
-	err = n.FillColumnView(view, mp)
+) (view *containers.Batch, err error) {
+	view = containers.NewBatch()
+	err = n.FillColumnView(view, colIdx, mp)
 	return
 }
 

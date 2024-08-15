@@ -38,6 +38,7 @@ const (
 
 	DefaultScannerInterval              = time.Second * 5
 	DefaultCheckpointFlushInterval      = time.Minute
+	DefaultCheckpointTransferInterval   = time.Second * 5
 	DefaultCheckpointMinCount           = int64(100)
 	DefaultCheckpointIncremetalInterval = time.Minute
 	DefaultCheckpointGlobalMinCount     = 10
@@ -82,9 +83,11 @@ type Options struct {
 	LogStoreT        LogstoreType
 
 	Fs                fileservice.FileService                  `toml:"-"`
+	LocalFs           fileservice.FileService                  `toml:"-"`
 	Lc                logservicedriver.LogServiceClientFactory `toml:"-"`
 	Ctx               context.Context                          `toml:"-"`
 	Shard             metadata.TNShard                         `toml:"-"`
 	Clock             clock.Clock                              `toml:"-"`
 	TaskServiceGetter taskservice.Getter                       `toml:"-"`
+	SID               string                                   `toml:"-"`
 }

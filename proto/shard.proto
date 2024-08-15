@@ -18,7 +18,11 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/shard";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "timestamp.proto";
+import "pipeline.proto";
+import "plan.proto";
 
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
 option (gogoproto.goproto_enum_prefix_all) = true;
  
 // Policy shard policy for a table.
@@ -190,11 +194,11 @@ message GetShardsResponse {
 }
 
 message ShardReadRequest {
-    TableShard          Shard      = 1 [(gogoproto.nullable) = false];
-    string              CN         = 2;
-    uint32              Method     = 3;
-    bytes               Payload    = 4;
-    timestamp.Timestamp ReadAt     = 5 [(gogoproto.nullable) = false];
+    TableShard           Shard      = 1 [(gogoproto.nullable) = false];
+    string               CN         = 2;
+    uint32               Method     = 3;
+    ReadParam            Param      = 4 [(gogoproto.nullable) = false];
+    timestamp.Timestamp  ReadAt     = 5 [(gogoproto.nullable) = false];
 }
 
 message ShardReadResponse {
@@ -216,3 +220,62 @@ message GetCNReplicasResponse {
     repeated ShardReplica  Replicas = 1 [(gogoproto.nullable) = false];
 }
 
+message ReadParam {
+    pipeline.ProcessInfo           Process                       = 1 [(gogoproto.nullable) = false];
+    TxnTable                       TxnTable                      = 2 [(gogoproto.nullable) = false];
+    StatsParam                     StatsParam                    = 3 [(gogoproto.nullable) = false];
+    SizeParam                      SizeParam                     = 4 [(gogoproto.nullable) = false];
+    RangesParam                    RangesParam                   = 5 [(gogoproto.nullable) = false];
+    GetColumMetadataScanInfoParam  GetColumMetadataScanInfoParam = 6 [(gogoproto.nullable) = false];
+    MergeObjectsParam              MergeObjectsParam             = 7 [(gogoproto.nullable) = false];
+    KeyParam                       KeyParam                      = 8 [(gogoproto.nullable) = false];
+    ReaderParam                    ReaderParam                   = 9 [(gogoproto.nullable) = false];
+    PrimaryKeysMayBeModifiedParam   PrimaryKeysMayBeModifiedParam  = 10 [(gogoproto.nullable) = false];
+}
+
+message TxnTable {
+    uint64 AccountID    = 1;
+    uint64 DatabaseID   = 2;
+    string DatabaseName = 3;
+    string TableName    = 4;
+}
+
+message StatsParam {
+    bool sync = 1;
+}
+
+message SizeParam {
+    string columnName = 1;
+}
+
+message RangesParam {
+    repeated plan.Expr Exprs = 1;
+    int32 txnOffset = 2;
+}
+
+message GetColumMetadataScanInfoParam {
+    string columnName = 1;
+}
+
+message KeyParam {
+    bytes Key = 1;
+}
+
+message ReaderParam {
+    int32 num        = 1;
+    plan.Expr expr   = 2 [(gogoproto.nullable) = false];
+    bytes ranges     = 3;
+    bool orderedScan = 4;
+    int32 txnOffset  = 5;
+}
+
+message PrimaryKeysMayBeModifiedParam {
+    bytes from      = 1;
+    bytes to        = 2;
+    bytes keyVector = 3;
+}
+
+message MergeObjectsParam {
+    repeated bytes objstats  = 1;
+    uint32 targetObjSize     = 3;
+}

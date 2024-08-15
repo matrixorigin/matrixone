@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -707,7 +708,7 @@ func runServicesTest(
 	if adjustConfigFunc != nil {
 		adjustConfigFunc(&cfg)
 	}
-	server := NewShardServer(cfg).(*server)
+	server := NewShardServer(cfg, runtime.ServiceRuntime(sid).Logger()).(*server)
 
 	services := make([]*service, 0, len(cns))
 	for _, cn := range cns {
@@ -728,7 +729,7 @@ func runServicesTest(
 			opts = adjustConfigFunc(&cfg)
 		}
 
-		s := NewService(cfg, NewMemShardStorage(), opts...)
+		s := NewService(cfg, NewMemShardStorage(runtime.ServiceRuntime(sid).Logger()), opts...)
 		services = append(services, s.(*service))
 	}
 

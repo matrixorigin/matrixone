@@ -206,8 +206,6 @@ type BaseMVCCNode interface {
 	IsCommitting() bool
 	IsCommitted() bool
 	IsAborted() bool
-	Set1PC()
-	Is1PC() bool
 
 	GetEnd() types.TS
 	GetStart() types.TS
@@ -290,8 +288,8 @@ type TxnStore interface {
 	DatabaseNames() []string
 
 	GetObject(id *common.ID) (handle.Object, error)
-	CreateObject(dbId, tid uint64, is1PC bool) (handle.Object, error)
-	CreateNonAppendableObject(dbId, tid uint64, is1PC bool, opt *objectio.CreateObjOpt) (handle.Object, error)
+	CreateObject(dbId, tid uint64) (handle.Object, error)
+	CreateNonAppendableObject(dbId, tid uint64, opt *objectio.CreateObjOpt) (handle.Object, error)
 	SoftDeleteObject(id *common.ID) error
 	SoftDeleteBlock(id *common.ID) error
 	UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error)
@@ -308,7 +306,7 @@ type TxnStore interface {
 	ObserveTxn(
 		visitDatabase func(db any),
 		visitTable func(tbl any),
-		rotateTable func(dbName, tblName string, dbid, tid uint64),
+		rotateTable func(aid uint32, dbName, tblName string, dbid, tid uint64, pkSeqnum uint16),
 		visitMetadata func(block any),
 		visitObject func(obj any),
 		visitAppend func(bat any),
@@ -332,6 +330,4 @@ type TxnEntry interface {
 	ApplyCommit(string) error
 	ApplyRollback() error
 	MakeCommand(uint32) (TxnCmd, error)
-	Is1PC() bool
-	Set1PC()
 }

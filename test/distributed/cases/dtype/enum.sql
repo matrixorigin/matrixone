@@ -267,12 +267,10 @@ select empty(col2) from builtin01;
 
 -- aggregate:count, max, min, any_value, group_concat
 select count(col1) as count_col1 from builtin01;
--- @bvt:issue#11348
 select max(col1), max(col2) from builtin01;
 select min(col1), min(col2) from builtin01;
 select group_concat(col1,col2) from builtin01;
 drop table builtin01;
--- @bvt:issue
 
 -- aggregate: max, min
 drop table if exists agg01;
@@ -281,10 +279,8 @@ insert into agg01 values (1, 'egwjqebwq');
 insert into agg01 values (2, 'weueiwqeowqehwgqjhenw');
 insert into agg01 values (3, 'qwewqewqeqewq');
 insert into agg01 values (4, null);
--- @bvt:issue#11348
 select max(col2) from agg01;
 select min(col2) from agg01;
--- @bvt:issue
 select * from agg01;
 drop table agg01;
 

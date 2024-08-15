@@ -15,6 +15,7 @@
 package txnentries
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sync"
@@ -32,35 +33,40 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"go.uber.org/zap"
 )
 
 type mergeObjectsEntry struct {
 	sync.RWMutex
 	txn           txnif.AsyncTxn
+	taskName      string
 	relation      handle.Relation
 	droppedObjs   []*catalog.ObjectEntry
 	createdObjs   []*catalog.ObjectEntry
-	transMappings *api.BlkTransferBooking
+	transMappings api.TransferMaps
 	skipTransfer  bool
 
 	rt                   *dbutils.Runtime
 	pageIds              []*common.ID
-	delTbls              [][]*model.TransDels
+	delTbls              map[objectio.ObjectId]map[uint16]struct{}
 	collectTs            types.TS
 	transCntBeforeCommit int
 	nextRoundDirties     map[*catalog.ObjectEntry]struct{}
 }
 
 func NewMergeObjectsEntry(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
+	taskName string,
 	relation handle.Relation,
 	droppedObjs, createdObjs []*catalog.ObjectEntry,
-	transMappings *api.BlkTransferBooking,
+	transMappings api.TransferMaps,
 	rt *dbutils.Runtime,
 ) (*mergeObjectsEntry, error) {
 	totalCreatedBlkCnt := 0
-	for _, obj := range createdObjs {
-		totalCreatedBlkCnt += obj.BlockCnt()
+	for i, obj := range createdObjs {
+		createdObjs[i] = obj.GetLatestNode()
+		totalCreatedBlkCnt += createdObjs[i].BlockCnt()
 	}
 	entry := &mergeObjectsEntry{
 		txn:           txn,
@@ -70,13 +76,11 @@ func NewMergeObjectsEntry(
 		transMappings: transMappings,
 		skipTransfer:  transMappings == nil,
 		rt:            rt,
+		taskName:      taskName,
 	}
 
 	if !entry.skipTransfer && totalCreatedBlkCnt > 0 {
-		entry.delTbls = make([][]*model.TransDels, len(createdObjs))
-		for i := 0; i < len(createdObjs); i++ {
-			entry.delTbls[i] = make([]*model.TransDels, createdObjs[i].BlockCnt())
-		}
+		entry.delTbls = make(map[types.Objectid]map[uint16]struct{})
 		entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
 		entry.collectTs = rt.Now()
 		var err error
@@ -85,46 +89,81 @@ func NewMergeObjectsEntry(
 		if err != nil {
 			return nil, err
 		}
-		entry.prepareTransferPage()
+		entry.prepareTransferPage(ctx)
 	}
 	return entry, nil
 }
 
-func (entry *mergeObjectsEntry) prepareTransferPage() {
+func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 	k := 0
+	pagesToSet := make([][]*model.TransferHashPage, 0, len(entry.droppedObjs))
+	bts := time.Now().Add(time.Hour)
+	createdObjIDs := make([]*objectio.ObjectId, 0, len(entry.createdObjs))
+	for _, obj := range entry.createdObjs {
+		createdObjIDs = append(createdObjIDs, obj.ID())
+	}
 	for _, obj := range entry.droppedObjs {
+		ioVector := model.InitTransferPageIO()
+		pages := make([]*model.TransferHashPage, 0, obj.BlockCnt())
+		var duration time.Duration
+		var start time.Time
 		for j := 0; j < obj.BlockCnt(); j++ {
-			if len(entry.transMappings.Mappings[k].M) == 0 {
-				k++
+			m := entry.transMappings[k]
+			k++
+			if len(m) == 0 {
 				continue
-			}
-			mapping := entry.transMappings.Mappings[k].M
-			if len(mapping) == 0 {
-				panic("cannot tranfer empty block")
 			}
 			tblEntry := obj.GetTable()
 			isTransient := !tblEntry.GetLastestSchema().HasPK()
 			id := obj.AsCommonID()
 			id.SetBlockOffset(uint16(j))
-			page := model.NewTransferHashPage(id, time.Now(), isTransient)
-			for srcRow, dst := range mapping {
-				objID := entry.createdObjs[dst.ObjIdx].ID
-				blkID := objectio.NewBlockidWithObjectID(&objID, uint16(dst.BlkIdx))
-				page.Train(uint32(srcRow), *objectio.NewRowid(blkID, uint32(dst.RowIdx)))
+			page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL(), createdObjIDs)
+			page.Train(m)
+
+			start = time.Now()
+			err := model.AddTransferPage(page, ioVector)
+			if err != nil {
+				return
 			}
+			duration += time.Since(start)
+
 			entry.pageIds = append(entry.pageIds, id)
-			_ = entry.rt.TransferTable.AddPage(page)
-			k++
+			pages = append(pages, page)
+		}
+
+		start = time.Now()
+		model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+		pagesToSet = append(pagesToSet, pages)
+		duration += time.Since(start)
+		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
+	}
+
+	now := time.Now()
+	for _, pages := range pagesToSet {
+		for _, page := range pages {
+			if page.BornTS() != bts {
+				page.SetBornTS(now.Add(time.Minute))
+			} else {
+				page.SetBornTS(now)
+			}
+			entry.rt.TransferTable.AddPage(page)
 		}
 	}
-	if k != len(entry.transMappings.Mappings) {
-		panic(fmt.Sprintf("k %v, mapping %v", k, len(entry.transMappings.Mappings)))
+
+	if k != len(entry.transMappings) {
+		logutil.Fatal(fmt.Sprintf("k %v, mapping %v", k, len(entry.transMappings)))
 	}
 }
 
 func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
 	for _, id := range entry.pageIds {
 		_ = entry.rt.TransferTable.DeletePage(id)
+	}
+	for objectID, blkMap := range entry.delTbls {
+		for blkOffset := range blkMap {
+			blkID := objectio.NewBlockidWithObjectID(&objectID, blkOffset)
+			entry.rt.TransferDelsMap.DeleteDelsForBlk(*blkID)
+		}
 	}
 	entry.pageIds = nil
 	return
@@ -158,9 +197,6 @@ func (entry *mergeObjectsEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err e
 		csn)
 	return
 }
-
-func (entry *mergeObjectsEntry) Set1PC()     {}
-func (entry *mergeObjectsEntry) Is1PC() bool { return false }
 
 // ATTENTION !!! (from, to] !!!
 func (entry *mergeObjectsEntry) transferObjectDeletes(
@@ -199,15 +235,15 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		row := rowid[i].GetRowOffset()
 		blkOffsetInObj := int(rowid[i].GetBlockOffset())
 		blkOffset := blkOffsetBase + blkOffsetInObj
-		mapping := entry.transMappings.Mappings[blkOffset].M
+		mapping := entry.transMappings[blkOffset]
 		if len(mapping) == 0 {
 			// this block had been all deleted, skip
 			// Note: it is possible that the block is empty, but not the object
 			continue
 		}
-		destpos, ok := mapping[int32(row)]
+		destpos, ok := mapping[row]
 		if !ok {
-			_min, _max := int32(math.MaxInt32), int32(0)
+			_min, _max := uint32(math.MaxUint32), uint32(0)
 			for k := range mapping {
 				if k < _min {
 					_min = k
@@ -218,19 +254,21 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 			}
 			panic(fmt.Sprintf(
 				"%s-%d find no transfer mapping for row %d, mapping range (%d, %d)",
-				dropped.ID.String(), blkOffsetInObj, row, _min, _max))
+				dropped.ID().String(), blkOffsetInObj, row, _min, _max))
 		}
-		if entry.delTbls[destpos.ObjIdx][destpos.BlkIdx] == nil {
-			entry.delTbls[destpos.ObjIdx][destpos.BlkIdx] = model.NewTransDels(entry.txn.GetPrepareTS())
+		if entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()] == nil {
+			entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()] = make(map[uint16]struct{})
 		}
-		entry.delTbls[destpos.ObjIdx][destpos.BlkIdx].Mapping[int(destpos.RowIdx)] = ts[i]
+		entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()][destpos.BlkIdx] = struct{}{}
+		blkID := objectio.NewBlockidWithObjectID(entry.createdObjs[destpos.ObjIdx].ID(), destpos.BlkIdx)
+		entry.rt.TransferDelsMap.SetDelsForBlk(*blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
 		var targetObj handle.Object
-		targetObj, err = entry.relation.GetObject(&entry.createdObjs[destpos.ObjIdx].ID)
+		targetObj, err = entry.relation.GetObject(entry.createdObjs[destpos.ObjIdx].ID())
 		if err != nil {
 			return
 		}
 		if err = targetObj.RangeDelete(
-			uint16(destpos.BlkIdx), uint32(destpos.RowIdx), uint32(destpos.RowIdx), handle.DT_MergeCompact, common.MergeAllocator,
+			destpos.BlkIdx, destpos.RowIdx, destpos.RowIdx, handle.DT_MergeCompact, common.MergeAllocator,
 		); err != nil {
 			return
 		}
@@ -264,7 +302,7 @@ func (entry *mergeObjectsEntry) collectDelsAndTransfer(from, to types.TS) (trans
 		hasMappingInThisObj := false
 		blkCnt := dropped.BlockCnt()
 		for iblk := 0; iblk < blkCnt; iblk++ {
-			if len(entry.transMappings.Mappings[blksOffsetBase+iblk].M) != 0 {
+			if len(entry.transMappings[blksOffsetBase+iblk]) != 0 {
 				hasMappingInThisObj = true
 				break
 			}
@@ -315,10 +353,14 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 		v2.TaskCommitMergeObjectsDurationHistogram.Observe(time.Since(inst).Seconds())
 	}()
 	if len(entry.createdObjs) == 0 || entry.skipTransfer {
-		logutil.Infof("mergeblocks commit %v, [%v,%v], no transfer",
-			entry.relation.ID(),
-			entry.txn.GetStartTS().ToString(),
-			entry.txn.GetCommitTS().ToString())
+		logutil.Info(
+			"[MERGE-PREPARE-COMMIT]",
+			zap.Uint64("table-id", entry.relation.ID()),
+			zap.Int("created-objs", len(entry.createdObjs)),
+			zap.Bool("skip-transfer", entry.skipTransfer),
+			zap.String("task", entry.taskName),
+			zap.String("commit-ts", entry.txn.GetPrepareTS().ToString()),
+		)
 		return
 	}
 
@@ -336,25 +378,30 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	}
 	tblEntry.Stats.Unlock()
 
-	for objIdx := range entry.delTbls {
-		for blkIdx, delTbl := range entry.delTbls[objIdx] {
-			if delTbl != nil {
-				destId := objectio.NewBlockidWithObjectID(&entry.createdObjs[objIdx].ID, uint16(blkIdx))
-				entry.rt.TransferDelsMap.SetDelsForBlk(*destId, delTbl)
-			}
-		}
-	}
-	rest := time.Since(inst1)
-	logutil.Infof("mergeblocks commit %v, [%v,%v], trans %d on %d objects, %d in commit queue",
-		entry.relation.ID(),
-		entry.txn.GetStartTS().ToString(),
-		entry.txn.GetCommitTS().ToString(),
-		entry.transCntBeforeCommit+transCnt,
-		len(entry.nextRoundDirties),
-		transCnt,
+	total := time.Since(inst)
+	fields := make([]zap.Field, 0, 9)
+	fields = append(fields,
+		zap.Uint64("table-id", entry.relation.ID()),
+		zap.String("task", entry.taskName),
+		zap.Int("total-transfer", entry.transCntBeforeCommit+transCnt),
+		zap.Int("in-queue-transfer", transCnt),
+		zap.Int("objs", len(entry.nextRoundDirties)),
+		zap.Duration("total-cost", total),
+		zap.Duration("this-tran-cost", time.Since(inst1)),
+		zap.String("commit-ts", entry.txn.GetPrepareTS().ToString()),
 	)
-	if total := time.Since(inst); total > 300*time.Millisecond {
-		logutil.Infof("mergeblocks slow commit total %v, transfer: %v, rest %v", total, stat.String(), rest)
+
+	if total > 300*time.Millisecond {
+		fields = append(fields, zap.String("stat", stat.String()))
+		logutil.Info(
+			"[MERGE-PREPARE-COMMIT-SLOW]",
+			fields...,
+		)
+	} else {
+		logutil.Info(
+			"[MERGE-PREPARE-COMMIT]",
+			fields...,
+		)
 	}
 
 	return

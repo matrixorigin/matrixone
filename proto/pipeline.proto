@@ -25,12 +25,14 @@ option (gogoproto.protosizer_all) = true;
 import "plan.proto";
 import "timestamp.proto";
 import "lock.proto";
+import "txn.proto";
 
 enum Method {
     UnknownMethod = 0;
     PipelineMessage = 1;
     BatchMessage = 2;
     PrepareDoneNotifyMessage = 3;// for dispatch
+    StopSending = 4;
 }
 
 enum Status {
@@ -49,9 +51,7 @@ message Message {
   bytes   analyse = 6;
   uint64  id = 7;
   bytes   uuid = 8;
-  uint64  batch_cnt = 9;
-  uint32  checksum = 10;
-  uint64  sequence = 11;
+  bool    needNotReply = 9;
 }
 
 message Connector {
@@ -83,6 +83,9 @@ message Dispatch {
 
 message Merge {
   bool sinkScan = 1;
+  bool partial = 2;
+  int32 start_idx = 3;
+  int32 end_idx = 4;
 }
 
 message MultiArguemnt{
@@ -187,6 +190,7 @@ message PreInsertSecondaryIndex{
 }
 
 message OnDuplicateKey{
+  // letter case: origin
   repeated string attrs = 1;
   int32 insert_col_count = 2;
   repeated plan.Expr unique_col_check_expr = 3;
@@ -201,6 +205,7 @@ message FuzzyFilter {
   string PkName = 2;
   plan.Type PkTyp = 3 [(gogoproto.nullable) = false];
   int32 BuildIdx = 4;
+  bool IfInsertFromUnique = 5;
 }
 
 message Join {
@@ -213,6 +218,8 @@ message Join {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
   bool hash_on_pk = 8;
   bool is_shuffle =9;
+  int32 join_map_tag = 10;
+  int32 shuffle_idx = 11;
 }
 
 message AntiJoin{
@@ -224,6 +231,8 @@ message AntiJoin{
   bool hash_on_pk = 6;
   bool is_shuffle = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
+  int32 join_map_tag = 9;
+  int32 shuffle_idx = 10;
 }
 
 message LeftJoin {
@@ -236,6 +245,8 @@ message LeftJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
   bool hash_on_pk = 8;
   bool is_shuffle = 9;
+  int32 join_map_tag = 10;
+  int32 shuffle_idx = 11;
 }
 
 message RightJoin {
@@ -249,6 +260,8 @@ message RightJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
   bool hash_on_pk = 9;
   bool is_shuffle = 10;
+  int32 join_map_tag = 11;
+  int32 shuffle_idx = 12;
 }
 
 message RightSemiJoin {
@@ -260,6 +273,8 @@ message RightSemiJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
   bool hash_on_pk = 7;
   bool is_shuffle = 8;
+  int32 join_map_tag = 9;
+  int32 shuffle_idx = 11;
 }
 
 message RightAntiJoin {
@@ -271,6 +286,8 @@ message RightAntiJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
   bool hash_on_pk = 7;
   bool is_shuffle = 8;
+  int32 join_map_tag = 9;
+  int32 shuffle_idx = 10;
 }
 
 message SemiJoin {
@@ -282,6 +299,8 @@ message SemiJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
   bool hash_on_pk = 7;
   bool is_shuffle = 8;
+  int32 join_map_tag = 9;
+  int32 shuffle_idx = 10;
 }
 
 message SingleJoin {
@@ -294,6 +313,8 @@ message SingleJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
   bool hash_on_pk = 8;
   bool is_shuffle = 9;
+  int32 join_map_tag = 10;
+  int32 shuffle_idx = 11;
 }
 
 message MarkJoin {
@@ -305,6 +326,8 @@ message MarkJoin {
   repeated plan.Expr on_list = 6;
   bool hash_on_pk = 7;
   bool is_shuffle = 8;
+  int32 join_map_tag = 9;
+  int32 shuffle_idx = 10;
 }
 
 message Product {
@@ -312,6 +335,7 @@ message Product {
   repeated int32 col_list = 2;
   repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
   bool is_shuffle =4;
+  int32 join_map_tag = 5;
 }
 
 message ProductL2 {
@@ -319,6 +343,7 @@ message ProductL2 {
   repeated int32 col_list = 2;
   repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
   plan.Expr  expr = 4;
+  int32 join_map_tag = 5;
 }
 
 message IndexJoin {
@@ -354,12 +379,25 @@ message ExternalScan {
   repeated string file_list = 7;
   repeated plan.ColDef origin_cols = 8;
   plan.Expr    filter = 9;
+  map<string, int32> TbColToDataCol = 10;
 }
 
 message StreamScan {
   plan.TableDef tbl_def = 1;
   int64 offset = 2;
   int64 limit = 3;
+}
+
+message TableScan {
+
+}
+
+message ValueScan {
+
+}
+
+message UnionAll {
+
 }
 
 message SampleFunc {
@@ -424,6 +462,9 @@ message Instruction{
   int32 max_parallel = 42;
   IndexJoin index_join = 43;
   ProductL2 product_l2 = 44;
+  TableScan table_scan = 45;
+  ValueScan value_scan = 46;
+  UnionAll union_all = 47;
 }
 
 message AnalysisList {
@@ -441,6 +482,7 @@ message Source {
   plan.TableDef tableDef = 8;
   timestamp.Timestamp timestamp = 9;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 10;
+  bool is_const = 11;
 }
 
 message NodeInfo {
@@ -448,7 +490,6 @@ message NodeInfo {
   string id = 2;
   string addr = 3;
   string payload = 4;
-  uint32 type = 5;
 }
 
 message ProcessLimitation {
@@ -459,16 +500,24 @@ message ProcessLimitation {
   int64 reader_size = 5;
 }
 
+message PrepareParamInfo {
+  int64 length = 1;
+  bytes data = 2;
+  bytes area = 3;
+  repeated bool nulls = 4;
+}
+
 message ProcessInfo {
   string id = 1;
   string sql = 2;
-  ProcessLimitation lim = 3;
+  ProcessLimitation lim = 3 [(gogoproto.nullable) = false];
   int64 unix_time = 4;
   uint32 account_id = 5;
-  string snapshot = 6;
-  SessionInfo session_info = 7;
+  txn.CNTxnSnapshot snapshot = 6 [(gogoproto.nullable) = false];
+  SessionInfo session_info = 7 [(gogoproto.nullable) = false];
   repeated int32 analysis_node_list = 8;
-  SessionLoggerInfo session_logger = 9;
+  SessionLoggerInfo session_logger = 9 [(gogoproto.nullable) = false];
+  PrepareParamInfo prepare_params = 10 [(gogoproto.nullable) = false];
 }
 
 message SessionInfo {
@@ -520,10 +569,12 @@ message Pipeline {
   NodeInfo node = 10;
   int32 push_down_info = 11;
   int32 children_count = 12;
+  repeated int32 channel_buffer_size = 13;
+  repeated int32 nil_batch_cnt = 14;
 
-  repeated UuidToRegIdx uuids_to_reg_idx = 13;
-  int32 build_idx = 14;
-  int32 shuffle_cnt = 15;
+  repeated UuidToRegIdx uuids_to_reg_idx = 15;
+  int32 build_idx = 16;
+  int32 shuffle_idx = 17;
 }
 
 message WrapNode {

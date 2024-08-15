@@ -28,4 +28,5 @@ func TestLogtailServerCfg(t *testing.T) {
 	require.Equal(t, defaults.LogtailCollectInterval, validated.LogtailCollectInterval)
 	require.Equal(t, defaults.ResponseSendTimeout, validated.ResponseSendTimeout)
 	require.Equal(t, defaults.RPCStreamPoisonTime, validated.RPCStreamPoisonTime)
+	require.Equal(t, defaults.PullWorkerPoolSize, validated.PullWorkerPoolSize)
 }
