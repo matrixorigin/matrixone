@@ -273,6 +273,10 @@ func (node *SetTransaction) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
+func (node *SetConnectionID) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
 func (node *LockTableStmt) StmtKind() StmtKind {
 	return frontendStatusTyp
 }

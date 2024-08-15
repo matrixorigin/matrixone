@@ -21,7 +21,7 @@ import (
 )
 
 func (c *DashboardCreator) initShardingDashboard() error {
-	folder, err := c.createFolder(moFolderName)
+	folder, err := c.createFolder(c.folderName)
 	if err != nil {
 		return err
 	}
