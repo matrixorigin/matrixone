@@ -913,8 +913,8 @@ func handleShowVariables(ses FeSession, execCtx *ExecCtx, sv *tree.ShowVariables
 }
 
 func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) error {
-	ses.EnterFPrint(115)
-	defer ses.ExitFPrint(115)
+	ses.EnterFPrint(FPHandleAnalyzeStmt)
+	defer ses.ExitFPrint(FPHandleAnalyzeStmt)
 	// rewrite analyzeStmt to `select approx_count_distinct(col), .. from tbl`
 	// IMO, this approach is simple and future-proof
 	// Although this rewriting processing could have been handled in rewrite module,
@@ -2267,8 +2267,8 @@ func makeCompactTxnInfo(op TxnOperator) string {
 func executeStmtWithResponse(ses *Session,
 	execCtx *ExecCtx,
 ) (err error) {
-	ses.EnterFPrint(3)
-	defer ses.ExitFPrint(3)
+	ses.EnterFPrint(FPStmtWithResponse)
+	defer ses.ExitFPrint(FPStmtWithResponse)
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "executeStmtWithResponse",
 		trace.WithKind(trace.SpanKindStatement))
@@ -2288,8 +2288,8 @@ func executeStmtWithResponse(ses *Session,
 	// TODO put in one txn
 	// insert data after create table in "create table ... as select ..." stmt
 	if ses.createAsSelectSql != "" {
-		ses.EnterFPrint(114)
-		defer ses.ExitFPrint(114)
+		ses.EnterFPrint(FPStmtWithResponseCreateAsSelect)
+		defer ses.ExitFPrint(FPStmtWithResponseCreateAsSelect)
 		sql := ses.createAsSelectSql
 		ses.createAsSelectSql = ""
 		tempExecCtx := ExecCtx{
@@ -2313,8 +2313,8 @@ func executeStmtWithResponse(ses *Session,
 func executeStmtWithTxn(ses FeSession,
 	execCtx *ExecCtx,
 ) (err error) {
-	ses.EnterFPrint(4)
-	defer ses.ExitFPrint(4)
+	ses.EnterFPrint(FPExecStmtWithTxn)
+	defer ses.ExitFPrint(FPExecStmtWithTxn)
 	if !ses.IsDerivedStmt() {
 		err = executeStmtWithWorkspace(ses, execCtx)
 	} else {
@@ -2331,8 +2331,8 @@ func executeStmtWithTxn(ses FeSession,
 func executeStmtWithWorkspace(ses FeSession,
 	execCtx *ExecCtx,
 ) (err error) {
-	ses.EnterFPrint(5)
-	defer ses.ExitFPrint(5)
+	ses.EnterFPrint(FPExecStmtWithWorkspace)
+	defer ses.ExitFPrint(FPExecStmtWithWorkspace)
 	if ses.IsDerivedStmt() {
 		return
 	}
@@ -2402,8 +2402,8 @@ func executeStmtWithWorkspace(ses FeSession,
 		return err
 	}
 
-	ses.EnterFPrint(118)
-	defer ses.ExitFPrint(118)
+	ses.EnterFPrint(FPExecStmtWithWorkspaceBeforeStart)
+	defer ses.ExitFPrint(FPExecStmtWithWorkspaceBeforeStart)
 	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//!!!NOTE!!!: statement management
 	//2. start statement on workspace
@@ -2417,8 +2417,8 @@ func executeStmtWithWorkspace(ses FeSession,
 
 		txnOp = ses.GetTxnHandler().GetTxn()
 		if txnOp != nil {
-			ses.EnterFPrint(119)
-			defer ses.ExitFPrint(119)
+			ses.EnterFPrint(FPExecStmtWithWorkspaceBeforeEnd)
+			defer ses.ExitFPrint(FPExecStmtWithWorkspaceBeforeEnd)
 			setFPrints(txnOp, execCtx.ses.GetFPrints())
 			//most of the cases, txnOp will not nil except that "set autocommit = 1"
 			//commit the txn immediately then the txnOp is nil.
@@ -2435,8 +2435,8 @@ func executeStmtWithIncrStmt(ses FeSession,
 	execCtx *ExecCtx,
 	txnOp TxnOperator,
 ) (err error) {
-	ses.EnterFPrint(6)
-	defer ses.ExitFPrint(6)
+	ses.EnterFPrint(FPExecStmtWithIncrStmt)
+	defer ses.ExitFPrint(FPExecStmtWithIncrStmt)
 
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
@@ -2446,8 +2446,8 @@ func executeStmtWithIncrStmt(ses FeSession,
 	if ses.IsDerivedStmt() {
 		return
 	}
-	ses.EnterFPrint(117)
-	defer ses.ExitFPrint(117)
+	ses.EnterFPrint(FPExecStmtWithIncrStmtBeforeIncr)
+	defer ses.ExitFPrint(FPExecStmtWithIncrStmtBeforeIncr)
 	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//3. increase statement id
 	err = txnOp.GetWorkspace().IncrStatementID(execCtx.reqCtx, false)
@@ -2475,8 +2475,8 @@ func executeStmtWithIncrStmt(ses FeSession,
 
 func dispatchStmt(ses FeSession,
 	execCtx *ExecCtx) (err error) {
-	ses.EnterFPrint(7)
-	defer ses.ExitFPrint(7)
+	ses.EnterFPrint(FPDispatchStmt)
+	defer ses.ExitFPrint(FPDispatchStmt)
 	//5. check plan within txn
 	if execCtx.cw.Plan() != nil {
 		if checkModify(execCtx.cw.Plan(), ses) {
@@ -2511,8 +2511,8 @@ func dispatchStmt(ses FeSession,
 func executeStmt(ses *Session,
 	execCtx *ExecCtx,
 ) (err error) {
-	ses.EnterFPrint(8)
-	defer ses.ExitFPrint(8)
+	ses.EnterFPrint(FPExecStmt)
+	defer ses.ExitFPrint(FPExecStmt)
 	ses.GetTxnCompileCtx().tcw = execCtx.cw
 
 	// record goroutine info when ddl stmt run timeout
@@ -2598,8 +2598,8 @@ func executeStmt(ses *Session,
 
 	cmpBegin = time.Now()
 
-	ses.EnterFPrint(62)
-	defer ses.ExitFPrint(62)
+	ses.EnterFPrint(FPExecStmtBeforeCompile)
+	defer ses.ExitFPrint(FPExecStmtBeforeCompile)
 	if ret, err = execCtx.cw.Compile(execCtx, ses.GetOutputCallback(execCtx)); err != nil {
 		return
 	}
@@ -2651,8 +2651,8 @@ func executeStmt(ses *Session,
 
 // execute query
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
-	ses.EnterFPrint(2)
-	defer ses.ExitFPrint(2)
+	ses.EnterFPrint(FPDoComQuery)
+	defer ses.ExitFPrint(FPDoComQuery)
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	// set the batch buf for stream scan
 	var inMemStreamScan []*kafka.Message
@@ -2934,8 +2934,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			}
 		}
 	}()
-	ses.EnterFPrint(1)
-	defer ses.ExitFPrint(1)
+	ses.EnterFPrint(FPExecRequest)
+	defer ses.ExitFPrint(FPExecRequest)
 
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "ExecRequest",
