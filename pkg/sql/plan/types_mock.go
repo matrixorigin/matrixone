@@ -83,7 +83,7 @@ func (mr *MockCompilerContext2MockRecorder) CheckTimeStampValid(ts interface{}) 
 }
 
 // DatabaseExists mocks base method.
-func (m *MockCompilerContext2) DatabaseExists(name string, snapshot Snapshot) bool {
+func (m *MockCompilerContext2) DatabaseExists(name string, snapshot *Snapshot) bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DatabaseExists", name, snapshot)
 	ret0, _ := ret[0].(bool)
@@ -155,8 +155,20 @@ func (mr *MockCompilerContext2MockRecorder) GetContext() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetContext", reflect.TypeOf((*MockCompilerContext2)(nil).GetContext))
 }
 
+// SetContext mocks base method.
+func (m *MockCompilerContext2) SetContext(ctx context.Context) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetContext", ctx)
+}
+
+// SetContext indicates an expected call of SetContext.
+func (mr *MockCompilerContext2MockRecorder) SetContext(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetContext", reflect.TypeOf((*MockCompilerContext2)(nil).SetContext), ctx)
+}
+
 // GetDatabaseId mocks base method.
-func (m *MockCompilerContext2) GetDatabaseId(dbName string, snapshot Snapshot) (uint64, error) {
+func (m *MockCompilerContext2) GetDatabaseId(dbName string, snapshot *Snapshot) (uint64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetDatabaseId", dbName, snapshot)
 	ret0, _ := ret[0].(uint64)
@@ -185,7 +197,7 @@ func (mr *MockCompilerContext2MockRecorder) GetLowerCaseTableNames() *gomock.Cal
 }
 
 // GetPrimaryKeyDef mocks base method.
-func (m *MockCompilerContext2) GetPrimaryKeyDef(dbName, tableName string, snapshot Snapshot) []*ColDef {
+func (m *MockCompilerContext2) GetPrimaryKeyDef(dbName, tableName string, snapshot *Snapshot) []*ColDef {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetPrimaryKeyDef", dbName, tableName, snapshot)
 	ret0, _ := ret[0].([]*ColDef)
@@ -285,7 +297,7 @@ func (mr *MockCompilerContext2MockRecorder) GetStatsCache() *gomock.Call {
 }
 
 // GetSubscriptionMeta mocks base method.
-func (m *MockCompilerContext2) GetSubscriptionMeta(dbName string, snapshot Snapshot) (*SubscriptionMeta, error) {
+func (m *MockCompilerContext2) GetSubscriptionMeta(dbName string, snapshot *Snapshot) (*SubscriptionMeta, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetSubscriptionMeta", dbName, snapshot)
 	ret0, _ := ret[0].(*SubscriptionMeta)
@@ -359,7 +371,7 @@ func (mr *MockCompilerContext2MockRecorder) ReplacePlan(execPlan interface{}) *g
 }
 
 // Resolve mocks base method.
-func (m *MockCompilerContext2) Resolve(schemaName, tableName string, snapshot Snapshot) (*ObjectRef, *TableDef) {
+func (m *MockCompilerContext2) Resolve(schemaName, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Resolve", schemaName, tableName, snapshot)
 	ret0, _ := ret[0].(*ObjectRef)
@@ -389,7 +401,7 @@ func (mr *MockCompilerContext2MockRecorder) ResolveAccountIds(accountNames inter
 }
 
 // ResolveById mocks base method.
-func (m *MockCompilerContext2) ResolveById(tableId uint64, snapshot Snapshot) (*ObjectRef, *TableDef) {
+func (m *MockCompilerContext2) ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ResolveById", tableId, snapshot)
 	ret0, _ := ret[0].(*ObjectRef)
@@ -512,7 +524,7 @@ func (mr *MockCompilerContext2MockRecorder) SetViews(views interface{}) *gomock.
 }
 
 // Stats mocks base method.
-func (m *MockCompilerContext2) Stats(obj *ObjectRef, snapshot Snapshot) (*statsinfo.StatsInfo, error) {
+func (m *MockCompilerContext2) Stats(obj *ObjectRef, snapshot *Snapshot) (*statsinfo.StatsInfo, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Stats", obj, snapshot)
 	ret0, _ := ret[0].(*statsinfo.StatsInfo)

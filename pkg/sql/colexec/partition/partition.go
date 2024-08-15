@@ -49,11 +49,9 @@ func (partition *Partition) OpType() vm.OpType {
 func (partition *Partition) Prepare(proc *process.Process) (err error) {
 	partition.ctr = new(container)
 	ctr := partition.ctr
-	partition.ctr.InitReceiver(proc, true)
 
-	length := 2 * len(proc.Reg.MergeReceivers)
-	ctr.batchList = make([]*batch.Batch, 0, length)
-	ctr.orderCols = make([][]*vector.Vector, 0, length)
+	ctr.batchList = make([]*batch.Batch, 0, 16)
+	ctr.orderCols = make([][]*vector.Vector, 0, 16)
 
 	partition.ctr.executors = make([]colexec.ExpressionExecutor, len(partition.OrderBySpecs))
 	for i := range partition.ctr.executors {
@@ -71,30 +69,33 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	ctr := partition.ctr
 	anal := proc.GetAnalyze(partition.GetIdx(), partition.GetParallelIdx(), partition.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	result := vm.NewCallResult()
-	var err error
+
+	ctr := partition.ctr
 	for {
 		switch ctr.status {
 		case receive:
-			msg := ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err := partition.GetChildren(0).Call(proc)
+			if err != nil {
+				return result, err
 			}
-			if msg.Batch == nil {
+			if result.Batch == nil {
 				ctr.indexList = make([]int64, len(ctr.batchList))
 				ctr.status = eval
 			} else {
-				if err = ctr.mergeAndEvaluateOrderColumn(proc, msg.Batch); err != nil {
+				bat, err := result.Batch.Dup(proc.Mp())
+				if err != nil {
+					return result, err
+				}
+				if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
 					return result, err
 				}
 			}
 
 		case eval:
-
+			result := vm.NewCallResult()
 			if len(ctr.batchList) == 0 {
 				result.Status = vm.ExecStop
 				return result, nil
@@ -103,8 +104,10 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 			ok, err := ctr.pickAndSend(proc, &result)
 			if ok {
 				result.Status = vm.ExecStop
+				anal.Output(result.Batch, partition.IsLast)
 				return result, err
 			}
+			anal.Output(result.Batch, partition.IsLast)
 			return result, err
 
 		}

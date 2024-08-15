@@ -45,7 +45,10 @@ type CatalogHandler struct {
 
 var _ Handler = new(CatalogHandler)
 
-func NewCatalogHandler(upstream *MemHandler) (*CatalogHandler, error) {
+func NewCatalogHandler(
+	sid string,
+	upstream *MemHandler,
+) (*CatalogHandler, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
@@ -111,7 +114,7 @@ func NewCatalogHandler(upstream *MemHandler) (*CatalogHandler, error) {
 
 	// attributes
 	// databases
-	for i, def := range catalog.MoDatabaseTableDefs {
+	for i, def := range catalog.GetDefines(sid).MoDatabaseTableDefs {
 		attr, ok := def.(*engine.AttributeDef)
 		if !ok {
 			continue
@@ -132,7 +135,7 @@ func NewCatalogHandler(upstream *MemHandler) (*CatalogHandler, error) {
 		}
 	}
 	// relations
-	for i, def := range catalog.MoTablesTableDefs {
+	for i, def := range catalog.GetDefines(sid).MoTablesTableDefs {
 		attr, ok := def.(*engine.AttributeDef)
 		if !ok {
 			continue
@@ -153,7 +156,7 @@ func NewCatalogHandler(upstream *MemHandler) (*CatalogHandler, error) {
 		}
 	}
 	// attributes
-	for i, def := range catalog.MoColumnsTableDefs {
+	for i, def := range catalog.GetDefines(sid).MoColumnsTableDefs {
 		attr, ok := def.(*engine.AttributeDef)
 		if !ok {
 			continue

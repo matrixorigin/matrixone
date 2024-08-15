@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -138,8 +139,14 @@ const (
 	// MO_PUBS publication meta table
 	MO_PUBS = "mo_pubs"
 
+	// MO_SUBS subscriptions meta table
+	MO_SUBS = "mo_subs"
+
 	// MO_SNAPSHOTS
 	MO_SNAPSHOTS = "mo_snapshots"
+
+	//MO_Pitr
+	MO_PITR = "mo_pitr"
 )
 
 const (
@@ -169,6 +176,7 @@ const (
 	SystemDBAttr_CreateAt    = "created_time"
 	SystemDBAttr_AccID       = "account_id"
 	SystemDBAttr_Type        = "dat_type"
+	SystemDBAttr_CPKey       = CPrimaryKeyColName
 
 	// 'mo_tables' table
 	SystemRelAttr_ID             = "rel_id"
@@ -189,6 +197,7 @@ const (
 	SystemRelAttr_Constraint     = "constraint"
 	SystemRelAttr_Version        = "rel_version"
 	SystemRelAttr_CatalogVersion = "catalog_version"
+	SystemRelAttr_CPKey          = CPrimaryKeyColName
 
 	// 'mo_indexes' table
 	IndexAlgoName      = "algo"
@@ -220,6 +229,7 @@ const (
 	SystemColAttr_IsClusterBy     = "attr_is_clusterby"
 	SystemColAttr_Seqnum          = "attr_seqnum"
 	SystemColAttr_EnumValues      = "attr_enum"
+	SystemColAttr_CPKey           = CPrimaryKeyColName
 
 	BlockMeta_ID              = "block_id"
 	BlockMeta_Delete_ID       = "block_delete_id"
@@ -343,6 +353,7 @@ const (
 	MO_DATABASE_CREATED_TIME_IDX     = 6
 	MO_DATABASE_ACCOUNT_ID_IDX       = 7
 	MO_DATABASE_DAT_TYPE_IDX         = 8
+	MO_DATABASE_CPKEY_IDX            = 9
 
 	MO_TABLES_REL_ID_IDX          = 0
 	MO_TABLES_REL_NAME_IDX        = 1
@@ -362,6 +373,7 @@ const (
 	MO_TABLES_CONSTRAINT_IDX      = 15
 	MO_TABLES_VERSION_IDX         = 16
 	MO_TABLES_CATALOG_VERSION_IDX = 17
+	MO_TABLES_CPKEY_IDX           = 18
 
 	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
 	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
@@ -387,6 +399,8 @@ const (
 	MO_COLUMNS_ATT_IS_CLUSTERBY          = 21
 	MO_COLUMNS_ATT_SEQNUM_IDX            = 22
 	MO_COLUMNS_ATT_ENUM_IDX              = 23
+	MO_COLUMNS_ATT_CPKEY_IDX             = 24
+	MO_COLUMNS_MAXIDX                    = MO_COLUMNS_ATT_CPKEY_IDX
 
 	BLOCKMETA_ID_IDX            = 0
 	BLOCKMETA_ENTRYSTATE_IDX    = 1
@@ -397,7 +411,7 @@ const (
 	BLOCKMETA_SEGID_IDX         = 6
 	BLOCKMETA_MemTruncPoint_IDX = 7
 
-	SKIP_ROWID_OFFSET = 1 //rowid is the 0th vector in the batch
+	SKIP_ROWID_OFFSET = 2 //rowid and cpk occupied the first coluns in delete batch
 )
 
 // used for memengine and tae
@@ -414,9 +428,19 @@ type CreateDatabase struct {
 	CreatedTime types.Timestamp
 }
 
+type CreateDatabaseReq struct {
+	Bat  *batch.Batch
+	Cmds []CreateDatabase
+}
+
 type DropDatabase struct {
 	Id   uint64
 	Name string
+}
+
+type DropDatabaseReq struct {
+	Bat  *batch.Batch
+	Cmds []DropDatabase
 }
 
 type CreateTable struct {
@@ -437,12 +461,18 @@ type CreateTable struct {
 	Defs         []engine.TableDef
 }
 
-func (t CreateTable) String() string {
-	return fmt.Sprintf("{aid-%v,uid-%v,rid-%v}: %d-%s:%d-%s, %q",
-		t.AccountId, t.Creator, t.Owner, t.DatabaseId, t.DatabaseName, t.TableId, t.Name, t.CreateSql)
+type CreateTableReq struct {
+	TableBat  *batch.Batch
+	ColumnBat []*batch.Batch
+	Cmds      []CreateTable
 }
 
-type DropOrTruncateTable struct {
+func (t CreateTable) String() string {
+	return fmt.Sprintf("{aid-%v,uid-%v,rid-%v}: %d-%s:%d-%s",
+		t.AccountId, t.Creator, t.Owner, t.DatabaseId, t.DatabaseName, t.TableId, t.Name)
+}
+
+type DropTable struct {
 	IsDrop       bool // true for Drop and false for Truncate
 	Id           uint64
 	NewId        uint64
@@ -451,8 +481,46 @@ type DropOrTruncateTable struct {
 	DatabaseName string
 }
 
+type DropTableReq struct {
+	TableBat  *batch.Batch
+	ColumnBat []*batch.Batch
+	Cmds      []DropTable
+}
+
 var (
 	MoDatabaseSchema = []string{
+		SystemDBAttr_ID,
+		SystemDBAttr_Name,
+		SystemDBAttr_CatalogName,
+		SystemDBAttr_CreateSQL,
+		SystemDBAttr_Owner,
+		SystemDBAttr_Creator,
+		SystemDBAttr_CreateAt,
+		SystemDBAttr_AccID,
+		SystemDBAttr_Type,
+		SystemDBAttr_CPKey,
+	}
+	MoDatabaseAllColsString  = strings.Join(append([]string{Row_ID}, MoDatabaseSchema...), ",")
+	MoDatabaseAllQueryFormat = fmt.Sprintf(
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%q",
+		MoDatabaseAllColsString, MO_CATALOG, MO_DATABASE,
+		SystemDBAttr_AccID, SystemDBAttr_Name)
+
+	MoDatabaseBatchQuery = fmt.Sprintf(
+		"select %s from `%s`.`%s`",
+		MoDatabaseAllColsString, MO_CATALOG, MO_DATABASE)
+
+	MoDatabasesInEngineQueryFormat = fmt.Sprintf(
+		"select %s from `%s`.`%s` where %s = %%d",
+		SystemDBAttr_Name, MO_CATALOG, MO_DATABASE,
+		SystemDBAttr_AccID)
+
+	MoDatabaseRowidQueryFormat = fmt.Sprintf(
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%q",
+		Row_ID, MO_CATALOG, MO_DATABASE,
+		SystemDBAttr_AccID, SystemDBAttr_Name)
+
+	MoDatabaseSchema_V1 = []string{
 		SystemDBAttr_ID,
 		SystemDBAttr_Name,
 		SystemDBAttr_CatalogName,
@@ -482,7 +550,37 @@ var (
 		SystemRelAttr_Constraint,
 		SystemRelAttr_Version,
 		SystemRelAttr_CatalogVersion,
+		SystemRelAttr_CPKey,
 	}
+	MoTablesAllColsString = strings.Replace(
+		strings.Join(append([]string{Row_ID}, MoTablesSchema...), ","),
+		SystemRelAttr_Constraint,
+		fmt.Sprintf("`%s`", SystemRelAttr_Constraint),
+		-1)
+	MoTablesAllQueryFormat = fmt.Sprintf(
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%q and %s = %%q",
+		MoTablesAllColsString, MO_CATALOG, MO_TABLES,
+		SystemRelAttr_AccID, SystemRelAttr_DBName, SystemRelAttr_Name)
+
+	MoTablesBatchQuery = fmt.Sprintf(
+		"select %s from `%s`.`%s`",
+		MoTablesAllColsString, MO_CATALOG, MO_TABLES)
+
+	MoTablesInDBQueryFormat = fmt.Sprintf(
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%q",
+		SystemRelAttr_Name, MO_CATALOG, MO_TABLES,
+		SystemRelAttr_AccID, SystemRelAttr_DBName)
+
+	MoTablesRowidQueryFormat = fmt.Sprintf(
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%q and %s = %%q",
+		Row_ID, MO_CATALOG, MO_TABLES,
+		SystemRelAttr_AccID, SystemRelAttr_DBName, SystemRelAttr_Name)
+
+	MoTablesQueryNameById = fmt.Sprintf(
+		"select %s,%s from `%s`.`%s` where %s = %%d and %s = %%d",
+		SystemRelAttr_Name, SystemRelAttr_DBName, MO_CATALOG, MO_TABLES,
+		SystemRelAttr_AccID, SystemRelAttr_ID)
+
 	MoTablesSchema_V1 = []string{
 		SystemRelAttr_ID,
 		SystemRelAttr_Name,
@@ -501,6 +599,26 @@ var (
 		SystemRelAttr_ViewDef,
 		SystemRelAttr_Constraint,
 		SystemRelAttr_Version,
+	}
+	MoTablesSchema_V2 = []string{
+		SystemRelAttr_ID,
+		SystemRelAttr_Name,
+		SystemRelAttr_DBName,
+		SystemRelAttr_DBID,
+		SystemRelAttr_Persistence,
+		SystemRelAttr_Kind,
+		SystemRelAttr_Comment,
+		SystemRelAttr_CreateSQL,
+		SystemRelAttr_CreateAt,
+		SystemRelAttr_Creator,
+		SystemRelAttr_Owner,
+		SystemRelAttr_AccID,
+		SystemRelAttr_Partitioned,
+		SystemRelAttr_Partition,
+		SystemRelAttr_ViewDef,
+		SystemRelAttr_Constraint,
+		SystemRelAttr_Version,
+		SystemRelAttr_CatalogVersion,
 	}
 	MoColumnsSchema = []string{
 		SystemColAttr_UniqName,
@@ -527,7 +645,24 @@ var (
 		SystemColAttr_IsClusterBy,
 		SystemColAttr_Seqnum,
 		SystemColAttr_EnumValues,
+		SystemColAttr_CPKey,
 	}
+	MoColumnsAllColsString  = strings.Join(append([]string{Row_ID}, MoColumnsSchema...), ",")
+	MoColumnsAllQueryFormat = fmt.Sprintf(
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%q and %s = %%q and %s = %%d",
+		MoColumnsAllColsString, MO_CATALOG, MO_COLUMNS,
+		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName, SystemColAttr_RelID)
+
+	MoColumnsBatchQuery = fmt.Sprintf(
+		"select %s from `%s`.`%s` order by %s, %s, %s",
+		MoColumnsAllColsString, MO_CATALOG, MO_COLUMNS,
+		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName)
+
+	MoColumnsRowidsQueryFormat = fmt.Sprintf(
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%q and %s = %%q and %s = %%d order by %s",
+		Row_ID, MO_CATALOG, MO_COLUMNS,
+		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName, SystemColAttr_RelID, SystemColAttr_Num)
+
 	MoColumnsSchema_V1 = []string{
 		SystemColAttr_UniqName,
 		SystemColAttr_AccID,
@@ -553,6 +688,32 @@ var (
 		SystemColAttr_IsClusterBy,
 		SystemColAttr_Seqnum,
 	}
+	MoColumnsSchema_V2 = []string{
+		SystemColAttr_UniqName,
+		SystemColAttr_AccID,
+		SystemColAttr_DBID,
+		SystemColAttr_DBName,
+		SystemColAttr_RelID,
+		SystemColAttr_RelName,
+		SystemColAttr_Name,
+		SystemColAttr_Type,
+		SystemColAttr_Num,
+		SystemColAttr_Length,
+		SystemColAttr_NullAbility,
+		SystemColAttr_HasExpr,
+		SystemColAttr_DefaultExpr,
+		SystemColAttr_IsDropped,
+		SystemColAttr_ConstraintType,
+		SystemColAttr_IsUnsigned,
+		SystemColAttr_IsAutoIncrement,
+		SystemColAttr_Comment,
+		SystemColAttr_IsHidden,
+		SystemColAttr_HasUpdate,
+		SystemColAttr_Update,
+		SystemColAttr_IsClusterBy,
+		SystemColAttr_Seqnum,
+		SystemColAttr_EnumValues,
+	}
 	MoTableMetaSchema = []string{
 		BlockMeta_ID,
 		BlockMeta_EntryState,
@@ -573,6 +734,18 @@ var (
 		BlockMeta_SegmentID,
 	}
 	MoDatabaseTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),      // dat_id
+		types.New(types.T_varchar, 5000, 0),  // datname
+		types.New(types.T_varchar, 5000, 0),  // dat_catalog_name
+		types.New(types.T_varchar, 5000, 0),  // dat_createsql
+		types.New(types.T_uint32, 0, 0),      // owner
+		types.New(types.T_uint32, 0, 0),      // creator
+		types.New(types.T_timestamp, 0, 0),   // created_time
+		types.New(types.T_uint32, 0, 0),      // account_id
+		types.New(types.T_varchar, 32, 0),    // dat_type
+		types.New(types.T_varchar, 65535, 0), // cpkey
+	}
+	MoDatabaseTypes_V1 = []types.Type{
 		types.New(types.T_uint64, 0, 0),     // dat_id
 		types.New(types.T_varchar, 5000, 0), // datname
 		types.New(types.T_varchar, 5000, 0), // dat_catalog_name
@@ -584,24 +757,25 @@ var (
 		types.New(types.T_varchar, 32, 0),   // dat_type
 	}
 	MoTablesTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0),     // rel_id
-		types.New(types.T_varchar, 5000, 0), // relname
-		types.New(types.T_varchar, 5000, 0), // reldatabase
-		types.New(types.T_uint64, 0, 0),     // reldatabase_id
-		types.New(types.T_varchar, 5000, 0), // relpersistence
-		types.New(types.T_varchar, 5000, 0), // relkind
-		types.New(types.T_varchar, 5000, 0), // rel_comment
-		types.New(types.T_text, 0, 0),       // rel_createsql
-		types.New(types.T_timestamp, 0, 0),  // created_time
-		types.New(types.T_uint32, 0, 0),     // creator
-		types.New(types.T_uint32, 0, 0),     // owner
-		types.New(types.T_uint32, 0, 0),     // account_id
-		types.New(types.T_int8, 0, 0),       // partitioned
-		types.New(types.T_blob, 0, 0),       // partition_info
-		types.New(types.T_varchar, 5000, 0), // viewdef
-		types.New(types.T_varchar, 5000, 0), // constraint
-		types.New(types.T_uint32, 0, 0),     // schema_version
-		types.New(types.T_uint32, 0, 0),     // schema_catalog_version
+		types.New(types.T_uint64, 0, 0),      // rel_id
+		types.New(types.T_varchar, 5000, 0),  // relname
+		types.New(types.T_varchar, 5000, 0),  // reldatabase
+		types.New(types.T_uint64, 0, 0),      // reldatabase_id
+		types.New(types.T_varchar, 5000, 0),  // relpersistence
+		types.New(types.T_varchar, 5000, 0),  // relkind
+		types.New(types.T_varchar, 5000, 0),  // rel_comment
+		types.New(types.T_text, 0, 0),        // rel_createsql
+		types.New(types.T_timestamp, 0, 0),   // created_time
+		types.New(types.T_uint32, 0, 0),      // creator
+		types.New(types.T_uint32, 0, 0),      // owner
+		types.New(types.T_uint32, 0, 0),      // account_id
+		types.New(types.T_int8, 0, 0),        // partitioned
+		types.New(types.T_blob, 0, 0),        // partition_info
+		types.New(types.T_varchar, 5000, 0),  // viewdef
+		types.New(types.T_varchar, 5000, 0),  // constraint
+		types.New(types.T_uint32, 0, 0),      // schema_version
+		types.New(types.T_uint32, 0, 0),      // schema_catalog_version
+		types.New(types.T_varchar, 65535, 0), // cpkey
 	}
 	MoTablesTypes_V1 = []types.Type{
 		types.New(types.T_uint64, 0, 0),     // rel_id
@@ -621,6 +795,26 @@ var (
 		types.New(types.T_varchar, 5000, 0), // viewdef
 		types.New(types.T_varchar, 5000, 0), // constraint
 		types.New(types.T_uint32, 0, 0),     // schema_version
+	}
+	MoTablesTypes_V2 = []types.Type{
+		types.New(types.T_uint64, 0, 0),     // rel_id
+		types.New(types.T_varchar, 5000, 0), // relname
+		types.New(types.T_varchar, 5000, 0), // reldatabase
+		types.New(types.T_uint64, 0, 0),     // reldatabase_id
+		types.New(types.T_varchar, 5000, 0), // relpersistence
+		types.New(types.T_varchar, 5000, 0), // relkind
+		types.New(types.T_varchar, 5000, 0), // rel_comment
+		types.New(types.T_text, 0, 0),       // rel_createsql
+		types.New(types.T_timestamp, 0, 0),  // created_time
+		types.New(types.T_uint32, 0, 0),     // creator
+		types.New(types.T_uint32, 0, 0),     // owner
+		types.New(types.T_uint32, 0, 0),     // account_id
+		types.New(types.T_int8, 0, 0),       // partitioned
+		types.New(types.T_blob, 0, 0),       // partition_info
+		types.New(types.T_varchar, 5000, 0), // viewdef
+		types.New(types.T_varchar, 5000, 0), // constraint
+		types.New(types.T_uint32, 0, 0),     // schema_version
+		types.New(types.T_uint32, 0, 0),     // schema_catalog_version
 	}
 	MoColumnsTypes = []types.Type{
 		types.New(types.T_varchar, 256, 0),                 // att_uniq_name
@@ -647,6 +841,7 @@ var (
 		types.New(types.T_int8, 0, 0),                      // att_is_clusterby
 		types.New(types.T_uint16, 0, 0),                    // att_seqnum
 		types.New(types.T_varchar, types.MaxVarcharLen, 0), // att_enum
+		types.New(types.T_varchar, 65535, 0),               // cpkey
 	}
 	MoColumnsTypes_V1 = []types.Type{
 		types.New(types.T_varchar, 256, 0),  // att_uniq_name
@@ -672,6 +867,32 @@ var (
 		types.New(types.T_varchar, 2048, 0), // att_update
 		types.New(types.T_int8, 0, 0),       // att_is_clusterby
 		types.New(types.T_uint16, 0, 0),     // att_seqnum
+	}
+	MoColumnsTypes_V2 = []types.Type{
+		types.New(types.T_varchar, 256, 0),                 // att_uniq_name
+		types.New(types.T_uint32, 0, 0),                    // account_id
+		types.New(types.T_uint64, 0, 0),                    // att_database_id
+		types.New(types.T_varchar, 256, 0),                 // att_database
+		types.New(types.T_uint64, 0, 0),                    // att_relname_id
+		types.New(types.T_varchar, 256, 0),                 // att_relname
+		types.New(types.T_varchar, 256, 0),                 // attname
+		types.New(types.T_varchar, 256, 0),                 // atttyp
+		types.New(types.T_int32, 0, 0),                     // attnum
+		types.New(types.T_int32, 0, 0),                     // att_length
+		types.New(types.T_int8, 0, 0),                      // attnotnull
+		types.New(types.T_int8, 0, 0),                      // atthasdef
+		types.New(types.T_varchar, 2048, 0),                // att_default
+		types.New(types.T_int8, 0, 0),                      // attisdropped
+		types.New(types.T_char, 1, 0),                      // att_constraint_type
+		types.New(types.T_int8, 0, 0),                      // att_is_unsigned
+		types.New(types.T_int8, 0, 0),                      // att_is_auto_increment
+		types.New(types.T_varchar, 2048, 0),                // att_comment
+		types.New(types.T_int8, 0, 0),                      // att_is_hidden
+		types.New(types.T_int8, 0, 0),                      // att_has_update
+		types.New(types.T_varchar, 2048, 0),                // att_update
+		types.New(types.T_int8, 0, 0),                      // att_is_clusterby
+		types.New(types.T_uint16, 0, 0),                    // att_seqnum
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // att_enum
 	}
 	MoTableMetaTypes = []types.Type{
 		types.New(types.T_Blockid, 0, 0),                   // block_id
@@ -738,19 +959,6 @@ var (
 		MO_COLUMNS_ATT_SEQNUM_IDX,
 		MO_COLUMNS_ATT_ENUM_IDX,
 	}
-
-	// used by memengine or tae
-	MoDatabaseTableDefs = []engine.TableDef{}
-	// used by memengine or tae
-	MoTablesTableDefs = []engine.TableDef{}
-	// used by memengine or tae
-	MoColumnsTableDefs = []engine.TableDef{}
-	// used by memengine or tae or cn
-	MoTableMetaDefs = []engine.TableDef{}
-
-	MoDatabaseConstraint = []byte{}
-	MoTableConstraint    = []byte{}
-	MoColumnConstraint   = []byte{}
 )
 
 var (

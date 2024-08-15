@@ -373,7 +373,7 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 						wg.Add(1)
 						require.NoError(t, stopper.RunTask(func(ctx context.Context) {
 							wg.Done()
-							w.wait(ctx)
+							w.wait(ctx, getLogger(""))
 							w.close()
 						}))
 					}

@@ -23,25 +23,26 @@ import (
 
 type CheckedAllocator struct {
 	upstream        Allocator
-	fraction        uint32
-	deallocatorPool *ClosureDeallocatorPool[checkedAllocatorArgs]
+	deallocatorPool *ClosureDeallocatorPool[checkedAllocatorArgs, *checkedAllocatorArgs]
 }
 
 type checkedAllocatorArgs struct {
-	deallocated  *atomic.Bool
-	deallocator  Deallocator
-	stacktraceID StacktraceID
-	size         uint64
-	ptr          unsafe.Pointer
+	deallocated *atomic.Bool
+	deallocator Deallocator
+	allocatePCs []uintptr
+	size        uint64
+	ptr         unsafe.Pointer
+}
+
+func (checkedAllocatorArgs) As(Trait) bool {
+	return false
 }
 
 func NewCheckedAllocator(
 	upstream Allocator,
-	fraction uint32,
 ) *CheckedAllocator {
 	return &CheckedAllocator{
 		upstream: upstream,
-		fraction: fraction,
 
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *checkedAllocatorArgs) {
@@ -51,7 +52,7 @@ func NewCheckedAllocator(
 						"double free: address %p, size %v, allocated at %s",
 						args.ptr,
 						args.size,
-						args.stacktraceID,
+						pcsToString(args.allocatePCs),
 					))
 				}
 
@@ -74,29 +75,35 @@ func (c *CheckedAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocat
 		return nil, nil, err
 	}
 
-	if fastrand()%c.fraction > 0 {
-		return ptr, dec, nil
-	}
-
-	stacktraceID := GetStacktraceID(0)
 	deallocated := new(atomic.Bool) // this will not be GC until deallocator is called
+	var pcs []uintptr
+	dec = c.deallocatorPool.Get2(func(args *checkedAllocatorArgs) checkedAllocatorArgs {
+		pcs = args.allocatePCs
+		if cap(pcs) < 32 {
+			pcs = make([]uintptr, 32)
+		} else {
+			pcs = pcs[:cap(pcs)]
+		}
+		n := runtime.Callers(1, pcs)
+		pcs = pcs[:n]
+		return checkedAllocatorArgs{
+			deallocated: deallocated,
+			deallocator: dec,
+			allocatePCs: pcs,
+			size:        size,
+			ptr:         unsafe.Pointer(unsafe.SliceData(ptr)),
+		}
+	})
+
 	runtime.SetFinalizer(deallocated, func(deallocated *atomic.Bool) {
 		if !deallocated.Load() {
 			panic(fmt.Sprintf(
 				"missing free: address %p, size %v, allocated at %s",
 				ptr,
 				size,
-				stacktraceID,
+				pcsToString(pcs),
 			))
 		}
-	})
-
-	dec = c.deallocatorPool.Get(checkedAllocatorArgs{
-		deallocated:  deallocated,
-		deallocator:  dec,
-		stacktraceID: stacktraceID,
-		size:         size,
-		ptr:          unsafe.Pointer(unsafe.SliceData(ptr)),
 	})
 
 	return ptr, dec, nil

@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -38,7 +39,6 @@ func (minus *Minus) Prepare(proc *process.Process) error {
 	var err error
 	{
 		minus.ctr = new(container)
-		minus.ctr.InitReceiver(proc, false)
 		minus.ctr.bat = nil
 		minus.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
 		if err != nil {
@@ -62,14 +62,13 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 	analyze := proc.GetAnalyze(minus.GetIdx(), minus.GetParallelIdx(), minus.GetParallelMajor())
 	analyze.Start()
 	defer analyze.Stop()
-	result := vm.NewCallResult()
 
 	for {
 		switch minus.ctr.state {
 		case buildingHashMap:
 			// step 1: build the hash table by all right batches.
-			if err = minus.ctr.buildHashTable(proc, analyze, 1, minus.GetIsFirst()); err != nil {
-				return result, err
+			if err = minus.buildHashTable(proc, analyze, 1, minus.GetIsFirst()); err != nil {
+				return vm.CancelResult, err
 			}
 			if minus.ctr.hashTable != nil {
 				analyze.Alloc(minus.ctr.hashTable.Size())
@@ -82,9 +81,10 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 			// only one batch is processed during each loop, and the batch will be sent to
 			// next operator immediately after successful processing.
 			last := false
-			last, err = minus.ctr.probeHashTable(proc, analyze, 0, minus.GetIsFirst(), minus.GetIsLast(), &result)
+			result := vm.NewCallResult()
+			last, err = minus.probeHashTable(proc, analyze, 0, minus.GetIsFirst(), minus.GetIsLast(), &result)
 			if err != nil {
-				return result, err
+				return vm.CancelResult, err
 			}
 			if last {
 				minus.ctr.state = operatorEnd
@@ -94,48 +94,43 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case operatorEnd:
 			// operator over.
-			result.Batch = nil
-			result.Status = vm.ExecStop
-			return result, nil
+			return vm.CancelResult, nil
 		}
 	}
 }
 
 // buildHashTable use all batches from proc.Reg.MergeReceiver[index] to build the hash map.
-func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze, index int, isFirst bool) error {
+func (minus *Minus) buildHashTable(proc *process.Process, ana process.Analyze, index int, isFirst bool) error {
+	ctr := minus.ctr
 	for {
-		msg := ctr.ReceiveFromSingleReg(index, ana)
-		if msg.Err != nil {
-			return msg.Err
+		input, err := minus.GetChildren(index).Call(proc)
+		if err != nil {
+			return err
 		}
-		bat := msg.Batch
 
 		// the last batch of pipeline.
-		if bat == nil {
+		if input.Batch == nil {
 			break
 		}
 
 		// just an empty batch.
-		if bat.IsEmpty() {
-			proc.PutBatch(bat)
+		if input.Batch.IsEmpty() {
 			continue
 		}
-		ana.Input(bat, isFirst)
+		ana.Input(input.Batch, isFirst)
 
 		itr := ctr.hashTable.NewIterator()
-		count := bat.Vecs[0].Length()
+		count := input.Batch.Vecs[0].Length()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := count - i
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
-			_, _, err := itr.Insert(i, n, bat.Vecs)
+			_, _, err := itr.Insert(i, n, input.Batch.Vecs)
 			if err != nil {
-				bat.Clean(proc.Mp())
 				return err
 			}
 		}
-		proc.PutBatch(bat)
 	}
 	return nil
 }
@@ -143,54 +138,49 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 // probeHashTable use a batch from proc.Reg.MergeReceivers[index] to probe and update the hash map.
 // If a row of data never appears in the hash table, add it into hath table and send it to the next operator.
 // if batch is the last one, return true, else return false.
-func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze, index int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
+func (minus *Minus) probeHashTable(proc *process.Process, ana process.Analyze, index int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
 	inserted := make([]uint8, hashmap.UnitLimit)
 	restoreInserted := make([]uint8, hashmap.UnitLimit)
 
 	for {
-		msg := ctr.ReceiveFromSingleReg(index, ana)
-		if msg.Err != nil {
-			return false, msg.Err
+		input, err := minus.GetChildren(index).Call(proc)
+		if err != nil {
+			return false, err
 		}
-		bat := msg.Batch
 
 		// the last batch of block.
-		if bat == nil {
+		if input.Batch == nil {
 			return true, nil
 		}
-		if bat.Last() {
-			ctr.bat = bat
-			result.Batch = ctr.bat
+		if input.Batch.Last() {
+			result.Batch = input.Batch
 			return false, nil
 		}
 		// just an empty batch.
-		if bat.IsEmpty() {
-			proc.PutBatch(bat)
+		if input.Batch.IsEmpty() {
 			continue
 		}
-		ana.Input(bat, isFirst)
+		ana.Input(input.Batch, isFirst)
 
-		if ctr.bat != nil {
-			proc.PutBatch(ctr.bat)
-			ctr.bat = nil
+		if minus.ctr.bat == nil {
+			minus.ctr.bat = batch.NewWithSize(len(input.Batch.Vecs))
+			for i := range input.Batch.Vecs {
+				minus.ctr.bat.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
+			}
 		}
-		ctr.bat = batch.NewWithSize(len(bat.Vecs))
-		for i := range bat.Vecs {
-			ctr.bat.Vecs[i] = proc.GetVector(*bat.Vecs[i].GetType())
-		}
+		minus.ctr.bat.CleanOnlyData()
 
-		count := bat.Vecs[0].Length()
-		itr := ctr.hashTable.NewIterator()
+		count := input.Batch.Vecs[0].Length()
+		itr := minus.ctr.hashTable.NewIterator()
 		for i := 0; i < count; i += hashmap.UnitLimit {
-			oldHashGroup := ctr.hashTable.GroupCount()
+			oldHashGroup := minus.ctr.hashTable.GroupCount()
 
 			n := count - i
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
-			vs, _, err := itr.Insert(i, n, bat.Vecs)
+			vs, _, err := itr.Insert(i, n, input.Batch.Vecs)
 			if err != nil {
-				bat.Clean(proc.Mp())
 				return false, err
 			}
 			copy(inserted[:n], restoreInserted[:n])
@@ -202,22 +192,21 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 					inserted[j] = 1
 				}
 			}
-			ctr.bat.AddRowCount(int(rows - oldHashGroup))
+			minus.ctr.bat.AddRowCount(int(rows - oldHashGroup))
 
-			newHashGroup := ctr.hashTable.GroupCount()
+			newHashGroup := minus.ctr.hashTable.GroupCount()
 			insertCount := int(newHashGroup - oldHashGroup)
 			if insertCount > 0 {
-				for pos := range bat.Vecs {
-					if err := ctr.bat.Vecs[pos].UnionBatch(bat.Vecs[pos], int64(i), insertCount, inserted[:n], proc.Mp()); err != nil {
-						bat.Clean(proc.Mp())
+				for pos := range input.Batch.Vecs {
+					if err := minus.ctr.bat.Vecs[pos].UnionBatch(input.Batch.Vecs[pos], int64(i), insertCount, inserted[:n], proc.Mp()); err != nil {
 						return false, err
 					}
 				}
 			}
 		}
-		ana.Output(ctr.bat, isLast)
-		result.Batch = ctr.bat
-		proc.PutBatch(bat)
+		ana.Alloc(int64(minus.ctr.bat.Size()))
+		ana.Output(minus.ctr.bat, isLast)
+		result.Batch = minus.ctr.bat
 		return false, nil
 	}
 }

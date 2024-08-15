@@ -40,8 +40,12 @@ func NewBootstrapManager(cluster pb.ClusterInfo) *Manager {
 	}
 }
 
-func (bm *Manager) Bootstrap(alloc util.IDAllocator,
-	tn pb.TNState, log pb.LogState) ([]pb.ScheduleCommand, error) {
+func (bm *Manager) Bootstrap(
+	service string,
+	alloc util.IDAllocator,
+	tn pb.TNState,
+	log pb.LogState,
+) ([]pb.ScheduleCommand, error) {
 	logCommands, err := bm.bootstrapLogService(alloc, log)
 	tnCommands := bm.bootstrapTN(alloc, tn)
 	if err != nil {
@@ -50,11 +54,11 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 
 	commands := append(logCommands, tnCommands...)
 	for _, command := range commands {
-		runtime.ProcessLevelRuntime().SubLogger(runtime.SystemInit).Info("schedule command generated",
+		runtime.ServiceRuntime(service).SubLogger(runtime.SystemInit).Info("schedule command generated",
 			zap.String("command", command.LogString()))
 	}
 	if len(commands) != 0 {
-		runtime.ProcessLevelRuntime().SubLogger(runtime.SystemInit).Info("schedule command generated")
+		runtime.ServiceRuntime(service).SubLogger(runtime.SystemInit).Info("schedule command generated")
 	}
 	return commands, nil
 }

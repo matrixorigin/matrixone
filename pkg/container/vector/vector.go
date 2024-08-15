@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
@@ -70,7 +71,7 @@ type typedSlice struct {
 
 func (t *typedSlice) reset() {
 	t.Ptr = nil
-	t.Cap = -1
+	t.Cap = 0
 }
 
 func (t *typedSlice) setFromVector(v *Vector) {
@@ -98,13 +99,31 @@ func (v *Vector) SetSorted(b bool) {
 	v.sorted = b
 }
 
+// Reset update vector's fields with a specific type.
+// we should redefine the value of capacity and values-ptr because of the possible change in type.
 func (v *Vector) Reset(typ types.Type) {
+	originOid := v.typ.Oid
 	v.typ = typ
+
 	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
 
+	v.length = 0
+	v.nsp.Reset()
+	v.sorted = false
+
+	if originOid != v.typ.Oid {
+		v.col.reset()
+		v.setupFromData()
+	}
+}
+
+func (v *Vector) ResetWithSameType() {
+	if v.area != nil {
+		v.area = v.area[:0]
+	}
 	v.length = 0
 	v.nsp.Reset()
 	v.sorted = false
@@ -661,36 +680,29 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 }
 
 // PreExtendArea use to expand the mpool and area of vector
-func (v *Vector) PreExtendArea(rows int, mp *mpool.MPool) error {
+// extraAreaSize: the size of area to be extended
+// mp: mpool
+func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool) error {
+	if v.class == CONSTANT {
+		return nil
+	}
 
-	// expand mpool
+	// pre-extend vector, the fixed len part
 	if err := v.PreExtend(rows, mp); err != nil {
 		return err
 	}
 
-	// get the size required for storing new rows
-	var vSize int
-	switch v.typ.Oid {
-	case types.T_array_float32:
-		vSize = 4 * int(v.typ.Width)
-	case types.T_array_float64:
-		vSize = 8 * int(v.typ.Width)
-	default:
-		vSize = v.typ.TypeSize()
-	}
-	vlen := vSize * rows
-
 	// check if required size is already satisfied
 	area1 := v.GetArea()
 	voff := len(area1)
-	if voff+vlen <= cap(area1) {
+	if voff+extraAreaSize <= cap(area1) {
 		return nil
 	}
 
 	// grow area
 	var err error
 	oldSz := len(area1)
-	area1, err = mp.Grow(area1, voff+vlen)
+	area1, err = mp.Grow(area1, voff+extraAreaSize)
 	if err != nil {
 		return err
 	}
@@ -776,7 +788,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	case types.T_float64:
 		shrinkFixed[float64](v, sels, negate)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -840,7 +852,7 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	case types.T_float64:
 		err = shuffleFixed[float64](v, sels, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		err = shuffleFixed[types.Varlena](v, sels, mp)
 	case types.T_date:
 		err = shuffleFixed[types.Date](v, sels, mp)
@@ -1574,7 +1586,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
@@ -1886,7 +1898,7 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64:
+		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return func(v, w *Vector, sel int64) error {
 			if w.IsConstNull() {
 				return appendOneFixed(v, types.Varlena{}, true, mp)
@@ -2175,7 +2187,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			return SetConstFixed(v, ws[sel], length, mp)
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64:
+		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
@@ -2323,7 +2335,14 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	return nil
 }
 
-func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
+func (v *Vector) Union(w *Vector, sels []int64, mp *mpool.MPool) error {
+	return unionT[int64](v, w, sels, mp)
+}
+func (v *Vector) UnionInt32(w *Vector, sels []int32, mp *mpool.MPool) error {
+	return unionT[int32](v, w, sels, mp)
+}
+
+func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	if len(sels) == 0 {
 		return nil
 	}
@@ -2628,7 +2647,7 @@ func (v *Vector) String() string {
 		return vecToString[types.Rowid](v)
 	case types.T_Blockid:
 		return vecToString[types.Blockid](v)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink:
 		col := InefficientMustStrCol(v)
 		if len(col) == 1 {
 			if nulls.Contains(v.nsp, 0) {
@@ -2722,6 +2741,25 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 	return nil
 }
 
+func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.MPool) error {
+	var err error
+	if vec.capacity == 0 {
+		if err := extend(vec, 1, mp); err != nil {
+			return err
+		}
+	}
+	vec.class = CONSTANT
+	var col []types.Varlena
+	ToSlice(vec, &col)
+	err = BuildVarlenaFromByteJson(vec, &col[0], bj, mp)
+	if err != nil {
+		return err
+	}
+	vec.data = vec.data[:cap(vec.data)]
+	vec.length = length
+	return nil
+}
+
 // SetConstArray set current vector as Constant_Array vector of given length.
 func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mpool.MPool) error {
 	var err error
@@ -2803,7 +2841,7 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 	case types.T_Blockid:
 		return appendOneFixed(vec, val.(types.Blockid), false, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return appendOneBytes(vec, val.([]byte), false, mp)
 	}
 	return nil
@@ -2827,6 +2865,16 @@ func AppendBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
 	return appendOneBytes(vec, val, isNull, mp)
+}
+
+func AppendByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool.MPool) error {
+	if vec.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
+	}
+	if mp == nil {
+		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
+	}
+	return appendOneByteJson(vec, bj, isNull, mp)
 }
 
 // AppendArray mainly used in tests
@@ -2937,6 +2985,21 @@ func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error
 		return appendOneFixed(vec, va, true, mp)
 	} else {
 		err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
+		if err != nil {
+			return err
+		}
+		return appendOneFixed(vec, va, false, mp)
+	}
+}
+
+func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool.MPool) error {
+	var err error
+	var va types.Varlena
+
+	if isNull {
+		return appendOneFixed(vec, va, true, mp)
+	} else {
+		err = BuildVarlenaFromByteJson(vec, &va, bj, mp)
 		if err != nil {
 			return err
 		}
@@ -3650,7 +3713,7 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		minv = types.EncodeFixed(minVal)
 		maxv = types.EncodeFixed(maxVal)
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		minv, maxv = VarlenGetMinMax(v)
 	case types.T_array_float32:
 		// Zone map Comparator should be consistent with the SQL Comparator for Array.
@@ -3947,7 +4010,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			appendList(v, newCol, nil, nil)
 		}
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
 			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
@@ -4137,7 +4200,7 @@ func (v *Vector) InplaceSort() {
 			return col[i].Less(col[j])
 		})
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
 			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
@@ -4191,6 +4254,31 @@ func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 	return nil
 }
 
+func BuildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejson.ByteJson, m *mpool.MPool) error {
+	vlen := len(bj.Data) + 1
+	area1 := vec.GetArea()
+	voff := len(area1)
+
+	var err error
+	if voff+vlen > cap(area1) && m != nil {
+		// Pass nil to Grow2, we can grow area1 to voff+vlen without
+		// copy bytejson data.
+		area1, err = m.Grow2(area1, nil, voff+vlen)
+		if err != nil {
+			return err
+		}
+		area1[voff] = byte(bj.Type)
+		copy(area1[voff+1:voff+vlen], bj.Data)
+	} else {
+		area1 = append(area1, byte(bj.Type))
+		area1 = append(area1, bj.Data...)
+	}
+
+	v1.SetOffsetLen(uint32(voff), uint32(vlen))
+	vec.area = area1
+	return nil
+}
+
 func BuildVarlenaFromValena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m *mpool.MPool) error {
 	if (*v2)[0] <= types.VarlenaInlineSize {
 		BuildVarlenaInline(v1, v2)
@@ -4216,6 +4304,22 @@ func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpo
 	return BuildVarlenaNoInline(vec, v, bs, m)
 }
 
+func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJson, m *mpool.MPool) error {
+	vlen := len(bj.Data) + 1
+	if vlen <= types.VarlenaInlineSize {
+		// first clear varlena to 0
+		p1 := v.UnsafePtr()
+		*(*int64)(p1) = 0
+		*(*int64)(unsafe.Add(p1, 8)) = 0
+		*(*int64)(unsafe.Add(p1, 16)) = 0
+		v[0] = byte(vlen)
+		v[1] = byte(bj.Type)
+		copy(v[2:vlen+1], bj.Data)
+		return nil
+	}
+	return BuildVarlenaNoInlineFromByteJson(vec, v, bj, m)
+}
+
 // BuildVarlenaFromArray convert array to Varlena so that it can be stored in the vector
 func BuildVarlenaFromArray[T types.RealNumbers](vec *Vector, v *types.Varlena, array *[]T, m *mpool.MPool) error {
 	_bs := types.ArrayToBytes[T](*array)
@@ -4236,7 +4340,12 @@ func BuildVarlenaFromArray[T types.RealNumbers](vec *Vector, v *types.Varlena, a
 
 // Intersection2VectorOrdered does a ∩ b ==> ret, keeps all item unique and sorted
 // it assumes that a and b all sorted already
-func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, ret *Vector, mp *mpool.MPool, cmp func(x, y T) int) {
+func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
+	a, b []T,
+	ret *Vector,
+	mp *mpool.MPool,
+	cmp func(x, y T) int) (err error) {
+
 	var long, short []T
 	if len(a) < len(b) {
 		long = b
@@ -4247,7 +4356,9 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, r
 	}
 	var lenLong, lenShort = len(long), len(short)
 
-	ret.PreExtend(lenLong+lenShort, mp)
+	if err = ret.PreExtend(lenLong+lenShort, mp); err != nil {
+		return err
+	}
 
 	for i := range short {
 		idx := sort.Search(lenLong, func(j int) bool {
@@ -4258,33 +4369,47 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, r
 		}
 
 		if cmp(short[i], long[idx]) == 0 {
-			AppendFixed(ret, short[i], false, mp)
+			if err = AppendFixed(ret, short[i], false, mp); err != nil {
+				return err
+			}
 		}
 
 		long = long[idx:]
 	}
+	return nil
 }
 
 // Union2VectorOrdered does a ∪ b ==> ret, keeps all item unique and sorted
 // it assumes that a and b all sorted already
-func Union2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, ret *Vector, mp *mpool.MPool, cmp func(x, y T) int) {
+func Union2VectorOrdered[T types.OrderedT | types.Decimal128](
+	a, b []T,
+	ret *Vector,
+	mp *mpool.MPool,
+	cmp func(x, y T) int) (err error) {
+
 	var i, j int
 	var prevVal T
 	var lenA, lenB = len(a), len(b)
 
-	ret.PreExtend(lenA+lenB, mp)
+	if err = ret.PreExtend(lenA+lenB, mp); err != nil {
+		return err
+	}
 
 	for i < lenA && j < lenB {
 		if cmp(a[i], b[j]) <= 0 {
 			if (i == 0 && j == 0) || cmp(prevVal, a[i]) != 0 {
 				prevVal = a[i]
-				AppendFixed(ret, a[i], false, mp)
+				if err = AppendFixed(ret, a[i], false, mp); err != nil {
+					return err
+				}
 			}
 			i++
 		} else {
 			if (i == 0 && j == 0) || cmp(prevVal, b[j]) != 0 {
 				prevVal = b[j]
-				AppendFixed(ret, b[j], false, mp)
+				if err = AppendFixed(ret, b[j], false, mp); err != nil {
+					return err
+				}
 			}
 			j++
 		}
@@ -4293,21 +4418,30 @@ func Union2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, ret *Vec
 	for ; i < lenA; i++ {
 		if (i == 0 && j == 0) || cmp(prevVal, a[i]) != 0 {
 			prevVal = a[i]
-			AppendFixed(ret, a[i], false, mp)
+			if err = AppendFixed(ret, a[i], false, mp); err != nil {
+				return err
+			}
 		}
 	}
 
 	for ; j < lenB; j++ {
 		if (i == 0 && j == 0) || cmp(prevVal, b[j]) != 0 {
 			prevVal = b[j]
-			AppendFixed(ret, b[j], false, mp)
+			if err = AppendFixed(ret, b[j], false, mp); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 // Intersection2VectorVarlen does a ∩ b ==> ret, keeps all item unique and sorted
 // it assumes that va and vb all sorted already
-func Intersection2VectorVarlen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
+func Intersection2VectorVarlen(
+	va, vb *Vector,
+	ret *Vector,
+	mp *mpool.MPool) (err error) {
+
 	var shortCol, longCol []types.Varlena
 	var shortArea, longArea []byte
 
@@ -4328,7 +4462,9 @@ func Intersection2VectorVarlen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 
 	var lenLong, lenShort = len(longCol), len(shortCol)
 
-	ret.PreExtend(lenLong+lenShort, mp)
+	if err = ret.PreExtend(lenLong+lenShort, mp); err != nil {
+		return err
+	}
 
 	for i := range shortCol {
 		shortBytes := shortCol[i].GetByteSlice(shortArea)
@@ -4340,16 +4476,23 @@ func Intersection2VectorVarlen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 		}
 
 		if bytes.Equal(shortBytes, longCol[idx].GetByteSlice(longArea)) {
-			AppendBytes(ret, shortBytes, false, mp)
+			if err = AppendBytes(ret, shortBytes, false, mp); err != nil {
+				return err
+			}
 		}
 
 		longCol = longCol[idx:]
 	}
+	return nil
 }
 
 // Union2VectorValen does a ∪ b ==> ret, keeps all item unique and sorted
 // it assumes that va and vb all sorted already
-func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
+func Union2VectorValen(
+	va, vb *Vector,
+	ret *Vector,
+	mp *mpool.MPool) (err error) {
+
 	var i, j int
 	var prevVal []byte
 
@@ -4358,7 +4501,9 @@ func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 
 	var lenA, lenB = len(cola), len(colb)
 
-	ret.PreExtend(lenA+lenB, mp)
+	if err = ret.PreExtend(lenA+lenB, mp); err != nil {
+		return err
+	}
 
 	for i < lenA && j < lenB {
 		bb := colb[j].GetByteSlice(areab)
@@ -4367,13 +4512,17 @@ func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 		if bytes.Compare(ba, bb) <= 0 {
 			if (i == 0 && j == 0) || bytes.Equal(prevVal, ba) {
 				prevVal = ba
-				AppendBytes(ret, ba, false, mp)
+				if err = AppendBytes(ret, ba, false, mp); err != nil {
+					return err
+				}
 			}
 			i++
 		} else {
 			if (i == 0 && j == 0) || bytes.Equal(prevVal, bb) {
 				prevVal = bb
-				AppendBytes(ret, bb, false, mp)
+				if err = AppendBytes(ret, bb, false, mp); err != nil {
+					return err
+				}
 			}
 			j++
 		}
@@ -4383,7 +4532,9 @@ func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 		ba := cola[i].GetByteSlice(areaa)
 		if (i == 0 && j == 0) || bytes.Equal(prevVal, ba) {
 			prevVal = ba
-			AppendBytes(ret, ba, false, mp)
+			if err = AppendBytes(ret, ba, false, mp); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -4391,7 +4542,11 @@ func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 		bb := colb[j].GetByteSlice(areab)
 		if (i == 0 && j == 0) || bytes.Equal(prevVal, bb) {
 			prevVal = bb
-			AppendBytes(ret, bb, false, mp)
+			if err = AppendBytes(ret, bb, false, mp); err != nil {
+				return err
+			}
 		}
 	}
+
+	return nil
 }

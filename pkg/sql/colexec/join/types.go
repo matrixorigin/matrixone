@@ -15,7 +15,6 @@
 package join
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -40,14 +40,10 @@ type evalVector struct {
 }
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state int
 
-	inBuckets []uint8
-
 	batches       []*batch.Batch
-	batchRowCount int
+	batchRowCount int64
 	lastrow       int
 	rbat          *batch.Batch
 
@@ -62,7 +58,7 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp  *hashmap.JoinMap
+	mp  *message.JoinMap
 	bat *batch.Batch
 
 	maxAllocSize int64
@@ -77,9 +73,12 @@ type InnerJoin struct {
 
 	HashOnPK           bool
 	IsShuffle          bool
+	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+	JoinMapTag         int32
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (innerJoin *InnerJoin) GetOperatorBase() *vm.OperatorBase {
@@ -119,22 +118,24 @@ func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := innerJoin.ctr
+	anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 
-		anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 
 		if innerJoin.ctr.bat != nil {
-			proc.PutBatch(innerJoin.ctr.bat)
 			innerJoin.ctr.bat = nil
 		}
 		innerJoin.ctr.lastrow = 0
 		innerJoin.ctr = nil
+	}
+	if innerJoin.ProjectList != nil {
+		anal.Alloc(innerJoin.ProjectAllocSize)
+		innerJoin.FreeProjection(proc)
 	}
 }
 
@@ -146,9 +147,6 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
-	for i := range ctr.batches {
-		proc.PutBatch(ctr.batches[i])
-	}
 	ctr.batches = nil
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)

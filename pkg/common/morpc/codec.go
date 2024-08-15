@@ -23,6 +23,7 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec"
 	"github.com/fagongzi/goetty/v2/codec/length"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -110,8 +111,14 @@ type messageCodec struct {
 //  3. Message body
 //     3.1. message body, required.
 //     3.2. payload, optional. Set if has paylad flag.
-func NewMessageCodec(messageFactory func() Message, options ...CodecOption) Codec {
+func NewMessageCodec(
+	sid string,
+	messageFactory func() Message,
+	options ...CodecOption,
+) Codec {
 	bc := &baseCodec{
+		sid:            sid,
+		logger:         getLogger(sid).Named("morpc"),
 		messageFactory: messageFactory,
 		maxBodySize:    defaultMaxBodyMessageSize,
 	}
@@ -151,6 +158,8 @@ func (c *messageCodec) AddHeaderCodec(hc HeaderCodec) {
 }
 
 type baseCodec struct {
+	sid             string
+	logger          *log.MOLogger
 	allocator       malloc.Allocator
 	checksumEnabled bool
 	compressEnabled bool
@@ -463,7 +472,7 @@ func (c *baseCodec) readMessage(
 
 	// invalid body packet
 	if offset >= len(data)-payloadSize {
-		getLogger().Warn("invalid body packet",
+		c.logger.Warn("invalid body packet",
 			zap.Int("offset", offset),
 			zap.Int("len", len(data)),
 			zap.Int("payloadSize", payloadSize),

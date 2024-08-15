@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
@@ -55,6 +56,7 @@ func (p *pool[REQ, RESP]) ReleaseResponse(resp RESP) {
 }
 
 type handleFuncCtx[REQ, RESP MethodBasedMessage] struct {
+	logger     *log.MOLogger
 	handleFunc HandleFunc[REQ, RESP]
 	async      bool
 }
@@ -68,13 +70,14 @@ func (c *handleFuncCtx[REQ, RESP]) call(
 	if err := c.handleFunc(ctx, req, resp, buf); err != nil {
 		resp.WrapError(err)
 	}
-	if getLogger().Enabled(zap.DebugLevel) {
-		getLogger().Debug("handle request completed",
+	if c.logger.Enabled(zap.DebugLevel) {
+		c.logger.Debug("handle request completed",
 			zap.String("response", resp.DebugString()))
 	}
 }
 
 type methodBasedServer[REQ, RESP MethodBasedMessage] struct {
+	logger   *log.MOLogger
 	cfg      *Config
 	rpc      RPCServer
 	pool     MessagePool[REQ, RESP]
@@ -105,12 +108,15 @@ func WithHandlerRespReleaseFunc[REQ, RESP MethodBasedMessage](f func(message Mes
 
 // NewMessageHandler create a message handler.
 func NewMessageHandler[REQ, RESP MethodBasedMessage](
+	sid string,
 	name string,
 	address string,
 	cfg Config,
 	pool MessagePool[REQ, RESP],
-	opts ...HandlerOption[REQ, RESP]) (MethodBasedServer[REQ, RESP], error) {
+	opts ...HandlerOption[REQ, RESP],
+) (MethodBasedServer[REQ, RESP], error) {
 	s := &methodBasedServer[REQ, RESP]{
+		logger:   getLogger(sid),
 		cfg:      &cfg,
 		pool:     pool,
 		handlers: make(map[uint32]handleFuncCtx[REQ, RESP]),
@@ -127,12 +133,13 @@ func NewMessageHandler[REQ, RESP MethodBasedMessage](
 	}
 
 	rpc, err := s.cfg.NewServer(
+		sid,
 		name,
 		address,
-		getLogger().RawLogger(),
 		func() Message { return pool.AcquireRequest() },
 		s.respReleaseFunc,
-		WithServerDisableAutoCancelContext())
+		WithServerDisableAutoCancelContext(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +161,7 @@ func (s *methodBasedServer[REQ, RESP]) RegisterMethod(
 	h HandleFunc[REQ, RESP],
 	async bool,
 ) MethodBasedServer[REQ, RESP] {
-	s.handlers[method] = handleFuncCtx[REQ, RESP]{handleFunc: h, async: async}
+	s.handlers[method] = handleFuncCtx[REQ, RESP]{handleFunc: h, async: async, logger: s.logger}
 	return s
 }
 
@@ -195,7 +202,7 @@ func (s *methodBasedServer[REQ, RESP]) onMessage(
 		defer request.Cancel()
 		req, ok := request.Message.(REQ)
 		if !ok {
-			getLogger().Fatal("received invalid message",
+			s.logger.Fatal("received invalid message",
 				zap.Any("message", request))
 		}
 
@@ -227,15 +234,15 @@ func (s *methodBasedServer[REQ, RESP]) getHandleFunc(
 	req REQ,
 	resp RESP,
 ) (handleFuncCtx[REQ, RESP], bool) {
-	if getLogger().Enabled(zap.DebugLevel) {
-		getLogger().Debug("received a request",
+	if s.logger.Enabled(zap.DebugLevel) {
+		s.logger.Debug("received a request",
 			zap.String("request", req.DebugString()))
 	}
 
 	select {
 	case <-ctx.Done():
-		if getLogger().Enabled(zap.DebugLevel) {
-			getLogger().Debug("skip request by timeout",
+		if s.logger.Enabled(zap.DebugLevel) {
+			s.logger.Debug("skip request by timeout",
 				zap.String("request", req.DebugString()))
 		}
 		resp.WrapError(ctx.Err())
@@ -245,8 +252,8 @@ func (s *methodBasedServer[REQ, RESP]) getHandleFunc(
 
 	if s.options.filter != nil &&
 		!s.options.filter(req) {
-		if getLogger().Enabled(zap.DebugLevel) {
-			getLogger().Debug("skip request by filter",
+		if s.logger.Enabled(zap.DebugLevel) {
+			s.logger.Debug("skip request by filter",
 				zap.String("request", req.DebugString()))
 		}
 		resp.WrapError(moerr.NewInvalidInputNoCtx("skip request by filter"))
@@ -271,6 +278,7 @@ type methodBasedClient[REQ, RESP MethodBasedMessage] struct {
 }
 
 func NewMethodBasedClient[REQ, RESP MethodBasedMessage](
+	sid string,
 	name string,
 	cfg Config,
 	pool MessagePool[REQ, RESP],
@@ -292,8 +300,8 @@ func NewMethodBasedClient[REQ, RESP MethodBasedMessage](
 	)
 
 	client, err := c.cfg.NewClient(
+		sid,
 		name,
-		getLogger().RawLogger(),
 		func() Message { return pool.AcquireResponse() },
 	)
 	if err != nil {

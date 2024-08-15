@@ -120,7 +120,7 @@ func init() {
 }
 
 func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers []bool, jsonType string, success bool) unnestTestCase {
-	proc := testutil.NewProcessWithMPool(m)
+	proc := testutil.NewProcessWithMPool("", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
 		for j := range defaultColDefs {

@@ -24,39 +24,35 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-
-	"github.com/stretchr/testify/assert"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/golang/mock/gomock"
 	cvey "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/stretchr/testify/require"
 )
 
 func init() {
-	testutil.SetupAutoIncrService()
+	testutil.SetupAutoIncrService("")
 }
 
 func Test_PathExists(t *testing.T) {
@@ -499,6 +495,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 
 func TestGetExprValue(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
+	catalog.SetupDefines("")
 	cvey.Convey("", t, func() {
 		type args struct {
 			sql     string
@@ -603,8 +600,11 @@ func TestGetExprValue(t *testing.T) {
 		binary.LittleEndian.PutUint64(id, 1)
 		ranges.Append(id)
 
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(&ranges, nil).AnyTimes()
-		table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
+		relData := &memoryengine.MemRelationData{
+			Shards: ranges,
+		}
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
+		//table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 		eng.EXPECT().Hints().Return(engine.Hints{
@@ -645,7 +645,7 @@ func TestGetExprValue(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setGlobalPu(pu)
-		ses := NewSession(ctx, &testMysqlWriter{}, testutil.NewProc().Mp())
+		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 		ses.SetDatabaseName("db")
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
@@ -756,7 +756,7 @@ func TestGetExprValue(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setGlobalPu(pu)
-		ses := NewSession(ctx, &testMysqlWriter{}, testutil.NewProc().Mp())
+		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
 		assert.Nil(t, err)
@@ -911,7 +911,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	ctx := context.TODO()
 	pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 	setGlobalPu(pu)
-	ses1 := NewSession(ctx, &testMysqlWriter{}, testutil.NewProc().Mp())
+	ses1 := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 
 	ses1.SetUserDefinedVar("var2", "val2", "set var2 = val2")
 	ses1.SetUserDefinedVar("var3", "val3", "set var3 = val3")
@@ -930,7 +930,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	}
 	defer mpool.DeleteMPool(mp)
 
-	testProc := process.New(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil)
+	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	params1 := testProc.GetVector(types.T_text.ToType())
 	for i := 0; i < 3; i++ {
@@ -1147,7 +1147,7 @@ func TestUserInput_getSqlSourceType(t *testing.T) {
 
 func TestTopsort(t *testing.T) {
 	cvey.Convey("create graph", t, func() {
-		g := topsort{next: make(map[string][]string)}
+		g := toposort{next: make(map[string][]string)}
 		g.addVertex("0")
 		g.addVertex("1")
 		g.addVertex("2")
@@ -1172,7 +1172,7 @@ func TestTopsort(t *testing.T) {
 	})
 
 	cvey.Convey("create graph", t, func() {
-		g := topsort{next: make(map[string][]string)}
+		g := toposort{next: make(map[string][]string)}
 		g.addVertex("0")
 		g.addVertex("1")
 		g.addVertex("2")
@@ -1183,7 +1183,7 @@ func TestTopsort(t *testing.T) {
 	})
 
 	cvey.Convey("create graph", t, func() {
-		g := topsort{next: make(map[string][]string)}
+		g := toposort{next: make(map[string][]string)}
 		g.addVertex("0")
 		g.addVertex("1")
 		g.addVertex("2")

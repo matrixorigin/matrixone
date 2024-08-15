@@ -91,7 +91,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	txnOperator.EXPECT().Snapshot().AnyTimes()
 
 	a := reuse.Alloc[process.AnalyzeInfo](nil)
-	proc := process.New(defines.AttachAccountId(context.TODO(), catalog.System_Account),
+	proc := process.NewTopProcess(defines.AttachAccountId(context.TODO(), catalog.System_Account),
 		nil,
 		nil,
 		txnOperator,
@@ -140,7 +140,7 @@ func Test_refactorScope(t *testing.T) {
 	s := reuse.Alloc[Scope](nil)
 	s.Proc = proc
 	c := reuse.Alloc[Compile](nil)
-	c.anal = newAnaylze()
+	c.anal = newAnalyzeModule()
 	c.proc = proc
 	c.proc.Ctx = ctx
 	rs := appendWriteBackOperator(c, s)
@@ -334,7 +334,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 }
 
 func Test_mergeAnalyseInfo(t *testing.T) {
-	target := newAnaylze()
+	target := newAnalyzeModule()
 	a := reuse.Alloc[process.AnalyzeInfo](nil)
 	target.analInfos = []*process.AnalyzeInfo{a}
 	ana := &pipeline.AnalysisList{
@@ -372,7 +372,7 @@ func Test_convertToPlanAnalyzeInfo(t *testing.T) {
 
 func Test_decodeBatch(t *testing.T) {
 	mp := &mpool.MPool{}
-	vp := process.New(
+	vp := process.NewTopProcess(
 		context.TODO(),
 		nil,
 		nil,
@@ -395,7 +395,6 @@ func Test_decodeBatch(t *testing.T) {
 		Attrs:      []string{"1"},
 		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType())},
 		Aggs:       []aggexec.AggFuncExec{agg0},
-		AuxData:    nil,
 	}
 	bat.SetRowCount(1)
 	data, err := types.Encode(bat)

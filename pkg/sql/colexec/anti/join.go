@@ -16,6 +16,9 @@ package anti
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,9 +41,6 @@ func (antiJoin *AntiJoin) OpType() vm.OpType {
 
 func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
 	antiJoin.ctr = new(container)
-	antiJoin.ctr.InitReceiver(proc, false)
-	antiJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-
 	antiJoin.ctr.vecs = make([]*vector.Vector, len(antiJoin.Conditions[0]))
 	antiJoin.ctr.executorForVecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, antiJoin.Conditions[0])
 	if err != nil {
@@ -49,6 +49,12 @@ func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
 
 	if antiJoin.Cond != nil {
 		antiJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, antiJoin.Cond)
+	}
+	if antiJoin.ProjectList != nil {
+		err := antiJoin.PrepareProjection(proc)
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -63,23 +69,21 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 	ap := antiJoin
 	result := vm.NewCallResult()
+	var err error
 	ctr := ap.ctr
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(anal); err != nil {
-				return result, err
-			}
+			antiJoin.build(anal, proc)
 			ctr.state = Probe
 
 		case Probe:
 			if ap.ctr.bat == nil {
-				msg := ctr.ReceiveFromSingleReg(0, anal)
-				if msg.Err != nil {
-					return result, msg.Err
+				result, err = antiJoin.Children[0].Call(proc)
+				if err != nil {
+					return result, err
 				}
-
-				bat := msg.Batch
+				bat := result.Batch
 				if bat == nil {
 					ctr.state = End
 					continue
@@ -97,16 +101,29 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.mp == nil {
-				err := ctr.emptyProbe(ap, proc, anal, antiJoin.GetIsFirst(), antiJoin.GetIsLast(), &result)
-				return result, err
+				err := ctr.emptyProbe(ap, proc, anal, antiJoin.GetIsFirst(), &result)
+				if err != nil {
+					return result, err
+				}
 			} else {
-				err := ctr.probe(ap, proc, anal, antiJoin.GetIsFirst(), antiJoin.GetIsLast(), &result)
+				err := ctr.probe(ap, proc, anal, antiJoin.GetIsFirst(), &result)
+				if err != nil {
+					return result, err
+				}
 				if ap.ctr.lastrow == 0 {
-					proc.PutBatch(ap.ctr.bat)
 					ap.ctr.bat = nil
 				}
-				return result, err
 			}
+
+			if ap.ProjectList != nil {
+				var err error
+				result.Batch, err = ap.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, antiJoin.GetIsLast())
+			return result, nil
 
 		default:
 			result.Batch = nil
@@ -116,51 +133,19 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
-	}
-	bat := msg.Batch
-	if bat != nil && bat.AuxData != nil {
-		ctr.mp = bat.DupJmAuxData()
-		ctr.hasNull = ctr.mp.HasNull()
+func (antiJoin *AntiJoin) build(anal process.Analyze, proc *process.Process) {
+	ctr := antiJoin.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
+	ctr.mp = message.ReceiveJoinMap(antiJoin.JoinMapTag, antiJoin.IsShuffle, antiJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-	return nil
+	ctr.batches = ctr.mp.GetBatches()
+	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
-func (ctr *container) receiveBatch(anal process.Analyze) error {
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat != nil {
-			ctr.batchRowCount += bat.RowCount()
-			ctr.batches = append(ctr.batches, bat)
-		} else {
-			break
-		}
-	}
-	for i := 0; i < len(ctr.batches)-1; i++ {
-		if ctr.batches[i].RowCount() != colexec.DefaultBatchSize {
-			panic("wrong batch received for hash build!")
-		}
-	}
-	return nil
-}
-
-func (ctr *container) build(anal process.Analyze) error {
-	err := ctr.receiveHashMap(anal)
-	if err != nil {
-		return err
-	}
-	return ctr.receiveBatch(anal)
-}
-
-func (ctr *container) emptyProbe(ap *AntiJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) emptyProbe(ap *AntiJoin, proc *process.Process, anal process.Analyze, isFirst bool, result *vm.CallResult) error {
 	anal.Input(ap.ctr.bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
@@ -175,7 +160,6 @@ func (ctr *container) emptyProbe(ap *AntiJoin, proc *process.Process, anal proce
 	count := ap.ctr.bat.RowCount()
 	for i := ap.ctr.lastrow; i < count; i += hashmap.UnitLimit {
 		if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
-			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.ctr.lastrow = i
 			return nil
@@ -193,15 +177,14 @@ func (ctr *container) emptyProbe(ap *AntiJoin, proc *process.Process, anal proce
 		}
 		ctr.rbat.AddRowCount(n)
 	}
-	anal.Output(ctr.rbat, isLast)
+
 	result.Batch = ctr.rbat
-	proc.PutBatch(ap.ctr.bat)
 	ap.ctr.lastrow = 0
 	ap.ctr.bat = nil
 	return nil
 }
 
-func (ctr *container) probe(ap *AntiJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *AntiJoin, proc *process.Process, anal process.Analyze, isFirst bool, result *vm.CallResult) error {
 
 	anal.Input(ap.ctr.bat, isFirst)
 	if ctr.rbat != nil {
@@ -216,7 +199,6 @@ func (ctr *container) probe(ap *AntiJoin, proc *process.Process, anal process.An
 	}
 	if ctr.batchRowCount == 1 && ctr.hasNull {
 		result.Batch = ctr.rbat
-		anal.Output(ctr.rbat, isLast)
 		return nil
 	}
 
@@ -234,10 +216,9 @@ func (ctr *container) probe(ap *AntiJoin, proc *process.Process, anal process.An
 	count := ap.ctr.bat.RowCount()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.NewIterator()
-	eligible := make([]int32, 0, hashmap.UnitLimit)
+	eligible := make([]int64, 0, hashmap.UnitLimit)
 	for i := ap.ctr.lastrow; i < count; i += hashmap.UnitLimit {
 		if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
-			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.ctr.lastrow = i
 			return nil
@@ -246,16 +227,15 @@ func (ctr *container) probe(ap *AntiJoin, proc *process.Process, anal process.An
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		copy(ctr.inBuckets, hashmap.OneUInt8s)
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := itr.Find(i, n, ctr.vecs)
 
 		rowCountIncrease := 0
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 || zvals[k] == 0 {
+			if zvals[k] == 0 {
 				continue
 			}
 			if vals[k] == 0 {
-				eligible = append(eligible, int32(i+k))
+				eligible = append(eligible, int64(i+k))
 				rowCountIncrease++
 				continue
 			}
@@ -311,7 +291,7 @@ func (ctr *container) probe(ap *AntiJoin, proc *process.Process, anal process.An
 						continue
 					}
 				}
-				eligible = append(eligible, int32(i+k))
+				eligible = append(eligible, int64(i+k))
 				rowCountIncrease++
 			}
 		}
@@ -324,7 +304,7 @@ func (ctr *container) probe(ap *AntiJoin, proc *process.Process, anal process.An
 		}
 		eligible = eligible[:0]
 	}
-	anal.Output(ctr.rbat, isLast)
+
 	result.Batch = ctr.rbat
 	ap.ctr.lastrow = 0
 	return nil

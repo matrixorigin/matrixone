@@ -21,14 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
@@ -82,7 +78,7 @@ func init() {
 		// newTestCase("insert into R values('991', '992', '993')", new(testing.T)),
 		// newTestCase("insert into R select * from S", new(testing.T)),
 		// newTestCase("update R set uid=110 where orderid='abcd'", new(testing.T)),
-		newTestCase(fmt.Sprintf("load data infile {\"filepath\"=\"%s/../../../test/distributed/resources/load_data/parallel.txt.gz\", \"compression\"=\"gzip\"} into table pressTbl FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '\"' LINES TERMINATED BY '\n' parallel 'true';", GetFilePath()), new(testing.T)),
+		newTestCase(fmt.Sprintf("load data infile {\"filepath\"=\"%s/../../../test/distributed/resources/load_data/parallel_1.txt.gz\", \"compression\"=\"gzip\"} into table pressTbl FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '\"' LINES TERMINATED BY '\n' parallel 'true';", GetFilePath()), new(testing.T)),
 	}
 }
 
@@ -139,8 +135,12 @@ func (w *Ws) GetHaveDDL() bool {
 	return false
 }
 
+func (w *Ws) PPString() string {
+	return ""
+}
+
 func TestCompile(t *testing.T) {
-	c, err := cnclient.NewPipelineClient("test", &cnclient.PipelineConfig{})
+	c, err := cnclient.NewPipelineClient("", "test", &cnclient.PipelineConfig{})
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, c.Close())
@@ -160,7 +160,7 @@ func TestCompile(t *testing.T) {
 		_, err = c.Run(0)
 		require.NoError(t, err)
 		// Enable memory check
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		//FIXME:
 		//!!!GOD!!!
 		//Sometimes it is 0.
@@ -175,7 +175,7 @@ func TestCompileWithFaults(t *testing.T) {
 	// fault.Enable()
 	var ctx = defines.AttachAccountId(context.Background(), catalog.System_Account)
 
-	pc, err := cnclient.NewPipelineClient("test", &cnclient.PipelineConfig{})
+	pc, err := cnclient.NewPipelineClient("", "test", &cnclient.PipelineConfig{})
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, pc.Close())
@@ -230,30 +230,6 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 		proc: proc,
 		pn:   pn,
 		stmt: stmts[0],
-	}
-}
-
-func TestCompileShouldReturnCtxError(t *testing.T) {
-	{
-		c := reuse.Alloc[Compile](nil)
-		c.proc = testutil.NewProcessWithMPool(mpool.MustNewZero())
-		ctx, cancel := context.WithTimeout(context.TODO(), 100*time.Millisecond)
-		c.proc.Ctx = ctx
-		time.Sleep(time.Second)
-		require.True(t, c.shouldReturnCtxErr())
-		cancel()
-		require.True(t, c.shouldReturnCtxErr())
-	}
-
-	{
-		c := reuse.Alloc[Compile](nil)
-		c.proc = testutil.NewProcessWithMPool(mpool.MustNewZero())
-		ctx, cancel := context.WithTimeout(context.TODO(), 500*time.Millisecond)
-		c.proc.Ctx = ctx
-		cancel()
-		require.False(t, c.shouldReturnCtxErr())
-		time.Sleep(time.Second)
-		require.False(t, c.shouldReturnCtxErr())
 	}
 }
 

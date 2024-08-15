@@ -95,7 +95,7 @@ func TestTop(t *testing.T) {
 		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -120,7 +120,7 @@ func BenchmarkTop(b *testing.B) {
 			_, _ = tc.arg.Call(tc.proc)
 			tc.arg.Free(tc.proc, false, nil)
 			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-			tc.proc.FreeVectors()
+			tc.proc.Free()
 		}
 	}
 }
@@ -128,7 +128,7 @@ func BenchmarkTop(b *testing.B) {
 func newTestCase(m *mpool.MPool, ts []types.Type, limit int64, fs []*plan.OrderBySpec) topTestCase {
 	return topTestCase{
 		types: ts,
-		proc:  testutil.NewProcessWithMPool(m),
+		proc:  testutil.NewProcessWithMPool("", m),
 		arg: &Top{
 			Fs:    fs,
 			Limit: plan2.MakePlan2Uint64ConstExprWithType(uint64(limit)),

@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"go.uber.org/zap/zapcore"
@@ -44,10 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-)
-
-const (
-	VectorLimit = 32
 )
 
 // Analyze analyzes information for operator
@@ -90,8 +88,31 @@ func NewRegMsg(bat *batch.Batch) *RegisterMessage {
 
 // WaitRegister channel
 type WaitRegister struct {
+	// Ctx, context of data receiver's pipeline.
+	//
+	// todo:
+	// This must cause a race here, because the context was shared by multiple pipelines.
+	//
+	// Assume we have two pipelines,
+	// pipeline1 and pipeline2, pipeline1 will dispatch data to pipeline2.
+	// so they share the same WaitRegister.
+	// and all of the receiver pipeline2 is parallel type.
+	//
+	// see the function `setContextForParallelScope` in `pkg/sql/compile/compile2.go`,
+	// we will rebuild pipeline context sometimes for parallel-type pipeline.
+	//
+	// If pipeline1 run first, it will listen to the context of pipeline2 from WaitRegister,
+	// and then pipeline2 run, it will rebuild the context, and the context of pipeline2 will be changed.
+	// it's a race but maybe not a problem, because the receiver never receive data before the pipeline2 run.
+	//
+	// it's a better way to use a self context but not the pipeline context here.
+	// and the receiver shut down the context when it's done.
 	Ctx context.Context
-	Ch  chan *RegisterMessage
+	// Ch, data receiver's channel, receiver will wait for data from this channel.
+	Ch chan *RegisterMessage
+
+	// how many nil batch this channel can receive, default 0 means every nil batch close channel
+	NilBatchCnt int
 }
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
@@ -145,7 +166,7 @@ type SessionInfo struct {
 	SessionId            uuid.UUID
 }
 
-// AnalyzeInfo  analyze information for query
+// AnalyzeInfo  operatorAnalyzer information for query
 type AnalyzeInfo struct {
 	// NodeId, index of query's node list
 	NodeId int32
@@ -317,14 +338,15 @@ func (sp *StmtProfile) GetStmtId() uuid.UUID {
 	return sp.stmtId
 }
 
-// the common part of process.
-// each query share only 1 instance of BaseProcess
 type BaseProcess struct {
+	// sqlContext includes the client context and the query context.
+	sqlContext QueryBaseContext
+
 	StmtProfile *StmtProfile
 	// Id, query id.
 	Id              string
 	Lim             Limitation
-	vp              *vectorPool
+	vp              *cachedVectorPool
 	mp              *mpool.MPool
 	prepareBatch    *batch.Batch
 	prepareExprList any
@@ -334,8 +356,6 @@ type BaseProcess struct {
 	TxnClient           client.TxnClient
 	AnalInfos           []*AnalyzeInfo
 	SessionInfo         SessionInfo
-	Ctx                 context.Context
-	Cancel              context.CancelFunc
 	FileService         fileservice.FileService
 	LockService         lockservice.LockService
 	IncrService         incrservice.AutoIncrementService
@@ -349,7 +369,7 @@ type BaseProcess struct {
 	Hakeeper            logservice.CNHAKeeperClient
 	UdfService          udf.Service
 	WaitPolicy          lock.WaitPolicy
-	MessageBoard        *MessageBoard
+	messageBoard        *message.MessageBoard
 	logger              *log.MOLogger
 	TxnOperator         client.TxnOperator
 	CloneTxnOperator    client.TxnOperator
@@ -359,24 +379,22 @@ type BaseProcess struct {
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
 type Process struct {
-	Base             *BaseProcess
-	Reg              Register
-	Ctx              context.Context
-	Cancel           context.CancelFunc
+	// BaseProcess is the common part of one process, and it's shared by all its children processes.
+	Base *BaseProcess
+	Reg  Register
+
+	// Ctx and Cancel are pipeline's context and cancel function.
+	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
+	Ctx    context.Context
+	Cancel context.CancelFunc
+
+	// TODO: move to dispatch operator.
 	DispatchNotifyCh chan *WrapCs
-}
-
-type vectorPool struct {
-	sync.Mutex
-	vecs map[uint8][]*vector.Vector
-
-	// max vector count limit for each type in pool.
-	Limit int
 }
 
 type sqlHelper interface {
 	GetCompilerContext() any
-	ExecSql(string) ([]interface{}, error)
+	ExecSql(string) ([][]interface{}, error)
 	GetSubscriptionMeta(string) (sub *plan.SubscriptionMeta, err error)
 }
 
@@ -387,6 +405,14 @@ type WrapCs struct {
 	Uid          uuid.UUID
 	Cs           morpc.ClientSession
 	Err          chan error
+}
+
+func (proc *Process) GetMessageBoard() *message.MessageBoard {
+	return proc.Base.messageBoard
+}
+
+func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
+	proc.Base.messageBoard = mb
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
@@ -423,23 +449,15 @@ func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
 }
 
 func (proc *Process) CleanValueScanBatchs() {
-	for k, bat := range proc.Base.valueScanBatch {
-		bat.SetCnt(1)
-		bat.Clean(proc.Mp())
-		delete(proc.Base.valueScanBatch, k)
-	}
-}
-
-func (proc *Process) GetValueScanBatchs() []*batch.Batch {
-	var bats []*batch.Batch
-
+	mp := proc.Mp()
 	for k, bat := range proc.Base.valueScanBatch {
 		if bat != nil {
-			bats = append(bats, bat)
+			bat.SetCnt(1)
+			bat.Clean(mp)
 		}
+		// todo: why not remake the map after all clean ?
 		delete(proc.Base.valueScanBatch, k)
 	}
-	return bats
 }
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
@@ -499,7 +517,8 @@ func (proc *Process) GetTxnOperator() client.TxnOperator {
 	return proc.Base.TxnOperator
 }
 
-type analyze struct {
+// Operator Resource Analzyer
+type operatorAnalyzer struct {
 	parallelMajor        bool
 	parallelIdx          int
 	start                time.Time

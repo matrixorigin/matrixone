@@ -201,7 +201,7 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 		case types.T_datetime:
 			s.MinValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_char, types.T_varchar, types.T_text:
+		case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 			s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
 		}
@@ -575,28 +575,32 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 	switch expr.Typ.Id {
 	case int32(types.T_decimal64):
-		w += 64
+		w += 8
 	case int32(types.T_decimal128):
-		w += 128
+		w += 16
 	case int32(types.T_float32), int32(types.T_float64):
 		w += 8
-	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text), int32(types.T_json):
+	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text):
 		w += 4
+	case int32(types.T_json), int32(types.T_datalink):
+		w += 32
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funcImpl := exprImpl.F
 		switch funcImpl.Func.GetObjName() {
+		case "json_extract":
+			w += 256
 		case "like":
-			w += 10
+			w += 32
 		case "cast":
-			w += 3
+			w += 8
 		case "in":
-			w += 2
+			w += 3
 		case "<>", "!=":
-			w += 1.2
+			w += 2
 		case "<", "<=":
-			w += 1.1
+			w += 1.5
 		default:
 			w += 1
 		}
@@ -792,11 +796,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_UNION_ALL:
 		node.Stats.Outcnt = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_INTERSECT:
 		if needResetHashMapStats {
@@ -806,6 +812,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_INTERSECT_ALL:
 		if needResetHashMapStats {
@@ -815,6 +822,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_MINUS:
 		if needResetHashMapStats {
@@ -825,6 +833,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_MINUS_ALL:
 		if needResetHashMapStats {
@@ -835,6 +844,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_VALUE_SCAN:
 		if node.RowsetData != nil {
@@ -863,14 +873,18 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	case plan.Node_TABLE_SCAN:
 		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
 		if node.ObjRef != nil && leafNode {
-			if len(node.BindingTags) > 0 {
-				builder.tag2Table[node.BindingTags[0]] = node.TableDef
+			if builder.isRestore {
+				node.Stats = DefaultHugeStats()
+			} else {
+				if len(node.BindingTags) > 0 {
+					builder.tag2Table[node.BindingTags[0]] = node.TableDef
+				}
+				newStats := calcScanStats(node, builder)
+				if needResetHashMapStats {
+					resetHashMapStats(newStats)
+				}
+				node.Stats = newStats
 			}
-			newStats := calcScanStats(node, builder)
-			if needResetHashMapStats {
-				resetHashMapStats(newStats)
-			}
-			node.Stats = newStats
 		}
 
 	case plan.Node_FILTER:
@@ -881,6 +895,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 		node.Stats.Cost = childStats.Cost
 		node.Stats.Selectivity = 0.05
+		node.Stats.BlockNum = childStats.BlockNum
 
 	case plan.Node_FUNCTION_SCAN:
 		if !computeFunctionScan(node.TableDef.TblFunc.Name, node.TblFuncExprList, node.Stats) {
@@ -888,11 +903,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				node.Stats.Outcnt = childStats.Outcnt
 				node.Stats.Cost = childStats.Outcnt
 				node.Stats.Selectivity = childStats.Selectivity
+				node.Stats.BlockNum = childStats.BlockNum
 			}
 		}
 
 	case plan.Node_INSERT:
 		if len(node.Children) > 0 && childStats != nil {
+			node.Stats.BlockNum = childStats.BlockNum
 			node.Stats.Outcnt = childStats.Outcnt
 			node.Stats.Cost = childStats.Outcnt
 			node.Stats.Selectivity = childStats.Selectivity
@@ -1058,6 +1075,9 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
+	if builder.isRestore {
+		return DefaultHugeStats()
+	}
 	if builder.skipStats {
 		return DefaultStats()
 	}
@@ -1073,12 +1093,12 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	//	ts = *node.ScanTS
 	//}
 
-	scanSnapshot := node.ScanSnapshot
-	if scanSnapshot == nil {
-		scanSnapshot = &Snapshot{}
+	var scanSnapshot *plan.Snapshot
+	if node.ScanSnapshot != nil {
+		scanSnapshot = node.ScanSnapshot
 	}
 
-	s, err := builder.compCtx.Stats(node.ObjRef, *scanSnapshot)
+	s, err := builder.compCtx.Stats(node.ObjRef, scanSnapshot)
 	if err != nil || s == nil {
 		return DefaultStats()
 	}
@@ -1313,7 +1333,9 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool) ExecType {
 		}
 		stats := node.Stats
 		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
-			if !txnHaveDDL {
+			if txnHaveDDL {
+				return ExecTypeAP_ONECN
+			} else {
 				return ExecTypeAP_MULTICN
 			}
 		}
@@ -1337,12 +1359,6 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 		return "AP QUERY PLAN ON MULTICN(" + strconv.Itoa(ncpu) + " core)"
 	}
 	return "QUERY PLAN"
-}
-
-func ReCalcQueryStats(builder *QueryBuilder, query *plan.Query) {
-	for _, rootID := range builder.qry.Steps {
-		ReCalcNodeStats(rootID, builder, true, false, true)
-	}
 }
 
 func PrintStats(qry *plan.Query) string {

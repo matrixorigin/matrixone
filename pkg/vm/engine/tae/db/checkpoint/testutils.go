@@ -16,7 +16,6 @@ package checkpoint
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
@@ -219,7 +219,7 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 		start = prev.end.Next()
 	}
 
-	entry := NewCheckpointEntry(start, end, ET_Incremental)
+	entry := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
 	logutil.Info(
 		"Checkpoint-Start-Force",
 		zap.String("entry", entry.String()),
@@ -300,7 +300,7 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	if prev != nil {
 		start = prev.end.Next()
 	}
-	entry := NewCheckpointEntry(start, end, ET_Incremental)
+	entry := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
 	r.storage.Lock()
 	r.storage.entries.Set(entry)
 	now := time.Now()
@@ -320,7 +320,7 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	}
 	backupTime := time.Now().UTC()
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
-	backup := NewCheckpointEntry(end.Next(), currTs, ET_Incremental)
+	backup := NewCheckpointEntry(r.rt.SID(), end.Next(), currTs, ET_Incremental)
 	location, err = r.doCheckpointForBackup(backup)
 	if err != nil {
 		return

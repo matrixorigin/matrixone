@@ -21,6 +21,8 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -403,7 +405,9 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if err != nil {
 			return nil, err
 		}
-		lines = append(lines, msgInfo)
+		if len(msgInfo) > 0 {
+			lines = append(lines, msgInfo)
+		}
 	}
 
 	if len(ndesc.Node.RecvMsgList) > 0 {
@@ -411,7 +415,9 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if err != nil {
 			return nil, err
 		}
-		lines = append(lines, msgInfo)
+		if len(msgInfo) > 0 {
+			lines = append(lines, msgInfo)
+		}
 	}
 	return lines, nil
 }
@@ -609,11 +615,15 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, op
 
 func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
-	buf.WriteString("Send Message: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.SendMsgList {
-			if !first {
+			if v.GetMsgType() == int32(message.MsgJoinMap) {
+				continue
+			}
+			if first {
+				buf.WriteString("Send Message: ")
+			} else {
 				buf.WriteString(", ")
 			}
 			first = false
@@ -629,11 +639,15 @@ func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *
 
 func (ndesc *NodeDescribeImpl) GetRecvMessageInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
-	buf.WriteString("Recv Message: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.RecvMsgList {
-			if !first {
+			if v.GetMsgType() == int32(message.MsgJoinMap) {
+				continue
+			}
+			if first {
+				buf.WriteString("Recv Message: ")
+			} else {
 				buf.WriteString(", ")
 			}
 			first = false
@@ -691,8 +705,6 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 
 		if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 			buf.WriteString(" shuffle: REUSE ")
-		} else if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
-			buf.WriteString(" RESHUFFLE ")
 		}
 	}
 	return buf.String(), nil

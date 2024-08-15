@@ -33,15 +33,21 @@ const (
 )
 
 type scheduler struct {
+	service           string
 	cfg               hakeeper.Config
 	taskServiceGetter func() taskservice.TaskService
 }
 
 var _ hakeeper.TaskScheduler = (*scheduler)(nil)
 
-func NewScheduler(taskServiceGetter func() taskservice.TaskService, cfg hakeeper.Config) hakeeper.TaskScheduler {
+func NewScheduler(
+	service string,
+	taskServiceGetter func() taskservice.TaskService,
+	cfg hakeeper.Config,
+) hakeeper.TaskScheduler {
 	cfg.Fill()
 	s := &scheduler{
+		service:           service,
 		taskServiceGetter: taskServiceGetter,
 		cfg:               cfg,
 	}
@@ -54,7 +60,7 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
 	tasks := append(runningTasks, createdTasks...)
 
-	runtime.ProcessLevelRuntime().Logger().Debug("task schedule query tasks",
+	runtime.ServiceRuntime(s.service).Logger().Debug("task schedule query tasks",
 		zap.Int("created", len(createdTasks)),
 		zap.Int("running", len(runningTasks)))
 	if len(tasks) == 0 {
@@ -62,7 +68,7 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	}
 	workingCNPool := cnPool.selectCNs(notExpired(s.cfg, currentTick))
 	expiredTasks := getExpiredTasks(runningTasks, workingCNPool)
-	runtime.ProcessLevelRuntime().Logger().Info("task schedule query tasks",
+	runtime.ServiceRuntime(s.service).Logger().Info("task schedule query tasks",
 		zap.Int("created", len(createdTasks)),
 		zap.Int("expired", len(expiredTasks)))
 	s.allocateTasks(createdTasks, workingCNPool)
@@ -84,7 +90,7 @@ func (s *scheduler) StopScheduleCronTask() {
 func (s *scheduler) queryTasks(status task.TaskStatus) []task.AsyncTask {
 	ts := s.taskServiceGetter()
 	if ts == nil {
-		runtime.ProcessLevelRuntime().Logger().Error("task service is nil",
+		runtime.ServiceRuntime(s.service).Logger().Error("task service is nil",
 			zap.String("status", status.String()))
 		return nil
 	}
@@ -93,7 +99,7 @@ func (s *scheduler) queryTasks(status task.TaskStatus) []task.AsyncTask {
 
 	tasks, err := ts.QueryAsyncTask(ctx, taskservice.WithTaskStatusCond(status))
 	if err != nil {
-		runtime.ProcessLevelRuntime().Logger().Error("failed to query tasks",
+		runtime.ServiceRuntime(s.service).Logger().Error("failed to query tasks",
 			zap.String("status", status.String()),
 			zap.Error(err))
 		return nil
@@ -108,11 +114,16 @@ func (s *scheduler) allocateTasks(tasks []task.AsyncTask, cnPool *cnPool) {
 	}
 
 	for _, t := range tasks {
-		allocateTask(ts, t, cnPool)
+		allocateTask(s.service, ts, t, cnPool)
 	}
 }
 
-func allocateTask(ts taskservice.TaskService, t task.AsyncTask, cnPool *cnPool) {
+func allocateTask(
+	service string,
+	ts taskservice.TaskService,
+	t task.AsyncTask,
+	cnPool *cnPool,
+) {
 	var rules []rule
 	if len(t.Metadata.Options.Labels) != 0 {
 		rules = make([]rule, 0, len(t.Metadata.Options.Labels))
@@ -130,7 +141,7 @@ func allocateTask(ts taskservice.TaskService, t task.AsyncTask, cnPool *cnPool) 
 	cnPool = cnPool.selectCNs(rules...)
 	runner := cnPool.min()
 	if runner.uuid == "" {
-		runtime.ProcessLevelRuntime().Logger().Error("failed to allocate task",
+		runtime.ServiceRuntime(service).Logger().Error("failed to allocate task",
 			zap.Uint64("task-id", t.ID),
 			zap.String("task-metadata-id", t.Metadata.ID),
 			zap.Error(moerr.NewInternalErrorNoCtx("no CN available")))
@@ -140,14 +151,14 @@ func allocateTask(ts taskservice.TaskService, t task.AsyncTask, cnPool *cnPool) 
 	defer cancel()
 
 	if err := ts.Allocate(ctx, t, runner.uuid); err != nil {
-		runtime.ProcessLevelRuntime().Logger().Error("failed to allocate task",
+		runtime.ServiceRuntime(service).Logger().Error("failed to allocate task",
 			zap.Uint64("task-id", t.ID),
 			zap.String("task-metadata-id", t.Metadata.ID),
 			zap.String("task-runner", runner.uuid),
 			zap.Error(err))
 		return
 	}
-	runtime.ProcessLevelRuntime().Logger().Info("task allocated",
+	runtime.ServiceRuntime(service).Logger().Info("task allocated",
 		zap.Uint64("task-id", t.ID),
 		zap.String("task-metadata-id", t.Metadata.ID),
 		zap.String("task-runner", runner.uuid))

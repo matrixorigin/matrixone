@@ -65,7 +65,7 @@ func NewTestEngineWithDir(
 	t *testing.T,
 	opts *options.Options,
 ) *TestEngine {
-	blockio.Start()
+	blockio.Start("")
 	db := InitTestDBWithDir(ctx, dir, t, opts)
 	return &TestEngine{
 		DB: db,
@@ -79,7 +79,7 @@ func NewTestEngine(
 	t *testing.T,
 	opts *options.Options,
 ) *TestEngine {
-	blockio.Start()
+	blockio.Start("")
 	db := InitTestDB(ctx, moduleName, t, opts)
 	return &TestEngine{
 		DB: db,
@@ -125,8 +125,6 @@ func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 
 func (e *TestEngine) Close() error {
 	err := e.DB.Close()
-	blockio.Stop()
-	blockio.ResetPipeline()
 	return err
 }
 
@@ -411,7 +409,7 @@ func writeIncrementalCheckpoint(
 	checkpointSize int,
 	fs fileservice.FileService,
 ) (objectio.Location, objectio.Location) {
-	factory := logtail.IncrementalCheckpointDataFactory(start, end, false, false)
+	factory := logtail.IncrementalCheckpointDataFactory("", start, end, false, false)
 	data, err := factory(c)
 	assert.NoError(t, err)
 	defer data.Close()
@@ -421,9 +419,9 @@ func writeIncrementalCheckpoint(
 }
 
 func tnReadCheckpoint(t *testing.T, location objectio.Location, fs fileservice.FileService) *logtail.CheckpointData {
-	reader, err := blockio.NewObjectReader(fs, location)
+	reader, err := blockio.NewObjectReader("", fs, location)
 	assert.NoError(t, err)
-	data := logtail.NewCheckpointData(common.CheckpointAllocator)
+	data := logtail.NewCheckpointData("", common.CheckpointAllocator)
 	err = data.ReadFrom(
 		context.Background(),
 		logtail.CheckpointCurrentVersion,
@@ -451,6 +449,7 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 	locations := strings.Join(locs, ";")
 	entries, cb, err := logtail.LoadCheckpointEntries(
 		context.Background(),
+		"",
 		locations,
 		tid,
 		"tbl",
@@ -482,7 +481,7 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 
 func checkTNCheckpointData(ctx context.Context, t *testing.T, data *logtail.CheckpointData,
 	start, end types.TS, c *catalog.Catalog) {
-	factory := logtail.IncrementalCheckpointDataFactory(start, end, false, false)
+	factory := logtail.IncrementalCheckpointDataFactory("", start, end, false, false)
 	data2, err := factory(c)
 	assert.NoError(t, err)
 	defer data2.Close()
@@ -567,7 +566,7 @@ func checkCNCheckpointData(ctx context.Context, t *testing.T, tid uint64, ins, d
 }
 
 func checkMODatabase(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end, false)
+	collector := logtail.NewIncrementalCollector("", start, end, false)
 	p := &catalog.LoopProcessor{}
 	p.DatabaseFn = collector.VisitDB
 	err := c.RecurLoop(p)
@@ -583,7 +582,7 @@ func checkMODatabase(ctx context.Context, t *testing.T, ins, del, cnIns, segDel 
 }
 
 func checkMOTables(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end, false)
+	collector := logtail.NewIncrementalCollector("", start, end, false)
 	p := &catalog.LoopProcessor{}
 	p.TableFn = collector.VisitTable
 	err := c.RecurLoop(p)
@@ -599,7 +598,7 @@ func checkMOTables(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *a
 }
 
 func checkMOColumns(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end, false)
+	collector := logtail.NewIncrementalCollector("", start, end, false)
 	p := &catalog.LoopProcessor{}
 	p.TableFn = collector.VisitTable
 	err := c.RecurLoop(p)
@@ -616,7 +615,7 @@ func checkMOColumns(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *
 }
 
 func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cnIns, seg *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end, false)
+	collector := logtail.NewIncrementalCollector("", start, end, false)
 	p := &catalog.LoopProcessor{}
 	p.TombstoneFn = func(be data.Tombstone) error {
 		if be.GetObject().(*catalog.ObjectEntry).GetTable().ID != tid {
@@ -651,7 +650,7 @@ func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cn
 }
 
 func GetUserTablesInsBatch(t *testing.T, tid uint64, start, end types.TS, c *catalog.Catalog) (*containers.Batch, *containers.Batch) {
-	collector := logtail.NewIncrementalCollector(start, end, false)
+	collector := logtail.NewIncrementalCollector("", start, end, false)
 	p := &catalog.LoopProcessor{}
 	p.TombstoneFn = func(be data.Tombstone) error {
 		if be.GetObject().(*catalog.ObjectEntry).GetTable().ID != tid {
@@ -748,7 +747,7 @@ func (e *TestEngine) CheckReadCNCheckpoint() {
 
 func (e *TestEngine) CheckCollectDeleteInRange() {
 	txn, rel := e.GetRelation()
-	ForEachObject(rel, func(obj handle.Object) error {
+	ForEachObject(e.T, rel, func(obj handle.Object) error {
 		meta := obj.GetMeta().(*catalog.ObjectEntry)
 		deleteBat, _, err := meta.GetObjectData().CollectDeleteInRange(
 			context.Background(), types.TS{}, txn.GetStartTS(), false, common.DefaultAllocator,

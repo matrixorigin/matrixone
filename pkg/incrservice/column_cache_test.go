@@ -514,26 +514,32 @@ func runColumnCacheTestsWithInitOffset(
 	offset uint64,
 	fn func(context.Context, *columnCache),
 ) {
-	defer leaktest.AfterTest(t)()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	runAllocatorTests(
-		t,
-		func(a valueAllocator) {
-			ctx, cancel := context.WithCancel(defines.AttachAccountId(context.Background(), catalog.System_Account))
-			defer cancel()
-			col := AutoColumn{
-				ColName: "k1",
-				Offset:  offset,
-				Step:    uint64(step),
-			}
-			a.(*allocator).store.Create(
-				ctx,
-				0,
-				[]AutoColumn{col},
-				nil)
-			cc, err := newColumnCache(ctx, 0, col, Config{CountPerAllocate: capacity}, true, a, nil)
-			require.NoError(t, err)
-			fn(ctx, cc)
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			defer leaktest.AfterTest(t)()
+			runAllocatorTests(
+				t,
+				func(a valueAllocator) {
+					ctx, cancel := context.WithCancel(defines.AttachAccountId(context.Background(), catalog.System_Account))
+					defer cancel()
+					col := AutoColumn{
+						ColName: "k1",
+						Offset:  offset,
+						Step:    uint64(step),
+					}
+					a.(*allocator).store.Create(
+						ctx,
+						0,
+						[]AutoColumn{col},
+						nil)
+					cc, err := newColumnCache(ctx, sid, 0, col, Config{CountPerAllocate: capacity}, true, a, nil)
+					require.NoError(t, err)
+					fn(ctx, cc)
+				},
+			)
 		},
 	)
+
 }

@@ -199,44 +199,50 @@ func (node *AlterPitr) GetQueryType() string     { return QueryTypeOth }
 type RestorePitr struct {
 	statementImpl
 
-	IfExists bool
-	Name     Identifier // pitr name
-
 	Level RestoreLevel // restore level
+
+	Name Identifier // pitr name
 
 	AccountName  Identifier // account name
 	DatabaseName Identifier // database name
 	TableName    Identifier // table name
+
+	SrcAccountName Identifier // source account name
+
+	TimeStamp string
 }
 
 func (node *RestorePitr) Format(ctx *FmtCtx) {
-	ctx.WriteString("restore pitr ")
-	if node.IfExists {
-		ctx.WriteString("if exists ")
-	}
+	ctx.WriteString("restore ")
 
 	switch node.Level {
 	case RESTORELEVELCLUSTER:
 		ctx.WriteString("cluster")
 	case RESTORELEVELACCOUNT:
-		ctx.WriteString("account ")
-		node.AccountName.Format(ctx)
+		if len(node.AccountName) != 0 {
+			ctx.WriteString("account ")
+			node.AccountName.Format(ctx)
+		} else {
+			ctx.WriteString("self account")
+		}
 	case RESTORELEVELDATABASE:
-		ctx.WriteString("account ")
-		node.AccountName.Format(ctx)
-		ctx.WriteString(" database ")
+		ctx.WriteString("database ")
 		node.DatabaseName.Format(ctx)
 	case RESTORELEVELTABLE:
-		ctx.WriteString("account ")
-		node.AccountName.Format(ctx)
-		ctx.WriteString(" database ")
+		ctx.WriteString("database ")
 		node.DatabaseName.Format(ctx)
 		ctx.WriteString(" table ")
 		node.TableName.Format(ctx)
 	}
 
-	ctx.WriteString(" from  pitr ")
+	ctx.WriteString(" from pitr ")
 	node.Name.Format(ctx)
+	ctx.WriteString(" timestamp = ")
+	ctx.WriteString(node.TimeStamp)
+	if len(node.SrcAccountName) != 0 {
+		ctx.WriteString(" from account ")
+		node.SrcAccountName.Format(ctx)
+	}
 }
 
 func (node *RestorePitr) GetStatementType() string { return "Restore PITR" }

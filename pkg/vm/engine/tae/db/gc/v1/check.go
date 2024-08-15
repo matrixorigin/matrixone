@@ -15,6 +15,8 @@
 package v1
 
 import (
+	"time"
+
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"time"
 )
 
 const NotFoundLimit = 10
@@ -74,7 +75,7 @@ func (c *checker) Check() error {
 	checkpoints := c.cleaner.ckpClient.ICKPSeekLT(entry.GetEnd(), 40)
 	unconsumedTable := NewGCTable()
 	for _, ckp := range checkpoints {
-		_, data, err := logtail.LoadCheckpointEntriesFromKey(c.cleaner.ctx, c.cleaner.fs.Service,
+		_, data, err := logtail.LoadCheckpointEntriesFromKey(c.cleaner.ctx, c.cleaner.sid, c.cleaner.fs.Service,
 			ckp.GetLocation(), ckp.GetVersion(), nil, &types.TS{})
 		if err != nil {
 			logutil.Errorf("load checkpoint failed: %v", err)

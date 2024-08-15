@@ -42,6 +42,7 @@ enum OpCode {
     OpInterceptCommit  = 2010;
     OpCommitMerge      = 2011;
     OpDiskDiskCleaner   = 2012;
+    OpReader = 2013;
 }
 
 // TNPingRequest ping request
@@ -85,9 +86,13 @@ message Batch {
 };
 
 message TableID {
-    uint64 db_id        = 1;
-    uint64 tb_id        = 2;
-    uint64 partition_id = 3;
+    uint64 db_id          = 1;
+    uint64 tb_id          = 2;
+    uint64 partition_id   = 3;
+    uint32 acc_id         = 4;
+    string db_name        = 5;
+    string tb_name        = 6;
+    uint32 primary_seqnum = 7;
 }
 
 // CN pull the log tail of table from TN.
@@ -393,7 +398,7 @@ message MergeCommitEntry {
     repeated bytes merged_objs = 5;
     repeated bytes created_objs = 6;
     BlkTransferBooking booking = 7;
-    bytes booking_loc = 8;
+    repeated string booking_loc = 8;
     string err = 9;
 }
 
@@ -408,8 +413,4 @@ message MergeTaskEntry {
     uint32 account_id = 7;
     uint32 user_id = 8;
     uint32 role_id = 9;
-}
-
-message HashPageMap {
-    map<uint32, bytes> m = 1[(gogoproto.nullable) = false];
 }

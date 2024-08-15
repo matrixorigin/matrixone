@@ -554,7 +554,7 @@ func (blk *baseObject) Prefetch(idxes []uint16, blkID uint16) error {
 		if err != nil {
 			return err
 		}
-		return blockio.Prefetch(idxes, []uint16{key.ID()}, blk.rt.Fs.Service, key)
+		return blockio.Prefetch(blk.rt.SID(), idxes, []uint16{key.ID()}, blk.rt.Fs.Service, key)
 	}
 }
 
@@ -1001,7 +1001,7 @@ func (blk *baseObject) PersistedCollectDeleteInRange(
 	if b != nil {
 		bat = b
 	}
-	t := types.T_int32.ToType()
+	t := types.T_int64.ToType()
 	sels := blk.rt.VectorPool.Transient.GetVector(&t)
 	defer sels.Close()
 	selsVec := sels.GetDownstreamVector()
@@ -1011,7 +1011,7 @@ func (blk *baseObject) PersistedCollectDeleteInRange(
 		blkID,
 		!withAborted,
 		func(row int, rowIdVec *vector.Vector) {
-			_ = vector.AppendFixed[int32](selsVec, int32(row), false, mp)
+			_ = vector.AppendFixed[int64](selsVec, int64(row), false, mp)
 		},
 		func(delBat *containers.Batch) {
 			if sels.Length() == 0 {
@@ -1035,7 +1035,7 @@ func (blk *baseObject) PersistedCollectDeleteInRange(
 				retVec.PreExtend(sels.Length())
 				retVec.GetDownstreamVector().Union(
 					srcVec.GetDownstreamVector(),
-					vector.MustFixedCol[int32](sels.GetDownstreamVector()),
+					vector.MustFixedCol[int64](sels.GetDownstreamVector()),
 					retVec.GetAllocator(),
 				)
 			}

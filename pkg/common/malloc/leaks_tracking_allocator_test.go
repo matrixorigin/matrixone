@@ -23,7 +23,7 @@ func TestLeaksTrackingAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
 		tracker := new(LeaksTracker)
 		return NewLeaksTrackingAllocator(
-			NewClassAllocator(NewFixedSizeMmapAllocator),
+			newUpstreamAllocatorForTest(),
 			tracker,
 		)
 	})
@@ -31,7 +31,7 @@ func TestLeaksTrackingAllocator(t *testing.T) {
 	t.Run("report", func(t *testing.T) {
 		tracker := new(LeaksTracker)
 		allocator := NewLeaksTrackingAllocator(
-			NewCAllocator(),
+			newUpstreamAllocatorForTest(),
 			tracker,
 		)
 
@@ -67,7 +67,7 @@ func BenchmarkLeaksTrackingAllocator(b *testing.B) {
 		benchmarkAllocator(b, func() Allocator {
 			tracker := new(LeaksTracker)
 			return NewLeaksTrackingAllocator(
-				NewClassAllocator(NewFixedSizeMmapAllocator),
+				newUpstreamAllocatorForTest(),
 				tracker,
 			)
 		}, n)
@@ -78,7 +78,7 @@ func FuzzLeaksTrackingAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
 		tracker := new(LeaksTracker)
 		return NewLeaksTrackingAllocator(
-			NewClassAllocator(NewFixedSizeMmapAllocator),
+			newUpstreamAllocatorForTest(),
 			tracker,
 		)
 	})

@@ -1,0 +1,23 @@
+select load_file(cast('file://$resources/file_test/normal.txt' as datalink));
+load_file(cast(file:///Users/arjunsunilkumar/GolandProjects/matrixone/test/distributed/resources/file_test/normal.txt as datalink))
+Hello world!
+select load_file(cast('file://$resources/file_test/normal.txt?offset=0&size=3' as datalink));
+load_file(cast(file:///Users/arjunsunilkumar/GolandProjects/matrixone/test/distributed/resources/file_test/normal.txt?offset=0&size=3 as datalink))
+Hel
+create table t1(a int, b datalink);
+insert into t1 values(1, "wrong datalink url");
+unsupported url scheme  is not yet implemented
+insert into t1 values(2, 'git://repo/normal.txt?offset=0&size=3');
+unsupported url scheme git is not yet implemented
+insert into t1 values(1, 'file://$resources/file_test/normal.txt?offset=0&size=3');
+insert into t1 values(2, 'file://$resources/file_test/normal.txt');
+insert into t1 values(3, 'file://$resources/file_test/normal.txt?size=3');
+insert into t1 values(4, 'file://$resources/file_test/normal.txt?offset=0');
+insert into t1 values(5, 'file://$resources/file_test/normal.txt?offset=0&size=-100');
+internal error: size cannot be less than -1
+select a, load_file(b) from t1;
+a    load_file(b)
+1    Hel
+2    Hello world!
+3    Hel
+4    Hello world!

@@ -44,7 +44,7 @@ type flushTableTailEntry struct {
 	taskName   string
 	tableEntry *catalog.TableEntry
 
-	transMappings      *api.BlkTransferBooking
+	transMappings      api.TransferMaps
 	ablksMetas         []*catalog.ObjectEntry
 	delSrcMetas        []*catalog.ObjectEntry
 	ablksHandles       []handle.Object
@@ -72,7 +72,7 @@ func NewFlushTableTailEntry(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	taskName string,
-	mapping *api.BlkTransferBooking,
+	mapping api.TransferMaps,
 	tableEntry *catalog.TableEntry,
 	ablksMetas []*catalog.ObjectEntry,
 	nblksMetas []*catalog.ObjectEntry,
@@ -126,24 +126,19 @@ func NewFlushTableTailEntry(
 func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked().HasPK()
 	ioVector := model.InitTransferPageIO()
-	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings.Mappings))
+	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings))
 	var duration time.Duration
 	var start time.Time
-	for i, mcontainer := range entry.transMappings.Mappings {
-		m := mcontainer.M
+	bts := time.Now().Add(time.Hour)
+	for i, m := range entry.transMappings {
 		if len(m) == 0 {
 			continue
 		}
 		id := entry.ablksHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
-		page := model.NewTransferHashPage(id, time.Now(), isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL())
-		mapping := make(map[uint32][]byte, len(m))
-		for srcRow, dst := range m {
-			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.BlkIdx))
-			rowID := objectio.NewRowid(blkid, uint32(dst.RowIdx))
-			mapping[uint32(srcRow)] = rowID[:]
-		}
-		page.Train(mapping)
+		objectIDs := []*objectio.ObjectId{entry.createdBlkHandles.GetID()}
+		page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL(), objectIDs)
+		page.Train(m)
 
 		start = time.Now()
 		err := model.AddTransferPage(page, ioVector)
@@ -151,13 +146,20 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 			return
 		}
 		duration += time.Since(start)
-
-		entry.rt.TransferTable.AddPage(page)
 		pages = append(pages, page)
 	}
 
 	start = time.Now()
 	model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+	now := time.Now()
+	for _, page := range pages {
+		if page.BornTS() != bts {
+			page.SetBornTS(now.Add(time.Minute))
+		} else {
+			page.SetBornTS(now)
+		}
+		entry.rt.TransferTable.AddPage(page)
+	}
 	duration += time.Since(start)
 	v2.TransferPageFlushLatencyHistogram.Observe(duration.Seconds())
 }
@@ -175,7 +177,7 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(from, to types.TS) (tra
 	for i, blk := range entry.ablksMetas {
 		// For ablock, there is only one block in it.
 		// Checking the block mapping once is enough
-		mapping := entry.transMappings.Mappings[i].M
+		mapping := entry.transMappings[i]
 		if len(mapping) == 0 {
 			// empty frozen aobjects, it can not has any more deletes
 			continue
@@ -202,15 +204,15 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(from, to types.TS) (tra
 		transCnt += count
 		for i := 0; i < count; i++ {
 			row := rowid[i].GetRowOffset()
-			destpos, ok := mapping[int32(row)]
+			destpos, ok := mapping[row]
 			if !ok {
 				panic(fmt.Sprintf("%s find no transfer mapping for row %d", blk.ID().String(), row))
 			}
-			blkID := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(destpos.BlkIdx))
+			blkID := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), destpos.BlkIdx)
 			entry.delTbls[destpos.BlkIdx] = blkID
 			entry.rt.TransferDelsMap.SetDelsForBlk(*blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
 			if err = entry.createdBlkHandles.RangeDelete(
-				uint16(destpos.BlkIdx), uint32(destpos.RowIdx), uint32(destpos.RowIdx), handle.DT_MergeCompact, common.MergeAllocator,
+				destpos.BlkIdx, destpos.RowIdx, destpos.RowIdx, handle.DT_MergeCompact, common.MergeAllocator,
 			); err != nil {
 				bat.Close()
 				return

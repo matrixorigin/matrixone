@@ -18,89 +18,98 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
-	"sync"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
-var (
-	logger         *log.MOLogger
-	loggerWithSkip *log.MOLogger
-	once           sync.Once
-)
-
-func getLogger() *log.MOLogger {
-	once.Do(initLoggers)
-	return logger
-}
-
-func getWithSkipLogger() *log.MOLogger {
-	once.Do(initLoggers)
-	return loggerWithSkip
-}
-
-func initLoggers() {
-	rt := runtime.ProcessLevelRuntime()
-	if rt == nil {
-		rt = runtime.DefaultRuntime()
-	}
-	logger = rt.Logger().Named("lockservice")
-	loggerWithSkip = logger.WithOptions(zap.AddCallerSkip(1))
+func getLogger(sid string) *log.MOLogger {
+	return runtime.ServiceRuntime(sid).Logger().Named("lockservice")
 }
 
 func logLocalLock(
+	logger *log.MOLogger,
 	txn *activeTxn,
 	tableID uint64,
 	rows [][]byte,
-	opts LockOptions) {
-	logger := getWithSkipLogger()
+	opts LockOptions,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("try to lock on local",
+		logger.Log(
+			"try to lock on local",
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
 			zap.Uint64("table", tableID),
 			bytesArrayField("rows", rows),
-			zap.String("opts", opts.DebugString()))
+			zap.String("opts", opts.DebugString()),
+		)
 	}
 }
 
 func logLocalLockRange(
+	logger *log.MOLogger,
 	txn *activeTxn,
 	tableID uint64,
 	start, end []byte,
-	mode pb.LockMode) {
-	logger := getWithSkipLogger()
+	mode pb.LockMode,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("try to lock range on local",
+		logger.Log(
+			"try to lock range on local",
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
 			zap.Uint64("table", tableID),
 			bytesField("start", start),
 			bytesField("end", end),
-			zap.String("mode", mode.String()))
+			zap.String("mode", mode.String()),
+		)
 	}
 }
 
 func logLocalLockAdded(
+	logger *log.MOLogger,
 	txn *activeTxn,
 	tableID uint64,
 	rows [][]byte,
-	opts LockOptions) {
-	logger := getWithSkipLogger()
+	opts LockOptions,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("lock added to local",
+		logger.Log(
+			"lock added to local",
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
 			zap.Uint64("table", tableID),
 			bytesArrayField("rows", rows),
-			zap.String("opts", opts.DebugString()))
+			zap.String("opts", opts.DebugString()),
+		)
 	}
 }
 
 func logHolderAdded(
+	logger *log.MOLogger,
 	c *lockContext,
-	lock Lock) {
-	logger := getWithSkipLogger()
+	lock Lock,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
 		var waits [][]byte
 		lock.waiters.iter(func(v *waiter) bool {
@@ -108,7 +117,9 @@ func logHolderAdded(
 			return true
 		})
 
-		logger.Debug("holder added",
+		logger.Log(
+			"holder added",
+			getLogOptions(zap.DebugLevel),
 			txnField(c.txn),
 			zap.Uint64("table", c.result.LockedOn.Table),
 			bytesArrayField("rows", c.rows),
@@ -120,29 +131,42 @@ func logHolderAdded(
 }
 
 func logLocalLockFailed(
+	logger *log.MOLogger,
 	txn *activeTxn,
 	tableID uint64,
 	rows [][]byte,
 	options LockOptions,
-	err error) {
-	logger := getWithSkipLogger()
+	err error,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.ErrorLevel) {
-		logger.Error("failed to lock on local",
+		logger.Log(
+			"failed to lock on local",
+			getLogOptions(zap.ErrorLevel),
 			txnField(txn),
 			zap.Uint64("table", tableID),
 			bytesArrayField("rows", rows),
 			zap.String("opts", options.DebugString()),
-			zap.Error(err))
+			zap.Error(err),
+		)
 	}
 }
 
 func logLocalLockWaitOn(
+	logger *log.MOLogger,
 	txn *activeTxn,
 	tableID uint64,
 	w *waiter,
 	key []byte,
-	waitOn Lock) {
-	logger := getWithSkipLogger()
+	waitOn Lock,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
 		var waits [][]byte
 		waitOn.waiters.iter(func(v *waiter) bool {
@@ -150,467 +174,727 @@ func logLocalLockWaitOn(
 			return true
 		})
 
-		logger.Debug("lock wait on local",
+		logger.Log(
+			"lock wait on local",
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
 			zap.Uint64("table", tableID),
 			zap.Stringer("waiter", w),
 			bytesField("wait-on-key", key),
 			zap.Stringer("wait-on", waitOn),
-			bytesArrayField("wait-txn-list", waits))
+			bytesArrayField("wait-txn-list", waits),
+		)
 	}
 }
 
 func logLocalLockWaitOnResult(
+	logger *log.MOLogger,
 	txn *activeTxn,
 	tableID uint64,
 	key []byte,
 	opts LockOptions,
 	waiter *waiter,
-	notify notifyValue) {
-	logger := getWithSkipLogger()
+	notify notifyValue,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("lock wait on local result",
+		logger.Log(
+			"lock wait on local result",
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
 			zap.Uint64("table", tableID),
 			bytesField("wait-on-key", key),
 			zap.String("opts", opts.DebugString()),
 			zap.Stringer("waiter", waiter),
-			zap.Stringer("result", notify))
+			zap.Stringer("result", notify),
+		)
 	}
 }
 
 func logRemoteLock(
-	txn *activeTxn,
-	rows [][]byte,
-	opts LockOptions,
-	remote pb.LockTable) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("lock on remote",
-			txnField(txn),
-			bytesArrayField("rows", rows),
-			zap.String("opts", opts.DebugString()),
-			zap.String("remote", remote.DebugString()))
-	}
-}
-
-func logRemoteLockAdded(
-	txn *activeTxn,
-	rows [][]byte,
-	opts LockOptions,
-	remote pb.LockTable) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("lock added to remote",
-			txnField(txn),
-			bytesArrayField("rows", rows),
-			zap.String("opts", opts.DebugString()),
-			zap.String("remote", remote.DebugString()))
-	}
-}
-
-func logRemoteLockFailed(
+	logger *log.MOLogger,
 	txn *activeTxn,
 	rows [][]byte,
 	opts LockOptions,
 	remote pb.LockTable,
-	err error) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.ErrorLevel) {
-		logger.Error("failed to lock on remote",
+) {
+	if logger == nil {
+		return
+	}
+
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Log(
+			"lock on remote",
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
 			bytesArrayField("rows", rows),
 			zap.String("opts", opts.DebugString()),
 			zap.String("remote", remote.DebugString()),
-			zap.Error(err))
+		)
 	}
 }
 
-func logTxnLockAdded(
+func logRemoteLockAdded(
+	logger *log.MOLogger,
 	txn *activeTxn,
-	rows [][]byte) {
-	logger := getWithSkipLogger()
+	rows [][]byte,
+	opts LockOptions,
+	remote pb.LockTable,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("lock added to txn",
+		logger.Log(
+			"lock added to remote",
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
-			bytesArrayField("rows", rows))
+			bytesArrayField("rows", rows),
+			zap.String("opts", opts.DebugString()),
+			zap.String("remote", remote.DebugString()),
+		)
+	}
+}
+
+func logRemoteLockFailed(
+	logger *log.MOLogger,
+	txn *activeTxn,
+	rows [][]byte,
+	opts LockOptions,
+	remote pb.LockTable,
+	err error,
+) {
+	if logger == nil {
+		return
+	}
+
+	logger.Log(
+		"failed to lock on remote",
+		getLogOptions(zap.ErrorLevel),
+		txnField(txn),
+		bytesArrayField("rows", rows),
+		zap.String("opts", opts.DebugString()),
+		zap.String("remote", remote.DebugString()),
+		zap.Error(err),
+	)
+}
+
+func logTxnLockAdded(
+	logger *log.MOLogger,
+	txn *activeTxn,
+	rows [][]byte,
+) {
+	if logger == nil {
+		return
+	}
+
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Log(
+			"lock added to txn",
+			getLogOptions(zap.DebugLevel),
+			txnField(txn),
+			bytesArrayField("rows", rows),
+		)
 	}
 }
 
 func logLockUnlocked(
+	logger *log.MOLogger,
 	txn *activeTxn,
 	key []byte,
-	lock Lock) {
-	logger := getWithSkipLogger()
+	lock Lock,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("lock unlocked",
+		logger.Log(
+			"lock unlocked",
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
 			bytesField("key", key),
-			zap.Stringer("lock", lock))
+			zap.Stringer("lock", lock),
+		)
 	}
 }
 
 func logGetRemoteBindFailed(
+	logger *log.MOLogger,
 	table uint64,
-	err error) {
-	getWithSkipLogger().Error("failed to get bind",
+	err error,
+) {
+	if logger == nil {
+		return
+	}
+
+	logger.Log(
+		"failed to get bind",
+		getLogOptions(zap.ErrorLevel),
 		zap.Uint64("table", table),
-		zap.Error(err))
+		zap.Error(err),
+	)
 }
 
 func logRemoteBindChanged(
+	logger *log.MOLogger,
 	serviceID string,
-	old, new pb.LockTable) {
-	logger := getWithSkipLogger()
-	logger.Info("bind changed",
+	old, new pb.LockTable,
+) {
+	if logger == nil {
+		return
+	}
+
+	logger.Log(
+		"bind changed",
+		getLogOptions(zap.InfoLevel),
 		zap.String("service", serviceID),
 		zap.String("old", old.DebugString()),
-		zap.String("new", new.DebugString()))
+		zap.String("new", new.DebugString()),
+	)
 }
 
 func logLockTableCreated(
+	logger *log.MOLogger,
 	serviceID string,
 	bind pb.LockTable,
-	remote bool) {
-	logger := getWithSkipLogger()
-	logger.Info("bind created",
+	remote bool,
+) {
+	if logger == nil {
+		return
+	}
+
+	logger.Log(
+		"bind created",
+		getLogOptions(zap.InfoLevel),
 		zap.String("service", serviceID),
 		zap.Bool("remote", remote),
-		zap.String("bind", bind.DebugString()))
+		zap.String("bind", bind.DebugString()),
+	)
 }
 
 func logLockTableClosed(
+	logger *log.MOLogger,
 	bind pb.LockTable,
-	remote bool) {
-	logger := getWithSkipLogger()
-	logger.Info("bind closed",
+	remote bool,
+) {
+	if logger == nil {
+		return
+	}
+
+	logger.Log(
+		"bind closed",
+		getLogOptions(zap.InfoLevel),
 		zap.Bool("remote", remote),
-		zap.String("bind", bind.DebugString()))
+		zap.String("bind", bind.DebugString()),
+	)
 }
 
 func logDeadLockFound(
+	logger *log.MOLogger,
 	txn pb.WaitTxn,
-	waiters *waiters) {
-	logger := getWithSkipLogger()
+	waiters *waiters,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("dead lock found",
+		logger.Log("dead lock found",
+			getLogOptions(zap.DebugLevel),
 			zap.String("txn", txn.DebugString()),
-			waitTxnArrayField("wait-txn-list", waiters.waitTxns))
+			waitTxnArrayField("wait-txn-list", waiters.waitTxns),
+		)
 	}
 }
 
 func logAbortDeadLock(
+	logger *log.MOLogger,
 	txn pb.WaitTxn,
-	activeTxn *activeTxn) {
-	logger := getWithSkipLogger()
+	activeTxn *activeTxn,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("abort dead lock txn",
+		logger.Log(
+			"abort dead lock txn",
+			getLogOptions(zap.DebugLevel),
 			zap.String("wait-txn", txn.DebugString()),
 			txnField(activeTxn),
-			waiterArrayField("blocked-waiters", activeTxn.blockedWaiters...))
+			waiterArrayField("blocked-waiters", activeTxn.blockedWaiters...),
+		)
 	}
 }
 
 func logLockServiceStartSucc(
-	serviceID string) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.InfoLevel) {
-		logger.Info("lock service start successfully",
-			zap.String("serviceID", serviceID))
+	logger *log.MOLogger,
+	serviceID string,
+) {
+	if logger == nil {
+		return
 	}
+
+	logger.Log(
+		"lock service start successfully",
+		getLogOptions(zap.InfoLevel),
+		zap.String("serviceID", serviceID),
+	)
 }
 
 func logLockAllocatorStartSucc(
-	version uint64) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.InfoLevel) {
-		logger.Info("lock allocator start successfully",
-			zap.Uint64("version", version))
+	logger *log.MOLogger,
+	version uint64,
+) {
+	if logger == nil {
+		return
 	}
+
+	logger.Log(
+		"lock allocator start successfully",
+		getLogOptions(zap.InfoLevel),
+		zap.Uint64("version", version),
+	)
 }
 
 func logCheckDeadLockFailed(
+	logger *log.MOLogger,
 	waitingTxn, txn pb.WaitTxn,
-	err error) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.ErrorLevel) {
-		logger.Error("failed to check dead lock",
-			zap.String("waiting-txn", waitingTxn.DebugString()),
-			zap.String("txn", txn.DebugString()),
-			zap.Error(err))
+	err error,
+) {
+	if logger == nil {
+		return
 	}
+
+	logger.Log(
+		"failed to check dead lock",
+		getLogOptions(zap.ErrorLevel),
+		zap.String("waiting-txn", waitingTxn.DebugString()),
+		zap.String("txn", txn.DebugString()),
+		zap.Error(err),
+	)
 }
 
-func logKeepBindFailed(err error) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.ErrorLevel) {
-		logger.Error("failed to keep lock table bind",
-			zap.Error(err))
+func logKeepBindFailed(
+	logger *log.MOLogger,
+	err error,
+) {
+	if logger == nil {
+		return
 	}
+
+	logger.Log(
+		"failed to keep lock table bind",
+		getLogOptions(zap.ErrorLevel),
+		zap.Error(err),
+	)
 }
 
 func logKeepRemoteLocksFailed(
+	logger *log.MOLogger,
 	bind pb.LockTable,
-	err error) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.ErrorLevel) {
-		logger.Error("failed to keep remote locks",
-			zap.String("bind", bind.DebugString()),
-			zap.Error(err))
+	err error,
+) {
+	if logger == nil {
+		return
 	}
+
+	logger.Log(
+		"failed to keep remote locks",
+		getLogOptions(zap.ErrorLevel),
+		zap.String("bind", bind.DebugString()),
+		zap.Error(err),
+	)
 }
 
 func logPingFailed(
+	logger *log.MOLogger,
 	serviceID string,
-	err error) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.ErrorLevel) {
-		logger.Error("failed to ping lock service",
-			zap.String("serviceID", serviceID),
-			zap.Error(err))
+	err error,
+) {
+	if logger == nil {
+		return
 	}
+
+	logger.Log(
+		"failed to ping lock service",
+		getLogOptions(zap.ErrorLevel),
+		zap.String("serviceID", serviceID),
+		zap.Error(err))
 }
 
 func logCanLockOnService(
-	serviceID string) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.InfoLevel) {
-		logger.Error("if lock on service",
-			zap.String("serviceID", serviceID))
+	logger *log.MOLogger,
+	serviceID string,
+) {
+	if logger == nil {
+		return
 	}
+
+	logger.Log(
+		"if lock on service",
+		getLogOptions(zap.InfoLevel),
+		zap.String("serviceID", serviceID),
+	)
 }
 
-func logLocalBindsInvalid() {
-	logger := getWithSkipLogger()
-	logger.Error("all local lock table invalid")
+func logLocalBindsInvalid(
+	logger *log.MOLogger,
+) {
+	if logger == nil {
+		return
+	}
+
+	logger.Log(
+		"all local lock table invalid",
+		getLogOptions(zap.ErrorLevel),
+	)
 }
 
 func logUnlockTxn(
+	logger *log.MOLogger,
 	serviceID string,
-	txn *activeTxn) func() {
-	logger := getWithSkipLogger()
+	txn *activeTxn,
+) func() {
+	if logger == nil {
+		return func() {}
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		return logger.DebugAction("unlock txn",
-			txnField(txn))
+		return logger.LogAction(
+			"unlock txn",
+			getLogOptions(zap.DebugLevel),
+			txnField(txn),
+		)
 	}
 	return func() {}
 }
 
 func logTxnReadyToClose(
+	logger *log.MOLogger,
 	serviceID string,
-	txn *activeTxn) {
-	logger := getWithSkipLogger()
+	txn *activeTxn,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("ready to unlock txn",
-			txnField(txn))
+		logger.Log(
+			"ready to unlock txn",
+			getLogOptions(zap.DebugLevel),
+			txnField(txn),
+		)
 	}
 }
 
 func logTxnUnlockTable(
+	logger *log.MOLogger,
 	serviceID string,
 	txn *activeTxn,
-	table uint64) {
-	logger := getWithSkipLogger()
+	table uint64,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn unlock table",
+		logger.Log(
+			"txn unlock table",
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
-			zap.Uint64("table", table))
+			zap.Uint64("table", table),
+		)
 	}
 }
 
 func logTxnUnlockTableCompleted(
+	logger *log.MOLogger,
 	serviceID string,
 	txn *activeTxn,
 	table uint64,
-	cs *cowSlice) {
-	logger := getWithSkipLogger()
+	cs *cowSlice,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
 		locks := cs.slice()
 		defer locks.unref()
-		logger.Debug("txn unlock table completed",
+		logger.Log(
+			"txn unlock table completed",
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
 			zap.Uint64("table", table),
-			bytesArrayField("rows", locks.values[:locks.len()]))
+			bytesArrayField("rows", locks.values[:locks.len()]),
+		)
 	}
 }
 
 func logUnlockTableOnLocal(
+	logger *log.MOLogger,
 	serviceID string,
 	txn *activeTxn,
-	bind pb.LockTable) {
-	logger := getWithSkipLogger()
+	bind pb.LockTable,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn unlock table on local",
+		logger.Log(
+			"txn unlock table on local",
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
-			zap.String("bind", bind.DebugString()))
+			zap.String("bind", bind.DebugString()),
+		)
 	}
 }
 
 func logUnlockTableOnRemote(
+	logger *log.MOLogger,
 	serviceID string,
 	txn *activeTxn,
-	bind pb.LockTable) {
-	logger := getWithSkipLogger()
+	bind pb.LockTable,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn unlock table on remote",
+		logger.Log(
+			"txn unlock table on remote",
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
-			zap.String("bind", bind.DebugString()))
+			zap.String("bind", bind.DebugString()),
+		)
 	}
 }
 
 func logUnlockTableOnRemoteFailed(
+	logger *log.MOLogger,
 	serviceID string,
 	txn *activeTxn,
 	bind pb.LockTable,
-	err error) {
-	logger := getWithSkipLogger()
-	logger.Debug("txn failed to unlock table on remote",
+	err error,
+) {
+	if logger == nil {
+		return
+	}
+
+	logger.Log(
+		"txn failed to unlock table on remote",
+		getLogOptions(zap.ErrorLevel),
 		txnField(txn),
 		zap.String("bind", bind.DebugString()),
-		zap.Error(err))
+		zap.Error(err),
+	)
 }
 
 func logWaitersAdded(
+	logger *log.MOLogger,
 	holders *holders,
-	added ...*waiter) {
-	logger := getWithSkipLogger()
+	added ...*waiter,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
 		txns := make([][]byte, 0, len(holders.txns))
 		for _, txn := range holders.txns {
 			txns = append(txns, txn.TxnID)
 		}
 
-		logger.Debug("new waiters added",
+		logger.Log(
+			"new waiters added",
+			getLogOptions(zap.DebugLevel),
 			bytesArrayField("holders", txns),
-			waiterArrayField("new-waiters", added...))
+			waiterArrayField("new-waiters", added...),
+		)
 	}
 }
 
 func logBindsMove(
-	binds []pb.LockTable) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.InfoLevel) {
-		logger.Info("binds move",
-			bindsArrayField("binds", binds))
+	logger *log.MOLogger,
+	binds []pb.LockTable,
+) {
+	if logger == nil {
+		return
 	}
+
+	logger.Log(
+		"binds move",
+		getLogOptions(zap.InfoLevel),
+		bindsArrayField("binds", binds),
+	)
 }
 
 func logStatus(
-	status pb.Status) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.InfoLevel) {
-		logger.Info("service status",
-			zap.String("status", status.String()))
+	logger *log.MOLogger,
+	status pb.Status,
+) {
+	if logger == nil {
+		return
 	}
+
+	logger.Log(
+		"service status",
+		getLogOptions(zap.InfoLevel),
+		zap.String("status", status.String()),
+	)
 }
 
 func logCleanCannotCommitTxn(
+	logger *log.MOLogger,
 	txnID string,
-	state int) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.InfoLevel) {
-		logger.Info("clean cannot commit txn",
-			zap.String("txnID", txnID),
-			zap.Int("state", state))
+	state int,
+) {
+	if logger == nil {
+		return
 	}
+
+	logger.Log(
+		"clean cannot commit txn",
+		getLogOptions(zap.InfoLevel),
+		zap.String("txnID", hex.EncodeToString(util.UnsafeStringToBytes(txnID))),
+		zap.Int("state", state),
+	)
 }
 
 func logServiceStatus(
+	logger *log.MOLogger,
 	info string,
 	serviceID string,
-	status pb.Status) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.InfoLevel) {
-		logger.Info("service status",
-			zap.String("info", info),
-			zap.String("serviceID", serviceID),
-			zap.String("status", status.String()))
+	status pb.Status,
+) {
+	if logger == nil {
+		return
 	}
+
+	logger.Log(
+		"service status",
+		getLogOptions(zap.InfoLevel),
+		zap.String("info", info),
+		zap.String("serviceID", serviceID),
+		zap.String("status", status.String()),
+	)
 }
 
 func logStatusChange(
+	logger *log.MOLogger,
 	from pb.Status,
-	to pb.Status) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.InfoLevel) {
-		logger.Info("service status change",
-			zap.String("from", from.String()),
-			zap.String("to", to.String()))
+	to pb.Status,
+) {
+	if logger == nil {
+		return
 	}
+
+	logger.Log(
+		"service status change",
+		getLogOptions(zap.InfoLevel),
+		zap.String("from", from.String()),
+		zap.String("to", to.String()),
+	)
 }
 
 func logWaiterGetNotify(
+	logger *log.MOLogger,
 	w *waiter,
-	v notifyValue) {
-	logger := getWithSkipLogger()
+	v notifyValue,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("waiter read notify",
+		logger.Log(
+			"waiter read notify",
+			getLogOptions(zap.DebugLevel),
 			zap.Stringer("waiter", w),
-			zap.Stringer("notify", v))
+			zap.Stringer("notify", v),
+		)
 	}
 }
 
 func logWaiterNotified(
+	logger *log.MOLogger,
 	w *waiter,
-	v notifyValue) {
-	logger := getWithSkipLogger()
+	v notifyValue,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("waiter add notify",
+		logger.Log(
+			"waiter add notify",
+			getLogOptions(zap.DebugLevel),
 			zap.Stringer("waiter", w),
-			zap.Stringer("notify", v))
+			zap.Stringer("notify", v),
+		)
 	}
 }
 
 func logWaiterNotifySkipped(
+	logger *log.MOLogger,
 	w string,
-	reason string) {
-	logger := getWithSkipLogger()
+	reason string,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("waiter notify skipped",
+		logger.Log(
+			"waiter notify skipped",
+			getLogOptions(zap.DebugLevel),
 			zap.String("reason", reason),
-			zap.String("waiter", w))
+			zap.String("waiter", w),
+		)
 	}
 }
 
 func logWaiterStatusChanged(
+	logger *log.MOLogger,
 	w *waiter,
-	from, to waiterStatus) {
-	logger := getWithSkipLogger()
+	from, to waiterStatus,
+) {
+	if logger == nil {
+		return
+	}
+
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("waiter status changed",
+		logger.Log(
+			"waiter status changed",
+			getLogOptions(zap.DebugLevel),
 			zap.Stringer("waiter", w),
 			zap.Int("from-state", int(from)),
-			zap.Int("to-state", int(to)))
+			zap.Int("to-state", int(to)),
+		)
 	}
 }
 
-func logWaiterStatusUpdate(
-	w *waiter,
-	state waiterStatus) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("waiter status set to new state",
-			zap.Stringer("waiter", w),
-			zap.Int("state", int(state)))
+func logTxnCreated(
+	logger *log.MOLogger,
+	txn *activeTxn,
+) {
+	if logger == nil {
+		return
 	}
-}
 
-func logWaiterContactPool(
-	w *waiter,
-	action string) {
-	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("waiter contact to pool",
-			zap.String("action", action),
-			zap.Stringer("waiter", w))
-	}
-}
-
-func logTxnCreated(txn *activeTxn) {
-	logger := getWithSkipLogger()
-	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn created",
-			txnField(txn))
+		logger.Log(
+			"txn created",
+			getLogOptions(zap.DebugLevel),
+			txnField(txn),
+		)
 	}
 }
 
@@ -678,4 +962,10 @@ func waiterArrayField(name string, values ...*waiter) zap.Field {
 	}
 	buffer.WriteString("]")
 	return zap.String(name, buffer.String())
+}
+
+func getLogOptions(
+	level zapcore.Level,
+) log.LogOptions {
+	return log.DefaultLogOptions().AddCallerSkip(1).WithLevel(level)
 }

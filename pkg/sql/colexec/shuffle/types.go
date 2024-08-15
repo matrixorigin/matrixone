@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,7 +35,7 @@ type Shuffle struct {
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
 	RuntimeFilterSpec  *plan.RuntimeFilterSpec
-	msgReceiver        *process.MessageReceiver
+	msgReceiver        *message.MessageReceiver
 	vm.OperatorBase
 }
 
@@ -70,11 +71,12 @@ func (shuffle *Shuffle) Release() {
 }
 
 type container struct {
-	ending        bool
-	sels          [][]int32
-	shufflePool   []*batch.Batch
-	sendPool      []*batch.Batch
-	lastSentBatch *batch.Batch
+	ending               bool
+	sels                 [][]int64
+	shufflePool          []*batch.Batch
+	sendPool             []*batch.Batch
+	lastSentBatch        *batch.Batch
+	runtimeFilterHandled bool
 }
 
 func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -83,7 +85,7 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 
 func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if shuffle.RuntimeFilterSpec != nil {
-		shuffle.RuntimeFilterSpec.Handled = false
+		shuffle.ctr.runtimeFilterHandled = false
 	}
 	// can't free this
 	/*if arg.msgReceiver != nil {

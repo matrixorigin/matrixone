@@ -50,7 +50,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
-			getLogger().Error("panic in scope remoteRun",
+			getLogger(s.Proc.GetService()).Error("panic in scope remoteRun",
 				zap.String("sql", c.sql),
 				zap.String("error", err.Error()))
 		}
@@ -64,7 +64,13 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	}
 
 	// generate a new sender to do send work.
-	sender, err = newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr, s.Proc.Mp(), c.anal)
+	sender, err = newMessageSenderOnClient(
+		s.Proc.Ctx,
+		s.Proc.GetService(),
+		s.NodeInfo.Addr,
+		s.Proc.Mp(),
+		c.anal,
+	)
 	if err != nil {
 		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
 			c.sql, c.proc.GetTxnOperator().Txn().DebugString(), err)
@@ -185,7 +191,7 @@ type messageSenderOnClient struct {
 	mp *mpool.MPool
 
 	// anal was used to merge remote-run's cost analysis information.
-	anal *anaylze
+	anal *analyzeModule
 
 	// message sender and its data receiver.
 	streamSender morpc.Stream
@@ -203,9 +209,13 @@ type messageSenderOnClient struct {
 }
 
 func newMessageSenderOnClient(
-	ctx context.Context, toAddr string, mp *mpool.MPool, ana *anaylze) (*messageSenderOnClient, error) {
-
-	streamSender, err := cnclient.GetPipelineClient().NewStream(toAddr)
+	ctx context.Context,
+	sid string,
+	toAddr string,
+	mp *mpool.MPool,
+	ana *analyzeModule,
+) (*messageSenderOnClient, error) {
+	streamSender, err := cnclient.GetPipelineClient(sid).NewStream(toAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -390,7 +400,7 @@ func (sender *messageSenderOnClient) dealAnalysis(ana *pipeline.AnalysisList) {
 	mergeAnalyseInfo(sender.anal, ana)
 }
 
-func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
+func mergeAnalyseInfo(target *analyzeModule, ana *pipeline.AnalysisList) {
 	source := ana.List
 	if len(target.analInfos) != len(source) {
 		return

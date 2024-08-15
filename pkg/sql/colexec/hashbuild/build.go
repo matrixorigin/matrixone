@@ -19,6 +19,8 @@ import (
 	"runtime"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -85,6 +87,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(hashBuild.GetIdx(), hashBuild.GetParallelIdx(), hashBuild.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
 	result := vm.NewCallResult()
 	ap := hashBuild
 	ctr := ap.ctr
@@ -106,46 +109,23 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
 				return result, err
 			}
-			ctr.state = SendHashMap
+			ctr.state = SendJoinMap
 
-		case SendHashMap:
-			result.Batch = batch.NewWithSize(0)
-
+		case SendJoinMap:
+			var jm *message.JoinMap
 			if ctr.inputBatchRowCount > 0 {
-				var jm *hashmap.JoinMap
-				if ap.NeedHashMap {
-					if ctr.keyWidth <= 8 {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
-					} else {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
-					}
-					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-					result.Batch.AuxData = jm
+				jm = message.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
+				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+				if ap.NeedMergedBatch {
+					jm.SetRowCount(int64(ctr.inputBatchRowCount))
 				}
-				ctr.intHashMap = nil
-				ctr.strHashMap = nil
-				ctr.multiSels = nil
-			} else {
-				ctr.cleanHashMap()
+				jm.IncRef(ap.JoinMapRefCnt)
 			}
+			if ap.JoinMapTag <= 0 {
+				panic("wrong joinmap message tag!")
+			}
+			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag}, proc.GetMessageBoard())
 
-			// this is just a dummy batch to indicate that the batch is must not empty.
-			// we should make sure this batch can be sent to the next join operator in other pipelines.
-			if result.Batch.IsEmpty() && ap.NeedHashMap {
-				result.Batch.AddRowCount(1)
-			}
-
-			ctr.state = SendBatch
-			return result, nil
-		case SendBatch:
-			if ctr.batchIdx >= len(ctr.batches) {
-				ctr.state = End
-			} else {
-				result.Batch = ctr.batches[ctr.batchIdx]
-				ctr.batchIdx++
-			}
-			return result, nil
-		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -286,11 +266,7 @@ func (ctr *container) buildHashmap(ap *HashBuild, proc *process.Process) error {
 			return err
 		}
 		for k, v := range vals[:n] {
-			if zvals[k] == 0 {
-				ctr.hasNull = true
-				continue
-			}
-			if v == 0 {
+			if zvals[k] == 0 || v == 0 {
 				continue
 			}
 			ai := int64(v) - 1
@@ -371,16 +347,16 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 		return nil
 	}
 
-	var runtimeFilter process.RuntimeFilterMessage
+	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
 
 	if ap.RuntimeFilterSpec.Expr == nil {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	} else if ctr.inputBatchRowCount == 0 || len(ctr.uniqueJoinKeys) == 0 || ctr.uniqueJoinKeys[0].Length() == 0 {
-		runtimeFilter.Typ = process.RuntimeFilter_DROP
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		runtimeFilter.Typ = message.RuntimeFilter_DROP
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	}
 
@@ -407,8 +383,8 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 	}()
 
 	if hashmapCount > uint64(inFilterCardLimit) {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	} else {
 		// Composite primary key
@@ -435,10 +411,10 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 			return err
 		}
 
-		runtimeFilter.Typ = process.RuntimeFilter_IN
+		runtimeFilter.Typ = message.RuntimeFilter_IN
 		runtimeFilter.Card = int32(vec.Length())
 		runtimeFilter.Data = data
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		ctr.runtimeFilterIn = true
 	}
 	return nil

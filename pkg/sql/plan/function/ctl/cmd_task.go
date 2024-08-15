@@ -44,10 +44,12 @@ var (
 // 1. enable
 // 2. disable
 // 3. [uuid:]taskId
-func handleTask(proc *process.Process,
+func handleTask(
+	proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (Result, error) {
+	sender requestSender,
+) (Result, error) {
 	parameter = strings.ToLower(parameter)
 	switch parameter {
 	case disableTask:
@@ -102,7 +104,7 @@ func checkRunTaskParameter(param string) (string, int32, error) {
 }
 
 func transferTaskToCN(qc qclient.QueryClient, target string, taskCode int32) (resp *querypb.Response, err error) {
-	clusterservice.GetMOCluster().GetCNService(
+	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(
 		clusterservice.NewServiceIDSelector(target),
 		func(cn metadata.CNService) bool {
 			req := qc.NewRequest(querypb.CmdMethod_RunTask)

@@ -16,8 +16,9 @@ package txnimpl
 
 import (
 	"context"
-	"github.com/tidwall/btree"
 	"sync"
+
+	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -114,9 +115,6 @@ func (it *ObjectIt) Next() bool {
 }
 
 func (it *ObjectIt) GetObject() handle.Object {
-	if isSysTableId(it.table.GetID()) {
-		return newSysObject(it.table, it.curr)
-	}
 	return newObject(it.table, it.curr)
 }
 
@@ -148,9 +146,6 @@ func (obj *txnObject) reset() {
 	obj.TxnObject.Reset()
 }
 func buildObject(table *txnTable, meta *catalog.ObjectEntry) handle.Object {
-	if isSysTableId(meta.GetTable().ID) {
-		return newSysObject(table, meta)
-	}
 	return newObject(table, meta)
 }
 func (obj *txnObject) Close() (err error) {

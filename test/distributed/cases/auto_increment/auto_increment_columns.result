@@ -583,19 +583,9 @@ b bigint auto_increment,
 c varchar(25)
 );
 load data infile '$resources/auto_increment_columns/auto_increment_1.csv' into table t11 fields terminated by ',';
+invalid input: the data of row 4 contained is not equal to input columns
 select * from t11 order by a;
 a    b    c
-1    1    '你好'
-2    3    'hello'
-4    4    'world'
-5    5    '
-6    6    'N'
-7    7    '
-8    8    '###'
-9    9
-10    10
-100    100    '100'
-101    101
 drop table t11;
 drop table if exists t12;
 create table t12(
@@ -604,19 +594,9 @@ b bigint auto_increment,
 c varchar(25)
 );
 load data infile '$resources/auto_increment_columns/auto_increment_2.csv' into table t12 fields terminated by ',';
+invalid input: the data of row 4 contained is not equal to input columns
 select * from t12 order by a;
 a    b    c
-0    0    '0'
-1    1    '你好'
-2    3    'hello'
-4    4    'world'
-5    5    '
-6    100    'aa'
-10    101    'bb'
-11    102    'cc'
-1000    103    '1000'
-1001    104
-1002    105
 drop table t12;
 drop table if exists t13;
 create table t13(

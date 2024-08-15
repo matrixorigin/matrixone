@@ -57,7 +57,6 @@ func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 	mergeTop.ctr.limit = vector.MustFixedCol[uint64](vec)[0]
-	mergeTop.ctr.InitReceiver(proc, true)
 	if mergeTop.ctr.limit > 1024 {
 		mergeTop.ctr.sels = make([]int64, 0, 1024)
 	} else {
@@ -114,15 +113,18 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (ctr *container) build(ap *MergeTop, proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
 	for {
-		msg := ctr.ReceiveFromAllRegs(anal)
-		if msg.Err != nil {
-			return true, msg.Err
+		result, err := ap.GetChildren(0).Call(proc)
+		if err != nil {
+			return true, err
 		}
-		if msg.Batch == nil {
+		if result.Batch == nil {
 			return false, nil
 		}
 
-		bat := msg.Batch
+		bat, err := result.Batch.Dup(proc.GetMPool())
+		if err != nil {
+			return true, err
+		}
 		anal.Input(bat, isFirst)
 
 		ctr.n = len(bat.Vecs)
@@ -169,10 +171,8 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, anal process.An
 		}
 
 		if err := ctr.processBatch(ap.ctr.limit, bat, proc); err != nil {
-			bat.Clean(proc.Mp())
 			return false, err
 		}
-		proc.PutBatch(bat)
 	}
 }
 

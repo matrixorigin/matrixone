@@ -9,4 +9,4 @@ max-size = 512
 
 
 [observability]
-statusPort = 7001
+status-port = 7001

@@ -1311,7 +1311,7 @@ func runFetchRowsTestWithAppendFunc[T any](
 	vec := vector.NewVec(tp)
 	appendFunc(vec, mp)
 
-	packer := types.NewPacker(mpool.MustNew("test"))
+	packer := types.NewPacker()
 	fetcher := GetFetchRowsFunc(tp)
 	assertFN := func(values []T, rows [][]byte) {
 		for idx, v := range values {
@@ -1358,7 +1358,7 @@ func runFetchRowsTestWithAppendFunc[T any](
 }
 
 func TestDecimal128(t *testing.T) {
-	packer := types.NewPacker(mpool.MustNew("test"))
+	packer := types.NewPacker()
 	decimal128Fn := func(v types.Decimal128) []byte {
 		packer.Reset()
 		packer.EncodeDecimal128(v)

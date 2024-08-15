@@ -30,7 +30,7 @@ import (
 )
 
 func initTest(t *testing.T) (*logservice.Service, *logservice.ClientConfig) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	fs := vfs.NewStrictMem()
 	service, ccfg, err := logservice.NewTestService(fs)
 	assert.NoError(t, err)
@@ -85,7 +85,7 @@ func TestReplay1(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig(ccfg)
+	cfg := NewTestConfig("", ccfg)
 	driver := NewLogServiceDriver(cfg)
 
 	entryCount := 10000
@@ -124,7 +124,7 @@ func TestReplay2(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig(ccfg)
+	cfg := NewTestConfig("", ccfg)
 	cfg.RecordSize = 100
 	driver := NewLogServiceDriver(cfg)
 

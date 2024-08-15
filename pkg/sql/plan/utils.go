@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -1271,11 +1273,11 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 		return true
 	}
 	switch constT.Oid {
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		switch columnT.Oid {
 		case types.T_char, types.T_varchar:
 			return constT.Width <= columnT.Width
-		case types.T_text:
+		case types.T_text, types.T_datalink:
 			return true
 		default:
 			return false
@@ -1813,13 +1815,18 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 }
 
 // databaseIsValid checks whether the database exists or not.
-func databaseIsValid(dbName string, ctx CompilerContext, snapshot Snapshot) (string, error) {
+func databaseIsValid(dbName string, ctx CompilerContext, snapshot *Snapshot) (string, error) {
 	connectDBFirst := false
 	if len(dbName) == 0 {
 		connectDBFirst = true
 	}
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
+	}
+
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
 	}
 
 	if len(dbName) == 0 || !ctx.DatabaseExists(dbName, snapshot) {

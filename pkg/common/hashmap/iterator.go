@@ -20,16 +20,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector, inBuckets []uint8) ([]uint64, []int64) {
+func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64) {
 	defer func() {
 		for i := 0; i < count; i++ {
-			itr.mp.keys[i] = itr.mp.keys[i][:0]
+			itr.keys[i] = itr.keys[i][:0]
 		}
 	}()
-	copy(itr.mp.zValues[:count], OneInt64s[:count])
-	itr.mp.encodeHashKeys(vecs, start, count)
-	itr.mp.hashMap.FindStringBatch(itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values)
-	return itr.mp.values[:count], itr.mp.zValues[:count]
+	copy(itr.zValues[:count], OneInt64s[:count])
+	itr.encodeHashKeys(vecs, start, count)
+	itr.mp.hashMap.FindStringBatch(itr.strHashStates, itr.keys[:count], itr.values)
+	return itr.values[:count], itr.zValues[:count]
+}
+
+// Insert a row from multiple columns into the hashmap, return true if it is new, otherwise false
+func (itr *strHashmapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, error) {
+	keys := itr.keys
+	defer func() { keys[0] = keys[0][:0] }()
+	itr.encodeHashKeys(vecs, row, 1)
+	if err := itr.mp.hashMap.InsertStringBatch(itr.strHashStates, keys[:1], itr.values[:1], itr.m); err != nil {
+		return false, err
+	}
+	if itr.values[0] > itr.mp.rows {
+		itr.mp.rows++
+		return true, nil
+	}
+	return false, nil
 }
 
 func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
@@ -37,35 +52,39 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) (
 
 	defer func() {
 		for i := 0; i < count; i++ {
-			itr.mp.keys[i] = itr.mp.keys[i][:0]
+			itr.keys[i] = itr.keys[i][:0]
 		}
 	}()
-	copy(itr.mp.zValues[:count], OneInt64s[:count])
-	itr.mp.encodeHashKeys(vecs, start, count)
+	copy(itr.zValues[:count], OneInt64s[:count])
+	itr.encodeHashKeys(vecs, start, count)
 
 	if itr.mp.hasNull {
-		err = itr.mp.hashMap.InsertStringBatch(itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values, itr.m)
+		err = itr.mp.hashMap.InsertStringBatch(itr.strHashStates, itr.keys[:count], itr.values, itr.m)
 	} else {
-		err = itr.mp.hashMap.InsertStringBatchWithRing(itr.mp.zValues, itr.mp.strHashStates, itr.mp.keys[:count], itr.mp.values, itr.m)
+		err = itr.mp.hashMap.InsertStringBatchWithRing(itr.zValues, itr.strHashStates, itr.keys[:count], itr.values, itr.m)
 	}
 
-	vs, zvs := itr.mp.values[:count], itr.mp.zValues[:count]
+	vs, zvs := itr.values[:count], itr.zValues[:count]
 	updateHashTableRows(itr.mp, vs, zvs)
 	return vs, zvs, err
 }
 
-func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector, inBuckets []uint8) ([]uint64, []int64) {
+func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64) {
 	defer func() {
 		for i := 0; i < count; i++ {
-			itr.mp.keys[i] = 0
+			itr.keys[i] = 0
 		}
-		copy(itr.mp.keyOffs[:count], zeroUint32)
+		copy(itr.keyOffs[:count], zeroUint32)
 	}()
-	copy(itr.mp.zValues[:count], OneInt64s[:count])
-	itr.mp.encodeHashKeys(vecs, start, count)
-	copy(itr.mp.hashes[:count], zeroUint64[:count])
-	itr.mp.hashMap.FindBatch(count, itr.mp.hashes[:count], unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values[:count])
-	return itr.mp.values[:count], itr.mp.zValues[:count]
+	copy(itr.zValues[:count], OneInt64s[:count])
+	itr.encodeHashKeys(vecs, start, count)
+	copy(itr.hashes[:count], zeroUint64[:count])
+	itr.mp.hashMap.FindBatch(count, itr.hashes[:count], unsafe.Pointer(&itr.keys[0]), itr.values[:count])
+	return itr.values[:count], itr.zValues[:count]
+}
+
+func (itr *intHashMapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, error) {
+	panic("not implemented yet!!!")
 }
 
 func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
@@ -73,20 +92,20 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 
 	defer func() {
 		for i := 0; i < count; i++ {
-			itr.mp.keys[i] = 0
+			itr.keys[i] = 0
 		}
-		copy(itr.mp.keyOffs[:count], zeroUint32)
+		copy(itr.keyOffs[:count], zeroUint32)
 	}()
 
-	copy(itr.mp.zValues[:count], OneInt64s[:count])
-	itr.mp.encodeHashKeys(vecs, start, count)
-	copy(itr.mp.hashes[:count], zeroUint64[:count])
+	copy(itr.zValues[:count], OneInt64s[:count])
+	itr.encodeHashKeys(vecs, start, count)
+	copy(itr.hashes[:count], zeroUint64[:count])
 	if itr.mp.hasNull {
-		err = itr.mp.hashMap.InsertBatch(count, itr.mp.hashes[:count], unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values, itr.m)
+		err = itr.mp.hashMap.InsertBatch(count, itr.hashes[:count], unsafe.Pointer(&itr.keys[0]), itr.values, itr.m)
 	} else {
-		err = itr.mp.hashMap.InsertBatchWithRing(count, itr.mp.zValues, itr.mp.hashes[:count], unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values, itr.m)
+		err = itr.mp.hashMap.InsertBatchWithRing(count, itr.zValues, itr.hashes[:count], unsafe.Pointer(&itr.keys[0]), itr.values, itr.m)
 	}
-	vs, zvs := itr.mp.values[:count], itr.mp.zValues[:count]
+	vs, zvs := itr.values[:count], itr.zValues[:count]
 	updateHashTableRows(itr.mp, vs, zvs)
 	return vs, zvs, err
 }

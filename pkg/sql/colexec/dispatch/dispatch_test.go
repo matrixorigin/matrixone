@@ -94,13 +94,13 @@ func TestDispatch(t *testing.T) {
 				msg.Batch.Clean(tc.proc.Mp())
 			}
 		}
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func newTestCase() dispatchTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	reg := &process.WaitRegister{Ctx: ctx, Ch: make(chan *process.RegisterMessage, 3)}

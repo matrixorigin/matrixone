@@ -54,7 +54,7 @@ func handleRemoveRemoteLockTable(
 	}
 
 	qt := proc.GetQueryClient()
-	mc := clusterservice.GetMOCluster()
+	mc := clusterservice.GetMOCluster(qt.ServiceID())
 	var addrs []string
 	mc.GetCNServiceWithoutWorkingState(
 		clusterservice.NewSelector(),
@@ -109,7 +109,7 @@ func handleGetLatestBind(
 	}
 
 	qt := proc.GetQueryClient()
-	mc := clusterservice.GetMOCluster()
+	mc := clusterservice.GetMOCluster(qt.ServiceID())
 	var addr string
 	mc.GetTNService(
 		clusterservice.NewSelector(),

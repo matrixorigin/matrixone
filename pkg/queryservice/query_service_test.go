@@ -40,17 +40,19 @@ import (
 )
 
 func testCreateQueryService(t *testing.T) QueryService {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	sid := ""
+	runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
 	cluster := clusterservice.NewMOCluster(
+		sid,
 		nil,
 		0,
 		clusterservice.WithDisableRefresh(),
 		clusterservice.WithServices([]metadata.CNService{{}}, nil))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
+	runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
 	address := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	err := os.RemoveAll(address[7:])
 	assert.NoError(t, err)
-	qs, err := NewQueryService("s1", address, morpc.Config{})
+	qs, err := NewQueryService("", address, morpc.Config{})
 	assert.NoError(t, err)
 	return qs
 }
@@ -141,145 +143,152 @@ func TestQueryServiceKillConn(t *testing.T) {
 }
 
 func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice.FileService, fn func(cli client.QueryClient, addr string)) {
-	defer leaktest.AfterTest(t)()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-	address := fmt.Sprintf("unix:///tmp/cn-%d-%s.sock",
-		time.Now().Nanosecond(), cn.ServiceID)
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			defer leaktest.AfterTest(t)()
+			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			runtime.SetupServiceBasedRuntime(cn.ServiceID, runtime.ServiceRuntime(sid))
+			address := fmt.Sprintf("unix:///tmp/cn-%d-%s.sock",
+				time.Now().Nanosecond(), cn.ServiceID)
 
-	if err := os.RemoveAll(address[7:]); err != nil {
-		panic(err)
-	}
-	cluster := clusterservice.NewMOCluster(
-		nil,
-		0,
-		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices([]metadata.CNService{{
-			ServiceID:    cn.ServiceID,
-			QueryAddress: address,
-		}}, nil))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
-
-	sm := NewSessionManager()
-	sm.AddSession(&mockSession{id: "s1", tenant: "t1"})
-	sm.AddSession(&mockSession{id: "s2", tenant: "t2"})
-	sm.AddSession(&mockSession{id: "s3", tenant: "t3"})
-
-	qs, err := NewQueryService(cn.ServiceID, address, morpc.Config{})
-	assert.NoError(t, err)
-
-	qt, err := client.NewQueryClient(cn.ServiceID, morpc.Config{})
-	assert.NoError(t, err)
-
-	qs.AddHandleFunc(pb.CmdMethod_ShowProcessList, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
-		if req.ShowProcessListRequest == nil {
-			return moerr.NewInternalError(ctx, "bad request")
-		}
-		var ss []Session
-		if req.ShowProcessListRequest.SysTenant {
-			ss = sm.GetAllSessions()
-		} else {
-			ss = sm.GetSessionsByTenant(req.ShowProcessListRequest.Tenant)
-		}
-		sessions := make([]*status.Session, 0, len(ss))
-		for _, ses := range ss {
-			sessions = append(sessions, ses.StatusSession())
-		}
-		resp.ShowProcessListResponse = &pb.ShowProcessListResponse{
-			Sessions: sessions,
-		}
-		return nil
-	}, false)
-	qs.AddHandleFunc(pb.CmdMethod_KillConn, func(ctx context.Context, request *pb.Request, response *pb.Response, _ *morpc.Buffer) error {
-		response.KillConnResponse = &pb.KillConnResponse{Success: true}
-		return nil
-	}, false)
-	qs.AddHandleFunc(pb.CmdMethod_AlterAccount, func(ctx context.Context, request *pb.Request, response *pb.Response, _ *morpc.Buffer) error {
-		response.AlterAccountResponse = &pb.AlterAccountResponse{AlterSuccess: true}
-		return nil
-	}, false)
-	qs.AddHandleFunc(pb.CmdMethod_TraceSpan, func(ctx context.Context, request *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
-		resp.TraceSpanResponse = &pb.TraceSpanResponse{
-			Resp: "echo",
-		}
-		return nil
-	}, false)
-	qs.AddHandleFunc(pb.CmdMethod_GetCacheInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
-		ci := &pb.CacheInfo{
-			NodeType:  cn.ServiceID,
-			NodeId:    "uuid",
-			CacheType: "memory",
-		}
-		resp.GetCacheInfoResponse = &pb.GetCacheInfoResponse{
-			CacheInfoList: []*pb.CacheInfo{ci},
-		}
-		return nil
-	}, false)
-	qs.AddHandleFunc(pb.CmdMethod_GetTxnInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
-		ti := &pb.TxnInfo{
-			CreateAt:  time.Now(),
-			Meta:      nil,
-			UserTxn:   true,
-			WaitLocks: nil,
-		}
-		resp.GetTxnInfoResponse = &pb.GetTxnInfoResponse{
-			CnId:        "uuid",
-			TxnInfoList: []*pb.TxnInfo{ti},
-		}
-		return nil
-	}, false)
-	qs.AddHandleFunc(pb.CmdMethod_GetLockInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
-		li := &pb.LockInfo{
-			TableId:     100,
-			Keys:        nil,
-			LockMode:    lock.LockMode_Shared,
-			IsRangeLock: true,
-			Holders:     nil,
-			Waiters:     nil,
-		}
-		resp.GetLockInfoResponse = &pb.GetLockInfoResponse{
-			CnId:         "uuid1",
-			LockInfoList: []*pb.LockInfo{li},
-		}
-		return nil
-	}, false)
-
-	qs.AddHandleFunc(pb.CmdMethod_GetCacheData,
-		func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
-			wr := &pb.WrappedResponse{
-				Response: resp,
+			if err := os.RemoveAll(address[7:]); err != nil {
+				panic(err)
 			}
-			err := fileservice.HandleRemoteRead(ctx, fs, req, wr)
-			if err != nil {
-				return err
-			}
-			qs.SetReleaseFunc(resp, wr.ReleaseFunc)
-			return nil
-		},
-		false,
-	)
+			cluster := clusterservice.NewMOCluster(
+				sid,
+				nil,
+				0,
+				clusterservice.WithDisableRefresh(),
+				clusterservice.WithServices([]metadata.CNService{{
+					ServiceID:    cn.ServiceID,
+					QueryAddress: address,
+				}}, nil))
+			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
 
-	qs.AddHandleFunc(pb.CmdMethod_GetStatsInfo,
-		func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
-			resp.GetStatsInfoResponse = &pb.GetStatsInfoResponse{
-				StatsInfo: &statsinfo.StatsInfo{
-					TableCnt: 100,
+			sm := NewSessionManager()
+			sm.AddSession(&mockSession{id: "s1", tenant: "t1"})
+			sm.AddSession(&mockSession{id: "s2", tenant: "t2"})
+			sm.AddSession(&mockSession{id: "s3", tenant: "t3"})
+
+			qs, err := NewQueryService(cn.ServiceID, address, morpc.Config{})
+			assert.NoError(t, err)
+
+			qt, err := client.NewQueryClient(cn.ServiceID, morpc.Config{})
+			assert.NoError(t, err)
+
+			qs.AddHandleFunc(pb.CmdMethod_ShowProcessList, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+				if req.ShowProcessListRequest == nil {
+					return moerr.NewInternalError(ctx, "bad request")
+				}
+				var ss []Session
+				if req.ShowProcessListRequest.SysTenant {
+					ss = sm.GetAllSessions()
+				} else {
+					ss = sm.GetSessionsByTenant(req.ShowProcessListRequest.Tenant)
+				}
+				sessions := make([]*status.Session, 0, len(ss))
+				for _, ses := range ss {
+					sessions = append(sessions, ses.StatusSession())
+				}
+				resp.ShowProcessListResponse = &pb.ShowProcessListResponse{
+					Sessions: sessions,
+				}
+				return nil
+			}, false)
+			qs.AddHandleFunc(pb.CmdMethod_KillConn, func(ctx context.Context, request *pb.Request, response *pb.Response, _ *morpc.Buffer) error {
+				response.KillConnResponse = &pb.KillConnResponse{Success: true}
+				return nil
+			}, false)
+			qs.AddHandleFunc(pb.CmdMethod_AlterAccount, func(ctx context.Context, request *pb.Request, response *pb.Response, _ *morpc.Buffer) error {
+				response.AlterAccountResponse = &pb.AlterAccountResponse{AlterSuccess: true}
+				return nil
+			}, false)
+			qs.AddHandleFunc(pb.CmdMethod_TraceSpan, func(ctx context.Context, request *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+				resp.TraceSpanResponse = &pb.TraceSpanResponse{
+					Resp: "echo",
+				}
+				return nil
+			}, false)
+			qs.AddHandleFunc(pb.CmdMethod_GetCacheInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+				ci := &pb.CacheInfo{
+					NodeType:  cn.ServiceID,
+					NodeId:    "uuid",
+					CacheType: "memory",
+				}
+				resp.GetCacheInfoResponse = &pb.GetCacheInfoResponse{
+					CacheInfoList: []*pb.CacheInfo{ci},
+				}
+				return nil
+			}, false)
+			qs.AddHandleFunc(pb.CmdMethod_GetTxnInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+				ti := &pb.TxnInfo{
+					CreateAt:  time.Now(),
+					Meta:      nil,
+					UserTxn:   true,
+					WaitLocks: nil,
+				}
+				resp.GetTxnInfoResponse = &pb.GetTxnInfoResponse{
+					CnId:        "uuid",
+					TxnInfoList: []*pb.TxnInfo{ti},
+				}
+				return nil
+			}, false)
+			qs.AddHandleFunc(pb.CmdMethod_GetLockInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+				li := &pb.LockInfo{
+					TableId:     100,
+					Keys:        nil,
+					LockMode:    lock.LockMode_Shared,
+					IsRangeLock: true,
+					Holders:     nil,
+					Waiters:     nil,
+				}
+				resp.GetLockInfoResponse = &pb.GetLockInfoResponse{
+					CnId:         "uuid1",
+					LockInfoList: []*pb.LockInfo{li},
+				}
+				return nil
+			}, false)
+
+			qs.AddHandleFunc(pb.CmdMethod_GetCacheData,
+				func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+					wr := &pb.WrappedResponse{
+						Response: resp,
+					}
+					err := fileservice.HandleRemoteRead(ctx, fs, req, wr)
+					if err != nil {
+						return err
+					}
+					qs.SetReleaseFunc(resp, wr.ReleaseFunc)
+					return nil
 				},
-			}
-			return nil
+				false,
+			)
+
+			qs.AddHandleFunc(pb.CmdMethod_GetStatsInfo,
+				func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+					resp.GetStatsInfoResponse = &pb.GetStatsInfoResponse{
+						StatsInfo: &statsinfo.StatsInfo{
+							TableCnt: 100,
+						},
+					}
+					return nil
+				},
+				false,
+			)
+
+			err = qs.Start()
+			assert.NoError(t, err)
+
+			fn(qt, address)
+
+			err = qs.Close()
+			assert.NoError(t, err)
+			err = qt.Close()
+			assert.NoError(t, err)
 		},
-		false,
 	)
-
-	err = qs.Start()
-	assert.NoError(t, err)
-
-	fn(qt, address)
-
-	err = qs.Close()
-	assert.NoError(t, err)
-	err = qt.Close()
-	assert.NoError(t, err)
 }
 
 func TestQueryServiceAlterAccount(t *testing.T) {

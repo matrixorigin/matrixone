@@ -34,7 +34,7 @@ func handleGetProtocolVersion(proc *process.Process,
 	parameter string,
 	sender requestSender) (Result, error) {
 	qt := proc.GetQueryClient()
-	mc := clusterservice.GetMOCluster()
+	mc := clusterservice.GetMOCluster(proc.GetService())
 	var addrs []string
 	var nodeIds []string
 	mc.GetCNService(
@@ -157,7 +157,7 @@ func transferToTN(qt qclient.QueryClient, version int64) (Result, error) {
 	var addr string
 	var resp *querypb.Response
 	var err error
-	clusterservice.GetMOCluster().GetTNService(
+	clusterservice.GetMOCluster(qt.ServiceID()).GetTNService(
 		clusterservice.NewSelector(),
 		func(t metadata.TNService) bool {
 			if t.QueryAddress == "" {
@@ -186,7 +186,7 @@ func transferToTN(qt qclient.QueryClient, version int64) (Result, error) {
 }
 
 func transferToCN(qt qclient.QueryClient, target string, version int64) (resp *querypb.Response, err error) {
-	clusterservice.GetMOCluster().GetCNService(
+	clusterservice.GetMOCluster(qt.ServiceID()).GetCNService(
 		clusterservice.NewServiceIDSelector(target),
 		func(cn metadata.CNService) bool {
 			req := qt.NewRequest(querypb.CmdMethod_SetProtocolVersion)

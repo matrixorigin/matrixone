@@ -15,8 +15,6 @@
 package preinsert
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
@@ -34,13 +32,13 @@ type container struct {
 }
 type PreInsert struct {
 	ctr *container
-	Ctx context.Context
 
 	HasAutoCol bool
 	IsUpdate   bool
 	SchemaName string
 	TableDef   *pb.TableDef
-	Attrs      []string
+	// letter case: origin
+	Attrs []string
 
 	EstimatedRowCount int64
 

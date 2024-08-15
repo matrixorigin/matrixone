@@ -16,12 +16,16 @@ package malloc
 
 type LeaksTrackingAllocator struct {
 	upstream        Allocator
-	deallocatorPool *ClosureDeallocatorPool[leaksTrackingDeallocatorArgs]
+	deallocatorPool *ClosureDeallocatorPool[leaksTrackingDeallocatorArgs, *leaksTrackingDeallocatorArgs]
 	tracker         *LeaksTracker
 }
 
 type leaksTrackingDeallocatorArgs struct {
 	stacktraceID StacktraceID
+}
+
+func (leaksTrackingDeallocatorArgs) As(Trait) bool {
+	return false
 }
 
 func NewLeaksTrackingAllocator(

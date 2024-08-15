@@ -35,8 +35,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state   int
 	bat     *batch.Batch
 	rbat    *batch.Batch
@@ -46,11 +44,14 @@ type container struct {
 }
 
 type LoopMark struct {
-	ctr    *container
-	Cond   *plan.Expr
-	Typs   []types.Type
-	Result []int32
+	ctr        *container
+	Cond       *plan.Expr
+	Typs       []types.Type
+	Result     []int32
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopMark *LoopMark) GetOperatorBase() *vm.OperatorBase {
@@ -92,8 +93,12 @@ func (loopMark *LoopMark) Free(proc *process.Process, pipelineFailed bool, err e
 	if ctr := loopMark.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 		loopMark.ctr = nil
+	}
+	if loopMark.ProjectList != nil {
+		anal := proc.GetAnalyze(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor())
+		anal.Alloc(loopMark.ProjectAllocSize)
+		loopMark.FreeProjection(proc)
 	}
 }
 

@@ -187,7 +187,7 @@ func (s *balanceScheduler) doBalance(
 
 	r.addOpLocked(to, newAddReplicaOp(shard, new))
 
-	getLogger().Info(
+	r.logger.Info(
 		"move shard",
 		zap.Uint64("table", t.id),
 		zap.String("from", from),

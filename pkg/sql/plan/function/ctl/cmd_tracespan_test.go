@@ -61,21 +61,29 @@ func TestCanHandleServiceAndCmdWrong(t *testing.T) {
 }
 
 func initRuntime(uuids []string, queryAddress []string) {
-	cns := make([]metadata.CNService, len(uuids))
-	for idx := range uuids {
-		cns[idx] = metadata.CNService{
-			ServiceID:    uuids[idx],
-			QueryAddress: queryAddress[idx],
-		}
-	}
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			cns := make([]metadata.CNService, len(uuids))
+			for idx := range uuids {
+				cns[idx] = metadata.CNService{
+					ServiceID:    uuids[idx],
+					QueryAddress: queryAddress[idx],
+				}
+				runtime.SetupServiceBasedRuntime(uuids[idx], rt)
+			}
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	moCluster := clusterservice.NewMOCluster(new(testHAKeeperClient),
-		time.Duration(time.Second),
-		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices(cns, nil))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, moCluster)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			moCluster := clusterservice.NewMOCluster(
+				"",
+				new(testHAKeeperClient),
+				time.Duration(time.Second),
+				clusterservice.WithDisableRefresh(),
+				clusterservice.WithServices(cns, nil))
+			rt.SetGlobalVariables(runtime.ClusterService, moCluster)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		},
+	)
+
 }
 
 func TestCanHandleSelfCmd(t *testing.T) {
@@ -91,6 +99,8 @@ func TestCanHandleSelfCmd(t *testing.T) {
 	initRuntime(nil, nil)
 
 	uuid := uuid2.New().String()
+	runtime.SetupServiceBasedRuntime(uuid, runtime.ServiceRuntime(""))
+
 	cli, err := qclient.NewQueryClient(uuid, morpc.Config{})
 	require.Nil(t, err)
 
@@ -193,7 +203,7 @@ func (c *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.Clust
 
 func mockHandleTraceSpan(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.TraceSpanResponse = new(query.TraceSpanResponse)
-	resp.TraceSpanResponse.Resp = SelfProcess(
+	resp.TraceSpanResponse.Resp = UpdateCurrentCNTraceSpan(
 		req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans, req.TraceSpanRequest.Threshold)
 	return nil
 }

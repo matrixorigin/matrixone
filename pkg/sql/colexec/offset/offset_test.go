@@ -49,7 +49,7 @@ var (
 func init() {
 	tcs = []offsetTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
@@ -68,7 +68,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
@@ -87,7 +87,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
@@ -148,7 +148,7 @@ func TestOffset(t *testing.T) {
 		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -157,7 +157,7 @@ func BenchmarkOffset(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []offsetTestCase{
 			{
-				proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+				proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 				types: []types.Type{
 					types.T_int8.ToType(),
 				},
@@ -188,7 +188,7 @@ func BenchmarkOffset(b *testing.B) {
 			resetChildren(tc.arg, bats)
 			_, _ = tc.arg.Call(tc.proc)
 			tc.arg.Free(tc.proc, false, nil)
-			tc.proc.FreeVectors()
+			tc.proc.Free()
 		}
 	}
 }

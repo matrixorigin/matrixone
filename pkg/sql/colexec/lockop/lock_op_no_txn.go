@@ -39,20 +39,28 @@ var (
 // a unique identifier, without using an external transaction.
 func LockTableWithUniqueID(
 	ctx context.Context,
+	sid string,
 	uniqueID string,
 	tableID uint64,
 	txnClient client.TxnClient,
 	pkType types.Type,
 	eng engine.Engine,
 	mp *mpool.MPool,
-	mode lock.LockMode) error {
-	proc, err := getInternalProcessByUniqueID(ctx, uniqueID, mp, txnClient)
+	mode lock.LockMode,
+) error {
+	proc, err := getInternalProcessByUniqueID(
+		ctx,
+		sid,
+		uniqueID,
+		mp,
+		txnClient,
+	)
 	if err != nil {
 		return err
 	}
 
-	parker := types.NewPacker(proc.Mp())
-	defer parker.FreeMem()
+	parker := types.NewPacker()
+	defer parker.Close()
 
 	opts := DefaultLockOptions(parker).
 		WithLockMode(mode).
@@ -70,6 +78,7 @@ func LockTableWithUniqueID(
 	_, _, _, err = doLock(
 		proc.Ctx,
 		eng,
+		nil,
 		nil,
 		tableID,
 		proc,
@@ -89,9 +98,11 @@ func UnlockWithUniqueID(
 
 func getInternalProcessByUniqueID(
 	ctx context.Context,
+	sid string,
 	id string,
 	mp *mpool.MPool,
-	txnClient client.TxnClient) (*process.Process, error) {
+	txnClient client.TxnClient,
+) (*process.Process, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -102,8 +113,8 @@ func getInternalProcessByUniqueID(
 	if err != nil {
 		return nil, err
 	}
-	v, _ := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.LockService)
-	proc := process.New(
+	v, _ := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.LockService)
+	proc := process.NewTopProcess(
 		ctx,
 		mp,
 		txnClient,
@@ -113,7 +124,8 @@ func getInternalProcessByUniqueID(
 		nil,
 		nil,
 		nil,
-		nil)
+		nil,
+	)
 	internalProcesses[id] = proc
 	return proc, nil
 }

@@ -228,6 +228,7 @@ func (c *DashboardCreator) initFSObjectStorageRow() dashboard.Option {
 			3,
 			[]string{
 				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="read"`),
+				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="active-read"`),
 				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="write"`),
 				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="delete"`),
 				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="list"`),
@@ -236,6 +237,7 @@ func (c *DashboardCreator) initFSObjectStorageRow() dashboard.Option {
 			},
 			[]string{
 				"read",
+				"active-read",
 				"write",
 				"delete",
 				"list",
@@ -249,6 +251,7 @@ func (c *DashboardCreator) initFSObjectStorageRow() dashboard.Option {
 			3,
 			[]string{
 				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="read"`) + `[$interval])`,
+				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="active-read"`) + `[$interval])`,
 				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="write"`) + `[$interval])`,
 				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="delete"`) + `[$interval])`,
 				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="list"`) + `[$interval])`,
@@ -257,6 +260,7 @@ func (c *DashboardCreator) initFSObjectStorageRow() dashboard.Option {
 			},
 			[]string{
 				"read",
+				"active-read",
 				"write",
 				"delete",
 				"list",

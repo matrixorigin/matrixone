@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -249,8 +248,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		dbName = ctx.DefaultDatabase()
 	}
 
-	// snapshot to fix
-	obj, tableDef := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
+	obj, tableDef := ctx.Resolve(dbName, tblName, nil)
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -451,10 +449,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
-	err = builder.addBinding(info.rootId, tree.AliasClause{
-		Alias: derivedTableName,
-	}, bindCtx)
-	if err != nil {
+	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
 		return false, nil, nil, err
 	}
 
@@ -1285,6 +1280,8 @@ func appendPrimaryConstraintPlan(
 	ifInsertFromUnique bool,
 	fuzzymessage *OriginTableMessageForFuzzy,
 ) error {
+	sid := builder.compCtx.GetProcess().GetService()
+
 	var lastNodeId int32
 	var err error
 
@@ -1293,7 +1290,7 @@ func appendPrimaryConstraintPlan(
 	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 		// needCheck := true
 		needCheck := !builder.qry.LoadTag
-		useFuzzyFilter := config.CNPrimaryCheck
+		useFuzzyFilter := config.CNPrimaryCheck.Load()
 		if isUpdate {
 			needCheck = updatePkCol
 			useFuzzyFilter = false
@@ -1432,6 +1429,10 @@ func appendPrimaryConstraintPlan(
 				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
 			}
 
+			if builder.isRestore {
+				scanNode.Stats = DefaultHugeStats()
+			}
+
 			var tableScanId int32
 
 			if len(pkFilterExprs) > 0 {
@@ -1480,7 +1481,7 @@ func appendPrimaryConstraintPlan(
 						},
 					},
 				}
-				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt), buildExpr)}
+				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt), buildExpr)}
 				recalcStatsByRuntimeFilter(scanNode, fuzzyFilterNode, builder)
 			}
 
@@ -1492,7 +1493,7 @@ func appendPrimaryConstraintPlan(
 	// The refactor that using fuzzy filter has not been completely finished, Update type Insert cannot directly use fuzzy filter for duplicate detection.
 	//  so the original logic is retained. should be deleted later
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
-	if config.CNPrimaryCheck {
+	if config.CNPrimaryCheck.Load() {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 			rfTag := builder.genNewMsgTag()
 
@@ -1599,7 +1600,7 @@ func appendPrimaryConstraintPlan(
 					JoinType:               plan.Node_RIGHT,
 					OnList:                 []*Expr{condExpr},
 					ProjectList:            []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
-					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt), buildExpr)},
+					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt), buildExpr)},
 				}
 				lastNodeId = builder.appendNode(joinNode, bindCtx)
 				recalcStatsByRuntimeFilter(scanNode, joinNode, builder)

@@ -72,11 +72,11 @@ func TestCheckpoint1(t *testing.T) {
 		processor.ObjectFn = objectFn
 		err := db.Catalog.RecurLoop(processor)
 		assert.NoError(t, err)
-		return blockCnt == 2+3
+		return blockCnt == 2
 	}
 	testutils.WaitExpect(1000, fn)
 	fn()
-	assert.Equal(t, 2+3, blockCnt)
+	assert.Equal(t, 2, blockCnt)
 }
 
 func TestCheckpoint2(t *testing.T) {

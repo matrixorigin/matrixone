@@ -60,8 +60,10 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 		if autoIncrCol != "" {
 			autoIncrement, err := getCurrentValue(
 				proc.Ctx,
+				proc.GetService(),
 				tableId,
-				autoIncrCol)
+				autoIncrCol,
+			)
 			if err != nil {
 				return err
 			}
@@ -94,10 +96,12 @@ func getTableAutoIncrCol(engineDefs []engine.TableDef) string {
 
 func getCurrentValue(
 	ctx context.Context,
+	sid string,
 	tableID uint64,
 	col string) (uint64, error) {
-	return incrservice.GetAutoIncrementService(ctx).CurrentValue(
+	return incrservice.GetAutoIncrementService(sid).CurrentValue(
 		ctx,
 		tableID,
-		col)
+		col,
+	)
 }

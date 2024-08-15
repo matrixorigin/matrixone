@@ -22,8 +22,6 @@ import (
 	"strings"
 	"time"
 
-	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -232,10 +231,15 @@ func getLocks(proc *process.Process) ([]*query.GetLockInfoResponse, error) {
 	var err error
 	var nodes []string
 
-	selectSuperTenant(clusterservice.NewSelector(), "root", nil,
+	selectSuperTenant(
+		proc.GetService(),
+		clusterservice.NewSelector(),
+		"root",
+		nil,
 		func(s *metadata.CNService) {
 			nodes = append(nodes, s.QueryAddress)
-		})
+		},
+	)
 
 	genRequest := func() *query.Request {
 		req := proc.GetQueryClient().NewRequest(query.CmdMethod_GetLockInfo)
@@ -582,10 +586,15 @@ func getTxns(proc *process.Process) ([]*query.GetTxnInfoResponse, error) {
 	var err error
 	var nodes []string
 
-	selectSuperTenant(clusterservice.NewSelector(), "root", nil,
+	selectSuperTenant(
+		proc.GetService(),
+		clusterservice.NewSelector(),
+		"root",
+		nil,
 		func(s *metadata.CNService) {
 			nodes = append(nodes, s.QueryAddress)
-		})
+		},
+	)
 
 	genRequest := func() *query.Request {
 		req := proc.Base.QueryClient.NewRequest(query.CmdMethod_GetTxnInfo)
@@ -706,14 +715,22 @@ func getCacheStats(proc *process.Process) ([]*query.GetCacheInfoResponse, error)
 	var err error
 	var nodes []string
 
-	selectSuperTenant(clusterservice.NewSelector(), "root", nil,
+	selectSuperTenant(
+		proc.GetService(),
+		clusterservice.NewSelector(),
+		"root",
+		nil,
 		func(s *metadata.CNService) {
 			nodes = append(nodes, s.QueryAddress)
-		})
+		},
+	)
 
-	listTnService(func(s *metadata.TNService) {
-		nodes = append(nodes, s.QueryAddress)
-	})
+	listTnService(
+		proc.GetService(),
+		func(s *metadata.TNService) {
+			nodes = append(nodes, s.QueryAddress)
+		},
+	)
 
 	genRequest := func() *query.Request {
 		req := proc.Base.QueryClient.NewRequest(query.CmdMethod_GetCacheInfo)
@@ -733,19 +750,24 @@ func getCacheStats(proc *process.Process) ([]*query.GetCacheInfoResponse, error)
 	return rsps, err
 }
 
-var selectSuperTenant = func(selector clusterservice.Selector,
+var selectSuperTenant = func(
+	sid string,
+	selector clusterservice.Selector,
 	username string,
 	filter func(string) bool,
-	appendFn func(service *metadata.CNService)) {
-	clusterservice.GetMOCluster().GetCNService(
+	appendFn func(service *metadata.CNService),
+) {
+	clusterservice.GetMOCluster(sid).GetCNService(
 		clusterservice.NewSelectAll(), func(s metadata.CNService) bool {
 			appendFn(&s)
 			return true
 		})
 }
 
-var listTnService = func(appendFn func(service *metadata.TNService)) {
-	disttae.ListTnService(appendFn)
+var listTnService = func(
+	sid string,
+	appendFn func(service *metadata.TNService)) {
+	disttae.ListTnService(sid, appendFn)
 }
 
 var requestMultipleCn = func(ctx context.Context, nodes []string, qc qclient.QueryClient, genRequest func() *query.Request, handleValidResponse func(string, *query.Response), handleInvalidResponse func(string)) error {

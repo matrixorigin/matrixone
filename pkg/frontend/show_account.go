@@ -157,7 +157,7 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 	txnOperator := ses.txnHandler.GetTxn()
 
 	// create a new proc for `handler`
-	proc := process.New(ctx, ses.proc.GetMPool(),
+	proc := process.NewTopProcess(ctx, ses.proc.GetMPool(),
 		ses.proc.Base.TxnClient, txnOperator,
 		ses.proc.Base.FileService, ses.proc.Base.LockService,
 		ses.proc.Base.QueryClient, ses.proc.Base.Hakeeper,
@@ -194,8 +194,13 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 	return result.Data.([]any)[0], tried, nil
 }
 
-func handleStorageUsageResponse_V0(ctx context.Context, fs fileservice.FileService,
-	usage *db.StorageUsageResp_V0, logger SessionLogger) (map[int64]uint64, error) {
+func handleStorageUsageResponse_V0(
+	ctx context.Context,
+	sid string,
+	fs fileservice.FileService,
+	usage *db.StorageUsageResp_V0,
+	logger SessionLogger,
+) (map[int64]uint64, error) {
 	result := make(map[int64]uint64, 0)
 	for idx := range usage.CkpEntries {
 		version := usage.CkpEntries[idx].Version
@@ -209,7 +214,7 @@ func handleStorageUsageResponse_V0(ctx context.Context, fs fileservice.FileServi
 			return map[int64]uint64{}, nil
 		}
 
-		ckpData, err := logtail.LoadSpecifiedCkpBatch(ctx, location, version, logtail.StorageUsageInsIDX, fs)
+		ckpData, err := logtail.LoadSpecifiedCkpBatch(ctx, sid, location, version, logtail.StorageUsageInsIDX, fs)
 		if err != nil {
 			return nil, err
 		}
@@ -330,7 +335,7 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64
 		}
 
 		// step 3: handling these pulled data
-		return handleStorageUsageResponse_V0(ctx, fs, usage, ses.GetLogger())
+		return handleStorageUsageResponse_V0(ctx, ses.GetService(), fs, usage, ses.GetLogger())
 
 	} else {
 		usage, ok := response.(*db.StorageUsageResp)
@@ -544,7 +549,6 @@ func getAccountInfo(ctx context.Context,
 
 		backSes := bh.(*backExec)
 		backSes.backSes.allResultSet[0].Columns = backSes.backSes.allResultSet[0].Columns[idxOfAccountId+1:]
-		delete(backSes.backSes.allResultSet[0].Name2Index, "account_id")
 		backSes.backSes.rs.ResultCols = backSes.backSes.rs.ResultCols[idxOfAccountId+1:]
 	}
 

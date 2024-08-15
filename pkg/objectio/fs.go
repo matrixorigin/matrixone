@@ -29,8 +29,16 @@ type ObjectFS struct {
 }
 
 func TmpNewFileservice(ctx context.Context, dir string) fileservice.FileService {
+	return tmpNewFileservice(ctx, defines.LocalFileServiceName, dir)
+}
+
+func TmpNewSharedFileservice(ctx context.Context, dir string) fileservice.FileService {
+	return tmpNewFileservice(ctx, defines.SharedFileServiceName, dir)
+}
+
+func tmpNewFileservice(ctx context.Context, kind string, dir string) fileservice.FileService {
 	c := fileservice.Config{
-		Name:    defines.LocalFileServiceName,
+		Name:    kind,
 		Backend: "DISK",
 		DataDir: dir,
 		Cache:   fileservice.DisabledCacheConfig,

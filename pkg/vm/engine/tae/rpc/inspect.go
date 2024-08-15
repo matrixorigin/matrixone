@@ -100,6 +100,9 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 	transfer := &transferArg{}
 	rootCmd.AddCommand(transfer.PrepareCommand())
 
+	inspect := &MoInspectArg{}
+	rootCmd.AddCommand(inspect.PrepareCommand())
+
 	return rootCmd
 }
 
@@ -120,8 +123,11 @@ func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
 			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("parse err: %v", err)))
 			return
 		}
-		ctx := cmd.Flag("ictx").Value.(*inspectContext)
-		logutil.Infof("inpsect mo_ctl %s: %v by account %+v", cmd.Name(), t.String(), ctx.acinfo)
+		v := cmd.Flag("ictx")
+		if v != nil {
+			ctx := cmd.Flag("ictx").Value.(*inspectContext)
+			logutil.Infof("inpsect mo_ctl %s: %v by account %+v", cmd.Name(), t.String(), ctx.acinfo)
+		}
 		err := t.Run()
 		if err != nil {
 			cmd.OutOrStdout().Write(
@@ -129,7 +135,7 @@ func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
 			)
 		} else {
 			cmd.OutOrStdout().Write(
-				[]byte(fmt.Sprintf("success. arg %v", t.String())),
+				[]byte(fmt.Sprintf("%v", t.String())),
 			)
 		}
 	}
@@ -1237,7 +1243,7 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 	var usageDelData [][]logtail.UsageData
 
 	if usageInsData, usageDelData, err = logtail.GetStorageUsageHistory(
-		ctx, locations, versions,
+		ctx, c.ctx.db.Runtime.SID(), locations, versions,
 		c.ctx.db.Runtime.Fs.Service, common.DebugAllocator); err != nil {
 		return err
 	}

@@ -61,7 +61,7 @@ func NewDefaultConfig(clientFactory LogServiceClientFactory) *Config {
 	}
 }
 
-func NewTestConfig(ccfg *logservice.ClientConfig) *Config {
+func NewTestConfig(sid string, ccfg *logservice.ClientConfig) *Config {
 	cfg := &Config{
 		ClientMaxCount:        10,
 		GetClientRetryTimeOut: time.Second,
@@ -78,7 +78,7 @@ func NewTestConfig(ccfg *logservice.ClientConfig) *Config {
 	}
 	cfg.ClientFactory = func() (logservice.Client, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.NewClientDuration)
-		logserviceClient, err := logservice.NewClient(ctx, *ccfg)
+		logserviceClient, err := logservice.NewClient(ctx, sid, *ccfg)
 		cancel()
 		return logserviceClient, err
 	}

@@ -240,7 +240,7 @@ drop table atomic_table_15;
 select * from atomic_table_15;
 c1    c2
 commit;
-internal error: w-w conflict: truncate error
+w-w conflict
 select * from atomic_table_15;
 SQL parser error: table "atomic_table_15" does not exist
 drop table if exists atomic_table_16;
@@ -311,7 +311,7 @@ drop table atomic_table_18;
 select * from atomic_table_18;
 c1    c2
 commit;
-internal error: w-w conflict: truncate error
+w-w conflict
 select * from atomic_table_18;
 SQL parser error: table "atomic_table_18" does not exist
 create table atomic_table_18(c1 int,c2 varchar(25));

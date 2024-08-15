@@ -46,7 +46,6 @@ func (window *Window) OpType() vm.OpType {
 
 func (window *Window) Prepare(proc *process.Process) (err error) {
 	window.ctr = new(container)
-	window.ctr.InitReceiver(proc, true)
 
 	ctr := window.ctr
 	ctr.aggVecs = make([]group.ExprEvalVector, len(window.Aggs))
@@ -74,50 +73,54 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(window.GetIdx(), window.GetParallelIdx(), window.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	result := vm.NewCallResult()
-	var bat *batch.Batch
-	var msg *process.RegisterMessage
 
 	for {
 		switch ctr.status {
 		case receiveAll:
 			for {
-				msg = ctr.ReceiveFromAllRegs(anal)
-				if msg.Err != nil {
-					return result, msg.Err
+				result, err := window.GetChildren(0).Call(proc)
+				if err != nil {
+					return result, err
 				}
 
-				if msg.Batch == nil {
+				if result.Batch == nil {
 					ctr.status = eval
 					break
 				}
-				bat = msg.Batch
 				if ctr.bat == nil {
-					ctr.bat = bat
+					ctr.bat, err = result.Batch.Dup(proc.Mp())
+					if err != nil {
+						return result, err
+					}
 					continue
 				}
-				anal.Input(bat, window.GetIsFirst())
-				for i := range bat.Vecs {
-					n := bat.Vecs[i].Length()
-					err = ctr.bat.Vecs[i].UnionBatch(bat.Vecs[i], 0, n, makeFlagsOne(n), proc.Mp())
+				anal.Input(result.Batch, window.GetIsFirst())
+				for i := range result.Batch.Vecs {
+					n := result.Batch.Vecs[i].Length()
+					err = ctr.bat.Vecs[i].UnionBatch(result.Batch.Vecs[i], 0, n, makeFlagsOne(n), proc.Mp())
 					if err != nil {
 						return result, err
 					}
 				}
-				ctr.bat.AddRowCount(bat.RowCount())
+				ctr.bat.AddRowCount(result.Batch.RowCount())
 			}
 		case receive:
-			msg = ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err := window.GetChildren(0).Call(proc)
+			if err != nil {
+				return result, err
 			}
-			if msg.Batch == nil {
+			if result.Batch == nil {
 				ctr.status = done
 			} else {
 				ctr.status = eval
+				anal.Input(result.Batch, window.GetIsFirst())
+				ctr.bat, err = result.Batch.Dup(proc.Mp())
+				if err != nil {
+					return result, err
+				}
 			}
-			ctr.bat = msg.Batch
 		case eval:
+			result := vm.NewCallResult()
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
@@ -170,6 +173,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Status = vm.ExecNext
 			return result, nil
 		case done:
+			result := vm.NewCallResult()
 			result.Status = vm.ExecStop
 			return result, nil
 		}

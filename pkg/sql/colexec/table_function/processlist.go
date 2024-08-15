@@ -173,10 +173,14 @@ func isSysTenant(tenant string) bool {
 }
 
 // fetchSessions get sessions all nodes which the tenant has privilege to access.
-func fetchSessions(ctx context.Context, tenant string, qc qclient.QueryClient) ([]*status.Session, error) {
+func fetchSessions(
+	ctx context.Context,
+	tenant string,
+	qc qclient.QueryClient,
+) ([]*status.Session, error) {
 	var nodes []string
 	sysTenant := isSysTenant(tenant)
-	clusterservice.GetMOCluster().GetCNService(clusterservice.NewSelector(),
+	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(clusterservice.NewSelectAll(),
 		func(s metadata.CNService) bool {
 			nodes = append(nodes, s.QueryAddress)
 			return true

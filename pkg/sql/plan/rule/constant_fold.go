@@ -348,7 +348,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 			},
 		}
 	case types.T_varchar, types.T_char,
-		types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		return &plan.Literal{
 			Value: &plan.Literal_Sval{
 				Sval: vec.GetStringAt(int(row)),

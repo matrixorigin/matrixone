@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -52,7 +51,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		dbName = ctx.DefaultDatabase()
 	}
 
-	_, t := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
+	_, t := ctx.Resolve(dbName, tblName, nil)
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -81,6 +80,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 	if stmt.IsRestore {
+		builder.isRestore = true
 		oldSnapshot := builder.compCtx.GetSnapshot()
 		builder.compCtx.SetSnapshot(&Snapshot{
 			Tenant: &plan.SnapshotTenant{
@@ -190,11 +190,11 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 				continue
 			}
-			attrs = append(attrs, col.Name)
+			attrs = append(attrs, col.GetOriginCaseName())
 			insertColCount++
 		}
 		for _, col := range tableDef.Cols {
-			attrs = append(attrs, col.Name)
+			attrs = append(attrs, col.GetOriginCaseName())
 		}
 		attrs = append(attrs, catalog.Row_ID)
 		uniqueColWithIdx := GetUniqueColAndIdxFromTableDef(tableDef)
@@ -323,8 +323,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
-	ReCalcQueryStats(builder, query)
+	builder.tempOptimizeForDML()
 	reCheckifNeedLockWholeTable(builder)
+
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -355,7 +356,7 @@ func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *Tab
 		}
 	} else {
 		for _, column := range stmt.Columns {
-			colName := string(column)
+			colName := strings.ToLower(string(column))
 			if _, ok := colToIdx[colName]; !ok {
 				return nil, moerr.NewBadFieldError(ctx, colName, tableDef.Name)
 			}
@@ -398,7 +399,7 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 		isCompound = len(tableDef.Pkey.Names) > 1
 	}
 
-	if !config.CNPrimaryCheck {
+	if !config.CNPrimaryCheck.Load() {
 		return false // break condition 0
 	}
 
@@ -707,7 +708,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 						Expr: &plan.Expr_Lit{
 							Lit: &plan.Literal{
 								Value: &plan.Literal_Sval{
-									Sval: val.ToString(),
+									Sval: val.String(),
 								},
 							},
 						},

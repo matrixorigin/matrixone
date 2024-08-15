@@ -16,6 +16,9 @@ package single
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,8 +42,6 @@ func (singleJoin *SingleJoin) OpType() vm.OpType {
 
 func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
 	singleJoin.ctr = new(container)
-	singleJoin.ctr.InitReceiver(proc, false)
-	singleJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	singleJoin.ctr.vecs = make([]*vector.Vector, len(singleJoin.Conditions[0]))
 
 	singleJoin.ctr.evecs = make([]evalVector, len(singleJoin.Conditions[0]))
@@ -53,6 +54,13 @@ func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
 
 	if singleJoin.Cond != nil {
 		singleJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, singleJoin.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if singleJoin.ProjectList != nil {
+		err = singleJoin.PrepareProjection(proc)
 	}
 	return err
 }
@@ -67,20 +75,19 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 	defer anal.Stop()
 	ctr := singleJoin.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(anal); err != nil {
-				return result, err
-			}
+			singleJoin.build(anal, proc)
 			ctr.state = Probe
 
 		case Probe:
-			msg := ctr.ReceiveFromSingleReg(0, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = singleJoin.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-			bat := msg.Batch
+			bat := result.Batch
 
 			if bat == nil {
 				ctr.state = End
@@ -91,23 +98,30 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 				return result, nil
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
+
+			anal.Input(bat, singleJoin.GetIsFirst())
 			if ctr.mp == nil {
-				if err := ctr.emptyProbe(bat, singleJoin, proc, anal, singleJoin.GetIsFirst(), singleJoin.GetIsLast(), &result); err != nil {
-					bat.Clean(proc.Mp())
+				if err := ctr.emptyProbe(bat, singleJoin, proc, &result); err != nil {
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			} else {
-				if err := ctr.probe(bat, singleJoin, proc, anal, singleJoin.GetIsFirst(), singleJoin.GetIsLast(), &result); err != nil {
-					bat.Clean(proc.Mp())
+				if err := ctr.probe(bat, singleJoin, proc, &result); err != nil {
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			}
-			proc.PutBatch(bat)
+
+			if singleJoin.ProjectList != nil {
+				var err error
+				result.Batch, err = singleJoin.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, singleJoin.GetIsLast())
 			return result, nil
 
 		default:
@@ -117,52 +131,19 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 		}
 	}
 }
-
-func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
-	}
-	bat := msg.Batch
-	if bat != nil && bat.AuxData != nil {
-		ctr.mp = bat.DupJmAuxData()
+func (singleJoin *SingleJoin) build(anal process.Analyze, proc *process.Process) {
+	ctr := singleJoin.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
+	ctr.mp = message.ReceiveJoinMap(singleJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-	return nil
+	ctr.batches = ctr.mp.GetBatches()
+	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
-func (ctr *container) receiveBatch(anal process.Analyze) error {
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat != nil {
-			ctr.batchRowCount += bat.RowCount()
-			ctr.batches = append(ctr.batches, bat)
-		} else {
-			break
-		}
-	}
-	for i := 0; i < len(ctr.batches)-1; i++ {
-		if ctr.batches[i].RowCount() != colexec.DefaultBatchSize {
-			panic("wrong batch received for hash build!")
-		}
-	}
-	return nil
-}
-
-func (ctr *container) build(anal process.Analyze) error {
-	err := ctr.receiveHashMap(anal)
-	if err != nil {
-		return err
-	}
-	return ctr.receiveBatch(anal)
-}
-
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -177,13 +158,11 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, proc *process
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -214,12 +193,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Proc
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		copy(ctr.inBuckets, hashmap.OneUInt8s)
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := itr.Find(i, n, ctr.vecs)
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 {
-				continue
-			}
 			if zvals[k] == 0 || vals[k] == 0 {
 				for j, rp := range ap.Result {
 					if rp.Rel != 0 {
@@ -342,7 +317,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Proc
 		}
 	}
 	ctr.rbat.SetRowCount(ctr.rbat.RowCount() + bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }

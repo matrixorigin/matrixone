@@ -16,11 +16,15 @@ package function
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/md5"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"math"
 	"runtime"
@@ -507,6 +511,10 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
+	return ReadFromFileOffsetSize(Filepath, fs, 0, -1)
+}
+
+func ReadFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
 	fs, readPath, err := fileservice.GetForETL(context.TODO(), fs, Filepath)
 	if fs == nil || err != nil {
 		return nil, err
@@ -517,8 +525,8 @@ func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, e
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			0: {
-				Offset:            0,
-				Size:              -1,
+				Offset:            offset, //0 - default
+				Size:              size,   //-1 - default
 				ReadCloserForRead: &r,
 			},
 		},
@@ -563,6 +571,64 @@ func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 
 	if err = rs.AppendBytes(ctx, false); err != nil {
 		return err
+	}
+	return nil
+}
+
+// LoadFileDatalink reads a file from the file service and returns the content as a blob.
+func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		_filePath, null1 := filePathVec.GetStrValue(i)
+		if null1 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		filePath := util.UnsafeBytesToString(_filePath)
+		fs := proc.GetFileService()
+
+		moUrl, offsetSize, ext, err := types.ParseDatalink(filePath)
+		if err != nil {
+			return err
+		}
+		r, err := ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
+		if err != nil {
+			return err
+		}
+
+		defer r.Close()
+
+		fileBytes, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+
+		var contentBytes []byte
+		switch ext {
+		case ".csv", ".txt":
+			contentBytes = fileBytes
+			//nothing to do.
+		default:
+			return moerr.NewInvalidInput(proc.Ctx, "unsupported file extension: %s", ext)
+		}
+
+		if len(fileBytes) > 65536 /*blob size*/ {
+			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+		}
+		if len(fileBytes) == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			return nil
+		}
+
+		if err = rs.AppendBytes(contentBytes, false); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -774,9 +840,9 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	toVec := result.GetResultVector()
 	toVec.Reset(*toVec.GetType())
 
-	sels := make([]int32, fromVec.Length())
+	sels := make([]int64, fromVec.Length())
 	for j := 0; j < len(sels); j++ {
-		sels[j] = int32(j)
+		sels[j] = int64(j)
 	}
 
 	err := toVec.Union(fromVec, sels, proc.GetMPool())
@@ -1053,6 +1119,88 @@ func octFloat[T constraints.Float](xs T) (types.Decimal128, error) {
 		}
 	}
 	return res, nil
+}
+
+func generateSHAKey(key []byte) []byte {
+	// return 32 bytes SHA256 checksum of the key
+	hash := sha256.Sum256(key)
+	return hash[:]
+}
+
+func generateInitializationVector(key []byte, length int) []byte {
+	data := append(key, byte(length))
+	hash := sha256.Sum256(data)
+	return hash[:aes.BlockSize]
+}
+
+// encode function encrypts a string, returns a binary string of the same length of the original string.
+// https://dev.mysql.com/doc/refman/5.7/en/encryption-functions.html#function_encode
+func encodeByAES(plaintext []byte, key []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
+	if null {
+		return rs.AppendMustNullForBytesResult()
+	}
+	fixedKey := generateSHAKey(key)
+	block, err := aes.NewCipher(fixedKey)
+	if err != nil {
+		return err
+	}
+	initializationVector := generateInitializationVector(key, len(plaintext))
+	ciphertext := make([]byte, len(plaintext))
+	stream := cipher.NewCTR(block, initializationVector)
+	stream.XORKeyStream(ciphertext, plaintext)
+	return rs.AppendMustBytesValue(ciphertext)
+}
+
+func Encode(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	key := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		data, nullData := source.GetStrValue(i)
+		keyData, nullKey := key.GetStrValue(i)
+		if err := encodeByAES(data, keyData, nullData || nullKey, rs); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// decode function decodes an encoded string and returns the original string
+// https://dev.mysql.com/doc/refman/5.7/en/encryption-functions.html#function_decode
+func decodeByAES(ciphertext []byte, key []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
+	if null {
+		return rs.AppendMustNullForBytesResult()
+	}
+	fixedKey := generateSHAKey(key)
+	block, err := aes.NewCipher(fixedKey)
+	if err != nil {
+		return err
+	}
+	iv := generateInitializationVector(key, len(ciphertext))
+	plaintext := make([]byte, len(ciphertext))
+	stream := cipher.NewCTR(block, iv)
+	stream.XORKeyStream(plaintext, ciphertext)
+	return rs.AppendMustBytesValue(plaintext)
+}
+
+func Decode(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	key := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		data, nullData := source.GetStrValue(i)
+		keyData, nullKey := key.GetStrValue(i)
+		if err := decodeByAES(data, keyData, nullData || nullKey, rs); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func DateToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

@@ -19,7 +19,6 @@ import (
 	"math"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -324,7 +323,9 @@ func Test_BuiltIn_Serial(t *testing.T) {
 		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"serial(true, 10)", "serial(false, 1)"}, nil),
 	}
-	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpSerial().BuiltInSerial)
+	opSerial := newOpSerial()
+	defer opSerial.Close()
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, opSerial.BuiltInSerial)
 	tcc.Run()
 
 	vec := tcc.GetResultVectorDirectly()
@@ -365,7 +366,9 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"serial_full(null, 10)", "serial_full(false, null)", "serial_full(null, 120)", "serial_full(null, null)"}, nil),
 	}
-	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpSerial().BuiltInSerialFull)
+	opSerial := newOpSerial()
+	defer opSerial.Close()
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, opSerial.BuiltInSerialFull)
 	tcc.Run()
 
 	vec := tcc.GetResultVectorDirectly()
@@ -405,9 +408,9 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 }
 
 func initSerialExtractTestCase() []tcTemp {
-	mp := mpool.MustNewZero()
 
-	ps := types.NewPacker(mp)
+	ps := types.NewPacker()
+	defer ps.Close()
 	ps.EncodeInt8(10)
 	ps.EncodeStringType([]byte("adam"))
 

@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -75,6 +77,7 @@ const (
 	Minus
 	Intersect
 	IntersectAll
+	UnionAll
 
 	HashBuild
 	ShuffleBuild
@@ -107,6 +110,7 @@ const (
 
 	Sample
 	ProductL2
+	Mock
 )
 
 type Operator interface {
@@ -232,6 +236,11 @@ func (o *OperatorBase) SetIsLast(isLast bool) {
 	o.IsLast = isLast
 }
 
+func (o *OperatorBase) SetAnalyzeControl(nodeIdx int, isFirst bool) {
+	o.Idx = nodeIdx
+	o.IsFirst = isFirst
+}
+
 var CancelResult = CallResult{
 	Status: ExecStop,
 }
@@ -280,7 +289,7 @@ func NewCallResult() CallResult {
 }
 
 type OperatorInfo struct {
-	Idx           int
+	Idx           int // plan node index to which the pipeline operator belongs
 	ParallelIdx   int
 	ParallelMajor bool
 	IsFirst       bool
@@ -292,36 +301,12 @@ type OperatorInfo struct {
 	MaxParallel int32
 }
 
-func (info OperatorInfo) GetAddress() process.MessageAddress {
-	return process.MessageAddress{
+func (info OperatorInfo) GetAddress() message.MessageAddress {
+	return message.MessageAddress{
 		CnAddr:     info.CnAddr,
 		OperatorID: info.OperatorID,
 		ParallelID: info.ParallelID,
 	}
-}
-
-func IsBrokenNode(op Operator) bool {
-	switch op.OpType() {
-	case Order, MergeOrder, Partition:
-		return true
-	case Limit, MergeLimit:
-		return true
-	case Offset, MergeOffset:
-		return true
-	case Group, MergeGroup:
-		return true
-	case Sample:
-		return true
-	case Top, MergeTop:
-		return true
-	case Window:
-		return true
-	case TimeWin, Fill:
-		return true
-	case MergeRecursive:
-		return true
-	}
-	return false
 }
 
 func CannotRemote(op Operator) bool {
@@ -333,6 +318,8 @@ type ModificationArgument interface {
 	AffectedRows() uint64
 }
 
+// doHandleAllOp function uses post traversal to recursively process nodes in the operand tree.
+// In post traversal, all child nodes are recursively processed first, and then the current node is processed.
 func doHandleAllOp(parentOp Operator, op Operator, opHandle func(parentOp Operator, op Operator) error) (err error) {
 	if op == nil {
 		return nil
@@ -340,7 +327,7 @@ func doHandleAllOp(parentOp Operator, op Operator, opHandle func(parentOp Operat
 	numChildren := op.GetOperatorBase().NumChildren()
 
 	for i := 0; i < numChildren; i++ {
-		if err := doHandleAllOp(op, op.GetOperatorBase().GetChildren(i), opHandle); err != nil {
+		if err = doHandleAllOp(op, op.GetOperatorBase().GetChildren(i), opHandle); err != nil {
 			return err
 		}
 	}

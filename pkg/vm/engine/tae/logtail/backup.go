@@ -100,12 +100,13 @@ type tableOffset struct {
 
 func getCheckpointData(
 	ctx context.Context,
+	sid string,
 	fs fileservice.FileService,
 	location objectio.Location,
 	version uint32,
 ) (*CheckpointData, error) {
-	data := NewCheckpointData(common.CheckpointAllocator)
-	reader, err := blockio.NewObjectReader(fs, location)
+	data := NewCheckpointData(sid, common.CheckpointAllocator)
+	reader, err := blockio.NewObjectReader(sid, fs, location)
 	if err != nil {
 		return nil, err
 	}
@@ -438,6 +439,7 @@ func formatData(data *batch.Batch) *batch.Batch {
 
 func LoadCheckpointEntriesFromKey(
 	ctx context.Context,
+	sid string,
 	fs fileservice.FileService,
 	location objectio.Location,
 	version uint32,
@@ -445,7 +447,7 @@ func LoadCheckpointEntriesFromKey(
 	baseTS *types.TS,
 ) ([]*objectio.BackupObject, *CheckpointData, error) {
 	locations := make([]*objectio.BackupObject, 0)
-	data, err := getCheckpointData(ctx, fs, location, version)
+	data, err := getCheckpointData(ctx, sid, fs, location, version)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -563,6 +565,7 @@ func LoadCheckpointEntriesFromKey(
 
 func ReWriteCheckpointAndBlockFromKey(
 	ctx context.Context,
+	sid string,
 	fs, dstFs fileservice.FileService,
 	loc, tnLocation objectio.Location,
 	version uint32, ts types.TS,
@@ -604,7 +607,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	}()
 	phaseNumber = 1
 	// Load checkpoint
-	data, err := getCheckpointData(ctx, fs, loc, version)
+	data, err := getCheckpointData(ctx, sid, fs, loc, version)
 	if err != nil {
 		return nil, nil, nil, err
 	}

@@ -23,13 +23,11 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
@@ -144,7 +142,7 @@ type PushClient struct {
 	receiver    []routineController
 	eng         *Engine
 
-	LogtailRPCClientFactory func(string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
+	LogtailRPCClientFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
 }
 
 type State struct {
@@ -216,11 +214,10 @@ func (c *connector) run(ctx context.Context) {
 func (c *PushClient) init(
 	serviceAddr string,
 	timestampWaiter client.TimestampWaiter,
-	serviceID string,
 	e *Engine,
 ) error {
 
-	c.serviceID = serviceID
+	c.serviceID = e.GetService()
 	c.timestampWaiter = timestampWaiter
 	if c.subscriber == nil {
 		c.subscriber = new(logTailSubscriber)
@@ -249,7 +246,7 @@ func (c *PushClient) init(
 	}
 	c.initialized = true
 
-	return c.subscriber.init(serviceAddr, c.LogtailRPCClientFactory)
+	return c.subscriber.init(e.GetService(), serviceAddr, c.LogtailRPCClientFactory)
 }
 
 func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
@@ -292,38 +289,8 @@ func (c *PushClient) toSubscribeTable(
 	tbl *txnTable) (ps *logtailreplay.PartitionState, err error) {
 
 	tableId := tbl.tableId
-	/*
-		if the table is truncated once or more than once,
-		it is suitable to use the old table id to sync logtail.
-
-		CORNER CASE 1:
-		create table t1(a int);
-		begin;
-		truncate t1; //table id changed. there is no new table id in DN.
-		select count(*) from t1; // sync logtail for the new id failed.
-
-		CORNER CASE 2:
-		create table t1(a int);
-		begin;
-		select count(*) from t1; // sync logtail for the old succeeded.
-		truncate t1; //table id changed. there is no new table id in DN.
-		select count(*) from t1; // not sync logtail this time.
-
-		CORNER CASE 3:
-		create table t1(a int);
-		begin;
-		truncate t1; //table id changed. there is no new table id in DN.
-		truncate t1; //table id changed. there is no new table id in DN.
-		select count(*) from t1; // sync logtail for the new id failed.
-	*/
-	var oldId uint64
-	if tbl.oldTableId != 0 {
-		oldId = tbl.oldTableId
-		tableId = tbl.oldTableId
-	}
-
 	//if table has been subscribed, return quickly.
-	if ps, ok := c.isSubscribed(tbl.db.databaseId, oldId, tbl.tableId); ok {
+	if ps, ok := c.isSubscribed(tbl.db.databaseId, tableId); ok {
 		return ps, nil
 	}
 
@@ -391,7 +358,6 @@ func (c *PushClient) TryToSubscribeTable(
 	// state machine for subscribe table.
 	//Unsubscribed -> Subscribing -> SubRspReceived -> Subscribed-->Unsubscribing-->Unsubscribed
 	for {
-
 		switch state {
 
 		case Subscribing:
@@ -648,6 +614,85 @@ func (c *PushClient) waitTimestamp() {
 	}
 }
 
+func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
+	// replay mo_catalog cache
+	ts := c.receivedLogTailTime.getTimestamp()
+	typeTs := types.TimestampToTS(ts)
+	op, err := e.cli.New(ctx, timestamp.Timestamp{}, client.WithSkipPushClientReady(), client.WithSnapshotTS(ts))
+	if err != nil {
+		return err
+	}
+	_ = e.New(ctx, op)
+
+	// read databases
+	result, err := execReadSql(ctx, op, catalog.MoDatabaseBatchQuery, true)
+	if err != nil {
+		return err
+	}
+	rowCntF := func(bat []*batch.Batch) string {
+		return stringifySlice(bat, func(b any) string {
+			return fmt.Sprintf("%d", b.(*batch.Batch).RowCount())
+		})
+	}
+	logutil.Infof("FIND_TABLE read mo_catalog.mo_databases %v rows", rowCntF(result.Batches))
+	defer result.Close()
+	for _, b := range result.Batches {
+		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
+			return err
+		}
+		e.catalog.InsertDatabase(b)
+	}
+
+	// read tables
+	result, err = execReadSql(ctx, op, catalog.MoTablesBatchQuery, true)
+	if err != nil {
+		return err
+	}
+	logutil.Infof("FIND_TABLE read mo_catalog.mo_tables %v rows", rowCntF(result.Batches))
+	defer result.Close()
+	for _, b := range result.Batches {
+		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
+			return err
+		}
+		e.tryAdjustThreeTablesCreatedTimeWithBatch(b)
+		e.catalog.InsertTable(b)
+	}
+
+	// read columns
+	result, err = execReadSql(ctx, op, catalog.MoColumnsBatchQuery, true)
+	if err != nil {
+		return err
+	}
+	defer result.Close()
+	logutil.Infof("FIND_TABLE read mo_catalog.mo_columns %v rows", rowCntF(result.Batches))
+
+	if isColumnsBatchPerfectlySplitted(result.Batches) {
+		for _, b := range result.Batches {
+			if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
+				return err
+			}
+			e.catalog.InsertColumns(b)
+		}
+	} else {
+		logutil.Info("FIND_TABLE merge mo_columns results")
+		bat := result.Batches[0]
+		for _, b := range result.Batches[1:] {
+			bat, err = bat.Append(ctx, result.Mp, b)
+			if err != nil {
+				return err
+			}
+		}
+		if err := fillTsVecForSysTableQueryBatch(bat, typeTs, result.Mp); err != nil {
+			return err
+		}
+		e.catalog.InsertColumns(bat)
+	}
+
+	e.catalog.UpdateStart(typeTs)
+	return nil
+
+}
+
 func (c *PushClient) connect(ctx context.Context, e *Engine) {
 	if c.connector.first.Load() {
 		c.startConsumers(ctx, e)
@@ -659,7 +704,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 				time.Sleep(time.Second)
 
 				tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
-				if err := c.init(tnLogTailServerBackend, c.timestampWaiter, c.serviceID, e); err != nil {
+				if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 					logutil.Errorf("%s init push client failed: %v", logTag, err)
 					continue
 				}
@@ -668,6 +713,11 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 				continue
 			}
 			c.waitTimestamp()
+
+			if err := c.replayCatalogCache(ctx, e); err != nil {
+				panic(err)
+			}
+
 			e.setPushClientStatus(true)
 			c.connector.first.Store(false)
 			return
@@ -686,7 +736,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		}
 
 		tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
-		if err := c.init(tnLogTailServerBackend, c.timestampWaiter, c.serviceID, e); err != nil {
+		if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 			logutil.Errorf("%s rebuild the cn log tail client failed, reason: %s", logTag, err)
 			time.Sleep(retryReconnect)
 			continue
@@ -713,11 +763,17 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 
 		err = c.subSysTables(ctx)
 		if err != nil {
+			c.pause(false)
 			logutil.Errorf("%s subscribe system tables failed, err %v", logTag, err)
 			continue
 		}
 
 		c.waitTimestamp()
+
+		if err := c.replayCatalogCache(ctx, e); err != nil {
+			panic(err)
+		}
+
 		e.setPushClientStatus(true)
 		logutil.Infof("%s %s: connected to server", logTag, c.serviceID)
 
@@ -856,6 +912,7 @@ func (c *PushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
 				part.Truncate(ctx, ids, ts)
 				part.UpdateStart(ts)
 			}
+			e.catalog.GC(ts.ToTimestamp())
 		}
 	}()
 }
@@ -880,24 +937,19 @@ type SubTableStatus struct {
 	LatestTime time.Time
 }
 
-func (c *PushClient) isSubscribed(dbId, oldId, newId uint64) (*logtailreplay.PartitionState, bool) {
+func (c *PushClient) isSubscribed(dbId, tId uint64) (*logtailreplay.PartitionState, bool) {
 	s := &c.subscribed
-	var subId uint64
-	subId = newId
-	if oldId != 0 {
-		subId = oldId
-	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	v, exist := s.m[SubTableID{DatabaseID: dbId, TableID: subId}]
+	v, exist := s.m[SubTableID{DatabaseID: dbId, TableID: tId}]
 	if exist && v.SubState == Subscribed {
 		//update latest time
-		s.m[SubTableID{DatabaseID: dbId, TableID: subId}] = SubTableStatus{
+		s.m[SubTableID{DatabaseID: dbId, TableID: tId}] = SubTableStatus{
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
-		return c.eng.GetOrCreateLatestPart(dbId, newId).Snapshot(), true
+		return c.eng.GetOrCreateLatestPart(dbId, tId).Snapshot(), true
 	}
 	return nil, false
 }
@@ -1166,6 +1218,7 @@ func (r *syncLogTailTimestamp) updateTimestamp(
 }
 
 type logTailSubscriber struct {
+	sid           string
 	tnNodeID      int
 	rpcClient     morpc.RPCClient
 	rpcStream     morpc.Stream
@@ -1189,12 +1242,18 @@ type logTailSubscriberResponse struct {
 // XXX generate a rpc client and new a stream.
 // we should hide these code into service's NewClient method next day.
 func DefaultNewRpcStreamToTnLogTailService(
-	serviceAddr string, rpcClient morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error) {
+	sid string,
+	serviceAddr string,
+	rpcClient morpc.RPCClient,
+) (morpc.RPCClient, morpc.Stream, error) {
 	if rpcClient == nil {
 		logger := logutil.GetGlobalLogger().Named("cn-log-tail-client")
-		codec := morpc.NewMessageCodec(func() morpc.Message {
-			return &service.LogtailResponseSegment{}
-		})
+		codec := morpc.NewMessageCodec(
+			sid,
+			func() morpc.Message {
+				return &service.LogtailResponseSegment{}
+			},
+		)
 		factory := morpc.NewGoettyBasedBackendFactory(codec,
 			morpc.WithBackendGoettyOptions(
 				goetty.WithSessionRWBUfferSize(1<<20, 1<<20),
@@ -1221,10 +1280,13 @@ func DefaultNewRpcStreamToTnLogTailService(
 	return rpcClient, stream, nil
 }
 
-func (s *logTailSubscriber) init(serviceAddr string,
-	rpcStreamFactory func(string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)) (err error) {
+func (s *logTailSubscriber) init(
+	sid string,
+	serviceAddr string,
+	rpcStreamFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)) (err error) {
 	// XXX we assume that we have only 1 tn now.
 	s.tnNodeID = 0
+	s.sid = sid
 
 	// clear the old status.
 	s.sendSubscribe = clientIsPreparing
@@ -1234,7 +1296,7 @@ func (s *logTailSubscriber) init(serviceAddr string,
 		s.logTailClient = nil
 	}
 
-	rpcClient, rpcStream, err := rpcStreamFactory(serviceAddr, s.rpcClient)
+	rpcClient, rpcStream, err := rpcStreamFactory(sid, serviceAddr, s.rpcClient)
 	if err != nil {
 		return err
 	}
@@ -1313,7 +1375,7 @@ func waitServerReady(addr string) {
 
 	// If we still cannot connect to logtail server for serverTimeout, we consider
 	// it has something wrong happened and panic immediately.
-	serverTimeout := time.Minute * 5
+	serverTimeout := time.Minute * 10
 	serverFatal := time.NewTimer(serverTimeout)
 	defer serverFatal.Stop()
 
@@ -1367,7 +1429,7 @@ func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter clien
 		}
 
 		// get log tail service address.
-		if err := e.pClient.init(logTailServerAddr, timestampWaiter, e.ls.GetServiceID(), e); err != nil {
+		if err := e.pClient.init(logTailServerAddr, timestampWaiter, e); err != nil {
 			logutil.Errorf("%s client init failed, err is %s", logTag, err)
 			continue
 		}
@@ -1417,7 +1479,7 @@ func dispatchSubscribeResponse(
 		if len(lt.CkpLocation) == 0 {
 			p := e.GetOrCreateLatestPart(tbl.DbId, tbl.TbId)
 			p.UpdateDuration(types.TS{}, types.MaxTs())
-			c := e.getLatestCatalogCache()
+			c := e.GetLatestCatalogCache()
 			c.UpdateDuration(types.TS{}, types.MaxTs())
 		}
 		e.pClient.subscribed.setTableSubscribed(tbl.DbId, tbl.TbId)
@@ -1708,16 +1770,11 @@ func updatePartitionOfPush(
 	defer partition.Unlock()
 	v2.LogtailUpdatePartitonGetLockDurationHistogram.Observe(time.Since(t0).Seconds())
 
-	catalogCache := e.getLatestCatalogCache()
-
 	if !partition.TableInfoOK {
-		t0 = time.Now()
-		tableInfo := catalogCache.GetTableById(dbId, tblId)
 		partition.TableInfo.ID = tblId
-		partition.TableInfo.Name = tableInfo.Name
-		partition.TableInfo.PrimarySeqnum = tableInfo.PrimarySeqnum
+		partition.TableInfo.Name = tl.Table.GetTbName()
+		partition.TableInfo.PrimarySeqnum = int(tl.Table.GetPrimarySeqnum())
 		partition.TableInfoOK = true
-		v2.LogtailUpdatePartitonGetCatalogDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
 	state, doneMutate := partition.MutateState()
@@ -1773,7 +1830,7 @@ func updatePartitionOfPush(
 			partition.UpdateDuration(ckpStart, types.MaxTs())
 			//Notice that the checkpoint duration is same among all mo system tables,
 			//such as mo_databases, mo_tables, mo_columns.
-			catalogCache.UpdateDuration(ckpStart, types.MaxTs())
+			e.GetLatestCatalogCache().UpdateDuration(ckpStart, types.MaxTs())
 			v2.LogtailUpdatePartitonUpdateTimestampsDurationHistogram.Observe(time.Since(t0).Seconds())
 		}
 	}
@@ -1825,6 +1882,7 @@ func consumeCkpsAndLogTail(
 	var closeCBs []func()
 	if entries, closeCBs, err = taeLogtail.LoadCheckpointEntries(
 		ctx,
+		engine.service,
 		lt.CkpLocation,
 		tableId, tableName,
 		databaseId, "", engine.mp, engine.fs); err != nil {
@@ -1837,7 +1895,7 @@ func consumeCkpsAndLogTail(
 	}()
 	for _, entry := range entries {
 		if err = consumeEntry(ctx, primarySeqnum,
-			engine, engine.getLatestCatalogCache(), state, entry); err != nil {
+			engine, engine.GetLatestCatalogCache(), state, entry); err != nil {
 			return
 		}
 	}
@@ -1851,93 +1909,22 @@ func hackConsumeLogtail(
 	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail) error {
 
-	var packer *types.Packer
-	put := engine.packerPool.Get(&packer)
-	defer put.Put()
-
-	t0 := time.Now()
-	switch lt.Table.TbId {
-
-	case catalog.MO_TABLES_ID:
-		primarySeqnum = catalog.MO_TABLES_CATALOG_VERSION_IDX + 1
-		for i := 0; i < len(lt.Commands); i++ {
-			if lt.Commands[i].EntryType == api.Entry_Insert {
-				bat, _ := batch.ProtoBatchToBatch(lt.Commands[i].Bat)
-				accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + 2))
-				names := bat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + 2)
-				databases := bat.GetVector(catalog.MO_TABLES_RELDATABASE_IDX + 2)
-				vec := vector.NewVec(types.New(types.T_varchar, 0, 0))
-				for i, acc := range accounts {
-					packer.EncodeUint32(acc)
-					packer.EncodeStringType(names.GetBytesAt(i))
-					packer.EncodeStringType(databases.GetBytesAt(i))
-					if err := vector.AppendBytes(vec, packer.Bytes(), false, engine.mp); err != nil {
-						panic(err)
-					}
-					packer.Reset()
-				}
-				hackVec, _ := vector.VectorToProtoVector(vec)
-				lt.Commands[i].Bat.Vecs = append(lt.Commands[i].Bat.Vecs, hackVec)
-				vec.Free(engine.mp)
-			}
-			if lt.Commands[i].EntryType == api.Entry_Delete {
-				continue
-			}
-			if lt.Commands[i].EntryType == api.Entry_SpecialDelete {
-				lt.Commands[i].EntryType = api.Entry_Delete
-			}
-			if err := consumeEntry(ctx, primarySeqnum,
-				engine, engine.getLatestCatalogCache(), state, &lt.Commands[i]); err != nil {
-				return err
-			}
-		}
-		v2.LogtailUpdatePartitonConsumeLogtailCatalogTableDurationHistogram.Observe(time.Since(t0).Seconds())
-		return nil
-
-	case catalog.MO_DATABASE_ID:
-		primarySeqnum = catalog.MO_DATABASE_DAT_TYPE_IDX + 1
-		for i := 0; i < len(lt.Commands); i++ {
-			if lt.Commands[i].EntryType == api.Entry_Insert {
-				bat, _ := batch.ProtoBatchToBatch(lt.Commands[i].Bat)
-				accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + 2))
-				names := bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + 2)
-				vec := vector.NewVec(types.New(types.T_varchar, 0, 0))
-				for i, acc := range accounts {
-					packer.EncodeUint32(acc)
-					packer.EncodeStringType(names.GetBytesAt(i))
-					if err := vector.AppendBytes(vec, packer.Bytes(), false, engine.mp); err != nil {
-						panic(err)
-					}
-					packer.Reset()
-				}
-				hackVec, _ := vector.VectorToProtoVector(vec)
-				lt.Commands[i].Bat.Vecs = append(lt.Commands[i].Bat.Vecs, hackVec)
-				vec.Free(engine.mp)
-			}
-			if lt.Commands[i].EntryType == api.Entry_Delete {
-				continue
-			}
-			if lt.Commands[i].EntryType == api.Entry_SpecialDelete {
-				lt.Commands[i].EntryType = api.Entry_Delete
-			}
-			if err := consumeEntry(ctx, primarySeqnum,
-				engine, engine.getLatestCatalogCache(), state, &lt.Commands[i]); err != nil {
-				return err
-			}
-		}
-		v2.LogtailUpdatePartitonConsumeLogtailCatalogTableDurationHistogram.Observe(time.Since(t0).Seconds())
-		return nil
-
+	if lt.Table.DbName == "" {
+		panic(fmt.Sprintf("missing fields %v", lt.Table.String()))
 	}
-
-	t0 = time.Now()
+	t0 := time.Now()
 	for i := 0; i < len(lt.Commands); i++ {
 		if err := consumeEntry(ctx, primarySeqnum,
-			engine, engine.getLatestCatalogCache(), state, &lt.Commands[i]); err != nil {
+			engine, engine.GetLatestCatalogCache(), state, &lt.Commands[i]); err != nil {
 			return err
 		}
 	}
-	v2.LogtailUpdatePartitonConsumeLogtailCommandsDurationHistogram.Observe(time.Since(t0).Seconds())
+
+	if lt.Table.TbId == catalog.MO_DATABASE_ID || lt.Table.TbId == catalog.MO_TABLES_ID || lt.Table.TbId == catalog.MO_COLUMNS_ID {
+		v2.LogtailUpdatePartitonConsumeLogtailCatalogTableDurationHistogram.Observe(time.Since(t0).Seconds())
+	} else {
+		v2.LogtailUpdatePartitonConsumeLogtailCatalogTableDurationHistogram.Observe(time.Since(t0).Seconds())
+	}
 
 	return nil
 }

@@ -35,61 +35,80 @@ import (
 )
 
 func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(qc qclient.QueryClient, addr string)) {
-	defer leaktest.AfterTest(t)()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-	address := fmt.Sprintf("unix:///tmp/cn-%d-%s.sock",
-		time.Now().Nanosecond(), cn.ServiceID)
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			defer leaktest.AfterTest(t)()
+			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			address := fmt.Sprintf("unix:///tmp/cn-%d-%s.sock",
+				time.Now().Nanosecond(), cn.ServiceID)
 
-	if err := os.RemoveAll(address[7:]); err != nil {
-		panic(err)
-	}
-	cluster := clusterservice.NewMOCluster(
-		nil,
-		0,
-		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices([]metadata.CNService{{
-			ServiceID:    cn.ServiceID,
-			QueryAddress: address,
-		}}, nil))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
+			if err := os.RemoveAll(address[7:]); err != nil {
+				panic(err)
+			}
+			cluster := clusterservice.NewMOCluster(
+				sid,
+				nil,
+				0,
+				clusterservice.WithDisableRefresh(),
+				clusterservice.WithServices([]metadata.CNService{{
+					ServiceID:    cn.ServiceID,
+					SQLAddress:   cn.SQLAddress,
+					QueryAddress: address,
+				}}, nil))
+			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
+			runtime.SetupServiceBasedRuntime(cn.ServiceID, rt)
 
-	qs, err := queryservice.NewQueryService(cn.ServiceID, address, morpc.Config{})
-	assert.NoError(t, err)
+			qs, err := queryservice.NewQueryService(cn.ServiceID, address, morpc.Config{})
+			assert.NoError(t, err)
 
-	qt, err := qclient.NewQueryClient(cn.ServiceID, morpc.Config{})
-	assert.NoError(t, err)
+			qt, err := qclient.NewQueryClient(cn.ServiceID, morpc.Config{})
+			assert.NoError(t, err)
 
-	qs.AddHandleFunc(pb.CmdMethod_MigrateConnFrom, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
-		if req.MigrateConnFromRequest == nil {
-			return moerr.NewInternalError(ctx, "bad request")
-		}
-		resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{
-			DB: "d1",
-		}
-		return nil
-	}, false)
-	qs.AddHandleFunc(pb.CmdMethod_MigrateConnTo, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
-		if req.MigrateConnToRequest == nil {
-			return moerr.NewInternalError(ctx, "bad request")
-		}
-		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{
-			Success: true,
-		}
-		return nil
-	}, false)
-	err = qs.Start()
-	assert.NoError(t, err)
+			qs.AddHandleFunc(pb.CmdMethod_MigrateConnFrom, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+				if req.MigrateConnFromRequest == nil {
+					return moerr.NewInternalError(ctx, "bad request")
+				}
+				resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{
+					DB: "d1",
+				}
+				return nil
+			}, false)
+			qs.AddHandleFunc(pb.CmdMethod_MigrateConnTo, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+				if req.MigrateConnToRequest == nil {
+					return moerr.NewInternalError(ctx, "bad request")
+				}
+				resp.MigrateConnToResponse = &pb.MigrateConnToResponse{
+					Success: true,
+				}
+				return nil
+			}, false)
+			qs.AddHandleFunc(pb.CmdMethod_ResetSession, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+				if req.ResetSessionRequest == nil {
+					return moerr.NewInternalError(ctx, "bad request")
+				}
+				resp.ResetSessionResponse = &pb.ResetSessionResponse{
+					AuthString: nil,
+					Success:    true,
+				}
+				return nil
+			}, false)
+			err = qs.Start()
+			assert.NoError(t, err)
 
-	fn(qt, address)
+			fn(qt, address)
 
-	err = qs.Close()
-	assert.NoError(t, err)
-	err = qt.Close()
-	assert.NoError(t, err)
+			err = qs.Close()
+			assert.NoError(t, err)
+			err = qt.Close()
+			assert.NoError(t, err)
+		},
+	)
+
 }
 
-func TestQueryServiceMigrateConn(t *testing.T) {
+func TestQueryServiceMigrateFrom(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1"}
 	runTestWithQueryService(t, cn, func(qc qclient.QueryClient, addr string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -106,7 +125,7 @@ func TestQueryServiceMigrateConn(t *testing.T) {
 	})
 }
 
-func TestQueryServiceMigrateFrom(t *testing.T) {
+func TestQueryServiceMigrateTo(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1"}
 	runTestWithQueryService(t, cn, func(qc qclient.QueryClient, addr string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)

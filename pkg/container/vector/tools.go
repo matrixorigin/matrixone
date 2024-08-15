@@ -77,6 +77,12 @@ func InefficientMustBytesCol(v *Vector) [][]byte {
 //	for i := range vs {
 //		vs[i].UnsafeGetString(area)
 //	}
+//
+// todo:
+// There is a bug here.
+// If the vector is reused, that is, the initial value of Varlena is not 0,
+// it will cause the UnsafeGetString method to panic. This is because what is stored here is the offset of the last value.
+// and InefficientMustBytesCol has a same bug.
 func InefficientMustStrCol(v *Vector) []string {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil

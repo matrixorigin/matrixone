@@ -183,10 +183,16 @@ func TestAsyncAlloc(t *testing.T) {
 
 func runAllocatorTests(
 	t *testing.T,
-	fn func(valueAllocator)) {
-	defer leaktest.AfterTest(t)()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	a := newValueAllocator(nil)
-	defer a.close()
-	fn(a)
+	fn func(valueAllocator),
+) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			defer leaktest.AfterTest(t)()
+			a := newValueAllocator(sid, nil)
+			defer a.close()
+			fn(a)
+		},
+	)
 }

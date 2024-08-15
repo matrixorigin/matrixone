@@ -786,7 +786,7 @@ func TestShuffle(t *testing.T) {
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, vs[1:3], MustFixedCol[types.Uuid](v))
-		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]]", v.String())
+		require.Equal(t, "[00000000-0000-0000-0000-000000000000 00000000-0000-0000-0000-000000000000]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}

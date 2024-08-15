@@ -212,7 +212,7 @@ func buildTNOptions(cfg *tnservice.Config, filter FilterFunc) tnOptions {
 		ctx = logservice.SetBackendOptions(ctx, morpc.WithBackendFilter(filter))
 
 		client, err := logservice.NewTNHAKeeperClient(
-			ctx, cfg.HAKeeper.ClientConfig,
+			ctx, cfg.UUID, cfg.HAKeeper.ClientConfig,
 		)
 		if err != nil {
 			return nil, err
@@ -230,7 +230,7 @@ func buildTNOptions(cfg *tnservice.Config, filter FilterFunc) tnOptions {
 		// transfer morpc.BackendOption via context
 		ctx = logservice.SetBackendOptions(ctx, morpc.WithBackendFilter(filter))
 
-		return logservice.NewClient(ctx, logservice.ClientConfig{
+		return logservice.NewClient(ctx, cfg.UUID, logservice.ClientConfig{
 			Tag:              "Test-TN",
 			ReadOnly:         false,
 			LogShardID:       shard.LogShardID,

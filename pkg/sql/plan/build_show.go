@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"go/constant"
@@ -22,9 +24,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -37,15 +40,28 @@ const INFORMATION_SCHEMA = "information_schema"
 
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
+
 	var err error
-	var name string
-	// snapshot to fix
-	name, err = databaseIsValid(getSuitableDBName("", stmt.Name), ctx, Snapshot{TS: &timestamp.Timestamp{}})
+	var snapshot *Snapshot
+	var snapshotSpec string
+	if stmt.AtTsExpr != nil {
+		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
+			return nil, err
+		}
+
+		if stmt.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+			snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.AtTsExpr.SnapshotName)
+		} else {
+			snapshotSpec = fmt.Sprintf("{MO_TS = %d}", snapshot.TS.PhysicalTime)
+		}
+	}
+
+	name, err := databaseIsValid(getSuitableDBName("", stmt.Name), ctx, snapshot)
 	if err != nil {
 		return nil, err
 	}
 
-	if sub, err := ctx.GetSubscriptionMeta(name, Snapshot{TS: &timestamp.Timestamp{}}); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(name, snapshot); err != nil {
 		return nil, err
 	} else if sub != nil {
 		accountId, err := ctx.GetAccountId()
@@ -54,7 +70,7 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		}
 		// get data from schema
 		//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
-		sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database md WHERE md.datname = '%s' and account_id=%d", MO_CATALOG_DB_NAME, stmt.Name, accountId)
+		sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database %s md WHERE md.datname = '%s' and account_id=%d", MO_CATALOG_DB_NAME, snapshotSpec, stmt.Name, accountId)
 		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 	}
 
@@ -70,32 +86,33 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	tblName := stmt.Name.GetTableName()
 	dbName := stmt.Name.GetDBName()
 
-	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
-	if len(stmt.SnapshotName) > 0 {
-		if snapshot, err = ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName); err != nil {
+	var snapshot *Snapshot
+	if stmt.AtTsExpr != nil {
+		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
 	}
 
-	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, *snapshot)
+	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, snapshot)
 	if err != nil {
 		return nil, err
 	}
 
 	// check if the database is a subscription
-	sub, err := ctx.GetSubscriptionMeta(dbName, *snapshot)
-	if err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(dbName, snapshot); err != nil {
 		return nil, err
-	}
+	} else if sub != nil {
+		if !pubsub.InSubMetaTables(sub, tblName) {
+			return nil, moerr.NewInternalErrorNoCtx("table %s not found in publication %s", tblName, sub.Name)
+		}
 
-	if sub != nil {
 		ctx.SetQueryingSubscription(sub)
 		defer func() {
 			ctx.SetQueryingSubscription(nil)
 		}()
 	}
 
-	tableObjRef, tableDef := ctx.Resolve(dbName, tblName, *snapshot)
+	_, tableDef := ctx.Resolve(dbName, tblName, snapshot)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -106,20 +123,30 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		} else if stmt.Name.NumParts == 2 {
 			newStmt = tree.NewShowCreateView(tree.NewUnresolvedObjectName(dbName, tblName))
 		}
-		if len(stmt.SnapshotName) > 0 {
-			newStmt.SnapshotName = stmt.SnapshotName
+		if stmt.AtTsExpr != nil {
+			newStmt.AtTsExpr = stmt.AtTsExpr
 		}
 
 		return buildShowCreateView(newStmt, ctx)
 	}
 
-	ddlStr, err := ConstructCreateTableSQL(tableObjRef, tableDef, *snapshot, ctx)
+	ddlStr, _, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, false)
 	if err != nil {
 		return nil, err
 	}
 
+	var buf bytes.Buffer
+	for i, ch := range ddlStr {
+		// escape double quote, for the sql pattern below
+		if ch == '"' {
+			if i == 0 || ddlStr[i-1] != '\\' {
+				buf.WriteRune('"')
+			}
+		}
+		buf.WriteRune(ch)
+	}
 	sql := "select \"%s\" as `Table`, \"%s\" as `Create Table`"
-	sql = fmt.Sprintf(sql, tblName, ddlStr)
+	sql = fmt.Sprintf(sql, tblName, buf.String())
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 }
@@ -130,19 +157,19 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	tblName := stmt.Name.GetTableName()
 	dbName := stmt.Name.GetDBName()
 
-	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
-	if len(stmt.SnapshotName) > 0 {
-		if snapshot, err = ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName); err != nil {
+	var snapshot *Snapshot
+	if stmt.AtTsExpr != nil {
+		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
 	}
 
-	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, *snapshot)
+	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, snapshot)
 	if err != nil {
 		return nil, err
 	}
 
-	_, tableDef := ctx.Resolve(dbName, tblName, *snapshot)
+	_, tableDef := ctx.Resolve(dbName, tblName, snapshot)
 	if tableDef == nil || tableDef.TableType != catalog.SystemViewRel {
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
 	}
@@ -180,14 +207,22 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 
 	var sql string
 	snapshotSpec := ""
-	if len(stmt.SnapshotName) > 0 {
-		snapshot, err := ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName)
-		if err != nil {
+
+	var snapshot *Snapshot
+	if stmt.AtTsExpr != nil {
+		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
-		accountId = snapshot.Tenant.TenantID
-		snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.SnapshotName)
+
+		if stmt.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+			accountId = snapshot.Tenant.TenantID
+			snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.AtTsExpr.SnapshotName)
+		} else {
+			snapshotSpec = fmt.Sprintf("{MO_TS = %d}", snapshot.TS.PhysicalTime)
+		}
+
 	}
+
 	// Any account should show database MO_CATALOG_DB_NAME
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
 	sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database %s where (%s) ORDER BY %s", MO_CATALOG_DB_NAME, snapshotSpec, accountClause, catalog.SystemDBAttr_Name)
@@ -208,7 +243,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 
 func buildShowSequences(stmt *tree.ShowSequences, ctx CompilerContext) (*Plan, error) {
 	// snapshot to fix
-	dbName, err := databaseIsValid(stmt.DBName, ctx, Snapshot{TS: &timestamp.Timestamp{}})
+	dbName, err := databaseIsValid(stmt.DBName, ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -239,32 +274,37 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		return nil, err
 	}
 
-	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
+	var snapshot *Snapshot
 	snapshotSpec := ""
-	if len(stmt.SnapshotName) > 0 {
-		if snapshot, err = ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName); err != nil {
+	if stmt.AtTsExpr != nil {
+		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
-		accountId = snapshot.Tenant.TenantID
-		snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.SnapshotName)
+
+		if stmt.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+			accountId = snapshot.Tenant.TenantID
+			snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.AtTsExpr.SnapshotName)
+		} else {
+			snapshotSpec = fmt.Sprintf("{MO_TS = %d}", snapshot.TS.PhysicalTime)
+		}
+
 	}
 
-	dbName, err := databaseIsValid(stmt.DBName, ctx, *snapshot)
+	dbName, err := databaseIsValid(stmt.DBName, ctx, snapshot)
 	if err != nil {
 		return nil, err
 	}
 
-	ddlType := plan.DataDefinition_SHOW_TABLES
 	var tableType string
 	if stmt.Full {
 		tableType = fmt.Sprintf(", case relkind when 'v' then 'VIEW' when '%s' then 'CLUSTER TABLE' else 'BASE TABLE' end as Table_type", catalog.SystemClusterRel)
 	}
 
-	sub, err := ctx.GetSubscriptionMeta(dbName, *snapshot)
+	subName := dbName
+	sub, err := ctx.GetSubscriptionMeta(dbName, snapshot)
 	if err != nil {
 		return nil, err
 	}
-	subName := dbName
 	if sub != nil {
 		accountId = uint32(sub.AccountId)
 		dbName = sub.DbName
@@ -284,6 +324,9 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	// Do not show views in sub-db
 	if sub != nil {
 		sql += fmt.Sprintf(" and relkind != '%s'", catalog.SystemViewRel)
+		if sub.Tables != pubsub.TableAll {
+			sql += fmt.Sprintf(" and relname in (%s)", pubsub.AddSingleQuotesJoin(strings.Split(sub.Tables, pubsub.Sep)))
+		}
 	}
 
 	// Do not show sequences.
@@ -291,6 +334,8 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 
 	// Order by relname
 	sql += fmt.Sprintf(" ORDER BY %s", catalog.SystemRelAttr_Name)
+
+	ddlType := plan.DataDefinition_SHOW_TABLES
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -311,20 +356,19 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 	if err != nil {
 		return nil, err
 	}
+
 	// snapshot to fix
-	dbName, err := databaseIsValid(stmt.DbName, ctx, Snapshot{TS: &timestamp.Timestamp{}})
+	var snapshot *Snapshot
+	dbName, err := databaseIsValid(stmt.DbName, ctx, snapshot)
 	if err != nil {
 		return nil, err
 	}
 
-	sub, err := ctx.GetSubscriptionMeta(dbName, Snapshot{TS: &timestamp.Timestamp{}})
-	if err != nil {
-		return nil, err
-	}
-
-	ddlType := plan.DataDefinition_SHOW_TABLES
 	subName := dbName
-	var sql string
+	sub, err := ctx.GetSubscriptionMeta(dbName, snapshot)
+	if err != nil {
+		return nil, err
+	}
 	if sub != nil {
 		accountId = uint32(sub.AccountId)
 		dbName = sub.DbName
@@ -332,31 +376,23 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 		defer func() {
 			ctx.SetQueryingSubscription(nil)
 		}()
-
-		if accountId == catalog.System_Account {
-			mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
-			clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
-			accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-			sql = fmt.Sprintf("SELECT count(relname) `Number of tables in %s`  FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s) and relkind != '%s'",
-				subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", accountClause, catalog.SystemViewRel)
-		} else {
-			sql = "SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'and relkind != '%s'"
-			sql = fmt.Sprintf(sql, subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.SystemViewRel)
-		}
-	} else {
-		if accountId == catalog.System_Account {
-			mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
-			clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
-			accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-			sql = fmt.Sprintf("SELECT count(relname) `Number of tables in %s`  FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
-				subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", accountClause)
-		} else {
-			sql = "SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'"
-			sql = fmt.Sprintf(sql, subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%")
-		}
-
 	}
 
+	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
+	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
+	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
+	sql := fmt.Sprintf("SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
+		subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", accountClause)
+
+	// Do not show views in sub-db
+	if sub != nil {
+		sql += fmt.Sprintf(" and relkind != '%s'", catalog.SystemViewRel)
+		if sub.Tables != pubsub.TableAll {
+			sql += fmt.Sprintf(" and relname in (%s)", pubsub.AddSingleQuotesJoin(strings.Split(sub.Tables, pubsub.Sep)))
+		}
+	}
+
+	ddlType := plan.DataDefinition_SHOW_TABLES
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
@@ -366,13 +402,13 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 		return nil, err
 	}
 	// snapshot to fix
-	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DbName), ctx, Snapshot{TS: &timestamp.Timestamp{}})
+	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DbName), ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
+	obj, tableDef := ctx.Resolve(dbName, tblName, nil)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -411,13 +447,13 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 }
 
 func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Plan, error) {
-	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DbName), ctx, Snapshot{TS: &timestamp.Timestamp{}})
+	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DbName), ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
+	obj, tableDef := ctx.Resolve(dbName, tblName, nil)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -470,16 +506,29 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	if err != nil {
 		return nil, err
 	}
-	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DBName), ctx, Snapshot{TS: &timestamp.Timestamp{}})
+
+	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DBName), ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
+	obj, tableDef := ctx.Resolve(dbName, tblName, nil)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+
+	colIdToOriginName := make(map[uint64]string)
+	colNameToOriginName := make(map[string]string)
+	for _, col := range tableDef.Cols {
+		if col.Hidden {
+			continue
+		}
+		colNameOrigin := col.GetOriginCaseName()
+		colIdToOriginName[col.ColId] = colNameOrigin
+		colNameToOriginName[col.Name] = colNameOrigin
+	}
+
 	var sub *SubscriptionMeta
 	if obj.PubInfo != nil {
 		dbName = obj.SchemaName
@@ -492,69 +541,58 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			ctx.SetQueryingSubscription(nil)
 		}()
 	}
+
 	var keyStr string
-	if dbName == catalog.MO_CATALOG && tblName == catalog.MO_DATABASE {
-		keyStr = "case when col.attname = '" + catalog.SystemDBAttr_ID + "' then 'PRI' else '' END as `Key`"
-	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_TABLES {
-		keyStr = "case when col.attname = '" + catalog.SystemRelAttr_ID + "' then 'PRI' else '' END as `Key`"
-	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_COLUMNS {
-		keyStr = "case when col.attname = '" + catalog.SystemColAttr_UniqName + "' then 'PRI' else '' END as `Key`"
-	} else {
-		if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 || len(tableDef.Indexes) != 0 {
-			keyStr += "case"
-			if tableDef.Pkey != nil {
-				for _, name := range tableDef.Pkey.Names {
+	if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 || len(tableDef.Indexes) != 0 {
+		keyStr += "case"
+		if tableDef.Pkey != nil {
+			for _, name := range tableDef.Pkey.Names {
+				name = colNameToOriginName[name]
+				keyStr += " when col.attname = "
+				keyStr += "'" + name + "'"
+				keyStr += " then 'PRI'"
+			}
+		}
+		if len(tableDef.Fkeys) != 0 {
+
+			for _, fk := range tableDef.Fkeys {
+				for _, colId := range fk.Cols {
 					keyStr += " when col.attname = "
-					keyStr += "'" + name + "'"
-					keyStr += " then 'PRI'"
+					keyStr += "'" + colIdToOriginName[colId] + "'"
+					keyStr += " then 'MUL'"
 				}
 			}
-			if len(tableDef.Fkeys) != 0 {
-				colIdToName := make(map[uint64]string)
-				for _, col := range tableDef.Cols {
-					if col.Hidden {
-						continue
-					}
-					colIdToName[col.ColId] = col.Name
-				}
-				for _, fk := range tableDef.Fkeys {
-					for _, colId := range fk.Cols {
-						keyStr += " when col.attname = "
-						keyStr += "'" + colIdToName[colId] + "'"
-						keyStr += " then 'MUL'"
-					}
-				}
-			}
-			if tableDef.Indexes != nil {
-				for _, indexdef := range tableDef.Indexes {
-					name := indexdef.Parts[0]
-					if indexdef.Unique {
-						if isPrimaryKey(tableDef, indexdef.Parts) {
-							for _, name := range indexdef.Parts {
-								keyStr += " when col.attname = "
-								keyStr += "'" + name + "'"
-								keyStr += " then 'PRI'"
-							}
-						} else if isMultiplePriKey(indexdef) {
+		}
+		if tableDef.Indexes != nil {
+			for _, indexDef := range tableDef.Indexes {
+				name := colNameToOriginName[indexDef.Parts[0]]
+				if indexDef.Unique {
+					if isPrimaryKey(tableDef, indexDef.Parts) {
+						for _, name = range indexDef.Parts {
+							name = colNameToOriginName[name]
 							keyStr += " when col.attname = "
 							keyStr += "'" + name + "'"
-							keyStr += " then 'MUL'"
-						} else {
-							keyStr += " when col.attname = "
-							keyStr += "'" + name + "'"
-							keyStr += " then 'UNI'"
+							keyStr += " then 'PRI'"
 						}
-					} else {
+					} else if isMultiplePriKey(indexDef) {
 						keyStr += " when col.attname = "
 						keyStr += "'" + name + "'"
 						keyStr += " then 'MUL'"
+					} else {
+						keyStr += " when col.attname = "
+						keyStr += "'" + name + "'"
+						keyStr += " then 'UNI'"
 					}
+				} else {
+					keyStr += " when col.attname = "
+					keyStr += "'" + name + "'"
+					keyStr += " then 'MUL'"
 				}
 			}
-			keyStr += " else '' END as `Key`"
-		} else {
-			keyStr = "'' as `Key`"
 		}
+		keyStr += " else '' END as `Key`"
+	} else {
+		keyStr = "'' as `Key`"
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
@@ -599,7 +637,7 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
-	dbName, err := databaseIsValid(stmt.DbName, ctx, Snapshot{TS: &timestamp.Timestamp{}})
+	dbName, err := databaseIsValid(stmt.DbName, ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -612,7 +650,7 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 
-	sub, err := ctx.GetSubscriptionMeta(dbName, Snapshot{TS: &timestamp.Timestamp{}})
+	sub, err := ctx.GetSubscriptionMeta(dbName, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -656,6 +694,14 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 				and relname not like '%s'
 				and (%s)`
 	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", accountClause)
+
+	// Do not show views in sub-db
+	if sub != nil {
+		sql += fmt.Sprintf(" and relkind != '%s'", catalog.SystemViewRel)
+		if sub.Tables != pubsub.TableAll {
+			sql += fmt.Sprintf(" and relname in (%s)", pubsub.AddSingleQuotesJoin(strings.Split(sub.Tables, pubsub.Sep)))
+		}
+	}
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -731,7 +777,7 @@ func buildShowTriggers(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
-	dbName, err := databaseIsValid(stmt.DbName, ctx, Snapshot{TS: &timestamp.Timestamp{}})
+	dbName, err := databaseIsValid(stmt.DbName, ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -755,12 +801,14 @@ func buildShowTriggers(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error
 }
 
 func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
-	dbName, err := databaseIsValid(getSuitableDBName(stmt.TableName.GetDBName(), stmt.DbName), ctx, Snapshot{TS: &timestamp.Timestamp{}})
+	var snapshot *Snapshot
+	dbName, err := databaseIsValid(getSuitableDBName(stmt.TableName.GetDBName(), stmt.DbName), ctx, snapshot)
 	if err != nil {
 		return nil, err
 	}
+
 	tblName := stmt.TableName.GetTableName()
-	obj, tableDef := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
+	obj, tableDef := ctx.Resolve(dbName, tblName, snapshot)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -895,6 +943,28 @@ func buildShowSnapShots(stmt *tree.ShowSnapShots, ctx CompilerContext) (*Plan, e
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowPitr(stmt *tree.ShowPitr, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	curAccountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+
+	sql := fmt.Sprintf("SELECT pitr_name as `PITR_NAME`, create_time  as `CREATED_TIME`, modified_time as MODIFIED_TIME, level as `PITR_LEVEL`, IF(account_name = '', '*', account_name)  as `ACCOUNT_NAME`, IF(database_name = '', '*', database_name) as `DATABASE_NAME`, IF(table_name = '', '*', table_name) as `TABLE_NAME`, pitr_length as `PITR_LENGTH`, pitr_unit  as `PITR_UNIT` FROM %s.mo_pitr where create_account = %d ORDER BY create_time DESC", MO_CATALOG_DB_NAME, curAccountId)
+
+	newCtx := ctx.GetContext()
+	if curAccountId != catalog.System_Account {
+		newCtx = context.WithValue(newCtx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+	ctx.SetContext(newCtx)
+
+	if stmt.Where != nil {
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	}
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func buildShowAccountUpgrade(stmt *tree.ShowAccountUpgrade, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_UPGRADE
 	sql := fmt.Sprintf("select account_name as `account_name`, create_version as `current_version` from %s.mo_account order by account_id;", MO_CATALOG_DB_NAME)
@@ -986,8 +1056,9 @@ func buildShowPublication(stmt *tree.ShowPublications, ctx CompilerContext) (*Pl
 
 func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := fmt.Sprintf("select pub_name as Publication, 'CREATE PUBLICATION ' || pub_name || ' DATABASE ' || database_name || ' ACCOUNT ' || account_list as 'Create Publication' from mo_catalog.mo_pubs where pub_name='%s';", stmt.Name)
+	sql := fmt.Sprintf("select pub_name as Publication, 'CREATE PUBLICATION ' || pub_name || ' DATABASE ' || database_name || case table_list when '*' then '' else ' TABLE ' || table_list end || ' ACCOUNT ' || account_list as 'Create Publication' from mo_catalog.mo_pubs where pub_name='%s';", stmt.Name)
 	return returnByRewriteSQL(ctx, sql, ddlType)
+
 }
 
 func returnByRewriteSQL(ctx CompilerContext, sql string,

@@ -75,7 +75,7 @@ type ProfileAllocator struct {
 	upstream        Allocator
 	profiler        *Profiler[HeapSampleValues, *HeapSampleValues]
 	fraction        uint32
-	deallocatorPool *ClosureDeallocatorPool[profileDeallocateArgs]
+	deallocatorPool *ClosureDeallocatorPool[profileDeallocateArgs, *profileDeallocateArgs]
 }
 
 func NewProfileAllocator(
@@ -100,6 +100,10 @@ func NewProfileAllocator(
 type profileDeallocateArgs struct {
 	values *HeapSampleValues
 	size   uint64
+}
+
+func (profileDeallocateArgs) As(Trait) bool {
+	return false
 }
 
 var _ Allocator = new(ProfileAllocator)

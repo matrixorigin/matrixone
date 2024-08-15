@@ -411,9 +411,9 @@ func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 }
 
 func (un *TxnMVCCNode) String() string {
-	return fmt.Sprintf("[%s,%s]",
+	return fmt.Sprintf("[%s,%s][%v]",
 		un.Start.ToString(),
-		un.End.ToString())
+		un.End.ToString(), un.Txn == nil)
 }
 
 func (un *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {

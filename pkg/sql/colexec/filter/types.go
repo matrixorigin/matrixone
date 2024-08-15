@@ -87,6 +87,7 @@ func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error
 		filter.ctr.cleanExecutor()
 		filter.ctr = nil
 	}
+	filter.exeExpr = nil
 }
 
 func (ctr *container) cleanExecutor() {

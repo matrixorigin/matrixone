@@ -155,17 +155,30 @@ func (mo *MOServer) startAccept(listener net.Listener) {
 	}
 }
 func (mo *MOServer) handleConn(conn net.Conn) {
-	rs, err := NewIOSession(conn, mo.pu)
+	var rs *Conn
+	var err error
+	defer func() {
+		if rs != nil {
+			err = rs.Close()
+			if err != nil {
+				logutil.Error("Handle conn error", zap.Error(err))
+				return
+			}
+		}
+	}()
+
+	rs, err = NewIOSession(conn, mo.pu)
 	if err != nil {
-		mo.rm.Closed(rs)
 		logutil.Error("NewIOSession error", zap.Error(err))
 		return
 	}
-	mo.rm.Created(rs)
-	err = mo.handshake(rs)
-
+	err = mo.rm.Created(rs)
 	if err != nil {
-		mo.rm.Closed(rs)
+		logutil.Error("Create routine error", zap.Error(err))
+		return
+	}
+	err = mo.handshake(rs)
+	if err != nil {
 		logutil.Error("HandShake error", zap.Error(err))
 		return
 	}
@@ -173,11 +186,6 @@ func (mo *MOServer) handleConn(conn net.Conn) {
 }
 
 func (mo *MOServer) handleLoop(rs *Conn) {
-	defer func() {
-		if err := rs.Close(); err != nil {
-			logutil.Error("close session failed", zap.Error(err))
-		}
-	}()
 	if err := mo.handleMessage(rs); err != nil {
 		logutil.Error("handle session failed", zap.Error(err))
 	}
@@ -195,6 +203,13 @@ func (mo *MOServer) handshake(rs *Conn) error {
 	defer tempCancel()
 
 	routine := rm.getRoutine(rs)
+	if routine == nil {
+		logutil.Error(
+			"Failed to handshake with server, routine does not exist...",
+			zap.Error(err))
+		return err
+	}
+
 	protocol := routine.getProtocol()
 
 	ses := routine.getSession()
@@ -327,7 +342,11 @@ func setGlobalRtMgr(rtMgr *RoutineManager) {
 }
 
 func getGlobalRtMgr() *RoutineManager {
-	return globalRtMgr.Load().(*RoutineManager)
+	v := globalRtMgr.Load()
+	if v != nil {
+		return v.(*RoutineManager)
+	}
+	return nil
 }
 
 func setGlobalPu(pu *config.ParameterUnit) {

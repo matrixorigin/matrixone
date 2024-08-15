@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -83,7 +82,7 @@ func CnServerMessageHandler(
 
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(ctx, e)
-			getLogger().Error("panic in CnServerMessageHandler",
+			getLogger(lockService.GetConfig().ServiceID).Error("panic in CnServerMessageHandler",
 				zap.String("error", err.Error()))
 			err = errors.Join(err, cs.Close())
 		}
@@ -177,7 +176,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
-		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// decode and running the pipeline.
 		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
@@ -185,26 +183,33 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			return err
 		}
 		s = appendWriteBackOperator(runCompile, s)
-		s.SetContextRecursively(runCompile.proc.Ctx)
 
+		runCompile.scope = []*Scope{s}
+		runCompile.InitPipelineContextToExecuteQuery()
 		defer func() {
-			runCompile.proc.FreeVectors()
-			runCompile.proc.CleanValueScanBatchs()
-			runCompile.proc.Base.AnalInfos = nil
-			runCompile.anal.analInfos = nil
-
+			runCompile.clear()
 			runCompile.Release()
-			s.release()
 		}()
+
+		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
+
+		// running pipeline.
+		if err = GetCompileService().recordRunningCompile(runCompile); err != nil {
+			return err
+		}
+		defer func() {
+			_, _ = GetCompileService().removeRunningCompile(runCompile)
+		}()
+
 		err = s.ParallelRun(runCompile)
 		if err == nil {
 			// record the number of s3 requests
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
 
 			receiver.finalAnalysisInfo = runCompile.proc.Base.AnalInfos
 		} else {
@@ -217,6 +222,8 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 				reuse.Free[process.AnalyzeInfo](runCompile.proc.Base.AnalInfos[i], nil)
 			}
 		}
+		runCompile.proc.Base.AnalInfos = nil
+		runCompile.anal.analInfos = nil
 		return err
 
 	case pipeline.Method_StopSending:
@@ -370,13 +377,8 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	pHelper, cnInfo := receiver.procBuildHelper, receiver.cnInformation
 
 	// required deadline.
-	deadline, ok := receiver.messageCtx.Deadline()
-	if !ok {
-		return nil, moerr.NewInternalError(receiver.messageCtx, "message context need a deadline.")
-	}
-
-	runningCtx, runningCancel := context.WithDeadline(receiver.connectionCtx, deadline)
-	proc := process.New(
+	runningCtx := defines.AttachAccountId(receiver.messageCtx, pHelper.accountId)
+	proc := process.NewTopProcess(
 		runningCtx,
 		mp,
 		pHelper.txnClient,
@@ -387,7 +389,6 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		cnInfo.hakeeper,
 		cnInfo.udfService,
 		cnInfo.aicm)
-	proc.Cancel = runningCancel
 	proc.Base.UnixTime = pHelper.unixTime
 	proc.Base.Id = pHelper.id
 	proc.Base.Lim = pHelper.lim
@@ -407,16 +408,15 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	}
 
 	c := GetCompileService().getCompile(proc)
+	c.execType = plan2.ExecTypeAP_MULTICN
 	c.e = cnInfo.storeEngine
 	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
-	c.proc.Base.MessageBoard = c.MessageBoard
-	c.anal = newAnaylze()
+	c.proc.SetMessageBoard(c.MessageBoard)
+	c.anal = newAnalyzeModule()
 	c.anal.analInfos = proc.Base.AnalInfos
 	c.addr = receiver.cnInformation.cnAddr
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 
 	// a method to send back.
-	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)

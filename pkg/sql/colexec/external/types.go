@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
@@ -48,24 +49,29 @@ type ExternalParam struct {
 }
 
 type ExParamConst struct {
-	IgnoreLine      int
-	IgnoreLineTag   int
-	ParallelLoad    bool
-	maxBatchSize    uint64
-	Idx             int
-	CreateSql       string
-	Close           byte
+	IgnoreLine    int
+	IgnoreLineTag int
+	ParallelLoad  bool
+	StrictSqlMode bool
+	maxBatchSize  uint64
+	Idx           int
+	CreateSql     string
+	Close         byte
+	// letter case: origin
 	Attrs           []string
 	Cols            []*plan.ColDef
 	FileList        []string
 	FileSize        []int64
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
-	Name2ColIndex   map[string]int32
-	Ctx             context.Context
-	Extern          *tree.ExternParam
-	tableDef        *plan.TableDef
-	ClusterTable    *plan.ClusterTable
+	// letter case: lower
+	Name2ColIndex map[string]int32
+	// letter case: lower
+	TbColToDataCol map[string]int32
+	Ctx            context.Context
+	Extern         *tree.ExternParam
+	tableDef       *plan.TableDef
+	ClusterTable   *plan.ClusterTable
 }
 
 type ExParam struct {
@@ -108,6 +114,7 @@ type External struct {
 	Es  *ExternalParam
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (external *External) GetOperatorBase() *vm.OperatorBase {
@@ -151,15 +158,21 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (external *External) Free(proc *process.Process, pipelineFailed bool, err error) {
+	anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
+	allocSize := int64(0)
 	if external.ctr != nil {
 		if external.ctr.buf != nil {
 			external.ctr.buf.Clean(proc.Mp())
 			external.ctr.buf = nil
 		}
-		anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
-		anal.Alloc(int64(external.ctr.maxAllocSize))
+		allocSize += int64(external.ctr.maxAllocSize)
 		external.ctr = nil
 	}
+	if external.ProjectList != nil {
+		allocSize += external.ProjectAllocSize
+		external.FreeProjection(proc)
+	}
+	anal.Alloc(allocSize)
 }
 
 type ParseLineHandler struct {

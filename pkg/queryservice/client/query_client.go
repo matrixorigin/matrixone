@@ -47,6 +47,8 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_MigrateConnFrom:          defines.MORPCVersion1,
 	pb.CmdMethod_MigrateConnTo:            defines.MORPCVersion1,
 	pb.CmdMethod_ReloadAutoIncrementCache: defines.MORPCVersion1,
+	pb.CmdMethod_CtlReader:                defines.MORPCVersion1,
+	pb.CmdMethod_ResetSession:             defines.MORPCVersion1,
 }
 
 type queryClient struct {
@@ -68,15 +70,13 @@ type QueryClient interface {
 }
 
 func NewQueryClient(sid string, cfg morpc.Config) (QueryClient, error) {
-	rt := runtime.ProcessLevelRuntime()
-	if rt == nil {
-		rt = runtime.DefaultRuntime()
-	}
 	pool := morpc.NewMessagePool(
 		func() *pb.Request { return &pb.Request{} },
 		func() *pb.Response { return &pb.Response{} },
 	)
-	c, err := cfg.NewClient("query-client", rt.Logger().Named("query-client").RawLogger(),
+	c, err := cfg.NewClient(
+		sid,
+		"query-client",
 		func() morpc.Message {
 			return pool.AcquireResponse()
 		},
@@ -101,7 +101,7 @@ func (c *queryClient) SendMessage(ctx context.Context, address string, req *pb.R
 	if address == "" {
 		return nil, moerr.NewInternalError(ctx, "invalid CN query address %s", address)
 	}
-	if err := checkMethodVersion(ctx, req); err != nil {
+	if err := checkMethodVersion(ctx, c.serviceID, req); err != nil {
 		return nil, err
 	}
 	f, err := c.client.Send(ctx, address, req)
@@ -142,6 +142,6 @@ func (c *queryClient) unwrapResponseError(resp *pb.Response) (*pb.Response, erro
 	return resp, nil
 }
 
-func checkMethodVersion(ctx context.Context, req *pb.Request) error {
-	return runtime.CheckMethodVersion(ctx, methodVersions, req)
+func checkMethodVersion(ctx context.Context, service string, req *pb.Request) error {
+	return runtime.CheckMethodVersion(ctx, service, methodVersions, req)
 }

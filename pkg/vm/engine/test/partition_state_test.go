@@ -17,12 +17,14 @@ package test
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -136,12 +138,12 @@ func Test_Append(t *testing.T) {
 
 	t.Log(taeEngine.GetDB().Catalog.SimplePPString(common.PPL1))
 
-	err = disttaeEngine.SubscribeTable(ctx, rel.ID(), database.GetID(), false)
+	err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), false)
 	require.Nil(t, err)
 
 	// check partition state without flush
 	{
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
 		fmt.Println(stats.String())
@@ -154,7 +156,7 @@ func Test_Append(t *testing.T) {
 	testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), database.GetName(), schema, false)
 	// check again after flush
 	{
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
 		fmt.Println(stats.String())
@@ -167,112 +169,109 @@ func Test_Append(t *testing.T) {
 }
 
 func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) {
-	var (
-		txn          txnif.AsyncTxn
-		opts         testutil.TestOptions
-		rel          handle.Relation
-		database     handle.Database
-		accountId    = uint32(0)
-		tableName    = "test1"
-		databaseName = "db1"
+	blockio.RunPipelineTest(
+		func() {
+			var (
+				txn          txnif.AsyncTxn
+				opts         testutil.TestOptions
+				rel          handle.Relation
+				database     handle.Database
+				accountId    = uint32(0)
+				tableName    = "test1"
+				databaseName = "db1"
+			)
+			// make sure that disabled all auto ckp and flush
+			opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
+			p := testutil.InitEnginePack(opts, t)
+			defer p.Close()
+			taeEngine := p.T
+
+			// one object, two blocks
+
+			schema := catalog.MockSchemaAll(3, 2)
+			schema.Name = tableName
+			schema.Comment = "rows:20;blks:2"
+			schema.BlockMaxRows = 20
+			schema.ObjectMaxBlocks = 2
+			taeEngine.BindSchema(schema)
+
+			rowsCnt := 40
+			{
+				dbBatch := catalog.MockBatch(schema, rowsCnt)
+				defer dbBatch.Close()
+				bat := containers.ToCNBatch(dbBatch)
+				txnOp := p.StartCNTxn()
+				_, handles := p.CreateDBAndTables(txnOp, databaseName, schema)
+				tH := handles[0]
+				require.Nil(t, tH.Write(p.Ctx, bat))
+				require.Nil(t, txnOp.Commit(p.Ctx))
+			}
+			var err error
+			disttaeEngine := p.D
+			ctx := p.Ctx
+
+			// checkpoint
+			{
+				// an obj recorded into ckp
+				testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
+				txn, _ = taeEngine.GetDB().StartTxn(nil)
+				ts := txn.GetStartTS()
+				taeEngine.GetDB().ForceCheckpoint(ctx, ts.Next(), time.Second)
+			}
+
+			{
+				txn, _ = taeEngine.GetDB().StartTxn(nil)
+				database, err = txn.GetDatabase(databaseName)
+				require.Nil(t, err)
+
+				rel, err = database.GetRelationByName(tableName)
+				require.Nil(t, err)
+
+				// merge the obj into a new object
+				// the obj recorded in the ckp has been deleted
+				testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
+				testutil2.MergeBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
+			}
+
+			err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), false)
+			require.Nil(t, err)
+
+			// check partition state without consume ckp
+			{
+				stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
+				require.Nil(t, err)
+
+				fmt.Println(stats.String())
+				// should only have one object
+				require.Equal(t, 1, stats.DataObjectsVisible.ObjCnt)
+				require.Equal(t, rowsCnt, stats.DataObjectsVisible.RowCnt)
+			}
+
+			// consume ckp
+			{
+				txnOp, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
+				require.Nil(t, err)
+
+				engineDB, err := disttaeEngine.Engine.Database(ctx, databaseName, txnOp)
+				require.Nil(t, err)
+
+				engineTbl, err := engineDB.Relation(ctx, tableName, nil)
+				require.Nil(t, err)
+
+				_, err = disttaeEngine.Engine.LazyLoadLatestCkp(ctx, engineTbl)
+				require.Nil(t, err)
+
+				stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
+				require.Nil(t, err)
+
+				fmt.Println(stats.String())
+
+				// should only have one object
+				require.Equal(t, 1, stats.DataObjectsVisible.ObjCnt)
+				require.Equal(t, rowsCnt, stats.DataObjectsVisible.RowCnt)
+			}
+		},
 	)
-
-	// make sure that disabled all auto ckp and flush
-	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
-	disttaeEngine, taeEngine, rpcAgent, _ := testutil.CreateEngines(ctx, opts, t)
-	defer func() {
-		disttaeEngine.Close(ctx)
-		taeEngine.Close(true)
-		rpcAgent.Close()
-	}()
-
-	schema := catalog.MockSchemaAll(2, 0)
-	schema.Name = tableName
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 2
-	taeEngine.BindSchema(schema)
-
-	rowsCnt := 40
-	bat := catalog.MockBatch(schema, rowsCnt)
-
-	var err error
-	{
-		txn, _ = taeEngine.GetDB().StartTxn(nil)
-		database, err = txn.CreateDatabase(databaseName, "", "")
-		require.Nil(t, err)
-
-		rel, err = database.CreateRelation(schema)
-		require.Nil(t, err)
-
-		err = rel.Append(ctx, bat)
-		require.Nil(t, err)
-
-		err = txn.Commit(context.Background())
-		require.Nil(t, err)
-	}
-
-	// checkpoint
-	{
-		// an obj recorded into ckp
-		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
-		txn, _ = taeEngine.GetDB().StartTxn(nil)
-		ts := txn.GetStartTS()
-		taeEngine.GetDB().ForceCheckpoint(ctx, ts.Next(), time.Second)
-	}
-
-	{
-		txn, _ = taeEngine.GetDB().StartTxn(nil)
-		database, err = txn.GetDatabase(databaseName)
-		require.Nil(t, err)
-
-		rel, err = database.GetRelationByName(tableName)
-		require.Nil(t, err)
-
-		// merge the obj into a new object
-		// the obj recorded in the ckp has been deleted
-		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
-		testutil2.MergeBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
-	}
-
-	err = disttaeEngine.SubscribeTable(ctx, rel.ID(), database.GetID(), false)
-	require.Nil(t, err)
-
-	// check partition state without consume ckp
-	{
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
-		require.Nil(t, err)
-
-		fmt.Println(stats.String())
-		// should only have one object
-		require.Equal(t, 1, stats.DataObjectsVisible.ObjCnt)
-		require.Equal(t, rowsCnt, stats.DataObjectsVisible.RowCnt)
-	}
-
-	// consume ckp
-	{
-		txnOp, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
-		require.Nil(t, err)
-
-		engineDB, err := disttaeEngine.Engine.Database(ctx, databaseName, txnOp)
-		require.Nil(t, err)
-
-		engineTbl, err := engineDB.Relation(ctx, tableName, nil)
-		require.Nil(t, err)
-
-		_, err = disttaeEngine.Engine.LazyLoadLatestCkp(ctx, engineTbl)
-		require.Nil(t, err)
-
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
-		require.Nil(t, err)
-
-		fmt.Println(stats.String())
-
-		// should only have one object
-		require.Equal(t, 1, stats.DataObjectsVisible.ObjCnt)
-		require.Equal(t, rowsCnt, stats.DataObjectsVisible.RowCnt)
-	}
-
 }
 
 // see PR#13644
@@ -290,46 +289,46 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 
 	// make sure that disabled all auto ckp and flush
 	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
-	disttaeEngine, taeEngine, rpcAgent, _ := testutil.CreateEngines(ctx, opts, t)
-	defer func() {
-		disttaeEngine.Close(ctx)
-		taeEngine.Close(true)
-		rpcAgent.Close()
-	}()
+	p := testutil.InitEnginePack(opts, t)
+	defer p.Close()
+	taeEngine := p.T
 
 	// one object, two blocks
 
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Name = tableName
+	schema.Comment = "rows:20;blks:2"
 	schema.BlockMaxRows = 20
 	schema.ObjectMaxBlocks = 2
 	taeEngine.BindSchema(schema)
 
 	rowsCnt := 40
-	bat := catalog.MockBatch(schema, rowsCnt)
-
+	{
+		dbBatch := catalog.MockBatch(schema, rowsCnt)
+		defer dbBatch.Close()
+		bat := containers.ToCNBatch(dbBatch)
+		txnOp := p.StartCNTxn()
+		_, handles := p.CreateDBAndTables(txnOp, databaseName, schema)
+		tH := handles[0]
+		require.Nil(t, tH.Write(p.Ctx, bat))
+		require.Nil(t, txnOp.Commit(p.Ctx))
+	}
 	var err error
+	disttaeEngine := p.D
+	ctx := p.Ctx
+
 	{
 		txn, _ = taeEngine.GetDB().StartTxn(nil)
-		database, err = txn.CreateDatabase(databaseName, "", "")
-		require.Nil(t, err)
-
-		rel, err = database.CreateRelation(schema)
-		require.Nil(t, err)
-
-		err = rel.Append(ctx, bat)
-		require.Nil(t, err)
-
-		err = txn.Commit(context.Background())
-		require.Nil(t, err)
+		database, _ = txn.GetDatabase(databaseName)
+		rel, _ = database.GetRelationByName(schema.Name)
+		txn.Commit(context.Background())
 	}
 
-	err = disttaeEngine.SubscribeTable(ctx, rel.ID(), database.GetID(), false)
+	err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), false)
 	require.Nil(t, err)
 
 	{
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
 		fmt.Println(stats.String(), stats.Details.DirtyBlocks)
@@ -341,7 +340,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 		// flush all aobj into one nobj
 		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
 
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
 		fmt.Println(stats.String(), stats.Details.DirtyBlocks)
@@ -374,7 +373,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 
 	// push deletes to cn
 	{
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
 		fmt.Println(stats.String(), stats.Details.DirtyBlocks)
@@ -385,7 +384,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 	testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
 
 	{
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
 		fmt.Println(stats.String(), stats.Details.DirtyBlocks)
@@ -409,39 +408,30 @@ func Test_EmptyObjectStats(t *testing.T) {
 
 	// make sure that disabled all auto ckp and flush
 	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
-	disttaeEngine, taeEngine, rpcAgent, _ := testutil.CreateEngines(ctx, opts, t)
-	defer func() {
-		disttaeEngine.Close(ctx)
-		taeEngine.Close(true)
-		rpcAgent.Close()
-	}()
+	p := testutil.InitEnginePack(opts, t)
+	defer p.Close()
+	taeEngine := p.T
 
 	// one object, two blocks
 
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Name = tableName
+	schema.Comment = "rows:20;blks:2"
 	schema.BlockMaxRows = 20
 	schema.ObjectMaxBlocks = 2
 	taeEngine.BindSchema(schema)
 
 	rowsCnt := 40
-	bat := catalog.MockBatch(schema, rowsCnt)
 
-	var err error
 	{
-		txn, _ = taeEngine.GetDB().StartTxn(nil)
-		database, err = txn.CreateDatabase(databaseName, "", "")
-		require.Nil(t, err)
-
-		rel, err = database.CreateRelation(schema)
-		require.Nil(t, err)
-
-		err = rel.Append(ctx, bat)
-		require.Nil(t, err)
-
-		err = txn.Commit(context.Background())
-		require.Nil(t, err)
+		dbBatch := catalog.MockBatch(schema, rowsCnt)
+		defer dbBatch.Close()
+		bat := containers.ToCNBatch(dbBatch)
+		txnOp := p.StartCNTxn()
+		_, handles := p.CreateDBAndTables(txnOp, databaseName, schema)
+		tH := handles[0]
+		require.Nil(t, tH.Write(p.Ctx, bat))
+		require.Nil(t, txnOp.Commit(p.Ctx))
 	}
 
 	// checkpoint
@@ -450,9 +440,10 @@ func Test_EmptyObjectStats(t *testing.T) {
 		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
 		txn, _ = taeEngine.GetDB().StartTxn(nil)
 		ts := txn.GetStartTS()
-		taeEngine.GetDB().ForceCheckpoint(ctx, ts.Next(), time.Second)
+		taeEngine.GetDB().ForceCheckpoint(p.Ctx, ts.Next(), time.Second)
 	}
 
+	var err error
 	{
 		txn, _ = taeEngine.GetDB().StartTxn(nil)
 		database, _ = txn.GetDatabase(databaseName)
@@ -471,11 +462,12 @@ func Test_EmptyObjectStats(t *testing.T) {
 
 	// push dela loc to cn
 	testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
-	err = disttaeEngine.SubscribeTable(ctx, rel.ID(), database.GetID(), false)
+	disttaeEngine := p.D
+	err = disttaeEngine.SubscribeTable(p.Ctx, database.GetID(), rel.ID(), false)
 	require.Nil(t, err)
 
 	{
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		stats, err := disttaeEngine.GetPartitionStateStats(p.Ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
 		// before consume the ckp, the object in partition state expect to be empty
@@ -487,19 +479,19 @@ func Test_EmptyObjectStats(t *testing.T) {
 
 	// consume ckp
 	{
-		txnOp, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
+		txnOp, err := disttaeEngine.NewTxnOperator(p.Ctx, disttaeEngine.Now())
 		require.Nil(t, err)
 
-		engineDB, err := disttaeEngine.Engine.Database(ctx, databaseName, txnOp)
+		engineDB, err := disttaeEngine.Engine.Database(p.Ctx, databaseName, txnOp)
 		require.Nil(t, err)
 
-		engineTbl, err := engineDB.Relation(ctx, tableName, nil)
+		engineTbl, err := engineDB.Relation(p.Ctx, tableName, nil)
 		require.Nil(t, err)
 
-		_, err = disttaeEngine.Engine.LazyLoadLatestCkp(ctx, engineTbl)
+		_, err = disttaeEngine.Engine.LazyLoadLatestCkp(p.Ctx, engineTbl)
 		require.Nil(t, err)
 
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		stats, err := disttaeEngine.GetPartitionStateStats(p.Ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
 		for idx := range stats.Details.DataObjectList.Visible {
@@ -521,59 +513,49 @@ func Test_SubscribeUnsubscribeConsistency(t *testing.T) {
 
 	// make sure that disabled all auto ckp and flush
 	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
-	disttaeEngine, taeEngine, rpcAgent, _ := testutil.CreateEngines(ctx, opts, t)
-	defer func() {
-		disttaeEngine.Close(ctx)
-		taeEngine.Close(true)
-		rpcAgent.Close()
-	}()
+	p := testutil.InitEnginePack(opts, t)
+	defer p.Close()
+	taeEngine := p.T
 
 	// one object, two blocks
 
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Name = tableName
+	schema.Comment = "rows:20;blks:2"
 	schema.BlockMaxRows = 20
 	schema.ObjectMaxBlocks = 2
 	taeEngine.BindSchema(schema)
 
 	rowsCnt := 40
+
 	bat := catalog.MockBatch(schema, rowsCnt)
+	defer bat.Close()
 	bats := bat.Split(2)
+	{
+		txnOp := p.StartCNTxn()
+		_, handles := p.CreateDBAndTables(txnOp, databaseName, schema)
+		tH := handles[0]
+		require.Nil(t, tH.Write(p.Ctx, containers.ToCNBatch(bats[0])))
+		require.Nil(t, txnOp.Commit(p.Ctx))
+		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
+	}
 
 	var err error
 	{
 		txn, _ = taeEngine.GetDB().StartTxn(nil)
-		database, err = txn.CreateDatabase(databaseName, "", "")
-		require.Nil(t, err)
-
-		rel, err = database.CreateRelation(schema)
-		require.Nil(t, err)
-
-		err = rel.Append(ctx, bats[0])
-		require.Nil(t, err)
-
-		err = txn.Commit(context.Background())
-		require.Nil(t, err)
-
-		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
-
-		txn, _ = taeEngine.GetDB().StartTxn(nil)
 		database, err = txn.GetDatabase(databaseName)
 		require.Nil(t, err)
-
 		rel, err = database.GetRelationByName(schema.Name)
 		require.Nil(t, err)
-
-		err = rel.Append(ctx, bats[1])
+		err = rel.Append(p.Ctx, bats[1])
 		require.Nil(t, err)
-
 		err = txn.Commit(context.Background())
 		require.Nil(t, err)
 	}
-
+	disttaeEngine := p.D
+	ctx := p.Ctx
 	checkSubscribed := func() {
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 		require.Equal(t, 20, stats.InmemRows.VisibleCnt)
 		require.Equal(t, 1, stats.DataObjectsInvisible.ObjCnt)
@@ -581,14 +563,14 @@ func Test_SubscribeUnsubscribeConsistency(t *testing.T) {
 	}
 
 	checkUnSubscribed := func() {
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 		require.Equal(t, 0, stats.InmemRows.VisibleCnt)
 		require.Equal(t, 0, stats.DataObjectsInvisible.ObjCnt)
 		require.Equal(t, 0, stats.DataObjectsInvisible.RowCnt)
 	}
 
-	err = disttaeEngine.SubscribeTable(ctx, rel.ID(), database.GetID(), true)
+	err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), true)
 	require.Nil(t, err)
 
 	checkSubscribed()
@@ -596,12 +578,12 @@ func Test_SubscribeUnsubscribeConsistency(t *testing.T) {
 	try := 10
 	ticker := time.NewTicker(100 * time.Millisecond)
 	for range ticker.C {
-		err = disttaeEngine.Engine.UnsubscribeTable(ctx, rel.ID(), database.GetID())
+		err = disttaeEngine.Engine.UnsubscribeTable(ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
 		checkUnSubscribed()
 
-		err = disttaeEngine.SubscribeTable(ctx, rel.ID(), database.GetID(), true)
+		err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), true)
 		require.Nil(t, err)
 
 		checkSubscribed()

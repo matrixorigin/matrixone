@@ -129,12 +129,18 @@ func TestCluster_DebugUpdateCNLabel(t *testing.T) {
 
 func runClusterTest(
 	refreshInterval time.Duration,
-	fn func(*testHAKeeperClient, *cluster)) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	hc := &testHAKeeperClient{}
-	c := NewMOCluster(hc, refreshInterval)
-	defer c.Close()
-	fn(hc, c.(*cluster))
+	fn func(*testHAKeeperClient, *cluster),
+) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			hc := &testHAKeeperClient{}
+			c := NewMOCluster(sid, hc, refreshInterval)
+			defer c.Close()
+			fn(hc, c.(*cluster))
+		},
+	)
 }
 
 type testHAKeeperClient struct {

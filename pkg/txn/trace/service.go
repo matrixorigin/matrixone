@@ -145,7 +145,8 @@ func NewService(
 	client client.TxnClient,
 	clock clock.Clock,
 	executor executor.SQLExecutor,
-	opts ...Option) (Service, error) {
+	opts ...Option,
+) (Service, error) {
 	if err := os.RemoveAll(dataDir); err != nil {
 		return nil, err
 	}
@@ -160,7 +161,7 @@ func NewService(
 		clock:     clock,
 		executor:  executor,
 		dir:       dataDir,
-		logger:    runtime.ProcessLevelRuntime().Logger().Named("txn-trace"),
+		logger:    runtime.ServiceRuntime(cn).Logger().Named("txn-trace"),
 		loadC:     make(chan loadAction, 4),
 		txnErrorC: make(chan string, stRuntime.NumCPU()*10),
 	}

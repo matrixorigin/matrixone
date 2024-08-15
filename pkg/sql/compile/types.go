@@ -15,9 +15,12 @@
 package compile
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/google/uuid"
 
@@ -131,12 +134,10 @@ type Scope struct {
 	// Proc contains the execution context.
 	Proc *process.Process
 
-	Reg *process.WaitRegister
-
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
 	BuildIdx   int
-	ShuffleCnt int
+	ShuffleIdx int
 
 	PartialResults     []any
 	PartialResultTypes []types.T
@@ -200,36 +201,37 @@ type scopeContext struct {
 	regs     map[*process.WaitRegister]int32
 }
 
-// anaylze information
-type anaylze struct {
-	// curr is the current index of plan
-	curr      int
+// analyzeModule information
+type analyzeModule struct {
+	// curNodeIdx is the current Node index when compilePlanScope
+	curNodeIdx int
+	// isFirst is the first opeator in pipeline for plan Node
 	isFirst   bool
 	qry       *plan.Query
 	analInfos []*process.AnalyzeInfo
 }
 
-func (a *anaylze) S3IOInputCount(idx int, count int64) {
+func (a *analyzeModule) S3IOInputCount(idx int, count int64) {
 	atomic.AddInt64(&a.analInfos[idx].S3IOInputCount, count)
 }
 
-func (a *anaylze) S3IOOutputCount(idx int, count int64) {
+func (a *analyzeModule) S3IOOutputCount(idx int, count int64) {
 	atomic.AddInt64(&a.analInfos[idx].S3IOOutputCount, count)
 }
 
-func (a *anaylze) Nodes() []*process.AnalyzeInfo {
+func (a *analyzeModule) Nodes() []*process.AnalyzeInfo {
 	return a.analInfos
 }
 
-func (a anaylze) TypeName() string {
-	return "compile.anaylze"
+func (a analyzeModule) TypeName() string {
+	return "compile.analyzeModule"
 }
 
-func newAnaylze() *anaylze {
-	return reuse.Alloc[anaylze](nil)
+func newAnalyzeModule() *analyzeModule {
+	return reuse.Alloc[analyzeModule](nil)
 }
 
-func (a *anaylze) release() {
+func (a *analyzeModule) release() {
 	// there are 3 situations to release analyzeInfo
 	// 1 is free analyzeInfo of Local CN when release analyze
 	// 2 is free analyzeInfo of remote CN before transfer back
@@ -238,7 +240,7 @@ func (a *anaylze) release() {
 	for i := range a.analInfos {
 		reuse.Free[process.AnalyzeInfo](a.analInfos[i], nil)
 	}
-	reuse.Free[anaylze](a, nil)
+	reuse.Free[analyzeModule](a, nil)
 }
 
 // Compile contains all the information needed for compilation.
@@ -269,7 +271,7 @@ type Compile struct {
 	// queryStatus is a structure to record query has done.
 	queryStatus queryDoneWaiter
 
-	anal *anaylze
+	anal *analyzeModule
 	// e db engine instance.
 	e engine.Engine
 
@@ -278,7 +280,7 @@ type Compile struct {
 	// TxnOffset read starting offset position within the transaction during the execute current statement
 	TxnOffset int
 
-	MessageBoard *process.MessageBoard
+	MessageBoard *message.MessageBoard
 
 	cnList engine.Nodes
 	// ast
@@ -296,7 +298,7 @@ type Compile struct {
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
 
-	buildPlanFunc func() (*plan2.Plan, error)
+	buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)
 	startAt       time.Time
 	// use for duplicate check
 	fuzzys []*fuzzyCheck

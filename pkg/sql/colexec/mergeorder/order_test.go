@@ -149,7 +149,7 @@ func TestOrder(t *testing.T) {
 				}
 			}
 		}
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		tc.arg.Free(tc.proc, false, nil)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -190,7 +190,7 @@ func BenchmarkOrder(b *testing.B) {
 }
 
 func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{

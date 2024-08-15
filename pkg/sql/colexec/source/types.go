@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -46,6 +47,7 @@ type Source struct {
 	Configs map[string]interface{}
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (source *Source) GetOperatorBase() *vm.OperatorBase {
@@ -91,5 +93,9 @@ func (source *Source) Free(proc *process.Process, pipelineFailed bool, err error
 		}
 		source.ctr = nil
 	}
-
+	if source.ProjectList != nil {
+		anal := proc.GetAnalyze(source.GetIdx(), source.GetParallelIdx(), source.GetParallelMajor())
+		anal.Alloc(source.ProjectAllocSize)
+		source.FreeProjection(proc)
+	}
 }

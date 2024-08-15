@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 func i82bool(v int8) bool {
@@ -46,6 +47,7 @@ func IsFakePkName(name string) bool {
 }
 
 type ColDef struct {
+	// letter case: origin
 	Name          string
 	Idx           int    // indicates its position in all coldefs
 	SeqNum        uint16 //
@@ -131,7 +133,7 @@ type Schema struct {
 	Extra           *apipb.SchemaExtra
 
 	// do not write down, reconstruct them when reading
-	NameMap    map[string]int // name -> logical idx
+	NameMap    map[string]int // name(letter case: origin) -> logical idx
 	SeqnumMap  map[uint16]int // seqnum -> logical idx
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
@@ -140,13 +142,16 @@ type Schema struct {
 }
 
 func NewEmptySchema(name string) *Schema {
-	return &Schema{
+	schema := &Schema{
 		Name:      name,
 		ColDefs:   make([]*ColDef, 0),
 		NameMap:   make(map[string]int),
 		SeqnumMap: make(map[uint16]int),
 		Extra:     &apipb.SchemaExtra{},
 	}
+	schema.BlockMaxRows = options.DefaultBlockMaxRows
+	schema.ObjectMaxBlocks = options.DefaultBlocksPerObject
+	return schema
 }
 
 func (s *Schema) Clone() *Schema {
@@ -315,7 +320,6 @@ func (s *Schema) getFakePrimaryKey() *ColDef {
 	idx, ok := s.NameMap[pkgcatalog.FakePrimaryKeyColName]
 	if !ok {
 		// should just call logutil.Fatal
-		logutil.Debugf("fake primary key not existed: %v", s.String())
 		panic("fake primary key not existed")
 	}
 	return s.ColDefs[idx]
@@ -327,6 +331,14 @@ func (s *Schema) GetPrimaryKey() *ColDef {
 		return s.ColDefs[s.SortKey.GetSingleIdx()]
 	}
 	return s.getFakePrimaryKey()
+}
+
+func (s *Schema) HasPKOrFakePK() bool {
+	if s.HasPK() {
+		return true
+	}
+	_, ok := s.NameMap[pkgcatalog.FakePrimaryKeyColName]
+	return ok
 }
 
 func (s *Schema) MustGetExtraBytes() []byte {
@@ -722,7 +734,7 @@ func (s *Schema) AppendSortColWithAttribute(attr engine.Attribute, sorIdx int, i
 
 func colDefFromPlan(col *plan.ColDef, idx int, seqnum uint16) *ColDef {
 	newcol := &ColDef{
-		Name:   col.Name,
+		Name:   col.GetOriginCaseName(),
 		Idx:    idx,
 		SeqNum: seqnum,
 		Type:   vector.ProtoTypeToType(&col.Typ),

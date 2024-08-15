@@ -18,15 +18,12 @@ import (
 	"context"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
 )
-
-var clusterUpgEntries = []versions.UpgradeEntry{}
 
 var (
 	Handler = &versionHandle{
@@ -66,12 +63,12 @@ func (v *versionHandle) HandleTenantUpgrade(
 
 		err := upgEntry.Upgrade(txn, uint32(tenantID))
 		if err != nil {
-			getLogger().Error("tenant upgrade entry execute error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
+			getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
 			return err
 		}
 
 		duration := time.Since(start)
-		getLogger().Info("tenant upgrade entry complete",
+		getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete",
 			zap.String("upgrade entry", upgEntry.String()),
 			zap.Int64("time cost(ms)", duration.Milliseconds()),
 			zap.Int32("tenantId", tenantID),
@@ -89,15 +86,24 @@ func (v *versionHandle) HandleClusterUpgrade(
 
 		err := upgEntry.Upgrade(txn, catalog.System_Account)
 		if err != nil {
-			getLogger().Error("cluster upgrade entry execute error", zap.Error(err), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
+			getLogger(txn.Txn().TxnOptions().CN).Error("cluster upgrade entry execute error", zap.Error(err), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
 			return err
 		}
 
 		duration := time.Since(start)
-		getLogger().Info("cluster upgrade entry complete",
+		getLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
 			zap.String("upgrade entry", upgEntry.String()),
 			zap.Int64("time cost(ms)", duration.Milliseconds()),
 			zap.String("toVersion", v.Metadata().Version))
+	}
+
+	if needUpgradePubSub {
+		if err := UpgradePubSub(txn); err != nil {
+			getLogger(txn.Txn().TxnOptions().CN).Error("cluster UpgradePubSub error",
+				zap.Error(err),
+				zap.String("version", v.Metadata().Version))
+			return err
+		}
 	}
 	return nil
 }

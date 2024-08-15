@@ -60,7 +60,10 @@ func (a *MockRPCAgent) Close() {
 }
 
 func (a *MockRPCAgent) MockLogtailRPCClientFactory(
-	serverAddr string, ownClient morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error) {
+	sid string,
+	serverAddr string,
+	ownClient morpc.RPCClient,
+) (morpc.RPCClient, morpc.Stream, error) {
 	if a.client == nil {
 		a.client = new(MockLogtailRPCClient)
 	}
