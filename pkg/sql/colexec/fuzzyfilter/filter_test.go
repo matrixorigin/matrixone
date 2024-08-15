@@ -158,14 +158,12 @@ func TestFuzzyFilter(t *testing.T) {
 						require.NoError(t, err)
 						require.Greater(t, tc.arg.ctr.rbat.RowCount(), int64(0))
 					}
-				}
-
-				if result.Status == vm.ExecStop {
-					tc.arg.Reset(tc.proc, false, err)
+				} else {
 					break
 				}
 			}
 
+			tc.arg.Reset(tc.proc, false, nil)
 			setProcForTest(tc.arg, tc.proc, tc.types, r)
 			err = tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
@@ -179,10 +177,7 @@ func TestFuzzyFilter(t *testing.T) {
 						require.NoError(t, err)
 						require.Greater(t, tc.arg.ctr.rbat.RowCount(), int64(0))
 					}
-				}
-
-				if result.Status == vm.ExecStop {
-					tc.arg.Free(tc.proc, false, err)
+				} else {
 					break
 				}
 			}
