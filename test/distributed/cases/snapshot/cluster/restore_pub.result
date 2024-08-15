@@ -14,7 +14,7 @@ insert into t1 values (1),(2),(3);
 create publication pubname1 database db1 account acc01 comment 'publish db1 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname1    db1    *    acc01        2024-08-14 18:38:37    null    publish db1 database
+pubname1    db1    *    acc01        2024-08-15 10:00:29    null    publish db1 database
 show databases like 'db1';
 Database
 db1
@@ -39,7 +39,7 @@ insert into t2 values (1),(2),(3);
 create publication pubname2 database db2 account acc02 comment 'publish db2 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname2    db2    *    acc02        2024-08-14 18:38:38    null    publish db2 database
+pubname2    db2    *    acc02        2024-08-15 10:00:29    null    publish db2 database
 show databases like 'db2';
 Database
 db2
@@ -64,7 +64,7 @@ insert into t3 values (1),(2),(3);
 create publication pubname3 database db3 account acc03 comment 'publish db3 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname3    db3    *    acc03        2024-08-14 18:38:38    null    publish db3 database
+pubname3    db3    *    acc03        2024-08-15 10:00:29    null    publish db3 database
 show databases like 'db3';
 Database
 db3
@@ -89,7 +89,7 @@ insert into t4 values (1),(2),(3);
 create publication pubname4 database db4 account acc04 comment 'publish db4 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname4    db4    *    acc04        2024-08-14 18:38:38    null    publish db4 database
+pubname4    db4    *    acc04        2024-08-15 10:00:29    null    publish db4 database
 show databases like 'db4';
 Database
 db4
@@ -114,7 +114,7 @@ insert into t5 values (1),(2),(3);
 create publication pubname5 database db5 account sys comment 'publish db5 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname5    db5    *    sys        2024-08-14 18:38:38    null    publish db5 database
+pubname5    db5    *    sys        2024-08-15 10:00:29    null    publish db5 database
 show databases like 'db5';
 Database
 db5
@@ -137,7 +137,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-08-14 10:38:38.359905    cluster            
+cluster_sp    2024-08-15 02:00:29.563644    cluster            
 drop publication if exists pubname1;
 drop database if exists db1;
 show publications;
@@ -184,7 +184,7 @@ drop database if exists sub_db4;
 show databases like 'sub_db4';
 Database
 restore cluster from snapshot cluster_sp;
-internal error: there is no publication pubname5
+internal error: there is no publication pubname1
 show databases;
 Database
 information_schema

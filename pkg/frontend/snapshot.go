@@ -588,7 +588,7 @@ func restoreToAccount(
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
 			if dbName == moCatalog {
-				if err = dropClusterTable(ctx, sid, bh, "", toAccountId); err != nil {
+				if err = dropClusterTable(ctx, sid, bh, snapshotName, toAccountId); err != nil {
 					return
 				}
 			}
@@ -766,7 +766,8 @@ func restoreToDatabaseOrTable(
 		}
 		pubInfo, err2 := getPubInfo(toCtx, bh, pubName)
 		if err2 != nil {
-			return err2
+			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, pub %v not exists", snapshotName, dbName, pubName))
+			return
 		}
 
 		if pubInfo != nil {
