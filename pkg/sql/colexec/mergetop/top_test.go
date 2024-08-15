@@ -73,6 +73,8 @@ func TestPrepare(t *testing.T) {
 
 func TestTop(t *testing.T) {
 	for _, tc := range genTestCases() {
+		tc.proc.Mp().EnableDetailRecording()
+
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 
@@ -114,7 +116,10 @@ func TestTop(t *testing.T) {
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 
 		tc.proc.Free()
-		require.Equal(t, tc.proc.Mp().CurrNB(), int64(0))
+		if tc.proc.Mp().CurrNB() != 0 {
+			println(tc.proc.Mp().Report())
+		}
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
