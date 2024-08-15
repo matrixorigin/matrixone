@@ -225,8 +225,13 @@ func buildFields(ls []string) []csvparser.Field {
 }
 
 func Test_Call2(t *testing.T) {
+	cases2 := []externalTestCase{
+		newTestCase(tree.CSV, ""),
+		newTestCase(tree.JSONLINE, tree.OBJECT),
+		newTestCase(tree.JSONLINE, tree.ARRAY),
+	}
 	convey.Convey("external Call", t, func() {
-		for _, tcs := range cases {
+		for _, tcs := range cases2 {
 			param := tcs.arg.Es
 			extern := &tree.ExternParam{
 				ExParamConst: tree.ExParamConst{
@@ -294,8 +299,10 @@ func Test_Call2(t *testing.T) {
 }
 
 func Test_CALL3(t *testing.T) {
+	case3 := newTestCase(tree.CSV, "")
+
 	convey.Convey("external Call", t, func() {
-		tcs := cases[0]
+		tcs := case3
 		param := tcs.arg.Es
 		extern := &tree.ExternParam{
 			ExParamConst: tree.ExParamConst{
