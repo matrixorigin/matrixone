@@ -213,6 +213,17 @@ func (s *Scope) Run(c *Compile) (err error) {
 	return err
 }
 
+func (s *Scope) FreeOperator(c *Compile) {
+	vm.HandleAllOp(s.RootOp, func(aprentOp vm.Operator, op vm.Operator) error {
+		op.Free(c.proc, false, nil)
+		return nil
+	})
+
+	for _, scope := range s.PreScopes {
+		scope.FreeOperator(c)
+	}
+}
+
 func (s *Scope) InitAllDataSource(c *Compile) error {
 	err := s.initDataSource(c)
 	if err != nil {

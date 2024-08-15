@@ -118,7 +118,7 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			if !ap.NeedMergedBatch {
 				// if do not need merged batch, free it now to save memory
 				for i := range ctr.batches {
-					proc.PutBatch(ctr.batches[i])
+					ctr.batches[i].Clean(proc.GetMPool())
 				}
 				ctr.batches = nil
 			}

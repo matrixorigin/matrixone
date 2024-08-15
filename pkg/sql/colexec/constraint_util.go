@@ -163,7 +163,7 @@ func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []
 	}
 	if err != nil {
 		for _, batchElem := range batches {
-			proc.PutBatch(batchElem)
+			batchElem.Clean(proc.GetMPool())
 		}
 		return nil, err
 	}

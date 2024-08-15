@@ -423,6 +423,12 @@ func (c *Compile) SetIsPrepare(isPrepare bool) {
 	c.isPrepare = isPrepare
 }
 
+func (c *Compile) FreeOperator() {
+	for _, s := range c.scope {
+		s.FreeOperator(c)
+	}
+}
+
 /*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {

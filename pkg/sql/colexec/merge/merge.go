@@ -57,7 +57,7 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		proc.PutBatch(merge.ctr.buf)
 		merge.ctr.buf = nil
 	}
-
+	var err error
 	for {
 		msg = merge.ctr.ReceiveFromAllRegs(anal)
 		if msg.Err != nil {
@@ -68,11 +68,13 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Status = vm.ExecStop
 			return result, nil
 		}
-
-		merge.ctr.buf = msg.Batch
-		if merge.ctr.buf.Last() && merge.SinkScan {
-			proc.PutBatch(merge.ctr.buf)
+		if msg.Batch.Last() && merge.SinkScan {
 			continue
+		}
+
+		merge.ctr.buf, err = msg.Batch.Dup(proc.GetMPool())
+		if err != nil {
+			return vm.CancelResult, err
 		}
 		break
 	}

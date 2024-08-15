@@ -239,6 +239,7 @@ func (prepareStmt *PrepareStmt) Close() {
 		}
 	}
 	if prepareStmt.compile != nil {
+		prepareStmt.compile.FreeOperator()
 		prepareStmt.compile.SetIsPrepare(false)
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
