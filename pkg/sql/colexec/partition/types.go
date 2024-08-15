@@ -110,6 +110,12 @@ func (partition *Partition) Free(proc *process.Process, pipelineFailed bool, err
 }
 
 func (ctr *container) freeBatch(mp *mpool.MPool) {
+	for _, bat := range ctr.batchList {
+		if bat != nil {
+			bat.Clean(mp)
+		}
+	}
+	ctr.batchList = nil
 	if ctr.buf != nil {
 		ctr.buf.Clean(mp)
 		ctr.buf = nil
@@ -151,5 +157,4 @@ func (ctr *container) resetParam() {
 	ctr.i = 0
 	ctr.indexList = ctr.indexList[:0]
 	ctr.status = receive
-	ctr.batchList = ctr.batchList[:0]
 }

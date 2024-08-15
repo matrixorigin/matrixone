@@ -87,8 +87,21 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.indexList = make([]int64, len(ctr.batchList))
 				ctr.status = eval
 			} else {
-				// it does not modify result.Batch, but calculate result and copy to ctr.buf
-				ctr.batchList = append(ctr.batchList, result.Batch)
+				if len(ctr.batchList) > ctr.i {
+					if ctr.batchList[ctr.i] != nil {
+						ctr.batchList[ctr.i].CleanOnlyData()
+					}
+					ctr.batchList[ctr.i], err = ctr.batchList[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+					if err != nil {
+						return result, err
+					}
+				} else {
+					appBat, err := result.Batch.Dup(proc.Mp())
+					if err != nil {
+						return result, err
+					}
+					ctr.batchList = append(ctr.batchList, appBat)
+				}
 
 				if err = ctr.evaluateOrderColumn(proc, ctr.i); err != nil {
 					return result, err
@@ -260,6 +273,9 @@ func (ctr *container) pickSameRow(row int64, cols []*vector.Vector) (batIndex in
 }
 
 func (ctr *container) removeBatch(proc *process.Process, index int) {
+	if ctr.batchList[index] != nil {
+		ctr.batchList[index].Clean(proc.Mp())
+	}
 	ctr.batchList = append(ctr.batchList[:index], ctr.batchList[index+1:]...)
 	ctr.indexList = append(ctr.indexList[:index], ctr.indexList[index+1:]...)
 	for _, vec := range ctr.orderCols[index] {

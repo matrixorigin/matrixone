@@ -84,7 +84,7 @@ func (source *Source) Release() {
 func (source *Source) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &source.ctr
 	if ctr.buf != nil {
-		ctr.buf.CleanOnlyData()
+		ctr.buf.Clean(proc.Mp())
 	}
 	ctr.status = retrieve
 	if source.ProjectList != nil {

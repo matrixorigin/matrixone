@@ -28,6 +28,9 @@ type container struct {
 	bats []*batch.Batch
 	buf  *batch.Batch
 	last bool
+
+	freeBats []*batch.Batch
+	i        int
 }
 
 type MergeRecursive struct {
@@ -69,7 +72,11 @@ func (mergeRecursive *MergeRecursive) Release() {
 
 func (mergeRecursive *MergeRecursive) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	mergeRecursive.ctr.last = false
+	mergeRecursive.ctr.i = 0
 }
 
 func (mergeRecursive *MergeRecursive) Free(proc *process.Process, pipelineFailed bool, err error) {
+	for _, bat := range mergeRecursive.ctr.freeBats {
+		bat.Clean(proc.Mp())
+	}
 }
