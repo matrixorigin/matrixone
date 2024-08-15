@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
@@ -24,8 +25,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
@@ -43,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -203,28 +201,41 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}()
 
 		err = s.ParallelRun(runCompile)
-		if err == nil {
-			// record the number of s3 requests
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
 
-			receiver.finalAnalysisInfo = runCompile.proc.Base.AnalInfos
-		} else {
-			// there are 3 situations to release analyzeInfo
-			// 1 is free analyzeInfo of Local CN when release analyze
-			// 2 is free analyzeInfo of remote CN before transfer back
-			// 3 is free analyzeInfo of remote CN when errors happen before transfer back
-			// this is situation 3
-			for i := range runCompile.proc.Base.AnalInfos {
-				reuse.Free[process.AnalyzeInfo](runCompile.proc.Base.AnalInfos[i], nil)
-			}
+		//-------------------------------------------------------------------
+		if err == nil {
+			receiver.phyPlan = ConvertCompileToPhyPlan(runCompile)
+			receiver.phyPlan.S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
+			receiver.phyPlan.S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
+			receiver.phyPlan.S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
+			receiver.phyPlan.S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
+			receiver.phyPlan.S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
+			receiver.phyPlan.S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
 		}
-		runCompile.proc.Base.AnalInfos = nil
-		runCompile.anal.analInfos = nil
+
+		//-------------------------------------------------------------------
+		//if err == nil {
+		//	// record the number of s3 requests
+		//	runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
+		//	runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
+		//	runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
+		//	runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
+		//	runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
+		//	runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
+		//
+		//	receiver.finalAnalysisInfo = runCompile.proc.Base.AnalInfos
+		//} else {
+		//	// there are 3 situations to release analyzeInfo
+		//	// 1 is free analyzeInfo of Local CN when release analyze
+		//	// 2 is free analyzeInfo of remote CN before transfer back
+		//	// 3 is free analyzeInfo of remote CN when errors happen before transfer back
+		//	// this is situation 3
+		//	for i := range runCompile.proc.Base.AnalInfos {
+		//		reuse.Free[process.AnalyzeInfo](runCompile.proc.Base.AnalInfos[i], nil)
+		//	}
+		//}
+		//runCompile.proc.Base.AnalInfos = nil
+		//runCompile.anal.analInfos = nil
 		return err
 
 	case pipeline.Method_StopSending:
@@ -265,16 +276,16 @@ type cnInformation struct {
 
 // information to rebuild a process.
 type processHelper struct {
-	id               string
-	lim              process.Limitation
-	unixTime         int64
-	accountId        uint32
-	txnOperator      client.TxnOperator
-	txnClient        client.TxnClient
-	sessionInfo      process.SessionInfo
-	analysisNodeList []int32
-	StmtId           uuid.UUID
-	prepareParams    *vector.Vector
+	id          string
+	lim         process.Limitation
+	unixTime    int64
+	accountId   uint32
+	txnOperator client.TxnOperator
+	txnClient   client.TxnClient
+	sessionInfo process.SessionInfo
+	//analysisNodeList []int32
+	StmtId        uuid.UUID
+	prepareParams *vector.Vector
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -298,7 +309,8 @@ type messageReceiverOnServer struct {
 	needNotReply bool
 
 	// result.
-	finalAnalysisInfo []*process.AnalyzeInfo
+	//finalAnalysisInfo []*process.AnalyzeInfo
+	phyPlan PhyPlan
 }
 
 func newMessageReceiverOnServer(
@@ -395,12 +407,12 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
-	proc.Base.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
+	//proc.Base.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
 	proc.SetPrepareParams(pHelper.prepareParams)
-	for i := range proc.Base.AnalInfos {
-		proc.Base.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
-		proc.Base.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
-	}
+	//for i := range proc.Base.AnalInfos {
+	//	proc.Base.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
+	//	proc.Base.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
+	//}
 	proc.DispatchNotifyCh = make(chan *process.WrapCs)
 	{
 		txn := proc.GetTxnOperator().Txn()
@@ -413,8 +425,8 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	c.e = cnInfo.storeEngine
 	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
 	c.proc.SetMessageBoard(c.MessageBoard)
-	c.anal = newAnalyzeModule()
-	c.anal.analInfos = proc.Base.AnalInfos
+	c.anal = newAnalyzeModuleV1()
+	//c.anal.analInfos = proc.Base.AnalInfos
 	c.addr = receiver.cnInformation.cnAddr
 
 	// a method to send back.
@@ -495,20 +507,27 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	message.SetID(receiver.messageId)
 	message.SetMessageType(receiver.messageTyp)
 
-	analysisInfo := receiver.finalAnalysisInfo
-	if len(analysisInfo) > 0 {
-		anas := &pipeline.AnalysisList{
-			List: make([]*plan.AnalyzeInfo, len(analysisInfo)),
-		}
-		for i, a := range analysisInfo {
-			anas.List[i] = convertToPlanAnalyzeInfo(a)
-		}
-		data, err := anas.Marshal()
-		if err != nil {
-			return err
-		}
-		message.SetAnalysis(data)
+	//analysisInfo := receiver.finalAnalysisInfo
+	//if len(analysisInfo) > 0 {
+	//	anas := &pipeline.AnalysisList{
+	//		List: make([]*plan.AnalyzeInfo, len(analysisInfo)),
+	//	}
+	//	for i, a := range analysisInfo {
+	//		anas.List[i] = convertToPlanAnalyzeInfo(a)
+	//	}
+	//	data, err := anas.Marshal()
+	//	if err != nil {
+	//		return err
+	//	}
+	//	message.SetAnalysis(data)
+	//}
+
+	jsonData, err := json.MarshalIndent(receiver.phyPlan, "", "  ")
+	if err != nil {
+		return err
 	}
+	message.SetAnalysis(jsonData)
+
 	return receiver.clientSession.Write(receiver.messageCtx, message)
 }
 
@@ -518,17 +537,17 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	if err != nil {
 		return processHelper{}, err
 	}
-	if len(procInfo.GetAnalysisNodeList()) == 0 {
-		panic(fmt.Sprintf("empty plan: %s", procInfo.Sql))
-	}
+	//if len(procInfo.GetAnalysisNodeList()) == 0 {
+	//	panic(fmt.Sprintf("empty plan: %s", procInfo.Sql))
+	//}
 
 	result := processHelper{
-		id:               procInfo.Id,
-		lim:              process.ConvertToProcessLimitation(procInfo.Lim),
-		unixTime:         procInfo.UnixTime,
-		accountId:        procInfo.AccountId,
-		txnClient:        cli,
-		analysisNodeList: procInfo.GetAnalysisNodeList(),
+		id:        procInfo.Id,
+		lim:       process.ConvertToProcessLimitation(procInfo.Lim),
+		unixTime:  procInfo.UnixTime,
+		accountId: procInfo.AccountId,
+		txnClient: cli,
+		//analysisNodeList: procInfo.GetAnalysisNodeList(),
 	}
 	if procInfo.PrepareParams.Length > 0 {
 		result.prepareParams = vector.NewVecWithData(

@@ -119,7 +119,9 @@ func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 
 		//anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
 		//anal.Alloc(ctr.maxAllocSize)
-		antiJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+		if antiJoin.OpAnalyzer != nil {
+			antiJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+		}
 
 		antiJoin.ctr.lastrow = 0
 

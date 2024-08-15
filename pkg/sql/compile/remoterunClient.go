@@ -16,8 +16,8 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -129,7 +129,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	}()
 
 	LastOperator := s.RootOp
-	lastAnalyze := c.proc.GetAnalyze(LastOperator.GetOperatorBase().GetIdx(), -1, false)
+	//lastAnalyze := c.proc.GetAnalyze(LastOperator.GetOperatorBase().GetIdx(), -1, false)
 	switch arg := LastOperator.(type) {
 	case *connector.Connector:
 		oldChildren := arg.Children
@@ -170,7 +170,8 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 			return nil
 		}
 
-		lastAnalyze.Network(bat)
+		//lastAnalyze.Network(bat)
+		LastOperator.GetOperatorBase().OpAnalyzer.Network(bat)
 		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
 
 		result, errCall := LastOperator.Call(s.Proc)
@@ -191,7 +192,7 @@ type messageSenderOnClient struct {
 	mp *mpool.MPool
 
 	// anal was used to merge remote-run's cost analysis information.
-	anal *analyzeModule
+	anal *AnalyzeModuleV1
 
 	// message sender and its data receiver.
 	streamSender morpc.Stream
@@ -213,7 +214,7 @@ func newMessageSenderOnClient(
 	sid string,
 	toAddr string,
 	mp *mpool.MPool,
-	ana *analyzeModule,
+	analyzeModule *AnalyzeModuleV1,
 ) (*messageSenderOnClient, error) {
 	streamSender, err := cnclient.GetPipelineClient(sid).NewStream(toAddr)
 	if err != nil {
@@ -224,7 +225,7 @@ func newMessageSenderOnClient(
 		safeToClose:  true,
 		alreadyClose: false,
 		mp:           mp,
-		anal:         ana,
+		anal:         analyzeModule,
 		streamSender: streamSender,
 	}
 
@@ -320,11 +321,19 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 
 			anaData := m.GetAnalyse()
 			if len(anaData) > 0 {
-				ana := new(pipeline.AnalysisList)
-				if err = ana.Unmarshal(anaData); err != nil {
+				//---------------------------------------------------------------
+				var p PhyPlan
+				err = json.Unmarshal(anaData, &p)
+				if err != nil {
 					return nil, false, err
 				}
-				sender.dealAnalysis(ana)
+				sender.dealRemoteAnalysis(p)
+				//---------------------------------------------------------------
+				//ana := new(pipeline.AnalysisList)
+				//if err = ana.Unmarshal(anaData); err != nil {
+				//	return nil, false, err
+				//}
+				//sender.dealAnalysis(ana)
 			}
 			return nil, true, nil
 		}
@@ -393,37 +402,49 @@ func generateStopSendingMessage(streamID uint64) *pipeline.Message {
 	return message
 }
 
-func (sender *messageSenderOnClient) dealAnalysis(ana *pipeline.AnalysisList) {
+func (sender *messageSenderOnClient) dealRemoteAnalysis(p PhyPlan) {
 	if sender.anal == nil {
 		return
 	}
-	mergeAnalyseInfo(sender.anal, ana)
+	sender.anal.AppendRemotePhyPlan(p)
+
+	//TODO: A lock may need to be added here
+	//sender.anal.phyPlan.RemoteScope = append(sender.anal.phyPlan.RemoteScope, p.LocalScope[0])
+	//sender.anal.phyPlan.S3IOInputCount += p.S3IOInputCount
+	//sender.anal.phyPlan.S3IOOutputCount += p.S3IOOutputCount
 }
 
-func mergeAnalyseInfo(target *analyzeModule, ana *pipeline.AnalysisList) {
-	source := ana.List
-	if len(target.analInfos) != len(source) {
-		return
-	}
-	for i := range target.analInfos {
-		n := source[i]
-		atomic.AddInt64(&target.analInfos[i].OutputSize, n.OutputSize)
-		atomic.AddInt64(&target.analInfos[i].OutputRows, n.OutputRows)
-		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
-		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
-		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
-		target.analInfos[i].MergeArray(n)
-		atomic.AddInt64(&target.analInfos[i].TimeConsumed, n.TimeConsumed)
-		atomic.AddInt64(&target.analInfos[i].WaitTimeConsumed, n.WaitTimeConsumed)
-		atomic.AddInt64(&target.analInfos[i].DiskIO, n.DiskIO)
-		atomic.AddInt64(&target.analInfos[i].S3IOByte, n.S3IOByte)
-		atomic.AddInt64(&target.analInfos[i].S3IOInputCount, n.S3IOInputCount)
-		atomic.AddInt64(&target.analInfos[i].S3IOOutputCount, n.S3IOOutputCount)
-		atomic.AddInt64(&target.analInfos[i].NetworkIO, n.NetworkIO)
-		atomic.AddInt64(&target.analInfos[i].ScanTime, n.ScanTime)
-		atomic.AddInt64(&target.analInfos[i].InsertTime, n.InsertTime)
-	}
-}
+//func (sender *messageSenderOnClient) dealAnalysis(ana *pipeline.AnalysisList) {
+//	if sender.anal == nil {
+//		return
+//	}
+//	mergeAnalyseInfo(sender.anal, ana)
+//}
+//
+//func mergeAnalyseInfo(target *analyzeModule, ana *pipeline.AnalysisList) {
+//	source := ana.List
+//	if len(target.analInfos) != len(source) {
+//		return
+//	}
+//	for i := range target.analInfos {
+//		n := source[i]
+//		atomic.AddInt64(&target.analInfos[i].OutputSize, n.OutputSize)
+//		atomic.AddInt64(&target.analInfos[i].OutputRows, n.OutputRows)
+//		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
+//		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
+//		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
+//		target.analInfos[i].MergeArray(n)
+//		atomic.AddInt64(&target.analInfos[i].TimeConsumed, n.TimeConsumed)
+//		atomic.AddInt64(&target.analInfos[i].WaitTimeConsumed, n.WaitTimeConsumed)
+//		atomic.AddInt64(&target.analInfos[i].DiskIO, n.DiskIO)
+//		atomic.AddInt64(&target.analInfos[i].S3IOByte, n.S3IOByte)
+//		atomic.AddInt64(&target.analInfos[i].S3IOInputCount, n.S3IOInputCount)
+//		atomic.AddInt64(&target.analInfos[i].S3IOOutputCount, n.S3IOOutputCount)
+//		atomic.AddInt64(&target.analInfos[i].NetworkIO, n.NetworkIO)
+//		atomic.AddInt64(&target.analInfos[i].ScanTime, n.ScanTime)
+//		atomic.AddInt64(&target.analInfos[i].InsertTime, n.InsertTime)
+//	}
+//}
 
 func (sender *messageSenderOnClient) close() {
 	sender.waitingTheStopResponse()

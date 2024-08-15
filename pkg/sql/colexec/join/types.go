@@ -124,7 +124,9 @@ func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err
 
 		//anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
 		//anal.Alloc(ctr.maxAllocSize)
-		innerJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+		if innerJoin.OpAnalyzer != nil {
+			innerJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+		}
 
 		if innerJoin.ctr.bat != nil {
 			proc.PutBatch(innerJoin.ctr.bat)

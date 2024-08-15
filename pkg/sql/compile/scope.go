@@ -382,6 +382,8 @@ func (s *Scope) RemoteRun(c *Compile) error {
 func (s *Scope) ParallelRun(c *Compile) (err error) {
 	var parallelScope *Scope
 
+	// waring: 有可能发生这样的情况： pipeline还未执行prepare，就发生错误，触发defer pipeline.Cleanup(),
+	// 执行reset和free，如果reset中有统计操作，就会发生空指针
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)

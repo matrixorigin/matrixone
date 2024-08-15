@@ -163,7 +163,9 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 		}
 		//anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
 		//anal.Alloc(int64(external.ctr.maxAllocSize))
-		external.OpAnalyzer.Alloc(int64(external.ctr.maxAllocSize))
+		if external.OpAnalyzer != nil {
+			external.OpAnalyzer.Alloc(int64(external.ctr.maxAllocSize))
+		}
 		external.ctr = nil
 	}
 }

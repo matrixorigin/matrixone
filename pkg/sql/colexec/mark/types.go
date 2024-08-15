@@ -199,7 +199,9 @@ func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err e
 
 		//anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
 		//anal.Alloc(ctr.maxAllocSize)
-		markJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+		if markJoin.OpAnalyzer != nil {
+			markJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+		}
 
 		markJoin.ctr = nil
 	}

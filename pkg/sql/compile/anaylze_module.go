@@ -3,6 +3,8 @@ package compile
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -18,6 +20,48 @@ type AnalyzeModuleV1 struct {
 	isFirst bool
 	qry     *plan.Query
 	phyPlan PhyPlan
+	mu      sync.RWMutex // 添加的读写锁
+}
+
+func (anal *AnalyzeModuleV1) AppendRemotePhyPlan(p PhyPlan) {
+	anal.mu.Lock()         // 加写锁
+	defer anal.mu.Unlock() // 解锁
+
+	anal.phyPlan.RemoteScope = append(anal.phyPlan.RemoteScope, p.LocalScope[0])
+	anal.phyPlan.S3IOInputCount += p.S3IOInputCount
+	anal.phyPlan.S3IOOutputCount += p.S3IOOutputCount
+}
+
+//func (a *AnalyzeModuleV1) S3IOInputCount(idx int, count int64) {
+//	atomic.AddInt64(&a.analInfos[idx].S3IOInputCount, count)
+//}
+//
+//func (a *AnalyzeModuleV1) S3IOOutputCount(idx int, count int64) {
+//	atomic.AddInt64(&a.analInfos[idx].S3IOOutputCount, count)
+//}
+//
+//func (a *AnalyzeModuleV1) Nodes() []*process.AnalyzeInfo {
+//	return a.analInfos
+//}
+
+func (a AnalyzeModuleV1) TypeName() string {
+	return "compile.analyzeModuleV1"
+}
+
+func newAnalyzeModuleV1() *AnalyzeModuleV1 {
+	return reuse.Alloc[AnalyzeModuleV1](nil)
+}
+
+func (a *AnalyzeModuleV1) release() {
+	// there are 3 situations to release analyzeInfo
+	// 1 is free analyzeInfo of Local CN when release analyze
+	// 2 is free analyzeInfo of remote CN before transfer back
+	// 3 is free analyzeInfo of remote CN when errors happen before transfer back
+	// this is situation 1
+	//for i := range a.analInfos {
+	//	reuse.Free[process.AnalyzeInfo](a.analInfos[i], nil)
+	//}
+	reuse.Free[AnalyzeModuleV1](a, nil)
 }
 
 func (c *Compile) initAnalyzeModuleV1(qry *plan.Query) {
@@ -25,10 +69,10 @@ func (c *Compile) initAnalyzeModuleV1(qry *plan.Query) {
 		panic("empty logic plan")
 	}
 
-	c.analV1 = &AnalyzeModuleV1{}
-	c.analV1.qry = qry
-	c.analV1.curNodeIdx = int(qry.Steps[0])
-	for _, node := range c.analV1.qry.Nodes {
+	c.anal = &AnalyzeModuleV1{}
+	c.anal.qry = qry
+	c.anal.curNodeIdx = int(qry.Steps[0])
+	for _, node := range c.anal.qry.Nodes {
 		if node.AnalyzeInfo == nil {
 			node.AnalyzeInfo = new(plan.AnalyzeInfo)
 		}
@@ -40,8 +84,8 @@ func (c *Compile) setAnalyzeCurrentV1(updateScopes []*Scope, nextId int) {
 		updateScopesLastFlag(updateScopes)
 	}
 
-	c.analV1.curNodeIdx = nextId
-	c.analV1.isFirst = true
+	c.anal.curNodeIdx = nextId
+	c.anal.isFirst = true
 }
 
 // 递归遍历 PhyOperator 并将 OpStats 添加到对应的 Plan Node 中
@@ -103,12 +147,12 @@ func (c *Compile) fillPlanNodeAnalyzeInfoV11(plan *PhyPlan) {
 
 	// 处理本地范围
 	for _, localScope := range plan.LocalScope {
-		processPhyScope(&localScope, c.analV1.qry.Nodes)
+		processPhyScope(&localScope, c.anal.qry.Nodes)
 	}
 
 	// 处理远程范围
 	for _, remoteScope := range plan.RemoteScope {
-		processPhyScope(&remoteScope, c.analV1.qry.Nodes)
+		processPhyScope(&remoteScope, c.anal.qry.Nodes)
 	}
 }
 
@@ -125,9 +169,11 @@ func (c *Compile) checkSQLHasQueryPlan() bool {
 //----------------------------------------------------------------------------------------------------------------------
 
 type PhyPlan struct {
-	Version     string     `json:"version"`
-	LocalScope  []PhyScope `json:"scope,omitempty"`
-	RemoteScope []PhyScope `json:"RemoteScope,omitempty"`
+	Version         string     `json:"version"`
+	LocalScope      []PhyScope `json:"scope,omitempty"`
+	RemoteScope     []PhyScope `json:"RemoteScope,omitempty"`
+	S3IOInputCount  int64      `json:"S3IOInputCount"`
+	S3IOOutputCount int64      `json:"S3IOInputCount"`
 }
 
 type PhyScope struct {
@@ -339,6 +385,10 @@ func ConvertCompileToPhyPlan(c *Compile) PhyPlan {
 			phyScope := ConvertScopeToPhyScope(c.scope[i], receiverMap)
 			phyPlan.LocalScope = append(phyPlan.LocalScope, phyScope)
 		}
+	}
+
+	if len(c.anal.phyPlan.RemoteScope) > 0 {
+		phyPlan.RemoteScope = append(phyPlan.RemoteScope, c.anal.phyPlan.RemoteScope...)
 	}
 
 	return phyPlan

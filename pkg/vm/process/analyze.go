@@ -15,13 +15,8 @@
 package process
 
 import (
-	"sync"
-	"sync/atomic"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"sync"
 )
 
 func init() {
@@ -71,91 +66,91 @@ func resetAnalyzeInfo(a *AnalyzeInfo) {
 	a.TimeConsumedArrayMinor = a.TimeConsumedArrayMinor[:0]
 }
 
-func (a *operatorAnalyzer) Start() {
-	a.start = time.Now()
-}
-
-func (a *operatorAnalyzer) Stop() {
-	if a.analInfo != nil {
-		atomic.AddInt64(&a.analInfo.WaitTimeConsumed, int64(a.wait/time.Nanosecond))
-		consumeTime := int64((time.Since(a.start) - a.wait - a.childrenCallDuration) / time.Nanosecond)
-		atomic.AddInt64(&a.analInfo.TimeConsumed, consumeTime)
-		a.analInfo.AddSingleParallelTimeConsumed(a.parallelMajor, a.parallelIdx, consumeTime)
-	}
-}
-
-func (a *operatorAnalyzer) Alloc(size int64) {
-	if a.analInfo != nil {
-		atomic.AddInt64(&a.analInfo.MemorySize, size)
-	}
-}
-
-func (a *operatorAnalyzer) InputBlock() {
-	if a.analInfo != nil {
-		atomic.AddInt64(&a.analInfo.InputBlocks, 1)
-	}
-}
-
-func (a *operatorAnalyzer) Input(bat *batch.Batch, isFirst bool) {
-	if a.analInfo != nil && bat != nil && isFirst {
-		atomic.AddInt64(&a.analInfo.InputSize, int64(bat.Size()))
-		atomic.AddInt64(&a.analInfo.InputRows, int64(bat.RowCount()))
-	}
-}
-
-func (a *operatorAnalyzer) Output(bat *batch.Batch, isLast bool) {
-	if a.analInfo != nil && bat != nil && isLast {
-		atomic.AddInt64(&a.analInfo.OutputSize, int64(bat.Size()))
-		atomic.AddInt64(&a.analInfo.OutputRows, int64(bat.RowCount()))
-	}
-}
-
-func (a *operatorAnalyzer) WaitStop(start time.Time) {
-	a.wait += time.Since(start)
-}
-
-func (a *operatorAnalyzer) ChildrenCallStop(start time.Time) {
-	a.childrenCallDuration += time.Since(start)
-}
-
-func (a *operatorAnalyzer) DiskIO(bat *batch.Batch) {
-	if a.analInfo != nil && bat != nil {
-		atomic.AddInt64(&a.analInfo.DiskIO, int64(bat.Size()))
-	}
-}
-
-func (a *operatorAnalyzer) S3IOByte(bat *batch.Batch) {
-	if a.analInfo != nil && bat != nil {
-		atomic.AddInt64(&a.analInfo.S3IOByte, int64(bat.Size()))
-	}
-}
-
-func (a *operatorAnalyzer) S3IOInputCount(count int) {
-	if a.analInfo != nil {
-		atomic.AddInt64(&a.analInfo.S3IOInputCount, int64(count))
-	}
-}
-
-func (a *operatorAnalyzer) S3IOOutputCount(count int) {
-	if a.analInfo != nil {
-		atomic.AddInt64(&a.analInfo.S3IOOutputCount, int64(count))
-	}
-}
-
-func (a *operatorAnalyzer) Network(bat *batch.Batch) {
-	if a.analInfo != nil && bat != nil {
-		atomic.AddInt64(&a.analInfo.NetworkIO, int64(bat.Size()))
-	}
-}
-
-func (a *operatorAnalyzer) AddScanTime(t time.Time) {
-	if a.analInfo != nil {
-		atomic.AddInt64(&a.analInfo.ScanTime, int64(time.Since(t)))
-	}
-}
-
-func (a *operatorAnalyzer) AddInsertTime(t time.Time) {
-	if a.analInfo != nil {
-		atomic.AddInt64(&a.analInfo.InsertTime, int64(time.Since(t)))
-	}
-}
+//func (a *operatorAnalyzer) Start() {
+//	a.start = time.Now()
+//}
+//
+//func (a *operatorAnalyzer) Stop() {
+//	if a.analInfo != nil {
+//		atomic.AddInt64(&a.analInfo.WaitTimeConsumed, int64(a.wait/time.Nanosecond))
+//		consumeTime := int64((time.Since(a.start) - a.wait - a.childrenCallDuration) / time.Nanosecond)
+//		atomic.AddInt64(&a.analInfo.TimeConsumed, consumeTime)
+//		a.analInfo.AddSingleParallelTimeConsumed(a.parallelMajor, a.parallelIdx, consumeTime)
+//	}
+//}
+//
+//func (a *operatorAnalyzer) Alloc(size int64) {
+//	if a.analInfo != nil {
+//		atomic.AddInt64(&a.analInfo.MemorySize, size)
+//	}
+//}
+//
+//func (a *operatorAnalyzer) InputBlock() {
+//	if a.analInfo != nil {
+//		atomic.AddInt64(&a.analInfo.InputBlocks, 1)
+//	}
+//}
+//
+//func (a *operatorAnalyzer) Input(bat *batch.Batch, isFirst bool) {
+//	if a.analInfo != nil && bat != nil && isFirst {
+//		atomic.AddInt64(&a.analInfo.InputSize, int64(bat.Size()))
+//		atomic.AddInt64(&a.analInfo.InputRows, int64(bat.RowCount()))
+//	}
+//}
+//
+//func (a *operatorAnalyzer) Output(bat *batch.Batch, isLast bool) {
+//	if a.analInfo != nil && bat != nil && isLast {
+//		atomic.AddInt64(&a.analInfo.OutputSize, int64(bat.Size()))
+//		atomic.AddInt64(&a.analInfo.OutputRows, int64(bat.RowCount()))
+//	}
+//}
+//
+//func (a *operatorAnalyzer) WaitStop(start time.Time) {
+//	a.wait += time.Since(start)
+//}
+//
+//func (a *operatorAnalyzer) ChildrenCallStop(start time.Time) {
+//	a.childrenCallDuration += time.Since(start)
+//}
+//
+//func (a *operatorAnalyzer) DiskIO(bat *batch.Batch) {
+//	if a.analInfo != nil && bat != nil {
+//		atomic.AddInt64(&a.analInfo.DiskIO, int64(bat.Size()))
+//	}
+//}
+//
+//func (a *operatorAnalyzer) S3IOByte(bat *batch.Batch) {
+//	if a.analInfo != nil && bat != nil {
+//		atomic.AddInt64(&a.analInfo.S3IOByte, int64(bat.Size()))
+//	}
+//}
+//
+//func (a *operatorAnalyzer) S3IOInputCount(count int) {
+//	if a.analInfo != nil {
+//		atomic.AddInt64(&a.analInfo.S3IOInputCount, int64(count))
+//	}
+//}
+//
+//func (a *operatorAnalyzer) S3IOOutputCount(count int) {
+//	if a.analInfo != nil {
+//		atomic.AddInt64(&a.analInfo.S3IOOutputCount, int64(count))
+//	}
+//}
+//
+//func (a *operatorAnalyzer) Network(bat *batch.Batch) {
+//	if a.analInfo != nil && bat != nil {
+//		atomic.AddInt64(&a.analInfo.NetworkIO, int64(bat.Size()))
+//	}
+//}
+//
+//func (a *operatorAnalyzer) AddScanTime(t time.Time) {
+//	if a.analInfo != nil {
+//		atomic.AddInt64(&a.analInfo.ScanTime, int64(time.Since(t)))
+//	}
+//}
+//
+//func (a *operatorAnalyzer) AddInsertTime(t time.Time) {
+//	if a.analInfo != nil {
+//		atomic.AddInt64(&a.analInfo.InsertTime, int64(time.Since(t)))
+//	}
+//}

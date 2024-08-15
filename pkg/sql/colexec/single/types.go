@@ -120,7 +120,10 @@ func (singleJoin *SingleJoin) Free(proc *process.Process, pipelineFailed bool, e
 
 		//anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
 		//anal.Alloc(ctr.maxAllocSize)
-		singleJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+		if singleJoin.OpAnalyzer != nil {
+			singleJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+		}
+
 		singleJoin.ctr = nil
 	}
 }

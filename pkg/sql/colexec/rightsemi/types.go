@@ -144,7 +144,9 @@ func (rightSemi *RightSemi) Free(proc *process.Process, pipelineFailed bool, err
 
 		//anal := proc.GetAnalyze(rightSemi.GetIdx(), rightSemi.GetParallelIdx(), rightSemi.GetParallelMajor())
 		//anal.Alloc(ctr.maxAllocSize)
-		rightSemi.OpAnalyzer.Alloc(ctr.maxAllocSize)
+		if rightSemi.OpAnalyzer != nil {
+			rightSemi.OpAnalyzer.Alloc(ctr.maxAllocSize)
+		}
 
 		rightSemi.ctr = nil
 	}

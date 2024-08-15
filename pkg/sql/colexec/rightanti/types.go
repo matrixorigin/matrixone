@@ -142,7 +142,9 @@ func (rightAnti *RightAnti) Free(proc *process.Process, pipelineFailed bool, err
 
 		//anal := proc.GetAnalyze(rightAnti.GetIdx(), rightAnti.GetParallelIdx(), rightAnti.GetParallelMajor())
 		//anal.Alloc(ctr.maxAllocSize)
-		rightAnti.OpAnalyzer.Alloc(ctr.maxAllocSize)
+		if rightAnti.OpAnalyzer != nil {
+			rightAnti.OpAnalyzer.Alloc(ctr.maxAllocSize)
+		}
 
 		rightAnti.ctr = nil
 	}

@@ -41,20 +41,20 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool)
 	}
 }
 
-func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Analyze) *process.RegisterMessage {
-	start := time.Now()
-	defer analyze.WaitStop(start)
-	select {
-	case <-r.proc.Ctx.Done():
-		return process.NormalEndRegisterMessage
-	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
-		if !ok || msg == nil {
-			return process.NormalEndRegisterMessage
-		}
-
-		return msg
-	}
-}
+//func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Analyze) *process.RegisterMessage {
+//	start := time.Now()
+//	defer analyze.WaitStop(start)
+//	select {
+//	case <-r.proc.Ctx.Done():
+//		return process.NormalEndRegisterMessage
+//	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
+//		if !ok || msg == nil {
+//			return process.NormalEndRegisterMessage
+//		}
+//
+//		return msg
+//	}
+//}
 
 // 后期验证该方法内部是否需要统计input
 func (r *ReceiverOperator) ReceiveFromSingleRegV1(regIdx int, analyzer process.Analyzer) *process.RegisterMessage {
@@ -101,45 +101,45 @@ func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
 
 // You MUST Init ReceiverOperator with Merge-Type
 // if you want to use this function
-func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) *process.RegisterMessage {
-	for {
-		if r.aliveMergeReceiver == 0 {
-			return process.NormalEndRegisterMessage
-		}
-
-		start := time.Now()
-		chosen, msg, ok := r.selectFromAllReg()
-		analyze.WaitStop(start)
-
-		// chosen == 0 means the info comes from proc context.Done
-		if chosen == 0 {
-			return process.NormalEndRegisterMessage
-		}
-
-		if !ok {
-			return process.NormalEndRegisterMessage
-		}
-
-		if msg == nil {
-			continue
-		}
-
-		if msg.Err != nil {
-			return msg
-		}
-
-		if msg.Batch == nil {
-			continue
-		}
-
-		if msg.Batch.IsEmpty() {
-			r.proc.PutBatch(msg.Batch)
-			continue
-		}
-
-		return msg
-	}
-}
+//func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) *process.RegisterMessage {
+//	for {
+//		if r.aliveMergeReceiver == 0 {
+//			return process.NormalEndRegisterMessage
+//		}
+//
+//		start := time.Now()
+//		chosen, msg, ok := r.selectFromAllReg()
+//		analyze.WaitStop(start)
+//
+//		// chosen == 0 means the info comes from proc context.Done
+//		if chosen == 0 {
+//			return process.NormalEndRegisterMessage
+//		}
+//
+//		if !ok {
+//			return process.NormalEndRegisterMessage
+//		}
+//
+//		if msg == nil {
+//			continue
+//		}
+//
+//		if msg.Err != nil {
+//			return msg
+//		}
+//
+//		if msg.Batch == nil {
+//			continue
+//		}
+//
+//		if msg.Batch.IsEmpty() {
+//			r.proc.PutBatch(msg.Batch)
+//			continue
+//		}
+//
+//		return msg
+//	}
+//}
 
 func (r *ReceiverOperator) ReceiveFromAllRegsV1(analyzer process.Analyzer) *process.RegisterMessage {
 	for {

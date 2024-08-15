@@ -141,7 +141,10 @@ func (rightJoin *RightJoin) Free(proc *process.Process, pipelineFailed bool, err
 
 		//anal := proc.GetAnalyze(rightJoin.GetIdx(), rightJoin.GetParallelIdx(), rightJoin.GetParallelMajor())
 		//anal.Alloc(ctr.maxAllocSize)
-		rightJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+		if rightJoin.OpAnalyzer != nil {
+			rightJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+		}
+
 		if rightJoin.ctr.buf != nil {
 			proc.PutBatch(rightJoin.ctr.buf)
 			rightJoin.ctr.buf = nil

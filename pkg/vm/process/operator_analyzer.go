@@ -243,29 +243,6 @@ func NewOperatorStats(operatorName string) *OperatorStats {
 	}
 }
 
-// UpdateStats Methods for updating statistical information
-func (ps *OperatorStats) UpdateStats(info *AnalyzeInfo) {
-	ps.CallCount++
-	if info == nil {
-		return
-	}
-	ps.TotalTimeConsumed += info.TimeConsumed
-	ps.TotalWaitTimeConsumed += info.WaitTimeConsumed
-	ps.TotalInputRows += info.InputRows
-	ps.TotalOutputRows += info.OutputRows
-	ps.TotalInputSize += info.InputSize
-	ps.TotalInputBlocks += info.InputBlocks
-	ps.TotalOutputSize += info.OutputSize
-	ps.TotalMemorySize += info.MemorySize
-	ps.TotalDiskIO += info.DiskIO
-	ps.TotalS3IOByte += info.S3IOByte
-	ps.TotalS3InputCount += info.S3IOInputCount
-	ps.TotalS3OutputCount += info.S3IOOutputCount
-	ps.TotalNetworkIO += info.NetworkIO
-	ps.TotalScanTime += info.ScanTime
-	ps.TotalInsertTime += info.InsertTime
-}
-
 func (ps *OperatorStats) Reset() {
 	ps.CallCount = 0
 	ps.TotalTimeConsumed = 0

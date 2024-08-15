@@ -217,13 +217,13 @@ func (o *OperatorBase) SetIdx(idx int) {
 	o.Idx = idx
 }
 
-func (o *OperatorBase) GetParallelIdx() int {
-	return o.ParallelIdx
-}
-
-func (o *OperatorBase) GetParallelMajor() bool {
-	return o.ParallelMajor
-}
+//func (o *OperatorBase) GetParallelIdx() int {
+//	return o.ParallelIdx
+//}
+//
+//func (o *OperatorBase) GetParallelMajor() bool {
+//	return o.ParallelMajor
+//}
 
 func (o *OperatorBase) GetIsFirst() bool {
 	return o.IsFirst
@@ -259,12 +259,12 @@ func CancelCheck(proc *process.Process) (error, bool) {
 	}
 }
 
-func ChildrenCall(o Operator, proc *process.Process, anal process.Analyze) (CallResult, error) {
-	beforeChildrenCall := time.Now()
-	result, err := o.Call(proc)
-	anal.ChildrenCallStop(beforeChildrenCall)
-	return result, err
-}
+//func ChildrenCall(o Operator, proc *process.Process, anal process.Analyze) (CallResult, error) {
+//	beforeChildrenCall := time.Now()
+//	result, err := o.Call(proc)
+//	anal.ChildrenCallStop(beforeChildrenCall)
+//	return result, err
+//}
 
 func ChildrenCallV1(op Operator, proc *process.Process, anal process.Analyzer) (CallResult, error) {
 	beforeChildrenCall := time.Now()
@@ -306,11 +306,11 @@ func NewCallResult() CallResult {
 }
 
 type OperatorInfo struct {
-	Idx           int // plan node index to which the pipeline operator belongs
-	ParallelIdx   int
-	ParallelMajor bool
-	IsFirst       bool
-	IsLast        bool
+	Idx int // plan node index to which the pipeline operator belongs
+	//ParallelIdx   int
+	//ParallelMajor bool
+	IsFirst bool
+	IsLast  bool
 
 	CnAddr      string
 	OperatorID  int32
