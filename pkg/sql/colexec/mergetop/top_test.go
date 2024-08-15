@@ -38,7 +38,7 @@ const (
 )
 
 // add unit tests for cases
-type topTestCase struct {
+type testCase struct {
 	ds     []bool // Directions, ds[i] == true: the attrs[i] are in descending order
 	arg    *MergeTop
 	types  []types.Type
@@ -46,30 +46,25 @@ type topTestCase struct {
 	cancel context.CancelFunc
 }
 
-var (
-	tcs []topTestCase
-)
-
-func init() {
-	tcs = []topTestCase{
+func genTestCases() []testCase {
+	return []testCase{
 		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
 		newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
 		newTestCase([]bool{false, false}, []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
 		newTestCase([]bool{true, false}, []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
 		newTestCase([]bool{true, false}, []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 0}}),
 	}
-
 }
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range genTestCases() {
 		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range genTestCases() {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.arg.Free(tc.proc, false, nil)
@@ -77,7 +72,7 @@ func TestPrepare(t *testing.T) {
 }
 
 func TestTop(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range genTestCases() {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 
@@ -125,7 +120,7 @@ func TestTop(t *testing.T) {
 
 func BenchmarkTop(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		tcs = []topTestCase{
+		tcs := []testCase{
 			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
 			newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
 		}
@@ -156,7 +151,7 @@ func BenchmarkTop(b *testing.B) {
 	}
 }
 
-func newTestCase(ds []bool, ts []types.Type, limit int64, fs []*plan.OrderBySpec) topTestCase {
+func newTestCase(ds []bool, ts []types.Type, limit int64, fs []*plan.OrderBySpec) testCase {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -168,7 +163,7 @@ func newTestCase(ds []bool, ts []types.Type, limit int64, fs []*plan.OrderBySpec
 		Ctx: ctx,
 		Ch:  make(chan *process.RegisterMessage, 3),
 	}
-	return topTestCase{
+	return testCase{
 		ds:    ds,
 		types: ts,
 		proc:  proc,
