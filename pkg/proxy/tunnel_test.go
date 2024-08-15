@@ -317,7 +317,18 @@ func TestTunnelReplaceConn(t *testing.T) {
 	require.NoError(t, scp.pause(ctx))
 
 	newServerProxy, newServer := net.Pipe()
-	tu.replaceServerConn(newMySQLConn("server", newServerProxy, 0, nil, nil, false, 0), false)
+	tu.replaceServerConn(
+		newMySQLConn(
+			"server",
+			newServerProxy,
+			0,
+			nil,
+			nil,
+			false, 0,
+		),
+		nil,
+		false,
+	)
 	require.NoError(t, tu.kickoff())
 
 	go func() {
@@ -674,7 +685,7 @@ func TestReplaceServerConn(t *testing.T) {
 	newSC := newMockServerConn(newServerProxy)
 	require.NotNil(t, sc)
 	newServerC := newMySQLConn("new-server", newSC.RawConn(), 0, nil, nil, false, 0)
-	tu.replaceServerConn(newServerC, false)
+	tu.replaceServerConn(newServerC, newSC, false)
 	_, newMysqlSC := tu.getConns()
 	require.Equal(t, newServerC, newMysqlSC)
 	require.NoError(t, tu.kickoff())
