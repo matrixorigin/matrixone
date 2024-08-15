@@ -42,6 +42,7 @@ func RunBaseClusterTests(
 		func() {
 			c, err = NewCluster(
 				WithCNCount(3),
+				WithTesting(),
 			)
 			if err != nil {
 				return

@@ -21,10 +21,9 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -38,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var (
@@ -79,7 +79,6 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 	lockOp.ctr.rt.parker = types.NewPacker()
 	lockOp.ctr.rt.retryError = nil
 	lockOp.ctr.rt.step = stepLock
-
 	return nil
 }
 
@@ -407,7 +406,8 @@ func doLock(
 	proc *process.Process,
 	vec *vector.Vector,
 	pkType types.Type,
-	opts LockOptions) (bool, bool, timestamp.Timestamp, error) {
+	opts LockOptions,
+) (bool, bool, timestamp.Timestamp, error) {
 	txnOp := proc.GetTxnOperator()
 	txnClient := proc.Base.TxnClient
 	lockService := proc.GetLockService()
@@ -562,6 +562,11 @@ func doLock(
 		changed, err := fn(proc, rel, tableID, eng, vec, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
+		}
+
+		if runtime.InTesting(proc.GetService()) {
+			tc := runtime.MustGetTestingContext(proc.GetService())
+			changed = tc.GetAdjustCheckDataChangedAfterLocked()(txn.ID, tableID, changed)
 		}
 
 		if changed {
@@ -924,7 +929,8 @@ func hasNewVersionInRange(
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,
-	from, to timestamp.Timestamp) (bool, error) {
+	from, to timestamp.Timestamp,
+) (bool, error) {
 	if vec == nil {
 		return false, nil
 	}

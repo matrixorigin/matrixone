@@ -10,9 +10,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
+
+func createTableAndWaitCNApplied(
+	t *testing.T,
+	db string,
+	tableName string,
+	tableSQL string,
+	createOnCN embed.ServiceOperator,
+	waitOnCNs ...embed.ServiceOperator,
+) {
+	createTestDatabase(t, db, createOnCN)
+	for _, cn := range waitOnCNs {
+		waitDatabaseCreated(t, db, cn)
+	}
+
+	execSQL(
+		t,
+		db,
+		tableSQL,
+		createOnCN,
+	)
+
+	for _, cn := range waitOnCNs {
+		waitTableCreated(t, db, tableName, cn)
+	}
+}
 
 func createTestDatabase(
 	t *testing.T,
@@ -33,21 +60,22 @@ func createTestDatabase(
 	waitDatabaseCreated(t, name, cn)
 }
 
-func execDDL(
+func execSQL(
 	t *testing.T,
 	db string,
-	ddl string,
+	sql string,
 	cn embed.ServiceOperator,
-) {
-	sql := cn.RawService().(cnservice.Service).GetSQLExecutor()
+) timestamp.Timestamp {
+	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := sql.ExecTxn(
+	var txnOp client.TxnOperator
+	err := exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
-			txn.Use(db)
-			res, err := txn.Exec(ddl, executor.StatementOption{})
+			txnOp = txn.Txn()
+			res, err := txn.Exec(sql, executor.StatementOption{})
 			if err != nil {
 				return err
 			}
@@ -58,6 +86,7 @@ func execDDL(
 	)
 
 	require.NoError(t, err)
+	return txnOp.Txn().CommitTS
 }
 
 func waitDatabaseCreated(
@@ -143,9 +172,8 @@ func getDatabaseName(
 	)
 }
 
-func getFullTableName(
-	db string,
-	table string,
-) string {
-	return db + "." + table
+func getSQLExecutor(
+	cn embed.ServiceOperator,
+) executor.SQLExecutor {
+	return cn.RawService().(cnservice.Service).GetSQLExecutor()
 }
