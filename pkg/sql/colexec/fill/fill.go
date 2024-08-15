@@ -473,7 +473,7 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 			if ctr.bats[i] != nil {
 				ctr.bats[i].CleanOnlyData()
 			}
-			ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+			ctr.bats[i], err = ctr.bats[i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 			if err != nil {
 				return result, err
 			}
