@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -1103,7 +1104,17 @@ func createPrepareStmt(
 		getFromSendLongData: make(map[int]struct{}),
 	}
 	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
-
+	columns := plan2.GetResultColumnsFromPlan(preparePlan.GetDcl().Control.(*planPb.DataControl_Prepare).Prepare.Plan)
+	numColumns := len(columns)
+	mp := execCtx.resper.MysqlRrWr().(*MysqlProtocolImpl)
+	for i := 0; i < numColumns; i++ {
+		column, err := colDef2MysqlColumn(execCtx.reqCtx, columns[i])
+		if err != nil {
+			return nil, err
+		}
+		colDefPacket := mp.makeColumnDefinition41Payload(column, int(COM_STMT_PREPARE))
+		prepareStmt.ColDefData = append(prepareStmt.ColDefData, colDefPacket)
+	}
 	if execCtx.input != nil {
 		sqlSourceTypes := execCtx.input.getSqlSourceTypes()
 		prepareStmt.IsCloudNonuser = slices.Contains(sqlSourceTypes, constant.CloudNoUserSql)

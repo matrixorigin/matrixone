@@ -684,18 +684,28 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 			return err
 		}
 	}
-
-	for i := 0; i < numColumns; i++ {
-		column, err := colDef2MysqlColumn(ctx, columns[i])
-		if err != nil {
-			return err
+	if stmt.ColDefData == nil || len(stmt.ColDefData) != numColumns {
+		stmt.ColDefData = nil
+		for i := 0; i < numColumns; i++ {
+			column, err := colDef2MysqlColumn(ctx, columns[i])
+			if err != nil {
+				return err
+			}
+			colDefPacket, err := mp.SendColumnDefinitionPacket(ctx, column, cmd)
+			if err != nil {
+				return err
+			}
+			stmt.ColDefData = append(stmt.ColDefData, colDefPacket)
 		}
-		colDefPacket, err := mp.SendColumnDefinitionPacket(ctx, column, cmd)
-		if err != nil {
-			return err
+	} else {
+		for i := 0; i < numColumns; i++ {
+			err = mp.WriteColumnDefBytes(stmt.ColDefData[i])
+			if err != nil {
+				return err
+			}
 		}
-		stmt.ColDefData = append(stmt.ColDefData, colDefPacket)
 	}
+
 	if numColumns > 0 {
 		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
 			return err
