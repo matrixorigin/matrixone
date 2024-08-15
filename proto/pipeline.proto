@@ -83,6 +83,9 @@ message Dispatch {
 
 message Merge {
   bool sinkScan = 1;
+  bool partial = 2;
+  int32 start_idx = 3;
+  int32 end_idx = 4;
 }
 
 message MultiArguemnt{
