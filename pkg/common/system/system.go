@@ -215,10 +215,8 @@ func refreshQuotaConfig() {
 		} else {
 			if cpu.CFS.PeriodMicros != 0 && cpu.CFS.QuotaMicros != 0 {
 				cpuNum.Store(int32(cpu.CFS.QuotaMicros / cpu.CFS.PeriodMicros))
-				// runtime.GOMAXPROCS(int(cpuNum.Load()))
 			} else {
 				cpuNum.Store(int32(runtime.NumCPU()))
-				// runtime.GOMAXPROCS(int(cpuNum.Load()))
 			}
 		}
 		limit, err := cgroup.GetMemLimit(pid)
