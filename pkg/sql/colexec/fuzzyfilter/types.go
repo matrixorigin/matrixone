@@ -110,8 +110,12 @@ func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool
 	ctr := &fuzzyFilter.ctr
 	ctr.state = Build
 	ctr.collisionCnt = 0
-	ctr.pass2RuntimeFilter.CleanOnlyData()
-	ctr.rbat.CleanOnlyData()
+	if ctr.pass2RuntimeFilter != nil {
+		ctr.pass2RuntimeFilter.CleanOnlyData()
+	}
+	if ctr.rbat != nil {
+		ctr.rbat.CleanOnlyData()
+	}
 
 	useRoaring := IfCanUseRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
 	if useRoaring {
@@ -120,7 +124,6 @@ func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool
 		ctr.bloomFilter.Reset()
 	}
 
-	fuzzyFilter.Free(proc, pipelineFailed, err)
 }
 
 func (fuzzyFilter *FuzzyFilter) Free(proc *process.Process, pipelineFailed bool, err error) {
