@@ -103,7 +103,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 			vs = append(vs, v)
 		}
 		b.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-		bitMap, err = serialWithCompacted(vs, nil, proc, packers)
+		bitMap, err = serialWithCompacted(vs, b.Vecs[0], proc, packers)
 	} else {
 		var vec *vector.Vector
 		for i, name := range attrs {
