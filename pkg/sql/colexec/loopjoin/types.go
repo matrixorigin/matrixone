@@ -118,10 +118,6 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
 	}
-	if ctr.inBat != nil {
-		ctr.inBat.Clean(mp)
-		ctr.inBat = nil
-	}
 }
 
 func (ctr *container) cleanExprExecutor() {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -323,6 +324,8 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	snapshotName := string(stmt.SnapShotName)
 	toAccountName := string(stmt.ToAccountName)
 
+	var restoreAccount uint32
+	var toAccountId uint32
 	// restore as a txn
 	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return err
@@ -345,7 +348,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	// default restore to src account
-	toAccountId, err := getAccountId(ctx, bh, srcAccountName)
+	restoreAccount, err = getAccountId(ctx, bh, srcAccountName)
 	if err != nil {
 		return err
 	}
@@ -365,6 +368,8 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		if toAccountId, err = getAccountId(ctx, bh, string(stmt.ToAccountName)); err != nil {
 			return err
 		}
+	} else {
+		toAccountId = restoreAccount
 	}
 
 	// check restore cluster
@@ -434,15 +439,41 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	switch stmt.Level {
 	case tree.RESTORELEVELACCOUNT:
-		if err = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, snapshot.ts); err != nil {
+		if err = restoreToAccount(ctx,
+			ses.GetService(),
+			bh, snapshotName,
+			toAccountId,
+			fkTableMap,
+			viewMap,
+			snapshot.ts,
+			restoreAccount); err != nil {
 			return err
 		}
 	case tree.RESTORELEVELDATABASE:
-		if err = restoreToDatabase(ctx, ses.GetService(), bh, snapshotName, dbName, toAccountId, fkTableMap, viewMap, snapshot.ts); err != nil {
+		if err = restoreToDatabase(ctx,
+			ses.GetService(),
+			bh,
+			snapshotName,
+			dbName,
+			toAccountId,
+			fkTableMap,
+			viewMap,
+			snapshot.ts,
+			restoreAccount); err != nil {
 			return err
 		}
 	case tree.RESTORELEVELTABLE:
-		if err = restoreToTable(ctx, ses.GetService(), bh, snapshotName, dbName, tblName, toAccountId, fkTableMap, viewMap, snapshot.ts); err != nil {
+		if err = restoreToTable(ctx,
+			ses.GetService(),
+			bh,
+			snapshotName,
+			dbName,
+			tblName,
+			toAccountId,
+			fkTableMap,
+			viewMap,
+			snapshot.ts,
+			restoreAccount); err != nil {
 			return err
 		}
 	}
@@ -512,6 +543,7 @@ func restoreToAccount(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
 	snapshotTs int64,
+	restoreAccount uint32,
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore account: %v, restore timestamp : %d", snapshotName, toAccountId, snapshotTs))
 
@@ -546,13 +578,27 @@ func restoreToAccount(
 	}
 
 	for _, dbName := range dbNames {
-		if err = restoreToDatabase(ctx, sid, bh, snapshotName, dbName, toAccountId, fkTableMap, viewMap, snapshotTs); err != nil {
+		if err = restoreToDatabase(ctx,
+			sid,
+			bh,
+			snapshotName,
+			dbName,
+			toAccountId,
+			fkTableMap,
+			viewMap,
+			snapshotTs,
+			restoreAccount); err != nil {
 			return
 		}
 	}
 
 	// restore system db
-	if err = restoreSystemDatabase(ctx, sid, bh, snapshotName, toAccountId, snapshotTs); err != nil {
+	if err = restoreSystemDatabase(ctx,
+		sid,
+		bh,
+		snapshotName,
+		toAccountId,
+		snapshotTs); err != nil {
 		return
 	}
 	return
@@ -567,9 +613,20 @@ func restoreToDatabase(
 	toAccountId uint32,
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
-	snapshotTs int64) (err error) {
+	snapshotTs int64,
+	restoreAccount uint32) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore db: %v, restore timestamp: %d", snapshotName, dbName, snapshotTs))
-	return restoreToDatabaseOrTable(ctx, sid, bh, snapshotName, dbName, "", toAccountId, fkTableMap, viewMap, snapshotTs)
+	return restoreToDatabaseOrTable(ctx,
+		sid,
+		bh,
+		snapshotName,
+		dbName,
+		"",
+		toAccountId,
+		fkTableMap,
+		viewMap,
+		snapshotTs,
+		restoreAccount)
 }
 
 func restoreToTable(
@@ -582,9 +639,20 @@ func restoreToTable(
 	toAccountId uint32,
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
-	snapshotTs int64) (err error) {
+	snapshotTs int64,
+	restoreAccount uint32) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: %v, restore timestamp: %d", snapshotName, tblName, snapshotTs))
-	return restoreToDatabaseOrTable(ctx, sid, bh, snapshotName, dbName, tblName, toAccountId, fkTableMap, viewMap, snapshotTs)
+	return restoreToDatabaseOrTable(ctx,
+		sid,
+		bh,
+		snapshotName,
+		dbName,
+		tblName,
+		toAccountId,
+		fkTableMap,
+		viewMap,
+		snapshotTs,
+		restoreAccount)
 }
 
 func restoreToDatabaseOrTable(
@@ -597,14 +665,34 @@ func restoreToDatabaseOrTable(
 	toAccountId uint32,
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
-	snapshotTs int64) (err error) {
+	snapshotTs int64,
+	restoreAccount uint32) (err error) {
 	if needSkipDb(dbName) {
 		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v", snapshotName, dbName))
 		return
 	}
 
+	var createDbSql string
+
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 	restoreToTbl := tblName != ""
+
+	createDbSql, err = getCreateDatabaseSql(toCtx, sid, bh, snapshotName, dbName)
+	if err != nil {
+		return
+	}
+
+	// if restore to table, check if the db is sub db
+	isSubDb := strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
+	if isSubDb && restoreToTbl {
+		return moerr.NewInternalError(toCtx, "can't restore to table for sub db")
+	}
+
+	// if current account is not to account id, and the db is sub db, skip restore
+	if restoreAccount != toAccountId && isSubDb {
+		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore subscription db: %v, current account is not to account", snapshotName, dbName))
+		return
+	}
 
 	// if restore to db, delete the same name db first
 	if !restoreToTbl {
@@ -615,8 +703,36 @@ func restoreToDatabaseOrTable(
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to create database: %v", snapshotName, dbName))
-	if err = bh.Exec(toCtx, "create database if not exists "+dbName); err != nil {
+
+	if isSubDb {
+		var err2 error
+		// check if the publication exists
+		// if the publication exists, create the db with the publication
+		// else skip restore the db
+		pubName, err2 := extractPubNameFromCreateDbSql(toCtx, createDbSql)
+		if err2 != nil {
+			return err2
+		}
+		pubInfo, err2 := getPubInfo(toCtx, bh, pubName)
+		if err2 != nil {
+			return err2
+		}
+
+		if pubInfo != nil {
+			// create db with publication
+			getLogger(sid).Info(fmt.Sprintf("[%s] start to create db with pub: %v, create db sql: %s", snapshotName, pubName, createDbSql))
+			if err = bh.Exec(toCtx, createDbSql); err != nil {
+				return
+			}
+		}
 		return
+	} else {
+		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbName)
+		// create db
+		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", snapshotName, dbName, createDbSql))
+		if err = bh.Exec(toCtx, createDbSql); err != nil {
+			return
+		}
 	}
 
 	if !restoreToTbl {
@@ -810,9 +926,11 @@ func restoreViews(
 				return err
 			}
 
+			getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to create view: %v, create view sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
 			if err = bh.Exec(toCtx, tblInfo.createSql); err != nil {
 				return err
 			}
+			getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] restore view: %v success", snapshotName, tblInfo.tblName))
 		}
 	}
 	return nil
@@ -1137,6 +1255,29 @@ func getTableInfos(ctx context.Context, sid string, bh BackgroundExec, snapshotN
 	return tableInfos, nil
 }
 
+func getCreateDatabaseSql(ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	dbName string) (string, error) {
+
+	sql := fmt.Sprintf("show create database `%s`", dbName)
+	if len(snapshotName) > 0 {
+		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
+	}
+	getLogger(sid).Info(fmt.Sprintf("[%s] get create database `%s` sql: %s", snapshotName, dbName, sql))
+
+	// cols: database_name, create_sql
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	if err != nil {
+		return "", nil
+	}
+	if len(colsList) == 0 || len(colsList[0]) == 0 {
+		return "", moerr.NewBadDB(ctx, dbName)
+	}
+	return colsList[0][1], nil
+}
+
 func getTableInfo(ctx context.Context, sid string, bh BackgroundExec, snapshotName string, dbName, tblName string) (*tableInfo, error) {
 	tableInfos, err := getTableInfos(ctx, sid, bh, snapshotName, dbName, tblName)
 	if err != nil {
@@ -1367,7 +1508,7 @@ func restoreAccountUsingClusterSnapshot(ctx context.Context, ses *Session, bh Ba
 	viewMap := make(map[string]*tableInfo)
 
 	// restore to account
-	if err = restoreToAccount(ctx, ses.GetService(), bh, newSnapshot, uint32(toAccountId), fkTableMap, viewMap, snapshotTs); err != nil {
+	if err = restoreToAccount(ctx, ses.GetService(), bh, newSnapshot, uint32(toAccountId), fkTableMap, viewMap, snapshotTs, uint32(toAccountId)); err != nil {
 		return err
 	}
 
@@ -1544,4 +1685,26 @@ func createPub(ctx context.Context, bh BackgroundExec, snapshotName, dbName stri
 		}
 	}
 	return
+}
+
+func extractPubNameFromCreateDbSql(ctx context.Context, createDbSql string) (string, error) {
+	var ast []tree.Statement
+	var err error
+	if ast, err = mysql.Parse(ctx, createDbSql, 1); err != nil {
+		return "", err
+	}
+
+	if len(ast) == 0 {
+		return "", moerr.NewInternalError(ctx, "parse create db sql failed")
+	}
+	createDbStmt, ok := ast[0].(*tree.CreateDatabase)
+	if !ok {
+		return "", moerr.NewInternalError(ctx, "parse create db sql failed")
+	}
+
+	if createDbStmt.SubscriptionOption == nil {
+		return "", moerr.NewInternalError(ctx, "create db sql has no subscription option")
+	}
+
+	return string(createDbStmt.SubscriptionOption.Publication), nil
 }
