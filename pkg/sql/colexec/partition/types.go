@@ -15,6 +15,7 @@
 package partition
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,7 +34,7 @@ const (
 )
 
 type Partition struct {
-	ctr *container
+	ctr container
 
 	OrderBySpecs []*plan.OrderBySpec
 
@@ -79,6 +80,7 @@ type container struct {
 	// batchList is the data structure to store the all the received batches
 	batchList []*batch.Batch
 	orderCols [][]*vector.Vector
+	i         int
 	// indexList[i] = k means the number of rows before k in batchList[i] has been merged and send.
 	indexList []int64
 
@@ -90,40 +92,69 @@ type container struct {
 }
 
 func (partition *Partition) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	partition.Free(proc, pipelineFailed, err)
+	ctr := &partition.ctr
+
+	ctr.resetExes()
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
+	ctr.resetParam()
 }
 
 func (partition *Partition) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := partition.ctr; ctr != nil {
-		mp := proc.Mp()
+	ctr := &partition.ctr
 
-		for i := range ctr.batchList {
-			if ctr.batchList[i] != nil {
-				ctr.batchList[i].Clean(mp)
-			}
+	ctr.freeExes()
+	ctr.freeBatch(proc.Mp())
+	ctr.freeVector(proc.Mp())
+}
+
+func (ctr *container) freeBatch(mp *mpool.MPool) {
+	for _, bat := range ctr.batchList {
+		if bat != nil {
+			bat.Clean(mp)
 		}
-		for i := range ctr.orderCols {
-			if ctr.orderCols[i] != nil {
-				for j := range ctr.orderCols[i] {
-					if ctr.orderCols[i][j] != nil {
-						ctr.orderCols[i][j].Free(mp)
-					}
+	}
+	ctr.batchList = nil
+	if ctr.buf != nil {
+		ctr.buf.Clean(mp)
+		ctr.buf = nil
+	}
+	ctr.batchList = nil
+}
+
+func (ctr *container) freeVector(mp *mpool.MPool) {
+	for i := range ctr.orderCols {
+		if ctr.orderCols[i] != nil {
+			for j := range ctr.orderCols[i] {
+				if ctr.orderCols[i][j] != nil {
+					ctr.orderCols[i][j].Free(mp)
 				}
 			}
 		}
-		for i := range ctr.executors {
-			if ctr.executors[i] != nil {
-				ctr.executors[i].Free()
-			}
-		}
-
-		ctr.executors = nil
-
-		if ctr.buf != nil {
-			ctr.buf.Clean(proc.Mp())
-			ctr.buf = nil
-		}
-
-		partition.ctr = nil
 	}
+	ctr.orderCols = nil
+}
+
+func (ctr *container) freeExes() {
+	for i := range ctr.executors {
+		if ctr.executors[i] != nil {
+			ctr.executors[i].Free()
+		}
+	}
+	ctr.executors = nil
+}
+
+func (ctr *container) resetExes() {
+	for i := range ctr.executors {
+		if ctr.executors[i] != nil {
+			ctr.executors[i].ResetForNextQuery()
+		}
+	}
+}
+
+func (ctr *container) resetParam() {
+	ctr.i = 0
+	ctr.indexList = ctr.indexList[:0]
+	ctr.status = receive
 }
