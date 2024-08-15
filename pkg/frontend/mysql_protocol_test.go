@@ -3007,6 +3007,7 @@ func (fp *testMysqlWriter) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) er
 }
 
 func (fp *testMysqlWriter) ResetStatistics() {}
+func (fp *testMysqlWriter) Reset(_ *Session) {}
 
 func (fp *testMysqlWriter) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 

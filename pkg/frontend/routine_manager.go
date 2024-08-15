@@ -446,6 +446,14 @@ func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromReques
 	return routine.migrateConnectionFrom(resp)
 }
 
+func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *query.ResetSessionResponse) error {
+	routine := rm.getRoutineByConnID(req.ConnID)
+	if routine == nil {
+		return moerr.NewInternalError(rm.ctx, "cannot get routine to clear session %d", req.ConnID)
+	}
+	return routine.resetSession(rm.baseService.ID(), resp)
+}
+
 func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {
 	accountRoutine := &AccountRoutineManager{
 		killQueueMu:       sync.RWMutex{},
