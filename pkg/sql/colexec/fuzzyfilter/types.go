@@ -119,9 +119,13 @@ func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool
 
 	useRoaring := IfCanUseRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
 	if useRoaring {
-		ctr.roaringFilter.b.Clear()
+		if ctr.roaringFilter != nil {
+			ctr.roaringFilter.b.Clear()
+		}
 	} else {
-		ctr.bloomFilter.Reset()
+		if ctr.bloomFilter != nil {
+			ctr.bloomFilter.Reset()
+		}
 	}
 
 }

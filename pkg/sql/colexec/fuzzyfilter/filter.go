@@ -89,31 +89,33 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 		rowCount = 1000
 	}
 
-	if err := fuzzyFilter.generate(); err != nil {
-		return err
-	}
-
-	useRoaring := IfCanUseRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
-
-	if useRoaring {
-		ctr.roaringFilter = newroaringFilter(types.T(fuzzyFilter.PkTyp.Id))
-	} else {
-		//@see https://hur.st/bloomfilter/
-		var probability float64
-		if rowCount < 10_0001 {
-			probability = 0.00001
-		} else if rowCount < 100_0001 {
-			probability = 0.000003
-		} else if rowCount < 1000_0001 {
-			probability = 0.000001
-		} else if rowCount < 1_0000_0001 {
-			probability = 0.0000005
-		} else if rowCount < 10_0000_0001 {
-			probability = 0.0000002
-		} else {
-			probability = 0.0000001
+	if ctr.rbat == nil {
+		if err := fuzzyFilter.generate(); err != nil {
+			return err
 		}
-		ctr.bloomFilter = bloomfilter.New(rowCount, probability)
+
+		useRoaring := IfCanUseRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
+
+		if useRoaring {
+			ctr.roaringFilter = newroaringFilter(types.T(fuzzyFilter.PkTyp.Id))
+		} else {
+			//@see https://hur.st/bloomfilter/
+			var probability float64
+			if rowCount < 10_0001 {
+				probability = 0.00001
+			} else if rowCount < 100_0001 {
+				probability = 0.000003
+			} else if rowCount < 1000_0001 {
+				probability = 0.000001
+			} else if rowCount < 1_0000_0001 {
+				probability = 0.0000005
+			} else if rowCount < 10_0000_0001 {
+				probability = 0.0000002
+			} else {
+				probability = 0.0000001
+			}
+			ctr.bloomFilter = bloomfilter.New(rowCount, probability)
+		}
 	}
 
 	return nil
