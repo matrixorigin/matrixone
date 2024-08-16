@@ -1704,7 +1704,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		case tree.INDEX_TYPE_MASTER:
 			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
 		case tree.INDEX_TYPE_LLM:
-			indexDef, tableDef, err = buildLlmSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+			indexDef, tableDef, err = buildLLMSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
 		default:
 			return moerr.NewInvalidInputNoCtx("unsupported index type: %s", indexInfo.KeyType.ToString())
 		}
@@ -1970,7 +1970,7 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	return []*plan.IndexDef{indexDef}, []*TableDef{tableDef}, nil
 }
 
-func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+func buildLLMSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 
 	indexParts := make([]string, 1)
 
@@ -1994,9 +1994,9 @@ func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 	indexDefs := make([]*plan.IndexDef, 2)
 	tableDefs := make([]*TableDef, 2)
 
-	// 1. create LLM chunk and embedding table
+	// 1. create LLM mo index table
 	{
-		// 1.a table consists of 3 columns: original primary key int, chunk datalink, embedding vecf32(120)
+		// 1.a table consists of 2 columns: primary key id, and text url datalink
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
 		if err != nil {
 			return nil, nil, err
@@ -2004,33 +2004,23 @@ func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 
 		tableDefs[0] = &TableDef{
 			Name:      indexTableName,
-			TableType: catalog.SystemSI_LLM_Table_Type,
-			Cols:      make([]*ColDef, 3),
+			TableType: catalog.SystemSI_LLM_TblType_Basic,
+			Cols:      make([]*ColDef, 2),
 		}
 
 		// 1.b indexDef0 init
-		// Use primary key and chunk as two keys for index
-		// primary key ensures each chunked string can be associated back to the original table's data
-		// chunks facilitates querying of text fragments
-		// embedding are high-dimensional floating-point arrays, not suitable for direct key-value query
-
-		//indexParts[0] = catalog.LLM_Index_Table_Primary_ColName
-		//indexParts[1] = catalog.LLM_Index_Table_Chunk_ColName
-
-		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_LLM_Table_Type, indexParts, false)
+		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_LLM_TblType_Basic, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		// 1.c columns: primary key, chunk, embedding
+		// 1.c columns: key(PK), url datalink
 		tableDefs[0].Cols[0] = &ColDef{
-			Name: catalog.LLM_Index_Table_Primary_ColName,
+			Name: catalog.SystemSI_LLM_TblCol_Basic_key,
 			Alg:  plan.CompressType_Lz4,
 			Typ: Type{
-				// TODO the types of primary key column?
-				Id: int32(types.T_varchar),
-				//Width: types.MaxVarcharLen,
-				//Width: types.MaxVarcharLen,
+				Id:    int32(types.T_varchar),
+				Width: types.MaxVarcharLen,
 			},
 			Primary: true,
 			Default: &plan.Default{
@@ -2041,7 +2031,7 @@ func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 		}
 
 		tableDefs[0].Cols[1] = &ColDef{
-			Name: catalog.LLM_Index_Table_Chunk_ColName,
+			Name: catalog.SystemSI_LLM_TblCol_Basic_url,
 			Alg:  plan.CompressType_Lz4,
 			Typ: Type{
 				Id: int32(types.T_datalink),
@@ -2054,8 +2044,66 @@ func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 			},
 		}
 
-		tableDefs[0].Cols[2] = &ColDef{
-			Name: catalog.LLM_Index_Table_Embedding_ColName,
+		// 1.d set primary key definition
+		tableDefs[0].Pkey = &PrimaryKeyDef{
+			Names:       []string{catalog.SystemSI_LLM_TblCol_Basic_key},
+			PkeyColName: catalog.SystemSI_LLM_TblCol_Basic_key,
+		}
+	}
+
+	// 2. create LLM chunk and embedding table
+	{
+		// 2.a table consists of 3 columns: original primary key int, chunk datalink, embedding vecf32(120)
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		tableDefs[1] = &TableDef{
+			Name:      indexTableName,
+			TableType: catalog.SystemSI_LLM_TblType_DataChunksEmbedding,
+			Cols:      make([]*ColDef, 3),
+		}
+
+		// 1.b indexDef0 init
+
+		indexDefs[1], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_LLM_TblType_DataChunksEmbedding, indexParts, false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// 1.c columns: primary key, chunk, embedding
+		tableDefs[1].Cols[0] = &ColDef{
+			Name: catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_primary,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_varchar),
+				Width: types.MaxVarcharLen,
+			},
+			Primary: true,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		tableDefs[1].Cols[1] = &ColDef{
+			Name: catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_chunk,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id: int32(types.T_datalink),
+				//Width: types.MaxVarcharLen,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		tableDefs[1].Cols[2] = &ColDef{
+			Name: catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_embedding,
 			Alg:  plan.CompressType_Lz4,
 			Typ: Type{
 				Id: int32(types.T_array_float32),
@@ -2069,9 +2117,9 @@ func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 		}
 
 		// 1.d set primary key definition
-		tableDefs[0].Pkey = &PrimaryKeyDef{
-			Names:       []string{catalog.LLM_Index_Table_Primary_ColName},
-			PkeyColName: catalog.LLM_Index_Table_Primary_ColName,
+		tableDefs[1].Pkey = &PrimaryKeyDef{
+			Names:       []string{catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_primary},
+			PkeyColName: catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_primary,
 		}
 	}
 

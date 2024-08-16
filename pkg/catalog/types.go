@@ -325,12 +325,17 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
 
 	// LLM table type
-	SystemSI_LLM_Table_Type = "LLM_Table"
+	SystemSI_LLM_TblType_Basic               = "basic"
+	SystemSI_LLM_TblType_DataChunksEmbedding = "data_chunks_embedding"
 
-	// LLM index table columns
-	LLM_Index_Table_Primary_ColName   = "original_tbl_pk"
-	LLM_Index_Table_Chunk_ColName     = "chunk"
-	LLM_Index_Table_Embedding_ColName = "embedding"
+	// LLM index basic table columns
+	SystemSI_LLM_TblCol_Basic_key = "primary_key"
+	SystemSI_LLM_TblCol_Basic_url = "url"
+
+	// LLM index embedding table columns
+	SystemSI_LLM_TblCol_DataChunksEmbedding_primary   = "tbl_pk"
+	SystemSI_LLM_TblCol_DataChunksEmbedding_chunk     = "chunk"
+	SystemSI_LLM_TblCol_DataChunksEmbedding_embedding = "embedding"
 )
 
 const (

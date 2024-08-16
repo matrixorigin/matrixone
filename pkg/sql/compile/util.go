@@ -160,11 +160,64 @@ func genCreateIndexTableSqlForIvfIndex(indexTableDef *plan.TableDef, indexDef *p
 
 	}
 
+	// constriction on primary key
 	if indexTableDef.Pkey != nil && indexTableDef.Pkey.Names != nil {
 		pkStr := fmt.Sprintf(", primary key ( %s ) ", partsToColsStr(indexTableDef.Pkey.Names))
 		sql += pkStr
 	}
 
+	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
+}
+
+// genCreateIndexTableSqlForLLMIndex: Generate ddl statements for creating llm index table
+// NOTE: Here the columns are part of meta, centroids, entries table.
+// basic                 -> key varchar(65535), url datalink
+// DataChunksEmbedding   -> key varchar(65535), chunk datalink, embedding vecf32
+func genCreateIndexTableSqlForLLMIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+	var sql string
+	planCols := indexTableDef.GetCols()
+	for i, planCol := range planCols {
+		if planCol.Name == catalog.CPrimaryKeyColName {
+			continue
+		}
+		if i >= 1 {
+			sql += ","
+		}
+		sql += "`" + planCol.Name + "`" + " "
+		typeId := types.T(planCol.Typ.Id)
+		switch typeId {
+		case types.T_char:
+			sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
+		case types.T_varchar:
+			sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
+		case types.T_binary:
+			sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
+		case types.T_varbinary:
+			sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
+		case types.T_decimal64:
+			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		case types.T_decimal128:
+			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		case types.T_array_float32:
+			sql += fmt.Sprintf("VECF32(%d)", planCol.Typ.Width)
+		case types.T_array_float64:
+			sql += fmt.Sprintf("VECF64(%d)", planCol.Typ.Width)
+		// support datalink type
+		case types.T_datalink:
+			sql += fmt.Sprintf("Datalink")
+		default:
+			sql += typeId.String()
+		}
+
+	}
+
+	if indexTableDef.Pkey != nil && indexTableDef.Pkey.Names != nil {
+		pkStr := fmt.Sprintf(", primary key ( %s ) ", partsToColsStr(indexTableDef.Pkey.Names))
+		sql += pkStr
+	}
+
+	// createIndexTableForamt              = "create table `%s`.`%s` (%s);"
+	// DBName                              = indexDefs[catalog.SystemSI_LLM_TblType_Basic]
 	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
 }
 
