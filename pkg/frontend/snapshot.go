@@ -588,7 +588,8 @@ func restoreToAccount(
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
 			if dbName == moCatalog {
-				if err = dropClusterTable(ctx, sid, bh, snapshotName, toAccountId); err != nil {
+				// drop existing cluster tables
+				if err = dropClusterTable(toCtx, sid, bh, "", toAccountId); err != nil {
 					return
 				}
 			}
