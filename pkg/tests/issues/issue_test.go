@@ -136,6 +136,7 @@ func TestWWConflict(t *testing.T) {
 						WithDatabase(db).
 						WithMinCommittedTS(committedAt),
 				)
+				// TODO(ouyuanning): use require.NoError(t, err) if #14880 fixed.
 				require.Error(t, err)
 			}()
 
