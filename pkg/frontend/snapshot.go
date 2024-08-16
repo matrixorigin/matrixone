@@ -878,21 +878,12 @@ func restoreToSubDb(
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore sub db: %v", snapshotName, subDb.dbName))
 
 	toCtx := defines.AttachAccountId(ctx, subDb.Account)
-	pubName, err := extractPubNameFromCreateDbSql(toCtx, subDb.createSql)
-	if err != nil {
+
+	getLogger(sid).Info(fmt.Sprintf("[%s] account %d start to create sub db: %v, create db sql: %s", snapshotName, subDb.Account, subDb.dbName, subDb.createSql))
+	if err = bh.Exec(toCtx, subDb.createSql); err != nil {
 		return
 	}
-	pubinfo, err := getPubInfo(toCtx, bh, pubName)
-	if err != nil {
-		return
-	}
-	if pubinfo != nil {
-		getLogger(sid).Info(fmt.Sprintf("[%s] account %d start to create sub db: %v, create db sql: %s", snapshotName, subDb.Account, subDb.dbName, subDb.createSql))
-		if err = bh.Exec(toCtx, subDb.createSql); err != nil {
-			return
-		}
-	}
-	getLogger(sid).Info(fmt.Sprintf("[%s] account %d skip restore sub db: %v, no publication", snapshotName, subDb.Account, subDb.dbName))
+
 	return
 }
 

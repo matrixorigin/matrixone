@@ -1296,7 +1296,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 		v2.CheckSubValidDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
 	var (
@@ -1316,13 +1316,6 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 	if sql, err = getSqlForAccountIdAndStatus(newCtx, pubAccountName, true); err != nil {
 		return
 	}
-
-	if err = bh.Exec(ctx, "begin;"); err != nil {
-		return
-	}
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(newCtx, sql); err != nil {
