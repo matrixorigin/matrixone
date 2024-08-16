@@ -2074,67 +2074,23 @@ func (c *Compile) setProjection(n *plan.Node, s *Scope) {
 	s.setRootOperator(op)
 }
 
-func (c *Compile) compileTPUnion(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
-	ss = append(ss, children...)
-	rs := c.newScopeListOnCurrentCN(len(ss), 1)
+func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*Scope {
+	left = c.mergeShuffleScopesIfNeeded(left, false)
+	right = c.mergeShuffleScopesIfNeeded(right, false)
+	left = append(left, right...)
+	rs := c.newMergeScope(left)
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
 	for i := range gn.GroupBy {
 		gn.GroupBy[i] = plan2.DeepCopyExpr(n.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
-
 	currentFirstFlag := c.anal.isFirst
 	op := constructGroup(c.proc.Ctx, gn, n, true, 0, c.proc)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs[0].setRootOperator(op)
+	rs.setRootOperator(op)
 	c.anal.isFirst = false
-
-	for i := range ss {
-		// waring: `connector` operator is not used as an input/output analyze,
-		// and `connector` operator cannot play the role of IsFirst/IsLast
-		connArg := connector.NewArgument().WithReg(rs[0].Proc.Reg.MergeReceivers[i])
-		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		ss[i].setRootOperator(connArg)
-		rs[0].PreScopes = append(rs[0].PreScopes, ss[i])
-	}
-	return rs
-}
-
-func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*Scope {
-	if c.IsSingleScope(left) && c.IsSingleScope(right) {
-		return c.compileTPUnion(n, left, right)
-	}
-
-	left = append(left, right...)
-	rs := c.newScopeListOnCurrentCN(1, int(n.Stats.BlockNum))
-	gn := new(plan.Node)
-	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
-	for i := range gn.GroupBy {
-		gn.GroupBy[i] = plan2.DeepCopyExpr(n.ProjectList[i])
-		gn.GroupBy[i].Typ.NotNullable = false
-	}
-	idx := 0
-
-	currentFirstFlag := c.anal.isFirst
-	for i := range rs {
-		op := constructGroup(c.proc.Ctx, gn, n, true, 0, c.proc)
-		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		rs[i].setRootOperator(op)
-		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
-			idx = i
-		}
-	}
-	c.anal.isFirst = false
-
-	mergeChildren := c.newMergeScope(left)
-	// waring: `dispath` operator is not used as an input/output analyze,
-	// and `dispath` operator cannot play the role of IsFirst/IsLast
-	dispathArg := constructDispatch(0, rs, c.addr, n, false)
-	dispathArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-	mergeChildren.setRootOperator(dispathArg)
-	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
-	return rs
+	return []*Scope{rs}
 }
 
 func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
@@ -2237,7 +2193,10 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 	}
 	var rs []*Scope
 	rs, buildScopes = c.compileBroadcastJoin(node, left, right, probeScopes, buildScopes)
-	if c.IsTpQuery() {
+	if c.IsSingleScope(rs) {
+		if !c.IsSingleScope(buildScopes) {
+			panic("build scopes should be single parallel!")
+		}
 		//construct join build operator for tp join
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, rs[0].RootOp, false, 1))
 		buildScopes[0].IsEnd = true
@@ -3471,8 +3430,11 @@ func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
 func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []*Scope, n *plan.Node, forceOneCN bool) ([]*Scope, []*Scope) {
 	var rs []*Scope
 
-	if c.IsTpQuery() {
-		// for tp join, can directly return
+	if c.IsSingleScope(probeScopes) {
+		if !c.IsSingleScope(buildScopes) {
+			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+		}
+		// for single parallel join, can directly return
 		rs = probeScopes
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 		return rs, buildScopes
@@ -3496,6 +3458,15 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		rs[i].IsJoin = true
 		rs[i].NodeInfo.Mcpu = c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
 		rs[i].BuildIdx = len(rs[i].Proc.Reg.MergeReceivers)
+	}
+
+	if c.IsSingleScope(rs) {
+		if !c.IsSingleScope(buildScopes) {
+			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+		}
+		// for single parallel join, can directly return
+		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
+		return rs, buildScopes
 	}
 
 	//construct build part
