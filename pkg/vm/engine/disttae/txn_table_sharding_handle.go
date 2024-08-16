@@ -214,7 +214,7 @@ func HandleShardingReadGetColumMetadataScanInfo(
 func HandleShardingReadReader(
 	ctx context.Context,
 	shard shard.TableShard,
-	engine engine.Engine,
+	e engine.Engine,
 	param shard.ReadParam,
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
@@ -222,7 +222,7 @@ func HandleShardingReadReader(
 	tbl, err := getTxnTable(
 		ctx,
 		param,
-		engine,
+		e,
 	)
 	if err != nil {
 		return nil, err
@@ -240,6 +240,7 @@ func HandleShardingReadReader(
 		int(param.ReaderParam.Num),
 		int(param.ReaderParam.TxnOffset),
 		param.ReaderParam.OrderedScan,
+		engine.Policy_CheckAll,
 	)
 	if err != nil {
 		return nil, err
