@@ -4355,7 +4355,6 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
 		short = b
 	}
 	var lenLong, lenShort = len(long), len(short)
-	fmt.Println("xxxx", lenLong, lenShort, len(a), len(b))
 
 	if err = ret.PreExtend(lenLong+lenShort, mp); err != nil {
 		return err
