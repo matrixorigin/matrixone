@@ -17,18 +17,20 @@ package catalog
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 // Index Algorithm names
 const (
-	MoIndexDefaultAlgo = tree.INDEX_TYPE_INVALID // used by UniqueIndex or default SecondaryIndex
-	MoIndexBTreeAlgo   = tree.INDEX_TYPE_BTREE   // used for Mocking MySQL behaviour.
-	MoIndexIvfFlatAlgo = tree.INDEX_TYPE_IVFFLAT // used for IVF flat index on Vector/Array columns
-	MOIndexMasterAlgo  = tree.INDEX_TYPE_MASTER  // used for Master Index on VARCHAR columns
+	MoIndexDefaultAlgo  = tree.INDEX_TYPE_INVALID  // used by UniqueIndex or default SecondaryIndex
+	MoIndexBTreeAlgo    = tree.INDEX_TYPE_BTREE    // used for Mocking MySQL behaviour.
+	MoIndexIvfFlatAlgo  = tree.INDEX_TYPE_IVFFLAT  // used for IVF flat index on Vector/Array columns
+	MOIndexMasterAlgo   = tree.INDEX_TYPE_MASTER   // used for Master Index on VARCHAR columns
+	MOIndexFullTextAlgo = tree.INDEX_TYPE_FULLTEXT // used for Fulltext Index on VARCHAR columns
 )
 
 // ToLower is used for before comparing AlgoType and IndexAlgoParamOpType. Reason why they are strings
@@ -60,6 +62,11 @@ func IsIvfIndexAlgo(algo string) bool {
 func IsMasterIndexAlgo(algo string) bool {
 	_algo := ToLower(algo)
 	return _algo == MOIndexMasterAlgo.ToString()
+}
+
+func IsFullTextIndexAlgo(algo string) bool {
+	_algo := ToLower(algo)
+	return _algo == MOIndexFullTextAlgo.ToString()
 }
 
 // ------------------------[START] IndexAlgoParams------------------------
@@ -130,7 +137,7 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 // IndexParamsToJsonString used by buildSecondaryIndexDef
 // Eg:- {"lists":"10","op_type":"vector_l2_ops"}
-func IndexParamsToJsonString(def *tree.Index) (string, error) {
+func IndexParamsToJsonString(def interface{}) (string, error) {
 
 	res, err := indexParamsToMap(def)
 	if err != nil {
@@ -165,47 +172,70 @@ func IndexParamsStringToMap(indexParams string) (map[string]string, error) {
 	return result, nil
 }
 
-func indexParamsToMap(def *tree.Index) (map[string]string, error) {
+func fullTextIndexParamsToMap(def *tree.FullTextIndex) (map[string]string, error) {
 	res := make(map[string]string)
 
-	switch def.KeyType {
-	case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
-		// do nothing
-	case tree.INDEX_TYPE_MASTER:
-		// do nothing
-	case tree.INDEX_TYPE_IVFFLAT:
-		if def.IndexOption.AlgoParamList == 0 {
-			// NOTE:
-			// 1. In the parser, we added the failure check for list=0 scenario. So if user tries to explicit
-			// set list=0, it will fail.
-			// 2. However, if user didn't use the list option (we will get it as 0 here), then we will
-			// set the default value as 1.
-			res[IndexAlgoParamLists] = strconv.FormatInt(1, 10)
-		} else if def.IndexOption.AlgoParamList > 0 {
-			res[IndexAlgoParamLists] = strconv.FormatInt(def.IndexOption.AlgoParamList, 10)
-		} else {
-			return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be > 0")
+	// fulltext index here
+	if def.IndexOption != nil {
+		parsername := strings.ToLower(def.IndexOption.ParserName)
+		if parsername != "ngram" {
+			return nil, moerr.NewInternalErrorNoCtx("invalid parser %s", parsername)
 		}
-
-		if len(def.IndexOption.AlgoParamVectorOpType) > 0 {
-			opType := ToLower(def.IndexOption.AlgoParamVectorOpType)
-			if opType != IndexAlgoParamOpType_l2 {
-				//opType != IndexAlgoParamOpType_ip &&
-				//opType != IndexAlgoParamOpType_cos &&
-
-				return nil, moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s'",
-					IndexAlgoParamOpType_l2,
-					//IndexAlgoParamOpType_ip, IndexAlgoParamOpType_cos,
-				)
-			}
-			res[IndexAlgoParamOpType] = def.IndexOption.AlgoParamVectorOpType
-		} else {
-			res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
-		}
-	default:
-		return nil, moerr.NewInternalErrorNoCtx("invalid index type")
+		res["parser"] = parsername
+		// TODO: get variable ngram_token_size.  default is 2.
+		res["ngram_token_size"] = strconv.FormatInt(2, 10)
 	}
 	return res, nil
+}
+
+func indexParamsToMap(def interface{}) (map[string]string, error) {
+	res := make(map[string]string)
+
+	if ftidx, ok := def.(*tree.FullTextIndex); ok {
+		return fullTextIndexParamsToMap(ftidx)
+	}
+
+	if idx, ok := def.(*tree.Index); ok {
+
+		switch idx.KeyType {
+		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
+			// do nothing
+		case tree.INDEX_TYPE_MASTER:
+			// do nothing
+		case tree.INDEX_TYPE_IVFFLAT:
+			if idx.IndexOption.AlgoParamList == 0 {
+				// NOTE:
+				// 1. In the parser, we added the failure check for list=0 scenario. So if user tries to explicit
+				// set list=0, it will fail.
+				// 2. However, if user didn't use the list option (we will get it as 0 here), then we will
+				// set the default value as 1.
+				res[IndexAlgoParamLists] = strconv.FormatInt(1, 10)
+			} else if idx.IndexOption.AlgoParamList > 0 {
+				res[IndexAlgoParamLists] = strconv.FormatInt(idx.IndexOption.AlgoParamList, 10)
+			} else {
+				return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be > 0")
+			}
+
+			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
+				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
+				if opType != IndexAlgoParamOpType_l2 {
+					//opType != IndexAlgoParamOpType_ip &&
+					//opType != IndexAlgoParamOpType_cos &&
+
+					return nil, moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s'",
+						IndexAlgoParamOpType_l2,
+						//IndexAlgoParamOpType_ip, IndexAlgoParamOpType_cos,
+					)
+				}
+				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
+			} else {
+				res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
+			}
+		default:
+			return nil, moerr.NewInternalErrorNoCtx("invalid index alogorithm type")
+		}
+	}
+	return res, moerr.NewInternalErrorNoCtx("invalid index type")
 }
 
 func DefaultIvfIndexAlgoOptions() map[string]string {

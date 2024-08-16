@@ -26,7 +26,8 @@ import (
 )
 
 const (
-	ivfFlatIndexFlag = "experimental_ivf_index"
+	ivfFlatIndexFlag  = "experimental_ivf_index"
+	fulltextIndexFlag = "experimental_fulltext_index"
 )
 
 func (s *Scope) handleUniqueIndexTable(c *Compile,
@@ -88,6 +89,38 @@ func (s *Scope) handleMasterIndexTable(c *Compile, indexDef *plan.IndexDef, qryD
 			return err
 		}
 	}
+	return nil
+}
+
+// ERIC
+func (s *Scope) handleFullTextIndexTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string,
+	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+	/*
+		if ok, err := s.isExperimentalEnabled(c, fulltextIndexFlag); err != nil {
+			return err
+		} else if !ok {
+			return moerr.NewInternalErrorNoCtx("FullText index is not enabled")
+		}
+	*/
+	if len(indexInfo.GetIndexTables()) != 1 {
+		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
+	}
+
+	def := indexInfo.GetIndexTables()[0]
+	createSQL := genCreateIndexTableSql(def, indexDef, qryDatabase)
+	err := c.runSql(createSQL)
+	if err != nil {
+		return err
+	}
+	/*
+		insertSQLs := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
+		for _, insertSQL := range insertSQLs {
+			err = c.runSql(insertSQL)
+			if err != nil {
+				return err
+			}
+		}
+	*/
 	return nil
 }
 
