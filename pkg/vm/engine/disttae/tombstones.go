@@ -166,8 +166,8 @@ func (tomb *tombstoneData) HasAnyTombstoneFile() bool {
 	return tomb != nil && len(tomb.files) > 0
 }
 
-func (tomb *tombstoneData) HasTombstones() bool {
-	return tomb != nil && (len(tomb.rowids) > 0 || len(tomb.files) > 0)
+func (tomb *tombstoneData) HasTombstones(bid types.Blockid) bool {
+	panic("Not Support")
 }
 
 // FIXME:
@@ -341,13 +341,17 @@ func (tomb *tombstoneDataWithDeltaLoc) StringWithPrefix(prefix string) string {
 	return w.String()
 }
 
-func (tomb *tombstoneDataWithDeltaLoc) HasTombstones() bool {
-	if len(tomb.inMemTombstones) == 0 &&
-		len(tomb.blk2UncommitLoc) == 0 &&
-		len(tomb.blk2CommitLoc) == 0 {
-		return false
+func (tomb *tombstoneDataWithDeltaLoc) HasTombstones(bid types.Blockid) bool {
+	if _, ok := tomb.inMemTombstones[bid]; ok {
+		return true
 	}
-	return true
+	if _, ok := tomb.blk2UncommitLoc[bid]; ok {
+		return true
+	}
+	if _, ok := tomb.blk2CommitLoc[bid]; ok {
+		return true
+	}
+	return false
 }
 
 func (tomb *tombstoneDataWithDeltaLoc) UnmarshalBinary(buf []byte) error {
