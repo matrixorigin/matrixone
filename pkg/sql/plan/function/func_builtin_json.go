@@ -255,7 +255,7 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 }
 
 // JSON_EXTRACT_STRING: extract a string value from a json object
-func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	var err error
 	var fn computeFn
 
@@ -317,7 +317,7 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 }
 
 // JSON_EXTRACT_FLOAT64: extract a float64 value from a json object
-func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	var err error
 	var fn computeFn
 
