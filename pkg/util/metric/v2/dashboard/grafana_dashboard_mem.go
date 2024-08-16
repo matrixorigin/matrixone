@@ -17,13 +17,14 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/row"
-	"strings"
 )
 
 func (c *DashboardCreator) initMemDashboard() error {
-	folder, err := c.createFolder(moFolderName)
+	folder, err := c.createFolder(c.folderName)
 	if err != nil {
 		return err
 	}

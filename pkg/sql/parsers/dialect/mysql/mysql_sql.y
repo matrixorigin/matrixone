@@ -500,7 +500,7 @@ import (
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
-%type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt
+%type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
@@ -2309,6 +2309,7 @@ set_stmt:
 |   set_role_stmt
 |   set_default_role_stmt
 |   set_transaction_stmt
+|   set_connection_id_stmt
 
 set_transaction_stmt:
     SET TRANSACTION transaction_characteristic_list
@@ -2333,6 +2334,23 @@ set_transaction_stmt:
             }
     }
 
+set_connection_id_stmt:
+  SET CONNECTION ID TO INTEGRAL
+  {
+    var connID uint32
+    switch v := $5.(type) {
+    case uint64:
+      connID = uint32(v)
+    case int64:
+      connID = uint32(v)
+    default:
+      yylex.Error("parse integral fail")
+      goto ret1
+    }
+    $$ = &tree.SetConnectionID{
+      ConnectionID: connID,
+    }
+  }
 
 transaction_characteristic_list:
     transaction_characteristic

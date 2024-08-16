@@ -214,6 +214,7 @@ func init() {
 		"hash":                       HASH,
 		"high_priority":              HIGH_PRIORITY,
 		"hour":                       HOUR,
+		"id":                         ID,
 		"identified":                 IDENTIFIED,
 		"if":                         IF,
 		"ignore":                     IGNORE,

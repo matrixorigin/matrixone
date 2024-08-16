@@ -83,6 +83,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_ReloadAutoIncrementCache, s.handleReloadAutoIncrementCache, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_CtlReader, s.handleCtlReader, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_ResetSession, s.handleResetSession, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -470,5 +471,21 @@ func (s *service) handleGetReplicaCount(
 	_ *morpc.Buffer,
 ) error {
 	resp.GetReplicaCount.Count = s.shardService.ReplicaCount()
+	return nil
+}
+
+func (s *service) handleResetSession(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	if req.ResetSessionRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	rm := s.mo.GetRoutineManager()
+	resp.ResetSessionResponse = &query.ResetSessionResponse{}
+	if err := rm.ResetSession(req.ResetSessionRequest, resp.ResetSessionResponse); err != nil {
+		logutil.Errorf("failed to reset session: %v", err)
+		return err
+	}
+	resp.ResetSessionResponse.Success = true
 	return nil
 }
