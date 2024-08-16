@@ -16,6 +16,8 @@ package runtime
 
 import (
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
 func InTesting(
@@ -44,24 +46,22 @@ func MustGetTestingContext(
 type TestingContext struct {
 	sync.RWMutex
 
-	adjustCheckDataChangedAfterLocked func(txnID []byte, tableID uint64, changed bool) bool
+	adjustLockResultFunc func(txnID []byte, tableID uint64, res *lock.Result)
 }
 
-func (tc *TestingContext) SetAdjustCheckDataChangedAfterLocked(
-	fn func(txnID []byte, tableID uint64, changed bool) bool,
+func (tc *TestingContext) SetAdjustLockResultFunc(
+	fn func(txnID []byte, tableID uint64, res *lock.Result),
 ) {
 	tc.Lock()
 	defer tc.Unlock()
-	tc.adjustCheckDataChangedAfterLocked = fn
+	tc.adjustLockResultFunc = fn
 }
 
-func (tc *TestingContext) GetAdjustCheckDataChangedAfterLocked() func(txnID []byte, tableID uint64, changed bool) bool {
+func (tc *TestingContext) GetAdjustLockResultFunc() func(txnID []byte, tableID uint64, res *lock.Result) {
 	tc.RLock()
 	defer tc.RUnlock()
-	if tc.adjustCheckDataChangedAfterLocked == nil {
-		return func(txnID []byte, tableID uint64, changed bool) bool {
-			return changed
-		}
+	if tc.adjustLockResultFunc == nil {
+		return func(txnID []byte, tableID uint64, res *lock.Result) {}
 	}
-	return tc.adjustCheckDataChangedAfterLocked
+	return tc.adjustLockResultFunc
 }

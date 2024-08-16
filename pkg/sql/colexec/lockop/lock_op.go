@@ -214,7 +214,8 @@ func performLock(
 	bat *batch.Batch,
 	proc *process.Process,
 	lockOp *LockOp,
-	analyze process.Analyze) error {
+	analyze process.Analyze,
+) error {
 	needRetry := false
 	for idx, target := range lockOp.targets {
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
@@ -501,6 +502,11 @@ func doLock(
 	// Record lock waiting time
 	analyzeLockWaitTime(analyze, start)
 
+	if runtime.InTesting(proc.GetService()) {
+		tc := runtime.MustGetTestingContext(proc.GetService())
+		tc.GetAdjustLockResultFunc()(txn.ID, tableID, &result)
+	}
+
 	if len(result.ConflictKey) > 0 {
 		trace.GetService(proc.GetService()).AddTxnActionInfo(
 			txnOp,
@@ -562,11 +568,6 @@ func doLock(
 		changed, err := fn(proc, rel, tableID, eng, vec, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
-		}
-
-		if runtime.InTesting(proc.GetService()) {
-			tc := runtime.MustGetTestingContext(proc.GetService())
-			changed = tc.GetAdjustCheckDataChangedAfterLocked()(txn.ID, tableID, changed)
 		}
 
 		if changed {
