@@ -1694,17 +1694,9 @@ func (s *Scope) handleDatalinkLLMIndex(c *Compile, indexDefs map[string]*plan.In
 	}
 
 	// 4.b populate chunk and embedding columns
-	err = s.handleLLMIndexChunkEmbeddingTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
+	err = s.handleLLMIndexChunkEmbeddingTable(c, indexDefs[catalog.SystemSI_LLM_TblType_DataChunksEmbedding], qryDatabase, originalTableDef,
 		totalCnt,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
-	if err != nil {
-		return err
-	}
-
-	// 4.c populate entries table
-	err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
+		indexDefs[catalog.SystemSI_LLM_TblType_Basic].IndexTableName)
 	if err != nil {
 		return err
 	}
