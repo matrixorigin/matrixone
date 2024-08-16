@@ -2074,67 +2074,23 @@ func (c *Compile) setProjection(n *plan.Node, s *Scope) {
 	s.setRootOperator(op)
 }
 
-func (c *Compile) compileTPUnion(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
-	ss = append(ss, children...)
-	rs := c.newScopeListOnCurrentCN(len(ss), 1)
+func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*Scope {
+	left = c.mergeShuffleScopesIfNeeded(left, false)
+	right = c.mergeShuffleScopesIfNeeded(right, false)
+	left = append(left, right...)
+	rs := c.newMergeScope(left)
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
 	for i := range gn.GroupBy {
 		gn.GroupBy[i] = plan2.DeepCopyExpr(n.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
-
 	currentFirstFlag := c.anal.isFirst
 	op := constructGroup(c.proc.Ctx, gn, n, true, 0, c.proc)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs[0].setRootOperator(op)
+	rs.setRootOperator(op)
 	c.anal.isFirst = false
-
-	for i := range ss {
-		// waring: `connector` operator is not used as an input/output analyze,
-		// and `connector` operator cannot play the role of IsFirst/IsLast
-		connArg := connector.NewArgument().WithReg(rs[0].Proc.Reg.MergeReceivers[i])
-		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		ss[i].setRootOperator(connArg)
-		rs[0].PreScopes = append(rs[0].PreScopes, ss[i])
-	}
-	return rs
-}
-
-func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*Scope {
-	if c.IsSingleScope(left) && c.IsSingleScope(right) {
-		return c.compileTPUnion(n, left, right)
-	}
-
-	left = append(left, right...)
-	rs := c.newScopeListOnCurrentCN(1, int(n.Stats.BlockNum))
-	gn := new(plan.Node)
-	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
-	for i := range gn.GroupBy {
-		gn.GroupBy[i] = plan2.DeepCopyExpr(n.ProjectList[i])
-		gn.GroupBy[i].Typ.NotNullable = false
-	}
-	idx := 0
-
-	currentFirstFlag := c.anal.isFirst
-	for i := range rs {
-		op := constructGroup(c.proc.Ctx, gn, n, true, 0, c.proc)
-		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		rs[i].setRootOperator(op)
-		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
-			idx = i
-		}
-	}
-	c.anal.isFirst = false
-
-	mergeChildren := c.newMergeScope(left)
-	// waring: `dispath` operator is not used as an input/output analyze,
-	// and `dispath` operator cannot play the role of IsFirst/IsLast
-	dispathArg := constructDispatch(0, rs, c.addr, n, false)
-	dispathArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-	mergeChildren.setRootOperator(dispathArg)
-	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
-	return rs
+	return []*Scope{rs}
 }
 
 func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
