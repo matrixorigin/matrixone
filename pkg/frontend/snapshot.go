@@ -587,7 +587,7 @@ func restoreToAccount(
 
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
-			if dbName == moCatalog {
+			if dbName == moCatalog && toAccountId == 0 {
 				// drop existing cluster tables
 				if err = dropClusterTable(toCtx, sid, bh, "", toAccountId); err != nil {
 					return
@@ -904,8 +904,9 @@ func dropClusterTable(
 	snapshotName string,
 	toAccountId uint32,
 ) (err error) {
-	getLogger(sid).Info("start to drop cluster table")
+	getLogger(sid).Info("start to drop exists cluster table")
 
+	// get all tables in mo_catalog
 	tableInfos, err := getTableInfos(ctx, sid, bh, snapshotName, moCatalog, "")
 	if err != nil {
 		return
