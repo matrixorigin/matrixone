@@ -257,3 +257,41 @@ func TestRemoveTable(t *testing.T) {
 		})
 	}
 }
+
+func TestJoinAccountIds(t *testing.T) {
+	type args struct {
+		accIds []int32
+	}
+	tests := []struct {
+		name  string
+		args  args
+		wantS string
+	}{
+		{
+			args: args{
+				accIds: []int32{},
+			},
+			wantS: "",
+		},
+		{
+			args: args{
+				accIds: []int32{1},
+			},
+			wantS: "1",
+		},
+
+		{
+			args: args{
+				accIds: []int32{1, 2, 3},
+			},
+			wantS: "1,2,3",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if gotS := JoinAccountIds(tt.args.accIds); gotS != tt.wantS {
+				t.Errorf("JoinAccountIds() = %v, want %v", gotS, tt.wantS)
+			}
+		})
+	}
+}
