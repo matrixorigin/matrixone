@@ -21,8 +21,9 @@ import (
 )
 
 var (
-	basicOnce    sync.Once
-	basicCluster Cluster
+	basicOnce         sync.Once
+	basicCluster      Cluster
+	basicRunningMutex sync.Mutex
 )
 
 func init() {
@@ -36,6 +37,10 @@ func init() {
 func RunBaseClusterTests(
 	fn func(Cluster),
 ) error {
+	// we must make all tests which use the basicCluster to be run in sequence
+	basicRunningMutex.Lock()
+	defer basicRunningMutex.Unlock()
+
 	var err error
 	var c Cluster
 	basicOnce.Do(
