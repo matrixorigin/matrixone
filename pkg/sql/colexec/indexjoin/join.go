@@ -53,7 +53,7 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 	ap := indexJoin
-	ctr := ap.ctr
+	ctr := &ap.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {

@@ -76,11 +76,6 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	bat := result.Batch
 	anal.Input(bat, projection.GetIsFirst())
 
-	if projection.ctr.buf != nil {
-		proc.PutBatch(projection.ctr.buf)
-		projection.ctr.buf = nil
-	}
-
 	projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 	// keep shuffleIDX unchanged
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX

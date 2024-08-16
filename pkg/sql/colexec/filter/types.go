@@ -85,9 +85,6 @@ func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err erro
 		}
 	}
 	filter.exeExpr = nil
-	if filter.ctr.buf != nil {
-		filter.ctr.buf.CleanOnlyData()
-	}
 }
 
 func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error) {

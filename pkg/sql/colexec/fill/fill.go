@@ -394,12 +394,12 @@ func processLinearCol(ctr *container, proc *process.Process, idx int) error {
 			}
 		case fillValue:
 			b := batch.NewWithSize(2)
-			b.Vecs[0] = proc.GetVector(*ctr.bats[ctr.preIdx].Vecs[idx].GetType())
+			b.Vecs[0] = vector.NewVec(*ctr.bats[ctr.preIdx].Vecs[idx].GetType())
 			err = appendValue(b.Vecs[0], ctr.bats[ctr.preIdx].Vecs[idx], ctr.preRow, proc)
 			if err != nil {
 				return err
 			}
-			b.Vecs[1] = proc.GetVector(*ctr.bats[ctr.curIdx].Vecs[idx].GetType())
+			b.Vecs[1] = vector.NewVec(*ctr.bats[ctr.curIdx].Vecs[idx].GetType())
 			err = appendValue(b.Vecs[1], ctr.bats[ctr.curIdx].Vecs[idx], ctr.curRow, proc)
 			if err != nil {
 				return err

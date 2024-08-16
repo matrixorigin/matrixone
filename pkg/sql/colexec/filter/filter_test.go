@@ -15,6 +15,7 @@
 package filter
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -46,13 +47,13 @@ func init() {
 	boolType := types.T_bool.ToType()
 	int32Type := types.T_int32.ToType()
 
-	fr0, _ := function.GetFunctionByName(nil, "and", []types.Type{boolType, boolType})
+	fr0, _ := function.GetFunctionByName(context.TODO(), "and", []types.Type{boolType, boolType})
 	fid0 := fr0.GetEncodedOverloadID()
 
-	fr1, _ := function.GetFunctionByName(nil, ">", []types.Type{int32Type, int32Type})
+	fr1, _ := function.GetFunctionByName(context.TODO(), ">", []types.Type{int32Type, int32Type})
 	fid1 := fr1.GetEncodedOverloadID()
 
-	fr2, _ := function.GetFunctionByName(nil, "<", []types.Type{int32Type, int32Type})
+	fr2, _ := function.GetFunctionByName(context.TODO(), "<", []types.Type{int32Type, int32Type})
 	fid2 := fr2.GetEncodedOverloadID()
 
 	tcs = []filterTestCase{

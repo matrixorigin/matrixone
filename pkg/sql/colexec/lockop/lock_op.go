@@ -859,7 +859,7 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 }
 
 func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	lockOp.resetPacker()
+	lockOp.resetParker()
 	lockOp.cleanCachedBatch(proc)
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.step = stepLock
@@ -868,7 +868,7 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
-	lockOp.cleanPacker()
+	lockOp.cleanParker()
 	lockOp.cleanCachedBatch(proc)
 }
 
@@ -879,13 +879,13 @@ func (lockOp *LockOp) cleanCachedBatch(proc *process.Process) {
 	lockOp.ctr.cachedBatches = nil
 }
 
-func (lockOp *LockOp) resetPacker() {
+func (lockOp *LockOp) resetParker() {
 	if lockOp.ctr.parker != nil {
 		lockOp.ctr.parker.Reset()
 	}
 }
 
-func (lockOp *LockOp) cleanPacker() {
+func (lockOp *LockOp) cleanParker() {
 	if lockOp.ctr.parker != nil {
 		lockOp.ctr.parker.Close()
 		lockOp.ctr.parker = nil
