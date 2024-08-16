@@ -359,7 +359,14 @@ func doTransferRowids(
 	}
 
 	readers, err := table.BuildReaders(
-		ctx, table.proc.Load(), expr, relData, 1, 0, false, engine.Policy_CheckCommittedS3Only,
+		ctx,
+		table.proc.Load(),
+		expr,
+		relData,
+		1,
+		0,
+		false,
+		engine.Policy_CheckCommittedOnly,
 	)
 	if err != nil {
 		return
@@ -409,6 +416,14 @@ func doTransferRowids(
 			"transfer rowids failed, length mismatch, expect %d, got %d",
 			transferIntents.Length(),
 			targetRowids.Length(),
+		)
+		logutil.Error(
+			"TRANSFER-ROWIDS-ERROR-LEN-MISMATCH",
+			zap.Error(err),
+			zap.String("table-name", table.tableDef.Name),
+			zap.Uint64("table-id", table.tableId),
+			zap.String("intents", common.MoVectorToString(transferIntents, 20)),
+			zap.String("actual", common.MoVectorToString(targetRowids, 20)),
 		)
 	}
 
