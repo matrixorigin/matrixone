@@ -587,7 +587,7 @@ func restoreToAccount(
 
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
-			if dbName == moCatalog && toAccountId == 0 {
+			if toAccountId == 0 && dbName == moCatalog {
 				// drop existing cluster tables
 				if err = dropClusterTable(toCtx, sid, bh, "", toAccountId); err != nil {
 					return
@@ -716,14 +716,13 @@ func restoreToDatabaseOrTable(
 	}
 
 	var createDbSql string
-
-	toCtx := defines.AttachAccountId(ctx, toAccountId)
-	restoreToTbl := tblName != ""
-
 	createDbSql, err = getCreateDatabaseSql(ctx, sid, bh, snapshotName, dbName, restoreAccount)
 	if err != nil {
 		return
 	}
+
+	toCtx := defines.AttachAccountId(ctx, toAccountId)
+	restoreToTbl := tblName != ""
 
 	// if restore to table, check if the db is sub db
 	isSubDb := strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
@@ -735,7 +734,7 @@ func restoreToDatabaseOrTable(
 		// if restore to cluster, and the db is sub, append the sub db to restore list
 		getLogger(sid).Info(fmt.Sprintf("[%s] append sub db to restore list: %v, at restore cluster account %d", snapshotName, dbName, toAccountId))
 		key := genKey(fmt.Sprint(restoreAccount), dbName)
-		subDbToRestore[key] = NewSubDbRestoreRecord(dbName, toAccountId, createDbSql)
+		subDbToRestore[key] = NewSubDbRestoreRecord(dbName, restoreAccount, createDbSql)
 		return
 
 	}
