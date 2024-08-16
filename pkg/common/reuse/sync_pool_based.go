@@ -19,20 +19,20 @@ import (
 	"sync"
 )
 
-type syncPoolBased[T ReusableObject] struct {
+type syncPoolBased[T any, P ReusableObject[T]] struct {
 	pool  sync.Pool
-	reset func(*T)
-	opts  *Options[T]
-	c     *checker[T]
+	reset func(P)
+	opts  *Options[T, P]
+	c     *checker[T, P]
 }
 
-func newSyncPoolBased[T ReusableObject](
-	new func() *T,
-	reset func(*T),
-	opts *Options[T]) Pool[T] {
+func newSyncPoolBased[T any, P ReusableObject[T]](
+	new func() P,
+	reset func(P),
+	opts *Options[T, P]) Pool[T, P] {
 	opts.adjust()
-	c := newChecker[T](opts.enableChecker)
-	return &syncPoolBased[T]{
+	c := newChecker[T, P](opts.enableChecker)
+	return &syncPoolBased[T, P]{
 		pool: sync.Pool{
 			New: func() any {
 				v := new()
@@ -41,7 +41,7 @@ func newSyncPoolBased[T ReusableObject](
 					c.created(v)
 					runtime.SetFinalizer(
 						v,
-						func(v *T) {
+						func(v P) {
 							if opts.gcRecover != nil {
 								defer opts.gcRecover()
 							}
@@ -59,13 +59,13 @@ func newSyncPoolBased[T ReusableObject](
 	}
 }
 
-func (p *syncPoolBased[T]) Alloc() *T {
-	v := p.pool.Get().(*T)
+func (p *syncPoolBased[T, P]) Alloc() P {
+	v := p.pool.Get().(P)
 	p.c.got(v)
 	return v
 }
 
-func (p *syncPoolBased[T]) Free(v *T) {
+func (p *syncPoolBased[T, P]) Free(v P) {
 	p.c.free(v)
 	p.reset(v)
 	p.pool.Put(v)

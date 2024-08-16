@@ -102,7 +102,6 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 			anal.Input(bat, semiJoin.GetIsFirst())
@@ -131,11 +130,9 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			}
 			if ctr.mp == nil {
-				proc.PutBatch(bat)
 				continue
 			}
 			if err := ctr.probe(bat, semiJoin, proc, &result); err != nil {
-				bat.Clean(proc.Mp())
 				return result, err
 			}
 			if semiJoin.ProjectList != nil {
@@ -146,7 +143,6 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 			anal.Output(result.Batch, semiJoin.GetIsLast())
-			proc.PutBatch(bat)
 			return result, nil
 
 		default:
