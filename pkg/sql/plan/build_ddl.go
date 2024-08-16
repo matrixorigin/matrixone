@@ -1991,8 +1991,8 @@ func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 	}
 
 	// init index and table definition slices,
-	indexDefs := make([]*plan.IndexDef, 1)
-	tableDefs := make([]*TableDef, 1)
+	indexDefs := make([]*plan.IndexDef, 2)
+	tableDefs := make([]*TableDef, 2)
 
 	// 1. create LLM chunk and embedding table
 	{
@@ -2028,7 +2028,7 @@ func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 			Alg:  plan.CompressType_Lz4,
 			Typ: Type{
 				// TODO the types of primary key column?
-				Id: int32(types.T_datalink),
+				Id: int32(types.T_varchar),
 				//Width: types.MaxVarcharLen,
 				//Width: types.MaxVarcharLen,
 			},
@@ -2371,8 +2371,11 @@ func CreateIndexDef(indexInfo *tree.Index,
 			indexDef.Comment = ""
 			indexDef.IndexAlgoParams = ""
 		case catalog.MOIndexLLMAlgo:
-			indexDef.Comment = ""
-			indexDef.IndexAlgoParams = ""
+			var err error
+			indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonString(catalog.DefaultLLMIndexAlgoOptions())
+			if err != nil {
+				return nil, err
+			}
 		case catalog.MoIndexIvfFlatAlgo:
 			var err error
 			indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonString(catalog.DefaultIvfIndexAlgoOptions())

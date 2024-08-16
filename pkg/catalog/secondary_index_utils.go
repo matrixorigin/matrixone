@@ -218,6 +218,13 @@ func DefaultIvfIndexAlgoOptions() map[string]string {
 	return res
 }
 
+func DefaultLLMIndexAlgoOptions() map[string]string {
+	res := make(map[string]string)
+	res[IndexAlgoParamLists] = "1"                      // set lists = 1 as default
+	res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
+	return res
+}
+
 //------------------------[END] IndexAlgoParams------------------------
 
 // ------------------------[START] Aliaser------------------------
