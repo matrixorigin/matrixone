@@ -51,21 +51,21 @@ func runWatchCgroupConfig(stopper *stopper.Stopper) {
 
 	fd, err := unix.InotifyInit()
 	if err != nil {
-		logutil.Errorf("unable to init inotify: %w", err)
+		logutil.Errorf("unable to init inotify: %v", err)
 		return
 	}
 	// watch cpu.max modified
 	cpuFd, err := unix.InotifyAddWatch(fd, filepath.Join(cgDir, cgroupv2CPULimit), unix.IN_MODIFY)
 	if err != nil {
 		unix.Close(fd)
-		logutil.Errorf("unable to add inotify watch: %w", err)
+		logutil.Errorf("unable to add inotify watch: %v", err)
 		return
 	}
 	// watch memory.max modified
 	memFd, err := unix.InotifyAddWatch(fd, filepath.Join(cgDir, cgroupv2MemLimit), unix.IN_MODIFY)
 	if err != nil {
 		unix.Close(fd)
-		logutil.Errorf("unable to add inotify watch: %w", err)
+		logutil.Errorf("unable to add inotify watch: %v", err)
 		return
 	}
 
