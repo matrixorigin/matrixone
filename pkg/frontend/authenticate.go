@@ -7552,9 +7552,12 @@ func createSubscription(ctx context.Context, bh BackgroundExec, newTenant *Tenan
 		return
 	}
 
+	// create sub for sys' to-all-pub
 	if err = handleForAccount(int32(catalog.System_Account)); err != nil {
 		return err
 	}
+
+	// create sub for other privileged tenants' to-all-pub
 	pubAllAccounts := pubsub.SplitAccounts(getGlobalPu().SV.PubAllAccounts)
 	for _, accountName := range pubAllAccounts {
 		accountInfo, ok := accNameInfoMap[accountName]
