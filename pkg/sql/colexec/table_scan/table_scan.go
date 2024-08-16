@@ -39,13 +39,10 @@ func (tableScan *TableScan) OpType() vm.OpType {
 }
 
 func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
-	tableScan.ctr = new(container)
 	if tableScan.TopValueMsgTag > 0 {
 		tableScan.ctr.msgReceiver = message.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress(), proc.GetMessageBoard())
 	}
-	if tableScan.ProjectList != nil {
-		err = tableScan.PrepareProjection(proc)
-	}
+	err = tableScan.PrepareProjection(proc)
 	return
 }
 
