@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"encoding/hex"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -37,15 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
 )
-
-func ConstructPrintablePK(buf []byte, tableDef *plan.TableDef) string {
-	if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		tuple, _, _, _ := types.DecodeTuple(buf)
-		return tuple.ErrString(nil)
-	} else {
-		return hex.EncodeToString(buf)
-	}
-}
 
 func ConstructInExpr(
 	ctx context.Context,
@@ -74,12 +64,12 @@ func TransferTombstones(
 	if len(deletedObjects) == 0 || len(createdObjects) == 0 {
 		return
 	}
-	wantDetail := true
+	wantDetail := false
 	var transferCnt int
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start)
-		if duration > time.Second || err != nil || wantDetail {
+		if duration > time.Millisecond*500 || err != nil || wantDetail {
 			logutil.Info(
 				"TRANSFER-TOMBSTONE-SLOW-LOG",
 				zap.Duration("duration", duration),
