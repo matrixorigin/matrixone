@@ -207,6 +207,8 @@ func runSystemMonitor(stopper *stopper.Stopper) {
 	}
 }
 
+// refreshQuotaConfig get CPU/Mem config from dev. If run in container, get it from the cgroup config.
+// Tips: Currently, the callings are serial in two places: 1) init; 2) runWatchCgroupConfig
 func refreshQuotaConfig() {
 	if InContainer() {
 		cpu, err := cgroup.GetCPUStats(pid)
