@@ -286,6 +286,8 @@ message OnUpdate {
 
 message IndexOption {
 	bool create_extra_table = 1;
+	string parser_name = 2;
+	int32 ngram_token_size = 3;
 }
 
 message PrimaryKeyDef {
@@ -316,7 +318,6 @@ message IndexDef {
 	bool table_exist        = 6;
 	string comment          = 7;
 	bool visible          = 8;
-	// currently not used
 	IndexOption option		  = 9;
 	string index_algo = 10;
 	string index_algo_table_type = 11;

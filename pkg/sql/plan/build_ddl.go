@@ -1590,6 +1590,204 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 
 // ERIC
 func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
+	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
+		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
+	}
+
+	// TODO: check variable ngram_token_size. Default is 2.
+	ngram_token_size := 2
+	logutil.Infof("FT: primary key name  %s, ngram =%d", pkeyName, ngram_token_size)
+
+	for _, indexInfo := range indexInfos {
+		// fulltext only support char, varchar and text
+		for _, keyPart := range indexInfo.KeyParts {
+			nameOrigin := keyPart.ColName.ColNameOrigin()
+			name := keyPart.ColName.ColName()
+			if _, ok := colMap[name]; !ok {
+				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", nameOrigin)
+			}
+			typid := colMap[name].Typ.Id
+			if !(typid == int32(types.T_text) || typid == int32(types.T_char) || typid == int32(types.T_varchar)) {
+				return moerr.NewNotSupported(ctx.GetContext(), "fulltext index only support char, varchar and text")
+			}
+		}
+
+		// check parser
+		var parsername string
+		if indexInfo.IndexOption != nil && indexInfo.IndexOption.ParserName != "" {
+			// set parser ngram
+			parsername = strings.ToLower(indexInfo.IndexOption.ParserName)
+			logutil.Infof("Parser %s", indexInfo.IndexOption.ParserName)
+			if parsername != "ngram" {
+				return moerr.NewInternalErrorNoCtx("Fulltext parser %s not supported", parsername)
+			}
+
+		}
+	}
+
+	for _, indexInfo := range indexInfos {
+
+		// create index definition
+		indexDef := &plan.IndexDef{}
+
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return err
+		}
+
+		indexParts := make([]string, 0)
+		for _, keyPart := range indexInfo.KeyParts {
+			//nameOrigin := keyPart.ColName.ColNameOrigin()
+			name := keyPart.ColName.ColName()
+			indexParts = append(indexParts, name)
+		}
+
+		indexDef.Unique = false
+		//indexDef.Fulltext = true
+		indexDef.IndexName = indexInfo.Name
+		indexDef.IndexTableName = indexTableName
+		indexDef.IndexAlgo = "fulltext"
+		indexDef.IndexAlgoTableType = ""
+		indexDef.Parts = indexParts
+		indexDef.TableExist = true
+		if indexInfo.IndexOption != nil {
+			if indexInfo.IndexOption.ParserName != "" {
+				indexDef.Option = &plan.IndexOption{ParserName: indexInfo.IndexOption.ParserName, NgramTokenSize: int32(ngram_token_size)}
+				indexDef.IndexAlgoParams = fmt.Sprintf("{\"parser\":\"ngram\", \"ngram_token_size\": %d}", ngram_token_size)
+			}
+			if indexInfo.IndexOption.Comment != "" {
+				indexDef.Comment = indexInfo.IndexOption.Comment
+			}
+		}
+
+		// create fulltext index hidden table definition
+		// fk_id, pos, word, doc_count, first_doc_id, last_doc_id where (fk_id, pos) is primary key
+		tableDef := &TableDef{
+			Name: indexTableName,
+		}
+
+		// foreign primary key column
+		keyName := catalog.FullTextIndex_TabCol_Id
+		colDef := &ColDef{
+			Name: keyName,
+			Alg:  plan.CompressType_Lz4,
+			Typ: plan.Type{
+				Id:    colMap[pkeyName].Typ.Id,
+				Width: colMap[pkeyName].Typ.Width,
+				Scale: colMap[pkeyName].Typ.Scale,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDef.Cols = append(tableDef.Cols, colDef)
+
+		// position (int64)
+		keyName = catalog.FullTextIndex_TabCol_Position
+		colDef = &ColDef{
+			Name: keyName,
+			Alg:  plan.CompressType_Lz4,
+			Typ: plan.Type{
+				Id: int32(types.T_int64),
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDef.Cols = append(tableDef.Cols, colDef)
+
+		// word (varchar)
+		keyName = catalog.FullTextIndex_TabCol_Word
+		colDef = &ColDef{
+			Name: keyName,
+			Alg:  plan.CompressType_Lz4,
+			Typ: plan.Type{
+				Id:    int32(types.T_varchar),
+				Width: types.MaxVarcharLen,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDef.Cols = append(tableDef.Cols, colDef)
+
+		// doc_count (int32)
+		keyName = catalog.FullTextIndex_TabCol_DocCount
+		colDef = &ColDef{
+			Name: keyName,
+			Alg:  plan.CompressType_Lz4,
+			Typ: plan.Type{
+				Id: int32(types.T_int32),
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDef.Cols = append(tableDef.Cols, colDef)
+
+		// first_doc_id (same as pkey)
+		keyName = catalog.FullTextIndex_TabCol_Firstrowid
+		colDef = &ColDef{
+			Name: keyName,
+			Alg:  plan.CompressType_Lz4,
+			Typ: plan.Type{
+				Id:    colMap[pkeyName].Typ.Id,
+				Width: colMap[pkeyName].Typ.Width,
+				Scale: colMap[pkeyName].Typ.Scale,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDef.Cols = append(tableDef.Cols, colDef)
+
+		// last_doc_id (same as pkey)
+		keyName = catalog.FullTextIndex_TabCol_Lastrowid
+		colDef = &ColDef{
+			Name: keyName,
+			Alg:  plan.CompressType_Lz4,
+			Typ: plan.Type{
+				Id:    colMap[pkeyName].Typ.Id,
+				Width: colMap[pkeyName].Typ.Width,
+				Scale: colMap[pkeyName].Typ.Scale,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDef.Cols = append(tableDef.Cols, colDef)
+
+		// hidden composite primary key
+		colDef = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+		colDef.Alg = plan.CompressType_Lz4
+		colDef.Primary = true
+
+		tableDef.Pkey = &PrimaryKeyDef{
+			Names:       []string{catalog.FullTextIndex_TabCol_Id, catalog.FullTextIndex_TabCol_Position},
+			PkeyColName: catalog.CPrimaryKeyColName,
+			CompPkeyCol: colDef,
+		}
+
+		logutil.Infof("indexDef %s", indexDef.String())
+		logutil.Infof("index columns = %v", indexParts)
+
+		// append to createTable.IndexTables and createTable.TableDef
+		createTable.IndexTables = append(createTable.IndexTables, tableDef)
+		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
+
+	}
 	logutil.Infof("buildFullTextIndexTable.....")
 	return nil
 }

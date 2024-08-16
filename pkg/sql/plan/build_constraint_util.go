@@ -26,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -380,6 +382,9 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// 	dbName = builder.compCtx.DefaultDatabase()
 	// }
 
+	//fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+	logutil.Infof(tree.String(stmt, dialect.MYSQL))
+
 	existAutoPkCol := false
 
 	insertWithoutUniqueKeyMap := make(map[string]bool)
@@ -409,6 +414,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			colCount := len(insertColumns)
 			for j, row := range slt.Rows {
 				if len(row) != colCount {
+					logutil.Infof("row %d == insertColum %d", len(row), colCount)
 					return false, nil, nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
 				}
 			}

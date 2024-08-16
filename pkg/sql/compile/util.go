@@ -32,6 +32,8 @@ const (
 	INDEX_TYPE_PRIMARY  = "PRIMARY"
 	INDEX_TYPE_UNIQUE   = "UNIQUE"
 	INDEX_TYPE_MULTIPLE = "MULTIPLE"
+	INDEX_TYPE_FULLTEXT = "FULLTEXT"
+	INDEX_TYPE_SPATIAL  = "SPATIAL"
 )
 
 const (
@@ -330,7 +332,13 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%d, ", i+1)
 
 					// 14. index vec_options
-					fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
+					if indexDef.Option != nil {
+						if indexDef.Option.ParserName != "" && indexDef.Option.NgramTokenSize > 0 {
+							fmt.Fprintf(buffer, "'parser=%s,ngram_token_size=%d', ", indexDef.Option.ParserName, indexDef.Option.NgramTokenSize)
+						}
+					} else {
+						fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
+					}
 
 					// 15. index vec_index_table
 					if indexDef.TableExist {
