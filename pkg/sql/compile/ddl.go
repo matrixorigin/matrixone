@@ -1701,11 +1701,10 @@ func (s *Scope) handleDatalinkLLMIndex(c *Compile, indexDefs map[string]*plan.In
 		return err
 	}
 
-	// 4.d delete older entries in index table.
-	err = s.handleIvfIndexDeleteOldEntries(c,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName,
+	// 4.d delete older llm info in index table.
+	err = s.handleLLMIndexDeleteOldInfo(c,
+		indexDefs[catalog.SystemSI_LLM_TblType_Basic].IndexTableName,
+		indexDefs[catalog.SystemSI_LLM_TblType_DataChunksEmbedding].IndexTableName,
 		qryDatabase)
 	if err != nil {
 		return err

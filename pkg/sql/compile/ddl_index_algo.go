@@ -172,117 +172,7 @@ func (s *Scope) handleLLMIndexBasicTable(c *Compile, indexDef *plan.IndexDef, qr
 }
 
 func (s *Scope) handleLLMIndexChunkEmbeddingTable(c *Compile, indexDef *plan.IndexDef,
-	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metadataTableName string) error {
-
-	// 1.a algo params
-	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
-	if err != nil {
-		return err
-	}
-	centroidParamsLists, err := strconv.Atoi(params[catalog.IndexAlgoParamLists])
-	if err != nil {
-		return err
-	}
-	centroidParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
-	kmeansInitType := "kmeansplusplus"
-	kmeansNormalize := "false"
-
-	// 1.b init centroids table with default centroid, if centroids are not enough.
-	// NOTE: we can run re-index to improve the centroid quality.
-	if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
-		initSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) "+
-			"SELECT "+
-			"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'), "+
-			"1, NULL;",
-			qryDatabase,
-			indexDef.IndexTableName,
-			catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-			catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-			catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-
-			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-			qryDatabase,
-			metadataTableName,
-			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-		)
-		err := c.runSql(initSQL)
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-
-	// 2. Sampling SQL Logic
-	sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
-	indexColumnName := indexDef.Parts[0]
-	sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows, 'row') as `%s` from `%s`.`%s`)",
-		indexColumnName,
-		sampleCnt,
-		indexColumnName,
-		qryDatabase,
-		originalTableDef.Name,
-	)
-
-	// 3. Insert into centroids table
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`)",
-		qryDatabase,
-		indexDef.IndexTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid)
-
-	/*
-		Sample SQL:
-
-		SELECT
-		(SELECT CAST(`value` AS BIGINT) FROM meta WHERE `key` = 'version'),
-		ROW_NUMBER() OVER(),
-		cast(`__mo_index_unnest_cols`.`value` as VARCHAR)
-		FROM
-		(SELECT cluster_centers(`embedding` kmeans '2,vector_l2_ops') AS `__mo_index_centroids_string` FROM (select sample(embedding, 10 rows) as embedding from tbl) ) AS `__mo_index_centroids_tbl`
-		CROSS JOIN
-		UNNEST(`__mo_index_centroids_tbl`.`__mo_index_centroids_string`) AS `__mo_index_unnest_cols`;
-	*/
-	// 4. final SQL
-	clusterCentersSQL := fmt.Sprintf("%s "+
-		"SELECT "+
-		"(SELECT CAST(`%s` AS BIGINT) FROM `%s` WHERE `%s` = 'version'), "+
-		"ROW_NUMBER() OVER(), "+
-		"cast(`__mo_index_unnest_cols`.`value` as VARCHAR) "+
-		"FROM "+
-		"(SELECT cluster_centers(`%s` kmeans '%d,%s,%s,%s') AS `__mo_index_centroids_string` FROM %s ) AS `__mo_index_centroids_tbl` "+
-		"CROSS JOIN "+
-		"UNNEST(`__mo_index_centroids_tbl`.`__mo_index_centroids_string`) AS `__mo_index_unnest_cols`;",
-		insertSQL,
-
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-
-		indexColumnName,
-		centroidParamsLists,
-		centroidParamsDistFn,
-		kmeansInitType,
-		kmeansNormalize,
-		sampleSQL,
-	)
-
-	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
-	if err != nil {
-		return err
-	}
-
-	err = c.runSql(clusterCentersSQL)
-	if err != nil {
-		return err
-	}
-
-	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_end")
-	if err != nil {
-		return err
-	}
-
-	return nil
+	// TODO should be done with Embedding() sql function
 }
 
 func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
@@ -523,6 +413,58 @@ func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile,
 	metadataTableName string,
 	centroidsTableName string,
 	entriesTableName string,
+	qryDatabase string) error {
+
+	pruneCentroidsTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
+		"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
+		qryDatabase,
+		centroidsTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	)
+
+	pruneEntriesTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
+		"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
+		qryDatabase,
+		entriesTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	)
+
+	err := s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_start")
+	if err != nil {
+		return err
+	}
+
+	err = c.runSql(pruneCentroidsTbl)
+	if err != nil {
+		return err
+	}
+
+	err = c.runSql(pruneEntriesTbl)
+	if err != nil {
+		return err
+	}
+
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_end")
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Scope) handleLLMIndexDeleteOldInfo(c *Compile,
+	metadataTableName string,
+	centroidsTableName string,
 	qryDatabase string) error {
 
 	pruneCentroidsTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
