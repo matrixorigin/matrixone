@@ -35,8 +35,7 @@ func (mergeCTE *MergeCTE) OpType() vm.OpType {
 }
 
 func (mergeCTE *MergeCTE) Prepare(proc *process.Process) error {
-	mergeCTE.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
-	mergeCTE.ctr.curNodeCnt = mergeCTE.ctr.nodeCnt
+	mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
 	mergeCTE.ctr.status = sendInitial
 	return nil
 }
@@ -112,7 +111,7 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 				mergeCTE.ctr.curNodeCnt--
 				if mergeCTE.ctr.curNodeCnt == 0 {
 					mergeCTE.ctr.last = true
-					mergeCTE.ctr.curNodeCnt = mergeCTE.ctr.nodeCnt
+					mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
 					if len(ctr.freeBats) > ctr.i {
 						if ctr.freeBats[ctr.i] != nil {
 							ctr.freeBats[ctr.i].CleanOnlyData()

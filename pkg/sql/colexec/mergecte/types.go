@@ -33,7 +33,6 @@ const (
 type container struct {
 	buf        *batch.Batch
 	bats       []*batch.Batch
-	nodeCnt    int32
 	curNodeCnt int32
 	status     int32
 	last       bool
@@ -43,6 +42,8 @@ type container struct {
 
 type MergeCTE struct {
 	ctr container
+
+	NodeCnt int
 
 	vm.OperatorBase
 }
@@ -72,6 +73,11 @@ func NewArgument() *MergeCTE {
 	return reuse.Alloc[MergeCTE](nil)
 }
 
+func (mergeCTE *MergeCTE) WithNodeCnt(nodeCnt int) *MergeCTE {
+	mergeCTE.NodeCnt = nodeCnt
+	return mergeCTE
+}
+
 func (mergeCTE *MergeCTE) Release() {
 	if mergeCTE != nil {
 		reuse.Free[MergeCTE](mergeCTE, nil)
@@ -79,10 +85,10 @@ func (mergeCTE *MergeCTE) Release() {
 }
 
 func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeCTE.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
-	mergeCTE.ctr.curNodeCnt = mergeCTE.ctr.nodeCnt
+	mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
 	mergeCTE.ctr.status = sendInitial
 	mergeCTE.ctr.i = 0
+	mergeCTE.ctr.last = false
 }
 
 func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {
