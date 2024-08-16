@@ -360,7 +360,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 	}
 
-	if needSkipDb(dbName) {
+	if len(dbName) > 0 && needSkipDb(dbName) {
 		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
 	}
 
