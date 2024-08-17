@@ -146,16 +146,18 @@ type accountRecord struct {
 }
 
 type subDbRestoreRecord struct {
-	dbName    string
-	Account   uint32
-	createSql string
+	dbName     string
+	Account    uint32
+	createSql  string
+	snapshotTs int64
 }
 
-func NewSubDbRestoreRecord(dbName string, account uint32, createSql string) *subDbRestoreRecord {
+func NewSubDbRestoreRecord(dbName string, account uint32, createSql string, spTs int64) *subDbRestoreRecord {
 	return &subDbRestoreRecord{
-		dbName:    dbName,
-		Account:   account,
-		createSql: createSql,
+		dbName:     dbName,
+		Account:    account,
+		createSql:  createSql,
+		snapshotTs: spTs,
 	}
 }
 
@@ -737,7 +739,7 @@ func restoreToDatabaseOrTable(
 		// if restore to cluster, and the db is sub, append the sub db to restore list
 		getLogger(sid).Info(fmt.Sprintf("[%s] append sub db to restore list: %v, at restore cluster account %d", snapshotName, dbName, toAccountId))
 		key := genKey(fmt.Sprint(restoreAccount), dbName)
-		subDbToRestore[key] = NewSubDbRestoreRecord(dbName, restoreAccount, createDbSql)
+		subDbToRestore[key] = NewSubDbRestoreRecord(dbName, restoreAccount, createDbSql, snapshotTs)
 		return
 
 	}
@@ -765,7 +767,7 @@ func restoreToDatabaseOrTable(
 		// else skip restore the db
 
 		var isPubExist bool
-		isPubExist, err = checkPubExistOrNot(ctx, sid, bh, snapshotName, dbName)
+		isPubExist, err = checkPubExistOrNot(ctx, sid, bh, snapshotName, dbName, snapshotTs)
 		if err != nil {
 			return
 		}
@@ -884,7 +886,7 @@ func restoreToSubDb(
 	toCtx := defines.AttachAccountId(ctx, subDb.Account)
 
 	var isPubExist bool
-	isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, subDb.dbName)
+	isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
 	if err != nil {
 		return
 	}
@@ -1812,6 +1814,7 @@ func checkPubExistOrNot(
 	bh BackgroundExec,
 	snapshotName string,
 	subName string,
+	timsStampTs int64,
 ) (bool, error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to check pub exist or not", snapshotName))
 	subInfos, err := getSubInfosFromSubWithSnapshot(
@@ -1819,7 +1822,8 @@ func checkPubExistOrNot(
 		sid,
 		bh,
 		snapshotName,
-		subName)
+		subName,
+		timsStampTs)
 	if err != nil {
 		return false, err
 	} else if len(subInfos) == 0 {
@@ -1848,6 +1852,7 @@ func getSubInfosFromSubWithSnapshot(
 	bh BackgroundExec,
 	snapshotName string,
 	subName string,
+	timestampTs int64,
 ) (subInfo []*pubsub.SubInfo, err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to get sub info from sub with snapshot", snapshotName))
 	subAccountId, err := defines.GetAccountId(ctx)
@@ -1857,8 +1862,8 @@ func getSubInfosFromSubWithSnapshot(
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 
 	var getSubSqlString string
-	if len(snapshotName) > 0 {
-		getSubSqlString = fmt.Sprintf(fmt.Sprintf(getSubsSqlFmt, "{snapshot = '%s'}"), snapshotName)
+	if timestampTs > 0 {
+		getSubSqlString = fmt.Sprintf(fmt.Sprintf(getSubsSqlFmt, "{MO_TS = %d}"), timestampTs)
 	} else {
 		getSubSqlString = fmt.Sprintf(getSubsSqlFmt, "")
 	}
@@ -1930,5 +1935,5 @@ func checkSubscriptionExist(
 		return
 	}
 
-	return
+	return true, nil
 }
