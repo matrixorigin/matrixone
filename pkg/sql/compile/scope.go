@@ -185,30 +185,37 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 	}()
 
-	id := uint64(0)
-	if s.DataSource.TableDef != nil {
-		id = s.DataSource.TableDef.TblId
-	}
-	p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
-	if s.DataSource.isConst {
-		_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
+	if s.DataSource == nil {
+		p = pipeline.NewMerge(s.RootOp)
+		_, err = p.MergeRun(s.Proc)
 	} else {
-		if s.DataSource.R == nil {
-			s.NodeInfo.Data = engine.BuildEmptyRelData()
-			readers, _, err := s.buildReaders(c, 1)
-			if err != nil {
-				return err
+		id := uint64(0)
+		if s.DataSource.TableDef != nil {
+			id = s.DataSource.TableDef.TblId
+		}
+		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
+		if s.DataSource.isConst {
+			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
+		} else {
+			if s.NodeInfo.Data == nil {
+				s.NodeInfo.Data = engine.BuildEmptyRelData()
 			}
-			s.DataSource.R = readers[0]
-		}
+			if s.DataSource.R == nil {
+				readers, _, err := s.buildReaders(c, 1)
+				if err != nil {
+					return err
+				}
+				s.DataSource.R = readers[0]
+				s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
+			}
 
-		var tag int32
-		if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
-			tag = s.DataSource.node.RecvMsgList[0].MsgTag
+			var tag int32
+			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
+				tag = s.DataSource.node.RecvMsgList[0].MsgTag
+			}
+			_, err = p.Run(s.DataSource.R, tag, s.Proc)
 		}
-		_, err = p.Run(s.DataSource.R, tag, s.Proc)
 	}
-
 	select {
 	case <-s.Proc.Ctx.Done():
 		err = nil
