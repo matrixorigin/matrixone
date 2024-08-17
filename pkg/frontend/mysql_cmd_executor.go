@@ -1105,15 +1105,8 @@ func createPrepareStmt(
 	}
 	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
 	columns := plan2.GetResultColumnsFromPlan(preparePlan.GetDcl().Control.(*planPb.DataControl_Prepare).Prepare.Plan)
-	numColumns := len(columns)
-	mp := execCtx.resper.MysqlRrWr().(*MysqlProtocolImpl)
-	for i := 0; i < numColumns; i++ {
-		column, err := colDef2MysqlColumn(execCtx.reqCtx, columns[i])
-		if err != nil {
-			return nil, err
-		}
-		colDefPacket := mp.makeColumnDefinition41Payload(column, int(COM_STMT_PREPARE))
-		prepareStmt.ColDefData = append(prepareStmt.ColDefData, colDefPacket)
+	if prepareStmt.ColDefData, err = execCtx.resper.MysqlRrWr().MakeColumnDefData(execCtx.reqCtx, columns); err != nil {
+		logutil.Errorf("Error make column def data for prepare statement: %v", err)
 	}
 	if execCtx.input != nil {
 		sqlSourceTypes := execCtx.input.getSqlSourceTypes()

@@ -2146,6 +2146,20 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	return data[:pos]
 }
 
+func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+	numColumns := len(columns)
+	colDefData := make([][]byte, 0, numColumns)
+	for i := 0; i < numColumns; i++ {
+		column, err := colDef2MysqlColumn(ctx, columns[i])
+		if err != nil {
+			return nil, err
+		}
+		colDefPacket := mp.makeColumnDefinition41Payload(column, int(COM_STMT_PREPARE))
+		colDefData = append(colDefData, colDefPacket)
+	}
+	return colDefData, nil
+}
+
 // SendColumnDefinitionPacket the server send the column definition to the client
 func (mp *MysqlProtocolImpl) SendColumnDefinitionPacket(ctx context.Context, column Column, cmd int) ([]byte, error) {
 	mysqlColumn, ok := column.(*MysqlColumn)
