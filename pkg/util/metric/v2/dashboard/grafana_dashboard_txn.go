@@ -16,6 +16,8 @@ package dashboard
 
 import (
 	"context"
+	"fmt"
+	"github.com/K-Phoen/grabana/timeseries"
 
 	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
@@ -49,6 +51,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnRangesCountRow(),
 			c.initTxnShowAccountsRow(),
 			c.initCNCommittedObjectQuantityRow(),
+			c.initTxnTransferRow(),
 		)...)
 	if err != nil {
 		return err
@@ -511,5 +514,35 @@ func (c *DashboardCreator) initTxnReaderDurationRow() dashboard.Option {
 			[]float32{3, 3, 3, 3},
 			axis.Unit("s"),
 			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initTxnTransferRow() dashboard.Option {
+	return dashboard.Row(
+		"Txn transfer duration",
+		c.getTimeSeries(
+			"Transfer tombstones count",
+			[]string{fmt.Sprintf(
+				"sum by (%s) (increase(%s[$interval]))",
+				c.by,
+				c.getMetricWithFilter(`mo_txn_transfer_tombstones_count_sum`, ""),
+			)},
+			[]string{"count"},
+			timeseries.Span(4),
+		),
+		c.getPercentHist(
+			"Transfer tombstone duration",
+			c.getMetricWithFilter(`mo_txn_transfer_duration_bucket`, `type="tombstones"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(4),
+		),
+		c.getPercentHist(
+			"Batch transfer tombstone duration",
+			c.getMetricWithFilter(`mo_txn_transfer_duration_bucket`, `type="rowids"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(4),
+		),
 	)
 }

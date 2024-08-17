@@ -320,3 +320,24 @@ var (
 	TxnRangesFastPathObjColumnZMapSelectivityHistogram  = txnRangesSelectivityHistogram.WithLabelValues("fast_path_obj_column_zm_selectivity")
 	TxnRangesFastPathBlkColumnZMapSelectivityHistogram  = txnRangesSelectivityHistogram.WithLabelValues("fast_path_blk_column_zm_selectivity")
 )
+
+var (
+	TransferTombstonesCountHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "txn",
+		Name:      "transfer_tombstones_count",
+		Help:      "The total number of transfer tombstones.",
+	})
+
+	txnTransferDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "transfer_duration",
+			Help:      "Bucketed histogram of short tn task execute duration.",
+			Buckets:   getShortDurationBuckets(),
+		}, []string{"type"})
+
+	TransferTombstonesDurationHistogram = txnTransferDurationHistogram.WithLabelValues("tombstones")
+	TransferRowidsDurationHistogram     = txnTransferDurationHistogram.WithLabelValues("rowids")
+)

@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -68,7 +69,6 @@ func TransferTombstones(
 	var transferCnt int
 	start := time.Now()
 	defer func() {
-		// TODO: add duration metric and transfer count metric here
 		duration := time.Since(start)
 		if duration > time.Millisecond*500 || err != nil || wantDetail {
 			logutil.Info(
@@ -82,6 +82,8 @@ func TransferTombstones(
 				zap.Error(err),
 			)
 		}
+		v2.TransferTombstonesCountHistogram.Observe(1)
+		v2.TransferTombstonesDurationHistogram.Observe(duration.Seconds())
 	}()
 	var objectList []objectio.ObjectStats
 	for name := range createdObjects {
@@ -336,7 +338,11 @@ func doTransferRowids(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (err error) {
-	// TODO: add duration metric here
+	now := time.Now()
+	defer func() {
+		duration := time.Since(now)
+		v2.TransferRowidsDurationHistogram.Observe(duration.Seconds())
+	}()
 	pkColumName := table.GetTableDef(ctx).Pkey.PkeyColName
 	expr := ConstructInExpr(ctx, pkColumName, searchPKColumn)
 
