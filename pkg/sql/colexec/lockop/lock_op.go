@@ -21,10 +21,9 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -38,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var (
@@ -212,7 +212,8 @@ func performLock(
 	bat *batch.Batch,
 	proc *process.Process,
 	lockOp *LockOp,
-	analyze process.Analyze) error {
+	analyze process.Analyze,
+) error {
 	needRetry := false
 	for idx, target := range lockOp.targets {
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
@@ -404,7 +405,8 @@ func doLock(
 	proc *process.Process,
 	vec *vector.Vector,
 	pkType types.Type,
-	opts LockOptions) (bool, bool, timestamp.Timestamp, error) {
+	opts LockOptions,
+) (bool, bool, timestamp.Timestamp, error) {
 	txnOp := proc.GetTxnOperator()
 	txnClient := proc.Base.TxnClient
 	lockService := proc.GetLockService()
@@ -497,6 +499,11 @@ func doLock(
 	}
 	// Record lock waiting time
 	analyzeLockWaitTime(analyze, start)
+
+	if runtime.InTesting(proc.GetService()) {
+		tc := runtime.MustGetTestingContext(proc.GetService())
+		tc.GetAdjustLockResultFunc()(txn.ID, tableID, &result)
+	}
 
 	if len(result.ConflictKey) > 0 {
 		trace.GetService(proc.GetService()).AddTxnActionInfo(
@@ -928,7 +935,8 @@ func hasNewVersionInRange(
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,
-	from, to timestamp.Timestamp) (bool, error) {
+	from, to timestamp.Timestamp,
+) (bool, error) {
 	if vec == nil {
 		return false, nil
 	}
