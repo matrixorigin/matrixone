@@ -35,7 +35,7 @@ int varlena_get_ptrlen(varlena_t *va, uint8_t *area, ptrlen_t *pl) {
     return pl->len;
 }
 
-int32_t xcall_l2distance_sq_f32(uint64_t *args, uint64_t len) {
+int32_t xcall_l2distance_f32(int64_t rtid, uint64_t *args, uint64_t len, bool sq) {
     /* 
      * Must be 3 args, ret, arg1, arg2.  
      * Len must be correct 
@@ -52,12 +52,17 @@ int32_t xcall_l2distance_sq_f32(uint64_t *args, uint64_t len) {
 
     c1const = pargs[1].dataSz == VARLENA_SZ;
     c2const = pargs[2].dataSz == VARLENA_SZ;
-    if (c1const) {
-        varlena_get_ptrlen(p1, pargs[1].parea, &c1);
+    varlena_get_ptrlen(p1, pargs[1].parea, &c1);
+    varlena_get_ptrlen(p2, pargs[2].parea, &c2);
+
+#ifdef MO_CL_CUDA
+    /* if vector is too small, does not worth it */
+    if (rtid == RUNTIME_CUDA && pargs[0].pnulls == NULL && c1.len > 128) {
+        return cuda_l2distance_f32(pres, (int)(len), sq,
+                p1, pargs[1].parea, c1const,
+                p2, pargs[2].parea, c2const);
     }
-    if (c2const) {
-        varlena_get_ptrlen(p2, pargs[2].parea, &c2);
-    }
+#endif
 
     for (uint64_t i = 0; i < len; i++) {
         if (!bitmap_test(pargs[0].pnulls, i)) {
@@ -74,6 +79,9 @@ int32_t xcall_l2distance_sq_f32(uint64_t *args, uint64_t len) {
             for (int j = 0; j < dim; j++) {
                 float diff = c1val[j] - c2val[j];
                 pres[i] += (double)(diff * diff);
+                if (!sq) {
+                    pres[i] = sqrt(pres[i]);
+                }
             }
         }
     }
@@ -81,7 +89,7 @@ int32_t xcall_l2distance_sq_f32(uint64_t *args, uint64_t len) {
 }
 
 /* well well well, does it worth to make f32/f64 a macro?  probably not */
-int32_t xcall_l2distance_sq_f64(uint64_t *args, uint64_t len) {
+int32_t xcall_l2distance_f64(int64_t rtid, uint64_t *args, uint64_t len, bool sq) {
     /* 
      * Must be 3 args, ret, arg1, arg2.  
      * Len must be correct 
@@ -97,12 +105,18 @@ int32_t xcall_l2distance_sq_f64(uint64_t *args, uint64_t len) {
 
     c1const = pargs[1].dataSz == VARLENA_SZ;
     c2const = pargs[2].dataSz == VARLENA_SZ;
-    if (c1const) {
-        varlena_get_ptrlen(p1, pargs[1].parea, &c1);
+    varlena_get_ptrlen(p1, pargs[1].parea, &c1);
+    varlena_get_ptrlen(p2, pargs[2].parea, &c2);
+
+#ifdef MO_CL_CUDA
+    /* if vector is too small, does not worth it */
+    if (rtid == RUNTIME_CUDA && pargs[0].pnulls == NULL && c1.len > 128) {
+        return cuda_l2distance_f64(pres, (int)(len), sq,
+                p1, pargs[1].parea, c1const,
+                p2, pargs[2].parea, c2const);
     }
-    if (c2const) {
-        varlena_get_ptrlen(p2, pargs[2].parea, &c2);
-    }
+#endif
+
 
     for (uint64_t i = 0; i < len; i++) {
         if (!bitmap_test(pargs[0].pnulls, i)) {
@@ -119,38 +133,12 @@ int32_t xcall_l2distance_sq_f64(uint64_t *args, uint64_t len) {
             for (int j = 0; j < dim; j++) {
                 double diff = c1val[j] - c2val[j];
                 pres[i] += diff * diff;
+                if (!sq) {
+                    pres[i] = sqrt(pres[i]);
+                }
             }
         }
     }
     return 0;
 }
 
-int32_t xcall_l2distance_f32(uint64_t *args, uint64_t len) {
-    xcall_args_t *pargs = (xcall_args_t *) args;
-    double *pres = (double *) pargs[0].pdata;
-    int ret = xcall_l2distance_sq_f32(args, len);
-    if (ret != 0) {
-        return ret;
-    }
-    for (uint64_t i = 0; i < len; i++) {
-        if (!bitmap_test(pargs[0].pnulls, i)) {
-            pres[i] = sqrt(pres[i]);
-        }
-    }
-    return 0;
-}
-        
-int32_t xcall_l2distance_f64(uint64_t *args, uint64_t len) {
-    xcall_args_t *pargs = (xcall_args_t *) args;
-    double *pres = (double *) pargs[0].pdata;
-    int ret = xcall_l2distance_sq_f64(args, len);
-    if (ret != 0) {
-        return ret;
-    }
-    for (uint64_t i = 0; i < len; i++) {
-        if (!bitmap_test(pargs[0].pnulls, i)) {
-            pres[i] = sqrt(pres[i]);
-        }
-    }
-    return 0;
-}

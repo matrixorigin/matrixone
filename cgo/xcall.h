@@ -41,20 +41,24 @@ typedef struct ptrlen_t {
     int len;
 } ptrlen_t;
 
+#define RUNTIME_C 0
+#define RUNTIME_CUDA 1
+
 int varlena_get_ptrlen(varlena_t *va, uint8_t *area, ptrlen_t *pl);
 
-int32_t xcall_l2distance_f32(uint64_t *args, uint64_t len);
-int32_t xcall_l2distance_f64(uint64_t *args, uint64_t len);
-int32_t xcall_l2distance_sq_f32(uint64_t *args, uint64_t len);
-int32_t xcall_l2distance_sq_f64(uint64_t *args, uint64_t len);
+int32_t xcall_l2distance_f32(int64_t rtid, uint64_t *args, uint64_t len, bool sq);
+int32_t xcall_l2distance_f64(int64_t rtid, uint64_t *args, uint64_t len, bool sq);
 
 #ifdef MO_CL_CUDA
-int32_t cuda_l2distance_f32(uint64_t *args, uint64_t len);
-int32_t cuda_l2distance_f64(uint64_t *args, uint64_t len);
-int32_t cuda_l2distance_sq_f32(uint64_t *args, uint64_t len);
-int32_t cuda_l2distance_sq_f64(uint64_t *args, uint64_t len);
+int32_t cuda_l2distance_f32(double *pres, int n, bool sq,
+        varlena_t *p1, uint8_t *area1, bool isconst1,
+        varlena_t *p2, uint8_t *area2, bool isconst2
+        );
+int32_t cuda_l2distance_f64(double *pres, int n, bool sq,
+        varlena_t *p1, uint8_t *area1, bool isconst1,
+        varlena_t *p2, uint8_t *area2, bool isconst2
+        );
 #endif
-
 
 #endif /* _XCALL_H_ */
 
