@@ -82,6 +82,7 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				if ctr.bat == nil {
+					ctr.inBat = nil
 					continue
 				}
 				anal.Input(ctr.inBat, product.GetIsFirst())
