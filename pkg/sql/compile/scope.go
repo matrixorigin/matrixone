@@ -22,10 +22,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -309,39 +305,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 		}
 	}()
 
-	if tableScanOp, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
-		// need to build readers for tp query
-		readers, _, err := s.buildReaders(c, 1)
-		if err != nil {
-			return err
-		}
-		s.DataSource.R = readers[0]
-		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
-
-		tableScanOp.Reader = s.DataSource.R
-		tableScanOp.Attrs = s.DataSource.Attributes
-		tableScanOp.TableID = s.DataSource.TableDef.TblId
-		if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
-			tableScanOp.TopValueMsgTag = s.DataSource.node.RecvMsgList[0].MsgTag
-		}
-	} else if valueScanOp, ok := vm.GetLeafOp(s.RootOp).(*value_scan.ValueScan); ok {
-		pipelineInputBatches := []*batch.Batch{s.DataSource.Bat}
-		if s.DataSource.Bat != nil {
-			pipelineInputBatches = append(pipelineInputBatches, nil)
-		}
-		valueScanOp.Batchs = pipelineInputBatches
+	if err := s.Run(c); err != nil {
+		return err
 	}
-
-	p := pipeline.NewMerge(s.RootOp)
-	if _, err := p.MergeRun(s.Proc); err != nil {
-		select {
-		case <-s.Proc.Ctx.Done():
-		default:
-			p.Cleanup(s.Proc, true, c.isPrepare, err)
-			return err
-		}
-	}
-	p.Cleanup(s.Proc, false, c.isPrepare, nil)
 
 	// receive and check error from pre-scopes and remote scopes.
 	preScopeCount := len(s.PreScopes)
