@@ -1657,12 +1657,6 @@ func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
 }
 
 func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, strictSqlMode bool) ([]*Scope, error) {
-	parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
-	ss := make([]*Scope, parallelSize)
-	for i := 0; i < parallelSize; i++ {
-		ss[i] = c.constructLoadMergeScope()
-	}
-
 	s := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
 	op := constructExternal(n, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
@@ -1670,6 +1664,15 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, 
 	op.SetIsFirst(currentFirstFlag)
 	s.setRootOperator(op)
 	c.anal.isFirst = false
+
+	parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
+	if parallelSize == 1 {
+		return []*Scope{s}, nil
+	}
+	ss := make([]*Scope, parallelSize)
+	for i := 0; i < parallelSize; i++ {
+		ss[i] = c.constructLoadMergeScope()
+	}
 
 	_, dispatchOp := constructDispatchLocalAndRemote(0, ss, c.addr)
 	dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
