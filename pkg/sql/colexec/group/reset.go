@@ -14,16 +14,65 @@
 
 package group
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+    "github.com/matrixorigin/matrixone/pkg/vm"
+    "github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 func (group *Group) Reset(
     proc *process.Process, isPipelineFail bool, pipelineErr error) {
 
     group.ctr.skipInitReusableMem = true
-    mp := proc.Mp()
-    group.ctr.cleanBatch(mp)
-    group.ctr.cleanHashMap()
+    group.ctr.state = vm.Build
 
+    // reused the bat.
+    if group.ctr.bat != nil {
+        if !group.NeedEval {
+            group.ctr.bat.Aggs = nil
+        } else {
+
+            if len(group.ctr.bat.Vecs) > len(group.Exprs) {
+                mp := proc.Mp()
+
+                for i := len(group.Exprs); i < len(group.ctr.bat.Vecs); i++ {
+                    if group.ctr.bat.Vecs[i] != nil {
+                        group.ctr.bat.Vecs[i].Free(mp)
+                        group.ctr.bat.Vecs[i] = nil
+                    }
+                }
+
+                group.ctr.bat.Vecs = group.ctr.bat.Vecs[:len(group.Exprs)]
+                for i := 0; i < len(group.ctr.bat.Vecs); i++ {
+                    group.ctr.bat.Vecs[i].CleanOnlyData()
+                }
+            }
+            group.ctr.bat.SetRowCount(0)
+
+            for i := 0; i < len(group.ctr.bat.Aggs); i++ {
+                if group.ctr.bat.Aggs[i] != nil {
+                    group.ctr.bat.Aggs[i].Free()
+                    group.ctr.bat.Aggs[i] = nil
+                }
+            }
+            group.ctr.bat.Aggs = nil
+        }
+    }
+
+    // reset the executors.
+    for i := 0; i < len(group.ctr.groupVecs.Executor); i++ {
+        if group.ctr.groupVecs.Executor[i] != nil {
+            group.ctr.groupVecs.Executor[i].ResetForNextQuery()
+        }
+    }
+    for i := 0; i < len(group.ctr.aggVecs); i++ {
+        for j := 0; j < len(group.ctr.aggVecs[i].Executor); j++ {
+            if group.ctr.aggVecs[i].Executor[j] != nil {
+                group.ctr.aggVecs[i].Executor[j].ResetForNextQuery()
+            }
+        }
+    }
+
+    group.ctr.cleanHashMap()
     if group.ProjectList != nil {
         anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
         anal.Alloc(group.ProjectAllocSize)
