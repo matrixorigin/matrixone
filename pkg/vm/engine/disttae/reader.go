@@ -344,8 +344,7 @@ func (r *reader) Read(
 		r.memFilter,
 		mp,
 		vp,
-		bat,
-	)
+		bat)
 
 	dataState = state
 
@@ -356,7 +355,7 @@ func (r *reader) Read(
 		return true, nil
 	}
 	if state == engine.InMem {
-		return false, err
+		return false, nil
 	}
 	//read block
 	filter := r.withFilterMixin.filterState.filter
@@ -407,5 +406,5 @@ func (r *reader) Read(
 		logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
 	}
 
-	return
+	return false, nil
 }

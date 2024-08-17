@@ -741,20 +741,19 @@ func (mr *MockDataSourceMockRecorder) GetTombstones(ctx, bid interface{}) *gomoc
 }
 
 // Next mocks base method.
-func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.Type, seqNums []uint16, memFilter any, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, *objectio.BlockInfo, engine.DataState, error) {
+func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.Type, seqNums []uint16, memFilter any, mp *mpool.MPool, vp engine.VectorPool, bat *batch.Batch) (*objectio.BlockInfo, engine.DataState, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Next", ctx, cols, types, seqNums, memFilter, mp, vp)
-	ret0, _ := ret[0].(*batch.Batch)
-	ret1, _ := ret[1].(*objectio.BlockInfo)
-	ret2, _ := ret[2].(engine.DataState)
-	ret3, _ := ret[3].(error)
-	return ret0, ret1, ret2, ret3
+	ret := m.ctrl.Call(m, "Next", ctx, cols, types, seqNums, memFilter, mp, vp, bat)
+	ret0, _ := ret[0].(*objectio.BlockInfo)
+	ret1, _ := ret[1].(engine.DataState)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
 }
 
 // Next indicates an expected call of Next.
-func (mr *MockDataSourceMockRecorder) Next(ctx, cols, types, seqNums, memFilter, mp, vp interface{}) *gomock.Call {
+func (mr *MockDataSourceMockRecorder) Next(ctx, cols, types, seqNums, memFilter, mp, vp, bat interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Next", reflect.TypeOf((*MockDataSource)(nil).Next), ctx, cols, types, seqNums, memFilter, mp, vp)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Next", reflect.TypeOf((*MockDataSource)(nil).Next), ctx, cols, types, seqNums, memFilter, mp, vp, bat)
 }
 
 // SetFilterZM mocks base method.
@@ -1093,6 +1092,21 @@ func (mr *MockRelationMockRecorder) GetHideKeys(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHideKeys", reflect.TypeOf((*MockRelation)(nil).GetHideKeys), arg0)
 }
 
+// GetNonAppendableObjectStats mocks base method.
+func (m *MockRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetNonAppendableObjectStats", ctx)
+	ret0, _ := ret[0].([]objectio.ObjectStats)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetNonAppendableObjectStats indicates an expected call of GetNonAppendableObjectStats.
+func (mr *MockRelationMockRecorder) GetNonAppendableObjectStats(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNonAppendableObjectStats", reflect.TypeOf((*MockRelation)(nil).GetNonAppendableObjectStats), ctx)
+}
+
 // GetPrimaryKeys mocks base method.
 func (m *MockRelation) GetPrimaryKeys(arg0 context.Context) ([]*engine.Attribute, error) {
 	m.ctrl.T.Helper()
@@ -1148,21 +1162,6 @@ func (m *MockRelation) GetTableName() string {
 func (mr *MockRelationMockRecorder) GetTableName() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTableName", reflect.TypeOf((*MockRelation)(nil).GetTableName))
-}
-
-// GetVisibleObjectStats mocks base method.
-func (m *MockRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetNonAppendableObjectStats", ctx)
-	ret0, _ := ret[0].([]objectio.ObjectStats)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetVisibleObjectStats indicates an expected call of GetVisibleObjectStats.
-func (mr *MockRelationMockRecorder) GetNonAppendableObjectStats(ctx interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNonAppendableObjectStats", reflect.TypeOf((*MockRelation)(nil).GetNonAppendableObjectStats), ctx)
 }
 
 // MaxAndMinValues mocks base method.
