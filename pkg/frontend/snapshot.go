@@ -640,7 +640,7 @@ func restoreToDatabaseOrTable(
 		// check if the publication exists
 		// if the publication exists, create the db with the publication
 		// else skip restore the db
-		isValid, _ := checkSubInRestore(ctx, bh, dbName)
+		isValid, _ := checkSubInRestore(toCtx, bh, createDbSql)
 		if !isValid {
 			getLogger().Info(fmt.Sprintf("[%s] skip restore subscription db: %v, publication not exists", snapshotName, dbName))
 			return
@@ -1487,9 +1487,7 @@ func checkSubInRestore(
 		err              error
 		accName, pubName string
 	)
-	if _, accName, pubName, err = getSubInfoFromSqlInRestore(
-		ctx,
-		createSql); err != nil {
+	if _, accName, pubName, err = getSubInfoFromSqlInRestore(ctx, createSql); err != nil {
 		return false, err
 	}
 	return checkSubscriptionValidInRestore(
@@ -1504,7 +1502,7 @@ func getSubInfoFromSqlInRestore(
 	sql string) (subName, pubAccountName, pubName string, err error) {
 
 	var ast []tree.Statement
-	if ast, err = mysql.Parse(ctx, sql, 0); err != nil {
+	if ast, err = mysql.Parse(ctx, sql, 1); err != nil {
 		return
 	}
 	defer func() {
