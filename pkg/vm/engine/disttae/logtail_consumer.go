@@ -632,10 +632,13 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 		return err
 	}
 	defer func() {
+		//same timeout value as it in frontend
+		ctx2, cancel := context.WithTimeout(ctx, e.Hints().CommitOrRollbackTimeout)
+		defer cancel()
 		if err != nil {
-			_ = op.Rollback(ctx)
+			_ = op.Rollback(ctx2)
 		} else {
-			_ = op.Commit(ctx)
+			_ = op.Commit(ctx2)
 		}
 	}()
 	err = e.New(ctx, op)
