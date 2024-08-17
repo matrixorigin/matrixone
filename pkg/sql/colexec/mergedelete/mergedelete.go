@@ -46,6 +46,7 @@ func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
 	}
 	mergeDelete.ctr.delSource = rel
 	mergeDelete.ctr.partitionSources = partitionRels
+	mergeDelete.ctr.affectedRows = 0
 	return nil
 }
 

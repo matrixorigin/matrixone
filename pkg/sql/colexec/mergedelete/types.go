@@ -93,7 +93,7 @@ func (mergeDelete *MergeDelete) Release() {
 }
 
 func (mergeDelete *MergeDelete) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeDelete.ctr.affectedRows = 0
+	//can not reset affectRows because MO need get affectRows after reset
 }
 
 func (mergeDelete *MergeDelete) Free(proc *process.Process, pipelineFailed bool, err error) {
