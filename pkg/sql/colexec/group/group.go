@@ -204,7 +204,7 @@ func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, ana
 
 				bat := result.Batch
 				batList[0] = bat
-				if err = ctr.evaluateAggAndGroupBy(proc, batList, ap); err != nil {
+				if err = ctr.evaluateAggAndGroupBy(proc, batList); err != nil {
 					return result, err
 				}
 
@@ -396,8 +396,7 @@ func (ctr *container) batchFill(i int, n int, vals []uint64, hashRows uint64, pr
 }
 
 func (ctr *container) evaluateAggAndGroupBy(
-	proc *process.Process, batList []*batch.Batch,
-	config *Group) (err error) {
+	proc *process.Process, batList []*batch.Batch) (err error) {
 	// evaluate the agg.
 	for i := range ctr.aggVecs {
 		for j := range ctr.aggVecs[i].Executor {

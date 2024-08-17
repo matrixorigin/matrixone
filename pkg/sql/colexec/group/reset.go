@@ -27,10 +27,7 @@ func (group *Group) Reset(
 
     // reused the bat.
     if group.ctr.bat != nil {
-        if !group.NeedEval {
-            group.ctr.bat.Aggs = nil
-        } else {
-
+        if group.NeedEval {
             if len(group.ctr.bat.Vecs) > len(group.Exprs) {
                 mp := proc.Mp()
 
@@ -47,15 +44,15 @@ func (group *Group) Reset(
                 }
             }
             group.ctr.bat.SetRowCount(0)
-
-            for i := 0; i < len(group.ctr.bat.Aggs); i++ {
-                if group.ctr.bat.Aggs[i] != nil {
-                    group.ctr.bat.Aggs[i].Free()
-                    group.ctr.bat.Aggs[i] = nil
-                }
-            }
-            group.ctr.bat.Aggs = nil
         }
+
+        for i := 0; i < len(group.ctr.bat.Aggs); i++ {
+            if group.ctr.bat.Aggs[i] != nil {
+                group.ctr.bat.Aggs[i].Free()
+                group.ctr.bat.Aggs[i] = nil
+            }
+        }
+        group.ctr.bat.Aggs = nil
     }
 
     // reset the executors.
