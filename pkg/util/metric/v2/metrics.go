@@ -79,6 +79,8 @@ func initTaskMetrics() {
 	registry.MustRegister(transferPageHitHistogram)
 	registry.MustRegister(TransferPageRowHistogram)
 	registry.MustRegister(TaskMergeTransferPageLengthGauge)
+	registry.MustRegister(transferDurationHistogram)
+	registry.MustRegister(transferShortDurationHistogram)
 
 	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
 }
@@ -202,5 +204,5 @@ func getDurationBuckets() []float64 {
 }
 
 func getShortDurationBuckets() []float64 {
-	return append(prometheus.ExponentialBuckets(0.00000001, 2, 30), math.MaxFloat64)
+	return append(prometheus.ExponentialBuckets(0.0000001, 2, 30), math.MaxFloat64)
 }

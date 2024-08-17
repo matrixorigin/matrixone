@@ -335,7 +335,7 @@ var (
 			Subsystem: "txn",
 			Name:      "transfer_duration",
 			Help:      "Bucketed histogram of tombstones transfer durations.",
-			Buckets:   getShortDurationBuckets(),
+			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 
 	TransferTombstonesDurationHistogram      = txnTransferDurationHistogram.WithLabelValues("tombstones")
