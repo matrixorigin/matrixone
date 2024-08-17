@@ -367,6 +367,7 @@ const (
 	LASTVAL = 313
 
 	// Array Function
+<<<<<<< HEAD
 	SUMMATION         = 314
 	L1_NORM           = 315 // L1_NORMALIZATION
 	L2_NORM           = 316 // L2 NORMALIZATION
@@ -405,9 +406,13 @@ const (
 	// fault inject function
 	FAULT_INJECT = 340
 
+	L2_DISTANCE_XC = 341   //L2_DISTANCE
+	L2_DISTANCE_SQ_XC = 342//L2_DISTANCE_SQ
+
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 341
+	FUNCTION_END_NUMBER = 343
 )
 
 // functionIdRegister is what function we have registered already.
@@ -716,7 +721,9 @@ var functionIdRegister = map[string]int32{
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
 	"l2_distance":       L2_DISTANCE,
+	"l2_distance_xc":    L2_DISTANCE_XC,
 	"l2_distance_sq":    L2_DISTANCE_SQ,
+	"l2_distance_sq_xc": L2_DISTANCE_SQ_XC,
 	"cosine_distance":   COSINE_DISTANCE,
 
 	"python_user_defined_function": PYTHON_UDF,
