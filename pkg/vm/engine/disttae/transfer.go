@@ -68,6 +68,7 @@ func TransferTombstones(
 	var transferCnt int
 	start := time.Now()
 	defer func() {
+		// TODO: add duration metric and transfer count metric here
 		duration := time.Since(start)
 		if duration > time.Millisecond*500 || err != nil || wantDetail {
 			logutil.Info(
@@ -76,11 +77,12 @@ func TransferTombstones(
 				zap.Int("count", transferCnt),
 				zap.String("table-name", table.tableDef.Name),
 				zap.Uint64("table-id", table.tableId),
+				zap.Int("deleted-objects", len(deletedObjects)),
+				zap.Int("created-objects", len(createdObjects)),
 				zap.Error(err),
 			)
 		}
 	}()
-	// TODO:
 	var objectList []objectio.ObjectStats
 	for name := range createdObjects {
 		if obj, ok := state.GetObject(name); ok {
@@ -334,6 +336,7 @@ func doTransferRowids(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (err error) {
+	// TODO: add duration metric here
 	pkColumName := table.GetTableDef(ctx).Pkey.PkeyColName
 	expr := ConstructInExpr(ctx, pkColumName, searchPKColumn)
 
