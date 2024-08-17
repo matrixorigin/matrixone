@@ -63,6 +63,8 @@ func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return vm.CancelResult, nil
 	}
+	bat.Aggs = result.Batch.Aggs
+	result.Batch.Aggs = nil
 
 	// there is no need to log anything here.
 	// because the context is already canceled means the pipeline closed normally.

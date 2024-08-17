@@ -111,7 +111,7 @@ func (mergeBlock *MergeBlock) Release() {
 }
 
 func (mergeBlock *MergeBlock) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeBlock.container.affectedRows = 0
+	//can not reset affectRows, because MO need get affectRows after reset
 	mergeBlock.resetMp(proc)
 }
 

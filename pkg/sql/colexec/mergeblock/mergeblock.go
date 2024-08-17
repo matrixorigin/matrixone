@@ -48,6 +48,8 @@ func (mergeBlock *MergeBlock) Prepare(proc *process.Process) error {
 	}
 	mergeBlock.container.source = rel
 	mergeBlock.container.partitionSources = partitionRels
+
+	mergeBlock.container.affectedRows = 0
 	return nil
 }
 
