@@ -96,7 +96,7 @@ type container struct {
 }
 
 type Group struct {
-	ctr          *container
+	ctr          container
 	NeedEval     bool // need to projection the aggregate column
 	PreAllocSize uint64
 
@@ -163,15 +163,12 @@ func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error)
 }
 
 func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := group.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanHashMap()
-		ctr.cleanAggVectors()
-		ctr.cleanGroupVectors()
-		group.ctr = nil
-	}
+	mp := proc.Mp()
+	group.ctr.cleanBatch(mp)
+	group.ctr.cleanHashMap()
+	group.ctr.cleanAggVectors()
+	group.ctr.cleanGroupVectors()
+
 	if group.ProjectList != nil {
 		anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
 		anal.Alloc(group.ProjectAllocSize)

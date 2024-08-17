@@ -58,34 +58,31 @@ func (group *Group) OpType() vm.OpType {
 }
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
-	group.ctr = new(container)
 	group.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	group.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
-
-	ctr := group.ctr
-	ctr.state = vm.Build
+	group.ctr.state = vm.Build
 
 	// create executors for aggregation functions.
 	if len(group.Aggs) > 0 {
-		ctr.aggVecs = make([]ExprEvalVector, len(group.Aggs))
+		group.ctr.aggVecs = make([]ExprEvalVector, len(group.Aggs))
 		for i, ag := range group.Aggs {
 			expressions := ag.GetArgExpressions()
-			if ctr.aggVecs[i], err = MakeEvalVector(proc, expressions); err != nil {
+			if group.ctr.aggVecs[i], err = MakeEvalVector(proc, expressions); err != nil {
 				return err
 			}
 		}
 	}
 
 	// create executors for group-by columns.
-	ctr.keyWidth = 0
+	group.ctr.keyWidth = 0
 	if group.Exprs != nil {
-		ctr.groupVecsNullable = false
-		ctr.groupVecs, err = MakeEvalVector(proc, group.Exprs)
+		group.ctr.groupVecsNullable = false
+		group.ctr.groupVecs, err = MakeEvalVector(proc, group.Exprs)
 		if err != nil {
 			return err
 		}
 		for _, gv := range group.Exprs {
-			ctr.groupVecsNullable = ctr.groupVecsNullable || (!gv.Typ.NotNullable)
+			group.ctr.groupVecsNullable = group.ctr.groupVecsNullable || (!gv.Typ.NotNullable)
 		}
 
 		for _, expr := range group.Exprs {
@@ -112,16 +109,16 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 					}
 				}
 			}
-			ctr.keyWidth += width
-			if ctr.groupVecsNullable {
-				ctr.keyWidth += 1
+			group.ctr.keyWidth += width
+			if group.ctr.groupVecsNullable {
+				group.ctr.keyWidth += 1
 			}
 		}
 	}
-	if ctr.keyWidth <= 8 {
-		ctr.typ = H8
+	if group.ctr.keyWidth <= 8 {
+		group.ctr.typ = H8
 	} else {
-		ctr.typ = HStr
+		group.ctr.typ = HStr
 	}
 
 	if group.ProjectList != nil {
