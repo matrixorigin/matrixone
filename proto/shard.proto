@@ -250,7 +250,7 @@ message SizeParam {
 
 message RangesParam {
     repeated plan.Expr Exprs = 1;
-    int32 txnOffset = 2;
+    bytes UncommittedObjects = 2;
 }
 
 message GetColumMetadataScanInfoParam {
@@ -277,6 +277,5 @@ message PrimaryKeysMayBeModifiedParam {
 
 message MergeObjectsParam {
     repeated bytes objstats  = 1;
-    string policyName        = 2;
     uint32 targetObjSize     = 3;
 }

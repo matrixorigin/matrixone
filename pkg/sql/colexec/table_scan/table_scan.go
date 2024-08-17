@@ -43,7 +43,10 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	if tableScan.TopValueMsgTag > 0 {
 		tableScan.ctr.msgReceiver = message.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress(), proc.GetMessageBoard())
 	}
-	return nil
+	if tableScan.ProjectList != nil {
+		err = tableScan.PrepareProjection(proc)
+	}
+	return
 }
 
 func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
@@ -137,8 +140,15 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		tableScan.ctr.buf = bat
 		break
 	}
+
 	result.Batch = tableScan.ctr.buf
 	anal.Input(result.Batch, tableScan.IsFirst)
+	var err error
+	if tableScan.ProjectList != nil {
+		result.Batch, err = tableScan.EvalProjection(result.Batch, proc)
+	}
+
 	anal.Output(result.Batch, tableScan.IsLast)
-	return result, nil
+	return result, err
+
 }

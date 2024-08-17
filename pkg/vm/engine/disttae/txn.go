@@ -1085,13 +1085,16 @@ func (txn *Transaction) getCachedTable(
 
 func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	logDebugf(txn.op.Txn(), "Transaction.Commit")
-	if err := txn.IncrStatementID(ctx, true); err != nil {
-		return nil, err
-	}
+
 	defer txn.delTransaction()
 	if txn.readOnly.Load() {
 		return nil, nil
 	}
+
+	if err := txn.IncrStatementID(ctx, true); err != nil {
+		return nil, err
+	}
+
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return nil, err
 	}
@@ -1234,7 +1237,15 @@ func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) 
 				len(deleteObjs))
 
 			if len(deleteObjs) > 0 {
-				if err := tbl.transferDeletes(ctx, state, deleteObjs, createObjs); err != nil {
+				if err := TransferTombstones(
+					ctx,
+					tbl,
+					state,
+					deleteObjs,
+					createObjs,
+					txn.proc.Mp(),
+					txn.engine.fs,
+				); err != nil {
 					return err
 				}
 			}

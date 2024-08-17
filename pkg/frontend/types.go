@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -44,6 +45,137 @@ import (
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const (
+	DefaultRpcBufferSize = 1 << 10
+)
+
+const (
+	FPHandleRequest = iota
+	FPExecRequest
+	FPDoComQuery
+	FPDoComQueryInBack
+	FPStmtWithResponse
+	FPStmtWithResponseCreateAsSelect
+	FPDispatchStmt
+	FPExecStmt
+	FPExecStmtBeforeCompile
+	FPExecStmtInBack
+	FPExecStmtInBackBeforeCompile
+	FPExecStmtWithTxn
+	FPExecStmtWithWorkspace
+	FPExecStmtWithWorkspaceBeforeStart
+	FPExecStmtWithWorkspaceBeforeEnd
+	FPExecStmtWithIncrStmt
+	FPExecStmtWithIncrStmtBeforeIncr
+	FPExecStmtInSameSession
+	FPExecInFrontEnd
+	FPExecInFrontEndInBack
+	FPInBackUse
+	FPInBackCreateDatabase
+	FPInBackDropDatabase
+	FPInBackGrant
+	FPInBackRevoke
+	FPStatusStmtInBack
+	FPCleanup
+	FPBeginTxn
+	FPSetRole
+	FPUse
+	FPPrepareStmt
+	FPPrepareString
+	FPCreateConnector
+	FPPauseDaemonTask
+	FPCancelDaemonTask
+	FPResumeDaemonTask
+	FPDropConnector
+	FPShowConnectors
+	FPDeallocate
+	FPReset
+	FPSetVar
+	FPShowVariables
+	FPShowErrors
+	FPAnalyzeStmt
+	FPExplainStmt
+	FPInternalCmdFieldList
+	FPCreatePublication
+	FPAlterPublication
+	FPDropPublication
+	FPShowSubscriptions
+	FPCreateStage
+	FPDropStage
+	FPAlterStage
+	FPCreateAccount
+	FPDropAccount
+	FPAlterAccount
+	FPAlterDataBaseConfig
+	FPCreateUser
+	FPDropUser
+	FPAlterUser
+	FPCreateRole
+	FPDropRole
+	FPCreateFunction
+	FPDropFunction
+	FPCreateProcedure
+	FPDropProcedure
+	FPCallStmt
+	FPGrant
+	FPRevoke
+	FPKill
+	FPShowAccounts
+	FPShowCollation
+	FPShowBackendServers
+	FPSetTransaction
+	FPBackupStart
+	FPCreateSnapShot
+	FPDropSnapShot
+	FPRestoreSnapShot
+	FPUpgradeStatement
+	FPCreatePitr
+	FPDropPitr
+	FPAlterPitr
+	FPRestorePitr
+	FPSetConnectionID
+	FPRollbackTxn
+	FPCommitTxn
+	FPFinishTxn
+	FPCommit
+	FPCommitBeforeCommitUnsafe
+	FPCommitUnsafe
+	FPCommitUnsafeBeforeCommit
+	FPCommitUnsafeBeforeCommitWithTxn
+	FPRollback
+	FPRollbackUnsafe1
+	FPRollbackUnsafe2
+	FPRollbackUnsafe
+	FPRollbackUnsafeBeforeRollback
+	FPRollbackUnsafeBeforeRollbackWithTxn
+	FPSetAutoCommit
+	FPResultRowStmt
+	FPResultRowStmtInBack
+	FPResultRowStmtSelect1
+	FPResultRowStmtSelect2
+	FPResultRowStmtExplainAnalyze1
+	FPResultRowStmtExplainAnalyze2
+	FPResultRowStmtDefault1
+	FPResultRowStmtDefault2
+	FPRespStreamResultRow
+	FPrespPrebuildResultRow
+	FPrespMixedResultRow
+	FPRespStatus
+	FPMigrate
+	FPMigrateDB
+	FPMigratePrepareStmt
+	FPGetBackgroundExec
+	FPGetShareTxnBackgroundExec
+	FPGetRawBatchBackgroundExec
+	FPBackExecExec
+	FPBackExecRestore
+	FPGetShareTxnBackgroundExecInBackSession
+	FPGetBackgroundExecInBackSession
+	FPInternalExecutorExec
+	FPInternalExecutorQuery
+	FPHandleAnalyzeStmt
 )
 
 type (
@@ -116,6 +248,7 @@ type PrepareStmt struct {
 	PreparePlan    *plan.Plan
 	PrepareStmt    tree.Statement
 	ParamTypes     []byte
+	ColDefData     [][]byte
 	IsCloudNonuser bool
 	IsInsertValues bool
 	InsertBat      *batch.Batch
@@ -175,6 +308,8 @@ type ExecResult interface {
 	GetUint64(ctx context.Context, rindex, cindex uint64) (uint64, error)
 
 	GetInt64(ctx context.Context, rindex, cindex uint64) (int64, error)
+
+	ColumnIsNull(ctx context.Context, rindex, cindex uint64) (bool, error)
 }
 
 func execResultArrayHasData(arr []ExecResult) bool {
@@ -245,6 +380,9 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	if prepareStmt.ParamTypes != nil {
 		prepareStmt.PrepareStmt = nil
+	}
+	if prepareStmt.ColDefData != nil {
+		prepareStmt.ColDefData = nil
 	}
 }
 
@@ -366,6 +504,7 @@ type FeSession interface {
 	SetStaticTxnInfo(string)
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
+	GetMySQLParser() *mysql.MySQLParser
 	SessionLogger
 }
 
@@ -418,6 +557,7 @@ type ExecCtx struct {
 	executeParamTypes []byte
 	resper            Responser
 	results           []ExecResult
+	prepareColDef     [][]byte
 	isIssue3482       bool
 }
 
@@ -439,6 +579,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.executeParamTypes = nil
 	execCtx.resper = nil
 	execCtx.results = nil
+	execCtx.prepareColDef = nil
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -504,22 +645,38 @@ type feSessionImpl struct {
 	respr        Responser
 	//refreshed once
 	staticTxnInfo string
+	// mysql parser
+	mysqlParser mysql.MySQLParser
+	// reserveCOnn is set true when TCP network on the session/routine should be
+	// reserved because the connection is still in use in proxy's connection cache.
+	// Default is false, means that the network connection should be closed.
+	reserveConn bool
+}
+
+func (ses *feSessionImpl) GetMySQLParser() *mysql.MySQLParser {
+	return &ses.mysqlParser
 }
 
 func (ses *feSessionImpl) EnterFPrint(idx int) {
 	if ses != nil {
 		ses.fprints.addEnter(idx)
+		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
+			ses.txnHandler.txnOp.SetFootPrints(ses.fprints.prints[:])
+		}
 	}
 }
 
 func (ses *feSessionImpl) ExitFPrint(idx int) {
 	if ses != nil {
 		ses.fprints.addExit(idx)
+		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
+			ses.txnHandler.txnOp.SetFootPrints(ses.fprints.prints[:])
+		}
 	}
 }
 
 func (ses *feSessionImpl) Close() {
-	if ses.respr != nil {
+	if ses.respr != nil && !ses.reserveConn {
 		ses.respr.Close()
 	}
 	ses.mrs = nil
@@ -815,7 +972,7 @@ func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {
 	return ses.sesSysVars
 }
 
-func (ses *feSessionImpl) GetSessionSysVar(name string) (interface{}, error) {
+func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	name = strings.ToLower(name)
 	if _, ok := gSysVarsDefs[name]; !ok {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
@@ -915,6 +1072,10 @@ func (ses *feSessionImpl) GetStaticTxnInfo() string {
 	return ses.staticTxnInfo
 }
 
+func (ses *feSessionImpl) ReserveConn() {
+	ses.reserveConn = true
+}
+
 func (ses *Session) GetDebugString() string {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -936,6 +1097,9 @@ const (
 	CAPABILITY
 	ESTABLISHED
 	TLS_ESTABLISHED
+
+	// AuthString is the property authString in MysqlProtocolImpl.
+	AuthString
 )
 
 type Property interface {
@@ -972,6 +1136,7 @@ type MysqlReader interface {
 	MediaReader
 	Property
 	Read() ([]byte, error)
+	ReadLoadLocalPacket() ([]byte, error)
 	Free(buf []byte)
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 	Authenticate(ctx context.Context) error
@@ -993,6 +1158,7 @@ type MysqlWriter interface {
 	WriteERR(errorCode uint16, sqlState, errorMessage string) error
 	WriteLengthEncodedNumber(uint64) error
 	WriteColumnDef(context.Context, Column, int) error
+	WriteColumnDefBytes([]byte) error
 	WriteRow() error
 	WriteTextRow() error
 	WriteBinaryRow() error
@@ -1004,6 +1170,8 @@ type MysqlWriter interface {
 	CalculateOutTrafficBytes(b bool) (int64, int64)
 	ResetStatistics()
 	UpdateCtx(ctx context.Context)
+	// Reset sets the session and reset some fields and stats.
+	Reset(ses *Session)
 }
 
 type MysqlRrWr interface {

@@ -500,7 +500,7 @@ import (
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
-%type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt
+%type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
@@ -543,7 +543,7 @@ import (
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subscription_opt
-%type <accountsSetOption> alter_publication_accounts_opt
+%type <accountsSetOption> alter_publication_accounts_opt, create_publication_accounts
 %type <str> alter_publication_db_name_opt
 
 %type <select> select_stmt select_no_parens
@@ -582,7 +582,7 @@ import (
 %type <tableDefs> table_elem_list_opt table_elem_list
 %type <tableDef> table_elem constaint_def constraint_elem index_def table_elem_2
 %type <tableName> table_name table_name_opt_wild
-%type <tableNames> table_name_list
+%type <tableNames> table_name_list alter_publication_table_opt
 %type <columnTableDef> column_def
 %type <columnType> mo_cast_type mysql_cast_type
 %type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type as_datatype_opt
@@ -2309,6 +2309,7 @@ set_stmt:
 |   set_role_stmt
 |   set_default_role_stmt
 |   set_transaction_stmt
+|   set_connection_id_stmt
 
 set_transaction_stmt:
     SET TRANSACTION transaction_characteristic_list
@@ -2333,6 +2334,23 @@ set_transaction_stmt:
             }
     }
 
+set_connection_id_stmt:
+  SET CONNECTION ID TO INTEGRAL
+  {
+    var connID uint32
+    switch v := $5.(type) {
+    case uint64:
+      connID = uint32(v)
+    case int64:
+      connID = uint32(v)
+    default:
+      yylex.Error("parse integral fail")
+      goto ret1
+    }
+    $$ = &tree.SetConnectionID{
+      ConnectionID: connID,
+    }
+  }
 
 transaction_characteristic_list:
     transaction_characteristic
@@ -4260,11 +4278,11 @@ show_upgrade_stmt:
 show_subscriptions_stmt:
     SHOW SUBSCRIPTIONS like_opt
     {
-	$$ = &tree.ShowSubscriptions{Like: $3}
+	    $$ = &tree.ShowSubscriptions{Like: $3}
     }
 |   SHOW SUBSCRIPTIONS ALL like_opt
     {
-	$$ = &tree.ShowSubscriptions{All: true, Like: $4}
+	    $$ = &tree.ShowSubscriptions{All: true, Like: $4}
     }
 
 like_opt:
@@ -4330,9 +4348,13 @@ show_create_stmt:
             AtTsExpr: $5,
         }
     }
-|   SHOW CREATE DATABASE not_exists_opt db_name
+|   SHOW CREATE DATABASE not_exists_opt db_name table_snapshot_opt
     {
-        $$ = &tree.ShowCreateDatabase{IfNotExists: $4, Name: $5}
+        $$ = &tree.ShowCreateDatabase{
+            IfNotExists: $4,
+            Name: $5,
+            AtTsExpr: $6,
+        }
     }
 |   SHOW CREATE PUBLICATION db_name
     {
@@ -6500,14 +6522,30 @@ create_user_stmt:
     }
 
 create_publication_stmt:
-    CREATE PUBLICATION not_exists_opt ident DATABASE ident alter_publication_accounts_opt comment_opt
+    CREATE PUBLICATION not_exists_opt ident DATABASE db_name create_publication_accounts comment_opt
     {
         var IfNotExists = $3
         var Name = tree.Identifier($4.Compare())
-        var Database = tree.Identifier($6.Compare())
-        var Table = tree.Identifier("")
+        var Database = tree.Identifier($6)
         var AccountsSet = $7
         var Comment = $8
+        $$ = tree.NewCreatePublication(
+            IfNotExists,
+            Name,
+            Database,
+            nil,
+            AccountsSet,
+            Comment,
+        )
+    }
+|   CREATE PUBLICATION not_exists_opt ident DATABASE db_name TABLE table_name_list create_publication_accounts comment_opt
+    {
+        var IfNotExists = $3
+        var Name = tree.Identifier($4.Compare())
+        var Database = tree.Identifier($6)
+        var Table = $8
+        var AccountsSet = $9
+        var Comment = $10
         $$ = tree.NewCreatePublication(
             IfNotExists,
             Name,
@@ -6517,23 +6555,21 @@ create_publication_stmt:
             Comment,
         )
     }
-|   CREATE PUBLICATION not_exists_opt ident TABLE ident alter_publication_accounts_opt comment_opt
+
+create_publication_accounts:
+    ACCOUNT ALL
     {
-        var IfNotExists = $3
-        var Name = tree.Identifier($4.Compare())
-        var Database = tree.Identifier("")
-        var Table = tree.Identifier($6.Compare())
-        var AccountsSet = $7
-        var Comment = $8
-        $$ = tree.NewCreatePublication(
-            IfNotExists,
-            Name,
-            Database,
-            Table,
-            AccountsSet,
-            Comment,
-        )
+	    $$ = &tree.AccountsSetOption{
+	        All: true,
+	    }
     }
+    | ACCOUNT accounts_list
+    {
+    	$$ = &tree.AccountsSetOption{
+	        SetAccounts: $2,
+	    }
+    }
+
 
 create_stage_stmt:
     CREATE STAGE not_exists_opt ident urlparams stage_credentials_opt stage_status_opt stage_comment_opt
@@ -6666,14 +6702,15 @@ alter_stage_stmt:
 
 
 alter_publication_stmt:
-    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt alter_publication_db_name_opt comment_opt
+    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt alter_publication_db_name_opt alter_publication_table_opt comment_opt
     {
         var ifExists = $3
         var name = tree.Identifier($4.Compare())
         var accountsSet = $5
         var dbName = $6
-        var comment = $7
-        $$ = tree.NewAlterPublication(ifExists, name, accountsSet, dbName, comment)
+        var table = $7
+        var comment = $8
+        $$ = tree.NewAlterPublication(ifExists, name, accountsSet, dbName, table, comment)
     }
 
 alter_publication_accounts_opt:
@@ -6710,6 +6747,15 @@ alter_publication_db_name_opt:
 	    $$ = ""
     }
     | DATABASE db_name
+    {
+	    $$ = $2
+    }
+
+alter_publication_table_opt:
+    {
+	    $$ = nil
+    }
+    | TABLE table_name_list
     {
 	    $$ = $2
     }

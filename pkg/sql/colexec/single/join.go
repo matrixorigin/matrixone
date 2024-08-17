@@ -54,6 +54,13 @@ func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
 
 	if singleJoin.Cond != nil {
 		singleJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, singleJoin.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if singleJoin.ProjectList != nil {
+		err = singleJoin.PrepareProjection(proc)
 	}
 	return err
 }
@@ -91,23 +98,30 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 				return result, nil
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
+
+			anal.Input(bat, singleJoin.GetIsFirst())
 			if ctr.mp == nil {
-				if err := ctr.emptyProbe(bat, singleJoin, proc, anal, singleJoin.GetIsFirst(), singleJoin.GetIsLast(), &result); err != nil {
-					bat.Clean(proc.Mp())
+				if err := ctr.emptyProbe(bat, singleJoin, proc, &result); err != nil {
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			} else {
-				if err := ctr.probe(bat, singleJoin, proc, anal, singleJoin.GetIsFirst(), singleJoin.GetIsLast(), &result); err != nil {
-					bat.Clean(proc.Mp())
+				if err := ctr.probe(bat, singleJoin, proc, &result); err != nil {
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			}
-			proc.PutBatch(bat)
+
+			if singleJoin.ProjectList != nil {
+				var err error
+				result.Batch, err = singleJoin.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, singleJoin.GetIsLast())
 			return result, nil
 
 		default:
@@ -129,8 +143,7 @@ func (singleJoin *SingleJoin) build(anal process.Analyze, proc *process.Process)
 	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -145,13 +158,11 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, proc *process
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -306,7 +317,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Proc
 		}
 	}
 	ctr.rbat.SetRowCount(ctr.rbat.RowCount() + bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }

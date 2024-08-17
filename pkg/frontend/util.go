@@ -20,6 +20,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"runtime"
@@ -96,6 +97,10 @@ func Max(a int, b int) int {
 	}
 }
 
+const (
+	invalidGoroutineId = math.MaxUint64
+)
+
 // GetRoutineId gets the routine id
 func GetRoutineId() uint64 {
 	data := make([]byte, 64)
@@ -103,6 +108,9 @@ func GetRoutineId() uint64 {
 	data = bytes.TrimPrefix(data, []byte("goroutine "))
 	data = data[:bytes.IndexByte(data, ' ')]
 	id, _ := strconv.ParseUint(string(data), 10, 64)
+	if id == 0 {
+		id = invalidGoroutineId
+	}
 	return id
 }
 
@@ -774,7 +782,35 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					vData[rowIdx] = fmt.Sprintf("%v", row[colIdx])
 				}
 			}
-			err := vector.AppendStringList(bat.Vecs[colIdx], vData, nil, pool)
+			if err = vector.AppendStringList(bat.Vecs[colIdx], vData, nil, pool); err != nil {
+				return nil, nil, err
+			}
+		case types.T_text:
+			vData := make([][]byte, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				if val, ok := row[colIdx].([]byte); ok {
+					vData[rowIdx] = val
+				} else {
+					vData[rowIdx] = ([]byte)(fmt.Sprintf("%v", row[colIdx]))
+				}
+			}
+			if err = vector.AppendBytesList(bat.Vecs[colIdx], vData, nil, pool); err != nil {
+				return nil, nil, err
+			}
+		case types.T_int8:
+			vData := make([]int8, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(int8)
+			}
+			err := vector.AppendFixedList[int8](bat.Vecs[colIdx], vData, nil, pool)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -955,6 +991,16 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 				Id: int32(types.T_varchar),
 			}
 			tType = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+		case defines.MYSQL_TYPE_TEXT:
+			pType = plan.Type{
+				Id: int32(types.T_text),
+			}
+			tType = types.New(types.T_text, types.MaxVarcharLen, 0)
+		case defines.MYSQL_TYPE_TINY:
+			pType = plan.Type{
+				Id: int32(types.T_int8),
+			}
+			tType = types.New(types.T_int8, 0, 0)
 		case defines.MYSQL_TYPE_SHORT:
 			pType = plan.Type{
 				Id: int32(types.T_int16),
@@ -1273,25 +1319,25 @@ func splitKey(key string) (string, string) {
 	return parts[0], ""
 }
 
-type topsort struct {
+type toposort struct {
 	next map[string][]string
 }
 
-func (g *topsort) addVertex(v string) {
+func (g *toposort) addVertex(v string) {
 	if _, ok := g.next[v]; ok {
 		return
 	}
 	g.next[v] = make([]string, 0)
 }
 
-func (g *topsort) addEdge(from, to string) {
+func (g *toposort) addEdge(from, to string) {
 	if _, ok := g.next[from]; !ok {
 		g.next[from] = make([]string, 0)
 	}
 	g.next[from] = append(g.next[from], to)
 }
 
-func (g *topsort) sort() (ans []string, err error) {
+func (g *toposort) sort() (ans []string, err error) {
 	inDegree := make(map[string]uint)
 	for u := range g.next {
 		inDegree[u] = 0
@@ -1418,4 +1464,31 @@ func hashString(s string) string {
 	hash.Write(util.UnsafeStringToBytes(s))
 	hashBytes := hash.Sum(nil)
 	return hex.EncodeToString(hashBytes)
+}
+
+func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, error) {
+	var err error
+	c := new(MysqlColumn)
+	c.SetName(col.Name)
+	c.SetOrgName(col.GetOriginCaseName())
+	c.SetTable(col.TblName)
+	c.SetOrgTable(col.TblName)
+	c.SetAutoIncr(col.Typ.AutoIncr)
+	c.SetSchema(col.DbName)
+	err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
+	if err != nil {
+		return nil, err
+	}
+	setColFlag(c)
+	setColLength(c, col.Typ.Width)
+	setCharacter(c)
+
+	// For binary/varbinary with mysql_type_varchar.Change the charset.
+	if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
+		c.SetCharset(0x3f)
+	}
+
+	c.SetDecimal(col.Typ.Scale)
+	convertMysqlTextTypeToBlobType(c)
+	return c, nil
 }

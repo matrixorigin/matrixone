@@ -51,3 +51,17 @@ CREATE TABLE `t_mes_product_bom` (
 );
 INSERT INTO `t_mes_product_bom` VALUES (?);
 DROP TABLE IF EXISTS `t_mes_product_bom`;
+
+drop table if exists t1;
+create table t1 (a int primary key, b int);
+begin;
+alter table t1 alter column b drop default;
+-- @session:id=1{
+use prepare;
+prepare s1 from insert into t1 values (?, 2);
+set @a=1;
+-- @wait:0:commit
+execute s1 using @a;
+select * from t1;
+-- @session}
+commit;

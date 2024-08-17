@@ -37,6 +37,9 @@ func (indexJoin *IndexJoin) OpType() vm.OpType {
 func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
 	ap := indexJoin
 	ap.ctr = new(container)
+	if indexJoin.ProjectList != nil {
+		err = indexJoin.PrepareProjection(proc)
+	}
 	return err
 }
 
@@ -66,7 +69,6 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
@@ -85,9 +87,15 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				indexJoin.ctr.buf.SetVector(int32(i), vec)
 			}
 			indexJoin.ctr.buf.AddRowCount(bat.RowCount())
-			proc.PutBatch(bat)
 			result.Batch = indexJoin.ctr.buf
-			anal.Output(indexJoin.ctr.buf, indexJoin.GetIsLast())
+			if indexJoin.ProjectList != nil {
+				var err error
+				result.Batch, err = indexJoin.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, indexJoin.GetIsLast())
 			return result, nil
 
 		default:

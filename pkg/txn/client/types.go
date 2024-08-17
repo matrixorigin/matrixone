@@ -238,6 +238,8 @@ type TimestampWaiter interface {
 }
 
 type Workspace interface {
+	Readonly() bool
+
 	// StartStatement tag a statement is running
 	StartStatement()
 	// EndStatement tag end a statement is completed

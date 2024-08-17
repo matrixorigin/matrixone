@@ -51,7 +51,9 @@ type LoopJoin struct {
 	Result     []colexec.ResultPos
 	Typs       []types.Type
 	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopJoin *LoopJoin) GetOperatorBase() *vm.OperatorBase {
@@ -96,6 +98,11 @@ func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanExprExecutor()
 		loopJoin.ctr = nil
 	}
+	if loopJoin.ProjectList != nil {
+		anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
+		anal.Alloc(loopJoin.ProjectAllocSize)
+		loopJoin.FreeProjection(proc)
+	}
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
@@ -110,10 +117,6 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
-	}
-	if ctr.inBat != nil {
-		ctr.inBat.Clean(mp)
-		ctr.inBat = nil
 	}
 }
 

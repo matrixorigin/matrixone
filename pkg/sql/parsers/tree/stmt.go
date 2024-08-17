@@ -273,6 +273,10 @@ func (node *SetTransaction) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
+func (node *SetConnectionID) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
 func (node *LockTableStmt) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
@@ -416,7 +420,7 @@ func (node *ShowCreatePublications) StmtKind() StmtKind {
 }
 
 func (node *ShowPublications) StmtKind() StmtKind {
-	return defaultResRowTyp
+	return compositeResRowType
 }
 
 func (node *ShowTableSize) StmtKind() StmtKind {

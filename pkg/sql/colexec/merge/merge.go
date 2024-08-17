@@ -35,7 +35,11 @@ func (merge *Merge) OpType() vm.OpType {
 
 func (merge *Merge) Prepare(proc *process.Process) error {
 	merge.ctr = new(container)
-	merge.ctr.InitReceiver(proc, true)
+	if merge.Partial {
+		merge.ctr.InitReceiver(proc, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
+	} else {
+		merge.ctr.InitReceiver(proc, proc.Reg.MergeReceivers)
+	}
 	return nil
 }
 

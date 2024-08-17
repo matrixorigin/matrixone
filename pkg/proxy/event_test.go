@@ -421,14 +421,3 @@ func TestSetVarEvent(t *testing.T) {
 	default:
 	}
 }
-
-func TestEventType_String(t *testing.T) {
-	e1 := baseEvent{}
-	require.Equal(t, "Unknown", e1.eventType().String())
-
-	e2 := killQueryEvent{}
-	require.Equal(t, "KillQuery", e2.eventType().String())
-
-	e3 := setVarEvent{}
-	require.Equal(t, "SetVar", e3.eventType().String())
-}
