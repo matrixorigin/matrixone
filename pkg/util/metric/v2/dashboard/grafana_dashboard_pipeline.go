@@ -16,11 +16,12 @@ package dashboard
 
 import (
 	"context"
+
 	"github.com/K-Phoen/grabana/dashboard"
 )
 
 func (c *DashboardCreator) initPipelineDashBoard() error {
-	folder, err := c.createFolder(moFolderName)
+	folder, err := c.createFolder(c.folderName)
 	if err != nil {
 		return err
 	}

@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -54,10 +53,6 @@ var (
 	dropPitrFormat = `delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d order by pitr_id;`
 
 	alterPitrFormat = `update mo_catalog.mo_pitr set modified_time = '%s', pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s' and create_account = %d;`
-
-	getDbPubCountWithTsFormat = `select count(1) from mo_catalog.mo_pubs {MO_TS = %d} where database_name = '%s';`
-
-	restorePubDbDataWithTsFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {MO_TS = %d} WHERE  DATABASE_NAME = '%s'"
 
 	getPitrFormat = `select * from mo_catalog.mo_pitr`
 
@@ -106,14 +101,6 @@ func getSqlForDropPitr(pitrName string, accountId uint64) string {
 
 func getSqlForAlterPitr(modifiedTime string, pitrLength uint8, pitrUnit string, pitrName string, accountId uint64) string {
 	return fmt.Sprintf(alterPitrFormat, modifiedTime, pitrLength, pitrUnit, pitrName, accountId)
-}
-
-func getSqlForGetDbPubCountWithTimestamp(ctx context.Context, ts int64, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(getDbPubCountWithTsFormat, ts, dbName), nil
 }
 
 func getSqlForCheckDatabaseWithPitr(ctx context.Context, ts int64, dbName string) (string, error) {
@@ -720,7 +707,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 			// collect views and tables during table restoration
 			viewMap := make(map[string]*tableInfo)
 
-			rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts, restoreAccount)
+			rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts, restoreAccount, false, nil)
 			if rtnErr != nil {
 				return rtnErr
 			}
@@ -785,7 +772,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 	// restore according the restore level
 	switch restoreLevel {
 	case tree.RESTORELEVELCLUSTER:
-		if err = restoreToCluster(ctx, ses, bh, pitrName, ts); err != nil {
+		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, nil); err != nil {
 			return
 		}
 	case tree.RESTORELEVELACCOUNT:
@@ -793,11 +780,11 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 			return
 		}
 	case tree.RESTORELEVELDATABASE:
-		if err = restoreToDatabaseWithPitr(ctx, ses.GetService(), bh, pitrName, ts, dbName, fkTableMap, viewMap); err != nil {
+		if err = restoreToDatabaseWithPitr(ctx, ses.GetService(), bh, pitrName, ts, dbName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
 		}
 	case tree.RESTORELEVELTABLE:
-		if err = restoreToTableWithPitr(ctx, ses.service, bh, pitrName, ts, dbName, tblName, fkTableMap, viewMap); err != nil {
+		if err = restoreToTableWithPitr(ctx, ses.service, bh, pitrName, ts, dbName, tblName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
 		}
 
@@ -844,7 +831,8 @@ func restoreToAccountWithPitr(
 
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
-			if dbName == moCatalog {
+			// drop existing cluster table
+			if curAccount == 0 && dbName == moCatalog {
 				if err = dropClusterTable(ctx, sid, bh, "", curAccount); err != nil {
 					return
 				}
@@ -865,13 +853,28 @@ func restoreToAccountWithPitr(
 	}
 
 	for _, dbName := range dbNames {
-		if err = restoreToDatabaseWithPitr(ctx, sid, bh, pitrName, ts, dbName, fkTableMap, viewMap); err != nil {
+		if err = restoreToDatabaseWithPitr(
+			ctx,
+			sid,
+			bh,
+			pitrName,
+			ts,
+			dbName,
+			fkTableMap,
+			viewMap,
+			curAccount); err != nil {
 			return
 		}
 	}
 
 	//restore system db
-	if err = restoreSystemDatabaseWithPitr(ctx, sid, bh, pitrName, ts, curAccount); err != nil {
+	if err = restoreSystemDatabaseWithPitr(
+		ctx,
+		sid,
+		bh,
+		pitrName,
+		ts,
+		curAccount); err != nil {
 		return
 	}
 	return
@@ -885,7 +888,9 @@ func restoreToDatabaseWithPitr(
 	ts int64,
 	dbName string,
 	fkTableMap map[string]*tableInfo,
-	viewMap map[string]*tableInfo) (err error) {
+	viewMap map[string]*tableInfo,
+	curAccount uint32,
+) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore db: %v, restore timestamp: %d", pitrName, dbName, ts))
 
 	var databaseExist bool
@@ -896,7 +901,17 @@ func restoreToDatabaseWithPitr(
 		return moerr.NewInternalError(ctx, "database '%s' not exists at timestamp %d", dbName, ts)
 	}
 
-	return restoreToDatabaseOrTableWithPitr(ctx, sid, bh, pitrName, ts, dbName, "", fkTableMap, viewMap)
+	return restoreToDatabaseOrTableWithPitr(
+		ctx,
+		sid,
+		bh,
+		pitrName,
+		ts,
+		dbName,
+		"",
+		fkTableMap,
+		viewMap,
+		curAccount)
 }
 
 func restoreToTableWithPitr(
@@ -908,7 +923,9 @@ func restoreToTableWithPitr(
 	dbName string,
 	tblName string,
 	fkTableMap map[string]*tableInfo,
-	viewMap map[string]*tableInfo) (err error) {
+	viewMap map[string]*tableInfo,
+	curAccount uint32,
+) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s]  start to restore table: '%v' at timestamp %d", pitrName, tblName, ts))
 
 	var TableExist bool
@@ -918,7 +935,17 @@ func restoreToTableWithPitr(
 	if !TableExist {
 		return moerr.NewInternalError(ctx, "database '%s' table '%s' not exists at timestamp %d", dbName, tblName, ts)
 	}
-	return restoreToDatabaseOrTableWithPitr(ctx, sid, bh, pitrName, ts, dbName, tblName, fkTableMap, viewMap)
+	return restoreToDatabaseOrTableWithPitr(
+		ctx,
+		sid,
+		bh,
+		pitrName,
+		ts,
+		dbName,
+		tblName,
+		fkTableMap,
+		viewMap,
+		curAccount)
 }
 
 func restoreToDatabaseOrTableWithPitr(
@@ -930,7 +957,9 @@ func restoreToDatabaseOrTableWithPitr(
 	dbName string,
 	tblName string,
 	fkTableMap map[string]*tableInfo,
-	viewMap map[string]*tableInfo) (err error) {
+	viewMap map[string]*tableInfo,
+	curAccount uint32,
+) (err error) {
 	if needSkipDb(dbName) {
 		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: '%v'", pitrName, dbName))
 		return
@@ -941,7 +970,7 @@ func restoreToDatabaseOrTableWithPitr(
 	// if restore to db, delete the same name db first
 	if !restoreToTbl {
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to drop database: '%v'", pitrName, dbName))
-		if err = bh.Exec(ctx, "drop database if exists "+dbName); err != nil {
+		if err = dropDb(ctx, bh, dbName); err != nil {
 			return
 		}
 	}
@@ -953,7 +982,8 @@ func restoreToDatabaseOrTableWithPitr(
 
 	// restore publication record
 	if !restoreToTbl {
-		if err = checkAndRestorePublicationRecordWithPitr(ctx, sid, bh, pitrName, ts, dbName); err != nil {
+		getLogger(sid).Info(fmt.Sprintf("[%s] start to create pub: %v", pitrName, dbName))
+		if err = createPub(ctx, sid, bh, pitrName, dbName, curAccount); err != nil {
 			return
 		}
 	}
@@ -1296,54 +1326,6 @@ func restoreViewsWithPitr(
 		}
 	}
 	return nil
-}
-
-// checkAndRestorePublicationRecord checks if the database is publicated, if so, restore the publication record
-func checkAndRestorePublicationRecordWithPitr(
-	ctx context.Context,
-	sid string,
-	bh BackgroundExec,
-	pitrName string,
-	ts int64,
-	dbName string) (err error) {
-
-	// check if the database is publicated
-	sql, err := getSqlForGetDbPubCountWithTimestamp(ctx, ts, dbName)
-	if err != nil {
-		return
-	}
-
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to check if db '%v' is publicated, check sql: %s", pitrName, dbName, sql))
-
-	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, sql); err != nil {
-		return
-	}
-
-	erArray, err := getResultSet(ctx, bh)
-	if err != nil {
-		return
-	}
-
-	if execResultArrayHasData(erArray) {
-		var pubCount int64
-		if pubCount, err = erArray[0].GetInt64(ctx, 0, 0); err != nil {
-			return
-		}
-		if pubCount > 0 {
-			// restore the publication record
-
-			// insert data
-			insertIntoSql := fmt.Sprintf(restorePubDbDataWithTsFmt, moCatalog, catalog.MO_PUBS, moCatalog, catalog.MO_PUBS, ts, dbName)
-			getLogger(sid).Info(fmt.Sprintf("[%s] start to restore db '%s' pub record, insert sql: %s", pitrName, catalog.MO_PUBS, insertIntoSql))
-
-			if err = bh.Exec(ctx, insertIntoSql); err != nil {
-				return
-			}
-
-		}
-	}
-	return
 }
 
 func restoreSystemDatabaseWithPitr(
