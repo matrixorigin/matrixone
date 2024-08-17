@@ -197,8 +197,7 @@ func (l *store) healthCheck(term uint64, state *pb.CheckerState) {
 			l.runtime.Logger().Debug("adding schedule command to hakeeper", zap.String("command", cmd.LogString()))
 		}
 		if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
-			// TODO: check whether this is temp error
-			l.runtime.Logger().Debug("failed to add schedule commands", zap.Error(err))
+			l.runtime.Logger().Error("failed to add schedule commands", zap.Error(err))
 			return
 		}
 	}
@@ -242,13 +241,35 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 		for _, c := range cmds {
 			l.runtime.Logger().Debug("bootstrap cmd", zap.String("cmd", c.LogString()))
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
-		defer cancel()
-		if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
-			// TODO: check whether this is temp error
-			l.runtime.Logger().Debug("failed to add schedule commands", zap.Error(err))
-			return
+
+		addFn := func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+			defer cancel()
+			if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
+				l.runtime.Logger().Error("failed to add schedule commands", zap.Error(err))
+				return err
+			}
+			return nil
 		}
+
+		timeout := time.NewTimer(time.Minute)
+		defer timeout.Stop()
+
+	LOOP:
+		for {
+			select {
+			case <-timeout.C:
+				panic("failed to add commands in bootstrap")
+
+			default:
+				if err := addFn(); err != nil {
+					time.Sleep(time.Second)
+				} else {
+					break LOOP
+				}
+			}
+		}
+
 		l.bootstrapCheckCycles = checkBootstrapCycles
 		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo)
 		l.assertHAKeeperState(pb.HAKeeperBootstrapCommandsReceived)
