@@ -208,7 +208,7 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if ctr.state == vm.End {
-		return result, nil
+		return vm.CancelResult, nil
 	}
 
 	panic("bug")

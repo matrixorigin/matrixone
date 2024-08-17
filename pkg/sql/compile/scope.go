@@ -45,8 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
@@ -816,7 +814,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			flg = true
 			arg := op.(*limit.Limit)
 			toReleaseOpRoot = arg.GetChildren(0)
-			newArg := mergelimit.NewArgument().
+			newArg := limit.NewArgument().
 				WithLimit(arg.LimitExpr)
 			resetRootOp(parentOp, arg, newArg)
 
@@ -929,7 +927,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			flg = true
 			arg := op.(*offset.Offset)
 			toReleaseOpRoot = arg.GetChildren(0)
-			newArg := mergeoffset.NewArgument().
+			newArg := offset.NewArgument().
 				WithOffset(arg.OffsetExpr)
 			resetRootOp(parentOp, arg, newArg)
 

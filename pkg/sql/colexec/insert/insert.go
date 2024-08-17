@@ -200,8 +200,7 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 	}
 
 	if insert.ctr.state == vm.End {
-		anal.Output(result.Batch, insert.IsLast)
-		return result, nil
+		return vm.CancelResult, nil
 	}
 
 	panic("bug")
@@ -218,6 +217,7 @@ func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) 
 		return input, nil
 	}
 
+	affectedRows := uint64(input.Batch.RowCount())
 	if len(insert.InsertCtx.PartitionTableIDs) > 0 {
 		//@todo partition's insertBatches should have buf
 		insertBatches, err := colexec.GroupByPartitionForInsert(proc, input.Batch, insert.InsertCtx.Attrs, insert.InsertCtx.PartitionIndexInBatch, len(insert.InsertCtx.PartitionTableIDs))
@@ -252,7 +252,6 @@ func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) 
 	}
 
 	if insert.InsertCtx.AddAffectedRows {
-		affectedRows := uint64(insert.ctr.buf.Vecs[0].Length())
 		atomic.AddUint64(&insert.ctr.affectedRows, affectedRows)
 	}
 	// `insertBat` does not include partition expression columns

@@ -71,8 +71,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
@@ -419,18 +417,18 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
-	case vm.MergeLimit:
-		t := sourceOp.(*mergelimit.MergeLimit)
-		op := mergelimit.NewArgument()
-		op.Limit = t.Limit
-		op.SetInfo(&info)
-		return op
-	case vm.MergeOffset:
-		t := sourceOp.(*mergeoffset.MergeOffset)
-		op := mergeoffset.NewArgument()
-		op.Offset = t.Offset
-		op.SetInfo(&info)
-		return op
+	// case vm.MergeLimit:
+	// 	t := sourceOp.(*mergelimit.MergeLimit)
+	// 	op := mergelimit.NewArgument()
+	// 	op.Limit = t.Limit
+	// 	op.SetInfo(&info)
+	// 	return op
+	// case vm.MergeOffset:
+	// 	t := sourceOp.(*mergeoffset.MergeOffset)
+	// 	op := mergeoffset.NewArgument()
+	// 	op.Offset = t.Offset
+	// 	op.SetInfo(&info)
+	// 	return op
 	case vm.MergeTop:
 		t := sourceOp.(*mergetop.MergeTop)
 		op := mergetop.NewArgument()
@@ -1301,9 +1299,13 @@ func constructOffset(n *plan.Node, proc *process.Process) *offset.Argument {
 }
 */
 
+func constructOffset(n *plan.Node) *offset.Offset {
+	arg := offset.NewArgument().WithOffset(n.Offset)
+	return arg
+}
+
 func constructLimit(n *plan.Node) *limit.Limit {
-	arg := limit.NewArgument()
-	arg.LimitExpr = plan2.DeepCopyExpr(n.Limit)
+	arg := limit.NewArgument().WithLimit(n.Limit)
 	return arg
 }
 
@@ -1585,15 +1587,15 @@ func constructMergeTop(n *plan.Node, topN *plan.Expr) *mergetop.MergeTop {
 	return arg
 }
 
-func constructMergeOffset(n *plan.Node) *mergeoffset.MergeOffset {
-	arg := mergeoffset.NewArgument().WithOffset(n.Offset)
-	return arg
-}
+// func constructMergeOffset(n *plan.Node) *mergeoffset.MergeOffset {
+// 	arg := mergeoffset.NewArgument().WithOffset(n.Offset)
+// 	return arg
+// }
 
-func constructMergeLimit(n *plan.Node) *mergelimit.MergeLimit {
-	arg := mergelimit.NewArgument().WithLimit(n.Limit)
-	return arg
-}
+// func constructMergeLimit(n *plan.Node) *mergelimit.MergeLimit {
+// 	arg := mergelimit.NewArgument().WithLimit(n.Limit)
+// 	return arg
+// }
 
 func constructMergeOrder(n *plan.Node) *mergeorder.MergeOrder {
 	arg := mergeorder.NewArgument()

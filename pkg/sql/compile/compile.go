@@ -68,7 +68,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -2643,7 +2642,7 @@ func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
-		op := offset.NewArgument().WithOffset(n.Offset)
+		op := constructOffset(n)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
 		c.anal.isFirst = false
@@ -2653,7 +2652,7 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag := c.anal.isFirst
-	arg := constructMergeOffset(n)
+	arg := constructOffset(n)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -2684,7 +2683,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag = c.anal.isFirst
-	arg := constructMergeLimit(n)
+	arg := constructLimit(n)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false

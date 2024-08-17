@@ -150,7 +150,7 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if top.ctr.state == vm.End {
-		return result, nil
+		return vm.CancelResult, nil
 	}
 
 	panic("bug")
