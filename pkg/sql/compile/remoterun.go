@@ -1259,10 +1259,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ProjectList = opr.ProjectList
 		op = arg
 		DecodeMergeGroup(op.(*mergegroup.MergeGroup), opr.Agg)
-	case vm.MergeLimit:
-		op = mergelimit.NewArgument().WithLimit(opr.Limit)
-	case vm.MergeOffset:
-		op = mergeoffset.NewArgument().WithOffset(opr.Offset)
+	// case vm.MergeLimit:
+	// 	op = mergelimit.NewArgument().WithLimit(opr.Limit)
+	// case vm.MergeOffset:
+	// 	op = mergeoffset.NewArgument().WithOffset(opr.Offset)
 	case vm.MergeTop:
 		op = mergetop.NewArgument().
 			WithLimit(opr.Limit).

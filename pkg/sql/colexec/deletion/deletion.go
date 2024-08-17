@@ -192,7 +192,7 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 	}
 
 	if deletion.ctr.state == vm.End {
-		return result, nil
+		return vm.CancelResult, nil
 	}
 
 	panic("bug")
