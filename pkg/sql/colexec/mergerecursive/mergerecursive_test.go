@@ -74,6 +74,7 @@ func TestMergeRecursive(t *testing.T) {
 		require.NoError(t, err)
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
+		tc.arg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())

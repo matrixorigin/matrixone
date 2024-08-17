@@ -109,9 +109,7 @@ func (loopMark *LoopMark) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanBatch(proc.Mp())
 	ctr.cleanExprExecutor()
 
-	if loopMark.ProjectList != nil {
-		loopMark.FreeProjection(proc)
-	}
+	loopMark.FreeProjection(proc)
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

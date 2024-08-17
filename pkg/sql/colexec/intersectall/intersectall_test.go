@@ -61,6 +61,9 @@ func TestIntersectAll(t *testing.T) {
 	}
 	require.Equal(t, 2, cnt) // 1 row
 
+	for _, child := range c.arg.Children {
+		child.Reset(proc, false, nil)
+	}
 	c.arg.Reset(c.proc, false, nil)
 
 	setProcForTest(proc, c.arg)
@@ -81,8 +84,10 @@ func TestIntersectAll(t *testing.T) {
 	require.Equal(t, 2, cnt) // 1 row
 
 	for _, child := range c.arg.Children {
+		child.Reset(proc, false, nil)
 		child.Free(proc, false, nil)
 	}
+	c.arg.Reset(c.proc, false, nil)
 	c.arg.Free(c.proc, false, nil)
 	c.proc.Free()
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())

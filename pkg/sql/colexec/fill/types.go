@@ -114,6 +114,12 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
 	}
+	for _, b := range ctr.bats {
+		if b != nil {
+			b.Clean(proc.GetMPool())
+		}
+	}
+	ctr.bats = ctr.bats[:0]
 
 	if fill.ProjectList != nil {
 		anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
@@ -128,11 +134,7 @@ func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr.freeExes()
 	ctr.freeVectors(proc.Mp())
 
-	if fill.ProjectList != nil {
-		anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
-		anal.Alloc(fill.ProjectAllocSize)
-		fill.FreeProjection(proc)
-	}
+	fill.FreeProjection(proc)
 }
 
 func (ctr *container) freeBatch(mp *mpool.MPool) {

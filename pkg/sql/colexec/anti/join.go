@@ -173,11 +173,6 @@ func (ctr *container) emptyProbe(ap *AntiJoin, inbat *batch.Batch, proc *process
 func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Process, result *vm.CallResult) error {
 	mpbat := ctr.mp.GetBatches()
 
-	if ctr.batchRowCount == 1 && ctr.hasNull {
-		result.Batch = ctr.rbat
-		return nil
-	}
-
 	if err := ctr.evalJoinCondition(inbat, proc); err != nil {
 		return err
 	}

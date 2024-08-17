@@ -146,12 +146,8 @@ func (rightSemi *RightSemi) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (rightSemi *RightSemi) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &rightSemi.ctr
-	if !ctr.handledLast && rightSemi.NumCPU > 1 && !rightSemi.IsMerger {
-		rightSemi.Channel <- nil
-	}
 	ctr.cleanBatch(proc)
 	ctr.cleanEvalVectors()
-	ctr.cleanHashMap()
 	ctr.cleanExprExecutor()
 
 	ctr.tmpBatches = nil

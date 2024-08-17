@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
-	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
@@ -69,21 +68,12 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 	}
 	top.ctr.limit = vector.MustFixedCol[uint64](vec)[0]
 
-	// sels
-	selsCap := int(top.ctr.limit)
-	if selsCap > 1024 {
-		selsCap = 1024
+	if top.ctr.limit > 1024 {
+		top.ctr.sels = make([]int64, 0, 1024)
+	} else {
+		top.ctr.sels = make([]int64, 0, top.ctr.limit)
 	}
-	if c := cap(top.ctr.sels); c < selsCap {
-		top.ctr.sels = slices.Grow(top.ctr.sels, selsCap-c)
-	}
-	top.ctr.sels = top.ctr.sels[:0]
-
-	// poses
-	if c := cap(top.ctr.poses); c < len(top.Fs) {
-		top.ctr.poses = slices.Grow(top.ctr.poses, len(top.Fs)-c)
-	}
-	top.ctr.poses = top.ctr.poses[:0]
+	top.ctr.poses = make([]int32, 0, len(top.Fs))
 
 	if len(top.ctr.executorsForOrderColumn) != len(top.Fs) {
 		top.ctr.executorsForOrderColumn = make([]colexec.ExpressionExecutor, len(top.Fs))

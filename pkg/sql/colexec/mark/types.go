@@ -184,6 +184,10 @@ func (markJoin *MarkJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.cleanHashMap()
 	ctr.resetBatch(proc.Mp())
 	ctr.state = Build
+	ctr.sels = nil
+	ctr.nullSels = nil
+	ctr.markVals = nil
+	ctr.markNulls = nil
 
 	if markJoin.ProjectList != nil {
 		anal.Alloc(markJoin.ProjectAllocSize + markJoin.ctr.maxAllocSize)
@@ -197,17 +201,11 @@ func (markJoin *MarkJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 
 func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &markJoin.ctr
-	anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
-	allocSize := ctr.maxAllocSize
 
 	ctr.cleanBatch(proc.Mp())
 	ctr.cleanExecutor()
 
-	if markJoin.ProjectList != nil {
-		allocSize += markJoin.ProjectAllocSize
-		markJoin.FreeProjection(proc)
-	}
-	anal.Alloc(allocSize)
+	markJoin.FreeProjection(proc)
 }
 
 func (ctr *container) resetBatch(mp *mpool.MPool) {

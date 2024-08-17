@@ -108,11 +108,7 @@ func (loopSingle *LoopSingle) Free(proc *process.Process, pipelineFailed bool, e
 	ctr.cleanBatch(proc.Mp())
 	ctr.cleanExprExecutor()
 
-	if loopSingle.ProjectList != nil {
-		anal := proc.GetAnalyze(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor())
-		anal.Alloc(loopSingle.ProjectAllocSize)
-		loopSingle.FreeProjection(proc)
-	}
+	loopSingle.FreeProjection(proc)
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

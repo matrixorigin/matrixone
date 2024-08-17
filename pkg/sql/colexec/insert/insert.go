@@ -131,7 +131,7 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 			anal.Input(input.Batch, insert.IsFirst)
 			if insert.InsertCtx.AddAffectedRows {
 				affectedRows := uint64(input.Batch.RowCount())
-				atomic.AddUint64(&insert.affectedRows, affectedRows)
+				atomic.AddUint64(&insert.ctr.affectedRows, affectedRows)
 			}
 
 			// If the target is partition table
@@ -253,7 +253,7 @@ func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) 
 
 	if insert.InsertCtx.AddAffectedRows {
 		affectedRows := uint64(insert.ctr.buf.Vecs[0].Length())
-		atomic.AddUint64(&insert.affectedRows, affectedRows)
+		atomic.AddUint64(&insert.ctr.affectedRows, affectedRows)
 	}
 	// `insertBat` does not include partition expression columns
 	anal.Output(input.Batch, insert.IsLast)

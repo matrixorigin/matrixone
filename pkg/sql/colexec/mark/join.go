@@ -70,9 +70,7 @@ func (markJoin *MarkJoin) Prepare(proc *process.Process) error {
 			}
 		}
 
-		if markJoin.ProjectList != nil {
-			err = markJoin.PrepareProjection(proc)
-		}
+		err = markJoin.PrepareProjection(proc)
 	}
 
 	return err

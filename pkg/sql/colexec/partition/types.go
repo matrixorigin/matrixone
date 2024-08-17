@@ -95,18 +95,21 @@ func (partition *Partition) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr := &partition.ctr
 
 	ctr.resetExes()
+	ctr.resetParam()
+	ctr.freeVector(proc.Mp())
+	ctr.freeBatch(proc.Mp())
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
 	}
-	ctr.resetParam()
 }
 
 func (partition *Partition) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &partition.ctr
-
 	ctr.freeExes()
-	ctr.freeBatch(proc.Mp())
-	ctr.freeVector(proc.Mp())
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
+	}
 }
 
 func (ctr *container) freeBatch(mp *mpool.MPool) {
@@ -114,11 +117,6 @@ func (ctr *container) freeBatch(mp *mpool.MPool) {
 		if bat != nil {
 			bat.Clean(mp)
 		}
-	}
-	ctr.batchList = nil
-	if ctr.buf != nil {
-		ctr.buf.Clean(mp)
-		ctr.buf = nil
 	}
 	ctr.batchList = nil
 }
@@ -155,6 +153,6 @@ func (ctr *container) resetExes() {
 
 func (ctr *container) resetParam() {
 	ctr.i = 0
-	ctr.indexList = ctr.indexList[:0]
+	ctr.indexList = nil
 	ctr.status = receive
 }

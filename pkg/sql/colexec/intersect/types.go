@@ -94,8 +94,6 @@ func (intersect *Intersect) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (intersect *Intersect) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &intersect.ctr
-	ctr.cleanHashMap()
-	ctr.putCnts(proc)
 	if ctr.buf != nil {
 		ctr.buf.Clean(proc.Mp())
 		ctr.buf = nil

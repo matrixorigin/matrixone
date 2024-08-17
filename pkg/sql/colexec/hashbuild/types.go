@@ -104,17 +104,16 @@ func (hashBuild *HashBuild) Release() {
 func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashBuild.ctr
 	ctr.state = BuildHashMap
+	ctr.runtimeFilterIn = false
+	ctr.inputBatchRowCount = 0
 	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
 	if ctr.batches != nil {
 		ctr.batches = ctr.batches[:0]
 	}
-	if ctr.buf != nil {
-		ctr.buf.CleanOnlyData()
-	}
 	ctr.intHashMap = nil
 	ctr.strHashMap = nil
-	if ctr.multiSels != nil {
+	if len(ctr.multiSels) > 0 {
 		ctr.multiSels = ctr.multiSels[:0]
 	}
 	for i := range ctr.executor {
@@ -126,8 +125,6 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashBuild.ctr
-	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
-	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
 	ctr.batches = nil
 	ctr.buf = nil
 	ctr.intHashMap = nil

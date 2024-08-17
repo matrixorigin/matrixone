@@ -74,7 +74,6 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		return input, nil
 	}
 	bat := input.Batch
-	mergeBlock.resetMp(proc)
 	if err := mergeBlock.Split(proc, bat); err != nil {
 		return input, err
 	}
@@ -95,8 +94,9 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 				if err = mergeBlock.container.partitionSources[i].Write(proc.Ctx, bat); err != nil {
 					return input, err
 				}
-
+				bat.Clean(proc.GetMPool())
 			}
+			mergeBlock.container.mp2[i] = mergeBlock.container.mp2[i][:0]
 		}
 	} else {
 		// handle origin/main table.
@@ -112,7 +112,9 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 			if err = mergeBlock.container.source.Write(proc.Ctx, bat); err != nil {
 				return input, err
 			}
+			bat.Clean(proc.GetMPool())
 		}
+		mergeBlock.container.mp2[0] = mergeBlock.container.mp2[0][:0]
 	}
 
 	anal.Output(input.Batch, mergeBlock.IsLast)

@@ -71,7 +71,7 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 				ctr.exes = append(ctr.exes, exe)
 			}
 		}
-		for i, _ := range fill.FillVal {
+		for i := range fill.FillVal {
 			ctr.valVecs[i], err = ctr.exes[i].Eval(proc, []*batch.Batch{b}, nil)
 			if err != nil {
 				return err

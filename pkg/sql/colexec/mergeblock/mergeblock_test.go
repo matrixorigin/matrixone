@@ -115,7 +115,6 @@ func TestMergeBlock(t *testing.T) {
 			mp2:    make(map[int][]*batch.Batch),
 		},
 		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
-		affectedRows: 0,
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
 				Idx:     0,
@@ -130,7 +129,7 @@ func TestMergeBlock(t *testing.T) {
 	// argument1.Prepare(proc)
 	_, err := argument1.Call(proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(15*3), argument1.affectedRows)
+	require.Equal(t, uint64(15*3), argument1.container.affectedRows)
 	// Check Tbl
 	{
 		result := argument1.container.source.(*mockRelation).result
@@ -207,7 +206,6 @@ func TestArgument_GetMetaLocBat(t *testing.T) {
 			mp2:    make(map[int][]*batch.Batch),
 		},
 		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
-		affectedRows: 0,
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
 				Idx:     0,
@@ -228,7 +226,6 @@ func TestArgument_GetMetaLocBat(t *testing.T) {
 
 	require.Equal(t, 2, len(arg.container.mp[0].Vecs))
 
-	arg.container.mp[0].Clean(proc.GetMPool())
 	bat.Clean(proc.GetMPool())
 
 	bat = mockBlockInfoBat(proc, false)

@@ -37,7 +37,6 @@ const (
 type container struct {
 	state int
 
-	hasNull       bool
 	batchRowCount int64
 	rbat          *batch.Batch
 
@@ -112,6 +111,7 @@ func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()
 	ctr.state = Build
+	ctr.batchRowCount = 0
 
 	if antiJoin.ProjectList != nil {
 		anal.Alloc(antiJoin.ProjectAllocSize + antiJoin.ctr.maxAllocSize)

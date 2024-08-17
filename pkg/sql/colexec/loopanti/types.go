@@ -108,9 +108,7 @@ func (loopAnti *LoopAnti) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanExprExecutor()
 	ctr.cleanBatch(proc)
 
-	if loopAnti.ProjectList != nil {
-		loopAnti.FreeProjection(proc)
-	}
+	loopAnti.FreeProjection(proc)
 }
 
 func (ctr *container) resetExprExecutor() {

@@ -328,7 +328,7 @@ func (c *Compile) run(s *Scope) error {
 		}
 		mergeArg := s.RootOp.(*mergedelete.MergeDelete)
 		if mergeArg.AddAffectedRows {
-			c.addAffectedRows(mergeArg.AffectedRows)
+			c.addAffectedRows(mergeArg.AffectedRows())
 		}
 		return nil
 	case Remote:

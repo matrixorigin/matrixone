@@ -48,7 +48,7 @@ func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (preInsertUnique *PreInsertUnique) initBuf(proc *process.Process, bat *batch.Batch, uniqueColumnPos []int32, pkPos int, isUpdate bool) {
+func (preInsertUnique *PreInsertUnique) initBuf(bat *batch.Batch, uniqueColumnPos []int32, pkPos int, isUpdate bool) {
 	if preInsertUnique.ctr.buf != nil {
 		preInsertUnique.ctr.buf.CleanOnlyData()
 		return
@@ -95,7 +95,7 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 	uniqueColumnPos := preInsertUnique.PreInsertCtx.Columns
 	pkPos := int(preInsertUnique.PreInsertCtx.PkColumn)
 	isUpdate := inputBat.Vecs[len(inputBat.Vecs)-1].GetType().Oid == types.T_Rowid
-	preInsertUnique.initBuf(proc, inputBat, uniqueColumnPos, pkPos, isUpdate)
+	preInsertUnique.initBuf(inputBat, uniqueColumnPos, pkPos, isUpdate)
 
 	colCount := len(uniqueColumnPos)
 

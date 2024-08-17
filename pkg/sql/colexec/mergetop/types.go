@@ -98,11 +98,10 @@ func (mergeTop *MergeTop) Free(proc *process.Process, pipelineFailed bool, err e
 }
 
 func (ctr *container) reset() {
-
 	ctr.n = 0
-	ctr.sels = ctr.sels[:0]
-	ctr.poses = ctr.poses[:0]
-	ctr.cmps = ctr.cmps[:0]
+	ctr.sels = nil
+	ctr.poses = nil
+	ctr.cmps = nil
 
 	ctr.limit = 0
 	if ctr.limitExecutor != nil {
@@ -123,6 +122,7 @@ func (ctr *container) reset() {
 func (ctr *container) free(proc *process.Process) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc.Mp())
+		ctr.bat = nil
 	}
 
 	for i := range ctr.executorsForOrderList {
@@ -131,10 +131,12 @@ func (ctr *container) free(proc *process.Process) {
 		}
 		ctr.executorsForOrderList[i].Free()
 	}
+	ctr.executorsForOrderList = nil
 
 	if ctr.limitExecutor != nil {
 		ctr.limitExecutor.Free()
 	}
+	ctr.limitExecutor = nil
 }
 
 func (ctr *container) compare(vi, vj int, i, j int64) int {

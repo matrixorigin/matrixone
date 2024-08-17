@@ -75,6 +75,7 @@ func TestIntersect(t *testing.T) {
 	for _, child := range c.arg.Children {
 		child.Free(proc, false, nil)
 	}
+	c.arg.Reset(c.proc, false, nil)
 	c.arg.Free(c.proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())

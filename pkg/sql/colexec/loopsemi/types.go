@@ -92,6 +92,7 @@ func (loopSemi *LoopSemi) Reset(proc *process.Process, pipelineFailed bool, err 
 
 	ctr.resetExprExecutor()
 	ctr.state = Build
+	ctr.lastrow = 0
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc.Mp())
 		ctr.bat = nil
@@ -110,11 +111,7 @@ func (loopSemi *LoopSemi) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanBatch(proc.Mp())
 	ctr.cleanExprExecutor()
 
-	if loopSemi.ProjectList != nil {
-		anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
-		anal.Alloc(loopSemi.ProjectAllocSize)
-		loopSemi.FreeProjection(proc)
-	}
+	loopSemi.FreeProjection(proc)
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

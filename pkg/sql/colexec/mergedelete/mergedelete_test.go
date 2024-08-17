@@ -45,6 +45,7 @@ func TestMergeDelete(t *testing.T) {
 	proc := testutil.NewProc()
 	proc.Ctx = context.TODO()
 	metaLocBat0 := &batch.Batch{
+		Cnt: 1,
 		Attrs: []string{
 			catalog.BlockMetaOffset,
 		},
@@ -57,6 +58,7 @@ func TestMergeDelete(t *testing.T) {
 
 	vcu32, _ := vector.NewConstFixed(types.T_uint32.ToType(), uint32(15), 1, proc.GetMPool())
 	batch1 := &batch.Batch{
+		Cnt: 1,
 		Attrs: []string{
 			catalog.BlockMeta_Delete_ID,
 			catalog.BlockMeta_DeltaLoc,
@@ -76,6 +78,7 @@ func TestMergeDelete(t *testing.T) {
 	uuid1 := objectio.NewSegmentid()
 	blkId1 := objectio.NewBlockid(uuid1, 0, 0)
 	metaLocBat1 := &batch.Batch{
+		Cnt: 1,
 		Attrs: []string{
 			catalog.Row_ID,
 		},
@@ -103,6 +106,7 @@ func TestMergeDelete(t *testing.T) {
 	require.Nil(t, err)
 
 	metaLocBat2 := &batch.Batch{
+		Cnt: 1,
 		Attrs: []string{
 			catalog.BlockMetaOffset,
 		},
@@ -114,6 +118,7 @@ func TestMergeDelete(t *testing.T) {
 	require.Nil(t, err)
 
 	metaLocBat3 := &batch.Batch{
+		Cnt: 1,
 		Attrs: []string{
 			catalog.BlockMeta_DeltaLoc,
 		},
@@ -126,6 +131,7 @@ func TestMergeDelete(t *testing.T) {
 
 	vcu32_2, _ := vector.NewConstFixed(types.T_uint32.ToType(), uint32(45), 3, proc.GetMPool())
 	batch2 := &batch.Batch{
+		Cnt: 1,
 		Attrs: []string{
 			catalog.BlockMeta_Delete_ID,
 			catalog.BlockMeta_DeltaLoc,
@@ -147,7 +153,7 @@ func TestMergeDelete(t *testing.T) {
 		ctr: container{
 			delSource: &mockRelation{},
 		},
-		AffectedRows: 0,
+		AddAffectedRows: true,
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
 				Idx:     0,
@@ -161,12 +167,12 @@ func TestMergeDelete(t *testing.T) {
 	resetChildren(&argument1, batch1)
 	_, err = argument1.Call(proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(15), argument1.AffectedRows)
+	require.Equal(t, uint64(15), argument1.AffectedRows())
 
 	resetChildren(&argument1, batch2)
 	_, err = argument1.Call(proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(60), argument1.AffectedRows)
+	require.Equal(t, uint64(60), argument1.AffectedRows())
 
 	// free resource
 	argument1.Free(proc, false, nil)
@@ -176,9 +182,7 @@ func TestMergeDelete(t *testing.T) {
 	metaLocBat3.Clean(proc.GetMPool())
 	batch1.Clean(proc.GetMPool())
 	batch2.Clean(proc.GetMPool())
-	// constVector can't free
-	// 2 * 16 is 2 header of const vector.
-	require.Equal(t, int64(16+2*16), proc.GetMPool().CurrNB())
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
 func resetChildren(arg *MergeDelete, bat *batch.Batch) {

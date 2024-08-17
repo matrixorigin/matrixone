@@ -122,12 +122,14 @@ func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bo
 
 func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &shuffleBuild.ctr
-	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
-	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
 	ctr.intHashMap = nil
 	ctr.strHashMap = nil
 	ctr.multiSels = nil
 	ctr.batches = nil
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.GetMPool())
+		ctr.buf = nil
+	}
 	ctr.cleanEvalVectors()
 }
 

@@ -83,8 +83,10 @@ func TestDispatch(t *testing.T) {
 			}
 		}*/
 		_, _ = tc.arg.Call(tc.proc)
-		tc.arg.Free(tc.proc, false, nil)
+		tc.arg.Children[0].Reset(tc.proc, false, nil)
 		tc.arg.Children[0].Free(tc.proc, false, nil)
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
 		for _, re := range tc.arg.LocalRegs {
 			for len(re.Ch) > 0 {
 				msg := <-re.Ch
