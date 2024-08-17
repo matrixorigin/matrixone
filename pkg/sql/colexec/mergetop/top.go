@@ -103,7 +103,7 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
-	if mergeTop.ctr.bat == nil {
+	if mergeTop.ctr.bat == nil || mergeTop.ctr.bat.IsEmpty() {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
@@ -117,6 +117,9 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (ctr *container) build(ap *MergeTop, proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
+	if ctr.bat != nil {
+		ctr.bat.CleanOnlyData()
+	}
 	for {
 		result, err := ap.GetChildren(0).Call(proc)
 		if err != nil {

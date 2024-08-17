@@ -73,6 +73,16 @@ func (preInsert *PreInsert) initBuf(proc *proc, bat *batch.Batch) (err error) {
 				return err
 			}
 		} else {
+			if bat.Vecs[idx].IsConst() {
+				//expland const vector
+				typ := bat.Vecs[idx].GetType()
+				tmpVec := vector.NewVec(*typ)
+				if err := vector.GetUnionAllFunction(*typ, proc.Mp())(tmpVec, bat.Vecs[idx]); err != nil {
+					return err
+				}
+				bat.Vecs[idx].Free(proc.GetMPool())
+				bat.Vecs[idx] = tmpVec
+			}
 			preInsert.ctr.buf.SetVector(int32(idx), bat.Vecs[idx])
 		}
 	}

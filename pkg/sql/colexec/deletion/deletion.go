@@ -77,6 +77,7 @@ func (deletion *Deletion) Prepare(proc *process.Process) error {
 		deletion.ctr.source = rel
 		deletion.ctr.partitionSources = partitionRels
 	}
+	deletion.ctr.affectedRows = 0
 
 	return nil
 }
@@ -260,7 +261,7 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 	}
 
 	if delCtx.AddAffectedRows {
-		atomic.AddUint64(&deletion.affectedRows, affectedRows)
+		atomic.AddUint64(&deletion.ctr.affectedRows, affectedRows)
 	}
 	return result, nil
 }

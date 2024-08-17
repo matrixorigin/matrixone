@@ -85,9 +85,10 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		offset.ctr.buf.Shrink(sels, false)
 		proc.Mp().PutSels(sels)
+		offset.ctr.seen += uint64(length)
+		return vm.CallResult{Batch: offset.ctr.buf, Status: vm.ExecNext}, nil
 	}
-	offset.ctr.seen += uint64(length)
-	return vm.CallResult{Batch: offset.ctr.buf, Status: vm.ExecNext}, nil
+	return vm.CancelResult, nil
 }
 
 func newSels(start, count int64, proc *process.Process) []int64 {
