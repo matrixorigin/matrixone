@@ -584,6 +584,21 @@ const (
 	TombstoneData
 )
 
+type TombstoneApplyPolicy uint64
+
+const (
+	Policy_SkipUncommitedInMemory = 1 << iota
+	Policy_SkipCommittedInMemory
+	Policy_SkipUncommitedS3
+	Policy_SkipCommittedS3
+)
+
+const (
+	Policy_CheckAll             = 0
+	Policy_CheckCommittedS3Only = Policy_SkipUncommitedInMemory | Policy_SkipCommittedInMemory | Policy_SkipUncommitedS3
+	Policy_CheckCommittedOnly   = Policy_SkipUncommitedInMemory | Policy_SkipUncommitedS3
+)
+
 type Tombstoner interface {
 	Type() TombstoneType
 	HasAnyInMemoryTombstone() bool
@@ -592,7 +607,7 @@ type Tombstoner interface {
 	String() string
 	StringWithPrefix(string) string
 
-	HasTombstones() bool
+	HasTombstones(bid types.Blockid) bool
 
 	MarshalBinaryWithBuffer(w *bytes.Buffer) error
 	UnmarshalBinary(buf []byte) error
@@ -817,7 +832,9 @@ type Relation interface {
 		relData RelData,
 		num int,
 		txnOffset int,
-		orderBy bool) ([]Reader, error)
+		orderBy bool,
+		policy TombstoneApplyPolicy,
+	) ([]Reader, error)
 
 	TableColumns(ctx context.Context) ([]*Attribute, error)
 

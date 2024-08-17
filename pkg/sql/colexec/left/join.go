@@ -89,7 +89,6 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				if bat.IsEmpty() {
-					proc.PutBatch(bat)
 					continue
 				}
 				leftJoin.ctr.bat = bat
@@ -107,7 +106,6 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 			if leftJoin.ctr.lastrow == 0 {
-				proc.PutBatch(leftJoin.ctr.bat)
 				leftJoin.ctr.bat = nil
 			} else if leftJoin.ctr.lastrow == startrow {
 				return result, moerr.NewInternalErrorNoCtx("left join hanging")

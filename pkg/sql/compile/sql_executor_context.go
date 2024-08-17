@@ -192,7 +192,10 @@ func (c *compilerContext) GetDbLevelConfig(dbName string, varName string) (strin
 }
 
 func (c *compilerContext) DefaultDatabase() string {
-	return c.defaultDB
+	if c.lower == 0 {
+		return c.defaultDB
+	}
+	return strings.ToLower(c.defaultDB)
 }
 
 func (c *compilerContext) GetPrimaryKeyDef(
