@@ -338,6 +338,6 @@ var (
 			Buckets:   getShortDurationBuckets(),
 		}, []string{"type"})
 
-	TransferTombstonesDurationHistogram = txnTransferDurationHistogram.WithLabelValues("tombstones")
-	TransferRowidsDurationHistogram     = txnTransferDurationHistogram.WithLabelValues("rowids")
+	TransferTombstonesDurationHistogram      = txnTransferDurationHistogram.WithLabelValues("tombstones")
+	BatchTransferTombstonesDurationHistogram = txnTransferDurationHistogram.WithLabelValues("batch")
 )

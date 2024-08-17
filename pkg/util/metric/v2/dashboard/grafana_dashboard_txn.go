@@ -539,7 +539,7 @@ func (c *DashboardCreator) initTxnTransferRow() dashboard.Option {
 		),
 		c.getPercentHist(
 			"Batch transfer tombstone duration",
-			c.getMetricWithFilter(`mo_txn_transfer_duration_bucket`, `type="rowids"`),
+			c.getMetricWithFilter(`mo_txn_transfer_duration_bucket`, `type="batch"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			SpanNulls(true),
 			timeseries.Span(4),
