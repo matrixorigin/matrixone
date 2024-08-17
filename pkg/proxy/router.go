@@ -18,16 +18,13 @@ import (
 	"context"
 	"time"
 
-	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-	"go.uber.org/zap"
 )
 
 const (
@@ -64,66 +61,6 @@ type RefreshableRouter interface {
 	Router
 
 	Refresh(sync bool)
-}
-
-// CNServer represents the backend CN server, including salt, tenant, uuid and address.
-// When there is a new client connection, a new CNServer will be created.
-type CNServer struct {
-	// connID is the backend CN server's connection ID, which is global unique
-	// and is tracked in connManager.
-	connID uint32
-	// salt is generated in proxy module and will be sent to backend
-	// server when build connection.
-	salt []byte
-	// reqLabel is the client requests, but not the label which CN server really has.
-	reqLabel labelInfo
-	// cnLabel is the labels that CN server has.
-	cnLabel map[string]metadata.LabelList
-	// hash keep the hash in it.
-	hash LabelHash
-	// uuid of the CN server.
-	uuid string
-	// addr is the net address of CN server.
-	addr string
-	// internalConn indicates the connection is from internal network. Default is false,
-	internalConn bool
-
-	// clientAddr is the real client address.
-	clientAddr string
-}
-
-// Connect connects to backend server and returns IOSession.
-func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IOSession, error) {
-	c := goetty.NewIOSession(
-		goetty.WithSessionCodec(frontend.NewSqlCodec()),
-		goetty.WithSessionLogger(logger),
-	)
-	err := c.Connect(s.addr, timeout)
-	if err != nil {
-		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, error: %v",
-			timeout, s.connID, s.addr, err)
-		return nil, newConnectErr(err)
-	}
-	if len(s.salt) != 20 {
-		return nil, moerr.NewInternalErrorNoCtx("salt is empty")
-	}
-	info := pb.ExtraInfo{
-		Salt:         s.salt,
-		InternalConn: s.internalConn,
-		ConnectionID: s.connID,
-		Label:        s.reqLabel.allLabels(),
-		ClientAddr:   s.clientAddr,
-	}
-	data, err := info.Encode()
-	if err != nil {
-		return nil, err
-	}
-	// When build connection with backend server, proxy send its salt, request
-	// labels and other information to the backend server.
-	if err := c.Write(data, goetty.WriteOptions{Flush: true}); err != nil {
-		return nil, err
-	}
-	return c, nil
 }
 
 // router can route the client connections to backend CN servers.
@@ -250,25 +187,19 @@ func (r *router) Route(ctx context.Context, sid string, c clientInfo, filter fun
 	v2.ProxyAvailableBackendServerNumGauge.
 		WithLabelValues(string(c.Tenant)).Set(float64(cnCount))
 
-	// getHash returns same hash for same labels.
-	hash, err := c.labelInfo.getHash()
-	if err != nil {
-		return nil, err
-	}
-
 	if cnCount == 0 {
 		return nil, noCNServerErr
 	} else if cnCount == 1 {
-		cns[0].hash = hash
+		cns[0].hash = c.hash
 		return cns[0], nil
 	}
 
-	s := r.rebalancer.connManager.selectOne(hash, cns)
+	s := r.rebalancer.connManager.selectOne(c.hash, cns)
 	if s == nil {
 		return nil, ErrNoAvailableCNServers
 	}
 	// Set the label hash for the select one.
-	s.hash = hash
+	s.hash = c.hash
 	return s, nil
 }
 
