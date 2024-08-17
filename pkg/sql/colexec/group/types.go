@@ -77,6 +77,9 @@ func (ev *ExprEvalVector) ResetForNextQuery() {
 }
 
 type container struct {
+	// if skipInitReusableMem is true, we will skip some initialization of reusable.
+	skipInitReusableMem bool
+
 	typ       int
 	state     vm.CtrState
 	inserted  []uint8
@@ -158,16 +161,13 @@ func (group *Group) Release() {
 	}
 }
 
-func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	group.Free(proc, pipelineFailed, err)
-}
-
 func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) {
 	mp := proc.Mp()
 	group.ctr.cleanBatch(mp)
 	group.ctr.cleanHashMap()
 	group.ctr.cleanAggVectors()
 	group.ctr.cleanGroupVectors()
+	group.ctr.skipInitReusableMem = false
 
 	if group.ProjectList != nil {
 		anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())

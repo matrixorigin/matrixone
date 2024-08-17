@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -58,68 +58,73 @@ func (group *Group) OpType() vm.OpType {
 }
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
-	group.ctr.inserted = make([]uint8, hashmap.UnitLimit)
-	group.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
-	group.ctr.state = vm.Build
+	if !group.ctr.skipInitReusableMem {
+		group.ctr.inserted = make([]uint8, hashmap.UnitLimit)
+		group.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 
-	// create executors for aggregation functions.
-	if len(group.Aggs) > 0 {
-		group.ctr.aggVecs = make([]ExprEvalVector, len(group.Aggs))
-		for i, ag := range group.Aggs {
-			expressions := ag.GetArgExpressions()
-			if group.ctr.aggVecs[i], err = MakeEvalVector(proc, expressions); err != nil {
-				return err
-			}
-		}
-	}
-
-	// create executors for group-by columns.
-	group.ctr.keyWidth = 0
-	if group.Exprs != nil {
-		group.ctr.groupVecsNullable = false
-		group.ctr.groupVecs, err = MakeEvalVector(proc, group.Exprs)
-		if err != nil {
-			return err
-		}
-		for _, gv := range group.Exprs {
-			group.ctr.groupVecsNullable = group.ctr.groupVecsNullable || (!gv.Typ.NotNullable)
-		}
-
-		for _, expr := range group.Exprs {
-			typ := expr.Typ
-			width := types.T(typ.Id).TypeLen()
-			if types.T(typ.Id).FixedLength() < 0 {
-				if typ.Width == 0 {
-					switch types.T(typ.Id) {
-					case types.T_array_float32:
-						width = 128 * 4
-					case types.T_array_float64:
-						width = 128 * 8
-					default:
-						width = 128
-					}
-				} else {
-					switch types.T(typ.Id) {
-					case types.T_array_float32:
-						width = int(typ.Width) * 4
-					case types.T_array_float64:
-						width = int(typ.Width) * 8
-					default:
-						width = int(typ.Width)
-					}
+		// create executors for aggregation columns.
+		if len(group.Aggs) > 0 {
+			group.ctr.aggVecs = make([]ExprEvalVector, len(group.Aggs))
+			for i, ag := range group.Aggs {
+				expressions := ag.GetArgExpressions()
+				if group.ctr.aggVecs[i], err = MakeEvalVector(proc, expressions); err != nil {
+					return err
 				}
 			}
-			group.ctr.keyWidth += width
-			if group.ctr.groupVecsNullable {
-				group.ctr.keyWidth += 1
+		}
+
+		// calculate the key width and set the hashmap type.
+		// create executors for group-by columns.
+		group.ctr.keyWidth = 0
+		if group.Exprs != nil {
+			group.ctr.groupVecsNullable = false
+			group.ctr.groupVecs, err = MakeEvalVector(proc, group.Exprs)
+			if err != nil {
+				return err
+			}
+			for _, gv := range group.Exprs {
+				group.ctr.groupVecsNullable = group.ctr.groupVecsNullable || (!gv.Typ.NotNullable)
+			}
+
+			for _, expr := range group.Exprs {
+				typ := expr.Typ
+				width := types.T(typ.Id).TypeLen()
+				if types.T(typ.Id).FixedLength() < 0 {
+					if typ.Width == 0 {
+						switch types.T(typ.Id) {
+						case types.T_array_float32:
+							width = 128 * 4
+						case types.T_array_float64:
+							width = 128 * 8
+						default:
+							width = 128
+						}
+					} else {
+						switch types.T(typ.Id) {
+						case types.T_array_float32:
+							width = int(typ.Width) * 4
+						case types.T_array_float64:
+							width = int(typ.Width) * 8
+						default:
+							width = int(typ.Width)
+						}
+					}
+				}
+				group.ctr.keyWidth += width
+				if group.ctr.groupVecsNullable {
+					group.ctr.keyWidth += 1
+				}
 			}
 		}
+		if group.ctr.keyWidth <= 8 {
+			group.ctr.typ = H8
+		} else {
+			group.ctr.typ = HStr
+		}
+
+		group.ctr.skipInitReusableMem = true
 	}
-	if group.ctr.keyWidth <= 8 {
-		group.ctr.typ = H8
-	} else {
-		group.ctr.typ = HStr
-	}
+	group.ctr.state = vm.Build
 
 	if group.ProjectList != nil {
 		err = group.PrepareProjection(proc)
@@ -127,7 +132,6 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 			return
 		}
 	}
-
 	return nil
 }
 
