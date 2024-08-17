@@ -334,7 +334,7 @@ var (
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "transfer_duration",
-			Help:      "Bucketed histogram of short tn task execute duration.",
+			Help:      "Bucketed histogram of tombstones transfer durations.",
 			Buckets:   getShortDurationBuckets(),
 		}, []string{"type"})
 

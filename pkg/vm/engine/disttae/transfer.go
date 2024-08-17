@@ -68,6 +68,7 @@ func TransferTombstones(
 	wantDetail := false
 	var transferCnt int
 	start := time.Now()
+	v2.TransferTombstonesCountHistogram.Observe(1)
 	defer func() {
 		duration := time.Since(start)
 		if duration > time.Millisecond*500 || err != nil || wantDetail {
@@ -82,7 +83,6 @@ func TransferTombstones(
 				zap.Error(err),
 			)
 		}
-		v2.TransferTombstonesCountHistogram.Observe(1)
 		v2.TransferTombstonesDurationHistogram.Observe(duration.Seconds())
 	}()
 	var objectList []objectio.ObjectStats
