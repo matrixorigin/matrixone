@@ -35,6 +35,7 @@ type ServiceOperator interface {
 	ServiceType() metadata.ServiceType
 	Index() int
 	Adjust(func(*ServiceConfig))
+	RawService() interface{}
 
 	Start() error
 	Close() error

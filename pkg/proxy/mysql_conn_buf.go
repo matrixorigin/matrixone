@@ -44,6 +44,7 @@ type MySQLCmd byte
 
 // cmdQuery is a query cmd.
 const (
+	cmdQuit   MySQLCmd = 0x01
 	cmdQuery  MySQLCmd = 0x03
 	cmdInitDB MySQLCmd = 0x02
 	// For stmt prepare and execute cmd from JDBC.
@@ -61,11 +62,17 @@ type MySQLConn struct {
 // newMySQLConn creates a new MySQLConn. reqC and respC are used for client
 // connection to handle events from client.
 func newMySQLConn(
-	name string, c net.Conn, sz int, reqC chan IEvent, respC chan []byte, cid uint32,
+	name string,
+	c net.Conn,
+	sz int,
+	reqC chan IEvent,
+	respC chan []byte,
+	connCacheEnabled bool,
+	cid uint32,
 ) *MySQLConn {
 	return &MySQLConn{
 		Conn:   c,
-		msgBuf: newMsgBuf(name, c, sz, reqC, respC, cid),
+		msgBuf: newMsgBuf(name, c, sz, reqC, respC, connCacheEnabled, cid),
 	}
 }
 
@@ -96,11 +103,19 @@ type msgBuf struct {
 	reqC chan IEvent
 	// respC is the channel of event response.
 	respC chan []byte
+	// connCacheEnabled is a function returns if the connection cache is enabled.
+	connCacheEnabled bool
 }
 
 // newMsgBuf creates a new message buffer.
 func newMsgBuf(
-	name string, src io.Reader, bufLen int, reqC chan IEvent, respC chan []byte, cid uint32,
+	name string,
+	src io.Reader,
+	bufLen int,
+	reqC chan IEvent,
+	respC chan []byte,
+	connCacheEnabled bool,
+	cid uint32,
 ) *msgBuf {
 	var availLen, extraLen int
 	if bufLen < mysqlHeadLen {
@@ -119,6 +134,8 @@ func newMsgBuf(
 		name:     name,
 		reqC:     reqC,
 		respC:    respC,
+		// set the connCache flag.
+		connCacheEnabled: connCacheEnabled,
 	}
 }
 
@@ -174,7 +191,13 @@ func (b *msgBuf) consumeClient(msg []byte) bool {
 	if e == nil {
 		return false
 	}
+
+	// send this event to the request channel.
 	sendReq(e, b.reqC)
+
+	// after send, wait the event finished.
+	e.wait()
+
 	// We cannot write to b.src directly here. The response has
 	// to go to the server conn buf, and lock writeMu then
 	// write to client.
@@ -233,7 +256,7 @@ func (b *msgBuf) sendTo(dst io.Writer) error {
 
 	var handled bool
 
-	if dataLeft == 0 {
+	if dataLeft == 0 && b.name == connClientName {
 		handled = b.consumeClient(b.buf[readPos:writePos])
 		// means the query has been handled
 		if handled {

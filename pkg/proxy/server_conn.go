@@ -16,6 +16,8 @@ package proxy
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -26,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"go.uber.org/zap"
 )
 
@@ -47,7 +51,20 @@ type ServerConn interface {
 	// The first return value indicates that if the execution result is OK.
 	// NB: the stmt can only be simple stmt, which returns OK or Err only.
 	ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error)
-	// Close closes the connection to CN server.
+	// GetCNServer returns the cn server instance of the server connection.
+	GetCNServer() *CNServer
+	// SetConnResponse sets the login response which is returned from a cn server.
+	// It is mainly used in connection cache. When a connection is reused, the response
+	// will be sent to client.
+	SetConnResponse(r []byte)
+	// GetConnResponse returns the connection response which is got from a cn server.
+	GetConnResponse() []byte
+	// CreateTime return the creation time of the server connection.
+	CreateTime() time.Time
+	// Quit sends quit command to cn server and disconnect from connection manager
+	// and close the TCP connection.
+	Quit() error
+	// Close disconnect with connection manager.
 	Close() error
 }
 
@@ -65,6 +82,13 @@ type serverConn struct {
 	rebalancer *rebalancer
 	// tun is the tunnel which this server connection belongs to.
 	tun *tunnel
+	// connResp is the response bytes which is got from cn server when
+	// connect to the cn.
+	connResp []byte
+	// createTime is the creation time of this connection.
+	createTime time.Time
+	// closeOnce only close the connection once.
+	closeOnce sync.Once
 }
 
 var _ ServerConn = (*serverConn)(nil)
@@ -85,6 +109,7 @@ func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Durati
 		connID:     nextServerConnID(),
 		rebalancer: r,
 		tun:        tun,
+		createTime: time.Now(),
 	}
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
@@ -197,15 +222,52 @@ func (s *serverConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, erro
 	return execOK, nil
 }
 
+// GetCNServer implements the ServerConn interface.
+func (s *serverConn) GetCNServer() *CNServer {
+	return s.cnServer
+}
+
+// SetConnResponse implements the ServerConn interface.
+func (s *serverConn) SetConnResponse(r []byte) {
+	s.connResp = r
+}
+
+// GetConnResponse implements the ServerConn interface.
+func (s *serverConn) GetConnResponse() []byte {
+	return s.connResp
+}
+
+// CreateTime implements the ServerConn interface.
+func (s *serverConn) CreateTime() time.Time {
+	return s.createTime
+}
+
+func (s *serverConn) Quit() error {
+	defer func() {
+		// Disconnect from the connection manager, also, close the
+		// raw TCP connection.
+		_ = s.RawConn().Close()
+	}()
+	_, err := s.ExecStmt(internalStmt{
+		cmdType: cmdQuit,
+	}, nil)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
+
 // Close implements the ServerConn interface.
 func (s *serverConn) Close() error {
-	if s.mysqlProto != nil {
-		tcpConn := s.mysqlProto.GetTcpConnection()
-		if tcpConn != nil {
-			_ = tcpConn.Close()
+	s.closeOnce.Do(func() {
+		if s.mysqlProto != nil {
+			tcpConn := s.mysqlProto.GetTcpConnection()
+			if tcpConn != nil {
+				_ = tcpConn.Close()
+			}
+			s.mysqlProto.Close()
 		}
-		s.mysqlProto.Close()
-	}
+	})
 	// Un-track the connection.
 	s.rebalancer.connManager.disconnect(s.cnServer, s.tun)
 	return nil
@@ -227,4 +289,63 @@ func (s *serverConn) readPacket() (*frontend.Packet, error) {
 // nextServerConnID increases baseConnID by 1 and returns the result.
 func nextServerConnID() uint32 {
 	return atomic.AddUint32(&serverBaseConnID, 1)
+}
+
+// CNServer represents the backend CN server, including salt, tenant, uuid and address.
+// When there is a new client connection, a new CNServer will be created.
+type CNServer struct {
+	// connID is the backend CN server's connection ID, which is global unique
+	// and is tracked in connManager.
+	connID uint32
+	// salt is generated in proxy module and will be sent to backend
+	// server when build connection.
+	salt []byte
+	// reqLabel is the client requests, but not the label which CN server really has.
+	reqLabel labelInfo
+	// cnLabel is the labels that CN server has.
+	cnLabel map[string]metadata.LabelList
+	// hash keep the hash in it.
+	hash LabelHash
+	// uuid of the CN server.
+	uuid string
+	// addr is the net address of CN server.
+	addr string
+	// internalConn indicates the connection is from internal network. Default is false,
+	internalConn bool
+	// clientAddr is the real client address.
+	clientAddr string
+}
+
+// Connect connects to backend server and returns IOSession.
+func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IOSession, error) {
+	c := goetty.NewIOSession(
+		goetty.WithSessionCodec(frontend.NewSqlCodec()),
+		goetty.WithSessionLogger(logger),
+	)
+	err := c.Connect(s.addr, timeout)
+	if err != nil {
+		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, error: %v",
+			timeout, s.connID, s.addr, err)
+		return nil, newConnectErr(err)
+	}
+	if len(s.salt) != 20 {
+		return nil, moerr.NewInternalErrorNoCtx("salt is empty")
+	}
+	info := pb.ExtraInfo{
+		Salt:         s.salt,
+		InternalConn: s.internalConn,
+		ConnectionID: s.connID,
+		Label:        s.reqLabel.allLabels(),
+		ClientAddr:   s.clientAddr,
+	}
+	data, err := info.Encode()
+	if err != nil {
+		return nil, err
+	}
+	// When build connection with backend server, proxy send its salt, request
+	// labels and other information to the backend server.
+	if err := c.Write(data, goetty.WriteOptions{Flush: true}); err != nil {
+		return nil, err
+	}
+	return c, nil
 }

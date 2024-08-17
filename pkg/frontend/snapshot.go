@@ -1012,9 +1012,11 @@ func restoreViews(
 				return err
 			}
 
+			getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to create view: %v, create view sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
 			if err = bh.Exec(toCtx, tblInfo.createSql); err != nil {
 				return err
 			}
+			getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] restore view: %v success", snapshotName, tblInfo.tblName))
 		}
 	}
 	return nil
