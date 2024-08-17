@@ -193,10 +193,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 		if s.DataSource.isConst {
 			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 		} else {
-			if s.NodeInfo.Data == nil {
-				s.NodeInfo.Data = engine.BuildEmptyRelData()
-			}
 			if s.DataSource.R == nil {
+				s.NodeInfo.Data = engine.BuildEmptyRelData()
 				readers, _, err := s.buildReaders(c, 1)
 				if err != nil {
 					return err
@@ -305,8 +303,15 @@ func (s *Scope) MergeRun(c *Compile) error {
 		}
 	}()
 
-	if err := s.Run(c); err != nil {
-		return err
+	if s.Magic != Normal && s.DataSource != nil {
+		s.Magic = Normal
+		if err := s.ParallelRun(c); err != nil {
+			return err
+		}
+	} else {
+		if err := s.Run(c); err != nil {
+			return err
+		}
 	}
 
 	// receive and check error from pre-scopes and remote scopes.
@@ -409,8 +414,9 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 
 	// probability 3: it's a SCAN pipeline.
 	case s.DataSource != nil:
+		fmt.Println("before parallel run" + DebugShowScopes([]*Scope{s}))
 		parallelScope, err = buildScanParallelRun(s, c)
-		//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
+		fmt.Println("after parallel run" + DebugShowScopes([]*Scope{parallelScope}))
 
 	// others.
 	default:
@@ -428,6 +434,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	if parallelScope.Magic == Normal {
 		return parallelScope.Run(c)
 	}
+	parallelScope.Magic = Normal
 	return parallelScope.MergeRun(c)
 }
 
@@ -569,6 +576,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	for i := 0; i < scanUsedCpuNumber; i++ {
 		readerScopes[i] = newScope(Normal)
 		readerScopes[i].NodeInfo = s.NodeInfo
+		readerScopes[i].NodeInfo.Mcpu = 1
 		readerScopes[i].DataSource = &Source{
 			R:            readers[i],
 			SchemaName:   s.DataSource.SchemaName,
@@ -586,6 +594,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		ReleaseScopes(readerScopes)
 		return nil, err
 	}
+	mergeFromParallelScanScope.DataSource = nil
 	return mergeFromParallelScanScope, nil
 }
 
