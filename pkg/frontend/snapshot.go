@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -68,6 +69,8 @@ var (
 	getPubInfoWithSnapshotFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {snapshot = '%s'} where database_name = '%s';`
 
 	getRestoreAccountsFmt = "select account_name, account_id from mo_catalog.mo_account where account_name in (select account_name from mo_catalog.mo_account {MO_TS = %d }) ORDER BY account_id ASC;"
+
+	getSubsSqlFmt = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs %s where 1=1"
 
 	//getDropAccountFmt = "select account_name from mo_catalog.mo_account where account_name not in (select account_name from mo_catalog.mo_account {MO_TS = %d });"
 
@@ -756,27 +759,28 @@ func restoreToDatabaseOrTable(
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to create database: %v", snapshotName, dbName))
 
 	if isSubDb {
-		var err2 error
+
 		// check if the publication exists
 		// if the publication exists, create the db with the publication
 		// else skip restore the db
-		pubName, err2 := extractPubNameFromCreateDbSql(toCtx, createDbSql)
-		if err2 != nil {
-			return err2
-		}
-		pubInfo, err2 := getPubInfo(toCtx, bh, pubName)
-		if err2 != nil {
-			return err2
+
+		var isPubExist bool
+		isPubExist, err = checkPubExistOrNot(ctx, sid, bh, snapshotName, dbName)
+		if err != nil {
+			return
 		}
 
-		if pubInfo != nil {
-			// create db with publication
-			getLogger(sid).Info(fmt.Sprintf("[%s] start to create db with pub: %v, create db sql: %s", snapshotName, pubName, createDbSql))
-			if err = bh.Exec(toCtx, createDbSql); err != nil {
-				return
-			}
+		if !isPubExist {
+			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, dbName))
+			return
 		}
-		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, dbName))
+
+		// create db with publication
+		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db with pub: %v, create db sql: %s", snapshotName, dbName, createDbSql))
+		if err = bh.Exec(toCtx, createDbSql); err != nil {
+			return
+		}
+
 		return
 	} else {
 		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbName)
@@ -878,6 +882,17 @@ func restoreToSubDb(
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore sub db: %v", snapshotName, subDb.dbName))
 
 	toCtx := defines.AttachAccountId(ctx, subDb.Account)
+
+	var isPubExist bool
+	isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, subDb.dbName)
+	if err != nil {
+		return
+	}
+
+	if !isPubExist {
+		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, subDb.dbName))
+		return
+	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] account %d start to create sub db: %v, create db sql: %s", snapshotName, subDb.Account, subDb.dbName, subDb.createSql))
 	if err = bh.Exec(toCtx, subDb.createSql); err != nil {
@@ -1789,24 +1804,129 @@ func createPub(
 	return
 }
 
-func extractPubNameFromCreateDbSql(ctx context.Context, createDbSql string) (string, error) {
-	var ast []tree.Statement
-	var err error
-	if ast, err = mysql.Parse(ctx, createDbSql, 1); err != nil {
-		return "", err
+func checkPubExistOrNot(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	subName string,
+) (bool, error) {
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to check pub exist or not", snapshotName))
+	subInfos, err := getSubInfosFromSubWithSnapshot(
+		ctx,
+		sid,
+		bh,
+		snapshotName,
+		subName)
+	if err != nil {
+		return false, err
+	} else if len(subInfos) == 0 {
+		return false, moerr.NewInternalError(ctx, "there is no subscription for database %s", subName)
 	}
 
-	if len(ast) == 0 {
-		return "", moerr.NewInternalError(ctx, "parse create db sql failed")
+	subInfo := subInfos[0]
+	var isPubValid bool
+	isPubValid, err = checkSubscriptionExist(
+		ctx,
+		sid,
+		bh,
+		subInfo.PubAccountName,
+		subInfo.PubName)
+	if err != nil {
+		return false, err
+	} else if !isPubValid {
+		return false, moerr.NewInternalError(ctx, "there is no publication %s", subInfo.PubName)
 	}
-	createDbStmt, ok := ast[0].(*tree.CreateDatabase)
-	if !ok {
-		return "", moerr.NewInternalError(ctx, "parse create db sql failed")
+	return true, nil
+}
+
+func getSubInfosFromSubWithSnapshot(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	subName string,
+) (subInfo []*pubsub.SubInfo, err error) {
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to get sub info from sub with snapshot", snapshotName))
+	subAccountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+
+	var getSubSqlString string
+	if len(snapshotName) > 0 {
+		getSubSqlString = fmt.Sprintf(fmt.Sprintf(getSubsSqlFmt, "{snapshot = '%s'}"), snapshotName)
+	} else {
+		getSubSqlString = fmt.Sprintf(getSubsSqlFmt, "")
 	}
 
-	if createDbStmt.SubscriptionOption == nil {
-		return "", moerr.NewInternalError(ctx, "create db sql has no subscription option")
+	sql := getSubSqlString + fmt.Sprintf(" and sub_account_id = %d", subAccountId)
+	if len(subName) > 0 {
+		sql += fmt.Sprintf(" and sub_name = '%s'", subName)
 	}
 
-	return string(createDbStmt.SubscriptionOption.Publication), nil
+	getLogger(sid).Info(fmt.Sprintf("[%s] get sub info from sub with snapshot sql: %s", snapshotName, sql))
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	return extractSubInfosFromExecResult(ctx, erArray)
+}
+
+func checkSubscriptionExist(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	pubAccountName,
+	pubName string) (isPubValid bool, err error) {
+
+	var (
+		sql     string
+		erArray []ExecResult
+		accId   int64
+	)
+
+	newCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	//get pubAccountId from publication info
+	if sql, err = getSqlForAccountIdAndStatus(newCtx, pubAccountName, true); err != nil {
+		return
+	}
+
+	getLogger(sid).Info(fmt.Sprintf("[%s] check subscription exist or not: get account id sql: %s", pubName, sql))
+	bh.ClearExecResultSet()
+	if err = bh.Exec(newCtx, sql); err != nil {
+		return
+	}
+
+	if erArray, err = getResultSet(newCtx, bh); err != nil {
+		return
+	}
+
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(newCtx, "there is no publication account %s", pubAccountName)
+		return
+	}
+	if accId, err = erArray[0].GetInt64(newCtx, 0, 0); err != nil {
+		return
+	}
+
+	//check the publication is already exist or not
+	newCtx = defines.AttachAccountId(ctx, uint32(accId))
+	pubInfo, err := getPubInfo(newCtx, bh, pubName)
+	if err != nil {
+		return
+	}
+	if pubInfo == nil {
+		err = moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
+		return
+	}
+
+	return
 }
