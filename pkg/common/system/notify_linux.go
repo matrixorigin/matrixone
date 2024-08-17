@@ -40,8 +40,8 @@ const (
 // pls, this function is run-in-container logic.
 func runWatchCgroupConfig(stopper *stopper.Stopper) {
 	// there are three cases while using cgroup, see more in cgroups.FromCgroup()
-	// ignore cgroups.Legacy and cgroups.Hybrid case.
-	if mode := cgroups.Mode(); mode != cgroups.Unified {
+	// ignore cgroups.Legacy case.
+	if mode := cgroups.Mode(); mode == cgroups.Legacy {
 		logutil.Warnf("ignore watch cgroup config in cgroupv1.")
 		return
 	}
@@ -58,14 +58,14 @@ func runWatchCgroupConfig(stopper *stopper.Stopper) {
 	cpuFd, err := unix.InotifyAddWatch(fd, filepath.Join(cgDir, cgroupv2CPULimit), unix.IN_MODIFY)
 	if err != nil {
 		unix.Close(fd)
-		logutil.Errorf("unable to add inotify watch: %v", err)
+		logutil.Errorf("unable to add inotify watch cpu.max: %v", err)
 		return
 	}
 	// watch memory.max modified
 	memFd, err := unix.InotifyAddWatch(fd, filepath.Join(cgDir, cgroupv2MemLimit), unix.IN_MODIFY)
 	if err != nil {
 		unix.Close(fd)
-		logutil.Errorf("unable to add inotify watch: %v", err)
+		logutil.Errorf("unable to add inotify watch memory.max: %v", err)
 		return
 	}
 
