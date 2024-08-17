@@ -17,10 +17,10 @@ package dashboard
 import (
 	"context"
 	"fmt"
-	"github.com/K-Phoen/grabana/timeseries"
 
 	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
+	"github.com/K-Phoen/grabana/timeseries"
 )
 
 func (c *DashboardCreator) initTxnDashboard() error {
