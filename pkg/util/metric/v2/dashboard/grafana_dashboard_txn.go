@@ -51,7 +51,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnRangesCountRow(),
 			c.initTxnShowAccountsRow(),
 			c.initCNCommittedObjectQuantityRow(),
-			c.initTxnTransferRow(),
+			c.initTombstoneTransferRow(),
 		)...)
 	if err != nil {
 		return err
@@ -517,9 +517,9 @@ func (c *DashboardCreator) initTxnReaderDurationRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initTxnTransferRow() dashboard.Option {
+func (c *DashboardCreator) initTombstoneTransferRow() dashboard.Option {
 	return dashboard.Row(
-		"Txn transfer duration",
+		"Tombstone transfer duration",
 		c.getTimeSeries(
 			"Transfer tombstones count",
 			[]string{fmt.Sprintf(
