@@ -203,7 +203,6 @@ func newTestCase(flgs []bool, ts []types.Type, exprIdx []int, pos int32) groupTe
 		proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 		arg: &Group{
 			Exprs: exprs,
-			Types: ts,
 			Aggs:  aggs,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{

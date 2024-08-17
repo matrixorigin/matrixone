@@ -33,7 +33,6 @@ var _ vm.Operator = new(Group)
 const (
 	H8 = iota
 	HStr
-	HIndex
 )
 
 type ExprEvalVector struct {
@@ -85,7 +84,6 @@ type container struct {
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
-	// idx        *index.LowCardinalityIndex
 
 	aggVecs   []ExprEvalVector
 	groupVecs ExprEvalVector
@@ -99,7 +97,6 @@ type container struct {
 
 type Group struct {
 	ctr          *container
-	IsShuffle    bool // is shuffle group
 	NeedEval     bool // need to projection the aggregate column
 	PreAllocSize uint64
 
@@ -147,11 +144,6 @@ func NewArgument() *Group {
 
 func (group *Group) WithExprs(exprs []*plan.Expr) *Group {
 	group.Exprs = exprs
-	return group
-}
-
-func (group *Group) WithTypes(types []types.Type) *Group {
-	group.Types = types
 	return group
 }
 

@@ -140,11 +140,9 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 	case vm.Group:
 		t := sourceOp.(*group.Group)
 		op := group.NewArgument()
-		op.IsShuffle = t.IsShuffle
 		op.PreAllocSize = t.PreAllocSize
 		op.NeedEval = t.NeedEval
 		op.Exprs = t.Exprs
-		op.Types = t.Types
 		op.Aggs = t.Aggs
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -1355,10 +1353,8 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
 	}
 
-	shuffleGroup := false
 	var preAllocSize uint64 = 0
 	if n.Stats != nil && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
-		shuffleGroup = true
 		if cn.NodeType == plan.Node_TABLE_SCAN && len(cn.FilterList) == 0 {
 			// if group on scan without filter, stats for hashmap is accurate to do preAlloc
 			// tune it up a little bit in case it is not so average after shuffle
@@ -1368,10 +1364,8 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 
 	arg := group.NewArgument()
 	arg.Aggs = aggregationExpressions
-	arg.Types = typs
 	arg.NeedEval = needEval
 	arg.Exprs = n.GroupBy
-	arg.IsShuffle = shuffleGroup
 	arg.PreAllocSize = preAllocSize
 	return arg
 }

@@ -847,7 +847,6 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			for j := range ss {
 				groupOp := group.NewArgument().
 					WithExprs(arg.Exprs).
-					WithTypes(arg.Types).
 					WithAggsNew(arg.Aggs)
 				groupOp.SetInfo(&vm.OperatorInfo{
 					Idx:         arg.Idx,
