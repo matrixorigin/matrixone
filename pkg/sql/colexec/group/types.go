@@ -104,7 +104,6 @@ type Group struct {
 	PreAllocSize uint64
 
 	Exprs []*plan.Expr // group Expressions
-	Types []types.Type
 	Aggs  []aggexec.AggFuncExecExpression
 
 	vm.OperatorBase
