@@ -2217,7 +2217,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return L2DistanceArray[float32]
+					return newXCallFunction(XCALL_L2DISTANCE_F32).XCall
 				},
 			},
 			{
@@ -2227,7 +2227,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return L2DistanceArray[float64]
+					return newXCallFunction(XCALL_L2DISTANCE_F64).XCall
 				},
 			},
 		},
@@ -2247,7 +2247,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return L2DistanceSqArray[float32]
+					return newXCallFunction(XCALL_L2DISTANCE_SQ_F32).XCall
 				},
 			},
 			{
@@ -2257,7 +2257,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return L2DistanceSqArray[float64]
+					return newXCallFunction(XCALL_L2DISTANCE_SQ_F64).XCall
 				},
 			},
 		},

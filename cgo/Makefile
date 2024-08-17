@@ -1,7 +1,9 @@
 DEBUG_OPT :=
-OPT_LV := -O3
+# Yeah, fast math.  We want it to be fast, for all xcall, 
+# IEEE compliance should not be an issue.
+OPT_LV := -O3 -ffast-math
 CFLAGS=-std=c99 -g ${OPT_LV} -Wall -Werror
-OBJS=mo.o arith.o compare.o logic.o
+OBJS=mo.o arith.o compare.o logic.o xcall.o
 
 all: libmo.a
 
