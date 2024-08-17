@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -618,6 +619,7 @@ func (c *PushClient) waitTimestamp() {
 func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err error) {
 	// replay mo_catalog cache
 	var op client.TxnOperator
+	var result executor.Result
 	ts := c.receivedLogTailTime.getTimestamp()
 	typeTs := types.TimestampToTS(ts)
 	createByOpt := client.WithTxnCreateBy(
@@ -636,10 +638,13 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 			_ = op.Commit(ctx)
 		}
 	}()
-	_ = e.New(ctx, op)
+	err = e.New(ctx, op)
+	if err != nil {
+		return err
+	}
 
 	// read databases
-	result, err := execReadSql(ctx, op, catalog.MoDatabaseBatchQuery, true)
+	result, err = execReadSql(ctx, op, catalog.MoDatabaseBatchQuery, true)
 	if err != nil {
 		return err
 	}
@@ -696,7 +701,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 				return err
 			}
 		}
-		if err := fillTsVecForSysTableQueryBatch(bat, typeTs, result.Mp); err != nil {
+		if err = fillTsVecForSysTableQueryBatch(bat, typeTs, result.Mp); err != nil {
 			return err
 		}
 		e.catalog.InsertColumns(bat)
