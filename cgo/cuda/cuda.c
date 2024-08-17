@@ -16,26 +16,10 @@
 
 #include <math.h>
 
-#include "xcall.h"
-#include "bitmap.h"
+#include "../xcall.h"
+#include "../bitmap.h"
 
-int varlena_get_ptrlen(varlena_t *va, uint8_t *area, ptrlen_t *pl) {
-    /* is small? */
-    if (va->bs[0] <= VARLENA_INLINE_SZ) {
-        pl->ptr = &(va->bs[1]);
-        pl->len = (int)(va->bs[0]);
-    } else {
-        if (area == NULL) {
-            return -1;
-        }
-        uint32_t *p = (uint32_t *) va;
-        pl->ptr = area + p[1];
-        pl->len = p[2];
-    }
-    return pl->len;
-}
-
-int32_t xcall_l2distance_sq_f32(uint64_t *args, uint64_t len) {
+int32_t cuda_l2distance_sq_f32(uint64_t *args, uint64_t len) {
     /* 
      * Must be 3 args, ret, arg1, arg2.  
      * Len must be correct 
@@ -81,7 +65,7 @@ int32_t xcall_l2distance_sq_f32(uint64_t *args, uint64_t len) {
 }
 
 /* well well well, does it worth to make f32/f64 a macro?  probably not */
-int32_t xcall_l2distance_sq_f64(uint64_t *args, uint64_t len) {
+int32_t cuda_l2distance_sq_f64(uint64_t *args, uint64_t len) {
     /* 
      * Must be 3 args, ret, arg1, arg2.  
      * Len must be correct 
@@ -125,7 +109,7 @@ int32_t xcall_l2distance_sq_f64(uint64_t *args, uint64_t len) {
     return 0;
 }
 
-int32_t xcall_l2distance_f32(uint64_t *args, uint64_t len) {
+int32_t cuda_l2distance_f32(uint64_t *args, uint64_t len) {
     xcall_args_t *pargs = (xcall_args_t *) args;
     double *pres = (double *) pargs[0].pdata;
     int ret = xcall_l2distance_sq_f32(args, len);
@@ -140,7 +124,7 @@ int32_t xcall_l2distance_f32(uint64_t *args, uint64_t len) {
     return 0;
 }
         
-int32_t xcall_l2distance_f64(uint64_t *args, uint64_t len) {
+int32_t cuda_l2distance_f64(uint64_t *args, uint64_t len) {
     xcall_args_t *pargs = (xcall_args_t *) args;
     double *pres = (double *) pargs[0].pdata;
     int ret = xcall_l2distance_sq_f64(args, len);

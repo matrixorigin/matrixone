@@ -41,12 +41,14 @@ typedef struct ptrlen_t {
     int len;
 } ptrlen_t;
 
+int varlena_get_ptrlen(varlena_t *va, uint8_t *area, ptrlen_t *pl);
+
 int32_t xcall_l2distance_f32(uint64_t *args, uint64_t len);
 int32_t xcall_l2distance_f64(uint64_t *args, uint64_t len);
 int32_t xcall_l2distance_sq_f32(uint64_t *args, uint64_t len);
 int32_t xcall_l2distance_sq_f64(uint64_t *args, uint64_t len);
 
-#ifdef MO_HAS_CUDA
+#ifdef MO_CL_CUDA
 int32_t cuda_l2distance_f32(uint64_t *args, uint64_t len);
 int32_t cuda_l2distance_f64(uint64_t *args, uint64_t len);
 int32_t cuda_l2distance_sq_f32(uint64_t *args, uint64_t len);

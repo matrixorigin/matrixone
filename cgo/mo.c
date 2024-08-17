@@ -67,7 +67,7 @@ int32_t XCall(int64_t runtimeId, int64_t funcId, uint64_t *args, uint64_t len) {
                 return -1;
         }
     } else if (runtimeId == 1) {
-#ifdef MO_HAS_CUDA
+#ifdef MO_CL_CUDA
         switch (funcId) {
             case XCALL_L2DISTANCE_F32:
                 return cuda_l2distance_f32(args, len);
