@@ -171,7 +171,7 @@ func (c *PushClient) GetState() State {
 // Only used for ut
 func (c *PushClient) SetSubscribeState(dbId, tblId uint64, state SubscribeState) {
 	c.subscribed.m[tblId] = SubTableStatus{
-		dbID:       dbId,
+		DBID:       dbId,
 		SubState:   state,
 		LatestTime: time.Now(),
 	}
@@ -825,9 +825,9 @@ func (c *PushClient) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) er
 		return nil
 	}
 
-	dbID = status.dbID
+	dbID = status.DBID
 	c.subscribed.m[k] = SubTableStatus{
-		dbID:       dbID,
+		DBID:       dbID,
 		SubState:   Unsubscribing,
 		LatestTime: status.LatestTime,
 	}
@@ -869,7 +869,7 @@ func (c *PushClient) unusedTableGCTicker(ctx context.Context) {
 
 				var err error
 				for k, v := range c.subscribed.m {
-					if ifShouldNotDistribute(v.dbID, k) {
+					if ifShouldNotDistribute(v.DBID, k) {
 						// never unsubscribe the mo_databases, mo_tables, mo_columns.
 						continue
 					}
@@ -883,16 +883,16 @@ func (c *PushClient) unusedTableGCTicker(ctx context.Context) {
 						}
 						if err = c.subscriber.sendUnSubscribe(
 							ctx,
-							api.TableID{DbId: v.dbID, TbId: k}); err == nil {
+							api.TableID{DbId: v.DBID, TbId: k}); err == nil {
 							logutil.Infof("%s send unsubscribe tbl[db: %d, tbl: %d] request succeed",
 								logTag,
-								v.dbID,
+								v.DBID,
 								k)
 							continue
 						}
 						logutil.Errorf("%s send unsubsribe tbl[dbId: %d, tblId: %d] request failed, err : %s",
 							logTag,
-							v.dbID,
+							v.DBID,
 							k,
 							err.Error())
 						break
@@ -951,7 +951,7 @@ type subscribedTable struct {
 }
 
 type SubTableStatus struct {
-	dbID       uint64
+	DBID       uint64
 	SubState   SubscribeState
 	LatestTime time.Time
 }
@@ -965,7 +965,7 @@ func (c *PushClient) isSubscribed(dbId, tId uint64) (*logtailreplay.PartitionSta
 	if exist && v.SubState == Subscribed {
 		//update latest time
 		s.m[tId] = SubTableStatus{
-			dbID:       dbId,
+			DBID:       dbId,
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
@@ -983,7 +983,7 @@ func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64
 			return Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 		}
 		c.subscribed.m[tblId] = SubTableStatus{
-			dbID:     dbId,
+			DBID:     dbId,
 			SubState: Subscribing,
 		}
 
@@ -1004,7 +1004,7 @@ func (s *subscribedTable) isSubscribed(dbId, tblId uint64) bool {
 	if exist && v.SubState == Subscribed {
 		//update latest time
 		s.m[tblId] = SubTableStatus{
-			dbID:       dbId,
+			DBID:       dbId,
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
@@ -1034,7 +1034,7 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 		}
 		//update latest time
 		c.subscribed.m[tableId] = SubTableStatus{
-			dbID:       tbl.db.databaseId,
+			DBID:       tbl.db.databaseId,
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
@@ -1046,7 +1046,7 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 			return Unsubscribed, nil, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 		}
 		c.subscribed.m[tableId] = SubTableStatus{
-			dbID:     tbl.db.databaseId,
+			DBID:     tbl.db.databaseId,
 			SubState: Subscribing,
 		}
 		if err := c.subscribeTable(ctx, api.TableID{DbId: tbl.db.databaseId, TbId: tableId}); err != nil {
@@ -1121,7 +1121,7 @@ func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (
 		return true, Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 	}
 	c.subscribed.m[tblId] = SubTableStatus{
-		dbID:     dbId,
+		DBID:     dbId,
 		SubState: Subscribing,
 	}
 	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
@@ -1149,7 +1149,7 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 		return true, Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 	}
 	c.subscribed.m[tblId] = SubTableStatus{
-		dbID:     dbId,
+		DBID:     dbId,
 		SubState: Subscribing,
 	}
 	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
@@ -1164,7 +1164,7 @@ func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.m[tblId] = SubTableStatus{
-		dbID:       dbId,
+		DBID:       dbId,
 		SubState:   Subscribed,
 		LatestTime: time.Now(),
 	}
@@ -1175,7 +1175,7 @@ func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.m[tblId] = SubTableStatus{
-		dbID:       dbId,
+		DBID:       dbId,
 		SubState:   SubRspReceived,
 		LatestTime: time.Now(),
 	}
