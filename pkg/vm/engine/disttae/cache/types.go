@@ -97,6 +97,15 @@ type DatabaseItem struct {
 	CPKey     []byte
 }
 
+func (item *DatabaseItem) String() string {
+	return fmt.Sprintln(
+		"item ptr", uintptr(unsafe.Pointer(item)),
+		"item pk",
+		hex.EncodeToString(item.CPKey),
+		"accId",
+		item.AccountId, item.Name, item.Id, item.Ts, item.deleted)
+}
+
 type TableItem struct {
 	// table key
 	AccountId  uint32

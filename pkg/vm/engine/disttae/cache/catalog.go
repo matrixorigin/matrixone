@@ -568,6 +568,26 @@ func (cc *CatalogCache) PrintTables2(tip, dbName string) {
 	})
 }
 
+func (cc *CatalogCache) PrintDatabases(tip string) {
+	fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache", "list [database] data & cpkeyindex =============", tip)
+	cnt := 0
+	cc.databases.data.Scan(func(item *DatabaseItem) bool {
+		fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache [database] data-item",
+			cnt,
+			item.String())
+		cnt++
+		return true
+	})
+	cnt = 0
+	cc.databases.cpkeyIndex.Scan(func(item *DatabaseItem) bool {
+		fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache [database] cpkeyindex-item",
+			cnt,
+			item.String())
+		cnt++
+		return true
+	})
+}
+
 func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 	var tblKey TableItemKey
 

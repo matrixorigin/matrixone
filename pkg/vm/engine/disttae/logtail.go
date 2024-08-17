@@ -76,7 +76,9 @@ func consumeEntry(
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			if cache != nil {
 				fmt.Fprintln(os.Stderr, "%%%%%> insert database into catalog cache")
+				cache.PrintDatabases("before")
 				cache.InsertDatabase(bat)
+				cache.PrintDatabases("after")
 			}
 		case catalog.MO_COLUMNS_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
@@ -101,7 +103,9 @@ func consumeEntry(
 		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			fmt.Fprintln(os.Stderr, "%%%%%> delete database from catalog cache")
+			cache.PrintDatabases("before")
 			cache.DeleteDatabase(bat)
+			cache.PrintDatabases("after")
 		}
 	}
 	v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
