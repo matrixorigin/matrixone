@@ -698,22 +698,22 @@ CREATE TABLE load_data_t1 (
 load data inline format='csv', data=$XXX$ zhangsan,26,XiAn $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age,name);
 select * from load_data_t1;
 name    age    city
-XiAn     26     zhangsan
+XiAn     26    zhangsan
 delete from load_data_t1;
 load data inline format='csv', data=$XXX$ XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age);
 select * from load_data_t1;
 name    age    city
-null    26     XiAn
+null    26    XiAn
 delete from load_data_t1;
 load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (@name, city,age);
 select * from load_data_t1;
 name    age    city
-null    26     XiAn
+null    26    XiAn
 delete from load_data_t1;
 load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (@aa, city,age);
 select * from load_data_t1;
 name    age    city
-null    26     XiAn
+null    26    XiAn
 delete from load_data_t1;
 load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age);
 invalid input: the data of row 1 contained is not equal to input columns
@@ -725,12 +725,12 @@ create table load_data_t2(id int, name varchar(20), age int);
 LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name , age);
 select * from load_data_t2 order by id;
 id    name    age
-1     aron    32
-2     ben    35
-3     cindy    22
-4     david    33
-5     emma    18
-6     frank    59
+1    aron    32
+2    ben    35
+3    cindy    22
+4    david    33
+5    emma    18
+6    frank    59
 delete from load_data_t2;
 LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (name, id, age);
 internal error: the input value 'aron' is not int32 type for column 1
@@ -749,22 +749,22 @@ delete from load_data_t2;
 LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id, name);
 select * from load_data_t2 order by id;
 id    name    age
-1     aron    null
-2     ben    null
-3     cindy    null
-4     david    null
-5     emma    null
-6     frank    null
+1    aron    null
+2    ben    null
+3    cindy    null
+4    david    null
+5    emma    null
+6    frank    null
 delete from load_data_t2;
 LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (age, name);
 select * from load_data_t2 order by id;
 id    name    age
-null     aron    1
-null     ben    2
-null     cindy    3
-null     david    4
-null     emma    5
-null     frank    6
+null    aron    1
+null    ben    2
+null    cindy    3
+null    david    4
+null    emma    5
+null    frank    6
 drop table load_data_t2;
 drop table if exists load_data_t3;
 create table load_data_t3(col1 int not null, col2 varchar(20) default "jane", col3 int);
@@ -873,3 +873,37 @@ invalid input: the data of row 1 contained is not equal to input columns
 drop table load_data_t8;
 drop database test_load_db;
 drop account test_load;
+drop table if exists load_data_t9;
+create table load_data_t9 (name varchar(25), age int, city varchar(25));
+load data inline format='csv', data=$XXX$"zhangsan","26","Shanxi" $XXX$ into table load_data_t9 fields terminated by ',' enclosed by '"'  lines terminated by '\n' (name,age,city);
+select * from load_data_t9;
+name    age    city
+zhangsan    26    Shanxi
+delete from load_data_t9;
+load data inline format='csv', data=$XXX$  "zhangsan","26","Shanxi" $XXX$ into table load_data_t9 fields terminated by ',' enclosed by '"'  lines terminated by '\n' (name,age,city);
+select * from load_data_t9;
+name    age    city
+zhangsan    26    Shanxi
+delete from load_data_t9;
+load data inline format='csv', data=$XXX$  "zhangsan","26","Shanxi"$XXX$ into table load_data_t9 fields terminated by ',' enclosed by '"'  lines terminated by '\n' (name,age,city);
+select * from load_data_t9;
+name    age    city
+zhangsan    26    Shanxi
+delete from load_data_t9;
+load data inline format='csv', data=$XXX$  "zhangsan","26","Shanxi"    \n$XXX$ into table load_data_t9 fields terminated by ',' enclosed by '"'  lines terminated by '\n' (name,age,city);
+select * from load_data_t9;
+name    age    city
+zhangsan    26    Shanxi
+delete from load_data_t9;
+load data inline format='csv', data=$XXX$  "zhangsan", "26", "Shanxi"   $XXX$ into table load_data_t9 fields terminated by ',' enclosed by '"'  lines terminated by '\n' (name,age,city);
+load data inline format='csv', data=$XXX$ "zhangsan","26","Shanxi;XiAn" $XXX$ into table load_data_t9 fields terminated by ',' enclosed by '"'  lines terminated by '\n' (name,age,city);
+select * from load_data_t9;
+name    age    city
+zhangsan    26    Shanxi
+zhangsan    26    Shanxi;XiAn
+delete from load_data_t9;
+load data  infile '$resources/load_data/test_parser_1.csv' into table load_data_t9 fields terminated by ',' enclosed by '"'  lines terminated by '\n' (name,age,city);
+select * from load_data_t9;
+name    age    city
+hi    23    hello
+drop table load_data_t9;

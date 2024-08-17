@@ -126,13 +126,14 @@ type CSVParser struct {
 	allowEmptyLine   bool
 	quotedNullIsText bool
 	unescapedQuote   bool
+	isLastChunk      bool
+	reuseRow         bool
 
 	reader io.Reader
 	// stores data that has NOT been parsed yet, it shares same memory as appendBuf.
 	buf []byte
 	// used to read data from the reader, the data will be moved to other buffers.
-	blockBuf    []byte
-	isLastChunk bool
+	blockBuf []byte
 
 	// The list of column names of the last INSERT statement.
 	columns []string
@@ -149,8 +150,6 @@ type CSVParser struct {
 	// cache
 	remainBuf *bytes.Buffer
 	appendBuf *bytes.Buffer
-
-	reuseRow bool
 
 	// see csv.Reader
 	comment byte
@@ -514,6 +513,7 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 			parser.pos += int64(len(buf))
 			return buf, 0, err
 		}
+		parser.skipWhileSpace()
 		index := IndexAnyByte(parser.buf, chars)
 		if index >= 0 {
 			buf = append(buf, parser.buf[:index]...)
@@ -521,6 +521,23 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 			parser.pos += int64(len(buf))
 			return buf, parser.buf[0], nil
 		}
+	}
+}
+
+// whileSpace here is just include '\t' and ' '
+func (parser *CSVParser) skipWhileSpace() {
+	i := 0
+	for i = 0; i < len(parser.buf); i++ {
+		if parser.buf[i] == '\t' || parser.buf[i] == ' ' {
+			continue
+		}
+		break
+
+	}
+	if i >= len(parser.buf) {
+		parser.buf = parser.buf[:0]
+	} else {
+		parser.skipBytes(i)
 	}
 }
 
@@ -596,6 +613,7 @@ outside:
 			parser.fieldIndexes = append(parser.fieldIndexes, len(parser.recordBuffer))
 			parser.fieldIsQuoted = append(parser.fieldIsQuoted, fieldIsQuoted)
 			fieldIsQuoted = false
+			parser.skipWhileSpace()
 		case csvTokenDelimiter:
 			if prevToken != csvTokenComma && prevToken != csvTokenNewLine {
 				if parser.unescapedQuote {
@@ -711,6 +729,9 @@ func (parser *CSVParser) readQuotedField() error {
 			} else if parser.unescapedQuote {
 				// allow unescaped quote inside quoted field, so we only finish
 				// reading the field when we see a delimiter + comma/newline.
+				// and we skip whilespace
+				parser.skipWhileSpace()
+
 				comma, _, err2 := parser.tryPeekExact(parser.comma)
 				if comma || err2 != nil {
 					return err2

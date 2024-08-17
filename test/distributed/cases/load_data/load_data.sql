@@ -455,4 +455,25 @@ drop database test_load_db;
 -- @session
 drop account test_load;
 
+drop table if exists load_data_t9;
+create table load_data_t9 (name varchar(25), age int, city varchar(25));
+load data inline format='csv', data=$XXX$"zhangsan","26","Shanxi" $XXX$ into table load_data_t9 fields terminated by ',' enclosed by '"'  lines terminated by '\n' (name,age,city);
+select * from load_data_t9;
+delete from load_data_t9;
+load data inline format='csv', data=$XXX$  "zhangsan","26","Shanxi" $XXX$ into table load_data_t9 fields terminated by ',' enclosed by '"'  lines terminated by '\n' (name,age,city);
+select * from load_data_t9;
+delete from load_data_t9;
+load data inline format='csv', data=$XXX$  "zhangsan","26","Shanxi"$XXX$ into table load_data_t9 fields terminated by ',' enclosed by '"'  lines terminated by '\n' (name,age,city);
+select * from load_data_t9;
+delete from load_data_t9;
+load data inline format='csv', data=$XXX$  "zhangsan","26","Shanxi"    \n$XXX$ into table load_data_t9 fields terminated by ',' enclosed by '"'  lines terminated by '\n' (name,age,city);
+select * from load_data_t9;
+delete from load_data_t9;
+load data inline format='csv', data=$XXX$  "zhangsan", "26", "Shanxi"   $XXX$ into table load_data_t9 fields terminated by ',' enclosed by '"'  lines terminated by '\n' (name,age,city);
+load data inline format='csv', data=$XXX$ "zhangsan","26","Shanxi;XiAn" $XXX$ into table load_data_t9 fields terminated by ',' enclosed by '"'  lines terminated by '\n' (name,age,city);
+select * from load_data_t9;
+delete from load_data_t9;
 
+load data  infile '$resources/load_data/test_parser_1.csv' into table load_data_t9 fields terminated by ',' enclosed by '"'  lines terminated by '\n' (name,age,city);
+select * from load_data_t9;
+drop table load_data_t9;
