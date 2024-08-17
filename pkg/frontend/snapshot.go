@@ -585,9 +585,8 @@ func restoreToDatabaseOrTable(
 		// check if the publication exists
 		// if the publication exists, create the db with the publication
 		// else skip restore the db
-		var isPubExist bool
-		isPubExist, err = checkPubExistOrNot(ctx, bh, snapshotName, dbName, snapshotTs)
-		if err != nil {
+		getLogger().Info(fmt.Sprintf("[%s] start to create db with pub: %v, create db sql: %s", snapshotName, pubName, createDbSql))
+		if err = bh.Exec(toCtx, createDbSql); err != nil {
 			return
 		}
 
@@ -1418,39 +1417,4 @@ func getCreateDatabaseSql(ctx context.Context,
 		return "", moerr.NewBadDB(ctx, dbName)
 	}
 	return colsList[0][1], nil
-}
-
-func checkPubExistOrNot(
-	ctx context.Context,
-	bh BackgroundExec,
-	snapshotName string,
-	subName string,
-	timsStampTs int64,
-) (bool, error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to check pub exist or not", snapshotName))
-	subInfos, err := getSubInfosFromSubWithSnapshot(
-		ctx,
-		bh,
-		snapshotName,
-		subName,
-		timsStampTs)
-	if err != nil {
-		return false, err
-	} else if len(subInfos) == 0 {
-		return false, moerr.NewInternalError(ctx, "there is no subscription for database %s", subName)
-	}
-
-	subInfo := subInfos[0]
-	var isPubValid bool
-	isPubValid, err = checkSubscriptionExist(
-		ctx,
-		bh,
-		subInfo.PubAccountName,
-		subInfo.PubName)
-	if err != nil {
-		return false, err
-	} else if !isPubValid {
-		return false, moerr.NewInternalError(ctx, "there is no publication %s", subInfo.PubName)
-	}
-	return true, nil
 }
