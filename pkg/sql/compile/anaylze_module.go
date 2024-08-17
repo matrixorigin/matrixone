@@ -1,3 +1,17 @@
+// Copyright 2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package compile
 
 import (
@@ -30,6 +44,10 @@ func (anal *AnalyzeModuleV1) AppendRemotePhyPlan(p PhyPlan) {
 	anal.phyPlan.RemoteScope = append(anal.phyPlan.RemoteScope, p.LocalScope[0])
 	anal.phyPlan.S3IOInputCount += p.S3IOInputCount
 	anal.phyPlan.S3IOOutputCount += p.S3IOOutputCount
+}
+
+func (anal *AnalyzeModuleV1) GetPhyPlan() PhyPlan {
+	return anal.phyPlan
 }
 
 //func (a *AnalyzeModuleV1) S3IOInputCount(idx int, count int64) {
@@ -77,6 +95,14 @@ func (c *Compile) initAnalyzeModuleV1(qry *plan.Query) {
 			node.AnalyzeInfo = new(plan.AnalyzeInfo)
 		}
 	}
+}
+
+func (c *Compile) GetAnalyzeModuleV1() *AnalyzeModuleV1 {
+	return c.anal
+}
+
+func (c *Compile) GetOriginSql() string {
+	return c.sql
 }
 
 func (c *Compile) setAnalyzeCurrentV1(updateScopes []*Scope, nextId int) {
@@ -274,13 +300,24 @@ func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]
 		return nil
 	}
 
+	//--------------------debug---------------------
+	//if op.GetOperatorBase().OpAnalyzer == nil {
+	//	buf := bytes.NewBuffer(make([]byte, 0, 50))
+	//	op.String(buf)
+	//	panic(fmt.Sprintf("<>operator analyzer is null opName: %v", buf.String()))
+	//}
+	//--------------------debug---------------------
+
 	phyOp := &PhyOperator{
 		OpName:       fmt.Sprintf("%d", op.OpType()),
 		NodeIdx:      op.GetOperatorBase().Idx,
 		IsFirst:      op.GetOperatorBase().IsFirst,
 		IsLast:       op.GetOperatorBase().IsLast,
 		DestReceiver: getDestReceiver(op, rmp),
-		OpStats:      op.GetOperatorBase().OpAnalyzer.GetOpStats(),
+		//OpStats:      op.GetOperatorBase().OpAnalyzer.GetOpStats(),
+	}
+	if op.GetOperatorBase().OpAnalyzer != nil {
+		phyOp.OpStats = op.GetOperatorBase().OpAnalyzer.GetOpStats()
 	}
 
 	children := op.GetOperatorBase().Children

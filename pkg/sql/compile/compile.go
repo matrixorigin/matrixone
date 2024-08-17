@@ -1751,9 +1751,24 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	}
 	c.anal.isFirst = false
 
+	if strings.Contains(n.TableDef.Name, "real_time_position") {
+		fmt.Printf("-----------pengzhen-------------->cnList: %v , nodes:%s,  scopes: %s \n",
+			c.cnList,
+			getNodeBaseInfo(nodes),
+			DebugShowScopes(ss, InfoLevel))
+	}
+
 	ss[0].PartialResults = partialResults
 	ss[0].PartialResultTypes = partialResultTypes
 	return ss, nil
+}
+
+func getNodeBaseInfo(nodes engine.Nodes) string {
+	var str = ""
+	for i := range nodes {
+		str += nodes[i].Addr + ", "
+	}
+	return str
 }
 
 func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, firstFlag bool) (*Scope, error) {
@@ -3949,11 +3964,14 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	// for multi cn in launch mode, put all payloads in current CN, maybe delete this in the future
 	// for an ordered scan, put all paylonds in current CN
 	// or sometimes force on one CN
-	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
-		return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
-	}
+	//if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
+	//	return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
+	//}
 	// disttae engine
 	if engineType == engine.Disttae {
+		if strings.Contains(n.TableDef.Name, "real_time_position") {
+			fmt.Println("-----------pengzhen1--------------")
+		}
 		nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
 		return nodes, partialResults, partialResultTypes, err
 	}
@@ -4346,7 +4364,7 @@ func isSameCN(addr string, currentCNAddr string) bool {
 		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
 		return true
 	}
-	return parts1[0] == parts2[0]
+	return parts1[0] == parts2[0] && parts1[1] == parts2[1]
 }
 
 func (s *Scope) affectedRows() uint64 {

@@ -259,18 +259,21 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	//--------------------------------------------------------------------------------------------------------------
 
 	if c.checkSQLHasQueryPlan() {
-		//if strings.HasPrefix(c.sql, "select") {
-		scopeInfo := DebugShowScopes(c.scope)
-		fmt.Printf("----------------------------------wuxiliang end----------------------------------\nSQL:%s %s\n--------------------------------------------", c.sql, scopeInfo)
+		//if strings.HasPrefix(c.sql, "SELECT ROUND(SUM") {
+		scopeInfo := DebugShowScopes(c.scope, InfoLevel)
+		fmt.Printf("-------------------------------wuxiliang end----------------------------------\nSQL:%s %s\n--------------------------------------------", c.sql, scopeInfo)
+
 		phyPlan := ConvertCompileToPhyPlan(runC)
 		runC.fillPlanNodeAnalyzeInfoV11(&phyPlan)
+
+		explainPhy := explainPhyPlan(&phyPlan)
+		fmt.Printf("------------------------------wuxiliang explain PhyPlan--------------------------\nSQL:%s %s\n-----------------------------------------", c.sql, explainPhy)
 
 		jsonStr, err := PhyPlanToJSON(phyPlan)
 		if err != nil {
 			panic(fmt.Sprintf("--------->wuxiliang Error serializing to JSON: %s", err))
 		}
 		fmt.Printf("---------->wuxiliang JSON2: %s\n", jsonStr)
-		//}
 	}
 	//--------------------------------------------------------------------------------------------------------------
 	return queryResult, err

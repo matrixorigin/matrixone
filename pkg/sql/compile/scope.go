@@ -351,6 +351,10 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		return s.ParallelRun(c)
 	}
 
+	if strings.HasPrefix(c.sql, "SELECT ROUND(SUM(distance), 2) AS total_distance") {
+		fmt.Println("----------------wangjian-------------------")
+	}
+
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
 			zap.String("local-address", c.addr),
@@ -948,7 +952,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		// Add log for cn panic which reported on issue 10656
 		// If you find this log is printed, please report the repro details
 		if s.RootOp == nil || s.RootOp.GetOperatorBase().NumChildren() == 0 {
-			c.proc.Error(c.proc.Ctx, "the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}),
+			c.proc.Error(c.proc.Ctx, "the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}, BaseLevel),
 				zap.String("stack", string(debug.Stack())),
 			)
 			return nil, moerr.NewInternalErrorNoCtx("the length of s.Instructions is too short !")

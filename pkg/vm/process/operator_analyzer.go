@@ -42,6 +42,10 @@ type Analyzer interface {
 	S3IOByte(*batch.Batch) // delete it, unused
 	S3IOInputCount(int)    // delete it, unused
 	S3IOOutputCount(int)   // delete it, unused
+
+	//---------------------------------------------
+	ChildCallStart(time time.Time)
+	//---------------------------------------------
 }
 
 // Operator Resource operatorAnalyzerV1
@@ -52,6 +56,8 @@ type operatorAnalyzerV1 struct {
 	start                time.Time
 	wait                 time.Duration
 	childrenCallDuration time.Duration
+	childrenCallStart    time.Time
+	childrenCallEnd      time.Time
 	opStats              *OperatorStats
 }
 
@@ -87,11 +93,25 @@ func (opAlyzr *operatorAnalyzerV1) Stop() {
 
 	// Calculate waiting time and total time consumption
 	waitDuration := opAlyzr.wait
-	totalDuration := time.Since(opAlyzr.start) - waitDuration - opAlyzr.childrenCallDuration
+
+	opDuration := time.Since(opAlyzr.start)
+	totalDuration := opDuration - waitDuration - opAlyzr.childrenCallDuration
 
 	// Check if the time consumption is legal
 	if totalDuration < 0 {
-		panic("Time consumed by the operator cannot be less than 0")
+		str := fmt.Sprintf("opAddr:%v, opDuration: %v, waitDuration:%v, childrenCallDuration:%v , start:%v, end:%v, childrenCallStart: %v, childrenCallEnd:%v , childrenCallEnd - childrenCallStart: %v \n",
+			opAlyzr.opStats.OperatorName,
+			opDuration,
+			waitDuration,
+			opAlyzr.childrenCallDuration,
+			opAlyzr.start, time.Now(),
+			opAlyzr.childrenCallStart,
+			opAlyzr.childrenCallEnd,
+			opAlyzr.childrenCallEnd.Sub(opAlyzr.childrenCallStart))
+		panic("Time consumed by the operator cannot be less than 0, " + str)
+		//fmt.Printf("Time consumed by the operator cannot be less than 0, %s \n", str)
+		//duration := time.Since(start)
+		//nonNegativeDuration := time.Duration(math.Max(0, float64(duration)))
 	}
 
 	// Update the statistical information of the operation analyzer
@@ -141,7 +161,15 @@ func (opAlyzr *operatorAnalyzerV1) WaitStop(start time.Time) {
 }
 
 func (opAlyzr *operatorAnalyzerV1) ChildrenCallStop(start time.Time) {
-	opAlyzr.childrenCallDuration += time.Since(start)
+	endTime := time.Now()
+	opAlyzr.childrenCallEnd = endTime
+	sub := endTime.Sub(start)
+	opAlyzr.childrenCallDuration += sub
+	//opAlyzr.childrenCallDuration += time.Since(start)
+}
+
+func (opAlyzr *operatorAnalyzerV1) ChildCallStart(time time.Time) {
+	opAlyzr.childrenCallStart = time
 }
 
 func (opAlyzr *operatorAnalyzerV1) DiskIO(bat *batch.Batch) {
