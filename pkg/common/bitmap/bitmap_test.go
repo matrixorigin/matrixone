@@ -132,6 +132,7 @@ func TestC(t *testing.T) {
 func TestBitmapIterator_Next(t *testing.T) {
 	np := newBm(BenchmarkRows)
 	np.AddRange(0, 64)
+	require.Equal(t, 64, np.Count())
 
 	// | 63 -- 0 | 127 -- 64 | 191 -- 128 | 255 -- 192 | 319 -- 256 | 383 -- 320 | ... |
 	rows := []uint64{127, 192, 320} // add some boundary case to check if loops over word

@@ -102,6 +102,13 @@ func Ptr(nsp *Nulls) *uint64 {
 	return nsp.np.Ptr()
 }
 
+func (nsp *Nulls) RawPtrLen() (uintptr, uintptr) {
+	if nsp == nil {
+		return 0, 0
+	}
+	return nsp.np.RawPtrLen()
+}
+
 // Size estimates the memory usage of the Nulls.
 func Size(nsp *Nulls) int {
 	if nsp == nil {
@@ -149,6 +156,7 @@ func (nsp *Nulls) AddRange(start, end uint64) {
 	}
 }
 
+// AddRange add bits [start, end) to nsp
 func AddRange(nsp *Nulls, start, end uint64) {
 	nsp.AddRange(start, end)
 }

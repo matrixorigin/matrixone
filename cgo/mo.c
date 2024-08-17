@@ -45,3 +45,45 @@ void Bitmap_Or(uint64_t *dst, uint64_t *a, uint64_t *b, uint64_t nbits) {
 void Bitmap_Not(uint64_t *dst, uint64_t *a, uint64_t nbits) {
     bitmap_not(dst, a, nbits);
 }
+
+#define XCALL_L2DISTANCE_F32 0
+#define XCALL_L2DISTANCE_F64 1
+#define XCALL_L2DISTANCE_SQ_F32 2
+#define XCALL_L2DISTANCE_SQ_F64 3
+
+int32_t XCall(int64_t runtimeId, int64_t funcId, uint64_t *args, uint64_t len) {
+    // obviously buggy impl
+    if (runtimeId == 0) {
+        switch (funcId) {
+            case XCALL_L2DISTANCE_F32:
+                return xcall_l2distance_f32(args, len);
+            case XCALL_L2DISTANCE_F64:
+                return xcall_l2distance_f64(args, len);
+            case XCALL_L2DISTANCE_SQ_F32:
+                return xcall_l2distance_sq_f32(args, len);
+            case XCALL_L2DISTANCE_SQ_F64:
+                return xcall_l2distance_sq_f64(args, len);
+            default:
+                return -1;
+        }
+    } else if (runtimeId == 1) {
+#ifdef MO_HAS_CUDA
+        switch (funcId) {
+            case XCALL_L2DISTANCE_F32:
+                return cuda_l2distance_f32(args, len);
+            case XCALL_L2DISTANCE_F64:
+                return cuda_l2distance_f64(args, len);
+            case XCALL_L2DISTANCE_SQ_F32:
+                return cuda_l2distance_sq_f32(args, len);
+            case XCALL_L2DISTANCE_SQ_F64:
+                return cuda_l2distance_sq_f64(args, len);
+            default:
+                return -1;
+        }
+#else
+        return -1;
+#endif
+    }
+
+    return -1;
+}
