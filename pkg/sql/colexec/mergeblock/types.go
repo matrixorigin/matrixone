@@ -120,6 +120,13 @@ func (mergeBlock *MergeBlock) Free(proc *process.Process, pipelineFailed bool, e
 }
 
 func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
+	if len(mergeBlock.container.mp) > 0 {
+		for _, bat := range mergeBlock.container.mp {
+			bat.CleanOnlyData()
+		}
+		return
+	}
+
 	var typs []types.Type
 	// exclude the table id column
 	attrs := src.Attrs[1:]
@@ -134,32 +141,26 @@ func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Proc
 		typs = append(typs, types.T_binary.ToType())
 	}
 
-	if len(mergeBlock.container.mp) == 0 {
-		// If the target is a partition table
-		if len(mergeBlock.container.partitionSources) > 0 {
-			// 'i' aligns with partition number
-			for i := range mergeBlock.container.partitionSources {
-				bat := batch.NewWithSize(len(attrs))
-				bat.Attrs = attrs
-				bat.Cnt = 1
-				for idx := 0; idx < len(attrs); idx++ {
-					bat.Vecs[idx] = vector.NewVec(typs[idx])
-				}
-				mergeBlock.container.mp[i] = bat
-			}
-		} else {
+	// If the target is a partition table
+	if len(mergeBlock.container.partitionSources) > 0 {
+		// 'i' aligns with partition number
+		for i := range mergeBlock.container.partitionSources {
 			bat := batch.NewWithSize(len(attrs))
 			bat.Attrs = attrs
 			bat.Cnt = 1
 			for idx := 0; idx < len(attrs); idx++ {
 				bat.Vecs[idx] = vector.NewVec(typs[idx])
 			}
-			mergeBlock.container.mp[0] = bat
+			mergeBlock.container.mp[i] = bat
 		}
 	} else {
-		for _, bat := range mergeBlock.container.mp {
-			bat.CleanOnlyData()
+		bat := batch.NewWithSize(len(attrs))
+		bat.Attrs = attrs
+		bat.Cnt = 1
+		for idx := 0; idx < len(attrs); idx++ {
+			bat.Vecs[idx] = vector.NewVec(typs[idx])
 		}
+		mergeBlock.container.mp[0] = bat
 	}
 }
 

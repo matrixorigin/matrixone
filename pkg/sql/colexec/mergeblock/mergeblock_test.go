@@ -226,7 +226,6 @@ func TestArgument_GetMetaLocBat(t *testing.T) {
 
 	require.Equal(t, 2, len(arg.container.mp[0].Vecs))
 
-	arg.container.mp[0].Clean(proc.GetMPool())
 	bat.Clean(proc.GetMPool())
 
 	bat = mockBlockInfoBat(proc, false)
