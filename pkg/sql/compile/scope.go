@@ -302,29 +302,27 @@ func (s *Scope) MergeRun(c *Compile) error {
 		}
 	}()
 
-	if s.NodeInfo.Mcpu == 1 {
-		if tableScanOp, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
-			// need to build readers for tp query
-			readers, _, err := s.buildReaders(c, 1)
-			if err != nil {
-				return err
-			}
-			s.DataSource.R = readers[0]
-			s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
-
-			tableScanOp.Reader = s.DataSource.R
-			tableScanOp.Attrs = s.DataSource.Attributes
-			tableScanOp.TableID = s.DataSource.TableDef.TblId
-			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
-				tableScanOp.TopValueMsgTag = s.DataSource.node.RecvMsgList[0].MsgTag
-			}
-		} else if valueScanOp, ok := vm.GetLeafOp(s.RootOp).(*value_scan.ValueScan); ok {
-			pipelineInputBatches := []*batch.Batch{s.DataSource.Bat}
-			if s.DataSource.Bat != nil {
-				pipelineInputBatches = append(pipelineInputBatches, nil)
-			}
-			valueScanOp.Batchs = pipelineInputBatches
+	if tableScanOp, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
+		// need to build readers for tp query
+		readers, _, err := s.buildReaders(c, 1)
+		if err != nil {
+			return err
 		}
+		s.DataSource.R = readers[0]
+		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
+
+		tableScanOp.Reader = s.DataSource.R
+		tableScanOp.Attrs = s.DataSource.Attributes
+		tableScanOp.TableID = s.DataSource.TableDef.TblId
+		if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
+			tableScanOp.TopValueMsgTag = s.DataSource.node.RecvMsgList[0].MsgTag
+		}
+	} else if valueScanOp, ok := vm.GetLeafOp(s.RootOp).(*value_scan.ValueScan); ok {
+		pipelineInputBatches := []*batch.Batch{s.DataSource.Bat}
+		if s.DataSource.Bat != nil {
+			pipelineInputBatches = append(pipelineInputBatches, nil)
+		}
+		valueScanOp.Batchs = pipelineInputBatches
 	}
 
 	p := pipeline.NewMerge(s.RootOp)
