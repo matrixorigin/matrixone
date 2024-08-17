@@ -414,9 +414,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 
 	// probability 3: it's a SCAN pipeline.
 	case s.DataSource != nil:
-		fmt.Println("before parallel run" + DebugShowScopes([]*Scope{s}))
 		parallelScope, err = buildScanParallelRun(s, c)
-		fmt.Println("after parallel run" + DebugShowScopes([]*Scope{parallelScope}))
 
 	// others.
 	default:
