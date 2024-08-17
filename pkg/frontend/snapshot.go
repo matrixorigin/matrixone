@@ -767,7 +767,7 @@ func restoreToDatabaseOrTable(
 		// else skip restore the db
 
 		var isPubExist bool
-		isPubExist, err = checkPubExistOrNot(ctx, sid, bh, snapshotName, dbName, snapshotTs)
+		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
 		if err != nil {
 			return
 		}
