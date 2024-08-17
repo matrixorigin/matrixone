@@ -1404,7 +1404,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 		v2.CheckSubValidDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
 	var (
@@ -1414,10 +1414,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 	)
 
 	tenantInfo := ses.GetTenantInfo()
-	if tenantInfo == nil {
-		err = moerr.NewInternalError(ctx, "get tenant info failed")
-		return
-	} else if pubAccountName == tenantInfo.GetTenant() {
+	if tenantInfo != nil && pubAccountName == tenantInfo.GetTenant() {
 		err = moerr.NewInternalError(ctx, "can not subscribe to self")
 		return
 	}
@@ -1427,13 +1424,6 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 	if sql, err = getSqlForAccountIdAndStatus(newCtx, pubAccountName, true); err != nil {
 		return
 	}
-
-	if err = bh.Exec(ctx, "begin;"); err != nil {
-		return
-	}
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(newCtx, sql); err != nil {
@@ -1472,7 +1462,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 		return
 	}
 
-	if !pubInfo.InSubAccounts(tenantInfo.GetTenant()) {
+	if tenantInfo != nil && !pubInfo.InSubAccounts(tenantInfo.GetTenant()) {
 		ses.Error(ctx,
 			"checkSubscriptionValidCommon",
 			zap.String("subName", subName),
