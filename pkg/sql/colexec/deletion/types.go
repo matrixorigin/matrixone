@@ -72,11 +72,11 @@ type container struct {
 	resBat           *batch.Batch
 	source           engine.Relation
 	partitionSources []engine.Relation // Align array index with the partition number
+	affectedRows     uint64
 }
 type Deletion struct {
-	ctr          container
-	DeleteCtx    *DeleteCtx
-	affectedRows uint64
+	ctr       container
+	DeleteCtx *DeleteCtx
 
 	// for delete filter below
 	// mp[segmentId] = 1 => txnWorkSpace,mp[segmentId] = 2 => CN Block
@@ -201,7 +201,7 @@ func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err e
 }
 
 func (deletion *Deletion) AffectedRows() uint64 {
-	return deletion.affectedRows
+	return deletion.ctr.affectedRows
 }
 
 func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch) error {

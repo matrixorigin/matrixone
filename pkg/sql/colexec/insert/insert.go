@@ -83,6 +83,7 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 			insert.ctr.buf.SetAttributes(insert.InsertCtx.Attrs)
 		}
 	}
+	insert.ctr.affectedRows = 0
 	return nil
 }
 
