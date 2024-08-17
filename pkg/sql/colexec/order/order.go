@@ -36,16 +36,9 @@ func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enou
 	}
 	all := s1 + s2
 
-	if ctr.batWaitForSort == nil {
-		ctr.batWaitForSort, err = bat.Dup(proc.Mp())
-		if err != nil {
-			return false, err
-		}
-	} else {
-		ctr.batWaitForSort, err = ctr.batWaitForSort.Append(proc.Ctx, proc.Mp(), bat)
-		if err != nil {
-			return false, err
-		}
+	ctr.batWaitForSort, err = ctr.batWaitForSort.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+	if err != nil {
+		return false, err
 	}
 	return all >= maxBatchSizeToSort, nil
 }
@@ -111,9 +104,7 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 			return err
 		}
 	}
-	ctr.rbat = ctr.batWaitForSort
 	result.Batch = ctr.batWaitForSort
-	ctr.batWaitForSort = nil
 	return nil
 }
 
@@ -175,12 +166,6 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 	defer func() {
 		anal.Stop()
 	}()
-
-	if ctr.rbat != nil {
-		//rbat is a big memory, just clean
-		ctr.rbat.Clean(proc.GetMPool())
-		ctr.rbat = nil
-	}
 
 	if ctr.state == vm.Build {
 		for {

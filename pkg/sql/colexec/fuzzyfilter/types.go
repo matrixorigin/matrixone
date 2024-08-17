@@ -107,6 +107,7 @@ func (fuzzyFilter *FuzzyFilter) getProbeIdx() int {
 }
 
 func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	message.FinalizeRuntimeFilter(fuzzyFilter.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	ctr := &fuzzyFilter.ctr
 	ctr.state = Build
 	ctr.collisionCnt = 0
@@ -117,21 +118,16 @@ func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool
 		ctr.rbat.CleanOnlyData()
 	}
 
-	useRoaring := IfCanUseRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
-	if useRoaring {
-		if ctr.roaringFilter != nil {
-			ctr.roaringFilter.b.Clear()
-		}
-	} else {
-		if ctr.bloomFilter != nil {
-			ctr.bloomFilter.Reset()
-		}
+	if ctr.roaringFilter != nil {
+		ctr.roaringFilter.b.Clear()
 	}
 
+	if ctr.bloomFilter != nil {
+		ctr.bloomFilter.Reset()
+	}
 }
 
 func (fuzzyFilter *FuzzyFilter) Free(proc *process.Process, pipelineFailed bool, err error) {
-	message.FinalizeRuntimeFilter(fuzzyFilter.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	if fuzzyFilter.ctr.bloomFilter != nil {
 		fuzzyFilter.ctr.bloomFilter.Clean()
 		fuzzyFilter.ctr.bloomFilter = nil

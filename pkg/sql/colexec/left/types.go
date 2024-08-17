@@ -116,6 +116,7 @@ func (leftJoin *LeftJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.inbat = nil
 	ctr.lastrow = 0
 	ctr.state = Build
+	ctr.batchRowCount = 0
 
 	if leftJoin.ProjectList != nil {
 		anal.Alloc(leftJoin.ProjectAllocSize + leftJoin.ctr.maxAllocSize)
@@ -134,9 +135,7 @@ func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanExprExecutor()
 	ctr.cleanBatch(proc)
 
-	if leftJoin.ProjectList != nil {
-		leftJoin.FreeProjection(proc)
-	}
+	leftJoin.FreeProjection(proc)
 }
 
 func (ctr *container) resetExprExecutor() {

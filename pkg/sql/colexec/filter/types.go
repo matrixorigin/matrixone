@@ -89,7 +89,6 @@ func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err erro
 
 func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error) {
 	filter.ctr.cleanExecutor()
-	filter.exeExpr = nil
 	if filter.ctr.buf != nil {
 		filter.ctr.buf.Clean(proc.Mp())
 	}

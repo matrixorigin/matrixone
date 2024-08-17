@@ -130,9 +130,7 @@ func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanExprExecutor()
 	ctr.cleanBatch(proc)
 
-	if semiJoin.ProjectList != nil {
-		semiJoin.FreeProjection(proc)
-	}
+	semiJoin.FreeProjection(proc)
 }
 
 func (ctr *container) resetExprExecutor() {

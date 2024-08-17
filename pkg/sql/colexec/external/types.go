@@ -168,18 +168,11 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (external *External) Free(proc *process.Process, pipelineFailed bool, err error) {
-	anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
-	allocSize := int64(0)
 	if external.ctr.buf != nil {
 		external.ctr.buf.Clean(proc.Mp())
 		external.ctr.buf = nil
 	}
-	allocSize += int64(external.ctr.maxAllocSize)
-	if external.ProjectList != nil {
-		allocSize += external.ProjectAllocSize
-		external.FreeProjection(proc)
-	}
-	anal.Alloc(allocSize)
+	external.FreeProjection(proc)
 }
 
 type ParseLineHandler struct {

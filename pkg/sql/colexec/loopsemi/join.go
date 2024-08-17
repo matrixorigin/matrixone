@@ -48,9 +48,7 @@ func (loopSemi *LoopSemi) Prepare(proc *process.Process) error {
 		}
 	}
 
-	if loopSemi.ProjectList != nil && loopSemi.ProjectExecutors == nil {
-		err = loopSemi.PrepareProjection(proc)
-	}
+	err = loopSemi.PrepareProjection(proc)
 	return err
 }
 

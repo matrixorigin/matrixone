@@ -82,8 +82,8 @@ func (indexBuild *IndexBuild) Reset(proc *process.Process, pipelineFailed bool, 
 }
 
 func (indexBuild *IndexBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
-	message.FinalizeRuntimeFilter(indexBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	if indexBuild.ctr.buf != nil {
 		indexBuild.ctr.buf.Clean(proc.Mp())
+		indexBuild.ctr.buf = nil
 	}
 }

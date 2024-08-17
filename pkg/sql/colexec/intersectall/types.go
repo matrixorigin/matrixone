@@ -86,6 +86,7 @@ func (intersectAll *IntersectAll) Reset(proc *process.Process, pipelineFailed bo
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
 	}
+	ctr.counter = nil
 }
 
 func (intersectAll *IntersectAll) Free(proc *process.Process, pipelineFailed bool, err error) {

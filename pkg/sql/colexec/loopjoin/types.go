@@ -91,6 +91,7 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 
 	ctr.resetExprExecutor()
 	ctr.state = Build
+	ctr.probeIdx = 0
 
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc.Mp())

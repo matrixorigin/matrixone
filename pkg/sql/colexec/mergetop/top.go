@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
-	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -61,22 +60,12 @@ func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 	mergeTop.ctr.limit = vector.MustFixedCol[uint64](vec)[0]
-
-	// sels
-	selsCap := int(mergeTop.ctr.limit)
-	if selsCap > 1024 {
-		selsCap = 1024
+	if mergeTop.ctr.limit > 1024 {
+		mergeTop.ctr.sels = make([]int64, 0, 1024)
+	} else {
+		mergeTop.ctr.sels = make([]int64, 0, mergeTop.ctr.limit)
 	}
-	if c := cap(mergeTop.ctr.sels); c < selsCap {
-		mergeTop.ctr.sels = slices.Grow(mergeTop.ctr.sels, selsCap-c)
-	}
-	mergeTop.ctr.sels = mergeTop.ctr.sels[:0]
-
-	// poses
-	if c := cap(mergeTop.ctr.poses); c < len(mergeTop.Fs) {
-		mergeTop.ctr.poses = slices.Grow(mergeTop.ctr.poses, len(mergeTop.Fs)-c)
-	}
-	mergeTop.ctr.poses = mergeTop.ctr.poses[:0]
+	mergeTop.ctr.poses = make([]int32, 0, len(mergeTop.Fs))
 
 	// executor for order list
 	if len(mergeTop.ctr.executorsForOrderList) != len(mergeTop.Fs) {

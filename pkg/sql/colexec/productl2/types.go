@@ -90,9 +90,7 @@ func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, er
 	if productl2.ctr.rbat != nil {
 		productl2.ctr.rbat.CleanOnlyData()
 	}
-	if productl2.ctr.inBat != nil {
-		productl2.ctr.inBat = nil
-	}
+	productl2.ctr.inBat = nil
 	if productl2.ProjectList != nil {
 		anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
 		anal.Alloc(productl2.ProjectAllocSize)
@@ -104,11 +102,7 @@ func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err error) {
 	productl2.ctr.cleanBatch(proc.Mp())
-	if productl2.ProjectList != nil {
-		anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
-		anal.Alloc(productl2.ProjectAllocSize)
-		productl2.FreeProjection(proc)
-	}
+	productl2.FreeProjection(proc)
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
@@ -120,7 +114,5 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 		ctr.rbat.Clean(mp)
 		ctr.rbat = nil
 	}
-	if ctr.inBat != nil {
-		ctr.inBat = nil
-	}
+	ctr.inBat = nil
 }

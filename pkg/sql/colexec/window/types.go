@@ -108,6 +108,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	// It needs to free, because the result of agg eval is not reuse the vector
 	if ctr.vec != nil {
 		ctr.vec.Free(proc.Mp())
+		ctr.vec = nil
 	}
 }
 

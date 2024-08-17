@@ -48,7 +48,7 @@ func (preInsertSecIdx *PreInsertSecIdx) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (preInsertSecIdx *PreInsertSecIdx) initBuf(proc *process.Process, bat *batch.Batch, secondaryColumnPos []int32, pkPos int, isUpdate bool) {
+func (preInsertSecIdx *PreInsertSecIdx) initBuf(bat *batch.Batch, secondaryColumnPos []int32, pkPos int, isUpdate bool) {
 	if preInsertSecIdx.ctr.buf != nil {
 		preInsertSecIdx.ctr.buf.CleanOnlyData()
 		return
@@ -95,7 +95,7 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 	secondaryColumnPos := preInsertSecIdx.PreInsertCtx.Columns
 	pkPos := int(preInsertSecIdx.PreInsertCtx.PkColumn)
 	isUpdate := inputBat.Vecs[len(inputBat.Vecs)-1].GetType().Oid == types.T_Rowid
-	preInsertSecIdx.initBuf(proc, inputBat, secondaryColumnPos, pkPos, isUpdate)
+	preInsertSecIdx.initBuf(inputBat, secondaryColumnPos, pkPos, isUpdate)
 
 	colCount := len(secondaryColumnPos)
 

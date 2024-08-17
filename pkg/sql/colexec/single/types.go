@@ -126,9 +126,7 @@ func (singleJoin *SingleJoin) Free(proc *process.Process, pipelineFailed bool, e
 	ctr.cleanExprExecutor()
 	ctr.cleanBatch(proc)
 
-	if singleJoin.ProjectList != nil {
-		singleJoin.FreeProjection(proc)
-	}
+	singleJoin.FreeProjection(proc)
 }
 
 func (ctr *container) resetExprExecutor() {

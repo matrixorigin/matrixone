@@ -73,10 +73,13 @@ func (mergeRecursive *MergeRecursive) Release() {
 func (mergeRecursive *MergeRecursive) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	mergeRecursive.ctr.last = false
 	mergeRecursive.ctr.i = 0
-}
-
-func (mergeRecursive *MergeRecursive) Free(proc *process.Process, pipelineFailed bool, err error) {
 	for _, bat := range mergeRecursive.ctr.freeBats {
 		bat.Clean(proc.Mp())
 	}
+	mergeRecursive.ctr.freeBats = nil
+	mergeRecursive.ctr.bats = nil
+	mergeRecursive.ctr.buf = nil
+}
+
+func (mergeRecursive *MergeRecursive) Free(proc *process.Process, pipelineFailed bool, err error) {
 }

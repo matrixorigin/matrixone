@@ -105,9 +105,9 @@ func (ctr *container) reset() {
 
 	ctr.n = 0
 	ctr.state = 0
-	ctr.sels = ctr.sels[:0]
-	ctr.poses = ctr.poses[:0]
-	ctr.cmps = ctr.cmps[:0]
+	ctr.sels = nil
+	ctr.poses = nil
+	ctr.cmps = nil
 
 	ctr.limit = 0
 	if ctr.limitExecutor != nil {

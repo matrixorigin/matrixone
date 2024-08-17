@@ -49,14 +49,9 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		for i := 0; i < int(shuffle.AliveRegCnt); i++ {
 			shuffle.ctr.sels[i] = make([]int64, 0, colexec.DefaultBatchSize/shuffle.AliveRegCnt*2)
 		}
-	}
-	if shuffle.ctr.shufflePool == nil {
 		shuffle.ctr.shufflePool = make([]*batch.Batch, shuffle.AliveRegCnt)
-	}
-	if shuffle.ctr.sendPool == nil {
 		shuffle.ctr.sendPool = make([]int, shuffle.AliveRegCnt)
 	}
-	shuffle.ctr.lastSentBatchIdx = -1
 	return nil
 }
 

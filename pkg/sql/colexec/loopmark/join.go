@@ -50,10 +50,7 @@ func (loopMark *LoopMark) Prepare(proc *process.Process) error {
 		}
 	}
 
-	if loopMark.ProjectList != nil && loopMark.ProjectExecutors == nil {
-		err = loopMark.PrepareProjection(proc)
-	}
-	return err
+	return loopMark.PrepareProjection(proc)
 }
 
 func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {

@@ -18,9 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -46,12 +44,8 @@ func (projection *Projection) OpType() vm.OpType {
 func (projection *Projection) Prepare(proc *process.Process) (err error) {
 	if len(projection.ctr.projExecutors) == 0 {
 		projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
-		projection.ctr.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(projection.ProjectList))
-		for i, e := range projection.ProjectList {
-			if e.Typ.Id != 0 {
-				projection.ctr.uafs[i] = vector.GetUnionAllFunction(plan.MakeTypeByPlan2Expr(e), proc.Mp())
-			}
-		}
+
+		projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 	}
 	return err
 }
@@ -76,7 +70,6 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	bat := result.Batch
 	anal.Input(bat, projection.GetIsFirst())
 
-	projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 	// keep shuffleIDX unchanged
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	for i := range projection.ctr.projExecutors {

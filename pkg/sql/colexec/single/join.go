@@ -124,7 +124,7 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 			}
 
 			if ctr.mp == nil {
-				err = ctr.emptyProbe(bat, singleJoin, proc, &probeResult)
+				err = ctr.emptyProbe(bat, singleJoin, &probeResult)
 			} else {
 				err = ctr.probe(bat, singleJoin, proc, &probeResult)
 			}
@@ -157,7 +157,7 @@ func (singleJoin *SingleJoin) build(anal process.Analyze, proc *process.Process)
 	}
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, proc *process.Process, result *vm.CallResult) error {
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, result *vm.CallResult) error {
 	for i, rp := range ap.Result {
 		if rp.Rel != 0 {
 			ctr.rbat.Vecs[i].SetClass(vector.CONSTANT)

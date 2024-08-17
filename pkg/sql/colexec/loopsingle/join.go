@@ -112,7 +112,7 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 			}
 
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(bat, loopSingle, proc, &probeResult)
+				err = ctr.emptyProbe(bat, loopSingle, &probeResult)
 			} else {
 				err = ctr.probe(bat, loopSingle, proc, &probeResult)
 			}
@@ -157,7 +157,7 @@ func (loopSingle *LoopSingle) build(proc *process.Process, anal process.Analyze)
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopSingle, proc *process.Process, result *vm.CallResult) error {
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopSingle, result *vm.CallResult) error {
 	for i, rp := range ap.Result {
 		if rp.Rel != 0 {
 			ctr.rbat.Vecs[i].SetClass(vector.CONSTANT)

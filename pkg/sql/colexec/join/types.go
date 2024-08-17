@@ -128,6 +128,7 @@ func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.inbat = nil
 	ctr.lastrow = 0
 	ctr.state = Build
+	ctr.batchRowCount = 0
 
 	if innerJoin.ProjectList != nil {
 		anal.Alloc(innerJoin.ProjectAllocSize + innerJoin.ctr.maxAllocSize)
@@ -146,9 +147,7 @@ func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanExprExecutor()
 	ctr.cleanBatch(proc)
 
-	if innerJoin.ProjectList != nil {
-		innerJoin.FreeProjection(proc)
-	}
+	innerJoin.FreeProjection(proc)
 
 }
 

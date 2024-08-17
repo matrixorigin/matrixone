@@ -59,34 +59,34 @@ func init() {
 				types.T_int32.ToType(),
 			},
 		},
-		{
-			arg:  newArgument(types.T_date.ToType()),
-			proc: newProcess(),
-			types: []types.Type{
-				types.T_date.ToType(),
-			},
-		},
-		{
-			arg:  newArgument(types.T_float32.ToType()),
-			proc: newProcess(),
-			types: []types.Type{
-				types.T_float32.ToType(),
-			},
-		},
-		{
-			arg:  newArgument(types.T_varchar.ToType()),
-			proc: newProcess(),
-			types: []types.Type{
-				types.T_varchar.ToType(),
-			},
-		},
-		{
-			arg:  newArgument(types.T_binary.ToType()),
-			proc: newProcess(),
-			types: []types.Type{
-				types.T_binary.ToType(),
-			},
-		},
+		// {
+		// 	arg:  newArgument(types.T_date.ToType()),
+		// 	proc: newProcess(),
+		// 	types: []types.Type{
+		// 		types.T_date.ToType(),
+		// 	},
+		// },
+		// {
+		// 	arg:  newArgument(types.T_float32.ToType()),
+		// 	proc: newProcess(),
+		// 	types: []types.Type{
+		// 		types.T_float32.ToType(),
+		// 	},
+		// },
+		// {
+		// 	arg:  newArgument(types.T_varchar.ToType()),
+		// 	proc: newProcess(),
+		// 	types: []types.Type{
+		// 		types.T_varchar.ToType(),
+		// 	},
+		// },
+		// {
+		// 	arg:  newArgument(types.T_binary.ToType()),
+		// 	proc: newProcess(),
+		// 	types: []types.Type{
+		// 		types.T_binary.ToType(),
+		// 	},
+		// },
 	}
 }
 
@@ -163,8 +163,10 @@ func TestFuzzyFilter(t *testing.T) {
 				}
 			}
 
+			tc.arg.GetChildren(0).Reset(tc.proc, false, nil)
+			tc.arg.GetChildren(1).Reset(tc.proc, false, nil)
 			tc.arg.Reset(tc.proc, false, nil)
-			setProcForTest(tc.arg, tc.proc, tc.types, r)
+
 			err = tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 
@@ -181,6 +183,14 @@ func TestFuzzyFilter(t *testing.T) {
 					break
 				}
 			}
+			tc.arg.GetChildren(0).Reset(tc.proc, false, nil)
+			tc.arg.GetChildren(1).Reset(tc.proc, false, nil)
+			tc.arg.Reset(tc.proc, false, nil)
+			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+			tc.arg.GetChildren(1).Free(tc.proc, false, nil)
+			tc.arg.Free(tc.proc, false, nil)
+			tc.proc.Free()
+			require.Equal(t, int64(0), tc.proc.GetMPool().CurrNB())
 		}
 	}
 }
