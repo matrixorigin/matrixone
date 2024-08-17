@@ -156,7 +156,7 @@ var (
 		Namespace: "mo",
 		Subsystem: "task",
 		Name:      "transfer_duration",
-		Buckets:   getShortDurationBuckets(),
+		Buckets:   getDurationBuckets(),
 	}, []string{"type"})
 
 	TransferDiskLatencyHistogram           = transferDurationHistogram.WithLabelValues("disk_latency")
