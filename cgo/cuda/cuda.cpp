@@ -96,6 +96,7 @@ int32_t CudaEnv_init(CudaEnv *env, uint8_t *errBuf) {
 
 CudaEnv *newCudaEnv(uint8_t *errBuf) {
     CudaEnv *env = (CudaEnv *) malloc(sizeof(CudaEnv));
+
     env->cuDevice = 0;
     env->cuContext = 0;
     env->cuModule = 0;
@@ -110,19 +111,25 @@ CudaEnv *newCudaEnv(uint8_t *errBuf) {
     return env;
 }
 
+static uint8_t gErrBuf[256]; 
+static CudaEnv *gCudaEnv = newCudaEnv(gErrBuf);
+
 int32_t cuda_l2distance_impl(uint8_t *errBuf, double *pres, int n, int vecsz, bool sq,
         varlena_t *p1, uint8_t *area1, bool isconst1,
         varlena_t *p2, uint8_t *area2, bool isconst2,
         int nbits
         ) {
-    static CudaEnv *gCudaEnv = newCudaEnv(errBuf);
+
     if (gCudaEnv == NULL) {
-        return -1999;
+        memcpy(errBuf, gErrBuf, 256);
+        return -1111;
     }
 
     // Allocate device memory.
     CUdeviceptr d_pres, d_p1, d_p2;
     ptrlen_t c1, c2;
+
+    MOCL_CHECK_RET(cuCtxSetCurrent(gCudaEnv->cuContext), -1999, errBuf); ;   
 
     MOCL_CHECK_RET(cuMemAlloc(&d_pres, n * sizeof(double)), -2000, errBuf);
     if (isconst1) {
@@ -239,12 +246,15 @@ int main(int argc, char **argv) {
         pp2[2] = vecsize;
     }
 
-    ret = cuda_l2distance_f32(errBuf, pres, n, vecsize, false, p1, area1, false, p2, area2, false);
-    if (ret != 0) {
-        cout << "Error: " << ret << endl << string((char *) errBuf+1, errBuf[0]) << endl;
-    } else {
-        for (int i = 0; i < 10; i++) {
-            cout << pres[i] << endl;
+    for (int loop = 0; loop < 100; loop++) {
+        ret = cuda_l2distance_f32(errBuf, pres, n, vecsize, false, p1, area1, false, p2, area2, false);
+        if (ret != 0) {
+            cout << "Error: " << ret << endl << string((char *) errBuf+1, errBuf[0]) << endl;
+        } else {
+            cout << "Loop: " << loop << endl;
+            for (int i = 0; i < 2; i++) {
+                cout << pres[i] << endl;
+            }
         }
     }
 }
