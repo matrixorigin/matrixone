@@ -52,7 +52,7 @@ int32_t xcall_l2distance_f32(int64_t rtid, uint8_t *errBuf, uint64_t *args, uint
                 p2, pargs[2].parea, c2const);
     }
 #endif
-
+    int dim = c1.len / sizeof(float);
     for (uint64_t i = 0; i < len; i++) {
         if (!bitmap_test(pargs[0].pnulls, i)) {
             if (!c1const) {
@@ -61,16 +61,15 @@ int32_t xcall_l2distance_f32(int64_t rtid, uint8_t *errBuf, uint64_t *args, uint
             if (!c2const) {
                 varlena_get_ptrlen(p2+i, pargs[2].parea, &c2);
             }
-            int dim = c1.len / sizeof(float);
             pres[i] = 0;
             float *c1val = (float *) c1.ptr;
             float *c2val = (float *) c2.ptr;
             for (int j = 0; j < dim; j++) {
                 float diff = c1val[j] - c2val[j];
                 pres[i] += (double)(diff * diff);
-                if (!sq) {
-                    pres[i] = sqrt(pres[i]);
-                }
+            }
+            if (!sq) {
+                pres[i] = sqrt(pres[i]);
             }
         }
     }
@@ -110,6 +109,7 @@ int32_t xcall_l2distance_f64(int64_t rtid, uint8_t *errBuf, uint64_t *args, uint
     }
 #endif
 
+    int dim = c1.len / sizeof(double);
     for (uint64_t i = 0; i < len; i++) {
         if (!bitmap_test(pargs[0].pnulls, i)) {
             if (!c1const) {
@@ -118,16 +118,15 @@ int32_t xcall_l2distance_f64(int64_t rtid, uint8_t *errBuf, uint64_t *args, uint
             if (!c2const) {
                 varlena_get_ptrlen(p2+i, pargs[2].parea, &c2);
             }
-            int dim = c1.len / sizeof(double);
             pres[i] = 0;
             double *c1val = (double *) c1.ptr;
             double *c2val = (double *) c2.ptr;
             for (int j = 0; j < dim; j++) {
                 double diff = c1val[j] - c2val[j];
                 pres[i] += diff * diff;
-                if (!sq) {
-                    pres[i] = sqrt(pres[i]);
-                }
+            }
+            if (!sq) {
+                pres[i] = sqrt(pres[i]);
             }
         }
     }
