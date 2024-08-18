@@ -61,6 +61,10 @@ func (r *pluginRouter) Route(
 		if re.CN == nil {
 			return nil, moerr.NewInternalErrorNoCtx("no CN server selected")
 		}
+		// selected CN should be filtered out, fall back to the delegated router
+		if filter != nil && filter(re.CN.SQLAddress) {
+			return r.Router.Route(ctx, sid, ci, filter)
+		}
 		v2.ProxyConnectSelectCounter.Inc()
 		return &CNServer{
 			reqLabel: ci.labelInfo,

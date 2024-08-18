@@ -1370,13 +1370,6 @@ func getConstValueByExpr(
 	return rule.GetConstantValue(vec, true, 0)
 }
 
-func getConstExpr(oid int32, c *plan.Literal) *plan.Expr {
-	return &plan.Expr{
-		Typ:  plan.Type{Id: oid},
-		Expr: &plan.Expr_Lit{Lit: c},
-	}
-}
-
 // ListTnService gets all tn service in the cluster
 func ListTnService(
 	service string,
@@ -1504,6 +1497,7 @@ func ForeachSnapshotObjects(
 	ts timestamp.Timestamp,
 	onObject func(obj logtailreplay.ObjectInfo, isCommitted bool) error,
 	tableSnapshot *logtailreplay.PartitionState,
+	extraCommitted []objectio.ObjectStats,
 	uncommitted ...objectio.ObjectStats,
 ) (err error) {
 	// process all uncommitted objects first
@@ -1512,6 +1506,15 @@ func ForeachSnapshotObjects(
 			ObjectStats: obj,
 		}
 		if err = onObject(info, false); err != nil {
+			return
+		}
+	}
+	// process all uncommitted objects first
+	for _, obj := range extraCommitted {
+		info := logtailreplay.ObjectInfo{
+			ObjectStats: obj,
+		}
+		if err = onObject(info, true); err != nil {
 			return
 		}
 	}

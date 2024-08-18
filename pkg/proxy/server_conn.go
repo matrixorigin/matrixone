@@ -87,6 +87,8 @@ type serverConn struct {
 	connResp []byte
 	// createTime is the creation time of this connection.
 	createTime time.Time
+	// closeOnce only close the connection once.
+	closeOnce sync.Once
 }
 
 var _ ServerConn = (*serverConn)(nil)
@@ -257,13 +259,15 @@ func (s *serverConn) Quit() error {
 
 // Close implements the ServerConn interface.
 func (s *serverConn) Close() error {
-	if s.mysqlProto != nil {
-		tcpConn := s.mysqlProto.GetTcpConnection()
-		if tcpConn != nil {
-			_ = tcpConn.Close()
+	s.closeOnce.Do(func() {
+		if s.mysqlProto != nil {
+			tcpConn := s.mysqlProto.GetTcpConnection()
+			if tcpConn != nil {
+				_ = tcpConn.Close()
+			}
+			s.mysqlProto.Close()
 		}
-		s.mysqlProto.Close()
-	}
+	})
 	// Un-track the connection.
 	s.rebalancer.connManager.disconnect(s.cnServer, s.tun)
 	return nil

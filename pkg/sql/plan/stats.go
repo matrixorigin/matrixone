@@ -1055,11 +1055,13 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 		if scanNode.Stats.Outcnt > scanNode.Stats.TableCnt {
 			scanNode.Stats.Outcnt = scanNode.Stats.TableCnt
 		}
-		scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/3) + 1
+		newBlockNum := int32(scanNode.Stats.Outcnt/3) + 1
+		if newBlockNum < scanNode.Stats.BlockNum {
+			scanNode.Stats.BlockNum = newBlockNum
+		}
 		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum) * DefaultBlockMaxRows
 		if scanNode.Stats.Cost > scanNode.Stats.TableCnt {
 			scanNode.Stats.Cost = scanNode.Stats.TableCnt
-			scanNode.Stats.BlockNum = int32(scanNode.Stats.TableCnt / DefaultBlockMaxRows)
 		}
 		scanNode.Stats.Selectivity = scanNode.Stats.Outcnt / scanNode.Stats.TableCnt
 		return
@@ -1070,7 +1072,10 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 	if scanNode.Stats.Cost < 1 {
 		scanNode.Stats.Cost = 1
 	}
-	scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/3) + 1
+	newBlockNum := int32(scanNode.Stats.Outcnt/3) + 1
+	if newBlockNum < scanNode.Stats.BlockNum {
+		scanNode.Stats.BlockNum = newBlockNum
+	}
 	scanNode.Stats.Selectivity = andSelectivity(scanNode.Stats.Selectivity, runtimeFilterSel)
 }
 

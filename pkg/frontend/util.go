@@ -20,6 +20,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"runtime"
@@ -96,6 +97,10 @@ func Max(a int, b int) int {
 	}
 }
 
+const (
+	invalidGoroutineId = math.MaxUint64
+)
+
 // GetRoutineId gets the routine id
 func GetRoutineId() uint64 {
 	data := make([]byte, 64)
@@ -103,6 +108,9 @@ func GetRoutineId() uint64 {
 	data = bytes.TrimPrefix(data, []byte("goroutine "))
 	data = data[:bytes.IndexByte(data, ' ')]
 	id, _ := strconv.ParseUint(string(data), 10, 64)
+	if id == 0 {
+		id = invalidGoroutineId
+	}
 	return id
 }
 

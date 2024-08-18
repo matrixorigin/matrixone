@@ -20,7 +20,8 @@ import (
 )
 
 type Buffer struct {
-	buf *buf.ByteBuf
+	markIdx int
+	buf     *buf.ByteBuf
 }
 
 // NewBuffer creates a new buffer
@@ -33,6 +34,7 @@ func (b Buffer) TypeName() string {
 }
 
 func (b *Buffer) reset() {
+	b.markIdx = 0
 	b.buf.Reset()
 }
 
@@ -82,4 +84,12 @@ func (b *Buffer) EncodeInt(
 		panic(err)
 	}
 	return b.buf.RawSlice(idx, b.buf.GetWriteIndex())
+}
+
+func (b *Buffer) Mark() {
+	b.markIdx = b.buf.GetWriteIndex()
+}
+
+func (b *Buffer) GetMarkedData() []byte {
+	return b.buf.RawSlice(b.markIdx, b.buf.GetWriteIndex())
 }

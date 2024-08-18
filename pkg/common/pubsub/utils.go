@@ -15,6 +15,7 @@
 package pubsub
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -58,6 +59,18 @@ func JoinAccounts(accountMap map[int32]*AccountInfo) string {
 	}
 	slices.Sort(accountNames)
 	return strings.Join(accountNames, Sep)
+}
+
+func JoinAccountIds(accIds []int32) (s string) {
+	if len(accIds) == 0 {
+		return
+	}
+
+	s += fmt.Sprintf("%d", accIds[0])
+	for i := 1; i < len(accIds); i++ {
+		s += "," + fmt.Sprintf("%d", accIds[i])
+	}
+	return
 }
 
 func CanPubToAll(accountName, pubAllAccounts string) bool {

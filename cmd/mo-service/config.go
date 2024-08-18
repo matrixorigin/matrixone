@@ -529,6 +529,8 @@ func (c *Config) mustGetServiceUUID() string {
 		return c.LogService.UUID
 	case metadata.ServiceType_PROXY:
 		return c.ProxyConfig.UUID
+	case metadata.ServiceType_PYTHON_UDF:
+		return c.PythonUdfServerConfig.UUID
 	}
 	panic("impossible")
 }

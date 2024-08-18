@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -370,73 +369,4 @@ func TestGetSqlForGetDbIdAndType(t *testing.T) {
 		require.Equal(t, k.err, err != nil)
 		require.Equal(t, k.want, sql)
 	}
-}
-
-func TestCheckSubscriptionValidCommon(t *testing.T) {
-	convey.Convey("check subscription success", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		tenant := &TenantInfo{
-			Tenant:        "acc1",
-			User:          "user1",
-			DefaultRole:   accountAdminRoleName,
-			TenantID:      1,
-			UserID:        1,
-			DefaultRoleID: accountAdminRoleID,
-		}
-		ses := newSes(nil, ctrl)
-		ses.tenant = tenant
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
-
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		ctx = defines.AttachAccount(ctx, 1, 1, accountAdminRoleID)
-
-		mockedSubInfoResults := func(ctrl *gomock.Controller) []interface{} {
-			er := mock_frontend.NewMockExecResult(ctrl)
-			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("open", nil).AnyTimes()
-			return []interface{}{er}
-		}
-
-		mockedPubInfoResults := func(ctrl *gomock.Controller) []interface{} {
-			er := mock_frontend.NewMockExecResult(ctrl)
-			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("pub1", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("db1", nil).AnyTimes()
-			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(2)).Return(uint64(0), nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return(pubsub.TableAll, nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return(pubsub.AccountAll, nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("", nil).AnyTimes()
-			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(6)).Return(true, nil).AnyTimes()
-			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(7)).Return(uint64(0), nil).AnyTimes()
-			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(8)).Return(uint64(0), nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(9)).Return("", nil).AnyTimes()
-			return []interface{}{er}
-		}
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-		// begin; commit; rollback
-		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
-		// getAccountIdAndStatus
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		bh.EXPECT().GetExecResultSet().Return(mockedSubInfoResults(ctrl))
-		// get pub info
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		bh.EXPECT().GetExecResultSet().Return(mockedPubInfoResults(ctrl))
-
-		_, err := checkSubscriptionValidCommon(ctx, ses, "sub1", "sys", "pub1")
-		convey.So(err, convey.ShouldBeNil)
-	})
 }

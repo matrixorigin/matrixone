@@ -206,6 +206,12 @@ func vec2Str[T any](vec []T, v *vector.Vector, opts ...TypePrintOpt) string {
 }
 
 func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string {
+	if v == nil || v.Length() == 0 {
+		return "empty vector"
+	}
+	if printN > v.Length() {
+		printN = v.Length()
+	}
 	switch v.GetType().Oid {
 	case types.T_bool:
 		return vec2Str(vector.MustFixedCol[bool](v)[:printN], v)

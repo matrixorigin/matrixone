@@ -250,7 +250,7 @@ message SizeParam {
 
 message RangesParam {
     repeated plan.Expr Exprs = 1;
-    int32 txnOffset = 2;
+    bytes UncommittedObjects = 2;
 }
 
 message GetColumMetadataScanInfoParam {

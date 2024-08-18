@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -614,18 +616,38 @@ func (c *PushClient) waitTimestamp() {
 	}
 }
 
-func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
+func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err error) {
 	// replay mo_catalog cache
+	var op client.TxnOperator
+	var result executor.Result
 	ts := c.receivedLogTailTime.getTimestamp()
 	typeTs := types.TimestampToTS(ts)
-	op, err := e.cli.New(ctx, timestamp.Timestamp{}, client.WithSkipPushClientReady(), client.WithSnapshotTS(ts))
+	createByOpt := client.WithTxnCreateBy(
+		0,
+		"",
+		"replayCatalogCache",
+		0)
+	op, err = e.cli.New(ctx, timestamp.Timestamp{}, client.WithSkipPushClientReady(), client.WithSnapshotTS(ts), createByOpt)
 	if err != nil {
 		return err
 	}
-	_ = e.New(ctx, op)
+	defer func() {
+		//same timeout value as it in frontend
+		ctx2, cancel := context.WithTimeout(ctx, e.Hints().CommitOrRollbackTimeout)
+		defer cancel()
+		if err != nil {
+			_ = op.Rollback(ctx2)
+		} else {
+			_ = op.Commit(ctx2)
+		}
+	}()
+	err = e.New(ctx, op)
+	if err != nil {
+		return err
+	}
 
 	// read databases
-	result, err := execReadSql(ctx, op, catalog.MoDatabaseBatchQuery, true)
+	result, err = execReadSql(ctx, op, catalog.MoDatabaseBatchQuery, true)
 	if err != nil {
 		return err
 	}
@@ -682,7 +704,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
 				return err
 			}
 		}
-		if err := fillTsVecForSysTableQueryBatch(bat, typeTs, result.Mp); err != nil {
+		if err = fillTsVecForSysTableQueryBatch(bat, typeTs, result.Mp); err != nil {
 			return err
 		}
 		e.catalog.InsertColumns(bat)

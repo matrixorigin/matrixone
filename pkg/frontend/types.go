@@ -660,12 +660,18 @@ func (ses *feSessionImpl) GetMySQLParser() *mysql.MySQLParser {
 func (ses *feSessionImpl) EnterFPrint(idx int) {
 	if ses != nil {
 		ses.fprints.addEnter(idx)
+		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
+			ses.txnHandler.txnOp.SetFootPrints(ses.fprints.prints[:])
+		}
 	}
 }
 
 func (ses *feSessionImpl) ExitFPrint(idx int) {
 	if ses != nil {
 		ses.fprints.addExit(idx)
+		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
+			ses.txnHandler.txnOp.SetFootPrints(ses.fprints.prints[:])
+		}
 	}
 }
 

@@ -61,7 +61,7 @@ var (
 			Subsystem: "logtail",
 			Name:      "bytes",
 			Help:      "Bucketed histogram of logtail log bytes.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 30),
 		})
 
 	logTailApplyDurationHistogram = prometheus.NewHistogramVec(
