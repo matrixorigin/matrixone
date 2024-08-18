@@ -4763,7 +4763,7 @@ func isSameCN(addr string, currentCNAddr string) bool {
 		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
 		return true
 	}
-	return parts1[0] == parts2[0]
+	return parts1[0] == parts2[0] && parts1[1] == parts2[1]
 }
 
 func (s *Scope) affectedRows() uint64 {
