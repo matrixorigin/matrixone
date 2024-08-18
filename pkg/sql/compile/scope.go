@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	goruntime "runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -548,12 +547,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan cannot run in remote.")
 	}
 
-	maxProvidedCpuNumber := goruntime.GOMAXPROCS(0)
-	if c.IsTpQuery() {
-		maxProvidedCpuNumber = 1
-	}
-
-	readers, scanUsedCpuNumber, err := s.buildReaders(c, maxProvidedCpuNumber)
+	readers, scanUsedCpuNumber, err := s.buildReaders(c, s.NodeInfo.Mcpu)
 	if err != nil {
 		return nil, err
 	}
