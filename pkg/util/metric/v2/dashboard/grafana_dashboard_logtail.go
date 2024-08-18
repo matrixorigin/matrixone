@@ -133,9 +133,9 @@ func (c *DashboardCreator) initLogtailQueueRow() dashboard.Option {
 
 func (c *DashboardCreator) initLogtailBytesRow() dashboard.Option {
 	return dashboard.Row(
-		"Logtail size",
+		"LogEntry Size",
 		c.getHistogram(
-			"Logtail size",
+			"LogEntry Size",
 			c.getMetricWithFilter(`mo_logtail_bytes_bucket`, ``),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			12,

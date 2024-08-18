@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -67,6 +68,7 @@ func TransferTombstones(
 	wantDetail := false
 	var transferCnt int
 	start := time.Now()
+	v2.TransferTombstonesCountHistogram.Observe(1)
 	defer func() {
 		duration := time.Since(start)
 		if duration > time.Millisecond*500 || err != nil || wantDetail {
@@ -76,11 +78,13 @@ func TransferTombstones(
 				zap.Int("count", transferCnt),
 				zap.String("table-name", table.tableDef.Name),
 				zap.Uint64("table-id", table.tableId),
+				zap.Int("deleted-objects", len(deletedObjects)),
+				zap.Int("created-objects", len(createdObjects)),
 				zap.Error(err),
 			)
 		}
+		v2.TransferTombstonesDurationHistogram.Observe(duration.Seconds())
 	}()
-	// TODO:
 	var objectList []objectio.ObjectStats
 	for name := range createdObjects {
 		if obj, ok := state.GetObject(name); ok {
@@ -334,6 +338,11 @@ func doTransferRowids(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (err error) {
+	now := time.Now()
+	defer func() {
+		duration := time.Since(now)
+		v2.BatchTransferTombstonesDurationHistogram.Observe(duration.Seconds())
+	}()
 	pkColumName := table.GetTableDef(ctx).Pkey.PkeyColName
 	expr := ConstructInExpr(ctx, pkColumName, searchPKColumn)
 
