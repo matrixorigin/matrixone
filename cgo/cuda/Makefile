@@ -278,7 +278,7 @@ ALL_LDFLAGS += $(addprefix -Xlinker ,$(LDFLAGS))
 ALL_LDFLAGS += $(addprefix -Xlinker ,$(EXTRA_LDFLAGS))
 
 # Common includes and paths for CUDA
-INCLUDES  := -I../../../Common
+INCLUDES  := -I./Common
 LIBRARIES :=
 
 ################################################################################
@@ -395,9 +395,15 @@ $(FATBIN_FILE): mocl.cu
 	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -fatbin $<
 
 cuda.o: cuda.cpp
-	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
+	$(EXEC) $(NVCC) $(INCLUDES) -O3 $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
+
+mytest.o: cuda.cpp $(FATBIN_FILE)
+	$(EXEC) $(NVCC) $(INCLUDES) -DTEST_RUN -g -O0 $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
+
+mytest: mytest.o
+	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
 
 clean:
-	rm -f *.o *.a $(FATBIN_FILE)
+	rm -f *.o *.a $(FATBIN_FILE) mytest
 
 clobber: clean

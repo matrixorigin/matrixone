@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#define MO_CL_CUDA
+
 #include <math.h>
 
 extern "C" 
@@ -22,20 +24,207 @@ extern "C"
 #include "../bitmap.h"
 }
 
-extern "C"
-int32_t cuda_l2distance_sq_f32(double *pres, int n, bool sq,
-        varlena_t *p1, uint8_t *area1, bool isconst1,
-        varlena_t *p2, uint8_t *area2, bool isconst2
-        ) {
+#include <string.h>
+#include <cstring>
+#include <iostream>
+#include <unistd.h>
+#include <libgen.h>
+
+// CUDA headers.
+#include <cuda.h>
+#include <helper_cuda_drvapi.h>
+#include <helper_functions.h>
+#include <builtin_types.h>
+
+#define FATBIN_FILE "mocl_kernel64.fatbin"
+
+using namespace std;
+
+#ifndef TEST_RUN
+#define MOCL_CHECK_RET(x, code) if ((x) != CUDA_SUCCESS) {      \
+    return code;                                                \
+} else 
+#else
+#define MOCL_CHECK_RET(x, code) checkCudaErrors(x)
+#endif
+
+static CUdevice CudaEnv_cuDevice;
+static CUcontext CudaEnv_cuContext;
+static CUmodule CudaEnv_cuModule;
+
+static CUfunction CudaEnv_l2distance_f32;
+static CUfunction CudaEnv_l2distance_f64;
+static CUfunction CudaEnv_l2distance_f32_const;
+static CUfunction CudaEnv_l2distance_f64_const;
+
+static int CudaEnv_init() {
+    MOCL_CHECK_RET(cuInit(0), -1000);
+    CudaEnv_cuDevice = findCudaDeviceDRV(0, NULL);
+    MOCL_CHECK_RET(cuCtxCreate(&CudaEnv_cuContext, 0, CudaEnv_cuDevice), -1001);
+#ifdef __linux__
+    char mobin_path[PATH_MAX];
+    ssize_t nb = readlink("/proc/self/exe", mobin_path, PATH_MAX);
+    if (nb == -1) {
+        return -1;
+    }
+    string fatbin_path = string(dirname(mobin_path)) + "/" + FATBIN_FILE;
+#else
+    // Not implemented yet.
     return -1;
+#endif
+    MOCL_CHECK_RET(cuModuleLoad(&CudaEnv_cuModule, fatbin_path.c_str()), -1002);
+    MOCL_CHECK_RET(cuModuleGetFunction(&CudaEnv_l2distance_f32, CudaEnv_cuModule, "l2distance_f32"), -1003);
+    MOCL_CHECK_RET(cuModuleGetFunction(&CudaEnv_l2distance_f64, CudaEnv_cuModule, "l2distance_f64"), -1004);
+    MOCL_CHECK_RET(cuModuleGetFunction(&CudaEnv_l2distance_f32_const, CudaEnv_cuModule, "l2distance_f32_const"), -1005);
+    MOCL_CHECK_RET(cuModuleGetFunction(&CudaEnv_l2distance_f64_const, CudaEnv_cuModule, "l2distance_f64_const"), -1006);
+    return 1;
+}  
+
+static int gCudaInited = CudaEnv_init();
+
+int32_t cuda_l2distance_impl(double *pres, int n, int vecsz, bool sq,
+        varlena_t *p1, uint8_t *area1, bool isconst1,
+        varlena_t *p2, uint8_t *area2, bool isconst2,
+        int nbits
+        ) {
+    // Allocate device memory.
+    CUdeviceptr d_pres, d_p1, d_p2;
+    ptrlen_t c1, c2;
+
+    // Check if CUDA is inited.
+    if (gCudaInited < 0) {
+        return gCudaInited; 
+    } else if (gCudaInited == 0) {
+        gCudaInited = CudaEnv_init();
+        if (gCudaInited < 0) {
+            return gCudaInited;
+        } else if (gCudaInited == 0) {
+            return -1999;
+        }
+    }
+
+    MOCL_CHECK_RET(cuMemAlloc(&d_pres, n * sizeof(double)), -2000);
+    if (isconst1) {
+        varlena_get_ptrlen(p1, area1, &c1);
+        MOCL_CHECK_RET(cuMemAlloc(&d_p1, vecsz), -2001);
+        MOCL_CHECK_RET(cuMemcpyHtoD(d_p1, c1.ptr, vecsz), -2002);
+    } else {
+        MOCL_CHECK_RET(cuMemAlloc(&d_p1, n * vecsz), -2003);
+        for (int i = 0; i < n; i++) {
+            varlena_get_ptrlen(p1+i, area1, &c1);
+            MOCL_CHECK_RET(cuMemcpyHtoD(d_p1+i*vecsz, c1.ptr, vecsz), -2004);
+        }
+    }
+
+    if (isconst2) {
+        varlena_get_ptrlen(p2, area2, &c2);
+        MOCL_CHECK_RET(cuMemAlloc(&d_p2, vecsz), -2005);
+        MOCL_CHECK_RET(cuMemcpyHtoD(d_p2, c2.ptr, vecsz), -2006);
+    } else {
+        MOCL_CHECK_RET(cuMemAlloc(&d_p2, n * vecsz), -2007);
+        for (int i = 0; i < n; i++) {
+            varlena_get_ptrlen(p2+i, area2, &c2);
+            MOCL_CHECK_RET(cuMemcpyHtoD(d_p2+i*vecsz, c2.ptr, vecsz), -2008);
+        }
+    }
+
+    int threadsPerBlock = CUDA_THREADS_PER_BLOCK;   
+    int blocksPerGrid = (n + threadsPerBlock - 1) / threadsPerBlock;
+
+    if (nbits == 32) {
+        if (isconst1) {
+            // swap p1 and p2, leave const the last arg.
+            void *args[] = {&d_pres, &n, &vecsz, &sq, &d_p2, &d_p1};
+            MOCL_CHECK_RET(cuLaunchKernel(CudaEnv_l2distance_f32_const, blocksPerGrid, 1, 1, threadsPerBlock, 1, 1, 0, NULL, args, NULL), -2009);
+        } else if (isconst2) {
+            void *args[] = {&d_pres, &n, &vecsz, &sq, &d_p1, &d_p2};
+            MOCL_CHECK_RET(cuLaunchKernel(CudaEnv_l2distance_f32_const, blocksPerGrid, 1, 1, threadsPerBlock, 1, 1, 0, NULL, args, NULL), -2010);
+        } else {
+            void *args[] = {&d_pres, &n, &vecsz, &sq, &d_p1, &d_p2};
+            MOCL_CHECK_RET(cuLaunchKernel(CudaEnv_l2distance_f32, blocksPerGrid, 1, 1, threadsPerBlock, 1, 1, 0, NULL, args, NULL), -2011);
+        } 
+    } else {
+        if (isconst1) {
+            // swap p1 and p2, leave const the last arg.
+            void *args[] = {&d_pres, &n, &vecsz, &sq, &d_p2, &d_p1};
+            MOCL_CHECK_RET(cuLaunchKernel(CudaEnv_l2distance_f64_const, blocksPerGrid, 1, 1, threadsPerBlock, 1, 1, 0, NULL, args, NULL), -2012);
+        } else if (isconst2) {
+            void *args[] = {&d_pres, &n, &vecsz, &sq, &d_p1, &d_p2};
+            MOCL_CHECK_RET(cuLaunchKernel(CudaEnv_l2distance_f64_const, blocksPerGrid, 1, 1, threadsPerBlock, 1, 1, 0, NULL, args, NULL), -2013);
+        } else {
+            void *args[] = {&d_pres, &n, &vecsz, &sq, &d_p1, &d_p2};
+            MOCL_CHECK_RET(cuLaunchKernel(CudaEnv_l2distance_f64, blocksPerGrid, 1, 1, threadsPerBlock, 1, 1, 0, NULL, args, NULL), -2014);
+        }
+    }
+
+    MOCL_CHECK_RET(cuMemcpyDtoH(pres, d_pres, n * sizeof(double)), -2015);
+
+    MOCL_CHECK_RET(cuMemFree(d_pres), -2016);
+    MOCL_CHECK_RET(cuMemFree(d_p1), -2017);
+    MOCL_CHECK_RET(cuMemFree(d_p2), -2018);
+
+    return 0;
 }
 
-/* well well well, does it worth to make f32/f64 a macro?  probably not */
 extern "C"
-int32_t cuda_l2distance_sq_f64(double *pres, int n, bool sq,
+int32_t cuda_l2distance_f32(double *pres, int n, int vecsz, bool sq,
         varlena_t *p1, uint8_t *area1, bool isconst1,
         varlena_t *p2, uint8_t *area2, bool isconst2
         ) {
-    return -1;
+    return cuda_l2distance_impl(
+        pres, n, vecsz, sq, p1, area1, isconst1, p2, area2, isconst2, 32);
 }
+
+extern "C"
+int32_t cuda_l2distance_f64(double *pres, int n, int vecsz, bool sq,
+        varlena_t *p1, uint8_t *area1, bool isconst1,
+        varlena_t *p2, uint8_t *area2, bool isconst2
+        ) {
+    return cuda_l2distance_impl(
+        pres, n, vecsz, sq, p1, area1, isconst1, p2, area2, isconst2, 64);
+}
+
+#ifdef TEST_RUN
+int main(int argc, char **argv) {
+    double *pres;
+    varlena_t *p1, *p2;
+    uint8_t *area1, *area2;
+
+    int n = 8192;
+    int vecsize = 128 * sizeof(float);
+    int32_t ret;
+
+    pres = (double *) malloc(n * sizeof(double));
+    p1 = (varlena_t *) malloc(n * sizeof(varlena_t));
+    p2 = (varlena_t *) malloc(n * sizeof(varlena_t));
+    area1 = (uint8_t *) malloc(n * vecsize);
+    area2 = (uint8_t *) malloc(n * vecsize);
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < 128; j++) {
+            ((float *) area1)[i*128+j] = i + j;
+            ((float *) area2)[i*128+j] = i + j + 1;
+        }
+
+        uint32_t *pp1 = (uint32_t *) &p1[i].bs[0];
+        uint32_t *pp2 = (uint32_t *) &p2[i].bs[0];
+
+        pp1[0] = 0xffffffff;
+        pp2[0] = 0xffffffff;
+        pp1[1] = i*vecsize;
+        pp2[1] = i*vecsize;
+        pp1[2] = vecsize;
+        pp2[2] = vecsize;
+    }
+
+    ret = cuda_l2distance_f32(pres, n, vecsize, false, p1, area1, false, p2, area2, false);
+    if (ret != 0) {
+        cout << "Error: " << ret << endl;
+    } else {
+        for (int i = 0; i < 10; i++) {
+            cout << pres[i] << endl;
+        }
+    }
+}
+#endif  
 

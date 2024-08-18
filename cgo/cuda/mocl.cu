@@ -1,41 +1,68 @@
-/* Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *  * Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *  * Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *  * Neither the name of NVIDIA CORPORATION nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
- * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
- * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-/* Vector addition: C = A + B.
- *
- * This sample is a very basic sample that implements element by element
- * vector addition. It is the same as the sample illustrating Chapter 3
- * of the programming guide with some additions like error checking.
- *
- */
-
 // Device code
-extern "C" __global__ void VecAdd_kernel(const float *A, const float *B,
-                                         float *C, int N) {
-  int i = blockDim.x * blockIdx.x + threadIdx.x;
+extern "C" __global__ void l2distance_f32(
+        double *res, int n, int vecsz, bool sq,
+        const float *A, const float *B) {
+    int i = blockDim.x * blockIdx.x + threadIdx.x;
+    int loop = vecsz / sizeof(float);
+    if (i < n) {
+        res[i] = 0;
+        for (int j = 0; j < loop; j++) {
+            float diff = A[i * loop + j] - B[i * loop + j];
+            res[i] += diff * diff;
+        }
+        if (!sq) {
+            res[i] = sqrt(res[i]);
+        }
+    }
+}
 
-  if (i < N) C[i] = A[i] + B[i];
+extern "C" __global__ void l2distance_f32_const(
+        double *res, int n, int vecsz, bool sq,
+        const float *A, const float *B) {
+    int i = blockDim.x * blockIdx.x + threadIdx.x;
+    int loop = vecsz / sizeof(float);
+    if (i < n) {
+        res[i] = 0;
+        for (int j = 0; j < loop; j++) {
+            float diff = A[i * loop + j] - B[j];
+            res[i] += diff * diff;
+        }
+        if (!sq) {
+            res[i] = sqrt(res[i]);
+        }
+    }
+}
+
+extern "C" __global__ void l2distance_f64(
+        double *res, int n, int vecsz, bool sq,
+        const double *A, const double *B) {
+    int i = blockDim.x * blockIdx.x + threadIdx.x;
+    int loop = vecsz / sizeof(double);
+    if (i < n) {
+        res[i] = 0;
+        for (int j = 0; j < loop; j++) {
+            double diff = A[i * loop + j] - B[i * loop + j];
+            res[i] += diff * diff;
+        }
+        if (!sq) {
+            res[i] = sqrt(res[i]);
+        } 
+    }
+}
+
+extern "C" __global__ void l2distance_f64_const(
+        double *res, int n, int vecsz, bool sq,
+        const float *A, const float *B) {
+    int i = blockDim.x * blockIdx.x + threadIdx.x;
+    int loop = vecsz / sizeof(double);
+    res[i] = 0;
+    if (i < n) {
+        for (int j = 0; j < loop; j++) {
+            double diff = A[i * loop + j] - B[j];
+            res[i] += diff * diff;
+        }
+        if (!sq) {
+            res[i] = sqrt(res[i]);
+        }
+    }
 }
