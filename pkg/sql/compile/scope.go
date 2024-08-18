@@ -303,7 +303,11 @@ func (s *Scope) MergeRun(c *Compile) error {
 	}()
 
 	if s.Magic != Normal && s.DataSource != nil {
-		if err := s.ParallelRun(c); err != nil {
+		magic := s.Magic
+		s.Magic = Normal
+		err := s.ParallelRun(c)
+		s.Magic = magic
+		if err != nil {
 			return err
 		}
 	} else {
