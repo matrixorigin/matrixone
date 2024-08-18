@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"encoding/hex"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -254,14 +253,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	if txnOperator != nil {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
 	}
-
-	if qry, ok := c.pn.Plan.(*plan.Plan_Query); ok {
-		if qry.Query.StmtType != plan.Query_REPLACE {
-			scopeInfo := DebugShowScopes(c.scope)
-			fmt.Printf("----------------------------------wuxiliang end----------------------------------\nSQL:%s %s\n--------------------------------------------", c.sql, scopeInfo)
-		}
-	}
-
 	return queryResult, err
 }
 
