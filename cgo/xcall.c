@@ -20,7 +20,7 @@
 #include "bitmap.h"
 
 
-int32_t xcall_l2distance_f32(int64_t rtid, uint64_t *args, uint64_t len, bool sq) {
+int32_t xcall_l2distance_f32(int64_t rtid, uint8_t *errBuf, uint64_t *args, uint64_t len, bool sq) {
     /* 
      * Must be 3 args, ret, arg1, arg2.  
      * Len must be correct 
@@ -47,7 +47,7 @@ int32_t xcall_l2distance_f32(int64_t rtid, uint64_t *args, uint64_t len, bool sq
             && pargs[0].pnulls == NULL 
             && len >= CUDA_THREADS_PER_BLOCK
             && c1.len > 128) {
-        return cuda_l2distance_f32(pres, (int)(len), c1.len, sq,
+        return cuda_l2distance_f32(errBuf, pres, (int)(len), c1.len, sq,
                 p1, pargs[1].parea, c1const,
                 p2, pargs[2].parea, c2const);
     }
@@ -78,7 +78,7 @@ int32_t xcall_l2distance_f32(int64_t rtid, uint64_t *args, uint64_t len, bool sq
 }
 
 /* well well well, does it worth to make f32/f64 a macro?  probably not */
-int32_t xcall_l2distance_f64(int64_t rtid, uint64_t *args, uint64_t len, bool sq) {
+int32_t xcall_l2distance_f64(int64_t rtid, uint8_t *errBuf, uint64_t *args, uint64_t len, bool sq) {
     /* 
      * Must be 3 args, ret, arg1, arg2.  
      * Len must be correct 
@@ -104,12 +104,11 @@ int32_t xcall_l2distance_f64(int64_t rtid, uint64_t *args, uint64_t len, bool sq
             && pargs[0].pnulls == NULL 
             && len >= CUDA_THREADS_PER_BLOCK
             && c1.len > 128) {
-        return cuda_l2distance_f64(pres, (int)(len), c1.len, sq,
+        return cuda_l2distance_f64(errBuf, pres, (int)(len), c1.len, sq,
                 p1, pargs[1].parea, c1const,
                 p2, pargs[2].parea, c2const);
     }
 #endif
-
 
     for (uint64_t i = 0; i < len; i++) {
         if (!bitmap_test(pargs[0].pnulls, i)) {

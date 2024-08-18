@@ -100,7 +100,7 @@ DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 
 ifeq ($(MO_CL_CUDA),1)
-	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -lstdc++
+	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart -lstdc++
 endif
 CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo " CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lm -lmo $(CUDA_LDFLAGS)"
 GOLDFLAGS=-ldflags="-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
