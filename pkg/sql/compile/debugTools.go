@@ -168,12 +168,12 @@ func showSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegi
 
 	if len(scope.PreScopes) > 0 {
 		gapNextLine(gap, buffer)
-		buffer.WriteString(fmt.Sprintf("  PreScopes: {"))
+		buffer.WriteString("  PreScopes: {")
 		for i := range scope.PreScopes {
 			showSingleScope(scope.PreScopes[i], i, gap+4, rmp, buffer)
 		}
 		gapNextLine(gap, buffer)
-		buffer.WriteString(fmt.Sprintf("  }"))
+		buffer.WriteString("  }")
 	}
 }
 
