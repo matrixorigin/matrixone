@@ -60,18 +60,18 @@ static inline int varlena_get_ptrlen(varlena_t *va, uint8_t *area, ptrlen_t *pl)
     return pl->len;
 }
 
-int32_t xcall_l2distance_f32(int64_t rtid, uint64_t *args, uint64_t len, bool sq);
-int32_t xcall_l2distance_f64(int64_t rtid, uint64_t *args, uint64_t len, bool sq);
+int32_t xcall_l2distance_f32(int64_t rtid, uint8_t *errBuf, uint64_t *args, uint64_t len, bool sq);
+int32_t xcall_l2distance_f64(int64_t rtid, uint8_t *errBuf, uint64_t *args, uint64_t len, bool sq);
 
 #ifdef MO_CL_CUDA
 
 #define CUDA_THREADS_PER_BLOCK 256
 
-int32_t cuda_l2distance_f32(double *pres, int n, int vecSz, bool sq,
+int32_t cuda_l2distance_f32(uint8_t *errBuf, double *pres, int n, int vecSz, bool sq,
         varlena_t *p1, uint8_t *area1, bool isconst1,
         varlena_t *p2, uint8_t *area2, bool isconst2
         );
-int32_t cuda_l2distance_f64(double *pres, int n, int vecSz, bool sq,
+int32_t cuda_l2distance_f64(uint8_t *errBuf, double *pres, int n, int vecSz, bool sq,
         varlena_t *p1, uint8_t *area1, bool isconst1,
         varlena_t *p2, uint8_t *area2, bool isconst2
         );

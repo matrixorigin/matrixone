@@ -112,7 +112,7 @@ DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 
 ifeq ($(MO_CL_CUDA),1)
-	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -lstdc++
+	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart -lstdc++
 endif
 
 CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include"

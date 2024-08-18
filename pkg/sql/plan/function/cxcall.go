@@ -42,11 +42,14 @@ type xcallArgs struct {
 	ptrLens [6]uintptr
 }
 
+const xcallErrStrLen = 256
+
 type XCallFunction struct {
 	clHost      string
 	clRuntimeId int64
 	xFuncId     int64
 	args        []xcallArgs
+	ErrStr      [xcallErrStrLen]byte
 }
 
 func getRuntimeId(rt string) int64 {
@@ -72,13 +75,17 @@ func c_xcall(f *XCallFunction, mp *mpool.MPool, length int, result *vector.Vecto
 	}
 
 	if f.clHost == "CGO" {
+		f.ErrStr[0] = 0
 		cret := C.XCall(
 			C.int64_t(f.clRuntimeId),
 			C.int64_t(f.xFuncId),
+			(*C.uint8_t)(unsafe.Pointer(&f.ErrStr[0])),
 			(*C.uint64_t)(unsafe.Pointer(&f.args[0])),
 			C.uint64_t(length))
 		if cret != 0 {
-			return moerr.NewInternalErrorNoCtx("xcall xfunc failed, error code %d", cret)
+			errLen := uint8(f.ErrStr[0])
+			errStr := string(f.ErrStr[1 : 1+errLen])
+			return moerr.NewInternalErrorNoCtx("xcall xfunc failed, error code %d, %s", cret, errStr)
 		}
 		return nil
 	} else {
