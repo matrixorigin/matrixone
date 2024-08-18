@@ -1,0 +1,160 @@
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop database if exists db1;
+create database db1;
+use db1;
+create table t1(a int);
+insert into t1 values (1),(2),(3);
+create publication pubname1 database db1 account acc01 comment 'publish db1 database';
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pubname1    db1    *    acc01        2024-08-17 16:11:58    null    publish db1 database
+show databases like 'db1';
+Database
+db1
+create database sub_db1 from sys publication pubname1;
+show databases like 'sub_db1';
+Database
+sub_db1
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t1
+select * from t1;
+a
+1
+2
+3
+drop database if exists db2;
+create database if not exists db2;
+use db2;
+create table t2(a int);
+insert into t2 values (1),(2),(3);
+create publication pubname2 database db2 account sys comment 'publish db2 database';
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pubname2    db2    *    sys        2024-08-17 16:11:58    null    publish db2 database
+show databases like 'db2';
+Database
+db2
+drop snapshot if exists snap1;
+create snapshot snap1 for account acc01;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+snap1    2024-08-17 08:11:58.864721    account    acc01        
+drop database if exists sub_db1;
+show databases like 'sub_db1';
+Database
+drop publication if exists pubname2;
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+drop database if exists db2;
+show databases like 'db2';
+Database
+restore account acc01 from snapshot snap1;
+show databases like 'sub_db1';
+Database
+sub_db1
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t1
+select * from t1;
+a
+1
+2
+3
+show databases like 'db2';
+Database
+db2
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pubname2    db2    *    sys        2024-08-17 16:11:58    null    publish db2 database
+drop snapshot if exists snap1;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+drop publication if exists pubname2;
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+drop publication if exists pubname1;
+drop database if exists db1;
+drop account if exists acc01;
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop database if exists db1;
+create database db1;
+use db1;
+create table t1(a int);
+insert into t1 values (1),(2),(3);
+create publication pubname1 database db1 account acc01 comment 'publish db1 database';
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pubname1    db1    *    acc01        2024-08-17 16:12:00    null    publish db1 database
+show databases like 'db1';
+Database
+db1
+create database sub_db1 from sys publication pubname1;
+show databases like 'sub_db1';
+Database
+sub_db1
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t1
+select * from t1;
+a
+1
+2
+3
+drop database if exists db2;
+create database if not exists db2;
+use db2;
+create table t2(a int);
+insert into t2 values (1),(2),(3);
+create publication pubname2 database db2 account sys comment 'publish db2 database';
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pubname2    db2    *    sys        2024-08-17 16:12:00    null    publish db2 database
+show databases like 'db2';
+Database
+db2
+drop snapshot if exists snap2;
+create snapshot snap2 for account acc01;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+snap2    2024-08-17 08:12:00.256683    account    acc01        
+drop database if exists sub_db1;
+show databases like 'sub_db1';
+Database
+drop publication if exists pubname2;
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+drop database if exists db2;
+show databases like 'db2';
+Database
+restore account acc01 from snapshot snap2;
+show databases like 'sub_db1';
+Database
+sub_db1
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t1
+select * from t1;
+a
+1
+2
+3
+show databases like 'db2';
+Database
+db2
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pubname2    db2    *    sys        2024-08-17 16:12:00    null    publish db2 database
+drop publication if exists pubname2;
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+drop snapshot if exists snap2;
+drop account if exists acc01;
+drop publication if exists pubname1;
+drop database if exists db1;
