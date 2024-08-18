@@ -3997,10 +3997,22 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				return nil, nil, nil, err
 			}
 
+			fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
+			if err != nil {
+				return nil, nil, nil, err
+			}
 			//For each blockinfo in relData, if blk has no tombstones, then compute the agg result,
 			//otherwise put it into newRelData.
-			engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk objectio.BlockInfo) (bool, error) {
-				if tombstones.HasTombstones(blk.BlockID) {
+			var (
+				hasTombstone bool
+				err2         error
+			)
+			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk objectio.BlockInfo) (bool, error) {
+				if hasTombstone, err2 = tombstones.HasBlockTombstone(
+					ctx, blk.BlockID, fs,
+				); err2 != nil {
+					return false, err2
+				} else if hasTombstone {
 					newRelData.AppendBlockInfo(blk)
 					return true, nil
 				}
@@ -4009,7 +4021,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 					return false, nil
 				}
 				return true, nil
-			})
+			}); err != nil {
+				return nil, nil, nil, err
+			}
 			if partialResults != nil {
 				relData = newRelData
 			}
