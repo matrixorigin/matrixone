@@ -4036,10 +4036,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 
 	engineType := rel.GetEngineType()
-	// for multi cn in launch mode, put all payloads in current CN, maybe delete this in the future
 	// for an ordered scan, put all paylonds in current CN
 	// or sometimes force on one CN
-	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
+	if len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
 		return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
@@ -4739,15 +4738,6 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 		}
 		s.RootOp.GetOperatorBase().IsLast = true
 	}
-}
-
-func isLaunchMode(cnlist engine.Nodes) bool {
-	for i := range cnlist {
-		if !isSameCN(cnlist[0].Addr, cnlist[i].Addr) {
-			return false
-		}
-	}
-	return true
 }
 
 func isSameCN(addr string, currentCNAddr string) bool {
