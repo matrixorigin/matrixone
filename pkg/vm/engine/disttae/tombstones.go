@@ -166,7 +166,7 @@ func (tomb *tombstoneData) HasAnyTombstoneFile() bool {
 	return tomb != nil && len(tomb.files) > 0
 }
 
-func (tomb *tombstoneData) HasTombstones(bid types.Blockid) bool {
+func (tomb *tombstoneData) HasBlockTombstone(bid objectio.Blockid) bool {
 	panic("Not Support")
 }
 
@@ -342,7 +342,7 @@ func (tomb *tombstoneDataWithDeltaLoc) StringWithPrefix(prefix string) string {
 	return w.String()
 }
 
-func (tomb *tombstoneDataWithDeltaLoc) HasTombstones(bid types.Blockid) bool {
+func (tomb *tombstoneDataWithDeltaLoc) HasBlockTombstone(bid objectio.Blockid) bool {
 	if _, ok := tomb.inMemTombstones[bid]; ok {
 		return true
 	}
