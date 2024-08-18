@@ -78,7 +78,7 @@ func c_xcall(f *XCallFunction, mp *mpool.MPool, length int, result *vector.Vecto
 			(*C.uint64_t)(unsafe.Pointer(&f.args[0])),
 			C.uint64_t(length))
 		if cret != 0 {
-			return moerr.NewInternalErrorNoCtx("xcall xfunc failed")
+			return moerr.NewInternalErrorNoCtx("xcall xfunc failed, error code %d", cret)
 		}
 		return nil
 	} else {

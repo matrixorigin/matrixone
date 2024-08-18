@@ -19,21 +19,6 @@
 #include "xcall.h"
 #include "bitmap.h"
 
-int varlena_get_ptrlen(varlena_t *va, uint8_t *area, ptrlen_t *pl) {
-    /* is small? */
-    if (va->bs[0] <= VARLENA_INLINE_SZ) {
-        pl->ptr = &(va->bs[1]);
-        pl->len = (int)(va->bs[0]);
-    } else {
-        if (area == NULL) {
-            return -1;
-        }
-        uint32_t *p = (uint32_t *) va;
-        pl->ptr = area + p[1];
-        pl->len = p[2];
-    }
-    return pl->len;
-}
 
 int32_t xcall_l2distance_f32(int64_t rtid, uint64_t *args, uint64_t len, bool sq) {
     /* 
@@ -57,8 +42,12 @@ int32_t xcall_l2distance_f32(int64_t rtid, uint64_t *args, uint64_t len, bool sq
 
 #ifdef MO_CL_CUDA
     /* if vector is too small, does not worth it */
-    if (rtid == RUNTIME_CUDA && pargs[0].pnulls == NULL && c1.len > 128) {
-        return cuda_l2distance_f32(pres, (int)(len), sq,
+    if (rtid == RUNTIME_CUDA 
+            && (!c1const || !c2const)
+            && pargs[0].pnulls == NULL 
+            && len >= CUDA_THREADS_PER_BLOCK
+            && c1.len > 128) {
+        return cuda_l2distance_f32(pres, (int)(len), c1.len, sq,
                 p1, pargs[1].parea, c1const,
                 p2, pargs[2].parea, c2const);
     }
@@ -110,8 +99,12 @@ int32_t xcall_l2distance_f64(int64_t rtid, uint64_t *args, uint64_t len, bool sq
 
 #ifdef MO_CL_CUDA
     /* if vector is too small, does not worth it */
-    if (rtid == RUNTIME_CUDA && pargs[0].pnulls == NULL && c1.len > 128) {
-        return cuda_l2distance_f64(pres, (int)(len), sq,
+    if (rtid == RUNTIME_CUDA 
+            && (!c1const || !c2const)
+            && pargs[0].pnulls == NULL 
+            && len >= CUDA_THREADS_PER_BLOCK
+            && c1.len > 128) {
+        return cuda_l2distance_f64(pres, (int)(len), c1.len, sq,
                 p1, pargs[1].parea, c1const,
                 p2, pargs[2].parea, c2const);
     }
