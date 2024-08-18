@@ -209,7 +209,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 			str += "  PreScopes: {"
 			str += debugShowScopes(ss[i].PreScopes, gap+4, rmp)
 			str += gapNextLine()
-			str += "}"
+			str += "  }"
 		}
 		result += "\n"
 		result += str
