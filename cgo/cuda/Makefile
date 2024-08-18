@@ -395,7 +395,7 @@ $(FATBIN_FILE): mocl.cu
 	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -fatbin $<
 
 cuda.o: cuda.cpp
-	$(EXEC) $(NVCC) $(INCLUDES) -O3 $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
+	$(EXEC) $(NVCC) $(INCLUDES) -O3 --shared $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
 mytest.o: cuda.cpp $(FATBIN_FILE)
 	$(EXEC) $(NVCC) $(INCLUDES) -DTEST_RUN -g -O0 $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
