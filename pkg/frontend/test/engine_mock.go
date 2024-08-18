@@ -274,11 +274,12 @@ func (mr *MockTombstonerMockRecorder) HasAnyTombstoneFile() *gomock.Call {
 // HasBlockTombstone mocks base method.
 func (m *MockTombstoner) HasBlockTombstone(
 	ctx context.Context, bid objectio.Blockid, fs fileservice.FileService,
-) bool {
+) (bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "HasBlockTombstone", ctx, bid, fs)
 	ret0, _ := ret[0].(bool)
-	return ret0
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // HasBlockTombstone indicates an expected call of HasBlockTombstone.
