@@ -253,6 +253,7 @@ func (tomb *tombstoneData) Merge(other engine.Tombstoner) error {
 		tomb.rowids = append(tomb.rowids, v.rowids...)
 		tomb.files = append(tomb.files, v.files...)
 		tomb.SortInMemory()
+		return nil
 	}
 	return moerr.NewInternalErrorNoCtx(
 		"tombstone type mismatch %d, %d", tomb.Type(), other.Type(),
@@ -598,6 +599,7 @@ func (tomb *tombstoneDataWithDeltaLoc) Merge(other engine.Tombstoner) error {
 		for blkID, loc := range v.blk2CommitLoc {
 			tomb.blk2CommitLoc[blkID] = loc
 		}
+		return nil
 	}
 	return moerr.NewInternalErrorNoCtx("tombstone type mismatch")
 }
