@@ -71,7 +71,9 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 	}()
 
 	if shuffle.ctr.lastSentBatchIdx != -1 {
-		shuffle.ctr.shufflePool[shuffle.ctr.lastSentBatchIdx].CleanOnlyData()
+		if shuffle.ctr.shufflePool[shuffle.ctr.lastSentBatchIdx] != nil {
+			shuffle.ctr.shufflePool[shuffle.ctr.lastSentBatchIdx].CleanOnlyData()
+		}
 		shuffle.ctr.lastSentBatchIdx = -1
 	}
 
