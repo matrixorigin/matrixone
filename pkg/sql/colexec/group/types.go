@@ -168,11 +168,7 @@ func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) 
 	group.ctr.cleanGroupVectors()
 	group.ctr.skipInitReusableMem = false
 
-	if group.ProjectList != nil {
-		anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
-		anal.Alloc(group.ProjectAllocSize)
-		group.FreeProjection(proc)
-	}
+	group.FreeProjection(proc)
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

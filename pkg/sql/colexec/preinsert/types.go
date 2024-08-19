@@ -28,7 +28,8 @@ var _ vm.Operator = new(PreInsert)
 type proc = process.Process
 
 type container struct {
-	buf *batch.Batch
+	buf           *batch.Batch
+	canFreeVecIdx map[int]bool //auto incr & expand constant vecotr.need free
 }
 type PreInsert struct {
 	ctr container
@@ -81,11 +82,9 @@ func (preInsert *PreInsert) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if preInsert.ctr.buf != nil {
-		for i, attr := range preInsert.Attrs {
-			if idx, ok := preInsert.TableDef.Name2ColIndex[attr]; ok {
-				if !preInsert.TableDef.Cols[idx].Typ.AutoIncr {
-					preInsert.ctr.buf.SetVector(int32(i), nil)
-				}
+		for idx := range preInsert.Attrs {
+			if _, ok := preInsert.ctr.canFreeVecIdx[idx]; !ok {
+				preInsert.ctr.buf.SetVector(int32(idx), nil)
 			}
 		}
 		preInsert.ctr.buf.Clean(proc.Mp())

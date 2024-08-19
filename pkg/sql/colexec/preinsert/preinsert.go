@@ -41,6 +41,9 @@ func (preInsert *PreInsert) OpType() vm.OpType {
 }
 
 func (preInsert *PreInsert) Prepare(_ *proc) error {
+	if preInsert.ctr.canFreeVecIdx == nil {
+		preInsert.ctr.canFreeVecIdx = make(map[int]bool)
+	}
 	return nil
 }
 
@@ -55,6 +58,11 @@ func (preInsert *PreInsert) initBuf(proc *proc, bat *batch.Batch) (err error) {
 		preInsert.ctr.buf.Attrs = preInsert.ctr.buf.Attrs[:len(preInsert.Attrs)]
 		preInsert.ctr.buf.SetRowCount(0)
 	} else {
+		for idx := range preInsert.Attrs {
+			if tableDef.Cols[idx].Typ.AutoIncr {
+				preInsert.ctr.canFreeVecIdx[idx] = true
+			}
+		}
 		preInsert.ctr.buf = batch.NewWithSize(len(preInsert.Attrs))
 		preInsert.ctr.buf.Attrs = make([]string, 0, len(preInsert.Attrs))
 		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, preInsert.Attrs...)
@@ -62,7 +70,7 @@ func (preInsert *PreInsert) initBuf(proc *proc, bat *batch.Batch) (err error) {
 	// if col is AutoIncr, genAutoIncrCol function may change the vector of this col, so wo should copy the vec from children vec
 	// and the other cols of preInsert.Attrs is stable, we just use the vecs of children's vecs, so just preInsert.ctr.buf.SetVector using bat.Vecs
 	for idx := range preInsert.Attrs {
-		if tableDef.Cols[idx].Typ.AutoIncr {
+		if _, ok := preInsert.ctr.canFreeVecIdx[idx]; ok {
 			typ := bat.Vecs[idx].GetType()
 			if preInsert.ctr.buf.Vecs[idx] != nil {
 				preInsert.ctr.buf.Vecs[idx].CleanOnlyData()
@@ -74,16 +82,17 @@ func (preInsert *PreInsert) initBuf(proc *proc, bat *batch.Batch) (err error) {
 			}
 		} else {
 			if bat.Vecs[idx].IsConst() {
+				preInsert.ctr.canFreeVecIdx[idx] = true
 				//expland const vector
 				typ := bat.Vecs[idx].GetType()
 				tmpVec := vector.NewVec(*typ)
 				if err := vector.GetUnionAllFunction(*typ, proc.Mp())(tmpVec, bat.Vecs[idx]); err != nil {
 					return err
 				}
-				bat.Vecs[idx].Free(proc.GetMPool())
-				bat.Vecs[idx] = tmpVec
+				preInsert.ctr.buf.Vecs[idx] = tmpVec
+			} else {
+				preInsert.ctr.buf.SetVector(int32(idx), bat.Vecs[idx])
 			}
-			preInsert.ctr.buf.SetVector(int32(idx), bat.Vecs[idx])
 		}
 	}
 	return err
