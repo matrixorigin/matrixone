@@ -20,12 +20,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"go.uber.org/zap"
 )
 
 // GetMOCluster get mo cluster from process level runtime
@@ -346,6 +347,10 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 		Labels:                 cn.Labels,
 		QueryAddress:           cn.QueryAddress,
 		CommitID:               cn.CommitID,
+		// why set this cfg, cc https://github.com/matrixorigin/matrixone/issues/16537
+		// should be used in getCNList
+		CPUTotal: cn.Resource.CPUTotal,
+		MemTotal: cn.Resource.MemTotal,
 	}
 }
 

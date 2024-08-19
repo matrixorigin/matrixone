@@ -25,6 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -55,8 +58,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 var _ engine.Engine = new(Engine)
@@ -583,6 +584,8 @@ func (e *Engine) Nodes(
 		cluster.GetCNService(selector, func(c metadata.CNService) bool {
 			if c.CommitID == version.CommitID {
 				nodes = append(nodes, engine.Node{
+					// should use c.CPUTotal to set Mcpu for the compile and pipeline.
+					// ref: https://github.com/matrixorigin/matrixone/issues/17935
 					Mcpu: ncpu,
 					Id:   c.ServiceID,
 					Addr: c.PipelineServiceAddress,
