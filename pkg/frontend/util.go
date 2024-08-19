@@ -20,6 +20,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"runtime"
@@ -96,6 +97,10 @@ func Max(a int, b int) int {
 	}
 }
 
+const (
+	invalidGoroutineId = math.MaxUint64
+)
+
 // GetRoutineId gets the routine id
 func GetRoutineId() uint64 {
 	data := make([]byte, 64)
@@ -103,6 +108,9 @@ func GetRoutineId() uint64 {
 	data = bytes.TrimPrefix(data, []byte("goroutine "))
 	data = data[:bytes.IndexByte(data, ' ')]
 	id, _ := strconv.ParseUint(string(data), 10, 64)
+	if id == 0 {
+		id = invalidGoroutineId
+	}
 	return id
 }
 
@@ -1217,7 +1225,7 @@ func (ui *UserInput) isIssue3482Sql() bool {
 
 func unboxExprStr(ctx context.Context, expr tree.Expr) (string, error) {
 	if e, ok := expr.(*tree.NumVal); ok && e.ValType == tree.P_char {
-		return e.OrigString(), nil
+		return e.String(), nil
 	}
 	return "", moerr.NewInternalError(ctx, "invalid expr type")
 }
@@ -1235,7 +1243,7 @@ func (b *strParamBinder) bind(e tree.Expr) string {
 
 	switch val := e.(type) {
 	case *tree.NumVal:
-		return val.OrigString()
+		return val.String()
 	case *tree.ParamExpr:
 		return b.params.GetStringAt(val.Offset - 1)
 	default:

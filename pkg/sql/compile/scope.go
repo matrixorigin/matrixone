@@ -17,11 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	goruntime "runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 
@@ -301,7 +302,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 		}
 	}()
 
-	if c.IsTpQuery() {
+	if s.NodeInfo.Mcpu == 1 {
 		if tableScanOp, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
 			// need to build readers for tp query
 			readers, _, err := s.buildReaders(c, 1)
@@ -476,9 +477,6 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	}
 
 	if mcpu <= 1 { // broadcast join with no parallel
-		buildScope := c.newJoinBuildScope(s, 1)
-		s.PreScopes = append(s.PreScopes, buildScope)
-		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx]
 		return s, nil
 	}
 
