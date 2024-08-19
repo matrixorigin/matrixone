@@ -20,11 +20,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -32,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -39,6 +39,7 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"go.uber.org/zap"
 )
 
 const (
@@ -77,11 +78,13 @@ const (
 		`""` + //reserved4
 		`)`
 
-	getNewCdcTaskFormat = `select ` +
+	getCdcTaskFormat = `select ` +
 		`sink_uri, ` +
 		`sink_type, ` +
 		`sink_password, ` +
-		`tables ` +
+		`tables, ` +
+		`start_ts_str, ` +
+		`checkpoint_str ` +
 		`from ` +
 		`mo_catalog.mo_cdc_task ` +
 		`where ` +
@@ -99,6 +102,10 @@ const (
 	dropCdcMeta = "delete from mo_catalog.mo_cdc_task where account_id = %d and task_id = '%s'"
 
 	updateCdcMeta = "update mo_catalog.mo_cdc_task set state = '%s' where account_id = %d and task_id = '%s'"
+
+	updatedWatermark = "update mo_catalog.mo_cdc_task set checkpoint_str = '%s' where account_id = %d and task_id = '%s'"
+
+	watermarkUpdateInterval = time.Second
 )
 
 func getSqlForNewCdcTask(
@@ -158,11 +165,11 @@ func getSqlForNewCdcTask(
 	)
 }
 
-func getSqlForRetrivingNewCdcTask(
+func getSqlForRetrievingCdcTask(
 	accId uint64,
 	taskId uuid.UUID,
 ) string {
-	return fmt.Sprintf(getNewCdcTaskFormat, accId, taskId)
+	return fmt.Sprintf(getCdcTaskFormat, accId, taskId)
 }
 
 func getSqlForDbIdAndTableId(accId uint64, db, table string) string {
@@ -609,7 +616,7 @@ func RegisterCdcExecutor(
 		if err := attachToTask(ctx, T.GetID(), cdc); err != nil {
 			return err
 		}
-		err = cdc.Start(ctx)
+		err = cdc.Start(ctx, true)
 
 		return err
 	}
@@ -625,13 +632,20 @@ type CdcTask struct {
 	fileService     fileservice.FileService
 	createTxnClient func(bool) (client.TxnClient, client.TimestampWaiter, error)
 
-	cdcTask       *task.CreateCdcDetails
-	cdcTxnClient  client.TxnClient
-	cdcTsWaiter   client.TimestampWaiter
-	cdcEngMp      *mpool.MPool
-	cdcEngine     engine.Engine
-	cdcTable      *disttae.CdcRelation
+	cdcTask      *task.CreateCdcDetails
+	cdcTxnClient client.TxnClient
+	cdcTsWaiter  client.TimestampWaiter
+	cdcEngMp     *mpool.MPool
+	cdcEngine    engine.Engine
+	cdcTable     *disttae.CdcRelation
+
 	activeRoutine *cdc2.ActiveRoutine
+	// inputChs are channels between partitioner and decoder
+	inputChs map[uint64]chan tools.Pair[*disttae.TableCtx, *disttae.DecoderInput]
+	// interChs are channels between decoder and sinker
+	interChs map[uint64]chan tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput]
+	// watermarkMap saves the watermark of each table
+	watermarkMap *sync.Map
 }
 
 func NewCdcTask(
@@ -656,14 +670,15 @@ func NewCdcTask(
 	}
 }
 
-func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
+func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 	fmt.Fprintln(os.Stderr, "====>cdc start")
+
 	ctx := defines.AttachAccountId(rootCtx, uint32(cdc.cdcTask.AccountId))
 
 	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
 
 	//step1 : get cdc task definition
-	sql := getSqlForRetrivingNewCdcTask(cdc.cdcTask.AccountId, cdcTaskId)
+	sql := getSqlForRetrievingCdcTask(cdc.cdcTask.AccountId, cdcTaskId)
 	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		return res.Error()
@@ -687,6 +702,10 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 		return err
 	}
 
+	if sinkTyp != MysqlSink && sinkTyp != MatrixoneSink {
+		return moerr.NewInternalError(ctx, "unsupported sink type: %s", sinkTyp)
+	}
+
 	//sink_password
 	sinkPwd, err := res.GetString(ctx, 0, 2)
 	if err != nil {
@@ -698,69 +717,29 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+
+	// start_ts_str
+	startTsStr, err := res.GetString(ctx, 0, 4)
+	if err != nil {
+		return err
+	}
+
+	// watermark
+	watermarkStr, err := res.GetString(ctx, 0, 5)
+	if err != nil {
+		return err
+	}
+	if watermarkStr == "" {
+		watermarkStr = startTsStr
+	}
+
+	watermark, err := cdc2.StrToTimestamp(watermarkStr)
+	if err != nil {
+		watermark = timestamp.Timestamp{}
+	}
+
 	fmt.Fprintln(os.Stderr, "====>", "cdc task row", sinkUri, sinkTyp, sinkPwd, tables)
 
-	//step2 : create cdc engine.
-
-	fs, err := fileservice.Get[fileservice.FileService](cdc.fileService, defines.SharedFileServiceName)
-	if err != nil {
-		return err
-	}
-
-	etlFs, err := fileservice.Get[fileservice.FileService](cdc.fileService, defines.ETLFileServiceName)
-	if err != nil {
-		return err
-	}
-
-	cdc.cdcTxnClient, cdc.cdcTsWaiter, err = cdc.createTxnClient(false)
-	if err != nil {
-		return err
-	}
-
-	cdc.cdcEngMp, err = mpool.NewMPool("cdc", 0, mpool.NoFixed)
-	if err != nil {
-		return err
-	}
-
-	inQueue := cdc2.NewMemQ[tools.Pair[*disttae.TableCtx, *disttae.DecoderInput]]()
-	cdc.cdcEngine = disttae.NewCdcEngine(
-		ctx,
-		cdc.cnUUID,
-		cdc.cdcEngMp,
-		fs,
-		etlFs,
-		cdc.cdcTxnClient,
-		cdc.cdcTask.GetTaskId(),
-		inQueue,
-		cdc.cnEngine,
-		cdc.cnTxnClient,
-	)
-	cdcEngine := cdc.cdcEngine.(*disttae.CdcEngine)
-
-	if sinkTyp != MysqlSink && sinkTyp != MatrixoneSink {
-		return moerr.NewInternalError(ctx, "unsupported sink type: %s", sinkTyp)
-	}
-
-	err = disttae.InitLogTailPushModel(ctx, cdcEngine, cdc.cdcTsWaiter)
-	if err != nil {
-		return err
-	}
-
-	//TODO: refine it
-	start := time.Now()
-	for !cdcEngine.PushClient().IsSubscriberReady() {
-		time.Sleep(30 * time.Millisecond)
-		if time.Since(start) > time.Second*10 {
-			break
-		}
-	}
-
-	if !cdcEngine.PushClient().IsSubscriberReady() {
-		return moerr.NewInternalError(ctx, "cdc pushClient is not ready")
-	}
-
-	//step3 : subscribe the table
-	//TODO:add multiple tables
 	var dbId, tableId uint64
 	dbTables := make([]tools.Pair[string, string], 0)
 	dbTableIds := make([]tools.Pair[uint64, uint64], 0)
@@ -804,107 +783,148 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 		})
 	}
 	//dbid 0, tableid 0 reserved for heartbeat
-	dbTableIds = append(dbTableIds, tools.Pair[uint64, uint64]{
-		Key:   0,
-		Value: 0,
-	})
+	//dbTableIds = append(dbTableIds, tools.Pair[uint64, uint64]{
+	//	Key:   0,
+	//	Value: 0,
+	//})
 
-	//                         + == inputCh == > decoder == interCh == > sinker -> remote db    // for table 1
-	// 	                       |
-	// inQueue -> partitioner -+ == inputCh == > decoder == interCh == > sinker -> remote db    // for table 2
-	//	                       |                                                                   ...
-	//	                       |                                                                   ...
-	// 						   + == inputCh == > decoder == interCh == > sinker -> remote db	// for table n
-
-	// make channels between partitioner and decoder
-	inputChs := make(map[uint64]chan tools.Pair[*disttae.TableCtx, *disttae.DecoderInput], len(dbTableIds))
-	for _, dbTableId := range dbTableIds {
-		tableId = dbTableId.Value
-		inputChs[tableId] = make(chan tools.Pair[*disttae.TableCtx, *disttae.DecoderInput])
-	}
-
-	// make channels between decoder and sinker
-	interChs := make(map[uint64]chan tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput], len(dbTableIds))
-	for _, dbTableId := range dbTableIds {
-		tableId = dbTableId.Value
-		interChs[tableId] = make(chan tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput])
-	}
-
-	// make partitioner
-	partitioner := cdc2.NewPartitioner(inQueue, inputChs)
-	go partitioner.Run(ctx, cdc.activeRoutine)
-
-	// make decoders
-	decoders := make(map[uint64]cdc2.Decoder)
-	for _, dbTableId := range dbTableIds {
-		tableId = dbTableId.Value
-		decoder := cdc2.NewDecoder(cdc.cdcEngMp, fs, tableId, inputChs[tableId], interChs[tableId])
-		decoders[tableId] = decoder
-
-		go decoder.Run(ctx, cdc.activeRoutine)
-	}
-
-	// make sinkers
-	sinkers := make(map[uint64]cdc2.Sinker)
-	for _, dbTableId := range dbTableIds {
-		tableId = dbTableId.Value
-		sinker, err := cdc2.NewSinker(ctx, sinkUri, interChs[tableId])
-		if err != nil {
-			return err
-		}
-		sinkers[tableId] = sinker
-
-		go sinker.Run(ctx, cdc.activeRoutine)
-	}
-
-	ch := make(chan int, 1)
-	cdcTables := make([]*disttae.CdcRelation, 0)
-	for i, pair := range dbTableIds {
-		//skip heartbeat
-		if pair.Key == 0 || pair.Value == 0 {
-			continue
-		}
-		cdcTbl := disttae.NewCdcRelation(
-			dbTables[i].Key,
-			dbTables[i].Value,
-			cdc.cdcTask.AccountId,
-			pair.Key,
-			pair.Value,
-			cdcEngine)
-		fmt.Fprintln(os.Stderr, "====>", "cdc SubscribeTable",
-			dbId, tableId, "before")
-		err = disttae.SubscribeCdcTable(ctx, cdcTbl, pair.Key, pair.Value)
+	// only subscribe tables when first start
+	if firstTime {
+		//step2 : create cdc engine.
+		fs, err := fileservice.Get[fileservice.FileService](cdc.fileService, defines.SharedFileServiceName)
 		if err != nil {
 			return err
 		}
 
-		cdcTables = append(cdcTables, cdcTbl)
+		etlFs, err := fileservice.Get[fileservice.FileService](cdc.fileService, defines.ETLFileServiceName)
+		if err != nil {
+			return err
+		}
 
-		//step4 : process partition state
-		fmt.Fprintf(os.Stderr, "====> cdc SubscribeTable %v:%v after\n",
-			dbId, tableId,
+		cdc.cdcTxnClient, cdc.cdcTsWaiter, err = cdc.createTxnClient(false)
+		if err != nil {
+			return err
+		}
+
+		cdc.cdcEngMp, err = mpool.NewMPool("cdc", 0, mpool.NoFixed)
+		if err != nil {
+			return err
+		}
+
+		inQueue := cdc2.NewMemQ[tools.Pair[*disttae.TableCtx, *disttae.DecoderInput]]()
+		cdcEngine := disttae.NewCdcEngine(
+			ctx,
+			cdc.cnUUID,
+			cdc.cdcEngMp,
+			fs,
+			etlFs,
+			cdc.cdcTxnClient,
+			cdc.cdcTask.GetTaskId(),
+			inQueue,
+			cdc.cnEngine,
+			cdc.cnTxnClient,
 		)
+		cdc.cdcEngine = cdcEngine
+
+		err = disttae.InitLogTailPushModel(ctx, cdcEngine, cdc.cdcTsWaiter)
+		if err != nil {
+			return err
+		}
+
+		timeTick := time.Tick(30 * time.Millisecond)
+		timeout := time.After(10 * time.Second)
+		for retry := true; retry; {
+			select {
+			case <-timeTick:
+				if cdcEngine.PushClient().IsSubscriberReady() {
+					retry = false
+				}
+			case <-timeout:
+				retry = false
+			}
+		}
+		if !cdcEngine.PushClient().IsSubscriberReady() {
+			return moerr.NewInternalError(ctx, "cdc pushClient is not ready")
+		}
+
+		//step3 : subscribe the table
+		cdcTables := make([]*disttae.CdcRelation, 0)
+		for i, pair := range dbTableIds {
+			//skip heartbeat
+			if pair.Key == 0 || pair.Value == 0 {
+				continue
+			}
+			cdcTbl := disttae.NewCdcRelation(
+				dbTables[i].Key,
+				dbTables[i].Value,
+				cdc.cdcTask.AccountId,
+				pair.Key,
+				pair.Value,
+				cdcEngine)
+			fmt.Fprintln(os.Stderr, "====>", "cdc SubscribeTable",
+				dbId, tableId, "before")
+			err = disttae.SubscribeCdcTable(ctx, cdcTbl, pair.Key, pair.Value)
+			if err != nil {
+				return err
+			}
+
+			cdcTables = append(cdcTables, cdcTbl)
+
+			//step4 : process partition state
+			fmt.Fprintf(os.Stderr, "====> cdc SubscribeTable %v:%v after\n",
+				dbId, tableId,
+			)
+		}
 	}
 
-	//TODO:
+	cdc.watermarkMap = new(sync.Map)
+	for _, dbTableId := range dbTableIds {
+		tableId = dbTableId.Value
+		cdc.watermarkMap.Store(tableId, watermark)
+	}
+	go cdc.watermarkUpdateLoop()
 
+	if err = cdc.startDecoderAndSinker(ctx, dbTableIds, sinkUri, watermark); err != nil {
+		return
+	}
+
+	// hold
+	ch := make(chan int, 1)
 	<-ch
-
-	return nil
+	return
 }
 
+// Resume restart cdc task from last recorded watermark
 func (cdc *CdcTask) Resume() error {
-	//TODO: DO SOMETHING
-	return nil
+	// closed in Pause, need renew
+	cdc.activeRoutine.Cancel = make(chan struct{})
+	cdc.activeRoutine.Pause = make(chan struct{})
+
+	return cdc.Start(context.Background(), false)
 }
 
+// Pause stops the components after inQueue (partitioner, decoder and sinker)
 func (cdc *CdcTask) Pause() error {
 	close(cdc.activeRoutine.Pause)
+	for _, c := range cdc.inputChs {
+		close(c)
+	}
+	for _, c := range cdc.interChs {
+		close(c)
+	}
 	return nil
 }
 
+// Cancel stops partitioner, decoder and sinker, as well as the cdc replayer
 func (cdc *CdcTask) Cancel() error {
 	close(cdc.activeRoutine.Cancel)
+	for _, c := range cdc.inputChs {
+		close(c)
+	}
+	for _, c := range cdc.interChs {
+		close(c)
+	}
+	// TODO stop replayer
 	return nil
 }
 
@@ -1022,4 +1042,111 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) error {
 		return moerr.NewInternalError(ctx, "update daemon task status failed.")
 	}
 	return nil
+}
+
+func (cdc *CdcTask) startDecoderAndSinker(
+	ctx context.Context,
+	dbTableIds []tools.Pair[uint64, uint64],
+	sinkUri string,
+	curWatermark timestamp.Timestamp,
+) error {
+
+	//                         + == inputCh == > decoder == interCh == > sinker -> remote db    // for table 1
+	// 	                       |
+	// inQueue -> partitioner -+ == inputCh == > decoder == interCh == > sinker -> remote db    // for table 2
+	//	                       |                                                                   ...
+	//	                       |                                                                   ...
+	// 						   + == inputCh == > decoder == interCh == > sinker -> remote db	// for table n
+
+	// make channels between partitioner and decoder
+	cdc.inputChs = make(map[uint64]chan tools.Pair[*disttae.TableCtx, *disttae.DecoderInput], len(dbTableIds))
+	for _, dbTableId := range dbTableIds {
+		tableId := dbTableId.Value
+		cdc.inputChs[tableId] = make(chan tools.Pair[*disttae.TableCtx, *disttae.DecoderInput])
+	}
+
+	// make channels between decoder and sinker
+	cdc.interChs = make(map[uint64]chan tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput], len(dbTableIds))
+	for _, dbTableId := range dbTableIds {
+		tableId := dbTableId.Value
+		cdc.interChs[tableId] = make(chan tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput])
+	}
+
+	cdcEngine := cdc.cdcEngine.(*disttae.CdcEngine)
+
+	// make partitioner
+	partitioner := cdc2.NewPartitioner(cdcEngine.InQueue(), cdc.inputChs)
+	go partitioner.Run(ctx, cdc.activeRoutine)
+
+	// make decoders
+	decoders := make(map[uint64]cdc2.Decoder)
+	for _, dbTableId := range dbTableIds {
+		tableId := dbTableId.Value
+		decoder := cdc2.NewDecoder(cdc.cdcEngMp, cdcEngine.FS(), tableId, cdc.inputChs[tableId], cdc.interChs[tableId])
+		decoders[tableId] = decoder
+
+		go decoder.Run(ctx, cdc.activeRoutine)
+	}
+
+	// make sinkers
+	sinkers := make(map[uint64]cdc2.Sinker)
+	for _, dbTableId := range dbTableIds {
+		tableId := dbTableId.Value
+		sinker, err := cdc2.NewSinker(ctx, sinkUri, cdc.interChs[tableId], curWatermark, cdc.updateTableWatermark)
+		if err != nil {
+			return err
+		}
+		sinkers[tableId] = sinker
+
+		go sinker.Run(ctx, cdc.activeRoutine)
+	}
+
+	return nil
+}
+
+func (cdc *CdcTask) updateTableWatermark(tableId uint64, watermark timestamp.Timestamp) {
+	//_, _ = fmt.Fprintf(os.Stderr, "^^^^^ [[updateTableWatermark]] tableId: %d, watermark: %s\n", tableId, watermark.DebugString())
+	cdc.watermarkMap.Store(tableId, watermark)
+}
+
+func (cdc *CdcTask) updateWatermark() {
+	// min ts of all table
+	var watermark timestamp.Timestamp
+	cdc.watermarkMap.Range(func(k, v any) bool {
+		ts := v.(timestamp.Timestamp)
+		if watermark.IsEmpty() || ts.Less(watermark) {
+			watermark = ts
+		}
+		return true
+	})
+
+	accountId := uint32(cdc.cdcTask.AccountId)
+	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
+	watermarkStr := cdc2.TimestampToStr(watermark)
+	sql := fmt.Sprintf(updatedWatermark, watermarkStr, accountId, cdcTaskId)
+
+	ctx := defines.AttachAccountId(context.Background(), uint32(cdc.cdcTask.AccountId))
+	err := cdc.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
+	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ [[updateWatermark]] watermark: %s, err: %v\n", watermark.DebugString(), err)
+}
+
+func (cdc *CdcTask) watermarkUpdateLoop() {
+	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ watermarkUpdateLoop: start\n")
+	defer func() {
+		cdc.updateWatermark()
+		_, _ = fmt.Fprintf(os.Stderr, "^^^^^ watermarkUpdateLoop: end\n")
+	}()
+
+	for {
+		select {
+		case <-cdc.activeRoutine.Pause:
+			return
+
+		case <-cdc.activeRoutine.Cancel:
+			return
+
+		case <-time.After(watermarkUpdateInterval):
+			cdc.updateWatermark()
+		}
+	}
 }

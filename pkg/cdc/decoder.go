@@ -73,24 +73,27 @@ func (dec *decoder) TableId() uint64 {
 }
 
 func (dec *decoder) Run(ctx context.Context, ar *ActiveRoutine) {
+	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Decoder: start\n")
+	defer fmt.Fprintf(os.Stderr, "^^^^^ Decoder: end\n")
+
 	for {
 		select {
-		case <-ctx.Done():
-			return
 		case <-ar.Pause:
 			return
+
 		case <-ar.Cancel:
 			return
+
 		case entry := <-dec.inputCh:
 			tableCtx := entry.Key
 			input := entry.Value
-			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Decoder: {%v} [%v(%v)].[%v(%v)]\n",
-				input.TS(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Decoder: {%s} [%v(%v)].[%v(%v)]\n",
+				input.TS().DebugString(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
 
 			dec.outputCh <- tools.NewPair[*disttae.TableCtx, *DecoderOutput](tableCtx, dec.Decode(ctx, tableCtx, input))
 
-			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Decoder: {%v} [%v(%v)].[%v(%v)], entry pushed\n",
-				input.TS(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Decoder: {%s} [%v(%v)].[%v(%v)], entry pushed\n",
+				input.TS().DebugString(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
 		}
 	}
 }
@@ -177,7 +180,7 @@ func decodeRows(
 	//TODO: schema info
 	var row []any
 	//TODO:refine && limit sql size
-	timePrefix := fmt.Sprintf("/* %v, %v */ ", ts.String(), time.Now())
+	timePrefix := fmt.Sprintf("/* decodeRows: %v, %v */ ", ts.String(), time.Now())
 	//---------------------------------------------------
 	insertPrefix := fmt.Sprintf("INSERT INTO `%s`.`%s` values ", cdcCtx.Db(), cdcCtx.Table())
 	/*
@@ -379,7 +382,7 @@ func decodeObjects(
 	var bat *batch.Batch
 	var release func()
 	var row []any
-	timePrefix := fmt.Sprintf("/* %v, %v */ ", ts.String(), time.Now())
+	timePrefix := fmt.Sprintf("/*decodeObjects: %v, %v */ ", ts.String(), time.Now())
 	//---------------------------------------------------
 	insertPrefix := fmt.Sprintf("INSERT INTO `%s`.`%s` values ", cdcCtx.Db(), cdcCtx.Table())
 	/*
@@ -503,7 +506,7 @@ func decodeDeltas(
 	deltaIter logtailreplay.BlockDeltaIter,
 	fs fileservice.FileService,
 ) (res [][]byte, err error) {
-	timePrefix := fmt.Sprintf("/* %v, %v */ ", ts.String(), time.Now())
+	timePrefix := fmt.Sprintf("/* decodeDeltas: %v, %v */ ", ts.String(), time.Now())
 	sbuf := strings.Builder{}
 	sbuf.WriteByte('(')
 	tableDef := cdcCtx.TableDef()
