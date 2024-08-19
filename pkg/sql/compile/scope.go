@@ -557,7 +557,6 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 	// only one scan reader, it can just run without any merge.
 	if scanUsedCpuNumber == 1 {
-		s.Magic = Normal
 		s.DataSource.R = readers[0]
 		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 		return s, nil
