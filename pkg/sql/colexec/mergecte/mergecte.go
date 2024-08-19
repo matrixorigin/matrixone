@@ -63,25 +63,25 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 
 		if result.Batch == nil {
 			ctr.status = sendLastTag
-		}
-
-		if len(ctr.freeBats) > ctr.i {
-			if ctr.freeBats[ctr.i] != nil {
-				ctr.freeBats[ctr.i].CleanOnlyData()
-			}
-			ctr.freeBats[ctr.i], err = ctr.freeBats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-			if err != nil {
-				return result, err
-			}
 		} else {
-			appBat, err := result.Batch.Dup(proc.Mp())
-			if err != nil {
-				return result, err
+			if len(ctr.freeBats) > ctr.i {
+				if ctr.freeBats[ctr.i] != nil {
+					ctr.freeBats[ctr.i].CleanOnlyData()
+				}
+				ctr.freeBats[ctr.i], err = ctr.freeBats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+				if err != nil {
+					return result, err
+				}
+			} else {
+				appBat, err := result.Batch.Dup(proc.Mp())
+				if err != nil {
+					return result, err
+				}
+				ctr.freeBats = append(ctr.freeBats, appBat)
 			}
-			ctr.freeBats = append(ctr.freeBats, appBat)
+			ctr.bats = append(ctr.bats, ctr.freeBats[ctr.i])
+			ctr.i++
 		}
-		ctr.bats = append(ctr.bats, ctr.freeBats[ctr.i])
-		ctr.i++
 
 		fallthrough
 	case sendLastTag:
@@ -92,7 +92,11 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.freeBats = append(ctr.freeBats, makeRecursiveBatch(proc))
 			}
-			mergeCTE.ctr.bats[0] = ctr.freeBats[ctr.i]
+			if len(mergeCTE.ctr.bats) == 0 {
+				mergeCTE.ctr.bats = append(mergeCTE.ctr.bats, ctr.freeBats[ctr.i])
+			} else {
+				mergeCTE.ctr.bats[0] = ctr.freeBats[ctr.i]
+			}
 			ctr.i++
 		}
 	case sendRecursive:
