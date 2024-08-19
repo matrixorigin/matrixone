@@ -66,8 +66,10 @@ backend = "DISK"
 
 [[fileservice]]
 name = "SHARED"
-backend = "DISK"
-data-dir = "{{.DataDir}}/shared"
+backend = "S3"
+[fileservice.s3]
+endpoint = "disk"
+bucket = "{{.DataDir}}/s3"
 
 [fileservice.cache]
 memory-capacity = "32MB"
@@ -122,8 +124,10 @@ backend = "DISK"
 
 [[fileservice]]
 name = "SHARED"
-backend = "DISK"
-data-dir = "{{.DataDir}}/shared"
+backend = "S3"
+[fileservice.s3]
+endpoint = "disk"
+bucket = "{{.DataDir}}/s3"
 
 [fileservice.cache]
 memory-capacity = "32MB"
@@ -169,8 +173,10 @@ backend = "DISK"
 
 [[fileservice]]
 name = "SHARED"
-backend = "DISK"
-data-dir = "{{.DataDir}}/shared"
+backend = "S3"
+[fileservice.s3]
+endpoint = "disk"
+bucket = "{{.DataDir}}/s3"
 
 [fileservice.cache]
 memory-capacity = "32MB"
@@ -191,7 +197,5 @@ func genConfigText(template *template.Template, args templateArgs) string {
 	if err := template.Execute(buf, args); err != nil {
 		panic(err)
 	}
-	ret := buf.String()
-	println("CONFIG", ret)
 	return buf.String()
 }
