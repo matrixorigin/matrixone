@@ -56,7 +56,7 @@ func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.Create
 		switch opt := option.(type) {
 		case *tree.CreateSourceWithOption:
 			key := string(opt.Key)
-			val := opt.Val.(*tree.NumVal).OrigString()
+			val := opt.Val.(*tree.NumVal).String()
 			options[key] = val
 		}
 	}
