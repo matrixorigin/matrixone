@@ -229,9 +229,11 @@ select json_extract('[0,234,32432,423,5234,11443242,44242342424,23424323]','$[20
 json_extract([0,234,32432,423,5234,11443242,44242342424,23424323], $[2000])
 null
 select json_extract_string('{"a":1,"b":2,"c":3}','$.a');
-invalid input: expecting a path that retrives a single string value
+json_extract_string({"a":1,"b":2,"c":3}, $.a)
+null
 select json_extract_string('{"a":1,"b":2,"c":3}','$.b');
-invalid input: expecting a path that retrives a single string value
+json_extract_string({"a":1,"b":2,"c":3}, $.b)
+null
 select json_extract_string('{"a":"x","b":"y","c":"z"}','$.a');
 json_extract_string({"a":"x","b":"y","c":"z"}, $.a)
 x
@@ -239,17 +241,22 @@ select json_extract_string('{"a":"x","b":"y","c":"z"}','$.b');
 json_extract_string({"a":"x","b":"y","c":"z"}, $.b)
 y
 select json_extract_string('{"a":{"q":[1,2,3]}}','$.a.q[1]');
-invalid input: expecting a path that retrives a single string value
+json_extract_string({"a":{"q":[1,2,3]}}, $.a.q[1])
+null
 select json_extract_string('[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}]','$[1].a');
-invalid input: expecting a path that retrives a single string value
+json_extract_string([{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}], $[1].a)
+null
 select json_extract_string('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}','$.a.q[1]');
-invalid input: expecting a path that retrives a single string value
+json_extract_string({"a":{"q":[{"a":1},{"a":2},{"a":3}]}}, $.a.q[1])
+null
 select json_extract_string('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}','$.a.q');
-invalid input: expecting a path that retrives a single string value
+json_extract_string({"a":{"q":[{"a":1},{"a":2},{"a":3}]}}, $.a.q)
+null
 select json_extract_string('[1,2,3]','$[*]');
 invalid input: json_extract_value should use a path that retrives a single value
 select json_extract_string('{"a":[1,2,3,{"b":4}]}','$.a[3].b');
-invalid input: expecting a path that retrives a single string value
+json_extract_string({"a":[1,2,3,{"b":4}]}, $.a[3].b)
+null
 select json_extract_string('{"a":[1,2,3,{"b":4}]}','$.a[3].c');
 json_extract_string({"a":[1,2,3,{"b":4}]}, $.a[3].c)
 null
@@ -260,9 +267,11 @@ invalid input: json_extract_value should use a path that retrives a single value
 select json_extract_string('{"a":[1,2,3,{"a":4}]}','$.a[*].a');
 invalid input: json_extract_value should use a path that retrives a single value
 select json_extract_string('{"a":1}','$[0]');
-invalid input: expecting a path that retrives a single string value
+json_extract_string({"a":1}, $[0])
+null
 select json_extract_string('{"a":1}','$[0].a');
-invalid input: expecting a path that retrives a single string value
+json_extract_string({"a":1}, $[0].a)
+null
 select json_extract_string('{"a":1}','$[0].b');
 json_extract_string({"a":1}, $[0].b)
 null
@@ -284,9 +293,11 @@ select json_extract_float64('{"a":1,"b":2,"c":3}','$.b');
 json_extract_float64({"a":1,"b":2,"c":3}, $.b)
 2.0
 select json_extract_float64('{"a":"x","b":"y","c":"z"}','$.a');
-invalid input: expecting a path that retrives a single numeric value
+json_extract_float64({"a":"x","b":"y","c":"z"}, $.a)
+null
 select json_extract_float64('{"a":"x","b":"y","c":"z"}','$.b');
-invalid input: expecting a path that retrives a single numeric value
+json_extract_float64({"a":"x","b":"y","c":"z"}, $.b)
+null
 select json_extract_float64('{"a":{"q":[1,2,3]}}','$.a.q[1]');
 json_extract_float64({"a":{"q":[1,2,3]}}, $.a.q[1])
 2.0
@@ -294,9 +305,11 @@ select json_extract_float64('[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}]','$[1].a'
 json_extract_float64([{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}], $[1].a)
 4.0
 select json_extract_float64('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}','$.a.q[1]');
-invalid input: expecting a path that retrives a single numeric value
+json_extract_float64({"a":{"q":[{"a":1},{"a":2},{"a":3}]}}, $.a.q[1])
+null
 select json_extract_float64('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}','$.a.q');
-invalid input: expecting a path that retrives a single numeric value
+json_extract_float64({"a":{"q":[{"a":1},{"a":2},{"a":3}]}}, $.a.q)
+null
 select json_extract_float64('[1,2,3]','$[*]');
 invalid input: json_extract_value should use a path that retrives a single value
 select json_extract_float64('{"a":[1,2,3,{"b":4}]}','$.a[3].b');
@@ -312,7 +325,8 @@ invalid input: json_extract_value should use a path that retrives a single value
 select json_extract_float64('{"a":[1,2,3,{"a":4}]}','$.a[*].a');
 invalid input: json_extract_value should use a path that retrives a single value
 select json_extract_float64('{"a":1}','$[0]');
-invalid input: expecting a path that retrives a single numeric value
+json_extract_float64({"a":1}, $[0])
+null
 select json_extract_float64('{"a":1}','$[0].a');
 json_extract_float64({"a":1}, $[0].a)
 1.0
@@ -331,18 +345,22 @@ invalid input: invalid json path '$.**'
 select json_extract_float64('{"a":"a1","b":"b1"}','$**.1');
 invalid input: invalid json path '$**.1'
 select json_extract_float64('{"a":123456789012345678901234567890,"b":2,"c":3}','$.a');
-invalid input: expecting a path that retrives a single numeric value
+json_extract_float64({"a":123456789012345678901234567890,"b":2,"c":3}, $.a)
+1.2345678901234568E29
 select json_extract_float64('{"a":-123456789012345678901234567890,"b":2,"c":3}','$.a');
-invalid input: expecting a path that retrives a single numeric value
+json_extract_float64({"a":-123456789012345678901234567890,"b":2,"c":3}, $.a)
+-1.2345678901234568E29
 select json_extract_float64('{"a":null,"b":2,"c":3}','$.a');
 json_extract_float64({"a":null,"b":2,"c":3}, $.a)
 null
 select json_extract_float64('{"a":NaN,"b":2,"c":3}','$.a');
 invalid input: json text {"a":NaN,"b":2,"c":3}
 select json_extract_float64('{"a":1e10,"b":2,"c":3}','$.a');
-invalid input: expecting a path that retrives a single numeric value
+json_extract_float64({"a":1e10,"b":2,"c":3}, $.a)
+1.0E10
 select json_extract_float64('{"a":3.1415926535897e1,"b":2,"c":3}','$.a');
-invalid input: expecting a path that retrives a single numeric value
+json_extract_float64({"a":3.1415926535897e1,"b":2,"c":3}, $.a)
+31.415926535897
 drop table if exists jtags;
 create table jtags(id int, tags json, metrics json);
 insert into jtags values
@@ -421,4 +439,45 @@ id    json_data    extracted_name
 1    {"age": 25, "name": "Alice"}    Alice
 2    {"age": 30, "name": "Bob"}    Bob
 3    {"age": 22, "name": "Charlie"}    Charlie
+drop database test;
+create database if not exists test;
+use test;
+drop table if exists t1;
+create table t1(c1 json);
+insert into t1 values ('{"area":"A"}');
+insert into t1 values ('{"area":"B"}');
+insert into t1 values ('{"area":"C"}');
+insert into t1 values ('{"area":"D","length":10.25}');
+insert into t1 values ('{"area":"E","length":20}');
+select * from t1;
+c1
+{"area": "A"}
+{"area": "B"}
+{"area": "C"}
+{"area": "D", "length": 10.25}
+{"area": "E", "length": 20}
+select c1, json_extract(c1, '$.area'), json_extract_string(c1, '$.area') from t1;
+c1    json_extract(c1, $.area)    json_extract_string(c1, $.area)
+{"area": "A"}    "A"    A
+{"area": "B"}    "B"    B
+{"area": "C"}    "C"    C
+{"area": "D", "length": 10.25}    "D"    D
+{"area": "E", "length": 20}    "E"    E
+select c1, json_extract(c1, '$.area'), json_extract_string(c1, '$.area'), json_extract_float64(c1, '$.length') from t1;
+c1    json_extract(c1, $.area)    json_extract_string(c1, $.area)    json_extract_float64(c1, $.length)
+{"area": "A"}    "A"    A    null
+{"area": "B"}    "B"    B    null
+{"area": "C"}    "C"    C    null
+{"area": "D", "length": 10.25}    "D"    D    10.25
+{"area": "E", "length": 20}    "E"    E    20.0
+select json_extract_float64(c1, '$.length') from t1;
+json_extract_float64(c1, $.length)
+null
+null
+null
+10.25
+20.0
+select json_extract_float64(c1, '$.length') from t1 where json_extract_string(c1, '$.area') = 'E';
+json_extract_float64(c1, $.length)
+20.0
 drop database test;

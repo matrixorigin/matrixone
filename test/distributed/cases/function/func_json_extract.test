@@ -203,3 +203,22 @@ SELECT
 FROM test_json;
 
 drop database test;
+
+create database if not exists test;
+use test;
+drop table if exists t1;
+create table t1(c1 json);
+
+insert into t1 values ('{"area":"A"}');
+insert into t1 values ('{"area":"B"}');
+insert into t1 values ('{"area":"C"}');
+insert into t1 values ('{"area":"D","length":10.25}');
+insert into t1 values ('{"area":"E","length":20}');
+
+select * from t1;
+select c1, json_extract(c1, '$.area'), json_extract_string(c1, '$.area') from t1;
+select c1, json_extract(c1, '$.area'), json_extract_string(c1, '$.area'), json_extract_float64(c1, '$.length') from t1;
+select json_extract_float64(c1, '$.length') from t1;
+select json_extract_float64(c1, '$.length') from t1 where json_extract_string(c1, '$.area') = 'E';
+
+drop database test;
