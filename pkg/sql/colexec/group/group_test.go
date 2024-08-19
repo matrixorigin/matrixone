@@ -347,7 +347,7 @@ func resetChildren(arg *Group, bats []*batch.Batch) {
 	valueScanArg := &value_scan.ValueScan{
 		Batchs: bats,
 	}
-	valueScanArg.Prepare(nil)
+	_ = valueScanArg.Prepare(nil)
 	if arg.NumChildren() == 0 {
 		arg.AppendChild(valueScanArg)
 

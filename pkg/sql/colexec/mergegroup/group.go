@@ -213,6 +213,7 @@ func (ctr *container) processH0(bat *batch.Batch, _ *process.Process) error {
 		ctr.bat.Aggs = bat.Aggs
 		bat.Aggs = nil
 		ctr.bat.SetRowCount(1)
+		return nil
 	}
 
 	for i, agg := range ctr.bat.Aggs {
