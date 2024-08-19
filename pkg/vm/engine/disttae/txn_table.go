@@ -635,6 +635,18 @@ func (tbl *txnTable) Ranges(
 	exprs []*plan.Expr,
 	txnOffset int,
 ) (data engine.RelData, err error) {
+	return tbl.doRanges(
+		ctx,
+		exprs,
+		tbl.collectUnCommittedObjects(txnOffset),
+	)
+}
+
+func (tbl *txnTable) doRanges(
+	ctx context.Context,
+	exprs []*plan.Expr,
+	uncommittedObjects []objectio.ObjectStats,
+) (data engine.RelData, err error) {
 	sid := tbl.proc.Load().GetService()
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
@@ -729,7 +741,7 @@ func (tbl *txnTable) Ranges(
 		exprs,
 		&blocks,
 		tbl.proc.Load(),
-		txnOffset,
+		uncommittedObjects,
 	); err != nil {
 		return
 	}
@@ -768,11 +780,9 @@ func (tbl *txnTable) rangesOnePart(
 	exprs []*plan.Expr, // filter expression
 	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
-	txnOffset int,
+	uncommittedObjects []objectio.ObjectStats,
 ) (err error) {
 	var done bool
-
-	uncommittedObjects := tbl.collectUnCommittedObjects(txnOffset)
 
 	if done, err = TryFastFilterBlocks(
 		ctx,

@@ -1657,12 +1657,6 @@ func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
 }
 
 func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, strictSqlMode bool) ([]*Scope, error) {
-	parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
-	ss := make([]*Scope, parallelSize)
-	for i := 0; i < parallelSize; i++ {
-		ss[i] = c.constructLoadMergeScope()
-	}
-
 	s := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
 	op := constructExternal(n, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
@@ -1670,6 +1664,15 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, 
 	op.SetIsFirst(currentFirstFlag)
 	s.setRootOperator(op)
 	c.anal.isFirst = false
+
+	parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
+	if parallelSize == 1 {
+		return []*Scope{s}, nil
+	}
+	ss := make([]*Scope, parallelSize)
+	for i := 0; i < parallelSize; i++ {
+		ss[i] = c.constructLoadMergeScope()
+	}
 
 	_, dispatchOp := constructDispatchLocalAndRemote(0, ss, c.addr)
 	dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
@@ -3994,10 +3997,22 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				return nil, nil, nil, err
 			}
 
+			fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
+			if err != nil {
+				return nil, nil, nil, err
+			}
 			//For each blockinfo in relData, if blk has no tombstones, then compute the agg result,
 			//otherwise put it into newRelData.
-			engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk objectio.BlockInfo) (bool, error) {
-				if tombstones.HasTombstones(blk.BlockID) {
+			var (
+				hasTombstone bool
+				err2         error
+			)
+			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk objectio.BlockInfo) (bool, error) {
+				if hasTombstone, err2 = tombstones.HasBlockTombstone(
+					ctx, blk.BlockID, fs,
+				); err2 != nil {
+					return false, err2
+				} else if hasTombstone {
 					newRelData.AppendBlockInfo(blk)
 					return true, nil
 				}
@@ -4006,7 +4021,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 					return false, nil
 				}
 				return true, nil
-			})
+			}); err != nil {
+				return nil, nil, nil, err
+			}
 			if partialResults != nil {
 				relData = newRelData
 			}
@@ -4033,10 +4050,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 
 	engineType := rel.GetEngineType()
-	// for multi cn in launch mode, put all payloads in current CN, maybe delete this in the future
 	// for an ordered scan, put all paylonds in current CN
 	// or sometimes force on one CN
-	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
+	if len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
 		return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
@@ -4738,15 +4754,6 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 	}
 }
 
-func isLaunchMode(cnlist engine.Nodes) bool {
-	for i := range cnlist {
-		if !isSameCN(cnlist[0].Addr, cnlist[i].Addr) {
-			return false
-		}
-	}
-	return true
-}
-
 func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
 
@@ -4760,7 +4767,7 @@ func isSameCN(addr string, currentCNAddr string) bool {
 		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
 		return true
 	}
-	return parts1[0] == parts2[0]
+	return parts1[0] == parts2[0] && parts1[1] == parts2[1]
 }
 
 func (s *Scope) affectedRows() uint64 {

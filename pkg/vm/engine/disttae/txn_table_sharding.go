@@ -18,7 +18,7 @@ import (
 	"context"
 
 	"github.com/fagongzi/goetty/v2/buf"
-
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -194,24 +194,31 @@ func (tbl *txnTableDelegate) Size(
 func (tbl *txnTableDelegate) Ranges(
 	ctx context.Context,
 	exprs []*plan.Expr,
-	n int,
+	txnOffset int,
 ) (engine.RelData, error) {
 	if tbl.isLocal() {
 		return tbl.origin.Ranges(
 			ctx,
 			exprs,
-			n,
+			txnOffset,
 		)
 	}
 
-	var rs []engine.RelData
+	buf := morpc.NewBuffer()
+	defer buf.Close()
+	uncommitted := tbl.origin.collectUnCommittedObjects(txnOffset)
+	buf.Mark()
+	for _, v := range uncommitted {
+		buf.EncodeBytes(v[:])
+	}
 
+	var rs []engine.RelData
 	err := tbl.forwardRead(
 		ctx,
 		shardservice.ReadRanges,
 		func(param *shard.ReadParam) {
 			param.RangesParam.Exprs = exprs
-			param.RangesParam.TxnOffset = int32(n)
+			param.RangesParam.UncommittedObjects = buf.GetMarkedData()
 		},
 		func(resp []byte) {
 			data, err := UnmarshalRelationData(resp)
