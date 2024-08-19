@@ -145,28 +145,10 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 	}
 	columns := make([]interface{}, len(cols))
 	for i, col := range cols {
-		c := new(MysqlColumn)
-		c.SetName(col.Name)
-		c.SetOrgName(col.GetOriginCaseName())
-		c.SetTable(col.TblName)
-		c.SetOrgTable(col.TblName)
-		c.SetAutoIncr(col.Typ.AutoIncr)
-		c.SetSchema(col.DbName)
-		err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
+		c, err := colDef2MysqlColumn(ctx, col)
 		if err != nil {
 			return nil, err
 		}
-		setColFlag(c)
-		setColLength(c, col.Typ.Width)
-		setCharacter(c)
-
-		// For binary/varbinary with mysql_type_varchar.Change the charset.
-		if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
-			c.SetCharset(0x3f)
-		}
-
-		c.SetDecimal(col.Typ.Scale)
-		convertMysqlTextTypeToBlobType(c)
 		columns[i] = c
 	}
 	return columns, err

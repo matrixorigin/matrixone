@@ -50,9 +50,8 @@ func (partition *Partition) Prepare(proc *process.Process) (err error) {
 	partition.ctr = new(container)
 	ctr := partition.ctr
 
-	length := 2 * len(proc.Reg.MergeReceivers)
-	ctr.batchList = make([]*batch.Batch, 0, length)
-	ctr.orderCols = make([][]*vector.Vector, 0, length)
+	ctr.batchList = make([]*batch.Batch, 0, 16)
+	ctr.orderCols = make([][]*vector.Vector, 0, 16)
 
 	partition.ctr.executors = make([]colexec.ExpressionExecutor, len(partition.OrderBySpecs))
 	for i := range partition.ctr.executors {

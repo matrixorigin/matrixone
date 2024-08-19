@@ -951,7 +951,7 @@ func (cdcTbl *CdcRelation) CollectTombstones(ctx context.Context, txnOffset int)
 	panic("implement me")
 }
 
-func (cdcTbl *CdcRelation) BuildReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool) ([]engine.Reader, error) {
+func (cdcTbl *CdcRelation) BuildReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy) ([]engine.Reader, error) {
 	//TODO implement me
 	panic("implement me")
 }

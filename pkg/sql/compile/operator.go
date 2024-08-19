@@ -397,6 +397,9 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		t := sourceOp.(*merge.Merge)
 		op := merge.NewArgument()
 		op.SinkScan = t.SinkScan
+		op.Partial = t.Partial
+		op.StartIDX = t.StartIDX
+		op.EndIDX = t.EndIDX
 		op.SetInfo(&info)
 		return op
 	case vm.MergeRecursive:
