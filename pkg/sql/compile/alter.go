@@ -205,6 +205,38 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		}
 	}
 
+	//--------------------------------------------------------------------------------------------------------------
+	{
+		multiTableIndexes := make(map[string]*MultiTableIndex)
+		newTableDef := newRel.CopyTableDef(c.proc.Ctx)
+
+		for _, indexDef := range newTableDef.Indexes {
+			if catalog.IsLLMIndexAlgo(indexDef.IndexAlgo) {
+				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+						IndexDefs: make(map[string]*plan.IndexDef),
+					}
+				}
+				multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+			}
+		}
+		for _, multiTableIndex := range multiTableIndexes {
+			switch multiTableIndex.IndexAlgo {
+			case catalog.MOIndexLLMAlgo.ToString():
+				err = s.handleDatalinkLLMIndex(c, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
+			}
+			if err != nil {
+				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",
+					zap.String("origin tableName", qry.GetTableDef().Name),
+					zap.String("copy table name", qry.CopyTableDef.Name),
+					zap.String("indexAlgo", multiTableIndex.IndexAlgo),
+					zap.Error(err))
+				return err
+			}
+		}
+	}
+
 	// get and update the change mapping information of table colIds
 	if err = updateNewTableColId(c, newRel, qry.ChangeTblColIdMap); err != nil {
 		c.proc.Error(c.proc.Ctx, "get and update the change mapping information of table colIds for alter table",

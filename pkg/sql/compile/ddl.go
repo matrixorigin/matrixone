@@ -605,6 +605,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				switch multiTableIndex.IndexAlgo {
 				case catalog.MoIndexIvfFlatAlgo.ToString():
 					err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
+				case catalog.MOIndexLLMAlgo.ToString():
+					err = s.handleDatalinkLLMIndex(c, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
 				}
 
 				if err != nil {
@@ -1529,6 +1531,14 @@ func (s *Scope) CreateIndex(c *Compile) error {
 				}
 			}
 			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+		} else if !indexDef.Unique && catalog.IsLLMIndexAlgo(indexAlgo) {
+			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+					IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+					IndexDefs: make(map[string]*plan.IndexDef),
+				}
+			}
+			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 		}
 		if err != nil {
 			return err
@@ -1539,6 +1549,8 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
 			err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+		case catalog.MOIndexLLMAlgo.ToString():
+			err = s.handleDatalinkLLMIndex(c, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		}
 
 		if err != nil {
@@ -1688,7 +1700,7 @@ func (s *Scope) handleDatalinkLLMIndex(c *Compile, indexDefs map[string]*plan.In
 	}
 
 	// 4.a populate basic table
-	err = s.handleLLMIndexBasicTable(c, indexDefs[catalog.SystemSI_LLM_TblType_Basic], qryDatabase)
+	err = s.handleLLMIndexBasicTable(c, indexDefs[catalog.SystemSI_LLM_TblType_Basic], qryDatabase, originalTableDef)
 	if err != nil {
 		return err
 	}

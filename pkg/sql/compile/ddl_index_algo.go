@@ -146,24 +146,48 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 	return nil
 }
 
-func (s *Scope) handleLLMIndexBasicTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string) error {
+func (s *Scope) handleLLMIndexBasicTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) error {
 
 	/*
 		Sample SQL:
-		CREATE TABLE basic ( `key` VARCHAR(255), `url` datalink(255), PRIMARY KEY (`key`));
-		INSERT INTO basic (`key`, `value`) VALUES ('version', '0');
+		CREATE TABLE basic (`primary_key` int, `url` DATALINK, PRIMARY KEY (`primary_key`));
 
-		One key should correspond to only one value.
+		insert into qryDatabase.basic (`primary_key`, `url`)
+		select `primary_key`, `datalink column`
+		from qryDatabase.original_table
+
+		The table will have two columns:
+		1. primary_key: Corresponds to the primary key of the original table.
+		2. url: The DATALINK column used to store URLs for LLM indexing.
 	*/
-
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) values('version', '0');",
+	// 1. Insert into LLM index basic table
+	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`)",
 		qryDatabase,
 		indexDef.IndexTableName,
 		catalog.SystemSI_LLM_TblCol_Basic_key,
 		catalog.SystemSI_LLM_TblCol_Basic_url,
 	)
 
-	err := c.runSql(insertSQL)
+	// 2. Select from original table's b column (datalink column) to populate the hidden table
+	datalinkColumnName := indexDef.Parts[0]
+	selectSQL := fmt.Sprintf("SELECT "+
+		"ROW_NUMBER() OVER() as `%s`, "+
+		"`%s` "+
+		"FROM `%s`.`%s`",
+		catalog.SystemSI_LLM_TblCol_Basic_key,
+		datalinkColumnName,
+		qryDatabase,
+		originalTableDef.Name,
+	)
+
+	// 3. Final SQL that inserts selected rows into the hidden table
+	finalSQL := fmt.Sprintf("%s %s;",
+		insertSQL,
+		selectSQL,
+	)
+
+	// 4. Execute the SQL to populate the hidden table
+	err := c.runSql(finalSQL)
 	if err != nil {
 		return err
 	}
@@ -172,7 +196,13 @@ func (s *Scope) handleLLMIndexBasicTable(c *Compile, indexDef *plan.IndexDef, qr
 }
 
 func (s *Scope) handleLLMIndexChunkEmbeddingTable(c *Compile, indexDef *plan.IndexDef,
+	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metadataTableName string) error {
 	// TODO should be done with Embedding() sql function
+	/*
+		Sample SQL:
+
+	*/
+	return nil
 }
 
 func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
@@ -467,49 +497,48 @@ func (s *Scope) handleLLMIndexDeleteOldInfo(c *Compile,
 	centroidsTableName string,
 	qryDatabase string) error {
 
-	pruneCentroidsTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
-		"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
-		qryDatabase,
-		centroidsTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-	)
-
-	pruneEntriesTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
-		"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
-		qryDatabase,
-		entriesTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-	)
-
-	err := s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_start")
-	if err != nil {
-		return err
-	}
-
-	err = c.runSql(pruneCentroidsTbl)
-	if err != nil {
-		return err
-	}
-
-	err = c.runSql(pruneEntriesTbl)
-	if err != nil {
-		return err
-	}
-
-	err = s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_end")
-	if err != nil {
-		return err
-	}
+	//pruneCentroidsTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
+	//	"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
+	//	qryDatabase,
+	//	centroidsTableName,
+	//	catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+	//
+	//	catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+	//	qryDatabase,
+	//	metadataTableName,
+	//	catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	//)
+	//
+	//pruneEntriesTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
+	//	"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
+	//	qryDatabase,
+	//	catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+	//
+	//	catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+	//	qryDatabase,
+	//	metadataTableName,
+	//	catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	//)
+	//
+	//err := s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_start")
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//err = c.runSql(pruneCentroidsTbl)
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//err = c.runSql(pruneEntriesTbl)
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//err = s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_end")
+	//if err != nil {
+	//	return err
+	//}
 
 	return nil
 }

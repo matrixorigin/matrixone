@@ -326,7 +326,7 @@ const (
 
 	// LLM table type
 	SystemSI_LLM_TblType_Basic               = "basic"
-	SystemSI_LLM_TblType_DataChunksEmbedding = "data_chunks_embedding"
+	SystemSI_LLM_TblType_DataChunksEmbedding = "llmtable"
 
 	// LLM index basic table columns
 	SystemSI_LLM_TblCol_Basic_key = "primary_key"

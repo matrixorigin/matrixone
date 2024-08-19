@@ -198,6 +198,9 @@ func genCreateIndexTableSqlForLLMIndex(indexTableDef *plan.TableDef, indexDef *p
 			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
 		case types.T_decimal128:
 			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		//case types.T_array_float32:
+		//	sql += fmt.Sprintf("VECF32(%d)", planCol.Typ.Width)
+		// TODO deal with typ.width later
 		case types.T_array_float32:
 			sql += fmt.Sprintf("VECF32(%d)", planCol.Typ.Width)
 		case types.T_array_float64:

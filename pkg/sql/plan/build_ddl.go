@@ -2019,8 +2019,8 @@ func buildLLMSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 			Name: catalog.SystemSI_LLM_TblCol_Basic_key,
 			Alg:  plan.CompressType_Lz4,
 			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
+				Id: int32(types.T_int64),
+				//Width: types.MaxVarcharLen,
 			},
 			Primary: true,
 			Default: &plan.Default{
@@ -2077,8 +2077,8 @@ func buildLLMSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 			Name: catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_primary,
 			Alg:  plan.CompressType_Lz4,
 			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
+				Id: int32(types.T_int64),
+				//Width: types.MaxVarcharLen,
 			},
 			Primary: true,
 			Default: &plan.Default{
@@ -2106,8 +2106,8 @@ func buildLLMSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 			Name: catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_embedding,
 			Alg:  plan.CompressType_Lz4,
 			Typ: Type{
-				Id: int32(types.T_array_float32),
-				// Width: types.MaxVarcharLen,
+				Id:    int32(types.T_array_float32),
+				Width: 4096,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
