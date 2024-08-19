@@ -150,6 +150,9 @@ func (r *RemoteCache) DeletePaths(ctx context.Context, paths []string) error {
 	return nil
 }
 
+func (r *RemoteCache) Evict(done chan int64) {
+}
+
 func HandleRemoteRead(
 	ctx context.Context, fs FileService, req *query.Request, resp *query.WrappedResponse,
 ) error {
