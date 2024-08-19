@@ -1103,9 +1103,13 @@ func createPrepareStmt(
 		getFromSendLongData: make(map[int]struct{}),
 	}
 	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
-	columns := plan2.GetResultColumnsFromPlan(preparePlan.GetDcl().Control.(*plan.DataControl_Prepare).Prepare.Plan)
-	if prepareStmt.ColDefData, err = execCtx.resper.MysqlRrWr().MakeColumnDefData(execCtx.reqCtx, columns); err != nil {
-		logutil.Errorf("Error make column def data for prepare statement: %v", err)
+
+	dcPrepare, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
+	if ok {
+		columns := plan2.GetResultColumnsFromPlan(dcPrepare.Prepare.Plan)
+		if prepareStmt.ColDefData, err = execCtx.resper.MysqlRrWr().MakeColumnDefData(execCtx.reqCtx, columns); err != nil {
+			logutil.Errorf("Error make column def data for prepare statement: %v", err)
+		}
 	}
 	if execCtx.input != nil {
 		sqlSourceTypes := execCtx.input.getSqlSourceTypes()
