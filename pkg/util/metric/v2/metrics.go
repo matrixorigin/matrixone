@@ -49,6 +49,7 @@ func init() {
 	initProxyMetrics()
 	initFrontendMetrics()
 	initPipelineMetrics()
+	initLogServiceMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -197,6 +198,12 @@ func initFrontendMetrics() {
 func initPipelineMetrics() {
 	registry.MustRegister(PipelineServerDurationHistogram)
 	registry.MustRegister(pipelineStreamCounter)
+}
+
+func initLogServiceMetrics() {
+	registry.MustRegister(LogServiceAppendDurationHistogram)
+	registry.MustRegister(LogServiceAppendCounter)
+	registry.MustRegister(LogServiceAppendBytesHistogram)
 }
 
 func getDurationBuckets() []float64 {

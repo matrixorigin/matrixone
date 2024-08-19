@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,29 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package types
+//go:build !linux
+// +build !linux
 
-import (
-	"strconv"
-	"strings"
+package system
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-)
+import "github.com/matrixorigin/matrixone/pkg/common/stopper"
 
-func ParseBool(s string) (bool, error) {
-	s = strings.ToLower(s)
-	if s == "true" {
-		return true, nil
-	} else if s == "false" {
-		return false, nil
-	}
-	val, err := strconv.ParseFloat(s, 64)
-	if err == nil {
-		if val != 0 {
-			return true, nil
-		} else {
-			return false, nil
-		}
-	}
-	return false, moerr.NewInvalidInputNoCtx("'%s' is not a valid bool expression", s)
+func runWatchCgroupConfig(stopper *stopper.Stopper) {
+	/* ignore watch cgroup in !linux os */
 }
