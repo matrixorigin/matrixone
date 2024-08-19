@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -108,176 +109,245 @@ var debugMagicNames = map[magicType]string{
 
 var _ = DebugShowScopes
 
-// DebugShowScopes show information of a scope structure.
+// DebugShowScopes generates and returns a string representation of debugging information for a set of scopes.
 func DebugShowScopes(ss []*Scope) string {
-	var generateReceiverMap func(*Scope, map[*process.WaitRegister]int)
-	generateReceiverMap = func(s *Scope, mp map[*process.WaitRegister]int) {
-		for i := range s.PreScopes {
-			generateReceiverMap(s.PreScopes[i], mp)
-		}
-		if s.Proc == nil {
-			return
-		}
-		for i := range s.Proc.Reg.MergeReceivers {
-			mp[s.Proc.Reg.MergeReceivers[i]] = len(mp)
-		}
-	}
-
 	receiverMap := make(map[*process.WaitRegister]int)
 	for i := range ss {
-		generateReceiverMap(ss[i], receiverMap)
+		genReceiverMap(ss[i], receiverMap)
 	}
 
-	return debugShowScopes(ss, 0, receiverMap)
+	return showScopes(ss, 0, receiverMap)
 }
 
-func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) string {
-	// new line and start with n space
-	gapNextLine := func() string {
-		str := "\n"
-		for i := 0; i < gap; i++ {
-			str += " "
-		}
-		return str
+// genReceiverMap recursively traverses the Scope tree and generates unique identifiers (integers) for
+// each WaitRegister in Scope.
+func genReceiverMap(s *Scope, mp map[*process.WaitRegister]int) {
+	for i := range s.PreScopes {
+		genReceiverMap(s.PreScopes[i], mp)
+	}
+	if s.Proc == nil {
+		return
+	}
+	for i := range s.Proc.Reg.MergeReceivers {
+		mp[s.Proc.Reg.MergeReceivers[i]] = len(mp)
+	}
+}
+
+// showScopes generates and returns a string representation of a set of Scopes. It recursively calls the
+// showSingleScope function to construct strings for each Scope and concatenates all results together.
+func showScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int) string {
+	buffer := bytes.NewBuffer(make([]byte, 0, 300))
+	for i := range scopes {
+		showSingleScope(scopes[i], i, 0, rmp, buffer)
+	}
+	return buffer.String()
+}
+
+// showSingleScope generates and outputs a string representation of a single Scope.
+// It includes header information of Scope, data source information, and pipeline tree information.
+// In addition, it recursively displays information from any PreScopes.
+func showSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegister]int, buffer *bytes.Buffer) {
+	gapNextLine(gap, buffer)
+
+	// Scope Header
+	receiverStr := getReceiverStr(scope, scope.Proc.Reg.MergeReceivers, rmp)
+	buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Mcpu, receiverStr))
+
+	// Scope DataSource
+	if scope.DataSource != nil {
+		gapNextLine(gap, buffer)
+		showDataSource(scope.DataSource)
+		buffer.WriteString(fmt.Sprintf("  DataSource: %s", showDataSource(scope.DataSource)))
 	}
 
-	// return n space
-	addGap := func() string {
-		str := ""
-		for i := 0; i < gap; i++ {
-			str += " "
-		}
-		return str
+	if scope.RootOp != nil {
+		gapNextLine(gap, buffer)
+		prefixStr := addGap(gap) + "         "
+		PrintPipelineTree(scope.RootOp, prefixStr, true, true, rmp, buffer)
 	}
 
-	// get receiver id string
-	getReceiverStr := func(s *Scope, rs []*process.WaitRegister) string {
-		str := "["
-		for i := range rs {
-			remote := ""
-			for _, u := range s.RemoteReceivRegInfos {
-				if u.Idx == i {
-					uuidStr := u.Uuid.String()
-					remote = fmt.Sprintf("(%s)", uuidStr[len(uuidStr)-6:])
-					break
-				}
-			}
+	if len(scope.PreScopes) > 0 {
+		gapNextLine(gap, buffer)
+		buffer.WriteString("  PreScopes: {")
+		for i := range scope.PreScopes {
+			showSingleScope(scope.PreScopes[i], i, gap+4, rmp, buffer)
+		}
+		gapNextLine(gap, buffer)
+		buffer.WriteString("  }")
+	}
+}
+
+func PrintPipelineTree(node vm.Operator, prefix string, isRoot bool, isTail bool, mp map[*process.WaitRegister]int, buffer *bytes.Buffer) {
+	if node == nil {
+		return
+	}
+
+	id := node.OpType()
+	name, ok := debugInstructionNames[id]
+	if !ok {
+		name = "unknown"
+	}
+
+	// Write to the current node
+	if isRoot {
+		headPrefix := "  Pipeline: └── "
+		buffer.WriteString(fmt.Sprintf("%s%s", headPrefix, name))
+		hanldeTailNodeReceiver(node, mp, buffer)
+		buffer.WriteString("\n")
+		// Ensure that child nodes are properly indented
+		prefix += "   "
+	} else {
+		if isTail {
+			buffer.WriteString(fmt.Sprintf("%s└── %s", prefix, name))
+			hanldeTailNodeReceiver(node, mp, buffer)
+			buffer.WriteString("\n")
+		} else {
+			buffer.WriteString(fmt.Sprintf("%s├── %s\n", prefix, name))
+		}
+	}
+
+	// Calculate new prefix
+	newPrefix := prefix
+	if isTail {
+		newPrefix += "    "
+	} else {
+		newPrefix += "│   "
+	}
+
+	// Write to child node
+	for i := 0; i < len(node.GetOperatorBase().Children); i++ {
+		isLast := i == len(node.GetOperatorBase().Children)-1
+		PrintPipelineTree(node.GetOperatorBase().GetChildren(i), newPrefix, false, isLast, mp, buffer)
+	}
+
+	if isRoot {
+		trimLastNewline(buffer)
+	}
+}
+
+func hanldeTailNodeReceiver(node vm.Operator, mp map[*process.WaitRegister]int, buffer *bytes.Buffer) {
+	if node == nil {
+		return
+	}
+
+	id := node.OpType()
+	if id == vm.Connector {
+		var receiver = "unknown"
+		arg := node.(*connector.Connector)
+		if receiverId, okk := mp[arg.Reg]; okk {
+			receiver = fmt.Sprintf("%d", receiverId)
+		}
+		buffer.WriteString(fmt.Sprintf(" to MergeReceiver %s", receiver))
+	}
+	if id == vm.Dispatch {
+		arg := node.(*dispatch.Dispatch)
+		chs := ""
+		for i := range arg.LocalRegs {
 			if i != 0 {
-				str += ", "
+				chs += ", "
 			}
-			if id, ok := rmp[rs[i]]; ok {
-				str += fmt.Sprintf("%d%s", id, remote)
+			if receiverId, okk := mp[arg.LocalRegs[i]]; okk {
+				chs += fmt.Sprintf("%d", receiverId)
 			} else {
-				str += "unknown"
+				chs += "unknown"
 			}
 		}
-		str += "]"
-		return str
-	}
-
-	// convert magic to its string name
-	magicShow := func(magic magicType) string {
-		name, ok := debugMagicNames[magic]
-		if ok {
-			return name
+		switch arg.FuncId {
+		case dispatch.ShuffleToAllFunc:
+			buffer.WriteString(fmt.Sprintf(" shuffle to all of MergeReceiver [%s]", chs))
+		case dispatch.SendToAllFunc, dispatch.SendToAllLocalFunc:
+			buffer.WriteString(fmt.Sprintf(" to all of MergeReceiver [%s]", chs))
+		case dispatch.SendToAnyLocalFunc:
+			buffer.WriteString(fmt.Sprintf(" to any of MergeReceiver [%s]", chs))
+		default:
+			buffer.WriteString(fmt.Sprintf(" unknow type dispatch [%s]", chs))
 		}
-		return "unknown"
-	}
 
-	// explain the datasource
-	showDataSource := func(source *Source) string {
-		if source == nil {
-			return "nil"
-		}
-		s := fmt.Sprintf("%s.%s%s", source.SchemaName, source.RelationName, source.Attributes)
-		return strings.TrimLeft(s, ".")
-	}
-
-	// explain the operator information
-	showOperator := func(op vm.Operator, mp map[*process.WaitRegister]int) string {
-		id := op.OpType()
-		name, ok := debugInstructionNames[id]
-		if ok {
-			str := name
-			if id == vm.Connector {
-				var receiver = "unknown"
-				arg := op.(*connector.Connector)
-				if receiverId, okk := mp[arg.Reg]; okk {
-					receiver = fmt.Sprintf("%d", receiverId)
+		if len(arg.RemoteRegs) != 0 {
+			remoteChs := ""
+			for i, reg := range arg.RemoteRegs {
+				if i != 0 {
+					remoteChs += ", "
 				}
-				str += fmt.Sprintf(" to MergeReceiver %s", receiver)
+				buffer.WriteString(fmt.Sprintf("[addr: %s, uuid %s]", reg.NodeAddr, reg.Uuid))
 			}
-			if id == vm.Dispatch {
-				arg := op.(*dispatch.Dispatch)
-				chs := ""
-				for i := range arg.LocalRegs {
-					if i != 0 {
-						chs += ", "
-					}
-					if receiverId, okk := mp[arg.LocalRegs[i]]; okk {
-						chs += fmt.Sprintf("%d", receiverId)
-					} else {
-						chs += "unknown"
-					}
-				}
-				switch arg.FuncId {
-				case dispatch.ShuffleToAllFunc:
-					str += fmt.Sprintf(" shuffle to all of MergeReceiver [%s].", chs)
-				case dispatch.SendToAllFunc, dispatch.SendToAllLocalFunc:
-					str += fmt.Sprintf(" to all of MergeReceiver [%s].", chs)
-				case dispatch.SendToAnyLocalFunc:
-					str += fmt.Sprintf(" to any of MergeReceiver [%s].", chs)
-				default:
-					str += fmt.Sprintf(" unknow type dispatch [%s].", chs)
-				}
+			buffer.WriteString(fmt.Sprintf(" cross-cn receiver info: %s", remoteChs))
+		}
 
-				if len(arg.RemoteRegs) != 0 {
-					remoteChs := ""
-					for i, reg := range arg.RemoteRegs {
-						if i != 0 {
-							remoteChs += ", "
-						}
-						uuidStr := reg.Uuid.String()
-						remoteChs += fmt.Sprintf("[addr: %s(%s)]", reg.NodeAddr, uuidStr[len(uuidStr)-6:])
-					}
-					str += fmt.Sprintf(" cross-cn receiver info: %s", remoteChs)
+		if len(arg.RemoteRegs) != 0 {
+			remoteChs := ""
+			for i, reg := range arg.RemoteRegs {
+				if i != 0 {
+					remoteChs += ", "
 				}
+				uuidStr := reg.Uuid.String()
+				buffer.WriteString(fmt.Sprintf("[addr: %s(%s)]", reg.NodeAddr, uuidStr[len(uuidStr)-6:]))
 			}
-			return str
+			buffer.WriteString(fmt.Sprintf(" cross-cn receiver info: %s", remoteChs))
 		}
-		return "unknown"
 	}
+}
+func trimLastNewline(buf *bytes.Buffer) {
+	data := buf.Bytes()
+	if len(data) > 0 && data[len(data)-1] == '\n' {
+		buf.Truncate(len(data) - 1)
+	}
+}
 
-	var result string
-	for i := range ss {
-		str := addGap()
-		receiverStr := "nil"
-		if ss[i].Proc != nil {
-			receiverStr = getReceiverStr(ss[i], ss[i].Proc.Reg.MergeReceivers)
-		}
-		str += fmt.Sprintf("Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s): [", i+1, magicShow(ss[i].Magic), ss[i].NodeInfo.Addr, ss[i].NodeInfo.Mcpu, receiverStr)
-		vm.HandleAllOp(ss[i].RootOp, func(parentOp vm.Operator, op vm.Operator) error {
-			if op.GetOperatorBase().NumChildren() != 0 {
-				str += " -> "
+func gapNextLine(gap int, buffer *bytes.Buffer) {
+	buffer.WriteString("\n")
+	for i := 0; i < gap; i++ {
+		buffer.WriteString(" ")
+	}
+}
+
+// get receiver id string
+func getReceiverStr(s *Scope, rs []*process.WaitRegister, rmp map[*process.WaitRegister]int) string {
+	str := "["
+	for i := range rs {
+		remote := ""
+		for _, u := range s.RemoteReceivRegInfos {
+			if u.Idx == i {
+				uuidStr := u.Uuid.String()
+				remote = fmt.Sprintf("(%s)", uuidStr[len(uuidStr)-6:])
+				break
 			}
-			str += showOperator(op, rmp)
-			return nil
-		})
-
-		str += "]"
-		if ss[i].DataSource != nil {
-			str += gapNextLine()
-			str += fmt.Sprintf("DataSource: %s,", showDataSource(ss[i].DataSource))
 		}
-		if len(ss[i].PreScopes) > 0 {
-			str += gapNextLine()
-			str += "  PreScopes: {"
-			str += debugShowScopes(ss[i].PreScopes, gap+2, rmp)
-			str += gapNextLine()
-			str += "}"
+		if i != 0 {
+			str += ", "
 		}
-		result += "\n"
-		result += str
+		if id, ok := rmp[rs[i]]; ok {
+			str += fmt.Sprintf("%d%s", id, remote)
+		} else {
+			str += "unknown"
+		}
 	}
-	return result
+	str += "]"
+	return str
+}
+
+// convert magic to its string name
+func magicShow(magic magicType) string {
+	name, ok := debugMagicNames[magic]
+	if ok {
+		return name
+	}
+	return "unknown"
+}
+
+func showDataSource(source *Source) string {
+	if source == nil {
+		return "nil"
+	}
+	s := fmt.Sprintf("%s.%s%s", source.SchemaName, source.RelationName, source.Attributes)
+	return strings.TrimLeft(s, ".")
+}
+
+// return n space
+func addGap(gap int) string {
+	str := ""
+	for i := 0; i < gap; i++ {
+		str += " "
+	}
+	return str
 }
