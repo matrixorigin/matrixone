@@ -37,9 +37,6 @@ func (mergeGroup *MergeGroup) OpType() vm.OpType {
 }
 
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
-	mergeGroup.ctr.inserted = make([]uint8, hashmap.UnitLimit)
-	mergeGroup.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
-
 	if mergeGroup.ProjectList != nil {
 		err := mergeGroup.PrepareProjection(proc)
 		if err != nil {
