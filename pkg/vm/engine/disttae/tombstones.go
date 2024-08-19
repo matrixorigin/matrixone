@@ -166,7 +166,9 @@ func (tomb *tombstoneData) HasAnyTombstoneFile() bool {
 	return tomb != nil && len(tomb.files) > 0
 }
 
-func (tomb *tombstoneData) HasTombstones(bid types.Blockid) bool {
+func (tomb *tombstoneData) HasBlockTombstone(
+	ctx context.Context, bid objectio.Blockid, fs fileservice.FileService,
+) (bool, error) {
 	panic("Not Support")
 }
 
@@ -253,6 +255,7 @@ func (tomb *tombstoneData) Merge(other engine.Tombstoner) error {
 		tomb.rowids = append(tomb.rowids, v.rowids...)
 		tomb.files = append(tomb.files, v.files...)
 		tomb.SortInMemory()
+		return nil
 	}
 	return moerr.NewInternalErrorNoCtx(
 		"tombstone type mismatch %d, %d", tomb.Type(), other.Type(),
@@ -341,17 +344,19 @@ func (tomb *tombstoneDataWithDeltaLoc) StringWithPrefix(prefix string) string {
 	return w.String()
 }
 
-func (tomb *tombstoneDataWithDeltaLoc) HasTombstones(bid types.Blockid) bool {
+func (tomb *tombstoneDataWithDeltaLoc) HasBlockTombstone(
+	_ context.Context, bid objectio.Blockid, _ fileservice.FileService,
+) (bool, error) {
 	if _, ok := tomb.inMemTombstones[bid]; ok {
-		return true
+		return true, nil
 	}
 	if _, ok := tomb.blk2UncommitLoc[bid]; ok {
-		return true
+		return true, nil
 	}
 	if _, ok := tomb.blk2CommitLoc[bid]; ok {
-		return true
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 
 func (tomb *tombstoneDataWithDeltaLoc) UnmarshalBinary(buf []byte) error {
@@ -598,6 +603,7 @@ func (tomb *tombstoneDataWithDeltaLoc) Merge(other engine.Tombstoner) error {
 		for blkID, loc := range v.blk2CommitLoc {
 			tomb.blk2CommitLoc[blkID] = loc
 		}
+		return nil
 	}
 	return moerr.NewInternalErrorNoCtx("tombstone type mismatch")
 }
