@@ -17,17 +17,16 @@ package disttae
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/stretchr/testify/require"
 )
 
 // should ensure that subscribe and unsubscribe methods are effective.
 func TestSubscribedTable(t *testing.T) {
 	var subscribeRecord subscribedTable
 
-	subscribeRecord.m = make(map[SubTableID]SubTableStatus)
+	subscribeRecord.m = make(map[uint64]SubTableStatus)
 	subscribeRecord.eng = &Engine{
 		partitions: make(map[[2]uint64]*logtailreplay.Partition),
 		globalStats: &GlobalStats{
