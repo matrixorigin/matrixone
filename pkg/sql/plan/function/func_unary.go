@@ -1168,23 +1168,26 @@ func EmbeddingDatalinkOp(parameters []*vector.Vector, result vector.FunctionResu
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	proxy, err1 := proc.GetResolveVariableFunc()("ollama_server_proxy", true, false)
-	if err1 != nil {
-		return err1
-	}
-	proxyStr, ok := proxy.(string)
-	if !ok {
-		return fmt.Errorf("unexpected type for vector_embedding_model: %T", proxy)
-	}
+	//proxy, err1 := proc.GetResolveVariableFunc()("ollama_server_proxy", true, false)
+	//if err1 != nil {
+	//	return err1
+	//}
+	//proxyStr, ok := proxy.(string)
+	//if !ok {
+	//	return fmt.Errorf("unexpected type for vector_embedding_model: %T", proxy)
+	//}
+	//
+	//ollamaModel, err1 := proc.GetResolveVariableFunc()("ollama_model", true, false)
+	//if err1 != nil {
+	//	return err1
+	//}
+	//ollamaModelStr, ok := ollamaModel.(string)
+	//if !ok {
+	//	return fmt.Errorf("unexpected type for vector_embedding_model: %T", ollamaModel)
+	//}
 
-	ollamaModel, err1 := proc.GetResolveVariableFunc()("ollama_model", true, false)
-	if err1 != nil {
-		return err1
-	}
-	ollamaModelStr, ok := ollamaModel.(string)
-	if !ok {
-		return fmt.Errorf("unexpected type for vector_embedding_model: %T", ollamaModel)
-	}
+	proxyStr := "http://localhost:11434/api/embed"
+	ollamaModelStr := "llama3"
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -1230,14 +1233,16 @@ func EmbeddingDatalinkOp(parameters []*vector.Vector, result vector.FunctionResu
 			return nil
 		}
 
-		model, err := proc.GetResolveVariableFunc()("vector_embedding_model", true, false)
-		if err != nil {
-			return err
-		}
-		modelStr, ok := model.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type for vector_embedding_model: %T", model)
-		}
+		//model, err := proc.GetResolveVariableFunc()("vector_embedding_model", true, false)
+		//if err != nil {
+		//	return err
+		//}
+		//modelStr, ok := model.(string)
+		//if !ok {
+		//	return fmt.Errorf("unexpected type for vector_embedding_model: %T", model)
+		//}
+
+		modelStr := "ollama"
 
 		input := string(contentBytes)
 		var embeddingBytes []byte

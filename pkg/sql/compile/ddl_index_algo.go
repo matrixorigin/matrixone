@@ -196,13 +196,73 @@ func (s *Scope) handleLLMIndexBasicTable(c *Compile, indexDef *plan.IndexDef, qr
 }
 
 func (s *Scope) handleLLMIndexChunkEmbeddingTable(c *Compile, indexDef *plan.IndexDef,
-	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metadataTableName string) error {
+	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, basicTableName string) error {
 	// TODO should be done with Embedding() sql function
 	/*
 		Sample SQL:
+		CREATE TABLE llmtable (
+		`tbl_pk` INT,
+		`chunk` DATALINK,
+		`embedding` VECF32(4096),
+		);
 
+		INSERT INTO qryDatabase.llmtable (`tbl_pk`, `chunk`, `embedding`)
+		SELECT
+		    `primary_key` AS `tbl_pk`,
+		    `url` AS `chunk`,
+		    CAST(embedding(`url`) AS VECF32(4096)) AS `embedding`
+		FROM
+		    basictable;
 	*/
+
+	// 1. Construct the insert SQL statement with the new columns `tbl_pk`, `chunk`, and `embedding`
+	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`)",
+		qryDatabase,
+		indexDef.IndexTableName,
+		catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_primary,
+		catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_chunk,
+		catalog.SystemSI_LLM_TblCol_DataChunksEmbedding_embedding,
+	)
+
+	// 2. Select from original table's primary key and datalink column to populate the hidden table
+	//selectSQL := fmt.Sprintf("SELECT "+
+	//	"`%s` AS `tbl_pk`, "+
+	//	"`%s` AS `chunk`, "+
+	//	"CAST(embedding(`%s`) AS VECF32(4096)) AS `embedding` "+
+	//	"FROM `%s`.`%s`",
+	//	catalog.SystemSI_LLM_TblCol_Basic_key,
+	//	catalog.SystemSI_LLM_TblCol_Basic_url,
+	//	catalog.SystemSI_LLM_TblCol_Basic_url,
+	//	qryDatabase,
+	//	basicTableName,
+	//)
+
+	selectSQL := fmt.Sprintf("SELECT "+
+		"`%s` AS `tbl_pk`, "+
+		"`%s` AS `chunk`, "+
+		"embedding(`%s`) AS `embedding` "+
+		"FROM `%s`.`%s`",
+		catalog.SystemSI_LLM_TblCol_Basic_key,
+		catalog.SystemSI_LLM_TblCol_Basic_url,
+		catalog.SystemSI_LLM_TblCol_Basic_url,
+		qryDatabase,
+		basicTableName,
+	)
+
+	// 3. Final SQL that inserts selected rows into the hidden table
+	finalSQL := fmt.Sprintf("%s %s;",
+		insertSQL,
+		selectSQL,
+	)
+
+	// 4. Execute the SQL to populate the hidden table
+	err := c.runSql(finalSQL)
+	if err != nil {
+		return err
+	}
+
 	return nil
+
 }
 
 func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,

@@ -2053,7 +2053,7 @@ func buildLLMSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 
 	// 2. create LLM chunk and embedding table
 	{
-		// 2.a table consists of 3 columns: original primary key int, chunk datalink, embedding vecf32(120)
+		// 2.a table consists of 3 columns: original primary key int, chunk datalink, embedding vecf32(4096)
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
 		if err != nil {
 			return nil, nil, err
