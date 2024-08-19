@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -109,6 +110,8 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 	}
 	for i := range tblArg.ctr.retSchema {
 		if tableFunction.ctr.buf.GetVector(int32(i)).GetType().Oid != tblArg.ctr.retSchema[i].Oid {
+			logutil.Infof("Col %d V Oid %d != S Oid = %d", i, tableFunction.ctr.buf.GetVector(int32(i)).GetType().Oid,
+				tblArg.ctr.retSchema[i].Oid)
 			result.Status = vm.ExecStop
 			return result, moerr.NewInternalError(proc.Ctx, "table function %s return type mismatch", tblArg.FuncName)
 		}

@@ -26,7 +26,7 @@ var (
 	ftIndexColdefs = []*plan.ColDef{
 		// row_id type should be same as index type
 		{
-			Name: "row_id",
+			Name: "doc_id",
 			Typ: plan.Type{
 				Id:          int32(types.T_int64),
 				NotNullable: false,
@@ -34,7 +34,7 @@ var (
 			},
 		},
 		{
-			Name: "tdidf",
+			Name: "tfidf",
 			Typ: plan.Type{
 				Id:          int32(types.T_float32),
 				NotNullable: false,
@@ -48,6 +48,19 @@ var (
 func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
 	colDefs := _getColDefs(ftIndexColdefs)
 	// colName := findColName(tbl.Func)
+
+	/*
+		val, err := builder.compCtx.ResolveVariable("save_query_result", true, false)
+		if err == nil {
+			if v, _ := val.(int8); v == 0 {
+				return 0, moerr.NewNoConfig(builder.GetContext(), "save query result")
+			} else {
+				logutil.Infof("buildMetaScan : save query result: %v", v)
+			}
+		} else {
+			return 0, err
+		}
+	*/
 
 	logutil.Infof("FULLTEXTINDEXSCAN PLAN PLAN BUILDER")
 	for i, e := range exprs {

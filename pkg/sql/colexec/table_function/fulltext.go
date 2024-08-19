@@ -19,12 +19,24 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const (
+	single_word_exact_match_sql = `SELECT t1.doc_id, CAST ((nmatch/nword) * log10((SELECT count(*) from idx) / (SELECT COUNT(1) FROM %s WHERE word='%s')) AS float) AS tfidf
+	FROM 
+	(SELECT MIN(first_doc_id) AS first_doc_id, MAX(last_doc_id) AS last_doc_id, MAX(doc_count) AS nmatch, doc_id FROM %s WHERE word ='%s' GROUP BY doc_id ) AS t1  
+	LEFT JOIN  
+	(SELECT COUNT(1) as nword, doc_id FROM %s WHERE doc_id in (SELECT doc_id FROM idx WHERE word = '%s') GROUP BY doc_id) AS t2 
+	ON 
+	t1.doc_id = t2.doc_id;`
 )
 
 // prepare
@@ -109,6 +121,46 @@ func fulltextIndexScanCall(_ int, proc *process.Process, tableFunction *TableFun
 
 	logutil.Infof("index %s, pk_json %s, key %s, pattern %s", index_table, pk_json, keys, pattern)
 
-	result.Batch.SetRowCount(0)
+	rbat, err = fulltextIndexMatch(proc, index_table, pattern)
+	if err != nil {
+		return false, err
+	}
+
+	//result.Batch = bat.Dup(proc.Mp())
+	result.Batch = rbat
 	return false, nil
+}
+
+func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
+	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+	exec := v.(executor.SQLExecutor)
+	opts := executor.Options{}.
+		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
+		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
+		WithDisableIncrStatement().
+		WithTxn(proc.GetTxnOperator()).
+		WithDatabase(proc.GetSessionInfo().Database).
+		WithTimeZone(proc.GetSessionInfo().TimeZone).
+		WithAccountID(proc.GetSessionInfo().AccountId)
+	return exec.Exec(proc.GetTopContext(), sql, opts)
+}
+
+func fulltextIndexMatch(proc *process.Process, tblname, pattern string) (batch *batch.Batch, err error) {
+	sql := fmt.Sprintf(single_word_exact_match_sql, tblname, pattern, tblname, pattern, tblname, pattern)
+	logutil.Infof("FULLTEXT SQL = %s", sql)
+	res, err := ft_runSql(proc, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+
+	if res.Batches != nil && len(res.Batches) > 0 {
+		return res.Batches[0].Dup(proc.Mp())
+		//return res.Batches[0], nil
+	}
+
+	return nil, nil
 }
