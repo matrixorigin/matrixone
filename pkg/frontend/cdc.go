@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,7 +41,6 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"go.uber.org/zap"
 )
 
 const (
@@ -738,7 +739,13 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		watermark = timestamp.Timestamp{}
 	}
 
-	fmt.Fprintln(os.Stderr, "====>", "cdc task row", sinkUri, sinkTyp, sinkPwd, tables)
+	fmt.Fprintln(os.Stderr, "====>", "cdc task row",
+		sinkUri,
+		sinkTyp,
+		sinkPwd,
+		tables,
+		"startTs", startTsStr,
+		"watermark", watermarkStr)
 
 	var dbId, tableId uint64
 	dbTables := make([]tools.Pair[string, string], 0)
