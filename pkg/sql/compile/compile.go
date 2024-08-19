@@ -2913,7 +2913,7 @@ func (c *Compile) compilePreInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) (
 func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	// Determine whether to Write S3
 	toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) >
-		float64(DistributedThreshold) || c.anal.qry.LoadTag
+		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
 	if toWriteS3 {
 		c.proc.Debugf(c.proc.Ctx, "insert of '%s' write s3\n", c.sql)
