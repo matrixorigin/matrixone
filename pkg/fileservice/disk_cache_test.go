@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 )
@@ -41,7 +42,7 @@ func TestDiskCache(t *testing.T) {
 	})
 
 	// new
-	cache, err := NewDiskCache(ctx, dir, 1<<20, nil, false)
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false)
 	assert.Nil(t, err)
 
 	// update
@@ -125,14 +126,14 @@ func TestDiskCache(t *testing.T) {
 	testRead(cache)
 
 	// new cache instance and read
-	cache, err = NewDiskCache(ctx, dir, 1<<20, nil, false)
+	cache, err = NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false)
 	assert.Nil(t, err)
 	testRead(cache)
 
 	assert.Equal(t, 1, numWritten)
 
 	// new cache instance and update
-	cache, err = NewDiskCache(ctx, dir, 1<<20, nil, false)
+	cache, err = NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false)
 	assert.Nil(t, err)
 	testUpdate(cache)
 
@@ -150,7 +151,7 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
-	cache, err := NewDiskCache(ctx, dir, 4096, nil, false)
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(4096), nil, false)
 	assert.Nil(t, err)
 
 	// update
@@ -214,7 +215,7 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 func TestDiskCacheFileCache(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
-	cache, err := NewDiskCache(ctx, dir, 1<<20, nil, false)
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false)
 	assert.Nil(t, err)
 
 	vector := IOVector{
@@ -273,11 +274,11 @@ func TestDiskCacheDirSize(t *testing.T) {
 
 	dir := t.TempDir()
 	capacity := 1 << 20
-	cache, err := NewDiskCache(ctx, dir, capacity, nil, false)
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(int64(capacity)), nil, false)
 	assert.Nil(t, err)
 
 	data := bytes.Repeat([]byte("a"), capacity/128)
-	for i := 0; i < capacity/len(data)*64; i++ {
+	for i := 0; i < capacity/len(data)*2; i++ {
 		err := cache.Update(ctx, &IOVector{
 			FilePath: fmt.Sprintf("%v", i),
 			Entries: []IOEntry{
@@ -330,7 +331,7 @@ func benchmarkDiskCacheWriteThenRead(
 	cache, err := NewDiskCache(
 		ctx,
 		dir,
-		10<<30,
+		fscache.ConstCapacity(10<<30),
 		nil,
 		false,
 	)
@@ -422,7 +423,7 @@ func benchmarkDiskCacheReadRandomOffsetAtLargeFile(
 	cache, err := NewDiskCache(
 		ctx,
 		dir,
-		8<<30,
+		fscache.ConstCapacity(8<<30),
 		nil,
 		false,
 	)
@@ -490,7 +491,7 @@ func BenchmarkDiskCacheMultipleIOEntries(b *testing.B) {
 	cache, err := NewDiskCache(
 		ctx,
 		dir,
-		8<<30,
+		fscache.ConstCapacity(8<<30),
 		nil,
 		false,
 	)

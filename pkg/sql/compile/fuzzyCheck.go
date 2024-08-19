@@ -318,7 +318,7 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 		duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, f.attr, f.db, f.tbl, f.attr, f.condition, f.attr)
 	}
 
-	res, err := c.runSqlWithResult(duplicateCheckSql)
+	res, err := c.runSqlWithResult(duplicateCheckSql, NoAccountId)
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fuzzy check background SQL failed is %s, and generated background sql is %s", c.sql, duplicateCheckSql)
 		return err
@@ -411,7 +411,7 @@ func (f *fuzzyCheck) format(toCheck *vector.Vector) ([]string, error) {
 		return ss, nil
 
 	// string family but not include binary
-	case types.T_char, types.T_varchar, types.T_varbinary, types.T_text, types.T_uuid, types.T_binary:
+	case types.T_char, types.T_varchar, types.T_varbinary, types.T_text, types.T_uuid, types.T_binary, types.T_datalink:
 		for i, str := range ss {
 			ss[i] = strconv.Quote(str)
 		}
@@ -454,7 +454,7 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 		return fmt.Sprintf("%v", vector.GetFixedAt[float32](vec, rowIndex)), nil
 	case types.T_float64:
 		return fmt.Sprintf("%v", vector.GetFixedAt[float64](vec, rowIndex)), nil
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		return vec.GetStringAt(rowIndex), nil
 	case types.T_array_float32:
 		return types.ArrayToString[float32](vector.GetArrayAt[float32](vec, rowIndex)), nil

@@ -1189,6 +1189,34 @@ func (mr *MockWorkspaceMockRecorder) IncrStatementID(ctx, commit interface{}) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IncrStatementID", reflect.TypeOf((*MockWorkspace)(nil).IncrStatementID), ctx, commit)
 }
 
+// PPString mocks base method.
+func (m *MockWorkspace) PPString() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PPString")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// PPString indicates an expected call of PPString.
+func (mr *MockWorkspaceMockRecorder) PPString() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PPString", reflect.TypeOf((*MockWorkspace)(nil).PPString))
+}
+
+// Readonly mocks base method.
+func (m *MockWorkspace) Readonly() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Readonly")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// Readonly indicates an expected call of Readonly.
+func (mr *MockWorkspaceMockRecorder) Readonly() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Readonly", reflect.TypeOf((*MockWorkspace)(nil).Readonly))
+}
+
 // Rollback mocks base method.
 func (m *MockWorkspace) Rollback(ctx context.Context) error {
 	m.ctrl.T.Helper()

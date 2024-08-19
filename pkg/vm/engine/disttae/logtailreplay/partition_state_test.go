@@ -23,7 +23,7 @@ import (
 )
 
 func BenchmarkPartitionStateConcurrentWriteAndIter(b *testing.B) {
-	partition := NewPartition("")
+	partition := NewPartition("", 42)
 	end := make(chan struct{})
 	defer func() {
 		close(end)
@@ -55,7 +55,7 @@ func BenchmarkPartitionStateConcurrentWriteAndIter(b *testing.B) {
 }
 
 func TestTruncate(t *testing.T) {
-	partition := NewPartitionState("", true)
+	partition := NewPartitionState("", true, 42)
 	addObject(partition, types.BuildTS(1, 0), types.BuildTS(2, 0))
 	addObject(partition, types.BuildTS(1, 0), types.BuildTS(3, 0))
 	addObject(partition, types.BuildTS(1, 0), types.TS{})

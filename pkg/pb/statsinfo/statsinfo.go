@@ -14,7 +14,11 @@
 
 package statsinfo
 
-import "math"
+import (
+	"math"
+
+	"golang.org/x/exp/constraints"
+)
 
 func (sc *StatsInfo) NeedUpdate(currentApproxObjNum int64) bool {
 	if sc.ApproxObjectNumber == 0 || sc.AccurateObjectNumber == 0 {
@@ -27,4 +31,36 @@ func (sc *StatsInfo) NeedUpdate(currentApproxObjNum int64) bool {
 		return true
 	}
 	return false
+}
+
+func (sc *StatsInfo) Merge(newInfo *StatsInfo) {
+	if sc == nil || newInfo == nil {
+		return
+	}
+	// TODO: do not handle ShuffleRange for now.
+	// sc.ShuffleRangeMap = nil
+	sc.NdvMap = mergeMaps(sc.NdvMap, newInfo.NdvMap)
+	sc.MinValMap = mergeMaps(sc.MinValMap, newInfo.MinValMap)
+	sc.MaxValMap = mergeMaps(sc.MaxValMap, newInfo.MaxValMap)
+	sc.DataTypeMap = mergeMaps(sc.DataTypeMap, newInfo.DataTypeMap)
+	sc.NullCntMap = mergeMaps(sc.NullCntMap, newInfo.NullCntMap)
+	sc.SizeMap = mergeMaps(sc.SizeMap, newInfo.SizeMap)
+	sc.BlockNumber += newInfo.BlockNumber
+	sc.ApproxObjectNumber += newInfo.ApproxObjectNumber
+	sc.TableCnt += newInfo.TableCnt
+}
+
+func mergeMaps[K comparable, V constraints.Ordered](m1, m2 map[K]V) map[K]V {
+	result := make(map[K]V)
+	for key, value := range m1 {
+		result[key] = value
+	}
+	for key, value := range m2 {
+		if v, exists := result[key]; exists {
+			result[key] = v + value
+		} else {
+			result[key] = value
+		}
+	}
+	return result
 }

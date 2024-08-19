@@ -596,7 +596,47 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_json.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return JsonExtract
+					return newOpBuiltInJsonExtract().jsonExtract
+				},
+			},
+		},
+	},
+
+	// function `json_extract_string`
+	{
+		functionId: JSON_EXTRACT_STRING,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonExtractCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonExtract().jsonExtractString
+				},
+			},
+		},
+	},
+
+	// function `json_extract_float64`
+	{
+		functionId: JSON_EXTRACT_FLOAT64,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonExtractCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonExtract().jsonExtractFloat64
 				},
 			},
 		},
@@ -1718,6 +1758,48 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubStrIndex[int64]
+				},
+			},
+		},
+	},
+
+	// function `encode`
+	{
+		functionId: ENCODE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Encode
+				},
+			},
+		},
+	},
+
+	// function `decode`
+	{
+		functionId: DECODE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_blob, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Decode
 				},
 			},
 		},
@@ -5520,7 +5602,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 0,
+				overloadId: 1,
 				volatile:   true,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
@@ -5528,6 +5610,17 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return LoadFile
+				},
+			},
+			{
+				overloadId: 2,
+				volatile:   true,
+				args:       []types.T{types.T_datalink},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LoadFileDatalink
 				},
 			},
 		},
@@ -5750,6 +5843,26 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return CastNanoToTimestamp
+				},
+			},
+		},
+	},
+
+	// function `cast_range_value_unit`
+	{
+		functionId: CAST_RANGE_VALUE_UNIT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_uint8, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastRangeValueUnit
 				},
 			},
 		},

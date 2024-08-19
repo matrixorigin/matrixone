@@ -28,19 +28,21 @@ import (
 func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.AlterTableRenameColumnClause, alterCtx *AlterTableContext) error {
 	tableDef := alterPlan.CopyTableDef
 
-	// get the original column name
-	originalColName := spec.OldColumnName.ColName()
+	// get the old column name
+	oldColName := spec.OldColumnName.ColName()
+	oldColNameOrigin := spec.OldColumnName.ColNameOrigin()
 
 	// get the new column name
 	newColName := spec.NewColumnName.ColName()
+	newColNameOrigin := spec.NewColumnName.ColNameOrigin()
 
 	// Check whether original column has existed.
-	originalCol := FindColumn(tableDef.Cols, originalColName)
-	if originalCol == nil || originalCol.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), spec.OldColumnName.ColNameOrigin(), alterPlan.TableDef.Name)
+	oldCol := FindColumn(tableDef.Cols, oldColName)
+	if oldCol == nil || oldCol.Hidden {
+		return moerr.NewBadFieldError(ctx.GetContext(), oldColNameOrigin, alterPlan.TableDef.Name)
 	}
 
-	if originalColName == newColName {
+	if oldColNameOrigin == newColNameOrigin {
 		return nil
 	}
 
@@ -49,15 +51,14 @@ func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		return err
 	}
 
-	if isColumnWithPartition(originalCol.Name, tableDef.Partition) {
+	if isColumnWithPartition(oldColName, tableDef.Partition) {
 		return moerr.NewNotSupported(ctx.GetContext(), "unsupport alter partition part column currently")
 	}
 
 	// If you want to rename the original column name to new name, you need to first check if the new name already exists.
-	if newColName != originalColName {
-		newcol := FindColumn(tableDef.Cols, newColName)
-		if newcol != nil {
-			return moerr.NewErrDupFieldName(ctx.GetContext(), spec.NewColumnName.ColNameOrigin())
+	if newColName != oldColName {
+		if FindColumn(tableDef.Cols, newColName) != nil {
+			return moerr.NewErrDupFieldName(ctx.GetContext(), newColNameOrigin)
 		}
 
 		// If the column name of the table changes, it is necessary to check if it is associated
@@ -65,7 +66,7 @@ func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		for _, indexInfo := range alterPlan.CopyTableDef.Indexes {
 			for j, partCol := range indexInfo.Parts {
 				partCol = catalog.ResolveAlias(partCol)
-				if partCol == originalCol.Name {
+				if partCol == oldColName {
 					indexInfo.Parts[j] = newColName
 					break
 				}
@@ -74,39 +75,41 @@ func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 
 		primaryKeyDef := alterPlan.CopyTableDef.Pkey
 		for j, partCol := range primaryKeyDef.Names {
-			if partCol == originalCol.Name {
+			if partCol == oldColName {
 				primaryKeyDef.Names[j] = newColName
 				break
 			}
 		}
 		// handle cluster by key in modify column
-		handleClusterByKey(ctx.GetContext(), alterPlan, newColName, originalCol.Name)
+		handleClusterByKey(ctx.GetContext(), alterPlan, newColName, oldColName)
 	}
 
 	for i, col := range tableDef.Cols {
-		if strings.EqualFold(col.Name, originalCol.Name) {
+		if strings.EqualFold(col.Name, oldColName) {
 			colDef := DeepCopyColDef(col)
 			colDef.Name = newColName
+			colDef.OriginName = newColNameOrigin
 			tableDef.Cols[i] = colDef
 			break
 		}
 	}
 
-	delete(alterCtx.alterColMap, originalCol.Name)
+	delete(alterCtx.alterColMap, oldColName)
 	alterCtx.alterColMap[newColName] = selectExpr{
 		sexprType: columnName,
-		sexprStr:  originalCol.Name,
+		sexprStr:  oldColName,
 	}
 
-	if tmpCol, ok := alterCtx.changColDefMap[originalCol.ColId]; ok {
+	if tmpCol, ok := alterCtx.changColDefMap[oldCol.ColId]; ok {
 		tmpCol.Name = newColName
+		tmpCol.OriginName = newColNameOrigin
 	}
 
 	alterCtx.UpdateSqls = append(alterCtx.UpdateSqls,
 		getSqlForRenameColumn(alterPlan.Database,
 			alterPlan.TableDef.Name,
-			originalColName,
-			newColName)...)
+			oldColNameOrigin,
+			newColNameOrigin)...)
 
 	return nil
 }

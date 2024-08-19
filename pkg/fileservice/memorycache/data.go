@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
 // Data is a reference counted byte buffer
@@ -31,7 +32,7 @@ type Data struct {
 	globalSize  *atomic.Int64
 }
 
-var _ CacheData = new(Data)
+var _ fscache.Data = new(Data)
 
 func newData(
 	allocator malloc.Allocator,
@@ -66,7 +67,7 @@ func (d *Data) Bytes() []byte {
 	return d.bytes
 }
 
-func (d *Data) Slice(n int) CacheData {
+func (d *Data) Slice(n int) fscache.Data {
 	d.bytes = d.bytes[:n]
 	return d
 }

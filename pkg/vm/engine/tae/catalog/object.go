@@ -344,33 +344,6 @@ func NewStandaloneObject(table *TableEntry, ts types.TS) *ObjectEntry {
 	return e
 }
 
-func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
-	e := &ObjectEntry{
-		table: table,
-		ObjectNode: ObjectNode{
-			state: ES_Appendable,
-		},
-		EntryMVCCNode: EntryMVCCNode{
-			CreatedAt: types.SystemDBTS,
-		},
-		CreateNode:  *txnbase.NewTxnMVCCNodeWithTS(types.SystemDBTS),
-		ObjectState: ObjectState_Create_ApplyCommit,
-	}
-	var bid types.Blockid
-	schema := table.GetLastestSchemaLocked()
-	if schema.Name == SystemTableSchema.Name {
-		bid = SystemBlock_Table_ID
-	} else if schema.Name == SystemDBSchema.Name {
-		bid = SystemBlock_DB_ID
-	} else if schema.Name == SystemColumnSchema.Name {
-		bid = SystemBlock_Columns_ID
-	} else {
-		panic("not supported")
-	}
-	objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(bid.Object()))
-	return e
-}
-
 func (entry *ObjectEntry) GetLocation() objectio.Location {
 	location := entry.ObjectStats.ObjectLocation()
 	return location
@@ -515,6 +488,7 @@ func (entry *ObjectEntry) PrepareRollback() (err error) {
 	case ObjectState_Delete_Active:
 		newEntry := entry.Clone()
 		newEntry.DeleteNode.Reset()
+		newEntry.ObjectState = ObjectState_Create_ApplyCommit
 		entry.table.link.Update(newEntry, entry)
 	default:
 		panic(fmt.Sprintf("invalid object state %v", lastNode.ObjectState))
@@ -632,12 +606,13 @@ func (entry *ObjectEntry) GetPKZoneMap(
 }
 
 func (entry *ObjectEntry) CheckPrintPrepareCompact() bool {
-	return entry.CheckPrintPrepareCompactLocked()
+
+	return entry.CheckPrintPrepareCompactLocked(30 * time.Minute)
 }
 
-func (entry *ObjectEntry) CheckPrintPrepareCompactLocked() bool {
+func (entry *ObjectEntry) CheckPrintPrepareCompactLocked(duration time.Duration) bool {
 	startTS := entry.GetLastMVCCNode().GetStart()
-	return startTS.Physical() < time.Now().UTC().UnixNano()-(time.Minute*30).Nanoseconds()
+	return startTS.Physical() < time.Now().UTC().UnixNano()-duration.Nanoseconds()
 }
 
 func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {

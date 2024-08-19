@@ -38,6 +38,11 @@ func SetupMOLogger(conf *LogConfig) {
 	Infof("MO logger init, level=%s, log file=%s, stackLevel=%s", conf.Level, conf.Filename, conf.StacktraceLevel)
 }
 
+// NewMOLogger new a mo zap logger
+func NewMOLogger(cfg *LogConfig) (*zap.Logger, error) {
+	return GetLoggerWithOptions(cfg.GetLevel(), cfg.getEncoder(), cfg.getSyncer(), cfg.getOptions()...), nil
+}
+
 // initMOLogger initializes a zap Logger.
 func initMOLogger(cfg *LogConfig) (*zap.Logger, error) {
 	return GetLoggerWithOptions(cfg.GetLevel(), cfg.getEncoder(), cfg.getSyncer(), cfg.getOptions()...), nil

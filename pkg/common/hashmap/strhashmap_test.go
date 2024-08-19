@@ -33,6 +33,7 @@ const (
 func TestInsert(t *testing.T) {
 	m := mpool.MustNewZero()
 	mp, err := NewStrMap(false, m)
+	itr := mp.NewIterator()
 	require.NoError(t, err)
 	ts := []types.Type{
 		types.New(types.T_int8, 0, 0),
@@ -44,63 +45,13 @@ func TestInsert(t *testing.T) {
 	}
 	vecs := newVectors(ts, false, Rows, m)
 	for i := 0; i < Rows; i++ {
-		ok, err := mp.Insert(vecs, i)
+		ok, err := itr.DetectDup(vecs, i)
 		require.NoError(t, err)
 		require.Equal(t, true, ok)
 	}
 	for _, vec := range vecs {
 		vec.Free(m)
 	}
-	mp.Free()
-	require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
-}
-
-func TestInsertValue(t *testing.T) {
-	m := mpool.MustNewZero()
-	mp, err := NewStrMap(false, m)
-	require.NoError(t, err)
-	ok, err := mp.InsertValue(int8(0))
-	require.NoError(t, err)
-	require.Equal(t, true, ok)
-	ok, err = mp.InsertValue(int16(0))
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
-	ok, err = mp.InsertValue(int32(0))
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
-	ok, err = mp.InsertValue(int64(0))
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
-	ok, err = mp.InsertValue(uint8(0))
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
-	ok, err = mp.InsertValue(uint16(0))
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
-	ok, err = mp.InsertValue(uint32(0))
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
-	ok, err = mp.InsertValue(uint64(0))
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
-	ok, err = mp.InsertValue([]byte{})
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
-	ok, err = mp.InsertValue(types.Date(0))
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
-	ok, err = mp.InsertValue(types.Datetime(0))
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
-	ok, err = mp.InsertValue(types.Timestamp(0))
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
-	ok, err = mp.InsertValue(types.Decimal64(0))
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
-	ok, err = mp.InsertValue(types.Decimal128{})
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
 	mp.Free()
 	require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
 }
@@ -123,7 +74,7 @@ func TestIterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs, nil)
+		vs, _ = itr.Find(0, Rows, vecs)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -148,7 +99,7 @@ func TestIterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs, nil)
+		vs, _ = itr.Find(0, Rows, vecs)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -173,7 +124,7 @@ func TestIterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs, nil)
+		vs, _ = itr.Find(0, Rows, vecs)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)

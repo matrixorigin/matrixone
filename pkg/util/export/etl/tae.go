@@ -124,7 +124,7 @@ func (w *TAEWriter) WriteStrings(Line []string) error {
 			}
 			elems[colIdx] = table.Float64Field(val)
 		case types.T_char, types.T_varchar,
-			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			//TAEWriter is deprecated. So no need to add T_array here.
 			elems[colIdx] = table.StringField(field)
 		case types.T_json:
@@ -220,7 +220,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 			cols := vector.MustFixedCol[float64](vec)
 			cols[rowIdx] = field.GetFloat64()
 		case types.T_char, types.T_varchar,
-			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			//TODO: How to handle T_array here?
 			switch field.Type {
 			case table.TVarchar, table.TText:
@@ -406,7 +406,7 @@ func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
 		cols := vector.MustFixedCol[float64](vec)
 		return len(cols), nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		cols := vector.MustFixedCol[types.Varlena](vec)
 		return len(cols), nil
 	case types.T_json:
@@ -433,7 +433,7 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 		cols := vector.MustFixedCol[float64](vec)
 		return fmt.Sprintf("%f", cols[rowIdx]), nil
 	case types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		cols, area := vector.MustVarlenaRawData(vec)
 		return cols[rowIdx].UnsafeGetString(area), nil
 	case types.T_array_float32:

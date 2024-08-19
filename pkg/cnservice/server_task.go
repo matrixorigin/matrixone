@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -249,16 +248,6 @@ func (s *service) registerExecutorsLocked() {
 		return
 	}
 
-	pu := config.NewParameterUnit(
-		&s.cfg.Frontend,
-		nil,
-		nil,
-		nil)
-	pu.StorageEngine = s.storeEngine
-	pu.TxnClient = s._txnClient
-	s.cfg.Frontend.SetDefaultValues()
-	pu.FileService = s.fileService
-	pu.LockService = s.lockService
 	ieFactory := func() ie.InternalExecutor {
 		return frontend.NewInternalExecutor(s.cfg.UUID)
 	}
@@ -297,7 +286,7 @@ func (s *service) registerExecutorsLocked() {
 				stats := objectio.ObjectStats(b)
 				objs[i] = stats.ObjectName().String()
 			}
-			sql := fmt.Sprintf("select mo_ctl('DN', 'MERGEOBJECTS', '%s.%s:%s')",
+			sql := fmt.Sprintf("select mo_ctl('CN', 'MERGEOBJECTS', 'o:%s.%s:%s')",
 				mergeTask.DbName, mergeTask.TableName, strings.Join(objs, ","))
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			defer cancel()

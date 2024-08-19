@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -109,6 +110,12 @@ func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
 
 func (obj *aobject) PrepareCompact() bool {
 	if obj.RefCount() > 0 {
+		if obj.meta.Load().CheckPrintPrepareCompactLocked(1 * time.Second) {
+			if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
+				logutil.Infof("object ref count is %d", obj.RefCount())
+			}
+			obj.meta.Load().PrintPrepareCompactDebugLog()
+		}
 		return false
 	}
 
@@ -119,22 +126,26 @@ func (obj *aobject) PrepareCompact() bool {
 
 	droppedCommitted := obj.GetObjMeta().HasDropCommitted()
 
+	checkDuration := 10 * time.Minute
+	if obj.GetRuntime().Options.CheckpointCfg.FlushInterval < 50*time.Millisecond {
+		checkDuration = 8 * time.Second
+	}
 	if droppedCommitted {
 		if !obj.meta.Load().PrepareCompactLocked() {
-			if obj.meta.Load().CheckPrintPrepareCompactLocked() {
+			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
 				obj.meta.Load().PrintPrepareCompactDebugLog()
 			}
 			return false
 		}
 	} else {
 		if !obj.meta.Load().PrepareCompactLocked() {
-			if obj.meta.Load().CheckPrintPrepareCompactLocked() {
+			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
 				obj.meta.Load().PrintPrepareCompactDebugLog()
 			}
 			return false
 		}
 		if !obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
-			if obj.meta.Load().CheckPrintPrepareCompactLocked() {
+			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
 				logutil.Infof("obj %v, data prepare compact failed", obj.meta.Load().ID().String())
 				if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
 					obj.meta.Load().HasPrintedPrepareComapct.Store(true)
@@ -145,7 +156,7 @@ func (obj *aobject) PrepareCompact() bool {
 		}
 	}
 	prepareCompact := obj.RefCount() == 0
-	if !prepareCompact && obj.meta.Load().CheckPrintPrepareCompactLocked() {
+	if !prepareCompact && obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
 		logutil.Infof("obj %v, data ref count is %d", obj.meta.Load().ID().String(), obj.RefCount())
 	}
 	return prepareCompact

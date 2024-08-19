@@ -2460,7 +2460,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 
 		// snapshot to fix
-		pk := builder.compCtx.GetPrimaryKeyDef(schema, table, Snapshot{TS: &timestamp.Timestamp{}})
+		pk := builder.compCtx.GetPrimaryKeyDef(schema, table, nil)
 		if len(pk) > 1 || pk[0].Name != r.ColName() {
 			return 0, moerr.NewNotSupported(builder.GetContext(), "%s is not primary key in time window", tree.String(col, dialect.MYSQL))
 		}
@@ -2624,6 +2624,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 		}
 		if builder.isForUpdate {
+			lockNode.Children[0] = nodeID
 			nodeID = builder.appendNode(lockNode, ctx)
 		}
 	}
@@ -3537,19 +3538,20 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				return 0, err
 			}
 		}
-		snapshot := ctx.snapshot
-		if snapshot == nil {
-			snapshot = &Snapshot{TS: &timestamp.Timestamp{}}
+
+		var snapshot *Snapshot
+		if ctx.snapshot != nil {
+			snapshot = ctx.snapshot
 		}
 
 		// TODO
-		schema, err = databaseIsValid(schema, builder.compCtx, *snapshot)
+		schema, err = databaseIsValid(schema, builder.compCtx, snapshot)
 		if err != nil {
 			return 0, err
 		}
 
 		// TODO
-		obj, tableDef := builder.compCtx.Resolve(schema, table, *snapshot)
+		obj, tableDef := builder.compCtx.Resolve(schema, table, snapshot)
 		if tableDef == nil {
 			return 0, moerr.NewParseError(builder.GetContext(), "table %q does not exist", table)
 		}

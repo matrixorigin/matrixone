@@ -30,7 +30,7 @@ const opName = "projection"
 func (projection *Projection) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
 	buf.WriteString(": projection(")
-	for i, e := range projection.Es {
+	for i, e := range projection.ProjectList {
 		if i > 0 {
 			buf.WriteString(",")
 		}
@@ -45,9 +45,9 @@ func (projection *Projection) OpType() vm.OpType {
 
 func (projection *Projection) Prepare(proc *process.Process) (err error) {
 	projection.ctr = new(container)
-	projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.Es)
-	projection.ctr.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(projection.Es))
-	for i, e := range projection.Es {
+	projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
+	projection.ctr.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(projection.ProjectList))
+	for i, e := range projection.ProjectList {
 		if e.Typ.Id != 0 {
 			projection.ctr.uafs[i] = vector.GetUnionAllFunction(plan.MakeTypeByPlan2Expr(e), proc.Mp())
 		}
@@ -60,14 +60,14 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	result, err := projection.GetChildren(0).Call(proc)
-	if err != nil {
-		return result, err
-	}
-
 	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
+	result, err := vm.ChildrenCall(projection.GetChildren(0), proc, anal)
+	if err != nil {
+		return result, err
+	}
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
@@ -80,7 +80,7 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		projection.ctr.buf = nil
 	}
 
-	projection.ctr.buf = batch.NewWithSize(len(projection.Es))
+	projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 	// keep shuffleIDX unchanged
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	// do projection.

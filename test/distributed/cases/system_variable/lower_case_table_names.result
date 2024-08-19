@@ -158,4 +158,66 @@ aa
 2
 3
 drop database test;
+select @@lower_case_table_names;
+@@lower_case_table_names
+0
+select table_name from INFORMATION_SCHEMA.TABLES limit 0;
+table_name
+select table_name from INFORMATION_SCHEMA.tables limit 0;
+table_name
+select table_name from information_schema.TABLES limit 0;
+table_name
+select table_name from information_schema.tables limit 0;
+table_name
+use INFORMATION_SCHEMA;
+use information_schema;
+select table_name from TABLES limit 0;
+table_name
+select table_name from tables limit 0;
+table_name
+set global lower_case_table_names = 1;
+select @@lower_case_table_names;
+@@lower_case_table_names
+1
+select table_name from INFORMATION_SCHEMA.TABLES limit 0;
+table_name
+select table_name from INFORMATION_SCHEMA.tables limit 0;
+table_name
+select table_name from information_schema.TABLES limit 0;
+table_name
+select table_name from information_schema.tables limit 0;
+table_name
+use INFORMATION_SCHEMA;
+use information_schema;
+select table_name from TABLES limit 0;
+table_name
+select table_name from tables limit 0;
+table_name
+set global lower_case_table_names = 0;
+select @@lower_case_table_names;
+@@lower_case_table_names
+0
+drop database if exists test;
+create database test;
+use test;
+create table t1 (`Id` int);
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n  `Id` INT DEFAULT NULL\n)
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+Id    INT(32)    YES        null        
+insert into t1 (`Id`) values (1);
+insert into t1 (id) values (1);
+insert into t1 (Id) values (1);
+insert into t1 (iD) values (1);
+insert into t1 (ID) values (1);
+select * from t1;
+id
+1
+1
+1
+1
+1
+set global lower_case_table_names = 1;
 drop account a1;

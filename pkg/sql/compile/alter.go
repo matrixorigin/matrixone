@@ -317,7 +317,7 @@ func updateNewTableColId(c *Compile, copyRel engine.Relation, changColDefMap map
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			for _, vColDef := range changColDefMap {
-				if vColDef.Name == attr.Attr.Name {
+				if vColDef.GetOriginCaseName() == attr.Attr.Name {
 					vColDef.ColId = attr.Attr.ID
 					break
 				}

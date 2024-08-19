@@ -59,8 +59,8 @@ func LockTableWithUniqueID(
 		return err
 	}
 
-	parker := types.NewPacker(proc.Mp())
-	defer parker.FreeMem()
+	parker := types.NewPacker()
+	defer parker.Close()
 
 	opts := DefaultLockOptions(parker).
 		WithLockMode(mode).
@@ -103,18 +103,24 @@ func getInternalProcessByUniqueID(
 	mp *mpool.MPool,
 	txnClient client.TxnClient,
 ) (*process.Process, error) {
+
 	mu.Lock()
 	defer mu.Unlock()
 
 	if proc, ok := internalProcesses[id]; ok {
 		return proc, nil
 	}
-	op, err := txnClient.New(ctx, timestamp.Timestamp{})
+	createByOpt := client.WithTxnCreateBy(
+		0,
+		"",
+		"getInternalProcessByUniqueID",
+		0)
+	op, err := txnClient.New(ctx, timestamp.Timestamp{}, createByOpt)
 	if err != nil {
 		return nil, err
 	}
 	v, _ := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.LockService)
-	proc := process.New(
+	proc := process.NewTopProcess(
 		ctx,
 		mp,
 		txnClient,

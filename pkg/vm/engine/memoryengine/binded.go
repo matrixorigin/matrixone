@@ -62,8 +62,14 @@ func (b *BindedEngine) Hints() engine.Hints {
 	return b.engine.Hints()
 }
 
-func (b *BindedEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, filter any, _ []byte, _ *plan.TableDef, _ any) ([]engine.Reader, error) {
+func (b *BindedEngine) BuildBlockReaders(
+	ctx context.Context,
+	proc any,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+	def *plan.TableDef,
+	relData engine.RelData,
+	num int) ([]engine.Reader, error) {
 	return nil, nil
 }
 

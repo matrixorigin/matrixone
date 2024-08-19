@@ -18,9 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"io"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -36,77 +32,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/util"
-	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"io"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 const DefaultBatchSize = 8192
-
-// New creates a new Process.
-// A process stores the execution context.
-func New(
-	ctx context.Context,
-	m *mpool.MPool,
-	txnClient client.TxnClient,
-	txnOperator client.TxnOperator,
-	fileService fileservice.FileService,
-	lockService lockservice.LockService,
-	queryClient qclient.QueryClient,
-	hakeeper logservice.CNHAKeeperClient,
-	udfService udf.Service,
-	aicm *defines.AutoIncrCacheManager) *Process {
-	sid := ""
-	if lockService != nil {
-		sid = lockService.GetConfig().ServiceID
-	}
-
-	baseProcess := &BaseProcess{
-		mp:             m,
-		TxnClient:      txnClient,
-		FileService:    fileService,
-		IncrService:    incrservice.GetAutoIncrementService(sid),
-		UnixTime:       time.Now().UnixNano(),
-		LastInsertID:   new(uint64),
-		LockService:    lockService,
-		Aicm:           aicm,
-		vp:             initCachedVectorPool(),
-		valueScanBatch: make(map[[16]byte]*batch.Batch),
-		QueryClient:    queryClient,
-		Hakeeper:       hakeeper,
-		UdfService:     udfService,
-		logger:         util.GetLogger(sid), // TODO: set by input
-		TxnOperator:    txnOperator,
-	}
-	return &Process{
-		Ctx:  ctx,
-		Base: baseProcess,
-	}
-}
-
-// NewFromProc create a new Process based on another process.
-func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
-	proc := new(Process)
-	newctx, cancel := context.WithCancel(ctx)
-	proc.Base = p.Base
-	// reg and cancel
-	proc.Ctx = newctx
-	proc.Cancel = cancel
-	proc.Reg.MergeReceivers = make([]*WaitRegister, regNumber)
-	for i := 0; i < regNumber; i++ {
-		proc.Reg.MergeReceivers[i] = &WaitRegister{
-			Ctx: newctx,
-			Ch:  make(chan *RegisterMessage, 1),
-		}
-	}
-	proc.DispatchNotifyCh = make(chan *WrapCs)
-	return proc
-}
 
 func (wreg *WaitRegister) CleanChannel(m *mpool.MPool) {
 	for len(wreg.Ch) > 0 {
@@ -115,22 +48,6 @@ func (wreg *WaitRegister) CleanChannel(m *mpool.MPool) {
 			msg.Batch.Clean(m)
 		}
 	}
-}
-
-func (wreg *WaitRegister) MarshalBinary() ([]byte, error) {
-	return nil, nil
-}
-
-func (wreg *WaitRegister) UnmarshalBinary(_ []byte) error {
-	return nil
-}
-
-func (proc *Process) MarshalBinary() ([]byte, error) {
-	return nil, nil
-}
-
-func (proc *Process) UnmarshalBinary(_ []byte) error {
-	return nil
 }
 
 func (proc *Process) QueryId() string {
@@ -235,23 +152,11 @@ func (proc *Process) OperatorOutofMemory(size int64) bool {
 	return proc.Mp().Cap() < size
 }
 
-func (proc *Process) ResetContextFromParent(parent context.Context) context.Context {
-	newctx, cancel := context.WithCancel(parent)
-
-	proc.Ctx = newctx
-	proc.Cancel = cancel
-
-	for i := range proc.Reg.MergeReceivers {
-		proc.Reg.MergeReceivers[i].Ctx = newctx
-	}
-	return newctx
-}
-
 func (proc *Process) GetAnalyze(idx, parallelIdx int, parallelMajor bool) Analyze {
 	if idx >= len(proc.Base.AnalInfos) || idx < 0 {
-		return &analyze{analInfo: nil, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
+		return &operatorAnalyzer{analInfo: nil, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
 	}
-	return &analyze{analInfo: proc.Base.AnalInfos[idx], wait: 0, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
+	return &operatorAnalyzer{analInfo: proc.Base.AnalInfos[idx], wait: 0, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
 }
 
 func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {
@@ -265,10 +170,6 @@ func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Null
 		nulls.Set(vec.GetNulls(), nsp)
 	}
 	return vec, nil
-}
-
-func (proc *Process) WithSpanContext(sc trace.SpanContext) {
-	proc.Ctx = trace.ContextWithSpanContext(proc.Ctx, sc)
 }
 
 func (proc *Process) CopyValueScanBatch(src *Process) {
@@ -390,9 +291,9 @@ func (proc *Process) Debugf(ctx context.Context, msg string, args ...any) {
 // appendSessionField append session id, transaction id and statement id to the fields
 func appendSessionField(fields []zap.Field, proc *Process) []zap.Field {
 	if proc != nil {
-		fields = append(fields, logutil.SessionIdField(uuid.UUID(proc.Base.SessionInfo.SessionId).String()))
+		fields = append(fields, logutil.SessionIdField(proc.Base.SessionInfo.SessionId.String()))
 		if p := proc.GetStmtProfile(); p != nil {
-			fields = append(fields, logutil.StatementIdField(uuid.UUID(p.stmtId).String()))
+			fields = append(fields, logutil.StatementIdField(p.stmtId.String()))
 			fields = append(fields, logutil.TxnIdField(hex.EncodeToString(p.txnId[:])))
 		}
 	}

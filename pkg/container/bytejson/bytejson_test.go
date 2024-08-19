@@ -209,6 +209,11 @@ func TestQuery(t *testing.T) {
 		require.Nil(t, err)
 		out := bj.Query([]*Path{&path})
 		require.JSONEq(t, kase.outStr, out.String())
+
+		if path.IsSimple() {
+			out2 := bj.QuerySimple([]*Path{&path})
+			require.JSONEq(t, kase.outStr, out2.String())
+		}
 	}
 }
 

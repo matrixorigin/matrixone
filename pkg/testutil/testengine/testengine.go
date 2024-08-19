@@ -41,7 +41,6 @@ func New(
 	compilerContext plan.CompilerContext,
 ) {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	ck := runtime.ServiceRuntime("").Clock()
 	addr := "1"
 	services := []metadata.TNService{{
@@ -60,6 +59,7 @@ func New(
 			clusterservice.WithServices(nil, services)))
 
 	storage, err := memorystorage.NewMemoryStorage(
+		"",
 		mpool.MustNewZeroNoFixed(),
 		ck,
 		memoryengine.RandomIDGenerator,

@@ -103,10 +103,11 @@ func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.
 		return "", moerr.NewInternalError(proc.Ctx, "Table input is not a sequence")
 	}
 
-	values, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
+	_values, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
 	if err != nil {
 		return "", err
 	}
+	values := _values[0]
 	if values == nil {
 		return "", moerr.NewInternalError(proc.Ctx, "Failed to get sequence meta data.")
 	}
@@ -324,10 +325,11 @@ func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn cl
 		return "", err
 	}
 
-	values, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
+	_values, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
 	if err != nil {
 		return "", err
 	}
+	values := _values[0]
 	if values == nil {
 		return "", moerr.NewInternalError(proc.Ctx, "Failed to get sequence meta data.")
 	}

@@ -2892,6 +2892,11 @@ func (fp *testMysqlWriter) WriteEOFIF(warnings uint16, status uint16) error {
 	panic("implement me")
 }
 
+func (fp *testMysqlWriter) WriteEOFIFAndNoFlush(warnings uint16, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (fp *testMysqlWriter) WriteEOFOrOK(warnings uint16, status uint16) error {
 	//TODO implement me
 	panic("implement me")
@@ -2908,6 +2913,11 @@ func (fp *testMysqlWriter) WriteLengthEncodedNumber(u uint64) error {
 }
 
 func (fp *testMysqlWriter) WriteColumnDef(ctx context.Context, column Column, i int) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteColumnDefBytes(payload []byte) error {
 	//TODO implement me
 	panic("implement me")
 }
@@ -2939,6 +2949,10 @@ func (fp *testMysqlWriter) WritePrepareResponse(ctx context.Context, stmt *Prepa
 
 func (fp *testMysqlWriter) Read() ([]byte, error) {
 	return fp.ioses.Read()
+}
+
+func (fp *testMysqlWriter) ReadLoadLocalPacket() ([]byte, error) {
+	return fp.ioses.ReadLoadLocalPacket()
 }
 
 func (fp *testMysqlWriter) Free(buf []byte) {
@@ -2993,6 +3007,7 @@ func (fp *testMysqlWriter) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) er
 }
 
 func (fp *testMysqlWriter) ResetStatistics() {}
+func (fp *testMysqlWriter) Reset(_ *Session) {}
 
 func (fp *testMysqlWriter) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 

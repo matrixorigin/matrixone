@@ -1,5 +1,6 @@
 drop account if exists bvt_query_type_part1;
 create account if not exists `bvt_query_type_part1` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+set session disable_agg_statement = on;
 create database statement_query_type;
 begin;
 commit;

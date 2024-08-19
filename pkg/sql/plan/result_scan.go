@@ -16,14 +16,14 @@ package plan
 
 import (
 	"encoding/json"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -49,6 +49,9 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 			return 0, err
 		}
 		exprs = append(exprs, curExpr)
+	}
+	if exprs[0].GetP() != nil {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "invalid argument of result_scan")
 	}
 	exprs[0], err = appendCastBeforeExpr(builder.GetContext(), exprs[0], plan.Type{
 		Id:          int32(types.T_uuid),
@@ -82,7 +85,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	builder.compCtx.GetProcess().GetSessionInfo().ResultColTypes = typs
 	name2ColIndex := map[string]int32{}
 	for i := 0; i < len(cols); i++ {
-		name2ColIndex[cols[i].Name] = int32(i)
+		name2ColIndex[strings.ToLower(cols[i].Name)] = int32(i)
 	}
 	tableDef := &plan.TableDef{
 		Name:          uuid.String(),

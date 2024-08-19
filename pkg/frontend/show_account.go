@@ -157,7 +157,7 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 	txnOperator := ses.txnHandler.GetTxn()
 
 	// create a new proc for `handler`
-	proc := process.New(ctx, ses.proc.GetMPool(),
+	proc := process.NewTopProcess(ctx, ses.proc.GetMPool(),
 		ses.proc.Base.TxnClient, txnOperator,
 		ses.proc.Base.FileService, ses.proc.Base.LockService,
 		ses.proc.Base.QueryClient, ses.proc.Base.Hakeeper,
@@ -549,7 +549,6 @@ func getAccountInfo(ctx context.Context,
 
 		backSes := bh.(*backExec)
 		backSes.backSes.allResultSet[0].Columns = backSes.backSes.allResultSet[0].Columns[idxOfAccountId+1:]
-		delete(backSes.backSes.allResultSet[0].Name2Index, "account_id")
 		backSes.backSes.rs.ResultCols = backSes.backSes.rs.ResultCols[idxOfAccountId+1:]
 	}
 

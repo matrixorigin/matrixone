@@ -5,7 +5,7 @@ SELECT * FROM `information_schema`.`character_sets` LIMIT 0,1000;
 character_set_name    default_collate_name    description    maxlen
 SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' order by ORDINAL_POSITION LIMIT 2;
 table_catalog    table_schema    table_name    column_name    ordinal_position    column_default    is_nullable    data_type    character_maximum_length    character_octet_length    numeric_precision    numeric_scale    datetime_precision    character_set_name    collation_name    column_type    column_key    extra    privileges    column_comment    generation_expression    srs_id
-def    mo_catalog    mo_tables    rel_id    1    null    YES    BIGINT UNSIGNED    null    null    null    null    null    null    null    BIGINT UNSIGNED(0)    PRI        select,insert,update,references            null
+def    mo_catalog    mo_tables    rel_id    1    null    YES    BIGINT UNSIGNED    null    null    null    null    null    null    null    BIGINT UNSIGNED(0)        select,insert,update,references            null
 def    mo_catalog    mo_tables    relname    2    null    YES    VARCHAR    5000    120000    null    null    null    utf8    utf8_bin    VARCHAR(5000)            select,insert,update,references            null
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
 constraint_catalog    constraint_schema    constraint_name    table_catalog    table_schema    table_name    column_name    ordinal_position    position_in_unique_constraint    referenced_table_schema    referenced_table_name    referenced_column_name
@@ -20,7 +20,7 @@ SELECT * FROM `information_schema`.`user_privileges` LIMIT 0,1000;
 grantee    table_catalog    privilege_type    is_grantable
 SELECT TABLE_SCHEMA AS TABLE_CAT, NULL AS TABLE_SCHEM, TABLE_NAME, NON_UNIQUE, NULL AS INDEX_QUALIFIER, INDEX_NAME,3 AS TYPE, SEQ_IN_INDEX AS ORDINAL_POSITION, COLUMN_NAME,COLLATION AS ASC_OR_DESC, CARDINALITY, 0 AS PAGES, NULL AS FILTER_CONDITION FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = 'mysql' AND TABLE_NAME = 'procs_priv' ORDER BY NON_UNIQUE, INDEX_NAME, SEQ_IN_INDEX limit 1;
 TABLE_CAT    TABLE_SCHEM    TABLE_NAME    NON_UNIQUE    INDEX_QUALIFIER    INDEX_NAME    TYPE    ORDINAL_POSITION    COLUMN_NAME    ASC_OR_DESC    CARDINALITY    PAGES    FILTER_CONDITION
-mysql    null    procs_priv    0    null    PRIMARY    3    1    host    A    0    0    null
+mysql    null    procs_priv    0    null    PRIMARY    3    1    Host    A    0    0    null
 SELECT * FROM `mysql`.`columns_priv` LIMIT 0,1000;
 host    db    user    table_name    column_name    timestamp    column_priv
 SELECT * FROM `mysql`.`db` LIMIT 0,1000;
@@ -40,112 +40,59 @@ procs_priv
 role_edges
 tables_priv
 user
-show columns from `user`;
-Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-select_priv    VARCHAR(10)    NO        'N'        
-insert_priv    VARCHAR(10)    NO        'N'        
-update_priv    VARCHAR(10)    NO        'N'        
-delete_priv    VARCHAR(10)    NO        'N'        
-create_priv    VARCHAR(10)    NO        'N'        
-drop_priv    VARCHAR(10)    NO        'N'        
-reload_priv    VARCHAR(10)    NO        'N'        
-shutdown_priv    VARCHAR(10)    NO        'N'        
-process_priv    VARCHAR(10)    NO        'N'        
-file_priv    VARCHAR(10)    NO        'N'        
-grant_priv    VARCHAR(10)    NO        'N'        
-references_priv    VARCHAR(10)    NO        'N'        
-index_priv    VARCHAR(10)    NO        'N'        
-alter_priv    VARCHAR(10)    NO        'N'        
-show_db_priv    VARCHAR(10)    NO        'N'        
-super_priv    VARCHAR(10)    NO        'N'        
-create_tmp_table_priv    VARCHAR(10)    NO        'N'        
-lock_tables_priv    VARCHAR(10)    NO        'N'        
-execute_priv    VARCHAR(10)    NO        'N'        
-repl_slave_priv    VARCHAR(10)    NO        'N'        
-repl_client_priv    VARCHAR(10)    NO        'N'        
-create_view_priv    VARCHAR(10)    NO        'N'        
-show_view_priv    VARCHAR(10)    NO        'N'        
-create_routine_priv    VARCHAR(10)    NO        'N'        
-alter_routine_priv    VARCHAR(10)    NO        'N'        
-create_user_priv    VARCHAR(10)    NO        'N'        
-event_priv    VARCHAR(10)    NO        'N'        
-trigger_priv    VARCHAR(10)    NO        'N'        
-create_tablespace_priv    VARCHAR(10)    NO        'N'        
-ssl_type    VARCHAR(10)    NO        ''        
-ssl_cipher    BLOB(0)    NO        null        
-x509_issuer    BLOB(0)    NO        null        
-x509_subject    BLOB(0)    NO        null        
-max_questions    INT UNSIGNED(32)    NO        '0'        
-max_updates    INT UNSIGNED(32)    NO        '0'        
-max_connections    INT UNSIGNED(32)    NO        '0'        
-max_user_connections    INT UNSIGNED(32)    NO        '0'        
-plugin    CHAR(64)    NO        'caching_sha2_password'        
-authentication_string    TEXT(0)    YES        null        
-password_expired    VARCHAR(10)    NO        'N'        
-password_last_changed    TIMESTAMP(0)    YES        null        
-password_lifetime    SMALLINT UNSIGNED(16)    YES        null        
-account_locked    VARCHAR(10)    NO        'N'        
-create_role_priv    VARCHAR(10)    NO        'N'        
-drop_role_priv    VARCHAR(10)    NO        'N'        
-password_reuse_history    SMALLINT UNSIGNED(16)    YES        null        
-password_reuse_time    SMALLINT UNSIGNED(16)    YES        null        
-password_require_current    VARCHAR(10)    YES        null        
-user_attributes    JSON(0)    YES        null        
 show columns from `db`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-db    CHAR(64)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-select_priv    VARCHAR(10)    NO        'N'        
-insert_priv    VARCHAR(10)    NO        'N'        
-update_priv    VARCHAR(10)    NO        'N'        
-delete_priv    VARCHAR(10)    NO        'N'        
-create_priv    VARCHAR(10)    NO        'N'        
-drop_priv    VARCHAR(10)    NO        'N'        
-grant_priv    VARCHAR(10)    NO        'N'        
-references_priv    VARCHAR(10)    NO        'N'        
-index_priv    VARCHAR(10)    NO        'N'        
-alter_priv    VARCHAR(10)    NO        'N'        
-create_tmp_table_priv    VARCHAR(10)    NO        'N'        
-lock_tables_priv    VARCHAR(10)    NO        'N'        
-create_view_priv    VARCHAR(10)    NO        'N'        
-show_view_priv    VARCHAR(10)    NO        'N'        
-create_routine_priv    VARCHAR(10)    NO        'N'        
-alter_routine_priv    VARCHAR(10)    NO        'N'        
-execute_priv    VARCHAR(10)    NO        'N'        
-event_priv    VARCHAR(10)    NO        'N'        
-trigger_priv    VARCHAR(10)    NO        'N'        
+Host    CHAR(255)    NO    PRI    ''        
+Db    CHAR(64)    NO    PRI    ''        
+User    CHAR(32)    NO    PRI    ''        
+Select_priv    VARCHAR(10)    NO        'N'        
+Insert_priv    VARCHAR(10)    NO        'N'        
+Update_priv    VARCHAR(10)    NO        'N'        
+Delete_priv    VARCHAR(10)    NO        'N'        
+Create_priv    VARCHAR(10)    NO        'N'        
+Drop_priv    VARCHAR(10)    NO        'N'        
+Grant_priv    VARCHAR(10)    NO        'N'        
+References_priv    VARCHAR(10)    NO        'N'        
+Index_priv    VARCHAR(10)    NO        'N'        
+Alter_priv    VARCHAR(10)    NO        'N'        
+Create_tmp_table_priv    VARCHAR(10)    NO        'N'        
+Lock_tables_priv    VARCHAR(10)    NO        'N'        
+Create_view_priv    VARCHAR(10)    NO        'N'        
+Show_view_priv    VARCHAR(10)    NO        'N'        
+Create_routine_priv    VARCHAR(10)    NO        'N'        
+Alter_routine_priv    VARCHAR(10)    NO        'N'        
+Execute_priv    VARCHAR(10)    NO        'N'        
+Event_priv    VARCHAR(10)    NO        'N'        
+Trigger_priv    VARCHAR(10)    NO        'N'        
 show columns from `procs_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-db    CHAR(64)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-routine_name    CHAR(64)    NO    PRI    ''        
-routine_type    VARCHAR(10)    NO    PRI    null        
-grantor    VARCHAR(288)    NO    MUL    ''        
-proc_priv    VARCHAR(10)    NO        ''        
-timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
+Host    CHAR(255)    NO    PRI    ''        
+Db    CHAR(64)    NO    PRI    ''        
+User    CHAR(32)    NO    PRI    ''        
+Routine_name    CHAR(64)    NO    PRI    ''        
+Routine_type    VARCHAR(10)    NO    PRI    null        
+Grantor    VARCHAR(288)    NO    MUL    ''        
+Proc_priv    VARCHAR(10)    NO        ''        
+Timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
 show columns from `columns_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-db    CHAR(64)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-table_name    CHAR(64)    NO    PRI    ''        
-column_name    CHAR(64)    NO    PRI    ''        
-timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
-column_priv    VARCHAR(10)    NO        ''        
+Host    CHAR(255)    NO    PRI    ''        
+Db    CHAR(64)    NO    PRI    ''        
+User    CHAR(32)    NO    PRI    ''        
+Table_name    CHAR(64)    NO    PRI    ''        
+Column_name    CHAR(64)    NO    PRI    ''        
+Timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
+Column_priv    VARCHAR(10)    NO        ''        
 show columns from `tables_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-db    CHAR(64)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-table_name    CHAR(64)    NO    PRI    ''        
-grantor    VARCHAR(288)    NO    MUL    ''        
-timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
-table_priv    VARCHAR(10)    NO        ''        
-column_priv    VARCHAR(10)    NO        ''        
+Host    CHAR(255)    NO    PRI    ''        
+Db    CHAR(64)    NO    PRI    ''        
+User    CHAR(32)    NO    PRI    ''        
+Table_name    CHAR(64)    NO    PRI    ''        
+Grantor    VARCHAR(288)    NO    MUL    ''        
+Timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
+Table_priv    VARCHAR(10)    NO        ''        
+Column_priv    VARCHAR(10)    NO        ''        
 use information_schema;
 show tables;
 Tables_in_information_schema
@@ -175,18 +122,18 @@ user_privileges
 views
 show columns from `KEY_COLUMN_USAGE`;
 Field    Type    Null    Key    Default    Extra    Comment
-constraint_catalog    VARCHAR(64)    YES        null        
-constraint_schema    VARCHAR(64)    YES        null        
-constraint_name    VARCHAR(64)    YES        null        
-table_catalog    VARCHAR(64)    YES        null        
-table_schema    VARCHAR(64)    YES        null        
-table_name    VARCHAR(64)    YES        null        
-column_name    VARCHAR(64)    YES        null        
-ordinal_position    INT UNSIGNED(32)    YES        null        
-position_in_unique_constraint    INT UNSIGNED(32)    YES        null        
-referenced_table_schema    VARCHAR(64)    YES        null        
-referenced_table_name    VARCHAR(64)    YES        null        
-referenced_column_name    VARCHAR(64)    YES        null        
+CONSTRAINT_CATALOG    VARCHAR(64)    YES        null        
+CONSTRAINT_SCHEMA    VARCHAR(64)    YES        null        
+CONSTRAINT_NAME    VARCHAR(64)    YES        null        
+TABLE_CATALOG    VARCHAR(64)    YES        null        
+TABLE_SCHEMA    VARCHAR(64)    YES        null        
+TABLE_NAME    VARCHAR(64)    YES        null        
+COLUMN_NAME    VARCHAR(64)    YES        null        
+ORDINAL_POSITION    INT UNSIGNED(32)    YES        null        
+POSITION_IN_UNIQUE_CONSTRAINT    INT UNSIGNED(32)    YES        null        
+REFERENCED_TABLE_SCHEMA    VARCHAR(64)    YES        null        
+REFERENCED_TABLE_NAME    VARCHAR(64)    YES        null        
+REFERENCED_COLUMN_NAME    VARCHAR(64)    YES        null        
 show columns from `COLUMNS`;
 Field    Type    Null    Key    Default    Extra    Comment
 table_catalog    VARCHAR(3)    NO        null        
@@ -213,30 +160,30 @@ generation_expression    VARCHAR(500)    NO        null
 srs_id    BIGINT(0)    YES        null        
 show columns from `PROFILING`;
 Field    Type    Null    Key    Default    Extra    Comment
-query_id    INT(32)    NO        '0'        
-seq    INT(32)    NO        '0'        
-state    VARCHAR(30)    NO        ''        
-duration    DECIMAL(9)    NO        '0.000000'        
-cpu_user    DECIMAL(9)    YES        null        
-cpu_system    DECIMAL(9)    YES        null        
-context_voluntary    INT(32)    YES        null        
-context_involuntary    INT(32)    YES        null        
-block_ops_in    INT(32)    YES        null        
-block_ops_out    INT(32)    YES        null        
-messages_sent    INT(32)    YES        null        
-messages_received    INT(32)    YES        null        
-page_faults_major    INT(32)    YES        null        
-page_faults_minor    INT(32)    YES        null        
-swaps    INT(32)    YES        null        
-source_function    VARCHAR(30)    YES        null        
-source_file    VARCHAR(20)    YES        null        
-source_line    INT(32)    YES        null        
+QUERY_ID    INT(32)    NO        '0'        
+SEQ    INT(32)    NO        '0'        
+STATE    VARCHAR(30)    NO        ''        
+DURATION    DECIMAL(9)    NO        '0.000000'        
+CPU_USER    DECIMAL(9)    YES        null        
+CPU_SYSTEM    DECIMAL(9)    YES        null        
+CONTEXT_VOLUNTARY    INT(32)    YES        null        
+CONTEXT_INVOLUNTARY    INT(32)    YES        null        
+BLOCK_OPS_IN    INT(32)    YES        null        
+BLOCK_OPS_OUT    INT(32)    YES        null        
+MESSAGES_SENT    INT(32)    YES        null        
+MESSAGES_RECEIVED    INT(32)    YES        null        
+PAGE_FAULTS_MAJOR    INT(32)    YES        null        
+PAGE_FAULTS_MINOR    INT(32)    YES        null        
+SWAPS    INT(32)    YES        null        
+SOURCE_FUNCTION    VARCHAR(30)    YES        null        
+SOURCE_FILE    VARCHAR(20)    YES        null        
+SOURCE_LINE    INT(32)    YES        null        
 show columns from `USER_PRIVILEGES`;
 Field    Type    Null    Key    Default    Extra    Comment
-grantee    VARCHAR(292)    NO        ''        
-table_catalog    VARCHAR(512)    NO        ''        
-privilege_type    VARCHAR(64)    NO        ''        
-is_grantable    VARCHAR(3)    NO        ''        
+GRANTEE    VARCHAR(292)    NO        ''        
+TABLE_CATALOG    VARCHAR(512)    NO        ''        
+PRIVILEGE_TYPE    VARCHAR(64)    NO        ''        
+IS_GRANTABLE    VARCHAR(3)    NO        ''        
 show columns from `SCHEMATA`;
 Field    Type    Null    Key    Default    Extra    Comment
 catalog_name    VARCHAR(5000)    YES        null        
@@ -247,34 +194,34 @@ sql_path    CHAR(0)    YES        null
 default_encryption    VARCHAR(3)    NO        null        
 show columns from `CHARACTER_SETS`;
 Field    Type    Null    Key    Default    Extra    Comment
-character_set_name    VARCHAR(64)    YES        null        
-default_collate_name    VARCHAR(64)    YES        null        
-description    VARCHAR(2048)    YES        null        
-maxlen    INT UNSIGNED(32)    YES        null        
+CHARACTER_SET_NAME    VARCHAR(64)    YES        null        
+DEFAULT_COLLATE_NAME    VARCHAR(64)    YES        null        
+DESCRIPTION    VARCHAR(2048)    YES        null        
+MAXLEN    INT UNSIGNED(32)    YES        null        
 show columns from `TRIGGERS`;
 Field    Type    Null    Key    Default    Extra    Comment
-trigger_catalog    VARCHAR(64)    YES        null        
-trigger_schema    VARCHAR(64)    YES        null        
-trigger_name    VARCHAR(64)    YES        null        
-event_manipulation    VARCHAR(10)    YES        null        
-event_object_catalog    VARCHAR(64)    YES        null        
-event_object_schema    VARCHAR(64)    YES        null        
-event_object_table    VARCHAR(64)    YES        null        
-action_order    INT UNSIGNED(32)    YES        null        
-action_condition    BINARY(0)    YES        null        
-action_statement    TEXT(0)    YES        null        
-action_orientation    VARCHAR(3)    YES        null        
-action_timing    VARCHAR(10)    YES        null        
-action_reference_old_table    BINARY(0)    YES        null        
-action_reference_new_table    BINARY(0)    YES        null        
-action_reference_old_row    VARCHAR(3)    YES        null        
-action_reference_new_row    VARCHAR(3)    YES        null        
-created    TIMESTAMP(2)    YES        null        
-sql_mode    VARCHAR(10)    YES        null        
-definer    VARCHAR(288)    YES        null        
-character_set_client    VARCHAR(64)    YES        null        
-collation_connection    VARCHAR(64)    YES        null        
-database_collation    VARCHAR(64)    YES        null        
+TRIGGER_CATALOG    VARCHAR(64)    YES        null        
+TRIGGER_SCHEMA    VARCHAR(64)    YES        null        
+TRIGGER_NAME    VARCHAR(64)    YES        null        
+EVENT_MANIPULATION    VARCHAR(10)    YES        null        
+EVENT_OBJECT_CATALOG    VARCHAR(64)    YES        null        
+EVENT_OBJECT_SCHEMA    VARCHAR(64)    YES        null        
+EVENT_OBJECT_TABLE    VARCHAR(64)    YES        null        
+ACTION_ORDER    INT UNSIGNED(32)    YES        null        
+ACTION_CONDITION    BINARY(0)    YES        null        
+ACTION_STATEMENT    TEXT(0)    YES        null        
+ACTION_ORIENTATION    VARCHAR(3)    YES        null        
+ACTION_TIMING    VARCHAR(10)    YES        null        
+ACTION_REFERENCE_OLD_TABLE    BINARY(0)    YES        null        
+ACTION_REFERENCE_NEW_TABLE    BINARY(0)    YES        null        
+ACTION_REFERENCE_OLD_ROW    VARCHAR(3)    YES        null        
+ACTION_REFERENCE_NEW_ROW    VARCHAR(3)    YES        null        
+CREATED    TIMESTAMP(2)    YES        null        
+SQL_MODE    VARCHAR(10)    YES        null        
+DEFINER    VARCHAR(288)    YES        null        
+CHARACTER_SET_CLIENT    VARCHAR(64)    YES        null        
+COLLATION_CONNECTION    VARCHAR(64)    YES        null        
+DATABASE_COLLATION    VARCHAR(64)    YES        null        
 show columns from `TABLES`;
 Field    Type    Null    Key    Default    Extra    Comment
 table_catalog    VARCHAR(3)    NO        null        

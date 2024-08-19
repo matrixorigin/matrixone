@@ -191,7 +191,7 @@ type messageSenderOnClient struct {
 	mp *mpool.MPool
 
 	// anal was used to merge remote-run's cost analysis information.
-	anal *anaylze
+	anal *analyzeModule
 
 	// message sender and its data receiver.
 	streamSender morpc.Stream
@@ -213,7 +213,7 @@ func newMessageSenderOnClient(
 	sid string,
 	toAddr string,
 	mp *mpool.MPool,
-	ana *anaylze,
+	ana *analyzeModule,
 ) (*messageSenderOnClient, error) {
 	streamSender, err := cnclient.GetPipelineClient(sid).NewStream(toAddr)
 	if err != nil {
@@ -400,7 +400,7 @@ func (sender *messageSenderOnClient) dealAnalysis(ana *pipeline.AnalysisList) {
 	mergeAnalyseInfo(sender.anal, ana)
 }
 
-func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
+func mergeAnalyseInfo(target *analyzeModule, ana *pipeline.AnalysisList) {
 	source := ana.List
 	if len(target.analInfos) != len(source) {
 		return

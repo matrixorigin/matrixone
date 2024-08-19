@@ -200,6 +200,12 @@ func WithBeginAutoCommit(begin, autocommit bool) TxnOption {
 	}
 }
 
+func WithSkipPushClientReady() TxnOption {
+	return func(tc *txnOperator) {
+		tc.skipWaitPushClient = true
+	}
+}
+
 type txnOperator struct {
 	sid                  string
 	logger               *log.MOLogger
@@ -241,6 +247,8 @@ type txnOperator struct {
 	fprints         footPrints
 
 	waitActiveCost time.Duration
+
+	skipWaitPushClient bool
 }
 
 func newTxnOperator(
@@ -524,15 +532,18 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 	txn := tc.getTxnMeta(false)
 	util.LogTxnCommit(tc.logger, txn)
 
-	tc.commitSeq = tc.NextSequence()
-	tc.commitAt = time.Now()
+	readonly := tc.workspace != nil && tc.workspace.Readonly()
+	if !readonly {
+		tc.commitSeq = tc.NextSequence()
+		tc.commitAt = time.Now()
 
-	tc.triggerEvent(newEvent(CommitEvent, txn, tc.commitSeq, nil))
-	defer func() {
-		cost := time.Since(tc.commitAt)
-		v2.TxnCNCommitDurationHistogram.Observe(cost.Seconds())
-		tc.triggerEvent(newCostEvent(CommitEvent, tc.getTxnMeta(false), tc.commitSeq, err, cost))
-	}()
+		tc.triggerEvent(newEvent(CommitEvent, txn, tc.commitSeq, nil))
+		defer func() {
+			cost := time.Since(tc.commitAt)
+			v2.TxnCNCommitDurationHistogram.Observe(cost.Seconds())
+			tc.triggerEvent(newCostEvent(CommitEvent, tc.getTxnMeta(false), tc.commitSeq, err, cost))
+		}()
+	}
 
 	if tc.options.ReadOnly() {
 		tc.mu.Lock()
@@ -1069,6 +1080,12 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 }
 
 func (tc *txnOperator) unlock(ctx context.Context) {
+	if tc.workspace != nil &&
+		tc.workspace.Readonly() &&
+		len(tc.mu.lockTables) == 0 {
+		return
+	}
+
 	if !tc.commitAt.IsZero() {
 		v2.TxnCNCommitResponseDurationHistogram.Observe(float64(time.Since(tc.commitAt).Seconds()))
 	}

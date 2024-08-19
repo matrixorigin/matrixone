@@ -23,7 +23,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -34,18 +33,14 @@ import (
 func sendToAllLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	var refCountAdd int64
 	var err error
+
 	if !ap.RecSink {
 		refCountAdd = int64(ap.ctr.localRegsCnt - 1)
 		atomic.AddInt64(&bat.Cnt, refCountAdd)
-		if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
-			jm.IncRef(refCountAdd)
-			jm.SetDupCount(int64(ap.ctr.localRegsCnt))
-		}
 	}
 	var bats []*batch.Batch
 	if ap.RecSink {
-		bats = append(bats, bat)
-		for k := 1; k < len(ap.LocalRegs); k++ {
+		for k := 1; k < len(ap.LocalRegs)+1; k++ {
 			bat, err = bat.Dup(proc.Mp())
 			if err != nil {
 				return false, err
@@ -417,10 +412,5 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs *pr
 func handleUnsent(proc *process.Process, bat *batch.Batch, refCnt int64, successCnt int64) {
 	diff := successCnt - refCnt
 	atomic.AddInt64(&bat.Cnt, diff)
-	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
-		jm.IncRef(diff)
-		jm.SetDupCount(diff)
-	}
-
 	proc.PutBatch(bat)
 }

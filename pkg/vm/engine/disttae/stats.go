@@ -53,8 +53,6 @@ type updateStatsRequest struct {
 
 	// tableDef is the main table definition.
 	tableDef *plan2.TableDef
-	// partitionsTableDef is the partitions table definition.
-	partitionsTableDef []*plan2.TableDef
 
 	partitionState  *logtailreplay.PartitionState
 	fs              fileservice.FileService
@@ -64,7 +62,6 @@ type updateStatsRequest struct {
 
 func newUpdateStatsRequest(
 	tableDef *plan2.TableDef,
-	partitionsTableDef []*plan2.TableDef,
 	partitionState *logtailreplay.PartitionState,
 	fs fileservice.FileService,
 	ts types.TS,
@@ -72,13 +69,12 @@ func newUpdateStatsRequest(
 	stats *pb.StatsInfo,
 ) *updateStatsRequest {
 	return &updateStatsRequest{
-		statsInfo:          stats,
-		tableDef:           tableDef,
-		partitionsTableDef: partitionsTableDef,
-		partitionState:     partitionState,
-		fs:                 fs,
-		ts:                 ts,
-		approxObjectNum:    approxObjectNum,
+		statsInfo:       stats,
+		tableDef:        tableDef,
+		partitionState:  partitionState,
+		fs:              fs,
+		ts:              ts,
+		approxObjectNum: approxObjectNum,
 	}
 }
 
@@ -190,7 +186,16 @@ func NewGlobalStats(
 	return s
 }
 
-func (gs *GlobalStats) ShouldUpdate(key pb.StatsInfoKey, entryNum int64) bool {
+// shouldTrigger returns true only if key already exists in the map.
+func (gs *GlobalStats) shouldTrigger(key pb.StatsInfoKey) bool {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	_, ok := gs.mu.statsInfoMap[key]
+	return ok
+}
+
+// checkTriggerCond checks the condition that if we should trigger the stats update.
+func (gs *GlobalStats) checkTriggerCond(key pb.StatsInfoKey, entryNum int64) bool {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	info, ok := gs.mu.statsInfoMap[key]
@@ -318,11 +323,14 @@ func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKey, force bool) {
 
 func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 	key := pb.StatsInfoKey{
+		AccId:      tail.Table.AccId,
 		DatabaseID: tail.Table.DbId,
 		TableID:    tail.Table.TbId,
 	}
 	if len(tail.CkpLocation) > 0 {
-		gs.triggerUpdate(key, false)
+		if gs.shouldTrigger(key) {
+			gs.triggerUpdate(key, false)
+		}
 	} else if tail.Table != nil {
 		var triggered bool
 		for _, cmd := range tail.Commands {
@@ -330,7 +338,9 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 				logtailreplay.IsObjTable(cmd.TableName) ||
 				logtailreplay.IsMetaTable(cmd.TableName) {
 				triggered = true
-				gs.triggerUpdate(key, false)
+				if gs.shouldTrigger(key) {
+					gs.triggerUpdate(key, false)
+				}
 				break
 			}
 		}
@@ -339,9 +349,11 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 		} else {
 			gs.tableLogtailCounter[key]++
 		}
-		if !triggered && gs.ShouldUpdate(key, gs.tableLogtailCounter[key]) {
+		if !triggered && gs.checkTriggerCond(key, gs.tableLogtailCounter[key]) {
 			gs.tableLogtailCounter[key] = 0
-			gs.triggerUpdate(key, false)
+			if gs.shouldTrigger(key) {
+				gs.triggerUpdate(key, false)
+			}
 		}
 	}
 }
@@ -522,7 +534,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		gs.doneUpdate(key, updated)
 	}()
 
-	table := gs.engine.getLatestCatalogCache().GetTableById(key.DatabaseID, key.TableID)
+	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
 	// table or its definition is nil, means that the table is created but not committed yet.
 	if table == nil || table.TableDef == nil {
 		logutil.Errorf("cannot get table by ID %v", key)
@@ -530,24 +542,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 	}
 
 	partitionState := gs.engine.GetOrCreateLatestPart(key.DatabaseID, key.TableID).Snapshot()
-	var partitionsTableDef []*plan2.TableDef
-	var approxObjectNum int64
-	if table.Partitioned > 0 {
-		partitionInfo := &plan2.PartitionByDef{}
-		if err := partitionInfo.UnMarshalPartitionInfo([]byte(table.Partition)); err != nil {
-			logutil.Errorf("failed to unmarshal partition table: %v", err)
-			return
-		}
-		for _, partitionTableName := range partitionInfo.PartitionTableNames {
-			partitionTable := gs.engine.getLatestCatalogCache().GetTableByName(key.DatabaseID, partitionTableName)
-			partitionsTableDef = append(partitionsTableDef, partitionTable.TableDef)
-			ps := gs.engine.GetOrCreateLatestPart(key.DatabaseID, partitionTable.Id).Snapshot()
-			approxObjectNum += int64(ps.ApproxObjectsNum())
-		}
-	} else {
-		approxObjectNum = int64(partitionState.ApproxObjectsNum())
-	}
-
+	approxObjectNum := int64(partitionState.ApproxObjectsNum())
 	if approxObjectNum == 0 {
 		// There are no objects flushed yet.
 		return
@@ -557,7 +552,6 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := newUpdateStatsRequest(
 		table.TableDef,
-		partitionsTableDef,
 		partitionState,
 		gs.engine.fs,
 		types.TimestampToTS(now),
@@ -616,7 +610,7 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 	case types.T_datetime:
 		return float64(types.DecodeFixed[types.Datetime](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Datetime](zm.GetMinBuf())) + 1
 	case types.T_uuid, types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		//NDV Function
 		// An aggregate function that returns an approximate value similar to the result of COUNT(DISTINCT col),
 		// the "number of distinct values".
@@ -796,14 +790,7 @@ func UpdateStats(
 
 	info.ApproxObjectNumber = req.approxObjectNum
 	baseTableDef := req.tableDef
-	if len(req.partitionsTableDef) > 0 {
-		for _, def := range req.partitionsTableDef {
-			req.tableDef = def
-			if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
-				return err
-			}
-		}
-	} else if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
+	if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
 		return err
 	}
 	adjustNDV(info, baseTableDef)

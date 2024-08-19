@@ -120,21 +120,9 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e.TableNode.schema.Store(schema)
 	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{Schema: schema})
 
-	var sid types.Uuid
-	if schema.Name == SystemDBSchema.Name {
-		if DefaultTableDataFactory != nil {
-			e.tableData = DefaultTableDataFactory(e) // TODO(aptend): add data handle
-		}
-		sid = SystemObject_DB_ID
-	} else if schema.Name == SystemTableSchema.Name {
-		sid = SystemObject_Table_ID
-	} else if schema.Name == SystemColumnSchema.Name {
-		sid = SystemObject_Columns_ID
-	} else {
-		panic("not supported")
+	if DefaultTableDataFactory != nil {
+		e.tableData = DefaultTableDataFactory(e)
 	}
-	objectEntry := NewSysObjectEntry(e, sid)
-	e.AddEntryLocked(objectEntry)
 	return e
 }
 

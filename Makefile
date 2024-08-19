@@ -137,11 +137,11 @@ musl:
 	$(info [Build binary(musl)])
 	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
-# build mo-debug tool
-.PHONY: mo-debug
-mo-debug: config cgo
-	$(info [Build mo-debug tool])
-	$(CGO_OPTS) go build -o mo-debug ./cmd/mo-debug
+# build mo-tool
+.PHONY: mo-tool
+mo-tool: config cgo
+	$(info [Build mo-tool tool])
+	$(CGO_OPTS) go build -o mo-tool ./cmd/mo-tool
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory

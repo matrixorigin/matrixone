@@ -17,15 +17,13 @@ package lockop
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -40,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var (
@@ -78,12 +77,9 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 		lockOp.ctr.rt.fetchers = append(lockOp.ctr.rt.fetchers,
 			GetFetchRowsFunc(lockOp.targets[idx].primaryColumnType))
 	}
-	lockOp.ctr.rt.parker = types.NewPacker(proc.Mp())
+	lockOp.ctr.rt.parker = types.NewPacker()
 	lockOp.ctr.rt.retryError = nil
 	lockOp.ctr.rt.step = stepLock
-	if lockOp.block {
-		lockOp.ctr.rt.InitReceiver(proc, true)
-	}
 	return nil
 }
 
@@ -124,6 +120,7 @@ func callNonBlocking(
 		return result, err
 	}
 
+	anal.Input(result.Batch, lockOp.IsFirst)
 	if result.Batch == nil {
 		err := lockTalbeIfLockCountIsZero(proc, lockOp)
 		if err != nil {
@@ -133,6 +130,7 @@ func callNonBlocking(
 	}
 	bat := result.Batch
 	if bat.IsEmpty() {
+		anal.Output(result.Batch, lockOp.IsLast)
 		return result, err
 	}
 
@@ -141,6 +139,7 @@ func callNonBlocking(
 		return result, err
 	}
 
+	anal.Output(result.Batch, lockOp.IsLast)
 	return result, nil
 }
 
@@ -183,7 +182,11 @@ func callBlocking(
 
 			// blocking lock node. Never pass the input batch into downstream operators before
 			// all lock are performed.
-			lockOp.ctr.rt.cachedBatches = append(lockOp.ctr.rt.cachedBatches, bat)
+			appendBat, err := bat.Dup(proc.GetMPool())
+			if err != nil {
+				return result, err
+			}
+			lockOp.ctr.rt.cachedBatches = append(lockOp.ctr.rt.cachedBatches, appendBat)
 		}
 	}
 
@@ -199,6 +202,7 @@ func callBlocking(
 			bat := lockOp.ctr.rt.cachedBatches[0]
 			lockOp.ctr.rt.cachedBatches = lockOp.ctr.rt.cachedBatches[1:]
 			result.Batch = bat
+			anal.Output(result.Batch, lockOp.IsLast)
 			return result, nil
 		}
 	}
@@ -210,6 +214,7 @@ func callBlocking(
 		if err != nil {
 			return result, err
 		}
+		anal.Output(result.Batch, lockOp.IsLast)
 		return result, lockOp.ctr.rt.retryError
 	}
 
@@ -220,7 +225,8 @@ func performLock(
 	bat *batch.Batch,
 	proc *process.Process,
 	lockOp *LockOp,
-	analyze process.Analyze) error {
+	analyze process.Analyze,
+) error {
 	needRetry := false
 	for idx, target := range lockOp.targets {
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
@@ -321,8 +327,8 @@ func LockTable(
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
-	parker := types.NewPacker(proc.Mp())
-	defer parker.FreeMem()
+	parker := types.NewPacker()
+	defer parker.Close()
 
 	opts := DefaultLockOptions(parker).
 		WithLockTable(true, changeDef).
@@ -367,8 +373,8 @@ func LockRows(
 		return nil
 	}
 
-	parker := types.NewPacker(proc.Mp())
-	defer parker.FreeMem()
+	parker := types.NewPacker()
+	defer parker.Close()
 
 	opts := DefaultLockOptions(parker).
 		WithLockTable(false, false).
@@ -412,7 +418,8 @@ func doLock(
 	proc *process.Process,
 	vec *vector.Vector,
 	pkType types.Type,
-	opts LockOptions) (bool, bool, timestamp.Timestamp, error) {
+	opts LockOptions,
+) (bool, bool, timestamp.Timestamp, error) {
 	txnOp := proc.GetTxnOperator()
 	txnClient := proc.Base.TxnClient
 	lockService := proc.GetLockService()
@@ -505,6 +512,11 @@ func doLock(
 	}
 	// Record lock waiting time
 	analyzeLockWaitTime(analyze, start)
+
+	if runtime.InTesting(proc.GetService()) {
+		tc := runtime.MustGetTestingContext(proc.GetService())
+		tc.GetAdjustLockResultFunc()(txn.ID, tableID, &result)
+	}
 
 	if len(result.ConflictKey) > 0 {
 		trace.GetService(proc.GetService()).AddTxnActionInfo(
@@ -635,8 +647,7 @@ func canRetryLock(txn client.TxnOperator, err error) bool {
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
-		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
-		errors.Is(err, context.DeadlineExceeded) {
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
 		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
@@ -896,12 +907,10 @@ func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error
 	if lockOp.ctr != nil {
 		if lockOp.ctr.rt != nil {
 			if lockOp.ctr.rt.parker != nil {
-				lockOp.ctr.rt.parker.FreeMem()
+				lockOp.ctr.rt.parker.Close()
 			}
 			lockOp.ctr.rt.retryError = nil
 			lockOp.cleanCachedBatch(proc)
-			lockOp.ctr.rt.FreeMergeTypeOperator(pipelineFailed)
-			lockOp.ctr.rt.lockCount = 0
 			lockOp.ctr.rt = nil
 		}
 		lockOp.ctr = nil
@@ -909,29 +918,28 @@ func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error
 
 }
 
-func (lockOp *LockOp) cleanCachedBatch(_ *process.Process) {
-	// do not need clean,  only set nil
-	// for _, bat := range arg.ctr.rt.cachedBatches {
-	// 	bat.Clean(proc.Mp())
-	// }
+func (lockOp *LockOp) cleanCachedBatch(proc *process.Process) {
+	for _, bat := range lockOp.ctr.rt.cachedBatches {
+		bat.Clean(proc.Mp())
+	}
 	lockOp.ctr.rt.cachedBatches = nil
 }
 
 func (lockOp *LockOp) getBatch(
-	_ *process.Process,
+	proc *process.Process,
 	anal process.Analyze,
 	isFirst bool) (*batch.Batch, error) {
 	fn := lockOp.ctr.rt.batchFetchFunc
 	if fn == nil {
-		fn = lockOp.ctr.rt.ReceiveFromAllRegs
+		fn = lockOp.GetChildren(0).Call
 	}
 
-	msg := fn(anal)
-	if msg.Err != nil {
-		return nil, msg.Err
+	input, err := fn(proc)
+	if err != nil {
+		return nil, err
 	}
-	anal.Input(msg.Batch, isFirst)
-	return msg.Batch, nil
+	anal.Input(input.Batch, isFirst)
+	return input.Batch, nil
 }
 
 func getRowsFilter(
@@ -953,7 +961,8 @@ func hasNewVersionInRange(
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,
-	from, to timestamp.Timestamp) (bool, error) {
+	from, to timestamp.Timestamp,
+) (bool, error) {
 	if vec == nil {
 		return false, nil
 	}

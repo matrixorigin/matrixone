@@ -154,11 +154,17 @@ type ReadOptions struct {
 }
 
 const (
-	ReadData   = 0
-	ReadRanges = 1
-	ReadStats  = 2
-	ReadRows   = 3
-	ReadSize   = 4
+	ReadData                     = 0
+	ReadRanges                   = 1
+	ReadStats                    = 2
+	ReadRows                     = 3
+	ReadSize                     = 4
+	ReadApproxObjectsNum         = 5
+	ReadPrimaryKeysMayBeModified = 6
+	ReadGetColumMetadataScanInfo = 7
+	ReadReader                   = 8
+	ReadMergeObjects             = 9
+	ReadVisibleObjectStats       = 10
 )
 
 type ReadRequest struct {

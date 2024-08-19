@@ -45,25 +45,30 @@ import (
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
-	var span trace.Span
-	c.proc.Ctx, span = trace.Start(c.proc.Ctx, "CreateDatabase")
+	ctx, span := trace.Start(c.proc.Ctx, "CreateDatabase")
 	defer span.End()
-	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
-	if _, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator()); err == nil {
-		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
+
+	createDatabase := s.Plan.GetDdl().GetCreateDatabase()
+	dbName := createDatabase.GetDatabase()
+	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
+		if createDatabase.GetIfNotExists() {
 			return nil
 		}
-		return moerr.NewDBAlreadyExists(c.proc.Ctx, dbName)
+		return moerr.NewDBAlreadyExists(ctx, dbName)
 	}
 
 	if err := lockMoDatabase(c, dbName); err != nil {
 		return err
 	}
 
-	ctx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, s.Plan.GetDdl().GetCreateDatabase().GetSql())
+	ctx = context.WithValue(ctx, defines.SqlKey{}, createDatabase.GetSql())
 	datType := ""
-	if s.Plan.GetDdl().GetCreateDatabase().SubscriptionOption != nil {
+	// handle sub
+	if subOption := createDatabase.SubscriptionOption; subOption != nil {
 		datType = catalog.SystemDBTypeSubscription
+		if err := createSubscription(ctx, c, dbName, subOption); err != nil {
+			return err
+		}
 	}
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
 	return c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
@@ -71,27 +76,34 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 
 func (s *Scope) DropDatabase(c *Compile) error {
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
-	if _, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator()); err != nil {
+	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	if err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
 		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
 	}
 
-	if err := lockMoDatabase(c, dbName); err != nil {
+	if err = lockMoDatabase(c, dbName); err != nil {
 		return err
+	}
+
+	// handle sub
+	if db.IsSubscription(c.proc.Ctx) {
+		if err = dropSubscription(c.proc.Ctx, c, dbName); err != nil {
+			return err
+		}
 	}
 
 	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
 	if len(sql) != 0 {
-		err := runDetectFkReferToDBSql(c, sql)
-		if err != nil {
+		if err = runDetectFkReferToDBSql(c, sql); err != nil {
 			return err
 		}
 	}
 
 	// whether foreign_key_checks = 0 or 1
-	err := s.removeFkeysRelationships(c, dbName)
+	err = s.removeFkeysRelationships(c, dbName)
 	if err != nil {
 		return err
 	}
@@ -115,7 +127,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	//3. delete fks
+	// 3. delete fks
 	err = c.runSql(s.Plan.GetDdl().GetDropDatabase().GetUpdateFkSql())
 	if err != nil {
 		return err
@@ -482,7 +494,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 			//1. build and update constraint def
 			for _, indexDef := range indexTableDef.Indexes {
-				insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
+				insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef, tableDef)
 				if err != nil {
 					return err
 				}
@@ -597,9 +609,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		case *plan.AlterTable_Action_AddColumn:
 			alterKinds = append(alterKinds, api.AlterKind_AddColumn)
 			col := &plan.ColDef{
-				Name: act.AddColumn.Name,
-				Alg:  plan.CompressType_Lz4,
-				Typ:  act.AddColumn.Type,
+				Name:       strings.ToLower(act.AddColumn.Name),
+				OriginName: act.AddColumn.Name,
+				Alg:        plan.CompressType_Lz4,
+				Typ:        act.AddColumn.Type,
 			}
 			var pos int32
 			cols, pos, err = getAddColPos(cols, col, act.AddColumn.PreName, act.AddColumn.Pos)
@@ -693,7 +706,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 	var addColIdx int
 	var dropColIdx int
-	constraint := make([][]byte, 0)
+	reqs := make([]*api.AlterTableReq, 0)
 	for _, kind := range alterKinds {
 		var req *api.AlterTableReq
 		switch kind {
@@ -720,14 +733,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			req = api.NewAddPartitionReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), changePartitionDef)
 		default:
 		}
-		tmp, err := req.Marshal()
-		if err != nil {
-			return err
-		}
-		constraint = append(constraint, tmp)
+		reqs = append(reqs, req)
 	}
 
-	err = rel.AlterTable(c.proc.Ctx, newCt, constraint)
+	err = rel.AlterTable(c.proc.Ctx, newCt, reqs)
 	if err != nil {
 		return err
 	}
@@ -780,14 +789,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := planColsToExeCols(planCols)
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-		)
-	}
 
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
@@ -809,36 +810,12 @@ func (s *Scope) CreateTable(c *Compile) error {
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
-			// TODO: debug for #11917
-			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-				c.proc.Info(c.proc.Ctx, "createTable",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-				)
-			}
 			return moerr.NewNoDB(c.proc.Ctx)
-		}
-		// TODO: debug for #11917
-		if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-			c.proc.Info(c.proc.Ctx, "createTable no exist",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-			)
 		}
 		return err
 	}
 	if _, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
-			// TODO: debug for #11917
-			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-				c.proc.Info(c.proc.Ctx, "createTable no exist",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-				)
-			}
 			return nil
 		}
 
@@ -866,7 +843,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+	if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		c.proc.Info(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
@@ -875,21 +852,13 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
-	if err := dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		c.proc.Info(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
 		)
 		return err
-	}
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		c.proc.Info(c.proc.Ctx, "createTable ok",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-		)
 	}
 
 	partitionTables := qry.GetPartitionTables()
@@ -955,7 +924,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		var colNameToId = make(map[string]uint64)
 		for _, def := range newTableDef {
 			if attr, ok := def.(*engine.AttributeDef); ok {
-				colNameToId[attr.Attr.Name] = attr.Attr.ID
+				colNameToId[strings.ToLower(attr.Attr.Name)] = attr.Attr.ID
 			}
 		}
 		//old colId -> colName
@@ -993,8 +962,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 					//colName -> new colId
 					newDef.ForeignCols[j] = colNameToId[colName]
 				}
-			} else {
-				copy(newDef.ForeignCols, fkey.ForeignCols)
 			}
 
 			//refresh child table column id
@@ -1104,7 +1071,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		var colNameToId = make(map[string]uint64)
 		for _, def := range newTableDef {
 			if attr, ok := def.(*engine.AttributeDef); ok {
-				colNameToId[attr.Attr.Name] = attr.Attr.ID
+				colNameToId[strings.ToLower(attr.Attr.Name)] = attr.Attr.ID
 			}
 		}
 		//1.1 update the column id of the column names in this table.
@@ -1519,6 +1486,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 	tableId := r.GetTableID(c.proc.Ctx)
+	tableDef := r.GetTableDef(c.proc.Ctx)
 
 	originalTableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
 	indexInfo := qry.GetIndex() // IndexInfo is named same as planner's IndexInfo
@@ -1588,7 +1556,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 
 	// generate inserts into mo_indexes metadata
 	for _, indexDef := range indexTableDef.Indexes {
-		sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef)
+		sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef, tableDef)
 		if err != nil {
 			return err
 		}
@@ -2134,6 +2102,11 @@ func (s *Scope) DropTable(c *Compile) error {
 		isTemp = true
 	}
 
+	// if dbSource is a pub, update tableList
+	if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
+		return err
+	}
+
 	if !isTemp && !isView && !isSource && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
@@ -2402,7 +2375,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 		colTyp := col.GetTyp()
 		exeCols[i] = &engine.AttributeDef{
 			Attr: engine.Attribute{
-				Name:          col.Name,
+				Name:          col.GetOriginCaseName(),
 				Alg:           alg,
 				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
 				Default:       planCols[i].GetDefault(),
@@ -2515,13 +2488,14 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	if rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		// sequence table exists
 		// get pre sequence table row values
-		values, err = c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
+		_values, err := c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
 		if err != nil {
 			return err
 		}
-		if values == nil {
+		if _values == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "Failed to get sequence meta data.")
 		}
+		values = _values[0]
 
 		// get pre curval
 

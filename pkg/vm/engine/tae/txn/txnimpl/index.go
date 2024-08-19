@@ -98,7 +98,7 @@ func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 	vec := makeWorkspaceVector(kType)
 	switch kType.Oid {
 	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		for k := range idx.tree {
 			vec.Append([]byte(k.(string)), false)
 		}
@@ -120,7 +120,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 	var vecs []containers.Vector
 	switch kType.Oid {
 	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		for k := range idx.tree {
 			if vec.Length() > int(MaxNodeRows) {
 				vecs = append(vecs, vec)
@@ -290,7 +290,7 @@ func (idx *simpleTableIndex) BatchInsert(
 		vs := vector.MustFixedCol[types.Blockid](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		vec := col.GetDownstreamVector()
 		if dedupInput {
 			set := make(map[string]bool)
@@ -438,7 +438,7 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 		vals := vector.MustFixedCol[types.Blockid](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		vec := col.GetDownstreamVector()
 		for i := 0; i < col.Length(); i++ {
 			bs := vec.GetBytesAt(i)

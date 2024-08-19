@@ -39,6 +39,7 @@ type Rowid = types.Rowid
 var NewObjectid = types.NewObjectid
 var NewBlockidWithObjectID = types.NewBlockidWithObjectID
 var NewRowid = types.NewRowid
+var NewRowIDWithObjectIDBlkNumAndRowID = types.NewRowIDWithObjectIDBlkNumAndRowID
 
 func NewSegmentid() *Segmentid {
 	id := types.Uuid(uuid.Must(uuid.NewV7()))

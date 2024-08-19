@@ -16,18 +16,14 @@ package rpc
 
 import (
 	"context"
-	"strings"
 
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -35,158 +31,6 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 )
-
-func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, err error) {
-	schema = catalog.NewEmptySchema(name)
-	schema.CatalogVersion = pkgcatalog.CatalogVersion_Curr
-	var pkeyColName string
-	for _, def := range defs {
-		switch defVal := def.(type) {
-		case *engine.ConstraintDef:
-			primaryKeyDef := defVal.GetPrimaryKeyDef()
-			if primaryKeyDef != nil {
-				pkeyColName = primaryKeyDef.Pkey.PkeyColName
-				break
-			}
-		}
-	}
-	for _, def := range defs {
-		switch defVal := def.(type) {
-		case *engine.AttributeDef:
-			if pkeyColName == defVal.Attr.Name {
-				if err = schema.AppendSortColWithAttribute(defVal.Attr, 0, true); err != nil {
-					return
-				}
-			} else if defVal.Attr.ClusterBy {
-				if err = schema.AppendSortColWithAttribute(defVal.Attr, 0, false); err != nil {
-					return
-				}
-			} else {
-				if err = schema.AppendColWithAttribute(defVal.Attr); err != nil {
-					return
-				}
-			}
-
-		case *engine.PropertiesDef:
-			for _, property := range defVal.Properties {
-				switch strings.ToLower(property.Key) {
-				case pkgcatalog.SystemRelAttr_Comment:
-					schema.Comment = property.Value
-				case pkgcatalog.SystemRelAttr_Kind:
-					schema.Relkind = property.Value
-				case pkgcatalog.SystemRelAttr_CreateSQL:
-					schema.Createsql = property.Value
-				default:
-				}
-			}
-
-		case *engine.PartitionDef:
-			schema.Partitioned = defVal.Partitioned
-			schema.Partition = defVal.Partition
-		case *engine.ViewDef:
-			schema.View = defVal.View
-		case *engine.CommentDef:
-			schema.Comment = defVal.Comment
-		case *engine.ConstraintDef:
-			schema.Constraint, err = defVal.MarshalBinary()
-			if err != nil {
-				return nil, err
-			}
-		default:
-			// We will not deal with other cases for the time being
-		}
-	}
-	if err = schema.Finalize(false); err != nil {
-		return
-	}
-	return
-}
-
-func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
-	if schema.Comment != "" {
-		commentDef := new(engine.CommentDef)
-		commentDef.Comment = schema.Comment
-		defs = append(defs, commentDef)
-	}
-
-	if schema.Partitioned > 0 || schema.Partition != "" {
-		partitionDef := new(engine.PartitionDef)
-		partitionDef.Partitioned = schema.Partitioned
-		partitionDef.Partition = schema.Partition
-		defs = append(defs, partitionDef)
-	}
-
-	if schema.View != "" {
-		viewDef := new(engine.ViewDef)
-		viewDef.View = schema.View
-		defs = append(defs, viewDef)
-	}
-
-	if len(schema.Constraint) > 0 {
-		c := new(engine.ConstraintDef)
-		if err := c.UnmarshalBinary(schema.Constraint); err != nil {
-			return nil, err
-		}
-		defs = append(defs, c)
-	}
-
-	for _, col := range schema.ColDefs {
-		if col.IsPhyAddr() {
-			continue
-		}
-		attr, err := AttrFromColDef(col)
-		if err != nil {
-			return nil, err
-		}
-		defs = append(defs, &engine.AttributeDef{Attr: *attr})
-	}
-	pro := new(engine.PropertiesDef)
-	pro.Properties = append(pro.Properties, engine.Property{
-		Key:   pkgcatalog.SystemRelAttr_Kind,
-		Value: string(schema.Relkind),
-	})
-	if schema.Createsql != "" {
-		pro.Properties = append(pro.Properties, engine.Property{
-			Key:   pkgcatalog.SystemRelAttr_CreateSQL,
-			Value: schema.Createsql,
-		})
-	}
-	defs = append(defs, pro)
-
-	return
-}
-
-func AttrFromColDef(col *catalog.ColDef) (attrs *engine.Attribute, err error) {
-	var defaultVal *plan.Default
-	if len(col.Default) > 0 {
-		defaultVal = &plan.Default{}
-		if err := types.Decode(col.Default, defaultVal); err != nil {
-			return nil, err
-		}
-	}
-
-	var onUpdate *plan.OnUpdate
-	if len(col.OnUpdate) > 0 {
-		onUpdate = new(plan.OnUpdate)
-		if err := types.Decode(col.OnUpdate, onUpdate); err != nil {
-			return nil, err
-		}
-	}
-
-	attr := &engine.Attribute{
-		Name:          col.Name,
-		Type:          col.Type,
-		Primary:       col.IsPrimary(),
-		IsHidden:      col.IsHidden(),
-		IsRowId:       col.IsPhyAddr(),
-		Comment:       col.Comment,
-		Default:       defaultVal,
-		OnUpdate:      onUpdate,
-		AutoIncrement: col.IsAutoIncrement(),
-		ClusterBy:     col.IsClusterBy(),
-	}
-	return attr, nil
-}
 
 type mItem struct {
 	objcnt   int
@@ -291,8 +135,8 @@ func (h *Handle) prefetchMetadata(_ context.Context, req *db.WriteReq) (int, err
 	return objCnt, nil
 }
 
-// TryPrefechTxn only prefecth data written by CN, do not change the state machine of TxnEngine.
-func (h *Handle) TryPrefechTxn(ctx context.Context, meta txn.TxnMeta) error {
+// TryPrefetchTxn only prefetch data written by CN, do not change the state machine of TxnEngine.
+func (h *Handle) TryPrefetchTxn(ctx context.Context, meta txn.TxnMeta) error {
 	txnCtx, _ := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
 
 	metaLocCnt := 0

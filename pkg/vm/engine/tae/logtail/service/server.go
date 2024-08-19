@@ -423,6 +423,7 @@ func (s *LogtailServer) pullLogtailsPhase1(ctx context.Context, sub subscription
 	if err != nil {
 		s.logger.Error("failed to get logtail of phase1 of subscription",
 			zap.String("table", string(sub.tableID)),
+			zap.Error(err),
 		)
 		sub.session.Unregister(sub.tableID)
 		return

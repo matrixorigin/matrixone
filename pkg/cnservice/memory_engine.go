@@ -93,6 +93,7 @@ func (s *service) initMemoryEngineNonDist(
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.ClusterService, cluster)
 
 	storage, err := memorystorage.NewMemoryStorage(
+		s.cfg.UUID,
 		mp,
 		ck,
 		memoryengine.RandomIDGenerator,

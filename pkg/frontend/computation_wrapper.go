@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -146,28 +145,10 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 	}
 	columns := make([]interface{}, len(cols))
 	for i, col := range cols {
-		c := new(MysqlColumn)
-		c.SetName(col.Name)
-		c.SetOrgName(col.Name)
-		c.SetTable(col.TblName)
-		c.SetOrgTable(col.TblName)
-		c.SetAutoIncr(col.Typ.AutoIncr)
-		c.SetSchema(col.DbName)
-		err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
+		c, err := colDef2MysqlColumn(ctx, col)
 		if err != nil {
 			return nil, err
 		}
-		setColFlag(c)
-		setColLength(c, col.Typ.Width)
-		setCharacter(c)
-
-		// For binary/varbinary with mysql_type_varchar.Change the charset.
-		if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
-			c.SetCharset(0x3f)
-		}
-
-		c.SetDecimal(col.Typ.Scale)
-		convertMysqlTextTypeToBlobType(c)
 		columns[i] = c
 	}
 	return columns, err
@@ -175,6 +156,15 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 
 func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
 	return uint16(cwft.ses.GetTxnHandler().GetServerStatus())
+}
+
+func checkResultQueryPrivilege(proc *process.Process, p *plan.Plan, reqCtx context.Context, sid string, ses *Session) error {
+	var ids []string
+	var err error
+	if ids, err = isResultQuery(proc, p); err != nil || ids == nil {
+		return err
+	}
+	return checkPrivilege(sid, ids, reqCtx, ses)
 }
 
 func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) error) (interface{}, error) {
@@ -208,10 +198,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 	}
 	if !cwft.ses.IsBackgroundSession() {
 		cwft.ses.SetPlan(cwft.plan)
-		if ids := isResultQuery(cwft.plan); ids != nil {
-			if err = checkPrivilege(cwft.ses.GetService(), ids, execCtx.reqCtx, cwft.ses.(*Session)); err != nil {
-				return nil, err
-			}
+		if err := checkResultQueryPrivilege(cwft.proc, cwft.plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session)); err != nil {
+			return nil, err
 		}
 	}
 
@@ -219,6 +207,9 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 		executePlan := cwft.plan.GetDcl().GetExecute()
 		retComp, plan, stmt, sql, err := replacePlan(execCtx.reqCtx, cwft.ses.(*Session), cwft, executePlan)
 		if err != nil {
+			return nil, err
+		}
+		if err := checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session)); err != nil {
 			return nil, err
 		}
 		originSQL = sql
@@ -246,7 +237,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 			cwft.compile.SetOriginSQL(originSQL)
 		} else {
 			// retComp
-			cwft.proc.Ctx = execCtx.reqCtx
+			cwft.proc.ReplaceTopCtx(execCtx.reqCtx)
 			retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql())
 			cwft.compile = retComp
 		}
@@ -271,9 +262,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 func updateTempStorageInCtx(execCtx *ExecCtx, proc *process.Process, tempStorage *memorystorage.Storage) {
 	if execCtx != nil && execCtx.reqCtx != nil {
 		execCtx.reqCtx = attachValue(execCtx.reqCtx, defines.TemporaryTN{}, tempStorage)
-	}
-	if proc != nil && proc.Ctx != nil {
-		proc.Ctx = attachValue(proc.Ctx, defines.TemporaryTN{}, tempStorage)
+		proc.ReplaceTopCtx(execCtx.reqCtx)
 	}
 }
 
@@ -332,7 +321,7 @@ func replacePlan(reqCtx context.Context, ses *Session, cwft *TxnComputationWrapp
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	for _, obj := range preparePlan.GetSchemas() {
-		newObj, newTableDef := ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
+		newObj, newTableDef := ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName, nil)
 		if newObj == nil {
 			return nil, nil, nil, originSQL, moerr.NewInternalError(reqCtx, "table '%s' in prepare statement '%s' does not exist anymore", obj.ObjName, stmtName)
 		}
@@ -400,7 +389,7 @@ func createCompile(
 	if len(getGlobalPu().ClusterNodes) > 0 {
 		addr = getGlobalPu().ClusterNodes[0].Addr
 	}
-	proc.Ctx = execCtx.reqCtx
+	proc.ReplaceTopCtx(execCtx.reqCtx)
 	proc.Base.FileService = getGlobalPu().FileService
 
 	var tenant string
@@ -433,8 +422,8 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
-	retCompile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
-		plan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
+	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
+		plan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), stmt)
 		if err != nil {
 			return nil, err
 		}

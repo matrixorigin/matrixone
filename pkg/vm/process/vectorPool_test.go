@@ -15,11 +15,12 @@
 package process
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestWhatVectorCouldBeAcceptedForPool(t *testing.T) {
@@ -69,9 +70,9 @@ func TestVectorPool(t *testing.T) {
 		_ = v2.PreExtend(10, mp)
 
 		v3 := vector.NewVec(types.T_varchar.ToType())
-		_ = v3.PreExtendArea(10, mp)
+		_ = v3.PreExtendWithArea(10, 100, mp)
 		v4 := vector.NewVec(types.T_varchar.ToType())
-		_ = v4.PreExtendArea(10, mp)
+		_ = v4.PreExtendWithArea(10, 100, mp)
 
 		// can only put 1 without-area vector.
 		vp.putVectorIntoPool(v1)

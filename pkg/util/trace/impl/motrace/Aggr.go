@@ -16,35 +16,34 @@ package motrace
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
-
-type Item interface {
-	Key(duration time.Duration) interface{}
-}
 
 type Aggregator struct {
 	ctx         context.Context
-	Grouped     map[interface{}]Item
+	mux         sync.Mutex
+	Grouped     map[table.WindowKey]table.Item
 	WindowSize  time.Duration
-	NewItemFunc func(i Item, ctx context.Context) Item
-	UpdateFunc  func(ctx context.Context, existing, new Item)
-	FilterFunc  func(i Item) bool
+	NewItemFunc func(i table.Item, ctx context.Context) table.Item
+	UpdateFunc  func(ctx context.Context, existing, new table.Item)
+	FilterFunc  func(i table.Item) bool
 }
 
-type key int
+type windowKey int
 
 const (
-	DurationKey key = iota
+	DurationKey windowKey = iota
 )
 
-func NewAggregator(ctx context.Context, windowSize time.Duration, newItemFunc func(i Item, ctx context.Context) Item, updateFunc func(ctx context.Context, existing, new Item), filterFunc func(i Item) bool) *Aggregator {
+func NewAggregator(ctx context.Context, windowSize time.Duration, newItemFunc func(i table.Item, ctx context.Context) table.Item, updateFunc func(ctx context.Context, existing, new table.Item), filterFunc func(i table.Item) bool) *Aggregator {
 	ctx = context.WithValue(ctx, DurationKey, windowSize)
 	return &Aggregator{
 		ctx:         ctx,
-		Grouped:     make(map[interface{}]Item),
+		Grouped:     make(map[table.WindowKey]table.Item),
 		WindowSize:  windowSize,
 		NewItemFunc: newItemFunc,
 		UpdateFunc:  updateFunc,
@@ -62,31 +61,55 @@ func (a *Aggregator) Close() {
 		}
 	}
 	// clean up the Grouped map
-	a.Grouped = make(map[interface{}]Item)
+	a.Grouped = make(map[table.WindowKey]table.Item)
 	// release resources related to the context if necessary
 	a.ctx = nil
 }
 
-func (a *Aggregator) AddItem(i Item) (Item, error) {
+func (a *Aggregator) AddItem(i table.Item) (table.Item, error) {
+	a.mux.Lock()
+	defer a.mux.Unlock()
 	if !a.FilterFunc(i) {
 		return i, ErrFilteredOut
 	}
 
-	group, exists := a.Grouped[i.Key(a.WindowSize)]
+	groupedItem, exists := a.Grouped[i.Key(a.WindowSize)]
 	if !exists {
-		orignal_key := i.Key(a.WindowSize)
-		group = a.NewItemFunc(i, a.ctx)
-		a.Grouped[orignal_key] = group
+		groupKey := i.Key(a.WindowSize)
+		groupedItem = a.NewItemFunc(i, a.ctx)
+		a.Grouped[groupKey] = groupedItem
 	} else {
-		a.UpdateFunc(a.ctx, group, i)
+		a.UpdateFunc(a.ctx, groupedItem, i)
 	}
 	return nil, nil
 }
 
-func (a *Aggregator) GetResults() []Item {
-	results := make([]Item, 0, len(a.Grouped))
+// GetResults return the aggr-ed result in Aggregator, but still keep in Aggregator
+// Needs co-operate with Close
+func (a *Aggregator) GetResults() []table.Item {
+	a.mux.Lock()
+	defer a.mux.Unlock()
+	results := make([]table.Item, 0, len(a.Grouped))
 	for _, group := range a.Grouped {
 		results = append(results, group)
+	}
+	return results
+}
+
+func (a *Aggregator) GetWindow() time.Duration { return a.WindowSize }
+
+// PopResultsBeforeWindow implements table.Aggregator.
+// return grouped items in Aggregator, and remove them from the Aggregator.
+// Those items NEED to be free by caller.
+func (a *Aggregator) PopResultsBeforeWindow(end time.Time) []table.Item {
+	a.mux.Lock()
+	defer a.mux.Unlock()
+	results := make([]table.Item, 0, len(a.Grouped))
+	for key, group := range a.Grouped {
+		if key.Before(end) {
+			results = append(results, group)
+			delete(a.Grouped, key) // fix mem-leak issue
+		}
 	}
 	return results
 }

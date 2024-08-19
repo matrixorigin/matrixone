@@ -17,7 +17,6 @@ package onduplicatekey
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -33,8 +32,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state            int
 	checkConflictBat *batch.Batch // batch to check conflict
 	rbat             *batch.Batch
@@ -47,6 +44,8 @@ type OnDuplicatekey struct {
 	// Source       engine.Relation
 	// UniqueSource []engine.Relation
 	// Ref          *plan.ObjectRef
+
+	// letter case: origin
 	Attrs              []string
 	InsertColCount     int32
 	UniqueColCheckExpr []*plan.Expr
@@ -99,7 +98,6 @@ func (onDuplicatekey *OnDuplicatekey) Reset(proc *process.Process, pipelineFaile
 
 func (onDuplicatekey *OnDuplicatekey) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if onDuplicatekey.ctr != nil {
-		onDuplicatekey.ctr.FreeMergeTypeOperator(pipelineFailed)
 		if onDuplicatekey.ctr.rbat != nil {
 			onDuplicatekey.ctr.rbat.Clean(proc.GetMPool())
 		}

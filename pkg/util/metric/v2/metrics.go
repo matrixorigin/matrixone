@@ -79,6 +79,8 @@ func initTaskMetrics() {
 	registry.MustRegister(transferPageHitHistogram)
 	registry.MustRegister(TransferPageRowHistogram)
 	registry.MustRegister(TaskMergeTransferPageLengthGauge)
+	registry.MustRegister(transferDurationHistogram)
+	registry.MustRegister(transferShortDurationHistogram)
 
 	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
 }
@@ -146,6 +148,9 @@ func initTxnMetrics() {
 
 	registry.MustRegister(txnRangesSelectivityHistogram)
 	registry.MustRegister(txnTNDeduplicateDurationHistogram)
+
+	registry.MustRegister(txnTransferDurationHistogram)
+	registry.MustRegister(TransferTombstonesCountHistogram)
 }
 
 func initRPCMetrics() {
@@ -168,15 +173,6 @@ func initRPCMetrics() {
 
 }
 
-func initTraceMetrics() {
-	registry.MustRegister(traceCollectorDurationHistogram)
-	registry.MustRegister(traceCollectorDiscardCounter)
-	registry.MustRegister(traceNegativeCUCounter)
-	registry.MustRegister(traceETLMergeCounter)
-	registry.MustRegister(traceMOLoggerExportDataHistogram)
-	registry.MustRegister(traceCheckStorageUsageCounter)
-}
-
 func initProxyMetrics() {
 	registry.MustRegister(proxyConnectCounter)
 	registry.MustRegister(proxyDisconnectCounter)
@@ -194,6 +190,8 @@ func initFrontendMetrics() {
 	registry.MustRegister(requestCounter)
 	registry.MustRegister(resolveDurationHistogram)
 	registry.MustRegister(createAccountDurationHistogram)
+	registry.MustRegister(pubSubDurationHistogram)
+	registry.MustRegister(sqlLengthHistogram)
 }
 
 func initPipelineMetrics() {
@@ -203,4 +201,8 @@ func initPipelineMetrics() {
 
 func getDurationBuckets() []float64 {
 	return append(prometheus.ExponentialBuckets(0.00001, 2, 30), math.MaxFloat64)
+}
+
+func getShortDurationBuckets() []float64 {
+	return append(prometheus.ExponentialBuckets(0.0000001, 2, 30), math.MaxFloat64)
 }

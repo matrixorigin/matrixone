@@ -19,11 +19,17 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -49,10 +55,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -788,7 +790,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 		}
 		ses := &Session{planCache: newPlanCache(1),
 			feSessionImpl: feSessionImpl{
-				gSysVars: &SystemVariables{sysVars: sysVars},
+				gSysVars: &SystemVariables{mp: sysVars},
 			},
 		}
 		ctrl := gomock.NewController(t)
@@ -1465,5 +1467,72 @@ func Test_ExecRequest(t *testing.T) {
 		}
 		_, err = ExecRequest(ses, ec, req)
 		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+// Benchmark_RecordStatement_IsTrue
+// goos: darwin
+// goarch: arm64
+// pkg: github.com/matrixorigin/matrixone/pkg/frontend
+// Benchmark_RecordStatement_IsTrue/SystemVariableBoolType_check_intVal
+// Benchmark_RecordStatement_IsTrue/SystemVariableBoolType_check_intVal-10         	569427550	         2.130 ns/op
+// Benchmark_RecordStatement_IsTrue/SystemVariableBoolType_check_boolVal
+// Benchmark_RecordStatement_IsTrue/SystemVariableBoolType_check_boolVal-10        	579195536	         2.064 ns/op
+// Benchmark_RecordStatement_IsTrue/atomic.Bool
+// Benchmark_RecordStatement_IsTrue/atomic.Bool-10                                 	1000000000	         0.5303 ns/op
+// Benchmark_RecordStatement_IsTrue/raw_bool
+// Benchmark_RecordStatement_IsTrue/raw_bool-10                                    	1000000000	         0.3175 ns/op
+// Benchmark_RecordStatement_IsTrue/check_time
+// Benchmark_RecordStatement_IsTrue/check_time-10                                  	571145943	         2.049 ns/op
+func Benchmark_RecordStatement_IsTrue(b *testing.B) {
+
+	var intVal int64 = 0
+	var boolVal = false
+	var boolSync atomic.Bool
+	var cnt = 0
+	var boolVar = InitSystemVariableBoolType("_")
+
+	b.Run("SystemVariableBoolType check intVal", func(b *testing.B) {
+		cnt := 0
+		for i := 0; i < b.N; i++ {
+			if boolVar.IsTrue(intVal) {
+				cnt++
+			}
+		}
+	})
+
+	b.Run("SystemVariableBoolType check boolVal", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			if boolVar.IsTrue(boolVal) {
+				cnt++
+			}
+		}
+	})
+
+	b.Run("atomic.Bool", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			if boolSync.Load() {
+				cnt++
+			}
+		}
+	})
+
+	b.Run("raw bool", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			if boolVal {
+				cnt++
+			}
+		}
+	})
+
+	endTime := time.Now().Add(time.Minute)
+	now := time.Now()
+	b.Run("check time", func(b *testing.B) {
+		cnt := 0
+		for i := 0; i < b.N; i++ {
+			if now.After(endTime) {
+				cnt++
+			}
+		}
 	})
 }

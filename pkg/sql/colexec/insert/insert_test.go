@@ -108,7 +108,7 @@ func TestInsertOperator(t *testing.T) {
 
 	argument1.Free(proc, false, nil)
 	argument1.GetChildren(0).Free(proc, false, nil)
-	proc.FreeVectors()
+	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 

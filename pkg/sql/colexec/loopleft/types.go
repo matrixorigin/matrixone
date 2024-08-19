@@ -35,8 +35,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state    int
 	probeIdx int
 	bat      *batch.Batch
@@ -48,11 +46,14 @@ type container struct {
 }
 
 type LoopLeft struct {
-	ctr    *container
-	Typs   []types.Type
-	Cond   *plan.Expr
-	Result []colexec.ResultPos
+	ctr        *container
+	Typs       []types.Type
+	Cond       *plan.Expr
+	Result     []colexec.ResultPos
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopLeft *LoopLeft) GetOperatorBase() *vm.OperatorBase {
@@ -93,8 +94,13 @@ func (loopLeft *LoopLeft) Free(proc *process.Process, pipelineFailed bool, err e
 	if ctr := loopLeft.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 		loopLeft.ctr = nil
+	}
+
+	if loopLeft.ProjectList != nil {
+		anal := proc.GetAnalyze(loopLeft.GetIdx(), loopLeft.GetParallelIdx(), loopLeft.GetParallelMajor())
+		anal.Alloc(loopLeft.ProjectAllocSize)
+		loopLeft.FreeProjection(proc)
 	}
 }
 

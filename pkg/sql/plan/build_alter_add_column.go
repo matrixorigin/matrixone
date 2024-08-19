@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -85,6 +84,7 @@ func handleAddColumnPosition(ctx context.Context, tableDef *TableDef, newCol *Co
 
 func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable, specNewColumn *tree.ColumnTableDef, colType plan.Type) (*ColDef, error) {
 	newColName := specNewColumn.Name.ColName()
+	newColNameOrigin := specNewColumn.Name.ColNameOrigin()
 	// Check if the new column name is valid and conflicts with internal hidden columns
 	err := CheckColumnNameValid(ctx.GetContext(), newColName)
 	if err != nil {
@@ -98,9 +98,10 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		//Default:  originalCol.Default,
 		//Comment:  originalCol.Comment,
 		//OnUpdate: originalCol.OnUpdate,
-		Name: newColName,
-		Typ:  colType,
-		Alg:  plan.CompressType_Lz4,
+		Name:       newColName,
+		OriginName: newColNameOrigin,
+		Typ:        colType,
+		Alg:        plan.CompressType_Lz4,
 	}
 
 	hasDefaultValue := false
@@ -127,7 +128,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		case *tree.AttributeComment:
 			comment := attribute.CMT.String()
 			if getNumOfCharacters(comment) > maxLengthOfColumnComment {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", specNewColumn.Name.ColNameOrigin())
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", newColNameOrigin)
 			}
 			newCol.Comment = comment
 		case *tree.AttributeAutoIncrement:
@@ -142,11 +143,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 				return nil, err
 			}
 			uniqueIndex := &tree.UniqueIndex{
-				KeyParts: []*tree.KeyPart{
-					{
-						ColName: specNewColumn.Name,
-					},
-				},
+				KeyParts: []*tree.KeyPart{{ColName: specNewColumn.Name}},
 			}
 
 			constrNames := map[string]bool{}
@@ -189,7 +186,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 
 	hasDefaultValue = defaultValue.Expr != nil
 	if auto_incr && hasDefaultValue {
-		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), specNewColumn.Name.ColNameOrigin())
+		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
 	}
 	if !hasDefaultValue {
 		defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
@@ -225,6 +222,9 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 	if colType.GetId() == int32(types.T_text) {
 		return moerr.NewNotSupported(ctx, "text type in primary key")
 	}
+	if colType.GetId() == int32(types.T_datalink) {
+		return moerr.NewNotSupported(ctx, "datalink type in primary key")
+	}
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))
 	}
@@ -241,6 +241,9 @@ func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName s
 	if colType.GetId() == int32(types.T_text) {
 		return moerr.NewNotSupported(ctx, "text type in primary key")
 	}
+	if colType.GetId() == int32(types.T_datalink) {
+		return moerr.NewNotSupported(ctx, "datalink type in primary key")
+	}
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))
 	}
@@ -250,7 +253,7 @@ func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName s
 func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey *tree.UniqueIndex) (*plan.IndexDef, error) {
 	indexName := uniKey.GetIndexName()
 	if strings.EqualFold(indexName, PrimaryKeyName) {
-		return nil, moerr.NewErrWrongNameForIndex(ctx, uniKey.GetIndexName())
+		return nil, moerr.NewErrWrongNameForIndex(ctx, indexName)
 	}
 
 	indexTableName, err := util.BuildIndexTableName(ctx, true)
@@ -451,7 +454,7 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 	}
 
 	for _, referredTblId := range tbInfo.RefChildTbls {
-		_, refTableDef := ctx.ResolveById(referredTblId, Snapshot{TS: &timestamp.Timestamp{}})
+		_, refTableDef := ctx.ResolveById(referredTblId, nil)
 		if refTableDef == nil {
 			return moerr.NewInternalError(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
 		}

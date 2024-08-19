@@ -10,6 +10,7 @@ desc	mo_catalog.mo_role                    ;
 desc	mo_catalog.mo_user_grant              ;
 desc	mo_catalog.mo_role_grant              ;
 desc	mo_catalog.mo_role_privs              ;
+-- @ignore:0
 desc	mo_catalog.mo_user_defined_function   ;
 desc	mo_catalog.mo_stored_procedure        ;
 desc	mo_catalog.mo_mysql_compatibility_mode;
@@ -37,6 +38,7 @@ show columns from	mo_catalog.mo_role                    ;
 show columns from	mo_catalog.mo_user_grant              ;
 show columns from	mo_catalog.mo_role_grant              ;
 show columns from	mo_catalog.mo_role_privs              ;
+-- @ignore:0
 show columns from	mo_catalog.mo_user_defined_function   ;
 show columns from	mo_catalog.mo_stored_procedure        ;
 show columns from	mo_catalog.mo_mysql_compatibility_mode;

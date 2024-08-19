@@ -15,7 +15,6 @@
 package common
 
 import (
-	"encoding/hex"
 	"fmt"
 	"math"
 	"math/rand"
@@ -543,12 +542,6 @@ func HumanReadableBytes(bytes int) string {
 		return fmt.Sprintf("%.2fMB", float64(bytes)/1024/1024)
 	}
 	return fmt.Sprintf("%.2fGB", float64(bytes)/1024/1024/1024)
-}
-
-func ShortObjId(x types.Objectid) string {
-	var shortuuid [12]byte
-	hex.Encode(shortuuid[:], x[10:16])
-	return string(shortuuid[:])
 }
 
 func moveAvg[T Number](prev, now T, f float64) T {

@@ -21,6 +21,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -39,8 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 type backExec struct {
@@ -48,6 +48,17 @@ type backExec struct {
 }
 
 func (back *backExec) Close() {
+	tempExecCtx := ExecCtx{
+		ses:    back.backSes,
+		txnOpt: FeTxnOption{byRollback: true},
+	}
+	defer tempExecCtx.Close()
+	err := back.backSes.GetTxnHandler().Rollback(&tempExecCtx)
+	if err != nil {
+		back.backSes.Error(tempExecCtx.reqCtx,
+			"Failed to rollback txn in back session",
+			zap.Error(err))
+	}
 	back.Clear()
 	back.backSes.Close()
 	back.backSes.Clear()
@@ -55,8 +66,8 @@ func (back *backExec) Close() {
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) error {
-	back.backSes.EnterFPrint(91)
-	defer back.backSes.ExitFPrint(91)
+	back.backSes.EnterFPrint(FPBackExecExec)
+	defer back.backSes.ExitFPrint(FPBackExecExec)
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
@@ -72,7 +83,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	//logutil.Debugf("-->bh:%s", sql)
 	v, err := back.backSes.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
-		return err
+		v = int64(1)
 	}
 	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
@@ -112,12 +123,13 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 		reqCtx: ctx,
 		ses:    back.backSes,
 	}
+	defer execCtx.Close()
 	return doComQueryInBack(back.backSes, &execCtx, userInput)
 }
 
 func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uint32, toAccount uint32) error {
-	back.backSes.EnterFPrint(97)
-	defer back.backSes.ExitFPrint(97)
+	back.backSes.EnterFPrint(FPBackExecRestore)
+	defer back.backSes.ExitFPrint(FPBackExecRestore)
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
@@ -131,7 +143,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	//logutil.Debugf("-->bh:%s", sql)
 	v, err := back.backSes.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
-		return err
+		v = int64(1)
 	}
 	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
@@ -166,6 +178,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 		reqCtx: ctx,
 		ses:    back.backSes,
 	}
+	defer execCtx.Close()
 	return doComQueryInBack(back.backSes, &execCtx, userInput)
 }
 
@@ -209,14 +222,14 @@ func doComQueryInBack(
 	execCtx *ExecCtx,
 	input *UserInput,
 ) (retErr error) {
-	backSes.EnterFPrint(92)
-	defer backSes.ExitFPrint(92)
+	backSes.EnterFPrint(FPDoComQueryInBack)
+	defer backSes.ExitFPrint(FPDoComQueryInBack)
 	backSes.GetTxnCompileCtx().SetExecCtx(execCtx)
 	backSes.SetSql(input.getSql())
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
 	userNameOnly := rootName
-	proc := process.New(
+	proc := process.NewTopProcess(
 		execCtx.reqCtx,
 		backSes.pool,
 		getGlobalPu().TxnClient,
@@ -297,6 +310,7 @@ func doComQueryInBack(
 		execCtx.stmt = nil
 		execCtx.cw = nil
 		execCtx.cws = nil
+		execCtx.runner = nil
 		for i := 0; i < len(cws); i++ {
 			cws[i].Free()
 		}
@@ -334,7 +348,7 @@ func doComQueryInBack(
 				return err
 			}
 		}
-
+		execCtx.txnOpt.Close()
 		execCtx.stmt = stmt
 		execCtx.isLastStmt = i >= len(cws)-1
 		execCtx.tenant = tenant
@@ -356,8 +370,8 @@ func doComQueryInBack(
 func executeStmtInBack(backSes *backSession,
 	execCtx *ExecCtx,
 ) (err error) {
-	execCtx.ses.EnterFPrint(93)
-	defer execCtx.ses.ExitFPrint(93)
+	execCtx.ses.EnterFPrint(FPExecStmtInBack)
+	defer execCtx.ses.ExitFPrint(FPExecStmtInBack)
 	var cmpBegin time.Time
 	var ret interface{}
 
@@ -391,8 +405,8 @@ func executeStmtInBack(backSes *backSession,
 
 	cmpBegin = time.Now()
 
-	execCtx.ses.EnterFPrint(94)
-	defer execCtx.ses.ExitFPrint(94)
+	execCtx.ses.EnterFPrint(FPExecStmtInBackBeforeCompile)
+	defer execCtx.ses.ExitFPrint(FPExecStmtInBackBeforeCompile)
 
 	err = disttae.CheckTxnIsValid(execCtx.ses.GetTxnHandler().GetTxn())
 	if err != nil {
@@ -463,7 +477,7 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 		}
 		stmts = append(stmts, cmdFieldStmt)
 	} else {
-		stmts, err = parseSql(execCtx)
+		stmts, err = parseSql(execCtx, ses.GetMySQLParser())
 		if err != nil {
 			return nil, err
 		}
@@ -515,8 +529,8 @@ func executeSQLInBackgroundSession(reqCtx context.Context, upstream *Session, sq
 // To be clear, only for the select statement derived from the set_var statement
 // in an independent transaction
 func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCtx, stmt tree.Statement) error {
-	ses.EnterFPrint(111)
-	defer ses.ExitFPrint(111)
+	ses.EnterFPrint(FPExecStmtInSameSession)
+	defer ses.ExitFPrint(FPExecStmtInSameSession)
 	switch stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
 	default:
@@ -550,7 +564,7 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 		ses.ReplaceDerivedStmt(prevDerivedStmt)
 		//@todo we need to improve: make one session, one proc, one txnOperator
 		p := ses.GetTxnCompileCtx().GetProcess()
-		p.FreeVectors()
+		p.Free()
 		execCtx.proc = proc
 		ses.GetTxnHandler().SetOptionBits(prevOptionBits)
 		ses.GetTxnHandler().SetServerStatus(prevServerStatus)
@@ -663,8 +677,6 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 		},
 	}
 	backSes.service = ses.GetService()
-	backSes.gSysVars = ses.GetGlobalSysVars()
-	backSes.sesSysVars = ses.GetSessionSysVars()
 	backSes.uuid, _ = uuid.NewV7()
 	return backSes
 }
@@ -838,12 +850,12 @@ func (backSes *backSession) GetDebugString() string {
 	if backSes.upstream != nil {
 		return backSes.upstream.GetDebugString()
 	}
-	return ""
+	return "backSes without upstream"
 }
 
 func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
-	backSes.EnterFPrint(116)
-	defer backSes.ExitFPrint(116)
+	backSes.EnterFPrint(FPGetShareTxnBackgroundExecInBackSession)
+	defer backSes.ExitFPrint(FPGetShareTxnBackgroundExecInBackSession)
 	var txnOp TxnOperator
 	if backSes.GetTxnHandler() != nil {
 		txnOp = backSes.GetTxnHandler().GetTxn()
@@ -862,17 +874,19 @@ func (backSes *backSession) GetUserDefinedVar(name string) (*UserDefinedVar, err
 	return nil, moerr.NewInternalError(context.Background(), "do not support user defined var in background exec")
 }
 
-func (backSes *backSession) GetSessionVar(ctx context.Context, name string) (interface{}, error) {
+func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 	switch strings.ToLower(name) {
 	case "autocommit":
 		return true, nil
+	case "lower_case_table_names":
+		return int64(1), nil
 	}
 	return nil, nil
 }
 
 func (backSes *backSession) GetBackgroundExec(ctx context.Context) BackgroundExec {
-	backSes.EnterFPrint(98)
-	defer backSes.ExitFPrint(98)
+	backSes.EnterFPrint(FPGetBackgroundExecInBackSession)
+	defer backSes.ExitFPrint(FPGetBackgroundExecInBackSession)
 	return NewBackgroundExec(ctx, backSes)
 }
 
@@ -978,11 +992,11 @@ func (sh *SqlHelper) GetCompilerContext() any {
 }
 
 func (sh *SqlHelper) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
-	return sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
+	return sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName, nil)
 }
 
 // Made for sequence func. nextval, setval.
-func (sh *SqlHelper) ExecSql(sql string) (ret []interface{}, err error) {
+func (sh *SqlHelper) ExecSql(sql string) (ret [][]interface{}, err error) {
 	var erArray []ExecResult
 
 	ctx := sh.ses.txnCompileCtx.execCtx.reqCtx
@@ -1010,5 +1024,5 @@ func (sh *SqlHelper) ExecSql(sql string) (ret []interface{}, err error) {
 		return nil, nil
 	}
 
-	return erArray[0].(*MysqlResultSet).Data[0], nil
+	return erArray[0].(*MysqlResultSet).Data, nil
 }

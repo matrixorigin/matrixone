@@ -149,7 +149,7 @@ func TestOrder(t *testing.T) {
 				}
 			}
 		}
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		tc.arg.Free(tc.proc, false, nil)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}

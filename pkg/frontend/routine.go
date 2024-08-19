@@ -236,7 +236,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	execCtx := ExecCtx{
 		ses: ses,
 	}
-
+	defer execCtx.Close()
 	v2.StartHandleRequestCounter.Inc()
 	defer func() {
 		v2.EndHandleRequestCounter.Inc()
@@ -247,6 +247,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	routineCtx, span = trace.Start(rt.getCancelRoutineCtx(), "Routine.handleRequest",
 		trace.WithHungThreshold(30*time.Minute),
 		trace.WithProfileGoroutine(),
+		trace.WithConstBackOff(5*time.Minute),
 		trace.WithProfileSystemStatus(func() ([]byte, error) {
 			ss, ok := runtime.ServiceRuntime(ses.GetService()).GetGlobalVariables(runtime.StatusServer)
 			if !ok {
@@ -265,10 +266,9 @@ func (rt *Routine) handleRequest(req *Request) error {
 	//all offspring related to the request inherit the txnCtx
 	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration)
 	rt.setCancelRequestFunc(cancelRequestFunc)
-	ses.UpdateDebugString()
 	ses.ResetFPrints()
-	ses.EnterFPrint(0)
-	defer ses.ExitFPrint(0)
+	ses.EnterFPrint(FPHandleRequest)
+	defer ses.ExitFPrint(FPHandleRequest)
 	defer ses.ResetFPrints()
 
 	if rt.needPrintSessionInfo() {
@@ -339,6 +339,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 			ses:    ses,
 			txnOpt: FeTxnOption{byRollback: true},
 		}
+		defer tempExecCtx.Close()
 		err = ses.GetTxnHandler().Rollback(&tempExecCtx)
 		if err != nil {
 			ses.Error(tenantCtx,
@@ -418,12 +419,13 @@ func (rt *Routine) cleanup() {
 		ses := rt.getSession()
 		//step A: rollback the txn
 		if ses != nil {
-			ses.EnterFPrint(110)
-			defer ses.ExitFPrint(110)
+			ses.EnterFPrint(FPCleanup)
+			defer ses.ExitFPrint(FPCleanup)
 			tempExecCtx := ExecCtx{
 				ses:    ses,
 				txnOpt: FeTxnOption{byRollback: true},
 			}
+			defer tempExecCtx.Close()
 			err := ses.GetTxnHandler().Rollback(&tempExecCtx)
 			if err != nil {
 				ses.Error(tempExecCtx.reqCtx,
@@ -477,6 +479,37 @@ func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) er
 			ParamTypes: st.ParamTypes,
 		})
 	}
+	return nil
+}
+
+func (rt *Routine) resetSession(baseServiceID string, resp *query.ResetSessionResponse) error {
+	// retrieve the old session.
+	oldSession := rt.getSession()
+
+	// create a new session with a new context.
+	cancelCtx := rt.getCancelRoutineCtx()
+	cancelCtx = context.WithValue(cancelCtx, defines.NodeIDKey{}, baseServiceID)
+
+	// before create new session, we should reset the database on the protocol.
+	rt.getProtocol().SetStr(DBNAME, "")
+
+	newSession := NewSession(cancelCtx, baseServiceID, rt.getProtocol(), nil)
+
+	// reset the old and new session.
+	if err := newSession.reset(oldSession); err != nil {
+		return err
+	}
+
+	// some cleanups in the routine.
+	rt.killQuery(false, "")
+
+	// reset the new session in other instances.
+	rt.protocol.Reset(newSession)
+	rt.setSession(newSession)
+
+	// update the password filed in response.
+	resp.AuthString = []byte(rt.protocol.GetStr(AuthString))
+
 	return nil
 }
 

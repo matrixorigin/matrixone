@@ -781,3 +781,11 @@ drop table su_07;
 select * from su_07;
 -- @session}
 commit;
+
+drop table if exists t1;
+create table t1 (a int primary key, b int);
+insert into t1 values (1,2),(2,2);
+prepare s1 from select a from t1 where b = ? order by b limit 1 for update;
+set @b=2;
+execute s1 using @b;
+deallocate prepare s1;

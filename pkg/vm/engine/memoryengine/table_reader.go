@@ -42,9 +42,18 @@ type IterInfo struct {
 	IterID ID
 }
 
-func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, bytes []byte, _ bool, txnOffset int) (readers []engine.Reader, err error) {
+func (t *Table) BuildReaders(
+	ctx context.Context,
+	_ any,
+	expr *plan.Expr,
+	relData engine.RelData,
+	parallel int,
+	_ int,
+	_ bool,
+	_ engine.TombstoneApplyPolicy) (readers []engine.Reader, err error) {
+
 	readers = make([]engine.Reader, parallel)
-	shardIDs := ShardIdSlice(bytes)
+	var shardIDs = relData.GetShardIDList()
 
 	var shards []Shard
 	if len(shardIDs) == 0 {
@@ -72,8 +81,8 @@ func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, by
 	} else {
 		// some
 		idSet := make(map[uint64]bool)
-		for i := 0; i < shardIDs.Len(); i++ {
-			idSet[shardIDs.Get(i)] = true
+		for i := 0; i < len(shardIDs); i++ {
+			idSet[shardIDs[i]] = true
 		}
 		for _, store := range getTNServices(t.engine.cluster) {
 			for _, shard := range store.Shards {
@@ -211,8 +220,8 @@ func (t *Table) GetEngineType() engine.EngineType {
 	return engine.Memory
 }
 
-func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.Ranges, error) {
-	// return encoded shard ids
+func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData, error) {
+	rd := &MemRelationData{}
 	nodes := getTNServices(t.engine.cluster)
 	shards := make(ShardIdSlice, 0, len(nodes)*8)
 	for _, node := range nodes {
@@ -222,12 +231,109 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.Ranges,
 			shards = append(shards, id...)
 		}
 	}
-	return &shards, nil
+	rd.Shards = shards
+	return rd, nil
+}
+
+func (t *Table) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
+	panic("implement me")
+}
+
+// for memory engine.
+type MemRelationData struct {
+	Shards ShardIdSlice
+}
+
+func (rd *MemRelationData) String() string {
+	return "RelData[M]"
+}
+
+func (rd *MemRelationData) GetBlockInfoSlice() objectio.BlockInfoSlice {
+	panic("not supported")
+}
+
+func (rd *MemRelationData) GetBlockInfo(i int) objectio.BlockInfo {
+	panic("not supported")
+}
+
+func (rd *MemRelationData) SetBlockInfo(i int, blk objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (rd *MemRelationData) AppendBlockInfo(blk objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (rd *MemRelationData) GetShardIDList() []uint64 {
+	ids := make([]uint64, rd.Shards.Len())
+	idsLen := rd.Shards.Len()
+
+	for idx := range idsLen {
+		ids[idx] = rd.Shards.Get(idx)
+	}
+
+	return ids
+}
+
+func (rd *MemRelationData) GetShardID(i int) uint64 {
+	return rd.Shards.Get(i)
+}
+
+func (rd *MemRelationData) SetShardID(i int, id uint64) {
+	rd.Shards.Set(i, id)
+}
+
+func (rd *MemRelationData) AppendShardID(id uint64) {
+	bb := make([]byte, 8)
+	binary.LittleEndian.PutUint64(bb, id)
+	rd.Shards.Append(bb)
+}
+
+func (rd *MemRelationData) MarshalBinary() ([]byte, error) {
+	panic("Not Support")
+}
+
+func (rd *MemRelationData) GetType() engine.RelDataType {
+	return engine.RelDataShardIDList
+}
+
+func (rd MemRelationData) UnmarshalBinary(buf []byte) error {
+	panic("Not Support")
+}
+
+func (rd *MemRelationData) AttachTombstones(tombstones engine.Tombstoner) error {
+	panic("Not Support")
+}
+
+func (rd *MemRelationData) GetTombstones() engine.Tombstoner {
+	panic("Not Support")
+}
+
+func (rd *MemRelationData) DataSlice(i, j int) engine.RelData {
+	panic("Not Support")
+}
+
+// GroupByPartitionNum TODO::remove it after refactor of partition table.
+func (rd *MemRelationData) GroupByPartitionNum() map[int16]engine.RelData {
+	panic("Not Support")
+}
+
+func (rd *MemRelationData) BuildEmptyRelData() engine.RelData {
+	return &MemRelationData{}
+}
+
+func (rd *MemRelationData) DataCnt() int {
+	return rd.Shards.Len()
 }
 
 type ShardIdSlice []byte
 
 var _ engine.Ranges = (*ShardIdSlice)(nil)
+
+func (s *ShardIdSlice) Set(i int, id uint64) {
+	buf := (*s)[i*8:]
+	binary.LittleEndian.PutUint64(buf, id)
+}
 
 func (s *ShardIdSlice) GetBytes(i int) []byte {
 	return (*s)[i*8 : (i+1)*8]

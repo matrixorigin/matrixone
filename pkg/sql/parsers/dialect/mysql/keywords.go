@@ -214,6 +214,7 @@ func init() {
 		"hash":                       HASH,
 		"high_priority":              HIGH_PRIORITY,
 		"hour":                       HOUR,
+		"id":                         ID,
 		"identified":                 IDENTIFIED,
 		"if":                         IF,
 		"ignore":                     IGNORE,
@@ -450,6 +451,7 @@ func init() {
 		"terminated":                 TERMINATED,
 		"task":                       TASK,
 		"text":                       TEXT,
+		"datalink":                   DATALINK,
 		"temporary":                  TEMPORARY,
 		"than":                       THAN,
 		"then":                       THEN,
@@ -631,5 +633,6 @@ func init() {
 		"mo_ts":                      MO_TS,
 		"restore":                    RESTORE,
 		"pitr":                       PITR,
+		"cdc":                        CDC,
 	}
 }

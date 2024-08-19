@@ -101,7 +101,7 @@ func TestCollectOffsetsByPrefixEqFactory(t *testing.T) {
 	off3 := fn3(v1)
 	off4 := fn4(v1)
 	require.Equal(t, 0, len(off1))
-	require.Equal(t, []int32{2, 3, 4}, off2)
+	require.Equal(t, []int64{2, 3, 4}, off2)
 	require.Equal(t, 0, len(off3))
 	require.Equal(t, 0, len(off4))
 }
@@ -128,6 +128,6 @@ func TestCollectOffsetsByPrefixBetweenFactory(t *testing.T) {
 	off1 := fn1(v1)
 	off2 := fn2(v1)
 
-	require.Equal(t, []int32{0, 1, 2, 3, 4}, off1)
-	require.Equal(t, []int32{2, 3, 4}, off2)
+	require.Equal(t, []int64{0, 1, 2, 3, 4}, off1)
+	require.Equal(t, []int64{2, 3, 4}, off2)
 }

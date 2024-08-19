@@ -395,9 +395,9 @@ func (c *Config) Validate() error {
 
 	// pessimistic mode implies primary key check
 	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic || c.PrimaryKeyCheck {
-		config.CNPrimaryCheck = true
+		config.CNPrimaryCheck.Store(true)
 	} else {
-		config.CNPrimaryCheck = false
+		config.CNPrimaryCheck.Store(false)
 	}
 
 	if c.LargestEntryLimit > 0 {
@@ -406,12 +406,12 @@ func (c *Config) Validate() error {
 
 	if c.MaxPreparedStmtCount > 0 {
 		if c.MaxPreparedStmtCount > maxForMaxPreparedStmtCount {
-			frontend.MaxPrepareNumberInOneSession = maxForMaxPreparedStmtCount
+			frontend.MaxPrepareNumberInOneSession.Store(uint32(maxForMaxPreparedStmtCount))
 		} else {
-			frontend.MaxPrepareNumberInOneSession = c.MaxPreparedStmtCount
+			frontend.MaxPrepareNumberInOneSession.Store(uint32(c.MaxPreparedStmtCount))
 		}
 	} else {
-		frontend.MaxPrepareNumberInOneSession = 100000
+		frontend.MaxPrepareNumberInOneSession.Store(100000)
 	}
 	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
 

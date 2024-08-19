@@ -6,6 +6,7 @@ create account if not exists `bvt_query_type_part1` ADMIN_NAME 'admin' IDENTIFIE
 -- @session:id=1&user=bvt_query_type_part1:admin:accountadmin&password=123456
 
 -- CASE: part 1
+set session disable_agg_statement = on;
 create database statement_query_type;
 
 -- test TCL sql

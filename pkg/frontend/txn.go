@@ -20,6 +20,8 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"go.uber.org/zap"
 )
 
 var (
@@ -43,8 +44,8 @@ var (
 
 // get errors during the transaction. rollback the transaction
 func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
-	execCtx.ses.EnterFPrint(88)
-	defer execCtx.ses.ExitFPrint(88)
+	execCtx.ses.EnterFPrint(FPRollbackTxn)
+	defer execCtx.ses.ExitFPrint(FPRollbackTxn)
 	incStatementErrorsCounter(execCtx.tenant, execCtx.stmt)
 	/*
 		Cases    | set Autocommit = 1/0 | BEGIN statement |
@@ -73,8 +74,8 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 // execution succeeds during the transaction. commit the transaction
 func commitTxnFunc(ses FeSession,
 	execCtx *ExecCtx) (retErr error) {
-	execCtx.ses.EnterFPrint(87)
-	defer execCtx.ses.ExitFPrint(87)
+	execCtx.ses.EnterFPrint(FPCommitTxn)
+	defer execCtx.ses.ExitFPrint(FPCommitTxn)
 	// Call a defer function -- if TxnCommitSingleStatement paniced, we
 	// want to catch it and convert it to an error.
 	defer func() {
@@ -93,8 +94,8 @@ func commitTxnFunc(ses FeSession,
 
 // finish the transaction
 func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
-	ses.EnterFPrint(74)
-	defer ses.ExitFPrint(74)
+	ses.EnterFPrint(FPFinishTxn)
+	defer ses.ExitFPrint(FPFinishTxn)
 	// First recover all panics.   If paniced, we will abort.
 	if r := recover(); r != nil {
 		recoverErr := moerr.ConvertPanicError(execCtx.reqCtx, r)
@@ -139,6 +140,13 @@ type FeTxnOption struct {
 	//byRollback denotes the txn rolled back by the ROLLBACK.
 	//or error types that need to roll back the whole txn.
 	byRollback bool
+}
+
+func (opt *FeTxnOption) Close() {
+	opt.byBegin = false
+	opt.autoCommit = true
+	opt.byCommit = false
+	opt.byRollback = false
 }
 
 const (
@@ -422,8 +430,8 @@ func (th *TxnHandler) GetTxn() TxnOperator {
 // Commit commits the txn.
 // option bits decide the actual commit behaviour
 func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
-	execCtx.ses.EnterFPrint(75)
-	defer execCtx.ses.ExitFPrint(75)
+	execCtx.ses.EnterFPrint(FPCommit)
+	defer execCtx.ses.ExitFPrint(FPCommit)
 	var err error
 	th.mu.Lock()
 	defer th.mu.Unlock()
@@ -438,8 +446,8 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 	if !bitsIsSet(th.optionBits, OPTION_BEGIN|OPTION_NOT_AUTOCOMMIT) ||
 		th.inActiveTxnUnsafe() && NeedToBeCommittedInActiveTransaction(execCtx.stmt) ||
 		execCtx.txnOpt.byCommit {
-		execCtx.ses.EnterFPrint(76)
-		defer execCtx.ses.ExitFPrint(76)
+		execCtx.ses.EnterFPrint(FPCommitBeforeCommitUnsafe)
+		defer execCtx.ses.ExitFPrint(FPCommitBeforeCommitUnsafe)
 		err = th.commitUnsafe(execCtx)
 		if err != nil {
 			return err
@@ -450,8 +458,8 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 }
 
 func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
-	execCtx.ses.EnterFPrint(77)
-	defer execCtx.ses.ExitFPrint(77)
+	execCtx.ses.EnterFPrint(FPCommitUnsafe)
+	defer execCtx.ses.ExitFPrint(FPCommitUnsafe)
 	_, span := trace.Start(execCtx.reqCtx, "TxnHandler.CommitTxn",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(execCtx.ses.GetTxnId(), execCtx.ses.GetStmtId(), execCtx.ses.GetSqlOfStmt()))
@@ -500,11 +508,11 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 			execCtx.ses.Debugf(execCtx.reqCtx, "CommitTxn exit txnId:%s", txnId)
 		}()
 	}
-	execCtx.ses.EnterFPrint(78)
-	defer execCtx.ses.ExitFPrint(78)
+	execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommit)
+	defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommit)
 	if th.txnOp != nil {
-		execCtx.ses.EnterFPrint(79)
-		defer execCtx.ses.ExitFPrint(79)
+		execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommitWithTxn)
+		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		commitTs := th.txnOp.Txn().CommitTS
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		setFPrints(th.txnOp, execCtx.ses.GetFPrints())
@@ -522,8 +530,8 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 // Rollback rolls back the txn
 // the option bits decide the actual behavior
 func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
-	execCtx.ses.EnterFPrint(80)
-	defer execCtx.ses.ExitFPrint(80)
+	execCtx.ses.EnterFPrint(FPRollback)
+	defer execCtx.ses.ExitFPrint(FPRollback)
 	var err error
 	th.mu.Lock()
 	defer th.mu.Unlock()
@@ -538,8 +546,8 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 	if !bitsIsSet(th.optionBits, OPTION_BEGIN|OPTION_NOT_AUTOCOMMIT) ||
 		th.inActiveTxnUnsafe() && NeedToBeCommittedInActiveTransaction(execCtx.stmt) ||
 		execCtx.txnOpt.byRollback {
-		execCtx.ses.EnterFPrint(81)
-		defer execCtx.ses.ExitFPrint(81)
+		execCtx.ses.EnterFPrint(FPRollbackUnsafe1)
+		defer execCtx.ses.ExitFPrint(FPRollbackUnsafe1)
 		//Case1.1: autocommit && not_begin
 		//Case1.2: (not_autocommit || begin) && activeTxn && needToBeCommitted
 		//Case1.3: the error that should rollback the whole txn
@@ -548,8 +556,8 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 		//Case2: not ( autocommit && !begin ) && not ( activeTxn && needToBeCommitted )
 		//<==>  ( not_autocommit || begin ) && not ( activeTxn && needToBeCommitted )
 		//just rollback statement
-		execCtx.ses.EnterFPrint(85)
-		defer execCtx.ses.ExitFPrint(85)
+		execCtx.ses.EnterFPrint(FPRollbackUnsafe2)
+		defer execCtx.ses.ExitFPrint(FPRollbackUnsafe2)
 		//non derived statement
 		if th.txnOp != nil && !execCtx.ses.IsDerivedStmt() {
 			setFPrints(th.txnOp, execCtx.ses.GetFPrints())
@@ -564,8 +572,8 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 }
 
 func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
-	execCtx.ses.EnterFPrint(82)
-	defer execCtx.ses.ExitFPrint(82)
+	execCtx.ses.EnterFPrint(FPRollbackUnsafe)
+	defer execCtx.ses.ExitFPrint(FPRollbackUnsafe)
 	_, span := trace.Start(execCtx.reqCtx, "TxnHandler.RollbackTxn",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(execCtx.ses.GetTxnId(), execCtx.ses.GetStmtId(), execCtx.ses.GetSqlOfStmt()))
@@ -607,11 +615,11 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 			execCtx.ses.Debugf(execCtx.reqCtx, "RollbackTxn exit txnId:%s", txnId)
 		}()
 	}
-	execCtx.ses.EnterFPrint(83)
-	defer execCtx.ses.ExitFPrint(83)
+	execCtx.ses.EnterFPrint(FPRollbackUnsafeBeforeRollback)
+	defer execCtx.ses.ExitFPrint(FPRollbackUnsafeBeforeRollback)
 	if th.txnOp != nil {
-		execCtx.ses.EnterFPrint(84)
-		defer execCtx.ses.ExitFPrint(84)
+		execCtx.ses.EnterFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
+		defer execCtx.ses.ExitFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		setFPrints(th.txnOp, execCtx.ses.GetFPrints())
 		err = th.txnOp.Rollback(ctx2)
@@ -630,8 +638,8 @@ SetAutocommit sets the value of the system variable 'autocommit'.
 It commits the active transaction if the old value is false and the new value is true.
 */
 func (th *TxnHandler) SetAutocommit(execCtx *ExecCtx, old, on bool) error {
-	execCtx.ses.EnterFPrint(86)
-	defer execCtx.ses.ExitFPrint(86)
+	execCtx.ses.EnterFPrint(FPSetAutoCommit)
+	defer execCtx.ses.ExitFPrint(FPSetAutoCommit)
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	//on -> on : do nothing
@@ -774,6 +782,7 @@ func (th *TxnHandler) createTempStorageUnsafe(ck clock.Clock) error {
 	}
 
 	ms, err := memorystorage.NewMemoryStorage(
+		th.service,
 		mpool.MustNewZeroNoFixed(),
 		ck,
 		memoryengine.RandomIDGenerator,

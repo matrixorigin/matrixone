@@ -17,6 +17,8 @@ package memoryengine
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -265,8 +267,9 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			col := &plan2.ColDef{
-				ColId: attr.Attr.ID,
-				Name:  attr.Attr.Name,
+				ColId:      attr.Attr.ID,
+				Name:       strings.ToLower(attr.Attr.Name),
+				OriginName: attr.Attr.Name,
 				Typ: plan2.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
@@ -376,6 +379,7 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 		Indexes:      indexes,
 		Version:      schemaVersion,
 		IsTemporary:  t.GetEngineType() == engine.Memory,
+		DbName:       t.databaseName,
 	}
 	return tableDef
 }
@@ -411,7 +415,7 @@ func (t *Table) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
 	return nil
 }
 
-func (t *Table) AlterTable(ctx context.Context, c *engine.ConstraintDef, constraint [][]byte) error {
+func (t *Table) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
 	// implement me
 	return nil
 }
@@ -546,6 +550,10 @@ func (t *Table) ApproxObjectsNum(ctx context.Context) int {
 	return 0
 }
 
-func (t *Table) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error) {
+func (t *Table) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
+	return nil, nil
+}
+
+func (t *Table) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	return nil, nil
 }

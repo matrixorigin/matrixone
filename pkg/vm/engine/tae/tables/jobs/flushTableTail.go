@@ -55,6 +55,7 @@ var FlushTableTailTaskFactory = func(
 	metas []*catalog.ObjectEntry, rt *dbutils.Runtime, endTs types.TS, /* end of dirty range*/
 ) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
+		txn.GetMemo().IsFlushOrMerge = true
 		return NewFlushTableTailTask(ctx, txn, metas, rt, endTs)
 	}
 }
@@ -72,7 +73,7 @@ type flushTableTailTask struct {
 	dbid uint64
 
 	// record the row mapping from deleted blocks to created blocks
-	transMappings *api.BlkTransferBooking
+	transMappings api.TransferMaps
 	doTransfer    bool
 
 	aObjMetas         []*catalog.ObjectEntry
@@ -183,6 +184,8 @@ func NewFlushTableTailTask(
 				)
 				return nil, txnif.ErrTxnNeedRetry
 			}
+		} else if hdl.IsAppendable() && obj.HasDropCommitted() && !obj.InMemoryDeletesExisted() {
+			// skip dropped . refer to Collector.tryCompactTree
 		} else {
 			task.delSrcMetas = append(task.delSrcMetas, obj)
 			task.delSrcHandles = append(task.delSrcHandles, hdl)
@@ -191,7 +194,10 @@ func NewFlushTableTailTask(
 
 	task.doTransfer = !strings.Contains(task.schema.Comment, pkgcatalog.MO_COMMENT_NO_DEL_HINT)
 	if task.doTransfer {
-		task.transMappings = mergesort.NewBlkTransferBooking(len(task.aObjHandles))
+		task.transMappings = make(api.TransferMaps, len(task.aObjHandles))
+		for i := range len(task.aObjHandles) {
+			task.transMappings[i] = make(api.TransferMap)
+		}
 	}
 
 	tblEntry := rel.GetMeta().(*catalog.TableEntry)
@@ -465,7 +471,7 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 		}
 	}
 	if task.doTransfer {
-		mergesort.AddSortPhaseMapping(task.transMappings, objIdx, totalRowCnt, sortMapping)
+		mergesort.AddSortPhaseMapping(task.transMappings[objIdx], totalRowCnt, sortMapping)
 	}
 	return
 }
