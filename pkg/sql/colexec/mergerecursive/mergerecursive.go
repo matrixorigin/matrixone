@@ -54,6 +54,7 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 		}
 		bat := result.Batch
 		if bat == nil || bat.End() {
+			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}

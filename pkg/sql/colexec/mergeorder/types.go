@@ -99,6 +99,7 @@ func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, 
 	ctr.batchList = ctr.batchList[:0]
 	ctr.orderCols = ctr.orderCols[:0]
 	ctr.indexList = nil
+	ctr.status = receiving
 
 	for i := range ctr.executors {
 		if ctr.executors[i] != nil {
