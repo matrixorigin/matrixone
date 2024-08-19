@@ -389,6 +389,8 @@ const (
 	FUNCTION_END_NUMBER
 	EMBEDDING
 	EXTRACT_TEXT
+	// chunk as LLM helper function
+	CHUNK
 )
 
 // functionIdRegister is what function we have registered already.
@@ -700,4 +702,5 @@ var functionIdRegister = map[string]int32{
 	"bitmap_or_agg":        BITMAP_OR_AGG,
 	"embedding":            EMBEDDING,
 	"extract_text":         EXTRACT_TEXT,
+	"chunk":                CHUNK,
 }

@@ -3015,6 +3015,27 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `chunk`
+	{
+		functionId: CHUNK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Chunk
+				},
+			},
+		},
+	},
+
 	// function `md5`
 	{
 		functionId: MD5,
