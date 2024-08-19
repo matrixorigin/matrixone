@@ -50,7 +50,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -1104,7 +1103,7 @@ func createPrepareStmt(
 		getFromSendLongData: make(map[int]struct{}),
 	}
 	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
-	columns := plan2.GetResultColumnsFromPlan(preparePlan.GetDcl().Control.(*planPb.DataControl_Prepare).Prepare.Plan)
+	columns := plan2.GetResultColumnsFromPlan(preparePlan.GetDcl().Control.(*plan.DataControl_Prepare).Prepare.Plan)
 	if prepareStmt.ColDefData, err = execCtx.resper.MysqlRrWr().MakeColumnDefData(execCtx.reqCtx, columns); err != nil {
 		logutil.Errorf("Error make column def data for prepare statement: %v", err)
 	}
