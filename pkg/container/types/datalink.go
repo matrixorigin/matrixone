@@ -47,7 +47,7 @@ func ParseDatalink(fsPath string) (string, []int, string, error) {
 	// 2. get file extension
 	extension := filepath.Ext(u.Path)
 	switch extension {
-	case ".txt", ".csv":
+	case ".txt", ".csv", ".pdf":
 	default:
 		return "", nil, "", moerr.NewNYINoCtx("unsupported file type %s", extension)
 	}
