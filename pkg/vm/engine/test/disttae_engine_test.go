@@ -542,10 +542,10 @@ func TestColumnsTransfer(t *testing.T) {
 	defer p.Close()
 	tae := p.T.GetDB()
 
-	schema := catalog2.MockSchemaAll(8188, -1)
+	schema := catalog2.MockSchemaAll(8000, -1)
 	schema.Name = "test"
 
-	schema2 := catalog2.MockSchemaAll(10, -1)
+	schema2 := catalog2.MockSchemaAll(200, -1)
 	schema2.Name = "todrop"
 
 	txnop := p.StartCNTxn()
