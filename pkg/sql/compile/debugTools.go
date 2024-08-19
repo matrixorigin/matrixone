@@ -109,14 +109,23 @@ var debugMagicNames = map[magicType]string{
 
 var _ = DebugShowScopes
 
+type DebugLevel int
+
+const (
+	NormalLevel DebugLevel = iota
+	VerboseLevel
+	AnalyzeLevel
+	OldLevel
+)
+
 // DebugShowScopes generates and returns a string representation of debugging information for a set of scopes.
-func DebugShowScopes(ss []*Scope) string {
+func DebugShowScopes(ss []*Scope, level DebugLevel) string {
 	receiverMap := make(map[*process.WaitRegister]int)
 	for i := range ss {
 		genReceiverMap(ss[i], receiverMap)
 	}
 
-	return showScopes(ss, 0, receiverMap)
+	return showScopes(ss, 0, receiverMap, level)
 }
 
 // genReceiverMap recursively traverses the Scope tree and generates unique identifiers (integers) for
@@ -135,10 +144,10 @@ func genReceiverMap(s *Scope, mp map[*process.WaitRegister]int) {
 
 // showScopes generates and returns a string representation of a set of Scopes. It recursively calls the
 // showSingleScope function to construct strings for each Scope and concatenates all results together.
-func showScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int) string {
+func showScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int, level DebugLevel) string {
 	buffer := bytes.NewBuffer(make([]byte, 0, 300))
 	for i := range scopes {
-		showSingleScope(scopes[i], i, 0, rmp, buffer)
+		showSingleScope(scopes[i], i, 0, rmp, level, buffer)
 	}
 	return buffer.String()
 }
@@ -146,7 +155,7 @@ func showScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int) str
 // showSingleScope generates and outputs a string representation of a single Scope.
 // It includes header information of Scope, data source information, and pipeline tree information.
 // In addition, it recursively displays information from any PreScopes.
-func showSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegister]int, buffer *bytes.Buffer) {
+func showSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegister]int, level DebugLevel, buffer *bytes.Buffer) {
 	gapNextLine(gap, buffer)
 
 	// Scope Header
@@ -162,22 +171,26 @@ func showSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegi
 
 	if scope.RootOp != nil {
 		gapNextLine(gap, buffer)
-		prefixStr := addGap(gap) + "         "
-		PrintPipelineTree(scope.RootOp, prefixStr, true, true, rmp, buffer)
+		if level == OldLevel {
+			ShowPipelineLink(scope.RootOp, rmp, buffer)
+		} else {
+			prefixStr := addGap(gap) + "         "
+			ShowPipelineTree(scope.RootOp, prefixStr, true, true, rmp, buffer)
+		}
 	}
 
 	if len(scope.PreScopes) > 0 {
 		gapNextLine(gap, buffer)
 		buffer.WriteString("  PreScopes: {")
 		for i := range scope.PreScopes {
-			showSingleScope(scope.PreScopes[i], i, gap+4, rmp, buffer)
+			showSingleScope(scope.PreScopes[i], i, gap+4, rmp, level, buffer)
 		}
 		gapNextLine(gap, buffer)
 		buffer.WriteString("  }")
 	}
 }
 
-func PrintPipelineTree(node vm.Operator, prefix string, isRoot bool, isTail bool, mp map[*process.WaitRegister]int, buffer *bytes.Buffer) {
+func ShowPipelineTree(node vm.Operator, prefix string, isRoot bool, isTail bool, mp map[*process.WaitRegister]int, buffer *bytes.Buffer) {
 	if node == nil {
 		return
 	}
@@ -217,12 +230,30 @@ func PrintPipelineTree(node vm.Operator, prefix string, isRoot bool, isTail bool
 	// Write to child node
 	for i := 0; i < len(node.GetOperatorBase().Children); i++ {
 		isLast := i == len(node.GetOperatorBase().Children)-1
-		PrintPipelineTree(node.GetOperatorBase().GetChildren(i), newPrefix, false, isLast, mp, buffer)
+		ShowPipelineTree(node.GetOperatorBase().GetChildren(i), newPrefix, false, isLast, mp, buffer)
 	}
 
 	if isRoot {
 		trimLastNewline(buffer)
 	}
+}
+
+func ShowPipelineLink(node vm.Operator, mp map[*process.WaitRegister]int, buffer *bytes.Buffer) {
+	buffer.WriteString("  Pipeline: ")
+	vm.HandleAllOp(node, func(parentOp vm.Operator, op vm.Operator) error {
+		if op.GetOperatorBase().NumChildren() != 0 {
+			buffer.WriteString(" -> ")
+		}
+		id := op.OpType()
+		name, ok := debugInstructionNames[id]
+		if !ok {
+			name = "unknown"
+		}
+
+		buffer.WriteString(name)
+		hanldeTailNodeReceiver(op, mp, buffer)
+		return nil
+	})
 }
 
 func hanldeTailNodeReceiver(node vm.Operator, mp map[*process.WaitRegister]int, buffer *bytes.Buffer) {
