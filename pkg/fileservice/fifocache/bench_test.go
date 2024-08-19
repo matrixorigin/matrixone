@@ -15,6 +15,7 @@
 package fifocache
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -81,6 +82,24 @@ func BenchmarkParallelGetOrSet(b *testing.B) {
 				cache.Get(i % nElements)
 			} else {
 				cache.Set(i%nElements, i, int64(1+i%3))
+			}
+		}
+	})
+}
+
+func BenchmarkParallelEvict(b *testing.B) {
+	size := 65536
+	cache := New[int, int](fscache.ConstCapacity(int64(size)), nil, ShardInt[int])
+	nElements := size * 16
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		ch := make(chan int64, 1)
+		for i := 0; pb.Next(); i++ {
+			cache.Set(i%nElements, i, int64(1+i%3))
+			cache.Evict(ch)
+			target := <-ch
+			if target != 65536 {
+				panic(fmt.Sprintf("got %v", target))
 			}
 		}
 	})

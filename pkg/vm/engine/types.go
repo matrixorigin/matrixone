@@ -607,7 +607,8 @@ type Tombstoner interface {
 	String() string
 	StringWithPrefix(string) string
 
-	HasTombstones(bid types.Blockid) bool
+	// false positive check
+	HasBlockTombstone(ctx context.Context, id objectio.Blockid, fs fileservice.FileService) (bool, error)
 
 	MarshalBinaryWithBuffer(w *bytes.Buffer) error
 	UnmarshalBinary(buf []byte) error
