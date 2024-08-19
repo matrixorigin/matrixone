@@ -803,8 +803,7 @@ func constructLockOp(n *plan.Node, c *Compile, block bool) *lockop.LockOp {
 		}
 	}
 	arg.SetBlock(block)
-	arg.Idx = c.anal.curNodeIdx
-	arg.IsFirst = c.anal.isFirst
+	arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
 
 	return arg
 }
