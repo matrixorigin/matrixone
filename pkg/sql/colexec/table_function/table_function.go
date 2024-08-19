@@ -28,6 +28,11 @@ import (
 
 const opName = "table_function"
 
+const (
+	FULLTEXT_INDEX_SCAN     = "fulltext_index_scan"
+	FULLTEXT_INDEX_TOKENIZE = "fulltext_tokenize"
+)
+
 func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
@@ -71,6 +76,8 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 		f, e = moTransactionsCall(idx, proc, tblArg, &result)
 	case "mo_cache":
 		f, e = moCacheCall(idx, proc, tblArg, &result)
+	case FULLTEXT_INDEX_SCAN:
+		f, e = fulltextIndexScanCall(idx, proc, tblArg, &result)
 	default:
 		result.Status = vm.ExecStop
 		return result, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))
@@ -154,6 +161,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		return moTransactionsPrepare(proc, tblArg)
 	case "mo_cache":
 		return moCachePrepare(proc, tblArg)
+	case FULLTEXT_INDEX_SCAN:
+		return fulltextIndexScanPrepare(proc, tblArg)
 	default:
 		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))
 	}
