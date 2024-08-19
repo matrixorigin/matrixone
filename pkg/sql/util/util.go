@@ -16,7 +16,6 @@ package util
 
 import (
 	"fmt"
-	"go/constant"
 	"strconv"
 	"strings"
 
@@ -127,7 +126,7 @@ func BuildMoDataBaseFilter(curAccountId uint64) tree.Expr {
 
 	datnameColName := tree.NewUnresolvedColName(catalog.SystemDBAttr_Name)
 
-	mo_catalogConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_CATALOG), catalog.MO_CATALOG, false, tree.P_char)
+	mo_catalogConst := tree.NewNumVal(catalog.MO_CATALOG, catalog.MO_CATALOG, false, tree.P_char)
 	inValues := tree.NewTuple(tree.Exprs{mo_catalogConst})
 	// datname in ('mo_catalog')
 	inExpr := tree.NewComparisonExpr(tree.IN, datnameColName, inValues)
@@ -161,9 +160,9 @@ func BuildMoTablesFilter(curAccountId uint64) tree.Expr {
 
 	relnameColName := tree.NewUnresolvedColName(catalog.SystemRelAttr_Name)
 
-	mo_databaseConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_DATABASE), catalog.MO_DATABASE, false, tree.P_char)
-	mo_tablesConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_TABLES), catalog.MO_TABLES, false, tree.P_char)
-	mo_columnsConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_COLUMNS), catalog.MO_COLUMNS, false, tree.P_char)
+	mo_databaseConst := tree.NewNumVal(catalog.MO_DATABASE, catalog.MO_DATABASE, false, tree.P_char)
+	mo_tablesConst := tree.NewNumVal(catalog.MO_TABLES, catalog.MO_TABLES, false, tree.P_char)
+	mo_columnsConst := tree.NewNumVal(catalog.MO_COLUMNS, catalog.MO_COLUMNS, false, tree.P_char)
 	inValues := tree.NewTuple(tree.Exprs{mo_databaseConst, mo_tablesConst, mo_columnsConst})
 
 	// relname in ('mo_tables','mo_database','mo_columns')
@@ -197,7 +196,7 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 
 	att_dblnameColName := tree.NewUnresolvedColName(catalog.SystemColAttr_DBName)
 
-	mo_catalogConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_CATALOG), catalog.MO_CATALOG, false, tree.P_char)
+	mo_catalogConst := tree.NewNumVal(catalog.MO_CATALOG, catalog.MO_CATALOG, false, tree.P_char)
 	inValues := tree.NewTuple(tree.Exprs{mo_catalogConst})
 	// datname in ('mo_catalog')
 	inExpr := tree.NewComparisonExpr(tree.IN, att_dblnameColName, inValues)
@@ -207,7 +206,7 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 		if _, ok := specialTables[table]; ok {
 			continue
 		}
-		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(table), table, false, tree.P_char))
+		exprs = append(exprs, tree.NewNumVal(table, table, false, tree.P_char))
 	}
 
 	notInValues := tree.NewTuple(exprs)
@@ -229,14 +228,14 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 // build equal ast expr: colName = 'xxx'
 func makeStringEqualAst(lColName, rValue string) tree.Expr {
 	relkindColName := tree.NewUnresolvedColName(lColName)
-	clusterConst := tree.NewNumValWithType(constant.MakeString(rValue), rValue, false, tree.P_char)
+	clusterConst := tree.NewNumVal(rValue, rValue, false, tree.P_char)
 	return tree.NewComparisonExpr(tree.EQUAL, relkindColName, clusterConst)
 }
 
 // build ast expr: account_id = cur_accountId
 func makeAccountIdEqualAst(curAccountId uint64) tree.Expr {
 	accountIdColName := tree.NewUnresolvedColName("account_id")
-	curAccountIdConst := tree.NewNumValWithType(constant.MakeUint64(uint64(curAccountId)), strconv.Itoa(int(curAccountId)), false, tree.P_int64)
+	curAccountIdConst := tree.NewNumVal(curAccountId, strconv.Itoa(int(curAccountId)), false, tree.P_uint64)
 	return tree.NewComparisonExpr(tree.EQUAL, accountIdColName, curAccountIdConst)
 }
 

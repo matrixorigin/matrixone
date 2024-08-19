@@ -1225,7 +1225,7 @@ func (ui *UserInput) isIssue3482Sql() bool {
 
 func unboxExprStr(ctx context.Context, expr tree.Expr) (string, error) {
 	if e, ok := expr.(*tree.NumVal); ok && e.ValType == tree.P_char {
-		return e.OrigString(), nil
+		return e.String(), nil
 	}
 	return "", moerr.NewInternalError(ctx, "invalid expr type")
 }
@@ -1243,7 +1243,7 @@ func (b *strParamBinder) bind(e tree.Expr) string {
 
 	switch val := e.(type) {
 	case *tree.NumVal:
-		return val.OrigString()
+		return val.String()
 	case *tree.ParamExpr:
 		return b.params.GetStringAt(val.Offset - 1)
 	default:
