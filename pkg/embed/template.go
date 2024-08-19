@@ -14,10 +14,26 @@
 
 package embed
 
+import (
+	"strings"
+	"text/template"
+)
+
+type templateArgs struct {
+	I           int
+	ID          uint64
+	DataDir     string
+	ServicePort int
+}
+
+var templateFuncs = map[string]any{
+	"NextBasePort": getNextBasePort,
+}
+
 var (
-	logConfig = `
+	logConfig = template.Must(template.New("log").Funcs(templateFuncs).Parse(`
 service-type = "LOG"
-data-dir = "%s"
+data-dir = "{{.DataDir}}"
 
 [log]
 level = "info"
@@ -26,13 +42,13 @@ max-size = 512
 
 [hakeeper-client]
 service-addresses = [
-  "127.0.0.1:%d",
+  "127.0.0.1:{{.ServicePort}}",
 ]
-`
+`))
 
-	tnConfig = `
+	tnConfig = template.Must(template.New("tn").Funcs(templateFuncs).Parse(`
 service-type = "TN"
-data-dir = "%s"
+data-dir = "{{.DataDir}}"
 
 [log]
 level = "info"
@@ -41,7 +57,7 @@ max-size = 512
 
 [hakeeper-client]
 service-addresses = [
-  "127.0.0.1:%d",
+  "127.0.0.1:{{.ServicePort}}",
 ]
 
 [[fileservice]]
@@ -51,20 +67,20 @@ backend = "DISK"
 [[fileservice]]
 name = "SHARED"
 backend = "DISK"
-data-dir = "%s/shared"
+data-dir = "{{.DataDir}}/shared"
 
 [fileservice.cache]
 memory-capacity = "32MB"
 disk-capacity = "1GB"
-disk-path = "%s/file-service-cache"
+disk-path = "{{.DataDir}}/file-service-cache"
 
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
 
 [tn]
-uuid = "%d-tn"
-port-base = %d
+uuid = "{{.ID}}-tn"
+port-base = {{NextBasePort}}
 
 [tn.Txn.Storage]
 backend = "TAE"
@@ -84,11 +100,11 @@ rpc-enable-checksum = true
 logtail-collect-interval = "2ms"
 logtail-response-send-timeout = "10s"
 max-logtail-fetch-failure = 5
-`
+`))
 
-	cnConfig = `
+	cnConfig = template.Must(template.New("cn").Funcs(templateFuncs).Parse(`
 service-type = "CN"
-data-dir = "%s"
+data-dir = "{{.DataDir}}"
 
 [log]
 level = "info"
@@ -97,7 +113,7 @@ max-size = 512
 
 [hakeeper-client]
 service-addresses = [
-	"127.0.0.1:%d",
+	"127.0.0.1:{{.ServicePort}}",
 ]
 
 [[fileservice]]
@@ -107,35 +123,35 @@ backend = "DISK"
 [[fileservice]]
 name = "SHARED"
 backend = "DISK"
-data-dir = "%s/shared"
+data-dir = "{{.DataDir}}/shared"
 
 [fileservice.cache]
 memory-capacity = "32MB"
 disk-capacity = "32MB"
-disk-path = "%s/file-service-cache"
+disk-path = "{{.DataDir}}/file-service-cache"
 
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
 
 [cn]
-uuid = "%d-cn-%d"
-port-base = %d
+uuid = "{{.I}}-cn-{{.ID}}"
+port-base = {{NextBasePort}}
 
 [cn.txn.trace]
-dir = "trace%d"
+dir = "trace{{.I}}"
 
 [cn.Engine]
 type = "distributed-tae"
 
 [cn.frontend]
-port = %d
-unix-socket = "%s/mysql%d.sock"
-`
+port = {{NextBasePort}}
+unix-socket = "{{.DataDir}}/mysql{{.I}}.sock"
+`))
 
-	proxyConfig = `
+	proxyConfig = template.Must(template.New("proxy").Funcs(templateFuncs).Parse(`
 service-type = "PROXY"
-data-dir = "%s"
+data-dir = "{{.DataDir}}"
 
 [log]
 level = "info"
@@ -144,7 +160,7 @@ max-size = 512
 
 [hakeeper-client]
 service-addresses = [
-  "127.0.0.1:%d",
+  "127.0.0.1:{{.ServicePort}}",
 ]
 
 [[fileservice]]
@@ -154,12 +170,12 @@ backend = "DISK"
 [[fileservice]]
 name = "SHARED"
 backend = "DISK"
-data-dir = "%s/shared"
+data-dir = "{{.DataDir}}/shared"
 
 [fileservice.cache]
 memory-capacity = "32MB"
 disk-capacity = "32MB"
-disk-path = "%s/file-service-cache"
+disk-path = "{{.DataDir}}file-service-cache"
 
 [[fileservice]]
 name = "ETL"
@@ -167,5 +183,15 @@ backend = "DISK-ETL"
 
 [proxy]
 uuid = "proxy"
-`
+`))
 )
+
+func genConfigText(template *template.Template, args templateArgs) string {
+	buf := new(strings.Builder)
+	if err := template.Execute(buf, args); err != nil {
+		panic(err)
+	}
+	ret := buf.String()
+	println("CONFIG", ret)
+	return buf.String()
+}
