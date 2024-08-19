@@ -20,6 +20,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"runtime"
@@ -96,6 +97,10 @@ func Max(a int, b int) int {
 	}
 }
 
+const (
+	invalidGoroutineId = math.MaxUint64
+)
+
 // GetRoutineId gets the routine id
 func GetRoutineId() uint64 {
 	data := make([]byte, 64)
@@ -103,6 +108,9 @@ func GetRoutineId() uint64 {
 	data = bytes.TrimPrefix(data, []byte("goroutine "))
 	data = data[:bytes.IndexByte(data, ' ')]
 	id, _ := strconv.ParseUint(string(data), 10, 64)
+	if id == 0 {
+		id = invalidGoroutineId
+	}
 	return id
 }
 
@@ -1456,4 +1464,31 @@ func hashString(s string) string {
 	hash.Write(util.UnsafeStringToBytes(s))
 	hashBytes := hash.Sum(nil)
 	return hex.EncodeToString(hashBytes)
+}
+
+func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, error) {
+	var err error
+	c := new(MysqlColumn)
+	c.SetName(col.Name)
+	c.SetOrgName(col.GetOriginCaseName())
+	c.SetTable(col.TblName)
+	c.SetOrgTable(col.TblName)
+	c.SetAutoIncr(col.Typ.AutoIncr)
+	c.SetSchema(col.DbName)
+	err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
+	if err != nil {
+		return nil, err
+	}
+	setColFlag(c)
+	setColLength(c, col.Typ.Width)
+	setCharacter(c)
+
+	// For binary/varbinary with mysql_type_varchar.Change the charset.
+	if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
+		c.SetCharset(0x3f)
+	}
+
+	c.SetDecimal(col.Typ.Scale)
+	convertMysqlTextTypeToBlobType(c)
+	return c, nil
 }

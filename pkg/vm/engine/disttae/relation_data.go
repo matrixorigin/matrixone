@@ -194,7 +194,7 @@ func (relData *blockListRelData) GroupByPartitionNum() map[int16]engine.RelData 
 	for idx := range blksLen {
 		blkInfo := blks.Get(idx)
 		if blkInfo.IsMemBlk() {
-			return nil
+			continue
 		}
 		partitionNum := blkInfo.PartitionNum
 		if _, ok := ret[partitionNum]; !ok {

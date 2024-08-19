@@ -48,6 +48,17 @@ type backExec struct {
 }
 
 func (back *backExec) Close() {
+	tempExecCtx := ExecCtx{
+		ses:    back.backSes,
+		txnOpt: FeTxnOption{byRollback: true},
+	}
+	defer tempExecCtx.Close()
+	err := back.backSes.GetTxnHandler().Rollback(&tempExecCtx)
+	if err != nil {
+		back.backSes.Error(tempExecCtx.reqCtx,
+			"Failed to rollback txn in back session",
+			zap.Error(err))
+	}
 	back.Clear()
 	back.backSes.Close()
 	back.backSes.Clear()
@@ -55,8 +66,8 @@ func (back *backExec) Close() {
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) error {
-	back.backSes.EnterFPrint(91)
-	defer back.backSes.ExitFPrint(91)
+	back.backSes.EnterFPrint(FPBackExecExec)
+	defer back.backSes.ExitFPrint(FPBackExecExec)
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
@@ -117,8 +128,8 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 }
 
 func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uint32, toAccount uint32) error {
-	back.backSes.EnterFPrint(97)
-	defer back.backSes.ExitFPrint(97)
+	back.backSes.EnterFPrint(FPBackExecRestore)
+	defer back.backSes.ExitFPrint(FPBackExecRestore)
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
@@ -211,8 +222,8 @@ func doComQueryInBack(
 	execCtx *ExecCtx,
 	input *UserInput,
 ) (retErr error) {
-	backSes.EnterFPrint(92)
-	defer backSes.ExitFPrint(92)
+	backSes.EnterFPrint(FPDoComQueryInBack)
+	defer backSes.ExitFPrint(FPDoComQueryInBack)
 	backSes.GetTxnCompileCtx().SetExecCtx(execCtx)
 	backSes.SetSql(input.getSql())
 	//the ses.GetUserName returns the user_name with the account_name.
@@ -359,8 +370,8 @@ func doComQueryInBack(
 func executeStmtInBack(backSes *backSession,
 	execCtx *ExecCtx,
 ) (err error) {
-	execCtx.ses.EnterFPrint(93)
-	defer execCtx.ses.ExitFPrint(93)
+	execCtx.ses.EnterFPrint(FPExecStmtInBack)
+	defer execCtx.ses.ExitFPrint(FPExecStmtInBack)
 	var cmpBegin time.Time
 	var ret interface{}
 
@@ -394,8 +405,8 @@ func executeStmtInBack(backSes *backSession,
 
 	cmpBegin = time.Now()
 
-	execCtx.ses.EnterFPrint(94)
-	defer execCtx.ses.ExitFPrint(94)
+	execCtx.ses.EnterFPrint(FPExecStmtInBackBeforeCompile)
+	defer execCtx.ses.ExitFPrint(FPExecStmtInBackBeforeCompile)
 
 	err = disttae.CheckTxnIsValid(execCtx.ses.GetTxnHandler().GetTxn())
 	if err != nil {
@@ -518,8 +529,8 @@ func executeSQLInBackgroundSession(reqCtx context.Context, upstream *Session, sq
 // To be clear, only for the select statement derived from the set_var statement
 // in an independent transaction
 func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCtx, stmt tree.Statement) error {
-	ses.EnterFPrint(111)
-	defer ses.ExitFPrint(111)
+	ses.EnterFPrint(FPExecStmtInSameSession)
+	defer ses.ExitFPrint(FPExecStmtInSameSession)
 	switch stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
 	default:
@@ -839,12 +850,12 @@ func (backSes *backSession) GetDebugString() string {
 	if backSes.upstream != nil {
 		return backSes.upstream.GetDebugString()
 	}
-	return ""
+	return "backSes without upstream"
 }
 
 func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
-	backSes.EnterFPrint(116)
-	defer backSes.ExitFPrint(116)
+	backSes.EnterFPrint(FPGetShareTxnBackgroundExecInBackSession)
+	defer backSes.ExitFPrint(FPGetShareTxnBackgroundExecInBackSession)
 	var txnOp TxnOperator
 	if backSes.GetTxnHandler() != nil {
 		txnOp = backSes.GetTxnHandler().GetTxn()
@@ -874,8 +885,8 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 }
 
 func (backSes *backSession) GetBackgroundExec(ctx context.Context) BackgroundExec {
-	backSes.EnterFPrint(98)
-	defer backSes.ExitFPrint(98)
+	backSes.EnterFPrint(FPGetBackgroundExecInBackSession)
+	defer backSes.ExitFPrint(FPGetBackgroundExecInBackSession)
 	return NewBackgroundExec(ctx, backSes)
 }
 

@@ -54,6 +54,7 @@ type cluster struct {
 		cn        int
 		withProxy bool
 		preStart  func(ServiceOperator)
+		testing   bool
 	}
 
 	ports struct {
@@ -243,6 +244,7 @@ func (c *cluster) createServiceOperators() error {
 					o.cfg.LogService.BootstrapConfig.InitHAKeeperMembers = []string{"131072:" + o.cfg.LogService.UUID}
 				}
 			},
+			c.options.testing,
 		)
 		if err != nil {
 			return err
