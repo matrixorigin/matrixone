@@ -125,3 +125,18 @@ func (l *LRU[K, V]) EnsureNBytes(n int) {
 		}
 	}
 }
+
+func (l *LRU[K, V]) Evict(done chan int64) {
+	if done != nil && cap(done) < 1 {
+		panic("should be buffered chan")
+	}
+	var target int64
+	ok := make(chan int64, 1)
+	for i := 0; i < len(l.shards); i++ {
+		l.shards[i].evict(context.TODO(), ok)
+		target += <-ok
+	}
+	if done != nil {
+		done <- target
+	}
+}

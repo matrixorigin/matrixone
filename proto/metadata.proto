@@ -130,6 +130,10 @@ message CNService {
   string ShardServiceAddress    = 9;
   // CommitID is the git commit ID of the cn node.
   string CommitID = 10;
+  // CPUTotal is cpu quota from logservicepb.CNStore
+  uint64 CPUTotal = 11;
+  // MemTotal is mem quota from logservicepb.CNStore
+  uint64 MemTotal = 12;
 }
 
 // TNService tn service metadata
