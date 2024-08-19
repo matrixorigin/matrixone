@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"go/constant"
 	"strconv"
 	"strings"
 
@@ -348,7 +347,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			return
 		}
 		astArgs := []tree.Expr{
-			tree.NewNumValWithType(constant.MakeString(typ.Enumvalues), typ.Enumvalues, false, tree.P_char),
+			tree.NewNumVal(typ.Enumvalues, typ.Enumvalues, false, tree.P_char),
 		}
 
 		// bind ast function's args
@@ -496,7 +495,7 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bo
 	if astExpr.Else != nil {
 		args = append(args, astExpr.Else)
 	} else {
-		args = append(args, tree.NewNumValWithType(constant.MakeUnknown(), "", false, tree.P_null))
+		args = append(args, tree.NewNumVal("", "", false, tree.P_null))
 	}
 
 	return b.bindFuncExprImplByAstExpr("case", args, depth)
@@ -971,7 +970,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, moerr.NewInvalidArg(b.GetContext(), "nullif need two args", len(astArgs))
 		}
 		elseExpr := astArgs[0]
-		thenExpr := tree.NewNumValWithType(constant.MakeUnknown(), "", false, tree.P_char)
+		thenExpr := tree.NewNumVal("", "", false, tree.P_null)
 		whenExpr := tree.NewComparisonExpr(tree.EQUAL, astArgs[0], astArgs[1])
 		astArgs = []tree.Expr{whenExpr, thenExpr, elseExpr}
 		name = "case"
@@ -1010,7 +1009,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					// rewrite count(*) to starcount(col_name)
 					name = "starcount"
 
-					astArgs = []tree.Expr{tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)}
+					astArgs = []tree.Expr{tree.NewNumVal(int64(1), "1", false, tree.P_int64)}
 				}
 			}
 		}
@@ -1769,12 +1768,12 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	case tree.P_null:
 		return makePlan2NullConstExprWithType(), nil
 	case tree.P_bool:
-		val := constant.BoolVal(astExpr.Value)
+		val := astExpr.Bool()
 		return makePlan2BoolConstExprWithType(val), nil
 	case tree.P_int64:
-		val, ok := constant.Int64Val(astExpr.Value)
+		val, ok := astExpr.Int64()
 		if !ok {
-			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid int value '%s'", astExpr.Value.String())
+			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid int value '%s'", astExpr.String())
 		}
 		expr := makePlan2Int64ConstExprWithType(val)
 		if !typ.IsEmpty() && typ.Id == int32(types.T_varchar) {
@@ -1782,9 +1781,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		}
 		return expr, nil
 	case tree.P_uint64:
-		val, ok := constant.Uint64Val(astExpr.Value)
+		val, ok := astExpr.Uint64()
 		if !ok {
-			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid int value '%s'", astExpr.Value.String())
+			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid int value '%s'", astExpr.String())
 		}
 		return makePlan2Uint64ConstExprWithType(val), nil
 	case tree.P_decimal:
@@ -1860,7 +1859,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 				return expr, nil
 			}
 		}
-		floatValue, ok := constant.Float64Val(astExpr.Value)
+		floatValue, ok := astExpr.Float64()
 		if !ok {
 			return returnDecimalExpr(originString)
 		}
