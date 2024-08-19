@@ -1322,6 +1322,50 @@ func (c *Compile) getStepRegs(step int32) []*process.WaitRegister {
 	return wrs
 }
 
+// func (c *Compile) compileLockOp(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+// 	lockRows := make([]*plan.LockTarget, 0, len(n.LockTargets))
+// 	for _, tbl := range n.LockTargets {
+// 		if tbl.LockTable {
+// 			c.lockTables[tbl.TableId] = tbl
+// 		} else {
+// 			if _, ok := c.lockTables[tbl.TableId]; !ok {
+// 				lockRows = append(lockRows, tbl)
+// 			}
+// 		}
+// 	}
+// 	n.LockTargets = lockRows
+// 	if len(n.LockTargets) == 0 {
+// 		return ss, nil
+// 	}
+
+// 	block := false
+// 	// only pessimistic txn needs to block downstream operators.
+// 	if c.proc.Base.TxnOperator.Txn().IsPessimistic() {
+// 		block = n.LockTargets[0].Block
+// 	}
+// 	if block {
+// 		lockOpArg := constructLockOp(n, c, block)
+// 		//@todo: remove this merge for len(ss)==1 [need change lock_op operator]
+// 		ss = []*Scope{c.newMergeScope(ss)}
+// 		lockOpArg.SetChildren(ss[0].RootOp.GetOperatorBase().Children)
+// 		ss[0].RootOp.Release()
+// 		ss[0].RootOp = lockOpArg
+// 	} else {
+// 		if len(n.LockTargets) > 1 || !n.LockTargets[0].LockTableAtTheEnd || len(ss) == 1 {
+// 			for i := range ss {
+// 				lockOpArg := constructLockOp(n, c, block)
+// 				ss[i].doSetRootOperator(lockOpArg)
+// 			}
+// 		} else {
+// 			lockOpArg := constructLockOp(n, c, block)
+// 			ss = []*Scope{c.newMergeScope(ss)}
+// 			ss[0].doSetRootOperator(lockOpArg)
+// 		}
+// 	}
+// 	ss = c.compileProjection(n, ss)
+// 	return ss, nil
+// }
+
 func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	ds := newScope(Normal)
 	if parallel {
@@ -3091,24 +3135,25 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	// only pessimistic txn needs to block downstream operators.
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		block = n.LockTargets[0].Block
-		if block {
+	}
+
+	if block {
+		ss = []*Scope{c.newMergeScope(ss)}
+		lockOpArg := constructLockOp(n, c, block)
+		ss[0].doSetRootOperator(lockOpArg)
+	} else {
+		if len(n.LockTargets) > 1 || !n.LockTargets[0].LockTableAtTheEnd || len(ss) == 1 {
+			for i := range ss {
+				lockOpArg := constructLockOp(n, c, block)
+				ss[i].doSetRootOperator(lockOpArg)
+			}
+		} else {
 			ss = []*Scope{c.newMergeScope(ss)}
+			lockOpArg := constructLockOp(n, c, block)
+			ss[0].doSetRootOperator(lockOpArg)
 		}
 	}
 
-	currentFirstFlag := c.anal.isFirst
-	for i := range ss {
-		var err error
-		var lockOpArg *lockop.LockOp
-		lockOpArg, err = constructLockOp(n, c.e)
-		if err != nil {
-			return nil, err
-		}
-		lockOpArg.SetBlock(block)
-		lockOpArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		ss[i].doSetRootOperator(lockOpArg)
-
-	}
 	c.anal.isFirst = false
 	return ss, nil
 }

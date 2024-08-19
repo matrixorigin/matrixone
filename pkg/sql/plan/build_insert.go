@@ -301,6 +301,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		upPlanCtx.insertColPos = insertColPos
 		upPlanCtx.updateColPosMap = updateColPosMap
 		upPlanCtx.updatePkCol = updatePkCol
+		upPlanCtx.lockTable = true
 
 		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, true)
 		if err != nil {

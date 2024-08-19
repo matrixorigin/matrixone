@@ -780,14 +780,14 @@ func constructMergeblock(eg engine.Engine, n *plan.Node) *mergeblock.MergeBlock 
 		WithAddAffectedRows(n.InsertCtx.AddAffectedRows)
 }
 
-func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
-	arg := lockop.NewArgumentByEngine(eng)
+func constructLockOp(n *plan.Node, c *Compile, block bool) *lockop.LockOp {
+	arg := lockop.NewArgumentByEngine(c.e)
 	for _, target := range n.LockTargets {
 		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
 		if target.IsPartitionTable {
-			arg.AddLockTargetWithPartition(target.GetPartitionTableIds(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetFilterColIdxInBat())
+			arg.AddLockTargetWithPartition(target.GetPartitionTableIds(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd(), target.GetFilterColIdxInBat())
 		} else {
-			arg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+			arg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 		}
 
 	}
@@ -802,7 +802,10 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 			}
 		}
 	}
-	return arg, nil
+	arg.SetBlock(block)
+	arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+
+	return arg
 }
 
 func constructInsert(n *plan.Node, eg engine.Engine) *insert.Insert {
