@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -143,9 +144,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 
-	if stmt.Param.FileSize < LoadParallelMinSize {
-		stmt.Param.Parallel = false
-	}
 	stmt.Param.LoadFile = true
 	stmt.Param.Tail.ColumnList = nil
 	if stmt.Param.ScanType != tree.INLINE {
@@ -211,7 +209,15 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if stmt.Param.FileSize < LoadParallelMinSize {
 		stmt.Param.Parallel = false
 	}
-	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) != tree.NOCOMPRESS || stmt.Local) {
+
+	inlineDataSize := unsafe.Sizeof(stmt.Param.Data)
+	builder.qry.LoadWriteS3 = true
+	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
+	if noCompress && (stmt.Param.FileSize < LoadParallelMinSize || inlineDataSize < LoadParallelMinSize) {
+		builder.qry.LoadWriteS3 = false
+	}
+
+	if stmt.Param.Parallel && (!noCompress || stmt.Local) {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode)
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
