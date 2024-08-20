@@ -476,6 +476,7 @@ func (ls *LocalDataSource) Next(
 	for {
 		switch ls.iteratePhase {
 		case engine.InMem:
+			bat.CleanOnlyData()
 			err := ls.iterateInMemData(ctx, cols, types, seqNums, bat, mp, vp)
 			if err != nil {
 				return nil, engine.InMem, err
