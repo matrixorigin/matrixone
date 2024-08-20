@@ -381,6 +381,50 @@ func (s *refreshableTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks 
 	return v, err
 }
 
+func (s *refreshableTaskStorage) AddCdcTask(ctx context.Context, insertSql string, dt task.DaemonTask) (int, error) {
+	v, lastAddress, err := s.AddCdcTaskSub(ctx, insertSql, dt)
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) AddCdcTaskSub(ctx context.Context, insertSql string, dt task.DaemonTask) (int, string, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.AddCdcTask(ctx, insertSql, dt)
+	}
+	return v, lastAddress, err
+}
+
+func (s *refreshableTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.TaskStatus, conditions ...Condition) (int, error) {
+	v, lastAddress, err := s.UpdateCdcTaskSub(ctx, targetStatus, conditions...)
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) UpdateCdcTaskSub(ctx context.Context, targetStatus task.TaskStatus, conditions ...Condition) (int, string, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.UpdateCdcTask(ctx, targetStatus, conditions...)
+	}
+	return v, lastAddress, err
+}
+
 func (s *refreshableTaskStorage) maybeRefresh(lastAddress string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

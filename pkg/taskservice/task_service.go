@@ -223,6 +223,25 @@ func (s *taskService) QueryDaemonTask(ctx context.Context, conds ...Condition) (
 	return s.store.QueryDaemonTask(ctx, conds...)
 }
 
+func (s *taskService) AddCdcTask(ctx context.Context, metadata task.TaskMetadata, details *task.Details, insertSql string) (int, error) {
+	now := time.Now()
+
+	dt := task.DaemonTask{
+		Metadata:   metadata,
+		TaskType:   details.Type(),
+		TaskStatus: task.TaskStatus_Created,
+		Details:    details,
+		CreateAt:   now,
+		UpdateAt:   now,
+	}
+
+	return s.store.AddCdcTask(ctx, insertSql, dt)
+}
+
+func (s *taskService) UpdateCdcTask(ctx context.Context, targetStatus task.TaskStatus, conds ...Condition) (int, error) {
+	return s.store.UpdateCdcTask(ctx, targetStatus, conds...)
+}
+
 func (s *taskService) Close() error {
 	s.StopScheduleCronTask()
 	return s.store.Close()
