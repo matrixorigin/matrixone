@@ -633,7 +633,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		t.Log(db.Catalog.SimplePPString(3))
 		cntOfAblk := 0
 		cntOfblk := 0
-		testutil.ForEachObject(rel, func(blk handle.Object) (err error) {
+		testutil.ForEachObject(t, rel, func(blk handle.Object) (err error) {
 			if blk.IsAppendable() {
 				view, err := blk.GetColumnDataById(context.Background(), 0, 3, common.DefaultAllocator)
 				assert.NoError(t, err)

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -42,29 +43,6 @@ func TestPrepare(t *testing.T) {
 	defer ctrl.Finish()
 
 	reader := mock_frontend.NewMockReader(ctrl)
-	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, expr *plan.Expr, b, c interface{}) (*batch.Batch, error) {
-		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
-
-		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-
-		err = vector.AppendFixed(bat.GetVector(1), uint64(272464), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-
-		err = vector.AppendBytes(bat.GetVector(2), []byte("empno"), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-		bat.SetRowCount(bat.GetVector(1).Length())
-		return bat, nil
-	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
 	arg := &TableScan{
@@ -99,6 +77,8 @@ func TestCall(t *testing.T) {
 	reader := getReader(t, ctrl)
 	arg := &TableScan{
 		Reader: reader,
+		Attrs:  []string{catalog.Row_ID, "int_col", "varchar_col"},
+		Types:  []types.Type{types.T_Rowid.ToType(), types.T_uint64.ToType(), types.T_varbinary.ToType()},
 	}
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
@@ -120,12 +100,11 @@ func TestCall(t *testing.T) {
 
 func getReader(t *testing.T, ctrl *gomock.Controller) engine.Reader {
 	reader := mock_frontend.NewMockReader(ctrl)
-	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, expr *plan.Expr, b, c interface{}) (*batch.Batch, error) {
-		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
-
+	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, expr *plan.Expr, b, c interface{}, bat *batch.Batch) (bool, error) {
+		// bat = batch.NewWithSize(3)
+		// bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		// bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+		// bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
@@ -141,7 +120,7 @@ func getReader(t *testing.T, ctrl *gomock.Controller) engine.Reader {
 			require.Nil(t, err)
 		}
 		bat.SetRowCount(bat.GetVector(1).Length())
-		return bat, nil
+		return false, nil
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()

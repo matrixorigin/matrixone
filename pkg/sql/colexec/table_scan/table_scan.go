@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -43,6 +45,12 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 		tableScan.ctr.msgReceiver = message.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress(), proc.GetMessageBoard())
 	}
 	err = tableScan.PrepareProjection(proc)
+	if tableScan.ctr.buf == nil {
+		tableScan.ctr.buf = batch.NewWithSize(len(tableScan.Types))
+		for i := range tableScan.Types {
+			tableScan.ctr.buf.Vecs[i] = vector.NewVec(tableScan.Types[i])
+		}
+	}
 	return
 }
 
