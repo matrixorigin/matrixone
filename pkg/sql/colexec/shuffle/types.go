@@ -91,22 +91,18 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	if shuffle.ctr.sels != nil {
 		shuffle.ctr.sels = shuffle.ctr.sels[:0]
 	}
-	if shuffle.ctr.sendPool != nil {
-		shuffle.ctr.sendPool = shuffle.ctr.sendPool[:0]
-	}
 	shuffle.ctr.ending = false
+	shuffle.ctr.lastSentBatchIdx = -1
 }
 
 func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if shuffle.RuntimeFilterSpec != nil {
-		shuffle.ctr.runtimeFilterHandled = false
-	}
 	for i := range shuffle.ctr.shufflePool {
 		if shuffle.ctr.shufflePool[i] != nil {
 			shuffle.ctr.shufflePool[i].Clean(proc.Mp())
 			shuffle.ctr.shufflePool[i] = nil
 		}
 	}
+	shuffle.ctr.shufflePool = nil
 	shuffle.ctr.sels = nil
 	shuffle.ctr.ending = false
 	shuffle.ctr.sendPool = nil

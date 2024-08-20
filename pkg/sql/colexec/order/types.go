@@ -71,7 +71,6 @@ func (order *Order) Release() {
 type container struct {
 	state          vm.CtrState
 	batWaitForSort *batch.Batch
-	rbat           *batch.Batch
 
 	desc      []bool // ds[i] == true: the attrs[i] are in descending order
 	nullsLast []bool
@@ -79,12 +78,18 @@ type container struct {
 	sortExprExecutor []colexec.ExpressionExecutor
 	sortVectors      []*vector.Vector
 	resultOrderList  []int64
-	flatFn           []func(v, w *vector.Vector) error // method to flat const vector
 }
 
 func (order *Order) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	order.cleanBatch(proc)
 	ctr := &order.ctr
+	if ctr.batWaitForSort != nil {
+		if ctr.batWaitForSort.RowCount() > colexec.DefaultBatchSize {
+			ctr.batWaitForSort.Clean(proc.Mp())
+			ctr.batWaitForSort = nil
+		} else {
+			ctr.batWaitForSort.CleanOnlyData()
+		}
+	}
 	ctr.state = vm.Build
 	for i := range ctr.sortExprExecutor {
 		if ctr.sortExprExecutor[i] != nil {
@@ -112,9 +117,5 @@ func (order *Order) cleanBatch(proc *process.Process) {
 	if ctr.batWaitForSort != nil {
 		ctr.batWaitForSort.Clean(proc.Mp())
 		ctr.batWaitForSort = nil
-	}
-	if ctr.rbat != nil {
-		ctr.rbat.Clean(proc.Mp())
-		ctr.rbat = nil
 	}
 }

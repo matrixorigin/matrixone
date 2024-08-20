@@ -138,17 +138,12 @@ func (rightJoin *RightJoin) Reset(proc *process.Process, pipelineFailed bool, er
 
 	anal := proc.GetAnalyze(rightJoin.GetIdx(), rightJoin.GetParallelIdx(), rightJoin.GetParallelMajor())
 	anal.Alloc(ctr.maxAllocSize)
-	if rightJoin.ctr.buf != nil {
-		rightJoin.ctr.buf = nil
-	}
+	rightJoin.ctr.buf = nil
 	ctr.maxAllocSize = 0
 }
 
 func (rightJoin *RightJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &rightJoin.ctr
-	if !ctr.handledLast && rightJoin.NumCPU > 1 && !rightJoin.IsMerger {
-		rightJoin.Channel <- nil
-	}
 	ctr.cleanBatch(proc)
 	ctr.cleanHashMap()
 	ctr.cleanExprExecutor()

@@ -63,13 +63,13 @@ type LockOptions struct {
 
 // LockOp lock op argument.
 type LockOp struct {
+	vm.OperatorBase
+
 	logger  *log.MOLogger
 	ctr     state
 	engine  engine.Engine
 	targets []lockTarget
 	block   bool
-
-	vm.OperatorBase
 }
 
 func (lockOp *LockOp) GetOperatorBase() *vm.OperatorBase {

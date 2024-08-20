@@ -91,6 +91,7 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 
 	ctr.resetExprExecutor()
 	ctr.state = Build
+	ctr.probeIdx = 0
 
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc.Mp())
@@ -111,8 +112,6 @@ func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanExprExecutor()
 
 	if loopJoin.ProjectList != nil {
-		anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
-		anal.Alloc(loopJoin.ProjectAllocSize)
 		loopJoin.FreeProjection(proc)
 	}
 }

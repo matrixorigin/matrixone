@@ -145,9 +145,6 @@ func (rightAnti *RightAnti) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (rightAnti *RightAnti) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &rightAnti.ctr
-	if !ctr.handledLast && rightAnti.NumCPU > 1 && !rightAnti.IsMerger {
-		rightAnti.Channel <- nil
-	}
 	ctr.cleanBuf(proc)
 	ctr.cleanBatch(proc)
 	ctr.cleanEvalVectors()

@@ -83,10 +83,6 @@ func (merge *Merge) Release() {
 }
 
 func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	merge.Free(proc, pipelineFailed, err)
-}
-
-func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if merge.ctr != nil {
 		merge.ctr.FreeMergeTypeOperator(pipelineFailed)
 		if merge.ctr.buf != nil {
@@ -95,5 +91,8 @@ func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) 
 		}
 		merge.ctr = nil
 	}
+}
+
+func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) {
 
 }

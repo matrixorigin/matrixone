@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -43,12 +41,6 @@ func (tableScan *TableScan) OpType() vm.OpType {
 func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	if tableScan.TopValueMsgTag > 0 {
 		tableScan.ctr.msgReceiver = message.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress(), proc.GetMessageBoard())
-	}
-	if tableScan.ctr.buf == nil {
-		tableScan.ctr.buf = batch.NewWithSize(len(tableScan.Types))
-		for i := range tableScan.Types {
-			tableScan.ctr.buf.Vecs[i] = vector.NewVec(tableScan.Types[i])
-		}
 	}
 	err = tableScan.PrepareProjection(proc)
 	return

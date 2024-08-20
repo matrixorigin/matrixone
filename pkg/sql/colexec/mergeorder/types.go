@@ -94,10 +94,43 @@ type container struct {
 }
 
 func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeOrder.Free(proc, pipelineFailed, err)
+	mergeOrder.cleanBatchAndCol(proc)
+	ctr := &mergeOrder.ctr
+	ctr.batchList = ctr.batchList[:0]
+	ctr.orderCols = ctr.orderCols[:0]
+	ctr.indexList = nil
+	ctr.status = receiving
+
+	for i := range ctr.executors {
+		if ctr.executors[i] != nil {
+			ctr.executors[i].ResetForNextQuery()
+		}
+	}
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
 }
 
 func (mergeOrder *MergeOrder) Free(proc *process.Process, pipelineFailed bool, err error) {
+	mergeOrder.cleanBatchAndCol(proc)
+	ctr := &mergeOrder.ctr
+	ctr.batchList = nil
+	ctr.orderCols = nil
+	for i := range ctr.executors {
+		if ctr.executors[i] != nil {
+			ctr.executors[i].Free()
+		}
+	}
+	ctr.executors = nil
+
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
+	}
+
+}
+
+func (mergeOrder *MergeOrder) cleanBatchAndCol(proc *process.Process) {
 	mp := proc.Mp()
 	ctr := &mergeOrder.ctr
 	for i := range ctr.batchList {
@@ -114,16 +147,4 @@ func (mergeOrder *MergeOrder) Free(proc *process.Process, pipelineFailed bool, e
 			}
 		}
 	}
-	for i := range ctr.executors {
-		if ctr.executors[i] != nil {
-			ctr.executors[i].Free()
-		}
-	}
-	ctr.executors = nil
-
-	if ctr.buf != nil {
-		ctr.buf.Clean(proc.Mp())
-		ctr.buf = nil
-	}
-
 }

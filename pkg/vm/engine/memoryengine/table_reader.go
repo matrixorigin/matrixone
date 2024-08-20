@@ -47,7 +47,8 @@ func (t *Table) BuildReaders(
 	relData engine.RelData,
 	parallel int,
 	_ int,
-	_ bool) (readers []engine.Reader, err error) {
+	_ bool,
+	_ engine.TombstoneApplyPolicy) (readers []engine.Reader, err error) {
 
 	readers = make([]engine.Reader, parallel)
 	var shardIDs = relData.GetShardIDList()

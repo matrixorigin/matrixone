@@ -94,14 +94,25 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(loopSingle.Result))
 				for i, rp := range loopSingle.Result {
-					ctr.rbat.Vecs[i] = vector.NewVec(loopSingle.Typs[rp.Pos])
+					if rp.Rel != 0 {
+						ctr.rbat.Vecs[i] = vector.NewVec(loopSingle.Typs[rp.Pos])
+					} else {
+						ctr.rbat.Vecs[i] = vector.NewVec(*bat.Vecs[rp.Pos].GetType())
+					}
 				}
 			} else {
 				ctr.rbat.CleanOnlyData()
 			}
+			for i, rp := range loopSingle.Result {
+				if rp.Rel == 0 {
+					if err = vector.GetUnionAllFunction(*bat.Vecs[rp.Pos].GetType(), proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
+						return result, err
+					}
+				}
+			}
 
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(bat, loopSingle, proc, &probeResult)
+				err = ctr.emptyProbe(bat, loopSingle, &probeResult)
 			} else {
 				err = ctr.probe(bat, loopSingle, proc, &probeResult)
 			}
@@ -146,12 +157,9 @@ func (loopSingle *LoopSingle) build(proc *process.Process, anal process.Analyze)
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopSingle, proc *process.Process, result *vm.CallResult) error {
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopSingle, result *vm.CallResult) error {
 	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			ctr.rbat.Vecs[i] = bat.Vecs[rp.Pos]
-			bat.Vecs[rp.Pos] = nil
-		} else {
+		if rp.Rel != 0 {
 			ctr.rbat.Vecs[i].SetClass(vector.CONSTANT)
 			ctr.rbat.Vecs[i].SetLength(bat.RowCount())
 		}
@@ -244,13 +252,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *LoopSingle, proc *process.Proc
 						}
 					}
 				}
-			}
-		}
-	}
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			if err := vector.GetUnionAllFunction(*ctr.rbat.Vecs[i].GetType(), proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
-				return err
 			}
 		}
 	}

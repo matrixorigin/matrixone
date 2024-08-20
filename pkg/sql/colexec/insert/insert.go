@@ -83,6 +83,7 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 			insert.ctr.buf.SetAttributes(insert.InsertCtx.Attrs)
 		}
 	}
+	insert.ctr.affectedRows = 0
 	return nil
 }
 
@@ -131,7 +132,7 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 			anal.Input(input.Batch, insert.IsFirst)
 			if insert.InsertCtx.AddAffectedRows {
 				affectedRows := uint64(input.Batch.RowCount())
-				atomic.AddUint64(&insert.affectedRows, affectedRows)
+				atomic.AddUint64(&insert.ctr.affectedRows, affectedRows)
 			}
 
 			// If the target is partition table
@@ -200,8 +201,7 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 	}
 
 	if insert.ctr.state == vm.End {
-		anal.Output(result.Batch, insert.IsLast)
-		return result, nil
+		return vm.CancelResult, nil
 	}
 
 	panic("bug")
@@ -218,6 +218,7 @@ func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) 
 		return input, nil
 	}
 
+	affectedRows := uint64(input.Batch.RowCount())
 	if len(insert.InsertCtx.PartitionTableIDs) > 0 {
 		//@todo partition's insertBatches should have buf
 		insertBatches, err := colexec.GroupByPartitionForInsert(proc, input.Batch, insert.InsertCtx.Attrs, insert.InsertCtx.PartitionIndexInBatch, len(insert.InsertCtx.PartitionTableIDs))
@@ -252,8 +253,7 @@ func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) 
 	}
 
 	if insert.InsertCtx.AddAffectedRows {
-		affectedRows := uint64(insert.ctr.buf.Vecs[0].Length())
-		atomic.AddUint64(&insert.affectedRows, affectedRows)
+		atomic.AddUint64(&insert.ctr.affectedRows, affectedRows)
 	}
 	// `insertBat` does not include partition expression columns
 	anal.Output(input.Batch, insert.IsLast)

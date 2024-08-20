@@ -41,7 +41,7 @@ func (innerJoin *InnerJoin) OpType() vm.OpType {
 }
 
 func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
-	if innerJoin.ctr.vecs == nil {
+	if len(innerJoin.ctr.vecs) == 0 {
 		innerJoin.ctr.vecs = make([]*vector.Vector, len(innerJoin.Conditions[0]))
 		innerJoin.ctr.executor = make([]colexec.ExpressionExecutor, len(innerJoin.Conditions[0]))
 		for i := range innerJoin.ctr.executor {

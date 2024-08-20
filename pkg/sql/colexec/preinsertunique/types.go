@@ -74,6 +74,7 @@ func (preInsertUnique *PreInsertUnique) Reset(proc *process.Process, pipelineFai
 	if preInsertUnique.ctr.buf != nil {
 		preInsertUnique.ctr.buf.CleanOnlyData()
 	}
+	preInsertUnique.packers.Free()
 }
 
 func (preInsertUnique *PreInsertUnique) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -81,6 +82,4 @@ func (preInsertUnique *PreInsertUnique) Free(proc *process.Process, pipelineFail
 		preInsertUnique.ctr.buf.Clean(proc.Mp())
 		preInsertUnique.ctr.buf = nil
 	}
-
-	preInsertUnique.packers.Free()
 }

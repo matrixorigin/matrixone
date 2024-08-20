@@ -72,11 +72,11 @@ type container struct {
 	resBat           *batch.Batch
 	source           engine.Relation
 	partitionSources []engine.Relation // Align array index with the partition number
+	affectedRows     uint64
 }
 type Deletion struct {
-	ctr          container
-	DeleteCtx    *DeleteCtx
-	affectedRows uint64
+	ctr       container
+	DeleteCtx *DeleteCtx
 
 	// for delete filter below
 	// mp[segmentId] = 1 => txnWorkSpace,mp[segmentId] = 2 => CN Block
@@ -135,78 +135,73 @@ type DeleteCtx struct {
 }
 
 func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	deletion.ctr.state = vm.Build
+	ctr := &deletion.ctr
+	ctr.state = vm.Build
 	if deletion.RemoteDelete {
-		for k := range deletion.ctr.blockId_bitmap {
-			delete(deletion.ctr.blockId_bitmap, k)
+		for k := range ctr.blockId_bitmap {
+			delete(ctr.blockId_bitmap, k)
 		}
-		for pidx, blockidRowidbatch := range deletion.ctr.partitionId_blockId_rowIdBatch {
+		for pidx, blockidRowidbatch := range ctr.partitionId_blockId_rowIdBatch {
 			for blkid, bat := range blockidRowidbatch {
 				if bat != nil {
 					bat.Clean(proc.GetMPool())
 				}
 				delete(blockidRowidbatch, blkid)
 			}
-			delete(deletion.ctr.partitionId_blockId_rowIdBatch, pidx)
+			delete(ctr.partitionId_blockId_rowIdBatch, pidx)
 		}
-		for pidx, blockId_metaLoc := range deletion.ctr.partitionId_blockId_deltaLoc {
+		for pidx, blockId_metaLoc := range ctr.partitionId_blockId_deltaLoc {
 			for blkid, bat := range blockId_metaLoc {
 				if bat != nil {
 					bat.Clean(proc.GetMPool())
 				}
 				delete(blockId_metaLoc, blkid)
 			}
-			delete(deletion.ctr.partitionId_blockId_deltaLoc, pidx)
+			delete(ctr.partitionId_blockId_deltaLoc, pidx)
 		}
-		for blkid := range deletion.ctr.blockId_type {
-			delete(deletion.ctr.blockId_type, blkid)
+		for blkid := range ctr.blockId_type {
+			delete(ctr.blockId_type, blkid)
 		}
-		deletion.ctr.pool.pools = deletion.ctr.pool.pools[:0]
+		for _, bat := range ctr.pool.pools {
+			bat.Clean(proc.GetMPool())
+		}
+		ctr.pool.pools = ctr.pool.pools[:0]
 	}
 
-	deletion.ctr.batch_size = 0
-	deletion.ctr.deleted_length = 0
+	if ctr.resBat != nil {
+		ctr.resBat.CleanOnlyData()
+	}
 
-	deletion.ctr.partitionSources = nil
-	deletion.ctr.source = nil
+	ctr.partitionSources = nil
+	ctr.source = nil
+
+	ctr.batch_size = 0
+	ctr.deleted_length = 0
 }
 
 // delete from t1 using t1 join t2 on t1.a = t2.a;
 func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &deletion.ctr
 	if deletion.RemoteDelete {
 		deletion.SegmentMap = nil
-		for _, blockId_rowIdBatch := range deletion.ctr.partitionId_blockId_rowIdBatch {
-			for _, bat := range blockId_rowIdBatch {
-				if bat != nil {
-					bat.Clean(proc.GetMPool())
-				}
-			}
-		}
-		for _, blockId_metaLoc := range deletion.ctr.partitionId_blockId_deltaLoc {
-			for _, bat := range blockId_metaLoc {
-				if bat != nil {
-					bat.Clean(proc.GetMPool())
-				}
-			}
-		}
-		deletion.ctr.blockId_bitmap = nil
-		deletion.ctr.partitionId_blockId_rowIdBatch = nil
-		deletion.ctr.partitionId_blockId_deltaLoc = nil
-		deletion.ctr.blockId_type = nil
-		deletion.ctr.pool = nil
+		ctr.blockId_bitmap = nil
+		ctr.partitionId_blockId_rowIdBatch = nil
+		ctr.partitionId_blockId_deltaLoc = nil
+		ctr.blockId_type = nil
+		ctr.pool = nil
 	}
 
-	if deletion.ctr.resBat != nil {
-		deletion.ctr.resBat.Clean(proc.GetMPool())
-		deletion.ctr.resBat = nil
+	if ctr.resBat != nil {
+		ctr.resBat.Clean(proc.GetMPool())
+		ctr.resBat = nil
 	}
 
-	deletion.ctr.partitionSources = nil
-	deletion.ctr.source = nil
+	ctr.partitionSources = nil
+	ctr.source = nil
 }
 
 func (deletion *Deletion) AffectedRows() uint64 {
-	return deletion.affectedRows
+	return deletion.ctr.affectedRows
 }
 
 func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch) error {
@@ -219,7 +214,7 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch)
 		}
 		for i, delBatch := range delBatches {
 			collectBatchInfo(proc, deletion, delBatch, 0, i, 1)
-			proc.PutBatch(delBatch)
+			delBatch.Clean(proc.GetMPool())
 		}
 	} else {
 		collectBatchInfo(proc, deletion, srcBat, deletion.DeleteCtx.RowIdIdx, 0, delCtx.PrimaryKeyIdx)

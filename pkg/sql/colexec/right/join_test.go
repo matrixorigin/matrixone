@@ -19,7 +19,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,8 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -41,37 +41,38 @@ const (
 
 // add unit tests for cases
 type joinTestCase struct {
-	arg    *RightJoin
-	flgs   []bool // flgs[i] == true: nullable
-	types  []types.Type
-	proc   *process.Process
-	cancel context.CancelFunc
-	barg   *hashbuild.HashBuild
-	marg   *merge.Merge
+	arg         *RightJoin
+	flgs        []bool // flgs[i] == true: nullable
+	types       []types.Type
+	proc        *process.Process
+	cancel      context.CancelFunc
+	barg        *hashbuild.HashBuild
+	resultBatch *batch.Batch
 }
 
 var (
+	tag int32
 	tcs []joinTestCase
 )
 
 func init() {
 	tcs = []joinTestCase{
-		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		newTestCase([]bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
 			[][]*plan.Expr{
 				{
-					newExpr(0, types.T_int8.ToType()),
+					newExpr(0, types.T_int32.ToType()),
 				},
 				{
-					newExpr(0, types.T_int8.ToType()),
+					newExpr(0, types.T_int32.ToType()),
 				},
 			}),
-		newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+		newTestCase([]bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
 			[][]*plan.Expr{
 				{
-					newExpr(0, types.T_int8.ToType()),
+					newExpr(0, types.T_int32.ToType()),
 				},
 				{
-					newExpr(0, types.T_int8.ToType()),
+					newExpr(0, types.T_int32.ToType()),
 				},
 			}),
 	}
@@ -84,145 +85,113 @@ func TestString(t *testing.T) {
 	}
 }
 
-/*
-	func TestJoin(t *testing.T) {
-		for _, tc := range tcs {
-			nb0 := tc.proc.Mp().CurrNB()
-			bats := hashBuild(t, tc)
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[0])
-			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[1])
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
-			for {
-				ok, err := tc.arg.Call(tc.proc)
-				if ok.Status == vm.ExecStop || err != nil {
-					break
-				}
-			}
-			tc.arg.Reset(tc.proc, false, nil)
+func TestJoin(t *testing.T) {
+	for _, tc := range tcs {
 
-			bats = hashBuild(t, tc)
-			err = tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[0])
-			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[1])
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
-			for {
-				ok, err := tc.arg.Call(tc.proc)
-				if ok.Status == vm.ExecStop || err != nil {
-					break
-				}
-			}
-			tc.arg.Free(tc.proc, false, nil)
-			tc.proc.FreeVectors()
-			nb1 := tc.proc.Mp().CurrNB()
-			require.Equal(t, nb0, nb1)
-		}
-		for _, tc := range tcs {
-			nb0 := tc.proc.Mp().CurrNB()
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
-			for {
-				ok, err := tc.arg.Call(tc.proc)
-				if ok.Status == vm.ExecStop || err != nil {
-					break
-				}
-			}
-			tc.arg.Reset(tc.proc, false, nil)
+		resetChildren(tc.arg)
+		resetHashBuildChildren(tc.barg)
+		err := tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		err = tc.barg.Prepare(tc.proc)
+		require.NoError(t, err)
 
-			err = tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
-			for {
-				ok, err := tc.arg.Call(tc.proc)
-				if ok.Status == vm.ExecStop || err != nil {
-					break
-				}
-			}
-			tc.arg.Free(tc.proc, false, nil)
-			tc.proc.FreeVectors()
-			nb1 := tc.proc.Mp().CurrNB()
-			require.Equal(t, nb0, nb1)
+		res, err := tc.barg.Call(tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, res.Batch == nil, true)
+		res, err = tc.arg.Call(tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
+		require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
+		for i := range res.Batch.Vecs {
+			vec1 := res.Batch.Vecs[i]
+			vec2 := tc.resultBatch.Vecs[i]
+			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
+			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
+			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
 		}
-	}
-*/
-func BenchmarkJoin(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs = []joinTestCase{
-			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
-				[][]*plan.Expr{
-					{
-						newExpr(0, types.T_int8.ToType()),
-					},
-					{
-						newExpr(0, types.T_int8.ToType()),
-					},
-				}),
-			newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
-				[][]*plan.Expr{
-					{
-						newExpr(0, types.T_int8.ToType()),
-					},
-					{
-						newExpr(0, types.T_int8.ToType()),
-					},
-				}),
+
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+
+		resetChildren(tc.arg)
+		resetHashBuildChildren(tc.barg)
+		tc.proc.GetMessageBoard().Reset()
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		err = tc.barg.Prepare(tc.proc)
+		require.NoError(t, err)
+
+		res, err = tc.barg.Call(tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, res.Batch == nil, true)
+		res, err = tc.arg.Call(tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
+		require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
+		for i := range res.Batch.Vecs {
+			vec1 := res.Batch.Vecs[i]
+			vec2 := tc.resultBatch.Vecs[i]
+			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
+			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
+			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
 		}
-		t := new(testing.T)
-		for _, tc := range tcs {
-			bats := hashBuild(t, tc)
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[0])
-			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[1])
-			for {
-				ok, err := tc.arg.Call(tc.proc)
-				if ok.Status == vm.ExecStop || err != nil {
-					break
-				}
-			}
-		}
+
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
+/*
+	func BenchmarkJoin(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			tcs = []joinTestCase{
+				newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+					[][]*plan.Expr{
+						{
+							newExpr(0, types.T_int8.ToType()),
+						},
+						{
+							newExpr(0, types.T_int8.ToType()),
+						},
+					}),
+				newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+					[][]*plan.Expr{
+						{
+							newExpr(0, types.T_int8.ToType()),
+						},
+						{
+							newExpr(0, types.T_int8.ToType()),
+						},
+					}),
+			}
+			t := new(testing.T)
+			for _, tc := range tcs {
+				bats := hashBuild(t, tc)
+				err := tc.arg.Prepare(tc.proc)
+				require.NoError(t, err)
+				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
+				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+				tc.proc.Reg.MergeReceivers[0].Ch <- nil
+				tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[0])
+				tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[1])
+				for {
+					ok, err := tc.arg.Call(tc.proc)
+					if ok.Status == vm.ExecStop || err != nil {
+						break
+					}
+				}
+			}
+		}
+	}
+*/
 func newExpr(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{
@@ -240,16 +209,8 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 
 func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
+	proc.SetMessageBoard(message.NewMessageBoard())
 	ctx, cancel := context.WithCancel(context.Background())
-	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *process.RegisterMessage, 10),
-	}
-	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *process.RegisterMessage, 10),
-	}
 	fr, _ := function.GetFunctionByName(ctx, "=", ts)
 	fid := fr.GetEncodedOverloadID()
 	args := make([]*plan.Expr, 0, 2)
@@ -286,6 +247,13 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 			},
 		},
 	}
+	resultBatch := batch.NewWithSize(len(rp))
+	resultBatch.SetRowCount(2)
+	for i := range rp {
+		bat := colexec.MakeMockBatchs()
+		resultBatch.Vecs[i] = bat.Vecs[rp[i].Pos]
+	}
+	tag++
 	return joinTestCase{
 		types:  ts,
 		flgs:   flgs,
@@ -306,6 +274,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 					IsLast:  false,
 				},
 			},
+			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
 			Typs:        ts,
@@ -320,31 +289,23 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 			},
 			NeedAllocateSels: true,
 			NeedMergedBatch:  true,
+			JoinMapTag:       tag,
+			JoinMapRefCnt:    1,
 		},
-		marg: &merge.Merge{},
+		resultBatch: resultBatch,
 	}
 }
 
-func hashBuild(t *testing.T, tc joinTestCase) []*batch.Batch {
-	err := tc.marg.Prepare(tc.proc)
-	require.NoError(t, err)
-	err = tc.barg.Prepare(tc.proc)
-	require.NoError(t, err)
-	tc.barg.SetChildren([]vm.Operator{tc.marg})
-	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-	for _, r := range tc.proc.Reg.MergeReceivers {
-		r.Ch <- nil
-	}
-	ok1, err := tc.barg.Call(tc.proc)
-	require.NoError(t, err)
-	require.Equal(t, false, ok1.Status == vm.ExecStop)
-	ok2, err := tc.barg.Call(tc.proc)
-	require.NoError(t, err)
-	require.Equal(t, false, ok2.Status == vm.ExecStop)
-	return []*batch.Batch{ok1.Batch, ok2.Batch}
+func resetChildren(arg *RightJoin) {
+	bat := colexec.MakeMockBatchs()
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
 }
 
-// create a new block based on the type information, flgs[i] == ture: has null
-func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+func resetHashBuildChildren(arg *hashbuild.HashBuild) {
+	bat := colexec.MakeMockBatchs()
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
 }

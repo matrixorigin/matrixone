@@ -108,13 +108,16 @@ func (onDuplicatekey *OnDuplicatekey) Reset(proc *process.Process, pipelineFaile
 func (onDuplicatekey *OnDuplicatekey) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if onDuplicatekey.ctr.rbat != nil {
 		onDuplicatekey.ctr.rbat.Clean(proc.GetMPool())
+		onDuplicatekey.ctr.rbat = nil
 	}
 	if onDuplicatekey.ctr.checkConflictBat != nil {
 		onDuplicatekey.ctr.checkConflictBat.Clean(proc.GetMPool())
+		onDuplicatekey.ctr.checkConflictBat = nil
 	}
 	for _, exe := range onDuplicatekey.ctr.uniqueCheckExes {
 		if exe != nil {
 			exe.Free()
 		}
 	}
+	onDuplicatekey.ctr.uniqueCheckExes = nil
 }

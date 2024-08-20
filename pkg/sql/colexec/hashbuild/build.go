@@ -43,29 +43,24 @@ func (hashBuild *HashBuild) OpType() vm.OpType {
 func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	ctr := &hashBuild.ctr
 	if hashBuild.NeedHashMap {
-		if ctr.vecs == nil {
+		if len(ctr.executor) == 0 {
 			ctr.vecs = make([][]*vector.Vector, 0)
-		}
-		if ctr.executor == nil {
 			ctr.executor = make([]colexec.ExpressionExecutor, len(hashBuild.Conditions))
-		}
-		ctr.keyWidth = 0
-		for i, expr := range hashBuild.Conditions {
-			typ := expr.Typ
-			width := types.T(typ.Id).TypeLen()
-			// todo : for varlena type, always go strhashmap
-			if types.T(typ.Id).FixedLength() < 0 {
-				width = 128
-			}
-			ctr.keyWidth += width
-			if ctr.executor[i] == nil {
+			ctr.keyWidth = 0
+			for i, expr := range hashBuild.Conditions {
+				typ := expr.Typ
+				width := types.T(typ.Id).TypeLen()
+				// todo : for varlena type, always go strhashmap
+				if types.T(typ.Id).FixedLength() < 0 {
+					width = 128
+				}
+				ctr.keyWidth += width
 				ctr.executor[i], err = colexec.NewExpressionExecutor(proc, hashBuild.Conditions[i])
 				if err != nil {
 					return err
 				}
 			}
 		}
-
 		if ctr.keyWidth <= 8 {
 			if ctr.intHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
 				return err
@@ -287,7 +282,7 @@ func (ctr *container) buildHashmap(ap *HashBuild, proc *process.Process) error {
 			if len(ap.ctr.uniqueJoinKeys) == 0 {
 				ap.ctr.uniqueJoinKeys = make([]*vector.Vector, len(ctr.executor))
 				for j, vec := range ctr.vecs[vecIdx1] {
-					ap.ctr.uniqueJoinKeys[j] = proc.GetVector(*vec.GetType())
+					ap.ctr.uniqueJoinKeys[j] = vector.NewVec(*vec.GetType())
 				}
 			}
 

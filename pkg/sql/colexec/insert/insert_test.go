@@ -111,7 +111,7 @@ func TestInsertOperator(t *testing.T) {
 	require.NoError(t, err)
 	_, err = argument1.Call(proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(3), argument1.affectedRows)
+	require.Equal(t, uint64(3), argument1.ctr.affectedRows)
 
 	argument1.Reset(proc, false, nil)
 
@@ -120,8 +120,9 @@ func TestInsertOperator(t *testing.T) {
 	require.NoError(t, err)
 	_, err = argument1.Call(proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(3), argument1.affectedRows)
+	require.Equal(t, uint64(3), argument1.ctr.affectedRows)
 
+	argument1.Reset(proc, false, nil)
 	argument1.Free(proc, false, nil)
 	argument1.GetChildren(0).Free(proc, false, nil)
 	proc.Free()

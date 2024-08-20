@@ -36,16 +36,16 @@ type container struct {
 	s3Writer           *colexec.S3Writer
 	partitionS3Writers []*colexec.S3Writer // The array is aligned with the partition number array
 	buf                *batch.Batch
+	affectedRows       uint64
 
 	source           engine.Relation
 	partitionSources []engine.Relation // Align array index with the partition number
 }
 
 type Insert struct {
-	ctr          container
-	affectedRows uint64
-	ToWriteS3    bool // mark if this insert's target is S3 or not.
-	InsertCtx    *InsertCtx
+	ctr       container
+	ToWriteS3 bool // mark if this insert's target is S3 or not.
+	InsertCtx *InsertCtx
 
 	vm.OperatorBase
 }
@@ -110,7 +110,6 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 	if insert.ctr.buf != nil {
 		insert.ctr.buf.CleanOnlyData()
 	}
-	insert.affectedRows = 0
 }
 
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
@@ -136,9 +135,9 @@ func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error
 }
 
 func (insert *Insert) AffectedRows() uint64 {
-	return insert.affectedRows
+	return insert.ctr.affectedRows
 }
 
 func (insert *Insert) GetAffectedRows() *uint64 {
-	return &insert.affectedRows
+	return &insert.ctr.affectedRows
 }

@@ -550,6 +550,10 @@ func (d *DiskCache) DeletePaths(
 	return nil
 }
 
+func (d *DiskCache) Evict(done chan int64) {
+	d.cache.Evict(done)
+}
+
 func fileSize(info fs.FileInfo) int64 {
 	if sys, ok := info.Sys().(*syscall.Stat_t); ok {
 		return int64(sys.Blocks) * 512 // it's always 512, not sys.Blksize

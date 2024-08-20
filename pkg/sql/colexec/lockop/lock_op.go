@@ -21,10 +21,9 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -38,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var (
@@ -212,7 +212,8 @@ func performLock(
 	bat *batch.Batch,
 	proc *process.Process,
 	lockOp *LockOp,
-	analyze process.Analyze) error {
+	analyze process.Analyze,
+) error {
 	needRetry := false
 	for idx, target := range lockOp.targets {
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
@@ -404,7 +405,8 @@ func doLock(
 	proc *process.Process,
 	vec *vector.Vector,
 	pkType types.Type,
-	opts LockOptions) (bool, bool, timestamp.Timestamp, error) {
+	opts LockOptions,
+) (bool, bool, timestamp.Timestamp, error) {
 	txnOp := proc.GetTxnOperator()
 	txnClient := proc.Base.TxnClient
 	lockService := proc.GetLockService()
@@ -497,6 +499,11 @@ func doLock(
 	}
 	// Record lock waiting time
 	analyzeLockWaitTime(analyze, start)
+
+	if runtime.InTesting(proc.GetService()) {
+		tc := runtime.MustGetTestingContext(proc.GetService())
+		tc.GetAdjustLockResultFunc()(txn.ID, tableID, &result)
+	}
 
 	if len(result.ConflictKey) > 0 {
 		trace.GetService(proc.GetService()).AddTxnActionInfo(
@@ -859,7 +866,7 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 }
 
 func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	lockOp.resetPacker()
+	lockOp.resetParker()
 	lockOp.cleanCachedBatch(proc)
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.step = stepLock
@@ -868,7 +875,7 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
-	lockOp.cleanPacker()
+	lockOp.cleanParker()
 	lockOp.cleanCachedBatch(proc)
 }
 
@@ -879,13 +886,13 @@ func (lockOp *LockOp) cleanCachedBatch(proc *process.Process) {
 	lockOp.ctr.cachedBatches = nil
 }
 
-func (lockOp *LockOp) resetPacker() {
+func (lockOp *LockOp) resetParker() {
 	if lockOp.ctr.parker != nil {
 		lockOp.ctr.parker.Reset()
 	}
 }
 
-func (lockOp *LockOp) cleanPacker() {
+func (lockOp *LockOp) cleanParker() {
 	if lockOp.ctr.parker != nil {
 		lockOp.ctr.parker.Close()
 		lockOp.ctr.parker = nil
@@ -928,7 +935,8 @@ func hasNewVersionInRange(
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,
-	from, to timestamp.Timestamp) (bool, error) {
+	from, to timestamp.Timestamp,
+) (bool, error) {
 	if vec == nil {
 		return false, nil
 	}

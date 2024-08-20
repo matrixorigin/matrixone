@@ -85,17 +85,14 @@ func (tableScan *TableScan) Release() {
 func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
 	allocSize := int64(0)
-	if tableScan.ctr.buf != nil {
-		tableScan.ctr.buf.CleanOnlyData()
-	}
 	allocSize += int64(tableScan.ctr.maxAllocSize)
-	if tableScan.ctr.msgReceiver != nil {
-		tableScan.ctr.msgReceiver.Free()
-		tableScan.ctr.msgReceiver = nil
+	if tableScan.ProjectList != nil {
+		allocSize += tableScan.ProjectAllocSize
+		tableScan.ResetProjection(proc)
 	}
-	allocSize += tableScan.ProjectAllocSize
-	tableScan.ResetProjection(proc)
+	tableScan.ctr.maxAllocSize = 0
 	anal.Alloc(allocSize)
+	tableScan.freeReceiver()
 	tableScan.closeReader()
 }
 
@@ -104,11 +101,13 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 		tableScan.ctr.buf.Clean(proc.Mp())
 		tableScan.ctr.buf = nil
 	}
+}
+
+func (tableScan *TableScan) freeReceiver() {
 	if tableScan.ctr.msgReceiver != nil {
 		tableScan.ctr.msgReceiver.Free()
 		tableScan.ctr.msgReceiver = nil
 	}
-	tableScan.closeReader()
 }
 
 func (tableScan *TableScan) closeReader() {

@@ -29,11 +29,11 @@ type container struct {
 	delSource engine.Relation
 	// 2. partition sub tables
 	partitionSources []engine.Relation
+	affectedRows     uint64
 }
 type MergeDelete struct {
 	ctr                 container
 	AddAffectedRows     bool
-	AffectedRows        uint64
 	Ref                 *plan.ObjectRef
 	Engine              engine.Engine
 	PartitionTableNames []string
@@ -93,8 +93,12 @@ func (mergeDelete *MergeDelete) Release() {
 }
 
 func (mergeDelete *MergeDelete) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeDelete.AffectedRows = 0
+	//can not reset affectRows because MO need get affectRows after reset
 }
 
 func (mergeDelete *MergeDelete) Free(proc *process.Process, pipelineFailed bool, err error) {
+}
+
+func (mergeDelete *MergeDelete) AffectedRows() uint64 {
+	return mergeDelete.ctr.affectedRows
 }

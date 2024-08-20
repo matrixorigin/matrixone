@@ -94,9 +94,5 @@ func (indexJoin *IndexJoin) Free(proc *process.Process, pipelineFailed bool, err
 		indexJoin.ctr.buf.Clean(proc.Mp())
 		indexJoin.ctr.buf = nil
 	}
-	if indexJoin.ProjectList != nil {
-		anal := proc.GetAnalyze(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor())
-		anal.Alloc(indexJoin.ProjectAllocSize)
-		indexJoin.FreeProjection(proc)
-	}
+	indexJoin.FreeProjection(proc)
 }

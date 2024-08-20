@@ -93,6 +93,7 @@ func (loopLeft *LoopLeft) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.resetExprExecutor()
 	ctr.state = Build
 	ctr.inBat = nil
+	ctr.probeIdx = 0
 
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc.Mp())
@@ -111,11 +112,7 @@ func (loopLeft *LoopLeft) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanBatch(proc.Mp())
 	ctr.cleanExprExecutor()
 
-	if loopLeft.ProjectList != nil {
-		anal := proc.GetAnalyze(loopLeft.GetIdx(), loopLeft.GetParallelIdx(), loopLeft.GetParallelMajor())
-		anal.Alloc(loopLeft.ProjectAllocSize)
-		loopLeft.FreeProjection(proc)
-	}
+	loopLeft.FreeProjection(proc)
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
@@ -130,10 +127,6 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
-	}
-	if ctr.inBat != nil {
-		ctr.inBat.Clean(mp)
-		ctr.inBat = nil
 	}
 }
 

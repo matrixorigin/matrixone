@@ -16,8 +16,6 @@ package mergecte
 
 import (
 	"bytes"
-	"sync/atomic"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -37,10 +35,7 @@ func (mergeCTE *MergeCTE) OpType() vm.OpType {
 }
 
 func (mergeCTE *MergeCTE) Prepare(proc *process.Process) error {
-	mergeCTE.ctr = new(container)
-
-	mergeCTE.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
-	mergeCTE.ctr.curNodeCnt = mergeCTE.ctr.nodeCnt
+	mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
 	mergeCTE.ctr.status = sendInitial
 	return nil
 }
@@ -56,11 +51,9 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result := vm.NewCallResult()
 	var err error
-	if mergeCTE.ctr.buf != nil {
-		proc.PutBatch(mergeCTE.ctr.buf)
-		mergeCTE.ctr.buf = nil
-	}
-	switch mergeCTE.ctr.status {
+	ctr := &mergeCTE.ctr
+
+	switch ctr.status {
 	case sendInitial:
 		result, err = mergeCTE.GetChildren(0).Call(proc)
 		if err != nil {
@@ -69,17 +62,42 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		if result.Batch == nil {
-			mergeCTE.ctr.status = sendLastTag
+			ctr.status = sendLastTag
+		} else {
+			if len(ctr.freeBats) > ctr.i {
+				if ctr.freeBats[ctr.i] != nil {
+					ctr.freeBats[ctr.i].CleanOnlyData()
+				}
+				ctr.freeBats[ctr.i], err = ctr.freeBats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+				if err != nil {
+					return result, err
+				}
+			} else {
+				appBat, err := result.Batch.Dup(proc.Mp())
+				if err != nil {
+					return result, err
+				}
+				ctr.freeBats = append(ctr.freeBats, appBat)
+			}
+			ctr.bats = append(ctr.bats, ctr.freeBats[ctr.i])
+			ctr.i++
 		}
-		if result.Batch != nil {
-			atomic.AddInt64(&result.Batch.Cnt, 1)
-		}
-		mergeCTE.ctr.bats = append(mergeCTE.ctr.bats, result.Batch)
+
 		fallthrough
 	case sendLastTag:
 		if mergeCTE.ctr.status == sendLastTag {
 			mergeCTE.ctr.status = sendRecursive
-			mergeCTE.ctr.bats[0] = makeRecursiveBatch(proc)
+			if len(ctr.freeBats) > ctr.i {
+				ctr.freeBats[ctr.i].SetLast()
+			} else {
+				ctr.freeBats = append(ctr.freeBats, makeRecursiveBatch(proc))
+			}
+			if len(mergeCTE.ctr.bats) == 0 {
+				mergeCTE.ctr.bats = append(mergeCTE.ctr.bats, ctr.freeBats[ctr.i])
+			} else {
+				mergeCTE.ctr.bats[0] = ctr.freeBats[ctr.i]
+			}
+			ctr.i++
 		}
 	case sendRecursive:
 		for !mergeCTE.ctr.last {
@@ -89,21 +107,52 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			if result.Batch == nil {
-				result.Batch = nil
 				result.Status = vm.ExecStop
 				return result, nil
 			}
-			atomic.AddInt64(&result.Batch.Cnt, 1)
+
 			if result.Batch.Last() {
 				mergeCTE.ctr.curNodeCnt--
 				if mergeCTE.ctr.curNodeCnt == 0 {
 					mergeCTE.ctr.last = true
-					mergeCTE.ctr.curNodeCnt = mergeCTE.ctr.nodeCnt
-					mergeCTE.ctr.bats = append(mergeCTE.ctr.bats, result.Batch)
+					mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
+					if len(ctr.freeBats) > ctr.i {
+						if ctr.freeBats[ctr.i] != nil {
+							ctr.freeBats[ctr.i].CleanOnlyData()
+						}
+						ctr.freeBats[ctr.i], err = ctr.freeBats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+						if err != nil {
+							return result, err
+						}
+					} else {
+						appBat, err := result.Batch.Dup(proc.Mp())
+						if err != nil {
+							return result, err
+						}
+						ctr.freeBats = append(ctr.freeBats, appBat)
+					}
+					ctr.bats = append(ctr.bats, ctr.freeBats[ctr.i])
+					ctr.i++
 					break
 				}
 			} else {
-				mergeCTE.ctr.bats = append(mergeCTE.ctr.bats, result.Batch)
+				if len(ctr.freeBats) > ctr.i {
+					if ctr.freeBats[ctr.i] != nil {
+						ctr.freeBats[ctr.i].CleanOnlyData()
+					}
+					ctr.freeBats[ctr.i], err = ctr.freeBats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+					if err != nil {
+						return result, err
+					}
+				} else {
+					appBat, err := result.Batch.Dup(proc.Mp())
+					if err != nil {
+						return result, err
+					}
+					ctr.freeBats = append(ctr.freeBats, appBat)
+				}
+				ctr.bats = append(ctr.bats, ctr.freeBats[ctr.i])
+				ctr.i++
 			}
 
 		}

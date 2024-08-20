@@ -49,14 +49,11 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		for i := 0; i < int(shuffle.AliveRegCnt); i++ {
 			shuffle.ctr.sels[i] = make([]int64, 0, colexec.DefaultBatchSize/shuffle.AliveRegCnt*2)
 		}
-	}
-	if shuffle.ctr.shufflePool == nil {
 		shuffle.ctr.shufflePool = make([]*batch.Batch, shuffle.AliveRegCnt)
-	}
-	if shuffle.ctr.sendPool == nil {
-		shuffle.ctr.sendPool = make([]int, shuffle.AliveRegCnt)
+		shuffle.ctr.sendPool = make([]int, 0, shuffle.AliveRegCnt)
 	}
 	shuffle.ctr.lastSentBatchIdx = -1
+	shuffle.ctr.ending = false
 	return nil
 }
 
@@ -76,7 +73,9 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 	}()
 
 	if shuffle.ctr.lastSentBatchIdx != -1 {
-		shuffle.ctr.shufflePool[shuffle.ctr.lastSentBatchIdx].CleanOnlyData()
+		if shuffle.ctr.shufflePool[shuffle.ctr.lastSentBatchIdx] != nil {
+			shuffle.ctr.shufflePool[shuffle.ctr.lastSentBatchIdx].CleanOnlyData()
+		}
 		shuffle.ctr.lastSentBatchIdx = -1
 	}
 
@@ -85,7 +84,7 @@ SENDLAST:
 		result := vm.NewCallResult()
 		//send shuffle pool
 		for i, bat := range shuffle.ctr.shufflePool {
-			if bat != nil {
+			if bat != nil && bat.RowCount() > 0 {
 				//need to wait for runtimefilter_pass before send batch
 				if err := shuffle.handleRuntimeFilter(proc); err != nil {
 					return vm.CancelResult, err
@@ -812,7 +811,7 @@ func putBatchIntoShuffledPoolsBySels(ap *Shuffle, srcBatch *batch.Batch, sels []
 	var err error
 	for regIndex := range shuffledPool {
 		newSels := sels[regIndex]
-		for len(newSels) > 0 {
+		if len(newSels) > 0 {
 			bat := shuffledPool[regIndex]
 			if bat == nil {
 				bat, err = proc.NewBatchFromSrc(srcBatch, colexec.DefaultBatchSize)
@@ -822,21 +821,16 @@ func putBatchIntoShuffledPoolsBySels(ap *Shuffle, srcBatch *batch.Batch, sels []
 				bat.ShuffleIDX = int32(regIndex)
 				ap.ctr.shufflePool[regIndex] = bat
 			}
-			length := len(newSels)
-			if length+bat.RowCount() > colexec.DefaultBatchSize {
-				length = colexec.DefaultBatchSize - bat.RowCount()
-			}
 			for vecIndex := range bat.Vecs {
 				v := bat.Vecs[vecIndex]
 				v.SetSorted(false)
-				err = v.Union(srcBatch.Vecs[vecIndex], newSels[:length], proc.Mp())
+				err = v.Union(srcBatch.Vecs[vecIndex], newSels, proc.Mp())
 				if err != nil {
 					return err
 				}
 			}
-			bat.AddRowCount(length)
-			newSels = newSels[length:]
-			if bat.RowCount() == colexec.DefaultBatchSize {
+			bat.AddRowCount(len(newSels))
+			if bat.RowCount() >= colexec.DefaultBatchSize {
 				ap.ctr.sendPool = append(ap.ctr.sendPool, regIndex)
 			}
 		}

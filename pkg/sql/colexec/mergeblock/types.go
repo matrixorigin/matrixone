@@ -42,6 +42,7 @@ type Container struct {
 
 	source           engine.Relation
 	partitionSources []engine.Relation
+	affectedRows     uint64
 }
 
 type MergeBlock struct {
@@ -53,7 +54,6 @@ type MergeBlock struct {
 	Engine              engine.Engine
 	Ref                 *plan.ObjectRef
 	PartitionTableNames []string
-	affectedRows        uint64
 	container           Container
 
 	vm.OperatorBase
@@ -111,15 +111,22 @@ func (mergeBlock *MergeBlock) Release() {
 }
 
 func (mergeBlock *MergeBlock) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	//can not reset affectRows, because MO need get affectRows after reset
 	mergeBlock.resetMp(proc)
-	mergeBlock.affectedRows = 0
 }
 
 func (mergeBlock *MergeBlock) Free(proc *process.Process, pipelineFailed bool, err error) {
-	mergeBlock.resetMp(proc)
+	mergeBlock.cleanMp(proc)
 }
 
 func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
+	if len(mergeBlock.container.mp) > 0 {
+		for _, bat := range mergeBlock.container.mp {
+			bat.CleanOnlyData()
+		}
+		return
+	}
+
 	var typs []types.Type
 	// exclude the table id column
 	attrs := src.Attrs[1:]
@@ -220,7 +227,7 @@ func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch) err
 		if tblIdx[i] >= 0 {
 			if mergeBlock.AddAffectedRows {
 				blkInfo := objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
-				mergeBlock.affectedRows += uint64(blkInfo.MetaLocation().Rows())
+				mergeBlock.container.affectedRows += uint64(blkInfo.MetaLocation().Rows())
 			}
 			vector.AppendBytes(mergeBlock.container.mp[int(tblIdx[i])].Vecs[0],
 				blkInfosVec.GetBytesAt(i), false, proc.GetMPool())
@@ -233,7 +240,7 @@ func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch) err
 			}
 			newBat.Cnt = 1
 			if mergeBlock.AddAffectedRows {
-				mergeBlock.affectedRows += uint64(newBat.RowCount())
+				mergeBlock.container.affectedRows += uint64(newBat.RowCount())
 			}
 			mergeBlock.container.mp2[idx] = append(mergeBlock.container.mp2[idx], newBat)
 		}
@@ -254,18 +261,30 @@ func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch) err
 
 func (mergeBlock *MergeBlock) resetMp(proc *process.Process) {
 	for k := range mergeBlock.container.mp {
-		mergeBlock.container.mp[k].Clean(proc.GetMPool())
-		mergeBlock.container.mp[k] = nil
-		delete(mergeBlock.container.mp, k)
+		mergeBlock.container.mp[k].CleanOnlyData()
 	}
-	for k, bats := range mergeBlock.container.mp2 {
+	for i, bats := range mergeBlock.container.mp2 {
 		for _, bat := range bats {
 			bat.Clean(proc.GetMPool())
 		}
-		delete(mergeBlock.container.mp2, k)
+		mergeBlock.container.mp2[i] = mergeBlock.container.mp2[i][:0]
 	}
 }
 
+func (mergeBlock *MergeBlock) cleanMp(proc *process.Process) {
+	for k := range mergeBlock.container.mp {
+		mergeBlock.container.mp[k].Clean(proc.GetMPool())
+		mergeBlock.container.mp[k] = nil
+	}
+	mergeBlock.container.mp = nil
+	for _, bats := range mergeBlock.container.mp2 {
+		for _, bat := range bats {
+			bat.Clean(proc.GetMPool())
+		}
+	}
+	mergeBlock.container.mp2 = nil
+}
+
 func (mergeBlock *MergeBlock) AffectedRows() uint64 {
-	return mergeBlock.affectedRows
+	return mergeBlock.container.affectedRows
 }
