@@ -144,17 +144,25 @@ type IOVectorCache interface {
 		ctx context.Context,
 		vector *IOVector,
 	) error
+
 	Update(
 		ctx context.Context,
 		vector *IOVector,
 		async bool,
 	) error
+
 	Flush()
-	//TODO file contents may change, so we still need this s.
+
+	//TODO file contents may change in TAE that violates the immutibility assumption
+	// before they fix this, we still need this sh**.
 	DeletePaths(
 		ctx context.Context,
 		paths []string,
 	) error
+
+	// Evict triggers eviction
+	// if done is not nil, when eviction finish, target size will be send to the done chan
+	Evict(done chan int64)
 }
 
 var slowCacheReadThreshold = time.Second * 0
