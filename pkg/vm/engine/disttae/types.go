@@ -897,6 +897,7 @@ type TempEngine interface {
 	TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error
 	IsCdcEngine() bool
 	ToCdc(*TableCtx, *DecoderInput)
+	GetDDLListener() DDLListener
 }
 
 var _ TempEngine = new(CdcEngine)
@@ -930,6 +931,11 @@ type CdcEngine struct {
 
 	cnEng       engine.Engine
 	cnTxnClient client.TxnClient
+	ddlListener DDLListener
+}
+
+func (cdcEng *CdcEngine) GetDDLListener() DDLListener {
+	return cdcEng.ddlListener
 }
 
 var _ engine.Relation = new(CdcRelation)
@@ -1025,4 +1031,71 @@ type Queue[T any] interface {
 	Back() T
 	Size() int
 	Empty() bool
+}
+
+type DetectResultType int
+
+const (
+	DetectResultInvalid           DetectResultType = 0
+	DetectResultCreateDB          DetectResultType = 1
+	DetectResultDropDB            DetectResultType = 2
+	DetectResultCreateTable       DetectResultType = 3
+	DetectResultDropTable         DetectResultType = 4
+	DetectResultAlterTableInplace DetectResultType = 5
+	DetectResultAlterTableCopy    DetectResultType = 6
+	DetectResultTruncateTable     DetectResultType = 7
+)
+
+func (dtype DetectResultType) String() string {
+	switch dtype {
+	case DetectResultInvalid:
+		return "invalid"
+	case DetectResultCreateDB:
+		return "create db"
+	case DetectResultDropDB:
+		return "drop db"
+	case DetectResultCreateTable:
+		return "create table"
+	case DetectResultDropTable:
+		return "drop table"
+	case DetectResultAlterTableInplace:
+		return "alter table inplace"
+	case DetectResultAlterTableCopy:
+		return "alter table copy"
+	case DetectResultTruncateTable:
+		return "truncate table"
+	default:
+		return "usp detect result type"
+	}
+}
+
+type DetectResult struct {
+	Typ        DetectResultType
+	AccountId  uint64
+	DB         string
+	Table      string
+	DBId       uint64
+	TableId    uint64
+	OldTableId uint64
+}
+
+func (d DetectResult) String() string {
+	return fmt.Sprintf("Typ:%v AccID:%v Db:%v Table:%v DBID:%v TableID:%v OldTableID:%v",
+		d.Typ,
+		d.AccountId,
+		d.DB,
+		d.Table,
+		d.DBId,
+		d.TableId,
+		d.OldTableId)
+}
+
+type DDLListener interface {
+	Init(ts timestamp.Timestamp)
+	InsertTable(bat *batch.Batch)
+	DeleteTable(bat *batch.Batch)
+	InsertDatabase(bat *batch.Batch)
+	DeleteDatabase(bat *batch.Batch)
+	Detect() []*DetectResult
+	Clear()
 }

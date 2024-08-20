@@ -454,13 +454,14 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 				DatabaseName: item.DatabaseName,
 				Ts:           ts.ToTimestamp(),
 			}
-			prev, rep := cc.tables.data.Set(newItem)
-			fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache delete table",
-				newItem.String())
-			if rep && prev != nil {
-				fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache delete table prev item",
-					prev.String())
-			}
+			cc.tables.data.Set(newItem)
+			//prev, rep := cc.tables.data.Set(newItem)
+			//fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache delete table",
+			//	newItem.String())
+			//if rep && prev != nil {
+			//	fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache delete table prev item",
+			//		prev.String())
+			//}
 		}
 	}
 }
@@ -483,8 +484,8 @@ func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
 				Ts:        ts.ToTimestamp(),
 			}
 			cc.databases.data.Set(newItem)
-			fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache delete database",
-				item.AccountId, item.Name, item.Id, item.Ts)
+			//fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache delete database",
+			//	item.AccountId, item.Name, item.Id, item.Ts)
 		}
 	}
 }
@@ -536,7 +537,7 @@ func ParseTablesBatchAnd(bat *batch.Batch, f func(*TableItem)) {
 
 func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	ParseTablesBatchAnd(bat, func(item *TableItem) {
-		fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache insert table", item.String())
+		//fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache insert table", item.String())
 		cc.tables.data.Set(item)
 		cc.tables.cpkeyIndex.Set(item)
 	})
@@ -675,8 +676,8 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				)
 				continue
 			}
-			fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache insert columns",
-				k.Name, k.AccountId, k.DatabaseId, k.Id, k.Ts.toTs())
+			//fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache insert columns",
+			//	k.Name, k.AccountId, k.DatabaseId, k.Id, k.Ts.toTs())
 			InitTableItemWithColumns(item, cols)
 		}
 	})
@@ -684,8 +685,8 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 
 func (cc *CatalogCache) InsertDatabase(bat *batch.Batch) {
 	ParseDatabaseBatchAnd(bat, func(item *DatabaseItem) {
-		fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache insert database",
-			item.AccountId, item.Name, item.Id, item.Ts)
+		//fmt.Fprintln(os.Stderr, "[", cc.cdcId, "]", "catalog cache insert database",
+		//	item.AccountId, item.Name, item.Id, item.Ts)
 		cc.databases.data.Set(item)
 		cc.databases.cpkeyIndex.Set(item)
 	})
@@ -704,6 +705,15 @@ func (cc *CatalogCache) PrintTables(dbId uint64) {
 
 func (cc *CatalogCache) SetCdcId(id string) {
 	cc.cdcId = id
+}
+
+// GetTableByCPKey
+func (cc *CatalogCache) GetTableByCPKey(cpkey []byte) (*TableItem, bool) {
+	return cc.tables.cpkeyIndex.Get(&TableItem{CPKey: cpkey})
+}
+
+func (cc *CatalogCache) GetDatabaseByCPKey(cpkey []byte) (*DatabaseItem, bool) {
+	return cc.databases.cpkeyIndex.Get(&DatabaseItem{CPKey: cpkey})
 }
 
 func ParseDatabaseBatchAnd(bat *batch.Batch, f func(*DatabaseItem)) {

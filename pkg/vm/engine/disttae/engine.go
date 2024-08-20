@@ -788,3 +788,7 @@ func (e *Engine) ToCdc(*TableCtx, *DecoderInput) {}
 func (e *Engine) PackerPool() *fileservice.Pool[*types.Packer] {
 	return e.packerPool
 }
+
+func (e *Engine) GetDDLListener() DDLListener {
+	return nil
+}

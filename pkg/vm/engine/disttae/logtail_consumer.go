@@ -1874,6 +1874,10 @@ func updatePartitionOfPush(
 	if e.IsCdcEngine() {
 		fmt.Fprintln(os.Stderr, "====> cdc handle logtail before")
 		defer fmt.Fprintln(os.Stderr, "====> cdc handle logtail after")
+
+		//init ddl ts
+		e.GetDDLListener().Init(*tl.Ts)
+		defer e.GetDDLListener().Clear()
 	}
 
 	// after consume the logtail, enqueue it to global stats.
@@ -1980,19 +1984,28 @@ func updatePartitionOfPush(
 	doneMutate()
 
 	//cdc replay logtail
-	if e.IsCdcEngine() &&
-		(tblId != catalog.MO_DATABASE_ID &&
+	//TODO: add table filter
+	//DOES not replay logtail for tables of all system database
+	if e.IsCdcEngine() {
+		if tblId != catalog.MO_DATABASE_ID &&
 			tblId != catalog.MO_TABLES_ID &&
-			tblId != catalog.MO_COLUMNS_ID) {
-		_ = cdcReplayLogtailUnlock(
-			ctx,
-			e,
-			dbId, tblId,
-			&partition.TableInfo,
-			tl,
-			lazyLoad,
-			firstCkpConsumed,
-		)
+			tblId != catalog.MO_COLUMNS_ID {
+			_ = cdcReplayLogtailUnlock(
+				ctx,
+				e,
+				dbId, tblId,
+				&partition.TableInfo,
+				tl,
+				lazyLoad,
+				firstCkpConsumed,
+			)
+		}
+
+		//handle ddl
+		dres := e.GetDDLListener().Detect()
+		for _, ddl := range dres {
+			fmt.Fprintln(os.Stderr, "decected ddl", ddl.String())
+		}
 	}
 
 	return nil

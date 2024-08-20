@@ -1887,3 +1887,25 @@ func printLogtail(tip string, list []logtail.TableLogtail) {
 		}
 	}
 }
+
+func needSkipThisTable(kind, db, table string) bool {
+	if kind != catalog.SystemOrdinaryRel {
+		return true
+	}
+	if strings.HasPrefix(table, catalog.PrefixIndexTableName) {
+		return true
+	}
+	return isBannedDatabase(db)
+}
+
+func needSkipThisDatabase(kind, db string) bool {
+	if kind != "" {
+		return true
+	}
+	return isBannedDatabase(db)
+}
+
+func isBannedDatabase(db string) bool {
+	//TODO:
+	return false
+}
