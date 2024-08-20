@@ -122,21 +122,21 @@ func (opAlyzr *operatorAnalyzerV1) Stop() {
 
 func (opAlyzr *operatorAnalyzerV1) Alloc(size int64) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Stop: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzerV1.Alloc: operatorAnalyzerV1.opStats is nil")
 	}
 	opAlyzr.opStats.TotalMemorySize += size
 }
 
 func (opAlyzr *operatorAnalyzerV1) InputBlock() {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Stop: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzerV1.InputBlock: operatorAnalyzerV1.opStats is nil")
 	}
 	opAlyzr.opStats.TotalInputBlocks += 1
 }
 
 func (opAlyzr *operatorAnalyzerV1) Input(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Stop: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzerV1.Input: operatorAnalyzerV1.opStats is nil")
 	}
 
 	if bat != nil && opAlyzr.isFirst {
@@ -147,7 +147,7 @@ func (opAlyzr *operatorAnalyzerV1) Input(bat *batch.Batch) {
 
 func (opAlyzr *operatorAnalyzerV1) Output(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Stop: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzerV1.Output: operatorAnalyzerV1.opStats is nil")
 	}
 
 	if bat != nil && opAlyzr.isLast {
@@ -174,7 +174,7 @@ func (opAlyzr *operatorAnalyzerV1) ChildCallStart(time time.Time) {
 
 func (opAlyzr *operatorAnalyzerV1) DiskIO(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Stop: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzerV1.DiskIO: operatorAnalyzerV1.opStats is nil")
 	}
 
 	if bat != nil {
@@ -184,7 +184,7 @@ func (opAlyzr *operatorAnalyzerV1) DiskIO(bat *batch.Batch) {
 
 func (opAlyzr *operatorAnalyzerV1) S3IOByte(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Stop: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzerV1.S3IOByte: operatorAnalyzerV1.opStats is nil")
 	}
 
 	if bat != nil {
@@ -194,21 +194,21 @@ func (opAlyzr *operatorAnalyzerV1) S3IOByte(bat *batch.Batch) {
 
 func (opAlyzr *operatorAnalyzerV1) S3IOInputCount(count int) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Stop: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzerV1.S3IOInputCount: operatorAnalyzerV1.opStats is nil")
 	}
 	opAlyzr.opStats.TotalS3InputCount += int64(count)
 }
 
 func (opAlyzr *operatorAnalyzerV1) S3IOOutputCount(count int) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Stop: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzerV1.S3IOOutputCount: operatorAnalyzerV1.opStats is nil")
 	}
 	opAlyzr.opStats.TotalS3OutputCount += int64(count)
 }
 
 func (opAlyzr *operatorAnalyzerV1) Network(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Stop: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzerV1.Network: operatorAnalyzerV1.opStats is nil")
 	}
 
 	if bat != nil {
@@ -218,51 +218,54 @@ func (opAlyzr *operatorAnalyzerV1) Network(bat *batch.Batch) {
 
 func (opAlyzr *operatorAnalyzerV1) AddScanTime(t time.Time) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Stop: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzerV1.AddScanTime: operatorAnalyzerV1.opStats is nil")
 	}
-	opAlyzr.opStats.TotalScanTime += int64(time.Since(t))
+	duration := time.Since(t)
+	opAlyzr.opStats.TotalScanTime += duration.Nanoseconds()
 }
 
 func (opAlyzr *operatorAnalyzerV1) AddInsertTime(t time.Time) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Stop: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzerV1.AddInsertTime: operatorAnalyzerV1.opStats is nil")
 	}
-	opAlyzr.opStats.TotalInsertTime += int64(time.Since(t))
+	duration := time.Since(t)
+	opAlyzr.opStats.TotalInsertTime += duration.Nanoseconds()
 }
 
 func (opAlyzr *operatorAnalyzerV1) ServiceInvokeTime(t time.Time) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Stop: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzerV1.ServiceInvokeTime: operatorAnalyzerV1.opStats is nil")
 	}
-	opAlyzr.opStats.TotalServiceTime += int64(time.Since(t))
+	duration := time.Since(t)
+	opAlyzr.opStats.TotalServiceTime += duration.Nanoseconds()
 }
 
 func (opAlyzr *operatorAnalyzerV1) GetOpStats() *OperatorStats {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Stop: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzerV1.GetOpStats(): operatorAnalyzerV1.opStats is nil")
 	}
 	return opAlyzr.opStats
 }
 
 type OperatorStats struct {
-	OperatorName          string `json:"OperatorName"`
-	CallCount             int    `json:"CallCount"`
-	TotalTimeConsumed     int64  `json:"TotalTimeConsumed"`
-	TotalWaitTimeConsumed int64  `json:"TotalWaitTimeConsumed"`
-	TotalMemorySize       int64  `json:"TotalMemorySize"`
-	TotalInputRows        int64  `json:"TotalInputRows"`
-	TotalOutputRows       int64  `json:"TotalOutputRows"`
-	TotalInputSize        int64  `json:"TotalInputSize"`
-	TotalInputBlocks      int64  `json:"TotalInputBlocks"`
-	TotalOutputSize       int64  `json:"TotalOutputSize"`
-	TotalDiskIO           int64  `json:"TotalDiskIO"`
-	TotalS3IOByte         int64  `json:"TotalS3IOByte"`
-	TotalS3InputCount     int64  `json:"TotalS3InputCount"`
-	TotalS3OutputCount    int64  `json:"TotalS3OutputCount"`
-	TotalNetworkIO        int64  `json:"TotalNetworkIO"`
-	TotalScanTime         int64  `json:"TotalScanTime"`
-	TotalInsertTime       int64  `json:"TotalInsertTime"`
-	TotalServiceTime      int64  `json:"TotalServiceTime"`
+	OperatorName          string `json:"-"`
+	CallCount             int    `json:"CallCount,omitempty"`
+	TotalTimeConsumed     int64  `json:"TotalTimeConsumed,omitempty"`
+	TotalWaitTimeConsumed int64  `json:"TotalWaitTimeConsumed,omitempty"`
+	TotalMemorySize       int64  `json:"TotalMemorySize,omitempty"`
+	TotalInputRows        int64  `json:"TotalInputRows,omitempty"`
+	TotalInputSize        int64  `json:"TotalInputSize,omitempty"`
+	TotalOutputRows       int64  `json:"TotalOutputRows,omitempty"`
+	TotalOutputSize       int64  `json:"TotalOutputSize,omitempty"`
+	TotalNetworkIO        int64  `json:"TotalNetworkIO,omitempty"`
+	TotalInputBlocks      int64  `json:"-"`
+	TotalDiskIO           int64  `json:"-"`
+	TotalS3IOByte         int64  `json:"-"`
+	TotalS3InputCount     int64  `json:"-"`
+	TotalS3OutputCount    int64  `json:"-"`
+	TotalScanTime         int64  `json:"-"`
+	TotalInsertTime       int64  `json:"-"`
+	TotalServiceTime      int64  `json:"-"`
 }
 
 func NewOperatorStats(operatorName string) *OperatorStats {
@@ -272,63 +275,26 @@ func NewOperatorStats(operatorName string) *OperatorStats {
 }
 
 func (ps *OperatorStats) Reset() {
-	ps.CallCount = 0
-	ps.TotalTimeConsumed = 0
-	ps.TotalWaitTimeConsumed = 0
-	ps.TotalMemorySize = 0
-	ps.TotalInputRows = 0
-	ps.TotalOutputRows = 0
-	ps.TotalInputSize = 0
-	ps.TotalInputBlocks = 0
-	ps.TotalOutputSize = 0
-	ps.TotalDiskIO = 0
-	ps.TotalS3IOByte = 0
-	ps.TotalS3InputCount = 0
-	ps.TotalS3OutputCount = 0
-	ps.TotalNetworkIO = 0
-	ps.TotalScanTime = 0
-	ps.TotalInsertTime = 0
-	ps.TotalServiceTime = 0
-}
-
-// Merge statistical information from another OperatorStats
-func (ps *OperatorStats) Merge(other *OperatorStats) {
-	ps.CallCount += other.CallCount
-	ps.TotalTimeConsumed += other.TotalTimeConsumed
-	ps.TotalWaitTimeConsumed += other.TotalWaitTimeConsumed
-	ps.TotalMemorySize += other.TotalMemorySize
-	ps.TotalInputRows += other.TotalInputRows
-	ps.TotalOutputRows += other.TotalOutputRows
-	ps.TotalInputSize += other.TotalInputSize
-	ps.TotalInputBlocks += other.TotalInputBlocks
-	ps.TotalOutputSize += other.TotalOutputSize
-	ps.TotalDiskIO += other.TotalDiskIO
-	ps.TotalS3IOByte += other.TotalS3IOByte
-	ps.TotalS3InputCount += other.TotalS3InputCount
-	ps.TotalS3OutputCount += other.TotalS3OutputCount
-	ps.TotalNetworkIO += other.TotalNetworkIO
-	ps.TotalScanTime += other.TotalScanTime
-	ps.TotalInsertTime += other.TotalInsertTime
-	ps.TotalServiceTime += other.TotalServiceTime
+	*ps = OperatorStats{}
 }
 
 func (ps *OperatorStats) String() string {
-	return fmt.Sprintf(" Call Count: %d, "+
-		"TimeConsumed: %d ms, "+
-		"WaitTimeConsumed: %d ms,"+
-		"InputRows: %d, "+
-		"OutputRows: %d, "+
-		"InputSize: %d bytes, "+
-		"InputBlocks: %d, "+
-		"OutputSize: %d bytes, "+
-		"MemorySize: %d bytes, "+
-		"DiskIO: %d bytes, "+
-		"S3IOByte: %d bytes, "+
-		"S3InputCount: %d, "+
-		"S3OutputCount: %d, "+
-		"NetworkIO: %d bytes, "+
-		"ScanTime: %d ms "+
-		"ServiceTime: %d ms",
+	return fmt.Sprintf(" CallNum:%d "+
+		"TimeCost:%dns "+
+		"WaitTime:%dns"+
+		"InputRows:%d "+
+		"OutputRows:%d "+
+		"InputSize:%dbytes "+
+		"InputBlock:%d "+
+		"OutputSize:%dbytes "+
+		"MemSize:%dbytes "+
+		"DiskIO:%dbytes "+
+		"S3IOByte:%dbytes "+
+		"S3InputCount:%d "+
+		"S3OutputCount:%d "+
+		"NetworkIO:%dbytes "+
+		"ScanTime:%dns "+
+		"ServiceTime:%dns",
 		ps.CallCount,
 		ps.TotalTimeConsumed,
 		ps.TotalWaitTimeConsumed,
@@ -345,4 +311,26 @@ func (ps *OperatorStats) String() string {
 		ps.TotalNetworkIO,
 		ps.TotalScanTime,
 		ps.TotalServiceTime)
+}
+
+func (ps *OperatorStats) ReducedString() string {
+	return fmt.Sprintf(" CallNum:%d "+
+		"TimeCost:%dns "+
+		"WaitTime:%dns "+
+		"InputRows:%d "+
+		"OutputRows:%d "+
+		"InputSize:%dbytes "+
+		"OutputSize:%dbytes "+
+		"MemSize:%dbytes "+
+		"Network:%dbytes",
+		ps.CallCount,
+		ps.TotalTimeConsumed,
+		ps.TotalWaitTimeConsumed,
+		ps.TotalInputRows,
+		ps.TotalOutputRows,
+		ps.TotalInputSize,
+		ps.TotalOutputSize,
+		ps.TotalMemorySize,
+		ps.TotalNetworkIO,
+	)
 }

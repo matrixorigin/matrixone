@@ -285,7 +285,7 @@ func updateTempStorageInCtx(execCtx *ExecCtx, proc *process.Process, tempStorage
 	}
 }
 
-func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
+func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, analyzeModule *compile.AnalyzeModuleV1) error {
 	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		waitActiveCost := time.Duration(0)
 		if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
@@ -294,7 +294,7 @@ func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 				waitActiveCost = txn.GetWaitActiveCost()
 			}
 		}
-		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, WithWaitActiveCost(waitActiveCost)))
+		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, analyzeModule, WithWaitActiveCost(waitActiveCost)))
 	}
 	return nil
 }

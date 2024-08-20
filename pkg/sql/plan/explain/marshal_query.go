@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -35,9 +37,9 @@ var MarshalPlanOptions = ExplainOptions{
 	Format:  EXPLAIN_FORMAT_TEXT,
 }
 
-func ConvertNode(ctx context.Context, node *plan.Node, options *ExplainOptions) (*Node, error) {
+func ConvertNode(ctx context.Context, node *plan.Node, options *ExplainOptions) (*models.Node, error) {
 	marshalNodeImpl := NewMarshalNodeImpl(node)
-	newNode := &Node{
+	newNode := &models.Node{
 		NodeId:     strconv.FormatInt(int64(node.NodeId), 10),
 		Statistics: marshalNodeImpl.GetStatistics(ctx, options),
 		Stats:      marshalNodeImpl.GetStats(),
@@ -66,10 +68,10 @@ func ConvertNode(ctx context.Context, node *plan.Node, options *ExplainOptions) 
 type MarshalNode interface {
 	GetNodeName(ctx context.Context) (string, error)
 	GetNodeTitle(ctx context.Context, options *ExplainOptions) (string, error)
-	GetNodeLabels(ctx context.Context, options *ExplainOptions) ([]Label, error)
-	GetStatistics(ctx context.Context, options *ExplainOptions) Statistics
-	GetStats() Stats
-	GetTotalStats() TotalStats
+	GetNodeLabels(ctx context.Context, options *ExplainOptions) ([]models.Label, error)
+	GetStatistics(ctx context.Context, options *ExplainOptions) models.Statistics
+	GetStats() models.Stats
+	GetTotalStats() models.TotalStats
 }
 
 type MarshalNodeImpl struct {
@@ -82,13 +84,13 @@ func NewMarshalNodeImpl(node *plan.Node) *MarshalNodeImpl {
 	}
 }
 
-func (m MarshalNodeImpl) GetStats() Stats {
+func (m MarshalNodeImpl) GetStats() models.Stats {
 	if m.node.Stats != nil {
 		var hashmapSize float64
 		if m.node.Stats.HashmapStats != nil {
 			hashmapSize = m.node.Stats.HashmapStats.HashmapSize
 		}
-		return Stats{
+		return models.Stats{
 			BlockNum:    m.node.Stats.BlockNum,
 			Cost:        m.node.Stats.Cost,
 			Outcnt:      m.node.Stats.Outcnt,
@@ -96,7 +98,7 @@ func (m MarshalNodeImpl) GetStats() Stats {
 			Rowsize:     m.node.Stats.Rowsize,
 		}
 	} else {
-		return Stats{}
+		return models.Stats{}
 	}
 }
 
@@ -240,8 +242,8 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 	return strings.TrimSpace(buf.String()), nil
 }
 
-func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOptions) ([]Label, error) {
-	labels := make([]Label, 0)
+func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOptions) ([]models.Label, error) {
+	labels := make([]models.Label, 0)
 
 	// 1. Handling unique label information for different nodes
 	switch m.node.NodeType {
@@ -257,7 +259,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			return nil, moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
 		}
 
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Table_Name, //"Full table name",
 			Value: fullTableName,
 		})
@@ -265,17 +267,17 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		// "name" : "Columns (2 / 28)",
 		columns := GetTableColsLableValue(ctx, tableDef.Cols, options)
 
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Table_Columns, //"Columns",
 			Value: columns,
 		})
 
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Total_Columns, //"Total columns",
 			Value: len(tableDef.Name2ColIndex),
 		})
 
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Scan_Columns, //"Scan columns",
 			Value: len(tableDef.Cols),
 		})
@@ -285,7 +287,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			if err != nil {
 				return nil, err
 			}
-			labels = append(labels, Label{
+			labels = append(labels, models.Label{
 				Name:  Label_Block_Filter_Conditions, // "Block Filter conditions",
 				Value: value,
 			})
@@ -299,7 +301,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			return nil, moerr.NewInternalError(ctx, "Table Function definition not found when plan is serialized to json")
 		}
 
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Table_Name, //"Full table name",
 			Value: fullTableName,
 		})
@@ -307,17 +309,17 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		// "name" : "Columns (2 / 28)",
 		columns := GetTableColsLableValue(ctx, tableDef.Cols, options)
 
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Table_Columns, //"Columns",
 			Value: columns,
 		})
 
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Total_Columns, //"Total columns",
 			Value: len(tableDef.Name2ColIndex),
 		})
 
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Scan_Columns, //"Scan columns",
 			Value: len(tableDef.Cols),
 		})
@@ -327,7 +329,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			if err != nil {
 				return nil, err
 			}
-			labels = append(labels, Label{
+			labels = append(labels, models.Label{
 				Name:  Label_Block_Filter_Conditions, // "Block Filter conditions",
 				Value: value,
 			})
@@ -341,14 +343,14 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			return nil, moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
 		}
 
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Table_Name, //"Full table name",
 			Value: fullTableName,
 		})
 	case plan.Node_DELETE:
 		if m.node.DeleteCtx != nil {
 			deleteTableNames := GetDeleteTableLabelValue(m.node.DeleteCtx)
-			labels = append(labels, Label{
+			labels = append(labels, models.Label{
 				Name:  Label_Table_Name, //"Full table name",
 				Value: deleteTableNames,
 			})
@@ -360,7 +362,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		if err != nil {
 			return nil, err
 		}
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_List_Expression, //"List of expressions",
 			Value: value,
 		})
@@ -372,7 +374,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			if err != nil {
 				return nil, err
 			}
-			labels = append(labels, Label{
+			labels = append(labels, models.Label{
 				Name:  Label_Grouping_Keys, //"Grouping keys",
 				Value: value,
 			})
@@ -384,7 +386,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			if err != nil {
 				return nil, err
 			}
-			labels = append(labels, Label{
+			labels = append(labels, models.Label{
 				Name:  Label_Agg_Functions, //"Aggregate functions",
 				Value: value,
 			})
@@ -394,13 +396,13 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		if err != nil {
 			return nil, err
 		}
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Filter_Conditions, //"Filter conditions",
 			Value: value,
 		})
 	case plan.Node_JOIN:
 		// Get Join type
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Join_Type, //"Join type",
 			Value: m.node.JoinType.String(),
 		})
@@ -411,16 +413,16 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			if err != nil {
 				return nil, err
 			}
-			labels = append(labels, Label{
+			labels = append(labels, models.Label{
 				Name:  Label_Join_Conditions, //"Join conditions",
 				Value: value,
 			})
 		}
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Left_NodeId, //"Left node id",
 			Value: m.node.Children[0],
 		})
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Right_NodeId, //"Right node id",
 			Value: m.node.Children[1],
 		})
@@ -429,7 +431,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		if err != nil {
 			return nil, err
 		}
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Sort_Keys, //"Sort keys",
 			Value: result,
 		})
@@ -438,7 +440,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		if err != nil {
 			return nil, err
 		}
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_List_Values, //"List of values",
 			Value: value,
 		})
@@ -448,7 +450,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			if err != nil {
 				return nil, err
 			}
-			labels = append(labels, Label{
+			labels = append(labels, models.Label{
 				Name:  Label_Block_Filter_Conditions, // "Block Filter conditions",
 				Value: value,
 			})
@@ -458,7 +460,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		if err != nil {
 			return nil, err
 		}
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Union_Expressions, //"Union expressions",
 			Value: value,
 		})
@@ -467,7 +469,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		if err != nil {
 			return nil, err
 		}
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Union_All_Expressions, // "Union all expressions",
 			Value: value,
 		})
@@ -476,7 +478,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		if err != nil {
 			return nil, err
 		}
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Intersect_Expressions, //"Intersect expressions",
 			Value: value,
 		})
@@ -485,7 +487,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		if err != nil {
 			return nil, err
 		}
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Intersect_All_Expressions, //"Intersect All expressions",
 			Value: value,
 		})
@@ -494,142 +496,142 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		if err != nil {
 			return nil, err
 		}
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Minus_Expressions, //"Minus expressions",
 			Value: value,
 		})
 	case plan.Node_PRE_INSERT:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Pre_Insert, //"pre insert",
 			Value: []string{},
 		})
 	case plan.Node_PRE_INSERT_UK:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Pre_InsertUk, //"pre insert uk",
 			Value: []string{},
 		})
 	case plan.Node_PRE_INSERT_SK:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Pre_InsertSk, //"pre insert sk",
 			Value: []string{},
 		})
 	case plan.Node_PRE_DELETE:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Pre_Delete, //"pre delete",
 			Value: []string{},
 		})
 	case plan.Node_SINK:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Sink, //"sink",
 			Value: []string{},
 		})
 	case plan.Node_SINK_SCAN:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Sink_Scan, //"sink scan",
 			Value: []string{},
 		})
 	case plan.Node_RECURSIVE_SCAN:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Recursive_SCAN, //"sink scan",
 			Value: []string{},
 		})
 	case plan.Node_RECURSIVE_CTE:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Recursive_SCAN, //"sink scan",
 			Value: []string{},
 		})
 	case plan.Node_LOCK_OP:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Lock_Op, //"lock op",
 			Value: []string{},
 		})
 	case plan.Node_TIME_WINDOW:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Time_Window,
 			Value: []string{},
 		})
 	case plan.Node_PARTITION:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Partition,
 			Value: []string{},
 		})
 	case plan.Node_BROADCAST:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Boardcast,
 			Value: []string{},
 		})
 	case plan.Node_SPLIT:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Split,
 			Value: []string{},
 		})
 	case plan.Node_GATHER:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Gather,
 			Value: []string{},
 		})
 	case plan.Node_ASSERT:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Assert,
 			Value: []string{},
 		})
 	case plan.Node_ON_DUPLICATE_KEY:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_On_Duplicate_Key,
 			Value: []string{},
 		})
 	case plan.Node_FUZZY_FILTER:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Fuzzy_Filter,
 			Value: []string{},
 		})
 	case plan.Node_EXTERNAL_FUNCTION:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_External_Function,
 			Value: []string{},
 		})
 	case plan.Node_FILL:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Fill,
 			Value: []string{},
 		})
 	case plan.Node_DISTINCT:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Distinct,
 			Value: []string{},
 		})
 	case plan.Node_SAMPLE:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Sample,
 			Value: []string{},
 		})
 	case plan.Node_WINDOW:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Window,
 			Value: []string{},
 		})
 	case plan.Node_MINUS_ALL:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Minus_All,
 			Value: []string{},
 		})
 	case plan.Node_UNIQUE:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Unique,
 			Value: []string{},
 		})
 	case plan.Node_REPLACE:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Replace,
 			Value: []string{},
 		})
 	case plan.Node_UNKNOWN:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Unknown,
 			Value: []string{},
 		})
 	case plan.Node_MATERIAL:
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Meterial,
 			Value: []string{},
 		})
@@ -643,7 +645,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		if err != nil {
 			return nil, err
 		}
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Filter_Conditions, // "Filter conditions",
 			Value: value,
 		})
@@ -656,7 +658,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		if err != nil {
 			return nil, err
 		}
-		labels = append(labels, Label{
+		labels = append(labels, models.Label{
 			Name:  Label_Row_Number, //"Number of rows",
 			Value: buf.String(),
 		})
@@ -667,12 +669,12 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			if err != nil {
 				return nil, err
 			}
-			labels = append(labels, Label{
+			labels = append(labels, models.Label{
 				Name:  Label_Offset, // "Offset",
 				Value: buf.String(),
 			})
 		} else {
-			labels = append(labels, Label{
+			labels = append(labels, models.Label{
 				Name:  Label_Offset, // "Offset",
 				Value: 0,
 			})
@@ -718,11 +720,11 @@ func GetInputRowsAndInputSize(ctx context.Context, node *plan.Node, options *Exp
 	return
 }
 
-func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOptions) Statistics {
-	statistics := NewStatistics()
+func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOptions) models.Statistics {
+	statistics := models.NewStatistics()
 	if options.Analyze && m.node.AnalyzeInfo != nil {
 		analyzeInfo := m.node.AnalyzeInfo
-		times := []StatisticValue{
+		times := []models.StatisticValue{
 			{
 				Name:  TimeConsumed,
 				Value: analyzeInfo.TimeConsumed,
@@ -744,7 +746,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Unit:  Statistic_Unit_ns,
 			},
 		}
-		mbps := []StatisticValue{
+		mbps := []models.StatisticValue{
 			{
 				Name:  InputRows,
 				Value: analyzeInfo.InputRows,
@@ -767,7 +769,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 			},
 		}
 
-		mems := []StatisticValue{
+		mems := []models.StatisticValue{
 			{
 				Name:  MemorySize,
 				Value: analyzeInfo.MemorySize,
@@ -775,7 +777,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 			},
 		}
 
-		io := []StatisticValue{
+		io := []models.StatisticValue{
 			{
 				Name:  DiskIO,
 				Value: analyzeInfo.DiskIO,
@@ -798,7 +800,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 			},
 		}
 
-		nw := []StatisticValue{
+		nw := []models.StatisticValue{
 			{
 				Name:  Network,
 				Value: analyzeInfo.NetworkIO,
@@ -815,8 +817,8 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 	return *statistics
 }
 
-func (m MarshalNodeImpl) GetTotalStats() TotalStats {
-	totalStats := TotalStats{
+func (m MarshalNodeImpl) GetTotalStats() models.TotalStats {
+	totalStats := models.TotalStats{
 		Name: "Time spent",
 		Unit: "ns",
 	}

@@ -68,6 +68,53 @@ const (
 	Replace
 )
 
+func (m magicType) String() string {
+	switch m {
+	case Merge:
+		return "Merge"
+	case Normal:
+		return "Normal"
+	case Remote:
+		return "Remote"
+	case Parallel:
+		return "Parallel"
+	case CreateDatabase:
+		return "CreateDatabase"
+	case CreateTable:
+		return "CreateTable"
+	case CreateView:
+		return "CreateView"
+	case CreateIndex:
+		return "CreateIndex"
+	case DropDatabase:
+		return "DropDatabase"
+	case DropTable:
+		return "DropTable"
+	case DropIndex:
+		return "DropIndex"
+	case TruncateTable:
+		return "TruncateTable"
+	case AlterView:
+		return "AlterView"
+	case AlterTable:
+		return "AlterTable"
+	case MergeInsert:
+		return "MergeInsert"
+	case MergeDelete:
+		return "MergeDelete"
+	case CreateSequence:
+		return "CreateSequence"
+	case DropSequence:
+		return "DropSequence"
+	case AlterSequence:
+		return "AlterSequence"
+	case Replace:
+		return "Replace"
+	default:
+		return "Unknown"
+	}
+}
+
 // Source contains information of a relation which will be used in execution.
 type Source struct {
 	isConst bool

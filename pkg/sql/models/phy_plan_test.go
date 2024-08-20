@@ -1,4 +1,4 @@
-package compile
+package models
 
 import (
 	"fmt"
@@ -8,7 +8,6 @@ import (
 )
 
 func TestPhyPlanJSON(t *testing.T) {
-	// 创建示例数据
 	operatorStats := &process.OperatorStats{
 		OperatorName:          "ExampleOperator",
 		CallCount:             10,
@@ -18,15 +17,15 @@ func TestPhyPlanJSON(t *testing.T) {
 		TotalInputRows:        1000,
 		TotalOutputRows:       950,
 		TotalInputSize:        2048,
-		TotalInputBlocks:      100,
+		TotalInputBlocks:      0,
 		TotalOutputSize:       1900,
-		TotalDiskIO:           300,
-		TotalS3IOByte:         500,
+		TotalDiskIO:           0,
+		TotalS3IOByte:         0,
 		TotalS3InputCount:     5,
 		TotalS3OutputCount:    4,
 		TotalNetworkIO:        600,
 		TotalScanTime:         1500,
-		TotalInsertTime:       700,
+		TotalInsertTime:       0,
 	}
 
 	//----------------------------------------------------operator---------------------------------------------------
@@ -140,19 +139,17 @@ func TestPhyPlanJSON(t *testing.T) {
 	}
 	//---------------------------------------------------------scope---------------------------------------------------
 	phyScope3 := PhyScope{
-		Magic:        Merge,
+		Magic:        "Merge",
 		PreScopes:    []PhyScope{},
 		RootOperator: &phyOperator3_4,
-		//Pipeline:     []PhyOperator{phyOperator3_0, phyOperator3_1, phyOperator3_2, phyOperator3_3, phyOperator3_4},
-		Receiver:   nil,
-		DataSource: &PhySource{SchemaName: "schema", RelationName: "table", Attributes: []string{"col1", "col2"}},
+		Receiver:     nil,
+		DataSource:   &PhySource{SchemaName: "schema", RelationName: "table", Attributes: []string{"col1", "col2"}},
 	}
 
 	phyScope2 := PhyScope{
-		Magic:        Merge,
+		Magic:        "Merge",
 		PreScopes:    []PhyScope{phyScope3},
 		RootOperator: &phyOperator2_3,
-		//Pipeline:  []PhyOperator{phyOperator2_0, phyOperator2_1, phyOperator2_2, phyOperator2_3},
 		Receiver: []PhyReceiver{
 			{
 				Idx:        0,
@@ -163,10 +160,9 @@ func TestPhyPlanJSON(t *testing.T) {
 	}
 
 	phyScope1 := PhyScope{
-		Magic:        Normal,
+		Magic:        "Normal",
 		PreScopes:    []PhyScope{phyScope2},
 		RootOperator: &phyOperator1_1,
-		//Pipeline:  []PhyOperator{phyOperator1_0, phyOperator1_1},
 		Receiver: []PhyReceiver{
 			{
 				Idx:        1,
@@ -179,8 +175,11 @@ func TestPhyPlanJSON(t *testing.T) {
 	//------------------------------------------------------------------------------------------------------------------
 
 	phyPlan := PhyPlan{
-		LocalScope: []PhyScope{phyScope1},
-		Version:    "1.0.0",
+		Version:         "1.0.0",
+		LocalScope:      []PhyScope{phyScope1},
+		RemoteScope:     []PhyScope{phyScope1},
+		S3IOInputCount:  5,
+		S3IOOutputCount: 0,
 	}
 
 	// Convert to JSON

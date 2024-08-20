@@ -73,7 +73,7 @@ type ComputationWrapper interface {
 
 	GetUUID() []byte
 
-	RecordExecPlan(ctx context.Context) error
+	RecordExecPlan(ctx context.Context, analyzeModule *compile.AnalyzeModuleV1) error
 
 	GetLoadTag() bool
 

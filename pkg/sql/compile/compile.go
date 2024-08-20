@@ -1755,7 +1755,7 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 		fmt.Printf("-----------pengzhen-------------->cnList: %v , nodes:%s,  scopes: %s \n",
 			c.cnList,
 			getNodeBaseInfo(nodes),
-			DebugShowScopes(ss, InfoLevel))
+			DebugShowScopes(ss, VerboseLevel))
 	}
 
 	ss[0].PartialResults = partialResults

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -322,7 +323,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			anaData := m.GetAnalyse()
 			if len(anaData) > 0 {
 				//---------------------------------------------------------------
-				var p PhyPlan
+				var p models.PhyPlan
 				err = json.Unmarshal(anaData, &p)
 				if err != nil {
 					return nil, false, err
@@ -405,7 +406,7 @@ func generateStopSendingMessage(streamID uint64) *pipeline.Message {
 	return message
 }
 
-func (sender *messageSenderOnClient) dealRemoteAnalysis(p PhyPlan) {
+func (sender *messageSenderOnClient) dealRemoteAnalysis(p models.PhyPlan) {
 	if sender.anal == nil {
 		return
 	}

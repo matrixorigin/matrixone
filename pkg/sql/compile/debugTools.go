@@ -109,125 +109,27 @@ var debugMagicNames = map[magicType]string{
 
 var _ = DebugShowScopes
 
-// 定义打印级别类型
 type DebugLevel int
 
-// 定义具体的打印级别常量
 const (
-	BaseLevel DebugLevel = iota
-	InfoLevel
+	NormalLevel DebugLevel = iota
+	VerboseLevel
 	AnalyzeLevel
+	OldLevel
 )
 
-// DebugShowScopes show information of a scope structure.
+// DebugShowScopes generates and returns a string representation of debugging information for a set of scopes.
 func DebugShowScopes(ss []*Scope, level DebugLevel) string {
 	receiverMap := make(map[*process.WaitRegister]int)
 	for i := range ss {
 		genReceiverMap(ss[i], receiverMap)
 	}
 
-	return debugShowScopes(ss, level, 0, receiverMap)
+	return showScopes(ss, 0, receiverMap, level)
 }
 
-func debugShowScopes(ss []*Scope, level DebugLevel, gap int, rmp map[*process.WaitRegister]int) string {
-	// new line and start with n space
-	gapNextLine := func() string {
-		str := "\n"
-		for i := 0; i < gap; i++ {
-			str += " "
-		}
-		return str
-	}
-
-	// return n space
-	addGap := func() string {
-		str := ""
-		for i := 0; i < gap; i++ {
-			str += " "
-		}
-		return str
-	}
-
-	// get receiver id string
-	getReceiverStr := func(s *Scope, rs []*process.WaitRegister) string {
-		str := "["
-		for i := range rs {
-			remote := ""
-			for _, u := range s.RemoteReceivRegInfos {
-				if u.Idx == i {
-					uuidStr := u.Uuid.String()
-					remote = fmt.Sprintf("(%s)", uuidStr[len(uuidStr)-6:])
-					break
-				}
-			}
-			if i != 0 {
-				str += ", "
-			}
-			if id, ok := rmp[rs[i]]; ok {
-				str += fmt.Sprintf("%d%s", id, remote)
-			} else {
-				str += "unknown"
-			}
-		}
-		str += "]"
-		return str
-	}
-
-	// convert magic to its string name
-	magicShow := func(magic magicType) string {
-		name, ok := debugMagicNames[magic]
-		if ok {
-			return name
-		}
-		return "unknown"
-	}
-
-	// explain the datasource
-	showDataSource := func(source *Source) string {
-		if source == nil {
-			return "nil"
-		}
-		s := fmt.Sprintf("%s.%s%s", source.SchemaName, source.RelationName, source.Attributes)
-		return strings.TrimLeft(s, ".")
-	}
-
-	var result string
-	for i := range ss {
-		str := addGap()
-		receiverStr := "nil"
-		if ss[i].Proc != nil {
-			receiverStr = getReceiverStr(ss[i], ss[i].Proc.Reg.MergeReceivers)
-		}
-		str += fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v, Receiver: %s)", i+1, magicShow(ss[i].Magic), ss[i].NodeInfo.Mcpu, receiverStr)
-
-		if ss[i].DataSource != nil {
-			str += gapNextLine()
-			str += fmt.Sprintf("  DataSource: %s", showDataSource(ss[i].DataSource))
-		}
-
-		if ss[i].RootOp != nil {
-			str += gapNextLine()
-			buffer := bytes.NewBuffer(make([]byte, 0, 50))
-			prefix := addGap() + "         "
-			PrintPipelineTree(ss[i].RootOp, level, true, prefix, true, rmp, buffer)
-			//str += fmt.Sprintf("Pipeline:\n %s", buffer.String())
-			str += fmt.Sprintf("%s", buffer.String())
-		}
-
-		if len(ss[i].PreScopes) > 0 {
-			str += gapNextLine()
-			str += "  PreScopes: {"
-			str += debugShowScopes(ss[i].PreScopes, level, gap+4, rmp)
-			str += gapNextLine()
-			str += "  }"
-		}
-		result += "\n"
-		result += str
-	}
-	return result
-
-}
-
+// genReceiverMap recursively traverses the Scope tree and generates unique identifiers (integers) for
+// each WaitRegister in Scope.
 func genReceiverMap(s *Scope, mp map[*process.WaitRegister]int) {
 	for i := range s.PreScopes {
 		genReceiverMap(s.PreScopes[i], mp)
@@ -240,7 +142,54 @@ func genReceiverMap(s *Scope, mp map[*process.WaitRegister]int) {
 	}
 }
 
-func PrintPipelineTree(node vm.Operator, level DebugLevel, isRoot bool, prefix string, isTail bool, mp map[*process.WaitRegister]int, buffer *bytes.Buffer) {
+// showScopes generates and returns a string representation of a set of Scopes. It recursively calls the
+// showSingleScope function to construct strings for each Scope and concatenates all results together.
+func showScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int, level DebugLevel) string {
+	buffer := bytes.NewBuffer(make([]byte, 0, 300))
+	for i := range scopes {
+		showSingleScope(scopes[i], i, gap, rmp, level, buffer)
+	}
+	return buffer.String()
+}
+
+// showSingleScope generates and outputs a string representation of a single Scope.
+// It includes header information of Scope, data source information, and pipeline tree information.
+// In addition, it recursively displays information from any PreScopes.
+func showSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegister]int, level DebugLevel, buffer *bytes.Buffer) {
+	gapNextLine(gap, buffer)
+
+	// Scope Header
+	receiverStr := getReceiverStr(scope, scope.Proc.Reg.MergeReceivers, rmp)
+	buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.NodeInfo.Mcpu, receiverStr))
+
+	// Scope DataSource
+	if scope.DataSource != nil {
+		gapNextLine(gap, buffer)
+		buffer.WriteString(fmt.Sprintf("  DataSource: %s", showDataSource(scope.DataSource)))
+	}
+
+	if scope.RootOp != nil {
+		gapNextLine(gap, buffer)
+		if level == OldLevel {
+			ShowPipelineLink(scope.RootOp, rmp, buffer)
+		} else {
+			prefixStr := addGap(gap) + "         "
+			ShowPipelineTree(scope.RootOp, prefixStr, true, true, rmp, level, buffer)
+		}
+	}
+
+	if len(scope.PreScopes) > 0 {
+		gapNextLine(gap, buffer)
+		buffer.WriteString("  PreScopes: {")
+		for i := range scope.PreScopes {
+			showSingleScope(scope.PreScopes[i], i, gap+4, rmp, level, buffer)
+		}
+		gapNextLine(gap, buffer)
+		buffer.WriteString("  }")
+	}
+}
+
+func ShowPipelineTree(node vm.Operator, prefix string, isRoot bool, isTail bool, mp map[*process.WaitRegister]int, level DebugLevel, buffer *bytes.Buffer) {
 	if node == nil {
 		return
 	}
@@ -251,19 +200,16 @@ func PrintPipelineTree(node vm.Operator, level DebugLevel, isRoot bool, prefix s
 		name = "unknown"
 	}
 
-	//str := name
-	var analyzeStr = ""
-	if true {
-		if level == InfoLevel || level == AnalyzeLevel {
-			analyzeStr = fmt.Sprintf("(idx:%v, isFirst:%v, isLast:%v) ",
-				node.GetOperatorBase().Idx,
-				node.GetOperatorBase().IsFirst,
-				node.GetOperatorBase().IsLast)
-		}
-		if level == AnalyzeLevel {
-			if node.GetOperatorBase().OpAnalyzer != nil && node.GetOperatorBase().OpAnalyzer.GetOpStats() != nil {
-				analyzeStr += node.GetOperatorBase().OpAnalyzer.GetOpStats().String()
-			}
+	analyzeStr := ""
+	if level == VerboseLevel || level == AnalyzeLevel {
+		analyzeStr = fmt.Sprintf("(idx:%v, isFirst:%v, isLast:%v) ",
+			node.GetOperatorBase().Idx,
+			node.GetOperatorBase().IsFirst,
+			node.GetOperatorBase().IsLast)
+	}
+	if level == AnalyzeLevel {
+		if node.GetOperatorBase().OpAnalyzer != nil && node.GetOperatorBase().OpAnalyzer.GetOpStats() != nil {
+			analyzeStr += node.GetOperatorBase().OpAnalyzer.GetOpStats().String()
 		}
 	}
 
@@ -296,12 +242,30 @@ func PrintPipelineTree(node vm.Operator, level DebugLevel, isRoot bool, prefix s
 	// Write to child node
 	for i := 0; i < len(node.GetOperatorBase().Children); i++ {
 		isLast := i == len(node.GetOperatorBase().Children)-1
-		PrintPipelineTree(node.GetOperatorBase().GetChildren(i), level, false, newPrefix, isLast, mp, buffer)
+		ShowPipelineTree(node.GetOperatorBase().GetChildren(i), newPrefix, false, isLast, mp, level, buffer)
 	}
 
 	if isRoot {
 		trimLastNewline(buffer)
 	}
+}
+
+func ShowPipelineLink(node vm.Operator, mp map[*process.WaitRegister]int, buffer *bytes.Buffer) {
+	buffer.WriteString("  Pipeline: ")
+	vm.HandleAllOp(node, func(parentOp vm.Operator, op vm.Operator) error {
+		if op.GetOperatorBase().NumChildren() != 0 {
+			buffer.WriteString(" -> ")
+		}
+		id := op.OpType()
+		name, ok := debugInstructionNames[id]
+		if !ok {
+			name = "unknown"
+		}
+
+		buffer.WriteString(name)
+		hanldeTailNodeReceiver(op, mp, buffer)
+		return nil
+	})
 }
 
 func hanldeTailNodeReceiver(node vm.Operator, mp map[*process.WaitRegister]int, buffer *bytes.Buffer) {
@@ -333,13 +297,13 @@ func hanldeTailNodeReceiver(node vm.Operator, mp map[*process.WaitRegister]int, 
 		}
 		switch arg.FuncId {
 		case dispatch.ShuffleToAllFunc:
-			buffer.WriteString(fmt.Sprintf(" shuffle to all of MergeReceiver [%s].", chs))
+			buffer.WriteString(fmt.Sprintf(" shuffle to all of MergeReceiver [%s]", chs))
 		case dispatch.SendToAllFunc, dispatch.SendToAllLocalFunc:
-			buffer.WriteString(fmt.Sprintf(" to all of MergeReceiver [%s].", chs))
+			buffer.WriteString(fmt.Sprintf(" to all of MergeReceiver [%s]", chs))
 		case dispatch.SendToAnyLocalFunc:
-			buffer.WriteString(fmt.Sprintf(" to any of MergeReceiver [%s].", chs))
+			buffer.WriteString(fmt.Sprintf(" to any of MergeReceiver [%s]", chs))
 		default:
-			buffer.WriteString(fmt.Sprintf(" unknow type dispatch [%s].", chs))
+			buffer.WriteString(fmt.Sprintf(" unknow type dispatch [%s]", chs))
 		}
 
 		if len(arg.RemoteRegs) != 0 {
@@ -371,4 +335,62 @@ func trimLastNewline(buf *bytes.Buffer) {
 	if len(data) > 0 && data[len(data)-1] == '\n' {
 		buf.Truncate(len(data) - 1)
 	}
+}
+
+func gapNextLine(gap int, buffer *bytes.Buffer) {
+	buffer.WriteString("\n")
+	for i := 0; i < gap; i++ {
+		buffer.WriteString(" ")
+	}
+}
+
+// get receiver id string
+func getReceiverStr(s *Scope, rs []*process.WaitRegister, rmp map[*process.WaitRegister]int) string {
+	str := "["
+	for i := range rs {
+		remote := ""
+		for _, u := range s.RemoteReceivRegInfos {
+			if u.Idx == i {
+				uuidStr := u.Uuid.String()
+				remote = fmt.Sprintf("(%s)", uuidStr[len(uuidStr)-6:])
+				break
+			}
+		}
+		if i != 0 {
+			str += ", "
+		}
+		if id, ok := rmp[rs[i]]; ok {
+			str += fmt.Sprintf("%d%s", id, remote)
+		} else {
+			str += "unknown"
+		}
+	}
+	str += "]"
+	return str
+}
+
+// convert magic to its string name
+func magicShow(magic magicType) string {
+	name, ok := debugMagicNames[magic]
+	if ok {
+		return name
+	}
+	return "unknown"
+}
+
+func showDataSource(source *Source) string {
+	if source == nil {
+		return "nil"
+	}
+	s := fmt.Sprintf("%s.%s%s", source.SchemaName, source.RelationName, source.Attributes)
+	return strings.TrimLeft(s, ".")
+}
+
+// return n space
+func addGap(gap int) string {
+	str := ""
+	for i := 0; i < gap; i++ {
+		str += " "
+	}
+	return str
 }

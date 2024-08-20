@@ -15,10 +15,11 @@
 package compile
 
 import (
-	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -31,36 +32,23 @@ type AnalyzeModuleV1 struct {
 	// curNodeIdx is the current Node index when compilePlanScope
 	curNodeIdx int
 	// isFirst is the first opeator in pipeline for plan Node
-	isFirst bool
-	qry     *plan.Query
-	phyPlan PhyPlan
-	mu      sync.RWMutex // 添加的读写锁
+	isFirst        bool
+	qry            *plan.Query
+	phyPlan        models.PhyPlan
+	remotePhyPlans []models.PhyPlan
+	// Added read-write lock
+	mu sync.RWMutex
 }
 
-func (anal *AnalyzeModuleV1) AppendRemotePhyPlan(p PhyPlan) {
-	anal.mu.Lock()         // 加写锁
-	defer anal.mu.Unlock() // 解锁
-
-	anal.phyPlan.RemoteScope = append(anal.phyPlan.RemoteScope, p.LocalScope[0])
-	anal.phyPlan.S3IOInputCount += p.S3IOInputCount
-	anal.phyPlan.S3IOOutputCount += p.S3IOOutputCount
+func (anal *AnalyzeModuleV1) AppendRemotePhyPlan(remotePhyPlan models.PhyPlan) {
+	anal.mu.Lock()
+	defer anal.mu.Unlock()
+	anal.remotePhyPlans = append(anal.remotePhyPlans, remotePhyPlan)
 }
 
-func (anal *AnalyzeModuleV1) GetPhyPlan() PhyPlan {
+func (anal *AnalyzeModuleV1) GetPhyPlan() models.PhyPlan {
 	return anal.phyPlan
 }
-
-//func (a *AnalyzeModuleV1) S3IOInputCount(idx int, count int64) {
-//	atomic.AddInt64(&a.analInfos[idx].S3IOInputCount, count)
-//}
-//
-//func (a *AnalyzeModuleV1) S3IOOutputCount(idx int, count int64) {
-//	atomic.AddInt64(&a.analInfos[idx].S3IOOutputCount, count)
-//}
-//
-//func (a *AnalyzeModuleV1) Nodes() []*process.AnalyzeInfo {
-//	return a.analInfos
-//}
 
 func (a AnalyzeModuleV1) TypeName() string {
 	return "compile.analyzeModuleV1"
@@ -87,12 +75,14 @@ func (c *Compile) initAnalyzeModuleV1(qry *plan.Query) {
 		panic("empty logic plan")
 	}
 
-	c.anal = &AnalyzeModuleV1{}
+	c.anal = newAnalyzeModuleV1()
 	c.anal.qry = qry
 	c.anal.curNodeIdx = int(qry.Steps[0])
 	for _, node := range c.anal.qry.Nodes {
 		if node.AnalyzeInfo == nil {
 			node.AnalyzeInfo = new(plan.AnalyzeInfo)
+		} else {
+			node.AnalyzeInfo.Reset()
 		}
 	}
 }
@@ -115,7 +105,7 @@ func (c *Compile) setAnalyzeCurrentV1(updateScopes []*Scope, nextId int) {
 }
 
 // 递归遍历 PhyOperator 并将 OpStats 添加到对应的 Plan Node 中
-func addOpStatsToPlanNodes(op *PhyOperator, nodes []*plan.Node) {
+func addOpStatsToPlanNodes(op *models.PhyOperator, nodes []*plan.Node) {
 	if op == nil {
 		return
 	}
@@ -126,21 +116,21 @@ func addOpStatsToPlanNodes(op *PhyOperator, nodes []*plan.Node) {
 		if node.AnalyzeInfo == nil {
 			node.AnalyzeInfo = &plan.AnalyzeInfo{}
 		}
-		node.AnalyzeInfo.InputRows = op.OpStats.TotalInputRows
-		node.AnalyzeInfo.OutputRows = op.OpStats.TotalOutputRows
-		node.AnalyzeInfo.InputSize = op.OpStats.TotalInputSize
-		node.AnalyzeInfo.OutputSize = op.OpStats.TotalOutputSize
-		node.AnalyzeInfo.TimeConsumed = op.OpStats.TotalTimeConsumed
-		node.AnalyzeInfo.MemorySize = op.OpStats.TotalMemorySize
-		node.AnalyzeInfo.WaitTimeConsumed = op.OpStats.TotalWaitTimeConsumed
-		node.AnalyzeInfo.DiskIO = op.OpStats.TotalDiskIO
-		node.AnalyzeInfo.S3IOByte = op.OpStats.TotalS3IOByte
-		node.AnalyzeInfo.S3IOInputCount = op.OpStats.TotalS3InputCount
-		node.AnalyzeInfo.S3IOOutputCount = op.OpStats.TotalS3OutputCount
-		node.AnalyzeInfo.NetworkIO = op.OpStats.TotalNetworkIO
-		node.AnalyzeInfo.ScanTime = op.OpStats.TotalScanTime
-		node.AnalyzeInfo.InsertTime = op.OpStats.TotalInsertTime
-		node.AnalyzeInfo.InputBlocks = op.OpStats.TotalInputBlocks
+		node.AnalyzeInfo.InputRows += op.OpStats.TotalInputRows
+		node.AnalyzeInfo.OutputRows += op.OpStats.TotalOutputRows
+		node.AnalyzeInfo.InputSize += op.OpStats.TotalInputSize
+		node.AnalyzeInfo.OutputSize += op.OpStats.TotalOutputSize
+		node.AnalyzeInfo.TimeConsumed += op.OpStats.TotalTimeConsumed
+		node.AnalyzeInfo.MemorySize += op.OpStats.TotalMemorySize
+		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.TotalWaitTimeConsumed
+		node.AnalyzeInfo.DiskIO += op.OpStats.TotalDiskIO
+		node.AnalyzeInfo.S3IOByte += op.OpStats.TotalS3IOByte
+		node.AnalyzeInfo.S3IOInputCount += op.OpStats.TotalS3InputCount
+		node.AnalyzeInfo.S3IOOutputCount += op.OpStats.TotalS3OutputCount
+		node.AnalyzeInfo.NetworkIO += op.OpStats.TotalNetworkIO
+		node.AnalyzeInfo.ScanTime += op.OpStats.TotalScanTime
+		node.AnalyzeInfo.InsertTime += op.OpStats.TotalInsertTime
+		node.AnalyzeInfo.InputBlocks += op.OpStats.TotalInputBlocks
 	}
 
 	// 递归处理子操作
@@ -150,35 +140,19 @@ func addOpStatsToPlanNodes(op *PhyOperator, nodes []*plan.Node) {
 }
 
 // 递归遍历 PhyScope 并处理其中的 PhyOperator
-func processPhyScope(scope *PhyScope, nodes []*plan.Node) {
+func processPhyScope(scope *models.PhyScope, nodes []*plan.Node) {
 	if scope == nil {
 		return
 	}
 
-	// 处理当前 Scope 中的 Pipeline
+	// handle current Scope operator pipeline
 	if scope.RootOperator != nil {
 		addOpStatsToPlanNodes(scope.RootOperator, nodes)
 	}
 
-	// 递归处理前置范围
+	// handle preScopes recursively
 	for _, preScope := range scope.PreScopes {
 		processPhyScope(&preScope, nodes)
-	}
-}
-
-func (c *Compile) fillPlanNodeAnalyzeInfoV11(plan *PhyPlan) {
-	if plan == nil {
-		return
-	}
-
-	// 处理本地范围
-	for _, localScope := range plan.LocalScope {
-		processPhyScope(&localScope, c.anal.qry.Nodes)
-	}
-
-	// 处理远程范围
-	for _, remoteScope := range plan.RemoteScope {
-		processPhyScope(&remoteScope, c.anal.qry.Nodes)
 	}
 }
 
@@ -192,69 +166,36 @@ func (c *Compile) checkSQLHasQueryPlan() bool {
 	return false
 }
 
-//----------------------------------------------------------------------------------------------------------------------
-
-type PhyPlan struct {
-	Version         string     `json:"version"`
-	LocalScope      []PhyScope `json:"scope,omitempty"`
-	RemoteScope     []PhyScope `json:"RemoteScope,omitempty"`
-	S3IOInputCount  int64      `json:"S3IOInputCount"`
-	S3IOOutputCount int64      `json:"S3IOInputCount"`
-}
-
-type PhyScope struct {
-	Magic        magicType     `json:"Magic"`
-	Receiver     []PhyReceiver `json:"Receiver,omitempty"`
-	DataSource   *PhySource    `json:"DataSource,omitempty"`
-	PreScopes    []PhyScope    `json:"PreScopes,omitempty"`
-	RootOperator *PhyOperator  `json:"RootOperator,omitempty"`
-}
-
-type PhyReceiver struct {
-	Idx        int    `json:"Idx"`
-	RemoteUuid string `json:"Uuid,omitempty"`
-}
-
-type PhySource struct {
-	SchemaName   string   `json:"SchemaName"`
-	RelationName string   `json:"TableName"`
-	Attributes   []string `json:"Columns"`
-}
-
-type PhyOperator struct {
-	OpName       string                 `json:"OpName"`
-	NodeIdx      int                    `json:"NodeIdx"`
-	IsFirst      bool                   `json:"IsFirst"`
-	IsLast       bool                   `json:"IsLast"`
-	DestReceiver []PhyReceiver          `json:"toMergeReceiver,omitempty"`
-	OpStats      *process.OperatorStats `json:"OpStats,omitempty"`
-	Children     []*PhyOperator         `json:"Children,omitempty"`
-}
-
-func PhyPlanToJSON(p PhyPlan) (string, error) {
-	jsonData, err := json.MarshalIndent(p, "", "  ")
-	if err != nil {
-		return "", err
+func (c *Compile) fillPlanNodeAnalyzeInfo() {
+	if c.anal == nil {
+		return
 	}
-	return string(jsonData), nil
-}
 
-func JSONToPhyPlan(jsonStr string) (PhyPlan, error) {
-	var p PhyPlan
-	err := json.Unmarshal([]byte(jsonStr), &p)
-	if err != nil {
-		return PhyPlan{}, err
+	// handle local scopes
+	for _, localScope := range c.anal.phyPlan.LocalScope {
+		processPhyScope(&localScope, c.anal.qry.Nodes)
 	}
-	return p, nil
+
+	// handle remote run scopes
+	for _, remoteScope := range c.anal.phyPlan.RemoteScope {
+		processPhyScope(&remoteScope, c.anal.qry.Nodes)
+	}
+
+	// Summarize the S3 resources executed by SQL into curNode
+	// TODO: Actually, S3 resources may not necessarily be used by the current node.
+	// We will handle it this way for now and optimize it in the future
+	curNode := c.anal.qry.Nodes[c.anal.curNodeIdx]
+	curNode.AnalyzeInfo.S3IOInputCount = c.anal.phyPlan.S3IOInputCount
+	curNode.AnalyzeInfo.S3IOOutputCount = c.anal.phyPlan.S3IOOutputCount
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 
-func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]int) PhyScope {
-	phyScope := PhyScope{
-		Magic:        scope.Magic,
+func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]int) models.PhyScope {
+	phyScope := models.PhyScope{
+		Magic:        scope.Magic.String(),
 		DataSource:   ConvertSourceToPhySource(scope.DataSource),
-		PreScopes:    []PhyScope{},
+		PreScopes:    []models.PhyScope{},
 		RootOperator: ConvertOperatorToPhyOperator(scope.RootOp, receiverMap),
 	}
 
@@ -269,8 +210,8 @@ func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]
 	return phyScope
 }
 
-func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.WaitRegister]int) []PhyReceiver {
-	receivers := make([]PhyReceiver, 0)
+func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.WaitRegister]int) []models.PhyReceiver {
+	receivers := make([]models.PhyReceiver, 0)
 	for i := range rs {
 		remote := ""
 		for _, u := range s.RemoteReceivRegInfos {
@@ -280,12 +221,12 @@ func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.Wai
 			}
 		}
 		if id, ok := rmp[rs[i]]; ok {
-			receivers = append(receivers, PhyReceiver{
+			receivers = append(receivers, models.PhyReceiver{
 				Idx:        id,
 				RemoteUuid: remote,
 			})
 		} else {
-			receivers = append(receivers, PhyReceiver{
+			receivers = append(receivers, models.PhyReceiver{
 				Idx:        -1, // "unknown"
 				RemoteUuid: remote,
 			})
@@ -295,7 +236,7 @@ func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.Wai
 }
 
 // 将 Operator 转换为 PhyOperator
-func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]int) *PhyOperator {
+func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]int) *models.PhyOperator {
 	if op == nil {
 		return nil
 	}
@@ -308,8 +249,8 @@ func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]
 	//}
 	//--------------------debug---------------------
 
-	phyOp := &PhyOperator{
-		OpName:       fmt.Sprintf("%d", op.OpType()),
+	phyOp := &models.PhyOperator{
+		OpName:       op.OpType().String(),
 		NodeIdx:      op.GetOperatorBase().Idx,
 		IsFirst:      op.GetOperatorBase().IsFirst,
 		IsLast:       op.GetOperatorBase().IsLast,
@@ -321,7 +262,7 @@ func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]
 	}
 
 	children := op.GetOperatorBase().Children
-	phyChildren := make([]*PhyOperator, len(children))
+	phyChildren := make([]*models.PhyOperator, len(children))
 	for i, child := range children {
 		phyChildren[i] = ConvertOperatorToPhyOperator(child, rmp)
 	}
@@ -331,8 +272,8 @@ func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]
 }
 
 // getDestReceiver 返回当前 Operator 的 DestReceiver
-func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []PhyReceiver {
-	receivers := make([]PhyReceiver, 0)
+func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []models.PhyReceiver {
+	receivers := make([]models.PhyReceiver, 0)
 	id := op.OpType()
 	_, ok := debugInstructionNames[id]
 	if ok {
@@ -340,7 +281,7 @@ func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []PhyRece
 			arg := op.(*connector.Connector)
 			if receiverId, okk := mp[arg.Reg]; okk {
 				//receivers = append(receivers, receiverId)
-				receivers = append(receivers, PhyReceiver{
+				receivers = append(receivers, models.PhyReceiver{
 					Idx:        receiverId,
 					RemoteUuid: "",
 				})
@@ -351,13 +292,13 @@ func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []PhyRece
 			for i := range arg.LocalRegs {
 				if receiverId, okk := mp[arg.LocalRegs[i]]; okk {
 					//receivers = append(receivers, receiverId)
-					receivers = append(receivers, PhyReceiver{
+					receivers = append(receivers, models.PhyReceiver{
 						Idx:        receiverId,
 						RemoteUuid: "",
 					})
 				} else {
 					//receivers = append(receivers, -1)
-					receivers = append(receivers, PhyReceiver{
+					receivers = append(receivers, models.PhyReceiver{
 						Idx:        -1,
 						RemoteUuid: "",
 					})
@@ -366,7 +307,7 @@ func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []PhyRece
 
 			if len(arg.RemoteRegs) != 0 {
 				for _, reg := range arg.RemoteRegs {
-					receivers = append(receivers, PhyReceiver{
+					receivers = append(receivers, models.PhyReceiver{
 						Idx:        -2, // reg.NodeAddr
 						RemoteUuid: fmt.Sprintf("%s", reg.Uuid),
 					})
@@ -380,18 +321,18 @@ func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []PhyRece
 	return receivers
 }
 
-func ConvertSourceToPhySource(source *Source) *PhySource {
+func ConvertSourceToPhySource(source *Source) *models.PhySource {
 	if source == nil {
 		return nil
 	}
-	return &PhySource{
+	return &models.PhySource{
 		SchemaName:   source.SchemaName,
 		RelationName: source.RelationName,
 		Attributes:   source.Attributes,
 	}
 }
 
-func ConvertCompileToPhyPlan(c *Compile) PhyPlan {
+func (c *Compile) GeneratePhyPlan() {
 	var generateReceiverMap func(*Scope, map[*process.WaitRegister]int)
 	generateReceiverMap = func(s *Scope, mp map[*process.WaitRegister]int) {
 		for i := range s.PreScopes {
@@ -412,21 +353,33 @@ func ConvertCompileToPhyPlan(c *Compile) PhyPlan {
 	}
 	//------------------------------------------------------------------------------------------------------
 
-	phyPlan := PhyPlan{
-		Version:     "1.0",        // 假设版本号为1.0，可以根据实际情况调整
-		RemoteScope: []PhyScope{}, // 假设这里需要处理 RemoteScope 字段，可以根据实际情况调整
+	c.anal.phyPlan = models.PhyPlan{
+		// Assuming the version number is 1.0,
+		Version:     "1.0",
+		RemoteScope: []models.PhyScope{},
 	}
 
 	if len(c.scope) > 0 {
 		for i := range c.scope {
 			phyScope := ConvertScopeToPhyScope(c.scope[i], receiverMap)
-			phyPlan.LocalScope = append(phyPlan.LocalScope, phyScope)
+			c.anal.phyPlan.LocalScope = append(c.anal.phyPlan.LocalScope, phyScope)
 		}
 	}
 
-	if len(c.anal.phyPlan.RemoteScope) > 0 {
-		phyPlan.RemoteScope = append(phyPlan.RemoteScope, c.anal.phyPlan.RemoteScope...)
-	}
+	//-------------------------------------------------------------------------------------------
+	// record the number of s3 requests
+	c.anal.phyPlan.S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
+	c.anal.phyPlan.S3IOInputCount += c.counterSet.FileService.S3.List.Load()
 
-	return phyPlan
+	c.anal.phyPlan.S3IOOutputCount += c.counterSet.FileService.S3.Head.Load()
+	c.anal.phyPlan.S3IOOutputCount += c.counterSet.FileService.S3.Get.Load()
+	c.anal.phyPlan.S3IOOutputCount += c.counterSet.FileService.S3.Delete.Load()
+	c.anal.phyPlan.S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
+	//-------------------------------------------------------------------------------------------
+
+	for _, remotePhy := range c.anal.remotePhyPlans {
+		c.anal.phyPlan.RemoteScope = append(c.anal.phyPlan.RemoteScope, remotePhy.LocalScope[0])
+		c.anal.phyPlan.S3IOInputCount += remotePhy.S3IOInputCount
+		c.anal.phyPlan.S3IOOutputCount += remotePhy.S3IOOutputCount
+	}
 }

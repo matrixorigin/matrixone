@@ -19,7 +19,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	gotrace "runtime/trace"
+	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 
 	"go.uber.org/zap"
 
@@ -259,17 +262,20 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	//--------------------------------------------------------------------------------------------------------------
 
 	if c.checkSQLHasQueryPlan() {
-		//if strings.HasPrefix(c.sql, "SELECT ROUND(SUM") {
-		scopeInfo := DebugShowScopes(c.scope, InfoLevel)
+		scopeInfo := DebugShowScopes(c.scope, AnalyzeLevel)
 		fmt.Printf("-------------------------------wuxiliang end----------------------------------\nSQL:%s %s\n--------------------------------------------", c.sql, scopeInfo)
 
-		phyPlan := ConvertCompileToPhyPlan(runC)
-		runC.fillPlanNodeAnalyzeInfoV11(&phyPlan)
+		runC.GeneratePhyPlan()
 
-		explainPhy := explainPhyPlan(&phyPlan)
-		fmt.Printf("------------------------------wuxiliang explain PhyPlan--------------------------\nSQL:%s %s\n-----------------------------------------", c.sql, explainPhy)
+		runC.fillPlanNodeAnalyzeInfo()
 
-		jsonStr, err := PhyPlanToJSON(phyPlan)
+		phyPlan := c.anal.phyPlan
+		if strings.HasPrefix(c.sql, "SELECT ROUND(SUM") {
+			explainPhy := models.ExplainPhyPlan(&phyPlan)
+			fmt.Printf("------------------------------wuxiliang explain PhyPlan--------------------------\nSQL:%s \n%s\n-----------------------------------------", c.sql, explainPhy)
+		}
+
+		jsonStr, err := models.PhyPlanToJSON(phyPlan)
 		if err != nil {
 			panic(fmt.Sprintf("--------->wuxiliang Error serializing to JSON: %s", err))
 		}
