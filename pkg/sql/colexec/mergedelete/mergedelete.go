@@ -47,6 +47,7 @@ func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
 	mergeDelete.ctr.delSource = rel
 	mergeDelete.ctr.partitionSources = partitionRels
 	mergeDelete.ctr.affectedRows = 0
+	mergeDelete.ctr.bat = new(batch.Batch)
 	return nil
 }
 
@@ -70,7 +71,8 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	if input.Batch == nil || input.Batch.IsEmpty() {
 		return input, nil
 	}
-	bat := input.Batch
+
+	resBat := input.Batch
 
 	// 	  blkId           deltaLoc                        type                                 partitionIdx
 	// |----------|-----------------------------|-------------------------------------------|---------------------
@@ -78,19 +80,20 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	// |  blk_id  | batch.Marshal(int64 offset) | CNBlockOffset (CN Block )                 |  partitionIdx
 	// |  blk_id  | batch.Marshal(rowId)        | RawRowIdBatch (DN Blcok )                 |  partitionIdx
 	// |  blk_id  | batch.Marshal(int64 offset) | RawBatchOffset(RawBatch[in txn workspace])|  partitionIdx
-	blkIds, area0 := vector.MustVarlenaRawData(bat.GetVector(0))
-	deltaLocs, area1 := vector.MustVarlenaRawData(bat.GetVector(1))
-	typs := vector.MustFixedCol[int8](bat.GetVector(2))
+	blkIds, area0 := vector.MustVarlenaRawData(resBat.GetVector(0))
+	deltaLocs, area1 := vector.MustVarlenaRawData(resBat.GetVector(1))
+	typs := vector.MustFixedCol[int8](resBat.GetVector(2))
+
+	bat := mergeDelete.ctr.bat
+	bat.CleanOnlyData()
 
 	// If the target table is a partition table, Traverse partition subtables for separate processing
+
 	if len(mergeDelete.ctr.partitionSources) > 0 {
-		partitionIdxs := vector.MustFixedCol[int32](bat.GetVector(3))
-		for i := 0; i < bat.RowCount(); i++ {
+		partitionIdxs := vector.MustFixedCol[int32](resBat.GetVector(3))
+		for i := 0; i < resBat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i].UnsafeGetString(area0), typs[i])
-			//@todo need new method for batch UnmarshalBinaryWithNoCopy(data []byte, enBatch *batch.EncodeBatch, mp *mpool.MPool)
-			//then we can reuse mem
-			bat := &batch.Batch{}
-			if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
+			if err := bat.UnmarshalBinaryWithNoCopy(deltaLocs[i].GetByteSlice(area1)); err != nil {
 				return input, err
 			}
 			bat.Cnt = 1
@@ -103,12 +106,10 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 		}
 	} else {
 		// If the target table is a general table
-		for i := 0; i < bat.RowCount(); i++ {
+		for i := 0; i < resBat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
-			//@todo need new method UnmarshalBinaryWithNoCopy(data []byte, enBatch *batch.EncodeBatch, mp *mpool.MPool) for batch
-			//then we can reuse mem
-			bat := &batch.Batch{}
-			if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
+
+			if err := bat.UnmarshalBinaryWithNoCopy(deltaLocs[i].GetByteSlice(area1)); err != nil {
 				return input, err
 			}
 			bat.Cnt = 1
@@ -121,7 +122,7 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	}
 	// and there are another attr used to record how many rows are deleted
 	if mergeDelete.AddAffectedRows {
-		mergeDelete.ctr.affectedRows += uint64(vector.GetFixedAt[uint32](bat.GetVector(4), 0))
+		mergeDelete.ctr.affectedRows += uint64(vector.GetFixedAt[uint32](resBat.GetVector(4), 0))
 	}
 	return input, nil
 }

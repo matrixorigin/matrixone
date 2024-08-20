@@ -78,6 +78,10 @@ func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
 	return bat.unmarshalBinaryWithAnyMp(data, nil)
 }
 
+func (bat *Batch) UnmarshalBinaryWithNoCopy(data []byte) (err error) {
+	return bat.unmarshalBinaryWithAnyMpAndNoCopy(data, nil)
+}
+
 func (bat *Batch) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	return bat.unmarshalBinaryWithAnyMp(data, mp)
 }
@@ -108,6 +112,88 @@ func (bat *Batch) unmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 		}
 	}
 	bat.ShuffleIDX = rbat.ShuffleIdx
+	return nil
+}
+
+func (bat *Batch) unmarshalBinaryWithAnyMpAndNoCopy(data []byte, mp *mpool.MPool) (err error) {
+	// types.DecodeXXX plays with raw pointer, so we make a copy of binary data
+	buf := make([]byte, len(data))
+	copy(buf, data)
+
+	bat.rowCount = int(types.DecodeInt64(buf[:8]))
+	buf = buf[8:]
+
+	l := types.DecodeInt32(buf[:4])
+	// reuse bat mem
+	firstTime := bat.Vecs == nil
+	if firstTime {
+		bat.Vecs = make([]*vector.Vector, l)
+		for i := range bat.Vecs {
+			bat.Vecs[i] = vector.NewVecFromReuse()
+		}
+	}
+	vecs := bat.Vecs
+	buf = buf[4:]
+
+	for i := 0; i < int(l); i++ {
+		size := types.DecodeInt32(buf[:4])
+		buf = buf[4:]
+
+		if mp == nil {
+			if err := vecs[i].UnmarshalBinary(buf[:size]); err != nil {
+				return err
+			}
+		} else {
+			if err := vecs[i].UnmarshalBinaryWithCopy(buf[:size], mp); err != nil {
+				return err
+			}
+		}
+
+		buf = buf[size:]
+	}
+
+	l = types.DecodeInt32(buf[:4])
+	if firstTime {
+		bat.Attrs = make([]string, l)
+	}
+	buf = buf[4:]
+
+	for i := 0; i < int(l); i++ {
+		size := types.DecodeInt32(buf[:4])
+		buf = buf[4:]
+		bat.Attrs[i] = string(buf[:size])
+		buf = buf[size:]
+	}
+
+	l = types.DecodeInt32(buf[:4])
+	aggs := make([][]byte, l)
+
+	buf = buf[4:]
+	for i := 0; i < int(l); i++ {
+		size := types.DecodeInt32(buf[:4])
+		buf = buf[4:]
+		aggs[i] = buf[:size]
+		buf = buf[size:]
+	}
+
+	bat.Recursive = types.DecodeInt32(buf[:4])
+	buf = buf[4:]
+	bat.ShuffleIDX = types.DecodeInt32(buf[:4])
+	bat.Cnt = 1
+
+	if len(aggs) > 0 {
+		bat.Aggs = make([]aggexec.AggFuncExec, len(aggs))
+		var aggMemoryManager aggexec.AggMemoryManager = nil
+		if mp != nil {
+			aggMemoryManager = aggexec.NewSimpleAggMemoryManager(mp)
+		}
+
+		for i, info := range aggs {
+			if bat.Aggs[i], err = aggexec.UnmarshalAggFuncExec(aggMemoryManager, info); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

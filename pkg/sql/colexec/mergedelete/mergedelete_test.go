@@ -152,6 +152,7 @@ func TestMergeDelete(t *testing.T) {
 	argument1 := MergeDelete{
 		ctr: container{
 			delSource: &mockRelation{},
+			bat:       &batch.Batch{},
 		},
 		AddAffectedRows: true,
 		OperatorBase: vm.OperatorBase{
@@ -169,6 +170,7 @@ func TestMergeDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(15), argument1.AffectedRows())
 
+	argument1.Reset(proc, false, err)
 	resetChildren(&argument1, batch2)
 	_, err = argument1.Call(proc)
 	require.NoError(t, err)
