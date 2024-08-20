@@ -994,7 +994,9 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 			return err
 		}
 	}
+
 	plh := param.plh
+	plh.moCsvLineArray = plh.moCsvLineArray[:cap(plh.moCsvLineArray)]
 	finish := false
 	cnt, finish, err = readCountStringLimitSize(plh.csvReader, proc.Ctx, param.maxBatchSize, plh.moCsvLineArray)
 	if err != nil {
@@ -1019,11 +1021,12 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 				plh.moCsvLineArray = plh.moCsvLineArray[param.IgnoreLine:cnt]
 				cnt -= param.IgnoreLine
 				plh.moCsvLineArray = append(plh.moCsvLineArray, make([]csvparser.Field, param.IgnoreLine))
+				param.IgnoreLine = 0
 			} else {
-				plh.moCsvLineArray = nil
+				// plh.moCsvLineArray = nil
+				param.IgnoreLine -= cnt
 				cnt = 0
 			}
-			param.IgnoreLine = 0
 		}
 	}
 	plh.batchSize = cnt
