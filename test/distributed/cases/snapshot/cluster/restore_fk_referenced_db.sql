@@ -212,6 +212,22 @@ select * from Company.Benefits;
 select * from Company.TimeOff;
 select * from Company.PerformanceReviews;
 
+restore account sys database Company table Employees from snapshot mater_sp;
+restore account sys database Company table Positions from snapshot mater_sp;
+restore account sys database Company table EmployeePositions from snapshot mater_sp;
+restore account sys database Company table Salaries from snapshot mater_sp;
+restore account sys database Company table Benefits from snapshot mater_sp;
+restore account sys database Company table TimeOff from snapshot mater_sp;
+restore account sys database Company table PerformanceReviews from snapshot mater_sp;
+select * from Company.Departments;
+select * from Company.Employees;
+select * from Company.Positions;
+select * from Company.EmployeePositions;
+select * from Company.Salaries;
+select * from Company.Benefits;
+select * from Company.TimeOff;
+select * from Company.PerformanceReviews;
+
 drop snapshot if exists mater_sp;
 -- @ignore:1
 show snapshots;

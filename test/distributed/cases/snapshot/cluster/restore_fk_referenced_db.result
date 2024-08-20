@@ -251,8 +251,79 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot mater_sp for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-mater_sp    2024-08-20 03:02:57.183144    account    sys        
+mater_sp    2024-08-20 06:14:12.156653    account    sys        
 restore account sys database Company table Departments from snapshot mater_sp;
+select * from Company.Departments;
+departmentid    name    managerid
+1    Research and Development    null
+2    Human Resources    null
+3    Sales    null
+4    Marketing    null
+5    Finance    null
+6    Legal    null
+select * from Company.Employees;
+employeeid    firstname    lastname    birthdate    departmentid
+1    John    Doe    1980-01-01    1
+2    Jane    Smith    1981-02-02    2
+3    Alice    Jones    1982-03-03    3
+4    Bob    Brown    1983-04-04    4
+5    Charlie    White    1984-05-05    5
+6    David    Black    1985-06-06    6
+select * from Company.Positions;
+positionid    title    departmentid
+1    Software Engineer    1
+2    HR Specialist    2
+3    Sales Associate    3
+4    Marketing Specialist    4
+5    Accountant    5
+6    Attorney    6
+select * from Company.EmployeePositions;
+employeeid    positionid
+1    1
+2    2
+3    3
+4    4
+5    5
+6    6
+select * from Company.Salaries;
+salaryid    employeeid    positionid    salary
+1    1    1    100000.00
+2    2    2    50000.00
+3    3    3    60000.00
+4    4    4    70000.00
+5    5    5    80000.00
+6    6    6    90000.00
+select * from Company.Benefits;
+benefitid    employeeid    benefit
+1    1    Health Insurance
+2    2    Dental Insurance
+3    3    Vision Insurance
+4    4    401k
+5    5    Stock Options
+6    6    Paid Time Off
+select * from Company.TimeOff;
+timeoffid    employeeid    startdate    enddate
+1    1    2020-01-01    2020-01-02
+2    2    2020-02-02    2020-02-03
+3    3    2020-03-03    2020-03-04
+4    4    2020-04-04    2020-04-05
+5    5    2020-05-05    2020-05-06
+6    6    2020-06-06    2020-06-07
+select * from Company.PerformanceReviews;
+performancereviewid    employeeid    reviewdate    reviewerid
+1    1    2020-01-01    2
+2    2    2020-02-02    3
+3    3    2020-03-03    4
+4    4    2020-04-04    5
+5    5    2020-05-05    6
+6    6    2020-06-06    1
+restore account sys database Company table Employees from snapshot mater_sp;
+restore account sys database Company table Positions from snapshot mater_sp;
+restore account sys database Company table EmployeePositions from snapshot mater_sp;
+restore account sys database Company table Salaries from snapshot mater_sp;
+restore account sys database Company table Benefits from snapshot mater_sp;
+restore account sys database Company table TimeOff from snapshot mater_sp;
+restore account sys database Company table PerformanceReviews from snapshot mater_sp;
 select * from Company.Departments;
 departmentid    name    managerid
 1    Research and Development    null
