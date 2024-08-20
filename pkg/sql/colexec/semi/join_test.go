@@ -270,7 +270,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 				},
 			},
 			NeedAllocateSels: true,
-			NeedMergedBatch:  true,
+			NeedBatches:      true,
 		},
 		marg: &merge.Merge{},
 	}

@@ -284,7 +284,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 				},
 			},
 			NeedAllocateSels: true,
-			NeedMergedBatch:  true,
+			NeedBatches:      true,
 		},
 		marg: &merge.Merge{},
 	}
