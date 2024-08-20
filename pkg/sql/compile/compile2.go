@@ -17,6 +17,9 @@ package compile
 import (
 	"context"
 	"encoding/hex"
+	gotrace "runtime/trace"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -31,8 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
-	gotrace "runtime/trace"
-	"time"
 )
 
 // I create this file to store the two most important entry functions for the Compile struct and their helper functions.
@@ -206,7 +207,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// build query context and pipeline contexts for the current run.
 		runC.InitPipelineContextToExecuteQuery()
 
-		if err = runC.runOnce(); err == nil {
+		retryOnMetadata := false
+		if err = runC.runOnce(&retryOnMetadata); err == nil {
 			break
 		}
 
@@ -241,7 +243,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		defChanged := moerr.IsMoErrCode(
 			err,
 			moerr.ErrTxnNeedRetryWithDefChanged)
-		if runC, err = c.prepareRetry(defChanged); err != nil {
+		if runC, err = c.prepareRetry(defChanged, retryOnMetadata); err != nil {
 			return nil, err
 		}
 	}
@@ -257,9 +259,12 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 }
 
 // prepareRetry rebuild a new Compile object for retrying the query.
-func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
+func (c *Compile) prepareRetry(
+	defChanged bool,
+	retryOnMetadata bool,
+) (*Compile, error) {
 	v2.TxnStatementRetryCounter.Inc()
-	c.proc.GetTxnOperator().ResetRetry(true)
+	c.proc.GetTxnOperator().ResetRetry(!retryOnMetadata)
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 
 	topContext := c.proc.GetTopContext()

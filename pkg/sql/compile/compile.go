@@ -432,23 +432,19 @@ func (c *Compile) printPipeline() {
 }
 */
 // run once
-func (c *Compile) runOnce() error {
+func (c *Compile) runOnce(retryOnMetadata *bool) error {
 	var wg sync.WaitGroup
-	var lockError error
 	err := c.lockMetaTables()
 	if err != nil {
-		if !c.isRetryErr(err) {
-			return err
+		if c.isRetryErr(err) {
+			*retryOnMetadata = true
 		}
-		lockError = err
+		return err
 	}
 
 	err = c.lockTable()
-	if err != nil && !c.isRetryErr(err) {
-		if !c.isRetryErr(err) {
-			return err
-		}
-		lockError = err
+	if err != nil {
+		return err
 	}
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
@@ -534,9 +530,6 @@ func (c *Compile) runOnce() error {
 		if alterTable != nil && len(alterTable.GetDetectSqls()) != 0 {
 			err = detectFkSelfRefer(c, alterTable.GetDetectSqls())
 		}
-	}
-	if err == nil {
-		err = lockError
 	}
 	return err
 }
