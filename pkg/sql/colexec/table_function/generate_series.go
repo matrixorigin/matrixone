@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -125,7 +127,10 @@ func initStartAndEndVarChar(gs *genDatetimeState,
 
 func generateSeriesPrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
 	st := new(generateSeriesArg)
-	return st, nil
+	var err error
+	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
+	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
+	return st, err
 }
 
 func (g *generateSeriesArg) reset(tf *TableFunction, proc *process.Process) {
@@ -183,6 +188,11 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 		if err = initStartAndEndVarChar(&g.dtState, startVec, endVec, nthRow); err != nil {
 			return err
 		}
+		// reset schema
+		typ := types.T_datetime.ToType()
+		typ.Scale = g.dtState.scale
+		tf.Rets[0].Typ = plan2.MakePlan2Type(&typ)
+		tf.ctr.retSchema[0] = typ
 	default:
 		return moerr.NewNotSupported(proc.Ctx, "generate_series not support type %s", resTyp.Oid.String())
 	}
@@ -234,6 +244,10 @@ func (g *generateSeriesArg) call(tf *TableFunction, proc *process.Process) (vm.C
 	case types.T_int64:
 		buildNextNumBatch[int64](&g.i64State, g.batch, 8192, proc)
 	case types.T_datetime:
+		if err := buildNextDatetimeBatch(&g.dtState, g.batch, 8192, proc); err != nil {
+			return vm.CancelResult, err
+		}
+	case types.T_varchar:
 		if err := buildNextDatetimeBatch(&g.dtState, g.batch, 8192, proc); err != nil {
 			return vm.CancelResult, err
 		}

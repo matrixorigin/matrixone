@@ -27,11 +27,6 @@ import (
 
 var _ vm.Operator = new(TableFunction)
 
-const (
-	dataProducing = iota
-	dataFinished
-)
-
 type TableFunction struct {
 	ctr container
 
@@ -157,6 +152,8 @@ func (s *simpleOneBatchState) call(tf *TableFunction, proc *process.Process) (vm
 }
 
 func (s *simpleOneBatchState) startPreamble(tf *TableFunction, proc *process.Process, nthRow int) {
+	_ = proc
+	_ = nthRow
 	s.called = false
 	if s.batch == nil {
 		s.batch = tf.createResultBatch()

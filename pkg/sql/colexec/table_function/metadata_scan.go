@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -40,7 +41,13 @@ type metadataScanState struct {
 }
 
 func metadataScanPrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
-	return &metadataScanState{}, nil
+	var err error
+	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
+	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
+	for i := range tableFunction.Attrs {
+		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
+	}
+	return &metadataScanState{}, err
 }
 
 func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
@@ -72,7 +79,10 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 	}
 
 	for i := range metaInfos {
-		fillMetadataInfoBat(s.batch, proc, tf, metaInfos[i])
+		err = fillMetadataInfoBat(s.batch, proc, tf, metaInfos[i])
+		if err != nil {
+			return err
+		}
 	}
 	s.batch.AddRowCount(len(metaInfos))
 	return nil
