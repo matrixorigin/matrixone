@@ -1778,3 +1778,66 @@ func NewSamplePercentFuncExpression2(percent float64, isStar bool, columns Exprs
 		columns: columns,
 	}, nil
 }
+
+type FullTextSearchType int
+
+const (
+	FULLTEXT_DEFAULT FullTextSearchType = iota
+	FULLTEXT_NL
+	FULLTEXT_NL_QUERY_EXPANSION
+	FULLTEXT_BOOLEAN
+	FULLTEXT_QUERY_EXPANSION
+)
+
+type FullTextMatchExpr struct {
+	exprImpl
+	// columns.
+	KeyParts Exprs
+
+	// pattern
+	Pattern string
+
+	Typ FullTextSearchType
+}
+
+func (node *FullTextSearchType) ToString() string {
+	switch *node {
+	case FULLTEXT_DEFAULT:
+		return ""
+	case FULLTEXT_NL:
+		return "IN NATURAL LANGUAGE MODE"
+	case FULLTEXT_NL_QUERY_EXPANSION:
+		return "IN NATURAL LANGUAGE WITH QUERY EXPANSION"
+	case FULLTEXT_BOOLEAN:
+		return "IN BOOLEAN MODE"
+	case FULLTEXT_QUERY_EXPANSION:
+		return "WITH QUERY EXPANSION"
+
+	default:
+		return "Unknown FullSearchType"
+	}
+}
+
+// Accept implements NodeChecker Accept interface.
+func (node *FullTextMatchExpr) Accept(v Visitor) (Expr, bool) {
+	panic("unimplement FullTextMatchExpr Accept")
+}
+
+func NewFullTextMatchFuncExpression(columns Exprs, pattern string, typ FullTextSearchType) (*FullTextMatchExpr, error) {
+
+	return &FullTextMatchExpr{KeyParts: columns, Pattern: pattern, Typ: typ}, nil
+}
+
+func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
+	ctx.WriteString("MATCH (")
+	node.KeyParts.Format(ctx)
+	ctx.WriteString(") ")
+	ctx.WriteString("AGAINST (")
+	ctx.WriteString(node.Pattern)
+
+	if node.Typ != FULLTEXT_DEFAULT {
+		ctx.WriteString(" ")
+		ctx.WriteString(node.Typ.ToString())
+	}
+	ctx.WriteString(")")
+}
