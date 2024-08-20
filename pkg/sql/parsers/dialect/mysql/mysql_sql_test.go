@@ -3008,6 +3008,24 @@ var (
 			input:  "show databases {snapshot = 'sp01'}",
 			output: "show databases {snapshot = sp01}",
 		},
+		{
+			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc' IN BOOLEAN MODE)",
+			output: "select * from t1 where MATCH (body, title) AGAINST (abc IN BOOLEAN MODE)",
+		},
+		{
+			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE)",
+			output: "select * from t1 where MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE)",
+		},
+		/*
+				{
+					input:  "select * from t1 where MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE WITH QUERY EXPANSION)",
+					output: "select * from t1 where MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE WITH QUERY EXPANSION)",
+				},
+		*/
+		{
+			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc' WITH QUERY EXPANSION)",
+			output: "select * from t1 where MATCH (body, title) AGAINST (abc WITH QUERY EXPANSION)",
+		},
 	}
 )
 

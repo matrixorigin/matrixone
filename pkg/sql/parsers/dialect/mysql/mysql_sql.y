@@ -58,6 +58,7 @@ import (
     tableExpr tree.TableExpr
     rowFormatType tree.RowFormatType
     matchType tree.MatchType
+    fullTextSearchType tree.FullTextSearchType
     attributeReference *tree.AttributeReference
     loadParam *tree.ExternParam
     tailParam *tree.TailParameter
@@ -594,6 +595,8 @@ import (
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
+%type <fullTextSearchType> fulltext_search_opt
+%type <str> search_pattern
 %type <referenceOptionType> ref_opt on_delete on_update
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
@@ -9144,6 +9147,27 @@ match:
         $$ = tree.MATCH_SIMPLE
     }
 
+fulltext_search_opt:
+    {
+	$$ = tree.FULLTEXT_DEFAULT
+    }
+|   IN NATURAL LANGUAGE MODE
+    {
+	$$ = tree.FULLTEXT_NL
+    }
+|   IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION
+    {
+	$$ = tree.FULLTEXT_NL_QUERY_EXPANSION
+    }
+|   IN BOOLEAN MODE
+    {
+	$$ = tree.FULLTEXT_BOOLEAN
+    }
+|   WITH QUERY EXPANSION
+    {
+	$$ = tree.FULLTEXT_QUERY_EXPANSION
+    }
+
 index_column_list_opt:
     {
         $$ = nil
@@ -9383,6 +9407,23 @@ simple_expr:
         $$ = $1
     }
 |   simple_expr COLLATE collate_name
+    {
+        $$ = $1
+    }
+|   MATCH '(' expression_list ')' AGAINST '(' search_pattern fulltext_search_opt ')'
+    {
+	val, err := tree.NewFullTextMatchFuncExpression($3, $7, $8)
+	if err != nil {
+		yylex.Error(err.Error())
+		goto ret1
+	}
+	$$ = val		
+    }
+
+
+
+search_pattern:
+    STRING
     {
         $$ = $1
     }
