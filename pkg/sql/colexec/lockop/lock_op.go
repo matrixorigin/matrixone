@@ -417,6 +417,11 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
+	if runtime.InTesting(proc.GetService()) {
+		tc := runtime.MustGetTestingContext(proc.GetService())
+		tc.GetBeforeLockFunc()(txnOp.Txn().ID, tableID)
+	}
+
 	seq := txnOp.NextSequence()
 	startAt := time.Now()
 	trace.GetService(proc.GetService()).AddTxnDurationAction(

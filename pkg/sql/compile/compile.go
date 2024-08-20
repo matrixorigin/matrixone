@@ -435,11 +435,11 @@ func (c *Compile) printPipeline() {
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
 	err := c.lockMetaTables()
-	if err != nil {
+	if err != nil && !c.isRetryErr(err) {
 		return err
 	}
 	err = c.lockTable()
-	if err != nil {
+	if err != nil && !c.isRetryErr(err) {
 		return err
 	}
 	errC := make(chan error, len(c.scope))
