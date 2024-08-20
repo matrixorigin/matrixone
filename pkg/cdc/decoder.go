@@ -22,8 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
-
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -36,10 +35,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/panjf2000/ants/v2"
 )
 
 const (
-	ROWS_REAL_DATA_OFFSET int = 2
+	RowsRealDataOffset    int = 2
+	ObjectsRealDataOffset int = 0
+	DeltaRealDataOffset   int = 1
+
+	MaxSqlSize int = 32 * 1024 * 1024
 )
 
 var _ Decoder = new(decoder)
@@ -117,7 +121,6 @@ func (dec *decoder) Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input 
 			return
 		}
 		out.sqlOfRows.Store(rows)
-
 	})
 	if err != nil {
 		panic(err)
@@ -179,10 +182,11 @@ func decodeRows(
 	rowsIter logtailreplay.RowsIter) (res [][]byte, err error) {
 	//TODO: schema info
 	var row []any
+	var typs []types.Type
 	//TODO:refine && limit sql size
 	timePrefix := fmt.Sprintf("/* decodeRows: %v, %v */ ", ts.String(), time.Now())
 	//---------------------------------------------------
-	insertPrefix := fmt.Sprintf("INSERT INTO `%s`.`%s` values ", cdcCtx.Db(), cdcCtx.Table())
+	insertPrefix := timePrefix + fmt.Sprintf("REPLACE INTO `%s`.`%s` VALUES ", cdcCtx.Db(), cdcCtx.Table())
 	/*
 		FORMAT:
 		insert into db.t values
@@ -206,164 +210,71 @@ func decodeRows(
 				TODO:
 	*/
 	//FIXME: assume the sink is mysql
-	sbuf := strings.Builder{}
-	sbuf.WriteByte('(')
 	tableDef := cdcCtx.TableDef()
-	if len(tableDef.Pkey.Names) == 0 {
-		return nil, moerr.NewInternalError(ctx, "cdc table need primary key")
-	}
-	singlePkCol := false
-	if len(tableDef.Pkey.Names) == 1 {
-		singlePkCol = true
-	}
 	colName2Index := make(map[string]int)
 	for i, col := range tableDef.Cols {
 		colName2Index[col.Name] = i
 	}
-	for i, pkName := range tableDef.Pkey.Names {
-		if i > 0 {
-			sbuf.WriteByte(',')
-		}
-		sbuf.WriteString(pkName)
-	}
-	sbuf.WriteByte(')')
-	deletePrefix := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s IN ( ", cdcCtx.Db(), cdcCtx.Table(), sbuf.String())
 
-	//TODO: complement the
-	firstInsertRow, firstDeleteRow := true, true
-	insertBuff := make([]byte, 0, 1024)
-	deleteBuff := make([]byte, 0, 1024)
+	userDefinedColCnt := 0
+	for _, col := range tableDef.Cols {
+		// skip internal columns
+		if _, ok := catalog.InternalColumns[col.Name]; !ok {
+			userDefinedColCnt++
+		}
+	}
+
+	primaryKeyStr, err := getPrimaryKeyStr(ctx, tableDef)
+	if err != nil {
+		return nil, err
+	}
+	deletePrefix := timePrefix + fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s IN (", cdcCtx.Db(), cdcCtx.Table(), primaryKeyStr)
+
+	// init sql buffer
+	insertBuff := make([]byte, 0, MaxSqlSize)
+	insertBuff = append(insertBuff, []byte(insertPrefix)...)
+	deleteBuff := make([]byte, 0, MaxSqlSize)
+	deleteBuff = append(deleteBuff, []byte(deletePrefix)...)
+
+	valuesBuff := make([]byte, 0, 1024)
+	deleteInBuff := make([]byte, 0, 1024)
 	for rowsIter.Next() {
 		ent := rowsIter.Entry()
-		//step1 : get row from the batch
-		//TODO: refine
 		if row == nil {
-			colCnt := len(ent.Batch.Attrs) - ROWS_REAL_DATA_OFFSET
+			colCnt := len(ent.Batch.Attrs) - RowsRealDataOffset
 			if colCnt <= 0 {
 				return nil, moerr.NewInternalError(ctx, "invalid row entry")
 			}
 			row = make([]any, len(ent.Batch.Attrs))
 		}
-		err = extractRowFromEveryVector(ctx, ent.Batch, ROWS_REAL_DATA_OFFSET, int(ent.Offset), row)
-		if err != nil {
+		if typs == nil {
+			for _, vec := range ent.Batch.Vecs {
+				typs = append(typs, *vec.GetType())
+			}
+		}
+
+		//step1 : get row from the batch
+		if err = extractRowFromEveryVector(ctx, ent.Batch, RowsRealDataOffset, int(ent.Offset), row); err != nil {
 			return nil, err
 		}
 		//step2 : transform rows into sql parts
 		if ent.Deleted {
-			//to delete
-			//need primary key only
-			//if the schema does not have the primary key,
-			//it also has the fake primary key
-			//end insert sql first
-			if len(insertBuff) != 0 {
-				res = append(res, copyBytes(insertBuff))
-				firstInsertRow = true
-				insertBuff = insertBuff[:0]
+			if deleteInBuff, err = getDeleteInBuff(ctx, tableDef, colName2Index, row, RowsRealDataOffset, deleteInBuff); err != nil {
+				return
 			}
-			if len(deleteBuff) == 0 {
-				//fill delete prefix
-				deleteBuff = appendString(deleteBuff, timePrefix)
-				deleteBuff = appendString(deleteBuff, deletePrefix)
-			}
-
-			if !firstDeleteRow {
-				deleteBuff = appendByte(deleteBuff, ',')
-			} else {
-				firstDeleteRow = false
-			}
-
-			//decode primary key col from pk col data
-			if !singlePkCol {
-				//case 1: composed pk col
-				comPkCol := row[2]
-				pkTuple, pkTypes, err := types.UnpackWithSchema(comPkCol.([]byte))
-				if err != nil {
-					return nil, err
-				}
-				deleteBuff = appendByte(deleteBuff, '(')
-				for pkIdx, pkEle := range pkTuple {
-					//
-					if pkIdx > 0 {
-						deleteBuff = appendByte(deleteBuff, ',')
-					}
-					pkName := tableDef.Pkey.Names[pkIdx]
-					pkColIdx := colName2Index[pkName]
-					pkCol := tableDef.Cols[pkColIdx]
-					if pkTypes[pkIdx] != types.T(pkCol.Typ.Id) {
-						return nil, moerr.NewInternalError(ctx, "different pk col Type %v %v", pkTypes[pkIdx], pkCol.Typ.Id)
-					}
-					ttype := types.Type{
-						Oid:   types.T(pkCol.Typ.Id),
-						Width: pkCol.Typ.Width,
-						Scale: pkCol.Typ.Scale,
-					}
-					deleteBuff, err = convertColIntoSql(ctx, pkEle, &ttype, deleteBuff)
-					if err != nil {
-						return nil, err
-					}
-				}
-				deleteBuff = appendByte(deleteBuff, ')')
-			} else {
-				//case 2: sinle pk col
-				pkColData := row[2]
-				pkName := tableDef.Pkey.Names[0]
-				pkColIdx := colName2Index[pkName]
-				pkCol := tableDef.Cols[pkColIdx]
-				ttype := types.Type{
-					Oid:   types.T(pkCol.Typ.Id),
-					Width: pkCol.Typ.Width,
-					Scale: pkCol.Typ.Scale,
-				}
-				deleteBuff, err = convertColIntoSql(ctx, pkColData, &ttype, deleteBuff)
-				if err != nil {
-					return nil, err
-				}
-			}
-
+			deleteBuff = appendDeleteBuff(deleteBuff, []byte(deletePrefix), deleteInBuff, &res)
 		} else {
-			//to insert
-			//just fetch all columns.
-			//do not distinguish primary keys first.
-			//end delete sql first
-			if len(deleteBuff) != 0 {
-				deleteBuff = appendString(deleteBuff, ")")
-				res = append(res, copyBytes(deleteBuff))
-				firstDeleteRow = true
-				deleteBuff = deleteBuff[:0]
+			if valuesBuff, err = getValuesBuff(ctx, typs, row, RowsRealDataOffset, userDefinedColCnt, valuesBuff); err != nil {
+				return
 			}
-			if len(insertBuff) == 0 {
-				//fill insert prefix
-				insertBuff = appendString(insertBuff, timePrefix)
-				insertBuff = appendString(insertBuff, insertPrefix)
-			}
-
-			if !firstInsertRow {
-				insertBuff = appendString(insertBuff, ",")
-			} else {
-				firstInsertRow = false
-			}
-			insertBuff = appendString(insertBuff, "(")
-			for colIdx, col := range row {
-				if colIdx < ROWS_REAL_DATA_OFFSET {
-					continue
-				}
-				if colIdx > ROWS_REAL_DATA_OFFSET {
-					insertBuff = appendString(insertBuff, ",")
-				}
-				//transform column into text values
-				insertBuff, err = convertColIntoSql(ctx, col, ent.Batch.Vecs[colIdx].GetType(), insertBuff)
-				if err != nil {
-					return nil, err
-				}
-			}
-			insertBuff = appendString(insertBuff, ") ")
+			insertBuff = appendInsertBuff(insertBuff, []byte(insertPrefix), valuesBuff, &res)
 		}
 	}
-	if len(insertBuff) != 0 {
+
+	if len(insertBuff) != len(insertPrefix) {
 		res = append(res, copyBytes(insertBuff))
 	}
-
-	if len(deleteBuff) != 0 {
+	if len(deleteBuff) != len(deletePrefix) {
 		deleteBuff = appendString(deleteBuff, ")")
 		res = append(res, copyBytes(deleteBuff))
 	}
@@ -382,9 +293,9 @@ func decodeObjects(
 	var bat *batch.Batch
 	var release func()
 	var row []any
-	timePrefix := fmt.Sprintf("/*decodeObjects: %v, %v */ ", ts.String(), time.Now())
+	timePrefix := fmt.Sprintf("/* decodeObjects: %v, %v */ ", ts.String(), time.Now())
 	//---------------------------------------------------
-	insertPrefix := fmt.Sprintf("INSERT INTO `%s`.`%s` values ", cdcCtx.Db(), cdcCtx.Table())
+	insertPrefix := timePrefix + fmt.Sprintf("REPLACE INTO `%s`.`%s` VALUES ", cdcCtx.Db(), cdcCtx.Table())
 	/*
 		FORMAT:
 		insert into db.t values
@@ -398,27 +309,30 @@ func decodeObjects(
 		return nil, moerr.NewInternalError(ctx, "cdc table need primary key")
 	}
 
-	firstInsertRow := true
-	insertBuff := make([]byte, 0, 1024)
-
-	cols := make([]uint16, 0)
-	typs := make([]types.Type, 0)
-
-	colName2Index := make(map[string]int)
-	for i, col := range tableDef.Cols {
-		colName2Index[col.Name] = i
+	userDefinedColCnt := 0
+	for _, col := range tableDef.Cols {
+		// skip internal columns
+		if _, ok := catalog.InternalColumns[col.Name]; !ok {
+			userDefinedColCnt++
+		}
 	}
-	for _, pkName := range tableDef.Pkey.Names {
-		pkColIdx := colName2Index[pkName]
-		pkColDef := tableDef.Cols[pkColIdx]
-		cols = append(cols, uint16(pkColIdx))
+
+	cols := make([]uint16, 0, len(tableDef.Cols))
+	typs := make([]types.Type, 0, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		cols = append(cols, uint16(i))
 		typs = append(typs, types.Type{
-			Oid:   types.T(pkColDef.Typ.Id),
-			Width: pkColDef.Typ.Width,
-			Scale: pkColDef.Typ.Scale,
+			Oid:   types.T(col.Typ.Id),
+			Width: col.Typ.Width,
+			Scale: col.Typ.Scale,
 		})
 	}
 
+	// init sql buffer
+	insertBuff := make([]byte, 0, MaxSqlSize)
+	insertBuff = append(insertBuff, []byte(insertPrefix)...)
+
+	valuesBuff := make([]byte, 0, 1024)
 	rowCnt := uint64(0)
 	for objIter.Next() {
 		ent := objIter.Entry()
@@ -455,34 +369,15 @@ func decodeObjects(
 					row = make([]any, len(bat.Vecs))
 				}
 				for i := 0; i < bat.Vecs[0].Length(); i++ {
-					err = extractRowFromEveryVector(ctx, bat, 0, i, row)
-					if err != nil {
+					if err = extractRowFromEveryVector(ctx, bat, ObjectsRealDataOffset, i, row); err != nil {
 						return false
 					}
-					//fmt.Fprintln(os.Stderr, "-----objects row----", row)
-					if len(insertBuff) == 0 {
-						//fill insert prefix
-						insertBuff = appendString(insertBuff, timePrefix)
-						insertBuff = appendString(insertBuff, insertPrefix)
+
+					if valuesBuff, err = getValuesBuff(ctx, typs, row, ObjectsRealDataOffset, userDefinedColCnt, valuesBuff); err != nil {
+						return false
 					}
 
-					if !firstInsertRow {
-						insertBuff = appendString(insertBuff, ",")
-					} else {
-						firstInsertRow = false
-					}
-					insertBuff = appendString(insertBuff, "(")
-					for colIdx, col := range row {
-						if colIdx > 0 {
-							insertBuff = appendString(insertBuff, ",")
-						}
-						//transform column into text values
-						insertBuff, err = convertColIntoSql(ctx, col, &typs[colIdx], insertBuff)
-						if err != nil {
-							return false
-						}
-					}
-					insertBuff = appendString(insertBuff, ") ")
+					insertBuff = appendInsertBuff(insertBuff, []byte(insertPrefix), valuesBuff, &res)
 					rowCnt++
 				}
 				return true
@@ -491,7 +386,7 @@ func decodeObjects(
 		)
 	}
 
-	if len(insertBuff) != 0 {
+	if len(insertBuff) != len(insertPrefix) {
 		res = append(res, copyBytes(insertBuff))
 	}
 
@@ -506,31 +401,24 @@ func decodeDeltas(
 	deltaIter logtailreplay.BlockDeltaIter,
 	fs fileservice.FileService,
 ) (res [][]byte, err error) {
-	timePrefix := fmt.Sprintf("/* decodeDeltas: %v, %v */ ", ts.String(), time.Now())
-	sbuf := strings.Builder{}
-	sbuf.WriteByte('(')
 	tableDef := cdcCtx.TableDef()
-	if len(tableDef.Pkey.Names) == 0 {
-		return nil, moerr.NewInternalError(ctx, "cdc table need primary key")
-	}
-	singlePkCol := false
-	if len(tableDef.Pkey.Names) == 1 {
-		singlePkCol = true
-	}
 	colName2Index := make(map[string]int)
 	for i, col := range tableDef.Cols {
 		colName2Index[col.Name] = i
 	}
-	for i, pkName := range tableDef.Pkey.Names {
-		if i > 0 {
-			sbuf.WriteByte(',')
-		}
-		sbuf.WriteString(pkName)
-	}
-	sbuf.WriteByte(')')
-	deletePrefix := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s IN ( ", cdcCtx.Db(), cdcCtx.Table(), sbuf.String())
 
-	var entRes [][]byte
+	primaryKeyStr, err := getPrimaryKeyStr(ctx, tableDef)
+	if err != nil {
+		return nil, err
+	}
+
+	timePrefix := fmt.Sprintf("/* decodeDeltas: %v, %v */ ", ts.String(), time.Now())
+	deletePrefix := timePrefix + fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s IN (", cdcCtx.Db(), cdcCtx.Table(), primaryKeyStr)
+
+	deleteBuff := make([]byte, 0, MaxSqlSize)
+	deleteBuff = append(deleteBuff, []byte(deletePrefix)...)
+	deleteInBuff := make([]byte, 0, 1024)
+
 	dedup := make(map[[objectio.LocationLen]byte]struct{})
 	for deltaIter.Next() {
 		ent := deltaIter.Entry()
@@ -542,20 +430,20 @@ func decodeDeltas(
 		}
 	}
 	fmt.Fprintln(os.Stderr, "-----delta count----", len(dedup))
-	for loc, _ := range dedup {
-		entRes, err = decodeDeltaEntry(
+	for loc := range dedup {
+		if err = decodeDeltaEntry(
 			ctx,
 			loc[:],
 			fs,
-			singlePkCol,
 			tableDef,
-			timePrefix, deletePrefix,
 			colName2Index,
-		)
-		if err != nil {
+			deletePrefix,
+			deleteInBuff,
+			deleteBuff,
+			&res,
+		); err != nil {
 			return nil, err
 		}
-		res = append(res, entRes...)
 	}
 	return
 }
@@ -564,102 +452,194 @@ func decodeDeltaEntry(
 	ctx context.Context,
 	loc []byte,
 	fs fileservice.FileService,
-	singlePkCol bool,
 	tableDef *plan.TableDef,
-	timePrefix, deletePrefix string,
 	colName2Index map[string]int,
-) (res [][]byte, err error) {
+	deletePrefix string,
+	deleteInBuff []byte,
+	deleteBuff []byte,
+	res *[][]byte,
+) (err error) {
 	bat, byCn, release, err := blockio.ReadBlockDelete(ctx, loc, fs)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer release()
 	fmt.Fprintln(os.Stderr, "-----delta batch----",
 		"byCn", byCn,
 		"column cnt", len(bat.Vecs),
 		"row count", bat.Vecs[0].Length())
-	fmt.Fprintln(os.Stderr, "attrs", bat.Attrs)
 
 	if byCn {
-		firstDeleteRow := true
-		deleteBuff := make([]byte, 0, 1024)
-		var row []any
 		colCnt := len(bat.Vecs)
 		if colCnt <= 0 {
-			return nil, moerr.NewInternalError(ctx, "invalid row entry")
+			return moerr.NewInternalError(ctx, "invalid row entry")
 		}
 		//Two columns : rowid, pk col
-		row = make([]any, colCnt)
+		row := make([]any, colCnt)
 
 		for rowIdx := 0; rowIdx < bat.Vecs[0].Length(); rowIdx++ {
-			err = extractRowFromEveryVector(ctx, bat, 1, rowIdx, row)
-			if err != nil {
-				return nil, err
-			}
-			if len(deleteBuff) == 0 {
-				//fill delete prefix
-				deleteBuff = appendString(deleteBuff, timePrefix)
-				deleteBuff = appendString(deleteBuff, deletePrefix)
+			if err = extractRowFromEveryVector(ctx, bat, 1, rowIdx, row); err != nil {
+				return err
 			}
 
-			if !firstDeleteRow {
-				deleteBuff = appendByte(deleteBuff, ',')
-			} else {
-				firstDeleteRow = false
+			if deleteInBuff, err = getDeleteInBuff(ctx, tableDef, colName2Index, row, DeltaRealDataOffset, deleteInBuff); err != nil {
+				return
 			}
 
-			//decode primary key col from pk col data
-			if !singlePkCol {
-				//case 1: composed pk col
-				comPkCol := row[1]
-				pkTuple, pkTypes, err := types.UnpackWithSchema(comPkCol.([]byte))
-				if err != nil {
-					return nil, err
-				}
-				deleteBuff = appendByte(deleteBuff, '(')
-				for pkIdx, pkEle := range pkTuple {
-					//
-					if pkIdx > 0 {
-						deleteBuff = appendByte(deleteBuff, ',')
-					}
-					pkName := tableDef.Pkey.Names[pkIdx]
-					pkColIdx := colName2Index[pkName]
-					pkCol := tableDef.Cols[pkColIdx]
-					if pkTypes[pkIdx] != types.T(pkCol.Typ.Id) {
-						return nil, moerr.NewInternalError(ctx, "different pk col Type %v %v", pkTypes[pkIdx], pkCol.Typ.Id)
-					}
-					ttype := types.Type{
-						Oid:   types.T(pkCol.Typ.Id),
-						Width: pkCol.Typ.Width,
-						Scale: pkCol.Typ.Scale,
-					}
-					deleteBuff, err = convertColIntoSql(ctx, pkEle, &ttype, deleteBuff)
-					if err != nil {
-						return nil, err
-					}
-				}
-				deleteBuff = appendByte(deleteBuff, ')')
-			} else {
-				//case 2: sinle pk col
-				pkColData := row[1]
-				pkName := tableDef.Pkey.Names[0]
-				pkColIdx := colName2Index[pkName]
-				pkCol := tableDef.Cols[pkColIdx]
-				ttype := types.Type{
-					Oid:   types.T(pkCol.Typ.Id),
-					Width: pkCol.Typ.Width,
-					Scale: pkCol.Typ.Scale,
-				}
-				deleteBuff, err = convertColIntoSql(ctx, pkColData, &ttype, deleteBuff)
-				if err != nil {
-					return nil, err
-				}
-			}
+			deleteBuff = appendDeleteBuff(deleteBuff, []byte(deletePrefix), deleteInBuff, res)
 		}
-		if len(deleteBuff) != 0 {
+
+		if len(deleteBuff) != len(deletePrefix) {
 			deleteBuff = appendString(deleteBuff, ")")
-			res = append(res, copyBytes(deleteBuff))
+			*res = append(*res, copyBytes(deleteBuff))
 		}
 	}
 	return
+}
+
+// appendInsertBuff appends bytes to insertBuff if not exceed its cap
+// otherwise, save insertBuff to res and reset insertBuff
+func appendInsertBuff(insertBuff, insertPrefix, bytes []byte, res *[][]byte) []byte {
+	// insert comma if not the first item
+	commaLen := 0
+	if len(insertBuff) != len(insertPrefix) {
+		commaLen = 1
+	}
+
+	if len(insertBuff)+commaLen+len(bytes) > cap(insertBuff) {
+		*res = append(*res, copyBytes(insertBuff))
+		insertBuff = insertBuff[:0]
+		// TODO need to update timePrefix?
+		insertBuff = append(insertBuff, insertPrefix...)
+	}
+
+	if len(insertBuff) != len(insertPrefix) {
+		insertBuff = appendByte(insertBuff, ',')
+	}
+	return append(insertBuff, bytes...)
+}
+
+func appendDeleteBuff(deleteBuff, deletePrefix, bytes []byte, res *[][]byte) []byte {
+	// insert comma if not the first item
+	commaLen := 0
+	if len(deleteBuff) != len(deletePrefix) {
+		commaLen = 1
+	}
+
+	// +1 is for the right parenthesis
+	if len(deleteBuff)+commaLen+len(bytes)+1 > cap(deleteBuff) {
+		deleteBuff = appendByte(deleteBuff, ')')
+		*res = append(*res, copyBytes(deleteBuff))
+		deleteBuff = deleteBuff[:0]
+		deleteBuff = append(deleteBuff, deletePrefix...)
+	}
+
+	if len(deleteBuff) != len(deletePrefix) {
+		deleteBuff = appendByte(deleteBuff, ',')
+	}
+	return append(deleteBuff, bytes...)
+}
+
+func getPrimaryKeyStr(ctx context.Context, tableDef *plan.TableDef) (string, error) {
+	if len(tableDef.Pkey.Names) == 0 {
+		return "", moerr.NewInternalError(ctx, "cdc table need primary key")
+	}
+
+	buf := strings.Builder{}
+	buf.WriteByte('(')
+	for i, pkName := range tableDef.Pkey.Names {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.WriteString(pkName)
+	}
+	buf.WriteByte(')')
+	return buf.String(), nil
+}
+
+func getValuesBuff(
+	ctx context.Context,
+	typs []types.Type,
+	row []any,
+	startColIdx int,
+	colsCnt int,
+	valuesBuff []byte,
+) ([]byte, error) {
+	var err error
+	valuesBuff = valuesBuff[:0]
+
+	valuesBuff = appendByte(valuesBuff, '(')
+	for i := startColIdx; i < startColIdx+colsCnt; i++ {
+		if i > startColIdx {
+			valuesBuff = appendByte(valuesBuff, ',')
+		}
+
+		//transform column into text values
+		if valuesBuff, err = convertColIntoSql(ctx, row[i], &typs[i], valuesBuff); err != nil {
+			return valuesBuff, err
+		}
+	}
+	valuesBuff = appendByte(valuesBuff, ')')
+
+	return valuesBuff, nil
+}
+
+func getDeleteInBuff(
+	ctx context.Context,
+	tableDef *plan.TableDef,
+	colName2Index map[string]int,
+	row []any,
+	pkIdxInRow int,
+	deleteInBuff []byte,
+) ([]byte, error) {
+	var err error
+	deleteInBuff = deleteInBuff[:0]
+
+	//decode primary key col from pk col data
+	if len(tableDef.Pkey.Names) != 1 {
+		//case 1: composed pk col
+		comPkCol := row[pkIdxInRow]
+		pkTuple, pkTypes, err := types.UnpackWithSchema(comPkCol.([]byte))
+		if err != nil {
+			return deleteInBuff, err
+		}
+
+		deleteInBuff = appendByte(deleteInBuff, '(')
+		for pkIdx, pkEle := range pkTuple {
+			if pkIdx > 0 {
+				deleteInBuff = appendByte(deleteInBuff, ',')
+			}
+			pkName := tableDef.Pkey.Names[pkIdx]
+			pkColIdx := colName2Index[pkName]
+			pkCol := tableDef.Cols[pkColIdx]
+			if pkTypes[pkIdx] != types.T(pkCol.Typ.Id) {
+				return deleteInBuff, moerr.NewInternalError(ctx, "different pk col Type %v %v", pkTypes[pkIdx], pkCol.Typ.Id)
+			}
+			ttype := types.Type{
+				Oid:   types.T(pkCol.Typ.Id),
+				Width: pkCol.Typ.Width,
+				Scale: pkCol.Typ.Scale,
+			}
+			if deleteInBuff, err = convertColIntoSql(ctx, pkEle, &ttype, deleteInBuff); err != nil {
+				return deleteInBuff, err
+			}
+		}
+		deleteInBuff = appendByte(deleteInBuff, ')')
+	} else {
+		//case 2: single pk col
+		pkColData := row[pkIdxInRow]
+		pkName := tableDef.Pkey.Names[0]
+		pkColIdx := colName2Index[pkName]
+		pkCol := tableDef.Cols[pkColIdx]
+		ttype := types.Type{
+			Oid:   types.T(pkCol.Typ.Id),
+			Width: pkCol.Typ.Width,
+			Scale: pkCol.Typ.Scale,
+		}
+		if deleteInBuff, err = convertColIntoSql(ctx, pkColData, &ttype, deleteInBuff); err != nil {
+			return deleteInBuff, err
+		}
+	}
+
+	return deleteInBuff, nil
 }

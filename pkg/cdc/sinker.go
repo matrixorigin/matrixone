@@ -181,8 +181,10 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 
 			err := s.Sink(ctx, decodeOutput)
 			if err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: {%s} [%v(%v)].[%v(%v)], sink error\n",
-					decodeOutput.ts.DebugString(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: {%s} [%v(%v)].[%v(%v)], sink error: %v\n",
+					decodeOutput.ts.DebugString(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId(),
+					err,
+				)
 				// TODO handle error
 				continue
 			}
