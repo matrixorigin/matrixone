@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"net"
 	"sync"
@@ -3049,4 +3050,8 @@ func (fp *testMysqlWriter) WriteLocalInfileRequest(filename string) error {
 
 func (fp *testMysqlWriter) Flush() error {
 	return nil
+}
+
+func (fp *testMysqlWriter) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+	return nil, nil
 }
