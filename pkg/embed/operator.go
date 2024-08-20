@@ -191,6 +191,12 @@ func (op *operator) Adjust(
 	fn(&op.cfg)
 }
 
+func (op *operator) GetServiceConfig() ServiceConfig {
+	op.RLock()
+	defer op.RUnlock()
+	return op.cfg
+}
+
 func (op *operator) startLogServiceLocked(
 	fs fileservice.FileService,
 ) error {

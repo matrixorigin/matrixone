@@ -808,11 +808,6 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 			if err != nil {
 				panic(err)
 			}
-
-			err = cWriter.Flush()
-			if err != nil {
-				panic(err)
-			}
 		}()
 
 		var data []byte
