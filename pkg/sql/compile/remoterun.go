@@ -830,6 +830,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			FileList:        t.Es.FileList,
 			Filter:          t.Es.Filter.FilterExpr,
 			TbColToDataCol:  t.Es.TbColToDataCol,
+			StrictSqlMode:   t.Es.StrictSqlMode,
 		}
 		in.ProjectList = t.ProjectList
 	case *source.Source:
@@ -1292,6 +1293,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					Name2ColIndex:   name2ColIndex,
 					FileList:        t.FileList,
 					TbColToDataCol:  t.TbColToDataCol,
+					StrictSqlMode:   t.StrictSqlMode,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
