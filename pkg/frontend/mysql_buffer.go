@@ -227,24 +227,55 @@ func (c *Conn) Read() ([]byte, error) {
 	// Requests > 16MB
 	payloads := make([][]byte, 0)
 	totalLength := 0
+	var firstPayload []byte
 	var finalPayload []byte
 	var payload []byte
 	var err error
-	defer func(payloads [][]byte, payload []byte, err error) {
-		c.allocator.Free(payload)
-		for _, eachPayload := range payloads {
-			c.allocator.Free(eachPayload)
+	var n, packetLength, readLength int
+	var sequenceId byte
+	defer func() {
+		for i := range payloads {
+			c.allocator.Free(payloads[i])
 		}
-	}(payloads, payload, err)
+		c.fixBuf.writeIndex = 0
+	}()
+
+	for c.fixBuf.writeIndex < 4 {
+		n, err = c.ReadFromConn(c.fixBuf.data)
+		if err != nil {
+			return nil, err
+		}
+		c.fixBuf.writeIndex += n
+	}
+	header := c.fixBuf.data[:4]
+	packetLength = int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
+	totalLength += packetLength
+	err = c.CheckAllowedPacketSize(totalLength)
+	if err != nil {
+		return nil, err
+	}
+	sequenceId = header[3]
+	c.sequenceId = sequenceId + 1
+	readLength = c.fixBuf.writeIndex - HeaderLengthOfTheProtocol
+	firstPayload = make([]byte, packetLength)
+	copy(firstPayload, c.fixBuf.data[HeaderLengthOfTheProtocol:])
+	if packetLength > readLength {
+		err = c.ReadBytes(firstPayload[readLength:], packetLength-readLength)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if packetLength != int(MaxPayloadSize) {
+		return firstPayload, nil
+	}
 
 	for {
-		var packetLength int
 		err = c.ReadBytes(c.header[:], HeaderLengthOfTheProtocol)
 		if err != nil {
 			return nil, err
 		}
 		packetLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
-		sequenceId := c.header[3]
+		sequenceId = c.header[3]
 		c.sequenceId = sequenceId + 1
 
 		if packetLength == 0 {
@@ -254,15 +285,6 @@ func (c *Conn) Read() ([]byte, error) {
 		err = c.CheckAllowedPacketSize(totalLength)
 		if err != nil {
 			return nil, err
-		}
-
-		if totalLength != int(MaxPayloadSize) && len(payloads) == 0 {
-			signalPayload := make([]byte, totalLength)
-			err = c.ReadBytes(signalPayload, totalLength)
-			if err != nil {
-				return nil, err
-			}
-			return signalPayload, nil
 		}
 
 		payload, err = c.ReadOnePayload(packetLength)
@@ -282,6 +304,8 @@ func (c *Conn) Read() ([]byte, error) {
 	}
 
 	copyIndex := 0
+	copy(finalPayload[copyIndex:], firstPayload)
+	copyIndex += len(firstPayload)
 	for _, eachPayload := range payloads {
 		copy(finalPayload[copyIndex:], eachPayload)
 		copyIndex += len(eachPayload)

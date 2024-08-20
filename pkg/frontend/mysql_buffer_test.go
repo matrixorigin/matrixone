@@ -26,6 +26,71 @@ import (
 	"time"
 )
 
+func ReadPacketForTest(c *Conn) ([]byte, error) {
+	// Requests > 16MB
+	payloads := make([][]byte, 0)
+	totalLength := 0
+	var finalPayload []byte
+	var payload []byte
+	var err error
+	defer func() {
+		for i := range payloads {
+			c.allocator.Free(payloads[i])
+		}
+	}()
+
+	for {
+		var packetLength int
+		err = c.ReadBytes(c.header[:], HeaderLengthOfTheProtocol)
+		if err != nil {
+			return nil, err
+		}
+		packetLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
+		sequenceId := c.header[3]
+		c.sequenceId = sequenceId + 1
+
+		if packetLength == 0 {
+			break
+		}
+		totalLength += packetLength
+		err = c.CheckAllowedPacketSize(totalLength)
+		if err != nil {
+			return nil, err
+		}
+
+		if totalLength != int(MaxPayloadSize) && len(payloads) == 0 {
+			signalPayload := make([]byte, totalLength)
+			err = c.ReadBytes(signalPayload, totalLength)
+			if err != nil {
+				return nil, err
+			}
+			return signalPayload, nil
+		}
+
+		payload, err = c.ReadOnePayload(packetLength)
+		if err != nil {
+			return nil, err
+		}
+
+		payloads = append(payloads, payload)
+
+		if uint32(packetLength) != MaxPayloadSize {
+			break
+		}
+	}
+
+	if totalLength > 0 {
+		finalPayload = make([]byte, totalLength)
+	}
+
+	copyIndex := 0
+	for _, eachPayload := range payloads {
+		copy(finalPayload[copyIndex:], eachPayload)
+		copyIndex += len(eachPayload)
+	}
+	return finalPayload, nil
+}
+
 func hasData(conn net.Conn) (bool, error) {
 	timeout := 1 * time.Second
 	conn.SetReadDeadline(time.Now().Add(timeout))
@@ -69,7 +134,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 		exceptPayload := make([][]byte, 0)
 		actualPayload := make([][]byte, 0)
 		repeat := 5
-		packetSize := 1024 * 5 // 16MB
+		packetSize := 1024 * 5 // 5MB
 		go func() {
 			for i := 0; i < repeat; i++ {
 				header := make([]byte, 4)
@@ -167,6 +232,8 @@ func TestMySQLProtocolRead(t *testing.T) {
 		}()
 
 		actualPayload, err := cm.Read()
+		fmt.Println(len(actualPayload))
+		fmt.Println(len(exceptPayload))
 		if err != nil {
 			t.Fatalf("Failed to read payload: %v", err)
 		}
@@ -272,7 +339,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 
 		var data []byte
 		for i := 0; i < rows; i++ {
-			data, err = cReader.Read()
+			data, err = ReadPacketForTest(cReader)
 			if err != nil {
 				t.Fatalf("Failed to read packet: %v", err)
 			}
@@ -334,7 +401,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			var data []byte
 
 			for i := 0; i < rows; i++ {
-				data, err = cReader.Read()
+				data, err = ReadPacketForTest(cReader)
 				if err != nil {
 					t.Fatalf("Failed to read packet: %v", err)
 				}
@@ -393,7 +460,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			var data []byte
 
 			for i := 0; i < rows; i++ {
-				data, err = cReader.Read()
+				data, err = ReadPacketForTest(cReader)
 				if err != nil {
 					t.Fatalf("Failed to read packet: %v", err)
 				}
@@ -456,7 +523,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			var data []byte
 
 			for i := 0; i < rows; i++ {
-				data, err = cReader.Read()
+				data, err = ReadPacketForTest(cReader)
 				if err != nil {
 					t.Fatalf("Failed to read packet: %v", err)
 				}
@@ -515,7 +582,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			var data []byte
 
 			for i := 0; i < rows; i++ {
-				data, err = cReader.Read()
+				data, err = ReadPacketForTest(cReader)
 				if err != nil {
 					t.Fatalf("Failed to read packet: %v", err)
 				}
@@ -581,7 +648,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			var data []byte
 
 			for i := 0; i < rows; i++ {
-				data, err = cReader.Read()
+				data, err = ReadPacketForTest(cReader)
 				if err != nil {
 					t.Fatalf("Failed to read packet: %v", err)
 				}
@@ -640,7 +707,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			var data []byte
 
 			for i := 0; i < rows; i++ {
-				data, err = cReader.Read()
+				data, err = ReadPacketForTest(cReader)
 				if err != nil {
 					t.Fatalf("Failed to read packet: %v", err)
 				}
@@ -654,6 +721,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 	})
 
 }
+
 func TestMySQLBufferReadLoadLocal(t *testing.T) {
 	var err error
 	sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -755,7 +823,7 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 		actualPayload := make([][]byte, 0)
 		go func() {
 			for {
-				_, err := cWriter.Read()
+				_, err := ReadPacketForTest(cWriter)
 				if err != nil {
 					return
 				}
@@ -811,13 +879,13 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 		}()
 
 		var data []byte
-		data, err = cReader.Read()
+		data, err = ReadPacketForTest(cReader)
 		convey.So(err, convey.ShouldBeNil)
 		actualPayload = append(actualPayload, data)
-		data, err = cReader.Read()
+		data, err = ReadPacketForTest(cReader)
 		convey.So(err, convey.ShouldBeNil)
 		actualPayload = append(actualPayload, data)
-		_, err = cReader.Read()
+		_, err = ReadPacketForTest(cReader)
 		convey.So(err, convey.ShouldNotBeNil)
 		for remain, _ = hasData(server); remain; remain, _ = hasData(server) {
 			_, _ = cReader.conn.Read(make([]byte, int(MaxPayloadSize)))
