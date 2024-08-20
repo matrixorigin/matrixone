@@ -320,6 +320,14 @@ func BlockDataReadInner(
 
 		// assemble result batch only with selected rows
 		for i, col := range loaded.Vecs {
+			typ := *col.GetType()
+			if typ.Oid == types.T_Rowid {
+				err = bat.Vecs[i].UnionBatch(col, 0, col.Length(), nil, mp)
+				if err != nil {
+					return
+				}
+				continue
+			}
 			if err = bat.Vecs[i].PreExtendWithArea(len(selectRows), 0, mp); err != nil {
 				break
 			}
