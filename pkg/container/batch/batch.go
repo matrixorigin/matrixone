@@ -381,3 +381,10 @@ func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
 func (bat *Batch) IsEmpty() bool {
 	return bat.rowCount == 0 && len(bat.Aggs) == 0
 }
+
+func (bat *Batch) IsDone() bool {
+	if bat == nil {
+		return true
+	}
+	return bat.IsEmpty() || bat.Last()
+}

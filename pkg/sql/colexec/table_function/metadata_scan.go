@@ -26,78 +26,56 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func metadataScanPrepare(proc *process.Process, tableFunction *TableFunction) (err error) {
-	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
-
-	for i := range tableFunction.Attrs {
-		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
-	}
-	return err
+// XXX: TODO:
+// to all my understanding, we are getting metadata info of a table
+// as a simple one batch TVF.   This won't work at all for large tables.
+// This need to be a REAL scanner.
+type metadataScanState struct {
+	simpleOneBatchState
 }
 
-func metadataScan(_ int, proc *process.Process, tableFunction *TableFunction, result *vm.CallResult) (bool, error) {
-	var (
-		err         error
-		source, col *vector.Vector
-		rbat        *batch.Batch
-	)
-	defer func() {
-		if err != nil && rbat != nil {
-			rbat.Clean(proc.Mp())
-		}
-	}()
+func metadataScanPrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
+	return &metadataScanState{}, nil
+}
 
-	bat := result.Batch
-	if bat == nil {
-		return true, nil
-	}
+func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+	s.startPreamble(tf, proc, nthRow)
 
-	source, err = tableFunction.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat}, nil)
-	if err != nil {
-		return false, err
-	}
-	col, err = tableFunction.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat}, nil)
-	if err != nil {
-		return false, err
-	}
-
+	source := tf.ctr.argVecs[0]
+	col := tf.ctr.argVecs[1]
 	dbname, tablename, colname, err := handleDataSource(source, col)
 	logutil.Infof("db: %s, table: %s, col: %s in metadataScan", dbname, tablename, colname)
 	if err != nil {
-		return false, err
+		return err
 	}
 
+	// Oh my
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	db, err := e.Database(proc.Ctx, dbname, proc.GetTxnOperator())
 	if err != nil {
-		return false, moerr.NewInternalError(proc.Ctx, "get database failed in metadata scan")
+		return moerr.NewInternalError(proc.Ctx, "get database failed in metadata scan")
 	}
 
 	rel, err := db.Relation(proc.Ctx, tablename, nil)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	metaInfos, err := rel.GetColumMetadataScanInfo(proc.Ctx, colname)
 	if err != nil {
-		return false, err
+		return err
 	}
 
-	rbat, err = genRetBatch(*proc, tableFunction, metaInfos)
-	if err != nil {
-		return false, err
+	for i := range metaInfos {
+		fillMetadataInfoBat(s.batch, proc, tf, metaInfos[i])
 	}
-
-	result.Batch = rbat
-	return false, nil
+	s.batch.AddRowCount(len(metaInfos))
+	return nil
 }
 
 func handleDataSource(source, col *vector.Vector) (string, string, string, error) {
@@ -111,39 +89,7 @@ func handleDataSource(source, col *vector.Vector) (string, string, string, error
 	return strs[0], strs[1], col.GetStringAt(0), nil
 }
 
-func genRetBatch(proc process.Process, tableFunction *TableFunction, metaInfos []*plan.MetadataScanInfo) (*batch.Batch, error) {
-	retBat, err := initMetadataInfoBat(proc, tableFunction)
-	if err != nil {
-		return nil, err
-	}
-
-	for i := range metaInfos {
-		fillMetadataInfoBat(retBat, proc, tableFunction, metaInfos[i])
-	}
-
-	retBat.AddRowCount(len(metaInfos))
-
-	return retBat, nil
-}
-
-func initMetadataInfoBat(proc process.Process, tableFunction *TableFunction) (*batch.Batch, error) {
-	retBat := batch.New(false, tableFunction.Attrs)
-	retBat.Cnt = 1
-
-	for i, a := range tableFunction.Attrs {
-		idx, ok := plan.MetadataScanInfo_MetadataScanInfoType_value[a]
-		if !ok {
-			return nil, moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", a)
-		}
-
-		tp := plan2.MetadataScanColTypes[idx]
-		retBat.Vecs[i] = proc.GetVector(tp)
-	}
-
-	return retBat, nil
-}
-
-func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, tableFunction *TableFunction, info *plan.MetadataScanInfo) error {
+func fillMetadataInfoBat(opBat *batch.Batch, proc *process.Process, tableFunction *TableFunction, info *plan.MetadataScanInfo) error {
 	mp := proc.GetMPool()
 	zm := index.ZM(info.ZoneMap)
 	zmNull := !zm.IsInited()
