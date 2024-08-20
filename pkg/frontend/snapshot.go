@@ -360,7 +360,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 	}
 
-	if needSkipDb(dbName) {
+	if len(dbName) > 0 && needSkipDb(dbName) {
 		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
 	}
 
@@ -477,8 +477,9 @@ func restoreToAccount(
 
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
-			if dbName == moCatalog {
-				if err = dropClusterTable(ctx, bh, "", toAccountId); err != nil {
+			if toAccountId == 0 && dbName == moCatalog {
+				// drop exists cluster table
+				if err = dropClusterTable(toCtx, bh, "", toAccountId); err != nil {
 					return
 				}
 			}
@@ -605,11 +606,6 @@ func restoreToDatabaseOrTable(
 		if tblInfo.typ == view {
 			viewMap[key] = tblInfo
 			continue
-		}
-
-		// checks if the given context has been canceled.
-		if err = CancelCheck(ctx); err != nil {
-			return
 		}
 
 		// checks if the given context has been canceled.
