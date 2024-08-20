@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -29,7 +30,10 @@ type metaScanState struct {
 }
 
 func metaScanPrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
-	return &metaScanState{}, nil
+	var err error
+	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
+	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
+	return &metaScanState{}, err
 }
 
 func (s *metaScanState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
@@ -67,7 +71,7 @@ func (s *metaScanState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}()
 
 	// Note that later s.batch.Vecs will be dupped from sbat.   So we must clean.
-	s.batch.Clean(proc.Mp())
+	s.batch.CleanOnlyData()
 	for i, vec := range bats[0].Vecs {
 		s.batch.Vecs[i], err = vec.Dup(proc.Mp())
 		if err != nil {

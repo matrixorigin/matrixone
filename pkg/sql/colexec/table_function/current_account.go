@@ -30,7 +30,7 @@ func (s *currentAccountState) reset(tf *TableFunction, proc *process.Process) {
 	// do not reset batch
 }
 
-func currentAccountPrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
+func currentAccountPrepare(_ *process.Process, _ *TableFunction) (tvfState, error) {
 	return &currentAccountState{}, nil
 }
 

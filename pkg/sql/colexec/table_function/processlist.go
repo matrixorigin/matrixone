@@ -34,7 +34,7 @@ type processlistState struct {
 	simpleOneBatchState
 }
 
-func processlistPrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
+func processlistPrepare(_ *process.Process, _ *TableFunction) (tvfState, error) {
 	var st processlistState
 	return &st, nil
 }
