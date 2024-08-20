@@ -181,7 +181,8 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot sys_sp for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sys_sp    2024-08-19 07:09:07.438063    account    sys        
+sys_sp    2024-08-20 03:03:00.682696    account    sys        
+restore account sys database Company from snapshot sys_sp;
 select * from Departments;
 departmentid    name    managerid
 1    Research and Development    null
@@ -247,7 +248,6 @@ performancereviewid    employeeid    reviewdate    reviewerid
 5    5    2020-05-05    6
 6    6    2020-06-06    1
 restore account sys database Company table Departments from snapshot sys_sp;
-internal error: can not drop table 'departments' referenced by some foreign key constraint
 select * from Departments;
 departmentid    name    managerid
 1    Research and Development    null

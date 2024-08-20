@@ -251,9 +251,8 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot mater_sp for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-mater_sp    2024-08-19 07:34:16.094229    account    sys        
+mater_sp    2024-08-20 03:02:57.183144    account    sys        
 restore account sys database Company table Departments from snapshot mater_sp;
-internal error: can not drop table 'departments' referenced by some foreign key constraint
 select * from Company.Departments;
 departmentid    name    managerid
 1    Research and Development    null
@@ -321,6 +320,5 @@ performancereviewid    employeeid    reviewdate    reviewerid
 drop snapshot if exists mater_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-drop database if exists Company;
-internal error: can not drop database. It has been referenced by foreign keys
 drop database if exists Payroll;
+drop database if exists Company;

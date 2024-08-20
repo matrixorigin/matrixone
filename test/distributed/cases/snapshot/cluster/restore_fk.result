@@ -181,7 +181,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot sys_sp_master for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sys_sp_master    2024-08-19 07:37:02.094143    account    sys        
+sys_sp_master    2024-08-20 03:02:21.518475    account    sys        
 restore account sys database Company from snapshot sys_sp_master;
 select * from Departments;
 departmentid    name    managerid
@@ -248,9 +248,7 @@ performancereviewid    employeeid    reviewdate    reviewerid
 5    5    2020-05-05    6
 6    6    2020-06-06    1
 restore account sys database Company table Employees from snapshot sys_sp_master;
-internal error: can not drop table 'employees' referenced by some foreign key constraint
 restore account sys database Company table Positions from snapshot sys_sp_master;
-internal error: can not drop table 'positions' referenced by some foreign key constraint
 restore account sys database Company table EmployeePositions from snapshot sys_sp_master;
 restore account sys database Company table Salaries from snapshot sys_sp_master;
 restore account sys database Company table Benefits from snapshot sys_sp_master;
