@@ -380,6 +380,7 @@ message ExternalScan {
   repeated plan.ColDef origin_cols = 8;
   plan.Expr    filter = 9;
   map<string, int32> TbColToDataCol = 10;
+  bool strict_sql_mode = 11;
 }
 
 message StreamScan {
