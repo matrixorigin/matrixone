@@ -404,6 +404,7 @@ func doTransferRowids(
 	}()
 	var isEnd bool
 	for {
+		bat.CleanOnlyData()
 		isEnd, err = readers[0].Read(
 			ctx,
 			attrs,

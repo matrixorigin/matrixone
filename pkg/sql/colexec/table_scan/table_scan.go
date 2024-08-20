@@ -47,6 +47,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	err = tableScan.PrepareProjection(proc)
 	if tableScan.ctr.buf == nil {
 		tableScan.ctr.buf = batch.NewWithSize(len(tableScan.Types))
+		tableScan.ctr.buf.Attrs = append(tableScan.ctr.buf.Attrs, tableScan.Attrs...)
 		for i := range tableScan.Types {
 			tableScan.ctr.buf.Vecs[i] = vector.NewVec(tableScan.Types[i])
 		}
@@ -106,6 +107,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 		// read data from storage engine
+		tableScan.ctr.buf.CleanOnlyData()
 		isEnd, err := tableScan.Reader.Read(proc.Ctx, tableScan.Attrs, nil, proc.Mp(), proc, tableScan.ctr.buf)
 		if err != nil {
 			e = err
