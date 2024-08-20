@@ -234,8 +234,10 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 		default:
 			return nil, moerr.NewInternalErrorNoCtx("invalid index alogorithm type")
 		}
+
+		return res, nil
 	}
-	return res, moerr.NewInternalErrorNoCtx("invalid index type")
+	return res, moerr.NewInternalErrorNoCtx("indexParamsToMap: invalid index type")
 }
 
 func DefaultIvfIndexAlgoOptions() map[string]string {
