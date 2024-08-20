@@ -17,14 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
-	goruntime "runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
@@ -185,30 +180,35 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 	}()
 
-	id := uint64(0)
-	if s.DataSource.TableDef != nil {
-		id = s.DataSource.TableDef.TblId
-	}
-	p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
-	if s.DataSource.isConst {
-		_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
+	if s.DataSource == nil {
+		p = pipeline.NewMerge(s.RootOp)
+		_, err = p.MergeRun(s.Proc)
 	} else {
-		if s.DataSource.R == nil {
-			s.NodeInfo.Data = engine.BuildEmptyRelData()
-			readers, _, err := s.buildReaders(c, 1)
-			if err != nil {
-				return err
+		id := uint64(0)
+		if s.DataSource.TableDef != nil {
+			id = s.DataSource.TableDef.TblId
+		}
+		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
+		if s.DataSource.isConst {
+			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
+		} else {
+			if s.DataSource.R == nil {
+				s.NodeInfo.Data = engine.BuildEmptyRelData()
+				readers, _, err := s.buildReaders(c, 1)
+				if err != nil {
+					return err
+				}
+				s.DataSource.R = readers[0]
+				s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 			}
-			s.DataSource.R = readers[0]
-		}
 
-		var tag int32
-		if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
-			tag = s.DataSource.node.RecvMsgList[0].MsgTag
+			var tag int32
+			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
+				tag = s.DataSource.node.RecvMsgList[0].MsgTag
+			}
+			_, err = p.Run(s.DataSource.R, tag, s.Proc)
 		}
-		_, err = p.Run(s.DataSource.R, tag, s.Proc)
 	}
-
 	select {
 	case <-s.Proc.Ctx.Done():
 		err = nil
@@ -302,41 +302,19 @@ func (s *Scope) MergeRun(c *Compile) error {
 		}
 	}()
 
-	if s.NodeInfo.Mcpu == 1 {
-		if tableScanOp, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
-			// need to build readers for tp query
-			readers, _, err := s.buildReaders(c, 1)
-			if err != nil {
-				return err
-			}
-			s.DataSource.R = readers[0]
-			s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
-
-			tableScanOp.Reader = s.DataSource.R
-			tableScanOp.Attrs = s.DataSource.Attributes
-			tableScanOp.TableID = s.DataSource.TableDef.TblId
-			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
-				tableScanOp.TopValueMsgTag = s.DataSource.node.RecvMsgList[0].MsgTag
-			}
-		} else if valueScanOp, ok := vm.GetLeafOp(s.RootOp).(*value_scan.ValueScan); ok {
-			pipelineInputBatches := []*batch.Batch{s.DataSource.Bat}
-			if s.DataSource.Bat != nil {
-				pipelineInputBatches = append(pipelineInputBatches, nil)
-			}
-			valueScanOp.Batchs = pipelineInputBatches
+	if s.Magic != Normal && s.DataSource != nil {
+		magic := s.Magic
+		s.Magic = Normal
+		err := s.ParallelRun(c)
+		s.Magic = magic
+		if err != nil {
+			return err
 		}
-	}
-
-	p := pipeline.NewMerge(s.RootOp)
-	if _, err := p.MergeRun(s.Proc); err != nil {
-		select {
-		case <-s.Proc.Ctx.Done():
-		default:
-			p.Cleanup(s.Proc, true, c.isPrepare, err)
+	} else {
+		if err := s.Run(c); err != nil {
 			return err
 		}
 	}
-	p.Cleanup(s.Proc, false, c.isPrepare, nil)
 
 	// receive and check error from pre-scopes and remote scopes.
 	preScopeCount := len(s.PreScopes)
@@ -426,6 +404,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		}
 	}()
 
+	_, isTableScan := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan)
 	switch {
 	// probability 1: it's a JOIN pipeline.
 	case s.IsJoin:
@@ -437,9 +416,8 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		parallelScope, err = buildLoadParallelRun(s, c)
 
 	// probability 3: it's a SCAN pipeline.
-	case s.DataSource != nil:
+	case isTableScan:
 		parallelScope, err = buildScanParallelRun(s, c)
-		//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
 
 	// others.
 	default:
@@ -457,6 +435,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	if parallelScope.Magic == Normal {
 		return parallelScope.Run(c)
 	}
+	parallelScope.Magic = Normal
 	return parallelScope.MergeRun(c)
 }
 
@@ -571,19 +550,13 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan cannot run in remote.")
 	}
 
-	maxProvidedCpuNumber := goruntime.GOMAXPROCS(0)
-	if c.IsTpQuery() {
-		maxProvidedCpuNumber = 1
-	}
-
-	readers, scanUsedCpuNumber, err := s.buildReaders(c, maxProvidedCpuNumber)
+	readers, scanUsedCpuNumber, err := s.buildReaders(c, s.NodeInfo.Mcpu)
 	if err != nil {
 		return nil, err
 	}
 
 	// only one scan reader, it can just run without any merge.
 	if scanUsedCpuNumber == 1 {
-		s.Magic = Normal
 		s.DataSource.R = readers[0]
 		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 		return s, nil
@@ -598,6 +571,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	for i := 0; i < scanUsedCpuNumber; i++ {
 		readerScopes[i] = newScope(Normal)
 		readerScopes[i].NodeInfo = s.NodeInfo
+		readerScopes[i].NodeInfo.Mcpu = 1
 		readerScopes[i].DataSource = &Source{
 			R:            readers[i],
 			SchemaName:   s.DataSource.SchemaName,
@@ -615,6 +589,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		ReleaseScopes(readerScopes)
 		return nil, err
 	}
+	mergeFromParallelScanScope.DataSource = nil
 	return mergeFromParallelScanScope, nil
 }
 
@@ -961,7 +936,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		// Add log for cn panic which reported on issue 10656
 		// If you find this log is printed, please report the repro details
 		if s.RootOp == nil || s.RootOp.GetOperatorBase().NumChildren() == 0 {
-			c.proc.Error(c.proc.Ctx, "the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}),
+			c.proc.Error(c.proc.Ctx, "the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}, NormalLevel),
 				zap.String("stack", string(debug.Stack())),
 			)
 			return nil, moerr.NewInternalErrorNoCtx("the length of s.Instructions is too short !")

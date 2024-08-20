@@ -772,9 +772,18 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 	// restore according the restore level
 	switch restoreLevel {
 	case tree.RESTORELEVELCLUSTER:
-		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, nil); err != nil {
+		subDbToRestore := make(map[string]*subDbRestoreRecord)
+		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, subDbToRestore); err != nil {
 			return
 		}
+		if len(subDbToRestore) > 0 {
+			for _, subDb := range subDbToRestore {
+				if err = restoreToSubDb(ctx, ses.GetService(), bh, pitrName, subDb); err != nil {
+					return err
+				}
+			}
+		}
+		return
 	case tree.RESTORELEVELACCOUNT:
 		if err = restoreToAccountWithPitr(ctx, ses.GetService(), bh, pitrName, ts, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
@@ -848,7 +857,12 @@ func restoreToAccountWithPitr(
 	}
 
 	// restore dbs
-	if dbNames, err = showDatabasesWithPitr(ctx, sid, bh, pitrName, ts); err != nil {
+	if dbNames, err = showDatabasesWithPitr(
+		ctx,
+		sid,
+		bh,
+		pitrName,
+		ts); err != nil {
 		return
 	}
 
@@ -965,7 +979,19 @@ func restoreToDatabaseOrTableWithPitr(
 		return
 	}
 
+	var createDbSql string
+	createDbSql, err = getCreateDatabaseSqlInPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts)
+	if err != nil {
+		return
+	}
+
 	restoreToTbl := tblName != ""
+
+	// if restore to table, check if the db is sub db
+	isSubDb := strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
+	if isSubDb && restoreToTbl {
+		return moerr.NewInternalError(ctx, "can't restore to table for sub db")
+	}
 
 	// if restore to db, delete the same name db first
 	if !restoreToTbl {
@@ -976,8 +1002,37 @@ func restoreToDatabaseOrTableWithPitr(
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to create database: '%v'", pitrName, dbName))
-	if err = bh.Exec(ctx, "create database if not exists "+dbName); err != nil {
+	if isSubDb {
+
+		// check if the publication exists
+		// if the publication exists, create the db with the publication
+		// else skip restore the db
+
+		var isPubExist bool
+		isPubExist, err = checkPubExistOrNot(ctx, sid, bh, pitrName, dbName, ts)
+		if err != nil {
+			return
+		}
+
+		if !isPubExist {
+			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", pitrName, dbName))
+			return
+		}
+
+		// create db with publication
+		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db with pub: %v, create db sql: %s", pitrName, dbName, createDbSql))
+		if err = bh.Exec(ctx, createDbSql); err != nil {
+			return
+		}
+
 		return
+	} else {
+		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbName)
+		// create db
+		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", pitrName, dbName, createDbSql))
+		if err = bh.Exec(ctx, createDbSql); err != nil {
+			return
+		}
 	}
 
 	// restore publication record
@@ -1788,4 +1843,31 @@ func doCheckAccountExistsInPitrRestore(
 		return false, nil
 	}
 	return true, nil
+}
+
+func getCreateDatabaseSqlInPitr(ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	pitrName string,
+	dbName string,
+	accountId uint32,
+	ts int64,
+) (string, error) {
+
+	sql := "select datname, dat_createsql from mo_catalog.mo_database"
+	if ts > 0 {
+		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
+	}
+	sql += fmt.Sprintf(" where datname = '%s' and account_id = %d", dbName, accountId)
+	getLogger(sid).Info(fmt.Sprintf("[%s] get create database `%s` sql: %s", pitrName, dbName, sql))
+
+	// cols: database_name, create_sql
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	if err != nil {
+		return "", err
+	}
+	if len(colsList) == 0 || len(colsList[0]) == 0 {
+		return "", moerr.NewBadDB(ctx, dbName)
+	}
+	return colsList[0][1], nil
 }
