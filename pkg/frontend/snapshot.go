@@ -741,7 +741,6 @@ func restoreToDatabaseOrTable(
 		key := genKey(fmt.Sprint(restoreAccount), dbName)
 		subDbToRestore[key] = NewSubDbRestoreRecord(dbName, restoreAccount, createDbSql, snapshotTs)
 		return
-
 	}
 
 	// if current account is not to account id, and the db is sub db, skip restore
@@ -759,7 +758,6 @@ func restoreToDatabaseOrTable(
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to create database: %v", snapshotName, dbName))
-
 	if isSubDb {
 
 		// check if the publication exists

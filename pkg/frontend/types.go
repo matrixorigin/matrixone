@@ -1175,9 +1175,14 @@ type MysqlWriter interface {
 	Reset(ses *Session)
 }
 
+type MysqlHelper interface {
+	MakeColumnDefData(context.Context, []*plan.ColDef) ([][]byte, error)
+}
+
 type MysqlRrWr interface {
 	MysqlReader
 	MysqlWriter
+	MysqlHelper
 }
 
 // MysqlPayloadWriter make final payload for the packet

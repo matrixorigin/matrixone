@@ -829,8 +829,8 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
-
 		ses := NewSession(ctx, "", proto, nil)
+		ses.respr = &MysqlResp{mysqlRrWr: proto}
 		ses.mrs = &MysqlResultSet{}
 		ses.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(), ses: ses}
 
@@ -850,6 +850,7 @@ func Test_HandlePrepareStmt(t *testing.T) {
 
 	runTestHandle("handlePrepareStmt", t, func(ses *Session) error {
 		stmt := stmt.(*tree.PrepareStmt)
+		ec.resper = ses.respr
 		_, err := handlePrepareStmt(ses, ec, stmt, "Prepare stmt1 from select 1, 2")
 		return err
 	})
