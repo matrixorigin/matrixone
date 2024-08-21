@@ -3704,7 +3704,7 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	return len(c.cnList) > 1 && !n.Stats.ForceOneCN && c.execType != plan2.ExecTypeAP_MULTICN && n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN)
+	return len(c.cnList) > 1 && !n.Stats.ForceOneCN && c.execType == plan2.ExecTypeAP_MULTICN && n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN)
 }
 
 func collectTombstones(
