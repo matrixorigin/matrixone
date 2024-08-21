@@ -432,13 +432,10 @@ func (c *Compile) printPipeline() {
 }
 */
 // run once
-func (c *Compile) runOnce(retryOnMetadata *bool) error {
+func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
 	err := c.lockMetaTables()
 	if err != nil {
-		if c.isRetryErr(err) {
-			*retryOnMetadata = true
-		}
 		return err
 	}
 

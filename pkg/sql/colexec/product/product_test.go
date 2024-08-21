@@ -177,8 +177,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) productTe
 			},
 		},
 		barg: &hashbuild.HashBuild{
-			Typs:            ts,
-			NeedMergedBatch: true,
+			NeedBatches: true,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
