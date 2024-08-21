@@ -261,7 +261,7 @@ func (s *service) reduceCanMoveGroupTables(txn *activeTxn) {
 		return
 	}
 
-	getLogger().Error("reduceCanMoveGroupTables 1",
+	getLogger("").Error("reduceCanMoveGroupTables 1",
 		txnField(txn),
 		zap.String("lockTableRef", fmt.Sprintf("%v", s.mu.lockTableRef)))
 	var res []pb.LockTable
@@ -279,7 +279,7 @@ func (s *service) reduceCanMoveGroupTables(txn *activeTxn) {
 			}
 		}
 	}
-	getLogger().Error("reduceCanMoveGroupTables 2",
+	getLogger("").Error("reduceCanMoveGroupTables 2",
 		txnField(txn),
 		zap.String("lockTableRef", fmt.Sprintf("%v", s.mu.lockTableRef)))
 	if len(res) > 0 {
@@ -294,7 +294,7 @@ func (s *service) checkCanMoveGroupTables() {
 		return
 	}
 
-	getLogger().Error("checkCanMoveGroupTables 1",
+	getLogger("").Error("checkCanMoveGroupTables 1",
 		zap.String("lockTableRef", fmt.Sprintf("%v", s.mu.lockTableRef)))
 
 	s.activeTxnHolder.incLockTableRef(s.mu.lockTableRef, s.serviceID)
@@ -312,7 +312,7 @@ func (s *service) checkCanMoveGroupTables() {
 		s.mu.groupTables = append(s.mu.groupTables, res)
 	}
 
-	getLogger().Error("checkCanMoveGroupTables 2",
+	getLogger("").Error("checkCanMoveGroupTables 2",
 		zap.String("lockTableRef", fmt.Sprintf("%v", s.mu.lockTableRef)))
 
 	s.mu.restartTime, _ = s.clock.Now()
@@ -327,7 +327,7 @@ func (s *service) incRef(group uint32, table uint64) {
 		s.mu.lockTableRef[group] = make(map[uint64]uint64)
 	}
 	s.mu.lockTableRef[group][table]++
-	getLogger().Error("incRef 1",
+	getLogger("").Error("incRef 1",
 		zap.String("lockTableRef", fmt.Sprintf("%v", s.mu.lockTableRef)))
 }
 
@@ -361,7 +361,7 @@ func (s *service) canLockOnServiceStatus(
 func (s *service) validGroupTable(group uint32, tableID uint64) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	getLogger().Error("validGroupTable",
+	getLogger("").Error("validGroupTable",
 		zap.String("lockTableRef", fmt.Sprintf("%v", s.mu.lockTableRef)))
 	_, ok := s.mu.lockTableRef[group][tableID]
 	return ok
