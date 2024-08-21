@@ -88,6 +88,7 @@ show tables;
 select * from aff01;
 select count(*) from pri01;
 drop database sub01;
+drop snapshot sp01;
 -- @session
 
 drop publication pub01;
@@ -149,6 +150,7 @@ restore account acc01 from snapshot sp02;
 -- @ignore:5,7
 show subscriptions;
 show databases;
+drop snapshot sp02;
 -- @session
 
 drop publication pub02;
@@ -224,6 +226,7 @@ drop database sub03;
 drop publication pub03;
 drop database test03;
 drop database test04;
+drop snapshot sp03;
 
 
 
@@ -277,6 +280,7 @@ select count(*) from t2;
 -- @ignore:5,7
 show subscriptions;
 drop database sub05;
+drop snapshot sp05;
 
 -- @session:id=1&user=acc01:test_account&password=111
 drop publication pub04;
@@ -348,6 +352,7 @@ drop database sub06;
 -- @session:id=1&user=acc01:test_account&password=111
 drop publication pub06;
 drop database test06;
+drop snapshot sp06;
 -- @session
 
 
@@ -409,6 +414,7 @@ drop table test07.t2;
 drop table test08.t3;
 drop database test07;
 drop database test08;
+drop snapshot sp06;
 
 drop account acc01;
 drop account acc02;

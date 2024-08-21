@@ -115,84 +115,87 @@ select count(*) from pri01;
 count(*)
 4
 drop database sub01;
+drop snapshot sp01;
 drop publication pub01;
 drop database test01;
 drop database if exists test02;
-[unknown result because it is related to issue#18259]
+
 create database test02;
-[unknown result because it is related to issue#18259]
+
 use test02;
-[unknown result because it is related to issue#18259]
+
 drop table if exists rs02;
-[unknown result because it is related to issue#18259]
+
 create table rs02 (col1 int primary key , col2 datetime);
-[unknown result because it is related to issue#18259]
+
 insert into rs02 values (1, '2020-10-13 10:10:10');
-[unknown result because it is related to issue#18259]
+
 insert into rs02 values (2, null);
-[unknown result because it is related to issue#18259]
+
 insert into rs02 values (3, '2021-10-10 00:00:00');
-[unknown result because it is related to issue#18259]
+
 insert into rs02 values (4, '2023-01-01 12:12:12');
-[unknown result because it is related to issue#18259]
+
 insert into rs02 values (5, null);
-[unknown result because it is related to issue#18259]
+
 insert into rs02 values (6, null);
-[unknown result because it is related to issue#18259]
+
 insert into rs02 values (7, '2023-11-27 01:02:03');
-[unknown result because it is related to issue#18259]
+
 select * from rs02;
-[unknown result because it is related to issue#18259]
+
 drop table if exists rs03;
-[unknown result because it is related to issue#18259]
+
 create table rs03 (col1 int, col2 float, col3 decimal, col4 enum('1','2','3','4'));
-[unknown result because it is related to issue#18259]
+
 insert into rs03 values (1, 12.21, 32324.32131, 1);
-[unknown result because it is related to issue#18259]
+
 insert into rs03 values (2, null, null, 2);
-[unknown result because it is related to issue#18259]
+
 insert into rs03 values (2, -12.1, 34738, null);
-[unknown result because it is related to issue#18259]
+
 insert into rs03 values (1, 90.2314, null, 4);
-[unknown result because it is related to issue#18259]
+
 insert into rs03 values (1, 43425.4325, -7483.432, 2);
-[unknown result because it is related to issue#18259]
+
 drop publication if exists pub02;
-[unknown result because it is related to issue#18259]
+
 create publication pub02 database test02 table rs02 account acc01;
-[unknown result because it is related to issue#18259]
+
 show publications;
-[unknown result because it is related to issue#18259]
+
 show subscriptions all;
-[unknown result because it is related to issue#18259]
+
 drop database if exists sub02;
-[unknown result because it is related to issue#18259]
+
 create database sub02 from sys publication pub02;
-[unknown result because it is related to issue#18259]
+
 show subscriptions;
-[unknown result because it is related to issue#18259]
+
 drop snapshot if exists sp02;
-[unknown result because it is related to issue#18259]
+
 create snapshot sp02 for account acc01;
-[unknown result because it is related to issue#18259]
+
 show snapshots;
-[unknown result because it is related to issue#18259]
+
 drop database sub02;
-[unknown result because it is related to issue#18259]
+
 drop publication pub02;
-[unknown result because it is related to issue#18259]
+
 show subscriptions;
-[unknown result because it is related to issue#18259]
+
 restore account acc01 from snapshot sp02;
-[unknown result because it is related to issue#18259]
+
 show subscriptions;
-[unknown result because it is related to issue#18259]
+
 show databases;
-[unknown result because it is related to issue#18259]
+
+drop snapshot sp02;
+
 drop publication pub02;
-[unknown result because it is related to issue#18259]
+
 drop database test02;
-[unknown result because it is related to issue#18259]
+
 drop database if exists test03;
 create database test03;
 use test03;
@@ -260,6 +263,7 @@ drop publication pub03;
 drop database test03;
 drop database test04;
 Can't drop database 'test04'; database doesn't exist
+drop snapshot sp03;
 drop database if exists test04;
 create database test04;
 use test04;
@@ -327,6 +331,7 @@ show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 pub04    acc01    test04    *    pub to sys account    2024-08-21 16:24:57    sub05    2024-08-21 16:24:57    0
 drop database sub05;
+drop snapshot sp05;
 drop publication pub04;
 drop database test04;
 drop database if exists test06;
@@ -394,6 +399,7 @@ table01    CREATE TABLE `table01` (\n  `col1` INT NOT NULL AUTO_INCREMENT,\n  `c
 drop database sub06;
 drop publication pub06;
 drop database test06;
+drop snapshot sp06;
 drop database if exists test07;
 create database test07;
 use test07;
@@ -433,7 +439,7 @@ create snapshot sp06 for account sys;
 alter publication pub06 account acc02 database test07;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    sys    null    null    null    null    sub06    2024-08-21 16:24:59    1
+pub06    sys    null    null    null    null    sub06    2024-08-21 16:56:30    1
 restore account sys from snapshot sp06;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
@@ -444,6 +450,7 @@ drop table test07.t2;
 drop table test08.t3;
 drop database test07;
 drop database test08;
+drop snapshot sp06;
 drop account acc01;
 drop account acc02;
 drop account acc03;
