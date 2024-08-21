@@ -26,6 +26,12 @@ func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32) i
 		if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_SEMI {
 			// for now, only support inner join and semi join.
 			// for left join, top operator can directly push down over this
+			if node.Stats.HashmapStats.Shuffle {
+				// don't need to go shuffle join for this
+				node.Stats.HashmapStats.Shuffle = false
+				node.RuntimeFilterProbeList = nil
+				node.RuntimeFilterBuildList = nil
+			}
 			return builder.gatherLeavesForMessageFromTopToScan(node.Children[0])
 		}
 	case plan.Node_FILTER:
