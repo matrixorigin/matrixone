@@ -20,10 +20,11 @@ import (
 	"sync/atomic"
 
 	"github.com/dolthub/maphash"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
 func New[K comparable, V BytesLike](
-	capacity int64,
+	capacity fscache.CapacityFunc,
 	postSet func(keySet K, valSet V),
 	postGet func(key K, value V),
 	postEvict func(keyEvicted K, valEvicted V),
@@ -62,9 +63,12 @@ func New[K comparable, V BytesLike](
 		l.shards[i].postGet = postGet
 		l.shards[i].postEvict = postEvict
 		l.shards[i].evicts = newList[K, V]()
-		l.shards[i].capacity = capacity / int64(len(l.shards))
-		if l.shards[i].capacity < 1 {
-			l.shards[i].capacity = 1
+		l.shards[i].capacity = func() int64 {
+			ret := capacity() / int64(len(l.shards))
+			if ret < 1 {
+				ret = 1
+			}
+			return ret
 		}
 		l.shards[i].kv = make(map[K]*lruItem[K, V])
 	}
@@ -94,7 +98,7 @@ func (l *LRU[K, V]) DeletePaths(ctx context.Context, paths []string) {
 }
 
 func (l *LRU[K, V]) Capacity() int64 {
-	return l.capacity
+	return l.capacity()
 }
 
 func (l *LRU[K, V]) Used() int64 {
@@ -102,7 +106,7 @@ func (l *LRU[K, V]) Used() int64 {
 }
 
 func (l *LRU[K, V]) Available() int64 {
-	return l.capacity - atomic.LoadInt64(&l.size)
+	return l.capacity() - atomic.LoadInt64(&l.size)
 }
 
 func (l *LRU[K, V]) hash(k K) uint64 {
@@ -119,5 +123,20 @@ func (l *LRU[K, V]) EnsureNBytes(n int) {
 			shard := &l.shards[i]
 			shard.evictOne()
 		}
+	}
+}
+
+func (l *LRU[K, V]) Evict(done chan int64) {
+	if done != nil && cap(done) < 1 {
+		panic("should be buffered chan")
+	}
+	var target int64
+	ok := make(chan int64, 1)
+	for i := 0; i < len(l.shards); i++ {
+		l.shards[i].evict(context.TODO(), ok)
+		target += <-ok
+	}
+	if done != nil {
+		done <- target
 	}
 }

@@ -22,7 +22,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 )
@@ -46,14 +46,14 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 
 	size := int64(4 * runtime.GOMAXPROCS(0))
-	m := NewMemCache(NewMemoryCache(size, true, nil), nil)
+	m := NewMemCache(NewMemoryCache(fscache.ConstCapacity(size), true, nil), nil)
 
 	vec := &IOVector{
 		FilePath: "foo",
 		Entries: []IOEntry{
 			{
 				Size: 3,
-				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
+				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
 					cacheData := allocator.Alloc(1)
 					cacheData.Bytes()[0] = 42
 					return cacheData, nil
@@ -79,7 +79,7 @@ func TestMemCacheLeak(t *testing.T) {
 		Entries: []IOEntry{
 			{
 				Size: 3,
-				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
+				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
 					cacheData := allocator.Alloc(1)
 					cacheData.Bytes()[0] = 42
 					return cacheData, nil
@@ -104,7 +104,7 @@ func TestMemCacheLeak(t *testing.T) {
 // TestHighConcurrency this test is to mainly test concurrency issue in objectCache
 // and dataOverlap-checker.
 func TestHighConcurrency(t *testing.T) {
-	m := NewMemCache(NewMemoryCache(2, true, nil), nil)
+	m := NewMemCache(NewMemoryCache(fscache.ConstCapacity(2), true, nil), nil)
 	ctx := context.Background()
 
 	n := 10
