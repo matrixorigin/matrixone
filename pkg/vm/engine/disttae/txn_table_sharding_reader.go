@@ -23,7 +23,7 @@ import (
 
 // TODO(fagongzi): remove this method to lower after used. Currently, it only used
 // upper to avoid SCA check.
-func (tbl *txnTableDelegate) NewStreamDataReader(
+func (tbl *txnTableDelegate) NewShardingDataReader(
 	param shard.ReadDataParam,
 ) ShardingDataReader {
 	if tbl.isLocal() {
