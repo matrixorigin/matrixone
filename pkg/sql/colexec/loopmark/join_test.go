@@ -233,8 +233,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
-			Typs:            ts,
-			NeedMergedBatch: true,
+			NeedBatches: true,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,

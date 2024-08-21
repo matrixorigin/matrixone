@@ -274,7 +274,6 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
-			Typs:        ts,
 			NeedHashMap: true,
 			Conditions:  cs[1],
 			OperatorBase: vm.OperatorBase{
@@ -285,7 +284,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 				},
 			},
 			NeedAllocateSels: true,
-			NeedMergedBatch:  true,
+			NeedBatches:      true,
 			JoinMapTag:       tag,
 			JoinMapRefCnt:    1,
 		},

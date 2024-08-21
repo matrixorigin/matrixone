@@ -558,8 +558,11 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if s.IsRemote && len(s.DataSource.OrderBy) > 0 {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan cannot run in remote.")
 	}
-
-	readers, scanUsedCpuNumber, err := s.buildReaders(c, s.NodeInfo.Mcpu)
+	maxProvidedCpuNumber := ncpu
+	if s.NodeInfo.Mcpu == 1 {
+		maxProvidedCpuNumber = 1
+	}
+	readers, scanUsedCpuNumber, err := s.buildReaders(c, maxProvidedCpuNumber)
 	if err != nil {
 		return nil, err
 	}

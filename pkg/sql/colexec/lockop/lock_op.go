@@ -415,6 +415,11 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
+	if runtime.InTesting(proc.GetService()) {
+		tc := runtime.MustGetTestingContext(proc.GetService())
+		tc.GetBeforeLockFunc()(txnOp.Txn().ID, tableID)
+	}
+
 	seq := txnOp.NextSequence()
 	startAt := time.Now()
 	trace.GetService(proc.GetService()).AddTxnDurationAction(
@@ -545,7 +550,7 @@ func doLock(
 	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
 	if !result.HasConflict &&
 		snapshotTS.LessEq(lockedTS) && // only retry when snapshotTS <= lockedTS, means lost some update in rc mode.
-		!txnOp.IsRetry() &&
+		!txnOp.IsRetry() && // retry not need to check data changed
 		txnOp.Txn().IsRCIsolation() {
 
 		start = time.Now()

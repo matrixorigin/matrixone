@@ -351,10 +351,9 @@ func newTestCase(rows int, flgs []bool, ts []types.Type, rp []colexec.ResultPos,
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
-			Typs:            ts,
-			NeedHashMap:     true,
-			Conditions:      cs[1],
-			NeedMergedBatch: true,
+			NeedHashMap: true,
+			Conditions:  cs[1],
+			NeedBatches: true,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,

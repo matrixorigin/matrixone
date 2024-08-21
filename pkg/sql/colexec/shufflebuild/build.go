@@ -115,7 +115,7 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 				ctr.cleanHashMap()
 				return result, err
 			}
-			if !ap.NeedMergedBatch {
+			if !ap.NeedBatches {
 				// if do not need merged batch, free it now to save memory
 				for i := range ctr.batches {
 					ctr.batches[i].Clean(proc.GetMPool())
@@ -136,7 +136,7 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			var jm *message.JoinMap
 			if ctr.inputBatchRowCount > 0 {
 				jm = message.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
-				if ap.NeedMergedBatch {
+				if ap.NeedBatches {
 					jm.SetRowCount(int64(ctr.inputBatchRowCount))
 				}
 				jm.IncRef(1)

@@ -1809,14 +1809,13 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 	case vm.Anti:
 		arg := op.(*anti.AntiJoin)
 		ret.NeedHashMap = true
-		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
-			ret.NeedMergedBatch = false
+			ret.NeedBatches = false
 			ret.NeedAllocateSels = false
 		} else {
-			ret.NeedMergedBatch = true
+			ret.NeedBatches = true
 			ret.NeedAllocateSels = true
 		}
 		ret.JoinMapTag = arg.JoinMapTag
@@ -1824,9 +1823,8 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 	case vm.Mark:
 		arg := op.(*mark.MarkJoin)
 		ret.NeedHashMap = true
-		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
@@ -1834,7 +1832,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 	case vm.Join:
 		arg := op.(*join.InnerJoin)
 		ret.NeedHashMap = true
-		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.HashOnPK = arg.HashOnPK
 
@@ -1849,7 +1846,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 				break
 			}
 		}
-		ret.NeedMergedBatch = needMergedBatch
+		ret.NeedBatches = needMergedBatch
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
@@ -1859,9 +1856,8 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 	case vm.Left:
 		arg := op.(*left.LeftJoin)
 		ret.NeedHashMap = true
-		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
@@ -1872,9 +1868,8 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 	case vm.Right:
 		arg := op.(*right.RightJoin)
 		ret.NeedHashMap = true
-		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
@@ -1885,9 +1880,8 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 	case vm.RightSemi:
 		arg := op.(*rightsemi.RightSemi)
 		ret.NeedHashMap = true
-		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
@@ -1898,9 +1892,8 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 	case vm.RightAnti:
 		arg := op.(*rightanti.RightAnti)
 		ret.NeedHashMap = true
-		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
@@ -1911,14 +1904,13 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 	case vm.Semi:
 		arg := op.(*semi.SemiJoin)
 		ret.NeedHashMap = true
-		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
-			ret.NeedMergedBatch = false
+			ret.NeedBatches = false
 			ret.NeedAllocateSels = false
 		} else {
-			ret.NeedMergedBatch = true
+			ret.NeedBatches = true
 			ret.NeedAllocateSels = true
 		}
 		if len(arg.RuntimeFilterSpecs) > 0 {
@@ -1929,9 +1921,8 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 	case vm.Single:
 		arg := op.(*single.SingleJoin)
 		ret.NeedHashMap = true
-		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
@@ -1941,62 +1932,54 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 	case vm.Product:
 		arg := op.(*product.Product)
 		ret.NeedHashMap = false
-		ret.Typs = arg.Typs
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
 	case vm.ProductL2:
 		arg := op.(*productl2.Productl2)
 		ret.NeedHashMap = false
-		ret.Typs = arg.Typs
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
 	case vm.LoopAnti:
 		arg := op.(*loopanti.LoopAnti)
 		ret.NeedHashMap = false
-		ret.Typs = arg.Typs
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopJoin:
 		arg := op.(*loopjoin.LoopJoin)
 		ret.NeedHashMap = false
-		ret.Typs = arg.Typs
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopLeft:
 		arg := op.(*loopleft.LoopLeft)
 		ret.NeedHashMap = false
-		ret.Typs = arg.Typs
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopSemi:
 		arg := op.(*loopsemi.LoopSemi)
 		ret.NeedHashMap = false
-		ret.Typs = arg.Typs
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopSingle:
 		arg := op.(*loopsingle.LoopSingle)
 		ret.NeedHashMap = false
-		ret.Typs = arg.Typs
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopMark:
 		arg := op.(*loopmark.LoopMark)
 		ret.NeedHashMap = false
-		ret.Typs = arg.Typs
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
 
@@ -2014,14 +1997,13 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 	switch op.OpType() {
 	case vm.Anti:
 		arg := op.(*anti.AntiJoin)
-		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
-			ret.NeedMergedBatch = false
+			ret.NeedBatches = false
 			ret.NeedAllocateSels = false
 		} else {
-			ret.NeedMergedBatch = true
+			ret.NeedBatches = true
 			ret.NeedAllocateSels = true
 		}
 		if len(arg.RuntimeFilterSpecs) > 0 {
@@ -2032,7 +2014,6 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 
 	case vm.Join:
 		arg := op.(*join.InnerJoin)
-		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.HashOnPK = arg.HashOnPK
 
@@ -2047,7 +2028,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 				break
 			}
 		}
-		ret.NeedMergedBatch = needMergedBatch
+		ret.NeedBatches = needMergedBatch
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
@@ -2057,9 +2038,8 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 
 	case vm.Left:
 		arg := op.(*left.LeftJoin)
-		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
@@ -2070,9 +2050,8 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 
 	case vm.Right:
 		arg := op.(*right.RightJoin)
-		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
@@ -2083,9 +2062,8 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 
 	case vm.RightSemi:
 		arg := op.(*rightsemi.RightSemi)
-		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
@@ -2096,9 +2074,8 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 
 	case vm.RightAnti:
 		arg := op.(*rightanti.RightAnti)
-		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.NeedMergedBatch = true
+		ret.NeedBatches = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
@@ -2109,14 +2086,13 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 
 	case vm.Semi:
 		arg := op.(*semi.SemiJoin)
-		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
-			ret.NeedMergedBatch = false
+			ret.NeedBatches = false
 			ret.NeedAllocateSels = false
 		} else {
-			ret.NeedMergedBatch = true
+			ret.NeedBatches = true
 			ret.NeedAllocateSels = true
 		}
 		if len(arg.RuntimeFilterSpecs) > 0 {
