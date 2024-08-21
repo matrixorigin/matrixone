@@ -166,10 +166,21 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	} else {
 		ap.ctr.hasData = true
 	}
-	sendBat, err := bat.Dup(proc.GetMPool())
-	if err != nil {
-		return vm.CancelResult, nil
+
+	sendBat := batch.NewWithSize(len(result.Batch.Vecs))
+	sendBat.SetAttributes(result.Batch.Attrs)
+	sendBat.Recursive = result.Batch.Recursive
+	for j, vec := range result.Batch.Vecs {
+		typ := *result.Batch.GetVector(int32(j)).GetType()
+		rvec := proc.GetVector(typ)
+		if err = vector.GetUnionAllFunction(typ, proc.GetMPool())(rvec, vec); err != nil {
+			sendBat.Clean(proc.GetMPool())
+			return vm.CancelResult, err
+		}
+		sendBat.SetVector(int32(j), rvec)
 	}
+	sendBat.SetRowCount(sendBat.Vecs[0].Length())
+
 	ok, err := ap.ctr.sendFunc(sendBat, ap, proc)
 	if ok {
 		result.Status = vm.ExecStop
