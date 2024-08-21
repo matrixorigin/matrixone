@@ -69,7 +69,6 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
@@ -88,7 +87,6 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				indexJoin.ctr.buf.SetVector(int32(i), vec)
 			}
 			indexJoin.ctr.buf.AddRowCount(bat.RowCount())
-			proc.PutBatch(bat)
 			result.Batch = indexJoin.ctr.buf
 			if indexJoin.ProjectList != nil {
 				var err error

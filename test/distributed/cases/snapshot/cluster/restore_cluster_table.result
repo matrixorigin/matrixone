@@ -552,6 +552,12 @@ stage_id    stage_name    url    stage_credentials    stage_status    created_ti
 select * from mo_catalog.mo_user_defined_function;
 function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
 1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2024-07-10 07:43:56    2024-07-10 07:43:56    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+select * from test01.sales;
+id    sale_date    amount
+1    2018-12-25    100.00
+2    2019-05-15    200.00
+3    2020-07-22    150.00
+4    2021-08-01    300.00
 use test02;
 select * from v01;
 id    sale_date    amount

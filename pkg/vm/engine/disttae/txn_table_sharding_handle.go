@@ -157,10 +157,18 @@ func HandleShardingReadRanges(
 		return nil, err
 	}
 
-	ranges, err := tbl.Ranges(
+	var uncommittedRanges []objectio.ObjectStats
+	n := len(param.RangesParam.UncommittedObjects) / objectio.ObjectStatsLen
+	for i := 0; i < n; i++ {
+		var stat objectio.ObjectStats
+		stat.UnMarshal(param.RangesParam.UncommittedObjects[i*objectio.ObjectStatsLen : (i+1)*objectio.ObjectStatsLen])
+		uncommittedRanges = append(uncommittedRanges, stat)
+	}
+
+	ranges, err := tbl.doRanges(
 		ctx,
 		param.RangesParam.Exprs,
-		int(param.RangesParam.TxnOffset),
+		uncommittedRanges,
 	)
 	if err != nil {
 		return nil, err
@@ -214,7 +222,7 @@ func HandleShardingReadGetColumMetadataScanInfo(
 func HandleShardingReadReader(
 	ctx context.Context,
 	shard shard.TableShard,
-	engine engine.Engine,
+	e engine.Engine,
 	param shard.ReadParam,
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
@@ -222,7 +230,7 @@ func HandleShardingReadReader(
 	tbl, err := getTxnTable(
 		ctx,
 		param,
-		engine,
+		e,
 	)
 	if err != nil {
 		return nil, err
@@ -240,6 +248,7 @@ func HandleShardingReadReader(
 		int(param.ReaderParam.Num),
 		int(param.ReaderParam.TxnOffset),
 		param.ReaderParam.OrderedScan,
+		engine.Policy_CheckAll,
 	)
 	if err != nil {
 		return nil, err

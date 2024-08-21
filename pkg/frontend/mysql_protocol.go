@@ -177,7 +177,7 @@ type debugStats struct {
 	writeBytes uint64
 }
 
-func (ds *debugStats) ResetStats() {
+func (ds *debugStats) resetStats() {
 	ds.writeCount = 0
 	ds.writeBytes = 0
 }
@@ -272,6 +272,11 @@ type MysqlProtocolImpl struct {
 	SV *config.FrontendParameters
 
 	ses *Session
+
+	// authString is the authentication string which is stored in mysql.user
+	// table. It is cached here to send it proxy when proxy tries to reuse
+	// a connection and do the authentication.
+	authString []byte
 }
 
 func (mp *MysqlProtocolImpl) GetStr(id PropertyID) string {
@@ -280,9 +285,12 @@ func (mp *MysqlProtocolImpl) GetStr(id PropertyID) string {
 		return mp.GetUserName()
 	case DBNAME:
 		return mp.GetDatabaseName()
+	case AuthString:
+		return string(mp.GetAuthString())
 	}
 	return ""
 }
+
 func (mp *MysqlProtocolImpl) SetStr(id PropertyID, val string) {
 	switch id {
 	case USERNAME:
@@ -291,7 +299,15 @@ func (mp *MysqlProtocolImpl) SetStr(id PropertyID, val string) {
 		mp.SetDatabaseName(val)
 	}
 }
-func (mp *MysqlProtocolImpl) SetU32(PropertyID, uint32) {}
+
+func (mp *MysqlProtocolImpl) SetU32(id PropertyID, v uint32) {
+	switch id {
+	case CONNID:
+		mp.connectionID = v
+	default:
+	}
+}
+
 func (mp *MysqlProtocolImpl) GetU32(id PropertyID) uint32 {
 	switch id {
 	case CONNID:
@@ -299,6 +315,7 @@ func (mp *MysqlProtocolImpl) GetU32(id PropertyID) uint32 {
 	}
 	return math.MaxUint32
 }
+
 func (mp *MysqlProtocolImpl) SetU8(id PropertyID, val uint8) {
 	switch id {
 	case SEQUENCEID:
@@ -313,6 +330,7 @@ func (mp *MysqlProtocolImpl) GetU8(id PropertyID) uint8 {
 	}
 	return 0
 }
+
 func (mp *MysqlProtocolImpl) SetBool(id PropertyID, val bool) {
 	switch id {
 	case ESTABLISHED:
@@ -325,6 +343,7 @@ func (mp *MysqlProtocolImpl) SetBool(id PropertyID, val bool) {
 		}
 	}
 }
+
 func (mp *MysqlProtocolImpl) GetBool(id PropertyID) bool {
 	switch id {
 	case ESTABLISHED:
@@ -415,7 +434,8 @@ func (mp *MysqlProtocolImpl) WriteLengthEncodedNumber(u uint64) error {
 }
 
 func (mp *MysqlProtocolImpl) WriteColumnDef(ctx context.Context, column Column, i int) error {
-	return mp.SendColumnDefinitionPacket(ctx, column, i)
+	_, err := mp.SendColumnDefinitionPacket(ctx, column, i)
+	return err
 }
 
 func (mp *MysqlProtocolImpl) WriteRow() error {
@@ -489,6 +509,18 @@ func (mp *MysqlProtocolImpl) SetDatabaseName(s string) {
 	mp.database = s
 }
 
+func (mp *MysqlProtocolImpl) GetAuthString() []byte {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	return mp.authString
+}
+
+func (mp *MysqlProtocolImpl) GetAuthResponse() []byte {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	return mp.authResponse
+}
+
 func (mp *MysqlProtocolImpl) GetUserName() string {
 	mp.m.Lock()
 	defer mp.m.Unlock()
@@ -539,7 +571,13 @@ func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, 
 }
 
 func (mp *MysqlProtocolImpl) ResetStatistics() {
-	mp.ResetStats()
+	mp.resetStats()
+}
+
+// Reset implements the MysqlWriter interface.
+func (mp *MysqlProtocolImpl) Reset(ses *Session) {
+	mp.ResetStatistics()
+	mp.SetSession(ses)
 }
 
 func (mp *MysqlProtocolImpl) GetConnectAttrs() map[string]string {
@@ -636,7 +674,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 			return err
 		}
 
-		err = mp.SendColumnDefinitionPacket(ctx, column, cmd)
+		_, err = mp.SendColumnDefinitionPacket(ctx, column, cmd)
 		if err != nil {
 			return err
 		}
@@ -646,22 +684,28 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 			return err
 		}
 	}
-
-	for i := 0; i < numColumns; i++ {
-		column := new(MysqlColumn)
-		column.SetName(columns[i].Name)
-		column.SetOrgName(columns[i].GetOriginCaseName())
-
-		err = convertEngineTypeToMysqlType(ctx, types.T(columns[i].Typ.Id), column)
-		if err != nil {
-			return err
+	if stmt.ColDefData == nil || len(stmt.ColDefData) != numColumns {
+		stmt.ColDefData = nil
+		for i := 0; i < numColumns; i++ {
+			column, err := colDef2MysqlColumn(ctx, columns[i])
+			if err != nil {
+				return err
+			}
+			colDefPacket, err := mp.SendColumnDefinitionPacket(ctx, column, cmd)
+			if err != nil {
+				return err
+			}
+			stmt.ColDefData = append(stmt.ColDefData, colDefPacket)
 		}
-
-		err = mp.SendColumnDefinitionPacket(ctx, column, cmd)
-		if err != nil {
-			return err
+	} else {
+		for i := 0; i < numColumns; i++ {
+			err = mp.WriteColumnDefBytes(stmt.ColDefData[i])
+			if err != nil {
+				return err
+			}
 		}
 	}
+
 	if numColumns > 0 {
 		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
 			return err
@@ -1320,22 +1364,20 @@ func (mp *MysqlProtocolImpl) writeZeros(data []byte, pos int, count int) int {
 	return pos + count
 }
 
+// CheckPassword checks the authentication from password.
 // the server get the auth string from HandShakeResponse
 // pwd is SHA1(SHA1(password)), AUTH is from client
 // hash1 = AUTH XOR SHA1( slat + pwd)
 // hash2 = SHA1(hash1)
 // check(hash2, hpwd)
-func (mp *MysqlProtocolImpl) checkPassword(pwd, salt, auth []byte) bool {
-	ses := mp.GetSession()
+func CheckPassword(pwd, salt, auth []byte) bool {
 	sha := sha1.New()
 	_, err := sha.Write(salt)
 	if err != nil {
-		ses.Error(mp.ctx, "SHA1(salt) failed.")
 		return false
 	}
 	_, err = sha.Write(pwd)
 	if err != nil {
-		ses.Error(mp.ctx, "SHA1(hpwd) failed.")
 		return false
 	}
 	hash1 := sha.Sum(nil)
@@ -1361,14 +1403,18 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	ses := mp.GetSession()
 	if !mp.SV.SkipCheckUser {
 		ses.Debugf(ctx, "authenticate user 1")
-		psw, err = ses.AuthenticateUser(ctx, mp.GetUserName(), mp.GetDatabaseName(), mp.authResponse, mp.GetSalt(), mp.checkPassword)
+		psw, err = ses.AuthenticateUser(ctx, mp.GetUserName(), mp.GetDatabaseName(), mp.authResponse, mp.GetSalt(), CheckPassword)
 		if err != nil {
 			return err
 		}
+
+		// update the authString field. It will be sent to proxy to help it do authentication.
+		mp.authString = psw
+
 		ses.Debugf(ctx, "authenticate user 2")
 
 		//TO Check password
-		if mp.checkPassword(psw, mp.GetSalt(), authResponse) {
+		if CheckPassword(psw, mp.GetSalt(), authResponse) {
 			ses.Debugf(ctx, "check password succeeded")
 			if err = ses.InitSystemVariables(ctx); err != nil {
 				return err
@@ -1388,7 +1434,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 			ses.SetTenantInfo(tenant)
 
 			//TO Check password
-			if len(psw) == 0 || mp.checkPassword(psw, mp.GetSalt(), authResponse) {
+			if len(psw) == 0 || CheckPassword(psw, mp.GetSalt(), authResponse) {
 				mp.ses.Info(ctx, "check password succeeded")
 			} else {
 				return moerr.NewInternalError(ctx, "check password failed")
@@ -2100,11 +2146,25 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	return data[:pos]
 }
 
+func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+	numColumns := len(columns)
+	colDefData := make([][]byte, 0, numColumns)
+	for i := 0; i < numColumns; i++ {
+		column, err := colDef2MysqlColumn(ctx, columns[i])
+		if err != nil {
+			return nil, err
+		}
+		colDefPacket := mp.makeColumnDefinition41Payload(column, int(COM_STMT_PREPARE))
+		colDefData = append(colDefData, colDefPacket)
+	}
+	return colDefData, nil
+}
+
 // SendColumnDefinitionPacket the server send the column definition to the client
-func (mp *MysqlProtocolImpl) SendColumnDefinitionPacket(ctx context.Context, column Column, cmd int) error {
+func (mp *MysqlProtocolImpl) SendColumnDefinitionPacket(ctx context.Context, column Column, cmd int) ([]byte, error) {
 	mysqlColumn, ok := column.(*MysqlColumn)
 	if !ok {
-		return moerr.NewInternalError(ctx, "sendColumn need MysqlColumn")
+		return nil, moerr.NewInternalError(ctx, "sendColumn need MysqlColumn")
 	}
 
 	var data []byte
@@ -2112,7 +2172,7 @@ func (mp *MysqlProtocolImpl) SendColumnDefinitionPacket(ctx context.Context, col
 		data = mp.makeColumnDefinition41Payload(mysqlColumn, cmd)
 	}
 
-	return mp.appendPacket(data)
+	return data, mp.appendPacket(data)
 }
 
 // SendColumnCountPacket makes the column count packet
@@ -2132,7 +2192,7 @@ func (mp *MysqlProtocolImpl) sendColumns(ctx context.Context, mrs *MysqlResultSe
 			return err
 		}
 
-		err = mp.SendColumnDefinitionPacket(ctx, col, cmd)
+		_, err = mp.SendColumnDefinitionPacket(ctx, col, cmd)
 		if err != nil {
 			return err
 		}
@@ -2660,6 +2720,11 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 
 	return err
 }
+
+func (mp *MysqlProtocolImpl) WriteColumnDefBytes(payload []byte) error {
+	return mp.appendPacket(payload)
+}
+
 func (mp *MysqlProtocolImpl) UseConn(conn net.Conn) {
 	mp.tcpConn.UseConn(conn)
 }

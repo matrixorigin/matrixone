@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"sync"
 
@@ -139,8 +140,8 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	defer func() {
 		sess.Close()
 	}()
-	sess.EnterFPrint(112)
-	defer sess.ExitFPrint(112)
+	sess.EnterFPrint(FPInternalExecutorExec)
+	defer sess.ExitFPrint(FPInternalExecutorExec)
 	ie.proto.stashResult = false
 	if sql == "" {
 		return
@@ -161,8 +162,8 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
-	sess.EnterFPrint(113)
-	defer sess.ExitFPrint(113)
+	sess.EnterFPrint(FPInternalExecutorQuery)
+	defer sess.ExitFPrint(FPInternalExecutorQuery)
 	ie.proto.stashResult = true
 	sess.Info(ctx, "internalExecutor new session")
 	tempExecCtx := ExecCtx{
@@ -493,6 +494,9 @@ func (ip *internalProtocol) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) e
 	defer ip.Unlock()
 	return ip.sendRows(mrs, cnt)
 }
+func (ip *internalProtocol) WriteColumnDefBytes(payload []byte) error {
+	return nil
+}
 
 func (ip *internalProtocol) ResetStatistics() {
 	ip.result.affectedRows = 0
@@ -501,8 +505,18 @@ func (ip *internalProtocol) ResetStatistics() {
 	ip.result.resultSet = nil
 }
 
+func (ip *internalProtocol) Reset(_ *Session) {
+	ip.ResetStatistics()
+	ip.database = ""
+	ip.username = ""
+}
+
 func (ip *internalProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
 func (ip *internalProtocol) WriteLocalInfileRequest(filename string) error {
 	return nil
+}
+
+func (ip *internalProtocol) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+	return nil, nil
 }

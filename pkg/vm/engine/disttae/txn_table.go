@@ -17,7 +17,6 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -46,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -637,6 +635,18 @@ func (tbl *txnTable) Ranges(
 	exprs []*plan.Expr,
 	txnOffset int,
 ) (data engine.RelData, err error) {
+	return tbl.doRanges(
+		ctx,
+		exprs,
+		tbl.collectUnCommittedObjects(txnOffset),
+	)
+}
+
+func (tbl *txnTable) doRanges(
+	ctx context.Context,
+	exprs []*plan.Expr,
+	uncommittedObjects []objectio.ObjectStats,
+) (data engine.RelData, err error) {
 	sid := tbl.proc.Load().GetService()
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
@@ -731,7 +741,7 @@ func (tbl *txnTable) Ranges(
 		exprs,
 		&blocks,
 		tbl.proc.Load(),
-		txnOffset,
+		uncommittedObjects,
 	); err != nil {
 		return
 	}
@@ -770,22 +780,19 @@ func (tbl *txnTable) rangesOnePart(
 	exprs []*plan.Expr, // filter expression
 	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
-	txnOffset int,
+	uncommittedObjects []objectio.ObjectStats,
 ) (err error) {
 	var done bool
-
-	uncommittedObjects := tbl.collectUnCommittedObjects(txnOffset)
 
 	if done, err = TryFastFilterBlocks(
 		ctx,
 		tbl,
-		txnOffset,
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
 		exprs,
 		state,
+		nil,
 		uncommittedObjects,
-		//&dirtyBlks,
 		outBlocks,
 		tbl.getTxn().engine.fs,
 		tbl.proc.Load(),
@@ -924,6 +931,7 @@ func (tbl *txnTable) rangesOnePart(
 			return
 		},
 		state,
+		nil,
 		uncommittedObjects...,
 	); err != nil {
 		return
@@ -1746,14 +1754,14 @@ func BuildLocalDataSource(
 		tbl = rel.(*txnTableDelegate).origin
 	}
 
-	return tbl.buildLocalDataSource(ctx, txnOffset, ranges, Policy_CheckAll)
+	return tbl.buildLocalDataSource(ctx, txnOffset, ranges, engine.Policy_CheckAll)
 }
 
 func (tbl *txnTable) buildLocalDataSource(
 	ctx context.Context,
 	txnOffset int,
 	relData engine.RelData,
-	policy TombstoneApplyPolicy,
+	policy engine.TombstoneApplyPolicy,
 ) (source engine.DataSource, err error) {
 
 	switch relData.GetType() {
@@ -1810,6 +1818,7 @@ func (tbl *txnTable) BuildReaders(
 	num int,
 	txnOffset int,
 	orderBy bool,
+	tombstonePolicy engine.TombstoneApplyPolicy,
 ) ([]engine.Reader, error) {
 	proc := p.(*process.Process)
 	//copy from NewReader.
@@ -1843,7 +1852,7 @@ func (tbl *txnTable) BuildReaders(
 		} else {
 			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
 		}
-		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, Policy_CheckAll)
+		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, tombstonePolicy)
 		if err != nil {
 			return nil, err
 		}
@@ -2142,248 +2151,6 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		from,
 		to,
 		keysVector)
-}
-
-// TODO::refactor in next PR
-func (tbl *txnTable) transferDeletes(
-	ctx context.Context,
-	state *logtailreplay.PartitionState,
-	deleteObjs,
-	createObjs map[objectio.ObjectNameShort]struct{},
-) error {
-	var blks []objectio.BlockInfo
-	sid := tbl.proc.Load().GetService()
-	relData := NewEmptyBlockListRelationData()
-	relData.AppendBlockInfo(objectio.EmptyBlockInfo)
-	ds, err := tbl.buildLocalDataSource(ctx, 0, relData, TombstoneApplyPolicy(Policy_CheckCommittedS3Only))
-	if err != nil {
-		return err
-	}
-	{
-		fs, err := fileservice.Get[fileservice.FileService](
-			tbl.proc.Load().GetFileService(),
-			defines.SharedFileServiceName)
-		if err != nil {
-			return err
-		}
-		var objDataMeta objectio.ObjectDataMeta
-		var objMeta objectio.ObjectMeta
-		for name := range createObjs {
-			if obj, ok := state.GetObject(name); ok {
-				objectStats := obj.ObjectStats
-				location := obj.Location()
-				if objMeta, err = objectio.FastLoadObjectMeta(
-					ctx,
-					&location,
-					false,
-					fs); err != nil {
-					return err
-				}
-				objDataMeta = objMeta.MustDataMeta()
-				for i := 0; i < int(objectStats.BlkCnt()); i++ {
-					blkMeta := objDataMeta.GetBlockMeta(uint32(i))
-					metaLoc := blockio.EncodeLocation(
-						obj.Location().Name(),
-						obj.Location().Extent(),
-						blkMeta.GetRows(),
-						blkMeta.GetID(),
-					)
-					bid := objectio.BuildObjectBlockid(objectStats.ObjectName(), uint16(i))
-					blkInfo := objectio.BlockInfo{
-						BlockID:    *bid,
-						Appendable: obj.Appendable,
-						Sorted:     obj.Sorted,
-						MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
-						CommitTs:   obj.CommitTS,
-					}
-					if obj.HasDeltaLoc {
-						_, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
-						if ok {
-							blkInfo.CommitTs = commitTs
-						}
-					}
-					blks = append(blks, blkInfo)
-				}
-			}
-		}
-
-	}
-
-	genPkString := func(bs []byte) string {
-		if tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-			tuple, _, _, _ := types.DecodeTuple(bs)
-			return tuple.ErrString(nil)
-		} else {
-			return hex.EncodeToString(bs)
-		}
-	}
-
-	for _, entry := range tbl.getTxn().writes {
-		if entry.tableId != tbl.tableId {
-			continue
-		}
-		if entry.typ == DELETE && entry.fileName == "" {
-			pkVec := entry.bat.GetVector(1)
-			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-			beTransfered := 0
-			toTransfer := 0
-			notFound := false
-			for i, rowid := range rowids {
-				blkid, _ := rowid.Decode()
-				if _, ok := deleteObjs[*objectio.ShortName(&blkid)]; ok {
-					toTransfer++
-					f := genPkString
-					if notFound {
-						f = nil
-					}
-					newId, ok, err := tbl.readNewRowid(pkVec, i, blks, ds, f)
-					if err != nil {
-						return err
-					}
-					if ok {
-						newBlockID, _ := newId.Decode()
-						trace.GetService(sid).ApplyTransferRowID(
-							tbl.db.op.Txn().ID,
-							tbl.tableId,
-							rowids[i][:],
-							newId[:],
-							blkid[:],
-							newBlockID[:],
-							pkVec,
-							i)
-						rowids[i] = newId
-						beTransfered++
-					} else {
-						notFound = true
-						logutil.Info("transfer deletes rowid failed",
-							zap.String("oldrowid", rowids[i].ShortStringEx()),
-							zap.String("pk", genPkString(pkVec.GetBytesAt(i))))
-					}
-				}
-			}
-			if beTransfered != toTransfer {
-				var idx int
-				detail := stringifySlice(rowids, func(a any) string {
-					rid := a.(types.Rowid)
-					pk := genPkString(pkVec.GetBytesAt(idx))
-					idx++
-					return fmt.Sprintf("%s:%s", pk, rid.ShortStringEx())
-				})
-				logutil.Error("transfer deletes failed", zap.String("note", entry.note),
-					zap.Uint64("tid", tbl.tableId),
-					zap.String("tname", tbl.tableName),
-					zap.String("blks", stringifySlice(blks, func(a any) string {
-						info := a.(objectio.BlockInfo)
-						return info.String()
-					})),
-					zap.String("detail", detail))
-				return moerr.NewInternalErrorNoCtx("%v-%v transfer deletes failed %v/%v in %v blks", tbl.tableId, tbl.tableName, beTransfered, toTransfer, len(blks))
-			}
-		}
-	}
-	return nil
-}
-
-func (tbl *txnTable) readNewRowid(
-	vec *vector.Vector,
-	row int,
-	blks []objectio.BlockInfo,
-	ds engine.DataSource,
-	genPkStr func([]byte) string,
-) (types.Rowid, bool, error) {
-	var auxIdCnt int32
-	var typ plan.Type
-	var rowid types.Rowid
-	var objMeta objectio.ObjectMeta
-
-	columns := []uint16{objectio.SEQNUM_ROWID}
-	colTypes := []types.Type{objectio.RowidType}
-	tableDef := tbl.GetTableDef(context.TODO())
-	for _, col := range tableDef.Cols {
-		if col.Name == tableDef.Pkey.PkeyColName {
-			typ = col.Typ
-			columns = append(columns, uint16(col.Seqnum))
-			colTypes = append(colTypes, types.T(col.Typ.Id).ToType())
-		}
-	}
-	constExpr := getConstExpr(int32(vec.GetType().Oid),
-		rule.GetConstantValue(vec, true, uint64(row)))
-	filter, err := tbl.newPkFilter(newColumnExpr(1, typ, tableDef.Pkey.PkeyColName), constExpr)
-	if err != nil {
-		return rowid, false, err
-	}
-	columnMap := make(map[int]int)
-	auxIdCnt += plan2.AssignAuxIdForExpr(filter, auxIdCnt)
-	zms := make([]objectio.ZoneMap, auxIdCnt)
-	vecs := make([]*vector.Vector, auxIdCnt)
-	plan2.GetColumnMapByExprs([]*plan.Expr{filter}, tableDef, columnMap)
-	objFilterMap := make(map[objectio.ObjectNameShort]bool)
-	for _, blk := range blks {
-		location := blk.MetaLocation()
-		if hit, ok := objFilterMap[*location.ShortName()]; !ok {
-			if objMeta, err = objectio.FastLoadObjectMeta(
-				tbl.proc.Load().Ctx, &location, false, tbl.getTxn().engine.fs,
-			); err != nil {
-				return rowid, false, err
-			}
-			hit = colexec.EvaluateFilterByZoneMap(tbl.proc.Load().Ctx, tbl.proc.Load(), filter,
-				objMeta.MustDataMeta(), columnMap, zms, vecs)
-			objFilterMap[*location.ShortName()] = hit
-			if !hit {
-				continue
-			}
-		} else if !hit {
-			continue
-		}
-		// eval filter expr on the block
-		blkMeta := objMeta.MustDataMeta().GetBlockMeta(uint32(location.ID()))
-		if !colexec.EvaluateFilterByZoneMap(tbl.proc.Load().Ctx, tbl.proc.Load(), filter,
-			blkMeta, columnMap, zms, vecs) {
-			continue
-		}
-		// rowid + pk
-		bat, err := blockio.BlockDataRead(
-			tbl.proc.Load().Ctx, tbl.proc.Load().GetService(), &blk, ds, columns, colTypes, tbl.db.op.SnapshotTS(),
-			nil, nil, blockio.BlockReadFilter{},
-			tbl.getTxn().engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(), fileservice.Policy(0), "",
-		)
-		if err != nil {
-			return rowid, false, err
-		}
-		vec, err := colexec.EvalExpressionOnce(tbl.getTxn().proc, filter, []*batch.Batch{bat})
-		if err != nil {
-			return rowid, false, err
-		}
-		bs := vector.MustFixedCol[bool](vec)
-		for i, b := range bs {
-			if b {
-				rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
-				vec.Free(tbl.proc.Load().Mp())
-				bat.Clean(tbl.proc.Load().Mp())
-				return rowids[i], true, nil
-			}
-		}
-		if genPkStr != nil && len(blks) == 1 {
-			var idx int
-			rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
-			detail := stringifySlice(rowids, func(a any) string {
-				rid := a.(types.Rowid)
-				pk := genPkStr(bat.Vecs[1].GetBytesAt(idx))
-				idx++
-				return fmt.Sprintf("%s:%s", pk, rid.ShortStringEx())
-			})
-			logutil.Error("transfer deletes rowid not found",
-				zap.String("batContent", detail))
-		}
-
-		vec.Free(tbl.proc.Load().Mp())
-		bat.Clean(tbl.proc.Load().Mp())
-	}
-	return rowid, false, nil
-}
-
-func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, error) {
-	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
 }
 
 func (tbl *txnTable) MergeObjects(

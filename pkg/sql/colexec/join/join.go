@@ -100,11 +100,9 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, nil
 				}
 				if bat.IsEmpty() {
-					proc.PutBatch(bat)
 					continue
 				}
 				if ctr.mp == nil {
-					proc.PutBatch(bat)
 					continue
 				}
 				innerJoin.ctr.bat = bat
@@ -116,7 +114,6 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			if innerJoin.ctr.lastrow == 0 {
-				proc.PutBatch(innerJoin.ctr.bat)
 				innerJoin.ctr.bat = nil
 			} else if innerJoin.ctr.lastrow == startrow {
 				return result, moerr.NewInternalErrorNoCtx("inner join hanging")

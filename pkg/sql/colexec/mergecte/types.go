@@ -17,7 +17,6 @@ package mergecte
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -32,11 +31,12 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
 	buf        *batch.Batch
+	bats       []*batch.Batch
 	nodeCnt    int32
 	curNodeCnt int32
 	status     int32
+	last       bool
 }
 
 type MergeCTE struct {
@@ -82,7 +82,6 @@ func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err 
 
 func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if mergeCTE.ctr != nil {
-		mergeCTE.ctr.FreeMergeTypeOperator(pipelineFailed)
 		if mergeCTE.ctr.buf != nil {
 			mergeCTE.ctr.buf.Clean(proc.Mp())
 			mergeCTE.ctr.buf = nil

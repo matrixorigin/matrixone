@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"net"
 	"sync"
@@ -2917,6 +2918,11 @@ func (fp *testMysqlWriter) WriteColumnDef(ctx context.Context, column Column, i 
 	panic("implement me")
 }
 
+func (fp *testMysqlWriter) WriteColumnDefBytes(payload []byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (fp *testMysqlWriter) WriteRow() error {
 	//TODO implement me
 	panic("implement me")
@@ -3002,6 +3008,7 @@ func (fp *testMysqlWriter) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) er
 }
 
 func (fp *testMysqlWriter) ResetStatistics() {}
+func (fp *testMysqlWriter) Reset(_ *Session) {}
 
 func (fp *testMysqlWriter) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
@@ -3043,4 +3050,8 @@ func (fp *testMysqlWriter) WriteLocalInfileRequest(filename string) error {
 
 func (fp *testMysqlWriter) Flush() error {
 	return nil
+}
+
+func (fp *testMysqlWriter) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+	return nil, nil
 }
