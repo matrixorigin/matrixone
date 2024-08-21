@@ -88,4 +88,15 @@ func init() {
 		reuse.DefaultOptions[futureSlice]().
 			WithEnableChecker(),
 	)
+
+	reuse.CreatePool[streamReader](
+		func() *streamReader {
+			return &streamReader{}
+		},
+		func(s *streamReader) {
+			s.reset()
+		},
+		reuse.DefaultOptions[streamReader]().
+			WithEnableChecker(),
+	)
 }
