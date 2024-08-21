@@ -93,7 +93,8 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 		partitionIdxs := vector.MustFixedCol[int32](resBat.GetVector(3))
 		for i := 0; i < resBat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i].UnsafeGetString(area0), typs[i])
-			if err := bat.UnmarshalBinaryWithNoCopy(deltaLocs[i].GetByteSlice(area1)); err != nil {
+
+			if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
 				return input, err
 			}
 			bat.Cnt = 1
@@ -102,14 +103,13 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 			if err != nil {
 				return input, err
 			}
-			bat.Clean(proc.Mp())
+			bat.CleanOnlyData()
 		}
 	} else {
 		// If the target table is a general table
 		for i := 0; i < resBat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
-
-			if err := bat.UnmarshalBinaryWithNoCopy(deltaLocs[i].GetByteSlice(area1)); err != nil {
+			if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
 				return input, err
 			}
 			bat.Cnt = 1
@@ -117,7 +117,7 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 			if err != nil {
 				return input, err
 			}
-			bat.Clean(proc.Mp())
+			bat.CleanOnlyData()
 		}
 	}
 	// and there are another attr used to record how many rows are deleted

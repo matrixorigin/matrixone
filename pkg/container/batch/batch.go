@@ -55,6 +55,41 @@ func SetLength(bat *Batch, n int) {
 }
 
 func (bat *Batch) MarshalBinary() ([]byte, error) {
+	// --------------------------------------------------------------------
+	// | len | Zs... | len | Vecs... | len | Attrs... | len | AggInfos... |
+	// --------------------------------------------------------------------
+	var buf bytes.Buffer
+
+	// row count.
+	rl := int64(bat.rowCount)
+	buf.Write(types.EncodeInt64(&rl))
+
+	// Vecs
+	l := int32(len(bat.Vecs))
+	buf.Write(types.EncodeInt32(&l))
+	for i := 0; i < int(l); i++ {
+		data, err := bat.Vecs[i].MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		size := int32(len(data))
+		buf.Write(types.EncodeInt32(&size))
+		buf.Write(data)
+	}
+
+	// Attrs
+	l = int32(len(bat.Attrs))
+	buf.Write(types.EncodeInt32(&l))
+	for i := 0; i < int(l); i++ {
+		size := int32(len(bat.Attrs[i]))
+		buf.Write(types.EncodeInt32(&size))
+		n, _ := buf.WriteString(bat.Attrs[i])
+		if int32(n) != size {
+			panic("unexpected length for string")
+		}
+	}
+
+	// AggInfos
 	aggInfos := make([][]byte, len(bat.Aggs))
 	for i, exec := range bat.Aggs {
 		data, err := aggexec.MarshalAggFuncExec(exec)
@@ -64,66 +99,29 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 		aggInfos[i] = data
 	}
 
-	return types.Encode(&EncodeBatch{
-		rowCount:   int64(bat.rowCount),
-		Vecs:       bat.Vecs,
-		Attrs:      bat.Attrs,
-		AggInfos:   aggInfos,
-		Recursive:  bat.Recursive,
-		ShuffleIdx: bat.ShuffleIDX,
-	})
+	l = int32(len(aggInfos))
+	buf.Write(types.EncodeInt32(&l))
+	for i := 0; i < int(l); i++ {
+		size := int32(len(aggInfos[i]))
+		buf.Write(types.EncodeInt32(&size))
+		buf.Write(aggInfos[i])
+	}
+
+	buf.Write(types.EncodeInt32(&bat.Recursive))
+	buf.Write(types.EncodeInt32(&bat.ShuffleIDX))
+
+	return buf.Bytes(), nil
 }
 
 func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
-	return bat.unmarshalBinaryWithAnyMp(data, nil)
+	return bat.UnmarshalBinaryWithAnyMp(data, nil)
 }
 
-func (bat *Batch) UnmarshalBinaryWithNoCopy(data []byte) (err error) {
-	return bat.unmarshalBinaryWithAnyMpAndNoCopy(data, nil)
-}
+func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
+	bat.rowCount = int(types.DecodeInt64(data[:8]))
+	data = data[8:]
 
-func (bat *Batch) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
-	return bat.unmarshalBinaryWithAnyMp(data, mp)
-}
-
-func (bat *Batch) unmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
-	rbat := new(EncodeBatch)
-	if err = rbat.UnmarshalBinaryWithCopy(data, mp); err != nil {
-		return err
-	}
-
-	bat.Recursive = rbat.Recursive
-	bat.Cnt = 1
-	bat.rowCount = int(rbat.rowCount)
-	bat.Vecs = rbat.Vecs
-	bat.Attrs = append(bat.Attrs, rbat.Attrs...)
-
-	if len(rbat.AggInfos) > 0 {
-		bat.Aggs = make([]aggexec.AggFuncExec, len(rbat.AggInfos))
-		var aggMemoryManager aggexec.AggMemoryManager = nil
-		if mp != nil {
-			aggMemoryManager = aggexec.NewSimpleAggMemoryManager(mp)
-		}
-
-		for i, info := range rbat.AggInfos {
-			if bat.Aggs[i], err = aggexec.UnmarshalAggFuncExec(aggMemoryManager, info); err != nil {
-				return err
-			}
-		}
-	}
-	bat.ShuffleIDX = rbat.ShuffleIdx
-	return nil
-}
-
-func (bat *Batch) unmarshalBinaryWithAnyMpAndNoCopy(data []byte, mp *mpool.MPool) (err error) {
-	// types.DecodeXXX plays with raw pointer, so we make a copy of binary data
-	buf := make([]byte, len(data))
-	copy(buf, data)
-
-	bat.rowCount = int(types.DecodeInt64(buf[:8]))
-	buf = buf[8:]
-
-	l := types.DecodeInt32(buf[:4])
+	l := types.DecodeInt32(data[:4])
 	// reuse bat mem
 	firstTime := bat.Vecs == nil
 	if firstTime {
@@ -133,52 +131,46 @@ func (bat *Batch) unmarshalBinaryWithAnyMpAndNoCopy(data []byte, mp *mpool.MPool
 		}
 	}
 	vecs := bat.Vecs
-	buf = buf[4:]
+	data = data[4:]
 
 	for i := 0; i < int(l); i++ {
-		size := types.DecodeInt32(buf[:4])
-		buf = buf[4:]
+		size := types.DecodeInt32(data[:4])
+		data = data[4:]
 
-		if mp == nil {
-			if err := vecs[i].UnmarshalBinary(buf[:size]); err != nil {
-				return err
-			}
-		} else {
-			if err := vecs[i].UnmarshalBinaryWithCopy(buf[:size], mp); err != nil {
-				return err
-			}
+		if err := vecs[i].UnmarshalBinary(data[:size]); err != nil {
+			return err
 		}
 
-		buf = buf[size:]
+		data = data[size:]
 	}
 
-	l = types.DecodeInt32(buf[:4])
+	l = types.DecodeInt32(data[:4])
 	if firstTime {
 		bat.Attrs = make([]string, l)
 	}
-	buf = buf[4:]
+	data = data[4:]
 
 	for i := 0; i < int(l); i++ {
-		size := types.DecodeInt32(buf[:4])
-		buf = buf[4:]
-		bat.Attrs[i] = string(buf[:size])
-		buf = buf[size:]
+		size := types.DecodeInt32(data[:4])
+		data = data[4:]
+		bat.Attrs[i] = string(data[:size])
+		data = data[size:]
 	}
 
-	l = types.DecodeInt32(buf[:4])
+	l = types.DecodeInt32(data[:4])
 	aggs := make([][]byte, l)
 
-	buf = buf[4:]
+	data = data[4:]
 	for i := 0; i < int(l); i++ {
-		size := types.DecodeInt32(buf[:4])
-		buf = buf[4:]
-		aggs[i] = buf[:size]
-		buf = buf[size:]
+		size := types.DecodeInt32(data[:4])
+		data = data[4:]
+		aggs[i] = data[:size]
+		data = data[size:]
 	}
 
-	bat.Recursive = types.DecodeInt32(buf[:4])
-	buf = buf[4:]
-	bat.ShuffleIDX = types.DecodeInt32(buf[:4])
+	bat.Recursive = types.DecodeInt32(data[:4])
+	data = data[4:]
+	bat.ShuffleIDX = types.DecodeInt32(data[:4])
 	bat.Cnt = 1
 
 	if len(aggs) > 0 {
@@ -187,7 +179,6 @@ func (bat *Batch) unmarshalBinaryWithAnyMpAndNoCopy(data []byte, mp *mpool.MPool
 		if mp != nil {
 			aggMemoryManager = aggexec.NewSimpleAggMemoryManager(mp)
 		}
-
 		for i, info := range aggs {
 			if bat.Aggs[i], err = aggexec.UnmarshalAggFuncExec(aggMemoryManager, info); err != nil {
 				return err
