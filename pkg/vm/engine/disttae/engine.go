@@ -26,7 +26,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/panjf2000/ants/v2"
-
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -586,6 +585,8 @@ func (e *Engine) Nodes(
 		cluster.GetCNService(selector, func(c metadata.CNService) bool {
 			if c.CommitID == version.CommitID {
 				nodes = append(nodes, engine.Node{
+					// should use c.CPUTotal to set Mcpu for the compile and pipeline.
+					// ref: https://github.com/matrixorigin/matrixone/issues/17935
 					Mcpu: ncpu,
 					Id:   c.ServiceID,
 					Addr: c.PipelineServiceAddress,

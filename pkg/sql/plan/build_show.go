@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"go/constant"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1055,10 +1054,10 @@ func buildShowPublication(stmt *tree.ShowPublications, ctx CompilerContext) (*Pl
 	like := stmt.Like
 	if like != nil {
 		right, ok := like.Right.(*tree.NumVal)
-		if !ok || right.Value.Kind() != constant.String {
+		if !ok || right.Kind() != tree.Str {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "like clause must be a string")
 		}
-		sql += fmt.Sprintf(" where pub_name like '%s' order by pub_name;", constant.StringVal(right.Value))
+		sql += fmt.Sprintf(" where pub_name like '%s' order by pub_name;", right.String())
 	} else {
 		sql += " order by update_time desc, created_time desc;"
 	}

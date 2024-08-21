@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"sync"
 
@@ -522,4 +523,8 @@ func (ip *internalProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) 
 
 func (ip *internalProtocol) WriteLocalInfileRequest(filename string) error {
 	return nil
+}
+
+func (ip *internalProtocol) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+	return nil, nil
 }

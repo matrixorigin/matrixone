@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"go/constant"
 	"os"
 	"strings"
 	"testing"
@@ -39,7 +38,7 @@ func BenchmarkInsert(b *testing.B) {
 	targetType.Width = 1024
 
 	originStr := "0123456789"
-	testExpr := tree.NewNumValWithType(constant.MakeString(originStr), originStr, false, tree.P_char)
+	testExpr := tree.NewNumVal(originStr, originStr, false, tree.P_char)
 	targetT := &plan.Expr{
 		Typ: targetType,
 		Expr: &plan.Expr_T{

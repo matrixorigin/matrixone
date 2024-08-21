@@ -363,6 +363,7 @@ func doTransferRowids(
 		return
 	}
 	relData := NewEmptyBlockListRelationData()
+	relData.AppendBlockInfo(objectio.EmptyBlockInfo) // read partition insert
 	for i, end := 0, blockList.Len(); i < end; i++ {
 		relData.AppendBlockInfo(*blockList.Get(i))
 	}

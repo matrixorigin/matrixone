@@ -192,3 +192,7 @@ func (m *MemCache) DeletePaths(
 	m.cache.DeletePaths(ctx, paths)
 	return nil
 }
+
+func (m *MemCache) Evict(done chan int64) {
+	m.cache.Evict(done)
+}

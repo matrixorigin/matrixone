@@ -432,12 +432,16 @@ func (c *Compile) printPipeline() {
 }
 */
 // run once
-func (c *Compile) runOnce() error {
+func (c *Compile) runOnce(retryOnMetadata *bool) error {
 	var wg sync.WaitGroup
 	err := c.lockMetaTables()
 	if err != nil {
+		if c.isRetryErr(err) {
+			*retryOnMetadata = true
+		}
 		return err
 	}
+
 	err = c.lockTable()
 	if err != nil {
 		return err
@@ -2913,7 +2917,7 @@ func (c *Compile) compilePreInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) (
 func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	// Determine whether to Write S3
 	toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) >
-		float64(DistributedThreshold) || c.anal.qry.LoadTag
+		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
 	if toWriteS3 {
 		c.proc.Debugf(c.proc.Ctx, "insert of '%s' write s3\n", c.sql)

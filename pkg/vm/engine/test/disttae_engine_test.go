@@ -38,6 +38,7 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -542,10 +543,10 @@ func TestColumnsTransfer(t *testing.T) {
 	defer p.Close()
 	tae := p.T.GetDB()
 
-	schema := catalog2.MockSchemaAll(8188, -1)
+	schema := catalog2.MockSchemaAll(8000, -1)
 	schema.Name = "test"
 
-	schema2 := catalog2.MockSchemaAll(10, -1)
+	schema2 := catalog2.MockSchemaAll(200, -1)
 	schema2.Name = "todrop"
 
 	txnop := p.StartCNTxn()
@@ -584,6 +585,145 @@ func TestColumnsTransfer(t *testing.T) {
 	require.NoError(t, txnop.GetWorkspace().IncrStatementID(ctx, true))
 	require.NoError(t, txnop.Commit(p.Ctx))
 
+}
+
+func TestInProgressTransfer(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	dir := testutil.MakeDefaultTestPath("partition_state", t)
+	opts.Fs = objectio.TmpNewSharedFileservice(context.Background(), dir)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	tae := p.T.GetDB()
+	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker.Start()
+	defer worker.Stop()
+
+	var did, tid uint64
+	var theRow *batch.Batch
+	{
+		schema := catalog2.MockSchemaAll(10, 3)
+		schema.Name = "test"
+		// create and append data
+		txnop := p.StartCNTxn()
+		_, rel := p.CreateDBAndTable(txnop, "db", schema)
+		did, tid = rel.GetDBID(p.Ctx), rel.GetTableID(p.Ctx)
+		bat := catalog2.MockBatch(schema, 10)
+		theRow = containers.ToCNBatch(bat.CloneWindow(7, 1, p.Mp))
+		require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat)))
+		require.NoError(t, txnop.Commit(p.Ctx))
+		require.Nil(t, p.D.SubscribeTable(p.Ctx, did, tid, false))
+	}
+
+	toTransferTxn1 := p.StartCNTxn()
+	toTransferTxn2 := p.StartCNTxn()
+	{
+		tnTxn, _ := tae.StartTxn(nil)
+		userDB, _ := tnTxn.GetDatabaseByID(did)
+		userTbl, _ := userDB.GetRelationByID(tid)
+		id, row, err := userTbl.GetByFilter(p.Ctx, handle.NewEQFilter(int64(7)))
+		require.NoError(t, err)
+		rowid := *objectio.NewRowid(&id.BlockID, row)
+
+		vec1 := vector.NewVec(types.T_Rowid.ToType())
+		require.NoError(t, vector.AppendFixed(vec1, rowid, false, p.Mp))
+		vec2 := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(vec2, int64(7), false, p.Mp))
+
+		delBatch := batch.NewWithSize(2)
+		delBatch.SetRowCount(1)
+		delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+		delBatch.Vecs[0] = vec1
+		delBatch.Vecs[1] = vec2
+
+		{
+			db, err := p.D.Engine.Database(p.Ctx, "db", toTransferTxn1)
+			require.NoError(t, err)
+			rel, err := db.Relation(p.Ctx, "test", nil)
+			require.NoError(t, err)
+			require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+			require.NoError(t, rel.Write(p.Ctx, theRow))
+		}
+
+		{
+			db, err := p.D.Engine.Database(p.Ctx, "db", toTransferTxn2)
+			require.NoError(t, err)
+			rel, err := db.Relation(p.Ctx, "test", nil)
+			require.NoError(t, err)
+			require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+		}
+	}
+
+	{
+		// first flush, with a parallel updating
+		tnFlushTxn, _ := tae.StartTxn(nil)
+		userDB, _ := tnFlushTxn.GetDatabaseByID(did)
+		userTbl, _ := userDB.GetRelationByID(tid)
+
+		it := userTbl.MakeObjectIt()
+		it.Next()
+		firstEntry := it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+		firstEntry.GetObjectData().FreezeAppend()
+		t.Log(firstEntry.ID().ShortStringEx())
+		task1, err := jobs.NewFlushTableTailTask(
+			tasks.WaitableCtx, tnFlushTxn,
+			[]*catalog2.ObjectEntry{firstEntry},
+			tae.Runtime, tnFlushTxn.GetStartTS())
+		require.NoError(t, err)
+		worker.SendOp(task1)
+		err = task1.WaitDone(context.Background())
+		require.NoError(t, err)
+
+		{
+			// update during flushing, create a new aobject
+			tnDelTxn, _ := tae.StartTxn(nil)
+			userDB, _ := tnDelTxn.GetDatabaseByID(did)
+			userTbl, _ := userDB.GetRelationByID(tid)
+			require.NoError(t, userTbl.UpdateByFilter(p.Ctx, handle.NewEQFilter(int64(7)), 0, int8(42), false))
+			require.NoError(t, tnDelTxn.Commit(p.Ctx))
+		}
+
+		require.NoError(t, tnFlushTxn.Commit(p.Ctx))
+	}
+
+	{
+		// trigger first transfer, read the memory delete and also find the the pk in memroy
+		time.Sleep(200 * time.Millisecond)
+		ctx := context.WithValue(p.Ctx, disttae.UT_ForceTransCheck{}, 42)
+		require.NoError(t, toTransferTxn1.GetWorkspace().IncrStatementID(ctx, true))
+		require.NoError(t, toTransferTxn1.Commit(p.Ctx))
+	}
+
+	{
+		// flush the second abobject
+		tnFlushTxn2, _ := tae.StartTxn(nil)
+		userDB, _ := tnFlushTxn2.GetDatabaseByID(did)
+		userTbl, _ := userDB.GetRelationByID(tid)
+		it := userTbl.MakeObjectIt()
+		var entry *catalog2.ObjectEntry
+		for it.Next() {
+			entry = it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+			if entry.IsAppendable() && !entry.HasDropCommitted() {
+				break
+			}
+		}
+		task1, err := jobs.NewFlushTableTailTask(
+			tasks.WaitableCtx, tnFlushTxn2,
+			[]*catalog2.ObjectEntry{entry},
+			tae.Runtime, tnFlushTxn2.GetStartTS())
+		require.NoError(t, err)
+		worker.SendOp(task1)
+		err = task1.WaitDone(context.Background())
+		require.NoError(t, err)
+		require.NoError(t, tnFlushTxn2.Commit(p.Ctx))
+	}
+
+	{
+		// trigge the second transfer, find the pk in the first row of the latest nobject
+		time.Sleep(200 * time.Millisecond)
+		ctx := context.WithValue(p.Ctx, disttae.UT_ForceTransCheck{}, 42)
+		require.NoError(t, toTransferTxn2.GetWorkspace().IncrStatementID(ctx, true))
+		require.NoError(t, toTransferTxn2.Commit(p.Ctx))
+	}
 }
 
 func TestCacheGC(t *testing.T) {

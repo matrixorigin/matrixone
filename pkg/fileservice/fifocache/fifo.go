@@ -116,7 +116,7 @@ func (c *Cache[K, V]) Set(key K, value V, size int64) {
 	c.queue1.enqueue(item)
 	c.used1 += size
 	if c.used1+c.used2 > c.capacity() {
-		c.evict()
+		c.evict(nil)
 	}
 }
 
@@ -142,13 +142,18 @@ func (c *Cache[K, V]) Delete(key K) {
 	// we don't update queues
 }
 
-func (c *Cache[K, V]) evict() {
-	for c.used1+c.used2 > c.capacity() {
-		if c.used1 > c.capacity1() {
+func (c *Cache[K, V]) evict(done chan int64) {
+	var target int64
+	var target1 int64
+	for target, target1 = c.capacity(), c.capacity1(); c.used1+c.used2 > target; target, target1 = c.capacity(), c.capacity1() {
+		if c.used1 > target1 {
 			c.evict1()
 		} else {
 			c.evict2()
 		}
+	}
+	if done != nil {
+		done <- target
 	}
 }
 
@@ -205,4 +210,13 @@ func (c *Cache[K, V]) evict2() {
 			return
 		}
 	}
+}
+
+func (c *Cache[K, V]) Evict(done chan int64) {
+	if done != nil && cap(done) < 1 {
+		panic("should be buffered chan")
+	}
+	c.queueLock.Lock()
+	defer c.queueLock.Unlock()
+	c.evict(done)
 }
