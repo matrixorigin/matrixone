@@ -266,10 +266,15 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
+<<<<<<< HEAD
 			Typs:            ts,
 			NeedHashMap:     true,
 			Conditions:      cs[1],
 			NeedMergedBatch: true,
+=======
+			NeedHashMap: true,
+			Conditions:  cs[1],
+>>>>>>> 143c670761c78c40d30563b42019ea533fdf4db5
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
@@ -278,8 +283,12 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 				},
 			},
 			NeedAllocateSels: true,
+<<<<<<< HEAD
 			JoinMapTag:       tag,
 			JoinMapRefCnt:    1,
+=======
+			NeedBatches:      true,
+>>>>>>> 143c670761c78c40d30563b42019ea533fdf4db5
 		},
 		resultBatch: resultBatch,
 	}

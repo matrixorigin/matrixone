@@ -226,8 +226,11 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
+<<<<<<< HEAD
 			Typs:            ts,
 			NeedMergedBatch: true,
+=======
+>>>>>>> 143c670761c78c40d30563b42019ea533fdf4db5
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
