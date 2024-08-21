@@ -700,5 +700,4 @@ var functionIdRegister = map[string]int32{
 	"bitmap_count":         BITMAP_COUNT,
 	"bitmap_construct_agg": BITMAP_CONSTRUCT_AGG,
 	"bitmap_or_agg":        BITMAP_OR_AGG,
-
 }
