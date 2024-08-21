@@ -6478,40 +6478,6 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
-
-	// function `stage_list`
-	// confused function.
-	{
-		functionId: STAGE_LIST,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				volatile:   true,
-				args:       []types.T{types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_text.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return StageList
-				},
-			},
-			{
-				overloadId: 1,
-				volatile:   true,
-				args:       []types.T{types.T_char},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_text.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return StageList
-				},
-			},
-		},
-	},
 }
 
 func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) (err error) {

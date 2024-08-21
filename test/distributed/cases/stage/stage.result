@@ -11,24 +11,24 @@ invalid configuration: URL protocol only supports stage://, s3:// and file:///
 CREATE STAGE if not exists my_ext_stage URL='s3://bucket/files/';
 SELECT * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-112    my_ext_stage    s3://bucket/files/        disabled    2024-08-07 10:35:26    
-113    my_sub_stage    stage://my_ext_stage/a/b/c/        disabled    2024-08-07 10:35:26    
+22    my_ext_stage    s3://bucket/files/        disabled    2024-08-21 10:45:44    
+23    my_sub_stage    stage://my_ext_stage/a/b/c/        disabled    2024-08-21 10:45:44    
 CREATE STAGE my_ext_stage1 URL='s3://bucket1/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
 CREATE STAGE my_ext_stage2 URL='s3://bucket2/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
 SELECT * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-112    my_ext_stage    s3://bucket/files/        disabled    2024-08-07 10:35:26    
-113    my_sub_stage    stage://my_ext_stage/a/b/c/        disabled    2024-08-07 10:35:26    
-114    my_ext_stage1    s3://bucket1/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-07 10:35:26    
-115    my_ext_stage2    s3://bucket2/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-07 10:35:26    
+22    my_ext_stage    s3://bucket/files/        disabled    2024-08-21 10:45:44    
+23    my_sub_stage    stage://my_ext_stage/a/b/c/        disabled    2024-08-21 10:45:44    
+24    my_ext_stage1    s3://bucket1/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-21 10:45:44    
+25    my_ext_stage2    s3://bucket2/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-21 10:45:44    
 CREATE STAGE my_ext_stage3 URL='s3://bucket3/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
 SELECT * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-112    my_ext_stage    s3://bucket/files/        disabled    2024-08-07 10:35:26    
-113    my_sub_stage    stage://my_ext_stage/a/b/c/        disabled    2024-08-07 10:35:26    
-114    my_ext_stage1    s3://bucket1/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-07 10:35:26    
-115    my_ext_stage2    s3://bucket2/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-07 10:35:26    
-116    my_ext_stage3    s3://bucket3/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-07 10:35:26    
+22    my_ext_stage    s3://bucket/files/        disabled    2024-08-21 10:45:44    
+23    my_sub_stage    stage://my_ext_stage/a/b/c/        disabled    2024-08-21 10:45:44    
+24    my_ext_stage1    s3://bucket1/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-21 10:45:44    
+25    my_ext_stage2    s3://bucket2/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-21 10:45:44    
+26    my_ext_stage3    s3://bucket3/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-21 10:45:44    
 ALTER STAGE my_ext_stage4 SET URL='s3://bucket4/files2/';
 internal error: the stage my_ext_stage4 not exists
 ALTER STAGE if exists my_ext_stage4 SET URL='s3://bucket4/files2/';
@@ -47,14 +47,14 @@ DROP STAGE my_sub_stage;
 CREATE STAGE my_ext_stage URL='s3://bucket/files/';
 SELECT * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-117    my_ext_stage    s3://bucket/files/        disabled    2024-08-07 10:35:26    
+27    my_ext_stage    s3://bucket/files/        disabled    2024-08-21 10:45:44    
 create account default_1 ADMIN_NAME admin IDENTIFIED BY '111111';
 CREATE STAGE my_ext_stage1 URL='s3://bucket1/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
 CREATE STAGE my_ext_stage2 URL='s3://bucket2/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
 SELECT * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    my_ext_stage1    s3://bucket1/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-07 10:35:26    
-2    my_ext_stage2    s3://bucket2/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-07 10:35:26    
+1    my_ext_stage1    s3://bucket1/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-21 10:45:45    
+2    my_ext_stage2    s3://bucket2/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-21 10:45:45    
 DROP STAGE my_ext_stage1;
 DROP STAGE my_ext_stage2;
 drop account default_1;
@@ -128,7 +128,7 @@ aws_stage    s3://bucket2/d/e/f/    ENABLED
 alter stage if exists aws_stage set CREDENTIALS={ 'AWS_REGION' = 'us-east-1'};
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-123    aws_stage    s3://bucket2/d/e/f/    AWS_REGION=us-east-1    enabled    2024-08-07 10:35:26    
+33    aws_stage    s3://bucket2/d/e/f/    AWS_REGION=us-east-1    enabled    2024-08-21 10:45:46    
 alter stage aws_stage set comment='comment1';
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
@@ -272,11 +272,11 @@ R_COMMENT    VARCHAR(152)
 select count(*) from stage_ext_table;
 count(*)
 35
-select count(stage_list('stage://sub_local_stage/'));
-count(stage_list(stage://sub_local_stage/))
+select count(*) from stage_list('stage://sub_local_stage/') as f;
+count(*)
 8
-select count(stage_list('stage://sub_local_stage/stage_table*.csv'));
-count(stage_list(stage://sub_local_stage/stage_table*.csv))
+select count(*) from stage_list('stage://sub_local_stage/stage_table*.csv') as f;
+count(*)
 7
 drop stage local_stage;
 drop stage sub_local_stage;

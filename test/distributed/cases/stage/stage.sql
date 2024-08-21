@@ -235,10 +235,10 @@ R_COMMENT    VARCHAR(152)
 select count(*) from stage_ext_table;
 
 -- list the stage directory
-select count(stage_list('stage://sub_local_stage/'));
+select count(*) from stage_list('stage://sub_local_stage/') as f;
 
 -- list the stage directory with wildcard
-select count(stage_list('stage://sub_local_stage/stage_table*.csv'));
+select count(*) from stage_list('stage://sub_local_stage/stage_table*.csv') as f;
 
 drop stage local_stage;
 drop stage sub_local_stage;
