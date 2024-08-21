@@ -598,7 +598,7 @@ func restoreToAccount(
 					return
 				}
 			}
-			getLogger(sid).Info(fmt.Sprintf("[%s]skip drop db: %v", snapshotName, dbName))
+			// getLogger(sid).Info(fmt.Sprintf("[%s]skip drop db: %v", snapshotName, dbName))
 			continue
 		}
 
@@ -1838,9 +1838,13 @@ func checkPubExistOrNot(
 		subInfo.PubName)
 	if err != nil {
 		return false, err
-	} else if !isPubValid {
-		return false, moerr.NewInternalError(ctx, "there is no publication %s", subInfo.PubName)
 	}
+
+	if !isPubValid {
+		getLogger(sid).Info(fmt.Sprintf("[%s] pub %s is not valid", snapshotName, subInfo.PubName))
+		return false, nil
+	}
+
 	return true, nil
 }
 
@@ -1904,7 +1908,7 @@ func checkSubscriptionExist(
 		return
 	}
 
-	getLogger(sid).Info(fmt.Sprintf("[%s] check subscription exist or not: get account id sql: %s", pubName, sql))
+	getLogger(sid).Info(fmt.Sprintf("check subscription %s exist or not: get account id sql: %s", pubName, sql))
 	bh.ClearExecResultSet()
 	if err = bh.Exec(newCtx, sql); err != nil {
 		return
@@ -1915,22 +1919,23 @@ func checkSubscriptionExist(
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(newCtx, "there is no publication account %s", pubAccountName)
-		return
+		getLogger(sid).Error(fmt.Sprintf("check subscription %s exist or not: get account id failed", pubName))
+		return false, nil
 	}
 	if accId, err = erArray[0].GetInt64(newCtx, 0, 0); err != nil {
-		return
+		getLogger(sid).Error(fmt.Sprintf("check subscription %s exist or not: get account id failed", pubName))
+		return false, nil
 	}
 
 	//check the publication is already exist or not
 	newCtx = defines.AttachAccountId(ctx, uint32(accId))
 	pubInfo, err := getPubInfo(newCtx, bh, pubName)
 	if err != nil {
-		return
+		getLogger(sid).Error(fmt.Sprintf("check subscription %s exist or not: get pub info failed", pubName))
+		return false, nil
 	}
 	if pubInfo == nil {
-		err = moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
-		return
+		return false, nil
 	}
 
 	return true, nil
