@@ -50,18 +50,11 @@ type container struct {
 }
 
 type ShuffleBuild struct {
-<<<<<<< HEAD
-	ctr container
-	// need to generate a push-down filter expression
-	NeedExpr         bool
-=======
-	ctr              *container
->>>>>>> 143c670761c78c40d30563b42019ea533fdf4db5
-	HashOnPK         bool
-	NeedBatches      bool
-	NeedAllocateSels bool
-	Conditions       []*plan.Expr
-
+	ctr               container
+	HashOnPK          bool
+	NeedBatches       bool
+	NeedAllocateSels  bool
+	Conditions        []*plan.Expr
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
 	JoinMapTag        int32
 	ShuffleIdx        int32

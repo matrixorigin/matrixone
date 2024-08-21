@@ -284,13 +284,9 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 				},
 			},
 			NeedAllocateSels: true,
-<<<<<<< HEAD
-			NeedMergedBatch:  true,
+			NeedBatches:      true,
 			JoinMapTag:       tag,
 			JoinMapRefCnt:    1,
-=======
-			NeedBatches:      true,
->>>>>>> 143c670761c78c40d30563b42019ea533fdf4db5
 		},
 		resultBatch: resultBatch,
 	}

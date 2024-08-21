@@ -54,13 +54,7 @@ type container struct {
 }
 
 type HashBuild struct {
-<<<<<<< HEAD
-	ctr container
-	// need to generate a push-down filter expression
-	NeedExpr          bool
-=======
-	ctr               *container
->>>>>>> 143c670761c78c40d30563b42019ea533fdf4db5
+	ctr               container
 	NeedHashMap       bool
 	HashOnPK          bool
 	NeedBatches       bool
