@@ -230,7 +230,8 @@ message ReadParam {
     MergeObjectsParam              MergeObjectsParam             = 7 [(gogoproto.nullable) = false];
     KeyParam                       KeyParam                      = 8 [(gogoproto.nullable) = false];
     ReaderParam                    ReaderParam                   = 9 [(gogoproto.nullable) = false];
-    PrimaryKeysMayBeModifiedParam   PrimaryKeysMayBeModifiedParam  = 10 [(gogoproto.nullable) = false];
+    PrimaryKeysMayBeModifiedParam  PrimaryKeysMayBeModifiedParam = 10 [(gogoproto.nullable) = false];
+    ReadDataParam                  ReadDataParam                 = 11 [(gogoproto.nullable) = false];
 }
 
 message TxnTable {
@@ -278,4 +279,17 @@ message PrimaryKeysMayBeModifiedParam {
 message MergeObjectsParam {
     repeated bytes objstats  = 1;
     uint32 targetObjSize     = 3;
+}
+
+message ReadDataParam {
+    repeated bytes Blocks          = 1;
+    repeated bytes TombstoneBlocks = 2;
+    bytes          Filter          = 3;
+    bytes          Offset          = 4;
+}
+
+message ReadDataResult {
+    bytes Offset = 1;
+    bytes Data   = 2;
+    bool  Last   = 3;
 }

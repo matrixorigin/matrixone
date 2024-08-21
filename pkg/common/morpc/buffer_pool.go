@@ -86,6 +86,15 @@ func (b *Buffer) EncodeInt(
 	return b.buf.RawSlice(idx, b.buf.GetWriteIndex())
 }
 
+func (b *Buffer) AllocateBytes(
+	n int,
+) []byte {
+	b.buf.Grow(n)
+	idx := b.buf.GetWriteIndex()
+	b.buf.SetWriteIndex(idx + n)
+	return b.buf.RawSlice(idx, b.buf.GetWriteIndex())
+}
+
 func (b *Buffer) Mark() {
 	b.markIdx = b.buf.GetWriteIndex()
 }

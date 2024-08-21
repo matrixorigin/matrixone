@@ -379,6 +379,41 @@ func HandleShardingReadVisibleObjectStats(
 	return buffer.EncodeBytes(b.Bytes()), nil
 }
 
+// HandleShardingReadData handles sharding read data
+func HandleShardingReadData(
+	ctx context.Context,
+	s shard.TableShard,
+	engine engine.Engine,
+	param shard.ReadParam,
+	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
+) ([]byte, error) {
+	// tbl, err := getTxnTable(
+	// 	ctx,
+	// 	param,
+	// 	engine,
+	// )
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// offset := param.ReadDataParam.Offset
+	// blocks := param.ReadDataParam.Blocks
+	// tombstoneBlocks := param.ReadDataParam.TombstoneBlocks
+	// filter := param.ReadDataParam.Filter
+
+	// TODO(lofi): do read data and return shard.ReadDataResult
+	var result shard.ReadDataResult
+
+	n := result.ProtoSize()
+	data := buffer.AllocateBytes(n)
+	_, err := result.MarshalTo(data)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
 func getTxnTable(
 	ctx context.Context,
 	param shard.ReadParam,

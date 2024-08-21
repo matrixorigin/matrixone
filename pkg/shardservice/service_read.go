@@ -159,14 +159,6 @@ func (s *service) Read(
 	return err
 }
 
-func (s *service) NewStreamReader(
-	ctx context.Context,
-	req ReadRequest,
-	opts ReadOptions,
-) (StreamReader, error) {
-	return nil, nil
-}
-
 func (s *service) doRead(
 	ctx context.Context,
 	shard pb.TableShard,
@@ -197,25 +189,4 @@ func (s *service) doRead(
 		readAt,
 		buffer,
 	)
-}
-
-type streamReader struct {
-	ctx  context.Context
-	req  ReadRequest
-	opts ReadOptions
-
-	// offset is used to keep track of where the data has been read.
-	offset []byte
-}
-
-func (r streamReader) Read() (bool, []byte, error) {
-	return false, nil, nil
-}
-
-func (r streamReader) TypeName() string {
-	return "sharding.streamReader"
-}
-
-func (r *streamReader) reset() {
-	*r = streamReader{}
 }

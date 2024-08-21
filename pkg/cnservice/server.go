@@ -768,6 +768,7 @@ func (s *service) initShardService() {
 			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
 			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
 			shardservice.ReadVisibleObjectStats:       disttae.HandleShardingReadVisibleObjectStats,
+			shardservice.ReadData:                     disttae.HandleShardingReadData,
 		},
 		s.storeEngine,
 	)

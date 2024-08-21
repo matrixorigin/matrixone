@@ -69,8 +69,6 @@ type ShardService interface {
 	Config() Config
 	// Read read data from shards.
 	Read(ctx context.Context, req ReadRequest, opts ReadOptions) error
-	// NewStreamReader creates a new stream reader for read the shard data.
-	NewStreamReader(ctx context.Context, req ReadRequest, opts ReadOptions) (StreamReader, error)
 	// HasLocalReplica returns whether the shard has a local replica.
 	HasLocalReplica(tableID, shardID uint64) bool
 	// HasAllLocalReplicas returns whether all shards of the table have local replicas.
@@ -142,11 +140,6 @@ type ShardStorage interface {
 	WaitLogAppliedAt(ctx context.Context, ts timestamp.Timestamp) error
 	// Read read data with the given timestamp
 	Read(ctx context.Context, shard pb.TableShard, method int, param pb.ReadParam, ts timestamp.Timestamp, buffer *morpc.Buffer) ([]byte, error)
-}
-
-type StreamReader interface {
-	Read() (bool, []byte, error)
-	Close()
 }
 
 var (

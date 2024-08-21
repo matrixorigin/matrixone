@@ -869,3 +869,8 @@ type mergeReader struct {
 
 type emptyReader struct {
 }
+
+type ShardingDataReader interface {
+	Read() (bool, []byte, error)
+	Close()
+}
