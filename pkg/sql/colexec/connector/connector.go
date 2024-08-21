@@ -74,7 +74,7 @@ func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	sendBat.Aggs = result.Batch.Aggs
 	result.Batch.Aggs = nil
-	sendBat.SetRowCount(sendBat.Vecs[0].Length())
+	sendBat.SetRowCount(result.Batch.RowCount())
 
 	// there is no need to log anything here.
 	// because the context is already canceled means the pipeline closed normally.
