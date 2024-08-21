@@ -3712,9 +3712,6 @@ func (c *Compile) determinExpandRanges(n *plan.Node) bool {
 		return true
 	}
 
-	if n.AggList != nil { //need to handle partial results
-		return true
-	}
 	return false
 }
 
