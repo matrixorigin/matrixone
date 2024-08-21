@@ -438,6 +438,7 @@ func (c *Compile) runOnce() error {
 	if err != nil {
 		return err
 	}
+
 	err = c.lockTable()
 	if err != nil {
 		return err

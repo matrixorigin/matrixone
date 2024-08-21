@@ -273,7 +273,6 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 			},
 		},
 		barg: &hashbuild.HashBuild{
-			Typs:        ts,
 			NeedHashMap: true,
 			Conditions:  cs[1],
 			OperatorBase: vm.OperatorBase{
@@ -284,7 +283,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 				},
 			},
 			NeedAllocateSels: true,
-			NeedMergedBatch:  true,
+			NeedBatches:      true,
 		},
 		marg: &merge.Merge{},
 	}
