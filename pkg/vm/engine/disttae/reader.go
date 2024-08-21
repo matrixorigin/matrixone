@@ -228,12 +228,12 @@ func (r *mergeReader) Read(
 		}
 		if isEnd {
 			r.rds = r.rds[1:]
-			continue
+		} else {
+			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+				logutil.Debug(testutil.OperatorCatchBatch("merge reader", bat))
+			}
+			return false, nil
 		}
-		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-			logutil.Debug(testutil.OperatorCatchBatch("merge reader", bat))
-		}
-		return false, nil
 	}
 	return true, nil
 }

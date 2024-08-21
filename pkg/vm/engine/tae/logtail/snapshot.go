@@ -481,12 +481,12 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, sid string, fs fileserv
 				}
 
 				bat := buildBatch()
+				defer bat.Clean(mp)
 				err := blockio.BlockDataRead(ctx, sid, &blk, ds, idxes, colTypes, checkpointTS.ToTimestamp(),
 					nil, nil, blockio.BlockReadFilter{}, fs, mp, nil, fileservice.Policy(0), "", bat)
 				if err != nil {
 					return nil, err
 				}
-				defer bat.Clean(mp)
 				tsList := vector.MustFixedCol[int64](bat.Vecs[0])
 				typeList := vector.MustFixedCol[types.Enum](bat.Vecs[1])
 				acctList := vector.MustFixedCol[uint64](bat.Vecs[2])
