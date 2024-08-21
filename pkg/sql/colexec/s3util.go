@@ -322,13 +322,16 @@ func getStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
 	return
 }
 
+func (w *S3Writer) FlushTailBatch(proc *process.Process) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
+	if w.batSize >= TagS3SizeForMOLogger {
+		return w.SortAndSync(proc)
+	}
+	return nil, nil, w.writeBatsToBlockInfoBat(proc.GetMPool())
+}
+
 func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
 	if len(w.batches) == 0 {
 		return nil, nil, nil
-	}
-
-	if w.batSize < TagS3SizeForMOLogger {
-		return nil, nil, w.writeBatsToBlockInfoBat(proc.GetMPool())
 	}
 
 	defer func() {
