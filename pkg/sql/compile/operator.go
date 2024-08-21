@@ -599,7 +599,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		return op
 	case vm.TableScan:
 		t := sourceOp.(*table_scan.TableScan)
-		op := table_scan.NewArgument()
+		op := table_scan.NewArgument().WithTypes(t.Types)
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -2179,9 +2179,9 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 }
 
 func constructTableScan(n *plan.Node) *table_scan.TableScan {
-	types := make([]types.Type, len(n.TableDef.Cols))
+	types := make([]plan.Type, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
-		types[j] = plan2.MakeTypeByPlan2Type(col.GetTyp())
+		types[j] = col.Typ
 	}
 	return table_scan.NewArgument().WithTypes(types)
 }

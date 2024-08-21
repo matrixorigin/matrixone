@@ -15,8 +15,9 @@
 package group
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
@@ -186,7 +187,7 @@ func TestGroupOperatorBehavior2(t *testing.T) {
 
 		OperatorArgument := &Group{
 			NeedEval: true,
-			Exprs: []*plan.Expr{newColumnExpression(0, types.T_int64.ToType())},
+			Exprs:    []*plan.Expr{newColumnExpression(0, types.T_int64.ToType())},
 			Aggs: []aggexec.AggFuncExecExpression{
 				aggexec.MakeAggFunctionExpression(
 					function.AggSumOverloadID, false,
@@ -259,7 +260,7 @@ func TestGroupOperatorBehavior2(t *testing.T) {
 
 		OperatorArgument := &Group{
 			NeedEval: false,
-			Exprs: []*plan.Expr{newColumnExpression(0, types.T_int64.ToType())},
+			Exprs:    []*plan.Expr{newColumnExpression(0, types.T_int64.ToType())},
 			Aggs: []aggexec.AggFuncExecExpression{
 				aggexec.MakeAggFunctionExpression(
 					function.AggSumOverloadID, false,

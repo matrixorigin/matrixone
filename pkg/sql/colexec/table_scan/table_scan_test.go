@@ -74,11 +74,14 @@ func TestCall(t *testing.T) {
 	proc.Ctx = ctx
 	proc.Base.TxnOperator = txnOperator
 
+	typ1 := types.T_Rowid.ToType()
+	typ2 := types.T_uint64.ToType()
+	typ3 := types.T_varbinary.ToType()
 	reader := getReader(t, ctrl)
 	arg := &TableScan{
 		Reader: reader,
 		Attrs:  []string{catalog.Row_ID, "int_col", "varchar_col"},
-		Types:  []types.Type{types.T_Rowid.ToType(), types.T_uint64.ToType(), types.T_varbinary.ToType()},
+		Types:  []plan.Type{plan.MakePlan2Type(&typ1), plan.MakePlan2Type(&typ2), plan.MakePlan2Type(&typ3)},
 	}
 	err := arg.Prepare(proc)
 	require.NoError(t, err)

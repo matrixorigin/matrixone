@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -49,7 +50,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 		tableScan.ctr.buf = batch.NewWithSize(len(tableScan.Types))
 		tableScan.ctr.buf.Attrs = append(tableScan.ctr.buf.Attrs, tableScan.Attrs...)
 		for i := range tableScan.Types {
-			tableScan.ctr.buf.Vecs[i] = vector.NewVec(tableScan.Types[i])
+			tableScan.ctr.buf.Vecs[i] = vector.NewVec(plan.MakeTypeByPlan2Type(tableScan.Types[i]))
 		}
 	}
 	return
@@ -144,6 +145,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 	anal.Output(retBatch, tableScan.IsLast)
-	return vm.CallResult{Batch: retBatch}, nil
+	return vm.CallResult{Batch: retBatch, Status: vm.ExecNext}, nil
 
 }

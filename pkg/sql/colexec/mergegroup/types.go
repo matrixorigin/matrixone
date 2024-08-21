@@ -39,19 +39,19 @@ const (
 )
 
 type container struct {
-	state     int
+	state int
 
 	// should use hash map or not and the hash map type.
-	typ       int
+	typ int
 
 	// hash map related.
-	hashKeyWidth int
-	groupByCol   int
+	hashKeyWidth   int
+	groupByCol     int
 	keyNullability bool
-	intHashMap *hashmap.IntHashMap
-	strHashMap *hashmap.StrHashMap
-	inserted  []uint8
-	zInserted []uint8
+	intHashMap     *hashmap.IntHashMap
+	strHashMap     *hashmap.StrHashMap
+	inserted       []uint8
+	zInserted      []uint8
 
 	bat *batch.Batch
 }

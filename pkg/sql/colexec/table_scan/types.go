@@ -17,8 +17,8 @@ package table_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -39,7 +39,7 @@ type TableScan struct {
 	Reader         engine.Reader
 	// letter case: origin
 	Attrs   []string
-	Types   []types.Type
+	Types   []plan.Type
 	TableID uint64
 
 	vm.OperatorBase
@@ -71,7 +71,7 @@ func NewArgument() *TableScan {
 	return reuse.Alloc[TableScan](nil)
 }
 
-func (tableScan *TableScan) WithTypes(types []types.Type) *TableScan {
+func (tableScan *TableScan) WithTypes(types []plan.Type) *TableScan {
 	tableScan.Types = types
 	return tableScan
 }

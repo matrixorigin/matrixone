@@ -15,98 +15,98 @@
 package mergegroup
 
 import (
-    "github.com/matrixorigin/matrixone/pkg/common/reuse"
-    "github.com/matrixorigin/matrixone/pkg/container/batch"
-    "github.com/matrixorigin/matrixone/pkg/container/vector"
-    "github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
-    NeedCalculationForKeyWidth = -1
+	NeedCalculationForKeyWidth = -1
 )
 
 func NewArgument() *MergeGroup {
-    r := reuse.Alloc[MergeGroup](nil)
-    r.ctr.hashKeyWidth = NeedCalculationForKeyWidth
-    r.ctr.groupByCol = 0
-    return r
+	r := reuse.Alloc[MergeGroup](nil)
+	r.ctr.hashKeyWidth = NeedCalculationForKeyWidth
+	r.ctr.groupByCol = 0
+	return r
 }
 
 func (mergeGroup *MergeGroup) Reset(
-    proc *process.Process, isPipelineFail bool, pipelineErr error) {
+	proc *process.Process, isPipelineFail bool, pipelineErr error) {
 
-    if isPipelineFail {
-        mergeGroup.Free(proc, isPipelineFail, pipelineErr)
-        return
-    }
+	if isPipelineFail {
+		mergeGroup.Free(proc, isPipelineFail, pipelineErr)
+		return
+	}
 
-    mergeGroup.ctr.state = Build
-    // reuse the batch except its agg fields.
-    if bat := mergeGroup.ctr.bat; bat != nil {
-        for _, agg := range bat.Aggs {
-            if agg != nil {
-                agg.Free()
-            }
-        }
-        bat.Aggs = nil
+	mergeGroup.ctr.state = Build
+	// reuse the batch except its agg fields.
+	if bat := mergeGroup.ctr.bat; bat != nil {
+		for _, agg := range bat.Aggs {
+			if agg != nil {
+				agg.Free()
+			}
+		}
+		bat.Aggs = nil
 
-        // reset the group-by vectors.
-        for i := mergeGroup.ctr.groupByCol; i < len(bat.Vecs); i++ {
-            if bat.Vecs[i] != nil {
-                bat.Vecs[i].Free(proc.Mp())
-                bat.Vecs[i] = nil
-            }
-        }
-        bat.Vecs = bat.Vecs[:mergeGroup.ctr.groupByCol]
+		// reset the group-by vectors.
+		for i := mergeGroup.ctr.groupByCol; i < len(bat.Vecs); i++ {
+			if bat.Vecs[i] != nil {
+				bat.Vecs[i].Free(proc.Mp())
+				bat.Vecs[i] = nil
+			}
+		}
+		bat.Vecs = bat.Vecs[:mergeGroup.ctr.groupByCol]
 
-        for i := 0; i < len(bat.Vecs); i++ {
-            if bat.Vecs[i] != nil {
-                bat.Vecs[i].CleanOnlyData()
-            }
-        }
+		for i := 0; i < len(bat.Vecs); i++ {
+			if bat.Vecs[i] != nil {
+				bat.Vecs[i].CleanOnlyData()
+			}
+		}
 
-        // reset the vectors.
-        bat.SetRowCount(0)
-    }
+		// reset the vectors.
+		bat.SetRowCount(0)
+	}
 
-    // cannot reuse the hash map.
-    mergeGroup.ctr.cleanHashMap()
+	// cannot reuse the hash map.
+	mergeGroup.ctr.cleanHashMap()
 
-    // cannot reuse the projection.
-    if mergeGroup.ProjectList != nil {
-        anal := proc.GetAnalyze(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor())
-        anal.Alloc(mergeGroup.ProjectAllocSize)
-        mergeGroup.FreeProjection(proc)
-    }
+	// cannot reuse the projection.
+	if mergeGroup.ProjectList != nil {
+		anal := proc.GetAnalyze(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor())
+		anal.Alloc(mergeGroup.ProjectAllocSize)
+		mergeGroup.FreeProjection(proc)
+	}
 }
 
 func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, err error) {
-    mp := proc.Mp()
-    mergeGroup.ctr.cleanBatch(mp)
-    mergeGroup.ctr.cleanHashMap()
-    mergeGroup.ctr.hashKeyWidth = NeedCalculationForKeyWidth
+	mp := proc.Mp()
+	mergeGroup.ctr.cleanBatch(mp)
+	mergeGroup.ctr.cleanHashMap()
+	mergeGroup.ctr.hashKeyWidth = NeedCalculationForKeyWidth
 
-    if mergeGroup.ProjectList != nil {
-        anal := proc.GetAnalyze(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor())
-        anal.Alloc(mergeGroup.ProjectAllocSize)
-        mergeGroup.FreeProjection(proc)
-    }
+	if mergeGroup.ProjectList != nil {
+		anal := proc.GetAnalyze(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor())
+		anal.Alloc(mergeGroup.ProjectAllocSize)
+		mergeGroup.FreeProjection(proc)
+	}
 }
 
 func (mergeGroup *MergeGroup) Release() {
-    if mergeGroup != nil {
-        reuse.Free[MergeGroup](mergeGroup, nil)
-    }
+	if mergeGroup != nil {
+		reuse.Free[MergeGroup](mergeGroup, nil)
+	}
 }
 
 func (ctr *container) initEmptyBatchFromInput(bat *batch.Batch) {
-    if ctr.bat != nil {
-        return
-    }
+	if ctr.bat != nil {
+		return
+	}
 
-    ctr.bat = batch.NewWithSize(len(bat.Vecs))
-    for i := range bat.Vecs {
-        ctr.bat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
-    }
-    return
+	ctr.bat = batch.NewWithSize(len(bat.Vecs))
+	for i := range bat.Vecs {
+		ctr.bat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
+	}
+	return
 }
