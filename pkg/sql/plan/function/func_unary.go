@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"math"
-	"path"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1732,59 +1731,5 @@ func LastDay(
 			}
 		}
 	}
-	return nil
-}
-
-func StageList(
-	ivecs []*vector.Vector,
-	result vector.FunctionResultWrapper,
-	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList,
-) error {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	filepath, null := p1.GetStrValue(0)
-	if null {
-		if err := rs.AppendBytes(nil, true); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	s, err := UrlToStageDef(string(filepath), proc)
-	if err != nil {
-		return err
-	}
-
-	fspath, _, err := s.ToPath()
-	if err != nil {
-		return err
-	}
-
-	idx := strings.LastIndex(fspath, fileservice.ServiceNameSeparator)
-
-	var service, pattern string
-	if idx == -1 {
-		service = ""
-		pattern = fspath
-	} else {
-		service = fspath[:idx]
-		pattern = fspath[idx+1:]
-	}
-
-	pattern = path.Clean("/" + pattern)
-
-	fileList, err := StageListWithPattern(service, pattern, proc)
-	if err != nil {
-		return err
-	}
-
-	for _, f := range fileList {
-		if err := rs.AppendBytes([]byte(f), false); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }

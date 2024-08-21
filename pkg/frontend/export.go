@@ -444,6 +444,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	reslen := buffer.Len()
 	result := make([]byte, reslen)
 	copy(result, buffer.Bytes())
+	buffer = nil
 
 	ByteChan <- &BatchByte{
 		index:     index,

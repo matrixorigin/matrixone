@@ -9,26 +9,26 @@ internal error: the stage my_ext_stage exists
 ALTER STAGE my_ext_stage SET URL='abc';
 invalid configuration: URL protocol only supports stage://, s3:// and file:///
 CREATE STAGE if not exists my_ext_stage URL='s3://bucket/files/';
-SELECT stage_name, url from mo_catalog.mo_stages;
-stage_name    url
-my_ext_stage    s3://bucket/files/
-my_sub_stage    stage://my_ext_stage/a/b/c/
+SELECT * from mo_catalog.mo_stages;
+stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
+22    my_ext_stage    s3://bucket/files/        disabled    2024-08-21 10:45:44    
+23    my_sub_stage    stage://my_ext_stage/a/b/c/        disabled    2024-08-21 10:45:44    
 CREATE STAGE my_ext_stage1 URL='s3://bucket1/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
 CREATE STAGE my_ext_stage2 URL='s3://bucket2/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
-SELECT stage_name, url, stage_credentials from mo_catalog.mo_stages;
-stage_name    url    stage_credentials
-my_ext_stage    s3://bucket/files/    
-my_sub_stage    stage://my_ext_stage/a/b/c/    
-my_ext_stage1    s3://bucket1/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio
-my_ext_stage2    s3://bucket2/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio
+SELECT * from mo_catalog.mo_stages;
+stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
+22    my_ext_stage    s3://bucket/files/        disabled    2024-08-21 10:45:44    
+23    my_sub_stage    stage://my_ext_stage/a/b/c/        disabled    2024-08-21 10:45:44    
+24    my_ext_stage1    s3://bucket1/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-21 10:45:44    
+25    my_ext_stage2    s3://bucket2/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-21 10:45:44    
 CREATE STAGE my_ext_stage3 URL='s3://bucket3/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
-SELECT stage_name, url, stage_credentials from mo_catalog.mo_stages;
-stage_name    url    stage_credentials
-my_ext_stage    s3://bucket/files/    
-my_sub_stage    stage://my_ext_stage/a/b/c/    
-my_ext_stage1    s3://bucket1/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio
-my_ext_stage2    s3://bucket2/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio
-my_ext_stage3    s3://bucket3/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio
+SELECT * from mo_catalog.mo_stages;
+stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
+22    my_ext_stage    s3://bucket/files/        disabled    2024-08-21 10:45:44    
+23    my_sub_stage    stage://my_ext_stage/a/b/c/        disabled    2024-08-21 10:45:44    
+24    my_ext_stage1    s3://bucket1/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-21 10:45:44    
+25    my_ext_stage2    s3://bucket2/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-21 10:45:44    
+26    my_ext_stage3    s3://bucket3/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-21 10:45:44    
 ALTER STAGE my_ext_stage4 SET URL='s3://bucket4/files2/';
 internal error: the stage my_ext_stage4 not exists
 ALTER STAGE if exists my_ext_stage4 SET URL='s3://bucket4/files2/';
@@ -45,16 +45,16 @@ DROP STAGE my_ext_stage2;
 DROP STAGE my_ext_stage3;
 DROP STAGE my_sub_stage;
 CREATE STAGE my_ext_stage URL='s3://bucket/files/';
-SELECT stage_name, url, stage_credentials from mo_catalog.mo_stages;
-stage_name    url    stage_credentials
-my_ext_stage    s3://bucket/files/    
+SELECT * from mo_catalog.mo_stages;
+stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
+27    my_ext_stage    s3://bucket/files/        disabled    2024-08-21 10:45:44    
 create account default_1 ADMIN_NAME admin IDENTIFIED BY '111111';
 CREATE STAGE my_ext_stage1 URL='s3://bucket1/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
 CREATE STAGE my_ext_stage2 URL='s3://bucket2/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
-SELECT stage_name, url, stage_credentials from mo_catalog.mo_stages;
-stage_name    url    stage_credentials
-my_ext_stage1    s3://bucket1/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio
-my_ext_stage2    s3://bucket2/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio
+SELECT * from mo_catalog.mo_stages;
+stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
+1    my_ext_stage1    s3://bucket1/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-21 10:45:45    
+2    my_ext_stage2    s3://bucket2/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z,AWS_REGION=us-east-2,PROVIDER=minio    disabled    2024-08-21 10:45:45    
 DROP STAGE my_ext_stage1;
 DROP STAGE my_ext_stage2;
 drop account default_1;
@@ -126,9 +126,9 @@ show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 aws_stage    s3://bucket2/d/e/f/    ENABLED    
 alter stage if exists aws_stage set CREDENTIALS={ 'AWS_REGION' = 'us-east-1'};
-select stage_name,url,stage_credentials,stage_status,comment from mo_catalog.mo_stages;
-stage_name    url    stage_credentials    stage_status    comment
-aws_stage    s3://bucket2/d/e/f/    AWS_REGION=us-east-1    enabled    
+select * from mo_catalog.mo_stages;
+stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
+33    aws_stage    s3://bucket2/d/e/f/    AWS_REGION=us-east-1    enabled    2024-08-21 10:45:46    
 alter stage aws_stage set comment='comment1';
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
@@ -146,7 +146,7 @@ insert into stage_table values
 (2,"ASIA","ges. thinly even pinto beans ca"),
 (3,"EUROPE","ly final courts cajole furiously final excuse"),
 (4,"MIDDLE EAST","uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl");
-create stage local_stage URL= 'file:///$resources/into_outfile' comment='local stage configure';
+create stage local_stage URL= 'file:///$resources/into_outfile/stage' comment='local stage configure';
 select stage_name,stage_status,comment from mo_catalog.mo_stages;
 stage_name    stage_status    comment
 local_stage    disabled    local stage configure
@@ -154,22 +154,18 @@ select * from stage_table into outfile 'stage://local_stage/stage_table.csv';
 drop stage local_stage;
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-create stage local_stage URL= 'file:///$resources/';
-create stage sub_local_stage URL= 'stage://local_stage/into_outfile/';
-select * from stage_table into outfile 'stage://sub_local_stage/stage_table.csv';
-open /home/ubuntu/p/matrixone/test/distributed/resources/into_outfile/stage_table.csv: file exists
+create stage local_stage URL= 'file:///$resources/into_outfile';
+create stage sub_local_stage URL= 'stage://local_stage/stage/';
+select * from stage_table into outfile 'stage://sub_local_stage/substage_table.csv';
 drop stage local_stage;
 drop stage sub_local_stage;
-select * from stage_table into outfile '$resources/into_outfile/stage_table00.csv';
-select * from stage_table into outfile '$resources/into_outfile/stage_table01.csv';
-select * from stage_table into outfile '$resources/into_outfile/stage_table02.csv';
-create stage local_stage URL= 'file://$resources/into_outfile';
-select stage_name, url, comment from mo_catalog.mo_stages;
-stage_name    url    comment
-local_stage    file:///home/ubuntu/p/mo-tester/../matrixone/test/distributed/resources/into_outfile    
+select * from stage_table into outfile '$resources/into_outfile/stage/stage_table00.csv';
+select * from stage_table into outfile '$resources/into_outfile/stage/stage_table01.csv';
+select * from stage_table into outfile '$resources/into_outfile/stage/stage_table02.csv';
+create stage local_stage URL= 'file:///$resources/into_outfile/stage';
 select * from stage_table into outfile 'stage://local_stage/stage_table1.csv';
 truncate table stage_table;
-load data infile '$resources/into_outfile/stage_table1.csv' into table stage_table fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/stage_table1.csv' into table stage_table fields terminated by ',' ignore 1 lines;
 select r_name from stage_table;
 r_name
 AFRICA
@@ -177,13 +173,13 @@ AMERICA
 ASIA
 EUROPE
 MIDDLE EAST
-alter stage local_stage set URL= 'file:///$resources/into_outfile_2';
+alter stage local_stage set URL= 'file:///$resources/into_outfile_2/stage';
 select stage_name,stage_status,comment from mo_catalog.mo_stages;
 stage_name    stage_status    comment
 local_stage    disabled    
 select * from stage_table into outfile 'stage://local_stage/stage_table2.csv';
 truncate table stage_table;
-load data infile '$resources/into_outfile_2/stage_table2.csv' into table stage_table fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile_2/stage/stage_table2.csv' into table stage_table fields terminated by ',' ignore 1 lines;
 select r_name from stage_table;
 r_name
 AFRICA
@@ -196,11 +192,11 @@ select stage_name,stage_status,comment from mo_catalog.mo_stages;
 stage_name    stage_status    comment
 local_stage    disabled    new comment
 drop stage if exists local_stage;
-create stage local_stage URL= 'file:///$resources/into_outfile' comment='local stage configure';
+create stage local_stage URL= 'file:///$resources/into_outfile/stage' comment='local stage configure';
 select * from stage_table into outfile 'stage://local_stage/stage_table3.csv';
 drop stage local_stage;
-create stage if not exists local_stage URL= 'file:///$resources/into_outfile' comment='local stage configure';
-create stage if not exists local_stage URL= 'file:///$resources/into_outfile2';
+create stage if not exists local_stage URL= 'file:///$resources/into_outfile/stage' comment='local stage configure';
+create stage if not exists local_stage URL= 'file:///$resources/into_outfile2/stage';
 select stage_name,stage_status,comment from mo_catalog.mo_stages;
 stage_name    stage_status    comment
 local_stage    disabled    local stage configure
@@ -210,7 +206,7 @@ grant all on table *.* to s_role;
 grant all on account * to s_role;
 grant all on database *.* to s_role;
 grant s_role to stage_user;
-create stage local_stage URL= 'file:///$resources/into_outfile' comment='local stage configure';
+create stage local_stage URL= 'file:///$resources/into_outfile/stage' comment='local stage configure';
 internal error: do not have privilege to execute the statement
 create database sdb;
 use sdb;
@@ -234,7 +230,7 @@ drop role s_role;
 drop account if exists stage_account;
 create account `stage_account` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 create stage local_stage URL= 'file:///$resources/' comment='local stage configure';
-create stage sub_local_stage URL= 'stage://local_stage/into_outfile' comment='sub local stage configure';
+create stage sub_local_stage URL= 'stage://local_stage/into_outfile/stage' comment='sub local stage configure';
 create database sdb;
 use sdb;
 CREATE TABLE stage_table(
@@ -276,11 +272,11 @@ R_COMMENT    VARCHAR(152)
 select count(*) from stage_ext_table;
 count(*)
 35
-select count(stage_list('stage://sub_local_stage/'));
-count(stage_list(stage://sub_local_stage/))
-7
-select count(stage_list('stage://sub_local_stage/stage_table*.csv'));
-count(stage_list(stage://sub_local_stage/stage_table*.csv))
+select count(*) from stage_list('stage://sub_local_stage/') as f;
+count(*)
+8
+select count(*) from stage_list('stage://sub_local_stage/stage_table*.csv') as f;
+count(*)
 7
 drop stage local_stage;
 drop stage sub_local_stage;
@@ -291,7 +287,7 @@ grant all on table *.* to s_role;
 grant all on account * to s_role;
 grant all on database *.* to s_role;
 grant s_role to stage_user02;
-create stage local_stage URL= 'file:///$resources/into_outfile';
+create stage local_stage URL= 'file:///$resources/into_outfile/stage';
 internal error: do not have privilege to execute the statement
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT

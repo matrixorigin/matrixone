@@ -9,14 +9,17 @@ ALTER STAGE my_ext_stage SET URL='abc';
 
 
 CREATE STAGE if not exists my_ext_stage URL='s3://bucket/files/';
-SELECT stage_name, url from mo_catalog.mo_stages;
+-- @ignore:0,5
+SELECT * from mo_catalog.mo_stages;
 
 CREATE STAGE my_ext_stage1 URL='s3://bucket1/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
 CREATE STAGE my_ext_stage2 URL='s3://bucket2/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
-SELECT stage_name, url, stage_credentials from mo_catalog.mo_stages;
+-- @ignore:0,5
+SELECT * from mo_catalog.mo_stages;
 
 CREATE STAGE my_ext_stage3 URL='s3://bucket3/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
-SELECT stage_name, url, stage_credentials from mo_catalog.mo_stages;
+-- @ignore:0,5
+SELECT * from mo_catalog.mo_stages;
 
 ALTER STAGE my_ext_stage4 SET URL='s3://bucket4/files2/';
 ALTER STAGE if exists my_ext_stage4 SET URL='s3://bucket4/files2/';
@@ -34,12 +37,14 @@ DROP STAGE my_sub_stage;
 
 
 CREATE STAGE my_ext_stage URL='s3://bucket/files/';
-SELECT stage_name, url, stage_credentials from mo_catalog.mo_stages;
+-- @ignore:0,5
+SELECT * from mo_catalog.mo_stages;
 create account default_1 ADMIN_NAME admin IDENTIFIED BY '111111';
 -- @session:id=1&user=default_1:admin&password=111111
 CREATE STAGE my_ext_stage1 URL='s3://bucket1/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
 CREATE STAGE my_ext_stage2 URL='s3://bucket2/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z', 'AWS_REGION'='us-east-2', 'PROVIDER'='minio'};
-SELECT stage_name, url, stage_credentials from mo_catalog.mo_stages;
+-- @ignore:0,5
+SELECT * from mo_catalog.mo_stages;
 DROP STAGE my_ext_stage1;
 DROP STAGE my_ext_stage2;
 -- @session
@@ -88,7 +93,8 @@ show stages;
 alter stage if exists aws_stage set URL= 's3://bucket2/d/e/f/';
 show stages;
 alter stage if exists aws_stage set CREDENTIALS={ 'AWS_REGION' = 'us-east-1'};
-select stage_name,url,stage_credentials,stage_status,comment from mo_catalog.mo_stages;
+-- @ignore:0,5
+select * from mo_catalog.mo_stages;
 alter stage aws_stage set comment='comment1';
 show stages;
 drop stage aws_stage;
@@ -107,7 +113,7 @@ insert into stage_table values
 (3,"EUROPE","ly final courts cajole furiously final excuse"),
 (4,"MIDDLE EAST","uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl");
 -- create stage local disk
-create stage local_stage URL= 'file:///$resources/into_outfile' comment='local stage configure';
+create stage local_stage URL= 'file:///$resources/into_outfile/stage' comment='local stage configure';
 select stage_name,stage_status,comment from mo_catalog.mo_stages;
 select * from stage_table into outfile 'stage://local_stage/stage_table.csv';
 drop stage local_stage;
@@ -119,43 +125,42 @@ show stages;
 -- drop stage local_stage;
 
 -- output to sub-stage file
-create stage local_stage URL= 'file:///$resources/';
-create stage sub_local_stage URL= 'stage://local_stage/into_outfile/';
-select * from stage_table into outfile 'stage://sub_local_stage/stage_table.csv';
+create stage local_stage URL= 'file:///$resources/into_outfile';
+create stage sub_local_stage URL= 'stage://local_stage/stage/';
+select * from stage_table into outfile 'stage://sub_local_stage/substage_table.csv';
 drop stage local_stage;
 drop stage sub_local_stage;
 
 -- select outfile without stage
-select * from stage_table into outfile '$resources/into_outfile/stage_table00.csv';
-select * from stage_table into outfile '$resources/into_outfile/stage_table01.csv';
-select * from stage_table into outfile '$resources/into_outfile/stage_table02.csv';
+select * from stage_table into outfile '$resources/into_outfile/stage/stage_table00.csv';
+select * from stage_table into outfile '$resources/into_outfile/stage/stage_table01.csv';
+select * from stage_table into outfile '$resources/into_outfile/stage/stage_table02.csv';
 
 -- alter stage params: enable/URL/comment
-create stage local_stage URL= 'file://$resources/into_outfile';
-select stage_name, url, comment from mo_catalog.mo_stages;
+create stage local_stage URL= 'file:///$resources/into_outfile/stage';
 select * from stage_table into outfile 'stage://local_stage/stage_table1.csv';
 truncate table stage_table;
-load data infile '$resources/into_outfile/stage_table1.csv' into table stage_table fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage/stage_table1.csv' into table stage_table fields terminated by ',' ignore 1 lines;
 select r_name from stage_table;
-alter stage local_stage set URL= 'file:///$resources/into_outfile_2';
+alter stage local_stage set URL= 'file:///$resources/into_outfile_2/stage';
 select stage_name,stage_status,comment from mo_catalog.mo_stages;
 select * from stage_table into outfile 'stage://local_stage/stage_table2.csv';
 truncate table stage_table;
-load data infile '$resources/into_outfile_2/stage_table2.csv' into table stage_table fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile_2/stage/stage_table2.csv' into table stage_table fields terminated by ',' ignore 1 lines;
 select r_name from stage_table;
 alter stage local_stage set comment = 'new comment';
 select stage_name,stage_status,comment from mo_catalog.mo_stages;
 
 -- select outfile file exists
 drop stage if exists local_stage;
-create stage local_stage URL= 'file:///$resources/into_outfile' comment='local stage configure';
+create stage local_stage URL= 'file:///$resources/into_outfile/stage' comment='local stage configure';
 select * from stage_table into outfile 'stage://local_stage/stage_table3.csv';
 --select * from stage_table into outfile 'local_stage:/stage_table3.csv';
 drop stage local_stage;
 
 -- if exists
-create stage if not exists local_stage URL= 'file:///$resources/into_outfile' comment='local stage configure';
-create stage if not exists local_stage URL= 'file:///$resources/into_outfile2';
+create stage if not exists local_stage URL= 'file:///$resources/into_outfile/stage' comment='local stage configure';
+create stage if not exists local_stage URL= 'file:///$resources/into_outfile2/stage';
 select stage_name,stage_status,comment from mo_catalog.mo_stages;
 
 -- privs confirm
@@ -166,7 +171,7 @@ grant all on account * to s_role;
 grant all on database *.* to s_role;
 grant s_role to stage_user;
 -- @session:id=2&user=sys:stage_user:s_role&password=123456
-create stage local_stage URL= 'file:///$resources/into_outfile' comment='local stage configure';
+create stage local_stage URL= 'file:///$resources/into_outfile/stage' comment='local stage configure';
 create database sdb;
 use sdb;
 CREATE TABLE stage_table(
@@ -191,7 +196,7 @@ drop account if exists stage_account;
 create account `stage_account` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 -- @session:id=3&user=stage_account:admin&password=123456
 create stage local_stage URL= 'file:///$resources/' comment='local stage configure';
-create stage sub_local_stage URL= 'stage://local_stage/into_outfile' comment='sub local stage configure';
+create stage sub_local_stage URL= 'stage://local_stage/into_outfile/stage' comment='sub local stage configure';
 create database sdb;
 use sdb;
 CREATE TABLE stage_table(
@@ -230,10 +235,10 @@ R_COMMENT    VARCHAR(152)
 select count(*) from stage_ext_table;
 
 -- list the stage directory
-select count(stage_list('stage://sub_local_stage/'));
+select count(*) from stage_list('stage://sub_local_stage/') as f;
 
 -- list the stage directory with wildcard
-select count(stage_list('stage://sub_local_stage/stage_table*.csv'));
+select count(*) from stage_list('stage://sub_local_stage/stage_table*.csv') as f;
 
 drop stage local_stage;
 drop stage sub_local_stage;
@@ -247,7 +252,7 @@ grant s_role to stage_user02;
 -- @session
 
 -- @session:id=4&user=stage_account:stage_user02:s_role&password=123456
-create stage local_stage URL= 'file:///$resources/into_outfile';
+create stage local_stage URL= 'file:///$resources/into_outfile/stage';
 show stages;
 drop stage local_stage;
 -- @session
