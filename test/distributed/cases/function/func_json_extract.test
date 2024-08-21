@@ -203,3 +203,97 @@ SELECT
 FROM test_json;
 
 drop database test;
+
+create database if not exists test;
+use test;
+drop table if exists t1;
+create table t1(c1 json);
+
+insert into t1 values ('{"area":"A"}');
+insert into t1 values ('{"area":"B"}');
+insert into t1 values ('{"area":"C"}');
+insert into t1 values ('{"area":"D","length":10.25}');
+insert into t1 values ('{"area":"E","length":20}');
+
+select * from t1;
+select c1, json_extract(c1, '$.area'), json_extract_string(c1, '$.area') from t1;
+select c1, json_extract(c1, '$.area'), json_extract_string(c1, '$.area'), json_extract_float64(c1, '$.length') from t1;
+select json_extract_float64(c1, '$.length') from t1;
+select json_extract_float64(c1, '$.length') from t1 where json_extract_string(c1, '$.area') = 'E';
+
+CREATE TABLE test_json (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    json_data JSON NOT NULL
+);
+
+INSERT INTO test_json (json_data)
+VALUES
+    ('{"number": 25}'),
+    ('{"number": 25.5}'),
+    ('{"number": "25"}'),
+    ('{"number": "25.5"}'),
+    ('{"number": "hello"}'),
+    ('{"number": true}'),
+    ('{"number": null}'),
+    ('{"number": [1, 2, 3]}'),
+    ('{"number": {"value": 25}}');
+
+SELECT
+    id,
+    json_data,
+    json_extract_float64(json_data, '$.number') AS extracted_number
+FROM test_json;
+
+drop table if exists test_json;
+
+CREATE TABLE test_json (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    json_data JSON NOT NULL
+);
+
+INSERT INTO test_json (json_data)
+VALUES
+    ('{"name": "Alice", "age": 25}'),
+    ('{"name": "Bob", "age": 25.5}'),
+    ('{"name": "Charlie", "age": "25"}'),
+    ('{"name": "David", "age": "25.5"}'),
+    ('{"name": "Eve", "age": "hello"}'),
+    ('{"name": "Frank", "age": true}'),
+    ('{"name": "Grace", "age": null}'),
+    ('{"name": "Hank", "age": [1, 2, 3]}'),
+    ('{"name": "Ivan", "age": {"value": 25}}');
+
+
+SELECT
+    id,
+    json_data,
+    json_extract_string(json_data, '$.name') AS extracted_name,
+    json_extract_float64(json_data, '$.age') AS extracted_age
+FROM test_json;
+
+CREATE TABLE test_json_simplified (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    json_data JSON NOT NULL
+);
+
+INSERT INTO test_json_simplified (json_data)
+VALUES
+    ('{"name": "Alice", "age": 25, "scores": {"math": 85.0, "science": 90.0}}'),
+    ('{"name": "Bob", "age": 25, "scores": {"math": 80.5, "science": 88.0}}'),
+    ('{"name": "Charlie", "age": 25, "scores": {"math": null, "science": null}}'),
+    ('{"name": "David", "age": 25, "scores": {"math": 80.5, "science": null}}'),
+    ('{"name": "Eve", "age": 25, "scores": {"math": null, "science": 92.0}}'),
+    ('{"name": "Frank", "age": 25, "scores": {"math": 85.0, "science": 88.0}}'),
+    ('{"name": "Grace", "age": 25, "scores": {"math": null, "science": null}}'),
+    ('{"name": "Hank", "age": 25, "scores": {"math": 80.5, "science": 88.0}}'),
+    ('{"name": "Ivan", "age": 25, "scores": {"math": null, "science": null}}');
+
+SELECT
+    id,
+    json_extract_string(json_data, '$.name') AS extracted_name,
+    json_extract_float64(json_data, '$.age') AS extracted_age,
+    json_extract_float64(json_data, '$.scores.math') AS extracted_math_score,
+    json_extract_float64(json_data, '$.scores.science') AS extracted_science_score
+FROM test_json_simplified;
+
+drop database test;

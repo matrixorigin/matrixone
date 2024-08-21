@@ -253,7 +253,6 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 			},
 		},
 		barg: &hashbuild.HashBuild{
-			Typs: ts,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,

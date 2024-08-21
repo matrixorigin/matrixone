@@ -1104,6 +1104,13 @@ func createPrepareStmt(
 	}
 	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
 
+	dcPrepare, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
+	if ok {
+		columns := plan2.GetResultColumnsFromPlan(dcPrepare.Prepare.Plan)
+		if prepareStmt.ColDefData, err = execCtx.resper.MysqlRrWr().MakeColumnDefData(execCtx.reqCtx, columns); err != nil {
+			logutil.Errorf("Error make column def data for prepare statement: %v", err)
+		}
+	}
 	if execCtx.input != nil {
 		sqlSourceTypes := execCtx.input.getSqlSourceTypes()
 		prepareStmt.IsCloudNonuser = slices.Contains(sqlSourceTypes, constant.CloudNoUserSql)
@@ -3449,7 +3456,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 				statsInfo.CompileDuration+
 				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
 		if val < 0 {
-			ses.Warnf(ctx, " negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
+			ses.Debugf(ctx, "issue#14926 negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
 				uuid.UUID(h.stmt.StatementID).String(),
 				statsInfo.ParseDuration,
 				statsInfo.CompileDuration,

@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -52,13 +51,10 @@ type container struct {
 }
 
 type ShuffleBuild struct {
-	ctr *container
-	// need to generate a push-down filter expression
-	NeedExpr         bool
+	ctr              *container
 	HashOnPK         bool
-	NeedMergedBatch  bool
+	NeedBatches      bool
 	NeedAllocateSels bool
-	Typs             []types.Type
 	Conditions       []*plan.Expr
 
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec

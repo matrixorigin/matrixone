@@ -271,18 +271,23 @@ func (mr *MockTombstonerMockRecorder) HasAnyTombstoneFile() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasAnyTombstoneFile", reflect.TypeOf((*MockTombstoner)(nil).HasAnyTombstoneFile))
 }
 
-// HasTombstones mocks base method.
-func (m *MockTombstoner) HasTombstones(bid types.Blockid) bool {
+// HasBlockTombstone mocks base method.
+func (m *MockTombstoner) HasBlockTombstone(
+	ctx context.Context, bid objectio.Blockid, fs fileservice.FileService,
+) (bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HasTombstones", bid)
+	ret := m.ctrl.Call(m, "HasBlockTombstone", ctx, bid, fs)
 	ret0, _ := ret[0].(bool)
-	return ret0
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
-// HasTombstones indicates an expected call of HasTombstones.
-func (mr *MockTombstonerMockRecorder) HasTombstones(bid interface{}) *gomock.Call {
+// HasBlockTombstone indicates an expected call of HasBlockTombstone.
+func (mr *MockTombstonerMockRecorder) HasBlockTombstone(ctx, bid, fs interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTombstones", reflect.TypeOf((*MockTombstoner)(nil).HasTombstones), bid)
+	return mr.mock.ctrl.RecordCallWithMethodType(
+		mr.mock, "HasBlockTombstone", reflect.TypeOf((*MockTombstoner)(nil).HasBlockTombstone), ctx, bid, fs,
+	)
 }
 
 // MarshalBinaryWithBuffer mocks base method.

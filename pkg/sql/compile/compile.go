@@ -438,6 +438,7 @@ func (c *Compile) runOnce() error {
 	if err != nil {
 		return err
 	}
+
 	err = c.lockTable()
 	if err != nil {
 		return err
@@ -1657,12 +1658,6 @@ func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
 }
 
 func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, strictSqlMode bool) ([]*Scope, error) {
-	parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
-	ss := make([]*Scope, parallelSize)
-	for i := 0; i < parallelSize; i++ {
-		ss[i] = c.constructLoadMergeScope()
-	}
-
 	s := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
 	op := constructExternal(n, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
@@ -1670,6 +1665,15 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, 
 	op.SetIsFirst(currentFirstFlag)
 	s.setRootOperator(op)
 	c.anal.isFirst = false
+
+	parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
+	if parallelSize == 1 {
+		return []*Scope{s}, nil
+	}
+	ss := make([]*Scope, parallelSize)
+	for i := 0; i < parallelSize; i++ {
+		ss[i] = c.constructLoadMergeScope()
+	}
 
 	_, dispatchOp := constructDispatchLocalAndRemote(0, ss, c.addr)
 	dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
@@ -2074,67 +2078,23 @@ func (c *Compile) setProjection(n *plan.Node, s *Scope) {
 	s.setRootOperator(op)
 }
 
-func (c *Compile) compileTPUnion(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
-	ss = append(ss, children...)
-	rs := c.newScopeListOnCurrentCN(len(ss), 1)
+func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*Scope {
+	left = c.mergeShuffleScopesIfNeeded(left, false)
+	right = c.mergeShuffleScopesIfNeeded(right, false)
+	left = append(left, right...)
+	rs := c.newMergeScope(left)
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
 	for i := range gn.GroupBy {
 		gn.GroupBy[i] = plan2.DeepCopyExpr(n.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
-
 	currentFirstFlag := c.anal.isFirst
 	op := constructGroup(c.proc.Ctx, gn, n, true, 0, c.proc)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs[0].setRootOperator(op)
+	rs.setRootOperator(op)
 	c.anal.isFirst = false
-
-	for i := range ss {
-		// waring: `connector` operator is not used as an input/output analyze,
-		// and `connector` operator cannot play the role of IsFirst/IsLast
-		connArg := connector.NewArgument().WithReg(rs[0].Proc.Reg.MergeReceivers[i])
-		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		ss[i].setRootOperator(connArg)
-		rs[0].PreScopes = append(rs[0].PreScopes, ss[i])
-	}
-	return rs
-}
-
-func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*Scope {
-	if c.IsSingleScope(left) && c.IsSingleScope(right) {
-		return c.compileTPUnion(n, left, right)
-	}
-
-	left = append(left, right...)
-	rs := c.newScopeListOnCurrentCN(1, int(n.Stats.BlockNum))
-	gn := new(plan.Node)
-	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
-	for i := range gn.GroupBy {
-		gn.GroupBy[i] = plan2.DeepCopyExpr(n.ProjectList[i])
-		gn.GroupBy[i].Typ.NotNullable = false
-	}
-	idx := 0
-
-	currentFirstFlag := c.anal.isFirst
-	for i := range rs {
-		op := constructGroup(c.proc.Ctx, gn, n, true, 0, c.proc)
-		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		rs[i].setRootOperator(op)
-		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
-			idx = i
-		}
-	}
-	c.anal.isFirst = false
-
-	mergeChildren := c.newMergeScope(left)
-	// waring: `dispath` operator is not used as an input/output analyze,
-	// and `dispath` operator cannot play the role of IsFirst/IsLast
-	dispathArg := constructDispatch(0, rs, c.addr, n, false)
-	dispathArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-	mergeChildren.setRootOperator(dispathArg)
-	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
-	return rs
+	return []*Scope{rs}
 }
 
 func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
@@ -2237,7 +2197,10 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 	}
 	var rs []*Scope
 	rs, buildScopes = c.compileBroadcastJoin(node, left, right, probeScopes, buildScopes)
-	if c.IsTpQuery() {
+	if c.IsSingleScope(rs) {
+		if !c.IsSingleScope(buildScopes) {
+			panic("build scopes should be single parallel!")
+		}
 		//construct join build operator for tp join
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, rs[0].RootOp, false, 1))
 		buildScopes[0].IsEnd = true
@@ -2951,7 +2914,7 @@ func (c *Compile) compilePreInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) (
 func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	// Determine whether to Write S3
 	toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) >
-		float64(DistributedThreshold) || c.anal.qry.LoadTag
+		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
 	if toWriteS3 {
 		c.proc.Debugf(c.proc.Ctx, "insert of '%s' write s3\n", c.sql)
@@ -3471,8 +3434,11 @@ func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
 func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []*Scope, n *plan.Node, forceOneCN bool) ([]*Scope, []*Scope) {
 	var rs []*Scope
 
-	if c.IsTpQuery() {
-		// for tp join, can directly return
+	if c.IsSingleScope(probeScopes) {
+		if !c.IsSingleScope(buildScopes) {
+			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+		}
+		// for single parallel join, can directly return
 		rs = probeScopes
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 		return rs, buildScopes
@@ -3496,6 +3462,15 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		rs[i].IsJoin = true
 		rs[i].NodeInfo.Mcpu = c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
 		rs[i].BuildIdx = len(rs[i].Proc.Reg.MergeReceivers)
+	}
+
+	if c.IsSingleScope(rs) {
+		if !c.IsSingleScope(buildScopes) {
+			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+		}
+		// for single parallel join, can directly return
+		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
+		return rs, buildScopes
 	}
 
 	//construct build part
@@ -4023,10 +3998,22 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				return nil, nil, nil, err
 			}
 
+			fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
+			if err != nil {
+				return nil, nil, nil, err
+			}
 			//For each blockinfo in relData, if blk has no tombstones, then compute the agg result,
 			//otherwise put it into newRelData.
-			engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk objectio.BlockInfo) (bool, error) {
-				if tombstones.HasTombstones(blk.BlockID) {
+			var (
+				hasTombstone bool
+				err2         error
+			)
+			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk objectio.BlockInfo) (bool, error) {
+				if hasTombstone, err2 = tombstones.HasBlockTombstone(
+					ctx, blk.BlockID, fs,
+				); err2 != nil {
+					return false, err2
+				} else if hasTombstone {
 					newRelData.AppendBlockInfo(blk)
 					return true, nil
 				}
@@ -4035,7 +4022,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 					return false, nil
 				}
 				return true, nil
-			})
+			}); err != nil {
+				return nil, nil, nil, err
+			}
 			if partialResults != nil {
 				relData = newRelData
 			}
@@ -4062,10 +4051,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 
 	engineType := rel.GetEngineType()
-	// for multi cn in launch mode, put all payloads in current CN, maybe delete this in the future
 	// for an ordered scan, put all paylonds in current CN
 	// or sometimes force on one CN
-	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
+	if len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
 		return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
@@ -4767,15 +4755,6 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 	}
 }
 
-func isLaunchMode(cnlist engine.Nodes) bool {
-	for i := range cnlist {
-		if !isSameCN(cnlist[0].Addr, cnlist[i].Addr) {
-			return false
-		}
-	}
-	return true
-}
-
 func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
 
@@ -4789,7 +4768,7 @@ func isSameCN(addr string, currentCNAddr string) bool {
 		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
 		return true
 	}
-	return parts1[0] == parts2[0]
+	return parts1[0] == parts2[0] && parts1[1] == parts2[1]
 }
 
 func (s *Scope) affectedRows() uint64 {

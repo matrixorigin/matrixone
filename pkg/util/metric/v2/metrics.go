@@ -49,6 +49,7 @@ func init() {
 	initProxyMetrics()
 	initFrontendMetrics()
 	initPipelineMetrics()
+	initLogServiceMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -79,6 +80,8 @@ func initTaskMetrics() {
 	registry.MustRegister(transferPageHitHistogram)
 	registry.MustRegister(TransferPageRowHistogram)
 	registry.MustRegister(TaskMergeTransferPageLengthGauge)
+	registry.MustRegister(transferDurationHistogram)
+	registry.MustRegister(transferShortDurationHistogram)
 
 	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
 }
@@ -146,6 +149,9 @@ func initTxnMetrics() {
 
 	registry.MustRegister(txnRangesSelectivityHistogram)
 	registry.MustRegister(txnTNDeduplicateDurationHistogram)
+
+	registry.MustRegister(txnTransferDurationHistogram)
+	registry.MustRegister(TransferTombstonesCountHistogram)
 }
 
 func initRPCMetrics() {
@@ -194,6 +200,16 @@ func initPipelineMetrics() {
 	registry.MustRegister(pipelineStreamCounter)
 }
 
+func initLogServiceMetrics() {
+	registry.MustRegister(LogServiceAppendDurationHistogram)
+	registry.MustRegister(LogServiceAppendCounter)
+	registry.MustRegister(LogServiceAppendBytesHistogram)
+}
+
 func getDurationBuckets() []float64 {
 	return append(prometheus.ExponentialBuckets(0.00001, 2, 30), math.MaxFloat64)
+}
+
+func getShortDurationBuckets() []float64 {
+	return append(prometheus.ExponentialBuckets(0.0000001, 2, 30), math.MaxFloat64)
 }

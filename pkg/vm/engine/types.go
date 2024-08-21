@@ -596,6 +596,7 @@ const (
 const (
 	Policy_CheckAll             = 0
 	Policy_CheckCommittedS3Only = Policy_SkipUncommitedInMemory | Policy_SkipCommittedInMemory | Policy_SkipUncommitedS3
+	Policy_CheckCommittedOnly   = Policy_SkipUncommitedInMemory | Policy_SkipUncommitedS3
 )
 
 type Tombstoner interface {
@@ -606,7 +607,8 @@ type Tombstoner interface {
 	String() string
 	StringWithPrefix(string) string
 
-	HasTombstones(bid types.Blockid) bool
+	// false positive check
+	HasBlockTombstone(ctx context.Context, id objectio.Blockid, fs fileservice.FileService) (bool, error)
 
 	MarshalBinaryWithBuffer(w *bytes.Buffer) error
 	UnmarshalBinary(buf []byte) error

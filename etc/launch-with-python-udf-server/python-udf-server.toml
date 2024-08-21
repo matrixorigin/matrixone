@@ -1,5 +1,6 @@
 service-type = "PYTHON_UDF"
 
 [python-udf-server]
+uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41b2"
 address = "127.0.0.1:50051"
 path = "pkg/udf/pythonservice/pyserver"
