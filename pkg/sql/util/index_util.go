@@ -43,6 +43,11 @@ func (list *PackerList) Free() {
 			p.Close()
 		}
 	}
+	list.ps = nil
+}
+
+func (list *PackerList) PackerCount() int {
+	return len(list.ps)
 }
 
 func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {

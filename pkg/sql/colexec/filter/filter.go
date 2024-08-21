@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -45,14 +46,26 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 		return nil
 	}
 
-	if len(filter.ctr.executors) == 0 {
-		if filter.exeExpr == nil {
-			filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
-		} else {
-			filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.exeExpr}))
-		}
+	var filterExpr *plan.Expr
+	if filter.exeExpr == nil {
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.E), proc, true, true)
+	} else {
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.exeExpr), proc, true, true)
 	}
+	if err != nil {
+		return err
+	}
+	filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
 	return err
+
+	// if len(filter.ctr.executors) == 0 {
+	// 	if filter.exeExpr == nil {
+	// 		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
+	// 	} else {
+	// 		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.exeExpr}))
+	// 	}
+	// }
+	// return err
 }
 
 func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
@@ -72,10 +85,6 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if inputResult.Batch == nil || inputResult.Batch.IsEmpty() || inputResult.Batch.Last() || len(filter.ctr.executors) == 0 {
 		return inputResult, nil
-	}
-
-	if filter.ctr.buf != nil {
-		filter.ctr.buf.CleanOnlyData()
 	}
 
 	filterBat := inputResult.Batch
@@ -159,6 +168,9 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 func tryDupBatch(ctr *container, proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
 	if bat == ctr.buf {
 		return bat, nil
+	}
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
 	}
 	//copy input.Batch to ctr.buf
 	var err error

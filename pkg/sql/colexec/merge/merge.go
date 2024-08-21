@@ -34,7 +34,6 @@ func (merge *Merge) OpType() vm.OpType {
 }
 
 func (merge *Merge) Prepare(proc *process.Process) error {
-	merge.ctr = new(container)
 	if merge.Partial {
 		merge.ctr.InitReceiver(proc, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
 	} else {
@@ -53,10 +52,7 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
-	if merge.ctr.buf != nil {
-		merge.ctr.buf.Clean(proc.GetMPool())
-		merge.ctr.buf = nil
-	}
+
 	var err error
 	for {
 		msg = merge.ctr.ReceiveFromAllRegs(anal)
@@ -72,7 +68,10 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 			continue
 		}
 
-		merge.ctr.buf, err = msg.Batch.Dup(proc.GetMPool())
+		if merge.ctr.buf != nil {
+			merge.ctr.buf.CleanOnlyData()
+		}
+		merge.ctr.buf, err = merge.ctr.buf.AppendWithCopy(proc.Ctx, proc.GetMPool(), msg.Batch)
 		if err != nil {
 			proc.PutBatch(msg.Batch)
 			return vm.CancelResult, err
