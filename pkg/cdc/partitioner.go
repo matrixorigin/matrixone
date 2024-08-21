@@ -29,7 +29,12 @@ type tableIdPartitioner struct {
 
 func (p tableIdPartitioner) Partition(entry tools.Pair[*disttae.TableCtx, *disttae.DecoderInput]) {
 	tableCtx := entry.Key
-	p.outputChs[tableCtx.TableId()] <- entry
+
+	if ch, ok := p.outputChs[tableCtx.TableId()]; !ok {
+		_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Partitioner: no inputCh found for table{%v}\n", tableCtx.TableId())
+	} else {
+		ch <- entry
+	}
 }
 
 func (p tableIdPartitioner) Run(_ context.Context, ar *ActiveRoutine) {

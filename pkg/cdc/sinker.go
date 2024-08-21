@@ -171,7 +171,7 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 			tableCtx := entry.Key
 			decodeOutput := entry.Value
 
-			if s.watermark.Greater(decodeOutput.ts) {
+			if s.watermark.GreaterEq(decodeOutput.ts) {
 				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: Unexpect watermark: %v, cur watermark: %v \n", decodeOutput.ts, s.watermark)
 				continue
 			}
