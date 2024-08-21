@@ -150,8 +150,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		seq = txnOperator.NextSequence()
 		writeOffset = uint64(txnOperator.GetWorkspace().GetSnapshotWriteOffset())
 		txnOperator.GetWorkspace().IncrSQLCount()
-		txnOperator.ResetRetry(false)
-
 		txnOperator.EnterRunSql()
 	}
 	defer func() {
@@ -207,8 +205,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// build query context and pipeline contexts for the current run.
 		runC.InitPipelineContextToExecuteQuery()
 
-		retryOnMetadata := false
-		if err = runC.runOnce(&retryOnMetadata); err == nil {
+		if err = runC.runOnce(); err == nil {
 			break
 		}
 
@@ -243,7 +240,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		defChanged := moerr.IsMoErrCode(
 			err,
 			moerr.ErrTxnNeedRetryWithDefChanged)
-		if runC, err = c.prepareRetry(defChanged, retryOnMetadata); err != nil {
+		if runC, err = c.prepareRetry(defChanged); err != nil {
 			return nil, err
 		}
 	}
@@ -261,10 +258,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 // prepareRetry rebuild a new Compile object for retrying the query.
 func (c *Compile) prepareRetry(
 	defChanged bool,
-	retryOnMetadata bool,
 ) (*Compile, error) {
 	v2.TxnStatementRetryCounter.Inc()
-	c.proc.GetTxnOperator().ResetRetry(!retryOnMetadata)
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 
 	topContext := c.proc.GetTopContext()
