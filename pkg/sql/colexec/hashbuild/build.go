@@ -116,7 +116,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.inputBatchRowCount > 0 {
 				jm = message.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
 				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-				if ap.NeedMergedBatch {
+				if ap.NeedBatches {
 					jm.SetRowCount(int64(ctr.inputBatchRowCount))
 				}
 				jm.IncRef(ap.JoinMapRefCnt)
@@ -332,7 +332,7 @@ func (ctr *container) build(ap *HashBuild, proc *process.Process, anal process.A
 	if err != nil {
 		return err
 	}
-	if !ap.NeedMergedBatch {
+	if !ap.NeedBatches {
 		// if do not need merged batch, free it now to save memory
 		for i := range ctr.batches {
 			proc.PutBatch(ctr.batches[i])
