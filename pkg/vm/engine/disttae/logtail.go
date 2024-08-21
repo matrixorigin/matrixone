@@ -76,7 +76,7 @@ func consumeEntry(
 
 				if engine.IsCdcEngine() {
 					//recognize ddl
-					engine.GetDDLListener().InsertTable(bat)
+					engine.GetDDLListener().OnAction(ActionInsertTable, bat)
 					cache.PrintTables2("after", "test")
 				}
 
@@ -92,7 +92,7 @@ func consumeEntry(
 				cache.InsertDatabase(bat)
 
 				if engine.IsCdcEngine() {
-					engine.GetDDLListener().InsertDatabase(bat)
+					engine.GetDDLListener().OnAction(ActionInsertDatabase, bat)
 					cache.PrintDatabases("after")
 				}
 			}
@@ -119,7 +119,7 @@ func consumeEntry(
 
 			if engine.IsCdcEngine() {
 				//recognize ddl
-				engine.GetDDLListener().DeleteTable(bat)
+				engine.GetDDLListener().OnAction(ActionDeleteTable, bat)
 				cache.PrintTables2("after", "test")
 			}
 		}
@@ -134,7 +134,7 @@ func consumeEntry(
 			cache.DeleteDatabase(bat)
 
 			if engine.IsCdcEngine() {
-				engine.GetDDLListener().DeleteDatabase(bat)
+				engine.GetDDLListener().OnAction(ActionDeleteDatabase, bat)
 				cache.PrintDatabases("after")
 			}
 		}

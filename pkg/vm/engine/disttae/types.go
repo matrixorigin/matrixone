@@ -1033,44 +1033,44 @@ type Queue[T any] interface {
 	Empty() bool
 }
 
-type DetectResultType int
+type DDLType int
 
 const (
-	DetectResultInvalid           DetectResultType = 0
-	DetectResultCreateDB          DetectResultType = 1
-	DetectResultDropDB            DetectResultType = 2
-	DetectResultCreateTable       DetectResultType = 3
-	DetectResultDropTable         DetectResultType = 4
-	DetectResultAlterTableInplace DetectResultType = 5
-	DetectResultAlterTableCopy    DetectResultType = 6
-	DetectResultTruncateTable     DetectResultType = 7
+	DDLTypeInvalid           DDLType = 0
+	DDLTypeCreateDB          DDLType = 1
+	DDLTypeDropDB            DDLType = 2
+	DDLTypeCreateTable       DDLType = 3
+	DDLTypeDropTable         DDLType = 4
+	DDLTypeAlterTableInplace DDLType = 5
+	DDLTypeAlterTableCopy    DDLType = 6
+	DDLTypeTruncateTable     DDLType = 7
 )
 
-func (dtype DetectResultType) String() string {
+func (dtype DDLType) String() string {
 	switch dtype {
-	case DetectResultInvalid:
+	case DDLTypeInvalid:
 		return "invalid"
-	case DetectResultCreateDB:
+	case DDLTypeCreateDB:
 		return "create db"
-	case DetectResultDropDB:
+	case DDLTypeDropDB:
 		return "drop db"
-	case DetectResultCreateTable:
+	case DDLTypeCreateTable:
 		return "create table"
-	case DetectResultDropTable:
+	case DDLTypeDropTable:
 		return "drop table"
-	case DetectResultAlterTableInplace:
+	case DDLTypeAlterTableInplace:
 		return "alter table inplace"
-	case DetectResultAlterTableCopy:
+	case DDLTypeAlterTableCopy:
 		return "alter table copy"
-	case DetectResultTruncateTable:
+	case DDLTypeTruncateTable:
 		return "truncate table"
 	default:
 		return "usp detect result type"
 	}
 }
 
-type DetectResult struct {
-	Typ        DetectResultType
+type DDL struct {
+	Typ        DDLType
 	AccountId  uint64
 	DB         string
 	Table      string
@@ -1079,7 +1079,7 @@ type DetectResult struct {
 	OldTableId uint64
 }
 
-func (d DetectResult) String() string {
+func (d DDL) String() string {
 	return fmt.Sprintf("Typ:%v AccID:%v Db:%v Table:%v DBID:%v TableID:%v OldTableID:%v",
 		d.Typ,
 		d.AccountId,
@@ -1090,12 +1090,18 @@ func (d DetectResult) String() string {
 		d.OldTableId)
 }
 
+type ActionType int
+
+const (
+	ActionInsertTable    ActionType = 1
+	ActionDeleteTable    ActionType = 2
+	ActionInsertDatabase ActionType = 3
+	ActionDeleteDatabase ActionType = 4
+)
+
 type DDLListener interface {
 	Init(ts timestamp.Timestamp)
-	InsertTable(bat *batch.Batch)
-	DeleteTable(bat *batch.Batch)
-	InsertDatabase(bat *batch.Batch)
-	DeleteDatabase(bat *batch.Batch)
-	Detect() []*DetectResult
+	OnAction(typ ActionType, bat *batch.Batch)
+	GetDDLs() []*DDL
 	Clear()
 }

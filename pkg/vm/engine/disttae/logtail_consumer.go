@@ -2002,8 +2002,8 @@ func updatePartitionOfPush(
 		}
 
 		//handle ddl
-		dres := e.GetDDLListener().Detect()
-		for _, ddl := range dres {
+		ddls := e.GetDDLListener().GetDDLs()
+		for _, ddl := range ddls {
 			fmt.Fprintln(os.Stderr, "decected ddl", ddl.String())
 		}
 	}

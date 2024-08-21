@@ -647,49 +647,63 @@ func (analyzer *DDLAnalyzer) DeleteDatabase(bat *batch.Batch) {
 	}
 }
 
-func (analyzer *DDLAnalyzer) Detect() (res []*DetectResult) {
+func (analyzer *DDLAnalyzer) OnAction(typ ActionType, bat *batch.Batch) {
+	switch typ {
+	case ActionInsertTable:
+		analyzer.InsertTable(bat)
+	case ActionDeleteTable:
+		analyzer.DeleteTable(bat)
+	case ActionInsertDatabase:
+		analyzer.InsertDatabase(bat)
+	case ActionDeleteDatabase:
+		analyzer.DeleteDatabase(bat)
+	default:
+	}
+}
+
+func (analyzer *DDLAnalyzer) GetDDLs() (res []*DDL) {
 	analyzer.tables.Scan(func(item *DDLTableItem) bool {
-		dres := new(DetectResult)
-		dres.AccountId = item.AccountId
-		dres.DB = item.DB
-		dres.Table = item.Table
-		dres.DBId = item.DBId
-		dres.TableId = item.TableId
-		dres.OldTableId = item.OldTableId
+		ddl := new(DDL)
+		ddl.AccountId = item.AccountId
+		ddl.DB = item.DB
+		ddl.Table = item.Table
+		ddl.DBId = item.DBId
+		ddl.TableId = item.TableId
+		ddl.OldTableId = item.OldTableId
 		if item.Deleted {
 			if item.OldTableId == 0 { //drop table
-				dres.Typ = DetectResultDropTable
+				ddl.Typ = DDLTypeDropTable
 			} else {
 				if item.OldTableId != item.TableId {
 					//alter table copy or
 					//truncate table
-					dres.Typ = DetectResultAlterTableCopy
+					ddl.Typ = DDLTypeAlterTableCopy
 					//TODO: check schema change
 				} else {
 					//alter table inplace
-					dres.Typ = DetectResultAlterTableInplace
+					ddl.Typ = DDLTypeAlterTableInplace
 				}
 			}
 
 		} else {
 			//create table
-			dres.Typ = DetectResultCreateTable
+			ddl.Typ = DDLTypeCreateTable
 		}
-		res = append(res, dres)
+		res = append(res, ddl)
 		return true
 	})
 
 	analyzer.dbs.Scan(func(item *DDLDBItem) bool {
-		dres := new(DetectResult)
-		dres.AccountId = item.AccountId
-		dres.DB = item.DB
-		dres.DBId = item.DBId
+		ddl := new(DDL)
+		ddl.AccountId = item.AccountId
+		ddl.DB = item.DB
+		ddl.DBId = item.DBId
 		if item.Deleted {
-			dres.Typ = DetectResultDropDB
+			ddl.Typ = DDLTypeDropDB
 		} else {
-			dres.Typ = DetectResultCreateDB
+			ddl.Typ = DDLTypeCreateDB
 		}
-		res = append(res, dres)
+		res = append(res, ddl)
 		return true
 	})
 	return
