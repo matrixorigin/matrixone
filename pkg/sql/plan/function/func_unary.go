@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"math"
-	"path"
 	"runtime"
 	"strconv"
 	"strings"
