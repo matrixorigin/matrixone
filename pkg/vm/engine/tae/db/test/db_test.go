@@ -29,6 +29,10 @@ import (
 
 	"sort"
 
+	"github.com/panjf2000/ants/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -41,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -62,9 +67,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/panjf2000/ants/v2"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -4204,9 +4206,24 @@ func TestBlockRead(t *testing.T) {
 			err = blockio.BlockPrefetch("", colIdxs, fs, infos, false)
 			assert.NoError(t, err)
 
-			b1, err := blockio.BlockDataReadInner(
+			var vp engine.VectorPool
+			buildBatch := func(typs []types.Type) *batch.Batch {
+				bat := batch.NewWithSize(len(typs))
+				//bat.Attrs = append(bat.Attrs, cols...)
+
+				for i := 0; i < len(typs); i++ {
+					if vp == nil {
+						bat.Vecs[i] = vector.NewVec(typs[i])
+					} else {
+						bat.Vecs[i] = vp.GetVector(typs[i])
+					}
+				}
+				return bat
+			}
+			b1 := buildBatch(colTyps)
+			err = blockio.BlockDataReadInner(
 				context.Background(), "", info, ds, colIdxs, colTyps,
-				beforeDel, nil, fs, pool, nil, fileservice.Policy(0),
+				beforeDel, nil, fs, pool, nil, fileservice.Policy(0), b1,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b1.Vecs))
@@ -4214,29 +4231,32 @@ func TestBlockRead(t *testing.T) {
 
 			testDS.SetTS(afterFirstDel)
 
-			b2, err := blockio.BlockDataReadInner(
+			b2 := buildBatch(colTyps)
+			err = blockio.BlockDataReadInner(
 				context.Background(), "", info, ds, colIdxs, colTyps,
-				afterFirstDel, nil, fs, pool, nil, fileservice.Policy(0),
+				afterFirstDel, nil, fs, pool, nil, fileservice.Policy(0), b2,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 19, b2.Vecs[0].Length())
 
 			testDS.SetTS(afterSecondDel)
 
-			b3, err := blockio.BlockDataReadInner(
+			b3 := buildBatch(colTyps)
+			err = blockio.BlockDataReadInner(
 				context.Background(), "", info, ds, colIdxs, colTyps,
-				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0),
+				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0), b3,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b2.Vecs))
 			assert.Equal(t, 16, b3.Vecs[0].Length())
 			// read rowid column only
-			b4, err := blockio.BlockDataReadInner(
+			b4 := buildBatch([]types.Type{types.T_Rowid.ToType()})
+			err = blockio.BlockDataReadInner(
 				context.Background(), "", info,
 				ds,
 				[]uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
-				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0),
+				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0), b4,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, len(b4.Vecs))
@@ -4244,11 +4264,12 @@ func TestBlockRead(t *testing.T) {
 
 			// read rowid column only
 			info.Appendable = false
-			b5, err := blockio.BlockDataReadInner(
+			b5 := buildBatch([]types.Type{types.T_Rowid.ToType()})
+			err = blockio.BlockDataReadInner(
 				context.Background(), "", info,
 				ds, []uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
-				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0),
+				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0), b5,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, len(b5.Vecs))

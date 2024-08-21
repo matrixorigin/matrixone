@@ -86,10 +86,10 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 	ctr := &fuzzyFilter.ctr
 
 	if ctr.rbat == nil {
-    	rowCount := int64(fuzzyFilter.N)
-    	if rowCount < 1000 {
-    		rowCount = 1000
-    	}
+		rowCount := int64(fuzzyFilter.N)
+		if rowCount < 1000 {
+			rowCount = 1000
+		}
 
 		if err := fuzzyFilter.generate(); err != nil {
 			return err

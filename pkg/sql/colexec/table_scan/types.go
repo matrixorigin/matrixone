@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -38,6 +39,7 @@ type TableScan struct {
 	Reader         engine.Reader
 	// letter case: origin
 	Attrs   []string
+	Types   []plan.Type
 	TableID uint64
 
 	vm.OperatorBase
@@ -67,6 +69,11 @@ func (tableScan TableScan) TypeName() string {
 
 func NewArgument() *TableScan {
 	return reuse.Alloc[TableScan](nil)
+}
+
+func (tableScan *TableScan) WithTypes(types []plan.Type) *TableScan {
+	tableScan.Types = types
+	return tableScan
 }
 
 func (tableScan *TableScan) Release() {
@@ -109,5 +116,6 @@ func (tableScan *TableScan) closeReader() {
 		if e != nil {
 			logutil.Errorf("close reader for table id=%d, err=%v", tableScan.TableID, e)
 		}
+		tableScan.Reader = nil
 	}
 }

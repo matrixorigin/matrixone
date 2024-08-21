@@ -1783,7 +1783,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, first
 		node: n,
 	}
 
-	op := constructTableScan()
+	op := constructTableScan(n)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, firstFlag)
 	s.setRootOperator(op)
 	s.Proc = c.proc.NewNoContextChildProc(0)
