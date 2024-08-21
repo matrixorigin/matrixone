@@ -167,11 +167,11 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		ap.ctr.hasData = true
 	}
 
-	sendBat := batch.NewWithSize(len(result.Batch.Vecs))
-	sendBat.SetAttributes(result.Batch.Attrs)
-	sendBat.Recursive = result.Batch.Recursive
-	for j, vec := range result.Batch.Vecs {
-		typ := *result.Batch.GetVector(int32(j)).GetType()
+	sendBat := batch.NewWithSize(len(bat.Vecs))
+	sendBat.SetAttributes(bat.Attrs)
+	sendBat.Recursive = bat.Recursive
+	for j, vec := range bat.Vecs {
+		typ := *bat.GetVector(int32(j)).GetType()
 		rvec := proc.GetVector(typ)
 		if err = vector.GetUnionAllFunction(typ, proc.GetMPool())(rvec, vec); err != nil {
 			sendBat.Clean(proc.GetMPool())
@@ -179,7 +179,7 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		sendBat.SetVector(int32(j), rvec)
 	}
-	sendBat.SetRowCount(sendBat.Vecs[0].Length())
+	sendBat.SetRowCount(bat.RowCount())
 
 	ok, err := ap.ctr.sendFunc(sendBat, ap, proc)
 	if ok {
