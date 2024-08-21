@@ -174,7 +174,6 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 		proc:   proc,
 		cancel: cancel,
 		arg: &HashBuild{
-			Typs:        ts,
 			Conditions:  cs,
 			NeedHashMap: true,
 			OperatorBase: vm.OperatorBase{
