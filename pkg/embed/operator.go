@@ -53,6 +53,7 @@ type operator struct {
 	index       int
 	serviceType metadata.ServiceType
 	state       state
+	testing     bool
 
 	reset struct {
 		svc        service
@@ -73,6 +74,8 @@ type service interface {
 func newService(
 	file string,
 	index int,
+	adjust func(*operator),
+	testing bool,
 ) (*operator, error) {
 	cfg := newServiceConfig()
 	if err := parseConfigFromFile(file, &cfg); err != nil {
@@ -88,7 +91,12 @@ func newService(
 		index:       index,
 		sid:         cfg.mustGetServiceUUID(),
 		serviceType: cfg.mustGetServiceType(),
+		testing:     testing,
 	}
+	if adjust != nil {
+		adjust(op)
+	}
+	op.sid = op.cfg.mustGetServiceUUID()
 	return op, nil
 }
 
@@ -102,6 +110,12 @@ func (op *operator) ServiceID() string {
 
 func (op *operator) ServiceType() metadata.ServiceType {
 	return op.serviceType
+}
+
+func (op *operator) RawService() interface{} {
+	op.RLock()
+	defer op.RUnlock()
+	return op.reset.svc
 }
 
 func (op *operator) Close() error {
@@ -175,6 +189,12 @@ func (op *operator) Adjust(
 	defer op.Unlock()
 
 	fn(&op.cfg)
+}
+
+func (op *operator) GetServiceConfig() ServiceConfig {
+	op.RLock()
+	defer op.RUnlock()
+	return op.cfg
 }
 
 func (op *operator) startLogServiceLocked(
@@ -366,6 +386,9 @@ func (op *operator) initRuntime() error {
 		runtime.WithClock(op.reset.clock),
 	)
 	runtime.SetupServiceBasedRuntime(op.sid, rt)
+	if op.testing {
+		runtime.SetupServiceRuntimeTestingContext(op.sid)
+	}
 	catalog.SetupDefines(op.sid)
 	op.reset.rt = rt
 	return nil

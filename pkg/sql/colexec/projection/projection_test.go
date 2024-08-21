@@ -52,7 +52,7 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Projection{
-				Es: []*plan.Expr{
+				ProjectList: []*plan.Expr{
 					{
 						Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
 						Typ: plan.Type{

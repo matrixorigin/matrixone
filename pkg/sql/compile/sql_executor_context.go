@@ -110,7 +110,7 @@ func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot plan.Snapshot) (*pb.StatsInfo, error) {
+func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*pb.StatsInfo, error) {
 	ctx, t, err := c.getRelation(obj.GetSchemaName(), obj.GetObjName(), snapshot)
 	if err != nil {
 		return nil, err
@@ -125,7 +125,7 @@ func (c *compilerContext) GetStatsCache() *plan.StatsCache {
 	return c.statsCache
 }
 
-func (c *compilerContext) GetSubscriptionMeta(dbName string, snapshot plan.Snapshot) (*plan.SubscriptionMeta, error) {
+func (c *compilerContext) GetSubscriptionMeta(dbName string, snapshot *plan.Snapshot) (*plan.SubscriptionMeta, error) {
 	return nil, nil
 }
 
@@ -137,11 +137,11 @@ func (c *compilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, strin
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bool {
+func (c *compilerContext) DatabaseExists(name string, snapshot *plan.Snapshot) bool {
 	ctx := c.GetContext()
 	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -157,11 +157,11 @@ func (c *compilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bo
 	return err == nil
 }
 
-func (c *compilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (uint64, error) {
+func (c *compilerContext) GetDatabaseId(dbName string, snapshot *plan.Snapshot) (uint64, error) {
 	ctx := c.GetContext()
 	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -192,13 +192,16 @@ func (c *compilerContext) GetDbLevelConfig(dbName string, varName string) (strin
 }
 
 func (c *compilerContext) DefaultDatabase() string {
-	return c.defaultDB
+	if c.lower == 0 {
+		return c.defaultDB
+	}
+	return strings.ToLower(c.defaultDB)
 }
 
 func (c *compilerContext) GetPrimaryKeyDef(
 	dbName string,
 	tableName string,
-	snapshot plan.Snapshot) []*plan.ColDef {
+	snapshot *plan.Snapshot) []*plan.ColDef {
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
@@ -258,11 +261,11 @@ func (c *compilerContext) SetContext(ctx context.Context) {
 	c.proc.ReplaceTopCtx(ctx)
 }
 
-func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
 	ctx := c.GetContext()
 	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -277,7 +280,7 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (o
 	return c.Resolve(dbName, tableName, snapshot)
 }
 
-func (c *compilerContext) Resolve(dbName string, tableName string, snapshot plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
 	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
 	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
 		dbName = strings.ToLower(dbName)
@@ -327,7 +330,7 @@ func (c *compilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error
 func (c *compilerContext) getRelation(
 	dbName string,
 	tableName string,
-	snapshot plan.Snapshot) (context.Context, engine.Relation, error) {
+	snapshot *plan.Snapshot) (context.Context, engine.Relation, error) {
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil, nil, err
@@ -336,7 +339,7 @@ func (c *compilerContext) getRelation(
 	ctx := c.GetContext()
 	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {

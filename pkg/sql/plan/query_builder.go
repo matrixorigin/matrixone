@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"go/constant"
 	"slices"
 	"strconv"
 	"strings"
@@ -1554,7 +1553,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// after this ,never call ReCalcNodeStats again !!!
 
 		if builder.isForUpdate {
-			reCheckifNeedLockWholeTable(builder, false)
+			reCheckifNeedLockWholeTable(builder)
 		}
 
 		builder.handleMessgaes(rootID)
@@ -2309,7 +2308,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				Exprs: tree.Exprs{tree.NewComparisonExpr(
 					tree.LESS_THAN,
 					tree.NewUnresolvedName(tree.NewCStr(ctx.cteName, ctx.lower), tree.NewCStr(moRecursiveLevelCol, 1)),
-					tree.NewNumValWithType(constant.MakeInt64(moDefaultRecursionMax), fmt.Sprintf("%d", moDefaultRecursionMax), false, tree.P_int64),
+					tree.NewNumVal(int64(moDefaultRecursionMax), fmt.Sprintf("%d", moDefaultRecursionMax), false, tree.P_int64),
 				)},
 			}
 			if clause.Where != nil {
@@ -2459,7 +2458,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 
 		// snapshot to fix
-		pk := builder.compCtx.GetPrimaryKeyDef(schema, table, Snapshot{TS: &timestamp.Timestamp{}})
+		pk := builder.compCtx.GetPrimaryKeyDef(schema, table, nil)
 		if len(pk) > 1 || pk[0].Name != r.ColName() {
 			return 0, moerr.NewNotSupported(builder.GetContext(), "%s is not primary key in time window", tree.String(col, dialect.MYSQL))
 		}
@@ -2478,7 +2477,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 
 		name := tree.NewUnresolvedColName("interval")
-		arg2 := tree.NewNumValWithType(constant.MakeString(astTimeWindow.Interval.Unit), astTimeWindow.Interval.Unit, false, tree.P_char)
+		arg2 := tree.NewNumVal(astTimeWindow.Interval.Unit, astTimeWindow.Interval.Unit, false, tree.P_char)
 		itr := &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{astTimeWindow.Interval.Val, arg2},
@@ -2489,7 +2488,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 
 		if astTimeWindow.Sliding != nil {
-			arg2 = tree.NewNumValWithType(constant.MakeString(astTimeWindow.Sliding.Unit), astTimeWindow.Sliding.Unit, false, tree.P_char)
+			arg2 = tree.NewNumVal(astTimeWindow.Sliding.Unit, astTimeWindow.Sliding.Unit, false, tree.P_char)
 			sld := &tree.FuncExpr{
 				Func:  tree.FuncName2ResolvableFunctionReference(name),
 				Exprs: tree.Exprs{astTimeWindow.Sliding.Val, arg2},
@@ -2545,7 +2544,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 								Right: e,
 							},
 						},
-						Right: tree.NewNumValWithType(constant.MakeInt64(2), "2", false, tree.P_int64),
+						Right: tree.NewNumVal(int64(2), "2", false, tree.P_int64),
 					}
 					v, err = projectionBinder.BindExpr(b, 0, true)
 					if err != nil {
@@ -2623,6 +2622,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 		}
 		if builder.isForUpdate {
+			lockNode.Children[0] = nodeID
 			nodeID = builder.appendNode(lockNode, ctx)
 		}
 	}
@@ -3536,19 +3536,20 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				return 0, err
 			}
 		}
-		snapshot := ctx.snapshot
-		if snapshot == nil {
-			snapshot = &Snapshot{TS: &timestamp.Timestamp{}}
+
+		var snapshot *Snapshot
+		if ctx.snapshot != nil {
+			snapshot = ctx.snapshot
 		}
 
 		// TODO
-		schema, err = databaseIsValid(schema, builder.compCtx, *snapshot)
+		schema, err = databaseIsValid(schema, builder.compCtx, snapshot)
 		if err != nil {
 			return 0, err
 		}
 
 		// TODO
-		obj, tableDef := builder.compCtx.Resolve(schema, table, *snapshot)
+		obj, tableDef := builder.compCtx.Resolve(schema, table, snapshot)
 		if tableDef == nil {
 			return 0, moerr.NewParseError(builder.GetContext(), "table %q does not exist", table)
 		}
@@ -3758,8 +3759,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				} else if util.TableIsClusterTable(midNode.GetTableDef().GetTableType()) {
 					ctx.binder = NewWhereBinder(builder, ctx)
 					left := tree.NewUnresolvedColName(util.GetClusterTableAttributeName())
-					right := tree.NewNumVal(constant.MakeUint64(uint64(currentAccountID)), strconv.Itoa(int(currentAccountID)), false)
-					right.ValType = tree.P_uint64
+					right := tree.NewNumVal(uint64(currentAccountID), strconv.Itoa(int(currentAccountID)), false, tree.P_uint64)
 					//account_id = the accountId of the non-sys account
 					accountFilter := &tree.ComparisonExpr{
 						Op:    tree.EQUAL,

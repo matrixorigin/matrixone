@@ -281,6 +281,7 @@ func (rm *RoutineManager) Created(rs *Conn) error {
 		pro.receiveExtraInfo(rs)
 	}
 	rm.setRoutine(rs, pro.connectionID, routine)
+	ses.UpdateDebugString()
 	return nil
 }
 
@@ -360,9 +361,9 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
-	connectionInfo := getConnectionInfo(rs)
 	routine := rm.getRoutine(rs)
 	if routine == nil {
+		connectionInfo := getConnectionInfo(rs)
 		err = moerr.NewInternalError(ctx, "routine does not exist")
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
@@ -443,6 +444,14 @@ func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromReques
 		return moerr.NewInternalError(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
 	return routine.migrateConnectionFrom(resp)
+}
+
+func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *query.ResetSessionResponse) error {
+	routine := rm.getRoutineByConnID(req.ConnID)
+	if routine == nil {
+		return moerr.NewInternalError(rm.ctx, "cannot get routine to clear session %d", req.ConnID)
+	}
+	return routine.resetSession(rm.baseService.ID(), resp)
 }
 
 func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {

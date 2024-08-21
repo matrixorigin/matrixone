@@ -76,7 +76,9 @@ type LeftJoin struct {
 	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (leftJoin *LeftJoin) GetOperatorBase() *vm.OperatorBase {
@@ -116,22 +118,27 @@ func (leftJoin *LeftJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 
 func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := leftJoin.ctr
+	anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
+	allocSize := int64(0)
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.cleanEvalVectors()
 
-		anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
+		allocSize += ctr.maxAllocSize
 
 		if leftJoin.ctr.bat != nil {
-			proc.PutBatch(leftJoin.ctr.bat)
 			leftJoin.ctr.bat = nil
 		}
 		leftJoin.ctr.lastrow = 0
 		leftJoin.ctr = nil
 	}
+	if leftJoin.ProjectList != nil {
+		allocSize += leftJoin.ProjectAllocSize
+		leftJoin.FreeProjection(proc)
+	}
+	anal.Alloc(allocSize)
 }
 
 func (ctr *container) cleanExprExecutor() {

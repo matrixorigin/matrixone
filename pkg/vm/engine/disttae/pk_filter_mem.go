@@ -42,7 +42,7 @@ func newMemPKFilter(
 	ts timestamp.Timestamp,
 	packerPool *fileservice.Pool[*types.Packer],
 	basePKFilter basePKFilter,
-) (filter MemPKFilter) {
+) (filter MemPKFilter, err error) {
 	//defer func() {
 	//	if filter.iter == nil {
 	//		filter.isValid = true
@@ -186,7 +186,9 @@ func newMemPKFilter(
 			packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
 		} else {
 			vec := vector.NewVec(types.T_any.ToType())
-			vec.UnmarshalBinary(basePKFilter.vec.([]byte))
+			if err = vec.UnmarshalBinary(basePKFilter.vec.([]byte)); err != nil {
+				return MemPKFilter{}, err
+			}
 			packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
 		}
 
@@ -250,10 +252,10 @@ func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(ts timestamp.Timestamp) {
 		}
 
 	case function.IN, function.PREFIX_IN:
-		// may be it's better to iterate rows instead.
-		if len(f.packed) > 128 {
-			return
-		}
+		// // may be it's better to iterate rows instead.
+		// if len(f.packed) > 128 {
+		// 	return
+		// }
 		//spec = logtailreplay.InKind(f.packed, f.op)
 		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
 			return logtailreplay.InKind(f.packed, f.op)

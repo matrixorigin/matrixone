@@ -983,13 +983,12 @@ func CompileFilterExpr(
 func TryFastFilterBlocks(
 	ctx context.Context,
 	tbl *txnTable,
-	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
 	snapshotTS timestamp.Timestamp,
 	tableDef *plan.TableDef,
 	exprs []*plan.Expr,
 	snapshot *logtailreplay.PartitionState,
+	extraCommittedObjects []objectio.ObjectStats,
 	uncommittedObjects []objectio.ObjectStats,
-	//dirtyBlocks *map[types.Blockid]struct{},
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 	proc *process.Process,
@@ -1002,7 +1001,6 @@ func TryFastFilterBlocks(
 	err = ExecuteBlockFilter(
 		ctx,
 		tbl,
-		txnOffset,
 		snapshotTS,
 		fastFilterOp,
 		loadOp,
@@ -1010,8 +1008,8 @@ func TryFastFilterBlocks(
 		blockFilterOp,
 		seekOp,
 		snapshot,
+		extraCommittedObjects,
 		uncommittedObjects,
-		//dirtyBlocks,
 		outBlocks,
 		fs,
 		proc,
@@ -1023,7 +1021,6 @@ func TryFastFilterBlocks(
 func ExecuteBlockFilter(
 	ctx context.Context,
 	tbl *txnTable,
-	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
 	snapshotTS timestamp.Timestamp,
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
@@ -1031,8 +1028,8 @@ func ExecuteBlockFilter(
 	blockFilterOp BlockFilterOp,
 	seekOp SeekFirstBlockOp,
 	snapshot *logtailreplay.PartitionState,
+	extraCommittedObjects []objectio.ObjectStats,
 	uncommittedObjects []objectio.ObjectStats,
-	//dirtyBlocks *map[types.Blockid]struct{},
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 	proc *process.Process,
@@ -1164,7 +1161,7 @@ func ExecuteBlockFilter(
 				}
 
 				blk.Sorted = obj.Sorted
-				blk.EntryState = obj.EntryState
+				blk.Appendable = obj.Appendable
 				blk.CommitTs = obj.CommitTS
 
 				//if obj.HasDeltaLoc {
@@ -1179,6 +1176,7 @@ func ExecuteBlockFilter(
 			return
 		},
 		snapshot,
+		extraCommittedObjects,
 		uncommittedObjects...,
 	)
 	return

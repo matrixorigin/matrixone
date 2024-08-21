@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
@@ -250,6 +251,13 @@ type Session struct {
 	// disableAgg co-operate with RecordStatement
 	// more can see Benchmark_RecordStatement_IsTrue()
 	disableAgg bool
+
+	// mysql parser
+	mysqlParser mysql.MySQLParser
+}
+
+func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
+	return &ses.mysqlParser
 }
 
 func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
@@ -577,6 +585,12 @@ func (ses *Session) GetService() string {
 	return ses.service
 }
 
+// ReserveConnAndClose closes the session with the connection is reserved.
+func (ses *Session) ReserveConnAndClose() {
+	ses.ReserveConn()
+	ses.Close()
+}
+
 func (ses *Session) Close() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -708,10 +722,10 @@ func (ses *Session) UpdateDebugString() {
 	sb.WriteByte('|')
 	//account info
 	if ses.tenant != nil {
-		sb.WriteString(ses.tenant.String())
+		sb.WriteString(fmt.Sprintf("account %s:%s", ses.tenant.GetTenant(), ses.tenant.GetUser()))
 	} else {
 		acc := getDefaultAccount()
-		sb.WriteString(acc.String())
+		sb.WriteString(fmt.Sprintf("account %s:%s", acc.GetTenant(), acc.GetUser()))
 	}
 	sb.WriteByte('|')
 	//go routine id
@@ -748,16 +762,16 @@ func (ses *Session) InvalidatePrivilegeCache() {
 
 // GetBackgroundExec generates a background executor
 func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
-	ses.EnterFPrint(99)
-	defer ses.ExitFPrint(99)
+	ses.EnterFPrint(FPGetBackgroundExec)
+	defer ses.ExitFPrint(FPGetBackgroundExec)
 	return NewBackgroundExec(ctx, ses)
 }
 
 // GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction.
 // newRawBatch denotes we need the raw batch instead of mysql result set.
 func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
-	ses.EnterFPrint(102)
-	defer ses.ExitFPrint(102)
+	ses.EnterFPrint(FPGetShareTxnBackgroundExec)
+	defer ses.ExitFPrint(FPGetShareTxnBackgroundExec)
 	var txnOp TxnOperator
 	if ses.GetTxnHandler() != nil {
 		txnOp = ses.GetTxnHandler().GetTxn()
@@ -784,8 +798,8 @@ var GetRawBatchBackgroundExec = func(ctx context.Context, ses *Session) Backgrou
 }
 
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec {
-	ses.EnterFPrint(100)
-	defer ses.ExitFPrint(100)
+	ses.EnterFPrint(FPGetRawBatchBackgroundExec)
+	defer ses.ExitFPrint(FPGetRawBatchBackgroundExec)
 
 	backSes := newBackSession(ses, nil, "", batchFetcher2)
 	bh := &backExec{
@@ -1065,6 +1079,13 @@ func (ses *Session) GetConnectionID() uint32 {
 		return ses.GetResponser().GetU32(CONNID)
 	}
 	return 0
+}
+
+func (ses *Session) SetConnectionID(v uint32) {
+	protocol := ses.GetResponser()
+	if protocol != nil {
+		ses.GetResponser().SetU32(CONNID, v)
+	}
 }
 
 func (ses *Session) skipAuthForSpecialUser() bool {
@@ -1504,6 +1525,53 @@ func (ses *Session) SetSessionRoutineStatus(status string) error {
 	return err
 }
 
+// reset resets the ses instance and copy some fields of prev, then
+// close the prev.
+func (ses *Session) reset(prev *Session) error {
+	if ses == nil || prev == nil {
+		return nil
+	}
+	// update information in the new session.
+	ses.tenant = prev.tenant.Copy()
+	ses.accountId = prev.accountId
+	ses.label = make(map[string]string, len(prev.label))
+	for k, v := range prev.label {
+		ses.label[k] = v
+	}
+	*ses.timeZone = *prev.timeZone
+	ses.uuid = prev.uuid
+	ses.fromRealUser = prev.fromRealUser
+	ses.rm = prev.rm
+	ses.rt = prev.rt
+	ses.requestLabel = make(map[string]string, len(prev.requestLabel))
+	for k, v := range prev.requestLabel {
+		ses.requestLabel[k] = v
+	}
+	ses.connType = prev.connType
+	ses.timestampMap = make(map[TS]time.Time, len(prev.timestampMap))
+	for k, v := range prev.timestampMap {
+		ses.timestampMap[k] = v
+	}
+	ses.fromProxy = prev.fromProxy
+	ses.clientAddr = prev.clientAddr
+	ses.proxyAddr = prev.proxyAddr
+
+	// rollback the transactions in the old session.
+	tempExecCtx := ExecCtx{
+		ses:    prev,
+		txnOpt: FeTxnOption{byRollback: true},
+	}
+	err := prev.GetTxnHandler().Rollback(&tempExecCtx)
+	if err != nil {
+		prev.Error(tempExecCtx.reqCtx, "failed to rollback txn",
+			zap.Error(err))
+		return err
+	}
+	// close the previous session.
+	prev.ReserveConnAndClose()
+	return nil
+}
+
 func checkPlanIsInsertValues(proc *process.Process,
 	p *plan.Plan) (bool, [][]colexec.ExpressionExecutor) {
 	qry := p.GetQuery()
@@ -1576,8 +1644,8 @@ func newDBMigration(db string) *dbMigration {
 }
 
 func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
-	ses.EnterFPrint(90)
-	defer ses.ExitFPrint(90)
+	ses.EnterFPrint(FPMigrateDB)
+	defer ses.ExitFPrint(FPMigrateDB)
 	if d.db == "" {
 		return nil
 	}
@@ -1607,8 +1675,8 @@ func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepar
 }
 
 func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error {
-	ses.EnterFPrint(103)
-	defer ses.ExitFPrint(103)
+	ses.EnterFPrint(FPMigratePrepareStmt)
+	defer ses.ExitFPrint(FPMigratePrepareStmt)
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
 		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
 	}
@@ -1625,8 +1693,8 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 
 func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	ses.ResetFPrints()
-	ses.EnterFPrint(89)
-	defer ses.ExitFPrint(89)
+	ses.EnterFPrint(FPMigrate)
+	defer ses.ExitFPrint(FPMigrate)
 	defer ses.ResetFPrints()
 	parameters := getGlobalPu().SV
 
@@ -1714,6 +1782,9 @@ func (ses *Session) log(ctx context.Context, level zapcore.Level, msg string, fi
 	ses.initLogger()
 	if ses.logLevel.Enabled(level) {
 		fields = append(fields, zap.String("session_info", ses.debugStr)) // not use ses.GetDebugStr() because this func may be locked.
+		if ses.tenant != nil {
+			fields = append(fields, zap.String("role", ses.tenant.GetDefaultRole()))
+		}
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
 		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
@@ -1728,6 +1799,9 @@ func (ses *Session) logf(ctx context.Context, level zapcore.Level, format string
 	if ses.logLevel.Enabled(level) {
 		fields := make([]zap.Field, 0, 5)
 		fields = append(fields, zap.String("session_info", ses.debugStr))
+		if ses.tenant != nil {
+			fields = append(fields, zap.String("role", ses.tenant.GetDefaultRole()))
+		}
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
 		ses.logger.Log(fmt.Sprintf(format, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)

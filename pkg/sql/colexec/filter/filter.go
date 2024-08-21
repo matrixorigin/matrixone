@@ -163,6 +163,7 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Batch = filter.ctr.buf
 		}
 	}
+
 	return result, nil
 }
 

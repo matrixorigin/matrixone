@@ -113,3 +113,7 @@ func (c *Cache) Available() int64 {
 func (c *Cache) DeletePaths(_ context.Context, _ []string) {
 	//TODO
 }
+
+func (c *Cache) Evict(done chan int64) {
+	c.l.Evict(done)
+}

@@ -20,6 +20,7 @@ import (
 
 // Cluster is the mo cluster interface
 type Cluster interface {
+	ID() uint64
 	Start() error
 	Close() error
 	GetService(sid string) (ServiceOperator, error)
@@ -34,6 +35,8 @@ type ServiceOperator interface {
 	ServiceType() metadata.ServiceType
 	Index() int
 	Adjust(func(*ServiceConfig))
+	RawService() interface{}
+	GetServiceConfig() ServiceConfig
 
 	Start() error
 	Close() error

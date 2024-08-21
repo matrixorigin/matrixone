@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	goruntime "runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -181,30 +180,35 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 	}()
 
-	id := uint64(0)
-	if s.DataSource.TableDef != nil {
-		id = s.DataSource.TableDef.TblId
-	}
-	p = pipeline.New(id, s.DataSource.Attributes, s.RootOp, s.Reg)
-	if s.DataSource.isConst {
-		_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
+	if s.DataSource == nil {
+		p = pipeline.NewMerge(s.RootOp)
+		_, err = p.MergeRun(s.Proc)
 	} else {
-		if s.DataSource.R == nil {
-			s.NodeInfo.Data = engine.BuildEmptyRelData()
-			readers, _, err := s.buildReaders(c, 1)
-			if err != nil {
-				return err
+		id := uint64(0)
+		if s.DataSource.TableDef != nil {
+			id = s.DataSource.TableDef.TblId
+		}
+		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
+		if s.DataSource.isConst {
+			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
+		} else {
+			if s.DataSource.R == nil {
+				s.NodeInfo.Data = engine.BuildEmptyRelData()
+				readers, _, err := s.buildReaders(c, 1)
+				if err != nil {
+					return err
+				}
+				s.DataSource.R = readers[0]
+				s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 			}
-			s.DataSource.R = readers[0]
-		}
 
-		var tag int32
-		if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
-			tag = s.DataSource.node.RecvMsgList[0].MsgTag
+			var tag int32
+			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
+				tag = s.DataSource.node.RecvMsgList[0].MsgTag
+			}
+			_, err = p.Run(s.DataSource.R, tag, s.Proc)
 		}
-		_, err = p.Run(s.DataSource.R, tag, s.Proc)
 	}
-
 	select {
 	case <-s.Proc.Ctx.Done():
 		err = nil
@@ -298,16 +302,19 @@ func (s *Scope) MergeRun(c *Compile) error {
 		}
 	}()
 
-	p := pipeline.NewMerge(s.RootOp, s.Reg)
-	if _, err := p.MergeRun(s.Proc); err != nil {
-		select {
-		case <-s.Proc.Ctx.Done():
-		default:
-			p.Cleanup(s.Proc, true, c.isPrepare, err)
+	if s.Magic != Normal && s.DataSource != nil {
+		magic := s.Magic
+		s.Magic = Normal
+		err := s.ParallelRun(c)
+		s.Magic = magic
+		if err != nil {
+			return err
+		}
+	} else {
+		if err := s.Run(c); err != nil {
 			return err
 		}
 	}
-	p.Cleanup(s.Proc, false, c.isPrepare, nil)
 
 	// receive and check error from pre-scopes and remote scopes.
 	preScopeCount := len(s.PreScopes)
@@ -356,7 +363,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
 
-	p := pipeline.New(0, nil, s.RootOp, s.Reg)
+	p := pipeline.New(0, nil, s.RootOp)
 	sender, err := s.remoteRun(c)
 
 	runErr := err
@@ -393,10 +400,11 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		// if codes run here, it means some error happens during build the parallel scope.
 		// we should do clean work for source-scope to avoid receiver hung.
 		if parallelScope == nil {
-			pipeline.NewMerge(s.RootOp, s.Reg).Cleanup(s.Proc, true, c.isPrepare, err)
+			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, true, c.isPrepare, err)
 		}
 	}()
 
+	_, isTableScan := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan)
 	switch {
 	// probability 1: it's a JOIN pipeline.
 	case s.IsJoin:
@@ -408,9 +416,8 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		parallelScope, err = buildLoadParallelRun(s, c)
 
 	// probability 3: it's a SCAN pipeline.
-	case s.DataSource != nil:
+	case isTableScan:
 		parallelScope, err = buildScanParallelRun(s, c)
-		//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
 
 	// others.
 	default:
@@ -421,9 +428,14 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		return err
 	}
 
+	if parallelScope != s {
+		setContextForParallelScope(parallelScope, s.Proc.Ctx, s.Proc.Cancel)
+	}
+
 	if parallelScope.Magic == Normal {
 		return parallelScope.Run(c)
 	}
+	parallelScope.Magic = Normal
 	return parallelScope.MergeRun(c)
 }
 
@@ -439,18 +451,11 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if s.ShuffleIdx > 0 { //shuffle join
 		buildScope := c.newJoinBuildScope(s, 1)
 		s.PreScopes = append(s.PreScopes, buildScope)
-		if s.BuildIdx > 1 {
-			probeScope := c.newJoinProbeScopeWithBidx(s)
-			s.PreScopes = append(s.PreScopes, probeScope)
-		}
-		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
+		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx]
 		return s, nil
 	}
 
 	if mcpu <= 1 { // broadcast join with no parallel
-		buildScope := c.newJoinBuildScope(s, 1)
-		s.PreScopes = append(s.PreScopes, buildScope)
-		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx]
 		return s, nil
 	}
 
@@ -545,19 +550,13 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan cannot run in remote.")
 	}
 
-	maxProvidedCpuNumber := goruntime.GOMAXPROCS(0)
-	if c.IsTpQuery() {
-		maxProvidedCpuNumber = 1
-	}
-
-	readers, scanUsedCpuNumber, err := s.buildReaders(c, maxProvidedCpuNumber)
+	readers, scanUsedCpuNumber, err := s.buildReaders(c, s.NodeInfo.Mcpu)
 	if err != nil {
 		return nil, err
 	}
 
 	// only one scan reader, it can just run without any merge.
 	if scanUsedCpuNumber == 1 {
-		s.Magic = Normal
 		s.DataSource.R = readers[0]
 		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 		return s, nil
@@ -572,6 +571,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	for i := 0; i < scanUsedCpuNumber; i++ {
 		readerScopes[i] = newScope(Normal)
 		readerScopes[i].NodeInfo = s.NodeInfo
+		readerScopes[i].NodeInfo.Mcpu = 1
 		readerScopes[i].DataSource = &Source{
 			R:            readers[i],
 			SchemaName:   s.DataSource.SchemaName,
@@ -589,6 +589,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		ReleaseScopes(readerScopes)
 		return nil, err
 	}
+	mergeFromParallelScanScope.DataSource = nil
 	return mergeFromParallelScanScope, nil
 }
 
@@ -699,17 +700,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 	}
 	return nil
-}
-
-func (s *Scope) isShuffle() bool {
-	// the pipeline is merge->group->xxx
-	if s != nil && s.RootOp != nil && s.RootOp.GetOperatorBase().NumChildren() > 0 {
-		op := vm.GetLeafOpParent(nil, s.RootOp)
-		if op.OpType() == vm.Group {
-			return op.(*group.Group).IsShuffle
-		}
-	}
-	return false
 }
 
 func (s *Scope) isRight() bool {
@@ -922,11 +912,11 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			}
 			arg.Release()
 		case vm.Output:
-		case vm.Connector:
-		case vm.Dispatch:
 		default:
-			for j := range ss {
-				ss[j].setRootOperator(dupOperator(op, nil, j))
+			if op != s.RootOp {
+				for j := range ss {
+					ss[j].setRootOperator(dupOperator(op, nil, j))
+				}
 			}
 		}
 		return nil
@@ -1134,7 +1124,7 @@ func (s *Scope) replace(c *Compile) error {
 
 	delAffectedRows := uint64(0)
 	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond))
+		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond), NoAccountId)
 		if err != nil {
 			return err
 		}
@@ -1147,7 +1137,7 @@ func (s *Scope) replace(c *Compile) error {
 	} else {
 		sql = "insert " + c.sql[7:]
 	}
-	result, err := c.runSqlWithResult(sql)
+	result, err := c.runSqlWithResult(sql, NoAccountId)
 	if err != nil {
 		return err
 	}
@@ -1217,7 +1207,9 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			s.NodeInfo.Data,
 			scanUsedCpuNumber,
 			s.TxnOffset,
-			len(s.DataSource.OrderBy) > 0)
+			len(s.DataSource.OrderBy) > 0,
+			engine.Policy_CheckAll,
+		)
 
 		if err != nil {
 			return
@@ -1309,14 +1301,16 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 				s.NodeInfo.Data,
 				scanUsedCpuNumber,
 				s.TxnOffset,
-				len(s.DataSource.OrderBy) > 0)
+				len(s.DataSource.OrderBy) > 0,
+				engine.Policy_CheckAll,
+			)
 			if err != nil {
 				return
 			}
 			readers = append(readers, mainRds...)
 		} else {
 			var mp map[int16]engine.RelData
-			if s.NodeInfo.Data != nil {
+			if s.NodeInfo.Data != nil && s.NodeInfo.Data.DataCnt() > 1 {
 				mp = s.NodeInfo.Data.GroupByPartitionNum()
 			}
 			var subRel engine.Relation
@@ -1326,21 +1320,25 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 					return
 				}
 
-				var subRelData engine.RelData
-				if s.NodeInfo.Data == nil {
-					subRelData = nil
+				var subBlkList engine.RelData
+				if s.NodeInfo.Data == nil || s.NodeInfo.Data.DataCnt() <= 1 {
+					//Even subBlkList is nil,
+					//we still need to build reader for sub partition table to read data from memory.
+					subBlkList = nil
 				} else {
-					subRelData = mp[int16(num)]
+					subBlkList = mp[int16(num)]
 				}
 
 				subRds, err = subRel.BuildReaders(
 					ctx,
 					c.proc,
 					s.DataSource.FilterExpr,
-					subRelData,
+					subBlkList,
 					scanUsedCpuNumber,
 					s.TxnOffset,
-					len(s.DataSource.OrderBy) > 0)
+					len(s.DataSource.OrderBy) > 0,
+					engine.Policy_CheckAll,
+				)
 				if err != nil {
 					return
 				}

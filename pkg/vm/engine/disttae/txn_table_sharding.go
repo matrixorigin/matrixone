@@ -18,7 +18,7 @@ import (
 	"context"
 
 	"github.com/fagongzi/goetty/v2/buf"
-
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -194,24 +194,31 @@ func (tbl *txnTableDelegate) Size(
 func (tbl *txnTableDelegate) Ranges(
 	ctx context.Context,
 	exprs []*plan.Expr,
-	n int,
+	txnOffset int,
 ) (engine.RelData, error) {
 	if tbl.isLocal() {
 		return tbl.origin.Ranges(
 			ctx,
 			exprs,
-			n,
+			txnOffset,
 		)
 	}
 
-	var rs []engine.RelData
+	buf := morpc.NewBuffer()
+	defer buf.Close()
+	uncommitted := tbl.origin.collectUnCommittedObjects(txnOffset)
+	buf.Mark()
+	for _, v := range uncommitted {
+		buf.EncodeBytes(v[:])
+	}
 
+	var rs []engine.RelData
 	err := tbl.forwardRead(
 		ctx,
 		shardservice.ReadRanges,
 		func(param *shard.ReadParam) {
 			param.RangesParam.Exprs = exprs
-			param.RangesParam.TxnOffset = int32(n)
+			param.RangesParam.UncommittedObjects = buf.GetMarkedData()
 		},
 		func(resp []byte) {
 			data, err := UnmarshalRelationData(resp)
@@ -312,7 +319,8 @@ func (tbl *txnTableDelegate) BuildReaders(
 	relData engine.RelData,
 	num int,
 	txnOffset int,
-	orderBy bool) ([]engine.Reader, error) {
+	orderBy bool,
+	policy engine.TombstoneApplyPolicy) ([]engine.Reader, error) {
 	if tbl.isLocal() {
 		return tbl.origin.BuildReaders(
 			ctx,
@@ -322,6 +330,7 @@ func (tbl *txnTableDelegate) BuildReaders(
 			num,
 			txnOffset,
 			orderBy,
+			engine.Policy_CheckAll,
 		)
 	}
 	return nil, nil
@@ -378,19 +387,9 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 	return modify, nil
 }
 
-func (tbl *txnTableDelegate) MergeObjects(
-	ctx context.Context,
-	objstats []objectio.ObjectStats,
-	policyName string,
-	targetObjSize uint32,
-) (*api.MergeCommitEntry, error) {
+func (tbl *txnTableDelegate) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
 	if tbl.isLocal() {
-		return tbl.origin.MergeObjects(
-			ctx,
-			objstats,
-			policyName,
-			targetObjSize,
-		)
+		return tbl.origin.MergeObjects(ctx, objstats, targetObjSize)
 	}
 
 	var entry api.MergeCommitEntry
@@ -403,7 +402,6 @@ func (tbl *txnTableDelegate) MergeObjects(
 				os[i] = o.Marshal()
 			}
 			param.MergeObjectsParam.Objstats = os
-			param.MergeObjectsParam.PolicyName = policyName
 			param.MergeObjectsParam.TargetObjSize = targetObjSize
 		},
 		func(resp []byte) {
@@ -418,6 +416,35 @@ func (tbl *txnTableDelegate) MergeObjects(
 		return nil, err
 	}
 	return &entry, nil
+}
+
+func (tbl *txnTableDelegate) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
+	if tbl.isLocal() {
+		return tbl.origin.GetNonAppendableObjectStats(
+			ctx,
+		)
+	}
+
+	var stats []objectio.ObjectStats
+	err := tbl.forwardRead(
+		ctx,
+		shardservice.ReadVisibleObjectStats,
+		func(param *shard.ReadParam) {},
+		func(resp []byte) {
+			if len(resp)%objectio.ObjectStatsLen != 0 {
+				panic("invalid resp")
+			}
+			size := len(resp) / objectio.ObjectStatsLen
+			stats = make([]objectio.ObjectStats, size)
+			for i := range size {
+				stats[i].UnMarshal(resp[i*objectio.ObjectStatsLen:])
+			}
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return stats, nil
 }
 
 func (tbl *txnTableDelegate) TableDefs(
