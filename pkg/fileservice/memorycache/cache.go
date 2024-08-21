@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache"
 	cache "github.com/matrixorigin/matrixone/pkg/pb/query"
 )
@@ -30,10 +31,10 @@ type Cache struct {
 }
 
 func NewCache(
-	capacity int64,
-	postSet func(key cache.CacheKey, value CacheData),
-	postGet func(key cache.CacheKey, value CacheData),
-	postEvict func(key cache.CacheKey, value CacheData),
+	capacity fscache.CapacityFunc,
+	postSet func(key cache.CacheKey, value fscache.Data),
+	postGet func(key cache.CacheKey, value fscache.Data),
+	postEvict func(key cache.CacheKey, value fscache.Data),
 	allocator malloc.Allocator,
 ) *Cache {
 
@@ -67,17 +68,17 @@ func NewCache(
 	return c
 }
 
-func (c *Cache) Alloc(n int) CacheData {
+func (c *Cache) Alloc(n int) fscache.Data {
 	c.l.EnsureNBytes(n)
 	data := newData(c.allocator, n, &c.size)
 	return data
 }
 
-func (c *Cache) Get(ctx context.Context, key cache.CacheKey) (CacheData, bool) {
+func (c *Cache) Get(ctx context.Context, key cache.CacheKey) (fscache.Data, bool) {
 	return c.l.Get(ctx, key)
 }
 
-func (c *Cache) Set(ctx context.Context, key cache.CacheKey, value CacheData) error {
+func (c *Cache) Set(ctx context.Context, key cache.CacheKey, value fscache.Data) error {
 	data := value.(*Data)
 	// freeze
 	var freeze malloc.Freezer
@@ -111,4 +112,8 @@ func (c *Cache) Available() int64 {
 
 func (c *Cache) DeletePaths(_ context.Context, _ []string) {
 	//TODO
+}
+
+func (c *Cache) Evict(done chan int64) {
+	c.l.Evict(done)
 }
