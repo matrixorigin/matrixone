@@ -23,8 +23,8 @@ type subPathType byte
 type pathFlag byte
 
 type ByteJson struct {
-	Data []byte
 	Type TpCode
+	Data []byte
 }
 type kv struct {
 	key string

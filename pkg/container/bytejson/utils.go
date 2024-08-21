@@ -332,7 +332,7 @@ func addByteElem(buf []byte, entryStart int, elems []ByteJson) []byte {
 	return buf
 }
 
-func mergeToArray(origin []ByteJson) *ByteJson {
+func mergeToArray(origin []ByteJson) ByteJson {
 	totalSize := headerSize + len(origin)*valEntrySize
 	for _, el := range origin {
 		if el.Type != TpCodeLiteral {
@@ -343,7 +343,7 @@ func mergeToArray(origin []ByteJson) *ByteJson {
 	endian.PutUint32(buf, uint32(len(origin)))
 	endian.PutUint32(buf[docSizeOff:], uint32(totalSize))
 	buf = addByteElem(buf, headerSize, origin)
-	return &ByteJson{Type: TpCodeArray, Data: buf}
+	return ByteJson{Type: TpCodeArray, Data: buf}
 }
 
 // check unnest mode
