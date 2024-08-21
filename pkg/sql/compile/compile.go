@@ -3704,14 +3704,9 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	if c.pn.GetQuery().StmtType != plan.Query_SELECT && len(n.RuntimeFilterProbeList) == 0 {
-		return true
-	}
-
 	if n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN) && len(c.cnList) > 1 && !n.Stats.ForceOneCN {
 		return true
 	}
-
 	return false
 }
 
