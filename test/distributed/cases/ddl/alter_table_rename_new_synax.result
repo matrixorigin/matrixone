@@ -1,0 +1,46 @@
+CREATE TABLE employees (
+id INT AUTO_INCREMENT PRIMARY KEY,
+first_name VARCHAR(50) NOT NULL,
+last_name VARCHAR(50) NOT NULL,
+department VARCHAR(50)
+);
+INSERT INTO employees (first_name, last_name, department)
+VALUES ('John', 'Doe', 'IT'),
+('Jane', 'Smith', 'HR'),
+('Michael', 'Johnson', 'Sales');
+RENAME TABLE employees TO staff;
+show tables;
+Tables_in_alter_table_rename_new_synax
+staff
+desc staff;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO    PRI    null    auto_increment    
+first_name    VARCHAR(50)    NO        null        
+last_name    VARCHAR(50)    NO        null        
+department    VARCHAR(50)    YES        null        
+drop table employees;
+no such table alter_table_rename_new_synax.employees
+drop table staff;
+create database test;
+use test;
+CREATE TABLE employees (
+id INT AUTO_INCREMENT PRIMARY KEY,
+first_name VARCHAR(50) NOT NULL,
+last_name VARCHAR(50) NOT NULL,
+department VARCHAR(50)
+);
+INSERT INTO employees (first_name, last_name, department)
+VALUES ('John', 'Doe', 'IT'),
+('Jane', 'Smith', 'HR'),
+('Michael', 'Johnson', 'Sales');
+RENAME TABLE test.employees TO test.staff;
+show tables;
+Tables_in_test
+staff
+desc staff;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO    PRI    null    auto_increment    
+first_name    VARCHAR(50)    NO        null        
+last_name    VARCHAR(50)    NO        null        
+department    VARCHAR(50)    YES        null        
+drop database test;
