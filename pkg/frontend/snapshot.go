@@ -1836,8 +1836,10 @@ func checkPubExistOrNot(
 		bh,
 		subInfo.PubAccountName,
 		subInfo.PubName)
+
 	if err != nil {
-		return false, err
+		getLogger(sid).Info(fmt.Sprintf("[%s] check pub exist or not error: %v", snapshotName, err))
+		return false, nil
 	}
 
 	if !isPubValid {
@@ -1919,23 +1921,20 @@ func checkSubscriptionExist(
 	}
 
 	if !execResultArrayHasData(erArray) {
-		getLogger(sid).Error(fmt.Sprintf("check subscription %s exist or not: get account id failed", pubName))
-		return false, nil
+		return
 	}
 	if accId, err = erArray[0].GetInt64(newCtx, 0, 0); err != nil {
-		getLogger(sid).Error(fmt.Sprintf("check subscription %s exist or not: get account id failed", pubName))
-		return false, nil
+		return
 	}
 
 	//check the publication is already exist or not
 	newCtx = defines.AttachAccountId(ctx, uint32(accId))
 	pubInfo, err := getPubInfo(newCtx, bh, pubName)
 	if err != nil {
-		getLogger(sid).Error(fmt.Sprintf("check subscription %s exist or not: get pub info failed", pubName))
-		return false, nil
+		return
 	}
 	if pubInfo == nil {
-		return false, nil
+		return
 	}
 
 	return true, nil
