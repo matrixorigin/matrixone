@@ -598,7 +598,7 @@ func restoreToAccount(
 					return
 				}
 			}
-			getLogger(sid).Info(fmt.Sprintf("[%s]skip drop db: %v", snapshotName, dbName))
+			// getLogger(sid).Info(fmt.Sprintf("[%s]skip drop db: %v", snapshotName, dbName))
 			continue
 		}
 
@@ -1836,11 +1836,17 @@ func checkPubExistOrNot(
 		bh,
 		subInfo.PubAccountName,
 		subInfo.PubName)
+
 	if err != nil {
-		return false, err
-	} else if !isPubValid {
-		return false, moerr.NewInternalError(ctx, "there is no publication %s", subInfo.PubName)
+		getLogger(sid).Info(fmt.Sprintf("[%s] check pub exist or not error: %v", snapshotName, err))
+		return false, nil
 	}
+
+	if !isPubValid {
+		getLogger(sid).Info(fmt.Sprintf("[%s] pub %s is not valid", snapshotName, subInfo.PubName))
+		return false, nil
+	}
+
 	return true, nil
 }
 
@@ -1904,7 +1910,7 @@ func checkSubscriptionExist(
 		return
 	}
 
-	getLogger(sid).Info(fmt.Sprintf("[%s] check subscription exist or not: get account id sql: %s", pubName, sql))
+	getLogger(sid).Info(fmt.Sprintf("check subscription %s exist or not: get account id sql: %s", pubName, sql))
 	bh.ClearExecResultSet()
 	if err = bh.Exec(newCtx, sql); err != nil {
 		return
