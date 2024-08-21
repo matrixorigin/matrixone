@@ -74,10 +74,6 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return inputResult, nil
 	}
 
-	if filter.ctr.buf != nil {
-		filter.ctr.buf.CleanOnlyData()
-	}
-
 	filterBat := inputResult.Batch
 	var sels []int64
 	for i := range filter.ctr.executors {
@@ -159,6 +155,9 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 func tryDupBatch(ctr *container, proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
 	if bat == ctr.buf {
 		return bat, nil
+	}
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
 	}
 	//copy input.Batch to ctr.buf
 	var err error
