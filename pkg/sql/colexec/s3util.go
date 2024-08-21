@@ -264,8 +264,11 @@ func (w *S3Writer) WriteBatch(proc *process.Process, bat *batch.Batch) bool {
 	start, end := 0, bat.RowCount()
 	for start < end {
 		n := len(w.batches)
-		if n == 0 || w.batches[n-1].RowCount() >=
-			int(options.DefaultBlockMaxRows) {
+		if n != 0 && w.batches[n-1].RowCount() < int(options.DefaultBlockMaxRows) {
+			// w.batches[n-1] is not full.
+			rbat = w.batches[n-1]
+		} else {
+			// w.batches[n-1] is full, use a new batch.
 			if len(w.tableBatchPool) > 0 {
 				rbat = w.tableBatchPool[0]
 				w.tableBatchPool = w.tableBatchPool[1:]
@@ -278,8 +281,6 @@ func (w *S3Writer) WriteBatch(proc *process.Process, bat *batch.Batch) bool {
 				}
 			}
 			w.batches = append(w.batches, rbat)
-		} else {
-			rbat = w.batches[n-1]
 		}
 		rows := end - start
 		if left := int(options.DefaultBlockMaxRows) - rbat.RowCount(); rows > left {
