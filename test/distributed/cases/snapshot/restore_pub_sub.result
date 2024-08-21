@@ -43,17 +43,17 @@ drop publication if exists pub01;
 create publication pub01 database test01 account all;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub01    test01    *    *        2024-08-21 16:24:53    null    
+pub01    test01    *    *        2024-08-21 18:03:57    null    
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub01    sys    test01    *        2024-08-21 16:24:53    null    null    0
+pub01    sys    test01    *        2024-08-21 18:03:57    null    null    0
 drop database if exists sub01;
 create database sub01 from sys publication pub01;
 drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2024-08-21 08:24:53.945385    account    acc01        
+sp01    2024-08-21 10:03:57.599494    account    acc01        
 use sub01;
 show tables;
 Tables_in_sub01
@@ -77,7 +77,7 @@ pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time
 restore account acc01 from snapshot sp01;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub01    sys    test01    *        2024-08-21 16:24:53    sub01    2024-08-21 16:24:54    0
+pub01    sys    test01    *        2024-08-21 18:03:57    sub01    2024-08-21 18:03:57    0
 show databases;
 Database
 information_schema
@@ -93,10 +93,10 @@ use test01;
 drop table aff01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub01    test01    *    *    acc01    2024-08-21 16:24:53    null    
+pub01    test01    *    *    acc01    2024-08-21 18:03:57    null    
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub01    sys    test01    *        2024-08-21 16:24:53    sub01    2024-08-21 16:24:54    0
+pub01    sys    test01    *        2024-08-21 18:03:57    sub01    2024-08-21 18:03:57    0
 show databases;
 Database
 information_schema
@@ -119,83 +119,67 @@ drop snapshot sp01;
 drop publication pub01;
 drop database test01;
 drop database if exists test02;
-
 create database test02;
-
 use test02;
-
 drop table if exists rs02;
-
 create table rs02 (col1 int primary key , col2 datetime);
-
 insert into rs02 values (1, '2020-10-13 10:10:10');
-
 insert into rs02 values (2, null);
-
 insert into rs02 values (3, '2021-10-10 00:00:00');
-
 insert into rs02 values (4, '2023-01-01 12:12:12');
-
 insert into rs02 values (5, null);
-
 insert into rs02 values (6, null);
-
 insert into rs02 values (7, '2023-11-27 01:02:03');
-
 select * from rs02;
-
+col1    col2
+1    2020-10-13 10:10:10
+2    null
+3    2021-10-10 00:00:00
+4    2023-01-01 12:12:12
+5    null
+6    null
+7    2023-11-27 01:02:03
 drop table if exists rs03;
-
 create table rs03 (col1 int, col2 float, col3 decimal, col4 enum('1','2','3','4'));
-
 insert into rs03 values (1, 12.21, 32324.32131, 1);
-
 insert into rs03 values (2, null, null, 2);
-
 insert into rs03 values (2, -12.1, 34738, null);
-
 insert into rs03 values (1, 90.2314, null, 4);
-
 insert into rs03 values (1, 43425.4325, -7483.432, 2);
-
 drop publication if exists pub02;
-
 create publication pub02 database test02 table rs02 account acc01;
-
 show publications;
-
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub02    test02    rs02    acc01        2024-08-21 18:03:59    null    
 show subscriptions all;
-
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub02    sys    test02    rs02        2024-08-21 18:03:59    null    null    0
 drop database if exists sub02;
-
 create database sub02 from sys publication pub02;
-
 show subscriptions;
-
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub02    sys    test02    rs02        2024-08-21 18:03:59    sub02    2024-08-21 18:03:59    0
 drop snapshot if exists sp02;
-
 create snapshot sp02 for account acc01;
-
 show snapshots;
-
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+sp02    2024-08-21 10:03:59.292709    account    acc01        
 drop database sub02;
-
 drop publication pub02;
-
 show subscriptions;
-
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 restore account acc01 from snapshot sp02;
-
 show subscriptions;
-
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 show databases;
-
+Database
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
 drop snapshot sp02;
-
-drop publication pub02;
-
 drop database test02;
-
 drop database if exists test03;
 create database test03;
 use test03;
@@ -223,7 +207,7 @@ drop publication if exists pub03;
 create publication pub03 database test03 account acc01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub03    test03    *    acc01        2024-08-21 16:24:55    null    
+pub03    test03    *    acc01        2024-08-21 18:04:00    null    
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 drop database if exists sub03;
@@ -289,12 +273,12 @@ drop publication if exists pub04;
 create publication pub04 database test04 account sys comment 'pub to sys account';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub04    test04    *    sys        2024-08-21 16:24:57    null    pub to sys account
+pub04    test04    *    sys        2024-08-21 18:04:01    null    pub to sys account
 drop database if exists sub05;
 create database sub05 from acc01 publication pub04;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub04    acc01    test04    *    pub to sys account    2024-08-21 16:24:57    sub05    2024-08-21 16:24:57    0
+pub04    acc01    test04    *    pub to sys account    2024-08-21 18:04:01    sub05    2024-08-21 18:04:02    0
 drop snapshot if exists sp05;
 create snapshot sp05 for account sys;
 drop database sub05;
@@ -329,7 +313,7 @@ count(*)
 1
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub04    acc01    test04    *    pub to sys account    2024-08-21 16:24:57    sub05    2024-08-21 16:24:57    0
+pub04    acc01    test04    *    pub to sys account    2024-08-21 18:04:01    sub05    2024-08-21 18:04:02    0
 drop database sub05;
 drop snapshot sp05;
 drop publication pub04;
@@ -354,25 +338,25 @@ drop publication if exists pub06;
 create publication pub06 database test06 account acc02 comment 'acc01 pub to acc02';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub06    test06    *    acc02        2024-08-21 16:24:58    null    acc01 pub to acc02
+pub06    test06    *    acc02        2024-08-21 18:04:02    null    acc01 pub to acc02
 drop database if exists sub06;
 create database sub06 from acc01 publication pub06;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    acc01    test06    *    acc01 pub to acc02    2024-08-21 16:24:58    sub06    2024-08-21 16:24:58    0
+pub06    acc01    test06    *    acc01 pub to acc02    2024-08-21 18:04:02    sub06    2024-08-21 18:04:02    0
 restore account acc01 from snapshot sp06;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    acc01    null    null    null    null    sub06    2024-08-21 16:24:58    2
+pub06    acc01    null    null    null    null    sub06    2024-08-21 18:04:02    2
 use sub06;
 internal error: there is no publication pub06
 drop publication if exists pub06;
 create publication pub06 database test06 table table01 account acc02 comment 'acc01 pub to acc02';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub06    test06    table01    acc02    acc02    2024-08-21 16:24:59    null    acc01 pub to acc02
+pub06    test06    table01    acc02    acc02    2024-08-21 18:04:03    null    acc01 pub to acc02
 show databases;
 Database
 information_schema
@@ -433,17 +417,17 @@ drop database if exists sub06;
 create database sub06 from sys publication pub06;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    sys    test07    *        2024-08-21 16:24:59    sub06    2024-08-21 16:24:59    0
+pub06    sys    test07    *        2024-08-21 18:04:03    sub06    2024-08-21 18:04:03    0
 drop snapshot if exists sp06;
 create snapshot sp06 for account sys;
 alter publication pub06 account acc02 database test07;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    sys    null    null    null    null    sub06    2024-08-21 16:56:30    1
+pub06    sys    null    null    null    null    sub06    2024-08-21 18:04:03    1
 restore account sys from snapshot sp06;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    sys    test07    *        2024-08-21 16:24:59    sub06    2024-08-21 16:24:59    0
+pub06    sys    test07    *        2024-08-21 18:04:03    sub06    2024-08-21 18:04:03    0
 drop database sub06;
 drop publication pub06;
 drop table test07.t2;

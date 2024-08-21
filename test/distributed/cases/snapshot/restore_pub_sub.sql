@@ -99,7 +99,6 @@ drop database test01;
 
 -- restore a deleted subscribed db, and this subscribed db corresponds tp the publication db has been deleted,
 -- do not need to restore the subscription db
--- @bvt:issue#18259
 drop database if exists test02;
 create database test02;
 use test02;
@@ -153,9 +152,7 @@ show databases;
 drop snapshot sp02;
 -- @session
 
-drop publication pub02;
 drop database test02;
--- @bvt:issue
 
 
 
