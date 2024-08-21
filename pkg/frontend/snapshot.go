@@ -1921,6 +1921,7 @@ func checkSubscriptionExist(
 	}
 
 	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(newCtx, "there is no publication account %s", pubAccountName)
 		return
 	}
 	if accId, err = erArray[0].GetInt64(newCtx, 0, 0); err != nil {
@@ -1934,6 +1935,7 @@ func checkSubscriptionExist(
 		return
 	}
 	if pubInfo == nil {
+		err = moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
 		return
 	}
 
