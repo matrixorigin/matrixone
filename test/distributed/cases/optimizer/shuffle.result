@@ -1,0 +1,133 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(c1 int, c2 int, c3 int) cluster by c1;
+create table t2(c1 int, c2 int, c3 int) cluster by c1;
+insert into t1 select *,*,* from generate_series(10000000) g;
+insert into t2 select *,*,* from generate_series(9000000) g;
+select mo_ctl('dn', 'flush', 'd1.t1');
+mo_ctl(dn, flush, d1.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'd1.t2');
+mo_ctl(dn, flush, d1.t2)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select Sleep(1);
+sleep(1)
+0
+explain select count(*) from t1,t2 where t1.c1=t2.c1;
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Join
+              Join Type: INNER
+              Join Cond: (t1.c1 = t2.c1) shuffle: range(t1.c1)
+              ->  Table Scan on d1.t1
+              ->  Table Scan on d1.t2
+select count(*) from t1,t2 where t1.c1=t2.c1;
+count(*)
+9000000
+explain select count(*) from t1,t2 where t1.c1=t2.c2;
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Join
+              Join Type: INNER
+              Join Cond: (t1.c1 = t2.c2) shuffle: range(t1.c1)
+              ->  Table Scan on d1.t1
+              ->  Table Scan on d1.t2
+select count(*) from t1,t2 where t1.c1=t2.c2;
+count(*)
+9000000
+explain select count(*) from t1,t2 where t1.c2=t2.c1;
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Join
+              Join Type: INNER
+              Join Cond: (t1.c2 = t2.c1) shuffle: range(t1.c2)
+              ->  Table Scan on d1.t1
+              ->  Table Scan on d1.t2
+select count(*) from t1,t2 where t1.c2=t2.c1;
+count(*)
+9000000
+explain select count(*) from t1,t2 where t1.c2=t2.c2;
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Join
+              Join Type: INNER
+              Join Cond: (t1.c2 = t2.c2) shuffle: range(t1.c2)
+              ->  Table Scan on d1.t1
+              ->  Table Scan on d1.t2
+select count(*) from t1,t2 where t1.c2=t2.c2;
+count(*)
+9000000
+explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<500000;
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Join
+              Join Type: INNER
+              Join Cond: (t1.c2 = t2.c2)
+              Runtime Filter Build: #[-1,0]
+              ->  Table Scan on d1.t1
+                    Runtime Filter Probe: t1.c2
+              ->  Table Scan on d1.t2
+                    Filter Cond: (t2.c3 < 500000)
+                    Block Filter Cond: (t2.c3 < 500000)
+select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<500000;
+count(*)
+499999
+explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<5000000;
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Join
+              Join Type: INNER
+              Join Cond: (t1.c2 = t2.c2) shuffle: range(t1.c2)
+              ->  Table Scan on d1.t1
+              ->  Table Scan on d1.t2
+                    Filter Cond: (t2.c3 < 5000000)
+                    Block Filter Cond: (t2.c3 < 5000000)
+select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<5000000;
+count(*)
+4999999
+explain select count(*) from t1 group by c1 limit 5;
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  Limit: 5
+  ->  Aggregate
+        Group Key: t1.c1 shuffle: range(t1.c1)
+        Aggregate Functions: starcount(1)
+        ->  Table Scan on d1.t1
+select count(*) from t1 group by c1 limit 5;
+count(*)
+1
+1
+1
+1
+1
+explain select count(*) from t1 group by c2 limit 5;
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  Limit: 5
+  ->  Aggregate
+        Group Key: t1.c2 shuffle: range(t1.c2)
+        Aggregate Functions: starcount(1)
+        ->  Table Scan on d1.t1
+select count(*) from t1 group by c2 limit 5;
+count(*)
+1
+1
+1
+1
+1
+drop database if exists d1;

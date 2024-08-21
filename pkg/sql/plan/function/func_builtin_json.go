@@ -308,7 +308,10 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 						return err
 					}
 				} else {
-					return moerr.NewInvalidInput(proc.Ctx, "expecting a path that retrives a single string value")
+					// append null
+					if err = rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -372,10 +375,14 @@ func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, 
 				if out.TYPE() == "INTEGER" {
 					i64 := out.GetInt64()
 					fv = float64(i64)
-				} else if out.TYPE() == "FLOAT" {
+				} else if out.TYPE() == "DOUBLE" {
 					fv = out.GetFloat64()
 				} else {
-					return moerr.NewInvalidInput(proc.Ctx, "expecting a path that retrives a single numeric value")
+					// append null
+					if err = rs.Append(0, true); err != nil {
+						return err
+					}
+					continue
 				}
 				if err = rs.Append(fv, false); err != nil {
 					return err
