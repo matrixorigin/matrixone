@@ -21,9 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -151,43 +153,47 @@ func (t *TableReader) Read(
 	mp *mpool.MPool,
 	_ engine.VectorPool,
 	bat *batch.Batch) (bool, error) {
-	return true, nil
-	//if t == nil {
-	//	return nil, nil
-	//}
+	if t == nil {
+		return true, nil
+	}
 
-	//for {
+	for {
 
-	//	if len(t.iterInfos) == 0 {
-	//		return nil, nil
-	//	}
+		if len(t.iterInfos) == 0 {
+			return true, nil
+		}
 
-	//	resps, err := DoTxnRequest[ReadResp](
-	//		t.ctx,
-	//		t.txnOperator,
-	//		true,
-	//		thisShard(t.iterInfos[0].Shard),
-	//		OpRead,
-	//		&ReadReq{
-	//			IterID:   t.iterInfos[0].IterID,
-	//			ColNames: colNames,
-	//		},
-	//	)
-	//	if err != nil {
-	//		return nil, err
-	//	}
+		resps, err := DoTxnRequest[ReadResp](
+			t.ctx,
+			t.txnOperator,
+			true,
+			thisShard(t.iterInfos[0].Shard),
+			OpRead,
+			&ReadReq{
+				IterID:   t.iterInfos[0].IterID,
+				ColNames: colNames,
+			},
+		)
+		if err != nil {
+			return true, err
+		}
 
-	//	resp := resps[0]
+		resp := resps[0]
 
-	//	if resp.Batch == nil {
-	//		// no more
-	//		t.iterInfos = t.iterInfos[1:]
-	//		continue
-	//	}
+		if resp.Batch == nil {
+			// no more
+			t.iterInfos = t.iterInfos[1:]
+			continue
+		}
 
-	//	logutil.Debug(testutil.OperatorCatchBatch("table reader", resp.Batch))
-	//	return resp.Batch, nil
-	//}
+		logutil.Debug(testutil.OperatorCatchBatch("table reader", resp.Batch))
+		_, err = bat.Append(t.ctx, mp, resp.Batch)
+		resp.Batch.Clean(mp)
+		if err != nil {
+			return true, err
+		}
+		return false, nil
+	}
 
 }
 
