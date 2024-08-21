@@ -72,7 +72,9 @@ func (preInsertSecIdx *PreInsertSecIdx) Reset(proc *process.Process, pipelineFai
 	if preInsertSecIdx.ctr.buf != nil {
 		preInsertSecIdx.ctr.buf.CleanOnlyData()
 	}
-	preInsertSecIdx.packer.Free()
+	if preInsertSecIdx.packer.PackerCount() > 10 {
+		preInsertSecIdx.packer.Free()
+	}
 }
 
 func (preInsertSecIdx *PreInsertSecIdx) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -80,4 +82,5 @@ func (preInsertSecIdx *PreInsertSecIdx) Free(proc *process.Process, pipelineFail
 		preInsertSecIdx.ctr.buf.Clean(proc.Mp())
 		preInsertSecIdx.ctr.buf = nil
 	}
+	preInsertSecIdx.packer.Free()
 }
