@@ -17,6 +17,9 @@ package compile
 import (
 	"context"
 	"encoding/hex"
+	gotrace "runtime/trace"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -31,8 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
-	gotrace "runtime/trace"
-	"time"
 )
 
 // I create this file to store the two most important entry functions for the Compile struct and their helper functions.
@@ -149,8 +150,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		seq = txnOperator.NextSequence()
 		writeOffset = uint64(txnOperator.GetWorkspace().GetSnapshotWriteOffset())
 		txnOperator.GetWorkspace().IncrSQLCount()
-		txnOperator.ResetRetry(false)
-
 		txnOperator.EnterRunSql()
 	}
 	defer func() {
@@ -257,9 +256,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 }
 
 // prepareRetry rebuild a new Compile object for retrying the query.
-func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
+func (c *Compile) prepareRetry(
+	defChanged bool,
+) (*Compile, error) {
 	v2.TxnStatementRetryCounter.Inc()
-	c.proc.GetTxnOperator().ResetRetry(true)
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 
 	topContext := c.proc.GetTopContext()
