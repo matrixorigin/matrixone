@@ -1987,6 +1987,21 @@ func updatePartitionOfPush(
 	//TODO: add table filter
 	//DOES not replay logtail for tables of all system database
 	if e.IsCdcEngine() {
+		//handle ddl
+		ddls := e.GetDDLListener().GetDDLs()
+		for _, ddl := range ddls {
+			fmt.Fprintln(os.Stderr, "decected ddl", ddl.String())
+		}
+		if len(ddls) > 0 {
+			tblCtx := TableCtx{}
+			decInput := DecoderInput{
+				typ:        InputTypeDDL,
+				ts:         *tl.Ts,
+				receivedAt: receiveAt,
+				ddls:       ddls,
+			}
+			e.ToCdc(&tblCtx, &decInput)
+		}
 		if tblId != catalog.MO_DATABASE_ID &&
 			tblId != catalog.MO_TABLES_ID &&
 			tblId != catalog.MO_COLUMNS_ID {
@@ -2001,11 +2016,6 @@ func updatePartitionOfPush(
 			)
 		}
 
-		//handle ddl
-		ddls := e.GetDDLListener().GetDDLs()
-		for _, ddl := range ddls {
-			fmt.Fprintln(os.Stderr, "decected ddl", ddl.String())
-		}
 	}
 
 	return nil
@@ -2020,7 +2030,7 @@ func updateHearbeat(
 ) (err error) {
 	tblCtx := TableCtx{}
 	decInput := DecoderInput{
-		isHearbeat: true,
+		typ:        InputTypeHeartbeat,
 		ts:         ts,
 		receivedAt: receiveAt,
 	}

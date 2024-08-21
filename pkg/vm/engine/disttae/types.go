@@ -999,15 +999,41 @@ func (tctx *TableCtx) TableDef() *plan.TableDef {
 	return tctx.tblDef
 }
 
+type InputType int
+
+const (
+	InputTypePartitionState InputType = 1
+	InputTypeHeartbeat      InputType = 2
+	InputTypeDDL            InputType = 3
+)
+
+func (typ InputType) String() string {
+	switch typ {
+	case InputTypePartitionState:
+		return "PartitionState"
+	case InputTypeHeartbeat:
+		return "Heartbeat"
+	case InputTypeDDL:
+		return "DDL"
+	default:
+		return "usp input type"
+	}
+}
+
 type DecoderInput struct {
-	isHearbeat bool
+	typ        InputType
 	ts         timestamp.Timestamp
 	state      *logtailreplay.PartitionState
 	receivedAt time.Time
+	ddls       []*DDL
 }
 
 func (dec *DecoderInput) IsHeartbeat() bool {
-	return dec.isHearbeat
+	return dec.typ == InputTypeHeartbeat
+}
+
+func (dec *DecoderInput) IsDDL() bool {
+	return dec.typ == InputTypeDDL
 }
 
 func (dec *DecoderInput) TS() timestamp.Timestamp {

@@ -55,6 +55,9 @@ func (p tableIdPartitioner) Run(_ context.Context, ar *ActiveRoutine) {
 				if decoderInput.IsHeartbeat() {
 					//_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Partitioner:{%s} heartbeat\n", decoderInput.TS().DebugString())
 					continue
+				} else if decoderInput.IsDDL() {
+					//TODO:action on ddl
+					continue
 				}
 
 				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Partitioner: {%s} [%v(%v)].[%v(%v)]\n",
