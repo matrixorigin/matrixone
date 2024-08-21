@@ -174,9 +174,8 @@ func (cdcEng *CdcEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uin
 	return cdcEng.PushClient().TryToSubscribeTable(ctx, dbID, tbID)
 }
 
-func (cdcEng *CdcEngine) UnsubscribeTable(ctx context.Context, u uint64, u2 uint64) error {
-	//TODO implement me
-	panic("implement me")
+func (cdcEng *CdcEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return cdcEng.PushClient().UnsubscribeTable(ctx, dbID, tbID)
 }
 
 func (cdcEng *CdcEngine) Delete(ctx context.Context, databaseName string, op client.TxnOperator) error {

@@ -483,6 +483,11 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 	case *tree.RestartCDC:
+		ses.EnterFPrint(127)
+		defer ses.ExitFPrint(127)
+		if err = handleRestartCdc(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.ResumeCDC:
 		ses.EnterFPrint(128)
 		defer ses.ExitFPrint(128)

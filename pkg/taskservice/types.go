@@ -303,6 +303,19 @@ func (c *taskMetadataIDCond) sql() string {
 	return fmt.Sprintf("task_metadata_id %s '%s'", OpName[c.op], c.taskMetadataID)
 }
 
+type taskNameCond struct {
+	op       Op
+	taskName string
+}
+
+func (c *taskNameCond) eval(v any) bool {
+	return false
+}
+
+func (c *taskNameCond) sql() string {
+	return fmt.Sprintf("task_name %s '%s'", OpName[c.op], c.taskName)
+}
+
 func compare[T constraints.Ordered](op Op, a T, b T) bool {
 	switch op {
 	case EQ:
@@ -337,6 +350,7 @@ const (
 	CondLastHeartbeat
 	CondCronTaskId
 	CondTaskMetadataId
+	CondCdcTaskName
 )
 
 var (
@@ -358,6 +372,10 @@ var (
 		CondAccountID:     {},
 		CondAccount:       {},
 		CondLastHeartbeat: {},
+	}
+	cdcWhereConditionCodes = map[condCode]struct{}{
+		CondAccountID:   {},
+		CondCdcTaskName: {},
 	}
 )
 
@@ -468,6 +486,12 @@ func WithTaskMetadataId(op Op, value string) Condition {
 	}
 }
 
+func WithTaskName(op Op, value string) Condition {
+	return func(c *conditions) {
+		(*c)[CondCdcTaskName] = &taskNameCond{op: op, taskName: value}
+	}
+}
+
 // TaskService Asynchronous Task Service, which provides scheduling execution and management of
 // asynchronous tasks. CN, DN, HAKeeper, LogService will all hold this service.
 type TaskService interface {
@@ -516,6 +540,12 @@ type TaskService interface {
 
 	// GetStorage returns the task storage
 	GetStorage() TaskStorage
+
+	// AddCdcTask Update cdc task in one transaction
+	AddCdcTask(context.Context, task.TaskMetadata, *task.Details, string) (int, error)
+
+	// UpdateCdcTask Update cdc task in one transaction
+	UpdateCdcTask(context.Context, task.TaskStatus, ...Condition) (int, error)
 }
 
 // TaskExecutor which is responsible for the execution logic of a specific Task, and the function exists to
@@ -580,6 +610,10 @@ type TaskStorage interface {
 	QueryDaemonTask(ctx context.Context, condition ...Condition) ([]task.DaemonTask, error)
 	// HeartbeatDaemonTask update the last heartbeat field of the task.
 	HeartbeatDaemonTask(ctx context.Context, task []task.DaemonTask) (int, error)
+	// AddCdcTask insert cdcTask and daemonTask
+	AddCdcTask(context.Context, string, task.DaemonTask) (int, error)
+	// UpdateCdcTask Update cdc task in one transaction
+	UpdateCdcTask(context.Context, task.TaskStatus, ...Condition) (int, error)
 }
 
 // TaskServiceHolder create and hold the task service in the cn, tn and log node. Create

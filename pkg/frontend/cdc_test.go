@@ -15,6 +15,8 @@
 package frontend
 
 import (
+	"regexp"
+	"sort"
 	"testing"
 	"time"
 
@@ -57,4 +59,70 @@ func Test_newCdcSqlFormat(t *testing.T) {
 	sql2 := getSqlForRetrievingCdcTask(3, id)
 	wantSql2 := `select sink_uri, sink_type, sink_password, tables from mo_catalog.mo_cdc_task where account_id = 3 and task_id = "019111fd-aed1-70c0-8760-9abadd8f0f4a"`
 	assert.Equal(t, wantSql2, sql2)
+}
+
+func Test_parseTables(t *testing.T) {
+	rows := [][]string{
+		{"acc1", "users", "t1"},
+		{"acc1", "users", "t2"},
+		{"acc2", "users", "t1"},
+		{"acc2", "users", "t2"},
+		{"acc3", "items", "t1"},
+		{"acc3", "items", "table1"},
+		{"acc3", "items", "table2"},
+		{"acc3", "items", "table3"},
+		{"sys", "test", "test"},
+		{"sys", "test1", "test"},
+		{"sys", "test2", "test"},
+		{"sys", "test", "t1"},
+		{"sys", "test", "t11"},
+		{"sys", "test", "t111"},
+		{"sys", "test", "t1111"},
+	}
+
+	tables := []string{
+		"acc1.users.t1",
+		"acc1.users.t*",
+		"acc*.users.t?",
+		"acc*./users|items/./t.*[12]/",
+		"acc*.*./table./",
+		"acc*.*.table*",
+		"/sys|acc.*/.*.t*",
+		"/sys|acc.*/.*./t.$/",
+		"/sys|acc.*/.test*./t1{1,3}$/,/acc[23]/.items./.*/",
+	}
+
+	want := [][]int{
+		{0},
+		{0, 1},
+		{0, 1, 2, 3},
+		{0, 1, 2, 3, 4, 5, 6},
+		{5, 6, 7},
+		{5, 6, 7},
+		{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14},
+		{0, 1, 2, 3, 4, 11},
+		{4, 5, 6, 7, 11, 12, 13},
+	}
+
+	for wantIdx, table := range tables {
+		matchedIdx := []int{}
+		pts, err := string2patterns(table)
+		assert.Equal(t, err, nil)
+		for _, pt := range pts {
+			for idx := range rows {
+				row := rows[idx]
+				accountMatched, err := regexp.MatchString(pt.SourceAccount, row[0])
+				assert.Equal(t, err, nil)
+				databaseMatched, err := regexp.MatchString(pt.SourceDatabase, row[1])
+				assert.Equal(t, err, nil)
+				tableMatched, err := regexp.MatchString(pt.SourceTable, row[2])
+				assert.Equal(t, err, nil)
+				if accountMatched && databaseMatched && tableMatched {
+					matchedIdx = append(matchedIdx, idx)
+				}
+			}
+		}
+		sort.Ints(matchedIdx)
+		assert.Equal(t, want[wantIdx], matchedIdx)
+	}
 }

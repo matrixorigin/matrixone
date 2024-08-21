@@ -50,6 +50,9 @@ option (gogoproto.protosizer_all) = true;
      // CancelRequested is the state that cancel request has been proposed to
      // the task and has not been canceled.
      CancelRequested = 8;
+     // RestartRequested is the state that restart request has been proposed to
+     // the task and has not been restart.
+     RestartRequested = 9;
  }
 
  // TaskCode task code

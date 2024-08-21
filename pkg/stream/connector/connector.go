@@ -310,6 +310,11 @@ func (k *KafkaMoConnector) Cancel() error {
 	return nil
 }
 
+// Restart implements the taskservice.ActiveRoutine interface.
+func (k *KafkaMoConnector) Restart() error {
+	return nil
+}
+
 func (k *KafkaMoConnector) Close() error {
 	// Close the Kafka consumer.
 	ct, err := k.kafkaAdapter.GetKafkaConsumer()

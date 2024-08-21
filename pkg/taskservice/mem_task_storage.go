@@ -376,3 +376,11 @@ func (s *memTaskStorage) filterDaemonTask(c *conditions, task task.DaemonTask) b
 	}
 	return ok
 }
+
+func (s *memTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.TaskStatus, condition ...Condition) (int, error) {
+	return 0, nil
+}
+
+func (s *memTaskStorage) AddCdcTask(ctx context.Context, insertSql string, dt task.DaemonTask) (int, error) {
+	return 0, nil
+}

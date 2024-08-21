@@ -53,6 +53,10 @@ func (r *mockActiveRoutine) Cancel() error {
 	return nil
 }
 
+func (r *mockActiveRoutine) Restart() error {
+	return nil
+}
+
 func daemonTaskMetadata() task.TaskMetadata {
 	return task.TaskMetadata{
 		ID:       "-",
