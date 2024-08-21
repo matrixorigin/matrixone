@@ -549,8 +549,11 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if s.IsRemote && len(s.DataSource.OrderBy) > 0 {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan cannot run in remote.")
 	}
-
-	readers, scanUsedCpuNumber, err := s.buildReaders(c, s.NodeInfo.Mcpu)
+	maxProvidedCpuNumber := ncpu
+	if s.NodeInfo.Mcpu == 1 {
+		maxProvidedCpuNumber = 1
+	}
+	readers, scanUsedCpuNumber, err := s.buildReaders(c, maxProvidedCpuNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -936,7 +939,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		// Add log for cn panic which reported on issue 10656
 		// If you find this log is printed, please report the repro details
 		if s.RootOp == nil || s.RootOp.GetOperatorBase().NumChildren() == 0 {
-			c.proc.Error(c.proc.Ctx, "the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}),
+			c.proc.Error(c.proc.Ctx, "the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}, NormalLevel),
 				zap.String("stack", string(debug.Stack())),
 			)
 			return nil, moerr.NewInternalErrorNoCtx("the length of s.Instructions is too short !")

@@ -482,6 +482,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 					FileOffsetTotal: t.Es.FileOffsetTotal,
 					Extern:          t.Es.Extern,
 					TbColToDataCol:  t.Es.TbColToDataCol,
+					StrictSqlMode:   t.Es.StrictSqlMode,
 				},
 				ExParam: external.ExParam{
 					Filter: &external.FilterParam{

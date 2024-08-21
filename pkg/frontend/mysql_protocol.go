@@ -684,18 +684,28 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 			return err
 		}
 	}
-
-	for i := 0; i < numColumns; i++ {
-		column, err := colDef2MysqlColumn(ctx, columns[i])
-		if err != nil {
-			return err
+	if stmt.ColDefData == nil || len(stmt.ColDefData) != numColumns {
+		stmt.ColDefData = nil
+		for i := 0; i < numColumns; i++ {
+			column, err := colDef2MysqlColumn(ctx, columns[i])
+			if err != nil {
+				return err
+			}
+			colDefPacket, err := mp.SendColumnDefinitionPacket(ctx, column, cmd)
+			if err != nil {
+				return err
+			}
+			stmt.ColDefData = append(stmt.ColDefData, colDefPacket)
 		}
-		colDefPacket, err := mp.SendColumnDefinitionPacket(ctx, column, cmd)
-		if err != nil {
-			return err
+	} else {
+		for i := 0; i < numColumns; i++ {
+			err = mp.WriteColumnDefBytes(stmt.ColDefData[i])
+			if err != nil {
+				return err
+			}
 		}
-		stmt.ColDefData = append(stmt.ColDefData, colDefPacket)
 	}
+
 	if numColumns > 0 {
 		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
 			return err
@@ -2134,6 +2144,20 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	}
 
 	return data[:pos]
+}
+
+func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+	numColumns := len(columns)
+	colDefData := make([][]byte, 0, numColumns)
+	for i := 0; i < numColumns; i++ {
+		column, err := colDef2MysqlColumn(ctx, columns[i])
+		if err != nil {
+			return nil, err
+		}
+		colDefPacket := mp.makeColumnDefinition41Payload(column, int(COM_STMT_PREPARE))
+		colDefData = append(colDefData, colDefPacket)
+	}
+	return colDefData, nil
 }
 
 // SendColumnDefinitionPacket the server send the column definition to the client
