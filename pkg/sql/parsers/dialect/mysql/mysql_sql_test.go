@@ -3009,22 +3009,24 @@ var (
 			output: "show databases {snapshot = sp01}",
 		},
 		{
-			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc' IN BOOLEAN MODE)",
-			output: "select * from t1 where MATCH (body, title) AGAINST (abc IN BOOLEAN MODE)",
+			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc dfc ghc')",
+			output: "select * from t1 where MATCH (body, title) AGAINST (abc dfc ghc)",
 		},
 		{
-			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE)",
-			output: "select * from t1 where MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE)",
+			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc- +abc' IN BOOLEAN MODE)",
+			output: "select * from t1 where MATCH (body, title) AGAINST (abc- +abc IN BOOLEAN MODE)",
 		},
-		/*
-				{
-					input:  "select * from t1 where MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE WITH QUERY EXPANSION)",
-					output: "select * from t1 where MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE WITH QUERY EXPANSION)",
-				},
-		*/
 		{
-			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc' WITH QUERY EXPANSION)",
-			output: "select * from t1 where MATCH (body, title) AGAINST (abc WITH QUERY EXPANSION)",
+			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc%' IN NATURAL LANGUAGE MODE)",
+			output: "select * from t1 where MATCH (body, title) AGAINST (abc% IN NATURAL LANGUAGE MODE)",
+		},
+		{
+			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc gg*' WITH QUERY EXPANSION)",
+			output: "select * from t1 where MATCH (body, title) AGAINST (abc gg* WITH QUERY EXPANSION)",
+		},
+		{
+			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION)",
+			output: "select * from t1 where MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION)",
 		},
 	}
 )
