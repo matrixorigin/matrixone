@@ -466,7 +466,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if node.NodeType == plan.Node_TABLE_SCAN {
 			return node.TableDef
 		} else {
-			if node.Children == nil || len(node.Children) == 0 {
+			if len(node.Children) == 0 {
 				return nil
 			}
 			return findTableDefFromSource(builder.qry.Nodes[node.Children[0]])

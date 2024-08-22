@@ -9,8 +9,6 @@ run:
   # Include test files or not.
   # Default: true
   tests: true
-  skip-files:
-    - pkg/sql/parsers/goyacc/goyacc.go
   
 linters:
   # Disable all linters.
@@ -20,7 +18,7 @@ linters:
   # https://golangci-lint.run/usage/linters/#enabled-by-default-linters
   enable:
     - depguard
-    - exportloopref
+    - copyloopvar
     - gocheckcompilerdirectives
     - gofmt
     - gosimple
@@ -203,3 +201,5 @@ issues:
     - path: _test\.go
       linters:
         - stylecheck
+  exclude-files:
+    - pkg/sql/parsers/goyacc/goyacc.go

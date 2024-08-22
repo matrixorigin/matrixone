@@ -369,7 +369,6 @@ func TestBytes(t *testing.T) {
 	wg := new(sync.WaitGroup)
 	wg.Add(numCursors)
 	for _, cursor := range cursors {
-		cursor := cursor
 		go func() {
 			defer wg.Done()
 			defer cursor.Close()

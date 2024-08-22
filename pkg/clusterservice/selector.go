@@ -131,7 +131,7 @@ func (s Selector) Match(labels map[string]metadata.LabelList) bool {
 }
 
 func (s Selector) emptyLabel() bool {
-	if s.labels == nil || len(s.labels) == 0 {
+	if len(s.labels) == 0 {
 		return true
 	}
 	return false

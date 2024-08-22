@@ -613,7 +613,7 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 	} else {
 		s.state.NextID = K8SIDRangeEnd
 	}
-	if req.NextIDByKey != nil && len(req.NextIDByKey) > 0 {
+	if len(req.NextIDByKey) > 0 {
 		s.state.NextIDByKey = req.NextIDByKey
 	}
 

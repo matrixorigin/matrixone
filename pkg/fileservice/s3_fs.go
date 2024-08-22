@@ -701,7 +701,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		if entry.done {
 			continue
 		}
-		entry := entry
 		numNotDoneEntries++
 
 		start := entry.Offset - *min

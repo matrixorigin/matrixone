@@ -545,7 +545,7 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 	if s.idx < s.length {
 		idx := s.idx
 		s.idx++
-		if s.content == nil || len(s.content) == 0 {
+		if len(s.content) == 0 {
 			s.logger.Error("ContentReader.ReadLine.nil",
 				logutil.PathField(s.path),
 				zap.Bool("nil", s.content == nil),
