@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -245,6 +246,27 @@ func (w *S3Writer) initBuffers(proc *process.Process, bat *batch.Batch) {
 	w.buffer = buffer
 }
 
+func (w *S3Writer) WriteRawBatchWithSort(proc *process.Process, bat *batch.Batch) error {
+	if w.sortIndex != -1 {
+		err := sortByKey(proc, bat, w.sortIndex, w.isClusterBy, proc.GetMPool())
+		if err != nil {
+			return err
+		}
+	}
+	if w.writer == nil {
+		_, err := w.generateWriter(proc)
+		if err != nil {
+			return err
+		}
+	}
+	if w.isTombstone {
+		_, err := w.writer.WriteTombstoneBatch(bat)
+		return err
+	}
+	_, err := w.writer.WriteBatch(bat)
+	return err
+}
+
 // WriteBatch batch into w.bats , and make sure that each batch in w.bats
 // contains options.DefaultBlockMaxRows rows except for the last one.
 // true: the tableBatches[idx] is over threshold
@@ -350,11 +372,17 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, []o
 		}
 
 		for i := range w.batches {
-			if _, err := w.writer.WriteBatch(w.batches[i]); err != nil {
-				return nil, nil, err
+			if w.isTombstone {
+				if _, err := w.writer.WriteTombstoneBatch(w.batches[i]); err != nil {
+					return nil, nil, err
+				}
+			} else {
+				if _, err := w.writer.WriteBatch(w.batches[i]); err != nil {
+					return nil, nil, err
+				}
 			}
 		}
-		return w.sync(proc)
+		return w.Sync(proc)
 	}
 
 	for i := range w.batches {
@@ -415,9 +443,13 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, []o
 		merge = newMerge(sort.UuidLess, getFixedCols[types.Uuid](w.batches, pos), nulls)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		merge = newMerge(sort.GenericLess[string], getStrCols(w.batches, pos), nulls)
-		//TODO: check if we need T_array here? T_json is missing here.
-		// Update Oct 20 2023: I don't think it is necessary to add T_array here. Keeping this comment,
-		// in case anything fails in vector S3 flush in future.
+	case types.T_Rowid:
+		merge = newMerge(sort.RowidLess, getFixedCols[types.Rowid](w.batches, pos), nulls)
+	//TODO: check if we need T_array here? T_json is missing here.
+	// Update Oct 20 2023: I don't think it is necessary to add T_array here. Keeping this comment,
+	// in case anything fails in vector S3 flush in future.
+	default:
+		panic(fmt.Sprintf("invalid type: %s", w.batches[0].Vecs[w.sortIndex].GetType().Oid))
 	}
 	if _, err := w.generateWriter(proc); err != nil {
 		return nil, nil, err
@@ -439,20 +471,32 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, []o
 		if lens == int(options.DefaultBlockMaxRows) {
 			lens = 0
 
-			if _, err := w.writer.WriteBatch(w.buffer); err != nil {
-				return nil, nil, err
+			if w.isTombstone {
+				if _, err := w.writer.WriteTombstoneBatch(w.buffer); err != nil {
+					return nil, nil, err
+				}
+			} else {
+				if _, err := w.writer.WriteBatch(w.buffer); err != nil {
+					return nil, nil, err
+				}
 			}
 			// force clean
 			w.buffer.CleanOnlyData()
 		}
 	}
 	if lens > 0 {
-		if _, err := w.writer.WriteBatch(w.buffer); err != nil {
-			return nil, nil, err
+		if w.isTombstone {
+			if _, err := w.writer.WriteTombstoneBatch(w.buffer); err != nil {
+				return nil, nil, err
+			}
+		} else {
+			if _, err := w.writer.WriteBatch(w.buffer); err != nil {
+				return nil, nil, err
+			}
 		}
 		w.buffer.CleanOnlyData()
 	}
-	return w.sync(proc)
+	return w.Sync(proc)
 }
 
 func (w *S3Writer) putBatch(bat *batch.Batch) {
@@ -546,9 +590,9 @@ func (w *S3Writer) FillBlockInfoBat(blkInfos []objectio.BlockInfo, stats []objec
 	return nil
 }
 
-// sync writes batches in buffer to fileservice(aka s3 in this feature) and get metadata about block on fileservice and put it into metaLocBat
+// Sync writes batches in buffer to fileservice(aka s3 in this feature) and get metadata about block on fileservice and put it into metaLocBat
 // For more information, please refer to the comment about func WriteEnd in Writer interface
-func (w *S3Writer) sync(proc *process.Process) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
+func (w *S3Writer) Sync(proc *process.Process) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)
 	if err != nil {
 		return nil, nil, err

@@ -915,7 +915,7 @@ func (tbl *txnTable) rangesOnePart(
 				blk.Appendable = obj.Appendable
 				blk.CommitTs = obj.CommitTS
 				//if obj.HasDeltaLoc {
-				//	_, commitTs, ok := state.GetBockDeltaLoc(blk.BlockID)
+				//	_, commitTs, ok := state.GetBlockDeltaLoc(blk.BlockID)
 				//	if ok {
 				//		blk.CommitTs = commitTs
 				//	}
@@ -1999,7 +1999,7 @@ func (tbl *txnTable) PKPersistedBetween(
 					blk.Appendable = obj.Appendable
 					blk.CommitTs = obj.CommitTS
 					if obj.HasDeltaLoc {
-						_, commitTs, ok := p.GetBockDeltaLoc(blk.BlockID)
+						_, commitTs, ok := p.GetBlockDeltaLoc(blk.BlockID)
 						if ok {
 							blk.CommitTs = commitTs
 						}
