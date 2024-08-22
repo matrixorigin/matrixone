@@ -91,7 +91,6 @@ func (mo *MOServer) Stop() error {
 		return nil
 	}
 	mo.running = false
-	setMoServerStarted(false)
 	mo.mu.Unlock()
 
 	var errors []error
