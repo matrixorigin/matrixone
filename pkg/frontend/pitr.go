@@ -1533,6 +1533,14 @@ func doResolveTimeStamp(timeStamp string) (ts int64, err error) {
 	return
 }
 
+// convert utc nano time to Local format string
+// @param ts: the utc nano time
+// @return the local time string
+func nanoTimeFormat(ts int64) string {
+	t := time.Unix(0, ts)
+	return t.Format("2006-01-02 15:04:05")
+}
+
 // check the ts is valid or not
 // @param ts: the timestamp
 // @param pitrRecord: the pitr record
@@ -1550,7 +1558,7 @@ func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
 	}
 
 	if ts < minTs.UnixNano() {
-		return moerr.NewInternalErrorNoCtx("ts %v is less than the minest time %v", ts, minTs.Unix())
+		return moerr.NewInternalErrorNoCtx("ts %v is less than the pitr range minest time %v", nanoTimeFormat(ts), nanoTimeFormat(minTs.UnixNano()))
 	}
 
 	return
