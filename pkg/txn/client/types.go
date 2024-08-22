@@ -174,9 +174,6 @@ type TxnOperator interface {
 	// GetWorkspace from the transaction
 	GetWorkspace() Workspace
 
-	ResetRetry(bool)
-	IsRetry() bool
-
 	// AppendEventCallback append callback. All append callbacks will be called sequentially
 	// if event happen.
 	AppendEventCallback(event EventType, callbacks ...func(TxnEvent))
