@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,15 +82,38 @@ func TestWWConflict(t *testing.T) {
 			go func() {
 				defer wg.Done()
 
+				var retried atomic.Bool
+				var txn2Triggered atomic.Bool
 				exec1 := getSQLExecutor(cn1)
 				err := exec1.ExecTxn(
 					ctx,
 					func(txn executor.TxnExecutor) error {
 						defer func() {
 							runtime.MustGetTestingContext(cn1.ServiceID()).SetAdjustLockResultFunc(nil)
+							runtime.MustGetTestingContext(cn1.ServiceID()).SetBeforeLockFunc(nil)
 						}()
 
 						tx1 := txn.Txn().Txn().ID
+
+						runtime.MustGetTestingContext(cn1.ServiceID()).SetBeforeLockFunc(
+							func(txnID []byte, tableID uint64) {
+								if !bytes.Equal(txnID, tx1) {
+									return
+								}
+
+								if tableID == catalog.MO_TABLES_ID || txn2Triggered.Load() {
+									return
+								}
+
+								txn2Triggered.Store(true)
+
+								// start txn2 update
+								close(txn2StartedC)
+
+								// wait txn2 update committed
+								<-txn2CommittedC
+							},
+						)
 
 						runtime.MustGetTestingContext(cn1.ServiceID()).SetAdjustLockResultFunc(
 							func(
@@ -100,22 +124,18 @@ func TestWWConflict(t *testing.T) {
 								if !bytes.Equal(txnID, tx1) {
 									return
 								}
+
 								if tableID != catalog.MO_TABLES_ID {
 									return
 								}
-								if txn.Txn().IsRetry() {
-									// start txn2 update
-									close(txn2StartedC)
 
-									// wait txn2 update committed
-									<-txn2CommittedC
-									return
-								}
-
-								if !result.HasConflict && !result.HasPrevCommit {
-									result.HasConflict = true
-									result.HasPrevCommit = true
-									result.Timestamp = txn.Txn().SnapshotTS().Next()
+								if !retried.Load() {
+									retried.Store(true)
+									if !result.HasConflict && !result.HasPrevCommit {
+										result.HasConflict = true
+										result.HasPrevCommit = true
+										result.Timestamp = txn.Txn().SnapshotTS().Next()
+									}
 								}
 							},
 						)
@@ -136,8 +156,7 @@ func TestWWConflict(t *testing.T) {
 						WithDatabase(db).
 						WithMinCommittedTS(committedAt),
 				)
-				// TODO(ouyuanning): use require.NoError(t, err) if #14880 fixed.
-				require.Error(t, err)
+				require.NoError(t, err)
 			}()
 
 			// txn2 workflow

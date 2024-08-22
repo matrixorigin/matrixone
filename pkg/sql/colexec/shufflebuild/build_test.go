@@ -157,7 +157,6 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 		proc:   proc,
 		cancel: cancel,
 		arg: &ShuffleBuild{
-			Typs:       ts,
 			Conditions: cs,
 			RuntimeFilterSpec: &plan.RuntimeFilterSpec{
 				Tag:         0,

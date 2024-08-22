@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"go/constant"
 	"slices"
 	"strings"
 	"time"
@@ -984,11 +983,11 @@ func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublicat
 	like := ""
 	if sp.Like != nil {
 		right, ok := sp.Like.Right.(*tree.NumVal)
-		if !ok || right.Value.Kind() != constant.String {
+		if !ok || right.Kind() != tree.Str {
 			err = moerr.NewInternalError(ctx, "like clause must be a string")
 			return
 		}
-		like = constant.StringVal(right.Value)
+		like = right.String()
 	}
 
 	pubInfos, err := getPubInfos(ctx, bh, like)
@@ -1072,11 +1071,11 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 	like := ss.Like
 	if like != nil {
 		right, ok := like.Right.(*tree.NumVal)
-		if !ok || right.Value.Kind() != constant.String {
+		if !ok || right.Kind() != tree.Str {
 			err = moerr.NewInternalError(ctx, "like clause must be a string")
 			return
 		}
-		sql += fmt.Sprintf(" and pub_name like '%s' order by pub_name;", constant.StringVal(right.Value))
+		sql += fmt.Sprintf(" and pub_name like '%s' order by pub_name;", right.String())
 	} else {
 		sql += " order by sub_time desc, pub_time desc;"
 	}
@@ -1404,7 +1403,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 		v2.CheckSubValidDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
 	var (
@@ -1414,10 +1413,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 	)
 
 	tenantInfo := ses.GetTenantInfo()
-	if tenantInfo == nil {
-		err = moerr.NewInternalError(ctx, "get tenant info failed")
-		return
-	} else if pubAccountName == tenantInfo.GetTenant() {
+	if tenantInfo != nil && pubAccountName == tenantInfo.GetTenant() {
 		err = moerr.NewInternalError(ctx, "can not subscribe to self")
 		return
 	}
@@ -1427,13 +1423,6 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 	if sql, err = getSqlForAccountIdAndStatus(newCtx, pubAccountName, true); err != nil {
 		return
 	}
-
-	if err = bh.Exec(ctx, "begin;"); err != nil {
-		return
-	}
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(newCtx, sql); err != nil {
@@ -1472,7 +1461,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 		return
 	}
 
-	if !pubInfo.InSubAccounts(tenantInfo.GetTenant()) {
+	if tenantInfo != nil && !pubInfo.InSubAccounts(tenantInfo.GetTenant()) {
 		ses.Error(ctx,
 			"checkSubscriptionValidCommon",
 			zap.String("subName", subName),

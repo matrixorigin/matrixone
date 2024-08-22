@@ -1,0 +1,64 @@
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop database if exists test02;
+create database test02;
+use test02;
+drop table if exists rs02;
+create table rs02 (col1 int primary key , col2 datetime);
+insert into rs02 values (1, '2020-10-13 10:10:10');
+insert into rs02 values (2, null);
+insert into rs02 values (3, '2021-10-10 00:00:00');
+insert into rs02 values (4, '2023-01-01 12:12:12');
+insert into rs02 values (5, null);
+insert into rs02 values (6, null);
+insert into rs02 values (7, '2023-11-27 01:02:03');
+select * from rs02;
+col1    col2
+1    2020-10-13 10:10:10
+2    null
+3    2021-10-10 00:00:00
+4    2023-01-01 12:12:12
+5    null
+6    null
+7    2023-11-27 01:02:03
+drop table if exists rs03;
+create table rs03 (col1 int, col2 float, col3 decimal, col4 enum('1','2','3','4'));
+insert into rs03 values (1, 12.21, 32324.32131, 1);
+insert into rs03 values (2, null, null, 2);
+insert into rs03 values (2, -12.1, 34738, null);
+insert into rs03 values (1, 90.2314, null, 4);
+insert into rs03 values (1, 43425.4325, -7483.432, 2);
+drop publication if exists pub02;
+create publication pub02 database test02 table rs02 account acc01;
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub02    test02    rs02    acc01        2024-08-21 14:51:51    null    
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub02    sys    test02    rs02        2024-08-21 14:51:51    null    null    0
+drop database if exists sub02;
+create database sub02 from sys publication pub02;
+show subscriptions;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub02    sys    test02    rs02        2024-08-21 14:51:51    sub02    2024-08-21 14:51:52    0
+drop snapshot if exists sp02;
+create snapshot sp02 for account acc01;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+sp02    2024-08-21 06:51:52.016381    account    acc01        
+drop database sub02;
+drop publication pub02;
+show subscriptions;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+restore account acc01 from snapshot sp02;
+show subscriptions;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+show databases;
+Database
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+drop account acc01;
+drop database if exists test02;

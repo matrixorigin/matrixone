@@ -183,6 +183,7 @@ spec:
       [cn.txn]
       enable-leak-check = 1
       max-active-ages = "20m"
+      max-active = 100
       [cn.txn.trace]
       buffer-size = 100000
       flush-bytes = "64M"

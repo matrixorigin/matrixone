@@ -47,6 +47,7 @@ type TestingContext struct {
 	sync.RWMutex
 
 	adjustLockResultFunc func(txnID []byte, tableID uint64, res *lock.Result)
+	beforeLockFunc       func(txnID []byte, tableID uint64)
 }
 
 func (tc *TestingContext) SetAdjustLockResultFunc(
@@ -64,4 +65,21 @@ func (tc *TestingContext) GetAdjustLockResultFunc() func(txnID []byte, tableID u
 		return func(txnID []byte, tableID uint64, res *lock.Result) {}
 	}
 	return tc.adjustLockResultFunc
+}
+
+func (tc *TestingContext) SetBeforeLockFunc(
+	fn func(txnID []byte, tableID uint64),
+) {
+	tc.Lock()
+	defer tc.Unlock()
+	tc.beforeLockFunc = fn
+}
+
+func (tc *TestingContext) GetBeforeLockFunc() func(txnID []byte, tableID uint64) {
+	tc.RLock()
+	defer tc.RUnlock()
+	if tc.adjustLockResultFunc == nil {
+		return func(txnID []byte, tableID uint64) {}
+	}
+	return tc.beforeLockFunc
 }

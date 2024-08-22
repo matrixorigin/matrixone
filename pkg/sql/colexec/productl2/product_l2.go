@@ -82,12 +82,10 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				if ctr.inBat.IsEmpty() {
-					proc.PutBatch(ctr.inBat)
 					ctr.inBat = nil
 					continue
 				}
 				if ctr.bat == nil {
-					proc.PutBatch(ctr.inBat)
 					ctr.inBat = nil
 					continue
 				}
