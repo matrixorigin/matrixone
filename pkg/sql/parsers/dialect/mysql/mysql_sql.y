@@ -3233,6 +3233,14 @@ alter_table_stmt:
         alterTable.PartitionOption = $4
         $$ = alterTable
     }
+|   RENAME TABLE table_name TO alter_table_rename
+    {
+        var table = $3
+        alterTable := tree.NewAlterTable(table)
+        opt := tree.AlterTableOption($5)
+        alterTable.Options = []tree.AlterTableOption{opt}
+        $$ = alterTable
+    }
 
 alter_option_list:
     alter_option
