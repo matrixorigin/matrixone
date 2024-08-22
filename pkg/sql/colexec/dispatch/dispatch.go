@@ -167,7 +167,7 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		ap.ctr.hasData = true
 	}
 
-	sendBat, err := result.Batch.Dup(proc.GetMPool())
+	sendBat, err := bat.Dup(proc.GetMPool())
 	if err != nil {
 		return vm.CancelResult, nil
 	}
