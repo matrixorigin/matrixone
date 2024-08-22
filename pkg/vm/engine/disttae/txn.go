@@ -503,7 +503,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		}
 		defer s3Writer.Free(txn.proc)
 		for i := 0; i < len(mp[tbKey]); i++ {
-			s3Writer.WriteBatch(txn.proc, mp[tbKey][i])
+			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
 		}
 		blockInfos, stats, err := s3Writer.SortAndSync(txn.proc)
 		if err != nil {

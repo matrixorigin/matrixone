@@ -257,7 +257,7 @@ func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) 
 }
 
 func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batch) error {
-	if writer.WriteBatch(proc, bat) {
+	if writer.StashBatch(proc, bat) {
 		blockInfos, stats, err := writer.SortAndSync(proc)
 		if err != nil {
 			return err

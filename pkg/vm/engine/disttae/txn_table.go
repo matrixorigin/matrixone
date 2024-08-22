@@ -1632,7 +1632,7 @@ func (tbl *txnTable) compaction(
 		if bat.RowCount() == 0 {
 			continue
 		}
-		s3writer.WriteBatch(tbl.getTxn().proc, bat)
+		s3writer.StashBatch(tbl.getTxn().proc, bat)
 		bat.Clean(tbl.getTxn().proc.GetMPool())
 	}
 	return s3writer.SortAndSync(tbl.getTxn().proc)

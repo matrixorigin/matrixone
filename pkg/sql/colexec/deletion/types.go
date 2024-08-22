@@ -234,7 +234,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 		for _, blkid := range blkids {
 			bat := blockId_rowIdBatch[blkid]
 
-			err = s3writer.WriteRawBatchWithSort(proc, bat)
+			err = s3writer.WriteBatch(proc, bat)
 			if err != nil {
 				return 0, err
 			}

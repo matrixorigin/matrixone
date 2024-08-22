@@ -70,9 +70,6 @@ type S3Writer struct {
 	// tableBatchSizes are used to record the table_i's batches'
 	// size in tableBatches
 	batSize uint64
-
-	typs []types.Type
-	ufs  []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion
 }
 
 const (
@@ -246,7 +243,7 @@ func (w *S3Writer) initBuffers(proc *process.Process, bat *batch.Batch) {
 	w.buffer = buffer
 }
 
-func (w *S3Writer) WriteRawBatchWithSort(proc *process.Process, bat *batch.Batch) error {
+func (w *S3Writer) WriteBatch(proc *process.Process, bat *batch.Batch) error {
 	if w.sortIndex != -1 {
 		err := sortByKey(proc, bat, w.sortIndex, w.isClusterBy, proc.GetMPool())
 		if err != nil {
@@ -267,65 +264,20 @@ func (w *S3Writer) WriteRawBatchWithSort(proc *process.Process, bat *batch.Batch
 	return err
 }
 
-// WriteBatch batch into w.bats , and make sure that each batch in w.bats
-// contains options.DefaultBlockMaxRows rows except for the last one.
+// StashBatch batch into w.bats.
 // true: the tableBatches[idx] is over threshold
 // false: the tableBatches[idx] is less than or equal threshold
-func (w *S3Writer) WriteBatch(proc *process.Process, bat *batch.Batch) bool {
-	var rbat *batch.Batch
-
-	if len(w.typs) == 0 {
-		for i := 0; i < bat.VectorCount(); i++ {
-			typ := *bat.GetVector(int32(i)).GetType()
-			w.typs = append(w.typs, typ)
-			w.ufs = append(w.ufs, vector.GetUnionOneFunction(typ, proc.Mp()))
-		}
+func (w *S3Writer) StashBatch(proc *process.Process, bat *batch.Batch) bool {
+	rbat, err := bat.Dup(proc.GetMPool())
+	if err != nil {
+		panic(err)
 	}
-	res := false
-	start, end := 0, bat.RowCount()
-	for start < end {
-		n := len(w.batches)
-		if n != 0 && w.batches[n-1].RowCount() < int(options.DefaultBlockMaxRows) {
-			// w.batches[n-1] is not full.
-			rbat = w.batches[n-1]
-		} else {
-			// w.batches[n-1] is full, use a new batch.
-			if len(w.tableBatchPool) > 0 {
-				rbat = w.tableBatchPool[0]
-				w.tableBatchPool = w.tableBatchPool[1:]
-				rbat.CleanOnlyData()
-			} else {
-				var err error
-				rbat, err = proc.NewBatchFromSrc(bat, int(options.DefaultBlockMaxRows))
-				if err != nil {
-					panic(err)
-				}
-			}
-			w.batches = append(w.batches, rbat)
-		}
-		rows := end - start
-		if left := int(options.DefaultBlockMaxRows) - rbat.RowCount(); rows > left {
-			rows = left
-		}
-
-		var err error
-		for i := 0; i < bat.VectorCount(); i++ {
-			vec := rbat.GetVector(int32(i))
-			srcVec := bat.GetVector(int32(i))
-			for j := 0; j < rows; j++ {
-				if err = w.ufs[i](vec, srcVec, int64(j+start)); err != nil {
-					panic(err)
-				}
-			}
-		}
-		rbat.AddRowCount(rows)
-		start += rows
-		w.batSize += uint64(rbat.Size())
-		if w.batSize > WriteS3Threshold {
-			res = true
-		}
+	w.batches = append(w.batches, rbat)
+	w.batSize += uint64(rbat.Size())
+	if w.batSize > WriteS3Threshold {
+		return true
 	}
-	return res
+	return false
 }
 
 func getFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int) (cols [][]T) {
