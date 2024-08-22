@@ -142,11 +142,11 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	return err
 }
 
-func (tf *TableFunction) createResultBatch() *batch.Batch {
-	bat := batch.NewWithSize(len(tf.Attrs))
-	bat.Attrs = tf.Attrs
-	for i := range tf.ctr.retSchema {
-		bat.Vecs[i] = vector.NewVec(tf.ctr.retSchema[i])
+func (tableFunction *TableFunction) createResultBatch() *batch.Batch {
+	bat := batch.NewWithSize(len(tableFunction.Attrs))
+	bat.Attrs = tableFunction.Attrs
+	for i := range tableFunction.ctr.retSchema {
+		bat.Vecs[i] = vector.NewVec(tableFunction.ctr.retSchema[i])
 	}
 	return bat
 }

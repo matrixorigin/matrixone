@@ -331,10 +331,13 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 			disttaeEngine.Engine, 0)
 		require.NoError(t, err)
 
-		ret := batch.NewWithSize(len(schema.ColDefs))
-		for i, col := range schema.ColDefs {
-			vec := vector.NewVec(col.Type.Oid.ToType())
-			ret.Vecs[i] = vec
+		ret := batch.NewWithSize(1)
+		for _, col := range schema.ColDefs {
+			if col.Name == schema.ColDefs[primaryKeyIdx].Name {
+				vec := vector.NewVec(col.Type)
+				ret.Vecs[0] = vec
+				break
+			}
 		}
 		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, mp, nil, ret)
 		require.NoError(t, err)
