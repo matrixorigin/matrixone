@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"regexp"
 	"sort"
 	"testing"
@@ -57,7 +58,7 @@ func Test_newCdcSqlFormat(t *testing.T) {
 	assert.Equal(t, wantSql, sql)
 
 	sql2 := getSqlForRetrievingCdcTask(3, id)
-	wantSql2 := `select sink_uri, sink_type, sink_password, tables from mo_catalog.mo_cdc_task where account_id = 3 and task_id = "019111fd-aed1-70c0-8760-9abadd8f0f4a"`
+	wantSql2 := `select sink_uri, sink_type, sink_password, tables, start_ts_str, checkpoint_str from mo_catalog.mo_cdc_task where account_id = 3 and task_id = "019111fd-aed1-70c0-8760-9abadd8f0f4a"`
 	assert.Equal(t, wantSql2, sql2)
 }
 
@@ -125,4 +126,81 @@ func Test_parseTables(t *testing.T) {
 		sort.Ints(matchedIdx)
 		assert.Equal(t, want[wantIdx], matchedIdx)
 	}
+}
+
+func Test_privilegeCheck(t *testing.T) {
+	var tenantInfo *TenantInfo
+	var err error
+	var pts []*PatternTuple
+	ctx := context.Background()
+	ses := &Session{}
+
+	tenantInfo = &TenantInfo{
+		Tenant:      sysAccountName,
+		DefaultRole: moAdminRoleName,
+	}
+	ses.tenant = tenantInfo
+	pts = []*PatternTuple{
+		{SourceAccount: "acc1"},
+		{SourceAccount: sysAccountName},
+	}
+	err = canCreateCdcTask(ctx, ses, "Cluster", "", pts)
+	assert.Nil(t, err)
+
+	pts = []*PatternTuple{
+		{SourceAccount: sysAccountName, SourceDatabase: moCatalog},
+	}
+	err = canCreateCdcTask(ctx, ses, "Cluster", "", pts)
+	assert.NotNil(t, err)
+
+	pts = []*PatternTuple{
+		{SourceAccount: sysAccountName},
+	}
+	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
+	assert.NotNil(t, err)
+
+	pts = []*PatternTuple{
+		{SourceAccount: "acc2"},
+	}
+	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
+	assert.NotNil(t, err)
+
+	pts = []*PatternTuple{
+		{},
+	}
+	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
+	assert.Nil(t, err)
+
+	pts = []*PatternTuple{
+		{SourceAccount: "acc1"},
+	}
+	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
+	assert.Nil(t, err)
+
+	tenantInfo = &TenantInfo{
+		Tenant:      "acc1",
+		DefaultRole: accountAdminRoleName,
+	}
+	ses.tenant = tenantInfo
+
+	pts = []*PatternTuple{
+		{SourceAccount: "acc1"},
+		{},
+	}
+	err = canCreateCdcTask(ctx, ses, "Cluster", "", pts)
+	assert.NotNil(t, err)
+
+	err = canCreateCdcTask(ctx, ses, "Account", "acc2", pts)
+	assert.NotNil(t, err)
+
+	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
+	assert.Nil(t, err)
+
+	pts = []*PatternTuple{
+		{SourceAccount: "acc2"},
+		{SourceAccount: sysAccountName},
+	}
+	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
+	assert.NotNil(t, err)
+
 }
