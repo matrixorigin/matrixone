@@ -9410,7 +9410,7 @@ simple_expr:
     {
         $$ = $1
     }
-|   MATCH '(' expression_list ')' AGAINST '(' search_pattern fulltext_search_opt ')'
+|   MATCH '(' index_column_list ')' AGAINST '(' search_pattern fulltext_search_opt ')'
     {
 	val, err := tree.NewFullTextMatchFuncExpression($3, $7, $8)
 	if err != nil {

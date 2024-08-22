@@ -1792,7 +1792,7 @@ const (
 type FullTextMatchExpr struct {
 	exprImpl
 	// columns.
-	KeyParts Exprs
+	KeyParts []*KeyPart
 
 	// pattern
 	Pattern string
@@ -1823,14 +1823,29 @@ func (node *FullTextMatchExpr) Accept(v Visitor) (Expr, bool) {
 	panic("unimplement FullTextMatchExpr Accept")
 }
 
-func NewFullTextMatchFuncExpression(columns Exprs, pattern string, typ FullTextSearchType) (*FullTextMatchExpr, error) {
+func (node *FullTextMatchExpr) Valid() error {
+	if len(node.KeyParts) == 0 {
+		return moerr.NewSyntaxErrorNoCtx("MATCH(expr list) expression list is empty.")
+	}
+	if len(node.Pattern) == 0 {
+		return moerr.NewSyntaxErrorNoCtx("AGAINST('pattern') pattern is empty.")
+	}
+	return nil
+}
+
+func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern string, typ FullTextSearchType) (*FullTextMatchExpr, error) {
 
 	return &FullTextMatchExpr{KeyParts: columns, Pattern: pattern, Typ: typ}, nil
 }
 
 func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	ctx.WriteString("MATCH (")
-	node.KeyParts.Format(ctx)
+	for i, k := range node.KeyParts {
+		if i > 0 {
+			ctx.WriteString(", ")
+		}
+		k.Format(ctx)
+	}
 	ctx.WriteString(") ")
 	ctx.WriteString("AGAINST (")
 	ctx.WriteString(node.Pattern)
