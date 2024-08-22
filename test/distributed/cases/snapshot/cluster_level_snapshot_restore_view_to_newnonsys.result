@@ -533,7 +533,6 @@ SQL parser error: table "enrollments" does not exist
 select * from StudentCoursesView;
 SQL parser error: table "studentcoursesview" does not exist
 restore account acc01 database test02 table Enrollments from snapshot sp07 to account acc02;
-no such table test02.courses
 use test02;
 select * from Enrollments;
 SQL parser error: table "enrollments" does not exist
