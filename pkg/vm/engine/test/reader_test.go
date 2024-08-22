@@ -336,6 +336,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 			if col.Name == schema.ColDefs[primaryKeyIdx].Name {
 				vec := vector.NewVec(col.Type)
 				ret.Vecs[0] = vec
+				ret.Attrs = []string{col.Name}
 				break
 			}
 		}
