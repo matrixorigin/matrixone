@@ -272,9 +272,11 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 			rbat.Clean(mp)
 			return nil, err
 		}
+		rvec.SetSorted(vec.GetSorted())
 		rbat.SetVector(int32(j), rvec)
 	}
 	rbat.rowCount = bat.rowCount
+	rbat.ShuffleIDX = bat.ShuffleIDX
 
 	//if len(bat.Aggs) > 0 {
 	//	rbat.Aggs = make([]aggexec.AggFuncExec, len(bat.Aggs))
