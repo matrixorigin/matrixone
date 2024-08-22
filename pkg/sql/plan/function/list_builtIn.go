@@ -6498,6 +6498,29 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// function `FULLTEXT_MATCH`
+	{
+		functionId: FULLTEXT_MATCH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_any, types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
+						return moerr.NewNotSupported(proc.Ctx, "function fulltext_match not supported")
+					}
+				},
+			},
+		},
+	},
 }
 
 func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) (err error) {

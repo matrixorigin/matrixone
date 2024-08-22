@@ -2965,6 +2965,7 @@ func DeepProcessExprForGroupConcat(expr *Expr, ctx *BindContext) *Expr {
 
 }
 
+// ERIC handle FullTExtMatchExpr here
 func appendSelectList(
 	builder *QueryBuilder,
 	ctx *BindContext,
@@ -3060,6 +3061,8 @@ func appendSelectList(
 				Expr: expr,
 				As:   selectExpr.As,
 			})
+		case *tree.FullTextMatchExpr:
+			// ERIC
 		default:
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
 				ctx.headings = append(ctx.headings, selectExpr.As.Origin())

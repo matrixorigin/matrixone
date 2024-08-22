@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -243,6 +244,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		// * should only appear in SELECT clause
 		err = moerr.NewInvalidInput(b.GetContext(), "SELECT clause contains unqualified star")
 
+	case *tree.FullTextMatchExpr:
+		// ERIC
+		logutil.Infof("FULLTEXT %s", exprImpl.String())
+		//err = moerr.NewInvalidInput(b.GetContext(), "FullTextMatchExpr not supported yet")
+		expr, err = b.bindFullTextMatchExpr(exprImpl, depth, isRoot)
 	default:
 		err = moerr.NewNYI(b.GetContext(), "expr '%+v'", exprImpl)
 	}
@@ -960,6 +966,51 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+}
+
+// ERIC
+func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, depth int32, isRoot bool) (*Expr, error) {
+
+	colrefs := make([]*plan.Expr, len(astExpr.KeyParts))
+	for i, k := range astExpr.KeyParts {
+		c, err := b.baseBindColRef(k.ColName, depth, isRoot)
+		if err != nil {
+			return nil, err
+		}
+		colrefs[i] = c
+	}
+
+	args := make([]*Expr, 3)
+	args[0] = &plan.Expr{
+		Expr: &plan.Expr_List{
+			List: &plan.ExprList{
+				List: colrefs,
+			},
+		},
+		Typ: plan.Type{Id: int32(types.T_any),
+			NotNullable: false,
+		},
+	}
+
+	mode := int64(astExpr.Mode)
+	args[1] = makePlan2StringConstExprWithType(astExpr.Pattern, false)
+	args[2] = makePlan2Int64ConstExprWithType(mode)
+
+	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
+
+	/*
+		return &plan.FullTextMatchExpr{
+			Mode: &plan.Literal_I32Val{
+				I32Val: int32(astExpr.Mode),
+			},
+			Pattern: &plan.Literal_Sval{Sval: astExpr.Pattern},
+			Expr: &plan.Expr_List{
+				List: &plan.ExprList{
+					List: colrefs,
+				},
+			},
+		}, nil
+	*/
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
