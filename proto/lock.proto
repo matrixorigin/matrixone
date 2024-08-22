@@ -359,7 +359,10 @@ message Result {
   bytes               ConflictKey     = 6;
   bytes               ConflictTxn     = 7;   
   bytes               PrevWaiter      = 8; 
-  uint32              Waiters         = 9;                 
+  uint32              Waiters         = 9;  
+  // NewLockAdd if true means new lock added, false means lock is added before by current 
+  // txn
+  bool                NewLockAdd      = 10;                
 }
 
 message ExtraMutation {

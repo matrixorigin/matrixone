@@ -106,7 +106,19 @@ func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 
 func printShuffleResult(dispatch *Dispatch) {
 	if dispatch.ctr.batchCnt != nil && dispatch.ctr.rowCnt != nil {
-		logutil.Debugf("shuffle type %v,  dispatch result: batchcnt %v, rowcnt %v", dispatch.ShuffleType, dispatch.ctr.batchCnt, dispatch.ctr.rowCnt)
+		maxNum := 0
+		minNum := 100000000
+		for i := range dispatch.ctr.batchCnt {
+			if dispatch.ctr.batchCnt[i] > maxNum {
+				maxNum = dispatch.ctr.batchCnt[i]
+			}
+			if dispatch.ctr.batchCnt[i] < minNum {
+				minNum = dispatch.ctr.batchCnt[i]
+			}
+		}
+		if maxNum > minNum*10 {
+			logutil.Warnf("shuffle imbalance!  type %v,  dispatch result: batchcnt %v, rowcnt %v", dispatch.ShuffleType, dispatch.ctr.batchCnt, dispatch.ctr.rowCnt)
+		}
 	}
 }
 
