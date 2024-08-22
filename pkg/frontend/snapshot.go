@@ -766,11 +766,7 @@ func restoreToDatabaseOrTable(
 		// else skip restore the db
 
 		var isPubExist bool
-		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
-		if err != nil {
-			return
-		}
-
+		isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
 		if !isPubExist {
 			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, dbName))
 			return
@@ -885,11 +881,7 @@ func restoreToSubDb(
 	toCtx := defines.AttachAccountId(ctx, subDb.Account)
 
 	var isPubExist bool
-	isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
-	if err != nil {
-		return
-	}
-
+	isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
 	if !isPubExist {
 		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, subDb.dbName))
 		return
@@ -1878,7 +1870,7 @@ func checkPubExistOrNot(
 
 	if err != nil {
 		getLogger(sid).Info(fmt.Sprintf("[%s] check pub exist or not error: %v", snapshotName, err))
-		return false, nil
+		return false, err
 	}
 
 	if !isPubValid {
