@@ -79,11 +79,7 @@ func (filter *Filter) GetExeExpr() *plan.Expr {
 }
 
 func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	for i := range filter.ctr.executors {
-		if filter.ctr.executors[i] != nil {
-			filter.ctr.executors[i].ResetForNextQuery()
-		}
-	}
+	filter.ctr.cleanExecutor() //todo need fix performance issue for executor mem reuse
 	filter.exeExpr = nil
 }
 
@@ -102,3 +98,12 @@ func (ctr *container) cleanExecutor() {
 	}
 	ctr.executors = nil
 }
+
+// func (ctr *container) resetExecutor() {
+// 	for i := range ctr.executors {
+// 		if ctr.executors[i] != nil {
+// 			ctr.executors[i].ResetForNextQuery()
+// 		}
+// 	}
+// 	ctr.executors = nil
+// }

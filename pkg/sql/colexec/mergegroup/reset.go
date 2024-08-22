@@ -108,5 +108,4 @@ func (ctr *container) initEmptyBatchFromInput(bat *batch.Batch) {
 	for i := range bat.Vecs {
 		ctr.bat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
 	}
-	return
 }

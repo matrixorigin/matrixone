@@ -178,7 +178,7 @@ func init() {
 
 func TestFilter(t *testing.T) {
 	for _, tc := range tcs {
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, tc.proc)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		// 1. First call
@@ -205,7 +205,7 @@ func TestFilter(t *testing.T) {
 
 		//--------------------------------------------------------
 		// Re enable the operator after reset
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, tc.proc)
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		res, _ = tc.arg.Call(tc.proc)
@@ -213,6 +213,10 @@ func TestFilter(t *testing.T) {
 			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
 		} else {
 			require.Equal(t, res.Batch == nil, true)
+		}
+		for _, child := range tc.arg.Children {
+			child.Reset(tc.proc, false, nil)
+			child.Free(tc.proc, false, nil)
 		}
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
@@ -222,7 +226,11 @@ func TestFilter(t *testing.T) {
 	}
 }
 
-func resetChildren(arg *Filter) {
+func resetChildren(arg *Filter, proc *process.Process) {
+	for _, child := range arg.Children {
+		child.Reset(proc, false, nil)
+		child.Free(proc, false, nil)
+	}
 	bat0 := MakeFilterMockBatchs()
 	bat1 := MakeFilterMockBatchs()
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat0, bat1})

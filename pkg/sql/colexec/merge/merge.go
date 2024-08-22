@@ -78,6 +78,8 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 			bat, err = msg.Batch.Dup(proc.GetMPool())
 		} else {
 			bat, err = merge.ctr.buf.AppendWithCopy(proc.Ctx, proc.GetMPool(), msg.Batch)
+			bat.ShuffleIDX = msg.Batch.ShuffleIDX
+			bat.Recursive = msg.Batch.Recursive
 		}
 		if err != nil {
 			proc.PutBatch(msg.Batch)
