@@ -1615,6 +1615,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Typ: Type{
 					Id:    colMap[colName].Typ.Id,
 					Width: colMap[colName].Typ.Width,
+					Scale: colMap[colName].Typ.Scale,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,

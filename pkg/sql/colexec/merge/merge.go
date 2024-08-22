@@ -78,8 +78,10 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 			proc.PutBatch(msg.Batch)
 			return vm.CancelResult, err
 		}
-		merge.ctr.buf.Aggs = msg.Batch.Aggs
-		msg.Batch.Aggs = nil
+		if msg.Batch.Aggs != nil {
+			merge.ctr.buf.Aggs = msg.Batch.Aggs
+			msg.Batch.Aggs = nil
+		}
 		result.Batch = merge.ctr.buf
 		proc.PutBatch(msg.Batch)
 		break
