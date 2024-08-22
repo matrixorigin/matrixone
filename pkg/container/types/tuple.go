@@ -112,6 +112,8 @@ func (tp Tuple) SQLStrings(scales []int32) []string {
 		case []byte:
 			s := *(*string)(unsafe.Pointer(&t))
 			res = append(res, strconv.Quote(s))
+		case Uuid:
+			res = append(res, fmt.Sprintf("'%v'", t.String()))
 		case Date:
 			res = append(res, fmt.Sprintf("'%v'", t.String()))
 		case Time:
