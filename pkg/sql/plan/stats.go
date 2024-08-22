@@ -604,7 +604,7 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 			w += 1
 		}
 		if strings.HasPrefix(objName, "json_") {
-			w += 128
+			w += 512
 		}
 		for _, child := range exprImpl.F.Args {
 			w += estimateFilterWeight(child, 0)
