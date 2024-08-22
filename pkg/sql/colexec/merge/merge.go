@@ -17,7 +17,6 @@ package merge
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -70,24 +69,18 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		if merge.ctr.buf != nil {
-			merge.ctr.buf.CleanOnlyData()
+			merge.ctr.buf.Clean(proc.GetMPool())
+			merge.ctr.buf = nil
 		}
 
-		var bat *batch.Batch
-		if len(msg.Batch.Vecs) == 0 || msg.Batch.Recursive > 0 {
-			bat, err = msg.Batch.Dup(proc.GetMPool())
-		} else {
-			bat, err = merge.ctr.buf.AppendWithCopy(proc.Ctx, proc.GetMPool(), msg.Batch)
-			bat.ShuffleIDX = msg.Batch.ShuffleIDX
-			bat.Recursive = msg.Batch.Recursive
-		}
+		merge.ctr.buf, err = msg.Batch.Dup(proc.GetMPool())
 		if err != nil {
 			proc.PutBatch(msg.Batch)
 			return vm.CancelResult, err
 		}
-		bat.Aggs = msg.Batch.Aggs
+		merge.ctr.buf.Aggs = msg.Batch.Aggs
 		msg.Batch.Aggs = nil
-		result.Batch = bat
+		result.Batch = merge.ctr.buf
 		proc.PutBatch(msg.Batch)
 		break
 	}
