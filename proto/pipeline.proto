@@ -102,14 +102,15 @@ message Aggregate {
 
 message Group {
   bool need_eval = 1;
-  repeated plan.Expr  exprs = 2;
-  repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
-  repeated Aggregate  aggs = 4;
-  repeated MultiArguemnt MultiAggs = 5;
-  bool isShuffle = 6;
-  uint64 preAllocSize = 7;
-  bytes PartialResults = 8;
-  repeated uint32 PartialResultTypes = 9;
+  bool need_rollup = 2;
+  repeated plan.Expr  exprs = 3;
+  repeated plan.Type  types = 4 [(gogoproto.nullable) = false];
+  repeated Aggregate  aggs = 5;
+  repeated MultiArguemnt MultiAggs = 6;
+  bool isShuffle = 7;
+  uint64 preAllocSize = 8;
+  bytes PartialResults = 9;
+  repeated uint32 PartialResultTypes = 10;
 }
 
 message Insert{

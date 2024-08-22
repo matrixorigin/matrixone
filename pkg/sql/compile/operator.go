@@ -139,6 +139,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.IsShuffle = t.IsShuffle
 		op.PreAllocSize = t.PreAllocSize
 		op.NeedEval = t.NeedEval
+		op.NeedRollup = t.NeedRollup
 		op.Exprs = t.Exprs
 		op.Types = t.Types
 		op.Aggs = t.Aggs

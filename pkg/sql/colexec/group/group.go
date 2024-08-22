@@ -234,6 +234,10 @@ func (ctr *container) processGroupByAndAgg(
 			}
 
 			result := vm.NewCallResult()
+
+			if ap.NeedRollup {
+				ctr.concatRollup(ctr.rollupBat, proc)
+			}
 			// there is no need to do agg merge. and we can get agg result here.
 			if ap.NeedEval {
 				aggVectors, err := ctr.getAggResult(ctr.bat)
@@ -246,35 +250,6 @@ func (ctr *container) processGroupByAndAgg(
 				for _, vec := range aggVectors {
 					anal.Alloc(int64(vec.Size()))
 				}
-			}
-			if ap.NeedRollup {
-				aggVectors, err := ctr.getAggResult(ctr.rollupBat)
-				if err != nil {
-					return result, err
-				}
-				ctr.rollupBat.Vecs = append(ctr.rollupBat.Vecs, aggVectors...)
-
-				// analyze.
-				for _, vec := range aggVectors {
-					anal.Alloc(int64(vec.Size()))
-				}
-				rollupCount := ctr.rollupBat.RowCount()
-				for i, vec := range ctr.bat.Vecs {
-					sels := make([]int32, rollupCount)
-					for j := 0; j < rollupCount; j++ {
-						sels[j] = int32(j)
-					}
-					for i := 0; i < vec.Length(); i++ {
-						vec.AddFlag([]bool{false})
-					}
-					if err := vec.Union(ctr.rollupBat.Vecs[i], sels, proc.Mp()); err != nil {
-						result.Batch.Clean(proc.Mp())
-						ctr.rollupBat.Clean(proc.Mp())
-						return result, err
-					}
-					vec.AddFlag(ctr.rollupBat.Vecs[i].GetFlag())
-				}
-				ctr.bat.AddRowCount(rollupCount)
 			}
 
 			anal.Output(ctr.bat, isLast)
@@ -548,6 +523,10 @@ func (ctr *container) initResultAndHashTable(bat **batch.Batch, proc *process.Pr
 		}
 	}
 
+	if config.NeedRollup {
+		ctr.groupVecsNullable = true
+	}
+
 	// init the hashmap.
 	switch {
 	case ctr.keyWidth <= 8:
@@ -622,6 +601,47 @@ func (ctr *container) aggWithoutGroupByCannotEmptySet(bat *batch.Batch, proc *pr
 				}
 			}
 			ctr.bat.SetRowCount(1)
+		}
+	}
+
+	return nil
+}
+
+func (ctr *container) concatRollup(rollupBat *batch.Batch, proc *process.Process) error {
+	count := rollupBat.RowCount()
+	for _, vec := range ctr.bat.Vecs {
+		for i := 0; i < vec.Length(); i++ {
+			vec.AddFlag([]bool{false})
+		}
+	}
+	for offset := 0; offset < count; offset += hashmap.UnitLimit { // batch
+		n := count - offset
+		if n > hashmap.UnitLimit {
+			n = hashmap.UnitLimit
+		}
+		inserted, vals := make([]uint8, n), make([]uint64, n)
+		for i := 0; i < n; i++ {
+			inserted[i] = 1
+			vals[i] = uint64(ctr.bat.RowCount() + i + 1)
+		}
+		ctr.bat.AddRowCount(n)
+
+		if n > 0 {
+			for j, vec := range ctr.bat.Vecs {
+				if err := vec.UnionBatch(rollupBat.Vecs[j], int64(offset), n, inserted[:n], proc.Mp()); err != nil {
+					return err
+				}
+			}
+			for _, agg := range ctr.bat.Aggs {
+				if err := agg.GroupGrow(n); err != nil {
+					return err
+				}
+			}
+		}
+		for j, agg := range ctr.bat.Aggs {
+			if err := agg.BatchMerge(rollupBat.Aggs[j], offset, vals[:n]); err != nil {
+				return err
+			}
 		}
 	}
 

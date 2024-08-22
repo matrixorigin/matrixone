@@ -156,6 +156,11 @@ func (group *Group) WithAggsNew(aggs []aggexec.AggFuncExecExpression) *Group {
 	return group
 }
 
+func (group *Group) WithRollup(withRollup bool) *Group {
+	group.NeedRollup = withRollup
+	return group
+}
+
 func (group *Group) Release() {
 	if group != nil {
 		reuse.Free[Group](group, nil)

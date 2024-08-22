@@ -540,6 +540,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			IsShuffle:    t.IsShuffle,
 			PreAllocSize: t.PreAllocSize,
 			NeedEval:     t.NeedEval,
+			NeedRollup:   t.NeedRollup,
 			Exprs:        t.Exprs,
 			Types:        convertToPlanTypes(t.Types),
 			Aggs:         convertToPipelineAggregates(t.Aggs),
@@ -948,6 +949,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsShuffle = t.IsShuffle
 		arg.PreAllocSize = t.PreAllocSize
 		arg.NeedEval = t.NeedEval
+		arg.NeedRollup = t.NeedRollup
 		arg.Exprs = t.Exprs
 		arg.Types = convertToTypes(t.Types)
 		arg.Aggs = convertToAggregates(t.Aggs)

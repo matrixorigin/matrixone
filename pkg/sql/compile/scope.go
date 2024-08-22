@@ -840,7 +840,8 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 				groupOp := group.NewArgument().
 					WithExprs(arg.Exprs).
 					WithTypes(arg.Types).
-					WithAggsNew(arg.Aggs)
+					WithAggsNew(arg.Aggs).
+					WithRollup(arg.NeedRollup)
 				groupOp.SetInfo(&vm.OperatorInfo{
 					Idx:         arg.Idx,
 					IsFirst:     arg.IsFirst,

@@ -728,6 +728,7 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	w.typ = v.typ
 	w.length = v.length
 	w.sorted = v.sorted
+	w.flag = v.flag
 	w.GetNulls().InitWith(v.GetNulls())
 
 	dataLen := v.typ.TypeSize()
@@ -818,6 +819,10 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		shrinkFixed[types.Blockid](v, sels, negate)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
+	}
+
+	if len(v.flag) > 0 {
+		v.flag = getElementsByIndexes(v.flag, sels, negate)
 	}
 }
 
@@ -952,6 +957,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -982,6 +988,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1012,6 +1019,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1042,6 +1050,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1072,6 +1081,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1102,6 +1112,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1132,6 +1143,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1162,6 +1174,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1192,6 +1205,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1222,6 +1236,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1252,6 +1267,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1282,6 +1298,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1312,6 +1329,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1342,6 +1360,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1372,6 +1391,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1402,6 +1422,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1432,6 +1453,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1462,6 +1484,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1492,6 +1515,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1522,6 +1546,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1552,6 +1577,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1582,6 +1608,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1589,6 +1616,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64:
 		return func(v, w *Vector) error {
+			v.flag = append(v.flag, w.flag...)
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
 					return err
@@ -1655,6 +1683,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -2449,6 +2478,13 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 	} else {
 		for i := range flags {
 			addCnt += int(flags[i])
+		}
+	}
+	if len(w.flag) > 0 {
+		for i, flag := range flags {
+			if flag > 0 {
+				v.flag = append(v.flag, w.flag[int(offset)+i])
+			}
 		}
 	}
 
@@ -4404,5 +4440,31 @@ func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 			prevVal = bb
 			AppendBytes(ret, bb, false, mp)
 		}
+	}
+}
+
+func getElementsByIndexes(arr []bool, indexes []int64, negate bool) []bool {
+	if negate {
+		result := make([]bool, len(arr)-len(indexes))
+		count := 0
+		for i, v := range arr {
+			if count == len(indexes) {
+				break
+			}
+			if i != int(indexes[count]) {
+				result = append(result, v)
+				continue
+			}
+			count += 1
+		}
+		return result
+	} else {
+		result := make([]bool, len(indexes))
+		for i, index := range indexes {
+			if index >= 0 && int(index) < len(arr) {
+				result[i] = arr[index]
+			}
+		}
+		return result
 	}
 }
