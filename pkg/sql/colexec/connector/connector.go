@@ -18,7 +18,6 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -60,18 +59,22 @@ func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
-	sendBat := batch.NewWithSize(len(result.Batch.Vecs))
-	sendBat.SetAttributes(result.Batch.Attrs)
-	sendBat.Recursive = result.Batch.Recursive
-	for j, vec := range result.Batch.Vecs {
-		typ := *result.Batch.GetVector(int32(j)).GetType()
-		rvec := proc.GetVector(typ)
-		if err = vector.GetUnionAllFunction(typ, proc.GetMPool())(rvec, vec); err != nil {
-			sendBat.Clean(proc.GetMPool())
-			return vm.CancelResult, err
-		}
-		sendBat.SetVector(int32(j), rvec)
+	sendBat, err := result.Batch.Dup(proc.GetMPool())
+	if err != nil {
+		return vm.CancelResult, nil
 	}
+	// sendBat := batch.NewWithSize(len(result.Batch.Vecs))
+	// sendBat.SetAttributes(result.Batch.Attrs)
+	// sendBat.Recursive = result.Batch.Recursive
+	// for j, vec := range result.Batch.Vecs {
+	// 	typ := *result.Batch.GetVector(int32(j)).GetType()
+	// 	rvec := proc.GetVector(typ)  -- if use proc.GetVector,not vector.NewVec,  BVT(window.sql) will panic
+	// 	if err = vector.GetUnionAllFunction(typ, proc.GetMPool())(rvec, vec); err != nil {
+	// 		sendBat.Clean(proc.GetMPool())
+	// 		return vm.CancelResult, err
+	// 	}
+	// 	sendBat.SetVector(int32(j), rvec)
+	// }
 	sendBat.Aggs = result.Batch.Aggs
 	result.Batch.Aggs = nil
 	sendBat.SetRowCount(result.Batch.RowCount())
