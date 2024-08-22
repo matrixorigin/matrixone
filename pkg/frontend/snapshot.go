@@ -72,7 +72,13 @@ var (
 
 	getDbPubCountWithSnapshotFormat = `select count(1) from mo_catalog.mo_pubs {snapshot = '%s'} where database_name = '%s';`
 
-	restorePubDbDataFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {snapshot = '%s'} WHERE  DATABASE_NAME = '%s'"
+	getRestoreAccountsFmt = "select account_name, account_id from mo_catalog.mo_account where account_name in (select account_name from mo_catalog.mo_account {MO_TS = %d }) ORDER BY account_id ASC;"
+
+	getSubsSqlFmt = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs %s where 1=1"
+
+	checkTableIsMasterFormat = "select db_name, table_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s' and refer_table_name = '%s'"
+
+	restorePubDbDataFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {MO_TS = %d }"
 
 	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", "mo_catalog"}
 
@@ -481,6 +487,15 @@ func deleteCurFkTables(ctx context.Context, bh BackgroundExec, dbName string, tb
 	for i := len(sortedFkTbls) - 1; i >= 0; i-- {
 		key := sortedFkTbls[i]
 		if tblInfo := curFkTableMap[key]; tblInfo != nil {
+			var isMasterTable bool
+			isMasterTable, err = checkTableIsMaster(ctx, bh, "", tblInfo.dbName, tblInfo.tblName)
+			if err != nil {
+				return err
+			}
+			if isMasterTable {
+				continue
+			}
+
 			getLogger().Info(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
 			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s.%s", tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
@@ -880,6 +895,14 @@ func recreateTable(
 	}
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
+
+	var isMasterTable bool
+	isMasterTable, err = checkTableIsMaster(ctx, bh, snapshotName, tblInfo.dbName, tblInfo.tblName)
+	if isMasterTable {
+		// skip restore the table which is master table
+		getLogger().Info(fmt.Sprintf("[%s] skip restore master table: %v.%v", snapshotName, tblInfo.dbName, tblInfo.tblName))
+		return
+	}
 
 	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
 		return
@@ -1576,4 +1599,29 @@ func checkSubscriptionValidInRestore(
 	}
 
 	return true, nil
+}
+
+// checkTableIsMaster check if the table is master table
+func checkTableIsMaster(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshotName string,
+	dbName string,
+	tblName string) (bool, error) {
+	sql := fmt.Sprintf(checkTableIsMasterFormat, dbName, tblName)
+	getLogger().Info(fmt.Sprintf("[%s] check table is master or not sql: %s", snapshotName, sql))
+
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return false, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		return true, nil
+	}
+	return false, nil
 }
