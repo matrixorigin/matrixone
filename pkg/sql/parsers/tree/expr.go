@@ -1797,7 +1797,7 @@ type FullTextMatchExpr struct {
 	// pattern
 	Pattern string
 
-	Typ FullTextSearchType
+	Mode FullTextSearchType
 }
 
 func (node *FullTextSearchType) ToString() string {
@@ -1833,9 +1833,9 @@ func (node *FullTextMatchExpr) Valid() error {
 	return nil
 }
 
-func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern string, typ FullTextSearchType) (*FullTextMatchExpr, error) {
+func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern string, mode FullTextSearchType) (*FullTextMatchExpr, error) {
 
-	return &FullTextMatchExpr{KeyParts: columns, Pattern: pattern, Typ: typ}, nil
+	return &FullTextMatchExpr{KeyParts: columns, Pattern: pattern, Mode: mode}, nil
 }
 
 func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
@@ -1850,9 +1850,9 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	ctx.WriteString("AGAINST (")
 	ctx.WriteString(node.Pattern)
 
-	if node.Typ != FULLTEXT_DEFAULT {
+	if node.Mode != FULLTEXT_DEFAULT {
 		ctx.WriteString(" ")
-		ctx.WriteString(node.Typ.ToString())
+		ctx.WriteString(node.Mode.ToString())
 	}
 	ctx.WriteString(")")
 }
