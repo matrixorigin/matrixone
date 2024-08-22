@@ -59,28 +59,28 @@ func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
-	sendBat, err := result.Batch.Dup(proc.GetMPool())
+	connector.buf, err = result.Batch.DupInto(connector.buf, proc.GetMPool())
 	if err != nil {
 		return vm.CancelResult, nil
 	}
-	sendBat.Aggs = result.Batch.Aggs
+	connector.buf.Aggs = result.Batch.Aggs
 	result.Batch.Aggs = nil
-	sendBat.SetRowCount(result.Batch.RowCount())
+	connector.buf.SetRowCount(result.Batch.RowCount())
 
 	// there is no need to log anything here.
 	// because the context is already canceled means the pipeline closed normally.
 	select {
 	case <-proc.Ctx.Done():
-		proc.PutBatch(sendBat)
+		proc.PutBatch(connector.buf)
 		result.Status = vm.ExecStop
 		return result, nil
 
 	case <-reg.Ctx.Done():
-		proc.PutBatch(sendBat)
+		proc.PutBatch(connector.buf)
 		result.Status = vm.ExecStop
 		return result, nil
 
-	case reg.Ch <- process.NewRegMsg(sendBat):
+	case reg.Ch <- process.NewRegMsg(connector.buf):
 		return result, nil
 	}
 }

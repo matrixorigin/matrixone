@@ -277,20 +277,35 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	}
 	rbat.rowCount = bat.rowCount
 	rbat.ShuffleIDX = bat.ShuffleIDX
+	return rbat, nil
+}
 
-	//if len(bat.Aggs) > 0 {
-	//	rbat.Aggs = make([]aggexec.AggFuncExec, len(bat.Aggs))
-	//	aggMemoryManager := aggexec.NewSimpleAggMemoryManager(mp)
-	//
-	//	for i, agg := range bat.Aggs {
-	//		rbat.Aggs[i], err = aggexec.CopyAggFuncExec(aggMemoryManager, agg)
-	//		if err != nil {
-	//			rbat.Clean(mp)
-	//			return nil, err
-	//		}
-	//	}
-	//}
+// same as dup, but with no allocation if rbat is not nil
+func (bat *Batch) DupInto(rbat *Batch, mp *mpool.MPool) (*Batch, error) {
+	var err error
+	if rbat == nil {
+		return bat.Dup(mp)
+	}
+	rbat.CleanOnlyData()
+	if len(rbat.Vecs) != len(bat.Vecs) {
+		rbat.Vecs = make([]*vector.Vector, len(bat.Vecs))
+	}
 
+	rbat.SetAttributes(bat.Attrs)
+	rbat.Recursive = bat.Recursive
+	for j, vec := range bat.Vecs {
+		typ := *bat.GetVector(int32(j)).GetType()
+		if !rbat.Vecs[j].GetType().Eq(typ) {
+			rbat.Vecs[j] = vector.NewVec(typ)
+		}
+		if err = vector.GetUnionAllFunction(typ, mp)(rbat.Vecs[j], vec); err != nil {
+			rbat.Clean(mp)
+			return nil, err
+		}
+		rbat.Vecs[j].SetSorted(vec.GetSorted())
+	}
+	rbat.rowCount = bat.rowCount
+	rbat.ShuffleIDX = bat.ShuffleIDX
 	return rbat, nil
 }
 

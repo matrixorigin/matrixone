@@ -61,6 +61,8 @@ type container struct {
 
 	batchCnt []int
 	rowCnt   []int
+
+	buf *batch.Batch
 }
 
 type Dispatch struct {
@@ -129,7 +131,10 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 			}
 			colexec.Get().DeleteUuids(uuids)
 		}
-
+		if dispatch.ctr.buf != nil {
+			dispatch.ctr.buf.Clean(proc.Mp())
+			dispatch.ctr.buf = nil
+		}
 		dispatch.ctr = nil
 	}
 

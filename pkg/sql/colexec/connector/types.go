@@ -16,6 +16,7 @@ package connector
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -24,6 +25,7 @@ var _ vm.Operator = new(Connector)
 
 // Connector pipe connector
 type Connector struct {
+	buf *batch.Batch
 	Reg *process.WaitRegister
 	vm.OperatorBase
 }
@@ -65,6 +67,9 @@ func (connector *Connector) Release() {
 }
 
 func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if connector.buf != nil {
+		connector.buf.CleanOnlyData()
+	}
 	// told the next operator to stop if it is still running.
 	msg := process.NewRegMsg(nil)
 	msg.Err = err
@@ -75,4 +80,8 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (connector *Connector) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if connector.buf != nil {
+		connector.buf.Clean(proc.Mp())
+		connector.buf = nil
+	}
 }
