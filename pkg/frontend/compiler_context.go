@@ -99,8 +99,8 @@ func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
 	tcc.snapshot = snapshot
 }
 
-func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
-	_, p, st, _, err := resolveExecutePlan(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan)
+func (tcc *TxnCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
+	_, p, st, _, err := initExecuteStmtParam(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan)
 	return p, st, err
 }
 
