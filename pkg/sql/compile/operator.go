@@ -113,7 +113,7 @@ func init() {
 	constBat.SetRowCount(1)
 }
 
-func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process.WaitRegister, index int) vm.Operator {
+func dupOperator(sourceOp vm.Operator, index int) vm.Operator {
 	srcOpBase := sourceOp.GetOperatorBase()
 	info := vm.OperatorInfo{
 		Idx:         srcOpBase.Idx,
@@ -478,16 +478,10 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.SetInfo(&info)
 		return op
 	case vm.Connector:
-		ok := false
-		if regMap != nil {
-			op := connector.NewArgument()
-			sourceReg := sourceOp.(*connector.Connector).Reg
-			if op.Reg, ok = regMap[sourceReg]; !ok {
-				panic("nonexistent wait register")
-			}
-			op.SetInfo(&info)
-			return op
-		}
+		op := connector.NewArgument()
+		op.Reg = sourceOp.(*connector.Connector).Reg
+		op.SetInfo(&info)
+		return op
 	case vm.Shuffle:
 		sourceArg := sourceOp.(*shuffle.Shuffle)
 		op := shuffle.NewArgument()
@@ -502,27 +496,21 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.SetInfo(&info)
 		return op
 	case vm.Dispatch:
-		ok := false
-		if regMap != nil {
-			sourceArg := sourceOp.(*dispatch.Dispatch)
-			op := dispatch.NewArgument()
-			op.IsSink = sourceArg.IsSink
-			op.RecSink = sourceArg.RecSink
-			op.FuncId = sourceArg.FuncId
-			op.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
-			op.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
-			for j := range op.LocalRegs {
-				sourceReg := sourceArg.LocalRegs[j]
-				if op.LocalRegs[j], ok = regMap[sourceReg]; !ok {
-					panic("nonexistent wait register")
-				}
-			}
-			for j := range op.RemoteRegs {
-				op.RemoteRegs[j] = sourceArg.RemoteRegs[j]
-			}
-			op.SetInfo(&info)
-			return op
+		sourceArg := sourceOp.(*dispatch.Dispatch)
+		op := dispatch.NewArgument()
+		op.IsSink = sourceArg.IsSink
+		op.RecSink = sourceArg.RecSink
+		op.FuncId = sourceArg.FuncId
+		op.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
+		op.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
+		for j := range op.LocalRegs {
+			op.LocalRegs[j] = sourceArg.LocalRegs[j]
 		}
+		for j := range op.RemoteRegs {
+			op.RemoteRegs[j] = sourceArg.RemoteRegs[j]
+		}
+		op.SetInfo(&info)
+		return op
 	case vm.Insert:
 		t := sourceOp.(*insert.Insert)
 		op := insert.NewArgument()

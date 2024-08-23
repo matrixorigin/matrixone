@@ -713,6 +713,11 @@ func (s *Scope) isRight() bool {
 	return OpType == vm.Right || OpType == vm.RightSemi || OpType == vm.RightAnti
 }
 
+// will substitute newParallelScope gruadually
+func newParallelScope1(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
+	return nil, nil
+}
+
 func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 	var flg bool
 	var toReleaseOpRoot vm.Operator
