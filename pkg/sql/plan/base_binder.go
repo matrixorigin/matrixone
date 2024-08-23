@@ -971,13 +971,16 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 // ERIC
 func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, depth int32, isRoot bool) (*Expr, error) {
 
+	logutil.Infof("BIND FULLTEXT")
 	colrefs := make([]*plan.Expr, len(astExpr.KeyParts))
 	for i, k := range astExpr.KeyParts {
+		logutil.Infof("Col %s", k.ColName.ColName())
 		c, err := b.baseBindColRef(k.ColName, depth, isRoot)
 		if err != nil {
 			return nil, err
 		}
 		colrefs[i] = c
+		logutil.Infof("Col_Ref: %s", c.GetCol().GetName())
 	}
 
 	args := make([]*Expr, 3)
@@ -999,7 +1002,7 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
 
 	/*
-		return &plan.FullTextMatchExpr{
+		return &plan.Expr{
 			Mode: &plan.Literal_I32Val{
 				I32Val: int32(astExpr.Mode),
 			},

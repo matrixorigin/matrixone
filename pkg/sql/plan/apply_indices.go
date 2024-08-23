@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -66,9 +67,12 @@ func isRuntimeConstExpr(expr *plan.Expr) bool {
 }
 
 func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+
 	if builder.optimizerHints != nil && builder.optimizerHints.applyIndices != 0 {
 		return nodeID
 	}
+
+	logutil.Infof("applyIndices START")
 	node := builder.qry.Nodes[nodeID]
 	for i, childID := range node.Children {
 		node.Children[i] = builder.applyIndices(childID, colRefCnt, idxColMap)
@@ -77,25 +81,66 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
+		logutil.Infof("TABLE_SCAN HERE")
 		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap)
 
 	case plan.Node_JOIN:
 		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap)
 
 	case plan.Node_PROJECT:
+		logutil.Infof("PROJECT HERE")
 		//NOTE: This is the entry point for vector index rule on SORT NODE.
 		return builder.applyIndicesForProject(nodeID, node, colRefCnt, idxColMap)
 
 	}
+
+	logutil.Infof("applyIndices END")
 	return nodeID
 }
 
 func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
+	// ERIC BUG HERE:  fulltext_match need to check first instead of len(Indexes) == 0... error out if fullmatch found but len(index) == 0
+
+	logutil.Infof("applyINdicesForFilters..... node.FilterList = %d, Index = %d", len(node.FilterList), len(node.TableDef.Indexes))
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
+	logutil.Infof("applyIndciesForFilters START")
+	// ERIC
+	{
+		for _, expr := range node.FilterList {
+			fn := expr.GetF()
+			if fn == nil {
+				goto END0
+			}
+
+			logutil.Infof("FUNCTION HERE : %s", fn.Func.ObjName)
+			switch fn.Func.ObjName {
+			case "fulltext_match":
+				// arg0 is Expr_List
+				for i, c := range fn.Args[0].GetList().GetList() {
+					logutil.Infof("COL %d %s", i, c.GetCol().GetName())
+				}
+				// arg1 is string
+				logutil.Infof("PATTERN %s", fn.Args[1].GetLit().GetSval())
+				// arg2 is int64
+				logutil.Infof("MODE %d", fn.Args[2].GetLit().GetI64Val())
+
+				for _, idx := range node.TableDef.Indexes {
+					logutil.Infof("INDX name = %s , keys  = %v", idx.IndexTableName, idx.Parts)
+				}
+				pkid := node.TableDef.Name2ColIndex[node.TableDef.Pkey.GetNames()[0]]
+				logutil.Infof("Primary Key POS =%d, %s", pkid, node.TableDef.Pkey.String())
+
+				logutil.Infof("Src table name %s", node.TableDef.Name)
+			default:
+			}
+		}
+
+	}
+	logutil.Infof("applyIndciesForFilters END")
 	// 1. Master Index Check
 	{
 		masterIndexes := make([]*plan.IndexDef, 0)
@@ -136,7 +181,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 				goto END0
 			}
 		}
-
+		// ERIC BUG?  e.g. a,b columns are in master index but the filter is a='str1' and b='str2' and c < 3. isAllFilterColumnsIncluded = false
 		for _, indexDef := range masterIndexes {
 			isAllFilterColumnsIncluded := true
 			for _, expr := range node.FilterList {
