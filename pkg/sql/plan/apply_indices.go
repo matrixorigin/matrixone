@@ -110,7 +110,8 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	logutil.Infof("applyIndciesForFilters START")
 	// ERIC
 	{
-		for _, expr := range node.FilterList {
+		ftid := -1
+		for i, expr := range node.FilterList {
 			fn := expr.GetF()
 			if fn == nil {
 				continue
@@ -120,6 +121,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			logutil.Infof("FUNCTION HERE : %s", fn.Func.ObjName)
 			switch fn.Func.ObjName {
 			case "fulltext_match":
+				ftid = i
 				// arg0 is Expr_List
 				for i, c := range fn.Args[0].GetList().GetList() {
 					logutil.Infof("COL %d %s", i, c.GetCol().GetName())
@@ -136,8 +138,14 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 				logutil.Infof("Primary Key POS =%d, %s", pkid, node.TableDef.Pkey.String())
 
 				logutil.Infof("Src table name %s", node.TableDef.Name)
+
+				// TEST REMOVE THIS FILTER
 			default:
 			}
+		}
+		if ftid != -1 {
+			node.FilterList = append(node.FilterList[:ftid], node.FilterList[ftid+1:]...)
+
 		}
 
 	}
@@ -158,7 +166,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 		for _, expr := range node.FilterList {
 			fn := expr.GetF()
 			if fn == nil {
-				goto END0
+				goto END0 // TODO: ERIC bug here
 			}
 
 			switch fn.Func.ObjName {

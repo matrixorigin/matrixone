@@ -3061,17 +3061,20 @@ func appendSelectList(
 				Expr: expr,
 				As:   selectExpr.As,
 			})
-		case *tree.FullTextMatchExpr:
-			// append same expression to select List and add label score or user defined column name to headings
-			selectList = append(selectList, tree.SelectExpr{
-				Expr: expr,
-				As:   selectExpr.As,
-			})
-			if selectExpr.As != nil && !selectExpr.As.Empty() {
-				ctx.headings = append(ctx.headings, selectExpr.As.Origin())
-			} else {
-				ctx.headings = append(ctx.headings, "score")
-			}
+		// ERIC TODO:  we can remove it.... no effect anyway
+		/*
+			case *tree.FullTextMatchExpr:
+				// append same expression to select List and add label score or user defined column name to headings
+				selectList = append(selectList, tree.SelectExpr{
+					Expr: expr,
+					As:   selectExpr.As,
+				})
+				if selectExpr.As != nil && !selectExpr.As.Empty() {
+					ctx.headings = append(ctx.headings, selectExpr.As.Origin())
+				} else {
+					ctx.headings = append(ctx.headings, "score")
+				}
+		*/
 		default:
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
 				ctx.headings = append(ctx.headings, selectExpr.As.Origin())

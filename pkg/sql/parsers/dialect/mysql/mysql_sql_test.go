@@ -3028,6 +3028,10 @@ var (
 			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION)",
 			output: "select * from t1 where MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION)",
 		},
+		{
+			input:  "select MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
+			output: "select MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
+		},
 	}
 )
 
