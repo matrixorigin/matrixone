@@ -1,0 +1,14 @@
+drop database if exists test;
+create database test;
+use test;
+
+create table t1(a int) with retention period 3 minute;
+select * from mo_catalog.mo_retention;
+database_name    table_name    account_id    retention_deadline
+test    t1    0    1724398793
+
+create table t2(a int) with retention period 2 second;
+-- @ignore:3
+select * from mo_catalog.mo_retention;
+database_name    table_name    account_id    retention_deadline
+test    t2    0    1724398793
