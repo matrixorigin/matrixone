@@ -31,42 +31,31 @@ import (
 
 // common sender: send to all LocalReceiver
 func sendToAllLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
-	var refCountAdd int64
 	var err error
-
-	if !ap.RecSink {
-		refCountAdd = int64(ap.ctr.localRegsCnt - 1)
-		atomic.AddInt64(&bat.Cnt, refCountAdd)
-	}
 	var bats []*batch.Batch
-	if ap.RecSink {
-		for k := 1; k < len(ap.LocalRegs)+1; k++ {
-			bat, err = bat.Dup(proc.Mp())
-			if err != nil {
-				return false, err
-			}
-			bats = append(bats, bat)
+	for k := 1; k < len(ap.LocalRegs)+1; k++ {
+		bat, err = bat.Dup(proc.Mp())
+		if err != nil {
+			return false, err
 		}
+		bats = append(bats, bat)
 	}
 
 	for i, reg := range ap.LocalRegs {
-		if ap.RecSink {
-			bat = bats[i]
-		}
 		select {
 		case <-proc.Ctx.Done():
-			handleUnsent(proc, bat, refCountAdd, int64(i))
+			for j := range bats {
+				bats[j].Clean(proc.Mp())
+			}
 			return true, nil
 
 		case <-reg.Ctx.Done():
-			if ap.IsSink {
-				atomic.AddInt64(&bat.Cnt, -1)
-				continue
+			for j := range bats {
+				bats[j].Clean(proc.Mp())
 			}
-			handleUnsent(proc, bat, refCountAdd, int64(i))
 			return true, nil
 
-		case reg.Ch <- process.NewRegMsg(bat):
+		case reg.Ch <- process.NewRegMsg(bats[i]):
 		}
 	}
 	return false, nil
@@ -406,11 +395,4 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs *pr
 		start = end
 	}
 	return false, nil
-}
-
-// success count is always no greater than refcnt
-func handleUnsent(proc *process.Process, bat *batch.Batch, refCnt int64, successCnt int64) {
-	diff := successCnt - refCnt
-	atomic.AddInt64(&bat.Cnt, diff)
-	proc.PutBatch(bat)
 }
