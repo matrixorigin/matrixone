@@ -104,8 +104,6 @@ linters-settings:
     enable-all: true
     disable:
       - fieldalignment
-      - nilness
-      # - printf
       - shadow
       - unusedwrite
 

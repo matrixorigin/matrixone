@@ -1107,9 +1107,6 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req *memo
 		if err != nil {
 			return err
 		}
-		if err != nil {
-			return err
-		}
 		if key.tableID != iter.TableID {
 			break
 		}

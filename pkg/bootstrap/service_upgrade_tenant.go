@@ -203,7 +203,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 						zap.String("tenant-version", createVersion),
 						zap.String("upgrade", upgrade.String()))
 
-					if err := h.HandleTenantUpgrade(ctx, id, txn); err != nil {
+					if err = h.HandleTenantUpgrade(ctx, id, txn); err != nil {
 						s.logger.Error("failed to execute upgrade tenant",
 							zap.Int32("tenant", id),
 							zap.String("tenant-version", createVersion),
@@ -212,7 +212,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 						return err
 					}
 
-					if err := versions.UpgradeTenantVersion(id, h.Metadata().Version, txn); err != nil {
+					if err = versions.UpgradeTenantVersion(id, h.Metadata().Version, txn); err != nil {
 						s.logger.Error("failed to update upgrade tenant create version",
 							zap.Int32("tenant", id),
 							zap.String("upgrade", upgrade.String()),
@@ -227,7 +227,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 					updated++
 				}
 
-				if err := versions.UpdateUpgradeTenantTaskState(taskID, versions.Yes, txn); err != nil {
+				if err = versions.UpdateUpgradeTenantTaskState(taskID, versions.Yes, txn); err != nil {
 					s.logger.Error("failed to update upgrade tenant state",
 						zap.String("upgrade", upgrade.String()))
 					return err

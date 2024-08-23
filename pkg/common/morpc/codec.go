@@ -438,7 +438,7 @@ func (c *baseCodec) writeBody(
 		return nil, err
 	}
 	defer dec.Deallocate(malloc.NoHints)
-	if _, err := msg.MarshalTo(origin); err != nil {
+	if _, err = msg.MarshalTo(origin); err != nil {
 		return nil, err
 	}
 

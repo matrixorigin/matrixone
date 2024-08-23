@@ -138,13 +138,13 @@ func NewService(
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
-	if err := srv.initQueryService(); err != nil {
+	if err = srv.initQueryService(); err != nil {
 		return nil, err
 	}
 
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
-	if err := srv.initMetadata(); err != nil {
+	if err = srv.initMetadata(); err != nil {
 		return nil, err
 	}
 
@@ -175,7 +175,8 @@ func NewService(
 	var udfServices []udf.Service
 	// add python client to handle python udf
 	if srv.cfg.PythonUdfClient.ServerAddress != "" {
-		pc, err := pythonservice.NewClient(srv.cfg.PythonUdfClient)
+		var pc *pythonservice.Client
+		pc, err = pythonservice.NewClient(srv.cfg.PythonUdfClient)
 		if err != nil {
 			panic(err)
 		}

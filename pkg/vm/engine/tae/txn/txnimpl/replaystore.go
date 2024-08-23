@@ -104,7 +104,6 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
 		logutil.Debug("", common.OperationField("replay-cmd"),
 			common.OperandField(txncmd.Desc()))
 	}
-	var err error
 	switch cmd := txncmd.(type) {
 	case *catalog.EntryCommand[*catalog.EmptyMVCCNode, *catalog.DBNode],
 		*catalog.EntryCommand[*catalog.TableMVCCNode, *catalog.TableNode],
@@ -116,9 +115,6 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
 		store.replayAppendData(cmd, store.Observer)
 	case *updates.UpdateCmd:
 		store.replayDataCmds(cmd, store.Observer)
-	}
-	if err != nil {
-		panic(err)
 	}
 }
 
