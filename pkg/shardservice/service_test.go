@@ -317,7 +317,7 @@ func TestShardCanBeAllocatedToMultiCN(t *testing.T) {
 			s2 := services[1]
 			table := uint64(1)
 			shards := uint32(2)
-			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			mustAddTestShards(t, ctx, s1, table, shards, 1, s2)
 
 			waitReplicaCount(table, s1, 1)
 			waitReplicaCount(table, s2, 1)
