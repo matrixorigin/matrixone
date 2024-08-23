@@ -235,16 +235,17 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
 	// vecs[1] store relative block metadata
 	if w.blockInfoBat != nil {
-		w.blockInfoBat.Clean(proc.GetMPool())
-	}
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-	blockInfoBat := batch.NewWithSize(len(attrs))
-	blockInfoBat.Attrs = attrs
-	blockInfoBat.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-	blockInfoBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
-	blockInfoBat.Vecs[2] = vector.NewVec(types.T_binary.ToType())
+		w.blockInfoBat.CleanOnlyData()
+	} else {
+		attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+		blockInfoBat := batch.NewWithSize(len(attrs))
+		blockInfoBat.Attrs = attrs
+		blockInfoBat.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+		blockInfoBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
+		blockInfoBat.Vecs[2] = vector.NewVec(types.T_binary.ToType())
 
-	w.blockInfoBat = blockInfoBat
+		w.blockInfoBat = blockInfoBat
+	}
 }
 
 //func (w *S3Writer) WriteEnd(proc *process.Process) {
