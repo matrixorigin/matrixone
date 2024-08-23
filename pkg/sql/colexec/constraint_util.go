@@ -71,9 +71,8 @@ func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, rowIdIdx
 	pkTyp := bat.Vecs[pkIdx].GetType()
 	fun := vector.GetUnionOneFunction(*pkTyp, proc.Mp())
 	for i := 0; i < partitionNum; i++ {
-		//retVec := vector.NewVec(types.T_Rowid.ToType())
-		retVec := proc.GetVector(types.T_Rowid.ToType())
-		pkVec := proc.GetVector(*pkTyp)
+		retVec := vector.NewVec(types.T_Rowid.ToType())
+		pkVec := vector.NewVec(*pkTyp)
 		vecList[i] = retVec
 		pkList[i] = pkVec
 	}
@@ -132,8 +131,7 @@ func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []
 		partitionBatch.Attrs = attrs
 		for i := range partitionBatch.Attrs {
 			vecType := bat.GetVector(int32(i)).GetType()
-			//retVec := vector.NewVec(*vecType)
-			retVec := proc.GetVector(*vecType)
+			retVec := vector.NewVec(*vecType)
 			partitionBatch.SetVector(int32(i), retVec)
 		}
 		batches[partIdx] = partitionBatch

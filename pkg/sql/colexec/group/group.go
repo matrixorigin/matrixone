@@ -17,8 +17,9 @@ package group
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"runtime"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -439,7 +440,7 @@ func (ctr *container) initResultBat(proc *process.Process, config *Group) (err e
 	// init the batch to store the group-by.
 	ctr.bat = batch.NewWithSize(len(config.Exprs))
 	for i := range ctr.groupVecs.Typ {
-		ctr.bat.Vecs[i] = proc.GetVector(ctr.groupVecs.Typ[i])
+		ctr.bat.Vecs[i] = vector.NewVec(ctr.groupVecs.Typ[i])
 	}
 	if config.PreAllocSize > 0 {
 		if err = ctr.bat.PreExtend(proc.Mp(), int(config.PreAllocSize)); err != nil {
