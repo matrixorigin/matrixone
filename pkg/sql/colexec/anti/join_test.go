@@ -284,7 +284,6 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 			},
 		},
 		barg: &hashbuild.HashBuild{
-			Typs:        ts,
 			NeedHashMap: true,
 			Conditions:  cs[1],
 			OperatorBase: vm.OperatorBase{
@@ -295,7 +294,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 				},
 			},
 			NeedAllocateSels: true,
-			NeedMergedBatch:  true,
+			NeedBatches:      true,
 		},
 		marg: &merge.Merge{},
 	}
