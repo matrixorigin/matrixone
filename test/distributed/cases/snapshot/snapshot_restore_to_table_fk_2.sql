@@ -253,9 +253,9 @@ drop snapshot if exists snapshot_01;
 show snapshots;
 create snapshot snapshot_01 for account sys;
 
-Drop database Company;
-Drop database Projects;
 Drop database Payroll;
+Drop database Projects;
+Drop database Company;
 
 restore account sys from snapshot snapshot_01;
 
@@ -537,9 +537,9 @@ drop snapshot if exists snapshot_01;
 show snapshots;
 create snapshot snapshot_01 for account sys;
 
+Drop database Payroll;
 Drop database Projects;
 Drop database Company;
-Drop database Payroll;
 
 restore account sys from snapshot snapshot_01;
 
