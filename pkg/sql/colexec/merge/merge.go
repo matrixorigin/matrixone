@@ -53,7 +53,6 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
 
-	var err error
 	for {
 		msg = merge.ctr.ReceiveFromAllRegs(anal)
 		if msg.Err != nil {
@@ -69,21 +68,24 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		if merge.ctr.buf != nil {
-			merge.ctr.buf.Clean(proc.GetMPool())
+			proc.PutBatch(merge.ctr.buf)
+			// merge.ctr.buf.Clean(proc.GetMPool())
 			merge.ctr.buf = nil
 		}
 
-		merge.ctr.buf, err = msg.Batch.Dup(proc.GetMPool())
-		if err != nil {
-			proc.PutBatch(msg.Batch)
-			return vm.CancelResult, err
-		}
-		if msg.Batch.Aggs != nil {
-			merge.ctr.buf.Aggs = msg.Batch.Aggs
-			msg.Batch.Aggs = nil
-		}
+		// merge.ctr.buf, err = msg.Batch.Dup(proc.GetMPool())
+		// if err != nil {
+		// 	proc.PutBatch(msg.Batch)
+		// 	return vm.CancelResult, err
+		// }
+		// if msg.Batch.Aggs != nil {
+		// 	merge.ctr.buf.Aggs = msg.Batch.Aggs
+		// 	msg.Batch.Aggs = nil
+		// }
+		// result.Batch = merge.ctr.buf
+		// proc.PutBatch(msg.Batch)
+		merge.ctr.buf = msg.Batch
 		result.Batch = merge.ctr.buf
-		proc.PutBatch(msg.Batch)
 		break
 	}
 
