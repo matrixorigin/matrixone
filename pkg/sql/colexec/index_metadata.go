@@ -205,49 +205,49 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	bat.Attrs[14] = MO_INDEX_TABLE_NAME
 	bat.Attrs[15] = MO_INDEX_PRIKEY
 
-	vec_id := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_ID].ToType())
+	vec_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ID].ToType())
 	bat.Vecs[0] = vec_id
 
-	vec_table_id := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_TABLE_ID].ToType())
+	vec_table_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TABLE_ID].ToType())
 	bat.Vecs[1] = vec_table_id
 
-	vec_database_id := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_DATABASE_ID].ToType())
+	vec_database_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_DATABASE_ID].ToType())
 	bat.Vecs[2] = vec_database_id
 
-	vec_name := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_NAME].ToType())
+	vec_name := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_NAME].ToType())
 	bat.Vecs[3] = vec_name
 
-	vec_type := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_TYPE].ToType())
+	vec_type := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TYPE].ToType())
 	bat.Vecs[4] = vec_type
 
-	vec_algo := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_ALGORITHM].ToType())
+	vec_algo := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ALGORITHM].ToType())
 	bat.Vecs[5] = vec_algo
 
-	vec_algo_table_type := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_ALGORITHM_TABLE_TYPE].ToType())
+	vec_algo_table_type := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ALGORITHM_TABLE_TYPE].ToType())
 	bat.Vecs[6] = vec_algo_table_type
 
-	vec_algo_params := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_ALGORITHM_PARAMS].ToType())
+	vec_algo_params := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ALGORITHM_PARAMS].ToType())
 	bat.Vecs[7] = vec_algo_params
 
-	vec_visible := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_IS_VISIBLE].ToType())
+	vec_visible := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_IS_VISIBLE].ToType())
 	bat.Vecs[8] = vec_visible
 
-	vec_hidden := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_HIDDEN].ToType())
+	vec_hidden := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_HIDDEN].ToType())
 	bat.Vecs[9] = vec_hidden
 
-	vec_comment := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_COMMENT].ToType())
+	vec_comment := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_COMMENT].ToType())
 	bat.Vecs[10] = vec_comment
 
-	vec_column_name := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_COLUMN_NAME].ToType())
+	vec_column_name := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_COLUMN_NAME].ToType())
 	bat.Vecs[11] = vec_column_name
 
-	vec_ordinal_position := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_ORDINAL_POSITION].ToType())
+	vec_ordinal_position := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ORDINAL_POSITION].ToType())
 	bat.Vecs[12] = vec_ordinal_position
 
-	vec_options := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_OPTIONS].ToType())
+	vec_options := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_OPTIONS].ToType())
 	bat.Vecs[13] = vec_options
 
-	vec_index_table := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_TABLE_NAME].ToType())
+	vec_index_table := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TABLE_NAME].ToType())
 	bat.Vecs[14] = vec_index_table
 
 	var indexId uint64

@@ -235,16 +235,17 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
 	// vecs[1] store relative block metadata
 	if w.blockInfoBat != nil {
-		w.blockInfoBat.Clean(proc.GetMPool())
-	}
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-	blockInfoBat := batch.NewWithSize(len(attrs))
-	blockInfoBat.Attrs = attrs
-	blockInfoBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
-	blockInfoBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
-	blockInfoBat.Vecs[2] = proc.GetVector(types.T_binary.ToType())
+		w.blockInfoBat.CleanOnlyData()
+	} else {
+		attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+		blockInfoBat := batch.NewWithSize(len(attrs))
+		blockInfoBat.Attrs = attrs
+		blockInfoBat.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+		blockInfoBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
+		blockInfoBat.Vecs[2] = vector.NewVec(types.T_binary.ToType())
 
-	w.blockInfoBat = blockInfoBat
+		w.blockInfoBat = blockInfoBat
+	}
 }
 
 //func (w *S3Writer) WriteEnd(proc *process.Process) {
@@ -307,9 +308,9 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 	return nil
 }
 
-func (w *S3Writer) InitBuffers(proc *process.Process, bat *batch.Batch) {
+func (w *S3Writer) InitBuffers(bat *batch.Batch) {
 	if w.buffer == nil {
-		w.buffer = getNewBatch(proc, bat)
+		w.buffer = getNewBatch(bat)
 	}
 }
 
@@ -342,7 +343,7 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) bool {
 				rbat = batch.NewWithSize(bat.VectorCount())
 				rbat.SetAttributes(bat.Attrs)
 				for i := range w.typs {
-					rbat.Vecs[i] = proc.GetVector(w.typs[i])
+					rbat.Vecs[i] = vector.NewVec(w.typs[i])
 				}
 			}
 			w.Bats = append(w.Bats, rbat)
@@ -526,7 +527,7 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 // no more data or the data size reaches 64M, at that time
 // we will trigger write s3.
 func (w *S3Writer) WriteS3Batch(proc *process.Process, bat *batch.Batch) error {
-	w.InitBuffers(proc, bat)
+	w.InitBuffers(bat)
 	if w.Put(bat, proc) {
 		w.SortAndFlush(proc)
 	}
@@ -537,11 +538,11 @@ func (w *S3Writer) putBatch(bat *batch.Batch) {
 	w.tableBatchBuffers = append(w.tableBatchBuffers, bat)
 }
 
-func getNewBatch(proc *process.Process, bat *batch.Batch) *batch.Batch {
+func getNewBatch(bat *batch.Batch) *batch.Batch {
 	newBat := batch.NewWithSize(bat.VectorCount())
 	newBat.SetAttributes(bat.Attrs)
 	for i := range bat.Vecs {
-		newBat.Vecs[i] = proc.GetVector(*bat.Vecs[i].GetType())
+		newBat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
 	}
 	return newBat
 }

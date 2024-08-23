@@ -86,11 +86,7 @@ func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, e
 	mergeGroup.ctr.cleanHashMap()
 	mergeGroup.ctr.hashKeyWidth = NeedCalculationForKeyWidth
 
-	if mergeGroup.ProjectList != nil {
-		anal := proc.GetAnalyze(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor())
-		anal.Alloc(mergeGroup.ProjectAllocSize)
-		mergeGroup.FreeProjection(proc)
-	}
+	mergeGroup.FreeProjection(proc)
 }
 
 func (mergeGroup *MergeGroup) Release() {
