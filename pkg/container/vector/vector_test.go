@@ -15,9 +15,9 @@
 package vector
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -437,7 +437,7 @@ func TestShrink(t *testing.T) {
 	}
 	{ // text
 		v := NewVec(types.T_text.ToType())
-		err := AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4"), []byte("5")}, nil, mp)
+		err := AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2}, false)
 		vs := InefficientMustStrCol(v)
