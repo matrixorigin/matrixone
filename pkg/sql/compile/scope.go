@@ -302,17 +302,20 @@ func (s *Scope) MergeRun(c *Compile) error {
 		}
 	}()
 
-	if s.Magic != Normal && s.DataSource != nil {
-		magic := s.Magic
-		s.Magic = Normal
-		err := s.ParallelRun(c)
-		s.Magic = magic
-		if err != nil {
-			return err
-		}
-	} else {
-		if err := s.Run(c); err != nil {
-			return err
+	// if rootOp is nil, it's a fake empty scope, just do nothing
+	if s.RootOp != nil {
+		if s.Magic != Normal && s.DataSource != nil {
+			magic := s.Magic
+			s.Magic = Normal
+			err := s.ParallelRun(c)
+			s.Magic = magic
+			if err != nil {
+				return err
+			}
+		} else {
+			if err := s.Run(c); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -418,6 +421,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	// probability 3: it's a SCAN pipeline.
 	case isTableScan:
 		parallelScope, err = buildScanParallelRun(s, c)
+		fmt.Println(DebugShowScopes([]*Scope{parallelScope}, OldLevel))
 
 	// others.
 	default:
@@ -541,6 +545,13 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	return ns, nil
 }
 
+// fake scope is used to merge parallel scopes, and do nothing itself
+func getEmptyFakeScope(ss []*Scope) *Scope {
+	ret := newScope(Merge)
+	ret.PreScopes = ss
+	return ret
+}
+
 // buildScanParallelRun deal one case of scope.ParallelRun.
 // this function will create a pipeline which will get data from n scan-pipeline and output it as a while to the outside.
 // return true if this was just one scan but not mergeScan.
@@ -585,15 +596,10 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		}
 		readerScopes[i].Proc = s.Proc.NewContextChildProc(0)
 		readerScopes[i].TxnOffset = s.TxnOffset
+		readerScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i))
 	}
 
-	mergeFromParallelScanScope, errNew := newParallelScope(c, s, readerScopes)
-	if errNew != nil {
-		ReleaseScopes(readerScopes)
-		return nil, err
-	}
-	mergeFromParallelScanScope.DataSource = nil
-	return mergeFromParallelScanScope, nil
+	return getEmptyFakeScope(readerScopes), nil
 }
 
 func DetermineRuntimeDOP(cpunum, blocks int) int {
@@ -711,11 +717,6 @@ func (s *Scope) isRight() bool {
 	}
 	OpType := vm.GetLeafOpParent(nil, s.RootOp).OpType()
 	return OpType == vm.Right || OpType == vm.RightSemi || OpType == vm.RightAnti
-}
-
-// will substitute newParallelScope gruadually
-func newParallelScope1(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
-	return nil, nil
 }
 
 func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {

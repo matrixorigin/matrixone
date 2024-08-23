@@ -113,6 +113,16 @@ func init() {
 	constBat.SetRowCount(1)
 }
 
+func dupOperatorRecursively(sourceOp vm.Operator, index int) vm.Operator {
+	op := dupOperator(sourceOp, index)
+	opBase := op.GetOperatorBase()
+	numChildren := opBase.NumChildren()
+	for i := 0; i < numChildren; i++ {
+		opBase.AppendChild(dupOperatorRecursively(opBase.GetChildren(i), index))
+	}
+	return op
+}
+
 func dupOperator(sourceOp vm.Operator, index int) vm.Operator {
 	srcOpBase := sourceOp.GetOperatorBase()
 	info := vm.OperatorInfo{
@@ -567,9 +577,8 @@ func dupOperator(sourceOp vm.Operator, index int) vm.Operator {
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
-	default:
-		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceOp.OpType()))
 	}
+	panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceOp.OpType()))
 	return nil
 }
 
