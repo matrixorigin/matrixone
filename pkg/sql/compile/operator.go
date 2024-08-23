@@ -113,18 +113,18 @@ func init() {
 	constBat.SetRowCount(1)
 }
 
-func dupOperatorRecursively(sourceOp vm.Operator, index int) vm.Operator {
-	op := dupOperator(sourceOp, index)
+func dupOperatorRecursively(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
+	op := dupOperator(sourceOp, index, maxParallel)
 	opBase := op.GetOperatorBase()
 	numChildren := sourceOp.GetOperatorBase().NumChildren()
 	for i := 0; i < numChildren; i++ {
 		child := sourceOp.GetOperatorBase().GetChildren(i)
-		opBase.AppendChild(dupOperatorRecursively(child, index))
+		opBase.AppendChild(dupOperatorRecursively(child, index, maxParallel))
 	}
 	return op
 }
 
-func dupOperator(sourceOp vm.Operator, index int) vm.Operator {
+func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	srcOpBase := sourceOp.GetOperatorBase()
 	info := vm.OperatorInfo{
 		Idx:         srcOpBase.Idx,
@@ -491,6 +491,7 @@ func dupOperator(sourceOp vm.Operator, index int) vm.Operator {
 	case vm.Connector:
 		op := connector.NewArgument()
 		op.Reg = sourceOp.(*connector.Connector).Reg
+		op.Reg.NilBatchCnt = maxParallel
 		op.SetInfo(&info)
 		return op
 	case vm.Shuffle:
@@ -511,10 +512,14 @@ func dupOperator(sourceOp vm.Operator, index int) vm.Operator {
 		op := dispatch.NewArgument()
 		op.IsSink = sourceArg.IsSink
 		op.RecSink = sourceArg.RecSink
+		op.ShuffleType = sourceArg.ShuffleType
+		op.ShuffleRegIdxLocal = sourceArg.ShuffleRegIdxLocal
+		op.ShuffleRegIdxRemote = sourceArg.ShuffleRegIdxRemote
 		op.FuncId = sourceArg.FuncId
 		op.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
 		op.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
 		for j := range op.LocalRegs {
+			sourceArg.LocalRegs[j].NilBatchCnt = maxParallel
 			op.LocalRegs[j] = sourceArg.LocalRegs[j]
 		}
 		for j := range op.RemoteRegs {

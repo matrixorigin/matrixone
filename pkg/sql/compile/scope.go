@@ -597,7 +597,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		}
 		readerScopes[i].Proc = s.Proc.NewContextChildProc(0)
 		readerScopes[i].TxnOffset = s.TxnOffset
-		readerScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i))
+		readerScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i, scanUsedCpuNumber))
 	}
 
 	return getEmptyFakeScope(s, readerScopes), nil
@@ -925,7 +925,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		default:
 			if op != s.RootOp {
 				for j := range ss {
-					ss[j].setRootOperator(dupOperator(op, j))
+					ss[j].setRootOperator(dupOperator(op, j, len(ss)))
 				}
 			}
 		}
