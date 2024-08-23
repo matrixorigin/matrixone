@@ -382,11 +382,7 @@ func (nsp *Nulls) Merge(o *Nulls) {
 	if o.Count() == 0 {
 		return
 	}
-	itr := o.np.Iterator()
-	for itr.HasNext() {
-		r := itr.Next()
-		nsp.Add(r)
-	}
+	nsp.np.Or(&o.np)
 }
 
 func (nsp *Nulls) String() string {
