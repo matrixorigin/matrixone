@@ -1263,6 +1263,19 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
+	if qry.RetentionDeadline != 0 {
+		accountID, err := defines.GetAccountId(c.proc.Ctx)
+		if err != nil {
+			return err
+		}
+		insertRetention := fmt.Sprintf("insert into `%s`.`%s` values ('%s','%s', %d, %d)",
+			catalog.MO_CATALOG, catalog.MO_RETENTION, dbName, tblName, accountID, qry.RetentionDeadline)
+		err = c.runSql(insertRetention)
+		if err != nil {
+			return err
+		}
+	}
+
 	if len(partitionTables) == 0 {
 		return nil
 	}

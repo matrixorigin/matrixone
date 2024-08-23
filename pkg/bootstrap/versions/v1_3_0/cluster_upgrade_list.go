@@ -24,6 +24,7 @@ import (
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pitr,
 	upg_mo_subs,
+	upg_mo_retention,
 }
 
 var needUpgradePubSub = false
@@ -53,6 +54,25 @@ var upg_mo_subs = versions.UpgradeEntry{
 	UpgSql:    frontend.MoCatalogMoSubsDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		isExist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_SUBS)
+		if err != nil {
+			return false, err
+		}
+
+		if isExist {
+			return true, nil
+		}
+		needUpgradePubSub = true
+		return false, nil
+	},
+}
+
+var upg_mo_retention = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_RETENTION,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoRetentionDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		isExist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_RETENTION)
 		if err != nil {
 			return false, err
 		}

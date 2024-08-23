@@ -90,6 +90,7 @@ var (
 		frontend.MoCatalogMoUpgradeDDL,
 		frontend.MoCatalogMoUpgradeTenantDDL,
 		frontend.MoCatalogMoPitrDDL,
+		frontend.MoCatalogMoRetentionDDL,
 	}
 
 	initMoVersionFormat = `insert into %s.%s values ('%s', %d, %d, current_timestamp(), current_timestamp())`

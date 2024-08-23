@@ -18,10 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
-	"strconv"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,6 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
 )
 
 func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
@@ -830,6 +830,15 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			if opt.Value != 0 {
 				createTable.TableDef.AutoIncrOffset = opt.Value - 1
 			}
+		case *tree.RetentionOption:
+			if opt.Period == 0 && opt.Unit == "" {
+				continue
+			}
+			duration, err := parseDuration(ctx.GetContext(), opt.Period, opt.Unit)
+			if err != nil {
+				return nil, err
+			}
+			createTable.RetentionDeadline = time.Now().Add(time.Duration(duration)).Unix()
 
 		// these table options is not support in plan
 		// case *tree.TableOptionEngine, *tree.TableOptionSecondaryEngine, *tree.TableOptionCharset,
@@ -3736,4 +3745,25 @@ func getAutoIncrementOffsetFromVariables(ctx CompilerContext) (uint64, bool) {
 		}
 	}
 	return 0, false
+}
+
+func parseDuration(ctx context.Context, period uint64, unit string) (uint64, error) {
+	unitSeconds := uint64(0)
+	switch strings.ToLower(unit) {
+	case "second", "seconds", "sec", "s":
+		unitSeconds = 1
+	case "minute", "minutes", "min", "m":
+		unitSeconds = 60
+	case "hour", "hours", "h":
+		unitSeconds = 3600
+	case "day", "days", "d":
+		unitSeconds = 86400
+	case "week", "weeks", "w":
+		unitSeconds = 604800
+	case "month", "months":
+		unitSeconds = 2628000
+	default:
+		return 0, moerr.NewInvalidArg(ctx, "time unit", unit)
+	}
+	return period * unitSeconds, nil
 }

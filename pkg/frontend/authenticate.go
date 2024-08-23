@@ -954,6 +954,7 @@ var (
 		"mo_foreign_keys":             0,
 		"mo_snapshots":                0,
 		"mo_subs":                     0,
+		catalog.MO_RETENTION:          0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
