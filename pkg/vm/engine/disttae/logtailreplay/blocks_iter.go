@@ -90,7 +90,7 @@ type ObjectsIterInCdc struct {
 func (iter *ObjectsIterInCdc) Next() bool {
 	for iter.iter.Next() {
 		entry := iter.iter.Item()
-		if !entry.DeleteTime.IsEmpty() {
+		if !entry.DeleteTime.IsEmpty() || !entry.objectsCreatedByCn {
 			continue
 		}
 		return true
@@ -295,8 +295,4 @@ func (p *PartitionState) GetTombstoneDeltaLocs(mp map[types.Blockid]BlockDeltaIn
 	}
 
 	return nil
-}
-
-func (p *PartitionState) HasObjectsCreatedByCn() bool {
-	return p.objectsCreatedByCn
 }

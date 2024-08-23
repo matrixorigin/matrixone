@@ -19,11 +19,15 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"go.uber.org/zap"
 )
 
 func NewMemQ[T any]() disttae.Queue[T] {
@@ -467,4 +470,40 @@ func StrToTimestamp(tsStr string) (ts timestamp.Timestamp, err error) {
 
 	ts.LogicalTime = uint32(logicalTime)
 	return
+}
+
+func updateWatermark(outputWMarkAtomic *atomic.Pointer[timestamp.Timestamp], curWMark timestamp.Timestamp) {
+	outputWMarkPtr := outputWMarkAtomic.Load()
+	if outputWMarkPtr == nil {
+		return
+	}
+	if curWMark.Greater(*outputWMarkPtr) {
+		*outputWMarkPtr = curWMark
+	}
+}
+
+type SqlFile struct {
+	file *os.File
+}
+
+func NewSqlFile(fname string) (*SqlFile, error) {
+	ret := &SqlFile{}
+	var err error
+	ret.file, err = os.OpenFile("./tee", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
+	if err != nil {
+		return nil, err
+	}
+	return ret, nil
+}
+
+func (sfile SqlFile) Record(row []byte) error {
+	_, err := sfile.file.Write(row)
+	if err != nil {
+		return err
+	}
+	_, err = sfile.file.WriteString("\n")
+	if err != nil {
+		return err
+	}
+	return err
 }

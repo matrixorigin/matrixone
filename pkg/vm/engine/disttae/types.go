@@ -1021,11 +1021,14 @@ func (typ InputType) String() string {
 }
 
 type DecoderInput struct {
-	typ        InputType
+	typ InputType
+	//ts comes from the ts timestamp on the logtail package
 	ts         timestamp.Timestamp
 	state      *logtailreplay.PartitionState
 	receivedAt time.Time
 	ddls       []*DDL
+	//fromSubResp denotes the content comes from subscribe response
+	fromSubResp bool
 }
 
 func (dec *DecoderInput) IsHeartbeat() bool {
@@ -1042,6 +1045,10 @@ func (dec *DecoderInput) TS() timestamp.Timestamp {
 
 func (dec *DecoderInput) State() *logtailreplay.PartitionState {
 	return dec.state
+}
+
+func (dec *DecoderInput) FromSubResp() bool {
+	return dec.fromSubResp
 }
 
 // Queue

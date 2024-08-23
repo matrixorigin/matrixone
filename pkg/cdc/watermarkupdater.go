@@ -70,6 +70,14 @@ func (u *WatermarkUpdater) RemoveTable(tableId uint64) {
 	u.watermarkMap.Delete(tableId)
 }
 
+func (u *WatermarkUpdater) GetTableWatermark(tableId uint64) timestamp.Timestamp {
+	if value, ok := u.watermarkMap.Load(tableId); ok {
+		return value.(timestamp.Timestamp)
+	} else {
+		return timestamp.Timestamp{}
+	}
+}
+
 func (u *WatermarkUpdater) updateWatermark() {
 	// get min ts of all table
 	var watermark timestamp.Timestamp
@@ -84,4 +92,26 @@ func (u *WatermarkUpdater) updateWatermark() {
 	// TODO handle error
 	_ = u.persistFunc(watermark)
 	//_, _ = fmt.Fprintf(os.Stderr, "^^^^^ updateWatermark persisted new watermark: %s\n", watermark.DebugString())
+}
+
+type WatermarkPair struct {
+	newWMark timestamp.Timestamp
+	oldWMark timestamp.Timestamp
+}
+
+func (wmark *WatermarkPair) String() string {
+	return fmt.Sprintf("newWMark %v oldWMark %v", TimestampToStr(wmark.newWMark), TimestampToStr(wmark.oldWMark))
+}
+
+func (wmark *WatermarkPair) NeedSkip(inputWMark timestamp.Timestamp) bool {
+	return inputWMark.LessEq(wmark.oldWMark)
+}
+
+func (wmark *WatermarkPair) Update(inputWMark timestamp.Timestamp) {
+	if wmark == nil {
+		return
+	}
+	if inputWMark.Greater(wmark.newWMark) {
+		wmark.newWMark = inputWMark
+	}
 }

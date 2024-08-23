@@ -1847,7 +1847,7 @@ func consumeSubscribeResponse(
 	lazyLoad bool,
 	receiveAt time.Time) error {
 	lt := rp.GetLogtail()
-	return updatePartitionOfPush(ctx, e, &lt, lazyLoad, receiveAt)
+	return updatePartitionOfPush(ctx, e, &lt, true, lazyLoad, receiveAt)
 }
 
 func consumeUpdateLogTail(
@@ -1856,16 +1856,21 @@ func consumeUpdateLogTail(
 	rp logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time) error {
-	return updatePartitionOfPush(ctx, e, &rp, lazyLoad, receiveAt)
+	return updatePartitionOfPush(ctx, e, &rp, false, lazyLoad, receiveAt)
 }
 
 // updatePartitionOfPush is the partition update method of log tail push model.
+// fromSubResp
+// - true: logtail comes from subscribe response
+// - false: logtail comes from update response
 func updatePartitionOfPush(
 	ctx context.Context,
 	e TempEngine,
 	tl *logtail.TableLogtail,
+	fromSubResp bool,
 	lazyLoad bool,
-	receiveAt time.Time) (err error) {
+	receiveAt time.Time,
+) (err error) {
 	start := time.Now()
 	v2.LogTailApplyLatencyDurationHistogram.Observe(start.Sub(receiveAt).Seconds())
 	defer func() {
@@ -1913,9 +1918,8 @@ func updatePartitionOfPush(
 	state, doneMutate := partition.MutateState()
 
 	var (
-		ckpStart         types.TS
-		ckpEnd           types.TS
-		firstCkpConsumed bool = state.IsFirstCkpConsumed()
+		ckpStart types.TS
+		ckpEnd   types.TS
 	)
 
 	if lazyLoad {
@@ -1949,17 +1953,9 @@ func updatePartitionOfPush(
 		t0 = time.Now()
 		err = consumeCkpsAndLogTail(ctx, partition.TableInfo.PrimarySeqnum, e, state, tl, dbId, tblId, partition.TableInfo.Name)
 
-		fmt.Fprintf(os.Stderr, "$$$$$$> %v:%v %s  firstCkpConsumed prev %v cur %v \n",
+		fmt.Fprintf(os.Stderr, "$$$$$$> %v:%v %s  fromSubResp %v \n",
 			dbId, tblId, partition.TableInfo.Name,
-			firstCkpConsumed,
-			state.IsFirstCkpConsumed())
-		if err == nil && !firstCkpConsumed {
-			state.SetFirstCkpConsumed(true)
-		}
-		fmt.Fprintf(os.Stderr, "$$$$$$> %v:%v %s firstCkpConsumed prev %v cur %v after \n",
-			dbId, tblId, partition.TableInfo.Name,
-			firstCkpConsumed,
-			state.IsFirstCkpConsumed())
+			fromSubResp)
 		v2.LogtailUpdatePartitonConsumeLogtailDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
@@ -1995,10 +1991,11 @@ func updatePartitionOfPush(
 		if len(ddls) > 0 {
 			tblCtx := TableCtx{}
 			decInput := DecoderInput{
-				typ:        InputTypeDDL,
-				ts:         *tl.Ts,
-				receivedAt: receiveAt,
-				ddls:       ddls,
+				typ:         InputTypeDDL,
+				ts:          *tl.Ts,
+				receivedAt:  receiveAt,
+				ddls:        ddls,
+				fromSubResp: fromSubResp,
 			}
 			e.ToCdc(&tblCtx, &decInput)
 		}
@@ -2011,8 +2008,8 @@ func updatePartitionOfPush(
 				dbId, tblId,
 				&partition.TableInfo,
 				tl,
+				fromSubResp,
 				lazyLoad,
-				firstCkpConsumed,
 			)
 		}
 
@@ -2047,15 +2044,15 @@ func cdcReplayLogtailUnlock(
 	dbId, tblId uint64,
 	tableInfo *logtailreplay.TableInfo,
 	tl *logtail.TableLogtail,
+	fromSubResp bool,
 	lazyLoad bool,
-	firstCkpConsumed bool,
 ) (err error) {
 
 	//step1 : replay logtail
-	fmt.Fprintf(os.Stderr, "$$$$$$> cdc replay logtail db:table %v:%v %v start lazyload %v firstCkpConsumed %v\n",
+	fmt.Fprintf(os.Stderr, "$$$$$$> cdc replay logtail db:table %v:%v %v start lazyload %v fromSubResp %v\n",
 		dbId, tblId, tableInfo.Name,
 		lazyLoad,
-		firstCkpConsumed,
+		fromSubResp,
 	)
 	defer func() {
 		fmt.Fprintf(os.Stderr, "$$$$$$> cdc replay logtail db:table %v:%v %v end\n",
@@ -2077,8 +2074,7 @@ func cdcReplayLogtailUnlock(
 			tl,
 		)
 	} else {
-		//if !firstCkpConsumed
-		{
+		if fromSubResp {
 			fmt.Fprintf(os.Stderr, "$$$$$$> cdc replay logtail db:table %v:%v %v consume ckp\n",
 				dbId, tblId, tableInfo.Name,
 			)
@@ -2109,8 +2105,9 @@ func cdcReplayLogtailUnlock(
 		tblDef:  tblItem.TableDef,
 	}
 	decInput := DecoderInput{
-		ts:    *tl.Ts,
-		state: state,
+		ts:          *tl.Ts,
+		state:       state,
+		fromSubResp: fromSubResp,
 	}
 	e.ToCdc(&tblCtx, &decInput)
 

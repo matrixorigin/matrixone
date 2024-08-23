@@ -833,7 +833,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 	cdc.interChs = make(map[uint64]chan tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput], len(dbTableInfos))
 
 	for _, info := range dbTableInfos {
-		if err = cdc.addExePipelineForTable(info.tblId, watermark); err != nil {
+		if err = cdc.addExePipelineForTable(info.tblId, watermark, cdc.sunkWatermarkUpdater); err != nil {
 			return err
 		}
 	}
@@ -1038,7 +1038,7 @@ func (cdc *CdcTask) unsubscribeTable(cdcTbl *disttae.CdcRelation) (err error) {
 	return
 }
 
-func (cdc *CdcTask) addExePipelineForTable(tableId uint64, watermark timestamp.Timestamp) (err error) {
+func (cdc *CdcTask) addExePipelineForTable(tableId uint64, watermark timestamp.Timestamp, wmarkUpdater *cdc2.WatermarkUpdater) (err error) {
 	//                         + == inputCh == > decoder == interCh == > sinker -> remote db    // for table 1
 	// 	                       |
 	// inQueue -> partitioner -+ == inputCh == > decoder == interCh == > sinker -> remote db    // for table 2
@@ -1055,7 +1055,7 @@ func (cdc *CdcTask) addExePipelineForTable(tableId uint64, watermark timestamp.T
 	cdc.interChs[tableId] = make(chan tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput])
 
 	// make decoder for table
-	decoder := cdc2.NewDecoder(cdc.cdcEngMp, cdc.cdcEngine.FS(), tableId, cdc.inputChs[tableId], cdc.interChs[tableId])
+	decoder := cdc2.NewDecoder(cdc.cdcEngMp, cdc.cdcEngine.FS(), tableId, cdc.inputChs[tableId], cdc.interChs[tableId], wmarkUpdater)
 	go decoder.Run(ctx, cdc.activeRoutine)
 
 	// make sinker for table

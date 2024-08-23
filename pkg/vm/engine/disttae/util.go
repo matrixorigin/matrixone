@@ -1871,7 +1871,7 @@ func isColumnsBatchPerfectlySplitted(bs []*batch.Batch) bool {
 func printLogtail(tip string, list []logtail.TableLogtail) {
 	fmt.Fprintln(os.Stderr, "&&&&&&> dispatch", tip, " response", "receive logtail list len", len(list))
 	for i, lt := range list {
-		fmt.Fprintln(os.Stderr, "&&&&&&> seq", i, "ckp", lt.CkpLocation, "Ts", lt.Ts, "Table", lt.Table)
+		fmt.Fprintln(os.Stderr, "&&&&&&> seq", i, "ckp[", lt.CkpLocation, "] Ts", lt.Ts, "Table", lt.Table)
 		for j, cmd := range lt.Commands {
 			fmt.Fprintln(os.Stderr, "&&&&&&> seq", i, "cmd", j,
 				cmd.EntryType,

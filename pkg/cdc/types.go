@@ -62,8 +62,46 @@ type Sink interface {
 }
 
 type DecoderOutput struct {
+	/*
+		ts denotes the watermark of logtails in this batch of logtail.
+
+		the algorithm of evaluating ts:
+			Assume we already have a watermark OldWMark.
+			To evaluate the NewWMark.
+
+			Init: NewWMark = OldWMark
+
+			for rowTs in Rows (Insert or Delete):
+				if rowTs <= OldWMark:
+					drop this row
+				else
+					NewWMark = max(NewWMark,rowTs)
+
+			for commitTs in Objects(only cn):
+				if commitTs <= OldWMark:
+					drop this object
+				else
+					NewWMark = max(NewWMark,commitTs)
+
+			for commitTs in Deltas(cn):
+				if commitTs <= OldWMark:
+					drop this delta
+				else
+					NewWMark = max(NewWMark,commitTs)
+
+			for rowTs in rows of Deltas(dn):
+				load rows of Deltas(dn);
+
+				if rowTs <= OldWMark:
+					drop this row
+				else
+					NewWMark = max(NewWMark,rowTs)
+	*/
+
 	ts           timestamp.Timestamp
+	logtailTs    timestamp.Timestamp
 	sqlOfRows    atomic.Value
 	sqlOfObjects atomic.Value
 	sqlOfDeletes atomic.Value
+	err          error
 }
