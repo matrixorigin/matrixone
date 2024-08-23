@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	fixBufferSize = 1024 * 1024
+	fixBufferSize = 1024
 )
 
 type SessionConn interface {
@@ -90,6 +90,8 @@ type Conn struct {
 	maxBytesToFlush   int
 	packetInBuf       int
 	allowedPacketSize int
+	beginReadIndex    int
+	readIndex         int
 	timeout           time.Duration
 	allocator         *BufferAllocator
 	ses               *Session
@@ -223,31 +225,33 @@ func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
 
 // Read reads the complete packet including process the > 16MB packet. return the payload
 func (c *Conn) Read() ([]byte, error) {
-
 	// Requests > 16MB
 	payloads := make([][]byte, 0)
-	totalLength := 0
 	var firstPayload []byte
 	var finalPayload []byte
 	var payload []byte
 	var err error
-	var n, packetLength, readLength int
+	var n, packetLength, readLength, totalLength int
 	var sequenceId byte
 	defer func() {
 		for i := range payloads {
 			c.allocator.Free(payloads[i])
 		}
-		c.fixBuf.writeIndex = 0
+		if len(firstPayload) != 0 && CommandType(firstPayload[0]) == COM_STMT_CLOSE && c.readIndex > totalLength+HeaderLengthOfTheProtocol {
+			copy(c.fixBuf.data, c.fixBuf.data[totalLength+HeaderLengthOfTheProtocol:c.readIndex])
+			c.readIndex -= totalLength + HeaderLengthOfTheProtocol
+		} else {
+			c.readIndex = 0
+		}
 	}()
-
-	for c.fixBuf.writeIndex < 4 {
-		n, err = c.ReadFromConn(c.fixBuf.data)
+	for c.readIndex < HeaderLengthOfTheProtocol {
+		n, err = c.ReadFromConn(c.fixBuf.data[c.readIndex:])
 		if err != nil {
 			return nil, err
 		}
-		c.fixBuf.writeIndex += n
+		c.readIndex += n
 	}
-	header := c.fixBuf.data[:4]
+	header := c.fixBuf.data[:HeaderLengthOfTheProtocol]
 	packetLength = int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
 	totalLength += packetLength
 	err = c.CheckAllowedPacketSize(totalLength)
@@ -256,7 +260,7 @@ func (c *Conn) Read() ([]byte, error) {
 	}
 	sequenceId = header[3]
 	c.sequenceId = sequenceId + 1
-	readLength = c.fixBuf.writeIndex - HeaderLengthOfTheProtocol
+	readLength = c.readIndex - HeaderLengthOfTheProtocol
 	firstPayload = make([]byte, packetLength)
 	copy(firstPayload, c.fixBuf.data[HeaderLengthOfTheProtocol:])
 	if packetLength > readLength {
