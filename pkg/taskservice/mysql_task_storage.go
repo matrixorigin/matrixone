@@ -1017,17 +1017,21 @@ func (m *mysqlTaskStorage) AddCdcTask(ctx context.Context, insertSql string, dt 
 		}
 	}()
 
-	daemonTaskRowsAffected, err := m.RunAddDaemonTask(ctx, tx, dt)
-	if err != nil {
-		return 0, err
-	}
-
 	exec, err := tx.ExecContext(ctx, insertSql)
 	if err != nil {
 		return 0, err
 	}
 
 	cdcTaskRowsAffected, err := exec.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+
+	if cdcTaskRowsAffected == 0 {
+		return 0, nil
+	}
+
+	daemonTaskRowsAffected, err := m.RunAddDaemonTask(ctx, tx, dt)
 	if err != nil {
 		return 0, err
 	}
