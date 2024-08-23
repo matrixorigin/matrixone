@@ -99,8 +99,8 @@ func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
 	tcc.snapshot = snapshot
 }
 
-func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
-	_, p, st, _, err := replacePlan(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan)
+func (tcc *TxnCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
+	_, p, st, _, err := initExecuteStmtParam(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan)
 	return p, st, err
 }
 
@@ -430,6 +430,26 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 	}
 	tableDef := table.CopyTableDef(pubContext)
 	return obj, tableDef
+}
+
+func (tcc *TxnCompilerContext) checkTableDefChange(dbName string, tableName string, originTblId uint64, originVersion uint32) (bool, error) {
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
+		tableName = strings.ToLower(tableName)
+	}
+
+	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, nil)
+	if err != nil || sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
+		return false, err
+	}
+
+	ctx, table, err := tcc.getRelation(dbName, tableName, sub, nil)
+	if err != nil {
+		return false, moerr.NewNoSuchTableNoCtx(dbName, tableName)
+	}
+
+	return table.GetTableDef(ctx).Version != originVersion || table.GetTableID(ctx) != originTblId, nil
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef) {

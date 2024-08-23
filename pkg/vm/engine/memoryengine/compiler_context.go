@@ -63,7 +63,7 @@ func (c *CompilerContext) SetSnapshot(snapshot *plan.Snapshot) {
 	panic("implement me")
 }
 
-func (c *CompilerContext) ReplacePlan(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
+func (c *CompilerContext) InitExecuteStmtParam(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
 	//TODO implement me
 	panic("implement me")
 }

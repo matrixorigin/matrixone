@@ -1076,7 +1076,7 @@ func restoreToDatabaseOrTableWithPitr(
 			return
 		}
 
-		if err = recreateTableWithPitr(ctx,
+		if err = reCreateTableWithPitr(ctx,
 			sid,
 			bh,
 			pitrName,
@@ -1088,7 +1088,7 @@ func restoreToDatabaseOrTableWithPitr(
 	return
 }
 
-func recreateTableWithPitr(
+func reCreateTableWithPitr(
 	ctx context.Context,
 	sid string,
 	bh BackgroundExec,
@@ -1096,6 +1096,14 @@ func recreateTableWithPitr(
 	ts int64,
 	tblInfo *tableInfo) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: '%v' at timestamp %d", pitrName, tblInfo.tblName, ts))
+
+	var isMasterTable bool
+	isMasterTable, err = checkTableIsMaster(ctx, sid, bh, pitrName, tblInfo.dbName, tblInfo.tblName)
+	if isMasterTable {
+		// skip restore the table which is master table
+		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore master table: %v.%v", pitrName, tblInfo.dbName, tblInfo.tblName))
+		return
+	}
 
 	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
 		return
@@ -1252,6 +1260,15 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 	for i := len(sortedFkTbls) - 1; i >= 0; i-- {
 		key := sortedFkTbls[i]
 		if tblInfo := curFkTableMap[key]; tblInfo != nil {
+			var isMasterTable bool
+			isMasterTable, err = checkTableIsMaster(ctx, sid, bh, "", tblInfo.dbName, tblInfo.tblName)
+			if err != nil {
+				return err
+			}
+			if isMasterTable {
+				continue
+			}
+
 			getLogger(sid).Info(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
 			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s.%s", tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
@@ -1303,7 +1320,7 @@ func restoreTablesWithFkByPitr(
 		// e.g. t1.pk <- t2.fk, we only want to restore t2, fkTableMap[t1.key] is nil, ignore t1
 		if tblInfo := fkTableMap[key]; tblInfo != nil {
 			getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table with fk: %v, restore timestamp: %d", pitrName, tblInfo.tblName, ts))
-			if err = recreateTableWithPitr(ctx, sid, bh, pitrName, ts, tblInfo); err != nil {
+			if err = reCreateTableWithPitr(ctx, sid, bh, pitrName, ts, tblInfo); err != nil {
 				return
 			}
 		}
@@ -1411,7 +1428,7 @@ func restoreSystemDatabaseWithPitr(
 			return
 		}
 
-		if err = recreateTableWithPitr(ctx, sid, bh, pitrName, ts, tblInfo); err != nil {
+		if err = reCreateTableWithPitr(ctx, sid, bh, pitrName, ts, tblInfo); err != nil {
 			return
 		}
 	}
