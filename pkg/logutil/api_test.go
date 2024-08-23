@@ -71,7 +71,7 @@ func TestLog_panic(t *testing.T) {
 		{
 			name: "panicF",
 			args: args{
-				msg:    "test",
+				msg:    "test %s",
 				fields: []zap.Field{zap.Int("int", 0), zap.String("string", "")},
 			},
 			printf: true,
@@ -81,10 +81,16 @@ func TestLog_panic(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			defer func() {
 				err := recover()
-				require.Equal(t, tt.args.msg, fmt.Sprintf("%s", err))
+				switch tt.printf {
+				case true:
+					require.Equal(t, fmt.Sprintf(tt.args.msg, "test"), fmt.Sprintf("%s", err))
+				default:
+					require.Equal(t, tt.args.msg, fmt.Sprintf("%s", err))
+				}
+
 			}()
 			if tt.printf {
-				Panicf(tt.args.msg, "")
+				Panicf(tt.args.msg, "test")
 			} else {
 				Panic(tt.args.msg, tt.args.fields...)
 			}
