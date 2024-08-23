@@ -153,6 +153,7 @@ func (ctr *container) freeAggFun() {
 				a.Free()
 			}
 		}
+		ctr.bat.Aggs = nil
 	}
 }
 

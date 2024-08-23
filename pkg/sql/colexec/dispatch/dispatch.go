@@ -167,12 +167,14 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		ap.ctr.hasData = true
 	}
 
-	sendBat, err := bat.Dup(proc.GetMPool())
-	if err != nil {
-		return vm.CancelResult, nil
+	if bat == result.Batch {
+		bat, err = bat.Dup(proc.GetMPool())
+		if err != nil {
+			return vm.CancelResult, nil
+		}
 	}
 
-	ok, err := ap.ctr.sendFunc(sendBat, ap, proc)
+	ok, err := ap.ctr.sendFunc(bat, ap, proc)
 	if ok {
 		result.Status = vm.ExecStop
 		return result, err
