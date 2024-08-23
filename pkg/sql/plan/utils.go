@@ -1505,21 +1505,21 @@ func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
 	// mandatory
 	param.S3Param.APIKey, found = s.GetCredentials(function.PARAMKEY_AWS_KEY_ID, "")
 	if !found {
-		return moerr.NewBadConfig(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_KEY_ID)
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_KEY_ID)
 	}
 	param.S3Param.APISecret, found = s.GetCredentials(function.PARAMKEY_AWS_SECRET_KEY, "")
 	if !found {
-		return moerr.NewBadConfig(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_SECRET_KEY)
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_SECRET_KEY)
 	}
 
 	param.S3Param.Region, found = s.GetCredentials(function.PARAMKEY_AWS_REGION, "")
 	if !found {
-		return moerr.NewBadConfig(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_REGION)
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_REGION)
 	}
 
 	param.S3Param.Endpoint, found = s.GetCredentials(function.PARAMKEY_ENDPOINT, "")
 	if !found {
-		return moerr.NewBadConfig(param.Ctx, "Credentials %s not found", function.PARAMKEY_ENDPOINT)
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_ENDPOINT)
 	}
 
 	// optional
@@ -1531,19 +1531,19 @@ func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
 			if format != tree.CSV && format != tree.JSONLINE {
-				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
 		case "jsondata":
 			jsondata := strings.ToLower(param.Option[i+1])
 			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
-				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+				return moerr.NewBadConfigf(param.Ctx, "the jsondata '%s' is not supported", jsondata)
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
 
 		default:
-			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
 		}
 	}
 
@@ -1587,7 +1587,7 @@ func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) erro
 		param.Filepath = s.Url.Path
 
 	} else {
-		return moerr.NewBadConfig(param.Ctx, "invalid URL: protocol %s not supported", s.Url.Scheme)
+		return moerr.NewBadConfigf(param.Ctx, "invalid URL: protocol %s not supported", s.Url.Scheme)
 	}
 
 	return nil
