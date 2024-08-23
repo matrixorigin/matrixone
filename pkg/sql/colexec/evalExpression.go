@@ -866,92 +866,6 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 	return vec, nil
 }
 
-// FixProjectionResult set result vector for rbat.
-// sbat is the source batch.
-func FixProjectionResult(proc *process.Process,
-	executors []ExpressionExecutor,
-	uafs []func(v, w *vector.Vector) error,
-	rbat *batch.Batch, sbat *batch.Batch) (dupSize int, err error) {
-	dupSize = 0
-
-	alreadySet := make([]bool, len(rbat.Vecs))
-	for i := range alreadySet {
-		alreadySet[i] = false
-	}
-
-	getNewVec := func(idx int, oldVec *vector.Vector) (*vector.Vector, error) {
-		if uafs[idx] != nil {
-			retVec := proc.GetVector(*oldVec.GetType())
-			retErr := uafs[idx](retVec, oldVec)
-			return retVec, retErr
-		} else {
-			return oldVec.Dup(proc.Mp())
-		}
-	}
-
-	for i, oldVec := range rbat.Vecs {
-		if !alreadySet[i] {
-			newVec := (*vector.Vector)(nil)
-			if columnExpr, ok := executors[i].(*ColumnExpressionExecutor); ok {
-				if sbat.GetCnt() == 1 {
-					if columnExpr.nullVecCache != nil && oldVec == columnExpr.nullVecCache {
-						newVec = vector.NewConstNull(columnExpr.typ, oldVec.Length(), proc.Mp())
-						dupSize += newVec.Size()
-						rbat.Vecs[i] = newVec
-					} else {
-						rplTimes := 0
-						for j := range rbat.Vecs {
-							if rbat.Vecs[j] == oldVec {
-								if rplTimes > 0 {
-									newVec, err = getNewVec(i, oldVec)
-									if err != nil {
-										if newVec != nil {
-											newVec.Free(proc.Mp())
-										}
-										return
-									}
-									dupSize += newVec.Size()
-									rbat.Vecs[j] = newVec
-								}
-								rplTimes++
-								alreadySet[j] = true
-							}
-						}
-						sbat.ReplaceVector(oldVec, nil)
-					}
-				} else {
-					newVec, err = getNewVec(i, oldVec)
-					if err != nil {
-						if newVec != nil {
-							newVec.Free(proc.Mp())
-						}
-						return
-					}
-					dupSize += newVec.Size()
-					rbat.Vecs[i] = newVec
-				}
-			} else if functionExpr, ok := executors[i].(*FunctionExpressionExecutor); ok && !functionExpr.folded.canFold {
-				// if projection, we can get the result directly
-				functionExpr.resultVector.SetResultVector(nil)
-
-			} else {
-				newVec, err = getNewVec(i, oldVec)
-				if err != nil {
-					if newVec != nil {
-						newVec.Free(proc.Mp())
-					}
-					return
-				}
-				dupSize += newVec.Size()
-				rbat.Vecs[i] = newVec
-			}
-			alreadySet[i] = true
-		}
-	}
-
-	return dupSize, nil
-}
-
 func NewJoinBatch(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch,
 	[]func(*vector.Vector, *vector.Vector, int64, int) error) {
 	rbat := batch.NewWithSize(bat.VectorCount())
@@ -1185,7 +1099,7 @@ func GetExprZoneMap(
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
-						vec := proc.GetVector(types.T_any.ToType())
+						vec := vector.NewVec(types.T_any.ToType())
 						vec.UnmarshalBinary(data.Vec.Data)
 						vecs[rid] = vec
 					} else {
@@ -1238,7 +1152,7 @@ func GetExprZoneMap(
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
-						vec := proc.GetVector(types.T_any.ToType())
+						vec := vector.NewVec(types.T_any.ToType())
 						vec.UnmarshalBinary(data.Vec.Data)
 						vecs[rid] = vec
 					} else {

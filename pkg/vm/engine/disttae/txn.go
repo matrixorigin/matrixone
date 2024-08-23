@@ -503,7 +503,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		}
 		defer s3Writer.Free(txn.proc)
 
-		s3Writer.InitBuffers(txn.proc, mp[tbKey][0])
+		s3Writer.InitBuffers(mp[tbKey][0])
 		for i := 0; i < len(mp[tbKey]); i++ {
 			s3Writer.Put(mp[tbKey][i], txn.proc)
 		}
