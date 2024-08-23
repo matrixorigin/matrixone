@@ -3750,17 +3750,17 @@ func getAutoIncrementOffsetFromVariables(ctx CompilerContext) (uint64, bool) {
 func parseDuration(ctx context.Context, period uint64, unit string) (uint64, error) {
 	unitSeconds := uint64(0)
 	switch strings.ToLower(unit) {
-	case "second", "seconds", "sec", "s":
+	case "second":
 		unitSeconds = 1
-	case "minute", "minutes", "min", "m":
+	case "minute":
 		unitSeconds = 60
-	case "hour", "hours", "h":
+	case "hour":
 		unitSeconds = 3600
-	case "day", "days", "d":
+	case "day":
 		unitSeconds = 86400
-	case "week", "weeks", "w":
+	case "week":
 		unitSeconds = 604800
-	case "month", "months":
+	case "month":
 		unitSeconds = 2628000
 	default:
 		return 0, moerr.NewInvalidArg(ctx, "time unit", unit)
