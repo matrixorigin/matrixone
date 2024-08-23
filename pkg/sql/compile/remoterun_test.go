@@ -310,7 +310,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.IntersectAll), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.Minus), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.Connector), Connect: &pipeline.Connector{}},
-		{Op: int32(vm.Merge)},
+		{Op: int32(vm.Merge), Merge: &pipeline.Merge{}},
 		{Op: int32(vm.MergeRecursive)},
 		{Op: int32(vm.MergeGroup), Agg: &pipeline.Group{}},
 		{Op: int32(vm.MergeLimit), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
