@@ -585,3 +585,18 @@ func (builder *QueryBuilder) resolveSortNode(node *plan.Node, depth int32) *plan
 
 	return nil
 }
+
+func (builder *QueryBuilder) resolveScanNodeFromProject(node *plan.Node, depth int32) *plan.Node {
+	if depth == 0 {
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef.Indexes != nil {
+			return node
+		}
+		return nil
+	}
+
+	if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 {
+		return builder.resolveScanNodeFromProject(builder.qry.Nodes[node.Children[0]], depth-1)
+	}
+
+	return nil
+}

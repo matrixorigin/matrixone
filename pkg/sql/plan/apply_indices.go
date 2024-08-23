@@ -113,7 +113,8 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 		for _, expr := range node.FilterList {
 			fn := expr.GetF()
 			if fn == nil {
-				goto END0
+				continue
+				// goto END0
 			}
 
 			logutil.Infof("FUNCTION HERE : %s", fn.Func.ObjName)
@@ -210,6 +211,55 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+	// ERIC
+	{
+		// TODO: it is possible that there is a sort node.   i.e. project -> sort -> scan or project -> scan
+		scanNode := builder.resolveScanNodeFromProject(projNode, 1)
+		if scanNode == nil {
+			sortNode := builder.resolveSortNode(projNode, 1)
+			if sortNode == nil || len(sortNode.OrderBy) != 1 {
+				goto END0
+			}
+
+			scanNode = builder.resolveScanNodeWithIndex(sortNode, 1)
+			if scanNode == nil {
+				goto END0
+			}
+			logutil.Infof("BAD.............BAD    SCAN NULL")
+		}
+
+		logutil.Infof("applyIndciesForFilters PROJECTION START")
+		for _, expr := range projNode.ProjectList {
+			fn := expr.GetF()
+			if fn == nil {
+				continue
+				//goto END0
+			}
+
+			logutil.Infof("FUNCTION HERE : %s", fn.Func.ObjName)
+			switch fn.Func.ObjName {
+			case "fulltext_match":
+				// arg0 is Expr_List
+				for i, c := range fn.Args[0].GetList().GetList() {
+					logutil.Infof("COL %d %s", i, c.GetCol().GetName())
+				}
+				// arg1 is string
+				logutil.Infof("PATTERN %s", fn.Args[1].GetLit().GetSval())
+				// arg2 is int64
+				logutil.Infof("MODE %d", fn.Args[2].GetLit().GetI64Val())
+
+				for _, idx := range scanNode.TableDef.Indexes {
+					logutil.Infof("INDX name = %s , keys  = %v", idx.IndexTableName, idx.Parts)
+				}
+				pkid := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.GetNames()[0]]
+				logutil.Infof("Primary Key POS =%d, %s", pkid, scanNode.TableDef.Pkey.String())
+
+				logutil.Infof("Src table name %s", scanNode.TableDef.Name)
+			default:
+			}
+		}
+		logutil.Infof("applyIndciesForFilters PROJECTION END")
+	}
 
 	// 1. Vector Index Check
 	// Handle Queries like
