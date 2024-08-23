@@ -3275,7 +3275,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope) *Scop
 		arg.SegmentMap = colexec.Get().GetCnSegmentMap()
 		arg.IBucket = uint32(i)
 		arg.Nbucket = uint32(len(rs))
-		rs[i].setRootOperator(dupOperator(arg, nil, 0))
+		rs[i].setRootOperator(dupOperator(arg, 0))
 	}
 	return c.newMergeScope(rs)
 }
@@ -4892,7 +4892,7 @@ func (c *Compile) newInsertMergeScope(arg *insert.Insert, ss []*Scope) *Scope {
 	}
 
 	for i := range ss2 {
-		ss2[i].setRootOperator(dupOperator(arg, nil, i))
+		ss2[i].setRootOperator(dupOperator(arg, i))
 	}
 	return c.newMergeScope(ss2)
 }

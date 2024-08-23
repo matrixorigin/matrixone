@@ -923,7 +923,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		default:
 			if op != s.RootOp {
 				for j := range ss {
-					ss[j].setRootOperator(dupOperator(op, nil, j))
+					ss[j].setRootOperator(dupOperator(op, j))
 				}
 			}
 		}
