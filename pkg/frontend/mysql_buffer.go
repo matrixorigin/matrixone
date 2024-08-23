@@ -672,6 +672,7 @@ func (c *Conn) Reset() {
 	c.packetLength = 0
 	c.curBuf = c.fixBuf
 	c.fixBuf.writeIndex = 0
+	c.fixBuf.readIndex = 0
 	for node := c.dynamicBuf.Front(); node != nil; node = node.Next() {
 		c.allocator.Free(node.Value.(*ListBlock).data)
 	}
