@@ -4012,9 +4012,9 @@ func (node *RetentionOption) Free() {
 }
 
 func (node RetentionOption) Format(ctx *FmtCtx) {
-	ctx.WriteString("with period ")
+	ctx.WriteString("with retention period ")
 	ctx.WriteString(strconv.FormatUint(node.Period, 10))
-	ctx.WriteString(node.Unit)
+	ctx.WriteString(" " + node.Unit)
 }
 
 func (node *RetentionOption) reset() {
