@@ -88,7 +88,8 @@ func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error)
 
 func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if merge.ctr.buf != nil {
-		merge.ctr.buf.Clean(proc.Mp())
+		// merge.ctr.buf.Clean(proc.Mp())
+		proc.PutBatch(merge.ctr.buf)
 		merge.ctr.buf = nil
 	}
 }

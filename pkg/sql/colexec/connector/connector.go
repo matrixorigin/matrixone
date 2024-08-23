@@ -71,12 +71,12 @@ func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 	// because the context is already canceled means the pipeline closed normally.
 	select {
 	case <-proc.Ctx.Done():
-		// proc.PutBatch(sendBat)
+		proc.PutBatch(sendBat)
 		result.Status = vm.ExecStop
 		return result, nil
 
 	case <-reg.Ctx.Done():
-		// proc.PutBatch(sendBat)
+		proc.PutBatch(sendBat)
 		result.Status = vm.ExecStop
 		return result, nil
 
