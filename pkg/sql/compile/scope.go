@@ -546,8 +546,9 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 }
 
 // fake scope is used to merge parallel scopes, and do nothing itself
-func getEmptyFakeScope(ss []*Scope) *Scope {
+func getEmptyFakeScope(s *Scope, ss []*Scope) *Scope {
 	ret := newScope(Merge)
+	ret.Proc = s.Proc
 	ret.PreScopes = ss
 	return ret
 }
@@ -599,7 +600,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		readerScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i))
 	}
 
-	return getEmptyFakeScope(readerScopes), nil
+	return getEmptyFakeScope(s, readerScopes), nil
 }
 
 func DetermineRuntimeDOP(cpunum, blocks int) int {

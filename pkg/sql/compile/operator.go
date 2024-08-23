@@ -116,9 +116,10 @@ func init() {
 func dupOperatorRecursively(sourceOp vm.Operator, index int) vm.Operator {
 	op := dupOperator(sourceOp, index)
 	opBase := op.GetOperatorBase()
-	numChildren := opBase.NumChildren()
+	numChildren := sourceOp.GetOperatorBase().NumChildren()
 	for i := 0; i < numChildren; i++ {
-		opBase.AppendChild(dupOperatorRecursively(opBase.GetChildren(i), index))
+		child := sourceOp.GetOperatorBase().GetChildren(i)
+		opBase.AppendChild(dupOperatorRecursively(child, index))
 	}
 	return op
 }
