@@ -141,6 +141,7 @@ func (ctr *container) resetVectors() {
 
 func (ctr *container) freeBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
+		ctr.bat.Aggs = nil
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
 	}
