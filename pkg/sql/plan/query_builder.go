@@ -4099,6 +4099,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildMoTransactions(tbl, ctx, exprs, childId)
 	case "mo_cache":
 		nodeId, err = builder.buildMoCache(tbl, ctx, exprs, childId)
+	case "stage_list":
+		nodeId, err = builder.buildStageList(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}
