@@ -449,7 +449,6 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	for _, cache := range vector.Caches {
-		cache := cache
 
 		t0 := time.Now()
 		LogEvent(ctx, str_read_vector_Caches_begin)
@@ -585,7 +584,6 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	for _, cache := range vector.Caches {
-		cache := cache
 		if err := readCache(ctx, cache, vector); err != nil {
 			return err
 		}

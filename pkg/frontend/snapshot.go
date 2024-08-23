@@ -230,7 +230,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 					}
 				}
 			} else {
-				return 0, moerr.NewInternalError(ctx, "account %s does not exist", accountName)
+				return 0, moerr.NewInternalErrorf(ctx, "account %s does not exist", accountName)
 			}
 			return accountId, rtnErr
 		}
@@ -255,7 +255,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	}
 	if snapshotExist {
 		if !stmt.IfNotExists {
-			return moerr.NewInternalError(ctx, "snapshot %s already exists", snapshotName)
+			return moerr.NewInternalErrorf(ctx, "snapshot %s already exists", snapshotName)
 		} else {
 			return nil
 		}
@@ -318,7 +318,7 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 
 	if !snapshotExist {
 		if !stmt.IfExists {
-			return moerr.NewInternalError(ctx, "snapshot %s does not exist", string(stmt.Name))
+			return moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", string(stmt.Name))
 		} else {
 			// do nothing
 			return err
@@ -360,10 +360,10 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	if snapshot == nil {
-		return moerr.NewInternalError(ctx, "snapshot %s does not exist", snapshotName)
+		return moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", snapshotName)
 	}
 	if snapshot.accountName != srcAccountName && snapshot.level != tree.RESTORELEVELCLUSTER.String() {
-		return moerr.NewInternalError(ctx, "accountName(%v) does not match snapshot.accountName(%v)", srcAccountName, snapshot.accountName)
+		return moerr.NewInternalErrorf(ctx, "accountName(%v) does not match snapshot.accountName(%v)", srcAccountName, snapshot.accountName)
 	}
 
 	// default restore to src account
@@ -399,13 +399,13 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 
 		if snapshot.level != tree.SNAPSHOTLEVELCLUSTER.String() {
-			err = moerr.NewInternalError(ctx, "snapshot %s is not cluster level snapshot", snapshotName)
+			err = moerr.NewInternalErrorf(ctx, "snapshot %s is not cluster level snapshot", snapshotName)
 			return
 		}
 	}
 
 	if len(dbName) > 0 && needSkipDb(dbName) {
-		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
+		return moerr.NewInternalErrorf(ctx, "can't restore db: %v", dbName)
 	}
 
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
@@ -806,9 +806,9 @@ func restoreToDatabaseOrTable(
 	// if restore to table, expect only one table here
 	if restoreToTbl {
 		if len(tableInfos) == 0 {
-			return moerr.NewInternalError(ctx, "table %s not exists at snapshot %s", tblName, snapshotName)
+			return moerr.NewInternalErrorf(ctx, "table %s not exists at snapshot %s", tblName, snapshotName)
 		} else if len(tableInfos) != 1 {
-			return moerr.NewInternalError(ctx, "find %v tableInfos by name %s at snapshot %s, expect only 1", len(tableInfos), tblName, snapshotName)
+			return moerr.NewInternalErrorf(ctx, "find %v tableInfos by name %s at snapshot %s, expect only 1", len(tableInfos), tblName, snapshotName)
 		}
 	}
 
@@ -1185,7 +1185,7 @@ func getSnapshotByName(ctx context.Context, bh BackgroundExec, snapshotName stri
 	if records, err := getSnapshotRecords(ctx, bh, sql); err != nil {
 		return nil, err
 	} else if len(records) != 1 {
-		return nil, moerr.NewInternalError(ctx, "find %v snapshot records by name(%v), expect only 1", len(records), snapshotName)
+		return nil, moerr.NewInternalErrorf(ctx, "find %v snapshot records by name(%v), expect only 1", len(records), snapshotName)
 	} else {
 		return records[0], nil
 	}
@@ -1201,7 +1201,7 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 	}
 
 	if record == nil {
-		err = moerr.NewInternalError(ctx, "snapshot %s does not exist", snapshotName)
+		err = moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", snapshotName)
 		return
 	}
 
@@ -1421,7 +1421,7 @@ func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) (u
 		return uint32(accountId), nil
 	}
 
-	return 0, moerr.NewInternalError(ctx, "new such account, account name: %v", accountName)
+	return 0, moerr.NewInternalErrorf(ctx, "new such account, account name: %v", accountName)
 }
 
 func getFkDeps(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (ans map[string][]string, err error) {
@@ -1722,7 +1722,7 @@ func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, snapsho
 	}
 
 	if record == nil {
-		err = moerr.NewInternalError(ctx, "snapshot %s does not exist", snapshotName)
+		err = moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", snapshotName)
 		return
 	}
 
@@ -1825,7 +1825,7 @@ func checkPubExistOrNot(
 	if err != nil {
 		return false, err
 	} else if len(subInfos) == 0 {
-		return false, moerr.NewInternalError(ctx, "there is no subscription for database %s", subName)
+		return false, moerr.NewInternalErrorf(ctx, "there is no subscription for database %s", subName)
 	}
 
 	subInfo := subInfos[0]
@@ -1921,7 +1921,7 @@ func checkSubscriptionExist(
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(newCtx, "there is no publication account %s", pubAccountName)
+		err = moerr.NewInternalErrorf(newCtx, "there is no publication account %s", pubAccountName)
 		return
 	}
 	if accId, err = erArray[0].GetInt64(newCtx, 0, 0); err != nil {
@@ -1935,7 +1935,7 @@ func checkSubscriptionExist(
 		return
 	}
 	if pubInfo == nil {
-		err = moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
+		err = moerr.NewInternalErrorf(newCtx, "there is no publication %s", pubName)
 		return
 	}
 

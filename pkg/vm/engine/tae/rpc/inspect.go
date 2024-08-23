@@ -192,7 +192,7 @@ func (c *catalogArg) FromCommand(cmd *cobra.Command) (err error) {
 	file, _ := cmd.Flags().GetString("outfile")
 	if file != "" {
 		if f, err := os.Create(file); err != nil {
-			return moerr.NewInternalErrorNoCtx("open %s err: %v", file, err)
+			return moerr.NewInternalErrorNoCtxf("open %s err: %v", file, err)
 		} else {
 			c.outfile = f
 		}
@@ -1116,7 +1116,7 @@ func parseStorageUsageDetail(expr string, ac *db.AccessInfo, db *db.DB) (
 // [pos1, pos2)
 func subString(src string, pos1, pos2 int) (string, error) {
 	if pos2 > len(src) {
-		return "", moerr.NewOutOfRangeNoCtx("", src, pos1, " to ", pos2)
+		return "", moerr.NewOutOfRangeNoCtxf("", src, pos1, " to ", pos2)
 	}
 
 	dst := make([]byte, pos2-pos1)

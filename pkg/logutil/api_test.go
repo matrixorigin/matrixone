@@ -84,7 +84,7 @@ func TestLog_panic(t *testing.T) {
 				require.Equal(t, tt.args.msg, fmt.Sprintf("%s", err))
 			}()
 			if tt.printf {
-				Panicf(tt.args.msg)
+				Panicf(tt.args.msg, nil)
 			} else {
 				Panic(tt.args.msg, tt.args.fields...)
 			}

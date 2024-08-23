@@ -805,16 +805,16 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 // UnsubscribeTable implements the LogtailEngine interface.
 func (c *PushClient) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
 	if c.subscriber == nil {
-		return moerr.NewInternalError(ctx, "%s cannot unsubscribe table %d-%d as subscriber not initialized", logTag, dbID, tbID)
+		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as subscriber not initialized", logTag, dbID, tbID)
 	}
 	if !c.subscriber.ready.Load() {
-		return moerr.NewInternalError(ctx, "%s cannot unsubscribe table %d-%d as logtail subscriber is not ready", logTag, dbID, tbID)
+		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as logtail subscriber is not ready", logTag, dbID, tbID)
 	}
 	if !c.receivedLogTailTime.ready.Load() {
-		return moerr.NewInternalError(ctx, "%s cannot unsubscribe table %d-%d as logtail client is not ready", logTag, dbID, tbID)
+		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as logtail client is not ready", logTag, dbID, tbID)
 	}
 	if ifShouldNotDistribute(dbID, tbID) {
-		return moerr.NewInternalError(ctx, "%s cannot unsubscribe table %d-%d as table ID is not allowed", logTag, dbID, tbID)
+		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as table ID is not allowed", logTag, dbID, tbID)
 	}
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()
@@ -1078,7 +1078,7 @@ func (c *PushClient) waitUntilSubscribingChanged(ctx context.Context, dbId, tblI
 	}
 	logutil.Errorf("%s wait for tbl[db: %d, tbl: %d] subscribing changed timeout[%s]",
 		logTag, dbId, tblId, maxTimeToCheckTableSubscribeSucceed)
-	return InvalidSubState, moerr.NewInternalError(ctx, "Wait for tbl[db:%d, tbl:%d] subscribing changed timeout",
+	return InvalidSubState, moerr.NewInternalErrorf(ctx, "Wait for tbl[db:%d, tbl:%d] subscribing changed timeout",
 		dbId, tblId)
 }
 
@@ -1102,7 +1102,7 @@ func (c *PushClient) waitUntilUnsubscribingChanged(ctx context.Context, dbId, tb
 	}
 	logutil.Errorf("%s wait for tbl[db: %d, tbl: %d] unsubscribing changed timeout[%s]",
 		logTag, dbId, tblId, maxTimeToCheckTableUnSubscribeSucceed)
-	return InvalidSubState, moerr.NewInternalError(ctx, "Wait for tbl[db:%d, tbl:%d] unsubscribing changed timeout",
+	return InvalidSubState, moerr.NewInternalErrorf(ctx, "Wait for tbl[db:%d, tbl:%d] unsubscribing changed timeout",
 		dbId, tblId)
 }
 

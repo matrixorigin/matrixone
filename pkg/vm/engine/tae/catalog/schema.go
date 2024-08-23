@@ -191,17 +191,17 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		var targetCol *ColDef
 		for _, def := range s.ColDefs {
 			if def.Name == rename.NewName {
-				return moerr.NewInternalErrorNoCtx("duplicate column %q", def.Name)
+				return moerr.NewInternalErrorNoCtxf("duplicate column %q", def.Name)
 			}
 			if def.Name == rename.OldName {
 				targetCol = def
 			}
 		}
 		if targetCol == nil {
-			return moerr.NewInternalErrorNoCtx("column %q not found", rename.OldName)
+			return moerr.NewInternalErrorNoCtxf("column %q not found", rename.OldName)
 		}
 		if targetCol.SeqNum != uint16(rename.SequenceNum) {
-			return moerr.NewInternalErrorNoCtx("unmatched seqnumn: %d != %d", targetCol.SeqNum, rename.SequenceNum)
+			return moerr.NewInternalErrorNoCtxf("unmatched seqnumn: %d != %d", targetCol.SeqNum, rename.SequenceNum)
 		}
 		targetCol.Name = rename.NewName
 		// a -> b, z -> a, m -> z
@@ -277,7 +277,7 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		}
 		s.Partition = string(bytes)
 	default:
-		return moerr.NewNYINoCtx("unsupported alter kind: %v", req.Kind)
+		return moerr.NewNYINoCtxf("unsupported alter kind: %v", req.Kind)
 	}
 	return nil
 }
@@ -661,7 +661,7 @@ func (s *Schema) AppendColDef(def *ColDef) (err error) {
 	s.ColDefs = append(s.ColDefs, def)
 	_, existed := s.NameMap[def.Name]
 	if existed {
-		err = moerr.NewConstraintViolationNoCtx("duplicate column \"%s\"", def.Name)
+		err = moerr.NewConstraintViolationNoCtxf("duplicate column \"%s\"", def.Name)
 		return
 	}
 	s.NameMap[def.Name] = def.Idx
@@ -897,7 +897,7 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		}
 		// Check unique name
 		if _, ok := names[def.Name]; ok {
-			return moerr.NewInvalidInputNoCtx("schema: duplicate column \"%s\"", def.Name)
+			return moerr.NewInvalidInputNoCtxf("schema: duplicate column \"%s\"", def.Name)
 		}
 		names[def.Name] = true
 		// Fake pk
@@ -931,7 +931,7 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 	if len(sortColIdx) == 1 {
 		def := s.ColDefs[sortColIdx[0]]
 		if def.SortIdx != 0 {
-			err = moerr.NewConstraintViolationNoCtx("bad sort idx %d, should be 0", def.SortIdx)
+			err = moerr.NewConstraintViolationNoCtxf("bad sort idx %d, should be 0", def.SortIdx)
 			return
 		}
 		s.SortKey = NewSortKey()

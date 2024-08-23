@@ -523,7 +523,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 					"Failed to construct byte due to unsupported type",
 					zap.Int("typeOid", int(vec.GetType().Oid)))
 				ByteChan <- &BatchByte{
-					err: moerr.NewInternalError(ctx, "constructByte : unsupported type %d", vec.GetType().Oid),
+					err: moerr.NewInternalErrorf(ctx, "constructByte : unsupported type %d", vec.GetType().Oid),
 				}
 				bat.Clean(ses.GetMemPool())
 				return
@@ -738,7 +738,7 @@ func exportDataToCSVFile(oq *ExportConfig) error {
 				return err
 			}
 		default:
-			return moerr.NewInternalError(oq.ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
+			return moerr.NewInternalErrorf(oq.ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
 		}
 	}
 	oq.Rows++

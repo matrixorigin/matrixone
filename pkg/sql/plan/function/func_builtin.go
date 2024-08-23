@@ -219,7 +219,7 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, err
 		}
 		if typ.Oid != types.T_enum {
-			return nil, moerr.NewNotSupported(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
+			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
 		}
 
 		// get enum values
@@ -621,7 +621,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 			break
 		}
 		if !found {
-			return moerr.NewNotSupported(proc.Ctx, "purge '%s'", tblName)
+			return moerr.NewNotSupportedf(proc.Ctx, "purge '%s'", tblName)
 		}
 
 	}
@@ -1582,7 +1582,7 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return serialExtractForString(p1, p2, rs, proc, length, selectList)
 	}
-	return moerr.NewInternalError(proc.Ctx, "not supported type %s", resTyp.String())
+	return moerr.NewInternalErrorf(proc.Ctx, "not supported type %s", resTyp.String())
 
 }
 

@@ -9,7 +9,7 @@ run:
   # Include test files or not.
   # Default: true
   tests: true
-  
+
 linters:
   # Disable all linters.
   # Default: false
@@ -100,6 +100,14 @@ linters-settings:
       - S1038
       - S1039
       - S1040
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
+      - nilness
+      # - printf
+      - shadow
+      - unusedwrite
 
   staticcheck:
     checks:

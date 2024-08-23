@@ -259,7 +259,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	// check the database is deleted or not
 	key := genDatabaseKey(accountId, name)
 	if _, exist := txn.deletedDatabaseMap.Load(key); exist {
-		return nil, moerr.NewParseError(ctx, "database %q does not exist", name)
+		return nil, moerr.NewParseErrorf(ctx, "database %q does not exist", name)
 	}
 
 	if v, ok := txn.databaseMap.Load(key); ok {
@@ -360,7 +360,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	txn := op.GetWorkspace().(*Transaction)
 	dbName, tableName, deleted := txn.tableOps.queryNameByTid(tableId)
 	if tableName == "" && deleted {
-		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d: accountId: %v. Deleted in txn", tableId, accountId)
+		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %v. Deleted in txn", tableId, accountId)
 	}
 
 	// not found in tableOps, try cache
@@ -399,7 +399,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		accountId, _ := defines.GetAccountId(ctx)
 		logutil.Error("FIND_TABLE GetRelationById failed",
 			zap.Uint64("tableId", tableId), zap.Uint32("accountId", accountId), zap.String("workspace", txn.PPString()))
-		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d: accountId: %v ", tableId, accountId)
+		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %v ", tableId, accountId)
 	}
 
 	txnDb, err := e.Database(ctx, dbName, op)

@@ -54,7 +54,7 @@ func MockCallback(from, to timestamp.Timestamp, closeCB func(), tails ...logtail
 			}
 		}
 	}
-	logutil.Infof(s)
+	logutil.Info(s)
 	return nil
 }
 

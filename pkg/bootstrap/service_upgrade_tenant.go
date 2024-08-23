@@ -58,7 +58,7 @@ func (s *service) MaybeUpgradeTenant(
 				return nil
 			} else if versions.Compare(currentCN.Version, version) < 0 {
 				// tenant create at 1.4.0, current tenant version 1.5.0, it must be cannot work
-				return moerr.NewInvalidInputNoCtx("tenant version %s is greater than current cn version %s",
+				return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
 					version, currentCN.Version)
 			}
 

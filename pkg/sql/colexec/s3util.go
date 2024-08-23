@@ -580,7 +580,7 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_nul
 	if nulls.Any(bat.Vecs[sortIndex].GetNulls()) {
 		hasNull = true
 		if !allow_null {
-			return moerr.NewConstraintViolation(proc.Ctx,
+			return moerr.NewConstraintViolationf(proc.Ctx,
 				"sort key can not be null, sortIndex = %d, sortCol = %s",
 				sortIndex, bat.Attrs[sortIndex])
 		}

@@ -225,7 +225,7 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot *plan2.Snap
 	}
 	databaseId, err := strconv.ParseUint(database.GetDatabaseId(tempCtx), 10, 64)
 	if err != nil {
-		return 0, moerr.NewInternalError(tempCtx, "The databaseid of '%s' is not a valid number", dbName)
+		return 0, moerr.NewInternalErrorf(tempCtx, "The databaseid of '%s' is not a valid number", dbName)
 	}
 	return databaseId, nil
 }
@@ -251,7 +251,7 @@ func (tcc *TxnCompilerContext) GetDbLevelConfig(dbName string, varName string) (
 		return "Check", nil
 	default:
 	}
-	return "", moerr.NewInternalError(tcc.GetContext(), "The variable '%s' is not a valid database level variable", varName)
+	return "", moerr.NewInternalErrorf(tcc.GetContext(), "The variable '%s' is not a valid database level variable", varName)
 }
 
 // getRelation returns the context (maybe updated) and the relation
@@ -637,7 +637,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 
 		return nil, err
 	} else {
-		return nil, moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+		return nil, moerr.NewNotSupportedf(ctx, "function or operator '%s'", name)
 	}
 }
 
@@ -727,7 +727,7 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (account
 			}
 			accountIds = append(accountIds, uint32(targetAccountId))
 		} else {
-			return nil, moerr.NewInternalError(ctx, "there is no account %s", name)
+			return nil, moerr.NewInternalErrorf(ctx, "there is no account %s", name)
 		}
 	}
 	return accountIds, err
@@ -784,7 +784,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 		return nil, err
 	}
 	if sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
-		return nil, moerr.NewInternalErrorNoCtx("table %s not found in publication %s", tableName, sub.Name)
+		return nil, moerr.NewInternalErrorNoCtxf("table %s not found in publication %s", tableName, sub.Name)
 	}
 	if !checkSub {
 		sub = &plan.SubscriptionMeta{
