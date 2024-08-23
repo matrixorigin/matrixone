@@ -194,7 +194,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 		} else {
 			if s.DataSource.R == nil {
 				s.NodeInfo.Data = engine.BuildEmptyRelData()
-				s.NodeInfo.Mcpu = 1
 				readers, err := s.buildReaders(c)
 				if err != nil {
 					return err
