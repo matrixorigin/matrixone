@@ -574,6 +574,14 @@ func TestShrinkByMask(t *testing.T) {
 		require.Equal(t, [][]float32{{2, 2, 2}, {3, 3, 3}}, MustArrayCol[float32](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_array_float32.ToType())
+		err = AppendArrayList[float32](v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		require.Equal(t, [][]float32{{1, 1, 1}}, MustArrayCol[float32](v))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // Array Float64
 		v := NewVec(types.T_array_float64.ToType())
@@ -581,6 +589,14 @@ func TestShrinkByMask(t *testing.T) {
 		require.NoError(t, err)
 		v.ShrinkByMask(&bmask, false)
 		require.Equal(t, [][]float64{{2, 2, 2}, {3, 3, 3}}, MustArrayCol[float64](v))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_array_float64.ToType())
+		err = AppendArrayList[float64](v, [][]float64{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		require.Equal(t, [][]float64{{1, 1, 1}}, MustArrayCol[float64](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -593,6 +609,15 @@ func TestShrinkByMask(t *testing.T) {
 		require.Equal(t, []bool{false, true}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_bool.ToType())
+		err = AppendFixedList(v, []bool{true, false, true, false}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[bool](v)
+		require.Equal(t, []bool{true, false}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int8
 		v := NewVec(types.T_int8.ToType())
@@ -601,6 +626,15 @@ func TestShrinkByMask(t *testing.T) {
 		v.ShrinkByMask(&bmask, false)
 		vs := MustFixedCol[int8](v)
 		require.Equal(t, []int8{2, 3}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_int8.ToType())
+		err = AppendFixedList(v, []int8{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[int8](v)
+		require.Equal(t, []int8{1, 4}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -613,6 +647,15 @@ func TestShrinkByMask(t *testing.T) {
 		require.Equal(t, []int16{2, 3}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_int16.ToType())
+		err = AppendFixedList(v, []int16{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[int16](v)
+		require.Equal(t, []int16{1, 4}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // int32
 		v := NewVec(types.T_int32.ToType())
@@ -621,6 +664,15 @@ func TestShrinkByMask(t *testing.T) {
 		v.ShrinkByMask(&bmask, false)
 		vs := MustFixedCol[int32](v)
 		require.Equal(t, []int32{2, 3}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_int32.ToType())
+		err = AppendFixedList(v, []int32{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[int32](v)
+		require.Equal(t, []int32{1, 4}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -633,6 +685,15 @@ func TestShrinkByMask(t *testing.T) {
 		require.Equal(t, []int64{2, 3}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_int64.ToType())
+		err = AppendFixedList(v, []int64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[int64](v)
+		require.Equal(t, []int64{1, 4}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uint8
 		v := NewVec(types.T_uint8.ToType())
@@ -641,6 +702,15 @@ func TestShrinkByMask(t *testing.T) {
 		v.ShrinkByMask(&bmask, false)
 		vs := MustFixedCol[uint8](v)
 		require.Equal(t, []uint8{2, 3}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_uint8.ToType())
+		err = AppendFixedList(v, []uint8{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[uint8](v)
+		require.Equal(t, []uint8{1, 4}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -653,6 +723,15 @@ func TestShrinkByMask(t *testing.T) {
 		require.Equal(t, []uint16{2, 3}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_uint16.ToType())
+		err = AppendFixedList(v, []uint16{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[uint16](v)
+		require.Equal(t, []uint16{1, 4}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uint32
 		v := NewVec(types.T_uint32.ToType())
@@ -661,6 +740,15 @@ func TestShrinkByMask(t *testing.T) {
 		v.ShrinkByMask(&bmask, false)
 		vs := MustFixedCol[uint32](v)
 		require.Equal(t, []uint32{2, 3}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_uint32.ToType())
+		err = AppendFixedList(v, []uint32{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[uint32](v)
+		require.Equal(t, []uint32{1, 4}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -673,6 +761,15 @@ func TestShrinkByMask(t *testing.T) {
 		require.Equal(t, []uint64{2, 3}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_uint64.ToType())
+		err = AppendFixedList(v, []uint64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[uint64](v)
+		require.Equal(t, []uint64{1, 4}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // float32
 		v := NewVec(types.T_float32.ToType())
@@ -683,6 +780,15 @@ func TestShrinkByMask(t *testing.T) {
 		require.Equal(t, []float32{2, 3}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_float32.ToType())
+		err = AppendFixedList(v, []float32{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[float32](v)
+		require.Equal(t, []float32{1, 4}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // float64
 		v := NewVec(types.T_float64.ToType())
@@ -691,6 +797,15 @@ func TestShrinkByMask(t *testing.T) {
 		v.ShrinkByMask(&bmask, false)
 		vs := MustFixedCol[float64](v)
 		require.Equal(t, []float64{2, 3}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_float64.ToType())
+		err = AppendFixedList(v, []float64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[float64](v)
+		require.Equal(t, []float64{1, 4}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -704,6 +819,16 @@ func TestShrinkByMask(t *testing.T) {
 		require.Equal(t, [][]byte{[]byte("2"), []byte("3")}, InefficientMustBytesCol(v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_text.ToType())
+		err = AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = InefficientMustStrCol(v)
+		require.Equal(t, []string{"1", "4"}, vs)
+		require.Equal(t, [][]byte{[]byte("1"), []byte("4")}, InefficientMustBytesCol(v))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // date
 		v := NewVec(types.T_date.ToType())
@@ -712,6 +837,15 @@ func TestShrinkByMask(t *testing.T) {
 		v.ShrinkByMask(&bmask, false)
 		vs := MustFixedCol[types.Date](v)
 		require.Equal(t, []types.Date{2, 3}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_date.ToType())
+		err = AppendFixedList(v, []types.Date{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[types.Date](v)
+		require.Equal(t, []types.Date{1, 4}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -724,6 +858,15 @@ func TestShrinkByMask(t *testing.T) {
 		require.Equal(t, []types.Datetime{2, 3}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_datetime.ToType())
+		err = AppendFixedList(v, []types.Datetime{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[types.Datetime](v)
+		require.Equal(t, []types.Datetime{1, 4}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // time
 		v := NewVec(types.T_time.ToType())
@@ -732,6 +875,15 @@ func TestShrinkByMask(t *testing.T) {
 		v.ShrinkByMask(&bmask, false)
 		vs := MustFixedCol[types.Time](v)
 		require.Equal(t, []types.Time{2, 3}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_time.ToType())
+		err = AppendFixedList(v, []types.Time{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[types.Time](v)
+		require.Equal(t, []types.Time{1, 4}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -744,6 +896,15 @@ func TestShrinkByMask(t *testing.T) {
 		require.Equal(t, []types.Timestamp{2, 3}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_timestamp.ToType())
+		err = AppendFixedList(v, []types.Timestamp{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[types.Timestamp](v)
+		require.Equal(t, []types.Timestamp{1, 4}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // decimal64
 		vs := make([]types.Decimal64, 4)
@@ -752,6 +913,15 @@ func TestShrinkByMask(t *testing.T) {
 		require.NoError(t, err)
 		v.ShrinkByMask(&bmask, false)
 		require.Equal(t, vs[1:3], MustFixedCol[types.Decimal64](v))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		vs = make([]types.Decimal64, 4)
+		v = NewVec(types.T_decimal64.ToType())
+		err = AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		require.Equal(t, append(vs[:1], vs[3]), MustFixedCol[types.Decimal64](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -764,6 +934,15 @@ func TestShrinkByMask(t *testing.T) {
 		require.Equal(t, vs[1:3], MustFixedCol[types.Decimal128](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+
+		vs = make([]types.Decimal128, 4)
+		v = NewVec(types.T_decimal128.ToType())
+		err = AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		require.Equal(t, append(vs[:1], vs[3]), MustFixedCol[types.Decimal128](v))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // uuid
 		vs := make([]types.Uuid, 4)
@@ -772,6 +951,15 @@ func TestShrinkByMask(t *testing.T) {
 		require.NoError(t, err)
 		v.ShrinkByMask(&bmask, false)
 		require.Equal(t, vs[1:3], MustFixedCol[types.Uuid](v))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		vs = make([]types.Uuid, 4)
+		v = NewVec(types.T_uuid.ToType())
+		err = AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		require.Equal(t, append(vs[:1], vs[3]), MustFixedCol[types.Uuid](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -784,6 +972,15 @@ func TestShrinkByMask(t *testing.T) {
 		require.Equal(t, vs[1:3], MustFixedCol[types.TS](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+
+		vs = make([]types.TS, 4)
+		v = NewVec(types.T_TS.ToType())
+		err = AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		require.Equal(t, append(vs[:1], vs[3]), MustFixedCol[types.TS](v))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // rowid
 		vs := make([]types.Rowid, 4)
@@ -792,6 +989,15 @@ func TestShrinkByMask(t *testing.T) {
 		require.NoError(t, err)
 		v.ShrinkByMask(&bmask, false)
 		require.Equal(t, vs[1:3], MustFixedCol[types.Rowid](v))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		vs = make([]types.Rowid, 4)
+		v = NewVec(types.T_Rowid.ToType())
+		err = AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		require.Equal(t, append(vs[:1], vs[3]), MustFixedCol[types.Rowid](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -804,6 +1010,15 @@ func TestShrinkByMask(t *testing.T) {
 		require.Equal(t, vs[1:3], MustFixedCol[types.Blockid](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+
+		vs = make([]types.Blockid, 4)
+		v = NewVec(types.T_Blockid.ToType())
+		err = AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		require.Equal(t, append(vs[:1], vs[3]), MustFixedCol[types.Blockid](v))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // bit
 		v := NewVec(types.T_bit.ToType())
@@ -812,6 +1027,15 @@ func TestShrinkByMask(t *testing.T) {
 		v.ShrinkByMask(&bmask, false)
 		vs := MustFixedCol[uint64](v)
 		require.Equal(t, []uint64{2, 3}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		v = NewVec(types.T_bit.ToType())
+		err = AppendFixedList(v, []uint64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.ShrinkByMask(&bmask, true)
+		vs = MustFixedCol[uint64](v)
+		require.Equal(t, []uint64{1, 4}, vs)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
