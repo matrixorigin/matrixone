@@ -51,14 +51,14 @@ type Merge[T any] struct {
 	heaps *mergeHeap[T]
 }
 
-func newMerge[T any](size int, compLess sort.LessFunc[T], cols [][]T, nulls []*nulls.Nulls) (merge *Merge[T]) {
+func newMerge[T any](compLess sort.LessFunc[T], cols [][]T, nulls []*nulls.Nulls) (merge *Merge[T]) {
 	merge = &Merge[T]{
-		size:     uint64(size),
+		size:     uint64(len(cols)),
 		cols:     cols,
-		pointers: make([]int, size),
+		pointers: make([]int, len(cols)),
 		nulls:    nulls,
 	}
-	merge.heaps = newMergeHeap(uint64(size), compLess)
+	merge.heaps = newMergeHeap(uint64(len(cols)), compLess)
 	merge.initHeap()
 	return
 }
