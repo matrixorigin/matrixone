@@ -43,7 +43,8 @@ var (
 // parameter format:
 // 1. enable
 // 2. disable
-// 3. [uuid:]taskId
+// 3. getuser
+// 4. [uuid:]taskId
 func handleTask(
 	proc *process.Process,
 	service serviceType,

@@ -249,18 +249,18 @@ func (s *service) startRetentionTask() {
 		ID:       "retention",
 		Executor: task.TaskCode_Retention,
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	retry := 10
-	for retry != 0 {
-		err := s.pu.TaskService.CreateDaemonTask(ctx, metadata, &task.Details{Details: &task.Details_Retention{}})
-		if err != nil {
-			retry--
-			time.Sleep(1 * time.Second)
-		} else {
+
+	for _ = range 10 {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := s.pu.TaskService.CreateCronTask(ctx, metadata, taskservice.Every2Seconds)
+		cancel()
+		if err == nil {
 			return
 		}
+		s.logger.Error("retention task failed", zap.Error(err))
+		time.Sleep(1 * time.Second)
 	}
+	panic("cannot create retention task")
 }
 
 func (s *service) registerExecutorsLocked() {
@@ -316,70 +316,61 @@ func (s *service) registerExecutorsLocked() {
 		},
 	)
 	s.task.runner.RegisterExecutor(task.TaskCode_Retention, func(ctx context.Context, task task.Task) error {
-		ticker := time.NewTicker(10 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-ticker.C:
-			}
+		ctx1, cancel1 := context.WithTimeout(ctx, 10*time.Second)
+		internalExecutor := ieFactory()
+		ctx1 = defines.AttachAccount(ctx1, 0, 0, 0)
+		result := internalExecutor.Query(ctx1, "select * from mo_catalog.mo_retention", ie.NewOptsBuilder().Internal(true).Finish())
+		cancel1()
+		if result.RowCount() == 0 {
+			return nil
+		}
 
-			ctx1, cancel1 := context.WithTimeout(ctx, 10*time.Second)
-			internalExecutor := ieFactory()
-			ctx1 = defines.AttachAccount(ctx1, 0, 0, 0)
-			result := internalExecutor.Query(ctx1, "select * from mo_catalog.mo_retention", ie.NewOptsBuilder().AccountId(0).Internal(true).Finish())
-			cancel1()
-			if result.RowCount() == 0 {
+		if result.ColumnCount() != 4 {
+			return moerr.NewInternalError(ctx, "invalid vector count for mo_retention")
+		}
+		for i := range result.RowCount() {
+			v, err := result.Value(ctx, i, 3)
+			if err != nil {
+				return err
+			}
+			rDDL := v.(uint64)
+			if time.Unix(int64(rDDL), 0).After(time.Now()) {
 				continue
 			}
 
-			if result.ColumnCount() != 4 {
-				return moerr.NewInternalError(ctx, "invalid vector count for mo_retention")
+			dbName, err := result.GetString(ctx, i, 0)
+			if err != nil {
+				return err
 			}
-			for i := range result.RowCount() {
-				v, err := result.Value(ctx, i, 3)
-				if err != nil {
-					return err
-				}
-				rDDL := v.(uint64)
-				if time.Unix(int64(rDDL), 0).After(time.Now()) {
-					continue
-				}
+			tableName, err := result.GetString(ctx, i, 1)
+			if err != nil {
+				return err
+			}
+			v1, err := result.Value(ctx, i, 2)
+			if err != nil {
+				return err
+			}
+			accountID := v1.(uint64)
 
-				dbName, err := result.GetString(ctx, i, 0)
-				if err != nil {
-					return err
-				}
-				tableName, err := result.GetString(ctx, i, 1)
-				if err != nil {
-					return err
-				}
-				v1, err := result.Value(ctx, i, 2)
-				if err != nil {
-					return err
-				}
-				accountID := v1.(uint64)
+			ctx2, cancel2 := context.WithTimeout(ctx, 10*time.Second)
+			ctx2 = defines.AttachAccount(ctx2, 0, 0, 0)
+			err = internalExecutor.Exec(ctx2, fmt.Sprintf(
+				"delete from mo_catalog.mo_retention where database_name='%s' and table_name='%s' and account_id=%d",
+				dbName, tableName, accountID), ie.NewOptsBuilder().Internal(true).Finish())
+			cancel2()
+			if err != nil {
+				return err
+			}
 
-				ctx3, cancel3 := context.WithTimeout(ctx, 10*time.Second)
-				ctx3 = defines.AttachAccount(ctx3, 0, 0, 0)
-				err = internalExecutor.Exec(ctx3, fmt.Sprintf(
-					"delete from mo_catalog.mo_retention where database_name='%s' and table_name='%s' and account_id=%d",
-					dbName, tableName, accountID), ie.NewOptsBuilder().AccountId(0).Internal(true).Finish())
-				cancel3()
-				if err != nil {
-					return err
-				}
-
-				ctx2, cancel2 := context.WithTimeout(ctx, 10*time.Second)
-				ctx2 = defines.AttachAccount(ctx2, uint32(accountID), 0, 0)
-				err = internalExecutor.Exec(ctx2, fmt.Sprintf("drop table `%s`.`%s`", dbName, tableName),
-					ie.NewOptsBuilder().AccountId(uint32(accountID)).Internal(true).Finish())
-				cancel2()
-				if err != nil {
-					return err
-				}
+			ctx3, cancel3 := context.WithTimeout(ctx, 10*time.Second)
+			ctx3 = defines.AttachAccount(ctx3, uint32(accountID), 0, 0)
+			err = internalExecutor.Exec(ctx3, fmt.Sprintf("drop table `%s`.`%s`", dbName, tableName),
+				ie.NewOptsBuilder().AccountId(uint32(accountID)).Internal(true).Finish())
+			cancel3()
+			if err != nil {
+				return err
 			}
 		}
+		return nil
 	})
 }

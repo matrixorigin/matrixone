@@ -416,6 +416,7 @@ mo_locks
 mo_mysql_compatibility_mode
 mo_pitr
 mo_pubs
+mo_retention
 mo_role
 mo_role_grant
 mo_role_privs
@@ -516,6 +517,7 @@ mo_locks
 mo_mysql_compatibility_mode
 mo_pitr
 mo_pubs
+mo_retention
 mo_role
 mo_role_grant
 mo_role_privs
