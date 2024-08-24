@@ -187,6 +187,7 @@ system
 system_metrics
 drop snapshot sp02;
 drop database test02;
+drop database test03;
 drop database if exists test03;
 create database test03;
 use test03;

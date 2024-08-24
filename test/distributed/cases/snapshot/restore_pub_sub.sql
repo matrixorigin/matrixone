@@ -160,6 +160,7 @@ drop snapshot sp02;
 -- @session
 
 drop database test02;
+drop database test03;
 
 
 
