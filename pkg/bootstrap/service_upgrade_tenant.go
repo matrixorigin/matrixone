@@ -247,7 +247,12 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 
 				upgrade.ReadyTenant += updated
 				if upgrade.TotalTenant < upgrade.ReadyTenant {
-					panic(fmt.Sprintf("BUG: invalid upgrade tenant, upgrade %s, updated %d", upgrade.String(), updated))
+					//panic(fmt.Sprintf("BUG: invalid upgrade tenant, upgrade %s, updated %d", upgrade.String(), updated))
+					getUpgradeLogger().Error("the upgraded readyTenant is greater than totalTenant, the same tenants may be are locked by two transactions, need transaction rollback",
+						zap.Int32("updated", updated),
+						zap.String("upgrade", upgrade.String()),
+					)
+					return moerr.NewInvalidInputNoCtx("the upgraded readyTenant is greater than totalTenant, the same tenants may be are locked by two transactions, need transaction rollback")
 				}
 
 				getUpgradeLogger().Info("upgrade tenant ready count changed",
