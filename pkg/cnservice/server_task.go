@@ -17,12 +17,12 @@ package cnservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -250,7 +250,7 @@ func (s *service) startRetentionTask() {
 		Executor: task.TaskCode_Retention,
 	}
 
-	for _ = range 10 {
+	for range 10 {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		err := s.pu.TaskService.CreateCronTask(ctx, metadata, taskservice.Every10Minutes)
 		cancel()
