@@ -186,6 +186,8 @@ mysql
 system
 system_metrics
 drop snapshot sp02;
+drop database sub02;
+Can't drop database 'sub02'; database doesn't exist
 drop database test02;
 drop database test03;
 drop database if exists test03;
@@ -326,3 +328,6 @@ drop database sub05;
 drop snapshot sp05;
 drop publication pub04;
 drop database test04;
+drop account acc01;
+drop account acc02;
+drop account acc03;

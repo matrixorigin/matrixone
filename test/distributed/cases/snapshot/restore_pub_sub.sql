@@ -157,6 +157,7 @@ restore account acc01 from snapshot sp02;
 show subscriptions;
 show databases;
 drop snapshot sp02;
+drop database sub02;
 -- @session
 
 drop database test02;
@@ -291,3 +292,7 @@ drop snapshot sp05;
 drop publication pub04;
 drop database test04;
 -- @session
+
+drop account acc01;
+drop account acc02;
+drop account acc03;
