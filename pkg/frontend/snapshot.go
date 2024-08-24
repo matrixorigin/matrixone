@@ -99,7 +99,7 @@ var (
 		"mo_role_privs":               0,
 		"mo_user_defined_function":    0,
 		"mo_stored_procedure":         0,
-		"mo_mysql_compatibility_mode": 0,
+		"mo_mysql_compatibility_mode": 1,
 		"mo_stages":                   0,
 		"mo_pubs":                     1,
 
@@ -912,6 +912,10 @@ func recreateTable(
 	// create table
 	getLogger().Info(fmt.Sprintf("[%s] start to create table: %v, create table sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
 	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			getLogger().Info(fmt.Sprintf("[%s] foreign key table %v referenced table not exists, skip restore", snapshotName, tblInfo.tblName))
+			err = nil
+		}
 		return
 	}
 
