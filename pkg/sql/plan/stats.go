@@ -588,9 +588,8 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funcImpl := exprImpl.F
-		switch funcImpl.Func.GetObjName() {
-		case "json_extract":
-			w += 256
+		objName := funcImpl.Func.GetObjName()
+		switch objName {
 		case "like":
 			w += 32
 		case "cast":
@@ -603,6 +602,9 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 			w += 1.5
 		default:
 			w += 1
+		}
+		if strings.HasPrefix(objName, "json_") {
+			w += 512
 		}
 		for _, child := range exprImpl.F.Args {
 			w += estimateFilterWeight(child, 0)

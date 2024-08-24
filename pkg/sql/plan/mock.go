@@ -61,7 +61,7 @@ func (m *MockCompilerContext) GetSnapshot() *Snapshot {
 
 func (m *MockCompilerContext) SetSnapshot(snapshot *Snapshot) {}
 
-func (m *MockCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
+func (m *MockCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
 	//TODO implement me
 	panic("implement me")
 }
