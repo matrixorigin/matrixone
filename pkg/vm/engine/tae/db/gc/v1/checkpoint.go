@@ -813,12 +813,12 @@ func (c *checkpointCleaner) CheckGC() error {
 	if err != nil {
 		logutil.Errorf("processing clean %s: %v", debugCandidates[0].String(), err)
 		// TODO
-		return moerr.NewInternalErrorNoCtx("processing clean %s: %v", debugCandidates[0].String(), err)
+		return moerr.NewInternalErrorNoCtxf("processing clean %s: %v", debugCandidates[0].String(), err)
 	}
 	snapshots, err := c.GetSnapshots()
 	if err != nil {
 		logutil.Errorf("processing clean %s: %v", debugCandidates[0].String(), err)
-		return moerr.NewInternalErrorNoCtx("processing clean GetSnapshots %s: %v", debugCandidates[0].String(), err)
+		return moerr.NewInternalErrorNoCtxf("processing clean GetSnapshots %s: %v", debugCandidates[0].String(), err)
 	}
 	defer logtail.CloseSnapshotList(snapshots)
 	debugTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots, c.snapshotMeta)
@@ -897,7 +897,7 @@ func (c *checkpointCleaner) Process() {
 		return
 	}
 	maxEnd := maxGlobalCKP.GetEnd()
-	if maxGlobalCKP != nil && compareTS.Less(&maxEnd) {
+	if compareTS.Less(&maxEnd) {
 		logutil.Info("[DiskCleaner]", common.OperationField("Try GC"),
 			common.AnyField("maxGlobalCKP :", maxGlobalCKP.String()),
 			common.AnyField("compareTS :", compareTS.ToString()))

@@ -222,7 +222,7 @@ func UpdateValue(col *movec.Vector, row uint32, val any, isNull bool, mp *mpool.
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		GenericUpdateBytes(col, row, val, isNull, mp)
 	default:
-		panic(moerr.NewInternalErrorNoCtx("%v not supported", col.GetType()))
+		panic(moerr.NewInternalErrorNoCtxf("%v not supported", col.GetType()))
 	}
 }
 

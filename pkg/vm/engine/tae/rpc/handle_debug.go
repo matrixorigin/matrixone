@@ -365,7 +365,7 @@ func (h *Handle) HandleCommitMerge(
 	merge.ActiveCNObj.RemoveActiveCNObj(ids)
 	if req.Err != "" {
 		resp.ReturnStr = req.Err
-		err = moerr.NewInternalError(ctx, "merge err in cn: %s", req.Err)
+		err = moerr.NewInternalErrorf(ctx, "merge err in cn: %s", req.Err)
 		return
 	}
 

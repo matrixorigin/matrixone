@@ -3320,7 +3320,7 @@ func TestDelete3(t *testing.T) {
 			}
 		}
 	}
-	t.Logf(tae.Catalog.SimplePPString(common.PPL1))
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestDropCreated1(t *testing.T) {
@@ -3835,50 +3835,50 @@ func TestCollectDelete(t *testing.T) {
 
 	batch, _, err := blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p1, true, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(logtail.BatchToString("", batch, false))
+	t.Log(logtail.BatchToString("", batch, false))
 	for i, vec := range batch.Vecs {
-		t.Logf(batch.Attrs[i])
+		t.Log(batch.Attrs[i])
 		assert.Equal(t, 1, vec.Length())
 	}
 	view, err := blkdata.CollectChangesInRange(context.Background(), 0, types.TS{}, p1, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(view.Deletes.String())
+	t.Log(view.Deletes.String())
 	assert.Equal(t, 1, view.Deletes.GetCardinality())
 
 	batch, _, err = blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p2, true, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(logtail.BatchToString("", batch, false))
+	t.Log(logtail.BatchToString("", batch, false))
 	for i, vec := range batch.Vecs {
-		t.Logf(batch.Attrs[i])
+		t.Log(batch.Attrs[i])
 		assert.Equal(t, 4, vec.Length())
 	}
 	view, err = blkdata.CollectChangesInRange(context.Background(), 0, types.TS{}, p2, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(view.Deletes.String())
+	t.Log(view.Deletes.String())
 	assert.Equal(t, 4, view.Deletes.GetCardinality())
 
 	batch, _, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p2, true, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(logtail.BatchToString("", batch, false))
+	t.Log(logtail.BatchToString("", batch, false))
 	for i, vec := range batch.Vecs {
-		t.Logf(batch.Attrs[i])
+		t.Log(batch.Attrs[i])
 		assert.Equal(t, 3, vec.Length())
 	}
 	view, err = blkdata.CollectChangesInRange(context.Background(), 0, p1.Next(), p2, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(view.Deletes.String())
+	t.Log(view.Deletes.String())
 	assert.Equal(t, 3, view.Deletes.GetCardinality())
 
 	batch, _, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(logtail.BatchToString("", batch, false))
+	t.Log(logtail.BatchToString("", batch, false))
 	for i, vec := range batch.Vecs {
-		t.Logf(batch.Attrs[i])
+		t.Log(batch.Attrs[i])
 		assert.Equal(t, 5, vec.Length())
 	}
 	view, err = blkdata.CollectChangesInRange(context.Background(), 0, p1.Next(), p3, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(view.Deletes.String())
+	t.Log(view.Deletes.String())
 	assert.Equal(t, 5, view.Deletes.GetCardinality())
 
 	blk1Name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
@@ -3905,14 +3905,14 @@ func TestCollectDelete(t *testing.T) {
 
 	batch, _, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(logtail.BatchToString("", batch, false))
+	t.Log(logtail.BatchToString("", batch, false))
 	for i, vec := range batch.Vecs {
-		t.Logf(batch.Attrs[i])
+		t.Log(batch.Attrs[i])
 		assert.Equal(t, 5, vec.Length())
 	}
 	view, err = blkdata.CollectChangesInRange(context.Background(), 0, p1.Next(), p3, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(view.Deletes.String())
+	t.Log(view.Deletes.String())
 	assert.Equal(t, 5, view.Deletes.GetCardinality())
 
 }
@@ -5077,7 +5077,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 		require.Equal(t, 10, bat.Length())
 		require.NoError(t, txn.Commit(ctx))
 	}
-	logutil.Infof(tae.Catalog.SimplePPString(3))
+	logutil.Info(tae.Catalog.SimplePPString(3))
 	tae.ForceLongCheckpoint()
 	{
 		txn, rel := tae.GetRelation()
@@ -5087,9 +5087,9 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 		require.Equal(t, 10, bat.Length())
 		require.NoError(t, txn.Commit(ctx))
 	}
-	logutil.Infof(tae.Catalog.SimplePPString(3))
+	logutil.Info(tae.Catalog.SimplePPString(3))
 	tae.Restart(ctx)
-	logutil.Infof(tae.Catalog.SimplePPString(3))
+	logutil.Info(tae.Catalog.SimplePPString(3))
 	{
 		txn, rel := tae.GetRelation()
 		meta := testutil.GetOneBlockMeta(rel)
@@ -6096,7 +6096,7 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	require.Equal(t, "xyz", bat2.Attrs[2+schema1.GetSeqnum("xyz")])
 	require.Equal(t, "xyz", bat2.Attrs[2+schema2.GetSeqnum("xyz")])
 	close()
-	logutil.Infof(tae.Catalog.SimplePPString(common.PPL1))
+	logutil.Info(tae.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestGlobalCheckpoint1(t *testing.T) {
@@ -7669,7 +7669,7 @@ func TestDeduplication(t *testing.T) {
 		txn.Commit(context.Background())
 	}
 	tae.CheckRowsByScan(rows, false)
-	t.Logf(tae.Catalog.SimplePPString(3))
+	t.Log(tae.Catalog.SimplePPString(3))
 }
 
 func TestGCInMemoryDeletesByTS(t *testing.T) {
@@ -7747,14 +7747,14 @@ func TestGCInMemoryDeletesByTS(t *testing.T) {
 
 		batch, _, err := blkData.CollectDeleteInRange(context.Background(), types.TS{}, ts, true, common.DefaultAllocator)
 		assert.NoError(t, err)
-		t.Logf(logtail.BatchToString("", batch, false))
+		t.Log(logtail.BatchToString("", batch, false))
 		for i, vec := range batch.Vecs {
-			t.Logf(batch.Attrs[i])
+			t.Log(batch.Attrs[i])
 			assert.Equal(t, offset+1, vec.Length())
 		}
 		view, err := blkData.CollectChangesInRange(context.Background(), 0, types.TS{}, ts, common.DefaultAllocator)
 		assert.NoError(t, err)
-		t.Logf(view.Deletes.String())
+		t.Log(view.Deletes.String())
 		assert.Equal(t, offset+1, view.Deletes.GetCardinality())
 	}
 	cancel()

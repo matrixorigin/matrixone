@@ -41,7 +41,7 @@ func NewScheduledTxnTask(ctx *tasks.Context, db *DB, taskType tasks.TaskType, sc
 
 func (task *ScheduledTxnTask) Scopes() []common.ID { return task.scopes }
 func (task *ScheduledTxnTask) Scope() *common.ID {
-	if task.scopes == nil || len(task.scopes) == 0 {
+	if len(task.scopes) == 0 {
 		return nil
 	}
 	return &task.scopes[0]

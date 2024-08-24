@@ -27,6 +27,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+
 	//"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -143,7 +144,7 @@ func (s *StageDef) ToPath() (mopath string, query string, err error) {
 	} else if s.Url.Scheme == FILE_PROTOCOL {
 		return s.Url.Path, s.Url.RawQuery, nil
 	}
-	return "", "", moerr.NewBadConfig(context.TODO(), "URL protocol %s not supported", s.Url.Scheme)
+	return "", "", moerr.NewBadConfigf(context.TODO(), "URL protocol %s not supported", s.Url.Scheme)
 }
 
 func getS3ServiceFromProvider(provider string) (string, error) {
@@ -154,7 +155,7 @@ func getS3ServiceFromProvider(provider string) (string, error) {
 	case S3_PROVIDER_MINIO:
 		return MINIO_SERVICE, nil
 	default:
-		return "", moerr.NewBadConfig(context.TODO(), "provider %s not supported", provider)
+		return "", moerr.NewBadConfigf(context.TODO(), "provider %s not supported", provider)
 	}
 }
 
@@ -238,7 +239,7 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s StageDef, err 
 	}
 
 	if reslist == nil {
-		return StageDef{}, moerr.NewBadConfig(context.TODO(), "Stage %s not found", stagename)
+		return StageDef{}, moerr.NewBadConfigf(context.TODO(), "Stage %s not found", stagename)
 	}
 
 	return reslist[0], nil
