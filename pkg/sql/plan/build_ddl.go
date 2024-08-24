@@ -839,7 +839,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			if err != nil {
 				return nil, err
 			}
-			createTable.RetentionDeadline = time.Now().Add(time.Duration(duration)).Unix()
+			createTable.RetentionDeadline = time.Now().Add(duration).Unix()
 
 		// these table options is not support in plan
 		// case *tree.TableOptionEngine, *tree.TableOptionSecondaryEngine, *tree.TableOptionCharset,
@@ -3748,7 +3748,7 @@ func getAutoIncrementOffsetFromVariables(ctx CompilerContext) (uint64, bool) {
 	return 0, false
 }
 
-func parseDuration(ctx context.Context, period uint64, unit string) (uint64, error) {
+func parseDuration(ctx context.Context, period uint64, unit string) (time.Duration, error) {
 	unitSeconds := uint64(0)
 	switch strings.ToLower(unit) {
 	case "second":
@@ -3766,5 +3766,6 @@ func parseDuration(ctx context.Context, period uint64, unit string) (uint64, err
 	default:
 		return 0, moerr.NewInvalidArg(ctx, "time unit", unit)
 	}
-	return period * unitSeconds, nil
+	seconds := period * unitSeconds
+	return time.Duration(seconds * uint64(time.Second)), nil
 }

@@ -2,7 +2,7 @@ drop database if exists test;
 create database test;
 use test;
 
-create table t1(a int) with retention period 3 minute;
+create table t1(a int) with retention period 10 month;
 select * from mo_catalog.mo_retention;
 database_name    table_name    account_id    retention_deadline
 test    t1    0    1724398793
@@ -11,7 +11,18 @@ select * from mo_catalog.mo_retention;
 database_name    table_name    account_id    retention_deadline
 test    t1    0    1724398793
 test    t2    0    1724398793
-select mo_ctl('cn', 'task', 'retention:*/2 * * * * ?');
+select mo_ctl('cn', 'task', 'retention:*/5 * * * * ?');
+mo_ctl(cn, task, retention:*/5 * * * * ?)
+{\n  "method": "TASK",\n  "result": "OK"\n}\n
 select sleep(10);
+sleep(10)
+0
 show tables;
+Tables_in_test
+t1
 select * from mo_catalog.mo_retention;
+database_name    table_name    account_id    retention_deadline
+test    t1    0    1724491107
+select mo_ctl('cn', 'task', 'retention:* */10 * * * ?');
+mo_ctl(cn, task, retention:* */10 * * * ?)
+{\n  "method": "TASK",\n  "result": "OK"\n}\n

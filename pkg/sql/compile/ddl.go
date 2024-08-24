@@ -1264,12 +1264,8 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	if qry.RetentionDeadline != 0 {
-		accountID, err := defines.GetAccountId(c.proc.Ctx)
-		if err != nil {
-			return err
-		}
-		insertRetention := fmt.Sprintf("insert into `%s`.`%s` values ('%s','%s', %d, %d)",
-			catalog.MO_CATALOG, catalog.MO_RETENTION, dbName, tblName, accountID, qry.RetentionDeadline)
+		insertRetention := fmt.Sprintf("insert into `%s`.`%s` values ('%s','%s', %d)",
+			catalog.MO_CATALOG, catalog.MO_RETENTION, dbName, tblName, qry.RetentionDeadline)
 		err = c.runSql(insertRetention)
 		if err != nil {
 			return err
@@ -2296,7 +2292,9 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 		}
 	}
-	return nil
+	return c.runSql(fmt.Sprintf(
+		"delete from %s.%s where database_name=%s and table_name=%s",
+		catalog.MO_CATALOG, catalog.MO_RETENTION, dbName, tblName))
 }
 
 func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {

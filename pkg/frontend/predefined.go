@@ -153,9 +153,8 @@ var (
 	MoCatalogMoRetentionDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
 			database_name varchar(5000),
     		table_name varchar(5000),
-    		account_id bigint unsigned,
     		retention_deadline bigint unsigned,
-    		primary key(account_id, database_name, table_name)
+    		primary key(database_name, table_name)
 			)`, catalog.MO_CATALOG, catalog.MO_RETENTION)
 
 	MoCatalogMoPubsDDL = `create table mo_catalog.mo_pubs (

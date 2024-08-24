@@ -979,6 +979,7 @@ var (
 		MoCatalogMoMysqlCompatibilityModeDDL,
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
+		MoCatalogMoRetentionDDL,
 		MoCatalogMoSubsDDL,
 		MoCatalogMoStoredProcedureDDL,
 		MoCatalogMoStagesDDL,
@@ -1007,6 +1008,7 @@ var (
 		`drop view if exists mo_catalog.mo_transactions;`,
 		`drop view if exists mo_catalog.mo_cache;`,
 		`drop table if exists mo_catalog.mo_snapshots;`,
+		`drop table if exists mo_catalog.mo_retention`,
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropMoPubsSql                   = `drop table if exists mo_catalog.mo_pubs;`

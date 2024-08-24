@@ -3756,14 +3756,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						return 0, err
 					}
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_RETENTION {
-					moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				} else if util.TableIsClusterTable(midNode.GetTableDef().GetTableType()) {
 					ctx.binder = NewWhereBinder(builder, ctx)
 					left := tree.NewUnresolvedColName(util.GetClusterTableAttributeName())
