@@ -237,7 +237,7 @@ func (c *Conn) Read() ([]byte, error) {
 		for i := range payloads {
 			c.allocator.Free(payloads[i])
 		}
-		if len(firstPayload) != 0 && CommandType(firstPayload[0]) == COM_STMT_CLOSE && c.readIndex > totalLength+HeaderLengthOfTheProtocol {
+		if len(firstPayload) != 0 && (CommandType(firstPayload[0]) == COM_STMT_CLOSE || CommandType(firstPayload[0]) == COM_STMT_SEND_LONG_DATA) && c.readIndex > totalLength+HeaderLengthOfTheProtocol {
 			copy(c.fixBuf.data, c.fixBuf.data[totalLength+HeaderLengthOfTheProtocol:c.readIndex])
 			c.readIndex -= totalLength + HeaderLengthOfTheProtocol
 		} else {
