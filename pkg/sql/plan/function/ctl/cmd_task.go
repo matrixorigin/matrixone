@@ -16,6 +16,7 @@ package ctl
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -33,6 +34,7 @@ var (
 	disableTask = "disable"
 	enableTask  = "enable"
 	getUser     = "getuser"
+	retention   = "retention"
 
 	taskMap = map[string]int32{
 		"storageusage": int32(taskpb.TaskCode_MetricStorageUsage),
@@ -44,7 +46,8 @@ var (
 // 1. enable
 // 2. disable
 // 3. getuser
-// 4. [uuid:]taskId
+// 4. retention:CronExpr
+// 5. uuid:taskId
 func handleTask(
 	proc *process.Process,
 	service serviceType,
@@ -74,10 +77,43 @@ func handleTask(
 		}
 		user := state.GetTaskTableUser()
 		return Result{Method: TaskMethod, Data: user}, nil
+	case retention:
+		cronExpr := strings.Split(strings.TrimSpace(parameter), ":")[1]
+		_, err := proc.GetSessionInfo().SqlHelper.ExecSql(
+			fmt.Sprintf(
+				"update mo_task.sys_cron_task set cron_expr='%s' where task_metadata_id='retention'",
+				cronExpr),
+		)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{
+			Method: TaskMethod,
+			Data:   "OK",
+		}, nil
 	default:
 	}
 
-	target, taskCode, err := checkRunTaskParameter(parameter)
+	args := strings.Split(strings.TrimSpace(parameter), ":")
+	if args[0] == retention {
+		if len(args) != 2 {
+			return Result{Method: TaskMethod, Data: "retention task cron expr not specified"}, nil
+		}
+		_, err := proc.GetSessionInfo().SqlHelper.ExecSql(
+			fmt.Sprintf(
+				"update mo_task.sys_cron_task set cron_expr='%s' where task_metadata_id='retention'",
+				args[1]),
+		)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{
+			Method: TaskMethod,
+			Data:   "OK",
+		}, nil
+	}
+
+	target, taskCode, err := checkRunTaskParameter(args)
 	if err != nil {
 		return Result{}, err
 	}
@@ -91,9 +127,8 @@ func handleTask(
 	}, nil
 }
 
-func checkRunTaskParameter(param string) (string, int32, error) {
+func checkRunTaskParameter(args []string) (string, int32, error) {
 	// uuid:taskId
-	args := strings.Split(param, ":")
 	if len(args) != 2 {
 		return "", 0, moerr.NewInternalErrorNoCtx("cmd invalid, expected uuid:task")
 	}

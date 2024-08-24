@@ -252,7 +252,7 @@ func (s *service) startRetentionTask() {
 
 	for _ = range 10 {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		err := s.pu.TaskService.CreateCronTask(ctx, metadata, taskservice.Every2Seconds)
+		err := s.pu.TaskService.CreateCronTask(ctx, metadata, taskservice.Every10Minutes)
 		cancel()
 		if err == nil {
 			return

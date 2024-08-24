@@ -30,6 +30,7 @@ const (
 	Every1Second   = "*/1 * * * * ?"
 	Every2Seconds  = "*/2 * * * * ?"
 	Every5Seconds  = "*/5 * * * * ?"
+	Every10Seconds = "*/10 * * * * ?"
 	Every15Seconds = "*/15 * * * * ?"
 	Every30Seconds = "*/30 * * * * ?"
 	Every1Minute   = "0 */1 * * * ?"
