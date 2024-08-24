@@ -369,7 +369,7 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			0: {
-				Offset:            0,
+				Offset:            param.Extern.FileStartOff,
 				Size:              -1,
 				ReadCloserForRead: &r,
 			},
@@ -412,13 +412,13 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 		},
 	}
 
-	var offset []int64
-	batchSize := fileSize / int64(mcpu)
+	var offsets []int64
 
-	offset = append(offset, 0)
+	offsets = append(offsets, param.FileStartOff)
+	batchSize := (fileSize - param.FileStartOff) / int64(mcpu)
 
 	for i := 1; i < mcpu; i++ {
-		vec.Entries[0].Offset = offset[i-1] + batchSize
+		vec.Entries[0].Offset = offsets[i-1] + batchSize
 		if vec.Entries[0].Offset >= fileSize {
 			break
 		}
@@ -429,15 +429,15 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 		if err != nil {
 			break
 		}
-		offset = append(offset, vec.Entries[0].Offset+tailSize)
+		offsets = append(offsets, vec.Entries[0].Offset+tailSize)
 	}
 
-	for i := 0; i < len(offset); i++ {
-		if i+1 < len(offset) {
-			arr = append(arr, offset[i])
-			arr = append(arr, offset[i+1])
+	for i := 0; i < len(offsets); i++ {
+		if i+1 < len(offsets) {
+			arr = append(arr, offsets[i])
+			arr = append(arr, offsets[i+1])
 		} else {
-			arr = append(arr, offset[i])
+			arr = append(arr, offsets[i])
 			arr = append(arr, -1)
 		}
 	}
@@ -526,6 +526,7 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 			if err != nil {
 				return false
 			}
+
 		case types.T_bit:
 			if len(field.Val) > 8 {
 				return false
@@ -964,7 +965,6 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 	}
 
 	plh := param.plh
-	plh.moCsvLineArray = plh.moCsvLineArray[:cap(plh.moCsvLineArray)]
 	finish := false
 	cnt, finish, err = readCountStringLimitSize(plh.csvReader, proc.Ctx, param.maxBatchSize, plh.moCsvLineArray)
 	if err != nil {
@@ -988,10 +988,9 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 			if cnt >= param.IgnoreLine {
 				plh.moCsvLineArray = plh.moCsvLineArray[param.IgnoreLine:cnt]
 				cnt -= param.IgnoreLine
-				plh.moCsvLineArray = append(plh.moCsvLineArray, make([]csvparser.Field, param.IgnoreLine))
+				plh.moCsvLineArray = append(plh.moCsvLineArray, make([][]csvparser.Field, param.IgnoreLine)...)
 				param.IgnoreLine = 0
 			} else {
-				// plh.moCsvLineArray = nil
 				param.IgnoreLine -= cnt
 				cnt = 0
 			}
