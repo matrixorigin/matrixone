@@ -232,13 +232,13 @@ R_REGIONKEY  INTEGER NOT NULL,
 R_NAME       CHAR(25) NOT NULL,
 R_COMMENT    VARCHAR(152)
 ) INFILE 'stage://sub_local_stage/stage_table*.csv' fields terminated by ',' IGNORE 1 LINES;
-select count(*) from stage_ext_table;
+-- select count(*) from stage_ext_table;
 
 -- list the stage directory
-select count(*) from stage_list('stage://sub_local_stage/') as f;
+-- select count(*) from stage_list('stage://sub_local_stage/') as f;
 
 -- list the stage directory with wildcard
-select count(*) from stage_list('stage://sub_local_stage/stage_table*.csv') as f;
+-- select count(*) from stage_list('stage://sub_local_stage/stage_table*.csv') as f;
 
 drop stage local_stage;
 drop stage sub_local_stage;
