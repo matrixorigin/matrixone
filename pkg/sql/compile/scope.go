@@ -180,6 +180,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 	}()
 
+	fmt.Println("scope run!!!!!!!!!!", DebugShowScopes([]*Scope{s}, OldLevel))
+
 	if s.DataSource == nil {
 		p = pipeline.NewMerge(s.RootOp)
 		_, err = p.MergeRun(s.Proc)

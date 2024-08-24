@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
@@ -492,6 +493,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := connector.NewArgument()
 		op.Reg = sourceOp.(*connector.Connector).Reg
 		op.Reg.NilBatchCnt = maxParallel
+		logutil.Infof("connector set channel %p nilbatchcnt %v", op.Reg.Ch, op.Reg.NilBatchCnt)
 		op.SetInfo(&info)
 		return op
 	case vm.Shuffle:
