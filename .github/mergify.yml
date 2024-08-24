@@ -1,10 +1,5 @@
 queue_rules:
   - name: main
-    branch_protection_injection_mode: queue
-    queue_conditions:
-      - "#changes-requested-reviews-by<=0"
-      - label!=do-not-merge/wip
-      - base=main
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
@@ -15,12 +10,6 @@ queue_rules:
 
         Approved by: @{{ approved_reviews_by | join(', @') }}
   - name: release-1.2
-    branch_protection_injection_mode: queue
-    queue_conditions:
-      - "#changes-requested-reviews-by<=0"
-      - label!=do-not-merge/wip
-      - base=1.2-dev
-      - approved-reviews-by=sukki37
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
@@ -32,6 +21,26 @@ queue_rules:
         Approved by: @{{ approved_reviews_by | join(', @') }}
 
 pull_request_rules:
+  - name: Automatic queue on approval for main
+    conditions:
+      - "#changes-requested-reviews-by<=0"
+      - label!=do-not-merge/wip
+      - base=main
+    actions:
+      queue:
+        name: main
+
+  - name: Automatic queue on approval for release-1.2
+    conditions:
+      - "#changes-requested-reviews-by<=0"
+      - label!=do-not-merge/wip
+      - base=1.2-dev
+      - approved-reviews-by=sukki37
+    actions:
+      queue:
+        name: release-1.2
+
+
   - name: Auto update branch
     conditions:
       - created-at>=00:10 ago
