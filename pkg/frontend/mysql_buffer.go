@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -94,6 +95,8 @@ type Conn struct {
 	timeout           time.Duration
 	allocator         *BufferAllocator
 	ses               *Session
+	closeConnFunc     sync.Once
+	closeFunc         sync.Once
 }
 
 // NewIOSession create a new io session
@@ -138,35 +141,33 @@ func (c *Conn) RawConn() net.Conn {
 func (c *Conn) UseConn(conn net.Conn) {
 	c.conn = conn
 }
-func (c *Conn) Disconnect() error {
-
-	return c.closeConn()
-}
 
 func (c *Conn) Close() error {
-	defer func() {
-		if len(c.fixBuf.data) > 0 {
-			// Free all allocated memory
-			c.allocator.Free(c.fixBuf.data)
-			c.fixBuf.data = nil
-		}
-		for e := c.dynamicBuf.Front(); e != nil; e = e.Next() {
-			c.allocator.Free(e.Value.([]byte))
-		}
-		c.dynamicBuf.Init()
-	}()
+	var err error
+	c.closeFunc.Do(func() {
+		defer func() {
+			if len(c.fixBuf.data) > 0 {
+				// Free all allocated memory
+				c.allocator.Free(c.fixBuf.data)
+				c.fixBuf.data = nil
+			}
+			for e := c.dynamicBuf.Front(); e != nil; e = e.Next() {
+				c.allocator.Free(e.Value.([]byte))
+			}
+			c.dynamicBuf.Init()
+		}()
 
-	err := c.closeConn()
-	if err != nil {
-		return err
-	}
-
-	c.ses = nil
-	rm := getGlobalRtMgr()
-	if rm != nil {
-		rm.Closed(c)
-	}
-	return nil
+		err = c.closeConn()
+		if err != nil {
+			return
+		}
+		c.ses = nil
+		rm := getGlobalRtMgr()
+		if rm != nil {
+			rm.Closed(c)
+		}
+	})
+	return err
 }
 
 func (c *Conn) CheckAllowedPacketSize(totalLength int) error {
@@ -556,12 +557,15 @@ func (c *Conn) RemoteAddress() string {
 }
 
 func (c *Conn) closeConn() error {
-	if c.conn != nil {
-		if err := c.conn.Close(); err != nil {
-			return err
+	var err error
+	c.closeConnFunc.Do(func() {
+		if c.conn != nil {
+			if err = c.conn.Close(); err != nil {
+				return
+			}
 		}
-	}
-	return nil
+	})
+	return err
 }
 
 func (c *Conn) Reset() {

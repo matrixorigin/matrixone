@@ -1009,11 +1009,7 @@ func restoreToDatabaseOrTableWithPitr(
 		// else skip restore the db
 
 		var isPubExist bool
-		isPubExist, err = checkPubExistOrNot(ctx, sid, bh, pitrName, dbName, ts)
-		if err != nil {
-			return
-		}
-
+		isPubExist, _ = checkPubExistOrNot(ctx, sid, bh, pitrName, dbName, ts)
 		if !isPubExist {
 			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", pitrName, dbName))
 			return
@@ -1117,6 +1113,10 @@ func reCreateTableWithPitr(
 	// create table
 	getLogger(sid).Info(fmt.Sprintf("[%s]  start to create table: '%v', create table sql: %s", pitrName, tblInfo.tblName, tblInfo.createSql))
 	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			getLogger(sid).Info(fmt.Sprintf("[%s] foreign key table %v referenced table not exists, skip restore", pitrName, tblInfo.tblName))
+			err = nil
+		}
 		return
 	}
 
@@ -1533,6 +1533,14 @@ func doResolveTimeStamp(timeStamp string) (ts int64, err error) {
 	return
 }
 
+// convert utc nano time to Local format string
+// @param ts: the utc nano time
+// @return the local time string
+func nanoTimeFormat(ts int64) string {
+	t := time.Unix(0, ts)
+	return t.Format("2006-01-02 15:04:05")
+}
+
 // check the ts is valid or not
 // @param ts: the timestamp
 // @param pitrRecord: the pitr record
@@ -1550,7 +1558,7 @@ func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
 	}
 
 	if ts < minTs.UnixNano() {
-		return moerr.NewInternalErrorNoCtxf("ts %v is less than the minest time %v", ts, minTs.Unix())
+		return moerr.NewInternalErrorNoCtxf("ts %v is less than the pitr range minest time %v", nanoTimeFormat(ts), nanoTimeFormat(minTs.UnixNano()))
 	}
 
 	return

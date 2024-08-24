@@ -199,9 +199,7 @@ func (mp *MysqlProtocolImpl) safeQuit() {
 		return
 	}
 	if mp.tcpConn != nil {
-		if err := mp.tcpConn.Disconnect(); err != nil {
-			return
-		}
+		_ = mp.tcpConn.closeConn()
 	}
 	//release salt
 	if mp.salt != nil {

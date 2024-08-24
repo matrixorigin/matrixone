@@ -97,7 +97,7 @@ var (
 		"mo_role_privs":               0,
 		"mo_user_defined_function":    0,
 		"mo_stored_procedure":         0,
-		"mo_mysql_compatibility_mode": 0,
+		"mo_mysql_compatibility_mode": 1,
 		"mo_stages":                   0,
 		catalog.MO_PUBS:               1,
 		catalog.MO_SUBS:               1,
@@ -766,11 +766,7 @@ func restoreToDatabaseOrTable(
 		// else skip restore the db
 
 		var isPubExist bool
-		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
-		if err != nil {
-			return
-		}
-
+		isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
 		if !isPubExist {
 			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, dbName))
 			return
@@ -885,11 +881,7 @@ func restoreToSubDb(
 	toCtx := defines.AttachAccountId(ctx, subDb.Account)
 
 	var isPubExist bool
-	isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
-	if err != nil {
-		return
-	}
-
+	isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
 	if !isPubExist {
 		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, subDb.dbName))
 		return
@@ -1059,6 +1051,10 @@ func recreateTable(
 	// create table
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to create table: %v, create table sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
 	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			getLogger(sid).Info(fmt.Sprintf("[%s] foreign key table %v referenced table not exists, skip restore", snapshotName, tblInfo.tblName))
+			err = nil
+		}
 		return
 	}
 
@@ -1874,7 +1870,7 @@ func checkPubExistOrNot(
 
 	if err != nil {
 		getLogger(sid).Info(fmt.Sprintf("[%s] check pub exist or not error: %v", snapshotName, err))
-		return false, nil
+		return false, err
 	}
 
 	if !isPubValid {
