@@ -144,6 +144,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 
+	if stmt.Param.FileSize < LoadParallelMinSize {
+		stmt.Param.Parallel = false
+	}
+
 	stmt.Param.LoadFile = true
 	stmt.Param.Tail.ColumnList = nil
 	if stmt.Param.ScanType != tree.INLINE {
@@ -205,9 +209,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	if err != nil {
 		return nil, err
-	}
-	if stmt.Param.FileSize < LoadParallelMinSize {
-		stmt.Param.Parallel = false
 	}
 
 	inlineDataSize := unsafe.Sizeof(stmt.Param.Data)
@@ -289,7 +290,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 			return "", err
 		}
 	} else {
-		if err := InitInfileParam(param); err != nil {
+		if err := InitInfileOrStageParam(param, ctx.GetProcess()); err != nil {
 			return "", err
 		}
 	}
