@@ -135,7 +135,7 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	case "mo_cache":
 		tblArg.ctr.state, err = moCachePrepare(proc, tblArg)
 	case "stage_list":
-		// tblArg.ctr.state, err = moCachePrepare(proc, tblArg)
+		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
 	default:
 		tblArg.ctr.state = nil
 		err = moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))
