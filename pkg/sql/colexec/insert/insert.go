@@ -45,14 +45,14 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 	if insert.ToWriteS3 {
 		if len(insert.InsertCtx.PartitionTableIDs) > 0 {
 			// If the target is partition table, just only apply writers for all partitioned sub tables
-			s3Writers, err := colexec.AllocPartitionS3Writer(proc, insert.InsertCtx.TableDef)
+			s3Writers, err := colexec.NewPartitionS3Writer(proc, insert.InsertCtx.TableDef)
 			if err != nil {
 				return err
 			}
 			insert.ctr.partitionS3Writers = s3Writers
 		} else {
 			// If the target is not partition table, you only need to operate the main table
-			s3Writer, err := colexec.AllocS3Writer(proc, insert.InsertCtx.TableDef)
+			s3Writer, err := colexec.NewS3Writer(proc, insert.InsertCtx.TableDef, 0)
 			if err != nil {
 				return err
 			}
@@ -137,28 +137,35 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 
 			// If the target is partition table
 			if len(insert.InsertCtx.PartitionTableIDs) > 0 {
-				insertBatches, err := colexec.GroupByPartitionForInsert(proc, input.Batch, insert.InsertCtx.Attrs, insert.InsertCtx.PartitionIndexInBatch, len(insert.InsertCtx.PartitionTableIDs))
+				insertBatches, err := colexec.GroupByPartitionForInsert(
+					proc,
+					input.Batch,
+					insert.InsertCtx.Attrs,
+					insert.InsertCtx.PartitionIndexInBatch,
+					len(insert.InsertCtx.PartitionTableIDs),
+				)
 				if err != nil {
-					return input, err
+					return vm.CancelResult, err
 				}
 
 				// write partition data to s3.
 				for pidx, writer := range insert.ctr.partitionS3Writers {
-					if err = writer.WriteS3Batch(proc, insertBatches[pidx]); err != nil {
+					err = writeBatch(proc, writer, insertBatches[pidx])
+					if err != nil {
 						insert.ctr.state = vm.End
-						insertBatches[pidx].Clean(proc.Mp())
-						return input, err
+						insertBatches[pidx].Clean(proc.GetMPool())
+						return vm.CancelResult, err
 					}
 					insertBatches[pidx].Clean(proc.Mp())
 				}
 			} else {
 				// Normal non partition table
-				s3Writer := insert.ctr.s3Writer
 				// write to s3.
 				input.Batch.Attrs = append(input.Batch.Attrs[:0], insert.InsertCtx.Attrs...)
-				if err := s3Writer.WriteS3Batch(proc, input.Batch); err != nil {
+				err = writeBatch(proc, insert.ctr.s3Writer, input.Batch)
+				if err != nil {
 					insert.ctr.state = vm.End
-					return input, err
+					return vm.CancelResult, err
 				}
 			}
 		}
@@ -171,28 +178,21 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 		// If the target is partition table
 		if len(insert.InsertCtx.PartitionTableIDs) > 0 {
 			for _, writer := range insert.ctr.partitionS3Writers {
-				if err := writer.WriteS3CacheBatch(proc); err != nil {
+				err := flushTailBatch(proc, writer, &result)
+				if err != nil {
 					insert.ctr.state = vm.End
 					return vm.CancelResult, err
 				}
 			}
-
-			if err := collectAndOutput(proc, insert.ctr.partitionS3Writers, &result); err != nil {
-				insert.ctr.state = vm.End
-				return vm.CancelResult, err
-			}
 		} else {
 			// Normal non partition table
-			s3Writer := insert.ctr.s3Writer
+			writer := insert.ctr.s3Writer
 			// handle the last Batch that batchSize less than DefaultBlockMaxRows
 			// for more info, refer to the comments about reSizeBatch
-			if err := s3Writer.WriteS3CacheBatch(proc); err != nil {
-				insert.ctr.state = vm.End
-				return vm.CancelResult, err
-			}
-			err := s3Writer.Output(proc, &result)
+			err := flushTailBatch(proc, writer, &result)
 			if err != nil {
-				return vm.CancelResult, err
+				insert.ctr.state = vm.End
+				return result, err
 			}
 		}
 		insert.ctr.state = vm.End
@@ -260,17 +260,28 @@ func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) 
 	return input, nil
 }
 
-// Collect all partition subtables' s3writers  metaLoc information and output it
-func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer, result *vm.CallResult) (err error) {
-	for _, w := range s3Writers {
-		//deep copy.
-		bat := w.GetBlockInfoBat()
-		_, err = result.Batch.Append(proc.Ctx, proc.GetMPool(), bat)
+func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batch) error {
+	if writer.StashBatch(proc, bat) {
+		blockInfos, stats, err := writer.SortAndSync(proc)
 		if err != nil {
-			return
+			return err
 		}
-		result.Batch.SetRowCount(result.Batch.RowCount() + bat.RowCount())
-		w.ResetBlockInfoBat(proc)
+		err = writer.FillBlockInfoBat(blockInfos, stats, proc.GetMPool())
+		if err != nil {
+			return err
+		}
 	}
-	return
+	return nil
+}
+
+func flushTailBatch(proc *process.Process, writer *colexec.S3Writer, result *vm.CallResult) error {
+	blockInfos, stats, err := writer.FlushTailBatch(proc)
+	if err != nil {
+		return err
+	}
+	err = writer.FillBlockInfoBat(blockInfos, stats, proc.GetMPool())
+	if err != nil {
+		return err
+	}
+	return writer.Output(proc, result)
 }
