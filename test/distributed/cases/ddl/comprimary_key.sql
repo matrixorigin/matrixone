@@ -126,3 +126,16 @@ CREATE external TABLE rawlog_withnull (
 infile{"filepath"='$resources/external_table_file/rawlog_withnull.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select raw_item,node_uuid,node_type,span_id,statement_id,logger_name,timestamp from rawlog_withnull order by 1 limit 1;
 drop table if exists rawlog_withnull;
+-- 包含uuid的复合主键测试
+drop table if exists test;
+CREATE TABLE test (
+    account_id BIGINT UNSIGNED NOT NULL,
+    task_id UUID NOT NULL,
+    task_name VARCHAR(1000) NOT NULL,
+    PRIMARY KEY (account_id, task_id),
+    UNIQUE KEY (account_id, task_name)
+);
+insert into test values(3,"019126ce-64a8-78cf-1234-be2626281abd","task3");
+insert into test values(3,"019126ce-64a8-78cf-5678-be2626281abd","task4");
+-- @pattern
+insert into test values(3,"019126ce-64a8-78cf-5678-be2626281abd","task4");
