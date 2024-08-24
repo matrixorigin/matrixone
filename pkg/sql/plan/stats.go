@@ -204,6 +204,14 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 		case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 			s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_decimal64:
+			s.MinValMap[colName] = float64(types.DecodeDecimal64(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeDecimal64(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_decimal128:
+			val := types.DecodeDecimal128(info.ColumnZMs[i].GetMinBuf())
+			s.MinValMap[colName] = float64(types.Decimal128ToFloat64(val, 0))
+			val = types.DecodeDecimal128(info.ColumnZMs[i].GetMaxBuf())
+			s.MaxValMap[colName] = float64(types.Decimal128ToFloat64(val, 0))
 		}
 
 		if info.ShuffleRanges[i] != nil {
@@ -365,23 +373,28 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder) float64
 }
 
 func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, vals []*plan.Literal) (ret float64) {
+	ok := true
+	var val1, val2 float64
 	switch funcName {
 	case ">", ">=":
-		if val, ok := getFloat64Value(typ, vals[0]); ok {
-			ret = (max - val + 1) / (max - min)
+		if val1, ok = getFloat64Value(typ, vals[0]); ok {
+			ret = (max - val1 + 1) / (max - min)
 		}
 	case "<", "<=":
-		if val, ok := getFloat64Value(typ, vals[0]); ok {
-			ret = (val - min + 1) / (max - min)
+		if val1, ok = getFloat64Value(typ, vals[0]); ok {
+			ret = (val1 - min + 1) / (max - min)
 		}
 	case "between":
-		if lb, ok := getFloat64Value(typ, vals[0]); ok {
-			if ub, ok := getFloat64Value(typ, vals[1]); ok {
-				ret = (ub - lb + 1) / (max - min)
+		if val1, ok = getFloat64Value(typ, vals[0]); ok {
+			if val2, ok = getFloat64Value(typ, vals[1]); ok {
+				ret = (val2 - val1 + 1) / (max - min)
 			}
 		}
 	default:
-		ret = 0.3
+		return 0.1
+	}
+	if !ok {
+		return 0.1
 	}
 	if ret < 0 {
 		ret = 0
@@ -438,9 +451,26 @@ func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
 		if val, valOk := lit.Value.(*plan.Literal_Dateval); valOk {
 			return float64(val.Dateval), true
 		}
+	case types.T_time:
+		if val, valOk := lit.Value.(*plan.Literal_Timeval); valOk {
+			return float64(val.Timeval), true
+		}
 	case types.T_datetime:
 		if val, valOk := lit.Value.(*plan.Literal_Datetimeval); valOk {
 			return float64(val.Datetimeval), true
+		}
+	case types.T_timestamp:
+		if val, valOk := lit.Value.(*plan.Literal_Timestampval); valOk {
+			return float64(val.Timestampval), true
+		}
+	case types.T_decimal64:
+		if val, valOk := lit.Value.(*plan.Literal_Decimal64Val); valOk {
+			return float64(val.Decimal64Val.A), true
+		}
+	case types.T_decimal128:
+		if val, valOk := lit.Value.(*plan.Literal_Decimal128Val); valOk {
+			d := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
+			return float64(types.Decimal128ToFloat64(d, 0)), true
 		}
 	}
 
@@ -471,9 +501,6 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	}
 	if col != nil && len(literals) > 0 {
 		typ := types.T(s.DataTypeMap[col.Name])
-		if !(typ.IsInteger() || typ.IsDateRelate()) {
-			return 0.1
-		}
 
 		switch colFnName {
 		case "":
