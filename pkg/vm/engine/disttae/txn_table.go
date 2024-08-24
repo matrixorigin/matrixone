@@ -1809,6 +1809,7 @@ func (tbl *txnTable) BuildReaders(
 	orderBy bool,
 	tombstonePolicy engine.TombstoneApplyPolicy,
 ) ([]engine.Reader, error) {
+	var rds []engine.Reader
 	proc := p.(*process.Process)
 	//copy from NewReader.
 	if plan2.IsFalseExpr(expr) {
@@ -1825,17 +1826,20 @@ func (tbl *txnTable) BuildReaders(
 		relData.AppendBlockInfo(objectio.EmptyBlockInfo)
 	}
 	blkCnt := relData.DataCnt()
+	newNum := num
 	if blkCnt < num {
-		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
+		newNum = blkCnt
+		for i := 0; i < num-blkCnt; i++ {
+			rds = append(rds, new(emptyReader))
+		}
 	}
 
-	scanType := determineScanType(relData, num)
+	scanType := determineScanType(relData, newNum)
 	def := tbl.GetTableDef(ctx)
-	mod := blkCnt % num
-	divide := blkCnt / num
+	mod := blkCnt % newNum
+	divide := blkCnt / newNum
 	var shard engine.RelData
-	var rds []engine.Reader
-	for i := 0; i < num; i++ {
+	for i := 0; i < newNum; i++ {
 		if i == 0 {
 			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
 		} else {
