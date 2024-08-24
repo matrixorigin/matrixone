@@ -180,8 +180,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 	}()
 
-	fmt.Println("scope run!!!!!!!!!!", DebugShowScopes([]*Scope{s}, OldLevel))
-
 	if s.DataSource == nil {
 		p = pipeline.NewMerge(s.RootOp)
 		_, err = p.MergeRun(s.Proc)
@@ -409,7 +407,6 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		}
 	}()
 
-	_, isTableScan := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan)
 	switch {
 	// probability 1: it's a JOIN pipeline.
 	case s.IsJoin:
@@ -421,7 +418,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		parallelScope, err = buildLoadParallelRun(s, c)
 
 	// probability 3: it's a SCAN pipeline.
-	case isTableScan:
+	case s.isTableScan():
 		parallelScope, err = buildScanParallelRun(s, c)
 		fmt.Println(DebugShowScopes([]*Scope{parallelScope}, OldLevel))
 
@@ -720,6 +717,14 @@ func (s *Scope) isRight() bool {
 	}
 	OpType := vm.GetLeafOpParent(nil, s.RootOp).OpType()
 	return OpType == vm.Right || OpType == vm.RightSemi || OpType == vm.RightAnti
+}
+
+func (s *Scope) isTableScan() bool {
+	if s == nil {
+		return false
+	}
+	_, isTableScan := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan)
+	return isTableScan
 }
 
 func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {

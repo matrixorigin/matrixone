@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -492,8 +493,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Connector:
 		op := connector.NewArgument()
 		op.Reg = sourceOp.(*connector.Connector).Reg
-		op.Reg.NilBatchCnt = maxParallel
-		logutil.Infof("connector set channel %p nilbatchcnt %v", op.Reg.Ch, op.Reg.NilBatchCnt)
+		logutil.Infof("connector  channel %p nilbatchcnt %v， maxparallel %v", op.Reg.Ch, op.Reg.NilBatchCnt, maxParallel)
 		op.SetInfo(&info)
 		return op
 	case vm.Shuffle:
@@ -521,8 +521,8 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
 		op.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
 		for j := range op.LocalRegs {
-			sourceArg.LocalRegs[j].NilBatchCnt = maxParallel
 			op.LocalRegs[j] = sourceArg.LocalRegs[j]
+			logutil.Infof("dispatch  channel %p nilbatchcnt %v， maxparallel %v", op.LocalRegs[j].Ch, op.LocalRegs[j].NilBatchCnt, maxParallel)
 		}
 		for j := range op.RemoteRegs {
 			op.RemoteRegs[j] = sourceArg.RemoteRegs[j]

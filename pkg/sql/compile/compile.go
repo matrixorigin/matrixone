@@ -3323,6 +3323,9 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		if !ss[i].IsEnd {
 			// waring: `connector` operator is not used as an input/output analyze,
 			// and `connector` operator cannot play the role of IsFirst/IsLast
+			if ss[i].isTableScan() {
+				rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = ss[i].NodeInfo.Mcpu
+			}
 			connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])
 			connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			ss[i].setRootOperator(connArg)
