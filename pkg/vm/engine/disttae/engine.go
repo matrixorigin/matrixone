@@ -655,24 +655,28 @@ func (e *Engine) BuildBlockReaders(
 	def *plan.TableDef,
 	relData engine.RelData,
 	num int) ([]engine.Reader, error) {
+	var (
+		rds   []engine.Reader
+		shard engine.RelData
+	)
 	proc := p.(*process.Process)
 	blkCnt := relData.DataCnt()
+	newNum := num
 	if blkCnt < num {
-		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
+		newNum = blkCnt
+		for i := 0; i < num-blkCnt; i++ {
+			rds = append(rds, new(emptyReader))
+		}
 	}
 	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
 
-	var (
-		rds   []engine.Reader
-		shard engine.RelData
-	)
-	scanType := determineScanType(relData, num)
-	mod := blkCnt % num
-	divide := blkCnt / num
-	for i := 0; i < num; i++ {
+	scanType := determineScanType(relData, newNum)
+	mod := blkCnt % newNum
+	divide := blkCnt / newNum
+	for i := 0; i < newNum; i++ {
 		if i == 0 {
 			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
 		} else {
