@@ -767,6 +767,10 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
 				info.ColumnNDVs[idx] = ndvUsingZonemap
 			}
 
+			if info.ColumnNDVs[idx] < 3 {
+				info.ColumnNDVs[idx] *= (4 - info.ColumnNDVs[idx])
+			}
+
 			if info.ColumnNDVs[idx] > info.TableCnt {
 				info.ColumnNDVs[idx] = info.TableCnt
 			}
