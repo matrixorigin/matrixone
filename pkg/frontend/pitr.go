@@ -1009,11 +1009,7 @@ func restoreToDatabaseOrTableWithPitr(
 		// else skip restore the db
 
 		var isPubExist bool
-		isPubExist, err = checkPubExistOrNot(ctx, sid, bh, pitrName, dbName, ts)
-		if err != nil {
-			return
-		}
-
+		isPubExist, _ = checkPubExistOrNot(ctx, sid, bh, pitrName, dbName, ts)
 		if !isPubExist {
 			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", pitrName, dbName))
 			return
