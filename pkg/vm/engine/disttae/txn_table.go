@@ -915,7 +915,7 @@ func (tbl *txnTable) rangesOnePart(
 				blk.Appendable = obj.Appendable
 				blk.CommitTs = obj.CommitTS
 				//if obj.HasDeltaLoc {
-				//	_, commitTs, ok := state.GetBockDeltaLoc(blk.BlockID)
+				//	_, commitTs, ok := state.GetBlockDeltaLoc(blk.BlockID)
 				//	if ok {
 				//		blk.CommitTs = commitTs
 				//	}
@@ -1610,15 +1610,11 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64,
 ) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
-	s3writer := &colexec.S3Writer{}
-	s3writer.SetTableName(tbl.tableName)
-	s3writer.SetSchemaVer(tbl.version)
-	_, err := s3writer.GenerateWriter(tbl.getTxn().proc)
+	s3writer, err := colexec.NewS3Writer(tbl.getTxn().proc, tbl.tableDef, 0)
 	if err != nil {
 		return nil, nil, err
 	}
 	tbl.ensureSeqnumsAndTypesExpectRowid()
-	s3writer.SetSeqnums(tbl.seqnums)
 
 	for blkmetaloc, deletes := range compactedBlks {
 		//blk.MetaLocation()
@@ -1636,17 +1632,10 @@ func (tbl *txnTable) compaction(
 		if bat.RowCount() == 0 {
 			continue
 		}
-		if err = s3writer.WriteBlock(bat); err != nil {
-			return nil, nil, err
-		}
+		s3writer.StashBatch(tbl.getTxn().proc, bat)
 		bat.Clean(tbl.getTxn().proc.GetMPool())
-
 	}
-	createdBlks, stats, err := s3writer.WriteEndBlocks(tbl.getTxn().proc)
-	if err != nil {
-		return nil, nil, err
-	}
-	return createdBlks, stats, nil
+	return s3writer.SortAndSync(tbl.getTxn().proc)
 }
 
 func (tbl *txnTable) Delete(
@@ -2010,7 +1999,7 @@ func (tbl *txnTable) PKPersistedBetween(
 					blk.Appendable = obj.Appendable
 					blk.CommitTs = obj.CommitTS
 					if obj.HasDeltaLoc {
-						_, commitTs, ok := p.GetBockDeltaLoc(blk.BlockID)
+						_, commitTs, ok := p.GetBlockDeltaLoc(blk.BlockID)
 						if ok {
 							blk.CommitTs = commitTs
 						}

@@ -327,7 +327,13 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 	return r, nil
 }
 
-func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
+func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
+	defer func() {
+		if errors.Is(err, io.EOF) {
+			panic("found EOF in Write")
+		}
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
