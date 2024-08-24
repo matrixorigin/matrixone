@@ -26,15 +26,36 @@ import (
 )
 
 func TestSimpleTupleAllTypes(t *testing.T) {
+	uuid, _ := BuildUuid()
 	tests := []struct {
 		args Tuple
 	}{
 		{
-			args: Tuple{true, int8(1), int16(2), int32(3), int64(4), uint8(5), uint16(6), uint32(7), uint64(8), float32(1),
+			args: Tuple{
+				true, int8(1), int16(2), int32(3), int64(4), uint8(5), uint16(6), uint32(7), uint64(8), float32(1),
 				float64(1),
 				DateFromCalendar(2000, 1, 1), DatetimeFromClock(2000, 1, 1, 1, 1, 0, 0),
 				FromClockUTC(2000, 2, 2, 2, 2, 0, 0), Decimal64(123),
-				Decimal128{123, 0}, []byte{1, 2, 3}},
+				Decimal128{123, 0},
+				[]byte{1, 2, 3},
+				uuid,
+			},
+		},
+		{
+			args: Tuple{
+				uuid,
+				float64(1),
+				uuid,
+				true, int8(1), int16(2), int32(3), int64(4), uint8(5), uint16(6), uint32(7), uint64(8), float32(1),
+				uuid,
+				FromClockUTC(2000, 2, 2, 2, 2, 0, 0), Decimal64(123),
+				uuid,
+				DateFromCalendar(2000, 1, 1), DatetimeFromClock(2000, 1, 1, 1, 1, 0, 0),
+				uuid,
+				Decimal128{123, 0},
+				uuid,
+				[]byte{1, 2, 3},
+			},
 		},
 	}
 	for _, test := range tests {
@@ -54,22 +75,22 @@ func TestSingleTypeTuple(t *testing.T) {
 		args Tuple
 	}{
 		{
-			args: Tuple{true, false},
+			Tuple{true, false},
 		},
 		{
-			args: randomTuple(int8Code, 100),
+			randomTuple(int8Code, 100),
 		},
 		{
-			args: randomTuple(int16Code, 100),
+			randomTuple(int16Code, 100),
 		},
 		{
-			args: randomTuple(int32Code, 100),
+			randomTuple(int32Code, 100),
 		},
 		{
-			args: randomTuple(int64Code, 100),
+			randomTuple(int64Code, 100),
 		},
 		{
-			args: randomTuple(uint8Code, 100),
+			randomTuple(uint8Code, 100),
 		},
 		{
 			randomTuple(uint16Code, 100),
@@ -103,6 +124,9 @@ func TestSingleTypeTuple(t *testing.T) {
 		},
 		{
 			randomTuple(float64Code, 100),
+		},
+		{
+			randomTuple(uuidCode, 100),
 		},
 	}
 	for _, test := range tests {
@@ -152,7 +176,7 @@ func TestDecimalOrderTuple(t *testing.T) {
 		args Tuple
 	}{
 		{
-			args: Tuple{Decimal128{uint64(rand.Int()), uint64(rand.Int())},
+			args: Tuple{
 				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
 				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
 				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
@@ -161,7 +185,9 @@ func TestDecimalOrderTuple(t *testing.T) {
 				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
 				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
 				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
-				Decimal128{uint64(rand.Int()), uint64(rand.Int())}},
+				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
+				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
+			},
 		},
 	}
 	for _, test := range tests {
@@ -289,6 +315,11 @@ func randomTuple(code int, si int) Tuple {
 		for i := 0; i < si; i++ {
 			tuple = addTupleElement(tuple, randStringType())
 		}
+	case uuidCode:
+		for i := 0; i < si; i++ {
+			tuple = addTupleElement(tuple, randUuid())
+		}
+
 	}
 	return tuple
 }
@@ -296,7 +327,7 @@ func randomTuple(code int, si int) Tuple {
 func randomTypeTuple(si int) Tuple {
 	var tuple Tuple
 	for i := 0; i < si; i++ {
-		randTypeId := rand.Intn(30)
+		randTypeId := rand.Intn(31)
 		switch randTypeId {
 		case 0:
 			tuple = addTupleElement(tuple, true)
@@ -366,10 +397,13 @@ func randomTypeTuple(si int) Tuple {
 			tuple = addTupleElement(tuple, rand.Float32())
 		case 29:
 			tuple = addTupleElement(tuple, rand.Float64())
+		case 30:
+			tuple = addTupleElement(tuple, randUuid())
 		}
 	}
 	return tuple
 }
+
 func addTupleElement(tuple Tuple, element interface{}) Tuple {
 	return append(tuple, element)
 }
@@ -451,6 +485,12 @@ func randStringType() []byte {
 	return b
 }
 
+func randUuid() []byte {
+	b := make([]byte, 16)
+	crand.Read(b)
+	return b
+}
+
 func encodeBufToPacker(tuple Tuple, p *Packer) {
 	for _, e := range tuple {
 		switch e := e.(type) {
@@ -488,6 +528,8 @@ func encodeBufToPacker(tuple Tuple, p *Packer) {
 			p.EncodeDecimal128(e)
 		case []byte:
 			p.EncodeStringType(e)
+		case Uuid:
+			p.EncodeUuid(e)
 		}
 	}
 }

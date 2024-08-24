@@ -574,17 +574,18 @@ func EvalDeleteRowsByTimestamp(
 }
 
 func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
-	deletes *batch.Batch, ts types.TS, committs types.TS,
+	blkID types.Blockid, deletes *batch.Batch,
 ) (rows *nulls.Bitmap) {
-	if deletes == nil || ts.Less(&committs) {
+	if deletes == nil {
 		return
 	}
 	// record visible delete rows
 	rows = nulls.NewWithSize(0)
 	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
 
-	for _, rowid := range rowids {
-		row := rowid.GetRowOffset()
+	start, end := FindIntervalForBlock(rowids, &blkID)
+	for i := start; i < end; i++ {
+		row := rowids[i].GetRowOffset()
 		rows.Add(uint64(row))
 	}
 	return
