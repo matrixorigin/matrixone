@@ -27,24 +27,24 @@ func NewBadS3ConfigNoCtx(msg string) *Error {
 	return newError(Context(), ErrBadS3Config, msg)
 }
 
-func NewInternalErrorNoCtxf(msg string, args ...any) *Error {
-	return NewInternalErrorNoCtx(fmt.Sprintf(msg, args...))
+func NewInternalErrorNoCtxf(format string, args ...any) *Error {
+	return NewInternalErrorNoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewInternalErrorNoCtx(msg string) *Error {
 	return newError(Context(), ErrInternal, msg)
 }
 
-func NewNYINoCtxf(msg string, args ...any) *Error {
-	return NewNYINoCtx(fmt.Sprintf(msg, args...))
+func NewNYINoCtxf(format string, args ...any) *Error {
+	return NewNYINoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewNYINoCtx(msg string) *Error {
 	return newError(Context(), ErrNYI, msg)
 }
 
-func NewNotSupportedNoCtxf(msg string, args ...any) *Error {
-	return NewNotSupportedNoCtx(fmt.Sprintf(msg, args...))
+func NewNotSupportedNoCtxf(format string, args ...any) *Error {
+	return NewNotSupportedNoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewNotSupportedNoCtx(msg string) *Error {
@@ -59,16 +59,16 @@ func NewDivByZeroNoCtx() *Error {
 	return newError(Context(), ErrDivByZero)
 }
 
-func NewOutOfRangeNoCtxf(typ string, msg string, args ...any) *Error {
-	return NewOutOfRangeNoCtx(typ, fmt.Sprintf(msg, args...))
+func NewOutOfRangeNoCtxf(typ string, format string, args ...any) *Error {
+	return NewOutOfRangeNoCtx(typ, fmt.Sprintf(format, args...))
 }
 
 func NewOutOfRangeNoCtx(typ string, msg string) *Error {
 	return newError(Context(), ErrOutOfRange, typ, msg)
 }
 
-func NewDataTruncatedNoCtxf(typ string, msg string, args ...any) *Error {
-	return NewDataTruncatedNoCtx(typ, fmt.Sprintf(msg, args...))
+func NewDataTruncatedNoCtxf(typ string, format string, args ...any) *Error {
+	return NewDataTruncatedNoCtx(typ, fmt.Sprintf(format, args...))
 }
 
 func NewDataTruncatedNoCtx(typ string, msg string) *Error {
@@ -79,16 +79,16 @@ func NewInvalidArgNoCtx(arg string, val any) *Error {
 	return newError(Context(), ErrInvalidArg, arg, fmt.Sprintf("%v", val))
 }
 
-func NewBadConfigNoCtxf(msg string, args ...any) *Error {
-	return NewBadConfigNoCtx(fmt.Sprintf(msg, args...))
+func NewBadConfigNoCtxf(format string, args ...any) *Error {
+	return NewBadConfigNoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewBadConfigNoCtx(msg string) *Error {
 	return newError(Context(), ErrBadConfig, msg)
 }
 
-func NewInvalidInputNoCtxf(msg string, args ...any) *Error {
-	return NewInvalidInputNoCtx(fmt.Sprintf(msg, args...))
+func NewInvalidInputNoCtxf(format string, args ...any) *Error {
+	return NewInvalidInputNoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewInvalidInputNoCtx(msg string) *Error {
@@ -105,24 +105,24 @@ func NewArrayDefMismatchNoCtx(expected, actual int) *Error {
 	return newError(Context(), ErrInvalidInput, xmsg)
 }
 
-func NewSyntaxErrorNoCtxf(msg string, args ...any) *Error {
-	return NewSyntaxErrorNoCtx(fmt.Sprintf(msg, args...))
+func NewSyntaxErrorNoCtxf(format string, args ...any) *Error {
+	return NewSyntaxErrorNoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewSyntaxErrorNoCtx(msg string) *Error {
 	return newError(Context(), ErrSyntaxError, msg)
 }
 
-func NewParseErrorNoCtxf(msg string, args ...any) *Error {
-	return NewParseErrorNoCtx(fmt.Sprintf(msg, args...))
+func NewParseErrorNoCtxf(format string, args ...any) *Error {
+	return NewParseErrorNoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewParseErrorNoCtx(msg string) *Error {
 	return newError(Context(), ErrParseError, msg)
 }
 
-func NewConstraintViolationNoCtxf(msg string, args ...any) *Error {
-	return NewConstraintViolationNoCtx(fmt.Sprintf(msg, args...))
+func NewConstraintViolationNoCtxf(format string, args ...any) *Error {
+	return NewConstraintViolationNoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewConstraintViolationNoCtx(msg string) *Error {
@@ -165,8 +165,8 @@ func NewInvalidPathNoCtx(f string) *Error {
 	return newError(Context(), ErrInvalidPath, f)
 }
 
-func NewInvalidStateNoCtxf(msg string, args ...any) *Error {
-	return NewInvalidStateNoCtx(fmt.Sprintf(msg, args...))
+func NewInvalidStateNoCtxf(format string, args ...any) *Error {
+	return NewInvalidStateNoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewInvalidStateNoCtx(msg string) *Error {
@@ -236,8 +236,8 @@ func NewTxnClosedNoCtx(txnID []byte) *Error {
 	return newError(Context(), ErrTxnClosed, id)
 }
 
-func NewTxnWriteConflictNoCtxf(msg string, args ...any) *Error {
-	return NewTxnWriteConflictNoCtx(fmt.Sprintf(msg, args...))
+func NewTxnWriteConflictNoCtxf(format string, args ...any) *Error {
+	return NewTxnWriteConflictNoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewTxnWriteConflictNoCtx(msg string) *Error {
@@ -248,8 +248,8 @@ func NewMissingTxnNoCtx() *Error {
 	return newError(Context(), ErrMissingTxn)
 }
 
-func NewTAEErrorNoCtxf(msg string, args ...any) *Error {
-	return NewTAEErrorNoCtx(fmt.Sprintf(msg, args...))
+func NewTAEErrorNoCtxf(format string, args ...any) *Error {
+	return NewTAEErrorNoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewTAEErrorNoCtx(msg string) *Error {
@@ -276,24 +276,24 @@ func NewTxnNotActiveNoCtx(st string) *Error {
 	return newError(Context(), ErrTxnNotActive, st)
 }
 
-func NewTAECommitNoCtxf(msg string, args ...any) *Error {
-	return NewTAECommitNoCtx(fmt.Sprintf(msg, args...))
+func NewTAECommitNoCtxf(format string, args ...any) *Error {
+	return NewTAECommitNoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewTAECommitNoCtx(msg string) *Error {
 	return newError(Context(), ErrTAECommit, msg)
 }
 
-func NewTAERollbackNoCtxf(msg string, args ...any) *Error {
-	return NewTAERollbackNoCtx(fmt.Sprintf(msg, args...))
+func NewTAERollbackNoCtxf(format string, args ...any) *Error {
+	return NewTAERollbackNoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewTAERollbackNoCtx(msg string) *Error {
 	return newError(Context(), ErrTAERollback, msg)
 }
 
-func NewTAEPrepareNoCtxf(msg string, args ...any) *Error {
-	return NewTAEPrepareNoCtx(fmt.Sprintf(msg, args...))
+func NewTAEPrepareNoCtxf(format string, args ...any) *Error {
+	return NewTAEPrepareNoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewTAEPrepareNoCtx(msg string) *Error {
@@ -354,8 +354,8 @@ func NewRoleGrantedToSelfNoCtx(from, to string) *Error {
 	return newError(Context(), ErrRoleGrantedToSelf, from, to)
 }
 
-func NewTxnReadConflictNoCtxf(msg string, args ...any) *Error {
-	return NewTxnReadConflictNoCtx(fmt.Sprintf(msg, args...))
+func NewTxnReadConflictNoCtxf(format string, args ...any) *Error {
+	return NewTxnReadConflictNoCtx(fmt.Sprintf(format, args...))
 }
 
 func NewTxnReadConflictNoCtx(msg string) *Error {
