@@ -1905,6 +1905,10 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.FilterExpr = filterExpr
 	s.DataSource.RuntimeFilterSpecs = n.RuntimeFilterProbeList
 	s.DataSource.OrderBy = n.OrderBy
+	if s.DataSource.OrderBy != nil {
+		// ordered scan run with single parallel
+		s.NodeInfo.Mcpu = 1
+	}
 
 	return nil
 }
