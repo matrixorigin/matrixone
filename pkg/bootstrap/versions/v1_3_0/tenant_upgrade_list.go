@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -56,6 +57,25 @@ var upg_mo_snapshots = versions.UpgradeEntry{
 		if colInfo.ColType != "TIMESTAMP" {
 			return true, nil
 		}
+		return false, nil
+	},
+}
+
+var upg_mo_retention = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_RETENTION,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoRetentionDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		isExist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_RETENTION)
+		if err != nil {
+			return false, err
+		}
+
+		if isExist {
+			return true, nil
+		}
+		needUpgradePubSub = true
 		return false, nil
 	},
 }

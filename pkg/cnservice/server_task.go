@@ -363,7 +363,7 @@ func (s *service) registerExecutorsLocked() {
 					return err
 				}
 
-				err = execSql(ctx, uint32(accountID), iExec, fmt.Sprintf("drop table `%s`.`%s`", dbName, tableName))
+				err = execSql(ctx, uint32(accountID), iExec, fmt.Sprintf("drop table %s.%s", dbName, tableName))
 				if err != nil {
 					return err
 				}
