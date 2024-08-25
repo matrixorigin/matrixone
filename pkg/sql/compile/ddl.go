@@ -2292,11 +2292,18 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 		}
 	}
+
 	// remove entry in mo_retention if exists
+	// skip tables in mo_catalog.
+	// These tables do not have retention info.
+	if dbName == catalog.MO_CATALOG {
+		return nil
+	}
 	deleteRetentionSQL := fmt.Sprintf(
 		"delete from %s.%s where database_name='%s' and table_name='%s'",
 		catalog.MO_CATALOG, catalog.MO_RETENTION, dbName, tblName)
 	err = c.runSql(deleteRetentionSQL)
+	// ignore error in case the table doesn't have entry in mo_retention.
 	if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 		return nil
 	}
