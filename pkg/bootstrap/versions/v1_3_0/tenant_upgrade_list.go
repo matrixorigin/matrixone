@@ -25,6 +25,7 @@ import (
 var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_systemMetrics_server_snapshot_usage,
 	upg_mo_snapshots,
+	upg_mo_retention,
 }
 
 const viewServerSnapshotUsage = "server_snapshot_usage"

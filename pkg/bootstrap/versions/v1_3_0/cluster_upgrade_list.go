@@ -24,7 +24,6 @@ import (
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pitr,
 	upg_mo_subs,
-	upg_mo_retention,
 }
 
 var needUpgradePubSub = false

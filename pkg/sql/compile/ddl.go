@@ -2292,9 +2292,11 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 		}
 	}
-	err = c.runSql(fmt.Sprintf(
-		"delete from %s.%s where database_name=%s and table_name=%s",
-		catalog.MO_CATALOG, catalog.MO_RETENTION, dbName, tblName))
+	// remove entry in mo_retention if exists
+	deleteRetentionSQL := fmt.Sprintf(
+		"delete from %s.%s where database_name='%s' and table_name='%s'",
+		catalog.MO_CATALOG, catalog.MO_RETENTION, dbName, tblName)
+	err = c.runSql(deleteRetentionSQL)
 	if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 		return nil
 	}
