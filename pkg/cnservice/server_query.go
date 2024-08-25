@@ -16,11 +16,12 @@ package cnservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"runtime"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -84,6 +85,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_CtlReader, s.handleCtlReader, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ResetSession, s.handleResetSession, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GOMaxProcs, s.handleGoMaxProcs, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -487,5 +489,15 @@ func (s *service) handleResetSession(
 		return err
 	}
 	resp.ResetSessionResponse.Success = true
+	return nil
+}
+
+func (s *service) handleGoMaxProcs(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	if req.GoMaxProcsRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	resp.GoMaxProcsResponse.MaxProcs = int32(runtime.GOMAXPROCS(int(req.GoMaxProcsRequest.MaxProcs)))
 	return nil
 }
