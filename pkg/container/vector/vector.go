@@ -2482,7 +2482,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 	}
 	if len(w.flag) > 0 {
 		for i, flag := range flags {
-			if flag > 0 {
+			if int(offset)+i < len(w.flag) && flag > 0 {
 				v.flag = append(v.flag, w.flag[int(offset)+i])
 			}
 		}

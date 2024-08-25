@@ -523,10 +523,6 @@ func (ctr *container) initResultAndHashTable(bat **batch.Batch, proc *process.Pr
 		}
 	}
 
-	if config.NeedRollup {
-		ctr.groupVecsNullable = true
-	}
-
 	// init the hashmap.
 	switch {
 	case ctr.keyWidth <= 8:
@@ -553,7 +549,7 @@ func (ctr *container) initResultAndHashTable(bat **batch.Batch, proc *process.Pr
 	if config.NeedRollup {
 		switch {
 		case ctr.keyWidth <= 8:
-			if ctr.rollupIntMap, err = hashmap.NewIntHashMap(ctr.groupVecsNullable, proc.Mp()); err != nil {
+			if ctr.rollupIntMap, err = hashmap.NewIntHashMap(true, proc.Mp()); err != nil {
 				return err
 			}
 			if config.PreAllocSize > 0 {
@@ -563,7 +559,7 @@ func (ctr *container) initResultAndHashTable(bat **batch.Batch, proc *process.Pr
 			}
 
 		default:
-			if ctr.rollupStrMap, err = hashmap.NewStrMap(ctr.groupVecsNullable, proc.Mp()); err != nil {
+			if ctr.rollupStrMap, err = hashmap.NewStrMap(true, proc.Mp()); err != nil {
 				return err
 			}
 			if config.PreAllocSize > 0 {
