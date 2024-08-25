@@ -179,9 +179,7 @@ func RequestMultipleCn(ctx context.Context,
 				queryResp, ok := res.response.(*pb.Response)
 				if ok {
 					//save response
-					if handleValidResponse != nil {
-						handleValidResponse(res.nodeAddr, queryResp)
-					}
+					handleValidResponse(res.nodeAddr, queryResp)
 					if queryResp != nil {
 						qc.Release(queryResp)
 					}

@@ -432,13 +432,10 @@ func (c *Compile) printPipeline() {
 }
 */
 // run once
-func (c *Compile) runOnce(retryOnMetadata *bool) error {
+func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
 	err := c.lockMetaTables()
 	if err != nil {
-		if c.isRetryErr(err) {
-			*retryOnMetadata = true
-		}
 		return err
 	}
 
@@ -1502,8 +1499,23 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	} else if param.ScanType == tree.INLINE {
 		return c.compileExternValueScan(n, param, strictSqlMode)
 	} else {
-		if err := plan2.InitInfileParam(param); err != nil {
+		if err := plan2.InitInfileOrStageParam(param, c.proc); err != nil {
 			return nil, err
+		}
+
+		// if filepath is stage URL, ScanType may change to tree.S3.  check param.Parallel again
+		if param.ScanType == tree.S3 && param.Parallel {
+			mcpu = 0
+			ID2Addr = make(map[int]int, 0)
+			for i := 0; i < len(c.cnList); i++ {
+				tmp := mcpu
+				if c.cnList[i].Mcpu > external.S3ParallelMaxnum {
+					mcpu += external.S3ParallelMaxnum
+				} else {
+					mcpu += c.cnList[i].Mcpu
+				}
+				ID2Addr[i] = mcpu - tmp
+			}
 		}
 	}
 
@@ -1894,6 +1906,10 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.FilterExpr = filterExpr
 	s.DataSource.RuntimeFilterSpecs = n.RuntimeFilterProbeList
 	s.DataSource.OrderBy = n.OrderBy
+	if s.DataSource.OrderBy != nil {
+		// ordered scan run with single parallel
+		s.NodeInfo.Mcpu = 1
+	}
 
 	return nil
 }
@@ -4510,7 +4526,7 @@ func removeEmtpyNodes(
 		for i := range c.cnList {
 			logstring = logstring + c.cnList[i].Addr + " "
 		}
-		c.proc.Warnf(c.proc.Ctx, logstring)
+		c.proc.Warn(c.proc.Ctx, logstring)
 	}
 	return newNodes, nil
 }
@@ -4626,7 +4642,7 @@ func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes)
 // Just for test
 func shuffleBlocksByMoCtl(relData engine.RelData, cnt int, nodes engine.Nodes) error {
 	if cnt > relData.DataCnt()-1 {
-		return moerr.NewInternalErrorNoCtx(
+		return moerr.NewInternalErrorNoCtxf(
 			"Invalid Parameter, distribute count:%d, block count:%d",
 			cnt,
 			relData.DataCnt()-1)

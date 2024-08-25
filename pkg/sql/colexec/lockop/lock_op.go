@@ -550,9 +550,9 @@ func doLock(
 	lockedTS := result.Timestamp
 
 	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
-	if !result.HasConflict &&
+	if result.NewLockAdd && // only check when new lock added, reentrant lock can skip check
+		!result.HasConflict &&
 		snapshotTS.LessEq(lockedTS) && // only retry when snapshotTS <= lockedTS, means lost some update in rc mode.
-		!txnOp.IsRetry() && // retry not need to check data changed
 		txnOp.Txn().IsRCIsolation() {
 
 		start = time.Now()
