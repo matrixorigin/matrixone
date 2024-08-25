@@ -455,6 +455,14 @@ func (s *service) handleGoMaxProcs(
 	if req.GoMaxProcsRequest == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
+	resp.GoMaxProcsResponse = &query.GoMaxProcsResponse{}
 	resp.GoMaxProcsResponse.MaxProcs = int32(runtime.GOMAXPROCS(int(req.GoMaxProcsRequest.MaxProcs)))
+	if req.GoMaxProcsRequest.MaxProcs > 0 {
+		logutil.Info("QueryService::GoMaxProcs",
+			zap.String("op", "set"),
+			zap.Int32("in", req.GoMaxProcsRequest.MaxProcs),
+			zap.Int32("out", resp.GoMaxProcsResponse.MaxProcs),
+		)
+	}
 	return nil
 }
