@@ -49,6 +49,7 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_ReloadAutoIncrementCache: defines.MORPCVersion1,
 	pb.CmdMethod_CtlReader:                defines.MORPCVersion1,
 	pb.CmdMethod_ResetSession:             defines.MORPCVersion1,
+	pb.CmdMethod_GOMAXPROCS:               defines.MORPCVersion3,
 }
 
 type queryClient struct {

@@ -531,6 +531,9 @@ message GoMaxProcsRequest {
   int32 MaxProcs = 1;
 }
 
+// GoMaxProcsResponse is the response of calling runtime.GOMAXPROCS(req.MaxProcs)
+// The MaxProcs is current value, or previous value.
+// Same meaning as calling runtime.GOMAXPROCS(req.MaxProcs).
 message GoMaxProcsResponse {
   int32 MaxProcs = 1;
 }

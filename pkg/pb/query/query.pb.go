@@ -3724,6 +3724,9 @@ func (m *GoMaxProcsRequest) GetMaxProcs() int32 {
 	return 0
 }
 
+// GoMaxProcsResponse is the response of calling runtime.GOMAXPROCS(req.MaxProcs)
+// The MaxProcs is current value, or previous value.
+// Same meaning as calling runtime.GOMAXPROCS(req.MaxProcs).
 type GoMaxProcsResponse struct {
 	MaxProcs int32 `protobuf:"varint,1,opt,name=MaxProcs,proto3" json:"MaxProcs,omitempty"`
 }

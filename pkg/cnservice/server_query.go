@@ -19,6 +19,8 @@ import (
 	"runtime"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -85,7 +87,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_CtlReader, s.handleCtlReader, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ResetSession, s.handleResetSession, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GOMaxProcs, s.handleGoMaxProcs, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -498,6 +500,14 @@ func (s *service) handleGoMaxProcs(
 	if req.GoMaxProcsRequest == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
+	resp.GoMaxProcsResponse = &query.GoMaxProcsResponse{}
 	resp.GoMaxProcsResponse.MaxProcs = int32(runtime.GOMAXPROCS(int(req.GoMaxProcsRequest.MaxProcs)))
+	if req.GoMaxProcsRequest.MaxProcs > 0 {
+		logutil.Info("QueryService::GoMaxProcs",
+			zap.String("op", "set"),
+			zap.Int32("in", req.GoMaxProcsRequest.MaxProcs),
+			zap.Int32("out", resp.GoMaxProcsResponse.MaxProcs),
+		)
+	}
 	return nil
 }
