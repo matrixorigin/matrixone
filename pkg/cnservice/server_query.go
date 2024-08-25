@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -78,6 +79,11 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnFrom, s.handleMigrateConnFrom, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnTo, s.handleMigrateConnTo, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ReloadAutoIncrementCache, s.handleReloadAutoIncrementCache, false)
+	// ignored in mo 1.2.3
+	//s.queryService.AddHandleFunc(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount, false)
+	//s.queryService.AddHandleFunc(query.CmdMethod_CtlReader, s.handleCtlReader, false)
+	//s.queryService.AddHandleFunc(query.CmdMethod_ResetSession, s.handleResetSession, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -441,4 +447,14 @@ func (s *service) handleReloadAutoIncrementCache(
 		ctx,
 		req.ReloadAutoIncrementCache.TableID,
 	)
+}
+
+func (s *service) handleGoMaxProcs(
+	ctx context.Context, req *query.Request, resp *query.Response,
+) error {
+	if req.GoMaxProcsRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	resp.GoMaxProcsResponse.MaxProcs = int32(runtime.GOMAXPROCS(int(req.GoMaxProcsRequest.MaxProcs)))
+	return nil
 }
