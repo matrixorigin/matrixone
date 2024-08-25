@@ -2292,9 +2292,13 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 		}
 	}
-	return c.runSql(fmt.Sprintf(
+	err = c.runSql(fmt.Sprintf(
 		"delete from %s.%s where database_name=%s and table_name=%s",
 		catalog.MO_CATALOG, catalog.MO_RETENTION, dbName, tblName))
+	if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+		return nil
+	}
+	return err
 }
 
 func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
