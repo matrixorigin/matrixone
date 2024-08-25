@@ -88,6 +88,8 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_CtlReader, s.handleCtlReader, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ResetSession, s.handleResetSession, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -509,5 +511,25 @@ func (s *service) handleGoMaxProcs(
 			zap.Int32("out", resp.GoMaxProcsResponse.MaxProcs),
 		)
 	}
+	return nil
+}
+
+func (s *service) handleFileServiceCacheRequest(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	if req.FileServiceCacheRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	resp.FileServiceCacheResponse = &query.FileServiceCacheResponse{}
+	return nil
+}
+
+func (s *service) handleFileServiceCacheEvictRequest(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	if req.FileServiceCacheEvictRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	resp.FileServiceCacheEvictResponse = &query.FileServiceCacheEvictResponse{}
 	return nil
 }

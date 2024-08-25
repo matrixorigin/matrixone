@@ -88,6 +88,9 @@ enum CmdMethod {
   ResetSession = 25;
   // GOMAXPROCS get/set the golang runtime.GOMAXPROCS()
   GOMAXPROCS = 26;
+  // FileServiceCache handle mem/disk cache query and reset action.
+  FileServiceCache = 27;
+  FileServiceCacheEvict = 28;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -219,6 +222,8 @@ message Request {
   // ResetSessionRequest is the request that resets the session information.
   ResetSessionRequest ResetSessionRequest = 28;
   GoMaxProcsRequest GoMaxProcsRequest = 29;
+  FileServiceCacheRequest FileServiceCacheRequest = 30;
+  FileServiceCacheEvictRequest FileServiceCacheEvictRequest = 31;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -274,6 +279,8 @@ message Response {
   // ResetSessionResponse is the response of ResetSessionRequest.
   ResetSessionResponse ResetSessionResponse = 28;
   GoMaxProcsResponse GoMaxProcsResponse = 29;
+  FileServiceCacheResponse FileServiceCacheResponse = 30;
+  FileServiceCacheEvictResponse FileServiceCacheEvictResponse = 31;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -536,4 +543,34 @@ message GoMaxProcsRequest {
 // Same meaning as calling runtime.GOMAXPROCS(req.MaxProcs).
 message GoMaxProcsResponse {
   int32 MaxProcs = 1;
+}
+
+
+enum FileServiceCacheType {
+  Memory = 0;
+  Disk = 1;
+}
+
+// FileServiceCacheRequest handle cache getter and setter request.
+// If @Size is zero, do the getter action, otherwise do the setter action.
+message FileServiceCacheRequest {
+  FileServiceCacheType Type = 1;
+  int64 Size = 2;
+}
+
+// FileServiceCacheResponse
+message FileServiceCacheResponse {
+  int64 Size = 1;
+  int64 Capacity = 2;
+  string Message = 3;
+}
+
+message FileServiceCacheEvictRequest {
+  FileServiceCacheType Type = 1;
+}
+
+message FileServiceCacheEvictResponse {
+  int64 Size = 1;
+  int64 Capacity = 2;
+  string Message = 3;
 }
