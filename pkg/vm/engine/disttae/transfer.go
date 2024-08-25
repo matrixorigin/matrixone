@@ -422,7 +422,7 @@ func doTransferRowids(
 	}
 
 	if targetRowids.Length() != transferIntents.Length() {
-		err = moerr.NewInternalErrorNoCtx(
+		err = moerr.NewInternalErrorNoCtxf(
 			"transfer rowids failed, length mismatch, expect %d, got %d",
 			transferIntents.Length(),
 			targetRowids.Length(),

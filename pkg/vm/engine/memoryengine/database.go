@@ -161,7 +161,7 @@ func (d *Database) Relation(ctx context.Context, relName string, _ any) (engine.
 		return table, nil
 
 	default:
-		panic(moerr.NewInternalError(ctx, "unknown type: %+v", resp.Type))
+		panic(moerr.NewInternalErrorf(ctx, "unknown type: %+v", resp.Type))
 	}
 
 }

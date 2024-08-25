@@ -101,7 +101,7 @@ func (tomb *tombstoneData) MarshalBinaryWithBuffer(buf *bytes.Buffer) (err error
 func (tomb *tombstoneData) UnmarshalBinary(buf []byte) error {
 	typ := engine.TombstoneType(types.DecodeUint8(buf))
 	if typ != engine.TombstoneData {
-		return moerr.NewInternalErrorNoCtx("UnmarshalBinary TombstoneData with %v", typ)
+		return moerr.NewInternalErrorNoCtxf("UnmarshalBinary TombstoneData with %v", typ)
 	}
 	buf = buf[1:]
 
@@ -257,7 +257,7 @@ func (tomb *tombstoneData) Merge(other engine.Tombstoner) error {
 		tomb.SortInMemory()
 		return nil
 	}
-	return moerr.NewInternalErrorNoCtx(
+	return moerr.NewInternalErrorNoCtxf(
 		"tombstone type mismatch %d, %d", tomb.Type(), other.Type(),
 	)
 }
@@ -362,7 +362,7 @@ func (tomb *tombstoneDataWithDeltaLoc) HasBlockTombstone(
 func (tomb *tombstoneDataWithDeltaLoc) UnmarshalBinary(buf []byte) error {
 	typ := engine.TombstoneType(types.DecodeUint8(buf))
 	if typ != engine.TombstoneWithDeltaLoc {
-		return moerr.NewInternalErrorNoCtx("UnmarshalBinary TombstoneWithDeltaLoc with %v", typ)
+		return moerr.NewInternalErrorNoCtxf("UnmarshalBinary TombstoneWithDeltaLoc with %v", typ)
 	}
 	buf = buf[1:]
 

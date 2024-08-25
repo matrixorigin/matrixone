@@ -4528,7 +4528,7 @@ func removeEmtpyNodes(
 		for i := range c.cnList {
 			logstring = logstring + c.cnList[i].Addr + " "
 		}
-		c.proc.Warnf(c.proc.Ctx, logstring)
+		c.proc.Warn(c.proc.Ctx, logstring)
 	}
 	return newNodes, nil
 }
@@ -4644,7 +4644,7 @@ func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes)
 // Just for test
 func shuffleBlocksByMoCtl(relData engine.RelData, cnt int, nodes engine.Nodes) error {
 	if cnt > relData.DataCnt()-1 {
-		return moerr.NewInternalErrorNoCtx(
+		return moerr.NewInternalErrorNoCtxf(
 			"Invalid Parameter, distribute count:%d, block count:%d",
 			cnt,
 			relData.DataCnt()-1)

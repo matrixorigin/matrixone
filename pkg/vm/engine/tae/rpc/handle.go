@@ -213,7 +213,7 @@ func (h *Handle) handleRequests(
 		case *db.WriteReq:
 			err = h.HandleWrite(ctx, txn, req)
 		default:
-			err = moerr.NewNotSupported(ctx, "unknown txn request type: %T", req)
+			err = moerr.NewNotSupportedf(ctx, "unknown txn request type: %T", req)
 		}
 		//Need to roll back the txn.
 		if err != nil {
@@ -280,7 +280,7 @@ func (h *Handle) HandlePreCommitWrite(
 				return err
 			}
 		default:
-			return moerr.NewNYI(ctx, "pre commit write type: %T", cmds)
+			return moerr.NewNYIf(ctx, "pre commit write type: %T", cmds)
 		}
 	}
 	//evaluate all the txn requests.

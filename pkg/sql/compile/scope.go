@@ -269,7 +269,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 			case Parallel:
 				preScopeResultReceiveChan <- scope.ParallelRun(c)
 			default:
-				preScopeResultReceiveChan <- moerr.NewInternalError(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
+				preScopeResultReceiveChan <- moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
 			}
 		})
 		if errSubmit != nil {

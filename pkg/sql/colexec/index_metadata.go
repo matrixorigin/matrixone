@@ -89,7 +89,7 @@ const (
 func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Database, proc *process.Process, tblName string) error {
 	databaseId, err := strconv.ParseUint(db.GetDatabaseId(ctx), 10, 64)
 	if err != nil {
-		return moerr.NewInternalError(ctx, "The databaseid of '%v' is not a valid number", databaseId)
+		return moerr.NewInternalErrorf(ctx, "The databaseid of '%v' is not a valid number", databaseId)
 	}
 
 	relation, err := db.Relation(ctx, tblName, nil)
@@ -151,7 +151,7 @@ func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Databa
 func InsertOneIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Database, proc *process.Process, tblName string, idxdef *plan.IndexDef) error {
 	databaseId, err := strconv.ParseUint(db.GetDatabaseId(ctx), 10, 64)
 	if err != nil {
-		return moerr.NewInternalError(ctx, "The databaseid of '%v' is not a valid number", databaseId)
+		return moerr.NewInternalErrorf(ctx, "The databaseid of '%v' is not a valid number", databaseId)
 	}
 	relation, err := db.Relation(ctx, tblName, nil)
 	if err != nil {
