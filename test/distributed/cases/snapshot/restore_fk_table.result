@@ -120,6 +120,7 @@ col1    col2    col3    col4    col5    col6
 2    3    b    32r32r    database    1111111.0
 drop database test01;
 drop database test02;
+drop snapshot sp01;
 drop database if exists test01;
 create database test01;
 use test01;
@@ -402,8 +403,8 @@ ca    cb
 2    2
 2    9
 drop snapshot sp06;
+drop database test07;
 drop database test06;
-internal error: can not drop database. It has been referenced by foreign keys
 drop database if exists test07;
 create database test07;
 use test07;

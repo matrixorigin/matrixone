@@ -91,6 +91,7 @@ use test02;
 select * from table01;
 drop database test01;
 drop database test02;
+drop snapshot sp01;
 
 
 
@@ -358,7 +359,9 @@ use test07;
 select * from c1;
 
 drop snapshot sp06;
+drop database test07;
 drop database test06;
+
 
 
 
