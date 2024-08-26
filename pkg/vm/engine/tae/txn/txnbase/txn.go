@@ -240,7 +240,7 @@ func (txn *Txn) doCommitting(inRecovery bool) (err error) {
 	}
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStatePrepared {
-		return moerr.NewInternalErrorNoCtx(
+		return moerr.NewInternalErrorNoCtxf(
 			"stat not prepared, unexpected txn status : %s",
 			txnif.TxnStrState(state),
 		)

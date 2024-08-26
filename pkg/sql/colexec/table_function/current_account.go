@@ -55,7 +55,7 @@ func (s *currentAccountState) start(tf *TableFunction, proc *process.Process, nt
 			case "role_id":
 				s.batch.Vecs[i], err = vector.NewConstFixed(types.T_uint32.ToType(), proc.GetSessionInfo().RoleId, 1, proc.Mp())
 			default:
-				err = moerr.NewInvalidInput(proc.Ctx, "%v is not supported by current_account()", attr)
+				err = moerr.NewInvalidInputf(proc.Ctx, "%v is not supported by current_account()", attr)
 			}
 			if err != nil {
 				return err

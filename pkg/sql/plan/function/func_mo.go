@@ -101,7 +101,7 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 						buf.WriteString(fmt.Sprintf("%s-%s; ", dbStr2, tblStr2))
 					}
 
-					logutil.Errorf(fmt.Sprintf("db not found when mo_table_size: %s-%s, extra: %s", dbStr, tblStr, buf.String()))
+					logutil.Error(fmt.Sprintf("db not found when mo_table_size: %s-%s, extra: %s", dbStr, tblStr, buf.String()))
 					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", fmt.Sprintf("%s-%s", dbStr, tblStr))
 				}
 				return err
@@ -219,7 +219,7 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					originalAccId, _ := defines.GetAccountId(proc.Ctx)
 					attachedAccId, _ := defines.GetAccountId(foolCtx)
 
-					logutil.Errorf(
+					logutil.Error(
 						fmt.Sprintf("db not found when mo_table_size: %s#%s, acc: %d-%d, extra: %s",
 							dbStr, tblStr, attachedAccId, originalAccId, buf.String()))
 					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", fmt.Sprintf("%s-%s", dbStr, tblStr))
@@ -396,10 +396,10 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 
 			// Magic code. too confused.
 			if tableStr == "mo_database" || tableStr == "mo_tables" || tableStr == "mo_columns" || tableStr == "sys_async_task" {
-				return moerr.NewInvalidInput(proc.Ctx, "%s has bad input table %s", fnName, tableStr)
+				return moerr.NewInvalidInputf(proc.Ctx, "%s has bad input table %s", fnName, tableStr)
 			}
 			if columnStr == "__mo_rowid" {
-				return moerr.NewInvalidInput(proc.Ctx, "%s has bad input column %s", fnName, columnStr)
+				return moerr.NewInvalidInputf(proc.Ctx, "%s has bad input column %s", fnName, columnStr)
 			}
 
 			ctx := proc.Ctx
@@ -420,7 +420,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 					return err
 				}
 				if sub != nil && !pubsub.InSubMetaTables(sub, tableStr) {
-					return moerr.NewInternalError(ctx, "table %s not found in publication %s", tableStr, sub.Name)
+					return moerr.NewInternalErrorf(ctx, "table %s not found in publication %s", tableStr, sub.Name)
 				}
 
 				// replace with pub account id

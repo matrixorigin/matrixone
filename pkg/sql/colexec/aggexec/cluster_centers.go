@@ -288,7 +288,7 @@ func (exec *clusterCentersExec) Flush() (*vector.Vector, error) {
 			return nil, err
 		}
 	default:
-		return nil, moerr.NewInternalErrorNoCtx(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"unsupported type '%s' for cluster_centers", exec.singleAggInfo.argType.String())
 	}
 
@@ -449,13 +449,13 @@ func decodeConfig(extra []byte) (
 		if res, ok := distTypeStrToEnum[v]; ok {
 			return res, nil
 		}
-		return 0, moerr.NewInternalErrorNoCtx("unsupported distance_type '%s' for cluster_centers", v)
+		return 0, moerr.NewInternalErrorNoCtxf("unsupported distance_type '%s' for cluster_centers", v)
 	}
 	parseInitType := func(s string) (kmeans.InitType, error) {
 		if res, ok := initTypeStrToEnum[s]; ok {
 			return res, nil
 		}
-		return 0, moerr.NewInternalErrorNoCtx("unsupported init_type '%s' for cluster_centers", s)
+		return 0, moerr.NewInternalErrorNoCtxf("unsupported init_type '%s' for cluster_centers", s)
 	}
 
 	if len(extra) == 0 {

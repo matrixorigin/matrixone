@@ -285,7 +285,7 @@ func (s *sPool) sampleFromColumn(groupIndex int, sampleVec *vector.Vector, bat *
 	case percentSamplePool:
 		return s.sPools[groupIndex].addRowsByPercent(s.proc, s.columns[0], bat, s.percents)
 	}
-	return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
+	return moerr.NewInternalErrorNoCtxf("unexpected sample type %d", s.typ)
 }
 
 func (s *sPool) sampleFromColumns(groupIndex int, sampleVectors []*vector.Vector, bat *batch.Batch) (err error) {
@@ -304,7 +304,7 @@ func (s *sPool) sampleFromColumns(groupIndex int, sampleVectors []*vector.Vector
 	case percentSamplePool:
 		return s.mPools[groupIndex].addRowsByPercent(s.proc, s.columns, bat, s.percents)
 	}
-	return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
+	return moerr.NewInternalErrorNoCtxf("unexpected sample type %d", s.typ)
 }
 
 func (s *sPool) BatchSample(offset, length int, groupList []uint64, sampleVectors []*vector.Vector, groupVectors []*vector.Vector, inputBatch *batch.Batch) (err error) {
@@ -358,7 +358,7 @@ func (s *sPool) batchSampleFromColumn(offset, length int, groupList []uint64, sa
 			row++
 		}
 	default:
-		return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
+		return moerr.NewInternalErrorNoCtxf("unexpected sample type %d", s.typ)
 	}
 	return nil
 }
@@ -403,7 +403,7 @@ func (s *sPool) batchSampleFromColumns(offset, length int, groupList []uint64, s
 			row++
 		}
 	default:
-		return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
+		return moerr.NewInternalErrorNoCtxf("unexpected sample type %d", s.typ)
 	}
 	return nil
 }

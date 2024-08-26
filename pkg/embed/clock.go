@@ -36,7 +36,7 @@ func newClock(
 	case localClockBackend:
 		c = newLocalClock(cfg, stopper)
 	default:
-		return nil, moerr.NewInternalError(context.Background(), "not implement for %s", cfg.Clock.Backend)
+		return nil, moerr.NewInternalErrorf(context.Background(), "not implement for %s", cfg.Clock.Backend)
 	}
 	c.SetNodeID(cfg.hashNodeID())
 	return c, nil

@@ -525,7 +525,7 @@ func decodeTuple(b []byte) (Tuple, int, []T, error) {
 			el, off = decodeUuid(b[i:])
 			// off += 1
 		default:
-			return nil, i, nil, moerr.NewInternalErrorNoCtx("unable to decode tuple element with unknown typecode %02x", b[i])
+			return nil, i, nil, moerr.NewInternalErrorNoCtxf("unable to decode tuple element with unknown typecode %02x", b[i])
 		}
 		t = append(t, el)
 		i += off

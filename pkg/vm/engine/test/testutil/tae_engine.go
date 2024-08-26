@@ -69,7 +69,7 @@ func (ts *TestTxnStorage) Write(ctx context.Context, request *txn.TxnRequest, re
 		_, err = taestorage.HandleWrite(ctx, req.Txn, req.CNRequest.Payload, ts.txnHandler.HandlePreCommitWrite)
 		//response.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
 	default:
-		err = moerr.NewNotSupported(ctx, "unknown write op: %v", req.CNRequest.OpCode)
+		err = moerr.NewNotSupportedf(ctx, "unknown write op: %v", req.CNRequest.OpCode)
 		//response.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
 	}
 	return err

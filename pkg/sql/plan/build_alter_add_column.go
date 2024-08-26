@@ -128,7 +128,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		case *tree.AttributeComment:
 			comment := attribute.CMT.String()
 			if getNumOfCharacters(comment) > maxLengthOfColumnComment {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", newColNameOrigin)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "comment for column '%s' is too long", newColNameOrigin)
 			}
 			newCol.Comment = comment
 		case *tree.AttributeAutoIncrement:
@@ -203,13 +203,13 @@ func checkAddColumnType(ctx context.Context, colType *plan.Type, columnName stri
 	if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
 		colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
 		if colType.GetWidth() > types.MaxStringSize {
-			return moerr.NewInvalidInput(ctx, "string width (%d) is too long", colType.GetWidth())
+			return moerr.NewInvalidInputf(ctx, "string width (%d) is too long", colType.GetWidth())
 		}
 	}
 
 	if colType.Id == int32(types.T_array_float32) || colType.Id == int32(types.T_array_float64) {
 		if colType.GetWidth() > types.MaxArrayDimension {
-			return moerr.NewInvalidInput(ctx, "vector width (%d) is too long", colType.GetWidth())
+			return moerr.NewInvalidInputf(ctx, "vector width (%d) is too long", colType.GetWidth())
 		}
 	}
 	return nil
@@ -456,7 +456,7 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 	for _, referredTblId := range tbInfo.RefChildTbls {
 		_, refTableDef := ctx.ResolveById(referredTblId, nil)
 		if refTableDef == nil {
-			return moerr.NewInternalError(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
+			return moerr.NewInternalErrorf(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
 		}
 		for _, referredFK := range refTableDef.Fkeys {
 			if referredFK.ForeignTbl == tbInfo.TblId {

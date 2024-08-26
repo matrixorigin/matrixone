@@ -40,7 +40,7 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 
 	// we know this cannot be true but check anyway
 	if tableFunction.ctr.state == nil {
-		return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "table function %s state is nil", tableFunction.FuncName)
+		return vm.CancelResult, moerr.NewInternalErrorf(proc.Ctx, "table function %s state is nil", tableFunction.FuncName)
 	}
 
 	// loop

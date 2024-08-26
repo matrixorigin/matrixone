@@ -216,7 +216,7 @@ func (c *UpdateCmd) Desc() string {
 	case IOET_WALTxnCommand_DeleteNode, IOET_WALTxnCommand_PersistedDeleteNode:
 		return fmt.Sprintf("CmdName=Delete;Dest=%s;%s;CSN=%d", c.dest.BlockString(), c.delete.GeneralDesc(), c.ID)
 	}
-	panic(moerr.NewInternalErrorNoCtx("unknown cmd type: %d", c.cmdType))
+	panic(moerr.NewInternalErrorNoCtxf("unknown cmd type: %d", c.cmdType))
 }
 
 func (c *UpdateCmd) String() string {
@@ -226,7 +226,7 @@ func (c *UpdateCmd) String() string {
 	case IOET_WALTxnCommand_DeleteNode, IOET_WALTxnCommand_PersistedDeleteNode:
 		return fmt.Sprintf("CmdName=Delete;Dest=%s;%s;CSN=%d", c.dest.BlockString(), c.delete.GeneralString(), c.ID)
 	}
-	panic(moerr.NewInternalErrorNoCtx("unknown cmd type: %d", c.cmdType))
+	panic(moerr.NewInternalErrorNoCtxf("unknown cmd type: %d", c.cmdType))
 }
 
 func (c *UpdateCmd) VerboseString() string {
@@ -236,7 +236,7 @@ func (c *UpdateCmd) VerboseString() string {
 	case IOET_WALTxnCommand_DeleteNode, IOET_WALTxnCommand_PersistedDeleteNode:
 		return fmt.Sprintf("CmdName=Delete;Dest=%s;CSN=%d;%s", c.dest.BlockString(), c.ID, c.delete.GeneralVerboseString())
 	}
-	panic(moerr.NewInternalErrorNoCtx("unknown cmd type: %d", c.cmdType))
+	panic(moerr.NewInternalErrorNoCtxf("unknown cmd type: %d", c.cmdType))
 }
 
 func (c *UpdateCmd) GetType() uint16 { return c.cmdType }

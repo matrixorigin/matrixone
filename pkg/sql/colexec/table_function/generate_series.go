@@ -86,7 +86,7 @@ func initDateTimeStep(gs *genDatetimeState,
 	stepStr = strings.TrimSuffix(stepStr, "(s)")
 	s := strings.Split(stepStr, " ")
 	if len(s) != 2 {
-		return moerr.NewInvalidInput(proc.Ctx, "invalid step '%s'", stepStr)
+		return moerr.NewInvalidInputf(proc.Ctx, "invalid step '%s'", stepStr)
 	}
 	gs.step, err = strconv.ParseInt(s[0], 10, 64)
 	if err != nil {
@@ -194,7 +194,7 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 		tf.Rets[0].Typ = plan2.MakePlan2Type(&typ)
 		tf.ctr.retSchema[0] = typ
 	default:
-		return moerr.NewNotSupported(proc.Ctx, "generate_series not support type %s", resTyp.Oid.String())
+		return moerr.NewNotSupportedf(proc.Ctx, "generate_series not support type %s", resTyp.Oid.String())
 	}
 
 	if g.batch == nil {
@@ -228,7 +228,7 @@ func buildNextDatetimeBatch(g *genDatetimeState, rbat *batch.Batch, maxSz int, p
 		vector.AppendFixed(rbat.Vecs[0], g.next, false, proc.Mp())
 		g.next, ok = g.next.AddInterval(g.step, g.tp, types.DateTimeType)
 		if !ok {
-			return moerr.NewInvalidInput(proc.Ctx, "invalid step '%v %v'", g.step, g.tp)
+			return moerr.NewInvalidInputf(proc.Ctx, "invalid step '%v %v'", g.step, g.tp)
 		}
 	}
 	rbat.SetRowCount(cnt)

@@ -161,7 +161,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	}
 
 	if !found {
-		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", columnName)
+		return 0, moerr.NewInvalidInputf(ctx, "bad input column name %v", columnName)
 	}
 
 	deletes := make(map[types.Rowid]struct{})
@@ -214,7 +214,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	}
 	sz, ok := s.SizeMap[columnName]
 	if !ok {
-		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", columnName)
+		return 0, moerr.NewInvalidInputf(ctx, "bad input column name %v", columnName)
 	}
 	return sz + szInPart, nil
 }
@@ -353,7 +353,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		}
 	}
 	if !found {
-		return nil, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
+		return nil, moerr.NewInvalidInputf(ctx, "bad input column name %v", name)
 	}
 
 	needCols := make([]*plan.ColDef, 0, n)
@@ -1585,7 +1585,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		}
 	default:
 		tbl.getTxn().hasS3Op.Store(true)
-		panic(moerr.NewInternalErrorNoCtx("Unsupport type for table delete %d", typ))
+		panic(moerr.NewInternalErrorNoCtxf("Unsupport type for table delete %d", typ))
 	}
 	return nil
 }
@@ -1809,6 +1809,7 @@ func (tbl *txnTable) BuildReaders(
 	orderBy bool,
 	tombstonePolicy engine.TombstoneApplyPolicy,
 ) ([]engine.Reader, error) {
+	var rds []engine.Reader
 	proc := p.(*process.Process)
 	//copy from NewReader.
 	if plan2.IsFalseExpr(expr) {
@@ -1825,17 +1826,20 @@ func (tbl *txnTable) BuildReaders(
 		relData.AppendBlockInfo(objectio.EmptyBlockInfo)
 	}
 	blkCnt := relData.DataCnt()
+	newNum := num
 	if blkCnt < num {
-		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
+		newNum = blkCnt
+		for i := 0; i < num-blkCnt; i++ {
+			rds = append(rds, new(emptyReader))
+		}
 	}
 
-	scanType := determineScanType(relData, num)
+	scanType := determineScanType(relData, newNum)
 	def := tbl.GetTableDef(ctx)
-	mod := blkCnt % num
-	divide := blkCnt / num
+	mod := blkCnt % newNum
+	divide := blkCnt / newNum
 	var shard engine.RelData
-	var rds []engine.Reader
-	for i := 0; i < num; i++ {
+	for i := 0; i < newNum; i++ {
 		if i == 0 {
 			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
 		} else {
@@ -2163,7 +2167,7 @@ func (tbl *txnTable) MergeObjects(
 		info, exist := state.GetObject(*objstat.ObjectShortName())
 		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
 			logutil.Errorf("object not visible: %s", info.String())
-			return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
+			return nil, moerr.NewInternalErrorNoCtxf("object %s not exist", objstat.ObjectName().String())
 		}
 		objInfos = append(objInfos, info)
 	}
