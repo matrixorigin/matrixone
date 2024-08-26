@@ -497,7 +497,6 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 	case *anti.AntiJoin:
 		in.Anti = &pipeline.AntiJoin{
 			Expr:                   t.Cond,
-			Types:                  convertToPlanTypes(t.Typs),
 			LeftCond:               t.Conditions[0],
 			RightCond:              t.Conditions[1],
 			Result:                 t.Result,
@@ -565,7 +564,6 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			RelList:                relList,
 			ColList:                colList,
 			Expr:                   t.Cond,
-			Types:                  convertToPlanTypes(t.Typs),
 			LeftCond:               t.Conditions[0],
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
@@ -639,7 +637,6 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 		in.Anti = &pipeline.AntiJoin{
 			Result:     t.Result,
 			Expr:       t.Cond,
-			Types:      convertToPlanTypes(t.Typs),
 			JoinMapTag: t.JoinMapTag,
 		}
 		in.ProjectList = t.ProjectList
@@ -649,7 +646,6 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			RelList:    relList,
 			ColList:    colList,
 			Expr:       t.Cond,
-			Types:      convertToPlanTypes(t.Typs),
 			JoinMapTag: t.JoinMapTag,
 		}
 		in.ProjectList = t.ProjectList
@@ -667,7 +663,6 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result:     t.Result,
 			Expr:       t.Cond,
-			Types:      convertToPlanTypes(t.Typs),
 			JoinMapTag: t.JoinMapTag,
 		}
 		in.ProjectList = t.ProjectList
@@ -684,7 +679,6 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 	case *loopmark.LoopMark:
 		in.MarkJoin = &pipeline.MarkJoin{
 			Expr:       t.Cond,
-			Types:      convertToPlanTypes(t.Typs),
 			Result:     t.Result,
 			JoinMapTag: t.JoinMapTag,
 		}
@@ -698,7 +692,6 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 		in.Product = &pipeline.Product{
 			RelList:    relList,
 			ColList:    colList,
-			Types:      convertToPlanTypes(t.Typs),
 			IsShuffle:  t.IsShuffle,
 			JoinMapTag: t.JoinMapTag,
 		}
@@ -707,7 +700,6 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 		in.ProductL2 = &pipeline.ProductL2{
 			RelList:    relList,
 			ColList:    colList,
-			Types:      convertToPlanTypes(t.Typs),
 			JoinMapTag: t.JoinMapTag,
 		}
 		in.ProjectList = t.ProjectList
@@ -722,7 +714,6 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result:                 t.Result,
 			Expr:                   t.Cond,
-			Types:                  convertToPlanTypes(t.Typs),
 			LeftCond:               t.Conditions[0],
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
@@ -735,7 +726,6 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 	case *indexjoin.IndexJoin:
 		in.IndexJoin = &pipeline.IndexJoin{
 			Result:                 t.Result,
-			Types:                  convertToPlanTypes(t.Typs),
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
 		in.ProjectList = t.ProjectList
@@ -797,7 +787,6 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			Result:     t.Result,
 			LeftCond:   t.Conditions[0],
 			RightCond:  t.Conditions[1],
-			Types:      convertToPlanTypes(t.Typs),
 			Expr:       t.Cond,
 			OnList:     t.OnList,
 			HashOnPk:   t.HashOnPK,
@@ -949,7 +938,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetAnti()
 		arg := anti.NewArgument()
 		arg.Cond = t.Expr
-		arg.Typs = convertToTypes(t.Types)
 		arg.Conditions = [][]*plan.Expr{
 			t.LeftCond, t.RightCond,
 		}
@@ -1028,7 +1016,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetJoin()
 		arg := join.NewArgument()
 		arg.Cond = t.Expr
-		arg.Typs = convertToTypes(t.Types)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
@@ -1099,7 +1086,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := loopanti.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Expr
-		arg.Typs = convertToTypes(t.Types)
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ProjectList = opr.ProjectList
 		op = arg
@@ -1108,7 +1094,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := loopjoin.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
-		arg.Typs = convertToTypes(t.Types)
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ProjectList = opr.ProjectList
 		op = arg
@@ -1126,7 +1111,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := loopsemi.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Expr
-		arg.Typs = convertToTypes(t.Types)
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ProjectList = opr.ProjectList
 		op = arg
@@ -1134,7 +1118,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetIndexJoin()
 		arg := indexjoin.NewArgument()
 		arg.Result = t.Result
-		arg.Typs = convertToTypes(t.Types)
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.ProjectList = opr.ProjectList
 		op = arg
@@ -1152,7 +1135,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := loopmark.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Expr
-		arg.Typs = convertToTypes(t.Types)
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ProjectList = opr.ProjectList
 		op = arg
@@ -1166,7 +1148,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetProduct()
 		arg := product.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
-		arg.Typs = convertToTypes(t.Types)
 		arg.IsShuffle = t.IsShuffle
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ProjectList = opr.ProjectList
@@ -1175,7 +1156,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetProductL2()
 		arg := productl2.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
-		arg.Typs = convertToTypes(t.Types)
 		arg.OnExpr = t.Expr
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ProjectList = opr.ProjectList
@@ -1193,7 +1173,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := semi.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Expr
-		arg.Typs = convertToTypes(t.Types)
 		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
@@ -1219,7 +1198,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := mark.NewArgument()
 		arg.Result = t.Result
 		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
-		arg.Typs = convertToTypes(t.Types)
 		arg.Cond = t.Expr
 		arg.OnList = t.OnList
 		arg.HashOnPK = t.HashOnPk
