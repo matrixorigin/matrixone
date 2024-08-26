@@ -44,7 +44,7 @@ type container struct {
 }
 
 type LoopMark struct {
-	ctr        *container
+	ctr        container
 	Cond       *plan.Expr
 	Typs       []types.Type
 	Result     []int32
@@ -86,20 +86,30 @@ func (loopMark *LoopMark) Release() {
 }
 
 func (loopMark *LoopMark) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	loopMark.Free(proc, pipelineFailed, err)
-}
+	ctr := &loopMark.ctr
 
-func (loopMark *LoopMark) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := loopMark.ctr; ctr != nil {
-		ctr.cleanBatch(proc.Mp())
-		ctr.cleanExprExecutor()
-		loopMark.ctr = nil
+	ctr.resetExprExecutor()
+	ctr.state = Build
+
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.Mp())
+		ctr.bat = nil
 	}
+
 	if loopMark.ProjectList != nil {
 		anal := proc.GetAnalyze(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor())
 		anal.Alloc(loopMark.ProjectAllocSize)
-		loopMark.FreeProjection(proc)
+		loopMark.ResetProjection(proc)
 	}
+}
+
+func (loopMark *LoopMark) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &loopMark.ctr
+
+	ctr.cleanBatch(proc.Mp())
+	ctr.cleanExprExecutor()
+
+	loopMark.FreeProjection(proc)
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
@@ -114,6 +124,12 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
+	}
+}
+
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
 }
 

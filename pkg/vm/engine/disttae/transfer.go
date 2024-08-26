@@ -18,6 +18,8 @@ import (
 	"context"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
-	"go.uber.org/zap"
 )
 
 func ConstructInExpr(
@@ -389,21 +390,35 @@ func doTransferRowids(
 		pkColumName,
 		catalog.Row_ID,
 	}
+	buildBatch := func() *batch.Batch {
+		bat := batch.NewWithSize(2)
+		bat.Attrs = append(bat.Attrs, attrs...)
+
+		bat.Vecs[0] = vector.NewVec(*readPKColumn.GetType())
+		bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
+		return bat
+	}
+	bat := buildBatch()
+	defer func() {
+		bat.Clean(mp)
+	}()
+	var isEnd bool
 	for {
-		var bat *batch.Batch
-		if bat, err = readers[0].Read(
+		bat.CleanOnlyData()
+		isEnd, err = readers[0].Read(
 			ctx,
 			attrs,
 			expr,
 			mp,
 			nil,
-		); err != nil {
+			bat,
+		)
+		if err != nil {
 			return
 		}
-		if bat == nil {
+		if isEnd {
 			break
 		}
-		defer bat.Clean(mp)
 		if err = vector.GetUnionAllFunction(
 			*readPKColumn.GetType(), mp,
 		)(
