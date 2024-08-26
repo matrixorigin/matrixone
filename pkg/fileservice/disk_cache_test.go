@@ -523,16 +523,19 @@ func BenchmarkDiskCacheMultipleIOEntries(b *testing.B) {
 		}
 		var counter perfcounter.CounterSet
 		ctx := perfcounter.WithCounterSet(ctx, &counter)
+		vec := &IOVector{
+			FilePath: "foo",
+			Entries:  entries,
+		}
 		err := cache.Read(
 			ctx,
-			&IOVector{
-				FilePath: "foo",
-				Entries:  entries,
-			},
+			vec,
 		)
 		if err != nil {
 			b.Fatal(err)
 		}
+		vec.Release()
+
 		numOpen := counter.FileService.Cache.Disk.OpenFullFile.Load()
 		if numOpen != 1 {
 			b.Fatal()

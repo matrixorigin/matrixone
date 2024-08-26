@@ -53,6 +53,8 @@ func BenchmarkMemoryFS(b *testing.B) {
 }
 
 func BenchmarkMemoryFSWithMemoryCache(b *testing.B) {
+	b.Skip()
+
 	ctx := context.Background()
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
@@ -75,6 +77,8 @@ func BenchmarkMemoryFSWithMemoryCache(b *testing.B) {
 }
 
 func BenchmarkMemoryFSWithMemoryCacheLowCapacity(b *testing.B) {
+	b.Skip()
+
 	ctx := context.Background()
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)

@@ -149,10 +149,5 @@ func newS3FileService(
 		return nil, err
 	}
 
-	if cfg.FixMissing || *fixMissingFlag || fixMissingFromEnv {
-		//TODO use context.WithoutCancel(ctx)
-		go fs.restoreFromDiskCache(context.Background())
-	}
-
 	return fs, nil
 }

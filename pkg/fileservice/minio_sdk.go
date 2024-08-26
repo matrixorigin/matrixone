@@ -196,8 +196,8 @@ loop1:
 			}
 		}
 
-		for _, prefix := range result.CommonPrefixes {
-			more, err := fn(true, prefix.Prefix, 0)
+		for _, pre := range result.CommonPrefixes {
+			more, err := fn(true, pre.Prefix, 0)
 			if err != nil {
 				return err
 			}
@@ -454,6 +454,10 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Get.Add(1)
 	}, a.perfCounterSets...)
+	if min == nil {
+		var zero int64
+		min = &zero
+	}
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
 			obj, err := DoWithRetry(

@@ -1000,6 +1000,29 @@ func testFileService(
 		assert.ErrorIs(t, err, context.Canceled)
 	})
 
+	t.Run("PrefetchFile", func(t *testing.T) {
+		fs := newFS(fsName)
+		defer fs.Close()
+		ctx := context.Background()
+
+		// write
+		err := fs.Write(ctx, IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: 4,
+					Data: []byte("1234"),
+				},
+			},
+			Policy: policy,
+		})
+		assert.Nil(t, err)
+
+		// prefetch
+		err = fs.PrefetchFile(ctx, "foo")
+		assert.Nil(t, err)
+	})
+
 }
 
 func randomSplit(data []byte, maxLen int) (ret [][]byte) {

@@ -529,6 +529,10 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Get.Add(1)
 	}, a.perfCounterSets...)
+	if min == nil {
+		var zero int64
+		min = &zero
+	}
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
 			LogEvent(ctx, str_retryable_reader_new_reader_begin, offset)

@@ -17,7 +17,6 @@ package fileservice
 import (
 	"encoding/csv"
 	"os"
-	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -130,12 +129,4 @@ func toOSPath(filePath string) string {
 		return filePath
 	}
 	return strings.ReplaceAll(filePath, "/", osPathSeparatorStr)
-}
-
-func fromOSPath(diskPath string) string {
-	diskPath = filepath.Clean(diskPath)
-	if os.PathSeparator == '/' {
-		return diskPath
-	}
-	return strings.ReplaceAll(diskPath, osPathSeparatorStr, "/")
 }

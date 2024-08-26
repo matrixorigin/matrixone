@@ -26,6 +26,7 @@ func benchmarkFileService(ctx context.Context, b *testing.B, newFS func() FileSe
 
 	b.Run("parallel raed", func(b *testing.B) {
 		fs := newFS()
+		defer fs.Close()
 
 		content := bytes.Repeat([]byte("x"), 16*1024*1024)
 		parts := fixedSplit(content, 512*1024)
@@ -52,26 +53,27 @@ func benchmarkFileService(ctx context.Context, b *testing.B, newFS func() FileSe
 
 		b.RunParallel(func(pb *testing.PB) {
 
-			readVector := &IOVector{
-				FilePath: "foo",
-			}
-			offset := int64(0)
-			for _, part := range parts2 {
-				readVector.Entries = append(readVector.Entries, IOEntry{
-					Offset:      offset,
-					Size:        int64(len(part)),
-					ToCacheData: CacheOriginalData,
-				})
-				offset += int64(len(part))
+			newReadVector := func() *IOVector {
+				readVector := &IOVector{
+					FilePath: "foo",
+				}
+				offset := int64(0)
+				for _, part := range parts2 {
+					readVector.Entries = append(readVector.Entries, IOEntry{
+						Offset:      offset,
+						Size:        int64(len(part)),
+						ToCacheData: CacheOriginalData,
+					})
+					offset += int64(len(part))
+				}
+				return readVector
 			}
 
 			for pb.Next() {
-				for i := range readVector.Entries {
-					readVector.Entries[i].done = false
-					readVector.Entries[i].Data = nil
-				}
-				err := fs.Read(ctx, readVector)
+				vec := newReadVector()
+				err := fs.Read(ctx, vec)
 				assert.Nil(b, err)
+				vec.Release()
 			}
 
 		})

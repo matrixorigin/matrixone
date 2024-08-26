@@ -527,19 +527,6 @@ func (d *DiskCache) pathForFile(path string) string {
 
 var ErrNotCacheFile = errorStr("not a cache file")
 
-func (d *DiskCache) decodeFilePath(diskPath string) (string, error) {
-	path, err := filepath.Rel(d.path, diskPath)
-	if err != nil {
-		return "", err
-	}
-	if !strings.HasPrefix(path, "full") {
-		return "", ErrNotCacheFile
-	}
-	path = strings.TrimPrefix(path, "full")
-	path = strings.TrimSuffix(path, cacheFileSuffix)
-	return fromOSPath(path), nil
-}
-
 func (d *DiskCache) waitUpdateComplete(path string) {
 	d.updatingPaths.L.Lock()
 	for d.updatingPaths.m[path] {

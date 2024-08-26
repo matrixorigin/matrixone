@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"context"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -32,4 +33,32 @@ cert-files = ['/etc/ssl/cert.pem']
 	_, err := toml.Decode(text, &config.S3)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(config.S3.CertFiles))
+}
+
+func TestNewFileservice(t *testing.T) {
+	for _, backend := range []string{
+		memFileServiceBackend,
+		diskFileServiceBackend,
+		diskETLFileServiceBackend,
+		minioFileServiceBackend,
+		s3FileServiceBackend,
+	} {
+		fs, err := NewFileService(
+			context.Background(),
+			Config{
+				Name:    "test",
+				Backend: backend,
+				DataDir: t.TempDir(),
+				S3: ObjectStorageArguments{
+					Endpoint: "disk",
+					Bucket:   t.TempDir(),
+				},
+			},
+			nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fs.Close()
+	}
 }
