@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	goruntime "runtime"
-	"sync/atomic"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -27,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/frontend/test/lock_mock"
+	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_incr"
+	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_moserver"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -37,6 +38,7 @@ import (
 )
 
 var dummyBadRequestErr = moerr.NewInternalError(context.TODO(), "bad request")
+var dummyErr = moerr.NewInternalError(context.TODO(), "dummy error")
 
 func Test_service_handleGoMaxProcs(t *testing.T) {
 	ctx := context.Background()
@@ -187,7 +189,7 @@ func Test_service_handleFileServiceCacheEvictRequest(t *testing.T) {
 func Test_service_handleReloadAutoIncrementCache(t *testing.T) {
 
 	ctl := gomock.NewController(t)
-	incSvc := mock_frontend.NewMockAutoIncrementService(ctl)
+	incSvc := mock_incr.NewMockAutoIncrementService(ctl)
 	incSvc.EXPECT().Reload(gomock.Any(), gomock.Any()).AnyTimes()
 
 	ctx := context.Background()
@@ -243,11 +245,9 @@ func Test_service_handleReloadAutoIncrementCache(t *testing.T) {
 func Test_service_handleGetPipelineInfo(t *testing.T) {
 
 	ctx := context.Background()
-	var counterVal2346 atomic.Int64
-	counterVal2346.Store(2346)
 
 	type fields struct {
-		counter atomic.Int64
+		counterVal int64
 	}
 	type args struct {
 		ctx  context.Context
@@ -282,7 +282,7 @@ func Test_service_handleGetPipelineInfo(t *testing.T) {
 		{
 			name: "val_2346",
 			fields: fields{
-				counter: counterVal2346,
+				counterVal: 2346,
 			},
 			args: args{
 				ctx:  ctx,
@@ -295,9 +295,8 @@ func Test_service_handleGetPipelineInfo(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := &service{
-				pipelines: struct{ counter atomic.Int64 }{counter: tt.fields.counter},
-			}
+			s := &service{}
+			s.pipelines.counter.Store(tt.fields.counterVal)
 			err := s.handleGetPipelineInfo(tt.args.ctx, tt.args.req, tt.args.resp)
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
@@ -308,18 +307,18 @@ func Test_service_handleGetPipelineInfo(t *testing.T) {
 
 func Test_service_handleRemoveRemoteLockTable(t *testing.T) {
 
-	err := fmt.Errorf("dummy error")
+	ctx := context.TODO()
+	err := dummyErr
 	ctl := gomock.NewController(t)
-	lockSvc := lock_mock.NewMockLockService(ctl)
+	lockSvc := mock_lock.NewMockLockService(ctl)
 	lockSvc.EXPECT().CloseRemoteLockTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil).AnyTimes()
 
-	lockSvcRemoved := lock_mock.NewMockLockService(ctl)
+	lockSvcRemoved := mock_lock.NewMockLockService(ctl)
 	lockSvcRemoved.EXPECT().CloseRemoteLockTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(true, nil).AnyTimes()
 
-	lockSvcErr := lock_mock.NewMockLockService(ctl)
+	lockSvcErr := mock_lock.NewMockLockService(ctl)
 	lockSvcErr.EXPECT().CloseRemoteLockTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, err).AnyTimes()
 
-	ctx := context.Background()
 	type fields struct {
 		lockService lockservice.LockService
 	}
@@ -397,7 +396,7 @@ func Test_service_handleRemoveRemoteLockTable(t *testing.T) {
 
 func Test_service_handleUnsubscribeTable(t *testing.T) {
 
-	err := fmt.Errorf("dummy error")
+	err := dummyErr
 	ctl := gomock.NewController(t)
 	mockEng := mock_frontend.NewMockEngine(ctl)
 	mockEng.EXPECT().UnsubscribeTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -598,7 +597,7 @@ func Test_service_handleMigrateConnFrom(t *testing.T) {
 
 	ctx := context.Background()
 	ctl := gomock.NewController(t)
-	mockServer := mock_frontend.NewMockServer(ctl)
+	mockServer := mock_moserver.NewMockServer(ctl)
 	mockServer.EXPECT().GetRoutineManager().Return(&frontend.RoutineManager{}).AnyTimes()
 
 	type fields struct {
@@ -654,7 +653,7 @@ func Test_service_handleMigrateConnTo(t *testing.T) {
 
 	ctx := context.Background()
 	ctl := gomock.NewController(t)
-	mockServer := mock_frontend.NewMockServer(ctl)
+	mockServer := mock_moserver.NewMockServer(ctl)
 	mockServer.EXPECT().GetRoutineManager().Return(&frontend.RoutineManager{}).AnyTimes()
 
 	type fields struct {
