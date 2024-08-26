@@ -504,13 +504,11 @@ func (s *service) handleGoMaxProcs(
 	}
 	resp.GoMaxProcsResponse = &query.GoMaxProcsResponse{}
 	resp.GoMaxProcsResponse.MaxProcs = int32(runtime.GOMAXPROCS(int(req.GoMaxProcsRequest.MaxProcs)))
-	if req.GoMaxProcsRequest.MaxProcs > 0 {
-		logutil.Info("QueryService::GoMaxProcs",
-			zap.String("op", "set"),
-			zap.Int32("in", req.GoMaxProcsRequest.MaxProcs),
-			zap.Int32("out", resp.GoMaxProcsResponse.MaxProcs),
-		)
-	}
+	logutil.Info("QueryService::GoMaxProcs",
+		zap.String("op", "set"),
+		zap.Int32("in", req.GoMaxProcsRequest.MaxProcs),
+		zap.Int32("out", resp.GoMaxProcsResponse.MaxProcs),
+	)
 	return nil
 }
 

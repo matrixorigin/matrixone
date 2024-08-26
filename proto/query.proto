@@ -555,13 +555,13 @@ enum FileServiceCacheType {
 // If @Size is zero, do the getter action, otherwise do the setter action.
 message FileServiceCacheRequest {
   FileServiceCacheType Type = 1;
-  int64 Size = 2;
+  int64 CacheSize = 2;
 }
 
 // FileServiceCacheResponse
 message FileServiceCacheResponse {
-  int64 Size = 1;
-  int64 Capacity = 2;
+  int64 CacheSize = 1;
+  int64 CacheCapacity = 2;
   string Message = 3;
 }
 
@@ -570,7 +570,7 @@ message FileServiceCacheEvictRequest {
 }
 
 message FileServiceCacheEvictResponse {
-  int64 Size = 1;
-  int64 Capacity = 2;
+  int64 CacheSize = 1;
+  int64 CacheCapacity = 2;
   string Message = 3;
 }
