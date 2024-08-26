@@ -396,15 +396,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 	}
 
-	// check restore to other account
-	if toAccountId != restoreAccount {
-		// if restore level is not account level, can't restore to other account
-		if stmt.Level != tree.RESTORELEVELACCOUNT {
-			err = moerr.NewInternalError(ctx, "can't restore to another account")
-			return
-		}
-	}
-
 	if len(dbName) > 0 && needSkipDb(dbName) {
 		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
 	}
