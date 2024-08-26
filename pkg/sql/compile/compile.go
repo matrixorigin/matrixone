@@ -1323,10 +1323,12 @@ func (c *Compile) getStepRegs(step int32) []*process.WaitRegister {
 
 func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	ds := newScope(Normal)
+	ds.NodeInfo = getEngineNode(c)
 	if parallel {
 		ds.Magic = Remote
+	} else {
+		ds.NodeInfo.Mcpu = 1
 	}
-	ds.NodeInfo = getEngineNode(c)
 	ds.NodeInfo.Addr = addr
 	ds.Proc = c.proc.NewNoContextChildProc(0)
 	c.proc.Base.LoadTag = c.anal.qry.LoadTag
