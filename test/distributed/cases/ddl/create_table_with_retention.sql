@@ -9,12 +9,12 @@ create table t2(a int) with retention period 1 second;
 -- @ignore:2
 select * from mo_catalog.mo_retention;
 select sleep(2);
-select mo_ctl('cn', 'task', 'retention:*/5 * * * * ?');
-select sleep(5);
+-- @ignore:0
+select mo_ctl('cn', 'task', ':retention');
+select sleep(1);
 show tables;
 -- @ignore:2
 select * from mo_catalog.mo_retention;
-select mo_ctl('cn', 'task', 'retention:* */10 * * * ?');
 create account acc0 admin_name 'root' identified by '111';
 -- @session:id=2&user=acc0:root&password=111
 create database test;

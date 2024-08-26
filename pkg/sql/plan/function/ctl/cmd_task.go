@@ -38,6 +38,7 @@ var (
 
 	taskMap = map[string]int32{
 		"storageusage": int32(taskpb.TaskCode_MetricStorageUsage),
+		"retention":    int32(taskpb.TaskCode_Retention),
 	}
 )
 
@@ -140,8 +141,15 @@ func checkRunTaskParameter(args []string) (string, int32, error) {
 }
 
 func transferTaskToCN(qc qclient.QueryClient, target string, taskCode int32) (resp *querypb.Response, err error) {
+	var selector clusterservice.Selector
+	if target == "" {
+		selector = clusterservice.NewSelectAll()
+	} else {
+		selector = clusterservice.NewServiceIDSelector(target)
+	}
+
 	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(
-		clusterservice.NewServiceIDSelector(target),
+		selector,
 		func(cn metadata.CNService) bool {
 			req := qc.NewRequest(querypb.CmdMethod_RunTask)
 			req.RunTask = &querypb.RunTaskRequest{TaskCode: taskCode}
@@ -149,7 +157,7 @@ func transferTaskToCN(qc qclient.QueryClient, target string, taskCode int32) (re
 			defer cancel()
 
 			resp, err = qc.SendMessage(ctx, cn.QueryAddress, req)
-			return true
+			return false
 		})
 	return
 }
