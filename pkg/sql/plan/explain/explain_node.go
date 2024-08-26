@@ -148,9 +148,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 
 	// Get Node's operator object info ,such as table, view
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		//buf.WriteString(pname)
-		// TODO: debug code, restore it in feature
-		buf.WriteString(fmt.Sprintf("%s[%d]", pname, ndesc.Node.NodeId))
+		buf.WriteString(pname)
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
 			buf.WriteString(" \"*VALUES*\" ")

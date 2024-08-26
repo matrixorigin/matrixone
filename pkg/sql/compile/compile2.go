@@ -17,9 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/hex"
-	"fmt"
 	gotrace "runtime/trace"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -259,24 +256,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	//--------------------------------------------------------------------------------------------------------------
 
 	if c.checkSQLHasQueryPlan() {
-		scopeInfo := DebugShowScopes(c.scope, AnalyzeLevel)
-		fmt.Printf("-------------------------------wuxiliang end----------------------------------\nSQL:%s %s\n--------------------------------------------", c.sql, scopeInfo)
-
 		runC.GeneratePhyPlan()
-
 		runC.fillPlanNodeAnalyzeInfo()
-
-		phyPlan := c.anal.phyPlan
-		if strings.HasPrefix(c.sql, "SELECT ROUND(SUM") {
-			explainPhy := models.ExplainPhyPlan(&phyPlan)
-			fmt.Printf("------------------------------wuxiliang explain PhyPlan--------------------------\nSQL:%s \n%s\n-----------------------------------------", c.sql, explainPhy)
-		}
-
-		jsonStr, err := models.PhyPlanToJSON(phyPlan)
-		if err != nil {
-			panic(fmt.Sprintf("--------->wuxiliang Error serializing to JSON: %s", err))
-		}
-		fmt.Printf("---------->wuxiliang JSON2: %s\n", jsonStr)
 	}
 	//--------------------------------------------------------------------------------------------------------------
 
