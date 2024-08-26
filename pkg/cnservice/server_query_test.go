@@ -25,11 +25,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/frontend/test/lock_mock"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -307,13 +310,13 @@ func Test_service_handleRemoveRemoteLockTable(t *testing.T) {
 
 	err := fmt.Errorf("dummy error")
 	ctl := gomock.NewController(t)
-	lockSvc := mock_frontend.NewMockLockService(ctl)
+	lockSvc := lock_mock.NewMockLockService(ctl)
 	lockSvc.EXPECT().CloseRemoteLockTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil).AnyTimes()
 
-	lockSvcRemoved := mock_frontend.NewMockLockService(ctl)
+	lockSvcRemoved := lock_mock.NewMockLockService(ctl)
 	lockSvcRemoved.EXPECT().CloseRemoteLockTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(true, nil).AnyTimes()
 
-	lockSvcErr := mock_frontend.NewMockLockService(ctl)
+	lockSvcErr := lock_mock.NewMockLockService(ctl)
 	lockSvcErr.EXPECT().CloseRemoteLockTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, err).AnyTimes()
 
 	ctx := context.Background()
@@ -520,6 +523,185 @@ func Test_service_handleGetStatsInfo(t *testing.T) {
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
 				"handleGetStatsInfo(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
+		})
+	}
+}
+
+func Test_service_handleTraceSpan(t *testing.T) {
+
+	trace.InitMOCtledSpan()
+	ctx := context.Background()
+	type fields struct {
+	}
+	type args struct {
+		ctx  context.Context
+		req  *query.Request
+		resp *query.Response
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr error
+		want    *query.Response
+	}{
+		/*{
+			name:    "nil",
+			fields:  fields{},
+			args:    args{req: &query.Request{}},
+			wantErr: dummyBadRequestErr,
+			want:    nil,
+		},*/
+		{
+			name:   "enable",
+			fields: fields{},
+			args: args{
+				ctx: ctx,
+				req: &query.Request{TraceSpanRequest: &query.TraceSpanRequest{
+					Cmd:       "enable",
+					Spans:     "s3,span2",
+					Threshold: 123,
+				}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{TraceSpanResponse: &query.TraceSpanResponse{Resp: fmt.Sprintf("%v %sd, %v failed", []string{"s3"}, "enable", []string{"span2"})}},
+		},
+		{
+			name:   "cmd_unknown",
+			fields: fields{},
+			args: args{
+				ctx: ctx,
+				req: &query.Request{TraceSpanRequest: &query.TraceSpanRequest{
+					Cmd:       "unknown",
+					Spans:     "span1,span2",
+					Threshold: 123,
+				}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{TraceSpanResponse: &query.TraceSpanResponse{Resp: fmt.Sprintf("%v %sd, %v failed", []string{}, "unknown", []string{"span1", "span2"})}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &service{}
+			err := s.handleTraceSpan(tt.args.ctx, tt.args.req, tt.args.resp)
+			require.Equal(t, tt.wantErr, err)
+			require.Equalf(t, tt.want, tt.args.resp,
+				"handleTraceSpan(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
+		})
+	}
+}
+
+func Test_service_handleMigrateConnFrom(t *testing.T) {
+
+	ctx := context.Background()
+	ctl := gomock.NewController(t)
+	mockServer := mock_frontend.NewMockServer(ctl)
+	mockServer.EXPECT().GetRoutineManager().Return(&frontend.RoutineManager{}).AnyTimes()
+
+	type fields struct {
+		mo frontend.Server
+	}
+	type args struct {
+		ctx  context.Context
+		req  *query.Request
+		resp *query.Response
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr error
+		want    *query.Response
+	}{
+		{
+			name:    "nil",
+			fields:  fields{},
+			args:    args{req: &query.Request{}},
+			wantErr: dummyBadRequestErr,
+			want:    nil,
+		},
+		{
+			name: "notExist_conn_1",
+			fields: fields{
+				mo: mockServer,
+			},
+			args: args{
+				ctx: ctx,
+				req: &query.Request{MigrateConnFromRequest: &query.MigrateConnFromRequest{
+					ConnID: 1,
+				}},
+				resp: &query.Response{},
+			},
+			wantErr: moerr.NewInternalError(ctx, "cannot get routine to migrate connection %d", 1),
+			want:    &query.Response{MigrateConnFromResponse: &query.MigrateConnFromResponse{}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &service{mo: tt.fields.mo}
+			err := s.handleMigrateConnFrom(tt.args.ctx, tt.args.req, tt.args.resp)
+			require.Equal(t, tt.wantErr, err)
+			require.Equalf(t, tt.want, tt.args.resp,
+				"handleMigrateConnFrom(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
+		})
+	}
+}
+
+func Test_service_handleMigrateConnTo(t *testing.T) {
+
+	ctx := context.Background()
+	ctl := gomock.NewController(t)
+	mockServer := mock_frontend.NewMockServer(ctl)
+	mockServer.EXPECT().GetRoutineManager().Return(&frontend.RoutineManager{}).AnyTimes()
+
+	type fields struct {
+		mo frontend.Server
+	}
+	type args struct {
+		ctx  context.Context
+		req  *query.Request
+		resp *query.Response
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr error
+		want    *query.Response
+	}{
+		{
+			name:    "nil",
+			fields:  fields{},
+			args:    args{req: &query.Request{}},
+			wantErr: dummyBadRequestErr,
+			want:    nil,
+		},
+		{
+			name: "notExist_conn_1",
+			fields: fields{
+				mo: mockServer,
+			},
+			args: args{
+				ctx: ctx,
+				req: &query.Request{MigrateConnToRequest: &query.MigrateConnToRequest{
+					ConnID: 1,
+				}},
+				resp: &query.Response{},
+			},
+			wantErr: moerr.NewInternalError(ctx, "cannot get routine to migrate connection %d", 1),
+			want:    &query.Response{MigrateConnToResponse: nil},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &service{mo: tt.fields.mo}
+			err := s.handleMigrateConnTo(tt.args.ctx, tt.args.req, tt.args.resp)
+			require.Equal(t, tt.wantErr, err)
+			require.Equalf(t, tt.want, tt.args.resp,
+				"handleMigrateConnTo(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
 		})
 	}
 }
