@@ -420,16 +420,12 @@ func (c *Compile) SetIsPrepare(isPrepare bool) {
 	c.isPrepare = isPrepare
 }
 
-<<<<<<< HEAD
-=======
 func (c *Compile) FreeOperator() {
 	for _, s := range c.scope {
 		s.FreeOperator(c)
 	}
 }
 
-/*
->>>>>>> 287f2d7c8aae85fa6bea04d31ff42b054cc151a1
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)

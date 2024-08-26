@@ -419,43 +419,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := mergecte.NewArgument()
 		op.SetInfo(&info)
 		return op
-<<<<<<< HEAD
-=======
-	case vm.MergeGroup:
-		t := sourceOp.(*mergegroup.MergeGroup)
-		op := mergegroup.NewArgument()
-		op.NeedEval = t.NeedEval
-		op.PartialResults = t.PartialResults
-		op.PartialResultTypes = t.PartialResultTypes
-		op.ProjectList = t.ProjectList
-		op.SetInfo(&info)
-		return op
-	// case vm.MergeLimit:
-	// 	t := sourceOp.(*mergelimit.MergeLimit)
-	// 	op := mergelimit.NewArgument()
-	// 	op.Limit = t.Limit
-	// 	op.SetInfo(&info)
-	// 	return op
-	// case vm.MergeOffset:
-	// 	t := sourceOp.(*mergeoffset.MergeOffset)
-	// 	op := mergeoffset.NewArgument()
-	// 	op.Offset = t.Offset
-	// 	op.SetInfo(&info)
-	// 	return op
-	case vm.MergeTop:
-		t := sourceOp.(*mergetop.MergeTop)
-		op := mergetop.NewArgument()
-		op.Limit = t.Limit
-		op.Fs = t.Fs
-		op.SetInfo(&info)
-		return op
-	case vm.MergeOrder:
-		t := sourceOp.(*mergeorder.MergeOrder)
-		op := mergeorder.NewArgument()
-		op.OrderBySpecs = t.OrderBySpecs
-		op.SetInfo(&info)
-		return op
->>>>>>> 287f2d7c8aae85fa6bea04d31ff42b054cc151a1
 	case vm.Mark:
 		t := sourceOp.(*mark.MarkJoin)
 		op := mark.NewArgument()
