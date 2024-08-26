@@ -8,8 +8,9 @@ select * from mo_catalog.mo_retention;
 create table t2(a int) with retention period 1 second;
 -- @ignore:2
 select * from mo_catalog.mo_retention;
+select sleep(2);
 select mo_ctl('cn', 'task', 'retention:*/5 * * * * ?');
-select sleep(10);
+select sleep(5);
 show tables;
 -- @ignore:2
 select * from mo_catalog.mo_retention;

@@ -123,7 +123,6 @@ func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
 			s.createProxyUser(cmd.CreateTaskService)
-			s.startRetentionTask()
 		} else if s.gossipNode.Created() && cmd.JoinGossipCluster != nil {
 			s.gossipNode.SetJoined()
 

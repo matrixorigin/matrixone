@@ -11,11 +11,14 @@ select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
 test    t1    1750919325
 test    t2    1724639327
+select sleep(2);
+sleep(2)
+0
 select mo_ctl('cn', 'task', 'retention:*/5 * * * * ?');
 mo_ctl(cn, task, retention:*/5 * * * * ?)
 {\n  "method": "TASK",\n  "result": "OK"\n}\n
-select sleep(10);
-sleep(10)
+select sleep(5);
+sleep(5)
 0
 show tables;
 Tables_in_test

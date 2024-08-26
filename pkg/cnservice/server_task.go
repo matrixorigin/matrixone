@@ -244,25 +244,6 @@ func (s *service) stopTask() error {
 	return nil
 }
 
-func (s *service) startRetentionTask() {
-	metadata := task.TaskMetadata{
-		ID:       "retention",
-		Executor: task.TaskCode_Retention,
-	}
-
-	for range 10 {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		err := s.pu.TaskService.CreateCronTask(ctx, metadata, taskservice.Every10Minutes)
-		cancel()
-		if err == nil {
-			return
-		}
-		s.logger.Error("retention task failed", zap.Error(err))
-		time.Sleep(1 * time.Second)
-	}
-	panic("cannot create retention task")
-}
-
 func (s *service) registerExecutorsLocked() {
 	if s.task.runner == nil {
 		return
