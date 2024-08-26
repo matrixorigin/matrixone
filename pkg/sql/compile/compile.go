@@ -3327,7 +3327,11 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		if !ss[i].IsEnd {
 			// waring: `connector` operator is not used as an input/output analyze,
 			// and `connector` operator cannot play the role of IsFirst/IsLast
-			rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = ss[i].NodeInfo.Mcpu
+			if isSameCN(rs.NodeInfo.Addr, ss[i].NodeInfo.Addr) {
+				rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = ss[i].NodeInfo.Mcpu
+			} else {
+				rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = 1
+			}
 			connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])
 			connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			ss[i].setRootOperator(connArg)
