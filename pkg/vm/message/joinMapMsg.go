@@ -106,7 +106,7 @@ func (jm *JoinMap) Free() {
 	jm.multiSels = nil
 	if jm.ihm != nil {
 		jm.ihm.Free()
-	} else {
+	} else if jm.shm != nil {
 		jm.shm.Free()
 	}
 	for i := range jm.batches {

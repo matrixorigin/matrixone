@@ -60,3 +60,20 @@ func New(rowCount int64, probability float64) *BloomFilter {
 		valLength: len(hashSeed) * 3,
 	}
 }
+
+func (bf *BloomFilter) Reset() {
+	end := uint64(bf.bitmap.Len())
+	bf.bitmap.RemoveRange(0, end)
+
+	for i := range bf.keys {
+		bf.keys[i] = nil
+	}
+	for i := range bf.vals {
+		for j := range bf.vals[i] {
+			bf.vals[i][j] = 0
+		}
+	}
+	for i := range bf.addVals {
+		bf.addVals[i] = 0
+	}
+}

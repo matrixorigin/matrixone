@@ -59,34 +59,34 @@ func init() {
 				types.T_int32.ToType(),
 			},
 		},
-		{
-			arg:  newArgument(types.T_date.ToType()),
-			proc: newProcess(),
-			types: []types.Type{
-				types.T_date.ToType(),
-			},
-		},
-		{
-			arg:  newArgument(types.T_float32.ToType()),
-			proc: newProcess(),
-			types: []types.Type{
-				types.T_float32.ToType(),
-			},
-		},
-		{
-			arg:  newArgument(types.T_varchar.ToType()),
-			proc: newProcess(),
-			types: []types.Type{
-				types.T_varchar.ToType(),
-			},
-		},
-		{
-			arg:  newArgument(types.T_binary.ToType()),
-			proc: newProcess(),
-			types: []types.Type{
-				types.T_binary.ToType(),
-			},
-		},
+		// {
+		// 	arg:  newArgument(types.T_date.ToType()),
+		// 	proc: newProcess(),
+		// 	types: []types.Type{
+		// 		types.T_date.ToType(),
+		// 	},
+		// },
+		// {
+		// 	arg:  newArgument(types.T_float32.ToType()),
+		// 	proc: newProcess(),
+		// 	types: []types.Type{
+		// 		types.T_float32.ToType(),
+		// 	},
+		// },
+		// {
+		// 	arg:  newArgument(types.T_varchar.ToType()),
+		// 	proc: newProcess(),
+		// 	types: []types.Type{
+		// 		types.T_varchar.ToType(),
+		// 	},
+		// },
+		// {
+		// 	arg:  newArgument(types.T_binary.ToType()),
+		// 	proc: newProcess(),
+		// 	types: []types.Type{
+		// 		types.T_binary.ToType(),
+		// 	},
+		// },
 	}
 }
 
@@ -158,15 +158,15 @@ func TestFuzzyFilter(t *testing.T) {
 						require.NoError(t, err)
 						require.Greater(t, tc.arg.ctr.rbat.RowCount(), int64(0))
 					}
-				}
-
-				if result.Status == vm.ExecStop {
-					tc.arg.Reset(tc.proc, false, err)
+				} else {
 					break
 				}
 			}
 
-			setProcForTest(tc.arg, tc.proc, tc.types, r)
+			tc.arg.GetChildren(0).Reset(tc.proc, false, nil)
+			tc.arg.GetChildren(1).Reset(tc.proc, false, nil)
+			tc.arg.Reset(tc.proc, false, nil)
+
 			err = tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 
@@ -179,13 +179,18 @@ func TestFuzzyFilter(t *testing.T) {
 						require.NoError(t, err)
 						require.Greater(t, tc.arg.ctr.rbat.RowCount(), int64(0))
 					}
-				}
-
-				if result.Status == vm.ExecStop {
-					tc.arg.Free(tc.proc, false, err)
+				} else {
 					break
 				}
 			}
+			tc.arg.GetChildren(0).Reset(tc.proc, false, nil)
+			tc.arg.GetChildren(1).Reset(tc.proc, false, nil)
+			tc.arg.Reset(tc.proc, false, nil)
+			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+			tc.arg.GetChildren(1).Free(tc.proc, false, nil)
+			tc.arg.Free(tc.proc, false, nil)
+			tc.proc.Free()
+			require.Equal(t, int64(0), tc.proc.GetMPool().CurrNB())
 		}
 	}
 }

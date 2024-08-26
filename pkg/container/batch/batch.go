@@ -257,6 +257,8 @@ func (bat *Batch) Log(tag string) {
 	logutil.Info("\n" + tag + "\n" + bat.String())
 }
 
+// Dup used to copy a Batch object, this method will create a new batch
+// and copy all vectors (Vecs) of the current batch to the new batch.
 func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	var err error
 
@@ -270,9 +272,11 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 			rbat.Clean(mp)
 			return nil, err
 		}
+		rvec.SetSorted(vec.GetSorted())
 		rbat.SetVector(int32(j), rvec)
 	}
 	rbat.rowCount = bat.rowCount
+	rbat.ShuffleIDX = bat.ShuffleIDX
 
 	//if len(bat.Aggs) > 0 {
 	//	rbat.Aggs = make([]aggexec.AggFuncExec, len(bat.Aggs))
@@ -378,4 +382,11 @@ func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
 
 func (bat *Batch) IsEmpty() bool {
 	return bat.rowCount == 0 && len(bat.Aggs) == 0
+}
+
+func (bat *Batch) IsDone() bool {
+	if bat == nil {
+		return true
+	}
+	return bat.IsEmpty() || bat.Last()
 }
