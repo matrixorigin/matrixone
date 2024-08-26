@@ -152,13 +152,6 @@ func (proc *Process) OperatorOutofMemory(size int64) bool {
 	return proc.Mp().Cap() < size
 }
 
-//func (proc *Process) GetAnalyze(idx, parallelIdx int, parallelMajor bool) Analyze {
-//	if idx >= len(proc.Base.AnalInfos) || idx < 0 {
-//		return &operatorAnalyzer{analInfo: nil, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
-//	}
-//	return &operatorAnalyzer{analInfo: proc.Base.AnalInfos[idx], wait: 0, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
-//}
-
 func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {
 	vec := proc.GetVector(typ)
 	err := vec.PreExtend(nele, proc.Mp())

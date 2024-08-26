@@ -48,25 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-//// Analyze analyzes information for operator
-//type Analyze interface {
-//	Stop()
-//	ChildrenCallStop(time.Time)
-//	Start()
-//	Alloc(int64)
-//	InputBlock()
-//	Input(*batch.Batch, bool)
-//	Output(*batch.Batch, bool)
-//	WaitStop(time.Time)
-//	DiskIO(*batch.Batch)
-//	S3IOByte(*batch.Batch)
-//	S3IOInputCount(int)
-//	S3IOOutputCount(int)
-//	Network(*batch.Batch)
-//	AddScanTime(t time.Time)
-//	AddInsertTime(t time.Time)
-//}
-
 var (
 	NormalEndRegisterMessage = NewRegMsg(nil)
 )
@@ -354,9 +335,8 @@ type BaseProcess struct {
 	prepareExprList any
 	valueScanBatch  map[[16]byte]*batch.Batch
 	// unix timestamp
-	UnixTime  int64
-	TxnClient client.TxnClient
-	//AnalInfos           []*AnalyzeInfo
+	UnixTime            int64
+	TxnClient           client.TxnClient
 	SessionInfo         SessionInfo
 	FileService         fileservice.FileService
 	LockService         lockservice.LockService
@@ -526,16 +506,6 @@ func (proc *Process) GetBaseProcessRunningStatus() bool {
 func (proc *Process) SetBaseProcessRunningStatus(status bool) {
 	proc.Base.atRuntime = status
 }
-
-//// Operator Resource Analzyer
-//type operatorAnalyzer struct {
-//	parallelMajor        bool
-//	parallelIdx          int
-//	start                time.Time
-//	wait                 time.Duration
-//	analInfo             *AnalyzeInfo
-//	childrenCallDuration time.Duration
-//}
 
 func (si *SessionInfo) GetUser() string {
 	return si.User

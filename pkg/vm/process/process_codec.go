@@ -39,9 +39,6 @@ func (proc *Process) BuildProcessInfo(
 	sql string,
 ) (pipeline.ProcessInfo, error) {
 	procInfo := pipeline.ProcessInfo{}
-	//if len(proc.Base.AnalInfos) == 0 {
-	//	proc.Error(proc.Ctx, "empty plan", zap.String("sql", sql))
-	//}
 	{
 		procInfo.Id = proc.QueryId()
 		procInfo.Sql = sql
@@ -57,10 +54,7 @@ func (proc *Process) BuildProcessInfo(
 			return procInfo, err
 		}
 		procInfo.Snapshot = snapshot
-		//procInfo.AnalysisNodeList = make([]int32, len(proc.Base.AnalInfos))
-		//for i := range procInfo.AnalysisNodeList {
-		//	procInfo.AnalysisNodeList[i] = proc.Base.AnalInfos[i].NodeId
-		//}
+
 		vec := proc.GetPrepareParams()
 		if vec != nil {
 			procInfo.PrepareParams.Length = int64(vec.Length())
