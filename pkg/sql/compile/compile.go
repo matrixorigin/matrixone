@@ -1557,6 +1557,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	if len(fileList) == 0 {
 		ret := newScope(Normal)
 		ret.NodeInfo = getEngineNode(c)
+		ret.NodeInfo.Mcpu = 1
 		ret.DataSource = &Source{isConst: true, node: n}
 
 		currentFirstFlag := c.anal.isFirst
