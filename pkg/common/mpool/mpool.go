@@ -572,11 +572,23 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	}
 
 	tempSize := int64(requiredSpaceWithoutHeader + kMemHdrSz)
-	gcurr := globalStats.RecordAlloc("global", tempSize)
-	if gcurr > GlobalCap() {
-		globalStats.RecordFree("global", tempSize)
-		return nil, moerr.NewOOMNoCtx()
-	}
+
+	/*
+		mpool currently only stats, and does not reuse memory. It also has the following problems
+			1. the stats are not correct, the correct fix for this problem depends on correct calls to Vector.Free and Batch.Free, and refactoring of the pipeline
+			2. GlobalCap is completely meaningless, because almost all mpools have a capacity limit of PB (this is probably also due to the first point, wrong statistics).
+
+		The fundamental fix to this problem depends on a complete refactoring of the mpool, 
+		which is already tracked in the issue, until then, comment out the moerr.NewOOMNoCtx() error, as it does not reflect the real problem and can cause the cluster to crash.
+		more info : https://github.com/matrixorigin/matrixone/issues/18240#issuecomment-2308223191
+	*/
+
+	// gcurr := globalStats.RecordAlloc("global", tempSize)
+	// if gcurr > GlobalCap() {
+	// 	globalStats.RecordFree("global", tempSize)
+	// 	return nil, moerr.NewOOMNoCtx()
+	// }
+
 	mycurr := mp.stats.RecordAlloc(mp.tag, tempSize)
 	if mycurr > mp.Cap() {
 		mp.stats.RecordFree(mp.tag, tempSize)
