@@ -247,3 +247,5 @@ drop account if exists acc03;
 drop account if exists acc04;
 -- @ignore:1
 show snapshots;
+-- @ignore:5,6
+show publications;

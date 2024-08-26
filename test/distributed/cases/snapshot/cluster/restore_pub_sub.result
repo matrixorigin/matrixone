@@ -64,3 +64,5 @@ drop account acc01;
 drop database if exists test02;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
