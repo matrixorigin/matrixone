@@ -358,7 +358,9 @@ use test07;
 select * from c1;
 
 drop snapshot sp06;
+drop database test07;
 drop database test06;
+
 
 
 

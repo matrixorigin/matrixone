@@ -402,8 +402,8 @@ ca    cb
 2    2
 2    9
 drop snapshot sp06;
+drop database test07;
 drop database test06;
-internal error: can not drop database. It has been referenced by foreign keys
 drop database if exists test07;
 create database test07;
 use test07;
