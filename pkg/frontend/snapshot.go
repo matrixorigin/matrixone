@@ -74,6 +74,8 @@ var (
 
 	restorePubDbDataFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {snapshot = '%s'} WHERE  DATABASE_NAME = '%s'"
 
+	checkTableIsMasterFormat = "select db_name, table_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s' and refer_table_name = '%s'"
+
 	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", "mo_catalog"}
 
 	needSkipTablesInMocatalog = map[string]int8{
@@ -97,7 +99,7 @@ var (
 		"mo_role_privs":               0,
 		"mo_user_defined_function":    0,
 		"mo_stored_procedure":         0,
-		"mo_mysql_compatibility_mode": 0,
+		"mo_mysql_compatibility_mode": 1,
 		"mo_stages":                   0,
 		"mo_pubs":                     1,
 
@@ -481,6 +483,15 @@ func deleteCurFkTables(ctx context.Context, bh BackgroundExec, dbName string, tb
 	for i := len(sortedFkTbls) - 1; i >= 0; i-- {
 		key := sortedFkTbls[i]
 		if tblInfo := curFkTableMap[key]; tblInfo != nil {
+			var isMasterTable bool
+			isMasterTable, err = checkTableIsMaster(ctx, bh, "", tblInfo.dbName, tblInfo.tblName)
+			if err != nil {
+				return err
+			}
+			if isMasterTable {
+				continue
+			}
+
 			getLogger().Info(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
 			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s.%s", tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
@@ -881,6 +892,14 @@ func recreateTable(
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
+	var isMasterTable bool
+	isMasterTable, err = checkTableIsMaster(ctx, bh, snapshotName, tblInfo.dbName, tblInfo.tblName)
+	if isMasterTable {
+		// skip restore the table which is master table
+		getLogger().Info(fmt.Sprintf("[%s] skip restore master table: %v.%v", snapshotName, tblInfo.dbName, tblInfo.tblName))
+		return
+	}
+
 	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
 		return
 	}
@@ -893,6 +912,10 @@ func recreateTable(
 	// create table
 	getLogger().Info(fmt.Sprintf("[%s] start to create table: %v, create table sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
 	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			getLogger().Info(fmt.Sprintf("[%s] foreign key table %v referenced table not exists, skip restore", snapshotName, tblInfo.tblName))
+			err = nil
+		}
 		return
 	}
 
@@ -1576,4 +1599,29 @@ func checkSubscriptionValidInRestore(
 	}
 
 	return true, nil
+}
+
+// checkTableIsMaster check if the table is master table
+func checkTableIsMaster(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshotName string,
+	dbName string,
+	tblName string) (bool, error) {
+	sql := fmt.Sprintf(checkTableIsMasterFormat, dbName, tblName)
+	getLogger().Info(fmt.Sprintf("[%s] check table is master or not sql: %s", snapshotName, sql))
+
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return false, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		return true, nil
+	}
+	return false, nil
 }

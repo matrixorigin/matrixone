@@ -106,6 +106,39 @@ func TestRowLock(t *testing.T) {
 	}
 }
 
+func TestReentrantRowLock(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(0)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					option := newTestRowExclusiveOptions()
+					rows := newTestRows(1)
+					txn1 := newTestTxnID(1)
+
+					res, err := s.Lock(ctx, table, rows, txn1, option)
+					require.NoError(t, err)
+					require.True(t, res.NewLockAdd)
+
+					res, err = s.Lock(ctx, table, rows, txn1, option)
+					require.NoError(t, err)
+					require.False(t, res.NewLockAdd)
+
+					defer func() {
+						assert.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					}()
+
+					checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
+				})
+		})
+	}
+}
+
 func TestRowLockWithSharedAndExclusive(t *testing.T) {
 	for name, runner := range runners {
 		t.Run(name, func(t *testing.T) {
@@ -209,6 +242,40 @@ func TestRangeLock(t *testing.T) {
 
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
+
+					defer func() {
+						assert.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					}()
+
+					checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
+				})
+		})
+	}
+}
+
+func TestReentrantRangeLock(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(0)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable,
+				) {
+					option := newTestRangeExclusiveOptions()
+					rows := newTestRows(1, 2)
+					txn1 := newTestTxnID(1)
+
+					res, err := s.Lock(ctx, table, rows, txn1, option)
+					require.NoError(t, err)
+					require.True(t, res.NewLockAdd)
+
+					res, err = s.Lock(ctx, table, rows, txn1, option)
+					require.NoError(t, err)
+					require.True(t, res.NewLockAdd)
 
 					defer func() {
 						assert.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
