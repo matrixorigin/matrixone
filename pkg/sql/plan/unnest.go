@@ -97,16 +97,16 @@ func _dupColDef(src *plan.ColDef) *plan.ColDef {
 	}
 }
 
-func _getDefaultColDefs() []*plan.ColDef {
-	ret := make([]*plan.ColDef, 0, len(defaultColDefs))
-	for _, v := range defaultColDefs {
+func _getColDefs(colDefs []*plan.ColDef) []*plan.ColDef {
+	ret := make([]*plan.ColDef, 0, len(colDefs))
+	for _, v := range colDefs {
 		ret = append(ret, _dupColDef(v))
 	}
 	return ret
 }
 
 func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
-	colDefs := _getDefaultColDefs()
+	colDefs := _getColDefs(defaultColDefs)
 	colName := findColName(tbl.Func)
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,

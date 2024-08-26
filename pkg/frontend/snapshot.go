@@ -72,15 +72,7 @@ var (
 
 	getSubsSqlFmt = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs %s where 1=1"
 
-	//getDropAccountFmt = "select account_name from mo_catalog.mo_account where account_name not in (select account_name from mo_catalog.mo_account {MO_TS = %d });"
-
-	//restoreDropAccountFmt = "insert into mo_catalog.mo_account select * from mo_catalog.mo_account {MO_TS = %d } where account_name not in (select account_name from mo_catalog.mo_account);"
-
-	//deleteAccountFmt = "delete from mo_catalog.mo_account where account_id != '0';"
-
-	//restoreAccountFmt = "insert into mo_catalog.mo_account select * from mo_catalog.mo_account {MO_TS = %d } where account_id != '0';"
-
-	//dropAccountFmt = "drop account if exists %s;"
+	checkTableIsMasterFormat = "select db_name, table_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s' and refer_table_name = '%s'"
 
 	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", moCatalog}
 
@@ -105,7 +97,7 @@ var (
 		"mo_role_privs":               0,
 		"mo_user_defined_function":    0,
 		"mo_stored_procedure":         0,
-		"mo_mysql_compatibility_mode": 0,
+		"mo_mysql_compatibility_mode": 1,
 		"mo_stages":                   0,
 		catalog.MO_PUBS:               1,
 		catalog.MO_SUBS:               1,
@@ -230,7 +222,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 					}
 				}
 			} else {
-				return 0, moerr.NewInternalError(ctx, "account %s does not exist", accountName)
+				return 0, moerr.NewInternalErrorf(ctx, "account %s does not exist", accountName)
 			}
 			return accountId, rtnErr
 		}
@@ -255,7 +247,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	}
 	if snapshotExist {
 		if !stmt.IfNotExists {
-			return moerr.NewInternalError(ctx, "snapshot %s already exists", snapshotName)
+			return moerr.NewInternalErrorf(ctx, "snapshot %s already exists", snapshotName)
 		} else {
 			return nil
 		}
@@ -318,7 +310,7 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 
 	if !snapshotExist {
 		if !stmt.IfExists {
-			return moerr.NewInternalError(ctx, "snapshot %s does not exist", string(stmt.Name))
+			return moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", string(stmt.Name))
 		} else {
 			// do nothing
 			return err
@@ -360,10 +352,10 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	if snapshot == nil {
-		return moerr.NewInternalError(ctx, "snapshot %s does not exist", snapshotName)
+		return moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", snapshotName)
 	}
 	if snapshot.accountName != srcAccountName && snapshot.level != tree.RESTORELEVELCLUSTER.String() {
-		return moerr.NewInternalError(ctx, "accountName(%v) does not match snapshot.accountName(%v)", srcAccountName, snapshot.accountName)
+		return moerr.NewInternalErrorf(ctx, "accountName(%v) does not match snapshot.accountName(%v)", srcAccountName, snapshot.accountName)
 	}
 
 	// default restore to src account
@@ -399,13 +391,13 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 
 		if snapshot.level != tree.SNAPSHOTLEVELCLUSTER.String() {
-			err = moerr.NewInternalError(ctx, "snapshot %s is not cluster level snapshot", snapshotName)
+			err = moerr.NewInternalErrorf(ctx, "snapshot %s is not cluster level snapshot", snapshotName)
 			return
 		}
 	}
 
 	if len(dbName) > 0 && needSkipDb(dbName) {
-		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
+		return moerr.NewInternalErrorf(ctx, "can't restore db: %v", dbName)
 	}
 
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
@@ -558,6 +550,15 @@ func deleteCurFkTables(ctx context.Context, sid string, bh BackgroundExec, dbNam
 	for i := len(sortedFkTbls) - 1; i >= 0; i-- {
 		key := sortedFkTbls[i]
 		if tblInfo := curFkTableMap[key]; tblInfo != nil {
+			var isMasterTable bool
+			isMasterTable, err = checkTableIsMaster(ctx, sid, bh, "", tblInfo.dbName, tblInfo.tblName)
+			if err != nil {
+				return err
+			}
+			if isMasterTable {
+				continue
+			}
+
 			getLogger(sid).Info(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
 			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s.%s", tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
@@ -598,7 +599,7 @@ func restoreToAccount(
 					return
 				}
 			}
-			getLogger(sid).Info(fmt.Sprintf("[%s]skip drop db: %v", snapshotName, dbName))
+			// getLogger(sid).Info(fmt.Sprintf("[%s]skip drop db: %v", snapshotName, dbName))
 			continue
 		}
 
@@ -765,11 +766,7 @@ func restoreToDatabaseOrTable(
 		// else skip restore the db
 
 		var isPubExist bool
-		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
-		if err != nil {
-			return
-		}
-
+		isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
 		if !isPubExist {
 			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, dbName))
 			return
@@ -806,9 +803,9 @@ func restoreToDatabaseOrTable(
 	// if restore to table, expect only one table here
 	if restoreToTbl {
 		if len(tableInfos) == 0 {
-			return moerr.NewInternalError(ctx, "table %s not exists at snapshot %s", tblName, snapshotName)
+			return moerr.NewInternalErrorf(ctx, "table %s not exists at snapshot %s", tblName, snapshotName)
 		} else if len(tableInfos) != 1 {
-			return moerr.NewInternalError(ctx, "find %v tableInfos by name %s at snapshot %s, expect only 1", len(tableInfos), tblName, snapshotName)
+			return moerr.NewInternalErrorf(ctx, "find %v tableInfos by name %s at snapshot %s, expect only 1", len(tableInfos), tblName, snapshotName)
 		}
 	}
 
@@ -884,11 +881,7 @@ func restoreToSubDb(
 	toCtx := defines.AttachAccountId(ctx, subDb.Account)
 
 	var isPubExist bool
-	isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
-	if err != nil {
-		return
-	}
-
+	isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
 	if !isPubExist {
 		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, subDb.dbName))
 		return
@@ -1038,6 +1031,14 @@ func recreateTable(
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
+	var isMasterTable bool
+	isMasterTable, err = checkTableIsMaster(ctx, sid, bh, snapshotName, tblInfo.dbName, tblInfo.tblName)
+	if isMasterTable {
+		// skip restore the table which is master table
+		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore master table: %v.%v", snapshotName, tblInfo.dbName, tblInfo.tblName))
+		return
+	}
+
 	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
 		return
 	}
@@ -1050,6 +1051,10 @@ func recreateTable(
 	// create table
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to create table: %v, create table sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
 	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			getLogger(sid).Info(fmt.Sprintf("[%s] foreign key table %v referenced table not exists, skip restore", snapshotName, tblInfo.tblName))
+			err = nil
+		}
 		return
 	}
 
@@ -1185,7 +1190,7 @@ func getSnapshotByName(ctx context.Context, bh BackgroundExec, snapshotName stri
 	if records, err := getSnapshotRecords(ctx, bh, sql); err != nil {
 		return nil, err
 	} else if len(records) != 1 {
-		return nil, moerr.NewInternalError(ctx, "find %v snapshot records by name(%v), expect only 1", len(records), snapshotName)
+		return nil, moerr.NewInternalErrorf(ctx, "find %v snapshot records by name(%v), expect only 1", len(records), snapshotName)
 	} else {
 		return records[0], nil
 	}
@@ -1201,7 +1206,7 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 	}
 
 	if record == nil {
-		err = moerr.NewInternalError(ctx, "snapshot %s does not exist", snapshotName)
+		err = moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", snapshotName)
 		return
 	}
 
@@ -1421,7 +1426,7 @@ func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) (u
 		return uint32(accountId), nil
 	}
 
-	return 0, moerr.NewInternalError(ctx, "new such account, account name: %v", accountName)
+	return 0, moerr.NewInternalErrorf(ctx, "new such account, account name: %v", accountName)
 }
 
 func getFkDeps(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (ans map[string][]string, err error) {
@@ -1722,7 +1727,7 @@ func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, snapsho
 	}
 
 	if record == nil {
-		err = moerr.NewInternalError(ctx, "snapshot %s does not exist", snapshotName)
+		err = moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", snapshotName)
 		return
 	}
 
@@ -1755,6 +1760,32 @@ func dropDb(ctx context.Context, bh BackgroundExec, dbName string) (err error) {
 
 	// drop db
 	return bh.Exec(ctx, fmt.Sprintf("drop database if exists %s", dbName))
+}
+
+// checkTableIsMaster check if the table is master table
+func checkTableIsMaster(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	dbName string,
+	tblName string) (bool, error) {
+	sql := fmt.Sprintf(checkTableIsMasterFormat, dbName, tblName)
+	getLogger(sid).Info(fmt.Sprintf("[%s] check table is master or not sql: %s", snapshotName, sql))
+
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return false, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		return true, nil
+	}
+	return false, nil
 }
 
 // createPub create pub after the database is created
@@ -1825,7 +1856,7 @@ func checkPubExistOrNot(
 	if err != nil {
 		return false, err
 	} else if len(subInfos) == 0 {
-		return false, moerr.NewInternalError(ctx, "there is no subscription for database %s", subName)
+		return false, moerr.NewInternalErrorf(ctx, "there is no subscription for database %s", subName)
 	}
 
 	subInfo := subInfos[0]
@@ -1836,11 +1867,17 @@ func checkPubExistOrNot(
 		bh,
 		subInfo.PubAccountName,
 		subInfo.PubName)
+
 	if err != nil {
+		getLogger(sid).Info(fmt.Sprintf("[%s] check pub exist or not error: %v", snapshotName, err))
 		return false, err
-	} else if !isPubValid {
-		return false, moerr.NewInternalError(ctx, "there is no publication %s", subInfo.PubName)
 	}
+
+	if !isPubValid {
+		getLogger(sid).Info(fmt.Sprintf("[%s] pub %s is not valid", snapshotName, subInfo.PubName))
+		return false, nil
+	}
+
 	return true, nil
 }
 
@@ -1904,7 +1941,7 @@ func checkSubscriptionExist(
 		return
 	}
 
-	getLogger(sid).Info(fmt.Sprintf("[%s] check subscription exist or not: get account id sql: %s", pubName, sql))
+	getLogger(sid).Info(fmt.Sprintf("check subscription %s exist or not: get account id sql: %s", pubName, sql))
 	bh.ClearExecResultSet()
 	if err = bh.Exec(newCtx, sql); err != nil {
 		return
@@ -1915,7 +1952,7 @@ func checkSubscriptionExist(
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(newCtx, "there is no publication account %s", pubAccountName)
+		err = moerr.NewInternalErrorf(newCtx, "there is no publication account %s", pubAccountName)
 		return
 	}
 	if accId, err = erArray[0].GetInt64(newCtx, 0, 0); err != nil {
@@ -1929,7 +1966,7 @@ func checkSubscriptionExist(
 		return
 	}
 	if pubInfo == nil {
-		err = moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
+		err = moerr.NewInternalErrorf(newCtx, "there is no publication %s", pubName)
 		return
 	}
 

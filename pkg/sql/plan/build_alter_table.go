@@ -87,15 +87,15 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 			case *tree.PrimaryKeyIndex:
 				err = AddPrimaryKey(ctx, alterTablePlan, optionAdd, alterTableCtx)
 			case *tree.ForeignKey:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			case *tree.UniqueIndex:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			case *tree.Index:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			case *tree.ColumnTableDef:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			default:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			}
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
@@ -103,24 +103,24 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 				//return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
 				err = DropColumn(ctx, alterTablePlan, string(option.Name), alterTableCtx)
 			case tree.AlterTableDropIndex:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", option)
 			case tree.AlterTableDropKey:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", option)
 			case tree.AlterTableDropPrimaryKey:
 				err = DropPrimaryKey(ctx, alterTablePlan, alterTableCtx)
 			case tree.AlterTableDropForeignKey:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", option)
 			default:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", option)
 			}
 		case *tree.AlterOptionAlterIndex:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterOptionAlterReIndex:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.TableOptionComment:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterOptionTableName:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterAddCol:
 			err = AddColumn(ctx, alterTablePlan, option, alterTableCtx)
 		case *tree.AlterTableModifyColumnClause:
@@ -134,7 +134,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(ctx, alterTablePlan, option, alterTableCtx)
 		case *tree.TableOptionAutoIncrement:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		default:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now.")
 		}

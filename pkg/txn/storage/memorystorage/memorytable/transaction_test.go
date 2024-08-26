@@ -121,7 +121,6 @@ func TestTransaction(t *testing.T) {
 		wg := new(sync.WaitGroup)
 		wg.Add(c)
 		for _, tx := range txs {
-			tx := tx
 			go func() {
 				defer wg.Done()
 				err := table.Update(tx, row)
@@ -167,7 +166,6 @@ func TestTransaction(t *testing.T) {
 		wg := new(sync.WaitGroup)
 		wg.Add(c)
 		for _, tx := range txs {
-			tx := tx
 			go func() {
 				defer wg.Done()
 				err := table.Delete(tx, row.key)
@@ -213,8 +211,6 @@ func TestTransaction(t *testing.T) {
 		wg := new(sync.WaitGroup)
 		wg.Add(c)
 		for i, tx := range txs {
-			i := i
-			tx := tx
 			go func() {
 				defer wg.Done()
 				var err error

@@ -211,7 +211,6 @@ func CompareByteJson(left, right ByteJson) int {
 		}
 	} else {
 		if (-6 <= order1 && order1 <= -4) && (-6 <= order2 && order2 <= -4) {
-			var cmp int
 			switch left.Type {
 			case TpCodeInt64:
 				switch right.Type {

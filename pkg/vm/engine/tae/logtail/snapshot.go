@@ -176,8 +176,9 @@ func (d *DeltaLocDataSource) Next(
 	_ any,
 	_ *mpool.MPool,
 	_ engine.VectorPool,
-) (*batch.Batch, *objectio.BlockInfo, engine.DataState, error) {
-	return nil, nil, engine.Persisted, nil
+	_ *batch.Batch,
+) (*objectio.BlockInfo, engine.DataState, error) {
+	return nil, engine.Persisted, nil
 }
 
 func (d *DeltaLocDataSource) Close() {
@@ -465,12 +466,27 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, sid string, fs fileserv
 					BlockID: *objectio.BuildObjectBlockid(name, uint16(i)),
 					MetaLoc: objectio.ObjectLocation(loc),
 				}
-				bat, err := blockio.BlockDataRead(ctx, sid, &blk, ds, idxes, colTypes, checkpointTS.ToTimestamp(),
-					nil, nil, blockio.BlockReadFilter{}, fs, mp, nil, fileservice.Policy(0), "")
+
+				var vp engine.VectorPool
+				buildBatch := func() *batch.Batch {
+					result := batch.NewWithSize(len(colTypes))
+					for i, typ := range colTypes {
+						if vp == nil {
+							result.Vecs[i] = vector.NewVec(typ)
+						} else {
+							result.Vecs[i] = vp.GetVector(typ)
+						}
+					}
+					return result
+				}
+
+				bat := buildBatch()
+				defer bat.Clean(mp)
+				err := blockio.BlockDataRead(ctx, sid, &blk, ds, idxes, colTypes, checkpointTS.ToTimestamp(),
+					nil, nil, blockio.BlockReadFilter{}, fs, mp, nil, fileservice.Policy(0), "", bat)
 				if err != nil {
 					return nil, err
 				}
-				defer bat.Clean(mp)
 				tsList := vector.MustFixedCol[int64](bat.Vecs[0])
 				typeList := vector.MustFixedCol[types.Enum](bat.Vecs[1])
 				acctList := vector.MustFixedCol[uint64](bat.Vecs[2])

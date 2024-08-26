@@ -327,7 +327,13 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 	return r, nil
 }
 
-func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
+func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
+	defer func() {
+		if errors.Is(err, io.EOF) {
+			panic("found EOF in Write")
+		}
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -449,7 +455,6 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	for _, cache := range vector.Caches {
-		cache := cache
 
 		t0 := time.Now()
 		LogEvent(ctx, str_read_vector_Caches_begin)
@@ -585,7 +590,6 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	for _, cache := range vector.Caches {
-		cache := cache
 		if err := readCache(ctx, cache, vector); err != nil {
 			return err
 		}
@@ -701,7 +705,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		if entry.done {
 			continue
 		}
-		entry := entry
 		numNotDoneEntries++
 
 		start := entry.Offset - *min

@@ -43,14 +43,9 @@ function run_bvt() {
    ./optools/run_bvt.sh ./ "${LAUNCH}"
 
   echo ">>>>>>>>>>>>>>>>>>>>>>>> start bvt"
-  if [[ "$LAUNCH" == "launch-tae-logservice" ]]; then
-    echo "> test case: test/cases"
-    cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/cases 2>&1
-  else
-    # use test/distributed/cases as default test cases
-    echo "> test case: test/distributed/cases"
-    cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/distributed/cases -e optimistic 2>&1
-  fi
+   # use test/distributed/cases as default test cases
+  echo "> test case: test/distributed/cases"
+  cd mo-tester && ./run.sh -n -g -o -p /matrixone-test/test/distributed/cases -e optimistic 2>&1
 }
 
 function bvt_ut() {

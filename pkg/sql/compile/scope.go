@@ -40,8 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
@@ -194,7 +192,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		} else {
 			if s.DataSource.R == nil {
 				s.NodeInfo.Data = engine.BuildEmptyRelData()
-				readers, _, err := s.buildReaders(c, 1)
+				readers, err := s.buildReaders(c)
 				if err != nil {
 					return err
 				}
@@ -215,6 +213,17 @@ func (s *Scope) Run(c *Compile) (err error) {
 	default:
 	}
 	return err
+}
+
+func (s *Scope) FreeOperator(c *Compile) {
+	for _, scope := range s.PreScopes {
+		scope.FreeOperator(c)
+	}
+
+	vm.HandleAllOp(s.RootOp, func(aprentOp vm.Operator, op vm.Operator) error {
+		op.Free(c.proc, false, nil)
+		return nil
+	})
 }
 
 func (s *Scope) InitAllDataSource(c *Compile) error {
@@ -269,7 +278,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 			case Parallel:
 				preScopeResultReceiveChan <- scope.ParallelRun(c)
 			default:
-				preScopeResultReceiveChan <- moerr.NewInternalError(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
+				preScopeResultReceiveChan <- moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
 			}
 		})
 		if errSubmit != nil {
@@ -549,17 +558,14 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if s.IsRemote && len(s.DataSource.OrderBy) > 0 {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan cannot run in remote.")
 	}
-	maxProvidedCpuNumber := ncpu
-	if s.NodeInfo.Mcpu == 1 {
-		maxProvidedCpuNumber = 1
-	}
-	readers, scanUsedCpuNumber, err := s.buildReaders(c, maxProvidedCpuNumber)
+
+	readers, err := s.buildReaders(c)
 	if err != nil {
 		return nil, err
 	}
 
 	// only one scan reader, it can just run without any merge.
-	if scanUsedCpuNumber == 1 {
+	if s.NodeInfo.Mcpu == 1 {
 		s.DataSource.R = readers[0]
 		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 		return s, nil
@@ -570,8 +576,8 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	}
 
 	// return a pipeline which merge result from scanUsedCpuNumber scan.
-	readerScopes := make([]*Scope, scanUsedCpuNumber)
-	for i := 0; i < scanUsedCpuNumber; i++ {
+	readerScopes := make([]*Scope, s.NodeInfo.Mcpu)
+	for i := 0; i < s.NodeInfo.Mcpu; i++ {
 		readerScopes[i] = newScope(Normal)
 		readerScopes[i].NodeInfo = s.NodeInfo
 		readerScopes[i].NodeInfo.Mcpu = 1
@@ -594,17 +600,6 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	}
 	mergeFromParallelScanScope.DataSource = nil
 	return mergeFromParallelScanScope, nil
-}
-
-func DetermineRuntimeDOP(cpunum, blocks int) int {
-	if cpunum <= 0 || blocks <= 16 {
-		return 1
-	}
-	ret := blocks/16 + 1
-	if ret < cpunum {
-		return ret
-	}
-	return cpunum
 }
 
 func (s *Scope) handleRuntimeFilter(c *Compile) error {
@@ -783,7 +778,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			flg = true
 			arg := op.(*limit.Limit)
 			toReleaseOpRoot = arg.GetChildren(0)
-			newArg := mergelimit.NewArgument().
+			newArg := limit.NewArgument().
 				WithLimit(arg.LimitExpr)
 			resetRootOp(parentOp, arg, newArg)
 
@@ -816,7 +811,6 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			for j := range ss {
 				groupOp := group.NewArgument().
 					WithExprs(arg.Exprs).
-					WithTypes(arg.Types).
 					WithAggsNew(arg.Aggs)
 				groupOp.SetInfo(&vm.OperatorInfo{
 					Idx:         arg.Idx,
@@ -896,7 +890,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			flg = true
 			arg := op.(*offset.Offset)
 			toReleaseOpRoot = arg.GetChildren(0)
-			newArg := mergeoffset.NewArgument().
+			newArg := offset.NewArgument().
 				WithOffset(arg.OffsetExpr)
 			resetRootOp(parentOp, arg, newArg)
 
@@ -1148,7 +1142,7 @@ func (s *Scope) replace(c *Compile) error {
 	return nil
 }
 
-func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []engine.Reader, scanUsedCpuNumber int, err error) {
+func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// receive runtime filter and optimized the datasource.
 	if err = s.handleRuntimeFilter(c); err != nil {
 		return
@@ -1167,9 +1161,6 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
 
-		// determined how many cpus we should use.
-		//blkSlice := objectio.BlockInfoSliceInProgress(s.NodeInfo.Data)
-		scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.DataCnt())
 		readers, err = c.e.BuildBlockReaders(
 			ctx,
 			c.proc,
@@ -1177,38 +1168,19 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			s.DataSource.FilterExpr,
 			s.DataSource.TableDef,
 			s.NodeInfo.Data,
-			scanUsedCpuNumber)
+			s.NodeInfo.Mcpu)
 		if err != nil {
 			return
 		}
 	// Reader can be generated from local relation.
 	case s.DataSource.Rel != nil && s.DataSource.TableDef.Partition == nil:
-		switch s.DataSource.Rel.GetEngineType() {
-		case engine.Disttae:
-			//Run time filter had already dropped it
-			if s.NodeInfo.Data == nil {
-				scanUsedCpuNumber = 1
-			} else {
-				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.DataCnt())
-			}
-		case engine.Memory:
-			if s.NodeInfo.Data == nil {
-				scanUsedCpuNumber = 1
-			} else {
-				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.DataCnt())
-			}
-		default:
-			scanUsedCpuNumber = 1
-		}
-		if len(s.DataSource.OrderBy) > 0 {
-			scanUsedCpuNumber = 1
-		}
+
 		readers, err = s.DataSource.Rel.BuildReaders(
 			c.proc.Ctx,
 			c.proc,
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
-			scanUsedCpuNumber,
+			s.NodeInfo.Mcpu,
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
@@ -1274,26 +1246,6 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			}
 		}
 
-		switch rel.GetEngineType() {
-		case engine.Disttae:
-			if s.NodeInfo.Data == nil {
-				scanUsedCpuNumber = 1
-			} else {
-				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.DataCnt())
-			}
-		case engine.Memory:
-			if s.NodeInfo.Data == nil {
-				scanUsedCpuNumber = 1
-			} else {
-				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.DataCnt())
-			}
-		default:
-			scanUsedCpuNumber = 1
-		}
-		if len(s.DataSource.OrderBy) > 0 {
-			scanUsedCpuNumber = 1
-		}
-
 		var mainRds []engine.Reader
 		var subRds []engine.Reader
 		if rel.GetEngineType() == engine.Memory || s.DataSource.PartitionRelationNames == nil {
@@ -1302,7 +1254,7 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 				c.proc,
 				s.DataSource.FilterExpr,
 				s.NodeInfo.Data,
-				scanUsedCpuNumber,
+				s.NodeInfo.Mcpu,
 				s.TxnOffset,
 				len(s.DataSource.OrderBy) > 0,
 				engine.Policy_CheckAll,
@@ -1337,7 +1289,7 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 					c.proc,
 					s.DataSource.FilterExpr,
 					subBlkList,
-					scanUsedCpuNumber,
+					s.NodeInfo.Mcpu,
 					s.TxnOffset,
 					len(s.DataSource.OrderBy) > 0,
 					engine.Policy_CheckAll,
@@ -1354,9 +1306,9 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 	s.NodeInfo.Data = nil
 
 	//for partition table.
-	if len(readers) != scanUsedCpuNumber {
-		newReaders := make([]engine.Reader, 0, scanUsedCpuNumber)
-		step := len(readers) / scanUsedCpuNumber
+	if len(readers) != s.NodeInfo.Mcpu {
+		newReaders := make([]engine.Reader, 0, s.NodeInfo.Mcpu)
+		step := len(readers) / s.NodeInfo.Mcpu
 		for i := 0; i < len(readers); i += step {
 			newReaders = append(newReaders, disttae.NewMergeReader(readers[i:i+step]))
 		}

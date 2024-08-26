@@ -59,7 +59,7 @@ var taskNames = map[TaskType]string{
 func RegisterType(t TaskType, name string) {
 	_, ok := taskNames[t]
 	if ok {
-		panic(moerr.NewInternalErrorNoCtx("duplicate task type: %d, %s", t, name))
+		panic(moerr.NewInternalErrorNoCtxf("duplicate task type: %d, %s", t, name))
 	}
 	taskNames[t] = name
 }

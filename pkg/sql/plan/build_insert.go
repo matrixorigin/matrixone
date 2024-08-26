@@ -56,7 +56,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 	if t.TableType == catalog.SystemSourceRel {
-		return nil, moerr.NewNYI(ctx.GetContext(), "insert stream %s", tblName)
+		return nil, moerr.NewNYIf(ctx.GetContext(), "insert stream %s", tblName)
 	}
 
 	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")

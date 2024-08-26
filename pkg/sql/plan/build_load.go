@@ -66,7 +66,7 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 		case *tree.UnresolvedName:
 			colName := realCol.ColName()
 			if _, ok := newTableDef.Name2ColIndex[colName]; !ok {
-				return nil, nil, nil, nil, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", colName)
+				return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%s' does not exist", colName)
 			}
 			tbColIdx := newTableDef.Name2ColIndex[colName]
 			colExpr := &plan.Expr{
@@ -88,7 +88,7 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 			name := realCol.Name
 			tbColToDataCol[name] = -1 // when in external call, can use len of the map to check load data row whether valid
 		default:
-			return nil, nil, nil, nil, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
+			return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "unsupported column type %v", realCol)
 		}
 	}
 
@@ -142,6 +142,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
 		return nil, err
+	}
+
+	if stmt.Param.FileSize < LoadParallelMinSize {
+		stmt.Param.Parallel = false
 	}
 
 	stmt.Param.LoadFile = true
@@ -205,9 +209,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	if err != nil {
 		return nil, err
-	}
-	if stmt.Param.FileSize < LoadParallelMinSize {
-		stmt.Param.Parallel = false
 	}
 
 	inlineDataSize := unsafe.Sizeof(stmt.Param.Data)
@@ -289,7 +290,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 			return "", err
 		}
 	} else {
-		if err := InitInfileParam(param); err != nil {
+		if err := InitInfileOrStageParam(param, ctx.GetProcess()); err != nil {
 			return "", err
 		}
 	}
@@ -396,7 +397,7 @@ func checkNullMap(stmt *tree.Load, Cols []*ColDef, ctx CompilerContext) error {
 			}
 		}
 		if !find {
-			return moerr.NewInvalidInput(ctx.GetContext(), "wrong col name '%s' in nullif function", k)
+			return moerr.NewInvalidInputf(ctx.GetContext(), "wrong col name '%s' in nullif function", k)
 		}
 	}
 	return nil
