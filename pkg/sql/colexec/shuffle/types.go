@@ -26,7 +26,7 @@ import (
 var _ vm.Operator = new(Shuffle)
 
 type Shuffle struct {
-	ctr                *container
+	ctr                container
 	ShuffleColIdx      int32
 	ShuffleType        int32
 	AliveRegCnt        int32
@@ -74,31 +74,36 @@ type container struct {
 	ending               bool
 	sels                 [][]int64
 	shufflePool          []*batch.Batch
-	sendPool             []*batch.Batch
-	lastSentBatch        *batch.Batch
+	sendPool             []int //pointers to shufflePool
+	lastSentBatchIdx     int
 	runtimeFilterHandled bool
 }
 
 func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	shuffle.Free(proc, pipelineFailed, err)
-}
-
-func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if shuffle.RuntimeFilterSpec != nil {
 		shuffle.ctr.runtimeFilterHandled = false
 	}
-	// can't free this
-	/*if arg.msgReceiver != nil {
-		arg.msgReceiver.Free()
-	}*/
-	if shuffle.ctr != nil {
-		for i := range shuffle.ctr.shufflePool {
-			if shuffle.ctr.shufflePool[i] != nil {
-				shuffle.ctr.shufflePool[i].Clean(proc.Mp())
-				shuffle.ctr.shufflePool[i] = nil
-			}
+	for i := range shuffle.ctr.shufflePool {
+		if shuffle.ctr.shufflePool[i] != nil {
+			shuffle.ctr.shufflePool[i].CleanOnlyData()
 		}
-		shuffle.ctr.sels = nil
-		shuffle.ctr = nil
 	}
+	if shuffle.ctr.sels != nil {
+		shuffle.ctr.sels = shuffle.ctr.sels[:0]
+	}
+	shuffle.ctr.ending = false
+	shuffle.ctr.lastSentBatchIdx = -1
+}
+
+func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {
+	for i := range shuffle.ctr.shufflePool {
+		if shuffle.ctr.shufflePool[i] != nil {
+			shuffle.ctr.shufflePool[i].Clean(proc.Mp())
+			shuffle.ctr.shufflePool[i] = nil
+		}
+	}
+	shuffle.ctr.shufflePool = nil
+	shuffle.ctr.sels = nil
+	shuffle.ctr.ending = false
+	shuffle.ctr.sendPool = nil
 }

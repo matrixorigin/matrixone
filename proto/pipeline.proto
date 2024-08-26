@@ -390,7 +390,7 @@ message StreamScan {
 }
 
 message TableScan {
-
+  repeated plan.Type  types = 1 [(gogoproto.nullable) = false];
 }
 
 message ValueScan {

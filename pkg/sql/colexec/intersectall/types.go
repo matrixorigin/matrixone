@@ -43,7 +43,7 @@ type container struct {
 
 type IntersectAll struct {
 	// execution container
-	ctr *container
+	ctr container
 
 	vm.OperatorBase
 }
@@ -80,18 +80,21 @@ func (intersectAll *IntersectAll) Release() {
 }
 
 func (intersectAll *IntersectAll) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	intersectAll.Free(proc, pipelineFailed, err)
+	ctr := &intersectAll.ctr
+	ctr.state = Build
+	ctr.cleanHashMap()
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
+	ctr.counter = nil
 }
 
 func (intersectAll *IntersectAll) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := intersectAll.ctr
-	if ctr != nil {
-		ctr.cleanHashMap()
-		if ctr.buf != nil {
-			ctr.buf.Clean(proc.Mp())
-			ctr.buf = nil
-		}
-		intersectAll.ctr = nil
+	ctr := &intersectAll.ctr
+	ctr.cleanHashMap()
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
 	}
 }
 
