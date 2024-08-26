@@ -91,6 +91,7 @@ use test02;
 select * from table01;
 drop database test01;
 drop database test02;
+drop snapshot sp01;
 
 
 
