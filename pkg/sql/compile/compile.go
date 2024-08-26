@@ -175,10 +175,6 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.sql = sql
 	c.affectRows.Store(0)
 
-	//for _, info := range c.anal.analInfos {
-	//	info.Reset()
-	//}
-
 	for _, s := range c.scope {
 		s.Reset(c)
 	}
@@ -301,7 +297,6 @@ func (c *Compile) run(s *Scope) error {
 	}
 	switch s.Magic {
 	case Normal:
-		//defer c.fillAnalyzeInfo()
 		err := s.Run(c)
 		if err != nil {
 			return err
@@ -310,7 +305,6 @@ func (c *Compile) run(s *Scope) error {
 		c.addAffectedRows(s.affectedRows())
 		return nil
 	case Merge, MergeInsert:
-		//defer c.fillAnalyzeInfo()
 		err := s.MergeRun(c)
 		if err != nil {
 			return err
@@ -319,7 +313,6 @@ func (c *Compile) run(s *Scope) error {
 		c.addAffectedRows(s.affectedRows())
 		return nil
 	case MergeDelete:
-		//defer c.fillAnalyzeInfo()
 		err := s.MergeRun(c)
 		if err != nil {
 			return err
@@ -330,7 +323,6 @@ func (c *Compile) run(s *Scope) error {
 		}
 		return nil
 	case Remote:
-		//defer c.fillAnalyzeInfo()
 		err := s.RemoteRun(c)
 		c.addAffectedRows(s.affectedRows())
 		return err
@@ -808,7 +800,6 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		return nil, cantCompileForPrepareErr
 	}
 
-	//c.initAnalyze(qry)
 	c.initAnalyzeModuleV1(qry)
 	// deal with sink scan first.
 	for i := len(qry.Steps) - 1; i >= 0; i-- {
@@ -3686,61 +3677,6 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 	return cpunum
 }
 
-/*
-	func (c *Compile) initAnalyze(qry *plan.Query) {
-		if len(qry.Nodes) == 0 {
-			panic("empty plan")
-		}
-
-		anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
-		for i := range anals {
-			anals[i] = reuse.Alloc[process.AnalyzeInfo](nil)
-			anals[i].NodeId = int32(i)
-		}
-		c.anal = newAnalyzeModule()
-		c.anal.qry = qry
-		c.anal.analInfos = anals
-		c.anal.curNodeIdx = int(qry.Steps[0])
-		for _, node := range c.anal.qry.Nodes {
-			if node.AnalyzeInfo == nil {
-				node.AnalyzeInfo = new(plan.AnalyzeInfo)
-			}
-		}
-		c.proc.Base.AnalInfos = c.anal.analInfos
-	}
-*/
-/*
-func (c *Compile) fillAnalyzeInfo() {
-	// record the number of s3 requests
-	c.anal.S3IOInputCount(c.anal.curNodeIdx, c.counterSet.FileService.S3.Put.Load())
-	c.anal.S3IOInputCount(c.anal.curNodeIdx, c.counterSet.FileService.S3.List.Load())
-
-	c.anal.S3IOOutputCount(c.anal.curNodeIdx, c.counterSet.FileService.S3.Head.Load())
-	c.anal.S3IOOutputCount(c.anal.curNodeIdx, c.counterSet.FileService.S3.Get.Load())
-	c.anal.S3IOOutputCount(c.anal.curNodeIdx, c.counterSet.FileService.S3.Delete.Load())
-	c.anal.S3IOOutputCount(c.anal.curNodeIdx, c.counterSet.FileService.S3.DeleteMulti.Load())
-
-	for i, anal := range c.anal.analInfos {
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputBlocks, atomic.LoadInt64(&anal.InputBlocks))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputRows, atomic.LoadInt64(&anal.InputRows))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.OutputRows, atomic.LoadInt64(&anal.OutputRows))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputSize, atomic.LoadInt64(&anal.InputSize))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.OutputSize, atomic.LoadInt64(&anal.OutputSize))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.TimeConsumed, atomic.LoadInt64(&anal.TimeConsumed))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.MemorySize, atomic.LoadInt64(&anal.MemorySize))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.WaitTimeConsumed, atomic.LoadInt64(&anal.WaitTimeConsumed))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.DiskIO, atomic.LoadInt64(&anal.DiskIO))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.S3IOByte, atomic.LoadInt64(&anal.S3IOByte))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.S3IOInputCount, atomic.LoadInt64(&anal.S3IOInputCount))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.S3IOOutputCount, atomic.LoadInt64(&anal.S3IOOutputCount))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO, atomic.LoadInt64(&anal.NetworkIO))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.ScanTime, atomic.LoadInt64(&anal.ScanTime))
-		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InsertTime, atomic.LoadInt64(&anal.InsertTime))
-		anal.DeepCopyArray(c.anal.qry.Nodes[i].AnalyzeInfo)
-	}
-}
-*/
-
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
 	if c.pn.GetQuery().StmtType != plan.Query_SELECT && len(n.RuntimeFilterProbeList) == 0 {
 		return true
@@ -4094,9 +4030,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	engineType := rel.GetEngineType()
 	// for an ordered scan, put all paylonds in current CN
 	// or sometimes force on one CN
-	//if len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
-	//	return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
-	//}
+	if len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
+		return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
+	}
 	// disttae engine
 	if engineType == engine.Disttae {
 		if strings.Contains(n.TableDef.Name, "real_time_position") {

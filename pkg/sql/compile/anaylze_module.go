@@ -236,7 +236,7 @@ func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.Wai
 	return receivers
 }
 
-// 将 Operator 转换为 PhyOperator
+// ConvertOperatorToPhyOperator Convert Operator to PhyOperator
 func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]int) *models.PhyOperator {
 	if op == nil {
 		return nil
