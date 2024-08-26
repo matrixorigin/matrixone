@@ -348,7 +348,7 @@ func (e *Engine) getOrCreateSnapPart(
 		return ps, nil
 	}
 	if ts.Less(&start) {
-		return nil, moerr.NewInternalErrorNoCtx(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"No valid checkpoints for snapshot read,maybe snapshot is too old, "+
 				"snapshot op:%s, start:%s, end:%s",
 			tbl.db.op.Txn().DebugString(),

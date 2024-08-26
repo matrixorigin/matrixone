@@ -254,7 +254,7 @@ func (bat *Batch) Log(tag string) {
 	if bat == nil || bat.rowCount < 1 {
 		return
 	}
-	logutil.Infof("\n" + tag + "\n" + bat.String())
+	logutil.Info("\n" + tag + "\n" + bat.String())
 }
 
 func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {

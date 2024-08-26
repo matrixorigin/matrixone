@@ -100,12 +100,12 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 
 	if tableFunction.ctr.buf.VectorCount() != len(tblArg.ctr.retSchema) {
 		result.Status = vm.ExecStop
-		return result, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.FuncName)
+		return result, moerr.NewInternalErrorf(proc.Ctx, "table function %s return length mismatch", tblArg.FuncName)
 	}
 	for i := range tblArg.ctr.retSchema {
 		if tableFunction.ctr.buf.GetVector(int32(i)).GetType().Oid != tblArg.ctr.retSchema[i].Oid {
 			result.Status = vm.ExecStop
-			return result, moerr.NewInternalError(proc.Ctx, "table function %s return type mismatch", tblArg.FuncName)
+			return result, moerr.NewInternalErrorf(proc.Ctx, "table function %s return type mismatch", tblArg.FuncName)
 		}
 	}
 

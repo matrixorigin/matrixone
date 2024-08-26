@@ -424,7 +424,8 @@ func (fp *FrontendParameters) GetUnixSocketAddress() string {
 	}
 
 	canCreate := func() string {
-		f, err := os.Create(fp.UnixSocketAddress)
+		var f *os.File
+		f, err = os.Create(fp.UnixSocketAddress)
 		if err != nil {
 			return ""
 		}
@@ -440,7 +441,7 @@ func (fp *FrontendParameters) GetUnixSocketAddress() string {
 	rootPath := filepath.Dir(fp.UnixSocketAddress)
 	f, err := os.Open(rootPath)
 	if os.IsNotExist(err) {
-		err := os.MkdirAll(rootPath, 0755)
+		err = os.MkdirAll(rootPath, 0755)
 		if err != nil {
 			return ""
 		}

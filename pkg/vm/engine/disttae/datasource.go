@@ -798,7 +798,7 @@ func loadBlockDeletesByDeltaLoc(
 		//readCost := time.Since(t1)
 
 		if persistedByCN {
-			rows = blockio.EvalDeleteRowsByTimestampForDeletesPersistedByCN(persistedDeletes, snapshotTS, blockCommitTS)
+			rows = blockio.EvalDeleteRowsByTimestampForDeletesPersistedByCN(blockId, persistedDeletes)
 		} else {
 			//t2 := time.Now()
 			rows = blockio.EvalDeleteRowsByTimestamp(persistedDeletes, snapshotTS, &blockId)
@@ -1112,7 +1112,7 @@ func (ls *LocalDataSource) applyPStatePersistedDeltaLocation(
 		return offsets, nil
 	}
 
-	deltaLoc, commitTS, ok := ls.pState.GetBockDeltaLoc(bid)
+	deltaLoc, commitTS, ok := ls.pState.GetBlockDeltaLoc(bid)
 	if !ok {
 		return offsets, nil
 	}
@@ -1153,7 +1153,7 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 
 	// prefetch blk delta location
 	for idx := begin; idx < end; idx++ {
-		if loc, _, ok := ls.pState.GetBockDeltaLoc(ls.rangeSlice.Get(idx).BlockID); ok {
+		if loc, _, ok := ls.pState.GetBlockDeltaLoc(ls.rangeSlice.Get(idx).BlockID); ok {
 			if err = blockio.PrefetchTombstone(
 				ls.table.proc.Load().GetService(), []uint16{0, 1, 2},
 				[]uint16{objectio.Location(loc[:]).ID()}, ls.fs, objectio.Location(loc[:])); err != nil {

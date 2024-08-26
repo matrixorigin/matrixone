@@ -18,12 +18,13 @@ import (
 	"container/list"
 	"context"
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"net"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 )
 
 const (
@@ -145,7 +146,7 @@ func (c *Conn) Close() error {
 	var err error
 	c.closeFunc.Do(func() {
 		defer func() {
-			if c.fixBuf.data != nil && len(c.fixBuf.data) > 0 {
+			if len(c.fixBuf.data) > 0 {
 				// Free all allocated memory
 				c.allocator.Free(c.fixBuf.data)
 				c.fixBuf.data = nil

@@ -293,7 +293,7 @@ func (c *connCache) resetSession(sc ServerConn) ([]byte, error) {
 	defer cancel()
 	addr := getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 	if addr == "" {
-		return nil, moerr.NewInternalError(ctx,
+		return nil, moerr.NewInternalErrorf(ctx,
 			"failed to get query service address, conn ID: %d", sc.ConnID())
 	}
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
@@ -306,7 +306,7 @@ func (c *connCache) resetSession(sc ServerConn) ([]byte, error) {
 		defer c.queryClient.Release(resp)
 	}
 	if resp == nil || resp.ResetSessionResponse == nil || !resp.ResetSessionResponse.Success {
-		return nil, moerr.NewInternalError(ctx,
+		return nil, moerr.NewInternalErrorf(ctx,
 			"failed to clear session, conn ID: %d", sc.ConnID())
 	}
 	return resp.ResetSessionResponse.AuthString, nil

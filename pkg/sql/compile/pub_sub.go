@@ -49,7 +49,7 @@ func createSubscription(ctx context.Context, c *Compile, dbName string, subOptio
 		return false
 	})
 	if totalCnt > 0 {
-		return moerr.NewInternalError(ctx, "publication %s can only be subscribed once", subOption.Publication)
+		return moerr.NewInternalErrorf(ctx, "publication %s can only be subscribed once", subOption.Publication)
 	}
 
 	sql = fmt.Sprintf("update mo_catalog.mo_subs set sub_name='%s', sub_time=now() where pub_account_name = '%s' and pub_name = '%s' and sub_account_id = %d", dbName, subOption.From, subOption.Publication, accountId)

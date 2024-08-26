@@ -80,7 +80,7 @@ func (r *pluginRouter) Route(
 	case plugin.Bypass:
 		return r.Router.Route(ctx, r.sid, ci, filter)
 	default:
-		return nil, moerr.NewInternalErrorNoCtx("unknown recommended action %d", re.Action)
+		return nil, moerr.NewInternalErrorNoCtxf("unknown recommended action %d", re.Action)
 	}
 }
 

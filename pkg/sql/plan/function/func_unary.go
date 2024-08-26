@@ -446,7 +446,7 @@ func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return opUnaryBytesToFixedWithErrorCheck[types.Date](ivecs, result, proc, length, func(v []byte) (types.Date, error) {
 		d, e := types.ParseDatetime(functionUtil.QuickBytesToStr(v), 6)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtx("date", "'%s'", v)
+			return 0, moerr.NewOutOfRangeNoCtxf("date", "'%s'", v)
 		}
 		return d.ToDate(), nil
 	}, selectList)
@@ -613,7 +613,7 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			contentBytes = fileBytes
 			//nothing to do.
 		default:
-			return moerr.NewInvalidInput(proc.Ctx, "unsupported file extension: %s", ext)
+			return moerr.NewInvalidInputf(proc.Ctx, "unsupported file extension: %s", ext)
 		}
 
 		if len(fileBytes) > 65536 /*blob size*/ {
@@ -687,7 +687,7 @@ func MoMemory(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		case "available":
 			return int64(system.MemoryAvailable()), nil
 		default:
-			return -1, moerr.NewInvalidInput(proc.Ctx, "unsupported memory command: %s", v)
+			return -1, moerr.NewInvalidInputf(proc.Ctx, "unsupported memory command: %s", v)
 		}
 	}, selectList)
 }
@@ -747,7 +747,7 @@ func FillSpaceNumber[T types.BuiltinNumber](v T) (string, error) {
 	} else {
 		ilen = int(v)
 		if ilen > MaxAllowedValue || ilen < 0 {
-			return "", moerr.NewInvalidInputNoCtx("the space count is greater than max allowed value %d", MaxAllowedValue)
+			return "", moerr.NewInvalidInputNoCtxf("the space count is greater than max allowed value %d", MaxAllowedValue)
 		}
 	}
 	return strings.Repeat(" ", ilen), nil
@@ -780,7 +780,7 @@ func Int64ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return opUnaryFixedToFixedWithErrorCheck[int64, types.Time](ivecs, result, proc, length, func(v int64) (types.Time, error) {
 		t, e := types.ParseInt64ToTime(v, 0)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtx("time", "'%d'", v)
+			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%d'", v)
 		}
 		return t, nil
 	}, selectList)
@@ -790,7 +790,7 @@ func DateStringToTime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return opUnaryBytesToFixedWithErrorCheck[types.Time](ivecs, result, proc, length, func(v []byte) (types.Time, error) {
 		t, e := types.ParseTime(string(v), 6)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtx("time", "'%s'", string(v))
+			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", string(v))
 		}
 		return t, nil
 	}, selectList)
@@ -801,7 +801,7 @@ func Decimal128ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return opUnaryFixedToFixedWithErrorCheck[types.Decimal128, types.Time](ivecs, result, proc, length, func(v types.Decimal128) (types.Time, error) {
 		t, e := types.ParseDecimal128ToTime(v, scale, 6)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtx("time", "'%s'", v.Format(0))
+			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", v.Format(0))
 		}
 		return t, nil
 	}, selectList)
@@ -1343,12 +1343,12 @@ func makeQueryIdIdx(loc, cnt int64, proc *process.Process) (int, error) {
 	var idx int
 	if loc < 0 {
 		if loc < -cnt {
-			return 0, moerr.NewInvalidInput(proc.Ctx, "index out of range: %d", loc)
+			return 0, moerr.NewInvalidInputf(proc.Ctx, "index out of range: %d", loc)
 		}
 		idx = int(loc + cnt)
 	} else {
 		if loc > cnt {
-			return 0, moerr.NewInvalidInput(proc.Ctx, "index out of range: %d", loc)
+			return 0, moerr.NewInvalidInputf(proc.Ctx, "index out of range: %d", loc)
 		}
 		idx = int(loc)
 	}
@@ -1556,7 +1556,7 @@ func bitCastBinaryToFixed[T types.FixedSizeTExceptStrType](
 			}
 		} else {
 			if len(v) > byteLen {
-				return moerr.NewOutOfRange(ctx, fmt.Sprintf("%d-byte fixed-length type", byteLen), "binary value '0x%s'", hex.EncodeToString(v))
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("%d-byte fixed-length type", byteLen), "binary value '0x%s'", hex.EncodeToString(v))
 			}
 
 			if len(v) < byteLen {
