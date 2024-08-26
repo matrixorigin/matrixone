@@ -296,7 +296,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice
 			)
 
 			qs.AddHandleFunc(pb.CmdMethod_GOMAXPROCS,
-				func(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+				func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
 					resp.GoMaxProcsResponse.MaxProcs = int32(goruntime.NumCPU())
 					return nil
 				},

@@ -29,10 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_incr"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_moserver"
+	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_shard"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -77,10 +79,10 @@ func Test_service_handleGoMaxProcs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &service{}
-			err := s.handleGoMaxProcs(tt.args.ctx, tt.args.req, tt.args.resp)
+			err := s.handleGoMaxProcs(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
-				"handleGoMaxProcs(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
+				"handleGoMaxProcs(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
@@ -129,10 +131,10 @@ func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &service{}
-			err := s.handleFileServiceCacheRequest(tt.args.ctx, tt.args.req, tt.args.resp)
+			err := s.handleFileServiceCacheRequest(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
-				"handleFileServiceCacheRequest(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
+				"handleFileServiceCacheRequest(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
@@ -178,10 +180,10 @@ func Test_service_handleFileServiceCacheEvictRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &service{}
-			err := s.handleFileServiceCacheEvictRequest(tt.args.ctx, tt.args.req, tt.args.resp)
+			err := s.handleFileServiceCacheEvictRequest(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
-				"handleFileServiceCacheEvictRequest(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
+				"handleFileServiceCacheEvictRequest(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
@@ -234,10 +236,10 @@ func Test_service_handleReloadAutoIncrementCache(t *testing.T) {
 			s := &service{
 				incrservice: tt.fields.incrservice,
 			}
-			err := s.handleReloadAutoIncrementCache(tt.args.ctx, tt.args.req, tt.args.resp)
+			err := s.handleReloadAutoIncrementCache(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
-				"handleReloadAutoIncrementCache(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
+				"handleReloadAutoIncrementCache(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
@@ -297,10 +299,10 @@ func Test_service_handleGetPipelineInfo(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &service{}
 			s.pipelines.counter.Store(tt.fields.counterVal)
-			err := s.handleGetPipelineInfo(tt.args.ctx, tt.args.req, tt.args.resp)
+			err := s.handleGetPipelineInfo(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
-				"handleGetPipelineInfo(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
+				"handleGetPipelineInfo(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
@@ -386,10 +388,10 @@ func Test_service_handleRemoveRemoteLockTable(t *testing.T) {
 			s := &service{
 				lockService: tt.fields.lockService,
 			}
-			err := s.handleRemoveRemoteLockTable(tt.args.ctx, tt.args.req, tt.args.resp)
+			err := s.handleRemoveRemoteLockTable(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
-				"handleRemoveRemoteLockTable(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
+				"handleRemoveRemoteLockTable(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
@@ -462,10 +464,10 @@ func Test_service_handleUnsubscribeTable(t *testing.T) {
 			s := &service{
 				storeEngine: tt.fields.storeEngine,
 			}
-			err := s.handleUnsubscribeTable(tt.args.ctx, tt.args.req, tt.args.resp)
+			err := s.handleUnsubscribeTable(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
-				"handleUnsubscribeTable(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
+				"handleUnsubscribeTable(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
@@ -518,10 +520,10 @@ func Test_service_handleGetStatsInfo(t *testing.T) {
 			s := &service{
 				storeEngine: tt.fields.storeEngine,
 			}
-			err := s.handleGetStatsInfo(tt.args.ctx, tt.args.req, tt.args.resp)
+			err := s.handleGetStatsInfo(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
-				"handleGetStatsInfo(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
+				"handleGetStatsInfo(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
@@ -585,10 +587,10 @@ func Test_service_handleTraceSpan(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &service{}
-			err := s.handleTraceSpan(tt.args.ctx, tt.args.req, tt.args.resp)
+			err := s.handleTraceSpan(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
-				"handleTraceSpan(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
+				"handleTraceSpan(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
@@ -634,17 +636,17 @@ func Test_service_handleMigrateConnFrom(t *testing.T) {
 				}},
 				resp: &query.Response{},
 			},
-			wantErr: moerr.NewInternalError(ctx, "cannot get routine to migrate connection %d", 1),
+			wantErr: moerr.NewInternalErrorf(ctx, "cannot get routine to migrate connection %d", 1),
 			want:    &query.Response{MigrateConnFromResponse: &query.MigrateConnFromResponse{}},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &service{mo: tt.fields.mo}
-			err := s.handleMigrateConnFrom(tt.args.ctx, tt.args.req, tt.args.resp)
+			err := s.handleMigrateConnFrom(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
-				"handleMigrateConnFrom(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
+				"handleMigrateConnFrom(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
@@ -690,17 +692,124 @@ func Test_service_handleMigrateConnTo(t *testing.T) {
 				}},
 				resp: &query.Response{},
 			},
-			wantErr: moerr.NewInternalError(ctx, "cannot get routine to migrate connection %d", 1),
+			wantErr: moerr.NewInternalErrorf(ctx, "cannot get routine to migrate connection %d", 1),
 			want:    &query.Response{MigrateConnToResponse: nil},
+		},
+		// ignore mockServerSuccess case.
+		// tips: success case dependent frontend.Routine{}.
+		// tips: frontend.Routine{} only internal api, no mock interface
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &service{mo: tt.fields.mo}
+			err := s.handleMigrateConnTo(tt.args.ctx, tt.args.req, tt.args.resp, nil)
+			require.Equal(t, tt.wantErr, err)
+			require.Equalf(t, tt.want, tt.args.resp,
+				"handleMigrateConnTo(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
+		})
+	}
+}
+
+func Test_service_handleGetReplicaCount(t *testing.T) {
+
+	ctx := context.Background()
+	ctl := gomock.NewController(t)
+	mockReplicaCount := int64(759)
+	mockService := mock_shard.NewMockShardService(ctl)
+	mockService.EXPECT().ReplicaCount().Return(mockReplicaCount).AnyTimes()
+
+	type fields struct {
+		shardService shardservice.ShardService
+	}
+	type args struct {
+		ctx  context.Context
+		req  *query.Request
+		resp *query.Response
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr error
+		want    *query.Response
+	}{
+		{
+			name: "normal",
+			fields: fields{
+				shardService: mockService,
+			},
+			args: args{
+				ctx:  ctx,
+				req:  &query.Request{},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{GetReplicaCount: query.GetReplicaCountResponse{Count: mockReplicaCount}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &service{shardService: tt.fields.shardService}
+			err := s.handleGetReplicaCount(tt.args.ctx, tt.args.req, tt.args.resp, nil)
+			require.Equal(t, tt.wantErr, err)
+			require.Equalf(t, tt.want, tt.args.resp,
+				"handleGetReplicaCount(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
+		})
+	}
+}
+
+func Test_service_handleResetSession(t *testing.T) {
+
+	ctx := context.Background()
+	ctl := gomock.NewController(t)
+	mockServer := mock_moserver.NewMockServer(ctl)
+	mockServer.EXPECT().GetRoutineManager().Return(&frontend.RoutineManager{}).AnyTimes()
+
+	type fields struct {
+		mo frontend.Server
+	}
+	type args struct {
+		ctx  context.Context
+		req  *query.Request
+		resp *query.Response
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr error
+		want    *query.Response
+	}{
+		{
+			name:    "nil",
+			fields:  fields{},
+			args:    args{req: &query.Request{}},
+			wantErr: dummyBadRequestErr,
+			want:    nil,
+		},
+		{
+			name: "notExist_conn_1",
+			fields: fields{
+				mo: mockServer,
+			},
+			args: args{
+				ctx: ctx,
+				req: &query.Request{ResetSessionRequest: &query.ResetSessionRequest{
+					ConnID: 1,
+				}},
+				resp: &query.Response{},
+			},
+			wantErr: moerr.NewInternalErrorf(ctx, "cannot get routine to clear session %d", 1),
+			want:    &query.Response{ResetSessionResponse: &query.ResetSessionResponse{Success: false}},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &service{mo: tt.fields.mo}
-			err := s.handleMigrateConnTo(tt.args.ctx, tt.args.req, tt.args.resp)
+			err := s.handleResetSession(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
-				"handleMigrateConnTo(%v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp)
+				"handleResetSession(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
