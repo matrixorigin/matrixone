@@ -331,7 +331,6 @@ show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 sp08    2024-08-26 06:05:52.576258    cluster            
 sp07    2024-08-26 06:05:52.499366    cluster            
-sp_fk    2024-08-26 06:03:36.960439    cluster            
 restore account acc01 from snapshot sp07 to account acc02;
 restore account acc01 from snapshot sp08 to account acc02;
 use test01;
