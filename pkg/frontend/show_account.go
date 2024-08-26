@@ -424,7 +424,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		}
 
 		if len(accInfosBatches) != 1 {
-			return moerr.NewInternalError(ctx, "no such account %v", account.GetTenantID())
+			return moerr.NewInternalErrorf(ctx, "no such account %v", account.GetTenantID())
 		}
 	}
 

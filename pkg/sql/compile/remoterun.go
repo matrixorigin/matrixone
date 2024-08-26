@@ -280,7 +280,7 @@ func convertPipelineUuid(p *pipeline.Pipeline, s *Scope) error {
 		op := p.UuidsToRegIdx[i]
 		uid, err := uuid.FromBytes(op.GetUuid())
 		if err != nil {
-			return moerr.NewInternalErrorNoCtx("decode uuid failed: %s\n", err)
+			return moerr.NewInternalErrorNoCtxf("decode uuid failed: %s\n", err)
 		}
 		s.RemoteReceivRegInfos[i] = RemoteReceivRegInfo{
 			Idx:      int(op.GetIdx()),

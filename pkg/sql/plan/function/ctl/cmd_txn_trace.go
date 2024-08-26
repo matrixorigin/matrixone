@@ -30,13 +30,13 @@ func handleTxnTrace(
 	sender requestSender) (Result, error) {
 	params := strings.Split(parameter, " ")
 	if len(params) == 0 {
-		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s", parameter)
 	}
 
 	switch strings.ToLower(params[0]) {
 	case "enable":
 		if len(params) < 2 {
-			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+			return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s", parameter)
 		}
 
 		err := trace.GetService(proc.GetService()).Enable(params[1])
@@ -46,7 +46,7 @@ func handleTxnTrace(
 		return Result{Data: "OK"}, nil
 	case "disable":
 		if len(params) < 2 {
-			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+			return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s", parameter)
 		}
 
 		err := trace.GetService(proc.GetService()).Disable(params[1])
@@ -56,7 +56,7 @@ func handleTxnTrace(
 		return Result{Data: "OK"}, nil
 	case "clear":
 		if len(params) < 2 || (params[1] != trace.FeatureTraceTxn && params[1] != trace.FeatureTraceData) {
-			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+			return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s", parameter)
 		}
 
 		var err error
@@ -77,7 +77,7 @@ func handleTxnTrace(
 			(params[1] != trace.FeatureTraceTxn &&
 				params[1] != trace.FeatureTraceData &&
 				params[1] != trace.FeatureTraceStatement) {
-			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+			return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s", parameter)
 		}
 
 		var err error
@@ -96,7 +96,7 @@ func handleTxnTrace(
 	case "add-table":
 		// add table [column1, column2, ...]
 		if len(params) < 2 {
-			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+			return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s", parameter)
 		}
 		var columns []string
 		table := params[1]
@@ -112,7 +112,7 @@ func handleTxnTrace(
 	case "add-txn":
 		// add-txn method value
 		if len(params) < 3 {
-			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+			return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s", parameter)
 		}
 
 		err := trace.GetService(proc.GetService()).AddTxnFilter(params[1], params[2])
@@ -123,7 +123,7 @@ func handleTxnTrace(
 	case "add-statement":
 		// add-statement method value
 		if len(params) < 3 {
-			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+			return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s", parameter)
 		}
 
 		err := trace.GetService(proc.GetService()).AddStatementFilter(params[1], params[2])
@@ -134,7 +134,7 @@ func handleTxnTrace(
 	case "decode-complex":
 		// decode complex pk
 		if len(params) != 2 {
-			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+			return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s", parameter)
 		}
 		value, err := trace.GetService(proc.GetService()).DecodeHexComplexPK(params[1])
 		if err != nil {
@@ -142,6 +142,6 @@ func handleTxnTrace(
 		}
 		return Result{Data: value}, nil
 	default:
-		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtxf("invalid parameter %s", parameter)
 	}
 }

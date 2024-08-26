@@ -89,7 +89,7 @@ func moLocksPrepare(proc *process.Process, tf *TableFunction) (tvfState, error) 
 			col = strings.ToLower(col)
 			idx, ok := plan2.MoLocksColName2Index[col]
 			if !ok {
-				return nil, moerr.NewInternalError(proc.Ctx, "invalid column name %s", col)
+				return nil, moerr.NewInternalErrorf(proc.Ctx, "invalid column name %s", col)
 			}
 			tf.ctr.retSchema[i] = plan2.MoLocksColTypes[idx]
 		}
@@ -257,7 +257,7 @@ func moConfigurationsPrepare(proc *process.Process, tf *TableFunction) (tvfState
 			col = strings.ToLower(col)
 			idx, ok := plan2.MoConfigColName2Index[col]
 			if !ok {
-				return nil, moerr.NewInternalError(proc.Ctx, "invalid column name %s", col)
+				return nil, moerr.NewInternalErrorf(proc.Ctx, "invalid column name %s", col)
 			}
 			tf.ctr.retSchema[i] = plan2.MoConfigColTypes[idx]
 		}
@@ -380,7 +380,7 @@ func moTransactionsPrepare(proc *process.Process, tf *TableFunction) (tvfState, 
 			col = strings.ToLower(col)
 			idx, ok := plan2.MoTransactionsColName2Index[col]
 			if !ok {
-				return nil, moerr.NewInternalError(proc.Ctx, "invalid column name %s", col)
+				return nil, moerr.NewInternalErrorf(proc.Ctx, "invalid column name %s", col)
 			}
 			tf.ctr.retSchema[i] = plan2.MoTransactionsColTypes[idx]
 		}
@@ -586,7 +586,7 @@ func moCachePrepare(proc *process.Process, tf *TableFunction) (tvfState, error) 
 		col = strings.ToLower(col)
 		idx, ok := plan2.MoCacheColName2Index[col]
 		if !ok {
-			return nil, moerr.NewInternalError(proc.Ctx, "invalid column name %s", col)
+			return nil, moerr.NewInternalErrorf(proc.Ctx, "invalid column name %s", col)
 		}
 		tf.ctr.retSchema[i] = plan2.MoCacheColTypes[idx]
 	}

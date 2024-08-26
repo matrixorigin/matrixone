@@ -225,7 +225,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 	dbName := string(cp.Database)
 	comment := cp.Comment
 	if _, ok := sysDatabases[dbName]; ok {
-		err = moerr.NewInternalError(ctx, "invalid database name '%s', not support publishing system database", dbName)
+		err = moerr.NewInternalErrorf(ctx, "invalid database name '%s', not support publishing system database", dbName)
 		return
 	}
 
@@ -233,7 +233,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 		return
 	}
 	if dbType != "" { //TODO: check the dat_type
-		return moerr.NewInternalError(ctx, "database '%s' is not a user database", cp.Database)
+		return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", cp.Database)
 	}
 
 	tablesStr := pubsub.TableAll
@@ -261,7 +261,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 	updateNormalSubAccounts := make([]int32, 0, len(subInfos))
 	for subAccId, subInfo := range subInfos {
 		if subInfo.Status != pubsub.SubStatusDeleted {
-			err = moerr.NewInternalError(ctx, "unexpected subInfo.Status, actual: %v, expect: %v", subInfo.Status, pubsub.SubStatusDeleted)
+			err = moerr.NewInternalErrorf(ctx, "unexpected subInfo.Status, actual: %v, expect: %v", subInfo.Status, pubsub.SubStatusDeleted)
 			return
 		}
 
@@ -357,7 +357,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		return
 	}
 	if pub == nil {
-		err = moerr.NewInternalError(ctx, "publication '%s' does not exist", pubName)
+		err = moerr.NewInternalErrorf(ctx, "publication '%s' does not exist", pubName)
 		return
 	}
 
@@ -423,14 +423,14 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	if ap.DbName != "" {
 		dbName = ap.DbName
 		if _, ok := sysDatabases[dbName]; ok {
-			return moerr.NewInternalError(ctx, "invalid database name '%s', not support publishing system database", dbName)
+			return moerr.NewInternalErrorf(ctx, "invalid database name '%s', not support publishing system database", dbName)
 		}
 
 		if dbId, dbType, err = getDbIdAndType(ctx, bh, dbName); err != nil {
 			return err
 		}
 		if dbType != "" { //TODO: check the dat_type
-			return moerr.NewInternalError(ctx, "database '%s' is not a user database", dbName)
+			return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", dbName)
 		}
 	}
 
@@ -460,7 +460,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	updateNormalSubAccounts := make([]int32, 0, len(subInfos))
 	for accName, subInfo := range subInfos {
 		if subInfo.Status == pubsub.SubStatusDeleted {
-			err = moerr.NewInternalError(ctx, "unexpected subInfo.Status: %v", subInfo.Status)
+			err = moerr.NewInternalErrorf(ctx, "unexpected subInfo.Status: %v", subInfo.Status)
 			return
 		}
 
@@ -567,7 +567,7 @@ func dropPublication(ctx context.Context, bh BackgroundExec, ifExists bool, pubN
 	}
 	if pub == nil {
 		if !ifExists {
-			err = moerr.NewInternalError(ctx, "publication '%s' does not exist", pubName)
+			err = moerr.NewInternalErrorf(ctx, "publication '%s' does not exist", pubName)
 		}
 		return
 	}
@@ -589,7 +589,7 @@ func dropPublication(ctx context.Context, bh BackgroundExec, ifExists bool, pubN
 	updateDeletedAccounts := make([]int32, 0, len(subInfos))
 	for _, subInfo := range subInfos {
 		if subInfo.Status == pubsub.SubStatusDeleted {
-			err = moerr.NewInternalError(ctx, "unexpected subInfo.Status: %v", subInfo.Status)
+			err = moerr.NewInternalErrorf(ctx, "unexpected subInfo.Status: %v", subInfo.Status)
 			return
 		}
 
@@ -1154,7 +1154,7 @@ func getDbIdAndType(ctx context.Context, bh BackgroundExec, dbName string) (dbId
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(ctx, "database '%s' does not exist", dbName)
+		err = moerr.NewInternalErrorf(ctx, "database '%s' does not exist", dbName)
 		return
 	}
 
@@ -1210,7 +1210,7 @@ func genPubTablesStr(ctx context.Context, bh BackgroundExec, dbName string, tabl
 	for _, tableName := range table {
 		tblName := string(tableName.ObjectName)
 		if !tablesInDb[tblName] {
-			err = moerr.NewInternalError(ctx, "table '%s' not exists", tblName)
+			err = moerr.NewInternalErrorf(ctx, "table '%s' not exists", tblName)
 			return
 		}
 		tablesNames = append(tablesNames, tblName)
@@ -1237,7 +1237,7 @@ func getSetAccounts(
 
 		accInfo, ok := accNameInfoMap[accName]
 		if !ok {
-			return nil, moerr.NewInternalError(ctx, "not existed account name '%s'", accName)
+			return nil, moerr.NewInternalErrorf(ctx, "not existed account name '%s'", accName)
 		}
 		accountMap[accInfo.Id] = accInfo
 	}
@@ -1265,7 +1265,7 @@ func getAddAccounts(
 
 		accInfo, ok := accNameInfoMap[accName]
 		if !ok {
-			return nil, moerr.NewInternalError(ctx, "not existed account name '%s'", accName)
+			return nil, moerr.NewInternalErrorf(ctx, "not existed account name '%s'", accName)
 		}
 		accountMap[accInfo.Id] = accInfo
 	}
@@ -1434,7 +1434,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(newCtx, "there is no publication account %s", pubAccountName)
+		err = moerr.NewInternalErrorf(newCtx, "there is no publication account %s", pubAccountName)
 		return
 	}
 	if accId, err = erArray[0].GetInt64(newCtx, 0, 0); err != nil {
@@ -1446,7 +1446,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 	}
 
 	if accStatus == tree.AccountStatusSuspend.String() {
-		err = moerr.NewInternalError(newCtx, "the account %s is suspended", pubAccountName)
+		err = moerr.NewInternalErrorf(newCtx, "the account %s is suspended", pubAccountName)
 		return
 	}
 
@@ -1457,7 +1457,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 		return
 	}
 	if pubInfo == nil {
-		err = moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
+		err = moerr.NewInternalErrorf(newCtx, "there is no publication %s", pubName)
 		return
 	}
 
@@ -1470,7 +1470,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 			zap.String("databaseName", pubInfo.DbName),
 			zap.String("accountList", pubInfo.SubAccountsStr),
 			zap.String("tenant", tenantInfo.GetTenant()))
-		err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
+		err = moerr.NewInternalErrorf(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
 		return
 	}
 
@@ -1493,7 +1493,7 @@ func checkSubscriptionValid(ctx context.Context, ses FeSession, dbName string) (
 	if err != nil {
 		return nil, err
 	} else if len(subInfos) == 0 {
-		return nil, moerr.NewInternalError(ctx, "there is no subscription for database %s", dbName)
+		return nil, moerr.NewInternalErrorf(ctx, "there is no subscription for database %s", dbName)
 	}
 
 	subInfo := subInfos[0]
@@ -1528,7 +1528,7 @@ func isDbPublishing(ctx context.Context, dbName string, ses FeSession) (ok bool,
 		return false, err
 	}
 	if !execResultArrayHasData(erArray) {
-		return false, moerr.NewInternalError(ctx, "there is no publication for database %s", dbName)
+		return false, moerr.NewInternalErrorf(ctx, "there is no publication for database %s", dbName)
 	}
 	count, err = erArray[0].GetInt64(ctx, 0, 0)
 	if err != nil {

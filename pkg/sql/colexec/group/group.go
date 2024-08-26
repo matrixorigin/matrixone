@@ -264,7 +264,7 @@ func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, ana
 			return result, nil
 
 		default:
-			return vm.NewCallResult(), moerr.NewInternalError(proc.Ctx, "unexpected state %d for group operator.", ctr.state)
+			return vm.NewCallResult(), moerr.NewInternalErrorf(proc.Ctx, "unexpected state %d for group operator.", ctr.state)
 		}
 	}
 }

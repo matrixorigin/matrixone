@@ -285,7 +285,7 @@ func (node *DeleteNode) setPersistedRows() {
 	)
 	if err != nil {
 		for {
-			logutil.Warnf(fmt.Sprintf("load deletes failed, deltaloc: %s, err: %v", node.deltaloc.String(), err))
+			logutil.Warn(fmt.Sprintf("load deletes failed, deltaloc: %s, err: %v", node.deltaloc.String(), err))
 			vectors, closeFunc, err = blockio.LoadTombstoneColumns2(
 				node.Txn.GetContext(),
 				[]uint16{0},

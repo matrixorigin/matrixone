@@ -729,7 +729,7 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 	}
 	pos = newPos
 	if int(paramIdx) >= numParams {
-		return moerr.NewInternalError(ctx, "get param index out of range. get %d, param length is %d", paramIdx, numParams)
+		return moerr.NewInternalErrorf(ctx, "get param index out of range. get %d, param length is %d", paramIdx, numParams)
 	}
 
 	if stmt.params == nil {
@@ -777,7 +777,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 	}
 	if flag != 0 {
 		// TODO only support CURSOR_TYPE_NO_CURSOR flag now
-		return moerr.NewInvalidInput(ctx, "unsupported Prepare flag '%v'", flag)
+		return moerr.NewInvalidInputf(ctx, "unsupported Prepare flag '%v'", flag)
 	}
 
 	// skip iteration-count, always 1
@@ -1710,7 +1710,7 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(ctx context.Context, dat
 		if info.clientPluginName != AuthNativePassword {
 			var err error
 			if info.authResponse, err = mp.negotiateAuthenticationMethod(ctx); err != nil {
-				return false, info, moerr.NewInternalError(ctx, "negotiate authentication method failed. error:%v", err)
+				return false, info, moerr.NewInternalErrorf(ctx, "negotiate authentication method failed. error:%v", err)
 			}
 			info.clientPluginName = AuthNativePassword
 		}
@@ -2658,7 +2658,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 				}
 			}
 		default:
-			return moerr.NewInternalError(mp.ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
+			return moerr.NewInternalErrorf(mp.ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
 		}
 	}
 	err = mp.finishedPacket()

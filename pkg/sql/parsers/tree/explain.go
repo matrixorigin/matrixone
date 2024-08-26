@@ -63,7 +63,7 @@ type ExplainStmt struct {
 
 func (node *ExplainStmt) Format(ctx *FmtCtx) {
 	ctx.WriteString("explain")
-	if node.Options != nil && len(node.Options) > 0 {
+	if len(node.Options) > 0 {
 		ctx.WriteString(" (")
 		var temp string
 		for _, v := range node.Options {
@@ -124,7 +124,7 @@ type ExplainAnalyze struct {
 
 func (node *ExplainAnalyze) Format(ctx *FmtCtx) {
 	ctx.WriteString("explain")
-	if node.Options != nil && len(node.Options) > 0 {
+	if len(node.Options) > 0 {
 		ctx.WriteString(" (")
 		var temp string
 		for _, v := range node.Options {

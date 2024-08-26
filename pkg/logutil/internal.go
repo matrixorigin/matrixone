@@ -192,7 +192,7 @@ func getLoggerEncoder(format string) zapcore.Encoder {
 	case "console":
 		return zapcore.NewConsoleEncoder(encoderConfig)
 	default:
-		panic(moerr.NewInternalError(context.Background(), "unsupported log format: %s", format))
+		panic(moerr.NewInternalErrorf(context.Background(), "unsupported log format: %s", format))
 	}
 }
 

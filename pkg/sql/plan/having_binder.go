@@ -117,13 +117,13 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			},
 		}, nil
 	} else {
-		return nil, moerr.NewSyntaxError(b.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL))
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL))
 	}
 }
 
 func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
-		return nil, moerr.NewSyntaxError(b.GetContext(), "aggregate function %s calls cannot be nested", funcName)
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "aggregate function %s calls cannot be nested", funcName)
 	}
 
 	if funcName == NameGroupConcat {
@@ -188,10 +188,10 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 			case tree.Int:
 				colPos, _ := numVal.Int64()
 				if numVal.Negative() {
-					moerr.NewSyntaxError(b.GetContext(), "ORDER BY position %v is negative", colPos)
+					moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is negative", colPos)
 				}
 				if colPos < 1 || int(colPos) > len(astExpr.Exprs)-1 {
-					return moerr.NewSyntaxError(b.GetContext(), "ORDER BY position %v is not in group_concat arguments", colPos)
+					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is not in group_concat arguments", colPos)
 				}
 				orderExpr = astExpr.Exprs[colPos-1]
 			default:
@@ -276,7 +276,7 @@ func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, dept
 	if b.insideAgg {
 		return nil, moerr.NewSyntaxError(b.GetContext(), "aggregate function calls cannot contain window function calls")
 	} else {
-		return nil, moerr.NewSyntaxError(b.GetContext(), "window %s functions not allowed in having clause", funcName)
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "window %s functions not allowed in having clause", funcName)
 	}
 }
 

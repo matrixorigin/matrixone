@@ -339,7 +339,7 @@ func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatK
 			rt.killQuery(killMyself, statementId)
 		}
 	} else {
-		return moerr.NewInternalError(ctx, "Unknown connection id %d", id)
+		return moerr.NewInternalErrorf(ctx, "Unknown connection id %d", id)
 	}
 	return nil
 }
@@ -433,7 +433,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 func (rm *RoutineManager) MigrateConnectionTo(ctx context.Context, req *query.MigrateConnToRequest) error {
 	routine := rm.getRoutineByConnID(req.ConnID)
 	if routine == nil {
-		return moerr.NewInternalError(ctx, "cannot get routine to migrate connection %d", req.ConnID)
+		return moerr.NewInternalErrorf(ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
 	return routine.migrateConnectionTo(ctx, req)
 }
@@ -441,7 +441,7 @@ func (rm *RoutineManager) MigrateConnectionTo(ctx context.Context, req *query.Mi
 func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromRequest, resp *query.MigrateConnFromResponse) error {
 	routine := rm.getRoutineByConnID(req.ConnID)
 	if routine == nil {
-		return moerr.NewInternalError(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
+		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
 	return routine.migrateConnectionFrom(resp)
 }
@@ -449,7 +449,7 @@ func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromReques
 func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *query.ResetSessionResponse) error {
 	routine := rm.getRoutineByConnID(req.ConnID)
 	if routine == nil {
-		return moerr.NewInternalError(rm.ctx, "cannot get routine to clear session %d", req.ConnID)
+		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to clear session %d", req.ConnID)
 	}
 	return routine.resetSession(rm.baseService.ID(), resp)
 }
@@ -498,7 +498,7 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) error {
 
 	cfg, err := ConstructTLSConfig(rm.ctx, SV.TlsCaFile, SV.TlsCertFile, SV.TlsKeyFile)
 	if err != nil {
-		return moerr.NewInternalError(rm.ctx, "init TLS config error: %v", err)
+		return moerr.NewInternalErrorf(rm.ctx, "init TLS config error: %v", err)
 	}
 
 	rm.tlsConfig = cfg

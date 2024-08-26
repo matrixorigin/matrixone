@@ -108,7 +108,7 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc *process.Process, tableFunctio
 		idx, ok := plan.MetadataScanInfo_MetadataScanInfoType_value[colname]
 		if !ok {
 			opBat.Clean(proc.GetMPool())
-			return moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", colname)
+			return moerr.NewInternalErrorf(proc.Ctx, "bad input select columns name %v", colname)
 		}
 
 		switch plan.MetadataScanInfo_MetadataScanInfoType(idx) {
