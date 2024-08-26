@@ -35,30 +35,28 @@ const (
 )
 
 const (
-	SnapshotAttr_TID                            = catalog.SnapshotAttr_TID
-	SnapshotAttr_DBID                           = catalog.SnapshotAttr_DBID
-	ObjectAttr_ID                               = catalog.ObjectAttr_ID
-	ObjectAttr_CreateAt                         = catalog.ObjectAttr_CreateAt
-	ObjectAttr_SegNode                          = catalog.ObjectAttr_SegNode
-	SnapshotAttr_BlockMaxRow                    = catalog.SnapshotAttr_BlockMaxRow
-	SnapshotAttr_ObjectMaxBlock                 = catalog.SnapshotAttr_ObjectMaxBlock
-	ObjectAttr_ObjectStats                      = catalog.ObjectAttr_ObjectStats
-	ObjectAttr_State                            = catalog.ObjectAttr_State
-	ObjectAttr_Sorted                           = catalog.ObjectAttr_Sorted
-	EntryNode_CreateAt                          = catalog.EntryNode_CreateAt
-	EntryNode_DeleteAt                          = catalog.EntryNode_DeleteAt
-	SnapshotMetaAttr_BlockInsertBatchStart      = "block_insert_batch_start"
-	SnapshotMetaAttr_BlockInsertBatchEnd        = "block_insert_batch_end"
-	SnapshotMetaAttr_BlockInsertBatchLocation   = "block_insert_batch_location"
-	SnapshotMetaAttr_BlockDeleteBatchStart      = "block_delete_batch_start"
-	SnapshotMetaAttr_BlockDeleteBatchEnd        = "block_delete_batch_end"
-	SnapshotMetaAttr_BlockDeleteBatchLocation   = "block_delete_batch_location"
-	SnapshotMetaAttr_BlockCNInsertBatchLocation = "block_cn_insert_batch_location"
-	SnapshotMetaAttr_SegDeleteBatchStart        = "seg_delete_batch_start"
-	SnapshotMetaAttr_SegDeleteBatchEnd          = "seg_delete_batch_end"
-	SnapshotMetaAttr_SegDeleteBatchLocation     = "seg_delete_batch_location"
-	CheckpointMetaAttr_BlockLocation            = "checkpoint_meta_block_location"
-	CheckpointMetaAttr_SchemaType               = "checkpoint_meta_schema_type"
+	SnapshotAttr_TID                              = catalog.SnapshotAttr_TID
+	SnapshotAttr_DBID                             = catalog.SnapshotAttr_DBID
+	ObjectAttr_ID                                 = catalog.ObjectAttr_ID
+	ObjectAttr_CreateAt                           = catalog.ObjectAttr_CreateAt
+	ObjectAttr_SegNode                            = catalog.ObjectAttr_SegNode
+	SnapshotAttr_BlockMaxRow                      = catalog.SnapshotAttr_BlockMaxRow
+	SnapshotAttr_ObjectMaxBlock                   = catalog.SnapshotAttr_ObjectMaxBlock
+	ObjectAttr_ObjectStats                        = catalog.ObjectAttr_ObjectStats
+	ObjectAttr_State                              = catalog.ObjectAttr_State
+	ObjectAttr_Sorted                             = catalog.ObjectAttr_Sorted
+	EntryNode_CreateAt                            = catalog.EntryNode_CreateAt
+	EntryNode_DeleteAt                            = catalog.EntryNode_DeleteAt
+	SnapshotMetaAttr_BlockInsertBatchStart        = "block_insert_batch_start"
+	SnapshotMetaAttr_BlockInsertBatchEnd          = "block_insert_batch_end"
+	SnapshotMetaAttr_BlockInsertBatchLocation     = "block_insert_batch_location"
+	SnapshotMetaAttr_BlockDeleteBatchStart        = "block_delete_batch_start"
+	SnapshotMetaAttr_BlockDeleteBatchEnd          = "block_delete_batch_end"
+	SnapshotMetaAttr_BlockDeleteBatchLocation     = "block_delete_batch_location"
+	SnapshotMetaAttr_DataObjectBatchLocation      = "data_object_batch_location"
+	SnapshotMetaAttr_TombstoneObjectBatchLocation = "tombstone_object_batch_location"
+	CheckpointMetaAttr_BlockLocation              = "checkpoint_meta_block_location"
+	CheckpointMetaAttr_SchemaType                 = "checkpoint_meta_schema_type"
 
 	CheckpointMetaAttr_StorageUsageInsLocation = "checkpoint_meta_storage_usage_ins_location"
 	CheckpointMetaAttr_StorageUsageDelLocation = "checkpoint_meta_storage_usage_del_location"
@@ -209,30 +207,12 @@ var (
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	}
-	MetaSchemaAttr_V1 = []string{
-		SnapshotAttr_TID,
-		SnapshotMetaAttr_BlockInsertBatchStart,
-		SnapshotMetaAttr_BlockInsertBatchEnd,
-		SnapshotMetaAttr_BlockDeleteBatchStart,
-		SnapshotMetaAttr_BlockDeleteBatchEnd,
-		SnapshotMetaAttr_SegDeleteBatchStart,
-		SnapshotMetaAttr_SegDeleteBatchEnd,
-	}
-	MetaShcemaTypes_V1 = []types.Type{
-		types.New(types.T_uint64, 0, 0),
-		types.New(types.T_int32, 0, 0),
-		types.New(types.T_int32, 0, 0),
-		types.New(types.T_int32, 0, 0),
-		types.New(types.T_int32, 0, 0),
-		types.New(types.T_int32, 0, 0),
-		types.New(types.T_int32, 0, 0),
-	}
 	MetaSchemaAttr = []string{
 		SnapshotAttr_TID,
 		SnapshotMetaAttr_BlockInsertBatchLocation,
-		SnapshotMetaAttr_BlockCNInsertBatchLocation,
 		SnapshotMetaAttr_BlockDeleteBatchLocation,
-		SnapshotMetaAttr_SegDeleteBatchLocation,
+		SnapshotMetaAttr_DataObjectBatchLocation,
+		SnapshotMetaAttr_TombstoneObjectBatchLocation,
 		CheckpointMetaAttr_StorageUsageInsLocation,
 		CheckpointMetaAttr_StorageUsageDelLocation,
 	}
@@ -274,7 +254,7 @@ var (
 	}
 
 	BaseAttr = []string{
-		catalog.AttrRowID,
+		catalog.PhyAddrColumnName,
 		catalog.AttrCommitTs,
 	}
 	BaseTypes = []types.Type{
@@ -468,19 +448,6 @@ func init() {
 			}
 		} else {
 			if err := MetaSchema.AppendCol(colname, MetaShcemaTypes[i]); err != nil {
-				panic(err)
-			}
-		}
-	}
-
-	MetaSchema_V1 = catalog.NewEmptySchema("meta")
-	for i, colname := range MetaSchemaAttr_V1 {
-		if i == 0 {
-			if err := MetaSchema_V1.AppendPKCol(colname, MetaShcemaTypes_V1[i], 0); err != nil {
-				panic(err)
-			}
-		} else {
-			if err := MetaSchema_V1.AppendCol(colname, MetaShcemaTypes_V1[i]); err != nil {
 				panic(err)
 			}
 		}

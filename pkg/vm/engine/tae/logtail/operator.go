@@ -59,7 +59,7 @@ func (c *BoundTableOperator) processTableData() error {
 	}
 	dirty := c.reader.GetDirtyByTable(c.dbID, c.tableID)
 	for _, dirtyObj := range dirty.Objs {
-		obj, err := tbl.GetObjectByID(dirtyObj.ID)
+		obj, err := tbl.GetObjectByID(dirtyObj.ID, false)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 				continue
@@ -71,12 +71,18 @@ func (c *BoundTableOperator) processTableData() error {
 		}
 
 	}
-	tombstones := tbl.GetDeleteList().Copy().Items()
-	for _, deletes := range tombstones {
-		err = c.visitor.OnTombstone(deletes)
+	for _, dirtyObj := range dirty.Tombstones {
+		obj, err := tbl.GetObjectByID(dirtyObj.ID, true)
 		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				continue
+			}
 			return err
 		}
+		if err = c.visitor.OnTombstone(obj); err != nil {
+			return err
+		}
+
 	}
 	return nil
 }

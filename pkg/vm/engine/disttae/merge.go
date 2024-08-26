@@ -252,7 +252,7 @@ func (t *cnMergeTask) prepareCommitEntry() *api.MergeCommitEntry {
 }
 
 func (t *cnMergeTask) PrepareNewWriter() *blockio.BlockWriter {
-	return mergesort.GetNewWriter(t.fs, t.version, t.colseqnums, t.sortkeyPos, t.sortkeyIsPK)
+	return mergesort.GetNewWriter(t.fs, t.version, t.colseqnums, t.sortkeyPos, t.sortkeyIsPK, false) // TODO obj.isTombstone
 }
 
 // readblock reads block data. there is no rowid column, no ablk

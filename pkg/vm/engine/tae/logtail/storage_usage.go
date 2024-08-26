@@ -450,7 +450,7 @@ func (m *TNUsageMemo) checkSpecial(usage UsageData, tbl *catalog.TableEntry) tri
 		return yeah
 	}
 
-	schema := tbl.GetLastestSchema()
+	schema := tbl.GetLastestSchema(false)
 	if strings.ToLower(schema.Relkind) == cluster {
 		return yeah
 	}
@@ -756,17 +756,12 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 	}()
 
 	for x := range m.pendingReplay.datas {
-		if m.pendingReplay.vers[x] < CheckpointVersion9 {
-			// haven't StorageUsageIns batch
-			// haven't StorageUsageDel batch
-			continue
-		}
 
 		insVecs := getStorageUsageBatVectors(m.pendingReplay.datas[x].bats[StorageUsageInsIDX])
 		accCol, dbCol, tblCol, sizeCol := getStorageUsageVectorCols(insVecs)
 
-		var skip bool
-		var log string
+		// var skip bool
+		// var log string
 		for y := 0; y < len(accCol); y++ {
 			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y], unknown}
 
@@ -775,31 +770,31 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 			//
 			// (if a table or db recreate, it's id will change)
 			//
-			if m.pendingReplay.vers[x] < CheckpointVersion11 {
-				// here only remove the deleted db and table.
-				// if table has deletes, we update it in gckp
-				usage, log, skip = try2RemoveStaleData(usage, c)
-				if skip {
-					buf.WriteString(log)
-					continue
-				}
-				if m.pendingReplay.delayed == nil {
-					m.pendingReplay.delayed = make(map[uint64]UsageData)
-				}
-				if old, ok := m.pendingReplay.delayed[usage.TblId]; !ok {
-					m.pendingReplay.delayed[usage.TblId] = usage
-				} else {
-					old.Size += usage.Size
-					m.pendingReplay.delayed[usage.TblId] = old
-				}
-			}
+			// if m.pendingReplay.vers[x] < CheckpointVersion11 {
+			// 	// here only remove the deleted db and table.
+			// 	// if table has deletes, we update it in gckp
+			// 	usage, log, skip = try2RemoveStaleData(usage, c)
+			// 	if skip {
+			// 		buf.WriteString(log)
+			// 		continue
+			// 	}
+			// 	if m.pendingReplay.delayed == nil {
+			// 		m.pendingReplay.delayed = make(map[uint64]UsageData)
+			// 	}
+			// 	if old, ok := m.pendingReplay.delayed[usage.TblId]; !ok {
+			// 		m.pendingReplay.delayed[usage.TblId] = usage
+			// 	} else {
+			// 		old.Size += usage.Size
+			// 		m.pendingReplay.delayed[usage.TblId] = old
+			// 	}
+			// }
 			m.DeltaUpdate(usage, false)
 		}
 
-		if m.pendingReplay.vers[x] < CheckpointVersion11 {
-			// haven't StorageUsageDel batch
-			continue
-		}
+		// if m.pendingReplay.vers[x] < CheckpointVersion11 {
+		// 	// haven't StorageUsageDel batch
+		// 	continue
+		// }
 
 		delVecs := getStorageUsageBatVectors(m.pendingReplay.datas[x].bats[StorageUsageDelIDX])
 		accCol, dbCol, tblCol, sizeCol = getStorageUsageVectorCols(delVecs)
@@ -1253,10 +1248,10 @@ func loadMetaBat(
 	var idxes []uint16
 
 	for idx := 0; idx < len(locations); idx++ {
-		if versions[idx] < CheckpointVersion11 {
-			// start with version 11, storage usage ins/del bat's locations is recorded in meta bat.
-			continue
-		}
+		// if versions[idx] < CheckpointVersion11 {
+		// 	// start with version 11, storage usage ins/del bat's locations is recorded in meta bat.
+		// 	continue
+		// }
 
 		data := NewCNCheckpointData(sid)
 

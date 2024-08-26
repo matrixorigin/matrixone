@@ -17,13 +17,16 @@ package test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -31,6 +34,9 @@ import (
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/panjf2000/ants/v2"
@@ -116,14 +122,14 @@ func Test_Append(t *testing.T) {
 		txn, _ := taeEngine.GetDB().StartTxn(nil)
 		database, _ = txn.GetDatabase(databaseName)
 		rel, _ = database.GetRelationByName(schema.Name)
-		_, err = rel.CreateObject()
+		_, err = rel.CreateObject(false)
 		assert.Nil(t, err)
 	}
 	{
 		txn, _ := taeEngine.GetDB().StartTxn(nil)
 		database, _ = txn.GetDatabase(databaseName)
 		rel, _ = database.GetRelationByName(schema.Name)
-		objIt := rel.MakeObjectIt()
+		objIt := rel.MakeObjectIt(false)
 		objCnt := uint32(0)
 		blkCnt := uint32(0)
 		for objIt.Next() {
@@ -355,7 +361,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 		database, _ = txn.GetDatabase(databaseName)
 		rel, _ = database.GetRelationByName(schema.Name)
 
-		iter := rel.MakeObjectIt()
+		iter := rel.MakeObjectIt(false)
 		iter.Next()
 		blkId := iter.GetObject().GetMeta().(*catalog.ObjectEntry).AsCommonID()
 		// delete one row on the 1st blk
@@ -390,6 +396,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 		fmt.Println(stats.String(), stats.Details.DirtyBlocks)
 		require.Equal(t, 0, stats.InmemRows.InvisibleCnt)
 		require.Equal(t, 0, len(stats.Details.DirtyBlocks))
+		require.Equal(t, 3, stats.DeltaLocationRowsCnt)
 	}
 }
 
@@ -449,7 +456,7 @@ func Test_EmptyObjectStats(t *testing.T) {
 		database, _ = txn.GetDatabase(databaseName)
 		rel, _ = database.GetRelationByName(schema.Name)
 
-		iter := rel.MakeObjectIt()
+		iter := rel.MakeObjectIt(false)
 		iter.Next()
 		blkId := iter.GetObject().GetMeta().(*catalog.ObjectEntry).AsCommonID()
 		// delete one row on the 1st blk
@@ -591,5 +598,157 @@ func Test_SubscribeUnsubscribeConsistency(t *testing.T) {
 		if try--; try <= 0 {
 			break
 		}
+	}
+}
+
+// root case:
+// the deletes in tombstone object will be skipped when reader apply deletes on the in-mem data.
+func Test_Bug_DupEntryWhenGCInMemTombstones(t *testing.T) {
+	var (
+		opts         testutil.TestOptions
+		tableName    = "test1"
+		databaseName = "db1"
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(opts, t)
+	defer p.Close()
+
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Name = tableName
+	schema.Comment = "rows:20;blks:2"
+	schema.BlockMaxRows = 20
+	schema.ObjectMaxBlocks = 2
+
+	txnop := p.StartCNTxn()
+	_, _ = p.CreateDBAndTable(txnop, databaseName, schema)
+	require.NoError(t, txnop.Commit(ctx))
+
+	txnop = p.StartCNTxn()
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	require.True(t, ok)
+
+	exec := v.(executor.SQLExecutor)
+
+	// insert 4 rows
+	{
+		res, err := exec.Exec(p.Ctx,
+			fmt.Sprintf("insert into `%s`.`%s` values(1,1,1),(2,2,2),(3,3,3),(4,4,4);",
+				databaseName, tableName),
+			executor.Options{}.
+				WithTxn(txnop).
+				WithWaitCommittedLogApplied())
+		require.NoError(t, err)
+		res.Close()
+		require.NoError(t, txnop.Commit(ctx))
+	}
+
+	time.Sleep(time.Second)
+
+	// delete row (1,1,1)
+	{
+		txnop = p.StartCNTxn()
+		res, err := exec.Exec(p.Ctx,
+			fmt.Sprintf("delete from `%s`.`%s` where `%s`=1;",
+				databaseName, tableName, schema.GetPrimaryKey().Name),
+			executor.Options{}.
+				WithTxn(txnop).
+				WithWaitCommittedLogApplied())
+
+		require.NoError(t, err)
+		res.Close()
+		require.NoError(t, txnop.Commit(ctx))
+	}
+
+	// flush tombstone only
+	{
+		tnTxnop, err := p.T.GetDB().StartTxn(nil)
+		require.NoError(t, err)
+
+		dbHandle, err := tnTxnop.GetDatabase(databaseName)
+		require.NoError(t, err)
+
+		relHandle, err := dbHandle.GetRelationByName(tableName)
+		require.NoError(t, err)
+
+		it := relHandle.MakeObjectIt(true)
+		it.Next()
+		tombstone := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		require.NoError(t, it.Close())
+
+		worker := ops.NewOpWorker(context.Background(), "xx")
+		worker.Start()
+		defer worker.Stop()
+
+		task1, err := jobs.NewFlushTableTailTask(
+			tasks.WaitableCtx, tnTxnop, nil,
+			[]*catalog.ObjectEntry{tombstone}, p.T.GetDB().Runtime)
+
+		require.NoError(t, err)
+		worker.SendOp(task1)
+		err = task1.WaitDone(context.Background())
+		require.NoError(t, err)
+		require.NoError(t, tnTxnop.Commit(ctx))
+	}
+
+	time.Sleep(time.Second * 1)
+
+	// check left rows
+	{
+		txnop = p.StartCNTxn()
+		res, err := exec.Exec(p.Ctx,
+			fmt.Sprintf("select * from `%s`.`%s` order by `%s` desc;",
+				databaseName, tableName, schema.GetPrimaryKey().Name),
+			executor.Options{}.
+				WithTxn(txnop).
+				WithWaitCommittedLogApplied())
+		require.NoError(t, err)
+		require.NoError(t, txnop.Commit(ctx))
+
+		fmt.Println(common.MoBatchToString(res.Batches[0], 1000))
+		require.Equal(t, res.Batches[0].RowCount(), 3)
+		require.Equal(t, 0,
+			slices.Compare(
+				vector.MustFixedCol[int32](res.Batches[0].Vecs[schema.GetPrimaryKey().Idx]),
+				[]int32{4, 3, 2}))
+
+		res.Close()
+	}
+
+	// re-insert the deleted row (1,1,1)
+	{
+		txnop = p.StartCNTxn()
+		res, err := exec.Exec(p.Ctx,
+			fmt.Sprintf("insert into `%s`.`%s` values(1,1,1);",
+				databaseName, tableName),
+			executor.Options{}.
+				WithTxn(txnop).
+				WithWaitCommittedLogApplied())
+		res.Close()
+		require.NoError(t, err)
+		require.NoError(t, txnop.Commit(ctx))
+	}
+
+	{
+		txnop = p.StartCNTxn()
+		res, err := exec.Exec(p.Ctx,
+			fmt.Sprintf("select * from `%s`.`%s` order by `%s` desc;",
+				databaseName, tableName, schema.GetPrimaryKey().Name),
+			executor.Options{}.
+				WithTxn(txnop).
+				WithWaitCommittedLogApplied())
+		require.NoError(t, err)
+		require.NoError(t, txnop.Commit(ctx))
+
+		fmt.Println(common.MoBatchToString(res.Batches[0], 1000))
+		require.Equal(t, res.Batches[0].RowCount(), 4)
+		require.Equal(t, 0,
+			slices.Compare(
+				vector.MustFixedCol[int32](res.Batches[0].Vecs[schema.GetPrimaryKey().Idx]),
+				[]int32{4, 3, 2, 1}))
+		res.Close()
 	}
 }

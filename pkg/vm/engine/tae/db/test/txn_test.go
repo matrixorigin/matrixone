@@ -241,13 +241,13 @@ func (c *APP1Client) CheckBound() {
 // TODO: rewrite
 func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint32, count uint64, err error) {
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
-	blockIt := rel.MakeObjectIt()
-	var view *containers.Batch
+	blockIt := rel.MakeObjectIt(false)
 	found := false
 	for blockIt.Next() {
 		blk := blockIt.GetObject()
 		for j := 0; j < blk.BlkCnt(); j++ {
-			view, err = blk.GetColumnDataByName(context.Background(), uint16(j), repertory.ColDefs[1].Name, common.DefaultAllocator)
+			var view *containers.Batch
+			err = blk.HybridScan(context.Background(), &view, uint16(j), []int{repertory.ColDefs[1].Idx}, common.DefaultAllocator)
 			if err != nil {
 				return
 			}
@@ -292,7 +292,7 @@ func (c *APP1Client) GetGoodEntry(goodId uint64) (id *common.ID, offset uint32, 
 
 	entry = new(APP1Goods)
 	entry.ID = goodId
-	price, _, _ := goodRel.GetValue(id, offset, 2)
+	price, _, _ := goodRel.GetValue(id, offset, 2, false)
 	entry.Price = price.(float64)
 	return
 }
@@ -510,8 +510,7 @@ func TestApp1(t *testing.T) {
 			err := txn.Rollback(context.Background())
 			assert.Nil(t, err)
 		} else {
-			err := txn.Commit(context.Background())
-			assert.Nil(t, err)
+			txn.Commit(context.Background())
 		}
 		if txn.GetTxnState(true) == txnif.TxnStateRollbacked {
 			t.Log(txn.String())
@@ -551,8 +550,9 @@ func TestWarehouse(t *testing.T) {
 		rel, err := GetWarehouseRelation("test", txn)
 		assert.Nil(t, err)
 		blk := testutil.GetOneObject(rel)
-		view, _ := blk.GetColumnDataById(context.Background(), 0, 1, common.DefaultAllocator)
-		t.Log(view.String())
+		var view *containers.Batch
+		blk.Scan(ctx, &view, 0, []int{1}, common.DefaultAllocator)
+		t.Log(view.Vecs[0].String())
 		defer view.Close()
 		testutil.CheckAllColRowsByScan(t, rel, 20, false)
 		_ = txn.Commit(context.Background())

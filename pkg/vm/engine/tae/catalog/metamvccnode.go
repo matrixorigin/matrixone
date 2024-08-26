@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -213,7 +212,8 @@ type ObjectNode struct {
 	SortHint uint64 // sort object by create time, make iteration on object determined
 	sorted   bool   // deprecated
 
-	remainingRows *common.FixedSampleIII[int]
+	// for tombstone
+	IsTombstone bool
 }
 
 const (
@@ -241,6 +241,11 @@ func (node *ObjectNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 1
+	_, err = r.Read(types.EncodeBool(&node.IsTombstone))
+	if err != nil {
+		return
+	}
+	n += 1
 	return
 }
 
@@ -261,6 +266,11 @@ func (node *ObjectNode) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += 8
 	_, err = w.Write(types.EncodeBool(&node.sorted))
+	if err != nil {
+		return
+	}
+	n += 1
+	_, err = w.Write(types.EncodeBool(&node.IsTombstone))
 	if err != nil {
 		return
 	}

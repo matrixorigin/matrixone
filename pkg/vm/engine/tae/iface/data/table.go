@@ -29,6 +29,6 @@ type TableHandle interface {
 }
 
 type Table interface {
-	GetHandle() TableHandle
-	ApplyHandle(TableHandle)
+	GetHandle(bool) TableHandle
+	ApplyHandle(TableHandle, bool)
 }

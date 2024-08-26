@@ -58,7 +58,7 @@ func ConstructInExpr(
 func TransferTombstones(
 	ctx context.Context,
 	table *txnTable,
-	state *logtailreplay.PartitionState,
+	state *logtailreplay.PartitionStateInProgress,
 	deletedObjects, createdObjects map[objectio.ObjectNameShort]struct{},
 	mp *mpool.MPool,
 	fs fileservice.FileService,
