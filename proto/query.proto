@@ -274,7 +274,7 @@ message Response {
   GetReplicaCountResponse GetReplicaCount = 27 [ (gogoproto.nullable) = false ];
   // ResetSessionResponse is the response of ResetSessionRequest.
   ResetSessionResponse ResetSessionResponse = 28;
-  GoMaxProcsResponse GoMaxProcsResponse = 29;
+  GoMaxProcsResponse GoMaxProcsResponse = 29  [ (gogoproto.nullable) = false ];
   FileServiceCacheResponse FileServiceCacheResponse = 30;
   FileServiceCacheEvictResponse FileServiceCacheEvictResponse = 31;
 }
