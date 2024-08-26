@@ -22,14 +22,11 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -62,8 +59,15 @@ func TestNormalDeletion(t *testing.T) {
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
 
+	database := mock_frontend.NewMockDatabase(ctrl)
+	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).AnyTimes()
+
 	relation := mock_frontend.NewMockRelation(ctrl)
+	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
+
 	proc := testutil.NewProc()
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
@@ -76,63 +80,35 @@ func TestNormalDeletion(t *testing.T) {
 				SchemaName: "testDb",
 				ObjName:    "testTable",
 			},
-			Engine: eng,
+			Engine:        eng,
+			PrimaryKeyIdx: 1,
 		},
-		ctr: &container{
+		ctr: container{
 			source: relation,
 		},
 	}
 
-	batch1 := &batch.Batch{
-		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
-			testutil.MakeScalarInt64(3, 3),
-			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil),
-			testutil.MakeScalarVarchar("d", 3),
-			testutil.MakeScalarNull(types.T_int64, 3),
-		},
-		Attrs: []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
-		Cnt:   1,
-	}
-	batch1.SetRowCount(3)
-
-	reader := mock_frontend.NewMockReader(ctrl)
-	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, expr *plan.Expr, b, c interface{}) (*batch.Batch, error) {
-		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
-
-		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-
-		err = vector.AppendFixed(bat.GetVector(1), uint64(272464), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-
-		err = vector.AppendBytes(bat.GetVector(2), []byte("empno"), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-		bat.SetRowCount(bat.GetVector(1).Length())
-		return bat, nil
-	}).AnyTimes()
-	reader.EXPECT().Close().Return(nil).AnyTimes()
-	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
-	childArg := &table_scan.TableScan{
-		Reader: reader,
-	}
-	err := childArg.Prepare(proc)
+	resetChildren(&arg)
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+	_, err = arg.Call(proc)
 	require.NoError(t, err)
 
-	arg.SetChildren([]vm.Operator{childArg})
+	arg.Reset(proc, false, nil)
+
+	err = arg.Prepare(proc)
+	require.NoError(t, err)
 	_, err = arg.Call(proc)
 	require.NoError(t, err)
 	arg.Free(proc, false, nil)
-	arg.GetChildren(0).Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func resetChildren(arg *Deletion) {
+	op := colexec.NewMockOperator()
+	bat := colexec.MakeMockBatchsWithRowID()
+	op.WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
 }

@@ -53,12 +53,18 @@ func (op *MockOperator) Release() {
 }
 
 func (op *MockOperator) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	op.Free(proc, pipelineFailed, err)
+	for i := range op.batchs {
+		if op.batchs[i] != nil && op.batchs[i] != batch.EmptyBatch {
+			op.batchs[i].CleanOnlyData()
+		}
+	}
 }
 
 func (op *MockOperator) Free(proc *process.Process, pipelineFailed bool, err error) {
 	for i := range op.batchs {
-		op.batchs[i].Clean(proc.Mp())
+		if op.batchs[i] != nil && op.batchs[i] != batch.EmptyBatch {
+			op.batchs[i].Clean(proc.Mp())
+		}
 	}
 	op.batchs = nil
 	op.current = 0
@@ -82,6 +88,9 @@ func (op *MockOperator) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
+	if op.current > 0 {
+		op.batchs[op.current-1].CleanOnlyData()
+	}
 	result.Batch = op.batchs[op.current]
 	op.current = op.current + 1
 	return result, nil
@@ -103,6 +112,24 @@ func makeMockVecs() []*vector.Vector {
 func MakeMockBatchs() *batch.Batch {
 	bat := batch.New(true, []string{"a", "b", "c", "d", "e"})
 	vecs := makeMockVecs()
+	bat.Vecs = vecs
+	bat.SetRowCount(vecs[0].Length())
+	return bat
+}
+
+func makeMockTimeWinVecs() []*vector.Vector {
+	vecs := make([]*vector.Vector, 2)
+	vecs[0] = testutil.MakeDatetimeVector([]string{
+		"2021-01-01 00:00:01", "2025-01-01 00:00:02",
+		"2021-01-01 00:00:03", "2025-01-01 00:00:04",
+	}, nil)
+	vecs[1] = testutil.MakeInt32Vector([]int32{1, 4, 5, 1000}, nil)
+	return vecs
+}
+
+func MakeMockTimeWinBatchs() *batch.Batch {
+	bat := batch.New(true, []string{"ts", "b"})
+	vecs := makeMockTimeWinVecs()
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
 	return bat

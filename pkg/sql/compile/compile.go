@@ -68,7 +68,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -329,7 +328,7 @@ func (c *Compile) run(s *Scope) error {
 		}
 		mergeArg := s.RootOp.(*mergedelete.MergeDelete)
 		if mergeArg.AddAffectedRows {
-			c.addAffectedRows(mergeArg.AffectedRows)
+			c.addAffectedRows(mergeArg.AffectedRows())
 		}
 		return nil
 	case Remote:
@@ -421,6 +420,16 @@ func (c *Compile) SetIsPrepare(isPrepare bool) {
 	c.isPrepare = isPrepare
 }
 
+<<<<<<< HEAD
+=======
+func (c *Compile) FreeOperator() {
+	for _, s := range c.scope {
+		s.FreeOperator(c)
+	}
+}
+
+/*
+>>>>>>> 287f2d7c8aae85fa6bea04d31ff42b054cc151a1
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)
@@ -1795,7 +1804,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, first
 		node: n,
 	}
 
-	op := constructTableScan()
+	op := constructTableScan(n)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, firstFlag)
 	s.setRootOperator(op)
 	s.Proc = c.proc.NewNoContextChildProc(0)
@@ -2660,7 +2669,7 @@ func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
-		op := offset.NewArgument().WithOffset(n.Offset)
+		op := constructOffset(n)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
 		c.anal.isFirst = false
@@ -2670,7 +2679,7 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag := c.anal.isFirst
-	arg := constructMergeOffset(n)
+	arg := constructOffset(n)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -2701,7 +2710,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag = c.anal.isFirst
-	arg := constructMergeLimit(n)
+	arg := constructLimit(n)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -3153,7 +3162,7 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	rs.setRootOperator(mergeOp1)
 
 	currentFirstFlag := c.anal.isFirst
-	mergecteArg := mergecte.NewArgument()
+	mergecteArg := mergecte.NewArgument().WithNodeCnt(len(n.SourceStep) - 1)
 	mergecteArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergecteArg)
 	c.anal.isFirst = false

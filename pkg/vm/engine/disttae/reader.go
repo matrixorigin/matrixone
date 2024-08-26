@@ -140,8 +140,9 @@ func (r *emptyReader) Read(
 	_ *plan.Expr,
 	_ *mpool.MPool,
 	_ engine.VectorPool,
-) (*batch.Batch, error) {
-	return nil, nil
+	_ *batch.Batch,
+) (bool, error) {
+	return true, nil
 }
 
 func prepareGatherStats(ctx context.Context) (context.Context, int64, int64) {
@@ -207,34 +208,34 @@ func (r *mergeReader) Read(
 	expr *plan.Expr,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
-) (*batch.Batch, error) {
+	bat *batch.Batch,
+) (bool, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	if len(r.rds) == 0 {
-		return nil, nil
+		return true, nil
 	}
 	for len(r.rds) > 0 {
-		bat, err := r.rds[0].Read(ctx, cols, expr, mp, vp)
+		isEnd, err := r.rds[0].Read(ctx, cols, expr, mp, vp, bat)
 		if err != nil {
 			for _, rd := range r.rds {
 				rd.Close()
 			}
-			return nil, err
+			return false, err
 		}
-		if bat == nil {
+		if isEnd {
 			r.rds = r.rds[1:]
-		}
-		if bat != nil {
+		} else {
 			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 				logutil.Debug(testutil.OperatorCatchBatch("merge reader", bat))
 			}
-			return bat, nil
+			return false, nil
 		}
 	}
-	return nil, nil
+	return true, nil
 }
 
 // -----------------------------------------------------------------
@@ -320,7 +321,8 @@ func (r *reader) Read(
 	expr *plan.Expr,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
-) (bat *batch.Batch, err error) {
+	bat *batch.Batch,
+) (isEnd bool, err error) {
 
 	var dataState engine.DataState
 
@@ -334,7 +336,7 @@ func (r *reader) Read(
 
 	r.tryUpdateColumns(cols)
 
-	bat, blkInfo, state, err := r.source.Next(
+	blkInfo, state, err := r.source.Next(
 		ctx,
 		cols,
 		r.columns.colTypes,
@@ -342,18 +344,18 @@ func (r *reader) Read(
 		r.memFilter,
 		mp,
 		vp,
-	)
+		bat)
 
 	dataState = state
 
 	if err != nil {
-		return
+		return false, err
 	}
 	if state == engine.End {
-		return nil, nil
+		return true, nil
 	}
 	if state == engine.InMem {
-		return
+		return false, nil
 	}
 	//read block
 	filter := r.withFilterMixin.filterState.filter
@@ -370,7 +372,7 @@ func (r *reader) Read(
 		policy = fileservice.SkipMemoryCacheWrites
 	}
 
-	bat, err = blockio.BlockDataRead(
+	err = blockio.BlockDataRead(
 		statsCtx,
 		r.withFilterMixin.proc.GetService(),
 		blkInfo,
@@ -383,9 +385,10 @@ func (r *reader) Read(
 		filter,
 		r.fs, mp, vp, policy,
 		r.tableDef.Name,
+		bat,
 	)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 
 	if filter.Valid {
@@ -403,5 +406,5 @@ func (r *reader) Read(
 		logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
 	}
 
-	return
+	return false, nil
 }
