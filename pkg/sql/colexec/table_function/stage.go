@@ -26,86 +26,70 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// prepare
-func stageListPrepare(proc *process.Process, tableFunction *TableFunction) (err error) {
-	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
+type stagelistState struct {
+	simpleOneBatchState
+}
 
+// prepare
+func stageListPrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
+	var err error
+	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
+	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
 	for i := range tableFunction.Attrs {
 		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
 	}
-	return err
+	return &stagelistState{}, err
 }
 
 // call
-func stageListCall(_ int, proc *process.Process, tableFunction *TableFunction, result *vm.CallResult) (bool, error) {
+func (s *stagelistState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+	s.startPreamble(tf, proc, nthRow)
 
 	var (
-		err  error
-		rbat *batch.Batch
+		err error
 	)
-	bat := result.Batch
-	defer func() {
-		if err != nil && rbat != nil {
-			rbat.Clean(proc.Mp())
-		}
-	}()
-	if bat == nil {
-		return true, nil
-	}
 
-	v, err := tableFunction.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat}, nil)
-	if err != nil {
-		return false, err
-	}
+	v := tf.ctr.argVecs[0]
 	if v.GetType().Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("stage_list: filepath must be string, but got %s", v.GetType().String()))
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("stage_list: filepath must be string, but got %s", v.GetType().String()))
 	}
 
 	filepath := v.UnsafeGetStringAt(0)
 
-	rbat, err = stageList(proc, tableFunction, filepath)
+	err = stageList(proc, tf, filepath, s.batch)
 	if err != nil {
-		return false, err
+		return err
 	}
 
-	result.Batch = rbat
-	return false, nil
+	return nil
 }
 
-func stageList(proc *process.Process, tableFunction *TableFunction, filepath string) (bat *batch.Batch, err error) {
+func stageList(proc *process.Process, tableFunction *TableFunction, filepath string, bat *batch.Batch) (err error) {
 
 	if len(tableFunction.Attrs) != 1 {
-		return nil, moerr.NewInvalidInput(proc.Ctx, "stage_list: number of output column must be 1.")
-	}
-
-	bat = batch.NewWithSize(len(tableFunction.Attrs))
-	bat.Attrs = tableFunction.Attrs
-	bat.Cnt = 1
-	for i := range tableFunction.ctr.retSchema {
-		bat.Vecs[i] = proc.GetVector(tableFunction.ctr.retSchema[i])
+		return moerr.NewInvalidInput(proc.Ctx, "stage_list: number of output column must be 1.")
 	}
 
 	rs := bat.GetVector(0)
 
 	if len(filepath) == 0 {
 		if err := vector.AppendBytes(rs, nil, true, proc.Mp()); err != nil {
-			return nil, err
+			return err
 		}
-		return bat, nil
+		return nil
 	}
 
 	s, err := function.UrlToStageDef(string(filepath), proc)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	fspath, _, err := s.ToPath()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	idx := strings.LastIndex(fspath, fileservice.ServiceNameSeparator)
@@ -123,15 +107,15 @@ func stageList(proc *process.Process, tableFunction *TableFunction, filepath str
 
 	fileList, err := function.StageListWithPattern(service, pattern, proc)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	for _, f := range fileList {
 		if err := vector.AppendBytes(rs, []byte(f), false, proc.Mp()); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	bat.SetRowCount(len(fileList))
-	return bat, nil
+	return nil
 }

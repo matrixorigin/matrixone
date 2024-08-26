@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -33,11 +34,12 @@ type container struct {
 	msgReceiver  *message.MessageReceiver
 }
 type TableScan struct {
-	ctr            *container
+	ctr            container
 	TopValueMsgTag int32
 	Reader         engine.Reader
 	// letter case: origin
 	Attrs   []string
+	Types   []plan.Type
 	TableID uint64
 
 	vm.OperatorBase
@@ -69,6 +71,11 @@ func NewArgument() *TableScan {
 	return reuse.Alloc[TableScan](nil)
 }
 
+func (tableScan *TableScan) WithTypes(types []plan.Type) *TableScan {
+	tableScan.Types = types
+	return tableScan
+}
+
 func (tableScan *TableScan) Release() {
 	if tableScan != nil {
 		reuse.Free[TableScan](tableScan, nil)
@@ -76,34 +83,39 @@ func (tableScan *TableScan) Release() {
 }
 
 func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	tableScan.Free(proc, pipelineFailed, err)
+	anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
+	allocSize := int64(0)
+	allocSize += int64(tableScan.ctr.maxAllocSize)
+	if tableScan.ProjectList != nil {
+		allocSize += tableScan.ProjectAllocSize
+		tableScan.ResetProjection(proc)
+	}
+	tableScan.ctr.maxAllocSize = 0
+	anal.Alloc(allocSize)
+	tableScan.freeReceiver()
+	tableScan.closeReader()
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
-	anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
-	allocSize := int64(0)
-	if tableScan.ctr != nil {
-		if tableScan.ctr.buf != nil {
-			tableScan.ctr.buf.Clean(proc.Mp())
-			tableScan.ctr.buf = nil
-		}
-		allocSize += int64(tableScan.ctr.maxAllocSize)
-		if tableScan.ctr.msgReceiver != nil {
-			tableScan.ctr.msgReceiver.Free()
-			tableScan.ctr.msgReceiver = nil
-		}
-		tableScan.ctr = nil
+	if tableScan.ctr.buf != nil {
+		tableScan.ctr.buf.Clean(proc.Mp())
+		tableScan.ctr.buf = nil
 	}
+}
 
-	if tableScan.ProjectList != nil {
-		allocSize += tableScan.ProjectAllocSize
-		tableScan.FreeProjection(proc)
+func (tableScan *TableScan) freeReceiver() {
+	if tableScan.ctr.msgReceiver != nil {
+		tableScan.ctr.msgReceiver.Free()
+		tableScan.ctr.msgReceiver = nil
 	}
+}
+
+func (tableScan *TableScan) closeReader() {
 	if tableScan.Reader != nil {
 		e := tableScan.Reader.Close()
 		if e != nil {
 			logutil.Errorf("close reader for table id=%d, err=%v", tableScan.TableID, e)
 		}
+		tableScan.Reader = nil
 	}
-	anal.Alloc(allocSize)
 }
