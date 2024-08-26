@@ -813,7 +813,7 @@ func (s *service) AddTxnFilter(method, value string) error {
 	switch method {
 	case sessionMethod, connectionMethod, tenantMethod, userMethod:
 	default:
-		return moerr.NewNotSupportedNoCtx("method %s not support", method)
+		return moerr.NewNotSupportedNoCtxf("method %s not support", method)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

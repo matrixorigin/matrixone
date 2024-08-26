@@ -191,7 +191,6 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 		vector.Entries[i].allocator = m.memCache
 	}
 	for _, cache := range m.caches {
-		cache := cache
 		if err := cache.Read(ctx, vector); err != nil {
 			return err
 		}

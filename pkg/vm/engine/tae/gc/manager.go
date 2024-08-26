@@ -63,7 +63,7 @@ func (mgr *Manager) addJob(
 	job Job,
 ) {
 	if _, found := mgr.nameIdx[name]; found {
-		panic(moerr.NewInternalErrorNoCtx("duplicate gc job: %s", name))
+		panic(moerr.NewInternalErrorNoCtxf("duplicate gc job: %s", name))
 	}
 	cj := &cronJob{
 		name:     name,

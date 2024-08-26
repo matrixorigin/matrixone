@@ -71,6 +71,8 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 		f, e = moTransactionsCall(idx, proc, tblArg, &result)
 	case "mo_cache":
 		f, e = moCacheCall(idx, proc, tblArg, &result)
+	case "stage_list":
+		f, e = stageListCall(idx, proc, tblArg, &result)
 	default:
 		result.Status = vm.ExecStop
 		return result, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))
@@ -98,12 +100,12 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 
 	if tableFunction.ctr.buf.VectorCount() != len(tblArg.ctr.retSchema) {
 		result.Status = vm.ExecStop
-		return result, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.FuncName)
+		return result, moerr.NewInternalErrorf(proc.Ctx, "table function %s return length mismatch", tblArg.FuncName)
 	}
 	for i := range tblArg.ctr.retSchema {
 		if tableFunction.ctr.buf.GetVector(int32(i)).GetType().Oid != tblArg.ctr.retSchema[i].Oid {
 			result.Status = vm.ExecStop
-			return result, moerr.NewInternalError(proc.Ctx, "table function %s return type mismatch", tblArg.FuncName)
+			return result, moerr.NewInternalErrorf(proc.Ctx, "table function %s return type mismatch", tblArg.FuncName)
 		}
 	}
 
@@ -154,6 +156,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		return moTransactionsPrepare(proc, tblArg)
 	case "mo_cache":
 		return moCachePrepare(proc, tblArg)
+	case "stage_list":
+		return stageListPrepare(proc, tblArg)
 	default:
 		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))
 	}

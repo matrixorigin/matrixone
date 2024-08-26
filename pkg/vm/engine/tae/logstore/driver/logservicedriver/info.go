@@ -249,9 +249,6 @@ func (info *driverInfo) tryGetLogServiceLsnByDriverLsn(driverLsn uint64) (uint64
 				}
 				info.commitCond.Wait()
 				info.commitCond.L.Unlock()
-				if err == nil {
-					break
-				}
 			}
 			if err != nil {
 				return 0, ErrRetryTimeOut

@@ -153,7 +153,7 @@ func (n *nodeList[T]) TxnGetNodeLocked(txn txnif.TxnReader, targetName string) (
 		return false
 	}
 	n.ForEachNodes(fn)
-	if tn == nil && err == nil {
+	if tn == nil {
 		err = moerr.GetOkExpectedEOB()
 	}
 	return

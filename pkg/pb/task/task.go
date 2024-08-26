@@ -65,7 +65,7 @@ func detailsType(d isDetails_Details) (TaskType, error) {
 	case *Details_Retention:
 		return TaskType_TypeRetention, nil
 	default:
-		return TaskType_TypeUnknown, moerr.NewInternalErrorNoCtx("Unknown details type: %T", d)
+		return TaskType_TypeUnknown, moerr.NewInternalErrorNoCtxf("Unknown details type: %T", d)
 	}
 }
 

@@ -86,17 +86,17 @@ func resetGenerateSeriesState(proc *process.Process, tableFunction *TableFunctio
 		switch tableFunction.ctr.generateSeries.startVecType.Oid {
 		case types.T_int32:
 			if endVec.GetType().Oid != types.T_int32 || (stepVec != nil && stepVec.GetType().Oid != types.T_int32) {
-				return moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
+				return moerr.NewInvalidInputf(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
 			}
 			initStartAndEnd[int32](tableFunction, startVec, endVec, stepVec)
 		case types.T_int64:
 			if endVec.GetType().Oid != types.T_int64 || (stepVec != nil && stepVec.GetType().Oid != types.T_int64) {
-				return moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
+				return moerr.NewInvalidInputf(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
 			}
 			initStartAndEnd[int64](tableFunction, startVec, endVec, stepVec)
 		case types.T_datetime:
 			if endVec.GetType().Oid != types.T_datetime || (stepVec != nil && stepVec.GetType().Oid != types.T_varchar) {
-				return moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
+				return moerr.NewInvalidInputf(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
 			}
 			startSlice := vector.MustFixedCol[types.Datetime](startVec)
 			endSlice := vector.MustFixedCol[types.Datetime](endVec)
@@ -138,7 +138,7 @@ func resetGenerateSeriesState(proc *process.Process, tableFunction *TableFunctio
 			tableFunction.ctr.generateSeries.last = newEndSlice[0]
 			tableFunction.ctr.generateSeries.step = stepVec.GetStringAt(0)
 		default:
-			return moerr.NewNotSupported(proc.Ctx, "generate_series not support type %s", tableFunction.ctr.generateSeries.startVecType.Oid.String())
+			return moerr.NewNotSupportedf(proc.Ctx, "generate_series not support type %s", tableFunction.ctr.generateSeries.startVecType.Oid.String())
 
 		}
 	}
@@ -222,7 +222,7 @@ func generateSeriesCall(_ int, proc *process.Process, tableFunction *TableFuncti
 		}
 
 	default:
-		return false, moerr.NewNotSupported(proc.Ctx, "generate_series not support type %s", tableFunction.ctr.generateSeries.startVecType.Oid.String())
+		return false, moerr.NewNotSupportedf(proc.Ctx, "generate_series not support type %s", tableFunction.ctr.generateSeries.startVecType.Oid.String())
 
 	}
 	result.Batch = rbat
@@ -309,12 +309,12 @@ func genStep(ctx context.Context, step string) (num int64, tp types.IntervalType
 	step = trimStep(step)
 	s := strings.Split(step, " ")
 	if len(s) != 2 {
-		err = moerr.NewInvalidInput(ctx, "invalid step '%s'", step)
+		err = moerr.NewInvalidInputf(ctx, "invalid step '%s'", step)
 		return
 	}
 	num, err = strconv.ParseInt(s[0], 10, 64)
 	if err != nil {
-		err = moerr.NewInvalidInput(ctx, "invalid step '%s'", step)
+		err = moerr.NewInvalidInputf(ctx, "invalid step '%s'", step)
 		return
 	}
 	tp, err = types.IntervalTypeOf(s[1])
@@ -392,7 +392,7 @@ func generateDatetime(ctx context.Context, start, end types.Datetime, stepStr st
 			var ok bool
 			i, ok = i.AddInterval(step, tp, types.DateTimeType)
 			if !ok {
-				return nil, moerr.NewInvalidInput(ctx, "invalid step '%s'", stepStr)
+				return nil, moerr.NewInvalidInputf(ctx, "invalid step '%s'", stepStr)
 			}
 		}
 	} else {
@@ -401,7 +401,7 @@ func generateDatetime(ctx context.Context, start, end types.Datetime, stepStr st
 			var ok bool
 			i, ok = i.AddInterval(step, tp, types.DateTimeType)
 			if !ok {
-				return nil, moerr.NewInvalidInput(ctx, "invalid step '%s'", stepStr)
+				return nil, moerr.NewInvalidInputf(ctx, "invalid step '%s'", stepStr)
 			}
 		}
 	}

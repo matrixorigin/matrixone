@@ -128,9 +128,9 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				}
 			}
 			if fstr == "char" && width > types.MaxCharLen {
-				return plan.Type{}, moerr.NewOutOfRange(ctx, "char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
+				return plan.Type{}, moerr.NewOutOfRangef(ctx, "char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if fstr == "varchar" && width > types.MaxVarcharLen {
-				return plan.Type{}, moerr.NewOutOfRange(ctx, "varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
+				return plan.Type{}, moerr.NewOutOfRangef(ctx, "varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
 			if fstr == "char" { // type char
 				return plan.Type{Id: int32(types.T_char), Width: width}, nil
@@ -161,12 +161,12 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			}
 
 			if (fstr == "char" || fstr == "binary") && width > types.MaxCharLen {
-				return plan.Type{}, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
+				return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if (fstr == "varchar" || fstr == "varbinary") && width > types.MaxVarcharLen {
-				return plan.Type{}, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
+				return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			} else if fstr == "vecf32" || fstr == "vecf64" {
 				if width > types.MaxArrayDimension {
-					return plan.Type{}, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxVectorLen : %v", types.MaxArrayDimension)
+					return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxVectorLen : %v", types.MaxArrayDimension)
 				}
 				if width < 1 {
 					return plan.Type{}, moerr.NewOutOfRange(ctx, fstr, " typeLen cannot be less than 1")
@@ -232,7 +232,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 
 			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
 		default:
-			return plan.Type{}, moerr.NewNYI(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
+			return plan.Type{}, moerr.NewNYIf(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
 	}
 	return plan.Type{}, moerr.NewInternalError(ctx, "unknown data type")
@@ -262,7 +262,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 		}
 	}
 	if !nullAbility && isNullAstExpr(expr) {
-		return nil, moerr.NewInvalidInput(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
+		return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
 	}
 
 	if expr == nil {
@@ -281,7 +281,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 
 	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
 		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" {
-			return nil, moerr.NewInvalidInput(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
 		}
 	}
 
@@ -460,7 +460,7 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 
 func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {
-		return nil, moerr.NewInvalidInput(ctx, "invalid default value for column '%s'", d.Name)
+		return nil, moerr.NewInvalidInputf(ctx, "invalid default value for column '%s'", d.Name)
 	}
 	if d.Default.Expr == nil {
 		return &Expr{

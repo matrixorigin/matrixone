@@ -459,7 +459,7 @@ func PopulateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []
 	unexpectEOF := false
 	value, ok := configs[ValueKey].(string)
 	if !ok {
-		return nil, moerr.NewInternalError(ctx, "expected string value for key: %s", ValueKey)
+		return nil, moerr.NewInternalErrorf(ctx, "expected string value for key: %s", ValueKey)
 	}
 	switch ValueType(value) {
 	case JSON:
@@ -502,7 +502,7 @@ func PopulateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []
 			}
 		}
 	default:
-		return nil, moerr.NewInternalError(ctx, "Unsupported value for key: %s", ValueKey)
+		return nil, moerr.NewInternalErrorf(ctx, "Unsupported value for key: %s", ValueKey)
 	}
 
 	n := b.Vecs[0].Length()
@@ -1062,20 +1062,20 @@ func ValidateConfig(ctx context.Context, configs map[string]interface{}, factory
 
 	for _, key := range requiredKeys {
 		if _, exists := configs[key]; !exists {
-			return moerr.NewInternalError(ctx, "missing required key: %s", key)
+			return moerr.NewInternalErrorf(ctx, "missing required key: %s", key)
 		}
 	}
 
 	// Validate keys in configs
 	for key := range configs {
 		if _, ok := allowedKeys[key]; !ok {
-			return moerr.NewInternalError(ctx, "invalid key: %s", key)
+			return moerr.NewInternalErrorf(ctx, "invalid key: %s", key)
 		}
 	}
 
 	value, ok := configs[ValueKey].(string)
 	if !ok {
-		return moerr.NewInternalError(ctx, "expected string value for key: %s", ValueKey)
+		return moerr.NewInternalErrorf(ctx, "expected string value for key: %s", ValueKey)
 	}
 
 	switch ValueType(value) {
@@ -1084,20 +1084,20 @@ func ValidateConfig(ctx context.Context, configs map[string]interface{}, factory
 	case PROTOBUF:
 		// check the schema and message name has been set or not
 		if _, ok := configs[ProtobufSchemaKey]; !ok {
-			return moerr.NewInternalError(ctx, "missing required key: %s", ProtobufSchemaKey)
+			return moerr.NewInternalErrorf(ctx, "missing required key: %s", ProtobufSchemaKey)
 		}
 		if _, ok := configs[ProtobufMessagekey]; !ok {
-			return moerr.NewInternalError(ctx, "missing required key: %s", ProtobufMessagekey)
+			return moerr.NewInternalErrorf(ctx, "missing required key: %s", ProtobufMessagekey)
 		}
 	case PROTOBUFSR:
 		if _, ok := configs[ProtobufMessagekey]; !ok {
-			return moerr.NewInternalError(ctx, "missing required key: %s", ProtobufMessagekey)
+			return moerr.NewInternalErrorf(ctx, "missing required key: %s", ProtobufMessagekey)
 		}
 		if _, ok := configs[SchemaRegistryKey]; !ok {
-			return moerr.NewInternalError(ctx, "missing required key: %s", SchemaRegistryKey)
+			return moerr.NewInternalErrorf(ctx, "missing required key: %s", SchemaRegistryKey)
 		}
 	default:
-		return moerr.NewInternalError(ctx, "Unsupported value for key: %s", ValueKey)
+		return moerr.NewInternalErrorf(ctx, "Unsupported value for key: %s", ValueKey)
 	}
 	// Convert the configuration to map[string]string for Kafka
 	kafkaConfigs := convertToKafkaConfig(configs)

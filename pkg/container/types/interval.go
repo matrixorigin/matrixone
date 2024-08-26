@@ -108,7 +108,7 @@ func IntervalTypeOf(s string) (IntervalType, error) {
 			return IntervalType(i), nil
 		}
 	}
-	return IntervalTypeMax, moerr.NewInvalidInputNoCtx("invalid interval type '%s'", s)
+	return IntervalTypeMax, moerr.NewInvalidInputNoCtxf("invalid interval type '%s'", s)
 }
 
 // parseInts parse integer from string s.   This is used to handle interval values,
@@ -138,7 +138,7 @@ func parseInts(s string, isxxxMicrosecond bool, typeMaxLength int) ([]int64, err
 				ret[cur] = 10*ret[cur] + int64(c-rune('0'))
 				numLength++
 				if ret[cur] < 0 {
-					return nil, moerr.NewInvalidInputNoCtx("invalid time interval value '%s'", s)
+					return nil, moerr.NewInvalidInputNoCtxf("invalid time interval value '%s'", s)
 				}
 			}
 		} else {
@@ -188,9 +188,9 @@ func conv(a []int64, mul []int64, rt IntervalType) (int64, IntervalType, error) 
 		ret += int64(a[i]) * curMul
 	}
 	if largerThanZero && ret < 0 {
-		return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtx("interval type, bad value '%d'", ret)
+		return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("interval type, bad value '%d'", ret)
 	} else if !largerThanZero && ret > 0 {
-		return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtx("interval type, bad value '%d'", ret)
+		return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("interval type, bad value '%d'", ret)
 	}
 
 	return ret, rt, nil
