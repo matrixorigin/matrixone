@@ -118,11 +118,6 @@ func NewTestDisttaeEngine(
 		return nil, err
 	}
 
-	err = de.Engine.InitLogTailPushModel(ctx, de.timestampWaiter)
-	if err != nil {
-		return nil, err
-	}
-
 	qc, _ := qclient.NewQueryClient("", morpc.Config{})
 	sqlExecutor := compile.NewSQLExecutor(
 		"127.0.0.1:2000",
@@ -135,6 +130,9 @@ func NewTestDisttaeEngine(
 		nil, //s.udfService
 	)
 	runtime.ServiceRuntime("").SetGlobalVariables(runtime.InternalSQLExecutor, sqlExecutor)
+
+	// InitLoTailPushModel presupposes that the internal sql executor has been initialized.
+	err = de.Engine.InitLogTailPushModel(ctx, de.timestampWaiter)
 	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
 	return de, err
 }
