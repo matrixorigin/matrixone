@@ -110,9 +110,9 @@ func ListSnapshotMetaWithDiskCleaner(
 	snapshot types.TS,
 	listFunc GetCheckpointRange,
 	metas map[string]struct{},
-) ([]*MetaFile, int, error) {
+) ([]*MetaFile, int, error, []*MetaFile) {
 	if len(metas) == 0 {
-		return nil, 0, nil
+		return nil, 0, nil, nil
 	}
 	metaFiles := make([]*MetaFile, 0)
 	idx := 0
@@ -130,15 +130,27 @@ func ListSnapshotMetaWithDiskCleaner(
 		return metaFiles[i].end.Less(&metaFiles[j].end)
 	})
 
+	mergeMetaFiles := make([]*MetaFile, 0)
+	start := 0
 	for i, file := range metaFiles {
 		// TODO: remove log
 		logutil.Infof("metaFiles[%d]: %v", i, file.String())
+		if file.start.IsEmpty() && i < len(metaFiles)-1 && !metaFiles[i+1].start.IsEmpty() {
+			start = i
+			break
+		}
+	}
+
+	if start > 0 {
+		mergeMetaFiles = append(mergeMetaFiles, metaFiles[:start]...)
+		metaFiles = metaFiles[start:]
 	}
 
 	if listFunc == nil {
 		listFunc = AllAfterAndGCheckpoint
 	}
-	return listFunc(snapshot, metaFiles)
+	files, num, err := listFunc(snapshot, metaFiles)
+	return files, num, err, mergeMetaFiles
 }
 
 func ListSnapshotCheckpointWithMeta(

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -82,8 +83,8 @@ func (it *txnRelationIt) Next() {
 		entry.RLock()
 		// SystemDB can hold table created by different tenant, filter needed.
 		// while the 3 shared tables are not affected
-		if it.txnDB.entry.IsSystemDB() && !isSysTable(entry.GetLastestSchemaLocked().Name) &&
-			entry.GetLastestSchemaLocked().AcInfo.TenantID != txn.GetTenantID() {
+		if it.txnDB.entry.IsSystemDB() && !isSysTable(entry.GetLastestSchemaLocked(false).Name) &&
+			entry.GetLastestSchemaLocked(false).AcInfo.TenantID != txn.GetTenantID() {
 			entry.RUnlock()
 			continue
 		}
@@ -131,8 +132,13 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 	if level < common.PPL1 {
 		return s
 	}
-	it := h.MakeObjectIt()
-	defer it.Close()
+	it := h.MakeObjectIt(false)
+	for it.Next() {
+		object := it.GetObject()
+		defer object.Close()
+		s = fmt.Sprintf("%s\n%s", s, object.String())
+	}
+	it = h.MakeObjectIt(true)
 	for it.Next() {
 		object := it.GetObject()
 		defer object.Close()
@@ -145,7 +151,7 @@ func (h *txnRelation) Close() error { return nil }
 func (h *txnRelation) GetMeta() any { return h.table.entry }
 
 // Schema return schema in txnTable, not the lastest schema in TableEntry
-func (h *txnRelation) Schema() any { return h.table.GetLocalSchema() }
+func (h *txnRelation) Schema(isTombstone bool) any { return h.table.GetLocalSchema(isTombstone) }
 
 func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
 
@@ -154,7 +160,7 @@ func (h *txnRelation) BatchDedup(col containers.Vector) error {
 }
 
 func (h *txnRelation) Append(ctx context.Context, data *containers.Batch) error {
-	if !h.table.GetLocalSchema().IsSameColumns(h.table.GetMeta().GetLastestSchemaLocked()) {
+	if !h.table.GetLocalSchema(false).IsSameColumns(h.table.GetMeta().GetLastestSchemaLocked(false)) {
 		return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
 	}
 	return h.Txn.GetStore().Append(ctx, h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
@@ -169,32 +175,32 @@ func (h *txnRelation) AddObjsWithMetaLoc(ctx context.Context, stats containers.V
 	)
 }
 
-func (h *txnRelation) GetObject(id *types.Objectid) (obj handle.Object, err error) {
+func (h *txnRelation) GetObject(id *types.Objectid, isTombstone bool) (obj handle.Object, err error) {
 	fp := h.table.entry.AsCommonID()
 	fp.SetObjectID(id)
-	return h.Txn.GetStore().GetObject(fp)
+	return h.Txn.GetStore().GetObject(fp, isTombstone)
 }
 
-func (h *txnRelation) CreateObject() (obj handle.Object, err error) {
-	return h.Txn.GetStore().CreateObject(h.table.entry.GetDB().ID, h.table.entry.GetID())
+func (h *txnRelation) CreateObject(isTombstone bool) (obj handle.Object, err error) {
+	return h.Txn.GetStore().CreateObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), isTombstone)
 }
 
-func (h *txnRelation) CreateNonAppendableObject(opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
-	return h.Txn.GetStore().CreateNonAppendableObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), opt)
+func (h *txnRelation) CreateNonAppendableObject(isTombstone bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
+	return h.Txn.GetStore().CreateNonAppendableObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), isTombstone, opt)
 }
 
-func (h *txnRelation) SoftDeleteObject(id *types.Objectid) (err error) {
+func (h *txnRelation) SoftDeleteObject(id *types.Objectid, isTombstone bool) (err error) {
 	fp := h.table.entry.AsCommonID()
 	fp.SetObjectID(id)
-	return h.Txn.GetStore().SoftDeleteObject(fp)
+	return h.Txn.GetStore().SoftDeleteObject(isTombstone, fp)
 }
 
-func (h *txnRelation) MakeObjectItOnSnap() handle.ObjectIt {
-	return newObjectItOnSnap(h.table)
+func (h *txnRelation) MakeObjectItOnSnap(isTombstone bool) handle.ObjectIt {
+	return newObjectItOnSnap(h.table, isTombstone)
 }
 
-func (h *txnRelation) MakeObjectIt() handle.ObjectIt {
-	return newObjectIt(h.table)
+func (h *txnRelation) MakeObjectIt(isTombstone bool) handle.ObjectIt {
+	return newObjectIt(h.table, isTombstone)
 }
 
 func (h *txnRelation) GetByFilter(
@@ -210,7 +216,7 @@ func (h *txnRelation) GetValueByFilter(
 	if err != nil {
 		return
 	}
-	v, isNull, err = h.GetValue(id, row, uint16(col))
+	v, isNull, err = h.GetValue(id, row, uint16(col), false)
 	return
 }
 
@@ -219,11 +225,11 @@ func (h *txnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter,
 	if err != nil {
 		return
 	}
-	schema := h.table.GetLocalSchema()
+	schema := h.table.GetLocalSchema(false)
 	pkDef := schema.GetPrimaryKey()
 	pkVec := makeWorkspaceVector(pkDef.Type)
 	defer pkVec.Close()
-	pkVal, _, err := h.table.GetValue(ctx, id, row, uint16(pkDef.Idx))
+	pkVal, _, err := h.table.GetValue(ctx, id, row, uint16(pkDef.Idx), true)
 	if err != nil {
 		return err
 	}
@@ -240,7 +246,7 @@ func (h *txnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter,
 			colVal = v
 			colValIsNull = isNull
 		} else {
-			colVal, colValIsNull, err = h.table.GetValue(ctx, id, row, uint16(def.Idx))
+			colVal, colValIsNull, err = h.table.GetValue(ctx, id, row, uint16(def.Idx), true)
 			if err != nil {
 				return err
 			}
@@ -294,11 +300,11 @@ func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
 	bid, row := rid.Decode()
 	id := h.table.entry.AsCommonID()
 	id.BlockID = bid
-	schema := h.table.GetLocalSchema()
+	schema := h.table.GetLocalSchema(false)
 	pkDef := schema.GetPrimaryKey()
 	pkVec := makeWorkspaceVector(pkDef.Type)
 	defer pkVec.Close()
-	val, _, err := h.table.GetValue(h.table.store.ctx, id, row, uint16(pkDef.Idx))
+	val, _, err := h.table.GetValue(h.table.store.ctx, id, row, uint16(pkDef.Idx), true)
 	if err != nil {
 		return err
 	}
@@ -307,12 +313,12 @@ func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
 }
 
 func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error {
-	schema := h.table.GetLocalSchema()
+	schema := h.table.GetLocalSchema(false)
 	pkDef := schema.GetPrimaryKey()
 	pkVec := h.table.store.rt.VectorPool.Small.GetVector(&pkDef.Type)
 	defer pkVec.Close()
 	for row := start; row <= end; row++ {
-		pkVal, _, err := h.table.GetValue(h.table.store.GetContext(), id, row, uint16(pkDef.Idx))
+		pkVal, _, err := h.table.GetValue(h.table.store.GetContext(), id, row, uint16(pkDef.Idx), true)
 		if err != nil {
 			return err
 		}
@@ -330,15 +336,15 @@ func (h *txnRelation) GetValueByPhyAddrKey(key any, col int) (any, bool, error) 
 	bid, row := rid.Decode()
 	id := h.table.entry.AsCommonID()
 	id.BlockID = bid
-	return h.Txn.GetStore().GetValue(id, row, uint16(col))
+	return h.Txn.GetStore().GetValue(id, row, uint16(col), false)
 }
 
-func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16) (any, bool, error) {
-	return h.Txn.GetStore().GetValue(id, row, col)
+func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16, skipCheckDelete bool) (any, bool, error) {
+	return h.Txn.GetStore().GetValue(id, row, col, skipCheckDelete)
 }
 
-func (h *txnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
-	return h.Txn.GetStore().LogTxnEntry(h.table.entry.GetDB().ID, h.table.entry.GetID(), entry, readed)
+func (h *txnRelation) LogTxnEntry(entry txnif.TxnEntry, readedObject, readedTombstone []*common.ID) (err error) {
+	return h.Txn.GetStore().LogTxnEntry(h.table.entry.GetDB().ID, h.table.entry.GetID(), entry, readedObject, readedTombstone)
 }
 
 func (h *txnRelation) GetDB() (handle.Database, error) {
@@ -347,4 +353,8 @@ func (h *txnRelation) GetDB() (handle.Database, error) {
 
 func (h *txnRelation) AlterTable(ctx context.Context, req *apipb.AlterTableReq) (err error) {
 	return h.table.AlterTable(ctx, req)
+}
+
+func (h *txnRelation) FillInWorkspaceDeletes(blkID types.Blockid, view **nulls.Nulls) error {
+	return h.table.FillInWorkspaceDeletes(blkID, view)
 }

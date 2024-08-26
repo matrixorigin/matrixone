@@ -64,7 +64,7 @@ func BatchToString(name string, bat *containers.Batch, isSpecialRowID bool) stri
 	_, _ = w.WriteString(fmt.Sprintf("[BatchName=%s]\n", name))
 	for i, vec := range bat.Vecs {
 		_, _ = w.WriteString(fmt.Sprintf("(attr=%s)", bat.Attrs[i]))
-		if bat.Attrs[i] == catalog.AttrRowID {
+		if bat.Attrs[i] == catalog.PhyAddrColumnName {
 			if isSpecialRowID {
 				_, _ = w.WriteString(ToStringTemplate(vec, common.DefaultMaxRowsToPrint, common.WithSpecialRowid{}))
 			} else {
@@ -83,7 +83,7 @@ func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *container
 	bat := containers.NewBatch()
 
 	bat.AddVector(
-		catalog.AttrRowID,
+		catalog.PhyAddrColumnName,
 		containers.MakeVector(types.T_Rowid.ToType(), mp),
 	)
 	bat.AddVector(
@@ -102,6 +102,24 @@ func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *container
 			containers.MakeVector(typs[i], mp),
 		)
 	}
+	return bat
+}
+
+func makeDelRespBatchFromSchema(pkType types.Type, mp *mpool.MPool) *containers.Batch {
+	bat := containers.NewBatch()
+
+	bat.AddVector(
+		catalog.AttrRowID,
+		containers.MakeVector(types.T_Rowid.ToType(), mp),
+	)
+	bat.AddVector(
+		catalog.AttrPKVal,
+		containers.MakeVector(pkType, mp),
+	)
+	bat.AddVector(
+		catalog.AttrCommitTs,
+		containers.MakeVector(types.T_TS.ToType(), mp),
+	)
 	return bat
 }
 
@@ -139,6 +157,29 @@ func DataChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batc
 		}
 		bat.AddVector(src.Attrs[i], src.Vecs[i].TryConvertConst())
 	}
+	return bat
+}
+
+func TombstoneChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batch {
+	seqnums := src.Seqnums
+	if len(seqnums) != len(src.Vecs) {
+		panic("unmatched seqnums length")
+	}
+	if len(src.Vecs) != 4 {
+		panic(fmt.Sprintf("logic err, attr %v", src.Attrs))
+	}
+
+	bat := containers.NewBatchWithCapacity(3)
+
+	// move special column first, no abort column in logtail
+	if src.Seqnums[2] != objectio.SEQNUM_ROWID || src.Seqnums[3] != objectio.SEQNUM_COMMITTS {
+		panic(fmt.Sprintf("bad last seqnums %v", src.Seqnums))
+	}
+	bat.AddVector(src.Attrs[0], src.Vecs[0]) // rowid
+	bat.AddVector(src.Attrs[3], src.Vecs[3]) // committs
+	bat.AddVector(src.Attrs[1], src.Vecs[1]) // pk
+	bat.AddVector(src.Attrs[2], src.Vecs[2]) // PhyAddrColumn
+
 	return bat
 }
 

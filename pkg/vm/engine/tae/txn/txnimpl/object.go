@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -72,20 +73,20 @@ type composedObjectIt struct {
 	uncommitted *catalog.ObjectEntry
 }
 
-func newObjectItOnSnap(table *txnTable) handle.ObjectIt {
+func newObjectItOnSnap(table *txnTable, isTombstone bool) handle.ObjectIt {
 	it := &ObjectIt{
-		linkIt: table.entry.MakeObjectIt(true),
+		linkIt: table.entry.MakeObjectIt(isTombstone),
 		table:  table,
 	}
 	return it
 }
 
-func newObjectIt(table *txnTable) handle.ObjectIt {
-	it := newObjectItOnSnap(table)
-	if table.tableSpace != nil {
+func newObjectIt(table *txnTable, isTombstone bool) handle.ObjectIt {
+	it := newObjectItOnSnap(table, isTombstone)
+	if table.getBaseTable(isTombstone) != nil && table.getBaseTable(isTombstone).tableSpace != nil {
 		cit := &composedObjectIt{
 			ObjectIt:    it.(*ObjectIt),
-			uncommitted: table.tableSpace.entry,
+			uncommitted: table.getBaseTable(isTombstone).tableSpace.entry,
 		}
 		return cit
 	}
@@ -158,13 +159,13 @@ func (obj *txnObject) GetTotalChanges() int {
 	return obj.entry.GetObjectData().GetTotalChanges()
 }
 func (obj *txnObject) RangeDelete(blkID uint16, start, end uint32, dt handle.DeleteType, mp *mpool.MPool) (err error) {
-	schema := obj.table.GetLocalSchema()
+	schema := obj.table.GetLocalSchema(true)
 	pkDef := schema.GetPrimaryKey()
 	pkVec := makeWorkspaceVector(pkDef.Type)
 	defer pkVec.Close()
 	for row := start; row <= end; row++ {
 		pkVal, _, err := obj.entry.GetObjectData().GetValue(
-			obj.table.store.GetContext(), obj.Txn, schema, blkID, int(row), pkDef.Idx, mp,
+			obj.table.store.GetContext(), obj.Txn, schema, blkID, int(row), pkDef.Idx, true, mp,
 		)
 		if err != nil {
 			return err
@@ -185,29 +186,27 @@ func (obj *txnObject) IsUncommitted() bool {
 
 func (obj *txnObject) IsAppendable() bool { return obj.entry.IsAppendable() }
 
-func (obj *txnObject) SoftDeleteBlock(id types.Blockid) (err error) {
-	fp := obj.entry.AsCommonID()
-	fp.BlockID = id
-	return obj.Txn.GetStore().SoftDeleteBlock(fp)
-}
-
 func (obj *txnObject) GetRelation() (rel handle.Relation) {
 	return newRelation(obj.table)
 }
 
 func (obj *txnObject) UpdateStats(stats objectio.ObjectStats) error {
 	id := obj.entry.AsCommonID()
-	return obj.Txn.GetStore().UpdateObjectStats(id, &stats)
+	return obj.Txn.GetStore().UpdateObjectStats(id, &stats, obj.entry.IsTombstone)
 }
 
 func (obj *txnObject) Prefetch(idxes []int) error {
-	schema := obj.table.GetLocalSchema()
+	schema := obj.table.GetLocalSchema(obj.entry.IsTombstone)
 	seqnums := make([]uint16, 0, len(idxes))
 	for _, idx := range idxes {
+		if idx == catalog.COLIDX_COMMITS {
+			seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
+			continue
+		}
 		seqnums = append(seqnums, schema.ColDefs[idx].SeqNum)
 	}
 	if obj.IsUncommitted() {
-		return obj.table.tableSpace.Prefetch(obj.entry, seqnums)
+		return obj.table.dataTable.tableSpace.Prefetch(obj.entry, seqnums)
 	}
 	for i := 0; i < obj.entry.BlockCnt(); i++ {
 		err := obj.entry.GetObjectData().Prefetch(seqnums, uint16(i))
@@ -220,57 +219,38 @@ func (obj *txnObject) Prefetch(idxes []int) error {
 
 func (obj *txnObject) Fingerprint() *common.ID { return obj.entry.AsCommonID() }
 
-func (obj *txnObject) GetByFilter(
-	ctx context.Context, filter *handle.Filter, mp *mpool.MPool,
-) (blkID uint16, offset uint32, err error) {
-	return obj.entry.GetObjectData().GetByFilter(ctx, obj.table.store.txn, filter, mp)
-}
-
-func (obj *txnObject) GetColumnDataById(
-	ctx context.Context, blkID uint16, colIdx int, mp *mpool.MPool,
-) (*containers.Batch, error) {
-	if obj.entry.IsLocal {
-		return obj.table.tableSpace.GetColumnDataById(ctx, obj.entry, colIdx, mp)
-	}
-	return obj.entry.GetObjectData().GetColumnDataById(ctx, obj.Txn, obj.table.GetLocalSchema(), blkID, colIdx, mp)
-}
-
-func (obj *txnObject) GetColumnDataByIds(
-	ctx context.Context, blkID uint16, colIdxes []int, mp *mpool.MPool,
-) (*containers.Batch, error) {
-	if obj.entry.IsLocal {
-		return obj.table.tableSpace.GetColumnDataByIds(obj.entry, colIdxes, mp)
-	}
-	return obj.entry.GetObjectData().GetColumnDataByIds(ctx, obj.Txn, obj.table.GetLocalSchema(), blkID, colIdxes, mp)
-}
-
-func (obj *txnObject) GetColumnDataByName(
-	ctx context.Context, blkID uint16, attr string, mp *mpool.MPool,
-) (*containers.Batch, error) {
-	schema := obj.table.GetLocalSchema()
-	colIdx := schema.GetColIdx(attr)
-	if obj.entry.IsLocal {
-		return obj.table.tableSpace.GetColumnDataById(ctx, obj.entry, colIdx, mp)
-	}
-	return obj.entry.GetObjectData().GetColumnDataById(ctx, obj.Txn, schema, blkID, colIdx, mp)
-}
-
-func (obj *txnObject) GetColumnDataByNames(
-	ctx context.Context, blkID uint16, attrs []string, mp *mpool.MPool,
-) (*containers.Batch, error) {
-	schema := obj.table.GetLocalSchema()
-	attrIds := make([]int, len(attrs))
-	for i, attr := range attrs {
-		attrIds[i] = schema.GetColIdx(attr)
-	}
-	if obj.entry.IsLocal {
-		return obj.table.tableSpace.GetColumnDataByIds(obj.entry, attrIds, mp)
-	}
-	return obj.entry.GetObjectData().GetColumnDataByIds(ctx, obj.Txn, schema, blkID, attrIds, mp)
-}
-
 func (obj *txnObject) UpdateDeltaLoc(blkID uint16, deltaLoc objectio.Location) error {
 	id := obj.entry.AsCommonID()
 	id.SetBlockOffset(blkID)
 	return obj.table.store.UpdateDeltaLoc(id, deltaLoc)
+}
+
+func (obj *txnObject) Scan(
+	ctx context.Context,
+	bat **containers.Batch,
+	blkID uint16,
+	colIdxes []int,
+	mp *mpool.MPool,
+) (err error) {
+	if obj.entry.IsLocal {
+		obj.table.dataTable.tableSpace.Scan(ctx, bat, colIdxes, mp)
+		return
+	}
+	return obj.entry.GetObjectData().Scan(ctx, bat, obj.Txn, obj.table.getSchema(obj.entry.IsTombstone), blkID, colIdxes, mp)
+}
+
+func (obj *txnObject) HybridScan(
+	ctx context.Context,
+	bat **containers.Batch,
+	blkOffset uint16,
+	colIdxs []int,
+	mp *mpool.MPool,
+) error {
+	if obj.entry.IsLocal {
+		obj.table.dataTable.tableSpace.HybridScan(ctx, bat, colIdxs, mp)
+		return nil
+	}
+	blkID := objectio.NewBlockidWithObjectID(obj.GetID(), blkOffset)
+	return tables.HybridScanByBlock(
+		ctx, obj.entry.GetTable(), obj.Txn, bat, obj.table.getSchema(obj.entry.IsTombstone), colIdxs, blkID, mp)
 }

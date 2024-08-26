@@ -17,11 +17,9 @@ package updates
 import (
 	"testing"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
@@ -35,7 +33,7 @@ func TestCompactBlockCmd(t *testing.T) {
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
-	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
+	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil, false)
 
 	controller := NewAppendMVCCHandle(obj)
 
@@ -56,47 +54,4 @@ func checkAppendCmdIsEqual(t *testing.T, cmd1, cmd2 *UpdateCmd) {
 	assert.Equal(t, IOET_WALTxnCommand_AppendNode, cmd1.GetType())
 	assert.Equal(t, IOET_WALTxnCommand_AppendNode, cmd2.GetType())
 	assert.Equal(t, cmd1.append.maxRow, cmd2.append.maxRow)
-}
-
-func TestDeleteNodeCmd(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	schema := catalog.MockSchema(1, 0)
-	c := catalog.MockCatalog()
-	defer c.Close()
-
-	db, _ := c.CreateDBEntry("db", "", "", nil)
-	table, _ := db.CreateTableEntry(schema, nil, nil)
-	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
-	objHandle := NewObjectMVCCHandle(obj)
-
-	controller := NewMVCCHandle(objHandle, 0)
-
-	node := NewDeleteNode(nil, handle.DT_Normal,
-		IOET_WALTxnCommand_DeleteNode_CurrVer)
-	node.mask = roaring.NewBitmap()
-	node.mask.Add(35)
-	node.chain.Store(controller.deletes)
-	cmd, err := node.MakeCommand(1)
-	assert.Nil(t, err)
-
-	buf, err := cmd.MarshalBinary()
-	assert.Nil(t, err)
-
-	cmd2, err := txnbase.BuildCommandFrom(buf)
-	assert.Nil(t, err)
-	checkDeleteCmdIsEqual(t, cmd.(*UpdateCmd), cmd2.(*UpdateCmd))
-}
-
-func checkDeleteCmdIsEqual(t *testing.T, cmd1, cmd2 *UpdateCmd) {
-	assert.Equal(t, IOET_WALTxnCommand_DeleteNode, cmd1.GetType())
-	assert.Equal(t, IOET_WALTxnCommand_DeleteNode, cmd2.GetType())
-	assert.Equal(t, cmd1.delete.GetCardinalityLocked(), cmd2.delete.GetCardinalityLocked())
-	mask1 := cmd1.delete.mask
-	if mask1 != nil && !mask1.IsEmpty() {
-		it := mask1.Iterator()
-		for it.HasNext() {
-			row := it.Next()
-			assert.True(t, cmd2.delete.mask.Contains(row))
-		}
-	}
 }

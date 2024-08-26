@@ -89,7 +89,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
 )
@@ -134,7 +134,7 @@ func HandleSyncLogTailReq(
 		return
 	}
 	// fill table info, as req.Table will be used as the Table field in TableLogtail response.
-	schema := tableEntry.GetLastestSchemaLocked()
+	schema := tableEntry.GetLastestSchemaLocked(false)
 	req.Table.AccId = schema.AcInfo.TenantID
 	req.Table.DbName = dbEntry.GetName()
 	req.Table.TbName = schema.Name
@@ -170,7 +170,7 @@ func HandleSyncLogTailReq(
 
 	if canRetry { // check simple conditions first
 		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
-		if (forceFlush && name == tableEntry.GetLastestSchemaLocked().Name) || resp.ProtoSize() > Size90M {
+		if (forceFlush && name == tableEntry.GetLastestSchemaLocked(false).Name) || resp.ProtoSize() > Size90M {
 			flushErr := ckpClient.FlushTable(ctx, did, tid, end)
 			// try again after flushing
 			newResp, closeCB, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
@@ -208,7 +208,7 @@ func catalogEntry2Batch[
 	for _, col := range schema.ColDefs {
 		fillDataRow(e, node, col.Name, dstBatch.GetVectorByName(col.Name))
 	}
-	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid, false)
+	dstBatch.GetVectorByName(catalog.PhyAddrColumnName).Append(rowid, false)
 	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs, false)
 }
 
@@ -217,15 +217,14 @@ func catalogEntry2Batch[
 type TableLogtailRespBuilder struct {
 	ctx context.Context
 	*catalog.LoopProcessor
-	start, end      types.TS
-	did, tid        uint64
-	dname, tname    string
-	checkpoint      string
-	blkMetaInsBatch *containers.Batch
-	blkMetaDelBatch *containers.Batch
-	objectMetaBatch *containers.Batch
-	dataInsBatches  map[uint32]*containers.Batch // schema version -> data batch
-	dataDelBatch    *containers.Batch
+	start, end         types.TS
+	did, tid           uint64
+	dname, tname       string
+	checkpoint         string
+	dataMetaBatch      *containers.Batch
+	tombstoneMetaBatch *containers.Batch
+	dataInsBatches     map[uint32]*containers.BatchWithVersion // schema version -> data batch
+	dataDelBatches     map[uint32]*containers.BatchWithVersion
 }
 
 func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end types.TS, tbl *catalog.TableEntry) *TableLogtailRespBuilder {
@@ -237,17 +236,17 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 		checkpoint:    ckp,
 	}
 	b.ObjectFn = b.VisitObj
-	b.TombstoneFn = b.visitDelete
+	b.TombstoneFn = b.VisitObj
 
 	b.did = tbl.GetDB().GetID()
 	b.tid = tbl.ID
 	b.dname = tbl.GetDB().GetName()
-	b.tname = tbl.GetLastestSchemaLocked().Name
+	b.tname = tbl.GetLastestSchemaLocked(false).Name
 
-	b.dataInsBatches = make(map[uint32]*containers.Batch)
-	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema, common.LogtailAllocator)
-	b.blkMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
-	b.objectMetaBatch = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
+	b.dataInsBatches = make(map[uint32]*containers.BatchWithVersion)
+	b.dataDelBatches = make(map[uint32]*containers.BatchWithVersion)
+	b.dataMetaBatch = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
+	b.tombstoneMetaBatch = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 	return b
 }
 
@@ -258,18 +257,12 @@ func (b *TableLogtailRespBuilder) Close() {
 		}
 	}
 	b.dataInsBatches = nil
-	if b.dataDelBatch != nil {
-		b.dataDelBatch.Close()
-		b.dataDelBatch = nil
+	for _, vec := range b.dataDelBatches {
+		if vec != nil {
+			vec.Close()
+		}
 	}
-	if b.blkMetaInsBatch != nil {
-		b.blkMetaInsBatch.Close()
-		b.blkMetaInsBatch = nil
-	}
-	if b.blkMetaDelBatch != nil {
-		b.blkMetaDelBatch.Close()
-		b.blkMetaDelBatch = nil
-	}
+	b.dataDelBatches = nil
 }
 
 func (b *TableLogtailRespBuilder) VisitObj(e *catalog.ObjectEntry) error {
@@ -291,11 +284,11 @@ func (b *TableLogtailRespBuilder) visitObjMeta(e *catalog.ObjectEntry) (bool, er
 
 	var objectMVCCNode *catalog.ObjectMVCCNode
 	for _, node := range mvccNodes {
-		if e.IsAppendable() && node.End.Equal(&e.CreatedAt) {
-			continue
+		if e.IsTombstone {
+			visitObject(b.tombstoneMetaBatch, e, node, node.End.Equal(&e.CreatedAt), false, types.TS{})
+		} else {
+			visitObject(b.dataMetaBatch, e, node, node.End.Equal(&e.CreatedAt), false, types.TS{})
 		}
-		objectMVCCNode = &e.ObjectMVCCNode
-		visitObject(b.objectMetaBatch, e, node, node.End.Equal(&e.CreatedAt), false, types.TS{}, true)
 	}
 	return b.skipObjectData(e, objectMVCCNode), nil
 }
@@ -308,35 +301,25 @@ func (b *TableLogtailRespBuilder) skipObjectData(e *catalog.ObjectEntry, objectM
 	}
 }
 func (b *TableLogtailRespBuilder) visitObjData(e *catalog.ObjectEntry) error {
-	data := e.GetObjectData()
-	insBatch, err := data.CollectAppendInRange(b.start, b.end, false, common.LogtailAllocator)
+	var err error
+	if e.IsTombstone {
+		err = tables.RangeScanInMemoryByObject(b.ctx, e, b.dataDelBatches, b.start, b.end, common.LogtailAllocator)
+	} else {
+		err = tables.RangeScanInMemoryByObject(b.ctx, e, b.dataInsBatches, b.start, b.end, common.LogtailAllocator)
+	}
 	if err != nil {
 		return err
 	}
-	if insBatch != nil && insBatch.Length() > 0 {
-		dest, ok := b.dataInsBatches[insBatch.Version]
-		if !ok {
-			// create new dest batch
-			dest = DataChangeToLogtailBatch(insBatch)
-			b.dataInsBatches[insBatch.Version] = dest
-		} else {
-			dest.Extend(insBatch.Batch)
-			// insBatch is freed, don't use anymore
-		}
-	}
 	return nil
 }
-func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNode *txnbase.TxnMVCCNode, create bool, push bool, committs types.TS, checkObjectstats bool) {
-	batch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(entry.ID()), false)
+func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNode *txnbase.TxnMVCCNode, create bool, push bool, committs types.TS) {
+	batch.GetVectorByName(catalog.PhyAddrColumnName).Append(objectio.HackObjid2Rowid(entry.ID()), false)
 	if push {
 		batch.GetVectorByName(catalog.AttrCommitTs).Append(committs, false)
 	} else {
 		batch.GetVectorByName(catalog.AttrCommitTs).Append(txnMVCCNode.End, false)
 	}
 	empty := entry.IsAppendable() && create
-	if checkObjectstats && empty {
-		panic("logic error")
-	}
 	entry.ObjectMVCCNode.AppendTuple(entry.ID(), batch, empty)
 	if push {
 		txnMVCCNode.AppendTupleWithCommitTS(batch, committs)
@@ -352,34 +335,18 @@ func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNod
 	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
 	batch.GetVectorByName(ObjectAttr_State).Append(entry.IsAppendable(), false)
 	sorted := false
-	if entry.GetTable().GetLastestSchemaLocked().HasSortKey() && !entry.IsAppendable() {
+	if entry.GetTable().GetLastestSchemaLocked(entry.IsTombstone).HasSortKey() && !entry.IsAppendable() {
 		sorted = true
 	}
 	batch.GetVectorByName(ObjectAttr_Sorted).Append(sorted, false)
-}
-
-func (b *TableLogtailRespBuilder) visitDelete(e data.Tombstone) error {
-	deletes, _, _, err := e.VisitDeletes(b.ctx, b.start, b.end, b.blkMetaInsBatch, nil, false, false)
-	if err != nil {
-		return err
-	}
-	if deletes != nil && deletes.Length() != 0 {
-		if b.dataDelBatch == nil {
-			b.dataDelBatch = deletes
-		} else {
-			b.dataDelBatch.Extend(deletes)
-			deletes.Close()
-		}
-	}
-	return nil
 }
 
 type TableRespKind int
 
 const (
 	TableRespKind_Data TableRespKind = iota
-	TableRespKind_Blk
-	TableRespKind_Obj
+	TableRespKind_DataMeta
+	TableRespKind_TombstoneMeta
 )
 
 func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
@@ -399,13 +366,13 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			tableName = b.tname
 			logutil.Debugf("[logtail] table data [%v] %d-%s-%d: %s", typ, b.tid, b.tname, version,
 				DebugBatchToString("data", batch, false, zap.InfoLevel))
-		case TableRespKind_Blk:
-			tableName = fmt.Sprintf("_%d_meta", b.tid)
-			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
-				DebugBatchToString("blkmeta", batch, false, zap.InfoLevel))
-		case TableRespKind_Obj:
-			tableName = fmt.Sprintf("_%d_obj", b.tid)
-			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
+		case TableRespKind_DataMeta:
+			tableName = fmt.Sprintf("_%d_data_meta", b.tid)
+			logutil.Debugf("[logtail] table data meta [%v] %d-%s: %s", typ, b.tid, b.tname,
+				DebugBatchToString("object", batch, false, zap.InfoLevel))
+		case TableRespKind_TombstoneMeta:
+			tableName = fmt.Sprintf("_%d_tombstone_meta", b.tid)
+			logutil.Debugf("[logtail] table tombstone meta [%v] %d-%s: %s", typ, b.tid, b.tname,
 				DebugBatchToString("object", batch, false, zap.InfoLevel))
 		}
 
@@ -437,13 +404,10 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	}
 
 	empty := api.SyncLogTailResp{}
-	if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Blk, b.blkMetaInsBatch, 0); err != nil {
+	if err := tryAppendEntry(api.Entry_Insert, TableRespKind_DataMeta, b.dataMetaBatch, 0); err != nil {
 		return empty, err
 	}
-	if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Blk, b.blkMetaDelBatch, 0); err != nil {
-		return empty, err
-	}
-	if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Obj, b.objectMetaBatch, 0); err != nil {
+	if err := tryAppendEntry(api.Entry_Insert, TableRespKind_TombstoneMeta, b.tombstoneMetaBatch, 0); err != nil {
 		return empty, err
 	}
 	keys := make([]uint32, 0, len(b.dataInsBatches))
@@ -452,12 +416,17 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
 	for _, k := range keys {
-		if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Data, b.dataInsBatches[k], k); err != nil {
+		if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Data, DataChangeToLogtailBatch(b.dataInsBatches[k]), k); err != nil {
 			return empty, err
 		}
 	}
-	if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Data, b.dataDelBatch, 0); err != nil {
-		return empty, err
+	if len(b.dataDelBatches) > 1 {
+		panic(fmt.Sprintf("logic err, batch %v", b.dataDelBatches))
+	}
+	for _, bat := range b.dataDelBatches {
+		if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Data, TombstoneChangeToLogtailBatch(bat), 0); err != nil {
+			return empty, err
+		}
 	}
 
 	// if b.tid == pkgcatalog.MO_DATABASE_ID || b.tid == pkgcatalog.MO_TABLES_ID || b.tid == pkgcatalog.MO_COLUMNS_ID {
@@ -604,7 +573,7 @@ func LoadCheckpointEntries(
 			continue
 		}
 		data := datas[i]
-		ins, del, cnIns, objInfo, err := data.GetTableDataFromBats(tableID, bats[i])
+		ins, del, dataObj, tombstoneObj, err := data.GetTableDataFromBats(tableID, bats[i])
 		if err != nil {
 			for j := range closeCBs {
 				if closeCBs[j] != nil {
@@ -625,17 +594,6 @@ func LoadCheckpointEntries(
 			}
 			entries = append(entries, entry)
 		}
-		if cnIns != nil {
-			entry := &api.Entry{
-				EntryType:    api.Entry_Insert,
-				TableId:      tableID,
-				TableName:    tableName,
-				DatabaseId:   dbID,
-				DatabaseName: dbName,
-				Bat:          cnIns,
-			}
-			entries = append(entries, entry)
-		}
 		if del != nil {
 			entry := &api.Entry{
 				EntryType:    api.Entry_Delete,
@@ -647,14 +605,25 @@ func LoadCheckpointEntries(
 			}
 			entries = append(entries, entry)
 		}
-		if objInfo != nil {
+		if dataObj != nil {
 			entry := &api.Entry{
 				EntryType:    api.Entry_Insert,
 				TableId:      tableID,
-				TableName:    fmt.Sprintf("_%d_obj", tableID),
+				TableName:    fmt.Sprintf("_%d_data_meta", tableID),
 				DatabaseId:   dbID,
 				DatabaseName: dbName,
-				Bat:          objInfo,
+				Bat:          dataObj,
+			}
+			entries = append(entries, entry)
+		}
+		if tombstoneObj != nil {
+			entry := &api.Entry{
+				EntryType:    api.Entry_Insert,
+				TableId:      tableID,
+				TableName:    fmt.Sprintf("_%d_tombstone_meta", tableID),
+				DatabaseId:   dbID,
+				DatabaseName: dbName,
+				Bat:          tombstoneObj,
 			}
 			entries = append(entries, entry)
 		}

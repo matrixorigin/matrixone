@@ -54,7 +54,7 @@ type updateStatsRequest struct {
 	// tableDef is the main table definition.
 	tableDef *plan2.TableDef
 
-	partitionState  *logtailreplay.PartitionState
+	partitionState  *logtailreplay.PartitionStateInProgress
 	fs              fileservice.FileService
 	ts              types.TS
 	approxObjectNum int64
@@ -62,7 +62,7 @@ type updateStatsRequest struct {
 
 func newUpdateStatsRequest(
 	tableDef *plan2.TableDef,
-	partitionState *logtailreplay.PartitionState,
+	partitionState *logtailreplay.PartitionStateInProgress,
 	fs fileservice.FileService,
 	ts types.TS,
 	approxObjectNum int64,
@@ -542,7 +542,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 	}
 
 	partitionState := gs.engine.GetOrCreateLatestPart(key.DatabaseID, key.TableID).Snapshot()
-	approxObjectNum := int64(partitionState.ApproxObjectsNum())
+	approxObjectNum := int64(partitionState.ApproxDataObjectsNum())
 	if approxObjectNum == 0 {
 		// There are no objects flushed yet.
 		return

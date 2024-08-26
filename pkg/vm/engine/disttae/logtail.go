@@ -33,7 +33,7 @@ func consumeEntry(
 	primarySeqnum int,
 	engine *Engine,
 	cache *cache.CatalogCache,
-	state *logtailreplay.PartitionState,
+	state *logtailreplay.PartitionStateInProgress,
 	e *api.Entry,
 ) error {
 	start := time.Now()
@@ -47,11 +47,11 @@ func consumeEntry(
 
 	if state != nil {
 		t0 := time.Now()
-		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer, engine.mp)
+		state.HandleLogtailEntryInProgress(ctx, engine.fs, e, primarySeqnum, packer, engine.mp)
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
-	if logtailreplay.IsMetaTable(e.TableName) {
+	if logtailreplay.IsMetaEntry(e.TableName) {
 		return nil
 	}
 

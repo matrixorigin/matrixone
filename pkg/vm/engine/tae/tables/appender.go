@@ -68,6 +68,7 @@ func (appender *objectAppender) IsSameColumns(other any) bool {
 }
 
 func (appender *objectAppender) PrepareAppend(
+	isMergeCompact bool,
 	rows uint32,
 	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
 	left := appender.obj.meta.Load().GetSchema().BlockMaxRows - appender.rows - appender.placeholder
@@ -86,6 +87,9 @@ func (appender *objectAppender) PrepareAppend(
 		txn,
 		appender.rows+appender.placeholder,
 		appender.placeholder+appender.rows+n)
+	if isMergeCompact {
+		node.SetIsMergeCompact()
+	}
 	appender.placeholder += n
 	return
 }
@@ -108,7 +112,7 @@ func (appender *objectAppender) ApplyAppend(
 	node := n.MustMNode()
 	appender.obj.Lock()
 	defer appender.obj.Unlock()
-	from, err = node.ApplyAppend(bat, txn)
+	from, err = node.ApplyAppendLocked(bat, txn)
 
 	schema := node.writeSchema
 	for _, colDef := range schema.ColDefs {

@@ -46,6 +46,14 @@ func IsFakePkName(name string) bool {
 	return name == pkgcatalog.FakePrimaryKeyColName
 }
 
+const (
+	COLIDX_COMMITS = objectio.SEQNUM_COMMITTS
+)
+
+var (
+	CommitTSType = types.T_TS.ToType()
+)
+
 type ColDef struct {
 	// letter case: origin
 	Name          string
@@ -887,6 +895,9 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 	// check duplicate column names
 	names := make(map[string]bool)
 	for idx, def := range s.ColDefs {
+		if idx == COLIDX_COMMITS {
+			panic(fmt.Sprintf("bad column idx %d, table %v", idx, s.Name))
+		}
 		// Check column sequence idx validility
 		if idx != def.Idx {
 			return moerr.NewInvalidInputNoCtx(fmt.Sprintf("schema: wrong column index %d specified for \"%s\"", def.Idx, def.Name))
@@ -1012,6 +1023,9 @@ func MockSnapShotSchema() *Schema {
 	schema.AppendCol("col6", types.T_uint64.ToType())
 	schema.AppendCol("id", types.T_uint64.ToType())
 	schema.Constraint, _ = constraintDef.MarshalBinary()
+	// mock fake pk
+	schema.AppendFakePKCol()
+	schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
 
 	_ = schema.Finalize(false)
 	return schema

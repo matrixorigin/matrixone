@@ -30,7 +30,7 @@ func BenchmarkPartitonConsumeCheckpoint(b *testing.B) {
 
 	ctx := context.Background()
 	for i := 0; i < b.N; i++ {
-		err := partition.ConsumeCheckpoints(ctx, func(checkpoint string, state *PartitionState) error {
+		err := partition.ConsumeCheckpoints(ctx, func(checkpoint string, state *PartitionStateInProgress) error {
 			return nil
 		})
 		if err != nil {
@@ -51,7 +51,7 @@ func BenchmarkConcurrentPartitionConsumeCheckpoint(b *testing.B) {
 	ctx := context.Background()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			err := partition.ConsumeCheckpoints(ctx, func(checkpoint string, state *PartitionState) error {
+			err := partition.ConsumeCheckpoints(ctx, func(checkpoint string, state *PartitionStateInProgress) error {
 				return nil
 			})
 			if err != nil {

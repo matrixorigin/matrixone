@@ -123,7 +123,7 @@ type TxnChanger interface {
 }
 
 type TxnWriter interface {
-	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
+	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readedObject, readedTombstone []*common.ID) error
 	LogTxnState(sync bool) (entry.Entry, error)
 }
 
@@ -224,6 +224,9 @@ type AppendNode interface {
 	TxnEntry
 	GetStartRow() uint32
 	GetMaxRow() uint32
+	IsTombstone() bool
+	SetIsMergeCompact()
+	IsMergeCompact() bool
 }
 
 type DeleteNode interface {
@@ -236,7 +239,6 @@ type DeleteNode interface {
 	DeletedPK() map[uint32]containers.Vector
 	RangeDeleteLocked(start, end uint32, pk containers.Vector, mp *mpool.MPool)
 	GetCardinalityLocked() uint32
-	IsDeletedLocked(row uint32) bool
 	GetRowMaskRefLocked() *roaring.Bitmap
 	OnApply() error
 }
@@ -270,7 +272,7 @@ type TxnStore interface {
 	GetByFilter(
 		ctx context.Context, dbId uint64, id uint64, filter *handle.Filter,
 	) (*common.ID, uint32, error)
-	GetValue(id *common.ID, row uint32, col uint16) (any, bool, error)
+	GetValue(id *common.ID, row uint32, col uint16, skipCheckDelete bool) (any, bool, error)
 
 	CreateRelation(dbId uint64, def any) (handle.Relation, error)
 	CreateRelationWithTableId(dbId uint64, tableId uint64, def any) (handle.Relation, error)
@@ -287,16 +289,14 @@ type TxnStore interface {
 	DropDatabaseByID(id uint64) (handle.Database, error)
 	DatabaseNames() []string
 
-	GetObject(id *common.ID) (handle.Object, error)
-	CreateObject(dbId, tid uint64) (handle.Object, error)
-	CreateNonAppendableObject(dbId, tid uint64, opt *objectio.CreateObjOpt) (handle.Object, error)
-	SoftDeleteObject(id *common.ID) error
-	SoftDeleteBlock(id *common.ID) error
-	UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error)
+	GetObject(id *common.ID, isTombstone bool) (handle.Object, error)
+	CreateObject(dbId, tid uint64, isTombstone bool) (handle.Object, error)
+	CreateNonAppendableObject(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (handle.Object, error)
+	SoftDeleteObject(isTombstone bool, id *common.ID) error
 
 	AddTxnEntry(TxnEntryType, TxnEntry)
 
-	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
+	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readedObject, readedTombstone []*common.ID) error
 	LogTxnState(sync bool) (entry.Entry, error)
 	DoneWaitEvent(cnt int)
 	AddWaitEvent(cnt int)
@@ -307,12 +307,12 @@ type TxnStore interface {
 		visitDatabase func(db any),
 		visitTable func(tbl any),
 		rotateTable func(aid uint32, dbName, tblName string, dbid, tid uint64, pkSeqnum uint16),
-		visitMetadata func(block any),
 		visitObject func(obj any),
-		visitAppend func(bat any),
-		visitDelete func(ctx context.Context, deletes DeleteNode))
+		visitAppend func(bat any, isTombstone bool))
 	GetTransactionType() TxnType
-	UpdateObjectStats(*common.ID, *objectio.ObjectStats) error
+	UpdateObjectStats(*common.ID, *objectio.ObjectStats, bool) error
+	FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls) error
+	IsDeletedInWorkSpace(id *common.ID, row uint32) (bool, error)
 }
 
 type TxnType int8

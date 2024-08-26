@@ -383,7 +383,7 @@ func (nsp *Nulls) ReadNoCopy(data []byte) error {
 
 // Or the m Nulls into nsp.
 func (nsp *Nulls) Or(m *Nulls) {
-	if !m.np.EmptyByFlag() {
+	if m != nil && !m.np.EmptyByFlag() {
 		nsp.np.Or(&m.np)
 	}
 }
