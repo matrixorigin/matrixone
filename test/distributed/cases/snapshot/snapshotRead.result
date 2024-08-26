@@ -1216,3 +1216,5 @@ drop table t1;
 drop database test07;
 drop snapshot sp10;
 drop snapshot sp08;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

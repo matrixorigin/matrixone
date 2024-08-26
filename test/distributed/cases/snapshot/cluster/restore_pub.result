@@ -282,3 +282,5 @@ drop account if exists acc01;
 drop account if exists acc02;
 drop account if exists acc03;
 drop account if exists acc04;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
