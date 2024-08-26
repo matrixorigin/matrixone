@@ -1776,6 +1776,10 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	}
 	c.anal.isFirst = false
 
+	if len(n.OrderBy) > 0 {
+		ss[0].NodeInfo.Mcpu = 1
+	}
+
 	ss[0].PartialResults = partialResults
 	ss[0].PartialResultTypes = partialResultTypes
 	return ss, nil
@@ -1905,11 +1909,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.FilterExpr = filterExpr
 	s.DataSource.RuntimeFilterSpecs = n.RuntimeFilterProbeList
 	s.DataSource.OrderBy = n.OrderBy
-	if s.DataSource.OrderBy != nil {
-		// ordered scan run with single parallel
-		s.NodeInfo.Mcpu = 1
-	}
-
 	return nil
 }
 
