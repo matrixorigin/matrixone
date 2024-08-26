@@ -329,8 +329,9 @@ drop snapshot if exists sp08;
 create snapshot sp08 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2024-07-09 08:20:05.60437    cluster
-sp07    2024-07-09 08:20:05.511062    cluster
+sp08    2024-08-26 06:05:52.576258    cluster            
+sp07    2024-08-26 06:05:52.499366    cluster            
+sp_fk    2024-08-26 06:03:36.960439    cluster            
 restore account acc01 from snapshot sp07 to account acc02;
 restore account acc01 from snapshot sp08 to account acc02;
 use test01;
@@ -419,24 +420,17 @@ restore account acc01 from snapshot sp03 to account sys;
 internal error: non-sys account's snapshot can't restore to sys account
 drop snapshot sp03;
 drop database test01;
-drop account acc01;
-drop account acc02;
 drop database if exists test_fk;
-[unknown result because it is related to issue#17294]
 create database test_fk;
-[unknown result because it is related to issue#17294]
 use test_fk;
-[unknown result because it is related to issue#17294]
 CREATE TABLE Students (
 StudentID INT PRIMARY KEY,
 Name VARCHAR(100)
 );
-[unknown result because it is related to issue#17294]
 CREATE TABLE Courses (
 CourseID INT PRIMARY KEY,
 CourseName VARCHAR(100)
 );
-[unknown result because it is related to issue#17294]
 CREATE TABLE Enrollments (
 EnrollmentID INT PRIMARY KEY AUTO_INCREMENT,
 StudentID INT,
@@ -445,40 +439,36 @@ Grade CHAR(2),
 FOREIGN KEY (StudentID) REFERENCES Students(StudentID),
 FOREIGN KEY (CourseID) REFERENCES Courses(CourseID)
 );
-[unknown result because it is related to issue#17294]
 INSERT INTO Students (StudentID, Name) VALUES (1, 'Alice');
-[unknown result because it is related to issue#17294]
 INSERT INTO Students (StudentID, Name) VALUES (2, 'Bob');
-[unknown result because it is related to issue#17294]
 INSERT INTO Courses (CourseID, CourseName) VALUES (101, 'Mathematics');
-[unknown result because it is related to issue#17294]
 INSERT INTO Courses (CourseID, CourseName) VALUES (102, 'Physics');
-[unknown result because it is related to issue#17294]
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 101, 'A');
-[unknown result because it is related to issue#17294]
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 102, 'B');
-[unknown result because it is related to issue#17294]
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (2, 101, 'B');
-[unknown result because it is related to issue#17294]
 drop snapshot if exists sp_fk;
-[unknown result because it is related to issue#17294]
 create snapshot sp_fk for cluster;
-[unknown result because it is related to issue#17294]
-restore account acc01 database test_fk table Students from snapshot sp_fk to account acc02;
-[unknown result because it is related to issue#17294]
-restore account acc01 database test_fk table Courses from snapshot sp_fk to account acc02;
-[unknown result because it is related to issue#17294]
-restore account acc01 database test_fk table Enrollments from snapshot sp_fk to account acc02;
-[unknown result because it is related to issue#17294]
+restore account acc01 from snapshot sp_fk to account acc02;
 show databases;
-[unknown result because it is related to issue#17294]
+Database
+acc_test02
+acc_test03
+acc_test04
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+test_fk
 select * from Students;
-[unknown result because it is related to issue#17294]
+not connect to a database
 select * from Courses;
-[unknown result because it is related to issue#17294]
+not connect to a database
 select * from Enrollments;
-[unknown result because it is related to issue#17294]
-drop snapshot sp_fk;
-[unknown result because it is related to issue#17294]
+not connect to a database
 drop database test_fk;
-[unknown result because it is related to issue#17294]
+drop snapshot sp_fk;
+drop database test_fk;
+Can't drop database 'test_fk'; database doesn't exist
+drop account acc01;
+drop account acc02;

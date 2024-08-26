@@ -747,7 +747,6 @@ drop snapshot sp17;
 
 
 
--- @bvt:issue#17294
 drop database if exists test_fk;
 create database test_fk;
 use test_fk;
@@ -792,6 +791,5 @@ select * from Courses;
 select * from Enrollments;
 drop snapshot sp_fk;
 drop database test_fk;
--- @bvt:issue
 
 

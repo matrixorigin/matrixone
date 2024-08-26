@@ -542,7 +542,6 @@ drop snapshot sp18;
 
 
 -- restore
--- @bvt:issue#17294
 -- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test_fk;
 create database test_fk;
@@ -574,23 +573,22 @@ INSERT INTO Courses (CourseID, CourseName) VALUES (102, 'Physics');
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 101, 'A');
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 102, 'B');
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (2, 101, 'B');
--- @session
 
 drop snapshot if exists sp_fk;
-create snapshot sp_fk for account sys;
+create snapshot sp_fk for account acc01;
 
-restore account sys database test_fk table Students from snapshot sp_fk;
-restore account sys database test_fk table Courses from snapshot sp_fk;
-restore account sys database test_fk table Enrollments from snapshot sp_fk;
+restore account acc01 database test_fk table Students from snapshot sp_fk;
+restore account acc01 database test_fk table Courses from snapshot sp_fk;
+restore account acc01 database test_fk table Enrollments from snapshot sp_fk;
 
--- @session:id=1&user=acc01:test_account&password=111
 show databases;
+use test_fk;
 select * from Students;
 select * from Courses;
 select * from Enrollments;
--- @session
 drop snapshot sp_fk;
--- @bvt:issue
+drop database test_fk;
+-- @session
 
 
 drop account acc01;
