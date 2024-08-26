@@ -670,12 +670,17 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 		return s, nil
 	}
 
+	lenChannels := 0
+	if s.IsJoin {
+		lenChannels = 1
+	}
+
 	parallelScopes := make([]*Scope, s.NodeInfo.Mcpu)
 	for i := 0; i < s.NodeInfo.Mcpu; i++ {
 		parallelScopes[i] = newScope(Normal)
 		parallelScopes[i].NodeInfo = s.NodeInfo
 		parallelScopes[i].NodeInfo.Mcpu = 1
-		parallelScopes[i].Proc = s.Proc.NewContextChildProc(0)
+		parallelScopes[i].Proc = s.Proc.NewContextChildProc(lenChannels)
 		parallelScopes[i].TxnOffset = s.TxnOffset
 		parallelScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i, s.NodeInfo.Mcpu))
 	}
