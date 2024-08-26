@@ -78,7 +78,7 @@ func (source *Source) Call(proc *process.Process) (vm.CallResult, error) {
 	defer span.End()
 
 	if source.ctr.buf != nil {
-		proc.PutBatch(source.ctr.buf)
+		source.ctr.buf.Clean(proc.GetMPool())
 		source.ctr.buf = nil
 	}
 	result := vm.NewCallResult()

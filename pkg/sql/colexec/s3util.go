@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -181,33 +182,23 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
 	// vecs[1] store relative block metadata
 	if w.blockInfoBat != nil {
-		proc.PutBatch(w.blockInfoBat)
-	}
-	w.blockInfoBat = newBlockInfoBat(proc)
-}
+		w.blockInfoBat.CleanOnlyData()
+	} else {
+		attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+		blockInfoBat := batch.NewWithSize(len(attrs))
+		blockInfoBat.Attrs = attrs
+		blockInfoBat.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+		blockInfoBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
+		blockInfoBat.Vecs[2] = vector.NewVec(types.T_binary.ToType())
 
-func newBlockInfoBat(proc *process.Process) *batch.Batch {
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-	blockInfoBat := batch.NewWithSize(len(attrs))
-	blockInfoBat.Attrs = attrs
-	blockInfoBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
-	blockInfoBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
-	blockInfoBat.Vecs[2] = proc.GetVector(types.T_binary.ToType())
-	return blockInfoBat
+		w.blockInfoBat = blockInfoBat
+	}
 }
 
 func (w *S3Writer) Output(proc *process.Process, result *vm.CallResult) error {
 	var err error
-	if result.Batch == nil {
-		result.Batch, err = proc.NewBatchFromSrc(w.blockInfoBat, 0)
-		if err != nil {
-			return err
-		}
-	}
-
 	result.Batch, err = result.Batch.Append(proc.Ctx, proc.GetMPool(), w.blockInfoBat)
 	if err != nil {
-		proc.PutBatch(result.Batch)
 		return err
 	}
 	w.ResetBlockInfoBat(proc)
