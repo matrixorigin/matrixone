@@ -548,6 +548,9 @@ var (
 			input:  "select Fld1, std(Fld2) from t1 group by Fld1 having variance(Fld2) is not null",
 			output: "select Fld1, std(Fld2) from t1 group by Fld1 having variance(Fld2) is not null",
 		}, {
+			input:  "select Fld1, std(Fld2) from t1 group by Fld1 with rollup having variance(Fld2) is not null",
+			output: "select Fld1, std(Fld2) from t1 group by Fld1 with rollup having variance(Fld2) is not null",
+		}, {
 			input:  "select a.f1 as a, a.f1 > b.f1 as gt, a.f1 < b.f1 as lt, a.f1<=>b.f1 as eq from t1 a, t1 b;",
 			output: "select a.f1 as a, a.f1 > b.f1 as gt, a.f1 < b.f1 as lt, a.f1 <=> b.f1 as eq from t1 as a cross join t1 as b",
 		}, {

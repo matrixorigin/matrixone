@@ -634,5 +634,6 @@ func init() {
 		"restore":                    RESTORE,
 		"pitr":                       PITR,
 		"cdc":                        CDC,
+		"rollup":                     ROLLUP,
 	}
 }
