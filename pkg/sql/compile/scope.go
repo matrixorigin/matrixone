@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -638,38 +639,43 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 	}
 
+	var appendNotPkFilter []*plan.Expr
 	for i := range inExprList {
 		fn := inExprList[i].GetF()
 		col := fn.Args[0].GetCol()
 		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
+		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Name == s.DataSource.TableDef.Pkey.PkeyColName
+		if !isFilterOnPK {
+			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(inExprList[i]))
+		}
+	}
 
-		newExpr := plan2.DeepCopyExpr(inExprList[i])
-		//put expr in reader
-		newExprList := []*plan.Expr{newExpr}
+	// reset filter
+	if len(appendNotPkFilter) > 0 {
+		// put expr in filter instruction
+		op := vm.GetLeafOp(s.RootOp)
+		if _, ok := op.(*table_scan.TableScan); ok {
+			op = vm.GetLeafOpParent(nil, s.RootOp)
+		}
+		arg, ok := op.(*filter.Filter)
+		if !ok {
+			panic("missing instruction for runtime filter!")
+		}
+		if arg.E != nil {
+			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(arg.E))
+		}
+		arg.SetExeExpr(colexec.RewriteFilterExprList(appendNotPkFilter))
+	}
+
+	// reset datasource
+	if len(inExprList) > 0 {
+		newExprList := plan2.DeepCopyExprList(inExprList)
 		if s.DataSource.FilterExpr != nil {
 			newExprList = append(newExprList, s.DataSource.FilterExpr)
 		}
 		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
-
-		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Name == s.DataSource.TableDef.Pkey.PkeyColName
-		if !isFilterOnPK {
-			// put expr in filter instruction
-			op := vm.GetLeafOp(s.RootOp)
-			if _, ok := op.(*table_scan.TableScan); ok {
-				op = vm.GetLeafOpParent(nil, s.RootOp)
-			}
-			arg, ok := op.(*filter.Filter)
-			if !ok {
-				panic("missing instruction for runtime filter!")
-			}
-			newExprList := []*plan.Expr{newExpr}
-			if arg.E != nil {
-				newExprList = append(newExprList, plan2.DeepCopyExpr(arg.E))
-			}
-			arg.SetExeExpr(colexec.RewriteFilterExprList(newExprList))
-		}
 	}
 
 	if s.NodeInfo.NeedExpandRanges {
@@ -678,9 +684,15 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			panic("can not expand ranges on remote pipeline!")
 		}
 
-		newExprList := plan2.DeepCopyExprList(inExprList)
+		// newExprList := plan2.DeepCopyExprList(inExprList) //base runtime filter ?
+		var newExprList []*plan.Expr
 		if len(s.DataSource.node.BlockFilterList) > 0 {
-			newExprList = append(newExprList, s.DataSource.node.BlockFilterList...)
+			tmp := colexec.RewriteFilterExprList(plan2.DeepCopyExprList(s.DataSource.node.BlockFilterList))
+			tmp, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, tmp, s.Proc, true, true)
+			if err != nil {
+				return err
+			}
+			newExprList = append(newExprList, tmp)
 		}
 
 		relData, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList)
