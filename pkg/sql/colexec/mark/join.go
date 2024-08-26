@@ -44,7 +44,7 @@ func (markJoin *MarkJoin) OpType() vm.OpType {
 
 func (markJoin *MarkJoin) Prepare(proc *process.Process) error {
 	var err error
-
+	markJoin.OpAnalyzer = process.NewAnalyzer(markJoin.GetIdx(), markJoin.IsFirst, markJoin.IsLast, "mark join")
 	if markJoin.ctr.vecs == nil {
 		markJoin.ctr.vecs = make([]*vector.Vector, len(markJoin.Conditions[0]))
 		markJoin.ctr.executor = make([]colexec.ExpressionExecutor, len(markJoin.Conditions[0]))
@@ -104,9 +104,13 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := markJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &markJoin.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -115,13 +119,14 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := markJoin.build(markJoin, proc, anal); err != nil {
+			if err := markJoin.build(markJoin, proc, analyzer); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
-			input, err = markJoin.Children[0].Call(proc)
+			//input, err = markJoin.Children[0].Call(proc)
+			input, err = vm.ChildrenCallV1(markJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -133,7 +138,7 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if bat.IsEmpty() {
 				continue
 			}
-			anal.Input(bat, markJoin.GetIsFirst())
+			//anal.Input(bat, markJoin.GetIsFirst())
 
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(markJoin.Result))
@@ -174,7 +179,8 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			anal.Output(result.Batch, markJoin.GetIsLast())
+			//anal.Output(result.Batch, markJoin.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -185,10 +191,10 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (markJoin *MarkJoin) build(ap *MarkJoin, proc *process.Process, anal process.Analyze) error {
+func (markJoin *MarkJoin) build(ap *MarkJoin, proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &markJoin.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	mp := message.ReceiveJoinMap(markJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil

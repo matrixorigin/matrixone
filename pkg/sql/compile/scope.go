@@ -367,6 +367,10 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		return s.ParallelRun(c)
 	}
 
+	if strings.HasPrefix(c.sql, "SELECT ROUND(SUM(distance), 2) AS total_distance") {
+		fmt.Println("----------------remote run with table total_distance-------------------")
+	}
+
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
 			zap.String("local-address", c.addr),
@@ -398,6 +402,8 @@ func (s *Scope) RemoteRun(c *Compile) error {
 func (s *Scope) ParallelRun(c *Compile) (err error) {
 	var parallelScope *Scope
 
+	// waring: 有可能发生这样的情况： pipeline还未执行prepare，就发生错误，触发defer pipeline.Cleanup(),
+	// 执行reset和free，如果analyzer没有实例化，如果reset中有统计操作，就会发生空指针
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)

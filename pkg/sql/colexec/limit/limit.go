@@ -38,6 +38,8 @@ func (limit *Limit) OpType() vm.OpType {
 
 func (limit *Limit) Prepare(proc *process.Process) error {
 	var err error
+	limit.OpAnalyzer = process.NewAnalyzer(limit.GetIdx(), limit.IsFirst, limit.IsLast, "limit")
+
 	if limit.ctr.limitExecutor == nil {
 		limit.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, limit.LimitExpr)
 		if err != nil {
@@ -68,15 +70,18 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
-	anal := proc.GetAnalyze(limit.GetIdx(), limit.GetParallelIdx(), limit.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(limit.GetIdx(), limit.GetParallelIdx(), limit.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := limit.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCall(limit.GetChildren(0), proc, anal)
+	result, err := vm.ChildrenCallV1(limit.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
-	anal.Input(result.Batch, limit.GetIsFirst())
+	//anal.Input(result.Batch, limit.GetIsFirst())
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
@@ -90,7 +95,8 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 		batch.SetLength(bat, int(limit.ctr.limit-limit.ctr.seen))
 		result.Status = vm.ExecStop
 	}
-	anal.Output(bat, limit.GetIsLast())
+	//anal.Output(bat, limit.GetIsLast())
 	limit.ctr.seen = newSeen
+	analyzer.Output(result.Batch)
 	return result, nil
 }

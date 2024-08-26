@@ -96,8 +96,11 @@ func (loopSingle *LoopSingle) Reset(proc *process.Process, pipelineFailed bool, 
 	}
 
 	if loopSingle.ProjectList != nil {
-		anal := proc.GetAnalyze(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor())
-		anal.Alloc(loopSingle.ProjectAllocSize)
+		//anal := proc.GetAnalyze(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor())
+		//anal.Alloc(loopSingle.ProjectAllocSize)
+		if loopSingle.OpAnalyzer != nil {
+			loopSingle.OpAnalyzer.Alloc(loopSingle.ProjectAllocSize)
+		}
 		loopSingle.ResetProjection(proc)
 	}
 }

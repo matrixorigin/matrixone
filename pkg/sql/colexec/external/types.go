@@ -157,13 +157,16 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 	if external.ctr.buf != nil {
 		external.ctr.buf.CleanOnlyData()
 	}
-	anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
+	//anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
 	allocSize := int64(external.ctr.maxAllocSize)
 	if external.ProjectList != nil {
 		allocSize += external.ProjectAllocSize
 		external.ResetProjection(proc)
 	}
-	anal.Alloc(allocSize)
+	//anal.Alloc(allocSize)
+	if external.OpAnalyzer != nil {
+		external.OpAnalyzer.Alloc(allocSize)
+	}
 	external.ctr.maxAllocSize = 0
 }
 

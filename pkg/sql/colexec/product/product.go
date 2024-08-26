@@ -41,6 +41,7 @@ func (product *Product) OpType() vm.OpType {
 }
 
 func (product *Product) Prepare(proc *process.Process) error {
+	product.OpAnalyzer = process.NewAnalyzer(product.GetIdx(), product.IsFirst, product.IsLast, "cross join")
 	if product.ProjectList != nil {
 		return product.PrepareProjection(proc)
 	}
@@ -52,9 +53,13 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(product.GetIdx(), product.GetParallelIdx(), product.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(product.GetIdx(), product.GetParallelIdx(), product.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := product.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ap := product
 	ctr := &ap.ctr
 	result := vm.NewCallResult()
@@ -62,14 +67,14 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err = product.build(proc, anal); err != nil {
+			if err = product.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
 			if ctr.inBat == nil {
-				result, err = product.Children[0].Call(proc)
+				result, err = vm.ChildrenCallV1(product.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -86,7 +91,7 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.inBat = nil
 					continue
 				}
-				anal.Input(ctr.inBat, product.GetIsFirst())
+				//anal.Input(ctr.inBat, product.GetIsFirst())
 			}
 
 			if ctr.rbat == nil {
@@ -112,7 +117,8 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 			}
-			anal.Output(result.Batch, product.GetIsLast())
+			//anal.Output(result.Batch, product.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -123,10 +129,10 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (product *Product) build(proc *process.Process, anal process.Analyze) error {
+func (product *Product) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &product.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	mp := message.ReceiveJoinMap(product.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil

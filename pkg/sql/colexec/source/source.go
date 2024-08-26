@@ -37,6 +37,7 @@ func (source *Source) OpType() vm.OpType {
 }
 
 func (source *Source) Prepare(proc *process.Process) error {
+	source.OpAnalyzer = process.NewAnalyzer(source.GetIdx(), source.IsFirst, source.IsLast, "source scan")
 	_, span := trace.Start(proc.Ctx, "SourcePrepare")
 	defer span.End()
 
@@ -74,6 +75,10 @@ func (source *Source) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
+	analyzer := source.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	_, span := trace.Start(proc.Ctx, "SourceCall")
 	defer span.End()
 
@@ -101,6 +106,6 @@ func (source *Source) Call(proc *process.Process) (vm.CallResult, error) {
 	if source.ProjectList != nil {
 		result.Batch, err = source.EvalProjection(result.Batch, proc)
 	}
-
+	analyzer.Output(result.Batch)
 	return result, err
 }

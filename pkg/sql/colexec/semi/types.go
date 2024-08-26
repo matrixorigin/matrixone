@@ -105,7 +105,7 @@ func (semiJoin *SemiJoin) Release() {
 
 func (semiJoin *SemiJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &semiJoin.ctr
-	anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
+	//anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
 
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
@@ -114,11 +114,18 @@ func (semiJoin *SemiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.skipProbe = false
 
 	if semiJoin.ProjectList != nil {
-		anal.Alloc(semiJoin.ProjectAllocSize + semiJoin.ctr.maxAllocSize)
+		//anal.Alloc(semiJoin.ProjectAllocSize + semiJoin.ctr.maxAllocSize)
+		if semiJoin.OpAnalyzer != nil {
+			semiJoin.OpAnalyzer.Alloc(semiJoin.ProjectAllocSize + semiJoin.ctr.maxAllocSize)
+		}
+
 		semiJoin.ctr.maxAllocSize = 0
 		semiJoin.ResetProjection(proc)
 	} else {
-		anal.Alloc(semiJoin.ctr.maxAllocSize)
+		//anal.Alloc(semiJoin.ctr.maxAllocSize)
+		if semiJoin.OpAnalyzer != nil {
+			semiJoin.OpAnalyzer.Alloc(semiJoin.ctr.maxAllocSize)
+		}
 		semiJoin.ctr.maxAllocSize = 0
 	}
 }

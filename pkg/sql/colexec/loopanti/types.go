@@ -96,8 +96,11 @@ func (loopAnti *LoopAnti) Reset(proc *process.Process, pipelineFailed bool, err 
 	}
 
 	if loopAnti.ProjectList != nil {
-		anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
-		anal.Alloc(loopAnti.ProjectAllocSize)
+		//anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
+		//anal.Alloc(loopAnti.ProjectAllocSize)
+		if loopAnti.OpAnalyzer != nil {
+			loopAnti.OpAnalyzer.Alloc(loopAnti.ProjectAllocSize)
+		}
 		loopAnti.ResetProjection(proc)
 	}
 }

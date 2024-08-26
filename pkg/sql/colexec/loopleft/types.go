@@ -88,7 +88,7 @@ func (loopLeft *LoopLeft) Release() {
 
 func (loopLeft *LoopLeft) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &loopLeft.ctr
-	anal := proc.GetAnalyze(loopLeft.GetIdx(), loopLeft.GetParallelIdx(), loopLeft.GetParallelMajor())
+	//anal := proc.GetAnalyze(loopLeft.GetIdx(), loopLeft.GetParallelIdx(), loopLeft.GetParallelMajor())
 
 	ctr.resetExprExecutor()
 	ctr.state = Build
@@ -101,7 +101,10 @@ func (loopLeft *LoopLeft) Reset(proc *process.Process, pipelineFailed bool, err 
 	}
 
 	if loopLeft.ProjectList != nil {
-		anal.Alloc(loopLeft.ProjectAllocSize)
+		//anal.Alloc(loopLeft.ProjectAllocSize)
+		if loopLeft.OpAnalyzer != nil {
+			loopLeft.OpAnalyzer.Alloc(loopLeft.ProjectAllocSize)
+		}
 		loopLeft.ResetProjection(proc)
 	}
 }

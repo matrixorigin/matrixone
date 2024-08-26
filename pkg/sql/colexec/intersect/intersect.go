@@ -37,7 +37,7 @@ func (intersect *Intersect) OpType() vm.OpType {
 
 func (intersect *Intersect) Prepare(proc *process.Process) error {
 	var err error
-
+	intersect.OpAnalyzer = process.NewAnalyzer(intersect.GetIdx(), intersect.IsFirst, intersect.IsLast, "intersect")
 	intersect.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
 	if err != nil {
 		return err
@@ -50,18 +50,21 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	analyze := proc.GetAnalyze(intersect.GetIdx(), intersect.GetParallelIdx(), intersect.GetParallelMajor())
-	analyze.Start()
-	defer analyze.Stop()
+	//analyze := proc.GetAnalyze(intersect.GetIdx(), intersect.GetParallelIdx(), intersect.GetParallelMajor())
+	//analyze.Start()
+	//defer analyze.Stop()
+	analyzer := intersect.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	for {
 		switch intersect.ctr.state {
 		case build:
-			if err := intersect.buildHashTable(proc, analyze, 1, intersect.GetIsFirst()); err != nil {
+			if err := intersect.buildHashTable(proc, analyzer, 1); err != nil {
 				return vm.CancelResult, err
 			}
 			if intersect.ctr.hashTable != nil {
-				analyze.Alloc(intersect.ctr.hashTable.Size())
+				analyzer.Alloc(intersect.ctr.hashTable.Size())
 			}
 			intersect.ctr.state = probe
 
@@ -69,7 +72,7 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 			var err error
 			isLast := false
 			result := vm.NewCallResult()
-			if isLast, err = intersect.probeHashTable(proc, analyze, 0, intersect.GetIsFirst(), intersect.GetIsLast(), &result); err != nil {
+			if isLast, err = intersect.probeHashTable(proc, analyzer, 0, &result); err != nil {
 				result.Status = vm.ExecStop
 				return result, err
 			}
@@ -77,7 +80,7 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 				intersect.ctr.state = end
 				continue
 			}
-
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		case end:
@@ -87,10 +90,10 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 // build hash table
-func (intersect *Intersect) buildHashTable(proc *process.Process, analyse process.Analyze, idx int, isFirst bool) error {
+func (intersect *Intersect) buildHashTable(proc *process.Process, analyzer process.Analyzer, idx int) error {
 	ctr := &intersect.ctr
 	for {
-		input, err := intersect.GetChildren(idx).Call(proc)
+		input, err := vm.ChildrenCallV1(intersect.GetChildren(idx), proc, analyzer)
 		if err != nil {
 			return err
 		}
@@ -105,7 +108,7 @@ func (intersect *Intersect) buildHashTable(proc *process.Process, analyse proces
 			continue
 		}
 
-		analyse.Input(input.Batch, isFirst)
+		//analyse.Input(input.Batch, isFirst)
 
 		cnt := input.Batch.RowCount()
 		itr := ctr.hashTable.NewIterator()
@@ -138,10 +141,10 @@ func (intersect *Intersect) buildHashTable(proc *process.Process, analyse proces
 	return nil
 }
 
-func (intersect *Intersect) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
+func (intersect *Intersect) probeHashTable(proc *process.Process, analyzer process.Analyzer, idx int, result *vm.CallResult) (bool, error) {
 	ctr := &intersect.ctr
 	for {
-		input, err := intersect.GetChildren(idx).Call(proc)
+		input, err := vm.ChildrenCallV1(intersect.GetChildren(idx), proc, analyzer)
 		if err != nil {
 			return false, err
 		}
@@ -156,7 +159,7 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyze proces
 			continue
 		}
 
-		analyze.Input(input.Batch, isFirst)
+		//analyze.Input(input.Batch, isFirst)
 		if ctr.buf == nil {
 			ctr.buf = batch.NewWithSize(len(input.Batch.Vecs))
 			for i := range input.Batch.Vecs {
@@ -211,8 +214,8 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyze proces
 			}
 		}
 
-		analyze.Alloc(int64(ctr.buf.Size()))
-		analyze.Output(ctr.buf, isLast)
+		analyzer.Alloc(int64(ctr.buf.Size()))
+		//analyze.Output(ctr.buf, isLast)
 		result.Batch = ctr.buf
 		return false, nil
 	}

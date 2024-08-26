@@ -37,6 +37,7 @@ func (minus *Minus) OpType() vm.OpType {
 
 func (minus *Minus) Prepare(proc *process.Process) error {
 	var err error
+	minus.OpAnalyzer = process.NewAnalyzer(minus.GetIdx(), minus.IsFirst, minus.IsLast, "minus")
 	minus.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
 	if err != nil {
 		return err
@@ -53,21 +54,25 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
+	analyzer := minus.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	var err error
 	// prepare the analysis work.
-	analyze := proc.GetAnalyze(minus.GetIdx(), minus.GetParallelIdx(), minus.GetParallelMajor())
-	analyze.Start()
-	defer analyze.Stop()
+	//analyze := proc.GetAnalyze(minus.GetIdx(), minus.GetParallelIdx(), minus.GetParallelMajor())
+	//analyze.Start()
+	//defer analyze.Stop()
 
 	for {
 		switch minus.ctr.state {
 		case buildingHashMap:
 			// step 1: build the hash table by all right batches.
-			if err = minus.buildHashTable(proc, analyze, 1, minus.GetIsFirst()); err != nil {
+			if err = minus.buildHashTable(proc, analyzer, 1); err != nil {
 				return vm.CancelResult, err
 			}
 			if minus.ctr.hashTable != nil {
-				analyze.Alloc(minus.ctr.hashTable.Size())
+				analyzer.Alloc(minus.ctr.hashTable.Size())
 			}
 			minus.ctr.state = probingHashMap
 
@@ -78,7 +83,7 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 			// next operator immediately after successful processing.
 			last := false
 			result := vm.NewCallResult()
-			last, err = minus.probeHashTable(proc, analyze, 0, minus.GetIsFirst(), minus.GetIsLast(), &result)
+			last, err = minus.probeHashTable(proc, analyzer, 0, &result)
 			if err != nil {
 				return vm.CancelResult, err
 			}
@@ -86,6 +91,7 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 				minus.ctr.state = operatorEnd
 				continue
 			}
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		case operatorEnd:
@@ -96,10 +102,11 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 // buildHashTable use all batches from proc.Reg.MergeReceiver[index] to build the hash map.
-func (minus *Minus) buildHashTable(proc *process.Process, ana process.Analyze, index int, isFirst bool) error {
+func (minus *Minus) buildHashTable(proc *process.Process, analyzer process.Analyzer, index int) error {
 	ctr := &minus.ctr
 	for {
-		input, err := minus.GetChildren(index).Call(proc)
+		//input, err := minus.GetChildren(index).Call(proc)
+		input, err := vm.ChildrenCallV1(minus.GetChildren(index), proc, analyzer)
 		if err != nil {
 			return err
 		}
@@ -113,7 +120,7 @@ func (minus *Minus) buildHashTable(proc *process.Process, ana process.Analyze, i
 		if input.Batch.IsEmpty() {
 			continue
 		}
-		ana.Input(input.Batch, isFirst)
+		//ana.Input(input.Batch, isFirst)
 
 		itr := ctr.hashTable.NewIterator()
 		count := input.Batch.Vecs[0].Length()
@@ -134,12 +141,13 @@ func (minus *Minus) buildHashTable(proc *process.Process, ana process.Analyze, i
 // probeHashTable use a batch from proc.Reg.MergeReceivers[index] to probe and update the hash map.
 // If a row of data never appears in the hash table, add it into hath table and send it to the next operator.
 // if batch is the last one, return true, else return false.
-func (minus *Minus) probeHashTable(proc *process.Process, ana process.Analyze, index int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
+func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analyzer, index int, result *vm.CallResult) (bool, error) {
 	inserted := make([]uint8, hashmap.UnitLimit)
 	restoreInserted := make([]uint8, hashmap.UnitLimit)
 
 	for {
-		input, err := minus.GetChildren(index).Call(proc)
+		//input, err := minus.GetChildren(index).Call(proc)
+		input, err := vm.ChildrenCallV1(minus.GetChildren(index), proc, analyzer)
 		if err != nil {
 			return false, err
 		}
@@ -156,7 +164,7 @@ func (minus *Minus) probeHashTable(proc *process.Process, ana process.Analyze, i
 		if input.Batch.IsEmpty() {
 			continue
 		}
-		ana.Input(input.Batch, isFirst)
+		//ana.Input(input.Batch, isFirst)
 
 		if minus.ctr.bat == nil {
 			minus.ctr.bat = batch.NewWithSize(len(input.Batch.Vecs))
@@ -200,8 +208,9 @@ func (minus *Minus) probeHashTable(proc *process.Process, ana process.Analyze, i
 				}
 			}
 		}
-		ana.Alloc(int64(minus.ctr.bat.Size()))
-		ana.Output(minus.ctr.bat, isLast)
+		//ana.Alloc(int64(minus.ctr.bat.Size()))
+		//ana.Output(minus.ctr.bat, isLast)
+		analyzer.Alloc(int64(minus.ctr.bat.Size()))
 		result.Batch = minus.ctr.bat
 		return false, nil
 	}

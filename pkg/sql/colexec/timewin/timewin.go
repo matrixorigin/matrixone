@@ -45,7 +45,7 @@ func (timeWin *TimeWin) OpType() vm.OpType {
 
 func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	ctr := &timeWin.ctr
-
+	timeWin.OpAnalyzer = process.NewAnalyzer(timeWin.GetIdx(), timeWin.IsFirst, timeWin.IsLast, "time_window")
 	if len(ctr.aggExe) == 0 {
 		ctr.aggExe = make([]colexec.ExpressionExecutor, len(timeWin.Aggs))
 		for i, ag := range timeWin.Aggs {
@@ -100,9 +100,12 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(timeWin.GetIdx(), timeWin.GetParallelIdx(), timeWin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(timeWin.GetIdx(), timeWin.GetParallelIdx(), timeWin.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := timeWin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	ctr := &timeWin.ctr
 	var err error
@@ -112,7 +115,8 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		switch ctr.status {
 		case dataTag:
-			result, err := timeWin.GetChildren(0).Call(proc)
+			//result, err := timeWin.GetChildren(0).Call(proc)
+			result, err := vm.ChildrenCallV1(timeWin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -138,11 +142,12 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, err
 				}
+				analyzer.Alloc(int64(appBat.Size()))
 				ctr.bats = append(ctr.bats, appBat)
 			}
 			ctr.i++
 
-			anal.Input(ctr.bats[ctr.i], timeWin.GetIsFirst())
+			//anal.Input(ctr.bats[ctr.i], timeWin.GetIsFirst())
 			if err = ctr.evalVecs(proc); err != nil {
 				return result, err
 			}
@@ -155,7 +160,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = evalTag
 		case initTag:
-			result, err := timeWin.GetChildren(0).Call(proc)
+			result, err := vm.ChildrenCallV1(timeWin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -177,6 +182,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, err
 				}
+				analyzer.Alloc(int64(appBat.Size()))
 				ctr.bats = append(ctr.bats, appBat)
 			}
 			ctr.i++
@@ -212,7 +218,8 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = nextTag
 			result.Batch = ctr.rbat
-			anal.Output(result.Batch, timeWin.IsLast)
+			//anal.Output(result.Batch, timeWin.IsLast)
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		case evalLastCur:
@@ -229,7 +236,8 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			result.Batch = ctr.rbat
-			anal.Output(result.Batch, timeWin.IsLast)
+			//anal.Output(result.Batch, timeWin.IsLast)
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		case evalLastPre:
@@ -271,13 +279,15 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = endTag
 			result.Batch = ctr.rbat
-			anal.Output(result.Batch, timeWin.IsLast)
+			//anal.Output(result.Batch, timeWin.IsLast)
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		case endTag:
 			result.Batch = nil
 			result.Status = vm.ExecStop
-			anal.Output(result.Batch, timeWin.IsLast)
+			//anal.Output(result.Batch, timeWin.IsLast)
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 

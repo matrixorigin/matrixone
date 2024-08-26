@@ -40,7 +40,7 @@ func (loopLeft *LoopLeft) OpType() vm.OpType {
 
 func (loopLeft *LoopLeft) Prepare(proc *process.Process) error {
 	var err error
-
+	loopLeft.OpAnalyzer = process.NewAnalyzer(loopLeft.GetIdx(), loopLeft.IsFirst, loopLeft.IsLast, "loop_left")
 	if loopLeft.Cond != nil && loopLeft.ctr.expr == nil {
 		loopLeft.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopLeft.Cond)
 		if err != nil {
@@ -59,9 +59,13 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopLeft.GetIdx(), loopLeft.GetParallelIdx(), loopLeft.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(loopLeft.GetIdx(), loopLeft.GetParallelIdx(), loopLeft.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := loopLeft.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &loopLeft.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -70,14 +74,15 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err = loopLeft.build(proc, anal); err != nil {
+			if err = loopLeft.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
 			if ctr.inBat == nil {
-				input, err = loopLeft.Children[0].Call(proc)
+				//input, err = loopLeft.Children[0].Call(proc)
+				input, err = vm.ChildrenCallV1(loopLeft.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -91,7 +96,7 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				ctr.probeIdx = 0
-				anal.Input(ctr.inBat, loopLeft.GetIsFirst())
+				//anal.Input(ctr.inBat, loopLeft.GetIsFirst())
 			}
 
 			if ctr.rbat == nil {
@@ -121,7 +126,8 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			anal.Output(result.Batch, loopLeft.GetIsLast())
+			//anal.Output(result.Batch, loopLeft.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, err
 
 		default:
@@ -132,10 +138,10 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (loopLeft *LoopLeft) build(proc *process.Process, anal process.Analyze) error {
+func (loopLeft *LoopLeft) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &loopLeft.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	mp := message.ReceiveJoinMap(loopLeft.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil

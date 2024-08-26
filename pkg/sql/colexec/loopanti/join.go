@@ -41,7 +41,7 @@ func (loopAnti *LoopAnti) OpType() vm.OpType {
 
 func (loopAnti *LoopAnti) Prepare(proc *process.Process) error {
 	var err error
-
+	loopAnti.OpAnalyzer = process.NewAnalyzer(loopAnti.GetIdx(), loopAnti.IsFirst, loopAnti.IsLast, "loop anti join")
 	if loopAnti.Cond != nil && loopAnti.ctr.expr == nil {
 		loopAnti.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopAnti.Cond)
 		if err != nil {
@@ -60,9 +60,13 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := loopAnti.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &loopAnti.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -71,14 +75,15 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err = loopAnti.build(proc, anal); err != nil {
+			if err = loopAnti.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
 
-			input, err = loopAnti.Children[0].Call(proc)
+			//input, err = loopAnti.Children[0].Call(proc)
+			input, err = vm.ChildrenCallV1(loopAnti.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -90,7 +95,7 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 			if inbat.RowCount() == 0 {
 				continue
 			}
-			anal.Input(inbat, loopAnti.GetIsFirst())
+			//anal.Input(inbat, loopAnti.GetIsFirst())
 
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(loopAnti.Result))
@@ -115,7 +120,8 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			anal.Output(result.Batch, loopAnti.GetIsLast())
+			//anal.Output(result.Batch, loopAnti.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, err
 		default:
 			result.Batch = nil
@@ -125,10 +131,10 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (loopAnti *LoopAnti) build(proc *process.Process, anal process.Analyze) error {
+func (loopAnti *LoopAnti) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &loopAnti.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	mp := message.ReceiveJoinMap(loopAnti.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil

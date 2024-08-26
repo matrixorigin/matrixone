@@ -40,7 +40,7 @@ func (loopJoin *LoopJoin) OpType() vm.OpType {
 
 func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 	var err error
-
+	loopJoin.OpAnalyzer = process.NewAnalyzer(loopJoin.GetIdx(), loopJoin.IsFirst, loopJoin.IsLast, "loop_join")
 	if loopJoin.Cond != nil && loopJoin.ctr.expr == nil {
 		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.Cond)
 		if err != nil {
@@ -59,9 +59,13 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := loopJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &loopJoin.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -70,7 +74,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := loopJoin.build(proc, anal); err != nil {
+			if err := loopJoin.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			if ctr.bat == nil {
@@ -81,7 +85,8 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			input, err = loopJoin.Children[0].Call(proc)
+			//input, err = loopJoin.Children[0].Call(proc)
+			input, err = vm.ChildrenCallV1(loopJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -96,7 +101,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
 				continue
 			}
-			anal.Input(inbat, loopJoin.GetIsFirst())
+			//anal.Input(inbat, loopJoin.GetIsFirst())
 
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(loopJoin.Result))
@@ -121,7 +126,8 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			anal.Output(result.Batch, loopJoin.GetIsLast())
+			//anal.Output(result.Batch, loopJoin.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, err
 		default:
 			result.Batch = nil
@@ -131,10 +137,10 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (loopJoin *LoopJoin) build(proc *process.Process, anal process.Analyze) error {
+func (loopJoin *LoopJoin) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &loopJoin.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	mp := message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil

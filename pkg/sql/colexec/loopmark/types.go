@@ -97,8 +97,11 @@ func (loopMark *LoopMark) Reset(proc *process.Process, pipelineFailed bool, err 
 	}
 
 	if loopMark.ProjectList != nil {
-		anal := proc.GetAnalyze(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor())
-		anal.Alloc(loopMark.ProjectAllocSize)
+		//anal := proc.GetAnalyze(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor())
+		//anal.Alloc(loopMark.ProjectAllocSize)
+		if loopMark.OpAnalyzer != nil {
+			loopMark.OpAnalyzer.Alloc(loopMark.ProjectAllocSize)
+		}
 		loopMark.ResetProjection(proc)
 	}
 }

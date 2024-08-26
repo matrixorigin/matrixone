@@ -83,8 +83,10 @@ func (external *External) OpType() vm.OpType {
 
 func (external *External) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
-
 	defer span.End()
+
+	external.OpAnalyzer = process.NewAnalyzer(external.GetIdx(), external.IsFirst, external.IsLast, "external")
+
 	param := external.Es
 	if proc.GetLim().MaxMsgSize == 0 {
 		param.maxBatchSize = uint64(morpc.GetMessageSize())
@@ -166,15 +168,19 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	t1 := time.Now()
-	anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
-	anal.Start()
+	//anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
+	//anal.Start()
+
+	analyzer := external.OpAnalyzer
+	analyzer.Start()
 	defer func() {
-		anal.Stop()
-		anal.AddScanTime(t1)
+		analyzer.Stop()
+		analyzer.AddScanTime(t1)
 		span.End()
 		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
-	anal.Input(nil, external.GetIsFirst())
+	//anal.Input(nil, external.GetIsFirst())
+	analyzer.Input(nil)
 
 	var err error
 	result := vm.NewCallResult()
@@ -212,7 +218,7 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, err
 		}
 	}
-	anal.Output(result.Batch, external.GetIsLast())
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 

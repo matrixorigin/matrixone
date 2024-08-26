@@ -40,9 +40,51 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, mergeReceivers []
 	}
 }
 
+//// You MUST Init ReceiverOperator with Merge-Type
+//// if you want to use this function
+//func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) *process.RegisterMessage {
+//	for {
+//		if r.aliveMergeReceiver == 0 {
+//			return process.NormalEndRegisterMessage
+//		}
+//
+//		start := time.Now()
+//		chosen, msg, ok := r.selectFromAllReg()
+//		analyze.WaitStop(start)
+//
+//		// chosen == 0 means the info comes from proc context.Done
+//		if chosen == 0 {
+//			return process.NormalEndRegisterMessage
+//		}
+//
+//		if !ok {
+//			return process.NormalEndRegisterMessage
+//		}
+//
+//		if msg == nil {
+//			continue
+//		}
+//
+//		if msg.Err != nil {
+//			return msg
+//		}
+//
+//		if msg.Batch == nil {
+//			continue
+//		}
+//
+//		if msg.Batch.IsEmpty() {
+//			r.proc.PutBatch(msg.Batch)
+//			continue
+//		}
+//
+//		return msg
+//	}
+//}
+
 // You MUST Init ReceiverOperator with Merge-Type
 // if you want to use this function
-func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) *process.RegisterMessage {
+func (r *ReceiverOperator) ReceiveFromAllRegsV1(analyzer process.Analyzer) *process.RegisterMessage {
 	for {
 		if r.aliveMergeReceiver == 0 {
 			return process.NormalEndRegisterMessage
@@ -50,7 +92,7 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) *process.
 
 		start := time.Now()
 		chosen, msg, ok := r.selectFromAllReg()
-		analyze.WaitStop(start)
+		analyzer.WaitStop(start)
 
 		// chosen == 0 means the info comes from proc context.Done
 		if chosen == 0 {
@@ -77,7 +119,7 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) *process.
 			r.proc.PutBatch(msg.Batch)
 			continue
 		}
-
+		analyzer.Input(msg.Batch)
 		return msg
 	}
 }

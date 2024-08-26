@@ -108,7 +108,7 @@ func (leftJoin *LeftJoin) Release() {
 
 func (leftJoin *LeftJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &leftJoin.ctr
-	anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
+	//anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
 
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
@@ -119,11 +119,17 @@ func (leftJoin *LeftJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.batchRowCount = 0
 
 	if leftJoin.ProjectList != nil {
-		anal.Alloc(leftJoin.ProjectAllocSize + leftJoin.ctr.maxAllocSize)
+		//anal.Alloc(leftJoin.ProjectAllocSize + leftJoin.ctr.maxAllocSize)
+		if leftJoin.OpAnalyzer != nil {
+			leftJoin.OpAnalyzer.Alloc(leftJoin.ProjectAllocSize + leftJoin.ctr.maxAllocSize)
+		}
 		leftJoin.ctr.maxAllocSize = 0
 		leftJoin.ResetProjection(proc)
 	} else {
-		anal.Alloc(leftJoin.ctr.maxAllocSize)
+		//anal.Alloc(leftJoin.ctr.maxAllocSize)
+		if leftJoin.OpAnalyzer != nil {
+			leftJoin.OpAnalyzer.Alloc(leftJoin.ctr.maxAllocSize)
+		}
 		leftJoin.ctr.maxAllocSize = 0
 	}
 }

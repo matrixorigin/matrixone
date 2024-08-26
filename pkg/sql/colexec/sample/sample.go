@@ -63,6 +63,7 @@ func (sample *Sample) OpType() vm.OpType {
 }
 
 func (sample *Sample) Prepare(proc *process.Process) (err error) {
+	sample.OpAnalyzer = process.NewAnalyzer(sample.GetIdx(), sample.IsFirst, sample.IsLast, "sample")
 	sample.ctr = &container{
 		isGroupBy:     len(sample.GroupExprs) != 0,
 		isMultiSample: len(sample.SampleExprs) > 1,
@@ -113,12 +114,15 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(sample.GetIdx(), sample.GetParallelIdx(), sample.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(sample.GetIdx(), sample.GetParallelIdx(), sample.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := sample.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	// duplicate code from other operators.
-	result, lastErr := vm.ChildrenCall(sample.Children[0], proc, anal)
+	result, lastErr := vm.ChildrenCallV1(sample.GetChildren(0), proc, analyzer)
 	if lastErr != nil {
 		return result, lastErr
 	}
@@ -139,16 +143,17 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if bat == nil {
 		result.Batch, lastErr = ctr.samplePool.Result(true)
-		anal.Output(result.Batch, sample.GetIsLast())
+		//anal.Output(result.Batch, sample.GetIsLast())
 		sample.ctr.buf = result.Batch
 		result.Status = vm.ExecStop
 		ctr.workDone = true
+		analyzer.Output(result.Batch)
 		return result, lastErr
 	}
 
 	var err error
 	if !bat.IsEmpty() {
-		anal.Input(bat, sample.GetIsFirst())
+		//anal.Input(bat, sample.GetIsFirst())
 
 		if err = ctr.evaluateSampleAndGroupByColumns(proc, bat); err != nil {
 			return result, err
@@ -172,8 +177,9 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 	} else {
 		result.Batch, err = ctr.samplePool.Result(false)
 	}
-	anal.Output(result.Batch, sample.GetIsLast())
+	//anal.Output(result.Batch, sample.GetIsLast())
 	sample.ctr.buf = result.Batch
+	analyzer.Output(result.Batch)
 	return result, err
 }
 

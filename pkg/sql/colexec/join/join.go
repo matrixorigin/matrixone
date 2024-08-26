@@ -41,6 +41,7 @@ func (innerJoin *InnerJoin) OpType() vm.OpType {
 }
 
 func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
+	innerJoin.OpAnalyzer = process.NewAnalyzer(innerJoin.GetIdx(), innerJoin.IsFirst, innerJoin.IsLast, "innerJoin")
 	if len(innerJoin.ctr.vecs) == 0 {
 		innerJoin.ctr.vecs = make([]*vector.Vector, len(innerJoin.Conditions[0]))
 		innerJoin.ctr.executor = make([]colexec.ExpressionExecutor, len(innerJoin.Conditions[0]))
@@ -66,9 +67,13 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := innerJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &innerJoin.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -77,7 +82,7 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			innerJoin.build(anal, proc)
+			innerJoin.build(analyzer, proc)
 
 			if ctr.mp == nil && !innerJoin.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
@@ -88,7 +93,7 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		case Probe:
 			if innerJoin.ctr.inbat == nil {
-				input, err = innerJoin.Children[0].Call(proc)
+				input, err = vm.ChildrenCallV1(innerJoin.Children[0], proc, analyzer)
 				if err != nil {
 					return input, err
 				}
@@ -99,6 +104,7 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				if bat.Last() {
 					result.Batch = bat
+					analyzer.Output(result.Batch)
 					return result, nil
 				}
 				if bat.IsEmpty() {
@@ -109,7 +115,7 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				ctr.inbat = bat
 				ctr.lastrow = 0
-				anal.Input(bat, innerJoin.GetIsFirst())
+				//anal.Input(bat, innerJoin.GetIsFirst())
 			}
 
 			startrow := innerJoin.ctr.lastrow
@@ -127,7 +133,8 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			anal.Output(result.Batch, innerJoin.GetIsLast())
+			//anal.Output(result.Batch, innerJoin.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -138,10 +145,10 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (innerJoin *InnerJoin) build(anal process.Analyze, proc *process.Process) {
+func (innerJoin *InnerJoin) build(analyzer process.Analyzer, proc *process.Process) {
 	ctr := &innerJoin.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	ctr.mp = message.ReceiveJoinMap(innerJoin.JoinMapTag, innerJoin.IsShuffle, innerJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())

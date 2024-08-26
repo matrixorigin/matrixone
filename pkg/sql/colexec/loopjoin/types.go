@@ -99,8 +99,11 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	}
 
 	if loopJoin.ProjectList != nil {
-		anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
-		anal.Alloc(loopJoin.ProjectAllocSize)
+		//anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
+		//anal.Alloc(loopJoin.ProjectAllocSize)
+		if loopJoin.OpAnalyzer != nil {
+			loopJoin.OpAnalyzer.Alloc(loopJoin.ProjectAllocSize)
+		}
 		loopJoin.ResetProjection(proc)
 	}
 }

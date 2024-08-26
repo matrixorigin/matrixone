@@ -34,6 +34,8 @@ func (mergeBlock *MergeBlock) OpType() vm.OpType {
 }
 
 func (mergeBlock *MergeBlock) Prepare(proc *process.Process) error {
+	mergeBlock.OpAnalyzer = process.NewAnalyzer(mergeBlock.GetIdx(), mergeBlock.IsFirst, mergeBlock.IsLast, "merge_block")
+
 	if mergeBlock.container.mp == nil {
 		mergeBlock.container.mp = make(map[int]*batch.Batch)
 		mergeBlock.container.mp2 = make(map[int][]*batch.Batch)
@@ -58,16 +60,19 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeBlock.GetIdx(), mergeBlock.GetParallelIdx(), mergeBlock.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(mergeBlock.GetIdx(), mergeBlock.GetParallelIdx(), mergeBlock.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := mergeBlock.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	var err error
-	input, err := vm.ChildrenCall(mergeBlock.GetChildren(0), proc, anal)
+	input, err := vm.ChildrenCallV1(mergeBlock.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return input, err
 	}
-	anal.Input(input.Batch, mergeBlock.IsFirst)
+	//anal.Input(input.Batch, mergeBlock.IsFirst)
 
 	if input.Batch == nil {
 		return vm.CancelResult, nil
@@ -119,6 +124,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		mergeBlock.container.mp2[0] = mergeBlock.container.mp2[0][:0]
 	}
 
-	anal.Output(input.Batch, mergeBlock.IsLast)
+	//anal.Output(input.Batch, mergeBlock.IsLast)
+	analyzer.Output(input.Batch)
 	return input, nil
 }

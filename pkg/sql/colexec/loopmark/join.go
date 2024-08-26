@@ -42,7 +42,7 @@ func (loopMark *LoopMark) OpType() vm.OpType {
 
 func (loopMark *LoopMark) Prepare(proc *process.Process) error {
 	var err error
-
+	loopMark.OpAnalyzer = process.NewAnalyzer(loopMark.GetIdx(), loopMark.IsFirst, loopMark.IsLast, "loop mark join")
 	if loopMark.Cond != nil && loopMark.ctr.expr == nil {
 		loopMark.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopMark.Cond)
 		if err != nil {
@@ -58,9 +58,13 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := loopMark.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &loopMark.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -68,14 +72,15 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := loopMark.build(proc, anal); err != nil {
+			if err := loopMark.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
 			var err error
-			input, err = loopMark.Children[0].Call(proc)
+			//input, err = loopMark.Children[0].Call(proc)
+			input, err = vm.ChildrenCallV1(loopMark.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -87,7 +92,7 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 			if bat.IsEmpty() {
 				continue
 			}
-			anal.Input(bat, loopMark.GetIsFirst())
+			//anal.Input(bat, loopMark.GetIsFirst())
 
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(loopMark.Result))
@@ -126,7 +131,8 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			anal.Output(result.Batch, loopMark.GetIsLast())
+			//anal.Output(result.Batch, loopMark.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, err
 
 		default:
@@ -137,10 +143,10 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (loopMark *LoopMark) build(proc *process.Process, anal process.Analyze) error {
+func (loopMark *LoopMark) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &loopMark.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	mp := message.ReceiveJoinMap(loopMark.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil

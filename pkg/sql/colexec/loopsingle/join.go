@@ -41,7 +41,7 @@ func (loopSingle *LoopSingle) OpType() vm.OpType {
 
 func (loopSingle *LoopSingle) Prepare(proc *process.Process) error {
 	var err error
-
+	loopSingle.OpAnalyzer = process.NewAnalyzer(loopSingle.GetIdx(), loopSingle.IsFirst, loopSingle.IsLast, "loop_single")
 	if loopSingle.Cond != nil && loopSingle.ctr.expr == nil {
 		loopSingle.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopSingle.Cond)
 		if err != nil {
@@ -60,9 +60,13 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := loopSingle.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &loopSingle.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -70,14 +74,15 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 	for {
 		switch ctr.state {
 		case Build:
-			if err := loopSingle.build(proc, anal); err != nil {
+			if err := loopSingle.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
 			var err error
-			input, err = loopSingle.Children[0].Call(proc)
+			//input, err = loopSingle.Children[0].Call(proc)
+			input, err = vm.ChildrenCallV1(loopSingle.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -89,7 +94,7 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 			if bat.IsEmpty() {
 				continue
 			}
-			anal.Input(bat, loopSingle.GetIsFirst())
+			//anal.Input(bat, loopSingle.GetIsFirst())
 
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(loopSingle.Result))
@@ -125,7 +130,8 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 				return result, err
 			}
 
-			anal.Output(result.Batch, loopSingle.GetIsLast())
+			//anal.Output(result.Batch, loopSingle.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, err
 
 		default:
@@ -136,10 +142,10 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 	}
 }
 
-func (loopSingle *LoopSingle) build(proc *process.Process, anal process.Analyze) error {
+func (loopSingle *LoopSingle) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &loopSingle.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	mp := message.ReceiveJoinMap(loopSingle.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil

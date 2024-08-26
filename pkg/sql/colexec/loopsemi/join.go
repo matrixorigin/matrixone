@@ -40,7 +40,7 @@ func (loopSemi *LoopSemi) OpType() vm.OpType {
 
 func (loopSemi *LoopSemi) Prepare(proc *process.Process) error {
 	var err error
-
+	loopSemi.OpAnalyzer = process.NewAnalyzer(loopSemi.GetIdx(), loopSemi.IsFirst, loopSemi.IsLast, "loop semi join")
 	if loopSemi.Cond != nil && loopSemi.ctr.expr == nil {
 		loopSemi.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopSemi.Cond)
 		if err != nil {
@@ -57,9 +57,13 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := loopSemi.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &loopSemi.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -68,7 +72,7 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := loopSemi.build(proc, anal); err != nil {
+			if err := loopSemi.build(proc, analyzer); err != nil {
 				return result, err
 			}
 			if ctr.bat == nil {
@@ -80,7 +84,8 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if loopSemi.ctr.buf == nil {
-				input, err = loopSemi.Children[0].Call(proc)
+				//input, err = loopSemi.Children[0].Call(proc)
+				input, err = vm.ChildrenCallV1(loopSemi.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -97,7 +102,7 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				loopSemi.ctr.buf = bat
 				loopSemi.ctr.lastrow = 0
-				anal.Input(loopSemi.ctr.buf, loopSemi.GetIsFirst())
+				//anal.Input(loopSemi.ctr.buf, loopSemi.GetIsFirst())
 			}
 
 			if ctr.rbat == nil {
@@ -119,7 +124,8 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			anal.Output(result.Batch, loopSemi.GetIsLast())
+			//anal.Output(result.Batch, loopSemi.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, err
 
 		default:
@@ -130,10 +136,10 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (loopSemi *LoopSemi) build(proc *process.Process, anal process.Analyze) error {
+func (loopSemi *LoopSemi) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &loopSemi.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	mp := message.ReceiveJoinMap(loopSemi.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil

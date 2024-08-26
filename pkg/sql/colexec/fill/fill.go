@@ -40,6 +40,7 @@ func (fill *Fill) OpType() vm.OpType {
 }
 
 func (fill *Fill) Prepare(proc *process.Process) (err error) {
+	fill.OpAnalyzer = process.NewAnalyzer(fill.GetIdx(), fill.IsFirst, fill.IsLast, "fill")
 	ctr := &fill.ctr
 
 	f := true
@@ -118,12 +119,16 @@ func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := fill.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &fill.ctr
 
-	result, err := ctr.process(ctr, fill, proc, anal)
+	result, err := ctr.process(ctr, fill, proc, analyzer)
 
 	if fill.ProjectList != nil {
 		result.Batch, err = fill.EvalProjection(result.Batch, proc)
@@ -145,9 +150,9 @@ func resetColRef(expr *plan.Expr, idx int) {
 	}
 }
 
-func processValue(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func processValue(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	var err error
-	result, err := ap.GetChildren(0).Call(proc)
+	result, err := vm.ChildrenCallV1(ap.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
@@ -163,7 +168,7 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, anal process.
 		return result, err
 	}
 
-	anal.Input(ctr.buf, ap.IsFirst)
+	//anal.Input(ctr.buf, ap.IsFirst)
 
 	for i := 0; i < ap.ColLen; i++ {
 		for j := 0; j < ctr.buf.Vecs[i].Length(); j++ {
@@ -176,7 +181,8 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, anal process.
 	}
 
 	result.Batch = ctr.buf
-	anal.Output(ctr.buf, ap.IsLast)
+	//anal.Output(ctr.buf, ap.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -277,9 +283,9 @@ func processNextCol(ctr *container, idx int, proc *process.Process) error {
 	}
 }
 
-func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	var err error
-	result, err := ap.GetChildren(0).Call(proc)
+	result, err := vm.ChildrenCallV1(ap.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
@@ -287,7 +293,7 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	anal.Input(ctr.buf, ap.IsFirst)
+	//anal.Input(ctr.buf, ap.IsFirst)
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
 	}
@@ -321,7 +327,8 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		}
 	}
 	result.Batch = ctr.buf
-	anal.Output(result.Batch, ap.IsLast)
+	//anal.Output(result.Batch, ap.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -447,7 +454,7 @@ func processLinearCol(ctr *container, proc *process.Process, idx int) error {
 	}
 }
 
-func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	var err error
 	result := vm.NewCallResult()
 	if ctr.done {
@@ -459,10 +466,11 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		result.Batch = ctr.bats[ctr.idx]
 		result.Status = vm.ExecNext
 		ctr.idx++
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 	for i := 0; ; i++ {
-		result, err = ap.GetChildren(0).Call(proc)
+		result, err = vm.ChildrenCallV1(ap.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}
@@ -482,6 +490,7 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 			if err != nil {
 				return result, err
 			}
+			analyzer.Alloc(int64(appBat.Size()))
 			ctr.bats = append(ctr.bats, appBat)
 		}
 	}
@@ -490,7 +499,7 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	anal.Input(ctr.buf, ap.IsFirst)
+	//anal.Input(ctr.buf, ap.IsFirst)
 
 	for i := range ctr.bats[0].Vecs {
 		if err = processNextCol(ctr, i, proc); err != nil {
@@ -502,11 +511,12 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 	result.Status = vm.ExecNext
 	ctr.idx++
 
-	anal.Output(result.Batch, ap.IsLast)
+	//anal.Output(result.Batch, ap.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 
-func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	var err error
 	result := vm.NewCallResult()
 	if ctr.done {
@@ -518,17 +528,18 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 		result.Batch = ctr.bats[ctr.idx]
 		result.Status = vm.ExecNext
 		ctr.idx++
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 	for i := 0; ; i++ {
-		result, err = ap.GetChildren(0).Call(proc)
+		result, err = vm.ChildrenCallV1(ap.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}
 		if result.Batch == nil {
 			break
 		}
-		anal.Input(result.Batch, ap.IsFirst)
+		//anal.Input(result.Batch, ap.IsFirst)
 		if len(ctr.bats) > i {
 			if ctr.bats[i] != nil {
 				ctr.bats[i].CleanOnlyData()
@@ -542,6 +553,7 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 			if err != nil {
 				return result, err
 			}
+			analyzer.Alloc(int64(appBat.Size()))
 			ctr.bats = append(ctr.bats, appBat)
 		}
 	}
@@ -560,12 +572,13 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 	result.Status = vm.ExecNext
 	ctr.idx++
 
-	anal.Output(result.Batch, ap.IsLast)
+	//anal.Output(result.Batch, ap.IsLast)
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 
-func processDefault(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
-	result, err := ap.GetChildren(0).Call(proc)
+func processDefault(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	result, err := vm.ChildrenCallV1(ap.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
@@ -574,12 +587,14 @@ func processDefault(ctr *container, ap *Fill, proc *process.Process, anal proces
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	anal.Input(ctr.buf, ap.IsFirst)
-	anal.Output(result.Batch, ap.IsLast)
+	//anal.Input(ctr.buf, ap.IsFirst)
+	//anal.Output(result.Batch, ap.IsLast)
 	ctr.buf, err = result.Batch.Dup(proc.Mp())
+	analyzer.Alloc(int64(ctr.buf.Size()))
 	if err != nil {
 		return result, err
 	}
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 

@@ -37,6 +37,8 @@ func (mergeDelete *MergeDelete) OpType() vm.OpType {
 }
 
 func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
+	mergeDelete.OpAnalyzer = process.NewAnalyzer(mergeDelete.GetIdx(), mergeDelete.IsFirst, mergeDelete.IsLast, "merge_delete")
+
 	ref := mergeDelete.Ref
 	eng := mergeDelete.Engine
 	partitionNames := mergeDelete.PartitionTableNames
@@ -55,14 +57,17 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeDelete.GetIdx(), mergeDelete.GetParallelIdx(), mergeDelete.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(mergeDelete.GetIdx(), mergeDelete.GetParallelIdx(), mergeDelete.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := mergeDelete.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	var err error
 	var name string
 
-	input, err := vm.ChildrenCall(mergeDelete.Children[0], proc, anal)
+	input, err := vm.ChildrenCallV1(mergeDelete.Children[0], proc, analyzer)
 	if err != nil {
 		return vm.CancelResult, err
 	}
@@ -123,5 +128,7 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	if mergeDelete.AddAffectedRows {
 		mergeDelete.ctr.affectedRows += uint64(vector.GetFixedAt[uint32](bat.GetVector(4), 0))
 	}
+
+	analyzer.Output(input.Batch)
 	return input, nil
 }

@@ -32,6 +32,7 @@ func (mergeRecursive *MergeRecursive) OpType() vm.OpType {
 }
 
 func (mergeRecursive *MergeRecursive) Prepare(proc *process.Process) error {
+	mergeRecursive.OpAnalyzer = process.NewAnalyzer(mergeRecursive.GetIdx(), mergeRecursive.IsFirst, mergeRecursive.IsLast, "merge recursive")
 	return nil
 }
 
@@ -40,15 +41,20 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeRecursive.GetIdx(), mergeRecursive.GetParallelIdx(), mergeRecursive.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(mergeRecursive.GetIdx(), mergeRecursive.GetParallelIdx(), mergeRecursive.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := mergeRecursive.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &mergeRecursive.ctr
 
 	result := vm.NewCallResult()
 	var err error
 	for !ctr.last {
-		result, err = mergeRecursive.GetChildren(0).Call(proc)
+		//result, err = mergeRecursive.GetChildren(0).Call(proc)
+		result, err = vm.ChildrenCallV1(mergeRecursive.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}
@@ -75,6 +81,7 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 			if err != nil {
 				return result, err
 			}
+			analyzer.Alloc(int64(appBat.Size()))
 			ctr.freeBats = append(ctr.freeBats, appBat)
 		}
 		mergeRecursive.ctr.bats = append(mergeRecursive.ctr.bats, ctr.freeBats[ctr.i])
@@ -93,9 +100,10 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 		return result, nil
 	}
 
-	anal.Input(mergeRecursive.ctr.buf, mergeRecursive.GetIsFirst())
-	anal.Output(mergeRecursive.ctr.buf, mergeRecursive.GetIsLast())
+	//anal.Input(mergeRecursive.ctr.buf, mergeRecursive.GetIsFirst())
+	//anal.Output(mergeRecursive.ctr.buf, mergeRecursive.GetIsLast())
 	result.Batch = mergeRecursive.ctr.buf
 	result.Status = vm.ExecHasMore
+	analyzer.Output(result.Batch)
 	return result, nil
 }

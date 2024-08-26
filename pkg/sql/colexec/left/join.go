@@ -41,6 +41,8 @@ func (leftJoin *LeftJoin) OpType() vm.OpType {
 }
 
 func (leftJoin *LeftJoin) Prepare(proc *process.Process) (err error) {
+	leftJoin.OpAnalyzer = process.NewAnalyzer(leftJoin.GetIdx(), leftJoin.IsFirst, leftJoin.IsLast, "left join")
+
 	if leftJoin.ctr.vecs == nil {
 		leftJoin.ctr.vecs = make([]*vector.Vector, len(leftJoin.Conditions[0]))
 		leftJoin.ctr.executor = make([]colexec.ExpressionExecutor, len(leftJoin.Conditions[0]))
@@ -66,9 +68,13 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := leftJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ctr := &leftJoin.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -77,12 +83,13 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			leftJoin.build(anal, proc)
+			leftJoin.build(analyzer, proc)
 			ctr.state = Probe
 
 		case Probe:
 			if leftJoin.ctr.inbat == nil {
-				input, err = leftJoin.Children[0].Call(proc)
+				//input, err = leftJoin.Children[0].Call(proc)
+				input, err = vm.ChildrenCallV1(leftJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 
@@ -97,7 +104,7 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				ctr.inbat = bat
 				ctr.lastrow = 0
-				anal.Input(bat, leftJoin.GetIsFirst())
+				//anal.Input(bat, leftJoin.GetIsFirst())
 			}
 
 			if ctr.rbat == nil {
@@ -139,7 +146,8 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				return result, err
 			}
-			anal.Output(result.Batch, leftJoin.GetIsLast())
+			//anal.Output(result.Batch, leftJoin.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -150,10 +158,10 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (leftJoin *LeftJoin) build(anal process.Analyze, proc *process.Process) {
+func (leftJoin *LeftJoin) build(analyzer process.Analyzer, proc *process.Process) {
 	ctr := &leftJoin.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	ctr.mp = message.ReceiveJoinMap(leftJoin.JoinMapTag, leftJoin.IsShuffle, leftJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())

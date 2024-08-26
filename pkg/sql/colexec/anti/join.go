@@ -40,6 +40,8 @@ func (antiJoin *AntiJoin) OpType() vm.OpType {
 }
 
 func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
+	antiJoin.OpAnalyzer = process.NewAnalyzer(antiJoin.GetIdx(), antiJoin.IsFirst, antiJoin.IsLast, "anti join")
+
 	if antiJoin.ctr.vecs == nil {
 		antiJoin.ctr.vecs = make([]*vector.Vector, len(antiJoin.Conditions[0]))
 		antiJoin.ctr.executor, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, antiJoin.Conditions[0])
@@ -64,9 +66,14 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+
+	analyzer := antiJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ap := antiJoin
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -76,11 +83,11 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			antiJoin.build(anal, proc)
+			antiJoin.build(analyzer, proc)
 			ctr.state = Probe
 
 		case Probe:
-			input, err = antiJoin.Children[0].Call(proc)
+			input, err = vm.ChildrenCallV1(antiJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -91,12 +98,13 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if inbat.Last() {
 				result.Batch = inbat
+				analyzer.Output(result.Batch)
 				return result, nil
 			}
 			if inbat.IsEmpty() {
 				continue
 			}
-			anal.Input(inbat, antiJoin.GetIsFirst())
+			//anal.Input(inbat, antiJoin.GetIsFirst())
 
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(ap.Result))
@@ -126,7 +134,8 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			anal.Output(result.Batch, antiJoin.GetIsLast())
+			//anal.Output(result.Batch, antiJoin.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -137,10 +146,10 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (antiJoin *AntiJoin) build(anal process.Analyze, proc *process.Process) {
+func (antiJoin *AntiJoin) build(analyzer process.Analyzer, proc *process.Process) {
 	ctr := &antiJoin.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
+	defer analyzer.WaitStop(start)
 	ctr.mp = message.ReceiveJoinMap(antiJoin.JoinMapTag, antiJoin.IsShuffle, antiJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())

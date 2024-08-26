@@ -34,6 +34,7 @@ func (merge *Merge) OpType() vm.OpType {
 }
 
 func (merge *Merge) Prepare(proc *process.Process) error {
+	merge.OpAnalyzer = process.NewAnalyzer(merge.GetIdx(), merge.IsFirst, merge.IsLast, "merge")
 	if merge.Partial {
 		merge.ctr.InitReceiver(proc, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
 	} else {
@@ -47,14 +48,18 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(merge.GetIdx(), merge.GetParallelIdx(), merge.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(merge.GetIdx(), merge.GetParallelIdx(), merge.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := merge.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
 
 	for {
-		msg = merge.ctr.ReceiveFromAllRegs(anal)
+		msg = merge.ctr.ReceiveFromAllRegsV1(analyzer)
 		if msg.Err != nil {
 			return vm.CancelResult, msg.Err
 		}
@@ -89,7 +94,8 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		break
 	}
 
-	anal.Input(merge.ctr.buf, merge.GetIsFirst())
-	anal.Output(merge.ctr.buf, merge.GetIsLast())
+	//anal.Input(merge.ctr.buf, merge.GetIsFirst())
+	//anal.Output(merge.ctr.buf, merge.GetIsLast())
+	analyzer.Output(result.Batch)
 	return result, nil
 }

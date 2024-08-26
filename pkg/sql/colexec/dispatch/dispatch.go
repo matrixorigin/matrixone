@@ -42,6 +42,8 @@ func (dispatch *Dispatch) OpType() vm.OpType {
 }
 
 func (dispatch *Dispatch) Prepare(proc *process.Process) error {
+	dispatch.OpAnalyzer = process.NewAnalyzer(dispatch.GetIdx(), dispatch.IsFirst, dispatch.IsLast, "dispatch")
+
 	ctr := new(container)
 	dispatch.ctr = ctr
 	ctr.localRegsCnt = len(dispatch.LocalRegs)

@@ -83,8 +83,9 @@ func (fuzzyFilter *FuzzyFilter) OpType() vm.OpType {
 }
 
 func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
-	ctr := &fuzzyFilter.ctr
+	fuzzyFilter.OpAnalyzer = process.NewAnalyzer(fuzzyFilter.GetIdx(), fuzzyFilter.IsFirst, fuzzyFilter.IsLast, "fuzzy_filter")
 
+	ctr := &fuzzyFilter.ctr
 	if ctr.rbat == nil {
 		rowCount := int64(fuzzyFilter.N)
 		if rowCount < 1000 {
@@ -151,9 +152,12 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(fuzzyFilter.GetIdx(), fuzzyFilter.GetParallelIdx(), fuzzyFilter.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(fuzzyFilter.GetIdx(), fuzzyFilter.GetParallelIdx(), fuzzyFilter.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := fuzzyFilter.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	ctr := &fuzzyFilter.ctr
@@ -162,12 +166,12 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 		case Build:
 			buildIdx := fuzzyFilter.BuildIdx
 
-			input, err := fuzzyFilter.GetChildren(buildIdx).Call(proc)
+			input, err := vm.ChildrenCallV1(fuzzyFilter.GetChildren(buildIdx), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
 			bat := input.Batch
-			anal.Input(bat, fuzzyFilter.IsFirst)
+			//anal.Input(bat, fuzzyFilter.IsFirst)
 
 			if bat == nil {
 				if fuzzyFilter.ifBuildOnSink() {
@@ -201,19 +205,20 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 		case Probe:
 			probeIdx := fuzzyFilter.getProbeIdx()
 
-			input, err := fuzzyFilter.GetChildren(probeIdx).Call(proc)
+			input, err := vm.ChildrenCallV1(fuzzyFilter.GetChildren(probeIdx), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
 			bat := input.Batch
-			anal.Input(bat, fuzzyFilter.IsFirst)
+			//anal.Input(bat, fuzzyFilter.IsFirst)
 
 			if bat == nil {
 				// fmt.Println("probe cnt = ", arg.probeCnt)
 				// this will happen in such case:create unique index from a table that unique col have no data
 				if ctr.rbat == nil || ctr.collisionCnt == 0 {
 					result.Status = vm.ExecStop
-					anal.Output(result.Batch, fuzzyFilter.IsLast)
+					//anal.Output(result.Batch, fuzzyFilter.IsLast)
+					analyzer.Output(result.Batch)
 					return result, nil
 				}
 
@@ -225,7 +230,8 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 				if err := fuzzyFilter.Callback(ctr.rbat); err != nil {
 					return result, err
 				} else {
-					anal.Output(result.Batch, fuzzyFilter.IsLast)
+					//anal.Output(result.Batch, fuzzyFilter.IsLast)
+					analyzer.Output(result.Batch)
 					return result, nil
 				}
 			}
@@ -245,7 +251,8 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			continue
 		case End:
 			result.Status = vm.ExecStop
-			anal.Output(result.Batch, fuzzyFilter.IsLast)
+			//anal.Output(result.Batch, fuzzyFilter.IsLast)
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

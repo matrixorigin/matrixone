@@ -525,7 +525,7 @@ func runLockBlockingOpTest(
 				batches2 = append(batches2, bat)
 			}
 			require.NoError(t, arg.Prepare(proc))
-			arg.ctr.batchFetchFunc = func(*process.Process) (vm.CallResult, error) {
+			arg.ctr.batchFetchFunc = func(vm.Operator, *process.Process, process.Analyzer) (vm.CallResult, error) {
 				if len(batches) == 0 {
 					return vm.NewCallResult(), nil
 				}

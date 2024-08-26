@@ -47,6 +47,8 @@ func (partition *Partition) OpType() vm.OpType {
 }
 
 func (partition *Partition) Prepare(proc *process.Process) (err error) {
+	partition.OpAnalyzer = process.NewAnalyzer(partition.GetIdx(), partition.IsFirst, partition.IsLast, "partition")
+
 	if len(partition.ctr.executors) > 0 {
 		return nil
 	}
@@ -71,15 +73,19 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(partition.GetIdx(), partition.GetParallelIdx(), partition.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(partition.GetIdx(), partition.GetParallelIdx(), partition.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := partition.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	ctr := &partition.ctr
 	for {
 		switch ctr.status {
 		case receive:
-			result, err := partition.GetChildren(0).Call(proc)
+			//result, err := partition.GetChildren(0).Call(proc)
+			result, err := vm.ChildrenCallV1(partition.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -100,6 +106,7 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 					if err != nil {
 						return result, err
 					}
+					analyzer.Alloc(int64(appBat.Size()))
 					ctr.batchList = append(ctr.batchList, appBat)
 				}
 
@@ -119,10 +126,12 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 			ok, err := ctr.pickAndSend(proc, &result)
 			if ok {
 				result.Status = vm.ExecStop
-				anal.Output(result.Batch, partition.IsLast)
+				//anal.Output(result.Batch, partition.IsLast)
+				analyzer.Output(result.Batch)
 				return result, err
 			}
-			anal.Output(result.Batch, partition.IsLast)
+			//anal.Output(result.Batch, partition.IsLast)
+			analyzer.Output(result.Batch)
 			return result, err
 
 		}

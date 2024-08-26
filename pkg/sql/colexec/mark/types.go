@@ -178,7 +178,7 @@ func (markJoin *MarkJoin) Release() {
 
 func (markJoin *MarkJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &markJoin.ctr
-	anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
+	//anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
 
 	ctr.resetExecutor()
 	ctr.cleanHashMap()
@@ -190,11 +190,17 @@ func (markJoin *MarkJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.markNulls = nil
 
 	if markJoin.ProjectList != nil {
-		anal.Alloc(markJoin.ProjectAllocSize + markJoin.ctr.maxAllocSize)
+		//anal.Alloc(markJoin.ProjectAllocSize + markJoin.ctr.maxAllocSize)
+		if markJoin.OpAnalyzer != nil {
+			markJoin.OpAnalyzer.Alloc(markJoin.ProjectAllocSize + markJoin.ctr.maxAllocSize)
+		}
 		markJoin.ctr.maxAllocSize = 0
 		markJoin.ResetProjection(proc)
 	} else {
-		anal.Alloc(markJoin.ctr.maxAllocSize)
+		//anal.Alloc(markJoin.ctr.maxAllocSize)
+		if markJoin.OpAnalyzer != nil {
+			markJoin.OpAnalyzer.Alloc(markJoin.ctr.maxAllocSize)
+		}
 		markJoin.ctr.maxAllocSize = 0
 	}
 }

@@ -99,8 +99,11 @@ func (loopSemi *LoopSemi) Reset(proc *process.Process, pipelineFailed bool, err 
 	}
 
 	if loopSemi.ProjectList != nil {
-		anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
-		anal.Alloc(loopSemi.ProjectAllocSize)
+		//anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
+		//anal.Alloc(loopSemi.ProjectAllocSize)
+		if loopSemi.OpAnalyzer != nil {
+			loopSemi.OpAnalyzer.Alloc(loopSemi.ProjectAllocSize)
+		}
 		loopSemi.ResetProjection(proc)
 	}
 }

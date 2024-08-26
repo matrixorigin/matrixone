@@ -42,6 +42,8 @@ func (filter *Filter) OpType() vm.OpType {
 }
 
 func (filter *Filter) Prepare(proc *process.Process) (err error) {
+	filter.OpAnalyzer = process.NewAnalyzer(filter.GetIdx(), filter.IsFirst, filter.IsLast, "filter")
+
 	if filter.exeExpr == nil && filter.E == nil {
 		return nil
 	}
@@ -73,15 +75,19 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(filter.GetIdx(), filter.GetParallelIdx(), filter.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(filter.GetIdx(), filter.GetParallelIdx(), filter.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
 
-	inputResult, err := vm.ChildrenCall(filter.GetChildren(0), proc, anal)
+	analyzer := filter.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
+	inputResult, err := vm.ChildrenCallV1(filter.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return inputResult, err
 	}
-	anal.Input(inputResult.Batch, filter.IsFirst)
+	//anal.Input(inputResult.Batch, filter.IsFirst)
 
 	if inputResult.Batch == nil || inputResult.Batch.IsEmpty() || inputResult.Batch.Last() || len(filter.ctr.executors) == 0 {
 		return inputResult, nil
@@ -102,7 +108,9 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		if proc.OperatorOutofMemory(int64(vec.Size())) {
 			return vm.CancelResult, moerr.NewOOM(proc.Ctx)
 		}
-		anal.Alloc(int64(vec.Size()))
+		//anal.Alloc(int64(vec.Size()))
+		analyzer.Alloc(int64(vec.Size()))
+
 		if !vec.GetType().IsBoolean() {
 			return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
@@ -159,9 +167,10 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	if filter.IsEnd {
 		result.Batch = nil
 	} else {
-		anal.Output(filterBat, filter.GetIsLast())
+		//anal.Output(filterBat, filter.GetIsLast())
 		result.Batch = filterBat
 	}
+	analyzer.Output(result.Batch)
 	return result, nil
 }
 

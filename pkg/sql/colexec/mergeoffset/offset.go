@@ -38,6 +38,7 @@ func (mergeOffset *MergeOffset) OpType() vm.OpType {
 
 func (mergeOffset *MergeOffset) Prepare(proc *process.Process) error {
 	var err error
+	mergeOffset.OpAnalyzer = process.NewAnalyzer(mergeOffset.GetIdx(), mergeOffset.IsFirst, mergeOffset.IsLast, "merge_offset")
 	mergeOffset.ctr = new(container)
 	if mergeOffset.ctr.offsetExecutor == nil {
 		mergeOffset.ctr.offsetExecutor, err = colexec.NewExpressionExecutor(proc, mergeOffset.Offset)
@@ -60,12 +61,16 @@ func (mergeOffset *MergeOffset) Call(proc *process.Process) (vm.CallResult, erro
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeOffset.GetIdx(), mergeOffset.GetParallelIdx(), mergeOffset.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	//anal := proc.GetAnalyze(mergeOffset.GetIdx(), mergeOffset.GetParallelIdx(), mergeOffset.GetParallelMajor())
+	//anal.Start()
+	//defer anal.Stop()
+	analyzer := mergeOffset.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
 	for {
-		result, err := mergeOffset.GetChildren(0).Call(proc)
+		//result, err := mergeOffset.GetChildren(0).Call(proc)
+		result, err := vm.ChildrenCallV1(mergeOffset.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}
@@ -74,9 +79,10 @@ func (mergeOffset *MergeOffset) Call(proc *process.Process) (vm.CallResult, erro
 			return result, err
 		}
 
-		anal.Input(result.Batch, mergeOffset.GetIsFirst())
+		//anal.Input(result.Batch, mergeOffset.GetIsFirst())
 		if mergeOffset.ctr.seen > mergeOffset.ctr.offset {
-			anal.Output(result.Batch, mergeOffset.GetIsLast())
+			//anal.Output(result.Batch, mergeOffset.GetIsLast())
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 		length := result.Batch.RowCount()
@@ -90,8 +96,9 @@ func (mergeOffset *MergeOffset) Call(proc *process.Process) (vm.CallResult, erro
 			}
 			buf.Shrink(sels, false)
 			proc.Mp().PutSels(sels)
-			anal.Output(buf, mergeOffset.GetIsLast())
+			//anal.Output(buf, mergeOffset.GetIsLast())
 			result.Batch = buf
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 		mergeOffset.ctr.seen += uint64(length)
