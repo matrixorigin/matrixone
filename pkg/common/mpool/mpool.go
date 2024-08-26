@@ -583,7 +583,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 		more info : https://github.com/matrixorigin/matrixone/issues/18240#issuecomment-2308223191
 	*/
 
-	// gcurr := globalStats.RecordAlloc("global", tempSize)
+	_ = globalStats.RecordAlloc("global", tempSize)
 	// if gcurr > GlobalCap() {
 	// 	globalStats.RecordFree("global", tempSize)
 	// 	return nil, moerr.NewOOMNoCtx()
