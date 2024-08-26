@@ -4005,7 +4005,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		return nodes, nil, nil, nil
 	}
 
-	if len(n.AggList) > 0 && relData.DataCnt() > 1 {
+	if !txnOp.IsSnapOp() && len(n.AggList) > 0 && relData.DataCnt() > 1 {
 		var columnMap map[int]int
 		partialResults, partialResultTypes, columnMap = checkAggOptimize(n)
 		if partialResults != nil {
