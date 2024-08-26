@@ -1434,7 +1434,7 @@ func constructDeleteDispatchAndLocal(
 
 // This function do not setting funcId.
 // PLEASE SETTING FuncId AFTER YOU CALL IT.
-func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string) (bool, *dispatch.Dispatch) {
+func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string, mcpu int) (bool, *dispatch.Dispatch) {
 	arg := dispatch.NewArgument()
 	scopeLen := len(ss)
 	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
@@ -1450,6 +1450,7 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 			isSameCN(s.NodeInfo.Addr, currentCNAddr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
+			s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = mcpu
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 			arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
 		} else {
@@ -1522,8 +1523,8 @@ func constructShuffleArgForGroup(ss []*Scope, node *plan.Node) *shuffle.Shuffle 
 }
 
 // cross-cn dispath  will send same batch to all register
-func constructDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.Node, left bool) *dispatch.Dispatch {
-	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
+func constructDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.Node, left bool, mcpu int) *dispatch.Dispatch {
+	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr, mcpu)
 	if node.Stats.HashmapStats.Shuffle {
 		arg.FuncId = dispatch.ShuffleToAllFunc
 		if node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
