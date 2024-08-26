@@ -56,7 +56,7 @@ func TestCheckpoint1(t *testing.T) {
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
 		blk := testutil.GetOneObject(rel)
-		err := blk.RangeDelete(0, 3, 3, handle.DT_Normal, common.DefaultAllocator)
+		err := rel.RangeDelete(blk.Fingerprint(), 3, 3, handle.DT_Normal)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
@@ -141,7 +141,7 @@ func TestCheckpoint2(t *testing.T) {
 		assert.Nil(t, err)
 		blk := testutil.GetOneObject(rel)
 		meta = blk.GetMeta().(*catalog.ObjectEntry)
-		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, []*catalog.ObjectEntry{meta}, tae.Runtime, txn.GetStartTS())
+		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, []*catalog.ObjectEntry{meta}, nil, tae.Runtime)
 		assert.Nil(t, err)
 		err = tae.Runtime.Scheduler.Schedule(task)
 		assert.Nil(t, err)

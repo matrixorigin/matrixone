@@ -226,7 +226,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			maxTs = maxGlobal.end
 		}
 		// for force checkpoint, ckpLSN is 0.
-		if maxGlobal.version >= logtail.CheckpointVersion7 && maxGlobal.ckpLSN > 0 {
+		if maxGlobal.ckpLSN > 0 {
 			if maxGlobal.ckpLSN < maxLSN {
 				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", maxLSN, maxGlobal.ckpLSN))
 			}
@@ -263,7 +263,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		if maxTs.Less(&checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
-		if checkpointEntry.version >= logtail.CheckpointVersion7 && checkpointEntry.ckpLSN != 0 {
+		if checkpointEntry.ckpLSN != 0 {
 			if checkpointEntry.ckpLSN < maxLSN {
 				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", maxLSN, checkpointEntry.ckpLSN))
 			}
@@ -273,7 +273,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		// For version 7, all ckp LSN of force ickp is 0.
 		// In db.ForceIncrementalCheckpoint，it truncates.
 		// If the last ckp is force ickp，LSN check should be disable.
-		if checkpointEntry.version == logtail.CheckpointVersion7 && checkpointEntry.ckpLSN == 0 {
+		if checkpointEntry.ckpLSN == 0 {
 			isLSNValid = false
 		}
 	}
@@ -394,22 +394,12 @@ func replayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entr
 			}
 		}
 		var version uint32
-		if checkpointVersion == 1 {
-			version = logtail.CheckpointVersion1
-		} else {
-			version = bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
-		}
+		version = bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
 		var tnLoc objectio.Location
-		if version <= logtail.CheckpointVersion4 {
-			tnLoc = cnLoc
-		} else {
-			tnLoc = objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
-		}
+		tnLoc = objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
 		var ckpLSN, truncateLSN uint64
-		if version >= logtail.CheckpointVersion7 {
-			ckpLSN = bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(i).(uint64)
-			truncateLSN = bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(i).(uint64)
-		}
+		ckpLSN = bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(i).(uint64)
+		truncateLSN = bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(i).(uint64)
 		checkpointEntry := &CheckpointEntry{
 			start:       start,
 			end:         end,

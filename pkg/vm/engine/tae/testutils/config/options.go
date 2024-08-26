@@ -133,8 +133,32 @@ func WithLongScanAndCKPOptsAndQuickGC(in *options.Options) (opts *options.Option
 	opts.CheckpointCfg.GlobalMinCount = 10000000
 	opts.CheckpointCfg.BlockRows = 10
 	opts.GCCfg = new(options.GCCfg)
-	opts.GCCfg.ScanGCInterval = time.Second * 1
+	opts.GCCfg.ScanGCInterval = time.Second * 10
 	opts.GCCfg.GCTTL = time.Millisecond * 1
+	opts.Ctx = context.Background()
+	return opts
+}
+
+func WithQuickScanAndALotCKPOpts(in *options.Options) (opts *options.Options) {
+	if in == nil {
+		opts = new(options.Options)
+	} else {
+		opts = in
+	}
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.ScanInterval = time.Millisecond * 10
+	opts.CheckpointCfg.FlushInterval = time.Millisecond * 10
+	opts.CheckpointCfg.MinCount = 3
+	opts.CheckpointCfg.IncrementalInterval = time.Millisecond * 20
+	opts.CheckpointCfg.GlobalMinCount = 8
+	opts.CheckpointCfg.GCCheckpointInterval = time.Millisecond * 10
+	opts.CheckpointCfg.BlockRows = 10
+	opts.CheckpointCfg.GlobalVersionInterval = time.Millisecond * 10
+	opts.GCCfg = new(options.GCCfg)
+	opts.GCCfg.ScanGCInterval = time.Millisecond * 10
+	opts.GCCfg.GCTTL = time.Millisecond * 1
+	opts.CatalogCfg = new(options.CatalogCfg)
+	opts.CatalogCfg.GCInterval = time.Millisecond * 1
 	opts.Ctx = context.Background()
 	return opts
 }

@@ -16,10 +16,8 @@ package tables
 
 import (
 	"context"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -74,6 +72,11 @@ func LoadPersistedColumnDatas(
 	vectors := make([]containers.Vector, len(colIdxs))
 	phyAddIdx := -1
 	for i, colIdx := range colIdxs {
+		if colIdx == catalog.COLIDX_COMMITS {
+			cols = append(cols, objectio.SEQNUM_COMMITTS)
+			typs = append(typs, catalog.CommitTSType)
+			continue
+		}
 		def := schema.ColDefs[colIdx]
 		if def.IsPhyAddr() {
 			vec, err := model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
@@ -90,9 +93,11 @@ func LoadPersistedColumnDatas(
 	if len(cols) == 0 {
 		return vectors, nil
 	}
+	var vecs []containers.Vector
+	var err error
 	//Extend lifetime of vectors is without the function.
 	//need to copy. closeFunc will be nil.
-	vecs, _, err := blockio.LoadColumns2(
+	vecs, _, err = blockio.LoadColumns2(
 		ctx, cols,
 		typs,
 		rt.Fs.Service,
@@ -112,101 +117,6 @@ func LoadPersistedColumnDatas(
 	}
 	return vectors, nil
 }
-
-func ReadPersistedBlockRow(location objectio.Location) int {
-	return int(location.Rows())
-}
-
-func LoadPersistedDeletes(
-	ctx context.Context,
-	pkName string,
-	fs *objectio.ObjectFS,
-	location objectio.Location,
-	mp *mpool.MPool,
-) (bat *containers.Batch, isPersistedByCN bool, release func(), err error) {
-	if isPersistedByCN, err = blockio.IsPersistedByCN(ctx, location, fs.Service); err != nil {
-		return
-	}
-	bat, release, err = LoadPersistedDeletesBySchema(ctx, pkName, fs, location, isPersistedByCN, mp)
-	return
-}
-
-func LoadPersistedDeletesBySchema(
-	ctx context.Context,
-	pkName string,
-	fs *objectio.ObjectFS,
-	location objectio.Location,
-	isPersistedByCN bool,
-	mp *mpool.MPool,
-) (bat *containers.Batch, release func(), err error) {
-	var (
-		recorder *common.DeletesCollectRecorder
-		movbat   *batch.Batch
-	)
-
-	if v := ctx.Value(common.RecorderKey{}); v != nil {
-		recorder = v.(*common.DeletesCollectRecorder)
-		inst := time.Now()
-		defer func() {
-			recorder.LoadCost = time.Since(inst)
-		}()
-		sloc := location.String()
-		entry, ok := recorder.TempCache[sloc]
-		if ok && entry.Bat != nil { // hit cache
-			movbat = entry.Bat
-		}
-
-		if ok && entry.Bat == nil { // cache enable and first call
-			movbat, release, err = blockio.ReadBlockDeleteBySchema(ctx, location, fs.Service, isPersistedByCN)
-			if err != nil {
-				return nil, nil, err
-			}
-			recorder.TempCache[sloc] = common.TempDelCacheEntry{
-				Bat:     movbat,
-				Release: release,
-			}
-		}
-		release = func() {}
-	}
-	if movbat == nil { // cache disabled
-		movbat, release, err = blockio.ReadBlockDeleteBySchema(ctx, location, fs.Service, isPersistedByCN)
-		if err != nil {
-			return
-		}
-	}
-
-	bat = containers.NewBatch()
-	if isPersistedByCN {
-		colNames := []string{catalog.PhyAddrColumnName, catalog.AttrPKVal}
-		for i := 0; i < 2; i++ {
-			bat.AddVector(colNames[i], containers.ToTNVector(movbat.Vecs[i], mp))
-		}
-	} else {
-		colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrPKVal, catalog.AttrAborted}
-		for i := 0; i < 4; i++ {
-			bat.AddVector(colNames[i], containers.ToTNVector(movbat.Vecs[i], mp))
-		}
-	}
-	return
-}
-
-// func MakeBFLoader(
-// 	meta *catalog.BlockEntry,
-// 	bf objectio.BloomFilter,
-// 	cache model.LRUCache,
-// 	fs fileservice.FileService,
-// ) indexwrapper.Loader {
-// 	return func(ctx context.Context) ([]byte, error) {
-// 		location := meta.GetMetaLoc()
-// 		var err error
-// 		if len(bf) == 0 {
-// 			if bf, err = LoadBF(ctx, location, cache, fs, false); err != nil {
-// 				return nil, err
-// 			}
-// 		}
-// 		return bf.GetBloomFilter(uint32(location.ID())), nil
-// 	}
-// }
 
 func MakeImmuIndex(
 	ctx context.Context,

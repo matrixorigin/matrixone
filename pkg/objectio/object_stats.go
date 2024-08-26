@@ -17,7 +17,6 @@ package objectio
 import (
 	"bytes"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -39,15 +38,17 @@ const (
 	objectSizeLen          = 4
 	objectOriginSizeOffset = objectSizeOffset + objectSizeLen
 	objectOriginSizeLen    = 4
-	ObjectStatsLen         = objectOriginSizeOffset + objectOriginSizeLen
+	reservedOffset         = objectOriginSizeOffset + objectOriginSizeLen
+	reservedLen            = 1
+	ObjectStatsLen         = reservedOffset + reservedLen
 )
 
 var ZeroObjectStats ObjectStats
 
 // ObjectStats has format:
-// +------------------------------------------------------------------------------------------------+
-// |object_name(60B)|extent(13B)|row_cnt(4B)|block_cnt(4B)|zone_map(64B)|objectSize|objectOriginSize|
-// +------------------------------------------------------------------------------------------------+
+// +------------------------------------------------------------------------------------------------+--------+
+// |object_name(60B)|extent(13B)|row_cnt(4B)|block_cnt(4B)|zone_map(64B)|objectSize|objectOriginSize|reserved|
+// +------------------------------------------------------------------------------------------------+--------+
 type ObjectStats [ObjectStatsLen]byte
 
 func NewObjectStats() *ObjectStats {
@@ -68,7 +69,24 @@ func (des *ObjectStats) Clone() *ObjectStats {
 	copy(copied[:], des[:])
 	return copied
 }
-
+func (des *ObjectStats) SetAppendable() {
+	des[reservedOffset] = des[reservedOffset] | 0x1
+}
+func (des *ObjectStats) GetAppendable() bool {
+	return des[reservedOffset]&0x1 != 0
+}
+func (des *ObjectStats) SetSorted() {
+	des[reservedOffset] = des[reservedOffset] | 0x2
+}
+func (des *ObjectStats) GetSorted() bool {
+	return des[reservedOffset]&0x2 != 0
+}
+func (des *ObjectStats) SetCNCreated() {
+	des[reservedOffset] = des[reservedOffset] | 0x4
+}
+func (des *ObjectStats) GetCNCreated() bool {
+	return des[reservedOffset]&0x4 != 0
+}
 func (des *ObjectStats) IsZero() bool {
 	return bytes.Equal(des[:], ZeroObjectStats[:])
 }
@@ -115,9 +133,19 @@ func (des *ObjectStats) Rows() uint32 {
 }
 
 func (des *ObjectStats) String() string {
-	return fmt.Sprintf("[object stats]: objName: %s; extent: %v; "+
+	reserved := ""
+	if des.GetAppendable() {
+		reserved = reserved + "A"
+	}
+	if des.GetSorted() {
+		reserved = reserved + "S"
+	}
+	if des.GetCNCreated() {
+		reserved = reserved + "C"
+	}
+	return fmt.Sprintf("[object stats]: %v; objName: %s; extent: %v; "+
 		"rowCnt: %d; blkCnt: %d; sortKey zoneMap: %v; size: %d; originSize: %d",
-		des.ObjectName().String(), des.Extent().String(),
+		reserved, des.ObjectName().String(), des.Extent().String(),
 		des.Rows(), des.BlkCnt(), des.SortKeyZoneMap(),
 		des.Size(), des.OriginSize())
 }
@@ -179,4 +207,43 @@ func ForeachObjectStats(onStats func(stats *ObjectStats) bool, statsList ...Obje
 			return
 		}
 	}
+}
+
+type ObjectStatsSlice []byte
+
+func (o *ObjectStatsSlice) Get(i int) *ObjectStats {
+	stats := ObjectStats((*o)[i*ObjectStatsLen : (i+1)*ObjectStatsLen])
+	return &stats
+}
+
+func (o *ObjectStatsSlice) GetBytes(i int) []byte {
+	return (*o)[i*ObjectStatsLen : (i+1)*ObjectStatsLen]
+}
+
+func (o *ObjectStatsSlice) Len() int {
+	return len(*o) / ObjectStatsLen
+}
+
+func (o *ObjectStatsSlice) Append(stats []byte) {
+	*o = append(*o, stats...)
+}
+
+func (o *ObjectStatsSlice) Size() int {
+	return len(*o)
+}
+
+func (o *ObjectStatsSlice) SetBytes(stats []byte) {
+	*o = stats
+}
+
+func (o *ObjectStatsSlice) GetAllBytes() []byte {
+	return (*o)[:]
+}
+
+func (o *ObjectStatsSlice) Slice(i, j int) []byte {
+	return (*o)[i*ObjectStatsLen : j*ObjectStatsLen]
+}
+
+func (o *ObjectStatsSlice) Set(i int, stats []byte) {
+	copy((*o)[i*ObjectStatsLen:(i+1)*ObjectStatsLen], stats)
 }

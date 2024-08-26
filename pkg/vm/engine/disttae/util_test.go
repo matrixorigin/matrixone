@@ -856,64 +856,64 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 	exprStrings := []string{
 		"a=10",
 		"a=20 and a=10",
-		"30=a and 20=a",
+		"30=a and 20=a", // 3
 		"a in (1,2)",
-		"b=40 and a=50",
+		"b=40 and a=50", // 5
 		"a=60 or b=70",
-		"b=80 and c=90",
+		"b=80 and c=90", // 7
 		"a=60 or a=70",
-		"a=60 or (a in (70,80))",
+		"a=60 or (a in (70,80))", // 9
 		"(a=10 or b=20) or a=30",
-		"(a=10 or b=20) and a=30",
+		"(a=10 or b=20) and a=30", // 11
 		"(b=10 and a=20) or a=30",
 
-		"a>=1 and a<=3",
+		"a>=1 and a<=3", // 13
 		"a>1 and a<=3",
-		"a>=1 and a<3",
+		"a>=1 and a<3", // 15
 		"a>1 and a<3",
 
-		"a>=1 or a<=3",
+		"a>=1 or a<=3", // 17
 		"a>1 or a<=3",
-		"a>=1 or a<3",
+		"a>=1 or a<3", // 19
 		"a>1 or a<3",
 
-		"a>1 and a>3",
+		"a>1 and a>3", // 21
 		"a>=1 and a>3",
-		"a>=1 and a>=3",
+		"a>=1 and a>=3", // 23
 		"a>1 and a>=3",
 
-		"a>1 or a>3",
+		"a>1 or a>3", // 25
 		"a>=1 or a>3",
-		"a>=1 or a>=3",
+		"a>=1 or a>=3", //27
 		"a>1 or a>=3",
 
-		"a<1 and a<3",
+		"a<1 and a<3", // 29
 		"a<=1 and a<3",
-		"a<=1 and a<=3",
+		"a<=1 and a<=3", // 31
 		"a<1 and a<=3",
 
-		"a<1 or a<3",
+		"a<1 or a<3", // 33
 		"a<=1 or a<3",
-		"a<=1 or a<=3",
+		"a<=1 or a<=3", // 35
 		"a<1 or a<=3",
 
-		"a<10 and a=5",
+		"a<10 and a=5", // 37
 		"a<10 and a=15",
-		"a>10 and a=5",
+		"a>10 and a=5", // 39
 		"a>10 and a=15",
-		"a>=10 and a=10",
+		"a>=10 and a=10", // 41
 		"a<=10 and a=10",
 
-		"a<10 or a=5",
+		"a<10 or a=5", // 43
 		"a<10 or a=15",
-		"a>10 or a=5",
+		"a>10 or a=5", // 45
 		"a>10 or a=15",
-		"a>=10 or a=10",
+		"a>=10 or a=10", // 47
 		"a<=10 or a=10",
 
-		"a<99",
+		"a<99", // 49
 		"a<=99",
-		"a>99",
+		"a>99", // 51
 		"a>=99",
 	}
 
@@ -936,67 +936,67 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 	filters := []basePKFilter{
 		// "a=10",
 		{op: function.EQUAL, valid: true, lb: encodeVal(10)},
-		{valid: false},
-		{valid: false},
+		{valid: true, op: function.EQUAL, lb: encodeVal(20)},
+		{valid: true, op: function.EQUAL, lb: encodeVal(30)}, // 3
 		{op: function.IN, valid: true, vec: encodeVec([]int64{1, 2})},
 		// "b=40 and a=50",
-		{valid: true, op: function.EQUAL, lb: encodeVal(50)},
+		{valid: true, op: function.EQUAL, lb: encodeVal(50)}, // 5
 		{valid: false},
+		{valid: false}, // 7
 		{valid: false},
+		{valid: false}, // 9
 		{valid: false},
-		{valid: false},
-		{valid: false},
-		{valid: true, op: function.EQUAL, lb: encodeVal(30)},
+		{valid: true, op: function.EQUAL, lb: encodeVal(30)}, // 11
 		{valid: false},
 
 		// "a>=1 and a<=3",
-		{valid: true, op: function.BETWEEN, lb: encodeVal(1), ub: encodeVal(3)},
+		{valid: true, op: function.BETWEEN, lb: encodeVal(1), ub: encodeVal(3)}, //13
 		{valid: true, op: rangeLeftOpen, lb: encodeVal(1), ub: encodeVal(3)},
-		{valid: true, op: rangeRightOpen, lb: encodeVal(1), ub: encodeVal(3)},
+		{valid: true, op: rangeRightOpen, lb: encodeVal(1), ub: encodeVal(3)}, //15
 		{valid: true, op: rangeBothOpen, lb: encodeVal(1), ub: encodeVal(3)},
 
+		{valid: false}, // 17
 		{valid: false},
-		{valid: false},
-		{valid: false},
+		{valid: false}, // 19
 		{valid: false},
 
+		{valid: true, op: function.GREAT_THAN, lb: encodeVal(3)}, // 21
 		{valid: true, op: function.GREAT_THAN, lb: encodeVal(3)},
-		{valid: true, op: function.GREAT_THAN, lb: encodeVal(3)},
+		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(3)}, // 23
 		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(3)},
-		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(3)},
 
-		{valid: true, op: function.GREAT_THAN, lb: encodeVal(1)},
+		{valid: true, op: function.GREAT_THAN, lb: encodeVal(1)}, // 25
 		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(1)},
-		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(1)},
+		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(1)}, // 27
 		{valid: true, op: function.GREAT_THAN, lb: encodeVal(1)},
 
-		{valid: true, op: function.LESS_THAN, lb: encodeVal(1)},
+		{valid: true, op: function.LESS_THAN, lb: encodeVal(1)}, // 29
 		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(1)},
-		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(1)},
+		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(1)}, // 31
 		{valid: true, op: function.LESS_THAN, lb: encodeVal(1)},
 
+		{valid: true, op: function.LESS_THAN, lb: encodeVal(3)}, // 33
 		{valid: true, op: function.LESS_THAN, lb: encodeVal(3)},
-		{valid: true, op: function.LESS_THAN, lb: encodeVal(3)},
-		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(3)},
+		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(3)}, // 35
 		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(3)},
 
-		{valid: true, op: function.EQUAL, lb: encodeVal(5)},
-		{valid: false},
-		{valid: false},
-		{valid: true, op: function.EQUAL, lb: encodeVal(15)},
-		{valid: true, op: function.EQUAL, lb: encodeVal(10)},
-		{valid: true, op: function.EQUAL, lb: encodeVal(10)},
-
+		{valid: true, op: function.EQUAL, lb: encodeVal(5)}, // 37
 		{valid: true, op: function.LESS_THAN, lb: encodeVal(10)},
+		{valid: true, op: function.GREAT_THAN, lb: encodeVal(10)}, // 39
+		{valid: true, op: function.EQUAL, lb: encodeVal(15)},
+		{valid: true, op: function.EQUAL, lb: encodeVal(10)}, // 41
+		{valid: true, op: function.EQUAL, lb: encodeVal(10)},
+
+		{valid: true, op: function.LESS_THAN, lb: encodeVal(10)}, // 43
 		{valid: false},
-		{valid: false},
+		{valid: false}, // 45
 		{valid: true, op: function.GREAT_THAN, lb: encodeVal(10)},
-		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(10)},
+		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(10)}, // 47
 		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(10)},
 
-		{valid: true, op: function.LESS_THAN, lb: encodeVal(99)},
+		{valid: true, op: function.LESS_THAN, lb: encodeVal(99)}, // 49
 		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(99)},
-		{valid: true, op: function.GREAT_THAN, lb: encodeVal(99)},
+		{valid: true, op: function.GREAT_THAN, lb: encodeVal(99)}, // 51
 		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(99)},
 	}
 

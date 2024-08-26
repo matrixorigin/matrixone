@@ -102,7 +102,7 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 		return nil, err
 	}
 	e := tbl.db.getEng()
-	approxObjectNum := int64(partitionState.ApproxObjectsNum())
+	approxObjectNum := int64(partitionState.ApproxDataObjectsNum())
 	if approxObjectNum == 0 {
 		// There are no objects flushed yet.
 		return nil, nil
@@ -220,12 +220,12 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 }
 
 func ForeachVisibleDataObject(
-	state *logtailreplay.PartitionState,
+	state *logtailreplay.PartitionStateInProgress,
 	ts types.TS,
 	fn func(obj logtailreplay.ObjectEntry) error,
 	executor ConcurrentExecutor,
 ) (err error) {
-	iter, err := state.NewObjectsIter(ts, true)
+	iter, err := state.NewObjectsIter(ts, true, false)
 	if err != nil {
 		return err
 	}
@@ -257,13 +257,13 @@ func (tbl *txnTable) ApproxObjectsNum(ctx context.Context) int {
 	if err != nil {
 		return 0
 	}
-	return part.ApproxObjectsNum()
+	return part.ApproxDataObjectsNum()
 }
 
 func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
 	var (
 		err  error
-		part *logtailreplay.PartitionState
+		part *logtailreplay.PartitionStateInProgress
 	)
 	if part, err = tbl.getPartitionState(ctx); err != nil {
 		return nil, nil, err
@@ -369,7 +369,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	if err != nil {
 		return nil, err
 	}
-	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxObjectsNum())
+	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxDataObjectsNum())
 	var updateMu sync.Mutex
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
@@ -451,7 +451,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	return infoList, nil
 }
 
-func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionState) []types.Blockid {
+func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionStateInProgress) []types.Blockid {
 	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
 	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
 
@@ -480,13 +480,14 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			if err != nil {
 				return err
 			}
-			rowIdBat, release, err := blockio.LoadTombstoneColumns(
+			rowIdBat, release, err := blockio.LoadColumns(
 				tbl.getTxn().proc.Ctx,
 				[]uint16{0},
 				nil,
 				tbl.getTxn().engine.fs,
 				location,
-				tbl.getTxn().proc.GetMPool())
+				tbl.getTxn().proc.GetMPool(),
+				fileservice.Policy(0))
 			if err != nil {
 				return err
 			}
@@ -503,9 +504,8 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 
 // LoadDeletesForMemBlocksIn loads deletes for memory blocks whose data resides in PartitionState.rows
 func (tbl *txnTable) LoadDeletesForMemBlocksIn(
-	state *logtailreplay.PartitionState,
-	deletesRowId map[types.Rowid]uint8,
-) error {
+	state *logtailreplay.PartitionStateInProgress,
+	deletesRowId map[types.Rowid]uint8) error {
 
 	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
 	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
@@ -522,13 +522,14 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 				if err != nil {
 					return err
 				}
-				rowIdBat, release, err := blockio.LoadTombstoneColumns(
+				rowIdBat, release, err := blockio.LoadColumns(
 					tbl.getTxn().proc.Ctx,
 					[]uint16{0},
 					nil,
 					tbl.getTxn().engine.fs,
 					location,
-					tbl.getTxn().proc.GetMPool())
+					tbl.getTxn().proc.GetMPool(),
+					fileservice.Policy(0))
 				if err != nil {
 					return err
 				}
@@ -554,11 +555,10 @@ func (tbl *txnTable) resetSnapshot() {
 	tbl._partState.Store(nil)
 }
 
-// CollectTombstones collects in memory tombstones and tombstone objects.
 func (tbl *txnTable) CollectTombstones(
 	ctx context.Context, txnOffset int,
 ) (engine.Tombstoner, error) {
-	tombstone := NewEmptyTombstoneWithDeltaLoc()
+	tombstone := NewEmptyTombstoneData()
 
 	offset := txnOffset
 	if tbl.db.op.IsSnapOp() {
@@ -589,14 +589,13 @@ func (tbl *txnTable) CollectTombstones(
 				// PartitionReader need to skip them.
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
-					bid, o := v.Decode()
-					tombstone.inMemTombstones[bid] = append(tombstone.inMemTombstones[bid], int32(o))
+					tombstone.rowids = append(tombstone.rowids, v)
 				}
 			}
 		})
 
 	//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
-	tbl.getTxn().deletedBlocks.getDeletedRowIDs(tombstone.inMemTombstones)
+	tbl.getTxn().deletedBlocks.getDeletedRowIDsInProgress(&tombstone.rowids)
 
 	//collect committed in-memory tombstones from partition state.
 	state, err := tbl.getPartitionState(ctx)
@@ -608,21 +607,23 @@ func (tbl *txnTable) CollectTombstones(
 		iter := state.NewRowsIter(types.TimestampToTS(ts), nil, true)
 		for iter.Next() {
 			entry := iter.Entry()
-			bid, o := entry.RowID.Decode()
-			tombstone.inMemTombstones[bid] = append(tombstone.inMemTombstones[bid], int32(o))
+			//bid, o := entry.RowID.Decode()
+			tombstone.rowids = append(tombstone.rowids, entry.RowID)
 		}
 		iter.Close()
 	}
 
 	//collect uncommitted persisted tombstones.
-	if err := tbl.getTxn().getUncommittedS3Tombstone(tombstone.blk2UncommitLoc); err != nil {
+	if err := tbl.getTxn().getUncommittedS3TombstoneInProgress(&tombstone.files); err != nil {
 		return nil, err
 	}
+
+	tombstone.SortInMemory()
 	//collect committed persisted tombstones from partition state.
-	if err = state.GetTombstoneDeltaLocs(tombstone.blk2CommitLoc); err != nil {
-		return nil, err
-	}
-	return tombstone, nil
+	//state.GetTombstoneDeltaLocs(tombstone.blk2CommitLoc)
+	snapshot := types.TimestampToTS(tbl.db.op.Txn().SnapshotTS)
+	err = state.CollectTombstoneObjects(snapshot, &tombstone.files)
+	return tombstone, err
 }
 
 // Ranges returns all unmodified blocks from the table.
@@ -727,7 +728,7 @@ func (tbl *txnTable) doRanges(
 	}()
 
 	// get the table's snapshot
-	var part *logtailreplay.PartitionState
+	var part *logtailreplay.PartitionStateInProgress
 	if part, err = tbl.getPartitionState(ctx); err != nil {
 		return
 	}
@@ -775,7 +776,7 @@ var slowPathCounter atomic.Int64
 // notice that only clean blocks can be distributed into remote CNs.
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
-	state *logtailreplay.PartitionState, // snapshot state of this transaction
+	state *logtailreplay.PartitionStateInProgress, // snapshot state of this transaction
 	tableDef *plan.TableDef, // table definition (schema)
 	exprs []*plan.Expr, // filter expression
 	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
@@ -914,12 +915,6 @@ func (tbl *txnTable) rangesOnePart(
 				blk.Sorted = obj.Sorted
 				blk.Appendable = obj.Appendable
 				blk.CommitTs = obj.CommitTS
-				//if obj.HasDeltaLoc {
-				//	_, commitTs, ok := state.GetBlockDeltaLoc(blk.BlockID)
-				//	if ok {
-				//		blk.CommitTs = commitTs
-				//	}
-				//}
 
 				outBlocks.AppendBlockInfo(blk)
 
@@ -1870,7 +1865,7 @@ func (tbl *txnTable) BuildReaders(
 
 func (tbl *txnTable) getPartitionState(
 	ctx context.Context,
-) (*logtailreplay.PartitionState, error) {
+) (*logtailreplay.PartitionStateInProgress, error) {
 	if !tbl.db.op.IsSnapOp() {
 		if tbl._partState.Load() == nil {
 			ps, err := tbl.tryToSubscribe(ctx)
@@ -1899,7 +1894,7 @@ func (tbl *txnTable) getPartitionState(
 	return tbl._partState.Load(), nil
 }
 
-func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
+func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionStateInProgress, err error) {
 	defer func() {
 		if err == nil {
 			tbl.getTxn().engine.globalStats.notifyLogtailUpdate(tbl.tableId)
@@ -1915,7 +1910,7 @@ func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.Part
 }
 
 func (tbl *txnTable) PKPersistedBetween(
-	p *logtailreplay.PartitionState,
+	p *logtailreplay.PartitionStateInProgress,
 	from types.TS,
 	to types.TS,
 	keys *vector.Vector,
@@ -2001,13 +1996,6 @@ func (tbl *txnTable) PKPersistedBetween(
 
 					blk.Sorted = obj.Sorted
 					blk.Appendable = obj.Appendable
-					blk.CommitTs = obj.CommitTS
-					if obj.HasDeltaLoc {
-						_, commitTs, ok := p.GetBlockDeltaLoc(blk.BlockID)
-						if ok {
-							blk.CommitTs = commitTs
-						}
-					}
 					blk.PartitionNum = -1
 					candidateBlks[blk.BlockID] = &blk
 					return true
@@ -2187,7 +2175,7 @@ func (tbl *txnTable) MergeObjects(
 		return nil, err
 	}
 
-	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost)
+	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost, false)
 	if err != nil {
 		taskHost.commitEntry.Err = err.Error()
 		return taskHost.commitEntry, err

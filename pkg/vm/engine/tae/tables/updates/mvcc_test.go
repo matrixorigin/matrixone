@@ -34,7 +34,7 @@ func TestMutationControllerAppend(t *testing.T) {
 	defer c.Close()
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
-	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
+	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil, false)
 	mc := NewAppendMVCCHandle(obj)
 
 	nodeCnt := 10000
@@ -89,7 +89,7 @@ func TestGetVisibleRow(t *testing.T) {
 	defer c.Close()
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
-	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
+	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil, false)
 	n := NewAppendMVCCHandle(obj)
 	an1, _ := n.AddAppendNodeLocked(nil, 0, 1)
 	an1.Start = types.BuildTS(1, 0)

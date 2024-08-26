@@ -99,7 +99,7 @@ func NewDBEntryWithID(catalog *Catalog, name string, createSql, datTyp string, i
 		e.acInfo.TenantID = txn.GetTenantID()
 		e.acInfo.UserID, e.acInfo.RoleID = txn.GetUserAndRoleID()
 	}
-	e.CreateWithTxn(txn, &EmptyMVCCNode{})
+	e.CreateWithTxnLocked(txn, &EmptyMVCCNode{})
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
@@ -113,7 +113,7 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 		name:      pkgcatalog.MO_CATALOG,
 		createSql: "create database " + pkgcatalog.MO_CATALOG,
 	}
-	entry.CreateWithTS(types.SystemDBTS, &EmptyMVCCNode{})
+	entry.CreateWithTSLocked(types.SystemDBTS, &EmptyMVCCNode{})
 	return entry
 }
 
@@ -206,14 +206,14 @@ func (e *DBEntry) AsCommonID() *common.ID {
 		DbID: e.ID,
 	}
 }
-func (e *DBEntry) GetObjectEntryByID(id *common.ID) (obj *ObjectEntry, err error) {
+func (e *DBEntry) GetObjectEntryByID(id *common.ID, isTombstone bool) (obj *ObjectEntry, err error) {
 	e.RLock()
 	table, err := e.GetTableEntryByID(id.TableID)
 	e.RUnlock()
 	if err != nil {
 		return
 	}
-	obj, err = table.GetObjectByID(id.ObjectID())
+	obj, err = table.GetObjectByID(id.ObjectID(), isTombstone)
 	return
 }
 
@@ -490,7 +490,7 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 		nn.CreateNode(table.ID)
 	} else {
 		if !skipDedup {
-			name := table.GetLastestSchemaLocked().Name
+			name := table.GetLastestSchemaLocked(false).Name
 			err = e.checkAddNameConflictLocked(name, table.ID, nn, txn)
 			if err != nil {
 				return
@@ -594,15 +594,4 @@ func MockDBEntryWithAccInfo(accId uint64, dbId uint64) *DBEntry {
 	entry.DBNode.acInfo.TenantID = uint32(accId)
 
 	return entry
-}
-
-func (e *DBEntry) GetBlockEntryByID(id *common.ID) (obj *ObjectEntry, err error) {
-	e.RLock()
-	table, err := e.GetTableEntryByID(id.TableID)
-	e.RUnlock()
-	if err != nil {
-		return
-	}
-	obj, err = table.GetObjectByID(id.ObjectID())
-	return
 }

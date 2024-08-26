@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -251,15 +250,15 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 		t.addObject(objectStats.ObjectName().String(), object, commitTS)
 	}
 
-	tombstone, _, _, _ := data.GetBlkBatchs()
-	tombstoneBlockIDVec := vector.MustFixedCol[types.Blockid](tombstone.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector())
-	tombstoneCommitTSVec := vector.MustFixedCol[types.TS](tombstone.GetVectorByName(catalog2.BlockMeta_CommitTs).GetDownstreamVector())
-	for i := 0; i < tombstone.Length(); i++ {
-		blockID := tombstoneBlockIDVec[i]
-		commitTS := tombstoneCommitTSVec[i]
-		deltaLoc := objectio.Location(tombstone.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
-		t.addTombstone(deltaLoc.Name().String(), blockID.ObjectNameString(), commitTS)
-	}
+	// tombstone, _, _, _ := data.GetBlkBatchs()
+	// tombstoneBlockIDVec := vector.MustFixedCol[types.Blockid](tombstone.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector())
+	// tombstoneCommitTSVec := vector.MustFixedCol[types.TS](tombstone.GetVectorByName(catalog2.BlockMeta_CommitTs).GetDownstreamVector())
+	// for i := 0; i < tombstone.Length(); i++ {
+	// 	blockID := tombstoneBlockIDVec[i]
+	// 	commitTS := tombstoneCommitTSVec[i]
+	// 	deltaLoc := objectio.Location(tombstone.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
+	// 	t.addTombstone(deltaLoc.Name().String(), blockID.ObjectNameString(), commitTS)
+	// }
 }
 
 func (t *GCTable) makeBatchWithGCTable() []*containers.Batch {
