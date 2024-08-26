@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	fixBufferSize = 1024
+	fixBufferSize = 1024 * 1024
 )
 
 type SessionConn interface {
@@ -67,6 +67,7 @@ func (ba *BufferAllocator) Free(buf []byte) {
 type ListBlock struct {
 	data       []byte
 	writeIndex int
+	readIndex  int
 }
 type Conn struct {
 	id                    uint64
@@ -90,7 +91,6 @@ type Conn struct {
 	// packet data size, used to count header
 	packetLength      int
 	maxBytesToFlush   int
-	readIndex         int
 	packetInBuf       int
 	allowedPacketSize int
 	timeout           time.Duration
@@ -276,7 +276,8 @@ func (c *Conn) Read() ([]byte, error) {
 	} else {
 		// CASE 3: packet length > 1MB, c.fixBuf.writeIndex < HeaderLengthOfTheProtocol + packetLength
 		// NOTE: only read the remaining bytes of the current packet, do not read the next packet
-		err = c.ReadIntoSlices(firstPayload[c.ReadBufLen()-HeaderLengthOfTheProtocol:], packetLength-(c.ReadBufLen()-HeaderLengthOfTheProtocol))
+		hasPayloadLen := c.ReadBufLen() - HeaderLengthOfTheProtocol
+		err = c.ReadIntoSlices(firstPayload[hasPayloadLen:], packetLength-hasPayloadLen)
 		if err != nil {
 			return nil, err
 		}
@@ -334,12 +335,12 @@ func (c *Conn) Read() ([]byte, error) {
 
 // IncReadIndex increase the read index of read buffer
 func (c *Conn) IncReadIndex(n int) {
-	c.readIndex += n
+	c.fixBuf.readIndex += n
 }
 
 // ReadBufLen get unconsumed byte from the read buf
 func (c *Conn) ReadBufLen() int {
-	return c.fixBuf.writeIndex - c.readIndex
+	return c.fixBuf.writeIndex - c.fixBuf.readIndex
 }
 
 // GetPacketLengthFromReadBuf try to get packet header from read buf
@@ -347,7 +348,7 @@ func (c *Conn) GetPacketLengthFromReadBuf() (int, bool) {
 	if c.ReadBufLen() < HeaderLengthOfTheProtocol {
 		return int(MaxPayloadSize), false
 	}
-	header := c.fixBuf.data[c.readIndex : c.readIndex+HeaderLengthOfTheProtocol]
+	header := c.fixBuf.data[c.fixBuf.readIndex : c.fixBuf.readIndex+HeaderLengthOfTheProtocol]
 	packetLength := int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
 	c.sequenceId = header[3] + 1
 	return packetLength, true
@@ -355,16 +356,16 @@ func (c *Conn) GetPacketLengthFromReadBuf() (int, bool) {
 
 // CleanConsumedPacket clean up the packet that have been consumed and move that have not been consumed forward
 func (c *Conn) CleanConsumedPacket() {
-	if c.readIndex != 0 {
-		copy(c.fixBuf.data, c.fixBuf.data[c.readIndex:c.fixBuf.writeIndex])
-		c.fixBuf.writeIndex -= c.readIndex
-		c.readIndex = 0
+	if c.fixBuf.readIndex != 0 {
+		copy(c.fixBuf.data, c.fixBuf.data[c.fixBuf.readIndex:c.fixBuf.writeIndex])
+		c.fixBuf.writeIndex -= c.fixBuf.readIndex
+		c.fixBuf.readIndex = 0
 	}
 }
 
 // ResetReadBufIndex set read and write index = 0
 func (c *Conn) ResetReadBufIndex() {
-	c.readIndex = 0
+	c.fixBuf.readIndex = 0
 	c.fixBuf.writeIndex = 0
 }
 
@@ -376,7 +377,7 @@ func (c *Conn) ReadBufIsFull() bool {
 // CopyFromBuf make memory for a payload and copy from read buf
 func (c *Conn) CopyFromBuf(packetLength int) []byte {
 	data := make([]byte, packetLength)
-	copy(data, c.fixBuf.data[c.readIndex+HeaderLengthOfTheProtocol:])
+	copy(data, c.fixBuf.data[c.fixBuf.readIndex+HeaderLengthOfTheProtocol:])
 	return data
 }
 
