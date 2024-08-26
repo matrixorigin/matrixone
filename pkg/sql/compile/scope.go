@@ -40,8 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
@@ -215,6 +213,17 @@ func (s *Scope) Run(c *Compile) (err error) {
 	default:
 	}
 	return err
+}
+
+func (s *Scope) FreeOperator(c *Compile) {
+	for _, scope := range s.PreScopes {
+		scope.FreeOperator(c)
+	}
+
+	vm.HandleAllOp(s.RootOp, func(aprentOp vm.Operator, op vm.Operator) error {
+		op.Free(c.proc, false, nil)
+		return nil
+	})
 }
 
 func (s *Scope) InitAllDataSource(c *Compile) error {
@@ -769,7 +778,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			flg = true
 			arg := op.(*limit.Limit)
 			toReleaseOpRoot = arg.GetChildren(0)
-			newArg := mergelimit.NewArgument().
+			newArg := limit.NewArgument().
 				WithLimit(arg.LimitExpr)
 			resetRootOp(parentOp, arg, newArg)
 
@@ -802,7 +811,6 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			for j := range ss {
 				groupOp := group.NewArgument().
 					WithExprs(arg.Exprs).
-					WithTypes(arg.Types).
 					WithAggsNew(arg.Aggs)
 				groupOp.SetInfo(&vm.OperatorInfo{
 					Idx:         arg.Idx,
@@ -882,7 +890,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			flg = true
 			arg := op.(*offset.Offset)
 			toReleaseOpRoot = arg.GetChildren(0)
-			newArg := mergeoffset.NewArgument().
+			newArg := offset.NewArgument().
 				WithOffset(arg.OffsetExpr)
 			resetRootOp(parentOp, arg, newArg)
 

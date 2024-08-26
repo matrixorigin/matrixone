@@ -27,6 +27,7 @@ import (
 )
 
 const maxBatchSizeToSend = 64 * mpool.MB
+const defaultCacheBatchSize = 16
 
 var _ vm.Operator = new(MergeOrder)
 
@@ -37,7 +38,7 @@ const (
 )
 
 type MergeOrder struct {
-	ctr *container
+	ctr container
 
 	OrderBySpecs []*plan.OrderBySpec
 
@@ -93,38 +94,57 @@ type container struct {
 }
 
 func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeOrder.Free(proc, pipelineFailed, err)
+	mergeOrder.cleanBatchAndCol(proc)
+	ctr := &mergeOrder.ctr
+	ctr.batchList = ctr.batchList[:0]
+	ctr.orderCols = ctr.orderCols[:0]
+	ctr.indexList = nil
+	ctr.status = receiving
+
+	for i := range ctr.executors {
+		if ctr.executors[i] != nil {
+			ctr.executors[i].ResetForNextQuery()
+		}
+	}
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
 }
 
 func (mergeOrder *MergeOrder) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := mergeOrder.ctr; ctr != nil {
-		mp := proc.Mp()
-		for i := range ctr.batchList {
-			if ctr.batchList[i] != nil {
-				ctr.batchList[i].Clean(mp)
-			}
+	mergeOrder.cleanBatchAndCol(proc)
+	ctr := &mergeOrder.ctr
+	ctr.batchList = nil
+	ctr.orderCols = nil
+	for i := range ctr.executors {
+		if ctr.executors[i] != nil {
+			ctr.executors[i].Free()
 		}
-		for i := range ctr.orderCols {
-			if ctr.orderCols[i] != nil {
-				for j := range ctr.orderCols[i] {
-					if ctr.orderCols[i][j] != nil {
-						ctr.orderCols[i][j].Free(mp)
-					}
+	}
+	ctr.executors = nil
+
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
+	}
+
+}
+
+func (mergeOrder *MergeOrder) cleanBatchAndCol(proc *process.Process) {
+	mp := proc.Mp()
+	ctr := &mergeOrder.ctr
+	for i := range ctr.batchList {
+		if ctr.batchList[i] != nil {
+			ctr.batchList[i].Clean(mp)
+		}
+	}
+	for i := range ctr.orderCols {
+		if ctr.orderCols[i] != nil {
+			for j := range ctr.orderCols[i] {
+				if ctr.orderCols[i][j] != nil {
+					ctr.orderCols[i][j].Free(mp)
 				}
 			}
 		}
-		for i := range ctr.executors {
-			if ctr.executors[i] != nil {
-				ctr.executors[i].Free()
-			}
-		}
-		ctr.executors = nil
-
-		if ctr.buf != nil {
-			ctr.buf.Clean(proc.Mp())
-			ctr.buf = nil
-		}
-
-		mergeOrder.ctr = nil
 	}
 }

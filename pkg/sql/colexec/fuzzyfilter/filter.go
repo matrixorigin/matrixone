@@ -83,38 +83,40 @@ func (fuzzyFilter *FuzzyFilter) OpType() vm.OpType {
 }
 
 func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
-	ctr := new(container)
-	fuzzyFilter.ctr = ctr
-	rowCount := int64(fuzzyFilter.N)
-	if rowCount < 1000 {
-		rowCount = 1000
-	}
+	ctr := &fuzzyFilter.ctr
 
-	if err := fuzzyFilter.generate(proc); err != nil {
-		return err
-	}
-
-	useRoaring := IfCanUseRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
-
-	if useRoaring {
-		ctr.roaringFilter = newroaringFilter(types.T(fuzzyFilter.PkTyp.Id))
-	} else {
-		//@see https://hur.st/bloomfilter/
-		var probability float64
-		if rowCount < 10_0001 {
-			probability = 0.00001
-		} else if rowCount < 100_0001 {
-			probability = 0.000003
-		} else if rowCount < 1000_0001 {
-			probability = 0.000001
-		} else if rowCount < 1_0000_0001 {
-			probability = 0.0000005
-		} else if rowCount < 10_0000_0001 {
-			probability = 0.0000002
-		} else {
-			probability = 0.0000001
+	if ctr.rbat == nil {
+		rowCount := int64(fuzzyFilter.N)
+		if rowCount < 1000 {
+			rowCount = 1000
 		}
-		ctr.bloomFilter = bloomfilter.New(rowCount, probability)
+
+		if err := fuzzyFilter.generate(); err != nil {
+			return err
+		}
+
+		useRoaring := IfCanUseRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
+
+		if useRoaring {
+			ctr.roaringFilter = newroaringFilter(types.T(fuzzyFilter.PkTyp.Id))
+		} else {
+			//@see https://hur.st/bloomfilter/
+			var probability float64
+			if rowCount < 10_0001 {
+				probability = 0.00001
+			} else if rowCount < 100_0001 {
+				probability = 0.000003
+			} else if rowCount < 1000_0001 {
+				probability = 0.000001
+			} else if rowCount < 1_0000_0001 {
+				probability = 0.0000005
+			} else if rowCount < 10_0000_0001 {
+				probability = 0.0000002
+			} else {
+				probability = 0.0000001
+			}
+			ctr.bloomFilter = bloomfilter.New(rowCount, probability)
+		}
 	}
 
 	return nil
@@ -154,7 +156,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
-	ctr := fuzzyFilter.ctr
+	ctr := &fuzzyFilter.ctr
 	for {
 		switch ctr.state {
 		case Build:
@@ -298,7 +300,7 @@ func (fuzzyFilter *FuzzyFilter) handleProbe(proc *process.Process, pkCol *vector
 }
 
 func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error {
-	ctr := fuzzyFilter.ctr
+	ctr := &fuzzyFilter.ctr
 
 	if fuzzyFilter.RuntimeFilterSpec == nil {
 		return nil
@@ -333,7 +335,7 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 }
 
 func (fuzzyFilter *FuzzyFilter) appendPassToRuntimeFilter(v *vector.Vector, proc *process.Process) {
-	ctr := fuzzyFilter.ctr
+	ctr := &fuzzyFilter.ctr
 	if ctr.pass2RuntimeFilter != nil && fuzzyFilter.RuntimeFilterSpec != nil {
 		el := ctr.pass2RuntimeFilter.Length()
 		al := v.Length()
@@ -341,7 +343,7 @@ func (fuzzyFilter *FuzzyFilter) appendPassToRuntimeFilter(v *vector.Vector, proc
 		if int64(el)+int64(al) <= int64(fuzzyFilter.RuntimeFilterSpec.UpperLimit) {
 			ctr.pass2RuntimeFilter.UnionMulti(v, 0, al, proc.Mp())
 		} else {
-			proc.PutVector(ctr.pass2RuntimeFilter)
+			ctr.pass2RuntimeFilter.Free(proc.Mp())
 			ctr.pass2RuntimeFilter = nil
 		}
 	}
@@ -349,17 +351,17 @@ func (fuzzyFilter *FuzzyFilter) appendPassToRuntimeFilter(v *vector.Vector, proc
 
 // appendCollisionKey will append collision key into rbat
 func (fuzzyFilter *FuzzyFilter) appendCollisionKey(proc *process.Process, idx int, pkCol *vector.Vector) {
-	ctr := fuzzyFilter.ctr
+	ctr := &fuzzyFilter.ctr
 	ctr.rbat.GetVector(0).UnionOne(pkCol, int64(idx), proc.GetMPool())
 	ctr.collisionCnt++
 }
 
 // rbat will contain the keys that have hash collisions
-func (fuzzyFilter *FuzzyFilter) generate(proc *process.Process) error {
-	ctr := fuzzyFilter.ctr
+func (fuzzyFilter *FuzzyFilter) generate() error {
+	ctr := &fuzzyFilter.ctr
 	rbat := batch.NewWithSize(1)
-	rbat.SetVector(0, proc.GetVector(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)))
-	ctr.pass2RuntimeFilter = proc.GetVector(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))
+	rbat.SetVector(0, vector.NewVec(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)))
+	ctr.pass2RuntimeFilter = vector.NewVec(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))
 	ctr.rbat = rbat
 	return nil
 }
