@@ -118,7 +118,6 @@ drop database if exists snapshot_read;
 drop accoount if exists test_account;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " accoount if exists test_account;";
 create account test_account admin_name = 'test_user' identified by '111';
-internal error: the tenant test_account exists
 drop database if exists snapshot_read;
 create database if not exists snapshot_read;
 use snapshot_read;

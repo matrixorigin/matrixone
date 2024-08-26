@@ -723,5 +723,3 @@ drop account acc01;
 drop account acc02;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp_01    2024-08-26 03:34:12.47705    account    test_account        
-sys_sp    2024-08-24 01:44:57.285825    account    sys        
