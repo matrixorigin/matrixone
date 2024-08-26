@@ -578,7 +578,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 			1. the stats are not correct, the correct fix for this problem depends on correct calls to Vector.Free and Batch.Free, and refactoring of the pipeline
 			2. GlobalCap is completely meaningless, because almost all mpools have a capacity limit of PB (this is probably also due to the first point, wrong statistics).
 
-		The fundamental fix to this problem depends on a complete refactoring of the mpool, 
+		The fundamental fix to this problem depends on a complete refactoring of the mpool,
 		which is already tracked in the issue, until then, comment out the moerr.NewOOMNoCtx() error, as it does not reflect the real problem and can cause the cluster to crash.
 		more info : https://github.com/matrixorigin/matrixone/issues/18240#issuecomment-2308223191
 	*/
