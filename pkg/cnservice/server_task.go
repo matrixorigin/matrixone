@@ -346,11 +346,11 @@ func (s *service) registerExecutorsLocked() {
 				if time.Unix(int64(rDDL), 0).After(time.Now()) {
 					continue
 				}
-				dbName, err := result.GetString(ctx, i, 0)
+				dbName, err := result.GetString(ctx, j, 0)
 				if err != nil {
 					return err
 				}
-				tableName, err := result.GetString(ctx, i, 1)
+				tableName, err := result.GetString(ctx, j, 1)
 				if err != nil {
 					return err
 				}

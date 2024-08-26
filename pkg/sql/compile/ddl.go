@@ -132,7 +132,18 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	return nil
+	// 4. delete retention info
+	deleteSql = fmt.Sprintf(deleteMoRetentionWithDatabaseNameFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabase())
+	err = c.runSql(deleteSql)
+	// ignore error in case no rows in mo_retention.
+	if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+		return nil
+	}
+	// ignore error in case mo_retention is dropped.
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return nil
+	}
+	return err
 }
 
 func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
@@ -2300,11 +2311,13 @@ func (s *Scope) DropTable(c *Compile) error {
 		return nil
 	}
 	deleteRetentionSQL := fmt.Sprintf(
-		"delete from %s.%s where database_name='%s' and table_name='%s'",
-		catalog.MO_CATALOG, catalog.MO_RETENTION, dbName, tblName)
+		deleteMoRetentionWithDatabaseNameAndTableNameFormat, dbName, tblName)
 	err = c.runSql(deleteRetentionSQL)
 	// ignore error in case the table doesn't have entry in mo_retention.
 	if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+		return nil
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 		return nil
 	}
 	return err
