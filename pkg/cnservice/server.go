@@ -491,7 +491,7 @@ func (s *service) initEngine(
 		}
 
 	default:
-		return moerr.NewInternalError(ctx, "unknown engine type: %s", s.cfg.Engine.Type)
+		return moerr.NewInternalErrorf(ctx, "unknown engine type: %s", s.cfg.Engine.Type)
 
 	}
 
@@ -613,7 +613,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 					resp.Txn.Status = txn.TxnStatus_Aborted
 				}
 			default:
-				return moerr.NewNotSupported(ctx, "unknown txn request method: %s", req.Method.String())
+				return moerr.NewNotSupportedf(ctx, "unknown txn request method: %s", req.Method.String())
 			}
 			return err
 		}

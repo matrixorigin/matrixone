@@ -245,7 +245,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	// check the database is deleted or not
 	key := genDatabaseKey(accountId, name)
 	if _, exist := txn.deletedDatabaseMap.Load(key); exist {
-		return nil, moerr.NewParseError(ctx, "database %q does not exist", name)
+		return nil, moerr.NewParseErrorf(ctx, "database %q does not exist", name)
 	}
 
 	if v, ok := txn.databaseMap.Load(key); ok {
@@ -408,7 +408,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 	}
 
 	if tblName == "" {
-		return "", "", moerr.NewInternalError(ctx, "can not find table name by id %d", tableId)
+		return "", "", moerr.NewInternalErrorf(ctx, "can not find table name by id %d", tableId)
 	}
 
 	return
@@ -522,7 +522,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			logutil.Errorf("tables: %v, tableIds: %v", tbls, tblIds)
 			util.CoreDump()
 		}
-		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d: accountId: %v ", tableId, accountId)
+		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %v ", tableId, accountId)
 	}
 	return
 }

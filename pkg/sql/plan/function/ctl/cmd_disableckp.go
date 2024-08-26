@@ -35,7 +35,7 @@ func handleDisableCheckpoint() handleFunc {
 			case "disable":
 				enable = false
 			default:
-				return nil, moerr.NewInternalErrorNoCtx("invalid parameter %v", parameter)
+				return nil, moerr.NewInternalErrorNoCtxf("invalid parameter %v", parameter)
 			}
 			return types.Encode(&db.Checkpoint{Enable: enable})
 		},

@@ -148,7 +148,7 @@ func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end typ
 		time.Minute,
 		r.options.forceFlushCheckInterval, false)
 	if err != nil {
-		return moerr.NewInternalError(ctx, "force global checkpoint failed: %v", err)
+		return moerr.NewInternalErrorf(ctx, "force global checkpoint failed: %v", err)
 	}
 	return nil
 }
@@ -186,7 +186,7 @@ func (r *runner) ForceFlushWithInterval(ts types.TS, ctx context.Context, forceD
 		forceDuration,
 		flushInterval, false)
 	if err != nil {
-		return moerr.NewInternalError(ctx, "force flush failed: %v", err)
+		return moerr.NewInternalErrorf(ctx, "force flush failed: %v", err)
 	}
 	_, sarg, _ := fault.TriggerFault("tae: flush timeout")
 	if sarg != "" {

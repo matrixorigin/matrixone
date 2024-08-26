@@ -112,7 +112,7 @@ func (col *columnCache) insertAutoValues(
 				if v == 0 {
 					v = math.MaxInt8 + 1
 				}
-				return moerr.NewOutOfRange(
+				return moerr.NewOutOfRangef(
 					ctx,
 					"tinyint",
 					"value %v",
@@ -131,7 +131,7 @@ func (col *columnCache) insertAutoValues(
 				if v == 0 {
 					v = math.MaxInt16 + 1
 				}
-				return moerr.NewOutOfRange(
+				return moerr.NewOutOfRangef(
 					ctx,
 					"smallint",
 					"value %v",
@@ -149,7 +149,7 @@ func (col *columnCache) insertAutoValues(
 				if v == 0 {
 					v = math.MaxInt32 + 1
 				}
-				return moerr.NewOutOfRange(
+				return moerr.NewOutOfRangef(
 					ctx,
 					"int",
 					"value %v",
@@ -168,7 +168,7 @@ func (col *columnCache) insertAutoValues(
 				if v == 0 {
 					v = math.MaxInt64 + 1
 				}
-				return moerr.NewOutOfRange(
+				return moerr.NewOutOfRangef(
 					ctx,
 					"bigint",
 					"value %v",
@@ -187,7 +187,7 @@ func (col *columnCache) insertAutoValues(
 				if v == 0 {
 					v = math.MaxUint8 + 1
 				}
-				return moerr.NewOutOfRange(
+				return moerr.NewOutOfRangef(
 					ctx,
 					"tinyint unsigned",
 					"value %v",
@@ -206,7 +206,7 @@ func (col *columnCache) insertAutoValues(
 				if v == 0 {
 					v = math.MaxUint16 + 1
 				}
-				return moerr.NewOutOfRange(
+				return moerr.NewOutOfRangef(
 					ctx,
 					"smallint unsigned",
 					"value %v",
@@ -225,7 +225,7 @@ func (col *columnCache) insertAutoValues(
 				if v == 0 {
 					v = math.MaxUint32 + 1
 				}
-				return moerr.NewOutOfRange(
+				return moerr.NewOutOfRangef(
 					ctx,
 					"int unsigned",
 					"value %v",
@@ -249,7 +249,7 @@ func (col *columnCache) insertAutoValues(
 			},
 			txnOp)
 	default:
-		return 0, moerr.NewInvalidInput(ctx, "invalid auto_increment type '%v'", vec.GetType().Oid)
+		return 0, moerr.NewInvalidInputf(ctx, "invalid auto_increment type '%v'", vec.GetType().Oid)
 	}
 }
 

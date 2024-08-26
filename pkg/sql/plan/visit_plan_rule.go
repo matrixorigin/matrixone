@@ -360,7 +360,7 @@ func GetVarValue(
 	case types.Decimal64, types.Decimal128:
 		err = moerr.NewNYI(ctx, "decimal var")
 	default:
-		err = moerr.NewParseError(ctx, "type of var %q is not supported now", exprImpl.V.Name)
+		err = moerr.NewParseErrorf(ctx, "type of var %q is not supported now", exprImpl.V.Name)
 	}
 	if err != nil {
 		return nil, err
