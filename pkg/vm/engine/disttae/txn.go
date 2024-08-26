@@ -275,7 +275,7 @@ func checkPKDup(
 			mp[v] = true
 		}
 	default:
-		panic(moerr.NewInternalErrorNoCtx("%s not supported", pk.GetType().String()))
+		panic(moerr.NewInternalErrorNoCtxf("%s not supported", pk.GetType().String()))
 	}
 	return false, ""
 }
@@ -497,18 +497,19 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
 
-		s3Writer, err := colexec.AllocS3Writer(txn.proc, tableDef)
+		s3Writer, err := colexec.NewS3Writer(txn.proc, tableDef, 0)
 		if err != nil {
 			return err
 		}
 		defer s3Writer.Free(txn.proc)
-
-		s3Writer.InitBuffers(txn.proc, mp[tbKey][0])
 		for i := 0; i < len(mp[tbKey]); i++ {
-			s3Writer.Put(mp[tbKey][i], txn.proc)
+			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
 		}
-		err = s3Writer.SortAndFlush(txn.proc)
-
+		blockInfos, stats, err := s3Writer.SortAndSync(txn.proc)
+		if err != nil {
+			return err
+		}
+		err = s3Writer.FillBlockInfoBat(blockInfos, stats, txn.proc.GetMPool())
 		if err != nil {
 			return err
 		}
@@ -1237,7 +1238,15 @@ func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) 
 				len(deleteObjs))
 
 			if len(deleteObjs) > 0 {
-				if err := tbl.transferDeletes(ctx, state, deleteObjs, createObjs); err != nil {
+				if err := TransferTombstones(
+					ctx,
+					tbl,
+					state,
+					deleteObjs,
+					createObjs,
+					txn.proc.Mp(),
+					txn.engine.fs,
+				); err != nil {
 					return err
 				}
 			}

@@ -185,7 +185,7 @@ func (s *methodBasedServer[REQ, RESP]) onMessage(
 ) error {
 	req, ok := request.Message.(REQ)
 	if !ok {
-		return moerr.NewNotSupported(
+		return moerr.NewNotSupportedf(
 			ctx,
 			"invalid message type %T",
 			request)
@@ -264,7 +264,7 @@ func (s *methodBasedServer[REQ, RESP]) getHandleFunc(
 	resp.SetMethod(req.Method())
 	handlerCtx, ok := s.handlers[req.Method()]
 	if !ok {
-		resp.WrapError(moerr.NewNotSupportedNoCtx("%d not support in current service",
+		resp.WrapError(moerr.NewNotSupportedNoCtxf("%d not support in current service",
 			req.Method()))
 	}
 	return handlerCtx, ok

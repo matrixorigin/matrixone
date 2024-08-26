@@ -204,6 +204,14 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 		case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 			s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_decimal64:
+			s.MinValMap[colName] = float64(types.DecodeDecimal64(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeDecimal64(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_decimal128:
+			val := types.DecodeDecimal128(info.ColumnZMs[i].GetMinBuf())
+			s.MinValMap[colName] = float64(types.Decimal128ToFloat64(val, 0))
+			val = types.DecodeDecimal128(info.ColumnZMs[i].GetMaxBuf())
+			s.MaxValMap[colName] = float64(types.Decimal128ToFloat64(val, 0))
 		}
 
 		if info.ShuffleRanges[i] != nil {
@@ -365,29 +373,28 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder) float64
 }
 
 func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, vals []*plan.Literal) (ret float64) {
+	var ok bool
+	var val1, val2 float64
 	switch funcName {
 	case ">", ">=":
-		if val, ok := getFloat64Value(typ, vals[0]); ok {
-			ret = (max - val + 1) / (max - min)
+		if val1, ok = getFloat64Value(typ, vals[0]); ok {
+			ret = (max - val1 + 1) / (max - min)
 		}
 	case "<", "<=":
-		if val, ok := getFloat64Value(typ, vals[0]); ok {
-			ret = (val - min + 1) / (max - min)
+		if val1, ok = getFloat64Value(typ, vals[0]); ok {
+			ret = (val1 - min + 1) / (max - min)
 		}
 	case "between":
-		if lb, ok := getFloat64Value(typ, vals[0]); ok {
-			if ub, ok := getFloat64Value(typ, vals[1]); ok {
-				ret = (ub - lb + 1) / (max - min)
+		if val1, ok = getFloat64Value(typ, vals[0]); ok {
+			if val2, ok = getFloat64Value(typ, vals[1]); ok {
+				ret = (val2 - val1 + 1) / (max - min)
 			}
 		}
 	default:
-		ret = 0.3
+		ret = 0.1
 	}
-	if ret < 0 {
-		ret = 0
-	}
-	if ret > 1 {
-		ret = 1
+	if !ok || ret < 0 || ret > 1 {
+		return 0.1
 	}
 	return ret
 }
@@ -438,9 +445,26 @@ func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
 		if val, valOk := lit.Value.(*plan.Literal_Dateval); valOk {
 			return float64(val.Dateval), true
 		}
+	case types.T_time:
+		if val, valOk := lit.Value.(*plan.Literal_Timeval); valOk {
+			return float64(val.Timeval), true
+		}
 	case types.T_datetime:
 		if val, valOk := lit.Value.(*plan.Literal_Datetimeval); valOk {
 			return float64(val.Datetimeval), true
+		}
+	case types.T_timestamp:
+		if val, valOk := lit.Value.(*plan.Literal_Timestampval); valOk {
+			return float64(val.Timestampval), true
+		}
+	case types.T_decimal64:
+		if val, valOk := lit.Value.(*plan.Literal_Decimal64Val); valOk {
+			return float64(val.Decimal64Val.A), true
+		}
+	case types.T_decimal128:
+		if val, valOk := lit.Value.(*plan.Literal_Decimal128Val); valOk {
+			d := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
+			return float64(types.Decimal128ToFloat64(d, 0)), true
 		}
 	}
 
@@ -471,9 +495,6 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	}
 	if col != nil && len(literals) > 0 {
 		typ := types.T(s.DataTypeMap[col.Name])
-		if !(typ.IsInteger() || typ.IsDateRelate()) {
-			return 0.1
-		}
 
 		switch colFnName {
 		case "":
@@ -588,9 +609,8 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funcImpl := exprImpl.F
-		switch funcImpl.Func.GetObjName() {
-		case "json_extract":
-			w += 256
+		objName := funcImpl.Func.GetObjName()
+		switch objName {
 		case "like":
 			w += 32
 		case "cast":
@@ -603,6 +623,9 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 			w += 1.5
 		default:
 			w += 1
+		}
+		if strings.HasPrefix(objName, "json_") {
+			w += 512
 		}
 		for _, child := range exprImpl.F.Args {
 			w += estimateFilterWeight(child, 0)
@@ -796,11 +819,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_UNION_ALL:
 		node.Stats.Outcnt = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_INTERSECT:
 		if needResetHashMapStats {
@@ -810,6 +835,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_INTERSECT_ALL:
 		if needResetHashMapStats {
@@ -819,6 +845,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_MINUS:
 		if needResetHashMapStats {
@@ -829,6 +856,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_MINUS_ALL:
 		if needResetHashMapStats {
@@ -839,6 +867,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_VALUE_SCAN:
 		if node.RowsetData != nil {
@@ -889,6 +918,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 		node.Stats.Cost = childStats.Cost
 		node.Stats.Selectivity = 0.05
+		node.Stats.BlockNum = childStats.BlockNum
 
 	case plan.Node_FUNCTION_SCAN:
 		if !computeFunctionScan(node.TableDef.TblFunc.Name, node.TblFuncExprList, node.Stats) {
@@ -896,11 +926,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				node.Stats.Outcnt = childStats.Outcnt
 				node.Stats.Cost = childStats.Outcnt
 				node.Stats.Selectivity = childStats.Selectivity
+				node.Stats.BlockNum = childStats.BlockNum
 			}
 		}
 
 	case plan.Node_INSERT:
 		if len(node.Children) > 0 && childStats != nil {
+			node.Stats.BlockNum = childStats.BlockNum
 			node.Stats.Outcnt = childStats.Outcnt
 			node.Stats.Cost = childStats.Outcnt
 			node.Stats.Selectivity = childStats.Selectivity
@@ -1046,11 +1078,13 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 		if scanNode.Stats.Outcnt > scanNode.Stats.TableCnt {
 			scanNode.Stats.Outcnt = scanNode.Stats.TableCnt
 		}
-		scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/3) + 1
+		newBlockNum := int32(scanNode.Stats.Outcnt/3) + 1
+		if newBlockNum < scanNode.Stats.BlockNum {
+			scanNode.Stats.BlockNum = newBlockNum
+		}
 		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum) * DefaultBlockMaxRows
 		if scanNode.Stats.Cost > scanNode.Stats.TableCnt {
 			scanNode.Stats.Cost = scanNode.Stats.TableCnt
-			scanNode.Stats.BlockNum = int32(scanNode.Stats.TableCnt / DefaultBlockMaxRows)
 		}
 		scanNode.Stats.Selectivity = scanNode.Stats.Outcnt / scanNode.Stats.TableCnt
 		return
@@ -1061,7 +1095,10 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 	if scanNode.Stats.Cost < 1 {
 		scanNode.Stats.Cost = 1
 	}
-	scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/3) + 1
+	newBlockNum := int32(scanNode.Stats.Outcnt/3) + 1
+	if newBlockNum < scanNode.Stats.BlockNum {
+		scanNode.Stats.BlockNum = newBlockNum
+	}
 	scanNode.Stats.Selectivity = andSelectivity(scanNode.Stats.Selectivity, runtimeFilterSel)
 }
 
@@ -1324,7 +1361,9 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool) ExecType {
 		}
 		stats := node.Stats
 		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
-			if !txnHaveDDL {
+			if txnHaveDDL {
+				return ExecTypeAP_ONECN
+			} else {
 				return ExecTypeAP_MULTICN
 			}
 		}

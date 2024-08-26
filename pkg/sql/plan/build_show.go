@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"go/constant"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -103,7 +102,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, err
 	} else if sub != nil {
 		if !pubsub.InSubMetaTables(sub, tblName) {
-			return nil, moerr.NewInternalErrorNoCtx("table %s not found in publication %s", tblName, sub.Name)
+			return nil, moerr.NewInternalErrorNoCtxf("table %s not found in publication %s", tblName, sub.Name)
 		}
 
 		ctx.SetQueryingSubscription(sub)
@@ -171,7 +170,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 
 	_, tableDef := ctx.Resolve(dbName, tblName, snapshot)
 	if tableDef == nil || tableDef.TableType != catalog.SystemViewRel {
-		return nil, moerr.NewInvalidInput(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
+		return nil, moerr.NewInvalidInputf(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
 	}
 	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`, 'utf8mb4' as `character_set_client`, 'utf8mb4_general_ci' as `collation_connection`"
 	var viewStr string
@@ -266,7 +265,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	}
 
 	if stmt.Open {
-		return nil, moerr.NewNYI(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
+		return nil, moerr.NewNYIf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 
 	accountId, err := ctx.GetAccountId()
@@ -1044,10 +1043,10 @@ func buildShowPublication(stmt *tree.ShowPublications, ctx CompilerContext) (*Pl
 	like := stmt.Like
 	if like != nil {
 		right, ok := like.Right.(*tree.NumVal)
-		if !ok || right.Value.Kind() != constant.String {
+		if !ok || right.Kind() != tree.Str {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "like clause must be a string")
 		}
-		sql += fmt.Sprintf(" where pub_name like '%s' order by pub_name;", constant.StringVal(right.Value))
+		sql += fmt.Sprintf(" where pub_name like '%s' order by pub_name;", right.String())
 	} else {
 		sql += " order by update_time desc, created_time desc;"
 	}
@@ -1120,7 +1119,7 @@ func getRewriteSQLStmt(ctx CompilerContext, sql string) (tree.Statement, error) 
 		return nil, err
 	}
 	if len(newStmts) != 1 {
-		return nil, moerr.NewInvalidInput(ctx.GetContext(), "rewrite can only contain one statement, %d provided", len(newStmts))
+		return nil, moerr.NewInvalidInputf(ctx.GetContext(), "rewrite can only contain one statement, %d provided", len(newStmts))
 	}
 	return newStmts[0], nil
 }

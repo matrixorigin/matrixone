@@ -48,6 +48,7 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_MigrateConnTo:            defines.MORPCVersion1,
 	pb.CmdMethod_ReloadAutoIncrementCache: defines.MORPCVersion1,
 	pb.CmdMethod_CtlReader:                defines.MORPCVersion1,
+	pb.CmdMethod_ResetSession:             defines.MORPCVersion1,
 }
 
 type queryClient struct {
@@ -98,7 +99,7 @@ func (c *queryClient) ServiceID() string {
 // SendMessage implements the QueryService interface.
 func (c *queryClient) SendMessage(ctx context.Context, address string, req *pb.Request) (*pb.Response, error) {
 	if address == "" {
-		return nil, moerr.NewInternalError(ctx, "invalid CN query address %s", address)
+		return nil, moerr.NewInternalErrorf(ctx, "invalid CN query address %s", address)
 	}
 	if err := checkMethodVersion(ctx, c.serviceID, req); err != nil {
 		return nil, err

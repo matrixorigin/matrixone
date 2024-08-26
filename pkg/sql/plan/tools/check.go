@@ -16,7 +16,6 @@ package tools
 
 import (
 	"context"
-	"go/constant"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,14 +32,14 @@ func (checker *ExprChecker) Check(astExpr tree.Expr, expr *plan2.Expr) (bool, er
 	case *tree.NumVal:
 		switch exprImpl.ValType {
 		case tree.P_int64:
-			val, ok := constant.Int64Val(exprImpl.Value)
+			val, ok := exprImpl.Int64()
 			if !ok {
-				return false, moerr.NewInvalidInput(context.Background(), "invalid int value '%s'", exprImpl.Value.String())
+				return false, moerr.NewInvalidInputf(context.Background(), "invalid int value '%s'", exprImpl.String())
 			}
 			ival := expr.GetLit().GetI64Val()
 			return val == ival, nil
 		default:
-			return false, moerr.NewInternalError(context.Background(), "unsupport numval type %v", exprImpl.ValType)
+			return false, moerr.NewInternalErrorf(context.Background(), "unsupport numval type %v", exprImpl.ValType)
 		}
 	case *tree.BinaryExpr:
 		fun := expr.GetF()

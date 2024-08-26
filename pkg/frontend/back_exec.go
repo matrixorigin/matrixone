@@ -48,6 +48,17 @@ type backExec struct {
 }
 
 func (back *backExec) Close() {
+	tempExecCtx := ExecCtx{
+		ses:    back.backSes,
+		txnOpt: FeTxnOption{byRollback: true},
+	}
+	defer tempExecCtx.Close()
+	err := back.backSes.GetTxnHandler().Rollback(&tempExecCtx)
+	if err != nil {
+		back.backSes.Error(tempExecCtx.reqCtx,
+			"Failed to rollback txn in back session",
+			zap.Error(err))
+	}
 	back.Clear()
 	back.backSes.Close()
 	back.backSes.Clear()
@@ -55,8 +66,8 @@ func (back *backExec) Close() {
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) error {
-	back.backSes.EnterFPrint(91)
-	defer back.backSes.ExitFPrint(91)
+	back.backSes.EnterFPrint(FPBackExecExec)
+	defer back.backSes.ExitFPrint(FPBackExecExec)
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
@@ -72,7 +83,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	//logutil.Debugf("-->bh:%s", sql)
 	v, err := back.backSes.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
-		return err
+		v = int64(1)
 	}
 	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
@@ -85,14 +96,14 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	}()
 
 	if len(statements) > 1 {
-		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
+		return moerr.NewInternalErrorf(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
 	//share txn can not run transaction statement
 	if back.backSes.GetTxnHandler().IsShareTxn() {
 		for _, stmt := range statements {
 			switch stmt.(type) {
 			case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
-				return moerr.NewInternalError(ctx, "Exec() can not run transaction statement in share transaction, sql = %s", sql)
+				return moerr.NewInternalErrorf(ctx, "Exec() can not run transaction statement in share transaction, sql = %s", sql)
 			}
 		}
 	}
@@ -117,8 +128,8 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 }
 
 func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uint32, toAccount uint32) error {
-	back.backSes.EnterFPrint(97)
-	defer back.backSes.ExitFPrint(97)
+	back.backSes.EnterFPrint(FPBackExecRestore)
+	defer back.backSes.ExitFPrint(FPBackExecRestore)
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
@@ -132,7 +143,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	//logutil.Debugf("-->bh:%s", sql)
 	v, err := back.backSes.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
-		return err
+		v = int64(1)
 	}
 	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
@@ -144,14 +155,14 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 		}
 	}()
 	if len(statements) > 1 {
-		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
+		return moerr.NewInternalErrorf(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
 	//share txn can not run transaction statement
 	if back.backSes.GetTxnHandler().IsShareTxn() {
 		for _, stmt := range statements {
 			switch stmt.(type) {
 			case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
-				return moerr.NewInternalError(ctx, "Exec() can not run transaction statement in share transaction, sql = %s", sql)
+				return moerr.NewInternalErrorf(ctx, "Exec() can not run transaction statement in share transaction, sql = %s", sql)
 			}
 		}
 	}
@@ -211,8 +222,8 @@ func doComQueryInBack(
 	execCtx *ExecCtx,
 	input *UserInput,
 ) (retErr error) {
-	backSes.EnterFPrint(92)
-	defer backSes.ExitFPrint(92)
+	backSes.EnterFPrint(FPDoComQueryInBack)
+	defer backSes.ExitFPrint(FPDoComQueryInBack)
 	backSes.GetTxnCompileCtx().SetExecCtx(execCtx)
 	backSes.SetSql(input.getSql())
 	//the ses.GetUserName returns the user_name with the account_name.
@@ -359,8 +370,8 @@ func doComQueryInBack(
 func executeStmtInBack(backSes *backSession,
 	execCtx *ExecCtx,
 ) (err error) {
-	execCtx.ses.EnterFPrint(93)
-	defer execCtx.ses.ExitFPrint(93)
+	execCtx.ses.EnterFPrint(FPExecStmtInBack)
+	defer execCtx.ses.ExitFPrint(FPExecStmtInBack)
 	var cmpBegin time.Time
 	var ret interface{}
 
@@ -394,8 +405,8 @@ func executeStmtInBack(backSes *backSession,
 
 	cmpBegin = time.Now()
 
-	execCtx.ses.EnterFPrint(94)
-	defer execCtx.ses.ExitFPrint(94)
+	execCtx.ses.EnterFPrint(FPExecStmtInBackBeforeCompile)
+	defer execCtx.ses.ExitFPrint(FPExecStmtInBackBeforeCompile)
 
 	err = disttae.CheckTxnIsValid(execCtx.ses.GetTxnHandler().GetTxn())
 	if err != nil {
@@ -443,7 +454,7 @@ func executeStmtInBack(backSes *backSession,
 		}
 	case tree.OUTPUT_UNDEFINED:
 		if _, ok := execCtx.stmt.(*tree.Execute); !ok {
-			return moerr.NewInternalError(execCtx.reqCtx, "need set result type for %s", execCtx.sqlOfStmt)
+			return moerr.NewInternalErrorf(execCtx.reqCtx, "need set result type for %s", execCtx.sqlOfStmt)
 		}
 	}
 
@@ -518,8 +529,8 @@ func executeSQLInBackgroundSession(reqCtx context.Context, upstream *Session, sq
 // To be clear, only for the select statement derived from the set_var statement
 // in an independent transaction
 func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCtx, stmt tree.Statement) error {
-	ses.EnterFPrint(111)
-	defer ses.ExitFPrint(111)
+	ses.EnterFPrint(FPExecStmtInSameSession)
+	defer ses.ExitFPrint(FPExecStmtInSameSession)
 	switch stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
 	default:
@@ -666,8 +677,6 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 		},
 	}
 	backSes.service = ses.GetService()
-	backSes.gSysVars = ses.GetGlobalSysVars()
-	backSes.sesSysVars = ses.GetSessionSysVars()
 	backSes.uuid, _ = uuid.NewV7()
 	return backSes
 }
@@ -841,12 +850,12 @@ func (backSes *backSession) GetDebugString() string {
 	if backSes.upstream != nil {
 		return backSes.upstream.GetDebugString()
 	}
-	return ""
+	return "backSes without upstream"
 }
 
 func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
-	backSes.EnterFPrint(116)
-	defer backSes.ExitFPrint(116)
+	backSes.EnterFPrint(FPGetShareTxnBackgroundExecInBackSession)
+	defer backSes.ExitFPrint(FPGetShareTxnBackgroundExecInBackSession)
 	var txnOp TxnOperator
 	if backSes.GetTxnHandler() != nil {
 		txnOp = backSes.GetTxnHandler().GetTxn()
@@ -865,17 +874,19 @@ func (backSes *backSession) GetUserDefinedVar(name string) (*UserDefinedVar, err
 	return nil, moerr.NewInternalError(context.Background(), "do not support user defined var in background exec")
 }
 
-func (backSes *backSession) GetSessionVar(ctx context.Context, name string) (interface{}, error) {
+func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 	switch strings.ToLower(name) {
 	case "autocommit":
 		return true, nil
+	case "lower_case_table_names":
+		return int64(1), nil
 	}
 	return nil, nil
 }
 
 func (backSes *backSession) GetBackgroundExec(ctx context.Context) BackgroundExec {
-	backSes.EnterFPrint(98)
-	defer backSes.ExitFPrint(98)
+	backSes.EnterFPrint(FPGetBackgroundExecInBackSession)
+	defer backSes.ExitFPrint(FPGetBackgroundExecInBackSession)
 	return NewBackgroundExec(ctx, backSes)
 }
 

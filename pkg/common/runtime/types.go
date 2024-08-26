@@ -56,6 +56,9 @@ const (
 	BackgroundCNSelector = "background-cn-selector"
 
 	PipelineClient = "pipeline-client"
+
+	// TestingContextKey is the key of context for testing
+	TestingContextKey = "testing-context"
 )
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service

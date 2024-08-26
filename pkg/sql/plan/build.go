@@ -72,7 +72,7 @@ func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepa
 	//At the same time, replace the param var by the param val
 	if plan.GetDcl() != nil && plan.GetDcl().GetExecute() != nil {
 		execPlan := plan.GetDcl().GetExecute()
-		replaced, _, err := ctx.ReplacePlan(execPlan)
+		replaced, _, err := ctx.InitExecuteStmtParam(execPlan)
 		if err != nil {
 			return nil, err
 		}
@@ -221,7 +221,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.ShowPitr:
 		return buildShowPitr(stmt, ctx)
 	default:
-		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
+		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 }
 

@@ -40,20 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type TombstoneApplyPolicy uint64
-
-const (
-	Policy_SkipUncommitedInMemory = 1 << iota
-	Policy_SkipCommittedInMemory
-	Policy_SkipUncommitedS3
-	Policy_SkipCommittedS3
-)
-
-const (
-	Policy_CheckAll             = 0
-	Policy_CheckCommittedS3Only = Policy_SkipUncommitedInMemory | Policy_SkipCommittedInMemory | Policy_SkipUncommitedS3
-)
-
 const (
 	batchPrefetchSize = 1000
 )
@@ -80,7 +66,7 @@ func NewLocalDataSource(
 	txnOffset int,
 	rangesSlice objectio.BlockInfoSlice,
 	skipReadMem bool,
-	policy TombstoneApplyPolicy,
+	policy engine.TombstoneApplyPolicy,
 ) (source *LocalDataSource, err error) {
 
 	source = &LocalDataSource{}
@@ -336,7 +322,7 @@ type LocalDataSource struct {
 	OrderBy  []*plan.OrderBySpec
 
 	filterZM        objectio.ZoneMap
-	tombstonePolicy TombstoneApplyPolicy
+	tombstonePolicy engine.TombstoneApplyPolicy
 }
 
 func (ls *LocalDataSource) String() string {
@@ -812,7 +798,7 @@ func loadBlockDeletesByDeltaLoc(
 		//readCost := time.Since(t1)
 
 		if persistedByCN {
-			rows = blockio.EvalDeleteRowsByTimestampForDeletesPersistedByCN(persistedDeletes, snapshotTS, blockCommitTS)
+			rows = blockio.EvalDeleteRowsByTimestampForDeletesPersistedByCN(blockId, persistedDeletes)
 		} else {
 			//t2 := time.Now()
 			rows = blockio.EvalDeleteRowsByTimestamp(persistedDeletes, snapshotTS, &blockId)
@@ -849,17 +835,27 @@ func (ls *LocalDataSource) ApplyTombstones(
 
 	var err error
 
-	rowsOffset = ls.applyWorkspaceEntryDeletes(bid, rowsOffset, nil)
-	rowsOffset, err = ls.applyWorkspaceFlushedS3Deletes(bid, rowsOffset, nil)
-	if err != nil {
-		return nil, err
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
+		rowsOffset = ls.applyWorkspaceEntryDeletes(bid, rowsOffset, nil)
+	}
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 {
+		rowsOffset, err = ls.applyWorkspaceFlushedS3Deletes(bid, rowsOffset, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	rowsOffset = ls.applyWorkspaceRawRowIdDeletes(bid, rowsOffset, nil)
-	rowsOffset = ls.applyPStateInMemDeletes(bid, rowsOffset, nil)
-	rowsOffset, err = ls.applyPStatePersistedDeltaLocation(bid, rowsOffset, nil)
-	if err != nil {
-		return nil, err
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
+		rowsOffset = ls.applyWorkspaceRawRowIdDeletes(bid, rowsOffset, nil)
+	}
+	if ls.tombstonePolicy&engine.Policy_SkipCommittedInMemory == 0 {
+		rowsOffset = ls.applyPStateInMemDeletes(bid, rowsOffset, nil)
+	}
+	if ls.tombstonePolicy&engine.Policy_SkipCommittedS3 == 0 {
+		rowsOffset, err = ls.applyPStatePersistedDeltaLocation(bid, rowsOffset, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return rowsOffset, nil
@@ -872,21 +868,21 @@ func (ls *LocalDataSource) GetTombstones(
 	deletedRows = &nulls.Nulls{}
 	deletedRows.InitWithSize(8192)
 
-	if ls.tombstonePolicy&Policy_SkipUncommitedInMemory == 0 {
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
 		ls.applyWorkspaceEntryDeletes(bid, nil, deletedRows)
 	}
-	if ls.tombstonePolicy&Policy_SkipUncommitedS3 == 0 {
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 {
 		_, err = ls.applyWorkspaceFlushedS3Deletes(bid, nil, deletedRows)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if ls.tombstonePolicy&Policy_SkipUncommitedInMemory == 0 {
+	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
 		ls.applyWorkspaceRawRowIdDeletes(bid, nil, deletedRows)
 	}
 
-	if ls.tombstonePolicy&Policy_SkipCommittedInMemory == 0 {
+	if ls.tombstonePolicy&engine.Policy_SkipCommittedInMemory == 0 {
 		ls.applyPStateInMemDeletes(bid, nil, deletedRows)
 	}
 
@@ -1116,7 +1112,7 @@ func (ls *LocalDataSource) applyPStatePersistedDeltaLocation(
 		return offsets, nil
 	}
 
-	deltaLoc, commitTS, ok := ls.pState.GetBockDeltaLoc(bid)
+	deltaLoc, commitTS, ok := ls.pState.GetBlockDeltaLoc(bid)
 	if !ok {
 		return offsets, nil
 	}
@@ -1157,7 +1153,7 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 
 	// prefetch blk delta location
 	for idx := begin; idx < end; idx++ {
-		if loc, _, ok := ls.pState.GetBockDeltaLoc(ls.rangeSlice.Get(idx).BlockID); ok {
+		if loc, _, ok := ls.pState.GetBlockDeltaLoc(ls.rangeSlice.Get(idx).BlockID); ok {
 			if err = blockio.PrefetchTombstone(
 				ls.table.proc.Load().GetService(), []uint16{0, 1, 2},
 				[]uint16{objectio.Location(loc[:]).ID()}, ls.fs, objectio.Location(loc[:])); err != nil {

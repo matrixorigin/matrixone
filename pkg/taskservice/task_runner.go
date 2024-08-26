@@ -630,7 +630,7 @@ func (r *taskRunner) getExecutor(code task.TaskCode) (TaskExecutor, error) {
 	if executor, ok := r.executors.m[code]; ok {
 		return executor, nil
 	}
-	return nil, moerr.NewInternalErrorNoCtx("executor with code %d not exists", code)
+	return nil, moerr.NewInternalErrorNoCtxf("executor with code %d not exists", code)
 }
 
 type runningTask struct {

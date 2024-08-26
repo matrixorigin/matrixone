@@ -782,7 +782,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					builder.appendStep(lastNodeId)
 				}
 			default:
-				return moerr.NewNYINoCtx("unsupported index algorithm %s", multiTableIndex.IndexAlgo)
+				return moerr.NewNYINoCtxf("unsupported index algorithm %s", multiTableIndex.IndexAlgo)
 			}
 		}
 	}
@@ -1260,7 +1260,6 @@ func buildInsertPlansWithRelatedHiddenTable(
 	insertWithoutUniqueKeyMap map[string]bool, ifInsertFromUniqueColMap map[string]bool,
 ) error {
 	var lastNodeId int32
-	var err error
 
 	if builder.isRestore {
 		checkInsertPkDupForHiddenIndexTable = false
@@ -1489,10 +1488,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				return err
 			}
 		default:
-			return moerr.NewInvalidInputNoCtx("Unsupported index algorithm: %s", multiTableIndex.IndexAlgo)
-		}
-		if err != nil {
-			return err
+			return moerr.NewInvalidInputNoCtxf("Unsupported index algorithm: %s", multiTableIndex.IndexAlgo)
 		}
 	}
 
@@ -2178,7 +2174,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 
 		parentObjRef, parentTableDef := builder.compCtx.ResolveById(fk.ForeignTbl, nil)
 		if parentTableDef == nil {
-			return -1, moerr.NewInternalError(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
+			return -1, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
 		}
 		newTableDef := DeepCopyTableDef(parentTableDef, false)
 		joinConds := make([]*plan.Expr, 0)
@@ -4094,6 +4090,6 @@ func IsForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
 	} else if v1, ok := value.(int8); ok {
 		return v1 == 1, nil
 	} else {
-		return false, moerr.NewInternalError(ctx.GetContext(), "invalid  %v ", value)
+		return false, moerr.NewInternalErrorf(ctx.GetContext(), "invalid  %v ", value)
 	}
 }

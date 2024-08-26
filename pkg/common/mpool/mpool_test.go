@@ -133,7 +133,8 @@ func TestMpoolReAllocate(t *testing.T) {
 
 	if cap(d3) > 5 {
 		d3 = d3[:cap(d3)-4]
-		d3_1, err := m.Grow(d3, cap(d3)-2)
+		var d3_1 []byte
+		d3_1, err = m.Grow(d3, cap(d3)-2)
 		require.NoError(t, err)
 		require.Equal(t, cap(d3), cap(d3_1))
 		require.Equal(t, int64(cap(d3)+kMemHdrSz), m.CurrNB())

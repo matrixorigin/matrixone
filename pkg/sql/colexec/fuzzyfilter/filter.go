@@ -85,7 +85,6 @@ func (fuzzyFilter *FuzzyFilter) OpType() vm.OpType {
 func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 	ctr := new(container)
 	fuzzyFilter.ctr = ctr
-	ctr.InitReceiver(proc, false)
 	rowCount := int64(fuzzyFilter.N)
 	if rowCount < 1000 {
 		rowCount = 1000
@@ -161,13 +160,13 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 		case Build:
 			buildIdx := fuzzyFilter.BuildIdx
 
-			msg := ctr.ReceiveFromSingleReg(buildIdx, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			input, err := fuzzyFilter.GetChildren(buildIdx).Call(proc)
+			if err != nil {
+				return result, err
 			}
-			anal.Input(msg.Batch, fuzzyFilter.IsFirst)
+			bat := input.Batch
+			anal.Input(bat, fuzzyFilter.IsFirst)
 
-			bat := msg.Batch
 			if bat == nil {
 				if fuzzyFilter.ifBuildOnSink() {
 					ctr.state = HandleRuntimeFilter
@@ -178,20 +177,17 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			}
 
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
 			pkCol := bat.GetVector(0)
 			fuzzyFilter.appendPassToRuntimeFilter(pkCol, proc)
 
-			err := fuzzyFilter.handleBuild(proc, pkCol)
+			err = fuzzyFilter.handleBuild(proc, pkCol)
 			if err != nil {
-				proc.PutBatch(bat)
 				return result, err
 			}
 
-			proc.PutBatch(bat)
 			continue
 
 		case HandleRuntimeFilter:
@@ -203,13 +199,13 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 		case Probe:
 			probeIdx := fuzzyFilter.getProbeIdx()
 
-			msg := ctr.ReceiveFromSingleReg(probeIdx, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			input, err := fuzzyFilter.GetChildren(probeIdx).Call(proc)
+			if err != nil {
+				return result, err
 			}
-			anal.Input(msg.Batch, fuzzyFilter.IsFirst)
+			bat := input.Batch
+			anal.Input(bat, fuzzyFilter.IsFirst)
 
-			bat := msg.Batch
 			if bat == nil {
 				// fmt.Println("probe cnt = ", arg.probeCnt)
 				// this will happen in such case:create unique index from a table that unique col have no data
@@ -233,20 +229,17 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			}
 
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
 			pkCol := bat.GetVector(0)
 
 			// arg.probeCnt += pkCol.Length()
-			err := fuzzyFilter.handleProbe(proc, pkCol)
+			err = fuzzyFilter.handleProbe(proc, pkCol)
 			if err != nil {
-				proc.PutBatch(bat)
 				return result, err
 			}
 
-			proc.PutBatch(bat)
 			continue
 		case End:
 			result.Status = vm.ExecStop

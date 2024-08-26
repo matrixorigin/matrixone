@@ -25,6 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -55,8 +58,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 var _ engine.Engine = new(Engine)
@@ -258,7 +259,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	// check the database is deleted or not
 	key := genDatabaseKey(accountId, name)
 	if _, exist := txn.deletedDatabaseMap.Load(key); exist {
-		return nil, moerr.NewParseError(ctx, "database %q does not exist", name)
+		return nil, moerr.NewParseErrorf(ctx, "database %q does not exist", name)
 	}
 
 	if v, ok := txn.databaseMap.Load(key); ok {
@@ -359,7 +360,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	txn := op.GetWorkspace().(*Transaction)
 	dbName, tableName, deleted := txn.tableOps.queryNameByTid(tableId)
 	if tableName == "" && deleted {
-		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d: accountId: %v. Deleted in txn", tableId, accountId)
+		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %v. Deleted in txn", tableId, accountId)
 	}
 
 	// not found in tableOps, try cache
@@ -398,7 +399,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		accountId, _ := defines.GetAccountId(ctx)
 		logutil.Error("FIND_TABLE GetRelationById failed",
 			zap.Uint64("tableId", tableId), zap.Uint32("accountId", accountId), zap.String("workspace", txn.PPString()))
-		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d: accountId: %v ", tableId, accountId)
+		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %v ", tableId, accountId)
 	}
 
 	txnDb, err := e.Database(ctx, dbName, op)
@@ -583,6 +584,8 @@ func (e *Engine) Nodes(
 		cluster.GetCNService(selector, func(c metadata.CNService) bool {
 			if c.CommitID == version.CommitID {
 				nodes = append(nodes, engine.Node{
+					// should use c.CPUTotal to set Mcpu for the compile and pipeline.
+					// ref: https://github.com/matrixorigin/matrixone/issues/17935
 					Mcpu: ncpu,
 					Id:   c.ServiceID,
 					Addr: c.PipelineServiceAddress,
@@ -652,24 +655,28 @@ func (e *Engine) BuildBlockReaders(
 	def *plan.TableDef,
 	relData engine.RelData,
 	num int) ([]engine.Reader, error) {
+	var (
+		rds   []engine.Reader
+		shard engine.RelData
+	)
 	proc := p.(*process.Process)
 	blkCnt := relData.DataCnt()
+	newNum := num
 	if blkCnt < num {
-		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
+		newNum = blkCnt
+		for i := 0; i < num-blkCnt; i++ {
+			rds = append(rds, new(emptyReader))
+		}
 	}
 	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
 
-	var (
-		rds   []engine.Reader
-		shard engine.RelData
-	)
-	scanType := determineScanType(relData, num)
-	mod := blkCnt % num
-	divide := blkCnt / num
-	for i := 0; i < num; i++ {
+	scanType := determineScanType(relData, newNum)
+	mod := blkCnt % newNum
+	divide := blkCnt / newNum
+	for i := 0; i < newNum; i++ {
 		if i == 0 {
 			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
 		} else {

@@ -179,7 +179,7 @@ func handleCNMerge(
 	parameter string,
 	sender requestSender) (Result, error) {
 	if service != cn {
-		return Result{}, moerr.NewNotSupported(proc.Ctx, "service %s not supported", service)
+		return Result{}, moerr.NewNotSupportedf(proc.Ctx, "service %s not supported", service)
 	}
 
 	txnOp := proc.GetTxnOperator()

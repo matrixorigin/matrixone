@@ -54,6 +54,7 @@ type cluster struct {
 		cn        int
 		withProxy bool
 		preStart  func(ServiceOperator)
+		testing   bool
 	}
 
 	ports struct {
@@ -243,6 +244,7 @@ func (c *cluster) createServiceOperators() error {
 					o.cfg.LogService.BootstrapConfig.InitHAKeeperMembers = []string{"131072:" + o.cfg.LogService.UUID}
 				}
 			},
+			c.options.testing,
 		)
 		if err != nil {
 			return err
@@ -288,11 +290,15 @@ func (c *cluster) initLogServiceConfig() error {
 	c.files = append(c.files, file)
 	return genConfig(
 		file,
-		fmt.Sprintf(
+		genConfigText(
 			logConfig,
-			c.options.dataPath,
-			c.ports.servicePort,
-		))
+			templateArgs{
+				ID:          c.id,
+				DataDir:     c.options.dataPath,
+				ServicePort: c.ports.servicePort,
+			},
+		),
+	)
 }
 
 func (c *cluster) initTNServiceConfig() error {
@@ -300,15 +306,15 @@ func (c *cluster) initTNServiceConfig() error {
 	c.files = append(c.files, file)
 	return genConfig(
 		file,
-		fmt.Sprintf(
+		genConfigText(
 			tnConfig,
-			c.options.dataPath,
-			c.ports.servicePort,
-			c.options.dataPath,
-			c.options.dataPath,
-			c.id,
-			getNextBasePort(),
-		))
+			templateArgs{
+				ID:          c.id,
+				DataDir:     c.options.dataPath,
+				ServicePort: c.ports.servicePort,
+			},
+		),
+	)
 }
 
 func (c *cluster) initCNServiceConfig() error {
@@ -317,20 +323,16 @@ func (c *cluster) initCNServiceConfig() error {
 		c.files = append(c.files, file)
 		err := genConfig(
 			file,
-			fmt.Sprintf(
+			genConfigText(
 				cnConfig,
-				c.options.dataPath,
-				c.ports.servicePort,
-				c.options.dataPath,
-				c.options.dataPath,
-				c.id,
-				i,
-				getNextBasePort(),
-				i,
-				getNextBasePort(),
-				c.options.dataPath,
-				i,
-			))
+				templateArgs{
+					I:           i,
+					ID:          c.id,
+					DataDir:     c.options.dataPath,
+					ServicePort: c.ports.servicePort,
+				},
+			),
+		)
 		if err != nil {
 			return err
 		}
@@ -341,13 +343,15 @@ func (c *cluster) initCNServiceConfig() error {
 func (c *cluster) initProxyServiceConfig() error {
 	return genConfig(
 		filepath.Join(c.options.dataPath, "proxy.toml"),
-		fmt.Sprintf(
+		genConfigText(
 			proxyConfig,
-			c.options.dataPath,
-			c.ports.servicePort,
-			c.options.dataPath,
-			c.options.dataPath,
-		))
+			templateArgs{
+				ID:          c.id,
+				DataDir:     c.options.dataPath,
+				ServicePort: c.ports.servicePort,
+			},
+		),
+	)
 }
 
 func getNextBasePort() int {

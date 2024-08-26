@@ -31,9 +31,10 @@ package interval
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // Comparable is an interface for trichotomic comparisons.
@@ -59,7 +60,7 @@ func (c rbcolor) String() string {
 	case red:
 		return "red"
 	default:
-		panic(moerr.NewInternalErrorNoCtx("unknown color %d", c))
+		panic(moerr.NewInternalErrorNoCtxf("unknown color %d", c))
 	}
 }
 

@@ -48,31 +48,31 @@ var (
 )
 
 func getErrorConvertFromStringToBoolFailed(str string) error {
-	return moerr.NewInternalError(context.Background(), errorConvertFromStringToBoolFailedFormat, str)
+	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToBoolFailedFormat, str)
 }
 
 func getErrorConvertFromStringToIntFailed(str string) error {
-	return moerr.NewInternalError(context.Background(), errorConvertFromStringToIntFailedFormat, str)
+	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToIntFailedFormat, str)
 }
 
 func getErrorConvertFromStringToUintFailed(str string) error {
-	return moerr.NewInternalError(context.Background(), errorConvertFromStringToUintFailedFormat, str)
+	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToUintFailedFormat, str)
 }
 
 func getErrorConvertFromStringToDoubleFailed(str string) error {
-	return moerr.NewInternalError(context.Background(), errorConvertFromStringToDoubleFailedFormat, str)
+	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToDoubleFailedFormat, str)
 }
 
 func getErrorConvertFromStringToEnumFailed(str string) error {
-	return moerr.NewInternalError(context.Background(), errorConvertFromStringToEnumFailedFormat, str)
+	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToEnumFailedFormat, str)
 }
 
 func getErrorConvertFromStringToSetFailed(str string) error {
-	return moerr.NewInternalError(context.Background(), errorConvertFromStringToSetFailedFormat, str)
+	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToSetFailedFormat, str)
 }
 
 func getErrorConvertFromStringToNullFailed(str string) error {
-	return moerr.NewInternalError(context.Background(), errorConvertFromStringToNullFailedFormat, str)
+	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToNullFailedFormat, str)
 }
 
 func errorConfigDoesNotExist() string { return "the config variable does not exist" }
@@ -3608,7 +3608,7 @@ type UserDefinedVar struct {
 	Sql   string
 }
 
-func autocommitValue(ctx context.Context, ses FeSession) (bool, error) {
+func autocommitValue(ses FeSession) (bool, error) {
 	value, err := ses.GetSessionSysVar("autocommit")
 	if err != nil {
 		return false, err

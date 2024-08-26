@@ -46,7 +46,7 @@ func (rightJoin *RightJoin) OpType() vm.OpType {
 func (rightJoin *RightJoin) Prepare(proc *process.Process) (err error) {
 	rightJoin.ctr = new(container)
 	rightJoin.ctr.vecs = make([]*vector.Vector, len(rightJoin.Conditions[0]))
-	rightJoin.ctr.InitReceiver(proc, false)
+	rightJoin.ctr.InitProc(proc)
 	rightJoin.ctr.evecs = make([]evalVector, len(rightJoin.Conditions[0]))
 	for i := range rightJoin.Conditions[0] {
 		rightJoin.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, rightJoin.Conditions[0][i])
@@ -98,11 +98,9 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				if bat.IsEmpty() {
-					proc.PutBatch(bat)
 					continue
 				}
 				if ctr.mp == nil {
-					proc.PutBatch(bat)
 					continue
 				}
 				rightJoin.ctr.buf = bat
@@ -114,7 +112,6 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			if rightJoin.ctr.lastpos == 0 {
-				proc.PutBatch(rightJoin.ctr.buf)
 				rightJoin.ctr.buf = nil
 			} else if rightJoin.ctr.lastpos == startrow {
 				return result, moerr.NewInternalErrorNoCtx("right join hanging")

@@ -280,7 +280,7 @@ func convertPipelineUuid(p *pipeline.Pipeline, s *Scope) error {
 		op := p.UuidsToRegIdx[i]
 		uid, err := uuid.FromBytes(op.GetUuid())
 		if err != nil {
-			return moerr.NewInternalErrorNoCtx("decode uuid failed: %s\n", err)
+			return moerr.NewInternalErrorNoCtxf("decode uuid failed: %s\n", err)
 		}
 		s.RemoteReceivRegInfos[i] = RemoteReceivRegInfo{
 			Idx:      int(op.GetIdx()),
@@ -768,6 +768,9 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 	case *merge.Merge:
 		in.Merge = &pipeline.Merge{
 			SinkScan: t.SinkScan,
+			Partial:  t.Partial,
+			StartIdx: t.StartIDX,
+			EndIdx:   t.EndIDX,
 		}
 	case *mergerecursive.MergeRecursive:
 	case *mergegroup.MergeGroup:
@@ -829,6 +832,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			FileList:        t.Es.FileList,
 			Filter:          t.Es.Filter.FilterExpr,
 			TbColToDataCol:  t.Es.TbColToDataCol,
+			StrictSqlMode:   t.Es.StrictSqlMode,
 		}
 		in.ProjectList = t.ProjectList
 	case *source.Source:
@@ -1241,7 +1245,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = connector.NewArgument().
 			WithReg(ctx.root.getRegister(t.PipelineId, t.ConnectorIndex))
 	case vm.Merge:
-		op = merge.NewArgument()
+		t := opr.GetMerge()
+		mergeOp := merge.NewArgument()
+		mergeOp.SinkScan = t.SinkScan
+		mergeOp.Partial = t.Partial
+		mergeOp.StartIDX = t.StartIdx
+		mergeOp.EndIDX = t.EndIdx
+		op = mergeOp
 	case vm.MergeRecursive:
 		op = mergerecursive.NewArgument()
 	case vm.MergeGroup:
@@ -1287,6 +1297,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					Name2ColIndex:   name2ColIndex,
 					FileList:        t.FileList,
 					TbColToDataCol:  t.TbColToDataCol,
+					StrictSqlMode:   t.StrictSqlMode,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),

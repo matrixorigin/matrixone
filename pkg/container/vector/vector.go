@@ -21,6 +21,7 @@ import (
 	"sort"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -405,7 +406,7 @@ func SetFixedAt[T types.FixedSizeT](v *Vector, idx int, t T) error {
 		idx = len(vacol) + idx
 	}
 	if idx < 0 || idx >= len(vacol) {
-		return moerr.NewInternalErrorNoCtx("vector idx out of range: %d > %d", idx, len(vacol))
+		return moerr.NewInternalErrorNoCtxf("vector idx out of range: %d > %d", idx, len(vacol))
 	}
 	vacol[idx] = t
 	return nil
@@ -815,6 +816,74 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		shrinkFixed[types.Rowid](v, sels, negate)
 	case types.T_Blockid:
 		shrinkFixed[types.Blockid](v, sels, negate)
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
+	}
+}
+
+func (v *Vector) ShrinkByMask(sels bitmap.Mask, negate bool) {
+	if v.IsConst() {
+		if negate {
+			v.length -= sels.Count()
+		} else {
+			v.length = sels.Count()
+		}
+		return
+	}
+
+	switch v.typ.Oid {
+	case types.T_bool:
+		shrinkFixedByMask[bool](v, sels, negate)
+	case types.T_bit:
+		shrinkFixedByMask[uint64](v, sels, negate)
+	case types.T_int8:
+		shrinkFixedByMask[int8](v, sels, negate)
+	case types.T_int16:
+		shrinkFixedByMask[int16](v, sels, negate)
+	case types.T_int32:
+		shrinkFixedByMask[int32](v, sels, negate)
+	case types.T_int64:
+		shrinkFixedByMask[int64](v, sels, negate)
+	case types.T_uint8:
+		shrinkFixedByMask[uint8](v, sels, negate)
+	case types.T_uint16:
+		shrinkFixedByMask[uint16](v, sels, negate)
+	case types.T_uint32:
+		shrinkFixedByMask[uint32](v, sels, negate)
+	case types.T_uint64:
+		shrinkFixedByMask[uint64](v, sels, negate)
+	case types.T_float32:
+		shrinkFixedByMask[float32](v, sels, negate)
+	case types.T_float64:
+		shrinkFixedByMask[float64](v, sels, negate)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		// XXX shrink varlena, but did not shrink area.  For our vector, this
+		// may well be the right thing.  If want to shrink area as well, we
+		// have to copy each varlena value and swizzle pointer.
+		shrinkFixedByMask[types.Varlena](v, sels, negate)
+	case types.T_date:
+		shrinkFixedByMask[types.Date](v, sels, negate)
+	case types.T_datetime:
+		shrinkFixedByMask[types.Datetime](v, sels, negate)
+	case types.T_time:
+		shrinkFixedByMask[types.Time](v, sels, negate)
+	case types.T_timestamp:
+		shrinkFixedByMask[types.Timestamp](v, sels, negate)
+	case types.T_enum:
+		shrinkFixedByMask[types.Enum](v, sels, negate)
+	case types.T_decimal64:
+		shrinkFixedByMask[types.Decimal64](v, sels, negate)
+	case types.T_decimal128:
+		shrinkFixedByMask[types.Decimal128](v, sels, negate)
+	case types.T_uuid:
+		shrinkFixedByMask[types.Uuid](v, sels, negate)
+	case types.T_TS:
+		shrinkFixedByMask[types.TS](v, sels, negate)
+	case types.T_Rowid:
+		shrinkFixedByMask[types.Rowid](v, sels, negate)
+	case types.T_Blockid:
+		shrinkFixedByMask[types.Blockid](v, sels, negate)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
@@ -3180,6 +3249,40 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 	}
 }
 
+func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate bool) {
+	vs := MustFixedCol[T](v)
+	length := sels.Count()
+	itr := sels.Iterator()
+	if !negate {
+		idx := 0
+		for itr.HasNext() {
+			vs[idx] = vs[itr.Next()]
+			idx++
+		}
+		nulls.FilterByMask(v.nsp, sels, false)
+		v.length = length
+	} else if length > 0 {
+		sel := itr.Next()
+		for oldIdx, newIdx := 0, 0; oldIdx < v.length; oldIdx++ {
+			if oldIdx != int(sel) {
+				vs[newIdx] = vs[oldIdx]
+				newIdx++
+			} else {
+				if !itr.HasNext() {
+					for idx := oldIdx + 1; idx < v.length; idx++ {
+						vs[newIdx] = vs[idx]
+						newIdx++
+					}
+					break
+				}
+				sel = itr.Next()
+			}
+		}
+		nulls.FilterByMask(v.nsp, sels, true)
+		v.length -= length
+	}
+}
+
 func shuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) error {
 	sz := v.typ.TypeSize()
 	olddata := v.data[:v.length*sz]
@@ -4362,19 +4465,20 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
 
 	for i := range short {
 		idx := sort.Search(lenLong, func(j int) bool {
-			return cmp(long[j], short[i]) >= 0
+			return cmp(long[j], short[i]) > 0
 		})
 		if idx >= lenLong {
 			break
 		}
 
-		if cmp(short[i], long[idx]) == 0 {
+		if idx > 0 && cmp(short[i], long[idx-1]) == 0 {
 			if err = AppendFixed(ret, short[i], false, mp); err != nil {
 				return err
 			}
 		}
 
 		long = long[idx:]
+		lenLong = len(long)
 	}
 	return nil
 }
@@ -4469,19 +4573,20 @@ func Intersection2VectorVarlen(
 	for i := range shortCol {
 		shortBytes := shortCol[i].GetByteSlice(shortArea)
 		idx := sort.Search(lenLong, func(j int) bool {
-			return bytes.Compare(longCol[j].GetByteSlice(longArea), shortBytes) >= 0
+			return bytes.Compare(longCol[j].GetByteSlice(longArea), shortBytes) > 0
 		})
 		if idx >= lenLong {
 			break
 		}
 
-		if bytes.Equal(shortBytes, longCol[idx].GetByteSlice(longArea)) {
+		if idx > 0 && bytes.Equal(shortBytes, longCol[idx-1].GetByteSlice(longArea)) {
 			if err = AppendBytes(ret, shortBytes, false, mp); err != nil {
 				return err
 			}
 		}
 
 		longCol = longCol[idx:]
+		lenLong = len(longCol)
 	}
 	return nil
 }

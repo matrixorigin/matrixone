@@ -35,7 +35,7 @@ func (s *taeStorage) Read(
 	case uint32(apipb.OpCode_OpGetLogTail):
 		return handleRead(ctx, txnMeta, payload, s.taeHandler.HandleGetLogTail)
 	default:
-		return nil, moerr.NewNotSupported(ctx, "known read op: %v", op)
+		return nil, moerr.NewNotSupportedf(ctx, "known read op: %v", op)
 	}
 }
 

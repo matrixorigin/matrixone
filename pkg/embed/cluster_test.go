@@ -16,9 +16,12 @@ package embed
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -38,8 +41,6 @@ func TestBasicCluster(t *testing.T) {
 }
 
 func TestMultiClusterCanWork(t *testing.T) {
-	// TODO(fagongzi) wait may data race fixed
-	t.SkipNow()
 	new := func() Cluster {
 		c, err := NewCluster(WithCNCount(3))
 		require.NoError(t, err)
@@ -59,9 +60,6 @@ func TestMultiClusterCanWork(t *testing.T) {
 }
 
 func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
-	// TODO(fagongzi) wait may data race fixed
-	t.SkipNow()
-
 	RunBaseClusterTests(
 		func(c Cluster) {
 			validCNCanWork(t, c, 0)
@@ -97,8 +95,6 @@ func TestBaseClusterOnlyStartOnce(t *testing.T) {
 }
 
 func TestRestartCN(t *testing.T) {
-	// TODO: wait #17668 fixed
-	t.SkipNow()
 	RunBaseClusterTests(
 		func(c Cluster) {
 			svc, err := c.GetCNService(0)
@@ -107,6 +103,26 @@ func TestRestartCN(t *testing.T) {
 
 			require.NoError(t, svc.Start())
 			validCNCanWork(t, c, 0)
+		},
+	)
+}
+
+func TestRunSQLWithFrontend(t *testing.T) {
+	RunBaseClusterTests(
+		func(c Cluster) {
+			cn0, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/",
+				cn0.GetServiceConfig().CN.Frontend.Port,
+			)
+
+			db, err := sql.Open("mysql", dsn)
+			require.NoError(t, err)
+			defer db.Close()
+
+			_, err = db.Exec("show databases")
+			require.NoError(t, err)
 		},
 	)
 }

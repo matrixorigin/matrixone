@@ -41,7 +41,7 @@ func ParseDatalink(fsPath string) (string, []int, string, error) {
 	case "file":
 		moUrl = strings.Join([]string{u.Host, u.Path}, "")
 	default:
-		return "", nil, "", moerr.NewNYINoCtx("unsupported url scheme %s", u.Scheme)
+		return "", nil, "", moerr.NewNYINoCtxf("unsupported url scheme %s", u.Scheme)
 	}
 
 	// 2. get file extension
@@ -49,7 +49,7 @@ func ParseDatalink(fsPath string) (string, []int, string, error) {
 	switch extension {
 	case ".txt", ".csv":
 	default:
-		return "", nil, "", moerr.NewNYINoCtx("unsupported file type %s", extension)
+		return "", nil, "", moerr.NewNYINoCtxf("unsupported file type %s", extension)
 	}
 
 	// 3. get size and offset from the query

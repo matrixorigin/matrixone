@@ -149,7 +149,7 @@ func NewMinioSDK(
 			return nil, err
 		}
 		if !ok {
-			return nil, moerr.NewInternalErrorNoCtx(
+			return nil, moerr.NewInternalErrorNoCtxf(
 				"bad s3 config, no such bucket or no permissions: %v",
 				args.Bucket,
 			)

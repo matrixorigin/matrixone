@@ -433,6 +433,7 @@ select * from mo_catalog.mo_user_defined_function;
 -- @session
 
 -- @session:id=3&user=acc03:test_account&password=111
+select * from test01.sales;
 use test02;
 select * from v01;
 use test03;

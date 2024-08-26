@@ -15,9 +15,11 @@
 package motrace
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestContentBuffer_isEmpty(t *testing.T) {
@@ -29,24 +31,28 @@ func TestContentBuffer_isEmpty(t *testing.T) {
 		fields fields
 		run    func(buf *ContentBuffer)
 		want   bool
+		nilReq bool
 	}{
 		{
 			name: "empty",
 			fields: fields{
 				options: []BufferOption{BufferWithGenBatchFunc(noopGenBatchSQL), BufferWithType("test")},
 			},
-			run:  func(buf *ContentBuffer) { /*none op*/ },
-			want: true,
+			run:    func(buf *ContentBuffer) { /*none op*/ },
+			want:   true,
+			nilReq: true,
 		},
 		{
 			name: "not_empty",
 			fields: fields{
 				options: []BufferOption{BufferWithGenBatchFunc(noopGenBatchSQL), BufferWithType("test")},
 			},
-			run:  func(buf *ContentBuffer) { buf.Add(&StatementInfo{}) },
-			want: false,
+			run:    func(buf *ContentBuffer) { buf.Add(&StatementInfo{}) },
+			want:   false,
+			nilReq: false,
 		},
 	}
+	ctx := context.TODO()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			b := NewContentBuffer(tt.fields.options...)
@@ -54,6 +60,19 @@ func TestContentBuffer_isEmpty(t *testing.T) {
 			_ = b.ShouldFlush()
 			_ = b.Size()
 			assert.Equalf(t, tt.want, b.isEmpty(), "isEmpty()")
+
+			// check bufferCount is correct count
+			req := b.GetBatch(ctx, nil)
+			if tt.nilReq {
+				require.Nil(t, req)
+			} else {
+				require.NotNil(t, req)
+				require.Equal(t, bufferCount.Load(), int32(1))
+				require.Equal(t, ContentBufferBackOff{}.Count(), true)
+				_, err := req.(*contentWriteRequest).Handle()
+				require.NoError(t, err)
+				require.Equal(t, bufferCount.Load(), int32(0))
+			}
 		})
 	}
 }

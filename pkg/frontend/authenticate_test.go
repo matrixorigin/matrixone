@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go/constant"
 	"net"
 	"reflect"
 	"strings"
@@ -6660,14 +6659,14 @@ func TestSetGlobalSysVar(t *testing.T) {
 }
 
 func boxExprStr(s string) tree.Expr {
-	return tree.NewNumValWithType(constant.MakeString(s), s, false, tree.P_char)
+	return tree.NewNumVal(s, s, false, tree.P_char)
 }
 
 func mustUnboxExprStr(e tree.Expr) string {
 	if e == nil {
 		return ""
 	}
-	return e.(*tree.NumVal).OrigString()
+	return e.(*tree.NumVal).String()
 }
 
 func Test_doAlterUser(t *testing.T) {
@@ -9604,7 +9603,7 @@ func TestDoCreateStage(t *testing.T) {
 		cs := &tree.CreateStage{
 			IfNotExists: false,
 			Name:        tree.Identifier("my_stage_test"),
-			Url:         "'s3://load/files/'",
+			Url:         "s3://load/files/",
 			Credentials: tree.StageCredentials{
 				Exist: false,
 			},
@@ -9662,7 +9661,7 @@ func TestDoCreateStage(t *testing.T) {
 		cs := &tree.CreateStage{
 			IfNotExists: false,
 			Name:        tree.Identifier("my_stage_test"),
-			Url:         "'s3://load/files/'",
+			Url:         "s3://load/files/",
 			Credentials: tree.StageCredentials{
 				Exist: false,
 			},
@@ -9722,7 +9721,7 @@ func TestDoCreateStage(t *testing.T) {
 		cs := &tree.CreateStage{
 			IfNotExists: true,
 			Name:        tree.Identifier("my_stage_test"),
-			Url:         "'s3://load/files/'",
+			Url:         "file:///load/files/",
 			Credentials: tree.StageCredentials{
 				Exist: false,
 			},
@@ -9780,10 +9779,10 @@ func TestDoCreateStage(t *testing.T) {
 		cs := &tree.CreateStage{
 			IfNotExists: false,
 			Name:        tree.Identifier("my_stage_test"),
-			Url:         "'s3://load/files/'",
+			Url:         "s3://load/files/",
 			Credentials: tree.StageCredentials{
 				Exist:       true,
-				Credentials: []string{"'AWS_KEY_ID'", "'1a2b3c'", "'AWS_SECRET_KEY'", "'4x5y6z'"},
+				Credentials: []string{"AWS_KEY_ID", "1a2b3c", "AWS_SECRET_KEY", "4x5y6z"},
 			},
 			Status: tree.StageStatus{
 				Exist:  true,
@@ -9840,7 +9839,7 @@ func TestDoCreateStage(t *testing.T) {
 		cs := &tree.CreateStage{
 			IfNotExists: false,
 			Name:        tree.Identifier("my_stage_test"),
-			Url:         "'s3://load/files/'",
+			Url:         "s3://load/files/",
 			Credentials: tree.StageCredentials{
 				Exist: false,
 			},
@@ -9902,7 +9901,7 @@ func TestDoAlterStage(t *testing.T) {
 			Name:        tree.Identifier("my_stage_test"),
 			UrlOption: tree.StageUrl{
 				Exist: true,
-				Url:   "'s3://load/files/'",
+				Url:   "s3://load/files/",
 			},
 			CredentialsOption: tree.StageCredentials{
 				Exist: false,
@@ -9968,7 +9967,7 @@ func TestDoAlterStage(t *testing.T) {
 			},
 			CredentialsOption: tree.StageCredentials{
 				Exist:       true,
-				Credentials: []string{"'AWS_KEY_ID'", "'1a2b3c'", "'AWS_SECRET_KEY'", "'4x5y6z'"},
+				Credentials: []string{"AWS_KEY_ID", "1a2b3c", "AWS_SECRET_KEY", "4x5y6z"},
 			},
 			StatusOption: tree.StageStatus{
 				Exist: false,
@@ -10028,7 +10027,7 @@ func TestDoAlterStage(t *testing.T) {
 			Name:        tree.Identifier("my_stage_test"),
 			UrlOption: tree.StageUrl{
 				Exist: true,
-				Url:   "'s3://load/files/'",
+				Url:   "s3://load/files/",
 			},
 			CredentialsOption: tree.StageCredentials{
 				Exist: false,
@@ -10089,7 +10088,7 @@ func TestDoAlterStage(t *testing.T) {
 			Name:        tree.Identifier("my_stage_test"),
 			UrlOption: tree.StageUrl{
 				Exist: true,
-				Url:   "'s3://load/files/'",
+				Url:   "s3://load/files/",
 			},
 			CredentialsOption: tree.StageCredentials{
 				Exist: false,
@@ -10150,11 +10149,11 @@ func TestDoAlterStage(t *testing.T) {
 			Name:        tree.Identifier("my_stage_test"),
 			UrlOption: tree.StageUrl{
 				Exist: true,
-				Url:   "'s3://load/files/'",
+				Url:   "s3://load/files/",
 			},
 			CredentialsOption: tree.StageCredentials{
 				Exist:       true,
-				Credentials: []string{"'AWS_KEY_ID'", "'1a2b3c'", "'AWS_SECRET_KEY'", "'4x5y6z'"},
+				Credentials: []string{"AWS_KEY_ID", "1a2b3c", "AWS_SECRET_KEY", "4x5y6z"},
 			},
 			StatusOption: tree.StageStatus{
 				Exist: false,
@@ -10215,7 +10214,7 @@ func TestDoAlterStage(t *testing.T) {
 			},
 			CredentialsOption: tree.StageCredentials{
 				Exist:       true,
-				Credentials: []string{"'AWS_KEY_ID'", "'1a2b3c'", "'AWS_SECRET_KEY'", "'4x5y6z'"},
+				Credentials: []string{"AWS_KEY_ID", "1a2b3c", "AWS_SECRET_KEY", "4x5y6z"},
 			},
 			StatusOption: tree.StageStatus{
 				Exist: false,
@@ -10240,307 +10239,6 @@ func TestDoAlterStage(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
-}
-
-func TestDoCheckFilePath(t *testing.T) {
-	convey.Convey("doCheckFilePath success", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		rm, _ := NewRoutineManager(ctx)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		cs := &tree.Select{}
-		ses.InitExportConfig(cs.Ep)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		err := doCheckFilePath(ctx, ses, cs.Ep)
-		convey.So(err, convey.ShouldBeNil)
-	})
-
-	convey.Convey("doCheckFilePath success", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		rm, _ := NewRoutineManager(ctx)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		cs := &tree.Select{
-			Ep: &tree.ExportParam{
-				FilePath: "/mnt/disk1/t1.csv",
-			},
-		}
-		ses.InitExportConfig(cs.Ep)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForCheckStageStatus(ctx, "enabled")
-		mrs := newMrsForPasswordOfUser([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doCheckFilePath(ctx, ses, cs.Ep)
-		convey.So(err, convey.ShouldBeNil)
-	})
-
-	convey.Convey("doCheckFilePath success", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		rm, _ := NewRoutineManager(ctx)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		cs := &tree.Select{
-			Ep: &tree.ExportParam{
-				FilePath: "/mnt/disk1/t1.csv",
-			},
-		}
-		ses.InitExportConfig(cs.Ep)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForCheckStageStatus(ctx, "enabled")
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{0, 0},
-		})
-		bh.sql2result[sql] = mrs
-
-		err := doCheckFilePath(ctx, ses, cs.Ep)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-
-	convey.Convey("doCheckFilePath fail", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		rm, _ := NewRoutineManager(ctx)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		cs := &tree.Select{
-			Ep: &tree.ExportParam{
-				FilePath: "stage1:/t1.csv",
-			},
-		}
-		ses.InitExportConfig(cs.Ep)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql, _ := getSqlForCheckStageStatusWithStageName(ctx, "stage1")
-		mrs := newMrsForPasswordOfUser([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doCheckFilePath(ctx, ses, cs.Ep)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-
-	convey.Convey("doCheckFilePath fail", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		rm, _ := NewRoutineManager(ctx)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		cs := &tree.Select{
-			Ep: &tree.ExportParam{
-				FilePath: "stage1:/t1.csv",
-			},
-		}
-		ses.InitExportConfig(cs.Ep)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql, _ := getSqlForCheckStageStatusWithStageName(ctx, "stage1")
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{"/tmp", "disabled"},
-		})
-		bh.sql2result[sql] = mrs
-
-		err := doCheckFilePath(ctx, ses, cs.Ep)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-
-	convey.Convey("doCheckFilePath success", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		rm, _ := NewRoutineManager(ctx)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		cs := &tree.Select{
-			Ep: &tree.ExportParam{
-				FilePath: "stage1:/t1.csv",
-			},
-		}
-		ses.InitExportConfig(cs.Ep)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql, _ := getSqlForCheckStageStatusWithStageName(ctx, "stage1")
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{"/tmp", "enabled"},
-		})
-		bh.sql2result[sql] = mrs
-
-		err := doCheckFilePath(ctx, ses, cs.Ep)
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(cs.Ep.FilePath, convey.ShouldEqual, "stage1:/t1.csv")
-	})
 }
 
 func TestGetLabelPart(t *testing.T) {

@@ -62,11 +62,11 @@ type TxnCompilerContext struct {
 }
 
 func (tcc *TxnCompilerContext) GetLowerCaseTableNames() int64 {
-	lower := int64(0)
-	if val, err := tcc.execCtx.ses.GetSessionSysVar("lower_case_table_names"); err != nil {
-		lower = val.(int64)
+	val, err := tcc.execCtx.ses.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		val = int64(1)
 	}
-	return lower
+	return val.(int64)
 }
 
 func (tcc *TxnCompilerContext) SetExecCtx(execCtx *ExecCtx) {
@@ -99,8 +99,8 @@ func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
 	tcc.snapshot = snapshot
 }
 
-func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
-	_, p, st, _, err := replacePlan(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan)
+func (tcc *TxnCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
+	_, p, st, _, err := initExecuteStmtParam(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan)
 	return p, st, err
 }
 
@@ -225,7 +225,7 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot *plan2.Snap
 	}
 	databaseId, err := strconv.ParseUint(database.GetDatabaseId(tempCtx), 10, 64)
 	if err != nil {
-		return 0, moerr.NewInternalError(tempCtx, "The databaseid of '%s' is not a valid number", dbName)
+		return 0, moerr.NewInternalErrorf(tempCtx, "The databaseid of '%s' is not a valid number", dbName)
 	}
 	return databaseId, nil
 }
@@ -251,7 +251,7 @@ func (tcc *TxnCompilerContext) GetDbLevelConfig(dbName string, varName string) (
 		return "Check", nil
 	default:
 	}
-	return "", moerr.NewInternalError(tcc.GetContext(), "The variable '%s' is not a valid database level variable", varName)
+	return "", moerr.NewInternalErrorf(tcc.GetContext(), "The variable '%s' is not a valid database level variable", varName)
 }
 
 // getRelation returns the context (maybe updated) and the relation
@@ -430,6 +430,26 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 	}
 	tableDef := table.CopyTableDef(pubContext)
 	return obj, tableDef
+}
+
+func (tcc *TxnCompilerContext) checkTableDefChange(dbName string, tableName string, originTblId uint64, originVersion uint32) (bool, error) {
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
+		tableName = strings.ToLower(tableName)
+	}
+
+	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, nil)
+	if err != nil || sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
+		return false, err
+	}
+
+	ctx, table, err := tcc.getRelation(dbName, tableName, sub, nil)
+	if err != nil {
+		return false, moerr.NewNoSuchTableNoCtx(dbName, tableName)
+	}
+
+	return table.GetTableDef(ctx).Version != originVersion || table.GetTableID(ctx) != originTblId, nil
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef) {
@@ -637,7 +657,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 
 		return nil, err
 	} else {
-		return nil, moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+		return nil, moerr.NewNotSupportedf(ctx, "function or operator '%s'", name)
 	}
 }
 
@@ -727,7 +747,7 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (account
 			}
 			accountIds = append(accountIds, uint32(targetAccountId))
 		} else {
-			return nil, moerr.NewInternalError(ctx, "there is no account %s", name)
+			return nil, moerr.NewInternalErrorf(ctx, "there is no account %s", name)
 		}
 	}
 	return accountIds, err
@@ -784,7 +804,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 		return nil, err
 	}
 	if sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
-		return nil, moerr.NewInternalErrorNoCtx("table %s not found in publication %s", tableName, sub.Name)
+		return nil, moerr.NewInternalErrorNoCtxf("table %s not found in publication %s", tableName, sub.Name)
 	}
 	if !checkSub {
 		sub = &plan.SubscriptionMeta{

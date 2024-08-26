@@ -80,13 +80,17 @@ func init() {
 	traceIDSpanIDCsvStr = fmt.Sprintf(`%s,%s`, sc.TraceID.String(), sc.SpanID.String())
 
 	if err := agent.Listen(agent.Options{}); err != nil {
-		_ = moerr.NewInternalError(DefaultContext(), "listen gops agent failed: %s", err)
+		_ = moerr.NewInternalErrorf(DefaultContext(), "listen gops agent failed: %s", err)
 		panic(err)
 	}
 	fmt.Println("Finish tests init.")
 }
 
-type dummyStringWriter struct{}
+type dummyStringWriter struct {
+	buf      *bytes.Buffer
+	callback func(*bytes.Buffer)
+	backoff  table.BackOff
+}
 
 func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
 	return fmt.Printf("dummyStringWriter: %s\n", s)
@@ -95,7 +99,23 @@ func (w *dummyStringWriter) WriteRow(row *table.Row) error {
 	fmt.Printf("dummyStringWriter: %v\n", row.ToStrings())
 	return nil
 }
+func (w *dummyStringWriter) SetBuffer(buf *bytes.Buffer, callback func(buffer *bytes.Buffer)) {
+	w.buf = buf
+	w.callback = callback
+}
+
+// NeedBuffer implements table.BufferSettable
+func (w *dummyStringWriter) NeedBuffer() bool { return true }
+func (w *dummyStringWriter) SetupBackOff(backoff table.BackOff) {
+	w.backoff = backoff
+}
 func (w *dummyStringWriter) FlushAndClose() (int, error) {
+	if w.backoff != nil {
+		_ = w.backoff.Count()
+	}
+	if w.callback != nil {
+		w.callback(w.buf)
+	}
 	return 0, nil
 }
 func (w *dummyStringWriter) GetContent() string    { return "" }
