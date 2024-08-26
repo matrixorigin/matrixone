@@ -38,7 +38,6 @@ func (offset *Offset) OpType() vm.OpType {
 
 func (offset *Offset) Prepare(proc *process.Process) error {
 	var err error
-	offset.ctr = new(container)
 	if offset.ctr.offsetExecutor == nil {
 		offset.ctr.offsetExecutor, err = colexec.NewExpressionExecutor(proc, offset.OffsetExpr)
 		if err != nil {
@@ -63,31 +62,33 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
-	result, err := vm.ChildrenCall(offset.GetChildren(0), proc, anal)
+	input, err := vm.ChildrenCall(offset.GetChildren(0), proc, anal)
 	if err != nil {
-		return result, err
+		return vm.CancelResult, err
 	}
-	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
-		return result, nil
+	if input.Batch == nil || input.Batch.IsEmpty() || input.Batch.Last() {
+		return input, nil
 	}
-	bat := result.Batch
-	anal.Input(bat, offset.GetIsFirst())
-
+	anal.Input(input.Batch, offset.GetIsFirst())
 	if offset.ctr.seen > offset.ctr.offset {
-		return result, nil
+		return input, nil
 	}
-	length := bat.RowCount()
+	length := input.Batch.RowCount()
+	if offset.ctr.buf != nil {
+		offset.ctr.buf.CleanOnlyData()
+	}
 	if offset.ctr.seen+uint64(length) > offset.ctr.offset {
 		sels := newSels(int64(offset.ctr.offset-offset.ctr.seen), int64(length)-int64(offset.ctr.offset-offset.ctr.seen), proc)
-		offset.ctr.seen += uint64(length)
-		bat.Shrink(sels, false)
+		offset.ctr.buf, err = offset.ctr.buf.AppendWithCopy(proc.Ctx, proc.GetMPool(), input.Batch)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+		offset.ctr.buf.Shrink(sels, false)
 		proc.Mp().PutSels(sels)
-		result.Batch = bat
-		return result, nil
+		offset.ctr.seen += uint64(length)
+		return vm.CallResult{Batch: offset.ctr.buf, Status: vm.ExecNext}, nil
 	}
-	offset.ctr.seen += uint64(length)
-	result.Batch = batch.EmptyBatch
-	return result, nil
+	return vm.CancelResult, nil
 }
 
 func newSels(start, count int64, proc *process.Process) []int64 {

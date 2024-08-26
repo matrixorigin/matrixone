@@ -34,17 +34,10 @@ const (
 	End
 )
 
-type evalVector struct {
-	executor colexec.ExpressionExecutor
-	vec      *vector.Vector
-}
-
 type container struct {
 	state int
 
-	batches       []*batch.Batch
-	batchRowCount int64
-	rbat          *batch.Batch
+	rbat *batch.Batch
 
 	expr colexec.ExpressionExecutor
 
@@ -54,8 +47,8 @@ type container struct {
 	joinBat2 *batch.Batch
 	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
-	evecs []evalVector
-	vecs  []*vector.Vector
+	executor []colexec.ExpressionExecutor
+	vecs     []*vector.Vector
 
 	mp        *message.JoinMap
 	skipProbe bool
@@ -64,7 +57,7 @@ type container struct {
 }
 
 type SemiJoin struct {
-	ctr        *container
+	ctr        container
 	Result     []int32
 	Typs       []types.Type
 	Cond       *plan.Expr
@@ -111,28 +104,39 @@ func (semiJoin *SemiJoin) Release() {
 }
 
 func (semiJoin *SemiJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	semiJoin.Free(proc, pipelineFailed, err)
+	ctr := &semiJoin.ctr
+	anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
+
+	ctr.resetExecutor()
+	ctr.resetExprExecutor()
+	ctr.cleanHashMap()
+	ctr.state = Build
+	ctr.skipProbe = false
+
+	if semiJoin.ProjectList != nil {
+		anal.Alloc(semiJoin.ProjectAllocSize + semiJoin.ctr.maxAllocSize)
+		semiJoin.ctr.maxAllocSize = 0
+		semiJoin.ResetProjection(proc)
+	} else {
+		anal.Alloc(semiJoin.ctr.maxAllocSize)
+		semiJoin.ctr.maxAllocSize = 0
+	}
 }
 
 func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := semiJoin.ctr
-	anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
-	allocSize := int64(0)
-	if ctr != nil {
-		ctr.cleanBatch(proc)
-		ctr.cleanEvalVectors()
-		ctr.cleanHashMap()
-		ctr.cleanExprExecutor()
+	ctr := &semiJoin.ctr
 
-		allocSize += ctr.maxAllocSize
+	ctr.cleanExecutor()
+	ctr.cleanExprExecutor()
+	ctr.cleanBatch(proc)
 
-		semiJoin.ctr = nil
+	semiJoin.FreeProjection(proc)
+}
+
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
-	if semiJoin.ProjectList != nil {
-		allocSize += semiJoin.ProjectAllocSize
-		semiJoin.FreeProjection(proc)
-	}
-	anal.Alloc(allocSize)
 }
 
 func (ctr *container) cleanExprExecutor() {
@@ -143,18 +147,14 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
-	ctr.batches = nil
 	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
+		ctr.rbat.Clean(proc.Mp())
 	}
 	if ctr.joinBat1 != nil {
-		proc.PutBatch(ctr.joinBat1)
-		ctr.joinBat1 = nil
+		ctr.joinBat1.Clean(proc.Mp())
 	}
 	if ctr.joinBat2 != nil {
-		proc.PutBatch(ctr.joinBat2)
-		ctr.joinBat2 = nil
+		ctr.joinBat2.Clean(proc.Mp())
 	}
 }
 
@@ -165,12 +165,18 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanEvalVectors() {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.Free()
+func (ctr *container) resetExecutor() {
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].ResetForNextQuery()
 		}
-		ctr.evecs[i].vec = nil
 	}
-	ctr.evecs = nil
+}
+
+func (ctr *container) cleanExecutor() {
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].Free()
+		}
+	}
 }
