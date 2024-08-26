@@ -132,8 +132,7 @@ CREATE TABLE test (
     account_id BIGINT UNSIGNED NOT NULL,
     task_id UUID NOT NULL,
     task_name VARCHAR(1000) NOT NULL,
-    PRIMARY KEY (account_id, task_id),
-    UNIQUE KEY (account_id, task_name)
+    PRIMARY KEY (account_id, task_id)
 );
 insert into test values(3,"019126ce-64a8-78cf-1234-be2626281abd","task3");
 insert into test values(3,"019126ce-64a8-78cf-5678-be2626281abd","task4");
