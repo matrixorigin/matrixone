@@ -48,10 +48,11 @@ type PhySource struct {
 }
 
 type PhyOperator struct {
-	OpName       string                 `json:"OpName"`
-	NodeIdx      int                    `json:"NodeIdx"`
-	IsFirst      bool                   `json:"IsFirst"`
-	IsLast       bool                   `json:"IsLast"`
+	OpName  string `json:"OpName"`
+	NodeIdx int    `json:"NodeIdx"`
+	//IsFirst      bool                   `json:"IsFirst"`
+	//IsLast       bool                   `json:"IsLast"`
+	Status       uint8                  `json:"Status"`
 	DestReceiver []PhyReceiver          `json:"toMergeReceiver,omitempty"`
 	OpStats      *process.OperatorStats `json:"OpStats,omitempty"`
 	Children     []*PhyOperator         `json:"Children,omitempty"`

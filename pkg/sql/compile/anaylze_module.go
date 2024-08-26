@@ -253,11 +253,17 @@ func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]
 	phyOp := &models.PhyOperator{
 		OpName:       op.OpType().String(),
 		NodeIdx:      op.GetOperatorBase().Idx,
-		IsFirst:      op.GetOperatorBase().IsFirst,
-		IsLast:       op.GetOperatorBase().IsLast,
 		DestReceiver: getDestReceiver(op, rmp),
 		//OpStats:      op.GetOperatorBase().OpAnalyzer.GetOpStats(),
 	}
+
+	if op.GetOperatorBase().IsFirst {
+		phyOp.Status |= 1 << 0
+	}
+	if op.GetOperatorBase().IsLast {
+		phyOp.Status |= 1 << 1
+	}
+
 	if op.GetOperatorBase().OpAnalyzer != nil {
 		phyOp.OpStats = op.GetOperatorBase().OpAnalyzer.GetOpStats()
 	}

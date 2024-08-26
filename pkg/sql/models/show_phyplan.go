@@ -130,6 +130,11 @@ var debugMagicNames = map[magicType]string{
 	MergeInsert:    "MergeInsert",
 }
 
+const (
+	IsFirstMask = 1 << 0 // 0001
+	IsLastMask  = 1 << 1 // 0010
+)
+
 func ExplainPhyPlan(plan *PhyPlan) string {
 	buffer := bytes.NewBuffer(make([]byte, 0, 300))
 	fmt.Fprintf(buffer, "Version: %s, S3IOInputCount: %d, S3IOOutputCount: %d\n", plan.Version, plan.S3IOInputCount, plan.S3IOOutputCount)
@@ -192,7 +197,10 @@ func PrintPipelineTreeV1(node *PhyOperator, prefix string, isRoot, isTail bool, 
 	//------------------------------------------------------------------------
 	var analyzeStr = ""
 	if true {
-		analyzeStr = fmt.Sprintf("(idx:%v, isFirst:%v, isLast:%v)", node.NodeIdx, node.IsFirst, node.IsLast)
+		// Extract the original bool values
+		isFirst := (node.Status & IsFirstMask) != 0
+		isLast := (node.Status & IsLastMask) != 0
+		analyzeStr = fmt.Sprintf("(idx:%v, isFirst:%v, isLast:%v)", node.NodeIdx, isFirst, isLast)
 
 		if node.OpStats != nil {
 			analyzeStr += node.OpStats.ReducedString()
