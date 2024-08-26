@@ -19,6 +19,8 @@ import (
 	"math"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -41,8 +43,6 @@ func (productl2 *Productl2) OpType() vm.OpType {
 }
 
 func (productl2 *Productl2) Prepare(proc *process.Process) error {
-	ap := productl2
-	ap.ctr = new(container)
 	if productl2.ProjectList != nil {
 		return productl2.PrepareProjection(proc)
 	}
@@ -58,7 +58,7 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 	ap := productl2
-	ctr := ap.ctr
+	ctr := &ap.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
@@ -92,6 +92,19 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 				anal.Input(ctr.inBat, productl2.GetIsFirst())
 			}
 
+			if ctr.rbat == nil {
+				ctr.rbat = batch.NewWithSize(len(productl2.Result))
+				for i, rp := range productl2.Result {
+					if rp.Rel == 0 {
+						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inBat.Vecs[rp.Pos].GetType())
+					} else {
+						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType())
+					}
+				}
+			} else {
+				ctr.rbat.CleanOnlyData()
+			}
+
 			if err := ctr.probe(ap, proc, &result); err != nil {
 				return result, err
 			}
@@ -115,7 +128,7 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (productl2 *Productl2) build(proc *process.Process, anal process.Analyze) error {
-	ctr := productl2.ctr
+	ctr := &productl2.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
 	mp := message.ReceiveJoinMap(productl2.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
@@ -131,6 +144,7 @@ func (productl2 *Productl2) build(proc *process.Process, anal process.Analyze) e
 			return err
 		}
 	}
+	mp.Free()
 	return nil
 }
 
@@ -150,19 +164,6 @@ func (productl2 *Productl2) build(proc *process.Process, anal process.Analyze) e
 //)
 
 func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.CallResult) error {
-	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
-	}
-	ctr.rbat = batch.NewWithSize(len(ap.Result))
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			ctr.rbat.Vecs[i] = proc.GetVector(*ctr.inBat.Vecs[rp.Pos].GetType())
-		} else {
-			ctr.rbat.Vecs[i] = proc.GetVector(*ctr.bat.Vecs[rp.Pos].GetType())
-		}
-	}
-
 	buildCount := ctr.bat.RowCount()
 	probeCount := ctr.inBat.RowCount()
 	var i, j int
@@ -285,7 +286,6 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 	ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
 	result.Batch = ctr.rbat
 
-	proc.PutBatch(ctr.inBat)
 	ctr.inBat = nil
 	return nil
 }

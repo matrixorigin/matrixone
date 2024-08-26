@@ -124,7 +124,7 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if sample.ctr.buf != nil {
-		proc.PutBatch(sample.ctr.buf)
+		sample.ctr.buf.Clean(proc.GetMPool())
 		sample.ctr.buf = nil
 	}
 

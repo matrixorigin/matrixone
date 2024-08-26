@@ -741,7 +741,8 @@ type DataSource interface {
 		memFilter any,
 		mp *mpool.MPool,
 		vp VectorPool,
-	) (*batch.Batch, *objectio.BlockInfo, DataState, error)
+		bat *batch.Batch,
+	) (*objectio.BlockInfo, DataState, error)
 
 	ApplyTombstones(
 		ctx context.Context,
@@ -858,7 +859,7 @@ type Relation interface {
 
 type Reader interface {
 	Close() error
-	Read(context.Context, []string, *plan.Expr, *mpool.MPool, VectorPool) (*batch.Batch, error)
+	Read(context.Context, []string, *plan.Expr, *mpool.MPool, VectorPool, *batch.Batch) (bool, error)
 	SetOrderBy([]*plan.OrderBySpec)
 	GetOrderBy() []*plan.OrderBySpec
 	SetFilterZM(objectio.ZoneMap)
