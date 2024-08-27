@@ -333,12 +333,6 @@ func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNod
 	}
 	batch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().ID, false)
 	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
-	batch.GetVectorByName(ObjectAttr_State).Append(entry.IsAppendable(), false)
-	sorted := false
-	if entry.GetTable().GetLastestSchemaLocked(entry.IsTombstone).HasSortKey() && !entry.IsAppendable() {
-		sorted = true
-	}
-	batch.GetVectorByName(ObjectAttr_Sorted).Append(sorted, false)
 }
 
 type TableRespKind int

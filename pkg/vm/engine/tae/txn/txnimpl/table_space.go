@@ -259,14 +259,8 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 	}
 
 	if shouldCreateNewObj() {
-		space.nobj, err = space.table.CreateNonAppendableObject(new(objectio.CreateObjOpt).WithId(sid), space.isTombstone)
-		if err != nil {
-			return
-		}
-		space.nobj.GetMeta().(*catalog.ObjectEntry).SetSorted()
-		stats.SetSorted()
-		stats.SetCNCreated()
-		err = space.nobj.UpdateStats(stats)
+		space.nobj, err = space.table.CreateNonAppendableObject(
+			&objectio.CreateObjOpt{Stats: &stats, IsTombstone: space.isTombstone})
 		if err != nil {
 			return
 		}

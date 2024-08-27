@@ -205,13 +205,3 @@ func (l *ObjectList) UpdateObjectInfo(obj *ObjectEntry, txn txnif.TxnReader, sta
 	l.Set(newObj, false)
 	return
 }
-
-func (l *ObjectList) SetSorted(sortHint uint64) {
-	objs := l.GetAllNodes(sortHint)
-	if len(objs) == 0 {
-		panic("logic error")
-	}
-	obj := objs[len(objs)-1]
-	newObj := obj.GetSortedEntry()
-	l.Set(newObj, false)
-}

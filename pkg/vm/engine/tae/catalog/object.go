@@ -106,10 +106,8 @@ func (entry *ObjectEntry) Clone() *ObjectEntry {
 		DeleteNode:    entry.DeleteNode,
 		table:         entry.table,
 		ObjectNode: ObjectNode{
-			state:       entry.state,
 			IsLocal:     entry.IsLocal,
 			SortHint:    entry.SortHint,
-			sorted:      entry.sorted,
 			IsTombstone: entry.IsTombstone,
 		},
 		objData:     entry.objData,
@@ -139,7 +137,7 @@ func (entry *ObjectEntry) GetDropEntry(txn txnif.TxnReader) (dropped *ObjectEntr
 func (entry *ObjectEntry) GetUpdateEntry(txn txnif.TxnReader, stats *objectio.ObjectStats) (dropped *ObjectEntry, isNewNode bool) {
 	dropped = entry.Clone()
 	node := dropped.GetLastMVCCNode()
-	dropped.ObjectStats = *stats
+	objectio.SetObjectStats(&dropped.ObjectStats, stats)
 	dropped.GetObjectData().UpdateMeta(dropped)
 	if node.Txn != nil && txn.GetID() == node.Txn.GetID() {
 		return
@@ -149,12 +147,6 @@ func (entry *ObjectEntry) GetUpdateEntry(txn txnif.TxnReader, stats *objectio.Ob
 	return
 }
 
-func (entry *ObjectEntry) GetSortedEntry() (sorted *ObjectEntry) {
-	sorted = entry.Clone()
-	sorted.sorted = true
-	sorted.GetObjectData().UpdateMeta(sorted)
-	return
-}
 func (entry *ObjectEntry) DeleteBefore(ts types.TS) bool {
 	deleteTS := entry.GetDeleteAt()
 	if deleteTS.IsEmpty() {
@@ -242,16 +234,14 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 
 func NewObjectEntry(
 	table *TableEntry,
-	id *objectio.ObjectId,
 	txn txnif.AsyncTxn,
-	state EntryState,
+	stats objectio.ObjectStats,
 	dataFactory ObjectDataFactory,
 	isTombstone bool,
 ) *ObjectEntry {
 	e := &ObjectEntry{
 		table: table,
 		ObjectNode: ObjectNode{
-			state:       state,
 			SortHint:    table.GetDB().catalog.NextObject(),
 			IsTombstone: isTombstone,
 		},
@@ -260,39 +250,10 @@ func NewObjectEntry(
 		},
 		CreateNode:  *txnbase.NewTxnMVCCNodeWithTxn(txn),
 		ObjectState: ObjectState_Create_Active,
-	}
-	if state == ES_Appendable {
-		e.ObjectMVCCNode.ObjectStats.SetAppendable()
-	}
-	objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(id))
-	if dataFactory != nil {
-		e.objData = dataFactory(e)
-	}
-	return e
-}
-
-func NewObjectEntryByMetaLocation(
-	table *TableEntry,
-	id *objectio.ObjectId,
-	start, end types.TS,
-	state EntryState,
-	metalocation objectio.Location,
-	dataFactory ObjectDataFactory,
-) *ObjectEntry {
-	e := &ObjectEntry{
-		table: table,
-		ObjectNode: ObjectNode{
-			state:    state,
-			sorted:   state == ES_NotAppendable,
-			SortHint: table.GetDB().catalog.NextObject(),
+		ObjectMVCCNode: ObjectMVCCNode{
+			ObjectStats: stats,
 		},
-		EntryMVCCNode: EntryMVCCNode{
-			CreatedAt: end,
-		},
-		CreateNode:  *txnbase.NewTxnMVCCNodeWithStartEnd(start, end),
-		ObjectState: ObjectState_Create_ApplyCommit,
 	}
-	objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(id))
 	if dataFactory != nil {
 		e.objData = dataFactory(e)
 	}
@@ -305,10 +266,10 @@ func NewReplayObjectEntry() *ObjectEntry {
 }
 
 func NewStandaloneObject(table *TableEntry, ts types.TS, isTombstone bool) *ObjectEntry {
+	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, false, false)
 	e := &ObjectEntry{
 		table: table,
 		ObjectNode: ObjectNode{
-			state:       ES_Appendable,
 			IsLocal:     true,
 			IsTombstone: isTombstone,
 		},
@@ -317,8 +278,10 @@ func NewStandaloneObject(table *TableEntry, ts types.TS, isTombstone bool) *Obje
 		},
 		CreateNode:  *txnbase.NewTxnMVCCNodeWithTS(ts),
 		ObjectState: ObjectState_Create_ApplyCommit,
+		ObjectMVCCNode: ObjectMVCCNode{
+			ObjectStats: *stats,
+		},
 	}
-	objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(objectio.NewObjectid()))
 	return e
 }
 
@@ -384,7 +347,15 @@ func (entry *ObjectEntry) PPString(level common.PPLevel, depth int, prefix strin
 
 func (entry *ObjectEntry) Repr() string {
 	id := entry.AsCommonID()
-	return fmt.Sprintf("[%s%s]OBJ[%s]", entry.state.Repr(), entry.ObjectNode.String(), id.String())
+	state := "A"
+	if !entry.IsAppendable() {
+		state = "NA"
+	}
+	sorted := "S"
+	if !entry.IsSorted() {
+		sorted = "US"
+	}
+	return fmt.Sprintf("[%s%s%d]OBJ[%s]", state, sorted, entry.ObjectNode.SortHint, id.String())
 }
 
 func (entry *ObjectEntry) String() string {
@@ -396,11 +367,19 @@ func (entry *ObjectEntry) StringWithLevel(level common.PPLevel) string {
 	if entry.IsTombstone {
 		nameStr = "TOMBSTONE"
 	}
-	if level <= common.PPL1 {
-		return fmt.Sprintf("[%s-%s]%v[%s]%v",
-			entry.state.Repr(), entry.ObjectNode.String(), nameStr, entry.ID().String(), entry.EntryMVCCNode.String())
+	state := "A"
+	if !entry.IsAppendable() {
+		state = "NA"
 	}
-	s := fmt.Sprintf("[%s-%s]%s[%s]%v%v", entry.state.Repr(), entry.ObjectNode.String(), nameStr, entry.ID().String(), entry.EntryMVCCNode.String(), entry.ObjectMVCCNode.String())
+	sorted := "S"
+	if !entry.IsSorted() {
+		sorted = "US"
+	}
+	if level <= common.PPL1 {
+		return fmt.Sprintf("[%s-%s%d]%v[%s]%v",
+			state, sorted, entry.ObjectNode.SortHint, nameStr, entry.ID().String(), entry.EntryMVCCNode.String())
+	}
+	s := fmt.Sprintf("[%s-%s%d]%s[%s]%v%v", state, sorted, entry.ObjectNode.SortHint, nameStr, entry.ID().String(), entry.EntryMVCCNode.String(), entry.ObjectMVCCNode.String())
 	if !entry.DeleteNode.IsEmpty() {
 		s = fmt.Sprintf("%s -> %s", s, entry.DeleteNode.String())
 	}
@@ -434,15 +413,12 @@ func (entry *ObjectEntry) getBlockCntFromStats() (blkCnt uint32) {
 }
 
 func (entry *ObjectEntry) IsAppendable() bool {
-	return entry.state == ES_Appendable
-}
-
-func (entry *ObjectEntry) SetSorted() {
-	entry.table.getObjectList(entry.IsTombstone).SetSorted(entry.SortHint)
+	return entry.ObjectStats.GetAppendable()
+	// return entry.state == ES_Appendable
 }
 
 func (entry *ObjectEntry) IsSorted() bool {
-	return entry.sorted
+	return entry.ObjectStats.GetSorted()
 }
 
 func (entry *ObjectEntry) GetTable() *TableEntry {

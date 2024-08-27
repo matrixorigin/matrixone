@@ -55,6 +55,20 @@ func NewObjectStats() *ObjectStats {
 	return new(ObjectStats)
 }
 
+func NewObjectStatsWithObjectID(id *ObjectId, appendable, sorted, cnCreated bool) *ObjectStats {
+	stats := new(ObjectStats)
+	SetObjectStatsObjectName(stats, BuildObjectNameWithObjectID(id))
+	if appendable {
+		stats.setAppendable()
+	}
+	if sorted {
+		stats.SetSorted()
+	}
+	if cnCreated {
+		stats.SetCNCreated()
+	}
+	return stats
+}
 func (des *ObjectStats) Marshal() []byte {
 	return des[:]
 }
@@ -69,7 +83,7 @@ func (des *ObjectStats) Clone() *ObjectStats {
 	copy(copied[:], des[:])
 	return copied
 }
-func (des *ObjectStats) SetAppendable() {
+func (des *ObjectStats) setAppendable() {
 	des[reservedOffset] = des[reservedOffset] | 0x1
 }
 func (des *ObjectStats) GetAppendable() bool {
@@ -162,6 +176,9 @@ func setHelper(stats *ObjectStats, offset int, data []byte) error {
 	return nil
 }
 
+func SetObjectStats(stats, o *ObjectStats) error {
+	return setHelper(stats, extentOffset, o[extentOffset:reservedOffset])
+}
 func SetObjectStatsRowCnt(stats *ObjectStats, cnt uint32) error {
 	return setHelper(stats, rowCntOffset, types.EncodeUint32(&cnt))
 }

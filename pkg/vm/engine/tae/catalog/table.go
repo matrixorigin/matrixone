@@ -189,20 +189,12 @@ func (entry *TableEntry) MakeObjectIt(isTombstone bool) btree.IterG[*ObjectEntry
 
 func (entry *TableEntry) CreateObject(
 	txn txnif.AsyncTxn,
-	state EntryState,
 	opts *objectio.CreateObjOpt,
 	dataFactory ObjectDataFactory,
-	isTombstone bool,
 ) (created *ObjectEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	var id *objectio.ObjectId
-	if opts != nil && opts.Id != nil {
-		id = opts.Id
-	} else {
-		id = objectio.NewObjectid()
-	}
-	created = NewObjectEntry(entry, id, txn, state, dataFactory, isTombstone)
+	created = NewObjectEntry(entry, txn, *opts.Stats, dataFactory, opts.IsTombstone)
 	entry.AddEntryLocked(created)
 	return
 }

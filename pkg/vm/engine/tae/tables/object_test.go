@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -36,7 +37,8 @@ func TestGetActiveRow(t *testing.T) {
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
-	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil, false)
+	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, false, false)
+	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
 	mvcc := updates.NewAppendMVCCHandle(obj)
 	// blk := &dataBlock{
 	// 	mvcc: mvcc,

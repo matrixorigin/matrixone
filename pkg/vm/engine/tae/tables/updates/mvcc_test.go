@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -34,7 +35,8 @@ func TestMutationControllerAppend(t *testing.T) {
 	defer c.Close()
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
-	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil, false)
+	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, false, false)
+	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
 	mc := NewAppendMVCCHandle(obj)
 
 	nodeCnt := 10000
@@ -89,7 +91,8 @@ func TestGetVisibleRow(t *testing.T) {
 	defer c.Close()
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
-	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil, false)
+	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, false, false)
+	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
 	n := NewAppendMVCCHandle(obj)
 	an1, _ := n.AddAppendNodeLocked(nil, 0, 1)
 	an1.Start = types.BuildTS(1, 0)
