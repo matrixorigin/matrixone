@@ -1357,8 +1357,8 @@ func ExtractText(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 
-		inputPath := string(inputBytes)
-		outputPath := string(outputBytes)
+		inputPath := util.UnsafeBytesToString(inputBytes)
+		outputPath := util.UnsafeBytesToString(outputBytes)
 
 		moUrl, offsetSize, _, err := types.ParseDatalink(inputPath)
 		if err != nil {
