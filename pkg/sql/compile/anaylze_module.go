@@ -18,13 +18,11 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/models"
-
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -35,7 +33,7 @@ type AnalyzeModuleV1 struct {
 	// isFirst is the first opeator in pipeline for plan Node
 	isFirst        bool
 	qry            *plan.Query
-	phyPlan        models.PhyPlan
+	phyPlan        *models.PhyPlan
 	remotePhyPlans []models.PhyPlan
 	// Added read-write lock
 	mu sync.RWMutex
@@ -47,7 +45,7 @@ func (anal *AnalyzeModuleV1) AppendRemotePhyPlan(remotePhyPlan models.PhyPlan) {
 	anal.remotePhyPlans = append(anal.remotePhyPlans, remotePhyPlan)
 }
 
-func (anal *AnalyzeModuleV1) GetPhyPlan() models.PhyPlan {
+func (anal *AnalyzeModuleV1) GetPhyPlan() *models.PhyPlan {
 	return anal.phyPlan
 }
 
@@ -359,13 +357,7 @@ func (c *Compile) GeneratePhyPlan() {
 		generateReceiverMap(ss[i], receiverMap)
 	}
 	//------------------------------------------------------------------------------------------------------
-
-	c.anal.phyPlan = models.PhyPlan{
-		// Assuming the version number is 1.0,
-		Version:     "1.0",
-		RemoteScope: []models.PhyScope{},
-	}
-
+	c.anal.phyPlan = models.NewPhyPlan()
 	if len(c.scope) > 0 {
 		for i := range c.scope {
 			phyScope := ConvertScopeToPhyScope(c.scope[i], receiverMap)

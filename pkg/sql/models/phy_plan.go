@@ -56,7 +56,15 @@ type PhyOperator struct {
 	Children     []*PhyOperator         `json:"Children,omitempty"`
 }
 
-func PhyPlanToJSON(p PhyPlan) (string, error) {
+func NewPhyPlan() *PhyPlan {
+	return &PhyPlan{
+		// Assuming the version number is 1.0,
+		Version:     "1.0",
+		RemoteScope: []PhyScope{},
+	}
+}
+
+func PhyPlanToJSON(p *PhyPlan) (string, error) {
 	jsonData, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return "", err

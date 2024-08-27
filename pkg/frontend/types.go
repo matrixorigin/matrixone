@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -205,7 +206,7 @@ type ComputationWrapper interface {
 
 	GetUUID() []byte
 
-	RecordExecPlan(ctx context.Context, analyzeModule *compile.AnalyzeModuleV1) error
+	RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error
 
 	GetLoadTag() bool
 

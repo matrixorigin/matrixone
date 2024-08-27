@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"io"
 	gotrace "runtime/trace"
 	"slices"
@@ -53,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -2614,9 +2614,13 @@ func executeStmt(ses *Session,
 
 	defer func() {
 		if c, ok := ret.(*compile.Compile); ok {
+			var phyPlan *models.PhyPlan
 			analyzeModule := c.GetAnalyzeModuleV1()
+			if analyzeModule != nil {
+				phyPlan = analyzeModule.GetPhyPlan()
+			}
 			// Serialize the execution plan as json
-			_ = execCtx.cw.RecordExecPlan(execCtx.reqCtx, analyzeModule)
+			_ = execCtx.cw.RecordExecPlan(execCtx.reqCtx, phyPlan)
 			c.Release()
 		}
 	}()
@@ -3271,8 +3275,8 @@ type jsonPlanHandler struct {
 	buffer     *bytes.Buffer
 }
 
-func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, analyze *compile.AnalyzeModuleV1, opts ...marshalPlanOptions) *jsonPlanHandler {
-	h := NewMarshalPlanHandler(ctx, stmt, plan, analyze, opts...)
+func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *jsonPlanHandler {
+	h := NewMarshalPlanHandler(ctx, stmt, plan, phyPlan, opts...)
 	jsonBytes := h.Marshal(ctx)
 	statsBytes, stats := h.Stats(ctx, ses)
 	return &jsonPlanHandler{
@@ -3321,7 +3325,7 @@ type marshalPlanHandler struct {
 	marshalPlanConfig
 }
 
-func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, analyze *compile.AnalyzeModuleV1, opts ...marshalPlanOptions) *marshalPlanHandler {
+func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *marshalPlanHandler {
 	// TODO: need mem improvement
 	uuid := uuid.UUID(stmt.StatementID)
 	stmt.MarkResponseAt()
@@ -3350,8 +3354,10 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 
 	if h.needMarshalPlan() {
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
-		h.marshalPlan.PhyPlan = analyze.GetPhyPlan()
 		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
+		if phyPlan != nil {
+			h.marshalPlan.PhyPlan = *phyPlan
+		}
 	}
 	return h
 }

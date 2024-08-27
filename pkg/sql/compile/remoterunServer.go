@@ -22,14 +22,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/models"
-
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
-	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
@@ -42,9 +34,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -314,7 +310,7 @@ type messageReceiverOnServer struct {
 
 	// result.
 	//finalAnalysisInfo []*process.AnalyzeInfo
-	phyPlan models.PhyPlan
+	phyPlan *models.PhyPlan
 }
 
 func newMessageReceiverOnServer(
