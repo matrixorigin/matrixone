@@ -983,37 +983,29 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 		logutil.Infof("Col_Ref: %s", c.GetCol().GetName())
 	}
 
-	args := make([]*Expr, 3)
-	args[0] = &plan.Expr{
-		Expr: &plan.Expr_List{
-			List: &plan.ExprList{
-				List: colrefs,
-			},
-		},
-		Typ: plan.Type{Id: int32(types.T_any),
-			NotNullable: false,
-		},
-	}
+	args := make([]*Expr, 2+len(colrefs))
 
 	mode := int64(astExpr.Mode)
-	args[1] = makePlan2StringConstExprWithType(astExpr.Pattern, false)
-	args[2] = makePlan2Int64ConstExprWithType(mode)
-
-	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
+	args[0] = makePlan2StringConstExprWithType(astExpr.Pattern, false)
+	args[1] = makePlan2Int64ConstExprWithType(mode)
+	for i, c := range colrefs {
+		args[i+2] = c
+	}
 
 	/*
-		return &plan.Expr{
-			Mode: &plan.Literal_I32Val{
-				I32Val: int32(astExpr.Mode),
-			},
-			Pattern: &plan.Literal_Sval{Sval: astExpr.Pattern},
+		args[2] = &plan.Expr{
 			Expr: &plan.Expr_List{
 				List: &plan.ExprList{
 					List: colrefs,
 				},
 			},
-		}, nil
+			Typ: plan.Type{Id: int32(types.T_any),
+				NotNullable: false,
+			},
+		}
 	*/
+
+	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {

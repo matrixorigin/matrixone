@@ -122,15 +122,23 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			switch fn.Func.ObjName {
 			case "fulltext_match":
 				ftid = i
-				// arg0 is Expr_List
-				for i, c := range fn.Args[0].GetList().GetList() {
-					logutil.Infof("COL %d %s", i, c.GetCol().GetName())
-				}
-				// arg1 is string
-				logutil.Infof("PATTERN %s", fn.Args[1].GetLit().GetSval())
-				// arg2 is int64
-				logutil.Infof("MODE %d", fn.Args[2].GetLit().GetI64Val())
 
+				// arg0 is string
+				logutil.Infof("PATTERN %s", fn.Args[0].GetLit().GetSval())
+				// arg1 is int64
+				logutil.Infof("MODE %d", fn.Args[1].GetLit().GetI64Val())
+
+				// arg2...N is ColRef Expr_List
+
+				nargs := len(fn.Args)
+				for i := 2; i < nargs; i++ {
+					logutil.Infof("COL %d %s", i-2, fn.Args[i].GetCol().GetName())
+				}
+				/*
+					for i, c := range fn.Args[0].GetList().GetList() {
+						logutil.Infof("COL %d %s", i, c.GetCol().GetName())
+					}
+				*/
 				for _, idx := range node.TableDef.Indexes {
 					logutil.Infof("INDX name = %s , keys  = %v", idx.IndexTableName, idx.Parts)
 				}
@@ -143,11 +151,14 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			default:
 			}
 		}
-		if ftid != -1 {
-			node.FilterList = append(node.FilterList[:ftid], node.FilterList[ftid+1:]...)
 
-		}
+		logutil.Infof("fulltext found %d", ftid)
+		/*
+			if ftid != -1 {
+				node.FilterList = append(node.FilterList[:ftid], node.FilterList[ftid+1:]...)
 
+			}
+		*/
 	}
 	logutil.Infof("applyIndciesForFilters END")
 	// 1. Master Index Check
@@ -247,14 +258,16 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			logutil.Infof("FUNCTION HERE : %s", fn.Func.ObjName)
 			switch fn.Func.ObjName {
 			case "fulltext_match":
-				// arg0 is Expr_List
-				for i, c := range fn.Args[0].GetList().GetList() {
-					logutil.Infof("COL %d %s", i, c.GetCol().GetName())
+
+				// arg0 is string
+				logutil.Infof("PATTERN %s", fn.Args[0].GetLit().GetSval())
+				// arg1 is int64
+				logutil.Infof("MODE %d", fn.Args[1].GetLit().GetI64Val())
+
+				nargs := len(fn.Args)
+				for i := 2; i < nargs; i++ {
+					logutil.Infof("COL %d %s", i-2, fn.Args[i].GetCol().GetName())
 				}
-				// arg1 is string
-				logutil.Infof("PATTERN %s", fn.Args[1].GetLit().GetSval())
-				// arg2 is int64
-				logutil.Infof("MODE %d", fn.Args[2].GetLit().GetI64Val())
 
 				for _, idx := range scanNode.TableDef.Indexes {
 					logutil.Infof("INDX name = %s , keys  = %v", idx.IndexTableName, idx.Parts)
