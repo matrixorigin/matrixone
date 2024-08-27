@@ -71,13 +71,7 @@ func BenchmarkGetStrValue2(b *testing.B) {
 func TestPreExtendAndReset(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 
-	wrapper := NewFunctionResultWrapper(
-		NewVec,
-		func(vec *Vector) {
-			vec.Free(mp)
-		},
-		types.T_bool.ToType(),
-		mp)
+	wrapper := NewFunctionResultWrapper(types.T_bool.ToType(), mp)
 
 	result := MustFunctionResult[bool](wrapper)
 	fmt.Printf("length is %d, capacity is %d\n", result.vec.Length(), result.vec.Capacity())
