@@ -384,10 +384,10 @@ const (
 	BITMAP_CONSTRUCT_AGG
 	BITMAP_OR_AGG
 
-	EMBEDDING
-	EXTRACT_TEXT
-	// chunk as LLM helper function
-	CHUNK
+	// internal helper functions for LLM
+	LLM_EMBEDDING
+	LLM_EXTRACT_TEXT
+	LLM_CHUNK
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -701,7 +701,7 @@ var functionIdRegister = map[string]int32{
 	"bitmap_count":         BITMAP_COUNT,
 	"bitmap_construct_agg": BITMAP_CONSTRUCT_AGG,
 	"bitmap_or_agg":        BITMAP_OR_AGG,
-	"embedding":            EMBEDDING,
-	"extract_text":         EXTRACT_TEXT,
-	"chunk":                CHUNK,
+	"llm_embedding":        LLM_EMBEDDING,
+	"llm_extract_text":     LLM_EXTRACT_TEXT,
+	"llm_chunk":            LLM_CHUNK,
 }

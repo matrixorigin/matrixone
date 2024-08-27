@@ -1385,7 +1385,7 @@ func ExtractText(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-// CHUNK
+// LLM_CHUNK
 // Fixed width chunking
 func fixedWidthChunk(text string, width int) [][]interface{} {
 	var chunks [][]interface{}

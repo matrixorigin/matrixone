@@ -2965,7 +2965,7 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `embedding`
 	{
-		functionId: EMBEDDING,
+		functionId: LLM_EMBEDDING,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
@@ -2996,7 +2996,7 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `extract_text`
 	{
-		functionId: EXTRACT_TEXT,
+		functionId: LLM_EXTRACT_TEXT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
@@ -3017,7 +3017,7 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `chunk`
 	{
-		functionId: CHUNK,
+		functionId: LLM_CHUNK,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
