@@ -1,4 +1,4 @@
-
+-- @bvt:issue#16709
 use mo_catalog;
 drop table if exists cluster_table_1;
 create cluster table cluster_table_1(a int, b int);
@@ -37,3 +37,4 @@ drop snapshot if exists snapshot2;
 drop table if exists cluster_table_1;
 
 drop account if exists acc01;
+-- @bvt:issue

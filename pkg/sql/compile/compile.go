@@ -547,6 +547,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		return nil, c.proc.Ctx.Err()
 	}
 	result.AffectRows = runC.getAffectedRows()
+	if c.uid != "mo_logger" && strings.Contains(strings.ToLower(c.sql), "insert") && (strings.Contains(c.sql, "{MO_TS =") || strings.Contains(c.sql, "{SNAPSHOT =")) {
+		getLogger().Info("insert into with snapshot", zap.String("sql", c.sql), zap.Uint64("affectRows", result.AffectRows))
+	}
 
 	if c.proc.TxnOperator != nil {
 		return result, c.proc.TxnOperator.GetWorkspace().Adjust(writeOffset)
