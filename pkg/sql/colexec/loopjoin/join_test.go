@@ -211,7 +211,6 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 		proc:   proc,
 		cancel: cancel,
 		arg: &LoopJoin{
-			Typs:   ts,
 			Cond:   cond,
 			Result: rp,
 			OperatorBase: vm.OperatorBase{
