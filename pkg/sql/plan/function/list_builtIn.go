@@ -6528,9 +6528,7 @@ func fulltext_expand_overload() []overload {
 				return types.T_bool.ToType()
 			},
 			newOp: func() executeLogicOfOverload {
-				return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
-					return moerr.NewNotSupported(proc.Ctx, "function fulltext_match (one key) not supported")
-				}
+				return fullTextMatch
 			},
 		}
 
@@ -6548,9 +6546,7 @@ func fulltext_expand_overload() []overload {
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
-						return moerr.NewNotSupported(proc.Ctx, "function fulltext_match (two keys) not supported")
-					}
+					return fullTextMatch
 				},
 			}
 
@@ -6570,9 +6566,7 @@ func fulltext_expand_overload() []overload {
 						return types.T_bool.ToType()
 					},
 					newOp: func() executeLogicOfOverload {
-						return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
-							return moerr.NewNotSupported(proc.Ctx, "function fulltext_match (three keys) not supported")
-						}
+						return fullTextMatch
 					},
 				}
 
