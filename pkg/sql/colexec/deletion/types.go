@@ -221,11 +221,11 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch)
 			return err
 		}
 		for i, delBatch := range delBatches {
-			deletion.collectBatchInfo(proc, srcBat, i, 1)
+			collectBatchInfo(proc, deletion, delBatch, 0, i, 1)
 			delBatch.Clean(proc.GetMPool())
 		}
 	} else {
-		deletion.collectBatchInfo(proc, srcBat, 0, delCtx.PrimaryKeyIdx)
+		collectBatchInfo(proc, deletion, srcBat, deletion.DeleteCtx.RowIdIdx, 0, delCtx.PrimaryKeyIdx)
 	}
 	// we will flush all
 	if deletion.ctr.batch_size >= flushThreshold {
@@ -291,8 +291,8 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 }
 
 // Collect relevant information about intermediate batche
-func (deletion *Deletion) collectBatchInfo(proc *process.Process, destBatch *batch.Batch, pIdx int, pkIdx int) {
-	vs := vector.MustFixedCol[types.Rowid](destBatch.GetVector(int32(deletion.DeleteCtx.RowIdIdx)))
+func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batch.Batch, rowIdIdx int, pIdx int, pkIdx int) {
+	vs := vector.MustFixedCol[types.Rowid](destBatch.GetVector(int32(rowIdIdx)))
 	var bitmap *nulls.Nulls
 	for i, rowId := range vs {
 		blkid := rowId.CloneBlockID()
