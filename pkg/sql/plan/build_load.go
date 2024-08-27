@@ -15,7 +15,9 @@
 package plan
 
 import (
+	"bufio"
 	"encoding/json"
+	"io"
 	"strings"
 	"time"
 	"unsafe"
@@ -23,8 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
@@ -104,6 +108,106 @@ func getExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef
 	}
 }
 
+func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser, reuseRow bool) (*csvparser.CSVParser, error) {
+	fieldsTerminatedBy := "\t"
+	fieldsEnclosedBy := "\""
+	fieldsEscapedBy := "\\"
+
+	linesTerminatedBy := "\n"
+	linesStartingBy := ""
+
+	if param.Tail.Fields != nil {
+		if terminated := param.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
+			fieldsTerminatedBy = terminated.Value
+		}
+		if enclosed := param.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
+			fieldsEnclosedBy = string(enclosed.Value)
+		}
+		if escaped := param.Tail.Fields.EscapedBy; escaped != nil {
+			if escaped.Value == 0 {
+				fieldsEscapedBy = ""
+			} else {
+				fieldsEscapedBy = string(escaped.Value)
+			}
+		}
+	}
+
+	if param.Tail.Lines != nil {
+		if terminated := param.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
+			linesTerminatedBy = param.Tail.Lines.TerminatedBy.Value
+		}
+		if param.Tail.Lines.StartingBy != "" {
+			linesStartingBy = param.Tail.Lines.StartingBy
+		}
+	}
+
+	if param.Format == tree.JSONLINE {
+		fieldsTerminatedBy = "\t"
+		fieldsEscapedBy = ""
+	}
+
+	config := csvparser.CSVConfig{
+		FieldsTerminatedBy: fieldsTerminatedBy,
+		FieldsEnclosedBy:   fieldsEnclosedBy,
+		FieldsEscapedBy:    fieldsEscapedBy,
+		LinesTerminatedBy:  linesTerminatedBy,
+		LinesStartingBy:    linesStartingBy,
+		NotNull:            false,
+		Null:               []string{`\N`},
+		UnescapedQuote:     true,
+		Comment:            '#',
+	}
+
+	return csvparser.NewCSVParser(&config, bufio.NewReader(reader), csvparser.ReadBlockSize, false, reuseRow)
+}
+
+func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, err error) {
+	fs, readPath, err := GetForETLWithType(param, param.Filepath)
+	if err != nil {
+		return 0, err
+	}
+	var r io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            0,
+				Size:              -1,
+				ReadCloserForRead: &r,
+			},
+		},
+	}
+
+	param.Ctx = ctx.GetContext()
+	if err = fs.Read(param.Ctx, &vec); err != nil {
+		return 0, err
+	}
+
+	bufR := bufio.NewReader(r)
+	skipLines := param.Tail.IgnoredLines
+
+	csvReader, err := newReaderWithParam(param, io.NopCloser(bufR), true)
+	if err != nil {
+		return 0, err
+	}
+	for skipLines > 0 {
+		_, err = csvReader.Read()
+		if err != nil {
+			if err == io.EOF {
+				param.Tail.IgnoredLines = 0
+				param.Ctx = nil
+				return csvReader.Pos(), nil
+			}
+			return 0, err
+		}
+		skipLines--
+	}
+
+	param.Tail.IgnoredLines = 0
+	param.Ctx = nil
+	return csvReader.Pos(), nil
+}
+
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -145,6 +249,19 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	if stmt.Param.FileSize < LoadParallelMinSize {
+		stmt.Param.Parallel = false
+	}
+	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
+	var offset int64 = 0
+	if stmt.Param.Parallel && noCompress && !stmt.Param.Local {
+		offset, err = IgnoredLines(stmt.Param, ctx)
+		if err != nil {
+			return nil, err
+		}
+		stmt.Param.FileStartOff = offset
+	}
+
+	if stmt.Param.FileSize-offset < LoadParallelMinSize {
 		stmt.Param.Parallel = false
 	}
 
@@ -213,8 +330,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	inlineDataSize := unsafe.Sizeof(stmt.Param.Data)
 	builder.qry.LoadWriteS3 = true
-	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
-	if noCompress && (stmt.Param.FileSize < LoadParallelMinSize || inlineDataSize < LoadParallelMinSize) {
+
+	if noCompress && (stmt.Param.Parallel || inlineDataSize < LoadParallelMinSize) {
 		builder.qry.LoadWriteS3 = false
 	}
 
