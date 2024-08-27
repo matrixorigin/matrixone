@@ -21,22 +21,34 @@ import (
 	goruntime "runtime"
 	"runtime/debug"
 	"testing"
+	"unsafe"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_file"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_incr"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_moserver"
+	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_query"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_shard"
+	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_task"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -655,6 +667,135 @@ func Test_service_handleTraceSpan(t *testing.T) {
 	}
 }
 
+func Test_service_handleCtlReader(t *testing.T) {
+
+	ctx := context.Background()
+	type fields struct {
+	}
+	type args struct {
+		ctx  context.Context
+		req  *query.Request
+		resp *query.Response
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr error
+		want    *query.Response
+	}{
+		{
+			name:   "enable",
+			fields: fields{},
+			args: args{
+				ctx: ctx,
+				// more details in pkg/sql/plan/function/ctl/reader.go::handleCtlReader
+				req: &query.Request{CtlReaderRequest: &query.CtlReaderRequest{
+					Cmd:   "enable",
+					Cfg:   "force_shuffle",
+					Extra: types.EncodeStringSlice([]string{"tid1,tid2:1"}),
+				}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want: &query.Response{CtlReaderResponse: &query.CtlReaderResponse{
+				Resp: "successed cmd: enable, cfg: [force_shuffle tid1,tid2 1]",
+			}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &service{}
+			err := s.handleCtlReader(tt.args.ctx, tt.args.req, tt.args.resp, nil)
+			require.Equal(t, tt.wantErr, err)
+			require.Equalf(t, tt.want, tt.args.resp,
+				"handleCtlReader(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
+		})
+	}
+}
+
+func Test_service_handleRunTask(t *testing.T) {
+
+	ctx := context.Background()
+	ctl := gomock.NewController(t)
+	mockRunner := mock_task.NewMockTaskRunner(ctl)
+	mockRunner.EXPECT().GetExecutor(gomock.Any()).DoAndReturn(func(code task.TaskCode) taskservice.TaskExecutor {
+		if code == -1 {
+			return nil
+		}
+		if code == 1 {
+			return func(ctx context.Context, task task.Task) error {
+				return nil
+			}
+		}
+		return nil
+	}).AnyTimes()
+
+	type fields struct {
+		runner taskservice.TaskRunner
+	}
+	type args struct {
+		ctx  context.Context
+		req  *query.Request
+		resp *query.Response
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr error
+		want    *query.Response
+	}{
+		{
+			name:    "nil",
+			fields:  fields{},
+			args:    args{req: &query.Request{}},
+			wantErr: dummyBadRequestErr,
+			want:    nil,
+		},
+		{
+			name:   "TaskRunnerNotReady",
+			fields: fields{},
+			args: args{
+				ctx: ctx,
+				// more details in pkg/sql/plan/function/ctl/reader.go::handleCtlReader
+				req: &query.Request{RunTask: &query.RunTaskRequest{
+					TaskCode: -1,
+				}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{RunTask: &query.RunTaskResponse{Result: "Task Runner Not Ready"}},
+		},
+		{
+			name: "TaskRunnerOK",
+			fields: fields{
+				runner: mockRunner,
+			},
+			args: args{
+				ctx: ctx,
+				// more details in pkg/sql/plan/function/ctl/reader.go::handleCtlReader
+				req: &query.Request{RunTask: &query.RunTaskRequest{
+					TaskCode: 1,
+				}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{RunTask: &query.RunTaskResponse{Result: "OK"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &service{}
+			s.task.runner = tt.fields.runner
+			err := s.handleRunTask(tt.args.ctx, tt.args.req, tt.args.resp, nil)
+			require.Equal(t, tt.wantErr, err)
+			require.Equalf(t, tt.want, tt.args.resp,
+				"handleRunTask(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
+		})
+	}
+}
+
 func Test_service_handleMigrateConnFrom(t *testing.T) {
 
 	ctx := context.Background()
@@ -872,4 +1013,115 @@ func Test_service_handleResetSession(t *testing.T) {
 				"handleResetSession(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
+}
+
+func Test_service_handleGetCacheData(t *testing.T) {
+
+	ctx := context.Background()
+	ctl := gomock.NewController(t)
+
+	mockFs := mock_file.NewMockFileService(ctl)
+	mockFs.EXPECT().Name().Return(defines.SharedFileServiceName).AnyTimes()
+	mockFs.EXPECT().ReadCache(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	fs, err := fileservice.NewFileServices("dummy", mockFs)
+	require.NoError(t, err)
+
+	mockQuery := mock_query.NewMockQueryService(ctl)
+	mockQuery.EXPECT().SetReleaseFunc(gomock.Any(), gomock.Any()).Return().AnyTimes()
+
+	type fields struct {
+		fileService  fileservice.FileService
+		queryService queryservice.QueryService
+	}
+	type args struct {
+		ctx  context.Context
+		req  *query.Request
+		resp *query.Response
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr error
+		want    *query.Response
+	}{
+		{
+			name:   "no_fileService",
+			fields: fields{},
+			args: args{
+				ctx:  ctx,
+				req:  &query.Request{},
+				resp: &query.Response{},
+			},
+			wantErr: moerr.NewNoServiceNoCtx(defines.SharedFileServiceName),
+			want:    &query.Response{},
+		},
+		{
+			name: "no_fileService_nil_req",
+			fields: fields{
+				fileService: fs,
+			},
+			args: args{
+				ctx:  ctx,
+				req:  &query.Request{},
+				resp: &query.Response{},
+			},
+			wantErr: dummyBadRequestErr,
+			want:    &query.Response{},
+		},
+		{
+			name: "read_empty",
+			fields: fields{
+				fileService:  fs,
+				queryService: mockQuery,
+			},
+			args: args{
+				ctx: ctx,
+				req: &query.Request{
+					GetCacheDataRequest: &query.GetCacheDataRequest{
+						RequestCacheKey: []*query.RequestCacheKey{
+							&query.RequestCacheKey{
+								Index:    1,
+								CacheKey: nil,
+							},
+						},
+					},
+				},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{GetCacheDataResponse: nil},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &service{
+				fileService:  tt.fields.fileService,
+				queryService: tt.fields.queryService,
+			}
+			err := s.handleGetCacheData(tt.args.ctx, tt.args.req, tt.args.resp, nil)
+			require.Equal(t, tt.wantErr, err)
+			require.Equalf(t, tt.want, tt.args.resp,
+				"handleGetCacheData(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
+		})
+	}
+}
+
+func Test_service_copy(t *testing.T) {
+	srcOpt := lock.LockOptions{
+		Granularity: 0,
+		Mode:        0,
+	}
+	gotOpt := copyLockOptions(srcOpt)
+	require.Falsef(t, unsafe.Pointer(&srcOpt) == unsafe.Pointer(gotOpt), "copyLockOptions should diff. src: %p, got: %p", &srcOpt, gotOpt)
+
+	srcLock := client.Lock{
+		TableID: 1,
+		Rows:    [][]byte{[]byte("123"), []byte("345")},
+		Options: lock.LockOptions{},
+	}
+	got := copyTxnInfo(srcLock)
+	require.Falsef(t, unsafe.Pointer(&srcLock.Rows) == unsafe.Pointer(&got.Rows), "copyTxnInfo Rows should diff. src: %p, got: %p", srcLock.Rows, got.Rows)
+	require.Falsef(t, unsafe.Pointer(&srcLock.Options) == unsafe.Pointer(got.Options), "copyTxnInfo Options should diff. src: %p, got: %p", &srcLock.Options, got.Options)
 }
