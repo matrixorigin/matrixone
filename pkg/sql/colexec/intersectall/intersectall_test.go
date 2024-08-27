@@ -15,7 +15,6 @@
 package intersectall
 
 import (
-	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,9 +28,8 @@ import (
 )
 
 type intersectAllTestCase struct {
-	proc   *process.Process
-	arg    *IntersectAll
-	cancel context.CancelFunc
+	proc *process.Process
+	arg  *IntersectAll
 }
 
 func TestIntersectAll(t *testing.T) {
@@ -44,7 +42,7 @@ func TestIntersectAll(t *testing.T) {
 		{3, 4, 5}
 	*/
 	var end vm.CallResult
-	c, _ := newIntersectAllTestCase(proc)
+	c := newIntersectAllTestCase(proc)
 
 	setProcForTest(proc, c.arg)
 	err := c.arg.Prepare(c.proc)
@@ -63,6 +61,9 @@ func TestIntersectAll(t *testing.T) {
 	}
 	require.Equal(t, 2, cnt) // 1 row
 
+	for _, child := range c.arg.Children {
+		child.Reset(proc, false, nil)
+	}
 	c.arg.Reset(c.proc, false, nil)
 
 	setProcForTest(proc, c.arg)
@@ -83,15 +84,16 @@ func TestIntersectAll(t *testing.T) {
 	require.Equal(t, 2, cnt) // 1 row
 
 	for _, child := range c.arg.Children {
+		child.Reset(proc, false, nil)
 		child.Free(proc, false, nil)
 	}
+	c.arg.Reset(c.proc, false, nil)
 	c.arg.Free(c.proc, false, nil)
 	c.proc.Free()
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
-func newIntersectAllTestCase(proc *process.Process) (intersectAllTestCase, context.Context) {
-	ctx, cancel := context.WithCancel(context.Background())
+func newIntersectAllTestCase(proc *process.Process) intersectAllTestCase {
 	arg := new(IntersectAll)
 	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 		Idx:     0,
@@ -99,10 +101,9 @@ func newIntersectAllTestCase(proc *process.Process) (intersectAllTestCase, conte
 		IsLast:  false,
 	}
 	return intersectAllTestCase{
-		proc:   proc,
-		arg:    arg,
-		cancel: cancel,
-	}, ctx
+		proc: proc,
+		arg:  arg,
+	}
 }
 
 func setProcForTest(proc *process.Process, intersetAll *IntersectAll) {

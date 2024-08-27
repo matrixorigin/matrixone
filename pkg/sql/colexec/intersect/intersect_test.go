@@ -15,7 +15,6 @@
 package intersect
 
 import (
-	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,9 +28,8 @@ import (
 )
 
 type intersectTestCase struct {
-	proc   *process.Process
-	arg    *Intersect
-	cancel context.CancelFunc
+	proc *process.Process
+	arg  *Intersect
 }
 
 func TestIntersect(t *testing.T) {
@@ -44,7 +42,7 @@ func TestIntersect(t *testing.T) {
 		{3, 4, 5}
 	*/
 	var end vm.CallResult
-	c, _ := newIntersectTestCase(proc)
+	c := newIntersectTestCase(proc)
 
 	setProcForTest(proc, c.arg)
 	err := c.arg.Prepare(c.proc)
@@ -77,13 +75,13 @@ func TestIntersect(t *testing.T) {
 	for _, child := range c.arg.Children {
 		child.Free(proc, false, nil)
 	}
+	c.arg.Reset(c.proc, false, nil)
 	c.arg.Free(c.proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
-func newIntersectTestCase(proc *process.Process) (intersectTestCase, context.Context) {
-	ctx, cancel := context.WithCancel(context.Background())
+func newIntersectTestCase(proc *process.Process) intersectTestCase {
 	arg := new(Intersect)
 	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 		Idx:     0,
@@ -91,10 +89,9 @@ func newIntersectTestCase(proc *process.Process) (intersectTestCase, context.Con
 		IsLast:  false,
 	}
 	return intersectTestCase{
-		proc:   proc,
-		arg:    arg,
-		cancel: cancel,
-	}, ctx
+		proc: proc,
+		arg:  arg,
+	}
 }
 
 func setProcForTest(proc *process.Process, interset *Intersect) {

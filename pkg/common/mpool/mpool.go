@@ -23,6 +23,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -120,7 +121,7 @@ func (s *MPoolStats) RecordManyFrees(tag string, nfree, sz int64) int64 {
 
 const (
 	NumFixedPool = 5
-	kMemHdrSz    = 16
+	kMemHdrSz    = 24
 	kStripeSize  = 128
 	B            = 1
 	KB           = 1024
@@ -135,10 +136,11 @@ var PoolElemSize = [NumFixedPool]int32{64, 128, 256, 512, 1024}
 
 // Memory header, kMemHdrSz bytes.
 type memHdr struct {
-	poolId       int64
-	allocSz      int32
-	fixedPoolIdx int8
-	guard        [3]uint8
+	poolId               int64
+	allocSz              int32
+	fixedPoolIdx         int8
+	guard                [3]uint8
+	allocateStacktraceID uint64
 }
 
 func init() {
@@ -264,16 +266,18 @@ type mpoolDetails struct {
 	mu    sync.Mutex
 	alloc map[string]detailInfo
 	free  map[string]detailInfo
+	inuse map[uint64]int
 }
 
 func newMpoolDetails() *mpoolDetails {
 	mpd := mpoolDetails{}
 	mpd.alloc = make(map[string]detailInfo)
 	mpd.free = make(map[string]detailInfo)
+	mpd.inuse = make(map[uint64]int)
 	return &mpd
 }
 
-func (d *mpoolDetails) recordAlloc(nb int64) {
+func (d *mpoolDetails) recordAlloc(nb int64, stacktraceID uint64) {
 	f := stack.Caller(2)
 	k := fmt.Sprintf("%v", f)
 	d.mu.Lock()
@@ -283,9 +287,11 @@ func (d *mpoolDetails) recordAlloc(nb int64) {
 	info.cnt += 1
 	info.bytes += nb
 	d.alloc[k] = info
+
+	d.inuse[stacktraceID]++
 }
 
-func (d *mpoolDetails) recordFree(nb int64) {
+func (d *mpoolDetails) recordFree(nb int64, stacktraceID uint64) {
 	f := stack.Caller(2)
 	k := fmt.Sprintf("%v", f)
 	d.mu.Lock()
@@ -295,6 +301,8 @@ func (d *mpoolDetails) recordFree(nb int64) {
 	info.cnt += 1
 	info.bytes += nb
 	d.free[k] = info
+
+	d.inuse[stacktraceID]--
 }
 
 func (d *mpoolDetails) reportJson() string {
@@ -469,6 +477,17 @@ func MustNewZeroNoFixed() *MPool {
 
 func (mp *MPool) Report() string {
 	ret := fmt.Sprintf("    mpool stats: %s", mp.Stats().Report("        "))
+	if mp.details != nil {
+		for id, n := range mp.details.inuse {
+			if n > 0 {
+				ret += fmt.Sprintf(
+					"inuse: count %d, stacktrace %s\n",
+					n,
+					malloc.StacktraceID(id).String(),
+				)
+			}
+		}
+	}
 	return ret
 }
 
@@ -590,7 +609,8 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	if idx < NumFixedPool {
 		bs := mp.pools[idx].alloc(int32(requiredSpaceWithoutHeader))
 		if mp.details != nil {
-			mp.details.recordAlloc(int64(bs.allocSz))
+			bs.allocateStacktraceID = uint64(malloc.GetStacktraceID(0))
+			mp.details.recordAlloc(int64(bs.allocSz), bs.allocateStacktraceID)
 		}
 		return bs.ToSlice(sz, int(mp.pools[idx].eleSz)), nil
 	}
@@ -635,7 +655,7 @@ func (mp *MPool) Free(bs []byte) {
 	mp.stats.RecordFree(mp.tag, recordSize)
 	globalStats.RecordFree("global", recordSize)
 	if mp.details != nil {
-		mp.details.recordFree(int64(pHdr.allocSz))
+		mp.details.recordFree(int64(pHdr.allocSz), uint64(pHdr.allocateStacktraceID))
 	}
 
 	// free from fixed pool

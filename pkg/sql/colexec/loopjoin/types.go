@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -39,17 +38,15 @@ type container struct {
 	probeIdx int
 	bat      *batch.Batch
 	rbat     *batch.Batch
-	inBat    *batch.Batch
 	joinBat  *batch.Batch
 	expr     colexec.ExpressionExecutor
 	cfs      []func(*vector.Vector, *vector.Vector, int64, int) error
 }
 
 type LoopJoin struct {
-	ctr        *container
+	ctr        container
 	Cond       *plan.Expr
 	Result     []colexec.ResultPos
-	Typs       []types.Type
 	JoinMapTag int32
 
 	vm.OperatorBase
@@ -88,19 +85,31 @@ func (loopJoin *LoopJoin) Release() {
 }
 
 func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	loopJoin.Free(proc, pipelineFailed, err)
-}
+	ctr := &loopJoin.ctr
 
-func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := loopJoin.ctr
-	if ctr != nil {
-		ctr.cleanBatch(proc.Mp())
-		ctr.cleanExprExecutor()
-		loopJoin.ctr = nil
+	ctr.resetExprExecutor()
+	ctr.state = Build
+	ctr.probeIdx = 0
+
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.Mp())
+		ctr.bat = nil
 	}
+
 	if loopJoin.ProjectList != nil {
 		anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
 		anal.Alloc(loopJoin.ProjectAllocSize)
+		loopJoin.ResetProjection(proc)
+	}
+}
+
+func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &loopJoin.ctr
+
+	ctr.cleanBatch(proc.Mp())
+	ctr.cleanExprExecutor()
+
+	if loopJoin.ProjectList != nil {
 		loopJoin.FreeProjection(proc)
 	}
 }
@@ -117,6 +126,12 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
+	}
+}
+
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
 }
 

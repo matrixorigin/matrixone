@@ -15,7 +15,6 @@
 package minus
 
 import (
-	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,9 +28,8 @@ import (
 )
 
 type minusTestCase struct {
-	proc   *process.Process
-	arg    *Minus
-	cancel context.CancelFunc
+	proc *process.Process
+	arg  *Minus
 }
 
 func TestMinus(t *testing.T) {
@@ -44,7 +42,7 @@ func TestMinus(t *testing.T) {
 		{3, 4, 5}
 	*/
 	var end vm.CallResult
-	c, _ := newMinusTestCase(proc)
+	c := newMinusTestCase(proc)
 
 	setProcForTest(proc, c.arg)
 	err := c.arg.Prepare(c.proc)
@@ -92,8 +90,7 @@ func TestMinus(t *testing.T) {
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
-func newMinusTestCase(proc *process.Process) (minusTestCase, context.Context) {
-	ctx, cancel := context.WithCancel(context.Background())
+func newMinusTestCase(proc *process.Process) minusTestCase {
 	arg := new(Minus)
 	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 		Idx:     0,
@@ -101,10 +98,9 @@ func newMinusTestCase(proc *process.Process) (minusTestCase, context.Context) {
 		IsLast:  false,
 	}
 	return minusTestCase{
-		proc:   proc,
-		arg:    arg,
-		cancel: cancel,
-	}, ctx
+		proc: proc,
+		arg:  arg,
+	}
 }
 
 func setProcForTest(proc *process.Process, minus *Minus) {

@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -26,13 +27,8 @@ import (
 
 var _ vm.Operator = new(TableFunction)
 
-const (
-	dataProducing = iota
-	dataFinished
-)
-
 type TableFunction struct {
-	ctr *container
+	ctr container
 
 	Rets     []*plan.ColDef
 	Args     []*plan.Expr
@@ -74,79 +70,94 @@ func (tableFunction *TableFunction) Release() {
 	}
 }
 
-type container struct {
-	state          int
-	buf            *batch.Batch
-	generateSeries *generateSeriesArg
-	retSchema      []types.Type
-
-	executorsForArgs []colexec.ExpressionExecutor
+type tvfState interface {
+	reset(tf *TableFunction, proc *process.Process)
+	start(tf *TableFunction, proc *process.Process, nthRow int) error
+	call(tf *TableFunction, proc *process.Process) (vm.CallResult, error)
+	free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error)
 }
 
-type generateSeriesState int
+type container struct {
+	// schema
+	retSchema        []types.Type
+	executorsForArgs []colexec.ExpressionExecutor
 
-var (
-	initArg   generateSeriesState = 0
-	genBatch  generateSeriesState = 1
-	genFinish generateSeriesState = 2
-)
+	// next row cursor.   inputBatch holds batch from children cross
+	// calls, we do not own it and do not free it.
+	nextRow    int
+	inputBatch *batch.Batch
+	// hold arg vectors, we do not own them and do not free them.
+	argVecs []*vector.Vector
 
-type generateSeriesArg struct {
-	state        generateSeriesState
-	startVecType *types.Type
-	start        any
-	end          any
-	last         any
-	step         any
-	scale        int32 // used by handleDateTime
+	// opaque, each table function has its own state.
+	state tvfState
 }
 
 func (tableFunction *TableFunction) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	tableFunction.Free(proc, pipelineFailed, err)
+	tableFunction.ctr.nextRow = 0
+	tableFunction.ctr.inputBatch = nil
+	for i := range tableFunction.ctr.executorsForArgs {
+		if tableFunction.ctr.executorsForArgs[i] != nil {
+			tableFunction.ctr.argVecs[i] = nil
+			tableFunction.ctr.executorsForArgs[i].ResetForNextQuery()
+		}
+	}
+	tableFunction.ctr.state.reset(tableFunction, proc)
 }
 
 func (tableFunction *TableFunction) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if tableFunction.ctr != nil {
-		tableFunction.ctr.cleanExecutors()
-		if tableFunction.ctr.buf != nil {
-			tableFunction.ctr.buf.Clean(proc.Mp())
-			tableFunction.ctr.buf = nil
-		}
-		tableFunction.ctr = nil
-	}
-
+	tableFunction.ctr.cleanExecutors()
+	tableFunction.ctr.state.free(tableFunction, proc, pipelineFailed, err)
 }
 
 func (ctr *container) cleanExecutors() {
 	for i := range ctr.executorsForArgs {
 		if ctr.executorsForArgs[i] != nil {
+			ctr.argVecs[i] = nil
 			ctr.executorsForArgs[i].Free()
 		}
 	}
 	ctr.executorsForArgs = nil
 }
 
-type unnestParam struct {
-	FilterMap map[string]struct{} `json:"filterMap"`
-	ColName   string              `json:"colName"`
+// simple state for table function that only produce one batch.
+// but we do not know how to generate the batch, so leave start to each impl.
+type simpleOneBatchState struct {
+	called bool
+	// result batch, we own it.
+	batch *batch.Batch
 }
 
-var (
-	unnestDeniedFilters = []string{"col", "seq"}
-	defaultFilterMap    = map[string]struct{}{
-		"key":   {},
-		"path":  {},
-		"index": {},
-		"value": {},
-		"this":  {},
+func (s *simpleOneBatchState) reset(tf *TableFunction, proc *process.Process) {
+	if s.batch != nil {
+		s.batch.CleanOnlyData()
 	}
-)
+}
 
-const (
-	unnestMode      = "both"
-	unnestRecursive = false
-)
+func (s *simpleOneBatchState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
+	if s.batch != nil {
+		s.batch.Clean(proc.Mp())
+	}
+}
 
-type generateSeriesNumber interface {
-	int32 | int64 | types.Datetime
+func (s *simpleOneBatchState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
+	if s.called {
+		return vm.CancelResult, nil
+	}
+	s.called = true
+	if s.batch.RowCount() == 0 {
+		return vm.CancelResult, nil
+	}
+	return vm.CallResult{Status: vm.ExecNext, Batch: s.batch}, nil
+}
+
+func (s *simpleOneBatchState) startPreamble(tf *TableFunction, proc *process.Process, nthRow int) {
+	_ = proc
+	_ = nthRow
+	s.called = false
+	if s.batch == nil {
+		s.batch = tf.createResultBatch()
+	} else {
+		s.batch.CleanOnlyData()
+	}
 }

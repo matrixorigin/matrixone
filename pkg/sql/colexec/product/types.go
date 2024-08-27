@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -41,8 +40,7 @@ type container struct {
 }
 
 type Product struct {
-	ctr        *container
-	Typs       []types.Type
+	ctr        container
 	Result     []colexec.ResultPos
 	IsShuffle  bool
 	JoinMapTag int32
@@ -83,21 +81,25 @@ func (product *Product) Release() {
 }
 
 func (product *Product) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	product.Free(proc, pipelineFailed, err)
-}
-
-func (product *Product) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := product.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		product.ctr = nil
+	if product.ctr.bat != nil {
+		product.ctr.bat.CleanOnlyData()
 	}
+	if product.ctr.rbat != nil {
+		product.ctr.rbat.CleanOnlyData()
+	}
+	product.ctr.inBat = nil
 	if product.ProjectList != nil {
 		anal := proc.GetAnalyze(product.GetIdx(), product.GetParallelIdx(), product.GetParallelMajor())
 		anal.Alloc(product.ProjectAllocSize)
-		product.FreeProjection(proc)
+		product.ResetProjection(proc)
 	}
+	product.ctr.state = Build
+	product.ctr.probeIdx = 0
+}
+
+func (product *Product) Free(proc *process.Process, pipelineFailed bool, err error) {
+	product.ctr.cleanBatch(proc.Mp())
+	product.FreeProjection(proc)
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
@@ -109,8 +111,5 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 		ctr.rbat.Clean(mp)
 		ctr.rbat = nil
 	}
-	if ctr.inBat != nil {
-		ctr.inBat.Clean(mp)
-		ctr.inBat = nil
-	}
+	ctr.inBat = nil
 }

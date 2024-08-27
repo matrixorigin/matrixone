@@ -144,6 +144,7 @@
 /pkg/sql/plan/explain @ouyuanning @aunjgr @badboynt1 @qingxinhome
 /pkg/sql/plan/tools @daviszhen @qingxinhome
 /pkg/sql/colexec/indexjoin @aunjgr @badboynt1
+/pkg/sql/colexec/indexbuild @badboynt1
 /pkg/sql/colexec/intersect @aunjgr @badboynt1
 /pkg/sql/colexec/intersectall @aunjgr @badboynt1
 /pkg/sql/colexec/loopanti @aunjgr @badboynt1
@@ -159,6 +160,7 @@
 /pkg/sql/colexec/mark @aunjgr @badboynt1
 /pkg/sql/colexec/semi @aunjgr @badboynt1
 /pkg/sql/colexec/join @aunjgr @badboynt1
+/pkg/sql/colexec/hashbuild @aunjgr @badboynt1
 /pkg/sql/colexec/left @aunjgr @badboynt1
 /pkg/sql/colexec/shuffle @badboynt1
 /pkg/sql/colexec/shufflebuild @badboynt1
