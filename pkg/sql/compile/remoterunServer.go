@@ -302,7 +302,6 @@ type messageReceiverOnServer struct {
 	needNotReply bool
 
 	// result.
-	//finalAnalysisInfo []*process.AnalyzeInfo
 	phyPlan *models.PhyPlan
 }
 
@@ -510,9 +509,6 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	if err != nil {
 		return processHelper{}, err
 	}
-	//if len(procInfo.GetAnalysisNodeList()) == 0 {
-	//	panic(fmt.Sprintf("empty plan: %s", procInfo.Sql))
-	//}
 
 	result := processHelper{
 		id:        procInfo.Id,
@@ -520,7 +516,6 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 		unixTime:  procInfo.UnixTime,
 		accountId: procInfo.AccountId,
 		txnClient: cli,
-		//analysisNodeList: procInfo.GetAnalysisNodeList(),
 	}
 	if procInfo.PrepareParams.Length > 0 {
 		result.prepareParams = vector.NewVecWithData(

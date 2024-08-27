@@ -73,11 +73,11 @@ func buildInM0ExplainPhyWithCfg(parameters []*vector.Vector, result vector.Funct
 		format := util.UnsafeBytesToString(target)
 		switch strings.ToLower(format) {
 		case "normal":
-			phyplan = models.ExplainPhyPlan(&planData.PhyPlan)
-		case "info":
-			phyplan = models.ExplainPhyPlan(&planData.PhyPlan)
+			phyplan = models.ExplainPhyPlan(&planData.PhyPlan, models.NormalOption)
+		case "verbose":
+			phyplan = models.ExplainPhyPlan(&planData.PhyPlan, models.VerboseOption)
 		case "analyze":
-			phyplan = models.ExplainPhyPlan(&planData.PhyPlan)
+			phyplan = models.ExplainPhyPlan(&planData.PhyPlan, models.AnalyzeOption)
 		default:
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err

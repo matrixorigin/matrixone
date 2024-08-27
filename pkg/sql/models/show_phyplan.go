@@ -135,14 +135,21 @@ const (
 	IsLastMask  = 1 << 1 // 0010
 )
 
-func ExplainPhyPlan(plan *PhyPlan) string {
+type ExplainOption int
+
+const (
+	NormalOption ExplainOption = iota
+	VerboseOption
+	AnalyzeOption
+)
+
+func ExplainPhyPlan(plan *PhyPlan, option ExplainOption) string {
 	buffer := bytes.NewBuffer(make([]byte, 0, 300))
 	fmt.Fprintf(buffer, "Version: %s, S3IOInputCount: %d, S3IOOutputCount: %d\n", plan.Version, plan.S3IOInputCount, plan.S3IOOutputCount)
-	//------------------------------------------------------------------------------------------------------------------
-	buffer.WriteString("LOCAL SCOPES:")
 
+	buffer.WriteString("LOCAL SCOPES:")
 	for i := range plan.LocalScope {
-		explainPhyScope(plan.LocalScope[i], i, 0, buffer)
+		explainPhyScope(plan.LocalScope[i], i, 0, option, buffer)
 	}
 
 	//------------------------------------------------------------------------------------------------------------------
@@ -152,13 +159,12 @@ func ExplainPhyPlan(plan *PhyPlan) string {
 	}
 
 	for i := range plan.RemoteScope {
-		explainPhyScope(plan.RemoteScope[i], i, 0, buffer)
+		explainPhyScope(plan.RemoteScope[i], i, 0, option, buffer)
 	}
-	//------------------------------------------------------------------------------------------------------------------
 	return buffer.String()
 }
 
-func explainPhyScope(scope PhyScope, index int, gap int, buffer *bytes.Buffer) {
+func explainPhyScope(scope PhyScope, index int, gap int, option ExplainOption, buffer *bytes.Buffer) {
 	gapNextLine(gap, buffer)
 
 	// Scope Header
@@ -174,37 +180,36 @@ func explainPhyScope(scope PhyScope, index int, gap int, buffer *bytes.Buffer) {
 	if scope.RootOperator != nil {
 		gapNextLine(gap, buffer)
 		prefixStr := addGap(gap) + "         "
-		PrintPipelineTreeV1(scope.RootOperator, prefixStr, true, true, buffer)
+		PrintPipelineTree(scope.RootOperator, prefixStr, true, true, option, buffer)
 	}
 
 	if len(scope.PreScopes) > 0 {
 		gapNextLine(gap, buffer)
 		buffer.WriteString("  PreScopes: {")
 		for i := range scope.PreScopes {
-			explainPhyScope(scope.PreScopes[i], i, gap+4, buffer)
+			explainPhyScope(scope.PreScopes[i], i, gap+4, option, buffer)
 		}
 		gapNextLine(gap, buffer)
 		buffer.WriteString("  }")
 	}
 }
 
-func PrintPipelineTreeV1(node *PhyOperator, prefix string, isRoot, isTail bool, buffer *bytes.Buffer) {
+func PrintPipelineTree(node *PhyOperator, prefix string, isRoot, isTail bool, option ExplainOption, buffer *bytes.Buffer) {
 	if node == nil {
 		return
 	}
 
 	name := node.OpName
-	//------------------------------------------------------------------------
+
 	var analyzeStr = ""
-	if true {
+	if option == VerboseOption || option == AnalyzeOption {
 		// Extract the original bool values
 		isFirst := (node.Status & IsFirstMask) != 0
 		isLast := (node.Status & IsLastMask) != 0
 		analyzeStr = fmt.Sprintf("(idx:%v, isFirst:%v, isLast:%v)", node.NodeIdx, isFirst, isLast)
-
-		if node.OpStats != nil {
-			analyzeStr += node.OpStats.ReducedString()
-		}
+	}
+	if option == AnalyzeOption && node.OpStats != nil {
+		analyzeStr += node.OpStats.ReducedString()
 	}
 
 	// Write to the current node
@@ -236,7 +241,7 @@ func PrintPipelineTreeV1(node *PhyOperator, prefix string, isRoot, isTail bool, 
 	// Write to child node
 	for i := 0; i < len(node.Children); i++ {
 		isLast := i == len(node.Children)-1
-		PrintPipelineTreeV1(node.Children[i], newPrefix, false, isLast, buffer)
+		PrintPipelineTree(node.Children[i], newPrefix, false, isLast, option, buffer)
 	}
 
 	if isRoot {
