@@ -354,14 +354,6 @@ func (o *OperatorBase) SetIdx(idx int) {
 	o.Idx = idx
 }
 
-//func (o *OperatorBase) GetParallelIdx() int {
-//	return o.ParallelIdx
-//}
-//
-//func (o *OperatorBase) GetParallelMajor() bool {
-//	return o.ParallelMajor
-//}
-
 func (o *OperatorBase) GetIsFirst() bool {
 	return o.IsFirst
 }
@@ -405,7 +397,6 @@ func CancelCheck(proc *process.Process) (error, bool) {
 
 func ChildrenCallV1(op Operator, proc *process.Process, anal process.Analyzer) (CallResult, error) {
 	beforeChildrenCall := time.Now()
-	anal.ChildCallStart(beforeChildrenCall)
 	result, err := op.Call(proc)
 	anal.ChildrenCallStop(beforeChildrenCall)
 	if err == nil {

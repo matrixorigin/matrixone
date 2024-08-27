@@ -204,13 +204,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if err == nil {
 			runCompile.GeneratePhyPlan()
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
-			//receiver.phyPlan = ConvertCompileToPhyPlan(runCompile)
-			//receiver.phyPlan.S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
-			//receiver.phyPlan.S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
-			//receiver.phyPlan.S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
-			//receiver.phyPlan.S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
-			//receiver.phyPlan.S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
-			//receiver.phyPlan.S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
 		}
 
 		//-------------------------------------------------------------------
@@ -407,12 +400,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
-	//proc.Base.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
 	proc.SetPrepareParams(pHelper.prepareParams)
-	//for i := range proc.Base.AnalInfos {
-	//	proc.Base.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
-	//	proc.Base.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
-	//}
 	proc.DispatchNotifyCh = make(chan *process.WrapCs)
 	{
 		txn := proc.GetTxnOperator().Txn()
@@ -426,7 +414,6 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
 	c.proc.SetMessageBoard(c.MessageBoard)
 	c.anal = newAnalyzeModuleV1()
-	//c.anal.analInfos = proc.Base.AnalInfos
 	c.addr = receiver.cnInformation.cnAddr
 
 	// a method to send back.
@@ -506,21 +493,6 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	message.SetSid(pipeline.Status_MessageEnd)
 	message.SetID(receiver.messageId)
 	message.SetMessageType(receiver.messageTyp)
-
-	//analysisInfo := receiver.finalAnalysisInfo
-	//if len(analysisInfo) > 0 {
-	//	anas := &pipeline.AnalysisList{
-	//		List: make([]*plan.AnalyzeInfo, len(analysisInfo)),
-	//	}
-	//	for i, a := range analysisInfo {
-	//		anas.List[i] = convertToPlanAnalyzeInfo(a)
-	//	}
-	//	data, err := anas.Marshal()
-	//	if err != nil {
-	//		return err
-	//	}
-	//	message.SetAnalysis(data)
-	//}
 
 	jsonData, err := json.MarshalIndent(receiver.phyPlan, "", "  ")
 	if err != nil {

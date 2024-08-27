@@ -42,10 +42,6 @@ type Analyzer interface {
 	S3IOByte(*batch.Batch) // delete it, unused
 	S3IOInputCount(int)    // delete it, unused
 	S3IOOutputCount(int)   // delete it, unused
-
-	//---------------------------------------------
-	ChildCallStart(time time.Time)
-	//---------------------------------------------
 }
 
 // Operator Resource operatorAnalyzerV1
@@ -56,9 +52,9 @@ type operatorAnalyzerV1 struct {
 	start                time.Time
 	wait                 time.Duration
 	childrenCallDuration time.Duration
-	childrenCallStart    time.Time
-	childrenCallEnd      time.Time
-	opStats              *OperatorStats
+	//childrenCallStart    time.Time
+	//childrenCallEnd      time.Time
+	opStats *OperatorStats
 }
 
 var _ Analyzer = &operatorAnalyzerV1{}
@@ -99,15 +95,13 @@ func (opAlyzr *operatorAnalyzerV1) Stop() {
 
 	// Check if the time consumption is legal
 	if totalDuration < 0 {
-		str := fmt.Sprintf("opAddr:%v, opDuration: %v, waitDuration:%v, childrenCallDuration:%v , start:%v, end:%v, childrenCallStart: %v, childrenCallEnd:%v , childrenCallEnd - childrenCallStart: %v \n",
+		str := fmt.Sprintf("opName:%s, opDuration: %v, waitDuration:%v, childrenCallDuration:%v , start:%v, end:%v\n",
 			opAlyzr.opStats.OperatorName,
 			opDuration,
 			waitDuration,
 			opAlyzr.childrenCallDuration,
-			opAlyzr.start, time.Now(),
-			opAlyzr.childrenCallStart,
-			opAlyzr.childrenCallEnd,
-			opAlyzr.childrenCallEnd.Sub(opAlyzr.childrenCallStart))
+			opAlyzr.start,
+			time.Now())
 		panic("Time consumed by the operator cannot be less than 0, " + str)
 		//fmt.Printf("Time consumed by the operator cannot be less than 0, %s \n", str)
 		//duration := time.Since(start)
@@ -117,7 +111,7 @@ func (opAlyzr *operatorAnalyzerV1) Stop() {
 	// Update the statistical information of the operation analyzer
 	opAlyzr.opStats.TotalWaitTimeConsumed += waitDuration.Nanoseconds()
 	opAlyzr.opStats.TotalTimeConsumed += totalDuration.Nanoseconds()
-	opAlyzr.opStats.CallCount++
+	opAlyzr.opStats.CallNum++
 }
 
 func (opAlyzr *operatorAnalyzerV1) Alloc(size int64) {
@@ -161,15 +155,7 @@ func (opAlyzr *operatorAnalyzerV1) WaitStop(start time.Time) {
 }
 
 func (opAlyzr *operatorAnalyzerV1) ChildrenCallStop(start time.Time) {
-	endTime := time.Now()
-	opAlyzr.childrenCallEnd = endTime
-	sub := endTime.Sub(start)
-	opAlyzr.childrenCallDuration += sub
-	//opAlyzr.childrenCallDuration += time.Since(start)
-}
-
-func (opAlyzr *operatorAnalyzerV1) ChildCallStart(time time.Time) {
-	opAlyzr.childrenCallStart = time
+	opAlyzr.childrenCallDuration += time.Since(start)
 }
 
 func (opAlyzr *operatorAnalyzerV1) DiskIO(bat *batch.Batch) {
@@ -249,7 +235,7 @@ func (opAlyzr *operatorAnalyzerV1) GetOpStats() *OperatorStats {
 
 type OperatorStats struct {
 	OperatorName          string `json:"-"`
-	CallCount             int    `json:"CallCount,omitempty"`
+	CallNum               int    `json:"CallCount,omitempty"`
 	TotalTimeConsumed     int64  `json:"TotalTimeConsumed,omitempty"`
 	TotalWaitTimeConsumed int64  `json:"TotalWaitTimeConsumed,omitempty"`
 	TotalMemorySize       int64  `json:"TotalMemorySize,omitempty"`
@@ -295,7 +281,7 @@ func (ps *OperatorStats) String() string {
 		"NetworkIO:%dbytes "+
 		"ScanTime:%dns "+
 		"ServiceTime:%dns",
-		ps.CallCount,
+		ps.CallNum,
 		ps.TotalTimeConsumed,
 		ps.TotalWaitTimeConsumed,
 		ps.TotalInputRows,
@@ -323,7 +309,7 @@ func (ps *OperatorStats) ReducedString() string {
 		"OutSize:%dbytes "+
 		"MemSize:%dbytes "+
 		"Network:%dbytes",
-		ps.CallCount,
+		ps.CallNum,
 		ps.TotalTimeConsumed,
 		ps.TotalWaitTimeConsumed,
 		ps.TotalInputRows,
