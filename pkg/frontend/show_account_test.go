@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"math/rand"
 	"testing"
 	"time"
@@ -87,37 +88,63 @@ func Test_updateCount(t *testing.T) {
 }
 
 func Test_updateStorageUsageCache(t *testing.T) {
-	var accIds []int64
-	var sizes []uint64
+	rep := db.StorageUsageResp_V2{}
 
 	for i := 0; i < 10; i++ {
-		accIds = append(accIds, int64(i))
-		sizes = append(sizes, rand.Uint64())
+		rep.AccIds = append(rep.AccIds, int64(i))
+		rep.Sizes = append(rep.Sizes, rand.Uint64())
+		rep.ObjCnts = append(rep.ObjCnts, rand.Uint64())
+		rep.BlkCnts = append(rep.BlkCnts, rand.Uint64())
+		rep.RowCnts = append(rep.RowCnts, rand.Uint64())
 	}
 
-	updateStorageUsageCache(accIds, sizes)
+	updateStorageUsageCache(&rep)
 
 	usages := cnUsageCache.GatherAllAccSize()
-	for i := 0; i < len(accIds); i++ {
-		require.Equal(t, sizes[i], usages[uint64(i)])
+	for i := 0; i < len(rep.AccIds); i++ {
+		require.Equal(t, rep.Sizes[i], usages[uint64(i)])
 	}
 }
 
 func Test_checkStorageUsageCache(t *testing.T) {
-	var accIds [][]int64
-	var sizes []uint64
+	rep := db.StorageUsageResp_V2{}
 
-	accIds = append(accIds, []int64{int64(0)})
-	sizes = append(sizes, rand.Uint64())
-	updateStorageUsageCache(accIds[0], []uint64{sizes[0]})
+	for i := 0; i < 10; i++ {
+		rep.AccIds = append(rep.AccIds, int64(i))
+		rep.Sizes = append(rep.Sizes, rand.Uint64())
+		rep.ObjCnts = append(rep.ObjCnts, rand.Uint64())
+		rep.BlkCnts = append(rep.BlkCnts, rand.Uint64())
+		rep.RowCnts = append(rep.RowCnts, rand.Uint64())
+	}
 
-	usages, ok := checkStorageUsageCache(accIds)
+	updateStorageUsageCache(&rep)
+
+	usages, ok := checkStorageUsageCache([][]int64{rep.AccIds})
 	require.True(t, ok)
-	for i := 0; i < len(accIds); i++ {
-		require.Equal(t, sizes[i], usages[int64(i)])
+	for i := 0; i < len(rep.AccIds); i++ {
+		require.Equal(t, rep.Sizes[i], usages[int64(i)])
 	}
 
 	time.Sleep(time.Second * 6)
-	_, ok = checkStorageUsageCache(accIds)
+	_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
 	require.False(t, ok)
+}
+
+func Test_GetObjectCount(t *testing.T) {
+	rep := db.StorageUsageResp_V2{}
+
+	for i := 0; i < 10; i++ {
+		rep.AccIds = append(rep.AccIds, int64(i))
+		rep.Sizes = append(rep.Sizes, rand.Uint64())
+		rep.ObjCnts = append(rep.ObjCnts, rand.Uint64())
+		rep.BlkCnts = append(rep.BlkCnts, rand.Uint64())
+		rep.RowCnts = append(rep.RowCnts, rand.Uint64())
+	}
+
+	updateStorageUsageCache(&rep)
+
+	abstract := cnUsageCache.GatherObjectAbstractForAccounts()
+	for i := 0; i < len(rep.AccIds); i++ {
+		require.Equal(t, int(rep.ObjCnts[i]), abstract[uint64(rep.AccIds[i])].TotalObjCnt)
+	}
 }

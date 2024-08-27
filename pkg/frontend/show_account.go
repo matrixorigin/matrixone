@@ -15,8 +15,12 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"go.uber.org/zap"
 	"math"
 	"strconv"
 	"strings"
@@ -147,7 +151,7 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 	}
 
 	responseUnmarshaler := func(payload []byte) (any, error) {
-		usage := &db.StorageUsageResp{}
+		usage := &db.StorageUsageResp_V2{}
 		if err := usage.Unmarshal(payload); err != nil {
 			return nil, err
 		}
@@ -239,7 +243,7 @@ func handleStorageUsageResponse_V0(
 
 func handleStorageUsageResponse(
 	ctx context.Context,
-	usage *db.StorageUsageResp,
+	usage *db.StorageUsageResp_V2,
 ) (map[int64]uint64, error) {
 	result := make(map[int64]uint64, 0)
 
@@ -274,9 +278,9 @@ func checkStorageUsageCache(accIds [][]int64) (result map[int64]uint64, succeed 
 	return result, true
 }
 
-func updateStorageUsageCache(accIds []int64, sizes []uint64) {
+func updateStorageUsageCache(usages *db.StorageUsageResp_V2) {
 
-	if len(accIds) == 0 {
+	if len(usages.AccIds) == 0 {
 		return
 	}
 
@@ -287,11 +291,19 @@ func updateStorageUsageCache(accIds []int64, sizes []uint64) {
 	cnUsageCache.ClearForUpdate()
 
 	// step 2: update
-	for x := range accIds {
-		usage := logtail.UsageData{AccId: uint64(accIds[x]), Size: sizes[x]}
-		if old, exist := cnUsageCache.Get(usage); exist {
-			usage.Size += old.Size
+	for x := range usages.AccIds {
+		usage := logtail.UsageData{
+			AccId: uint64(usages.AccIds[x]),
+			Size:  usages.Sizes[x],
+			ObjectAbstract: logtail.ObjectAbstract{
+				TotalObjCnt: int(usages.ObjCnts[x]),
+				TotalBlkCnt: int(usages.BlkCnts[x]),
+				TotalRowCnt: int(usages.RowCnts[x]),
+			},
 		}
+		//if old, exist := cnUsageCache.Get(usage); exist {
+		//	usage.Size += old.Size
+		//}
 
 		cnUsageCache.SetOrReplace(usage)
 	}
@@ -330,12 +342,12 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64
 		return handleStorageUsageResponse_V0(ctx, ses.GetService(), fs, usage, ses.GetLogger())
 
 	} else {
-		usage, ok := response.(*db.StorageUsageResp)
+		usage, ok := response.(*db.StorageUsageResp_V2)
 		if !ok || usage.Magic != logtail.StorageUsageMagic {
 			return nil, moerr.NewInternalErrorNoCtx("storage usage response decode failed, retry later")
 		}
 
-		updateStorageUsageCache(usage.AccIds, usage.Sizes)
+		updateStorageUsageCache(usage)
 
 		// step 3: handling these pulled data
 		return handleStorageUsageResponse(ctx, usage)
@@ -397,10 +409,16 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		return err
 	}
 
+	var needUpdateObjectCountMetric bool
+
 	if account.IsSysTenant() {
 		sql = getSqlForAccountInfo(sa.Like, -1)
 		if accInfosBatches, accIds, err = getAccountInfo(ctx, bh, sql, mp); err != nil {
 			return err
+		}
+
+		if sa.Like == nil {
+			needUpdateObjectCountMetric = true
 		}
 
 		// normal account
@@ -473,6 +491,10 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		if err != nil {
 			return err
 		}
+	}
+
+	if err == nil && needUpdateObjectCountMetric {
+		updateObjectCountMetricForAllAccounts(accInfosBatches, accIds)
 	}
 
 	return err
@@ -578,4 +600,28 @@ func getSpecialTableInfo(ctx context.Context, bh BackgroundExec, accId int64) (d
 	dbCnt = vector.MustFixedColWithTypeCheck[int64](ret[0].Vecs[1])[0]
 	tblCnt = vector.MustFixedColWithTypeCheck[int64](ret[0].Vecs[0])[0]
 	return dbCnt, tblCnt, nil
+}
+
+func updateObjectCountMetricForAllAccounts(accInfosBatches []*batch.Batch, accIds [][]int64) {
+	var buf bytes.Buffer
+
+	metric.ObjectCountFactory.Reset()
+
+	abstract := cnUsageCache.GatherObjectAbstractForAccounts()
+	for i := range accIds {
+		data, area := vector.MustVarlenaRawData(accInfosBatches[i].Vecs[0])
+		for j := range accIds[i] {
+			name := data[j].GetString(area)
+			objectCnt := float64(abstract[uint64(accIds[i][j])].TotalObjCnt)
+
+			buf.WriteString(fmt.Sprintf("%s-%f; ", name, objectCnt))
+
+			metric.ObjectCount(name).Set(objectCnt)
+		}
+	}
+
+	logutil.Info("update object count metric for all accounts",
+		zap.String("details", buf.String()))
+
+	return
 }

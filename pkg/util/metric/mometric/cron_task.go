@@ -125,6 +125,7 @@ func cleanStorageUsageMetric(logger *log.MOLogger, actor string) {
 	// clean metric data for next cron task.
 	metric.StorageUsageFactory.Reset()
 	metric.SnapshotUsageFactory.Reset()
+	metric.ObjectCountFactory.Reset()
 	logger.Info("clean storage usage metric", zap.String("actor", actor))
 }
 
