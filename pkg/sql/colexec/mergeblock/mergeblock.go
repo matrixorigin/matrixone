@@ -68,7 +68,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 	defer analyzer.Stop()
 
 	var err error
-	input, err := vm.ChildrenCallV1(mergeBlock.GetChildren(0), proc, analyzer)
+	input, err := vm.ChildrenCall(mergeBlock.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return input, err
 	}

@@ -108,7 +108,7 @@ func (intersectAll *IntersectAll) Call(proc *process.Process) (vm.CallResult, er
 func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &intersectAll.ctr
 	for {
-		input, err := vm.ChildrenCallV1(intersectAll.GetChildren(1), proc, analyzer)
+		input, err := vm.ChildrenCall(intersectAll.GetChildren(1), proc, analyzer)
 		if err != nil {
 			return err
 		}
@@ -160,7 +160,7 @@ func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.
 func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) (bool, error) {
 	ctr := &intersectAll.ctr
 	for {
-		input, err := vm.ChildrenCallV1(intersectAll.GetChildren(0), proc, analyzer)
+		input, err := vm.ChildrenCall(intersectAll.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return false, err
 		}

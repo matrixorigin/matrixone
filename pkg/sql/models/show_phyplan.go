@@ -206,7 +206,7 @@ func PrintPipelineTree(node *PhyOperator, prefix string, isRoot, isTail bool, op
 		// Extract the original bool values
 		isFirst := (node.Status & IsFirstMask) != 0
 		isLast := (node.Status & IsLastMask) != 0
-		analyzeStr = fmt.Sprintf("(idx:%v, isFirst:%v, isLast:%v)", node.NodeIdx, isFirst, isLast)
+		analyzeStr = fmt.Sprintf(" (idx:%v, isFirst:%v, isLast:%v)", node.NodeIdx, isFirst, isLast)
 	}
 	if option == AnalyzeOption && node.OpStats != nil {
 		analyzeStr += node.OpStats.ReducedString()

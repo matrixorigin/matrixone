@@ -386,7 +386,7 @@ func CancelCheck(proc *process.Process) (error, bool) {
 	}
 }
 
-func ChildrenCallV1(op Operator, proc *process.Process, anal process.Analyzer) (CallResult, error) {
+func ChildrenCall(op Operator, proc *process.Process, anal process.Analyzer) (CallResult, error) {
 	beforeChildrenCall := time.Now()
 	result, err := op.Call(proc)
 	anal.ChildrenCallStop(beforeChildrenCall)

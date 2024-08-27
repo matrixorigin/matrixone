@@ -89,7 +89,7 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case Probe:
 			if leftJoin.ctr.inbat == nil {
 				//input, err = leftJoin.Children[0].Call(proc)
-				input, err = vm.ChildrenCallV1(leftJoin.GetChildren(0), proc, analyzer)
+				input, err = vm.ChildrenCall(leftJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 

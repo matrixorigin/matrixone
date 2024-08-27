@@ -59,7 +59,7 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 
 	for {
-		msg = merge.ctr.ReceiveFromAllRegsV1(analyzer)
+		msg = merge.ctr.ReceiveFromAllRegs(analyzer)
 		if msg.Err != nil {
 			return vm.CancelResult, msg.Err
 		}

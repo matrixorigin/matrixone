@@ -66,7 +66,7 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			// TODO: index join 算子原本没有input统计，该处后期需要验证
-			result, err = vm.ChildrenCallV1(indexJoin.GetChildren(0), proc, analyzer)
+			result, err = vm.ChildrenCall(indexJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}

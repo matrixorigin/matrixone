@@ -129,7 +129,7 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 	}
 	for {
 		//result, err := ap.GetChildren(0).Call(proc)
-		result, err := vm.ChildrenCallV1(ap.GetChildren(0), proc, analyzer)
+		result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return true, err
 		}

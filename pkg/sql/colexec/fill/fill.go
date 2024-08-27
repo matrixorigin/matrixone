@@ -152,7 +152,7 @@ func resetColRef(expr *plan.Expr, idx int) {
 
 func processValue(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	var err error
-	result, err := vm.ChildrenCallV1(ap.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
@@ -285,7 +285,7 @@ func processNextCol(ctr *container, idx int, proc *process.Process) error {
 
 func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	var err error
-	result, err := vm.ChildrenCallV1(ap.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
@@ -470,7 +470,7 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 		return result, nil
 	}
 	for i := 0; ; i++ {
-		result, err = vm.ChildrenCallV1(ap.GetChildren(0), proc, analyzer)
+		result, err = vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}
@@ -532,7 +532,7 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer pro
 		return result, nil
 	}
 	for i := 0; ; i++ {
-		result, err = vm.ChildrenCallV1(ap.GetChildren(0), proc, analyzer)
+		result, err = vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}
@@ -578,7 +578,7 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer pro
 }
 
 func processDefault(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
-	result, err := vm.ChildrenCallV1(ap.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}

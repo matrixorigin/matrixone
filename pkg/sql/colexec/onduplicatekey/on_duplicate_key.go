@@ -69,7 +69,7 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 		case Build:
 			for {
 				//result, err := onDuplicatekey.GetChildren(0).Call(proc)
-				result, err := vm.ChildrenCallV1(onDuplicatekey.GetChildren(0), proc, analyzer)
+				result, err := vm.ChildrenCall(onDuplicatekey.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}

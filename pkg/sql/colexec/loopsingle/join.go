@@ -82,7 +82,7 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 		case Probe:
 			var err error
 			//input, err = loopSingle.Children[0].Call(proc)
-			input, err = vm.ChildrenCallV1(loopSingle.GetChildren(0), proc, analyzer)
+			input, err = vm.ChildrenCall(loopSingle.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}

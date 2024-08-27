@@ -79,7 +79,7 @@ func (indexBuild *IndexBuild) Call(proc *process.Process) (vm.CallResult, error)
 
 func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.Process, analyzer process.Analyzer) error {
 	for {
-		result, err := vm.ChildrenCallV1(indexBuild.GetChildren(0), proc, analyzer)
+		result, err := vm.ChildrenCall(indexBuild.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return err
 		}

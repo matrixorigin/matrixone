@@ -106,7 +106,7 @@ func (minus *Minus) buildHashTable(proc *process.Process, analyzer process.Analy
 	ctr := &minus.ctr
 	for {
 		//input, err := minus.GetChildren(index).Call(proc)
-		input, err := vm.ChildrenCallV1(minus.GetChildren(index), proc, analyzer)
+		input, err := vm.ChildrenCall(minus.GetChildren(index), proc, analyzer)
 		if err != nil {
 			return err
 		}
@@ -147,7 +147,7 @@ func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analy
 
 	for {
 		//input, err := minus.GetChildren(index).Call(proc)
-		input, err := vm.ChildrenCallV1(minus.GetChildren(index), proc, analyzer)
+		input, err := vm.ChildrenCall(minus.GetChildren(index), proc, analyzer)
 		if err != nil {
 			return false, err
 		}

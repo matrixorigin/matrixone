@@ -54,7 +54,7 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 	var err error
 	for !ctr.last {
 		//result, err = mergeRecursive.GetChildren(0).Call(proc)
-		result, err = vm.ChildrenCallV1(mergeRecursive.GetChildren(0), proc, analyzer)
+		result, err = vm.ChildrenCall(mergeRecursive.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}

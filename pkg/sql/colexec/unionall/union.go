@@ -50,7 +50,7 @@ func (unionall *UnionAll) Call(proc *process.Process) (vm.CallResult, error) {
 	defer analyzer.Stop()
 
 	//result, err := vm.ChildrenCall(unionall.GetChildren(0), proc, anal)
-	result, err := vm.ChildrenCallV1(unionall.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(unionall.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}

@@ -187,7 +187,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *process.Process, analyzer process.Analyzer) error {
 	for {
 		//result, err := vm.ChildrenCall(shuffleBuild.Children[0], proc, anal)
-		result, err := vm.ChildrenCallV1(shuffleBuild.Children[0], proc, analyzer)
+		result, err := vm.ChildrenCall(shuffleBuild.Children[0], proc, analyzer)
 		if err != nil {
 			return err
 		}

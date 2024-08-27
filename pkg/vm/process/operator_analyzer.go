@@ -44,23 +44,21 @@ type Analyzer interface {
 	S3IOOutputCount(int)   // delete it, unused
 }
 
-// Operator Resource operatorAnalyzerV1
-type operatorAnalyzerV1 struct {
+// Operator Resource operatorAnalyzer
+type operatorAnalyzer struct {
 	nodeIdx              int
 	isFirst              bool
 	isLast               bool
 	start                time.Time
 	wait                 time.Duration
 	childrenCallDuration time.Duration
-	//childrenCallStart    time.Time
-	//childrenCallEnd      time.Time
-	opStats *OperatorStats
+	opStats              *OperatorStats
 }
 
-var _ Analyzer = &operatorAnalyzerV1{}
+var _ Analyzer = &operatorAnalyzer{}
 
 func NewAnalyzer(idx int, isFirst bool, isLast bool, operatorName string) Analyzer {
-	return &operatorAnalyzerV1{
+	return &operatorAnalyzer{
 		nodeIdx:              idx,
 		isFirst:              isFirst,
 		isLast:               isLast,
@@ -70,21 +68,21 @@ func NewAnalyzer(idx int, isFirst bool, isLast bool, operatorName string) Analyz
 	}
 }
 
-func (opAlyzr *operatorAnalyzerV1) Reset() {
+func (opAlyzr *operatorAnalyzer) Reset() {
 	opAlyzr.wait = 0
 	opAlyzr.childrenCallDuration = 0
 	opAlyzr.opStats.Reset()
 }
 
-func (opAlyzr *operatorAnalyzerV1) Start() {
+func (opAlyzr *operatorAnalyzer) Start() {
 	opAlyzr.start = time.Now()
 	opAlyzr.wait = 0
 	opAlyzr.childrenCallDuration = 0
 }
 
-func (opAlyzr *operatorAnalyzerV1) Stop() {
+func (opAlyzr *operatorAnalyzer) Stop() {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Stop: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzer.Stop: operatorAnalyzer.opStats is nil")
 	}
 
 	// Calculate waiting time and total time consumption
@@ -114,23 +112,23 @@ func (opAlyzr *operatorAnalyzerV1) Stop() {
 	opAlyzr.opStats.CallNum++
 }
 
-func (opAlyzr *operatorAnalyzerV1) Alloc(size int64) {
+func (opAlyzr *operatorAnalyzer) Alloc(size int64) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Alloc: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzer.Alloc: operatorAnalyzer.opStats is nil")
 	}
 	opAlyzr.opStats.TotalMemorySize += size
 }
 
-func (opAlyzr *operatorAnalyzerV1) InputBlock() {
+func (opAlyzr *operatorAnalyzer) InputBlock() {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.InputBlock: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzer.InputBlock: operatorAnalyzer.opStats is nil")
 	}
 	opAlyzr.opStats.TotalInputBlocks += 1
 }
 
-func (opAlyzr *operatorAnalyzerV1) Input(bat *batch.Batch) {
+func (opAlyzr *operatorAnalyzer) Input(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Input: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzer.Input: operatorAnalyzer.opStats is nil")
 	}
 
 	if bat != nil && opAlyzr.isFirst {
@@ -139,9 +137,9 @@ func (opAlyzr *operatorAnalyzerV1) Input(bat *batch.Batch) {
 	}
 }
 
-func (opAlyzr *operatorAnalyzerV1) Output(bat *batch.Batch) {
+func (opAlyzr *operatorAnalyzer) Output(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Output: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzer.Output: operatorAnalyzer.opStats is nil")
 	}
 
 	if bat != nil && opAlyzr.isLast {
@@ -150,17 +148,17 @@ func (opAlyzr *operatorAnalyzerV1) Output(bat *batch.Batch) {
 	}
 }
 
-func (opAlyzr *operatorAnalyzerV1) WaitStop(start time.Time) {
+func (opAlyzr *operatorAnalyzer) WaitStop(start time.Time) {
 	opAlyzr.wait += time.Since(start)
 }
 
-func (opAlyzr *operatorAnalyzerV1) ChildrenCallStop(start time.Time) {
+func (opAlyzr *operatorAnalyzer) ChildrenCallStop(start time.Time) {
 	opAlyzr.childrenCallDuration += time.Since(start)
 }
 
-func (opAlyzr *operatorAnalyzerV1) DiskIO(bat *batch.Batch) {
+func (opAlyzr *operatorAnalyzer) DiskIO(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.DiskIO: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzer.DiskIO: operatorAnalyzer.opStats is nil")
 	}
 
 	if bat != nil {
@@ -168,9 +166,9 @@ func (opAlyzr *operatorAnalyzerV1) DiskIO(bat *batch.Batch) {
 	}
 }
 
-func (opAlyzr *operatorAnalyzerV1) S3IOByte(bat *batch.Batch) {
+func (opAlyzr *operatorAnalyzer) S3IOByte(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.S3IOByte: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzer.S3IOByte: operatorAnalyzer.opStats is nil")
 	}
 
 	if bat != nil {
@@ -178,23 +176,23 @@ func (opAlyzr *operatorAnalyzerV1) S3IOByte(bat *batch.Batch) {
 	}
 }
 
-func (opAlyzr *operatorAnalyzerV1) S3IOInputCount(count int) {
+func (opAlyzr *operatorAnalyzer) S3IOInputCount(count int) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.S3IOInputCount: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzer.S3IOInputCount: operatorAnalyzer.opStats is nil")
 	}
 	opAlyzr.opStats.TotalS3InputCount += int64(count)
 }
 
-func (opAlyzr *operatorAnalyzerV1) S3IOOutputCount(count int) {
+func (opAlyzr *operatorAnalyzer) S3IOOutputCount(count int) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.S3IOOutputCount: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzer.S3IOOutputCount: operatorAnalyzer.opStats is nil")
 	}
 	opAlyzr.opStats.TotalS3OutputCount += int64(count)
 }
 
-func (opAlyzr *operatorAnalyzerV1) Network(bat *batch.Batch) {
+func (opAlyzr *operatorAnalyzer) Network(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.Network: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzer.Network: operatorAnalyzer.opStats is nil")
 	}
 
 	if bat != nil {
@@ -202,33 +200,33 @@ func (opAlyzr *operatorAnalyzerV1) Network(bat *batch.Batch) {
 	}
 }
 
-func (opAlyzr *operatorAnalyzerV1) AddScanTime(t time.Time) {
+func (opAlyzr *operatorAnalyzer) AddScanTime(t time.Time) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.AddScanTime: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzer.AddScanTime: operatorAnalyzer.opStats is nil")
 	}
 	duration := time.Since(t)
 	opAlyzr.opStats.TotalScanTime += duration.Nanoseconds()
 }
 
-func (opAlyzr *operatorAnalyzerV1) AddInsertTime(t time.Time) {
+func (opAlyzr *operatorAnalyzer) AddInsertTime(t time.Time) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.AddInsertTime: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzer.AddInsertTime: operatorAnalyzer.opStats is nil")
 	}
 	duration := time.Since(t)
 	opAlyzr.opStats.TotalInsertTime += duration.Nanoseconds()
 }
 
-func (opAlyzr *operatorAnalyzerV1) ServiceInvokeTime(t time.Time) {
+func (opAlyzr *operatorAnalyzer) ServiceInvokeTime(t time.Time) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.ServiceInvokeTime: operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzer.ServiceInvokeTime: operatorAnalyzer.opStats is nil")
 	}
 	duration := time.Since(t)
 	opAlyzr.opStats.TotalServiceTime += duration.Nanoseconds()
 }
 
-func (opAlyzr *operatorAnalyzerV1) GetOpStats() *OperatorStats {
+func (opAlyzr *operatorAnalyzer) GetOpStats() *OperatorStats {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzerV1.GetOpStats(): operatorAnalyzerV1.opStats is nil")
+		panic("operatorAnalyzer.GetOpStats(): operatorAnalyzer.opStats is nil")
 	}
 	return opAlyzr.opStats
 }

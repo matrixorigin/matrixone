@@ -84,7 +84,7 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 	analyzer.Start()
 	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCallV1(preInsertUnique.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(preInsertUnique.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}

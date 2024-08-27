@@ -116,7 +116,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.status {
 		case dataTag:
 			//result, err := timeWin.GetChildren(0).Call(proc)
-			result, err := vm.ChildrenCallV1(timeWin.GetChildren(0), proc, analyzer)
+			result, err := vm.ChildrenCall(timeWin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -160,7 +160,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = evalTag
 		case initTag:
-			result, err := vm.ChildrenCallV1(timeWin.GetChildren(0), proc, analyzer)
+			result, err := vm.ChildrenCall(timeWin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}

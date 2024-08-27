@@ -106,7 +106,7 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 	var err error
 	if deletion.ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCallV1(deletion.GetChildren(0), proc, analyzer)
+			result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -214,7 +214,7 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 	analyzer.Start()
 	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCallV1(deletion.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}

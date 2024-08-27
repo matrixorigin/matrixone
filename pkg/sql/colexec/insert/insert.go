@@ -122,7 +122,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 
 	if insert.ctr.state == vm.Build {
 		for {
-			input, err := vm.ChildrenCallV1(insert.GetChildren(0), proc, analyzer)
+			input, err := vm.ChildrenCall(insert.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return input, err
 			}
@@ -215,7 +215,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 }
 
 func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
-	input, err := vm.ChildrenCallV1(insert.GetChildren(0), proc, analyzer)
+	input, err := vm.ChildrenCall(insert.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return input, err
 	}

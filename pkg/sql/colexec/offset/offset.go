@@ -66,7 +66,7 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer.Start()
 	defer analyzer.Stop()
 
-	input, err := vm.ChildrenCallV1(offset.GetChildren(0), proc, analyzer)
+	input, err := vm.ChildrenCall(offset.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return vm.CancelResult, err
 	}

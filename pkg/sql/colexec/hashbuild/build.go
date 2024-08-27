@@ -169,7 +169,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 
 func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
 	for {
-		result, err := vm.ChildrenCallV1(hashBuild.GetChildren(0), proc, analyzer)
+		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return err
 		}

@@ -117,7 +117,7 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 	if top.ctr.state == vm.Build {
 		for {
 			//result, err := vm.ChildrenCall(top.GetChildren(0), proc, anal)
-			result, err := vm.ChildrenCallV1(top.GetChildren(0), proc, analyzer)
+			result, err := vm.ChildrenCall(top.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}

@@ -83,7 +83,7 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer.Start()
 	defer analyzer.Stop()
 
-	inputResult, err := vm.ChildrenCallV1(filter.GetChildren(0), proc, analyzer)
+	inputResult, err := vm.ChildrenCall(filter.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return inputResult, err
 	}

@@ -63,7 +63,7 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	analyzer.Start()
 	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCallV1(projection.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(projection.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}

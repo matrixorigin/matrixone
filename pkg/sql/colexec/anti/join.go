@@ -87,7 +87,7 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = Probe
 
 		case Probe:
-			input, err = vm.ChildrenCallV1(antiJoin.GetChildren(0), proc, analyzer)
+			input, err = vm.ChildrenCall(antiJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}

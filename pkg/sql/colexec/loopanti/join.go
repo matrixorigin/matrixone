@@ -83,7 +83,7 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		case Probe:
 
 			//input, err = loopAnti.Children[0].Call(proc)
-			input, err = vm.ChildrenCallV1(loopAnti.GetChildren(0), proc, analyzer)
+			input, err = vm.ChildrenCall(loopAnti.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}

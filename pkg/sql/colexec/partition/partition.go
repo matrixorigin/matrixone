@@ -85,7 +85,7 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.status {
 		case receive:
 			//result, err := partition.GetChildren(0).Call(proc)
-			result, err := vm.ChildrenCallV1(partition.GetChildren(0), proc, analyzer)
+			result, err := vm.ChildrenCall(partition.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}

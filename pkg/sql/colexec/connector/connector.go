@@ -49,7 +49,7 @@ func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 
 	reg := connector.Reg
 
-	result, err := vm.ChildrenCallV1(connector.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(connector.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}

@@ -77,7 +77,7 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer.Start()
 	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCallV1(limit.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(limit.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}

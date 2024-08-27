@@ -67,7 +67,7 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	var err error
 	var name string
 
-	input, err := vm.ChildrenCallV1(mergeDelete.Children[0], proc, analyzer)
+	input, err := vm.ChildrenCall(mergeDelete.Children[0], proc, analyzer)
 	if err != nil {
 		return vm.CancelResult, err
 	}

@@ -66,7 +66,7 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		case Build:
 			for {
 				//result, err := mergeGroup.GetChildren(0).Call(proc)
-				result, err := vm.ChildrenCallV1(mergeGroup.GetChildren(0), proc, analyzer)
+				result, err := vm.ChildrenCall(mergeGroup.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}

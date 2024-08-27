@@ -884,7 +884,7 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 			rs = c.newMergeScope(ss)
 		}
 		updateScopesLastFlag([]*Scope{rs})
-		c.setAnalyzeCurrentV1([]*Scope{rs}, c.anal.curNodeIdx)
+		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
 		rs.setRootOperator(
 			output.NewArgument().
 				WithFunc(c.fill),
@@ -978,7 +978,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
-		c.setAnalyzeCurrentV1(nil, int(curNodeIdx))
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
 		ss, err = c.compileValueScan(n)
 		if err != nil {
 			return nil, err
@@ -991,7 +991,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 		node := plan2.DeepCopyNode(n)
 
-		c.setAnalyzeCurrentV1(nil, int(curNodeIdx))
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
 		ss, err = c.compileExternScan(node)
 		if err != nil {
 			return nil, err
@@ -1001,7 +1001,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 	case plan.Node_TABLE_SCAN:
 		c.appendMetaTables(n.ObjRef)
 
-		c.setAnalyzeCurrentV1(nil, int(curNodeIdx))
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
 		ss, err = c.compileTableScan(n)
 		if err != nil {
 			return nil, err
@@ -1015,7 +1015,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 		return ss, nil
 	case plan.Node_SOURCE_SCAN:
-		c.setAnalyzeCurrentV1(nil, int(curNodeIdx))
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
 		ss, err = c.compileSourceScan(n)
 		if err != nil {
 			return nil, err
@@ -1028,7 +1028,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
 		return ss, nil
 	case plan.Node_AGG:
@@ -1041,7 +1041,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		defer groupInfo.Release()
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
 
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		if c.IsSingleScope(ss) && ss[0].PartialResults == nil {
 			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
 			return ss, nil
@@ -1058,7 +1058,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileSample(n, ss))))
 		return ss, nil
 	case plan.Node_WINDOW:
@@ -1067,7 +1067,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileWin(n, ss))))
 		return ss, nil
 	case plan.Node_TIME_WINDOW:
@@ -1076,7 +1076,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileProjection(n, c.compileRestrict(n, c.compileTimeWin(n, c.compileSort(n, ss))))
 		return ss, nil
 	case plan.Node_FILL:
@@ -1085,7 +1085,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileProjection(n, c.compileRestrict(n, c.compileFill(n, ss)))
 		return ss, nil
 	case plan.Node_JOIN:
@@ -1098,8 +1098,8 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(left, int(curNodeIdx))
-		c.setAnalyzeCurrentV1(right, int(curNodeIdx))
+		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileJoin(n, ns[n.Children[0]], ns[n.Children[1]], left, right))
 		return ss, nil
 	case plan.Node_SORT:
@@ -1108,7 +1108,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileProjection(n, c.compileRestrict(n, c.compileSort(n, ss)))
 		return ss, nil
 	case plan.Node_PARTITION:
@@ -1117,7 +1117,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileProjection(n, c.compileRestrict(n, c.compilePartition(n, ss)))
 		return ss, nil
 	case plan.Node_UNION:
@@ -1130,8 +1130,8 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(left, int(curNodeIdx))
-		c.setAnalyzeCurrentV1(right, int(curNodeIdx))
+		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileUnion(n, left, right))
 		return ss, nil
 	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
@@ -1144,8 +1144,8 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(left, int(curNodeIdx))
-		c.setAnalyzeCurrentV1(right, int(curNodeIdx))
+		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileMinusAndIntersect(n, left, right, n.NodeType))
 		return ss, nil
 	case plan.Node_UNION_ALL:
@@ -1158,8 +1158,8 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(left, int(curNodeIdx))
-		c.setAnalyzeCurrentV1(right, int(curNodeIdx))
+		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileUnionAll(n, left, right))
 		return ss, nil
 	case plan.Node_DELETE:
@@ -1185,7 +1185,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 
 		n.NotCacheable = true
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileDelete(n, ss)
 	case plan.Node_ON_DUPLICATE_KEY:
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
@@ -1193,7 +1193,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss, err = c.compileOnduplicateKey(n, ss)
 		if err != nil {
 			return nil, err
@@ -1209,8 +1209,8 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(left, int(curNodeIdx))
-		c.setAnalyzeCurrentV1(right, int(curNodeIdx))
+		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		return c.compileFuzzyFilter(n, ns, left, right)
 	case plan.Node_PRE_INSERT_UK:
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
@@ -1218,7 +1218,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compilePreInsertUk(n, ss)
 		return ss, nil
 	case plan.Node_PRE_INSERT_SK:
@@ -1226,7 +1226,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compilePreInsertSK(n, ss)
 		return ss, nil
 	case plan.Node_PRE_INSERT:
@@ -1235,7 +1235,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compilePreInsert(ns, n, ss)
 	case plan.Node_INSERT:
 		c.appendMetaTables(n.ObjRef)
@@ -1245,7 +1245,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 
 		n.NotCacheable = true
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileInsert(ns, n, ss)
 	case plan.Node_LOCK_OP:
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
@@ -1253,7 +1253,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss, err = c.compileLock(n, ss)
 		if err != nil {
 			return nil, err
@@ -1265,11 +1265,11 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss))))
 		return ss, nil
 	case plan.Node_SINK_SCAN:
-		c.setAnalyzeCurrentV1(nil, int(curNodeIdx))
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
 		ss, err = c.compileSinkScanNode(n, curNodeIdx)
 		if err != nil {
 			return nil, err
@@ -1277,10 +1277,10 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		ss = c.compileProjection(n, ss)
 		return ss, nil
 	case plan.Node_RECURSIVE_SCAN:
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileRecursiveScan(n, curNodeIdx)
 	case plan.Node_RECURSIVE_CTE:
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss, err = c.compileRecursiveCte(n, curNodeIdx)
 		if err != nil {
 			return nil, err
@@ -1293,7 +1293,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		c.setAnalyzeCurrentV1(ss, int(curNodeIdx))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileSinkNode(n, ss, step)
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", n))

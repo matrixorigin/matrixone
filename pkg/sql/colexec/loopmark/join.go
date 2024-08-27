@@ -80,7 +80,7 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 		case Probe:
 			var err error
 			//input, err = loopMark.Children[0].Call(proc)
-			input, err = vm.ChildrenCallV1(loopMark.GetChildren(0), proc, analyzer)
+			input, err = vm.ChildrenCall(loopMark.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}

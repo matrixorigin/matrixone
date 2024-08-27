@@ -166,7 +166,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 		case Build:
 			buildIdx := fuzzyFilter.BuildIdx
 
-			input, err := vm.ChildrenCallV1(fuzzyFilter.GetChildren(buildIdx), proc, analyzer)
+			input, err := vm.ChildrenCall(fuzzyFilter.GetChildren(buildIdx), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -205,7 +205,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 		case Probe:
 			probeIdx := fuzzyFilter.getProbeIdx()
 
-			input, err := vm.ChildrenCallV1(fuzzyFilter.GetChildren(probeIdx), proc, analyzer)
+			input, err := vm.ChildrenCall(fuzzyFilter.GetChildren(probeIdx), proc, analyzer)
 			if err != nil {
 				return result, err
 			}

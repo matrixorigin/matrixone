@@ -217,7 +217,7 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 	for {
 		switch ctr.status {
 		case receiving:
-			input, err := vm.ChildrenCallV1(mergeOrder.GetChildren(0), proc, analyzer)
+			input, err := vm.ChildrenCall(mergeOrder.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return vm.CancelResult, err
 			}

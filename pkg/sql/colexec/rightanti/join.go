@@ -91,7 +91,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			//result, err = rightAnti.Children[0].Call(proc)
-			result, err = vm.ChildrenCallV1(rightAnti.GetChildren(0), proc, analyzer)
+			result, err = vm.ChildrenCall(rightAnti.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}

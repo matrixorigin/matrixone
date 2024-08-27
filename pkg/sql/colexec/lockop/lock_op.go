@@ -117,7 +117,7 @@ func callNonBlocking(
 	analyzer.Start()
 	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCallV1(lockOp.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
@@ -924,7 +924,7 @@ func (lockOp *LockOp) getBatch(
 	fn := lockOp.ctr.batchFetchFunc
 	if fn == nil {
 		//fn = lockOp.GetChildren(0).Call
-		fn = vm.ChildrenCallV1
+		fn = vm.ChildrenCall
 	}
 
 	//input, err := fn(proc)

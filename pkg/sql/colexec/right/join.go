@@ -93,7 +93,7 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case Probe:
 			if rightJoin.ctr.buf == nil {
 				//result, err = rightJoin.Children[0].Call(proc)
-				result, err = vm.ChildrenCallV1(rightJoin.GetChildren(0), proc, analyzer)
+				result, err = vm.ChildrenCall(rightJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}

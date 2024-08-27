@@ -85,7 +85,7 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 		case Probe:
 			if loopSemi.ctr.buf == nil {
 				//input, err = loopSemi.Children[0].Call(proc)
-				input, err = vm.ChildrenCallV1(loopSemi.GetChildren(0), proc, analyzer)
+				input, err = vm.ChildrenCall(loopSemi.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}

@@ -136,7 +136,7 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 
 	ap := dispatch
 
-	result, err := vm.ChildrenCallV1(dispatch.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(dispatch.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}

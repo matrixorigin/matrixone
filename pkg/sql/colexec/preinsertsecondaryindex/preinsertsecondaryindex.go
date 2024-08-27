@@ -84,7 +84,7 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 	analyzer.Start()
 	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCallV1(preInsertSecIdx.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(preInsertSecIdx.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}

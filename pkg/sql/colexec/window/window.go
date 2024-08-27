@@ -85,7 +85,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 		case receiveAll:
 			for {
 				//result, err := window.GetChildren(0).Call(proc)
-				result, err := vm.ChildrenCallV1(window.GetChildren(0), proc, analyzer)
+				result, err := vm.ChildrenCall(window.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -101,7 +101,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		case receive:
 			//result, err := window.GetChildren(0).Call(proc)
-			result, err := vm.ChildrenCallV1(window.GetChildren(0), proc, analyzer)
+			result, err := vm.ChildrenCall(window.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}

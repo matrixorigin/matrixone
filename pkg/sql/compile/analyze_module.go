@@ -94,9 +94,9 @@ func (c *Compile) GetOriginSql() string {
 	return c.sql
 }
 
-// setAnalyzeCurrentV1 Update the specific scopes's instruction to true
+// setAnalyzeCurrent Update the specific scopes's instruction to true
 // then update the current idx
-func (c *Compile) setAnalyzeCurrentV1(updateScopes []*Scope, nextId int) {
+func (c *Compile) setAnalyzeCurrent(updateScopes []*Scope, nextId int) {
 	if updateScopes != nil {
 		updateScopesLastFlag(updateScopes)
 	}

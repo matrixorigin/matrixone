@@ -90,7 +90,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			//result, err = rightSemi.Children[0].Call(proc)
-			result, err = vm.ChildrenCallV1(rightSemi.GetChildren(0), proc, analyzer)
+			result, err = vm.ChildrenCall(rightSemi.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}

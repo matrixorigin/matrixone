@@ -126,7 +126,7 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			//input, err = markJoin.Children[0].Call(proc)
-			input, err = vm.ChildrenCallV1(markJoin.GetChildren(0), proc, analyzer)
+			input, err = vm.ChildrenCall(markJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}

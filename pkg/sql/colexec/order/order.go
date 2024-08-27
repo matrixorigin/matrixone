@@ -174,7 +174,7 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if ctr.state == vm.Build {
 		for {
-			input, err := vm.ChildrenCallV1(order.GetChildren(0), proc, analyzer)
+			input, err := vm.ChildrenCall(order.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return vm.CancelResult, err
 			}

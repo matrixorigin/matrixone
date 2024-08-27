@@ -194,7 +194,7 @@ func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, ana
 		case vm.Build:
 			batList := make([]*batch.Batch, 1)
 			for {
-				result, err := vm.ChildrenCallV1(ap.GetChildren(0), proc, anal)
+				result, err := vm.ChildrenCall(ap.GetChildren(0), proc, anal)
 				if err != nil {
 					return result, err
 				}

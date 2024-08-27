@@ -86,7 +86,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			//input, err = loopJoin.Children[0].Call(proc)
-			input, err = vm.ChildrenCallV1(loopJoin.GetChildren(0), proc, analyzer)
+			input, err = vm.ChildrenCall(loopJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}

@@ -122,7 +122,7 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 	defer analyzer.Stop()
 
 	// duplicate code from other operators.
-	result, lastErr := vm.ChildrenCallV1(sample.GetChildren(0), proc, analyzer)
+	result, lastErr := vm.ChildrenCall(sample.GetChildren(0), proc, analyzer)
 	if lastErr != nil {
 		return result, lastErr
 	}

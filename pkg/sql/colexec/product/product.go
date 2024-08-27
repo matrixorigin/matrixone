@@ -74,7 +74,7 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if ctr.inBat == nil {
-				result, err = vm.ChildrenCallV1(product.GetChildren(0), proc, analyzer)
+				result, err = vm.ChildrenCall(product.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}

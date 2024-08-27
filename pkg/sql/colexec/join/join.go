@@ -93,7 +93,7 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		case Probe:
 			if innerJoin.ctr.inbat == nil {
-				input, err = vm.ChildrenCallV1(innerJoin.Children[0], proc, analyzer)
+				input, err = vm.ChildrenCall(innerJoin.Children[0], proc, analyzer)
 				if err != nil {
 					return input, err
 				}
