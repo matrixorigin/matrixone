@@ -375,7 +375,7 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			0: {
-				Offset:            0,
+				Offset:            param.Extern.FileStartOff,
 				Size:              -1,
 				ReadCloserForRead: &r,
 			},
@@ -399,53 +399,7 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 	return r, nil
 }
 
-// TODO : merge below two functions
-func ReadFileOffsetNoStrict(param *tree.ExternParam, mcpu int, fileSize int64) ([]int64, error) {
-	arr := make([]int64, 0)
-
-	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
-	if err != nil {
-		return nil, err
-	}
-	var r io.ReadCloser
-	vec := fileservice.IOVector{
-		FilePath: readPath,
-		Entries: []fileservice.IOEntry{
-			0: {
-				Offset:            0,
-				Size:              -1,
-				ReadCloserForRead: &r,
-			},
-		},
-	}
-	var tailSize []int64
-	var offset []int64
-	for i := 0; i < mcpu; i++ {
-		vec.Entries[0].Offset = int64(i) * (fileSize / int64(mcpu))
-		if err = fs.Read(param.Ctx, &vec); err != nil {
-			return nil, err
-		}
-		r2 := bufio.NewReader(r)
-		line, _ := r2.ReadString('\n')
-		tailSize = append(tailSize, int64(len(line)))
-		offset = append(offset, vec.Entries[0].Offset)
-	}
-
-	start := int64(0)
-	for i := 0; i < mcpu; i++ {
-		if i+1 < mcpu {
-			arr = append(arr, start)
-			arr = append(arr, offset[i+1]+tailSize[i+1])
-			start = offset[i+1] + tailSize[i+1]
-		} else {
-			arr = append(arr, start)
-			arr = append(arr, -1)
-		}
-	}
-	return arr, nil
-}
-
-func ReadFileOffsetStrict(param *tree.ExternParam, mcpu int, fileSize int64, visibleCols []*plan.ColDef) ([]int64, error) {
+func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCols []*plan.ColDef) ([]int64, error) {
 	arr := make([]int64, 0)
 
 	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
@@ -464,13 +418,13 @@ func ReadFileOffsetStrict(param *tree.ExternParam, mcpu int, fileSize int64, vis
 		},
 	}
 
-	var offset []int64
-	batchSize := fileSize / int64(mcpu)
+	var offsets []int64
 
-	offset = append(offset, 0)
+	offsets = append(offsets, param.FileStartOff)
+	batchSize := (fileSize - param.FileStartOff) / int64(mcpu)
 
 	for i := 1; i < mcpu; i++ {
-		vec.Entries[0].Offset = offset[i-1] + batchSize
+		vec.Entries[0].Offset = offsets[i-1] + batchSize
 		if vec.Entries[0].Offset >= fileSize {
 			break
 		}
@@ -481,15 +435,15 @@ func ReadFileOffsetStrict(param *tree.ExternParam, mcpu int, fileSize int64, vis
 		if err != nil {
 			break
 		}
-		offset = append(offset, vec.Entries[0].Offset+tailSize)
+		offsets = append(offsets, vec.Entries[0].Offset+tailSize)
 	}
 
-	for i := 0; i < len(offset); i++ {
-		if i+1 < len(offset) {
-			arr = append(arr, offset[i])
-			arr = append(arr, offset[i+1])
+	for i := 0; i < len(offsets); i++ {
+		if i+1 < len(offsets) {
+			arr = append(arr, offsets[i])
+			arr = append(arr, offsets[i+1])
 		} else {
-			arr = append(arr, offset[i])
+			arr = append(arr, offsets[i])
 			arr = append(arr, -1)
 		}
 	}
@@ -497,6 +451,20 @@ func ReadFileOffsetStrict(param *tree.ExternParam, mcpu int, fileSize int64, vis
 }
 
 func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) (int64, error) {
+	if param.Strict {
+		return getTailSizeStrict(param, cols, r)
+	} else {
+		return getTailSizeNoStrict(r), nil
+	}
+}
+
+func getTailSizeNoStrict(r io.ReadCloser) int64 {
+	r2 := bufio.NewReader(r)
+	line, _ := r2.ReadString('\n')
+	return int64(len(line))
+}
+
+func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) (int64, error) {
 	bufR := bufio.NewReader(r)
 	// ensure the first character is not field quote symbol
 	quoteByte := byte('"')
@@ -564,6 +532,7 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 			if err != nil {
 				return false
 			}
+
 		case types.T_bit:
 			if len(field.Val) > 8 {
 				return false
@@ -1000,6 +969,7 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 			return err
 		}
 	}
+
 	plh := param.plh
 	finish := false
 	cnt, finish, err = readCountStringLimitSize(plh.csvReader, proc.Ctx, param.maxBatchSize, plh.moCsvLineArray)
@@ -1024,12 +994,12 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 			if cnt >= param.IgnoreLine {
 				plh.moCsvLineArray = plh.moCsvLineArray[param.IgnoreLine:cnt]
 				cnt -= param.IgnoreLine
-				plh.moCsvLineArray = append(plh.moCsvLineArray, make([]csvparser.Field, param.IgnoreLine))
+				plh.moCsvLineArray = append(plh.moCsvLineArray, make([][]csvparser.Field, param.IgnoreLine)...)
+				param.IgnoreLine = 0
 			} else {
-				plh.moCsvLineArray = nil
+				param.IgnoreLine -= cnt
 				cnt = 0
 			}
-			param.IgnoreLine = 0
 		}
 	}
 	plh.batchSize = cnt
