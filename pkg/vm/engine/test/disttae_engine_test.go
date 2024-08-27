@@ -15,6 +15,7 @@
 package test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -36,6 +37,7 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -44,6 +46,7 @@ import (
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -853,4 +856,178 @@ func TestShowDatabasesInRestoreTxn(t *testing.T) {
 	// require.NoError(t, err)
 	// t.Log(rels, brels)
 
+}
+
+func TestObjectStats1(t *testing.T) {
+	catalog.SetupDefines("")
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+	schema := catalog2.MockSchemaAll(10, 0)
+	bat := catalog2.MockBatch(schema, 10)
+
+	testutil2.CreateRelationAndAppend(t, catalog.System_Account, taeHandler.GetDB(), "db", schema, bat, true)
+
+	txn, rel := testutil2.GetRelation(t, catalog.System_Account, taeHandler.GetDB(), "db", schema.Name)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	appendableObjectID := testutil2.GetOneObject(rel).GetID()
+	id.SetObjectID(appendableObjectID)
+	err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+
+	testutil2.CompactBlocks(t, 0, taeHandler.GetDB(), "db", schema, false)
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	require.Nil(t, err)
+
+	ts := taeHandler.GetDB().TxnMgr.Now()
+	state := disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot()
+	iter, err := state.NewObjectsIter(ts, false, false)
+	assert.NoError(t, err)
+	objCount := 0
+	for iter.Next() {
+		obj := iter.Entry()
+		objCount++
+		if bytes.Equal(obj.ObjectInfo.ObjectStats.ObjectName().ObjectId()[:], appendableObjectID[:]) {
+			assert.True(t, obj.Appendable)
+			assert.False(t, obj.Sorted)
+			assert.False(t, obj.ObjectStats.GetCNCreated())
+		} else {
+			assert.False(t, obj.Appendable)
+			assert.True(t, obj.Sorted)
+			assert.False(t, obj.ObjectStats.GetCNCreated())
+		}
+	}
+	assert.Equal(t, objCount, 2)
+	iter.Close()
+	iter, err = state.NewObjectsIter(ts, false, true)
+	assert.NoError(t, err)
+	objCount = 0
+	appendableCount := 0
+	for iter.Next() {
+		obj := iter.Entry()
+		objCount++
+		if obj.Appendable {
+			appendableCount++
+		}
+		assert.True(t, obj.Sorted)
+		assert.False(t, obj.ObjectStats.GetCNCreated())
+	}
+	assert.Equal(t, appendableCount, 1)
+	assert.Equal(t, objCount, 2)
+	iter.Close()
+
+	testutil2.MergeBlocks(t, 0, taeHandler.GetDB(), "db", schema, false)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	ts = taeHandler.GetDB().TxnMgr.Now()
+	state = disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot()
+	iter, err = state.NewObjectsIter(ts, true, false)
+	assert.NoError(t, err)
+	objCount = 0
+	for iter.Next() {
+		obj := iter.Entry()
+		objCount++
+		assert.False(t, obj.Appendable)
+		assert.True(t, obj.Sorted)
+		assert.False(t, obj.ObjectStats.GetCNCreated())
+	}
+	assert.Equal(t, objCount, 1)
+	iter.Close()
+}
+
+func TestObjectStats2(t *testing.T) {
+	catalog.SetupDefines("")
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+	schema := catalog2.MockSchemaAll(10, -1)
+	bat := catalog2.MockBatch(schema, 10)
+
+	testutil2.CreateRelationAndAppend(t, catalog.System_Account, taeHandler.GetDB(), "db", schema, bat, true)
+
+	txn, rel := testutil2.GetRelation(t, catalog.System_Account, taeHandler.GetDB(), "db", schema.Name)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	appendableObjectID := testutil2.GetOneObject(rel).GetID()
+	id.SetObjectID(appendableObjectID)
+	err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+
+	testutil2.CompactBlocks(t, 0, taeHandler.GetDB(), "db", schema, false)
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	require.Nil(t, err)
+
+	ts := taeHandler.GetDB().TxnMgr.Now()
+	state := disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot()
+	iter, err := state.NewObjectsIter(ts, false, false)
+	assert.NoError(t, err)
+	objCount := 0
+	for iter.Next() {
+		obj := iter.Entry()
+		objCount++
+		if bytes.Equal(obj.ObjectInfo.ObjectStats.ObjectName().ObjectId()[:], appendableObjectID[:]) {
+			assert.True(t, obj.Appendable)
+			assert.False(t, obj.Sorted)
+			assert.False(t, obj.ObjectStats.GetCNCreated())
+		} else {
+			assert.False(t, obj.Appendable)
+			assert.False(t, obj.Sorted)
+			assert.False(t, obj.ObjectStats.GetCNCreated())
+		}
+	}
+	assert.Equal(t, objCount, 2)
+	iter.Close()
+	iter, err = state.NewObjectsIter(ts, false, true)
+	assert.NoError(t, err)
+	objCount = 0
+	appendableCount := 0
+	for iter.Next() {
+		obj := iter.Entry()
+		objCount++
+		if obj.Appendable {
+			appendableCount++
+		}
+		assert.True(t, obj.Sorted)
+		assert.False(t, obj.ObjectStats.GetCNCreated())
+	}
+	assert.Equal(t, appendableCount, 1)
+	assert.Equal(t, objCount, 2)
+	iter.Close()
+
+	testutil2.MergeBlocks(t, 0, taeHandler.GetDB(), "db", schema, false)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	ts = taeHandler.GetDB().TxnMgr.Now()
+	state = disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot()
+	iter, err = state.NewObjectsIter(ts, true, false)
+	assert.NoError(t, err)
+	objCount = 0
+	for iter.Next() {
+		obj := iter.Entry()
+		objCount++
+		assert.False(t, obj.Appendable)
+		assert.False(t, obj.Sorted)
+		assert.False(t, obj.ObjectStats.GetCNCreated())
+	}
+	iter.Close()
+	assert.Equal(t, objCount, 1)
 }

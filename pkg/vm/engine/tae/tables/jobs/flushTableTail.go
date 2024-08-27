@@ -677,22 +677,8 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	}
 
 	// write!
-	// create new object to hold merged blocks
-	var createdObjectHandle handle.Object
-	if isTombstone {
-		if task.createdTombstoneHandles, err = task.rel.CreateNonAppendableObject(isTombstone, nil); err != nil {
-			return
-		}
-		createdObjectHandle = task.createdTombstoneHandles
-	} else {
-		if task.createdObjHandles, err = task.rel.CreateNonAppendableObject(isTombstone, nil); err != nil {
-			return
-		}
-		createdObjectHandle = task.createdObjHandles
-	}
-	toObjectEntry := createdObjectHandle.GetMeta().(*catalog.ObjectEntry)
-	toObjectEntry.SetSorted()
-	name := objectio.BuildObjectNameWithObjectID(toObjectEntry.ID())
+	objID := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(objID)
 	writer, err := blockio.NewBlockWriterNew(task.rt.Fs.Service, name, schema.Version, seqnums)
 	if err != nil {
 		return err
@@ -730,12 +716,30 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		task.createdMergedObjectName = name.String()
 	}
 
+	sorted := false
+	if task.rel.GetMeta().(*catalog.TableEntry).GetLastestSchema(isTombstone).HasSortKey() {
+		sorted = true
+	}
 	// update new status for created blocks
-	stats := writer.Stats()
-	stats.SetSorted()
-	err = createdObjectHandle.UpdateStats(stats)
-	if err != nil {
-		return
+	stats := objectio.NewObjectStatsWithObjectID(objID, false, sorted, false)
+	writerStats := writer.Stats()
+	objectio.SetObjectStats(stats, &writerStats)
+	// create new object to hold merged blocks
+	var createdObjectHandle handle.Object
+	if isTombstone {
+		if task.createdTombstoneHandles, err = task.rel.CreateNonAppendableObject(
+			isTombstone,
+			&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone}); err != nil {
+			return
+		}
+		createdObjectHandle = task.createdTombstoneHandles
+	} else {
+		if task.createdObjHandles, err = task.rel.CreateNonAppendableObject(
+			isTombstone,
+			&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone}); err != nil {
+			return
+		}
+		createdObjectHandle = task.createdObjHandles
 	}
 	err = createdObjectHandle.GetMeta().(*catalog.ObjectEntry).GetObjectData().Init()
 	if err != nil {
@@ -843,7 +847,6 @@ func (task *flushTableTailTask) waitFlushAObjForSnapshot(ctx context.Context, su
 			return
 		}
 		stat := subtask.stat.Clone()
-		stat.SetAppendable()
 		if err = handles[i].UpdateStats(*stat); err != nil {
 			return
 		}

@@ -108,27 +108,19 @@ func (p *PartitionState) HandleDataObjectList(
 	statsVec := mustVectorFromProto(ee.Bat.Vecs[2])
 	defer statsVec.Free(pool)
 
-	vec := mustVectorFromProto(ee.Bat.Vecs[3])
-	defer vec.Free(pool)
-	stateCol := vector.MustFixedCol[bool](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[4])
-	defer vec.Free(pool)
-	sortedCol := vector.MustFixedCol[bool](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[7])
+	vec := mustVectorFromProto(ee.Bat.Vecs[5])
 	defer vec.Free(pool)
 	createTSCol := vector.MustFixedCol[types.TS](vec)
 
-	vec = mustVectorFromProto(ee.Bat.Vecs[8])
+	vec = mustVectorFromProto(ee.Bat.Vecs[6])
 	defer vec.Free(pool)
 	deleteTSCol := vector.MustFixedCol[types.TS](vec)
 
-	vec = mustVectorFromProto(ee.Bat.Vecs[9])
+	vec = mustVectorFromProto(ee.Bat.Vecs[7])
 	defer vec.Free(pool)
 	startTSCol := vector.MustFixedCol[types.TS](vec)
 
-	vec = mustVectorFromProto(ee.Bat.Vecs[11])
+	vec = mustVectorFromProto(ee.Bat.Vecs[9])
 	defer vec.Free(pool)
 	commitTSCol := vector.MustFixedCol[types.TS](vec)
 
@@ -146,11 +138,11 @@ func (p *PartitionState) HandleDataObjectList(
 			continue
 		}
 
-		objEntry.Appendable = stateCol[idx]
+		objEntry.Appendable = objEntry.ObjectStats.GetAppendable()
 		objEntry.CreateTime = createTSCol[idx]
 		objEntry.DeleteTime = deleteTSCol[idx]
 		objEntry.CommitTS = commitTSCol[idx]
-		objEntry.Sorted = sortedCol[idx]
+		objEntry.Sorted = objEntry.ObjectStats.GetSorted()
 
 		old, exist := p.dataObjects.Get(objEntry)
 		if exist {
@@ -273,27 +265,19 @@ func (p *PartitionState) HandleTombstoneObjectList(
 	statsVec := mustVectorFromProto(ee.Bat.Vecs[2])
 	defer statsVec.Free(pool)
 
-	vec := mustVectorFromProto(ee.Bat.Vecs[3])
-	defer vec.Free(pool)
-	stateCol := vector.MustFixedCol[bool](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[4])
-	defer vec.Free(pool)
-	sortedCol := vector.MustFixedCol[bool](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[7])
+	vec := mustVectorFromProto(ee.Bat.Vecs[5])
 	defer vec.Free(pool)
 	createTSCol := vector.MustFixedCol[types.TS](vec)
 
-	vec = mustVectorFromProto(ee.Bat.Vecs[8])
+	vec = mustVectorFromProto(ee.Bat.Vecs[6])
 	defer vec.Free(pool)
 	deleteTSCol := vector.MustFixedCol[types.TS](vec)
 
-	vec = mustVectorFromProto(ee.Bat.Vecs[9])
+	vec = mustVectorFromProto(ee.Bat.Vecs[7])
 	defer vec.Free(pool)
 	startTSCol := vector.MustFixedCol[types.TS](vec)
 
-	vec = mustVectorFromProto(ee.Bat.Vecs[11])
+	vec = mustVectorFromProto(ee.Bat.Vecs[9])
 	defer vec.Free(pool)
 	commitTSCol := vector.MustFixedCol[types.TS](vec)
 
@@ -313,11 +297,11 @@ func (p *PartitionState) HandleTombstoneObjectList(
 			continue
 		}
 
-		objEntry.Appendable = stateCol[idx]
+		objEntry.Appendable = objEntry.ObjectStats.GetAppendable()
 		objEntry.CreateTime = createTSCol[idx]
 		objEntry.DeleteTime = deleteTSCol[idx]
 		objEntry.CommitTS = commitTSCol[idx]
-		objEntry.Sorted = sortedCol[idx]
+		objEntry.Sorted = objEntry.ObjectStats.GetSorted()
 
 		old, exist := p.tombstoneObjets.Get(objEntry)
 		if exist {

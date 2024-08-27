@@ -43,8 +43,6 @@ const (
 	SnapshotAttr_ObjectMaxBlock = "Object_max_block"
 	SnapshotAttr_SchemaExtra    = "schema_extra"
 	ObjectAttr_ObjectStats      = "object_stats"
-	ObjectAttr_State            = "state"
-	ObjectAttr_Sorted           = "sorted"
 	EntryNode_CreateAt          = "create_at"
 	EntryNode_DeleteAt          = "delete_at"
 )

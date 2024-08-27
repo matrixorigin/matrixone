@@ -574,6 +574,9 @@ func (w *S3Writer) sync(proc *process.Process) ([]objectio.BlockInfo, []objectio
 	for i := range stats {
 		if !stats[i].IsZero() {
 			stats[i].SetCNCreated()
+			if w.sortIndex != -1 {
+				stats[i].SetSorted()
+			}
 		}
 	}
 

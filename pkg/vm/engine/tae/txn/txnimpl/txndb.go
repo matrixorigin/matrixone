@@ -320,7 +320,8 @@ func (db *txnDB) CreateNonAppendableObject(tid uint64, opt *objectio.CreateObjOp
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateNonAppendableObject(opt, isTombstone)
+	opt.WithIsTombstone(isTombstone)
+	return table.CreateNonAppendableObject(opt)
 }
 
 func (db *txnDB) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStats, isTombstone bool) error {
