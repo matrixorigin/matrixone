@@ -1,0 +1,102 @@
+CREATE TABLE sales (year INT,country VARCHAR(20),product VARCHAR(32),profit INT);
+INSERT INTO sales (year, country, product, profit) VALUES (2024, 'USA', 'Laptop', 1200),(2024, 'USA', 'Smartphone', 2000),(2024, 'USA', 'Smartphone', NULL),(2024, 'USA', 'Smartphone', NULL),(2024, 'USA', 'Printer', 1001),(2024, 'USA', 'Laptop', 2010),(2024, 'Canada', 'Smartphone', 800),(2024, 'Canada', 'Smartphone', 900),(2024, 'Canada', 'Smartphone', 500),(2023, 'China', 'Printer', 400),(2024, 'China', 'Printer', 500),(2024, 'China', 'Printer', 600),(2023, NULL, 'Printer', 700),(NULL, 'India', 'Mouse', 500),(NULL, 'China', 'Mouse', 300),(NULL, NULL, 'Mouse', 150),(NULL, NULL, 'Printer', 200),(NULL, NULL, NULL, NULL);
+
+SELECT 
+year, SUM(profit) AS profit 
+FROM 
+sales 
+GROUP BY 
+year 
+WITH ROLLUP
+ORDER BY
+profit;
+
+SELECT year, country, product, SUM(profit) AS profit 
+FROM 
+sales 
+GROUP By
+year,country,product 
+WITH ROLLUP
+ORDER BY
+profit;
+
+SELECT
+year,
+country,
+product,
+SUM(profit) AS profit,
+GROUPING(year) AS grp_year,
+GROUPING(country) AS grp_country,
+GROUPING(product) AS grp_product
+FROM sales
+GROUP BY
+year,
+country,
+product
+WITH
+ROLLUP
+ORDER BY
+profit;
+
+SELECT
+IF(
+GROUPING(year),
+'All years',
+year
+) AS year,
+IF(
+GROUPING(country),
+'All countries',
+country
+) AS country,
+IF(
+GROUPING(product),
+'All products',
+product
+) AS product,
+SUM(profit) AS profit
+FROM sales
+GROUP BY
+year,
+country,
+product
+WITH
+ROLLUP
+ORDER BY 
+year,
+country,
+product;
+
+SELECT year, country, product, SUM(profit) AS profit
+FROM sales
+GROUP BY
+year,
+country,
+product
+WITH
+ROLLUP
+HAVING
+GROUPING(year, country, product) <> 0
+ORDER BY 
+year,
+country,
+product;
+
+SELECT *
+FROM (
+SELECT year, SUM(profit) AS profit
+FROM sales
+GROUP BY
+year
+ WITH
+ROLLUP
+) AS dt
+ORDER BY year DESC;
+
+SELECT year, SUM(profit) AS profit
+FROM sales
+GROUP BY
+year
+WITH
+ROLLUP
+ORDER BY GROUPING(year) DESC;

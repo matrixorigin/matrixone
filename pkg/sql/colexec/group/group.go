@@ -157,7 +157,7 @@ func (ctr *container) processGroupByAndAgg(
 					return result, err
 				}
 				if result.Batch == nil {
-					if err = ctr.aggWithoutGroupByCannotEmptySet(ctr.bat, proc, ap); err != nil {
+					if err = ctr.aggWithoutGroupByCannotEmptySet(&ctr.bat, proc, ap); err != nil {
 						return result, err
 					}
 					ctr.state = vm.Eval
@@ -270,20 +270,20 @@ func (ctr *container) processGroupByAndAgg(
 	}
 }
 
-func (ctr *container) generateAggStructures(bat *batch.Batch, proc *process.Process, group *Group) error {
+func (ctr *container) generateAggStructures(bat **batch.Batch, proc *process.Process, group *Group) error {
 	for i, ag := range group.Aggs {
-		bat.Aggs[i] = aggexec.MakeAgg(
+		(*bat).Aggs[i] = aggexec.MakeAgg(
 			proc,
 			ag.GetAggID(), ag.IsDistinct(), ctr.aggVecs[i].Typ...)
 		if config := ag.GetExtraConfig(); config != nil {
-			if err := bat.Aggs[i].SetExtraInformation(config, 0); err != nil {
+			if err := (*bat).Aggs[i].SetExtraInformation(config, 0); err != nil {
 				return err
 			}
 		}
 	}
 
 	if preAllocate := int(group.PreAllocSize); preAllocate > 0 {
-		for _, ag := range bat.Aggs {
+		for _, ag := range (*bat).Aggs {
 			if err := ag.PreAllocateGroups(preAllocate); err != nil {
 				return err
 			}
@@ -513,12 +513,12 @@ func (ctr *container) initResultAndHashTable(bat **batch.Batch, proc *process.Pr
 
 	// init the agg.
 	if len(ctr.groupVecs.Vec) == 0 {
-		if err = ctr.aggWithoutGroupByCannotEmptySet(*bat, proc, config); err != nil {
+		if err = ctr.aggWithoutGroupByCannotEmptySet(bat, proc, config); err != nil {
 			return err
 		}
 	} else {
 		(*bat).Aggs = make([]aggexec.AggFuncExec, len(config.Aggs))
-		if err = ctr.generateAggStructures(*bat, proc, config); err != nil {
+		if err = ctr.generateAggStructures(bat, proc, config); err != nil {
 			return err
 		}
 	}
@@ -573,30 +573,30 @@ func (ctr *container) initResultAndHashTable(bat **batch.Batch, proc *process.Pr
 	return nil
 }
 
-func (ctr *container) aggWithoutGroupByCannotEmptySet(bat *batch.Batch, proc *process.Process, config *Group) (err error) {
+func (ctr *container) aggWithoutGroupByCannotEmptySet(bat **batch.Batch, proc *process.Process, config *Group) (err error) {
 	if len(ctr.groupVecs.Vec) != 0 {
 		return nil
 	}
 
 	// if this was a query like `select agg(a) from t`, and t is empty.
 	// agg(a) should return 0 for count, and return null for other agg.
-	if bat == nil {
-		bat = batch.NewWithSize(0)
+	if *bat == nil {
+		*bat = batch.NewWithSize(0)
 	}
-	if len(bat.Aggs) == 0 {
+	if len((*bat).Aggs) == 0 {
 		// init the agg.
-		bat.Aggs = make([]aggexec.AggFuncExec, len(config.Aggs))
+		(*bat).Aggs = make([]aggexec.AggFuncExec, len(config.Aggs))
 		if err = ctr.generateAggStructures(bat, proc, config); err != nil {
 			return err
 		}
 		// if no group by, the group number must be 1.
 		if len(ctr.groupVecs.Vec) == 0 {
-			for _, ag := range bat.Aggs {
+			for _, ag := range (*bat).Aggs {
 				if err = ag.GroupGrow(1); err != nil {
 					return err
 				}
 			}
-			ctr.bat.SetRowCount(1)
+			(*bat).SetRowCount(1)
 		}
 	}
 

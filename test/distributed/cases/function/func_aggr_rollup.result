@@ -1,0 +1,184 @@
+CREATE TABLE sales (year INT,country VARCHAR(20),product VARCHAR(32),profit INT);
+INSERT INTO sales (year, country, product, profit) VALUES (2024, 'USA', 'Laptop', 1200),(2024, 'USA', 'Smartphone', 2000),(2024, 'USA', 'Smartphone', NULL),(2024, 'USA', 'Smartphone', NULL),(2024, 'USA', 'Printer', 1001),(2024, 'USA', 'Laptop', 2010),(2024, 'Canada', 'Smartphone', 800),(2024, 'Canada', 'Smartphone', 900),(2024, 'Canada', 'Smartphone', 500),(2023, 'China', 'Printer', 400),(2024, 'China', 'Printer', 500),(2024, 'China', 'Printer', 600),(2023, NULL, 'Printer', 700),(NULL, 'India', 'Mouse', 500),(NULL, 'China', 'Mouse', 300),(NULL, NULL, 'Mouse', 150),(NULL, NULL, 'Printer', 200),(NULL, NULL, NULL, NULL);
+SELECT
+year, SUM(profit) AS profit
+FROM
+sales
+GROUP BY
+year
+WITH ROLLUP;
+year    profit
+null    1150
+2023    1100
+2024    9511
+null    11761
+SELECT year, country, product, SUM(profit) AS profit
+FROM
+sales
+GROUP By
+year,country,product
+WITH ROLLUP;
+year    country    product    profit
+null    null    null    null
+null    null    Mouse    150
+null    null    Printer    200
+null    null    null    350
+null    China    Mouse    300
+null    China    null    300
+null    India    Mouse    500
+null    India    null    500
+null    null    null    1150
+2023    null    Printer    700
+2023    null    null    700
+2023    China    Printer    400
+2023    China    null    400
+2023    null    null    1100
+2024    Canada    Smartphone    2200
+2024    Canada    null    2200
+2024    China    Printer    1100
+2024    China    null    1100
+2024    USA    Laptop    3210
+2024    USA    Printer    1001
+2024    USA    Smartphone    2000
+2024    USA    null    6211
+2024    null    null    9511
+null    null    null    11761
+SELECT
+year,
+country,
+product,
+SUM(profit) AS profit,
+GROUPING(year) AS grp_year,
+GROUPING(country) AS grp_country,
+GROUPING(product) AS grp_product
+FROM sales
+GROUP BY
+year,
+country,
+product
+WITH
+ROLLUP;
+year    country    product    profit    grp_year    grp_country    grp_product
+null    null    null    null    0    0    0
+null    null    Mouse    150    0    0    0
+null    null    Printer    200    0    0    0
+null    null    null    350    0    0    1
+null    China    Mouse    300    0    0    0
+null    China    null    300    0    0    1
+null    India    Mouse    500    0    0    0
+null    India    null    500    0    0    1
+null    null    null    1150    0    1    1
+2023    null    Printer    700    0    0    0
+2023    null    null    700    0    0    1
+2023    China    Printer    400    0    0    0
+2023    China    null    400    0    0    1
+2023    null    null    1100    0    1    1
+2024    Canada    Smartphone    2200    0    0    0
+2024    Canada    null    2200    0    0    1
+2024    China    Printer    1100    0    0    0
+2024    China    null    1100    0    0    1
+2024    USA    Laptop    3210    0    0    0
+2024    USA    Printer    1001    0    0    0
+2024    USA    Smartphone    2000    0    0    0
+2024    USA    null    6211    0    0    1
+2024    null    null    9511    0    1    1
+null    null    null    11761    1    1    1
+SELECT
+IF(
+GROUPING(year),
+'All years',
+year
+) AS year,
+IF(
+GROUPING(country),
+'All countries',
+country
+) AS country,
+IF(
+GROUPING(product),
+'All products',
+product
+) AS product,
+SUM(profit) AS profit
+FROM sales
+GROUP BY
+year,
+country,
+product
+WITH
+ROLLUP;
+year    country    product    profit
+null    null    null    null
+null    null    Mouse    150
+null    null    Printer    200
+null    null    All products    350
+null    China    Mouse    300
+null    China    All products    300
+null    India    Mouse    500
+null    India    All products    500
+null    All countries    All products    1150
+2023    null    Printer    700
+2023    null    All products    700
+2023    China    Printer    400
+2023    China    All products    400
+2023    All countries    All products    1100
+2024    Canada    Smartphone    2200
+2024    Canada    All products    2200
+2024    China    Printer    1100
+2024    China    All products    1100
+2024    USA    Laptop    3210
+2024    USA    Printer    1001
+2024    USA    Smartphone    2000
+2024    USA    All products    6211
+2024    All countries    All products    9511
+All years    All countries    All products    11761
+SELECT year, country, product, SUM(profit) AS profit
+FROM sales
+GROUP BY
+year,
+country,
+product
+WITH
+ROLLUP
+HAVING
+GROUPING(year, country, product) <> 0;
+year    country    product    profit
+null    null    null    350
+null    China    null    300
+null    India    null    500
+null    null    null    1150
+2023    null    null    700
+2023    China    null    400
+2023    null    null    1100
+2024    Canada    null    2200
+2024    China    null    1100
+2024    USA    null    6211
+2024    null    null    9511
+null    null    null    11761
+SELECT *
+FROM (
+SELECT year, SUM(profit) AS profit
+FROM sales
+GROUP BY
+year
+WITH
+ROLLUP
+) AS dt
+ORDER BY year DESC;
+year    profit
+2024    9511
+2023    1100
+null    1150
+null    11761
+SELECT year, SUM(profit) AS profit
+FROM sales
+GROUP BY
+year
+WITH
+ROLLUP
+ORDER BY GROUPING(year) DESC;
+year    profit
+null    11761
+null    1150
+2023    1100
+2024    9511
