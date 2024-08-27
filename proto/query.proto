@@ -84,9 +84,10 @@ enum CmdMethod {
   ResetSession = 25;
   // GOMAXPROCS get/set the golang runtime.GOMAXPROCS()
   GOMAXPROCS = 26;
+  GOMEMLIMIT = 27;
   // FileServiceCache handle mem/disk cache query and reset action.
-  FileServiceCache = 27;
-  FileServiceCacheEvict = 28;
+  FileServiceCache = 28;
+  FileServiceCacheEvict = 29;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -218,8 +219,9 @@ message Request {
   // ResetSessionRequest is the request that resets the session information.
   ResetSessionRequest ResetSessionRequest = 28;
   GoMaxProcsRequest GoMaxProcsRequest = 29;
-  FileServiceCacheRequest FileServiceCacheRequest = 30;
-  FileServiceCacheEvictRequest FileServiceCacheEvictRequest = 31;
+  GoMemLimitRequest GoMemLimitRequest = 30;
+  FileServiceCacheRequest FileServiceCacheRequest = 31;
+  FileServiceCacheEvictRequest FileServiceCacheEvictRequest = 32;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -275,8 +277,9 @@ message Response {
   // ResetSessionResponse is the response of ResetSessionRequest.
   ResetSessionResponse ResetSessionResponse = 28;
   GoMaxProcsResponse GoMaxProcsResponse = 29  [ (gogoproto.nullable) = false ];
-  FileServiceCacheResponse FileServiceCacheResponse = 30;
-  FileServiceCacheEvictResponse FileServiceCacheEvictResponse = 31;
+  GoMemLimitResponse GoMemLimitResponse = 30  [ (gogoproto.nullable) = false ];
+  FileServiceCacheResponse FileServiceCacheResponse = 31;
+  FileServiceCacheEvictResponse FileServiceCacheEvictResponse = 32;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -539,6 +542,17 @@ message GoMaxProcsRequest {
 // Same meaning as calling runtime.GOMAXPROCS(req.MaxProcs).
 message GoMaxProcsResponse {
   int32 MaxProcs = 1;
+}
+
+message GoMemLimitRequest {
+  int64 MemLimitBytes = 1;
+}
+
+// GoMemLimitResponse is the response of calling runtime/debug.SetMemoryLimit(req.MemLimitBytes)
+// The MemLimitBytes is previous value.
+// Same meaning as calling runtime/debug.SetMemoryLimit(req.MemLimitBytes).
+message GoMemLimitResponse {
+  int64 MemLimitBytes = 1;
 }
 
 enum FileServiceCacheType {
