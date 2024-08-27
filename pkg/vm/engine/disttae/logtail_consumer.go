@@ -287,7 +287,7 @@ func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
 
 func (c *PushClient) toSubscribeTable(
 	ctx context.Context,
-	tbl *txnTable) (ps *logtailreplay.PartitionStateInProgress, err error) {
+	tbl *txnTable) (ps *logtailreplay.PartitionState, err error) {
 
 	tableId := tbl.tableId
 	//if table has been subscribed, return quickly.
@@ -956,7 +956,7 @@ type SubTableStatus struct {
 	LatestTime time.Time
 }
 
-func (c *PushClient) isSubscribed(dbId, tId uint64) (*logtailreplay.PartitionStateInProgress, bool) {
+func (c *PushClient) isSubscribed(dbId, tId uint64) (*logtailreplay.PartitionState, bool) {
 	s := &c.subscribed
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -1018,7 +1018,7 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 	ctx context.Context,
 	tableId uint64,
 	tbl *txnTable,
-) (SubscribeState, *logtailreplay.PartitionStateInProgress, error) {
+) (SubscribeState, *logtailreplay.PartitionState, error) {
 
 	//part, err := c.eng.lazyLoadLatestCkp(ctx, tbl)
 	//if err != nil {
@@ -1873,7 +1873,7 @@ func consumeLogTail(
 	ctx context.Context,
 	primarySeqnum int,
 	engine *Engine,
-	state *logtailreplay.PartitionStateInProgress,
+	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail,
 ) error {
 	return hackConsumeLogtail(ctx, primarySeqnum, engine, state, lt)
@@ -1901,7 +1901,7 @@ func consumeCkpsAndLogTail(
 	ctx context.Context,
 	primarySeqnum int,
 	engine *Engine,
-	state *logtailreplay.PartitionStateInProgress,
+	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail,
 	databaseId uint64,
 	tableId uint64,
@@ -1937,7 +1937,7 @@ func hackConsumeLogtail(
 	ctx context.Context,
 	primarySeqnum int,
 	engine *Engine,
-	state *logtailreplay.PartitionStateInProgress,
+	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail) error {
 
 	if lt.Table.DbName == "" {

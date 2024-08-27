@@ -321,17 +321,7 @@ func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64
 	b.offsets[*blockID] = append(b.offsets[*blockID], offsets...)
 }
 
-func (b *deletedBlocks) getDeletedRowIDs(mp map[types.Blockid][]int32) {
-	b.RLock()
-	defer b.RUnlock()
-	for bid, offsets := range b.offsets {
-		for _, offset := range offsets {
-			mp[bid] = append(mp[bid], int32(offset))
-		}
-	}
-}
-
-func (b *deletedBlocks) getDeletedRowIDsInProgress(dest *[]types.Rowid) {
+func (b *deletedBlocks) getDeletedRowIDs(dest *[]types.Rowid) {
 	b.RLock()
 	defer b.RUnlock()
 	for bid, offsets := range b.offsets {
@@ -798,7 +788,7 @@ type txnTable struct {
 	tableDef      *plan.TableDef
 	seqnums       []uint16
 	typs          []types.Type
-	_partState    atomic.Pointer[logtailreplay.PartitionStateInProgress]
+	_partState    atomic.Pointer[logtailreplay.PartitionState]
 	primaryIdx    int // -1 means no primary key
 	primarySeqnum int // -1 means no primary key
 	clusterByIdx  int // -1 means no clusterBy key
