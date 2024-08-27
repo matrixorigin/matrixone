@@ -579,7 +579,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		return op
 	}
 	panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceOp.OpType()))
-	return nil
 }
 
 func constructRestrict(n *plan.Node, filterExpr *plan2.Expr) *filter.Filter {

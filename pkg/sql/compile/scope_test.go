@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
@@ -251,7 +250,6 @@ func TestMessageSenderOnClientReceive(t *testing.T) {
 func TestNewParallelScope(t *testing.T) {
 	// function `newParallelScope` will dispatch one scope's work into n scopes.
 	testCompile := &Compile{
-		lock: &sync.RWMutex{},
 		proc: testutil.NewProcess(),
 	}
 

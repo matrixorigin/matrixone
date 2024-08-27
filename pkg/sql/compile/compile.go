@@ -218,8 +218,11 @@ func (c *Compile) clear() {
 	for i := range c.scopes {
 		c.scopes[i].release()
 	}
-	for i := range c.tmpScopes {
-		c.tmpScopes[i].release()
+	if c.tmpScopes != nil {
+		for i := range c.tmpScopes {
+			c.tmpScopes[i].release()
+		}
+		c.tmpScopes = c.tmpScopes[:0]
 	}
 	for i := range c.fuzzys {
 		c.fuzzys[i].release()
@@ -228,9 +231,6 @@ func (c *Compile) clear() {
 	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
 	c.scopes = c.scopes[:0]
-	if c.tmpScopes != nil {
-		c.tmpScopes = c.tmpScopes[:0]
-	}
 	c.pn = nil
 	c.fill = nil
 	c.affectRows.Store(0)
@@ -251,7 +251,6 @@ func (c *Compile) clear() {
 	c.startAt = time.Time{}
 	c.needLockMeta = false
 	c.isInternal = false
-	c.lastAllocID = 0
 	c.isPrepare = false
 
 	for k := range c.metaTables {
@@ -395,16 +394,6 @@ func (c *Compile) run(s *Scope) error {
 	return nil
 }
 
-func (c *Compile) allocOperatorID() int32 {
-	c.lock.Lock()
-	defer func() {
-		c.lastAllocID++
-		c.lock.Unlock()
-	}()
-
-	return c.lastAllocID
-}
-
 // isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
 // he statement
 func (c *Compile) isRetryErr(err error) bool {
@@ -436,8 +425,11 @@ func (c *Compile) FreeOperator() {
 	for _, s := range c.scopes {
 		s.FreeOperator(c)
 	}
-	for _, s := range c.tmpScopes {
-		s.FreeOperator(c)
+	if c.tmpScopes != nil {
+		for i := range c.tmpScopes {
+			c.tmpScopes[i].release()
+		}
+		c.tmpScopes = c.tmpScopes[:0]
 	}
 }
 
