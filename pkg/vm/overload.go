@@ -49,10 +49,8 @@ package vm
 // 	LoopMark:    loopmark.String,
 
 // 	MergeTop:       mergetop.String,
-// 	MergeLimit:     mergelimit.String,
 // 	MergeOrder:     mergeorder.String,
 // 	MergeGroup:     mergegroup.String,
-// 	MergeOffset:    mergeoffset.String,
 // 	MergeRecursive: mergerecursive.String,
 // 	MergeCTE:       mergecte.String,
 
@@ -119,10 +117,8 @@ package vm
 // 	LoopMark:    loopmark.Prepare,
 
 // 	MergeTop:       mergetop.Prepare,
-// 	MergeLimit:     mergelimit.Prepare,
 // 	MergeOrder:     mergeorder.Prepare,
 // 	MergeGroup:     mergegroup.Prepare,
-// 	MergeOffset:    mergeoffset.Prepare,
 // 	MergeRecursive: mergerecursive.Prepare,
 // 	MergeCTE:       mergecte.Prepare,
 
@@ -189,10 +185,8 @@ package vm
 // 	LoopMark:    loopmark.Call,
 
 // 	MergeTop:       mergetop.Call,
-// 	MergeLimit:     mergelimit.Call,
 // 	MergeOrder:     mergeorder.Call,
 // 	MergeGroup:     mergegroup.Call,
-// 	MergeOffset:    mergeoffset.Call,
 // 	MergeRecursive: mergerecursive.Call,
 // 	MergeCTE:       mergecte.Call,
 
