@@ -481,8 +481,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if isRight {
 		channel := make(chan *bitmap.Bitmap, mcpu)
 		for i := range ms.PreScopes {
-			s := ms.PreScopes[i]
-			switch arg := vm.GetLeafOpParent(nil, s.RootOp).(type) {
+			switch arg := vm.GetLeafOpParent(nil, ms.PreScopes[i].RootOp).(type) {
 			case *right.RightJoin:
 				arg.Channel = channel
 				arg.NumCPU = uint64(mcpu)
@@ -717,6 +716,7 @@ func newParallelScope1(s *Scope, c *Compile) (*Scope, []*Scope) {
 	}
 
 	rs.PreScopes = parallelScopes
+	s.PreScopes = nil
 	c.tmpScopes = append(c.tmpScopes, rs)
 	return rs, parallelScopes
 }
@@ -753,6 +753,7 @@ func newParallelScope(s *Scope, c *Compile) (*Scope, []*Scope) {
 	rs := newScope(Merge)
 	rs.Proc = s.Proc
 	rs.PreScopes = parallelScopes
+	s.PreScopes = nil
 	c.tmpScopes = append(c.tmpScopes, rs)
 	return rs, parallelScopes
 }
