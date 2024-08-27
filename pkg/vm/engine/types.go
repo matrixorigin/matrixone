@@ -784,9 +784,9 @@ var _ Ranges = (*objectio.BlockInfoSlice)(nil)
 type Hint int
 
 const (
-	checkpoint Hint = iota
-	tail_wip
-	tail_done
+	Checkpoint Hint = iota
+	Tail_wip
+	Tail_done
 )
 
 type ChangesHandle interface {
@@ -901,6 +901,8 @@ type LogtailEngine interface {
 	TryToSubscribeTable(context.Context, uint64, uint64) error
 	// UnsubscribeTable unsubscribes a table from logtail client.
 	UnsubscribeTable(context.Context, uint64, uint64) error
+
+	LatestLogtailAppliedTime() timestamp.Timestamp
 }
 
 type Engine interface {

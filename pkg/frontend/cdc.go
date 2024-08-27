@@ -107,13 +107,6 @@ const (
 	updatedWatermark = "update mo_catalog.mo_cdc_task set checkpoint_str = '%s' where account_id = %d and task_id = '%s'"
 )
 
-type dbTableInfo struct {
-	dbName  string
-	tblName string
-	dbId    uint64
-	tblId   uint64
-}
-
 func getSqlForNewCdcTask(
 	accId uint64,
 	taskId uuid.UUID,
@@ -742,7 +735,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 
 	var dbId, tblId uint64
 	tableList := strings.Split(tables, ",")
-	dbTableInfos := make([]*dbTableInfo, 0, len(tableList))
+	dbTableInfos := make([]*cdc2.DbTableInfo, 0, len(tableList))
 	for _, table := range tableList {
 		//get dbid tableid for the table
 		seps := strings.Split(table, ".")
@@ -771,11 +764,11 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 			return err
 		}
 
-		dbTableInfos = append(dbTableInfos, &dbTableInfo{
-			dbName:  dbName,
-			tblName: tblName,
-			dbId:    dbId,
-			tblId:   tblId,
+		dbTableInfos = append(dbTableInfos, &cdc2.DbTableInfo{
+			DbName:  dbName,
+			TblName: tblName,
+			DbId:    dbId,
+			TblId:   tblId,
 		})
 	}
 
@@ -792,7 +785,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 	cdc.interChs = make(map[uint64]chan tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput], len(dbTableInfos))
 
 	for _, info := range dbTableInfos {
-		if err = cdc.addExePipelineForTable(info.tblId, watermark, cdc.sunkWatermarkUpdater); err != nil {
+		if err = cdc.addExePipelineForTable(info.TblId, watermark, cdc.sunkWatermarkUpdater); err != nil {
 			return err
 		}
 	}

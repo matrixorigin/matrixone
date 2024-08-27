@@ -105,3 +105,23 @@ type DecoderOutput struct {
 	sqlOfDeletes atomic.Value
 	err          error
 }
+
+type RowType int
+
+const (
+	DeleteRow RowType = 1
+	InsertRow RowType = 2
+)
+
+type RowIterator interface {
+	Next() bool
+	Row(row []any) (RowType, error)
+	Close() error
+}
+
+type DbTableInfo struct {
+	DbName  string
+	TblName string
+	DbId    uint64
+	TblId   uint64
+}
