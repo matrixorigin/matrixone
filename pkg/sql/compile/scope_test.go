@@ -117,7 +117,6 @@ func checkScopeRoot(t *testing.T, s *Scope) {
 
 func TestScopeSerialization2(t *testing.T) {
 	testCompile := &Compile{
-		lock: &sync.RWMutex{},
 		proc: testutil.NewProcess(),
 	}
 	var reg process.WaitRegister
