@@ -113,7 +113,7 @@ func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 	}
 
 	for i, j := oldLength, len(exec.groups); i < j; i++ {
-		exec.groups[i] = exec.ret.mg.GetVector(exec.singleAggInfo.argType)
+		exec.groups[i] = vector.NewVec(exec.singleAggInfo.argType)
 	}
 	return exec.ret.grows(more)
 }
@@ -331,11 +331,7 @@ func (exec *medianColumnExecSelf[T, R]) Free() {
 		if v == nil {
 			continue
 		}
-		if v.NeedDup() {
-			v.Free(exec.ret.mp)
-		} else {
-			exec.ret.mg.PutVector(v)
-		}
+		v.Free(exec.ret.mp)
 	}
 	exec.ret.free()
 	exec.distinctHash.free()
