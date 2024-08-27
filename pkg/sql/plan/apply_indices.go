@@ -129,14 +129,13 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 				logutil.Infof("MODE %d", fn.Args[1].GetLit().GetI64Val())
 
 				// arg2...N is ColRef Expr_List
-
-				nargs := len(fn.Args)
-				for i := 2; i < nargs; i++ {
-					logutil.Infof("COL %d %s", i-2, fn.Args[i].GetCol().GetName())
+				for j := 2; j < len(fn.Args); j++ {
+					cref := fn.Args[j].GetCol()
+					logutil.Infof("COL %d %s relpos %d colpos %d", j-2, cref.GetName(), cref.RelPos, cref.ColPos)
 				}
 				/*
-					for i, c := range fn.Args[0].GetList().GetList() {
-						logutil.Infof("COL %d %s", i, c.GetCol().GetName())
+					for j, c := range fn.Args[0].GetList().GetList() {
+						logutil.Infof("COL %d %s", j, c.GetCol().GetName())
 					}
 				*/
 				for _, idx := range node.TableDef.Indexes {

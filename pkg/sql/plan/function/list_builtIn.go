@@ -6504,24 +6504,46 @@ var supportedOthersBuiltIns = []FuncNew{
 		functionId: FULLTEXT_MATCH,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedDirectlyTypeMatch,
 
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
-						return moerr.NewNotSupported(proc.Ctx, "function fulltext_match (one key) not supported")
-					}
-				},
+		Overloads: fulltext_expand_overload(),
+	},
+}
+
+// fulltext_match supports varchar, char and text.  Expand the function signature to all possible combination of input types
+func fulltext_expand_overload() []overload {
+
+	overloads := make([]overload, 0)
+	supported_types := []types.T{types.T_varchar, types.T_char, types.T_text}
+	curr := 0
+
+	prefix_types := []types.T{types.T_varchar, types.T_int64}
+
+	// single key
+	for _, t := range supported_types {
+		o := overload{
+			overloadId: curr,
+			args:       append(prefix_types, t),
+			retType: func(parameters []types.Type) types.Type {
+				return types.T_bool.ToType()
 			},
-			{
-				overloadId: 1,
-				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar, types.T_varchar},
+			newOp: func() executeLogicOfOverload {
+				return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
+					return moerr.NewNotSupported(proc.Ctx, "function fulltext_match (one key) not supported")
+				}
+			},
+		}
+
+		overloads = append(overloads, o)
+		curr += 1
+	}
+
+	// two keys
+	for _, t1 := range supported_types {
+		for _, t2 := range supported_types {
+			o := overload{
+				overloadId: curr,
+				args:       append(prefix_types, []types.T{t1, t2}...),
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -6530,33 +6552,39 @@ var supportedOthersBuiltIns = []FuncNew{
 						return moerr.NewNotSupported(proc.Ctx, "function fulltext_match (two keys) not supported")
 					}
 				},
-			},
-			{
-				overloadId: 2,
-				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar, types.T_varchar, types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
-						return moerr.NewNotSupported(proc.Ctx, "function fulltext_match (three keys) not supported")
-					}
-				},
-			},
-			{
-				overloadId: 3,
-				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar, types.T_varchar, types.T_varchar, types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
-						return moerr.NewNotSupported(proc.Ctx, "function fulltext_match (four keys) not supported")
-					}
-				},
-			},
-		},
-	},
+			}
+
+			overloads = append(overloads, o)
+			curr += 1
+		}
+	}
+
+	// three keys
+	for _, t1 := range supported_types {
+		for _, t2 := range supported_types {
+			for _, t3 := range supported_types {
+				o := overload{
+					overloadId: curr,
+					args:       append(prefix_types, []types.T{t1, t2, t3}...),
+					retType: func(parameters []types.Type) types.Type {
+						return types.T_bool.ToType()
+					},
+					newOp: func() executeLogicOfOverload {
+						return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
+							return moerr.NewNotSupported(proc.Ctx, "function fulltext_match (three keys) not supported")
+						}
+					},
+				}
+
+				overloads = append(overloads, o)
+				curr += 1
+			}
+		}
+	}
+
+	// up to 3 keys for now.  add more combination below.
+
+	return overloads
 }
 
 func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) (err error) {

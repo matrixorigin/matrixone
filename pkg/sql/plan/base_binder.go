@@ -972,26 +972,20 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, depth int32, isRoot bool) (*Expr, error) {
 
 	logutil.Infof("BIND FULLTEXT")
-	colrefs := make([]*plan.Expr, len(astExpr.KeyParts))
+	args := make([]*Expr, 2+len(astExpr.KeyParts))
+
+	mode := int64(astExpr.Mode)
+	args[0] = makePlan2StringConstExprWithType(astExpr.Pattern, false)
+	args[1] = makePlan2Int64ConstExprWithType(mode)
 	for i, k := range astExpr.KeyParts {
 		logutil.Infof("Col %s", k.ColName.ColName())
 		c, err := b.baseBindColRef(k.ColName, depth, isRoot)
 		if err != nil {
 			return nil, err
 		}
-		colrefs[i] = c
-		logutil.Infof("Col_Ref: %s", c.GetCol().GetName())
-	}
-
-	args := make([]*Expr, 2+len(colrefs))
-
-	mode := int64(astExpr.Mode)
-	args[0] = makePlan2StringConstExprWithType(astExpr.Pattern, false)
-	args[1] = makePlan2Int64ConstExprWithType(mode)
-	for i, c := range colrefs {
 		args[i+2] = c
+		logutil.Infof("Col_Ref: %d %s", i, c.GetCol().GetName())
 	}
-
 	/*
 		args[2] = &plan.Expr{
 			Expr: &plan.Expr_List{
