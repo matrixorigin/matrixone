@@ -419,6 +419,31 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := mergecte.NewArgument()
 		op.SetInfo(&info)
 		return op
+<<<<<<< HEAD
+=======
+	case vm.MergeGroup:
+		t := sourceOp.(*mergegroup.MergeGroup)
+		op := mergegroup.NewArgument()
+		op.NeedEval = t.NeedEval
+		op.PartialResults = t.PartialResults
+		op.PartialResultTypes = t.PartialResultTypes
+		op.ProjectList = t.ProjectList
+		op.SetInfo(&info)
+		return op
+	case vm.MergeTop:
+		t := sourceOp.(*mergetop.MergeTop)
+		op := mergetop.NewArgument()
+		op.Limit = t.Limit
+		op.Fs = t.Fs
+		op.SetInfo(&info)
+		return op
+	case vm.MergeOrder:
+		t := sourceOp.(*mergeorder.MergeOrder)
+		op := mergeorder.NewArgument()
+		op.OrderBySpecs = t.OrderBySpecs
+		op.SetInfo(&info)
+		return op
+>>>>>>> 9bf3e807175447be6fce9bdcb78a0746e31a41bd
 	case vm.Mark:
 		t := sourceOp.(*mark.MarkJoin)
 		op := mark.NewArgument()
@@ -730,14 +755,14 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	return op, nil
 }
 
-func constructPreInsertUk(n *plan.Node, proc *process.Process) *preinsertunique.PreInsertUnique {
+func constructPreInsertUk(n *plan.Node) *preinsertunique.PreInsertUnique {
 	preCtx := n.PreInsertUkCtx
 	op := preinsertunique.NewArgument()
 	op.PreInsertCtx = preCtx
 	return op
 }
 
-func constructPreInsertSk(n *plan.Node, proc *process.Process) *preinsertsecondaryindex.PreInsertSecIdx {
+func constructPreInsertSk(n *plan.Node) *preinsertsecondaryindex.PreInsertSecIdx {
 	op := preinsertsecondaryindex.NewArgument()
 	op.PreInsertCtx = n.PreInsertSkCtx
 	return op
@@ -1562,16 +1587,6 @@ func constructMergeTop(n *plan.Node, topN *plan.Expr) *mergetop.MergeTop {
 	arg.Limit = topN
 	return arg
 }
-
-// func constructMergeOffset(n *plan.Node) *mergeoffset.MergeOffset {
-// 	arg := mergeoffset.NewArgument().WithOffset(n.Offset)
-// 	return arg
-// }
-
-// func constructMergeLimit(n *plan.Node) *mergelimit.MergeLimit {
-// 	arg := mergelimit.NewArgument().WithLimit(n.Limit)
-// 	return arg
-// }
 
 func constructMergeOrder(n *plan.Node) *mergeorder.MergeOrder {
 	arg := mergeorder.NewArgument()
