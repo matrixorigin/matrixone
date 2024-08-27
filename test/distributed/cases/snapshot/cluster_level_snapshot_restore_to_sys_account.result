@@ -80,7 +80,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-288962    test01    def    create database test01    0    1    2024-07-04 11:11:09    0    
+288962    test01    def    create database test01    0    1    2024-07-04 11:11:09    0
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 __mo_fake_pk_col
@@ -269,19 +269,19 @@ dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    cr
 303195    test03    def    create database test03    0    1    2024-07-08 17:35:47    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
 attname
+empno
+ename
+job
+mgr
+hiredate
+sal
+comm
+deptno
 __mo_rowid
 deptno
 dname
 loc
 __mo_rowid
-comm
-deptno
-empno
-ename
-hiredate
-job
-mgr
-sal
 show snapshots where snapshot_name = 'sp04';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
 sp04    2024-07-08 09:35:47.77113    cluster            
@@ -1044,7 +1044,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp16    2024-07-08 09:35:54.686691    cluster            
+sp16    2024-08-26 04:02:21.809805    cluster
 drop database db09;
 drop database db10;
 drop snapshot sp16;
@@ -1113,38 +1113,33 @@ col1    col2
 23420    32432543
 show columns from pri01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DECIMAL(38)    YES        null        
+col1    INT(32)    NO    PRI    null
+col2    DECIMAL(38)    YES        null
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp18'} where reldatabase = 'db11';
 count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp18'} where datname = 'db11';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-303452    db11    def    create database db11    0    1    2024-07-08 17:35:55    0    
+272812    db11    def    create database db11    0    1    2024-08-26 12:02:22    0
 select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database = 'db11';
 attname
-__mo_rowid
 col1
 col2
+__mo_rowid
 drop database db11;
 drop snapshot sp18;
 drop snapshot sp17;
 drop database if exists test_fk;
-
 create database test_fk;
-
 use test_fk;
-
 CREATE TABLE Students (
 StudentID INT PRIMARY KEY,
 Name VARCHAR(100)
 );
-
 CREATE TABLE Courses (
 CourseID INT PRIMARY KEY,
 CourseName VARCHAR(100)
 );
-
 CREATE TABLE Enrollments (
 EnrollmentID INT PRIMARY KEY AUTO_INCREMENT,
 StudentID INT,
@@ -1153,40 +1148,41 @@ Grade CHAR(2),
 FOREIGN KEY (StudentID) REFERENCES Students(StudentID),
 FOREIGN KEY (CourseID) REFERENCES Courses(CourseID)
 );
-
 INSERT INTO Students (StudentID, Name) VALUES (1, 'Alice');
-
 INSERT INTO Students (StudentID, Name) VALUES (2, 'Bob');
-
 INSERT INTO Courses (CourseID, CourseName) VALUES (101, 'Mathematics');
-
 INSERT INTO Courses (CourseID, CourseName) VALUES (102, 'Physics');
-
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 101, 'A');
-
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 102, 'B');
-
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (2, 101, 'B');
-
 drop snapshot if exists sp_fk;
-
 create snapshot sp_fk for cluster;
-
 restore account sys database test_fk table Students from snapshot sp_fk;
-
 restore account sys database test_fk table Courses from snapshot sp_fk;
-
 restore account sys database test_fk table Enrollments from snapshot sp_fk;
-
 show databases;
-
+Database
+cluster_level_snapshot_restore_to_sys_account
+information_schema
+mo_catalog
+mo_debug
+mo_task
+mysql
+system
+system_metrics
+test_fk
 select * from Students;
-
+studentid    name
+1    Alice
+2    Bob
 select * from Courses;
-
+courseid    coursename
+101    Mathematics
+102    Physics
 select * from Enrollments;
-
+enrollmentid    studentid    courseid    grade
+1    1    101    A
+2    1    102    B
+3    2    101    B
 drop snapshot sp_fk;
-
 drop database test_fk;
-
