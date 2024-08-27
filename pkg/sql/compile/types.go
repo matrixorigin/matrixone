@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -291,8 +290,6 @@ type Compile struct {
 
 	nodeRegs map[[2]int32]*process.WaitRegister
 	stepRegs map[int32][][2]int32
-
-	lock *sync.RWMutex
 
 	isInternal bool
 
