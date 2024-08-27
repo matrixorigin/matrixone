@@ -91,7 +91,6 @@ import (
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
 func encodeScope(s *Scope) ([]byte, error) {
-	fmt.Println("encode scope", DebugShowScopes([]*Scope{s}, OldLevel))
 	p, err := fillPipeline(s)
 	if err != nil {
 		return nil, err

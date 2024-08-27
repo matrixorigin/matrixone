@@ -426,7 +426,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	// probability 3: it's a SCAN pipeline.
 	case s.isTableScan():
 		parallelScope, err = buildScanParallelRun(s, c)
-		fmt.Println("after scan parallel run", DebugShowScopes([]*Scope{parallelScope}, OldLevel))
+		//fmt.Println("after scan parallel run", DebugShowScopes([]*Scope{parallelScope}, OldLevel))
 
 	// others.
 	default:
