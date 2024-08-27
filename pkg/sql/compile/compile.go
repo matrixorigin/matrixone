@@ -3308,14 +3308,8 @@ func (c *Compile) newEmptyMergeScope() *Scope {
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := c.newEmptyMergeScope()
 	rs.PreScopes = ss
-	cnt := 0
-	for _, s := range ss {
-		if s.IsEnd {
-			continue
-		}
-		cnt++
-	}
-	rs.Proc = c.proc.NewNoContextChildProc(cnt)
+
+	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
 	if len(ss) > 0 {
 		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
 	}
@@ -3329,6 +3323,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 
 	j := 0
 	for i := range ss {
+<<<<<<< HEAD
 		if !ss[i].IsEnd {
 			// waring: `connector` operator is not used as an input/output analyze,
 			// and `connector` operator cannot play the role of IsFirst/IsLast
@@ -3342,6 +3337,14 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 			ss[i].setRootOperator(connArg)
 			j++
 		}
+=======
+		// waring: `connector` operator is not used as an input/output analyze,
+		// and `connector` operator cannot play the role of IsFirst/IsLast
+		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])
+		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		ss[i].setRootOperator(connArg)
+		j++
+>>>>>>> bcf7807c27631cbfa879403b20be5a33e50a8789
 	}
 	return rs
 }
