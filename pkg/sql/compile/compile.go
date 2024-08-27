@@ -3314,37 +3314,21 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
 	}
 
-	// waring: `Merge` operator` is not used as an input/output analyze,
-	// and `Merge` operator cannot play the role of IsFirst/IsLast
 	mergeOp := merge.NewArgument()
 	mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	rs.setRootOperator(mergeOp)
-	//c.anal.isFirst = false
 
 	j := 0
 	for i := range ss {
-<<<<<<< HEAD
-		if !ss[i].IsEnd {
-			// waring: `connector` operator is not used as an input/output analyze,
-			// and `connector` operator cannot play the role of IsFirst/IsLast
-			if isSameCN(rs.NodeInfo.Addr, ss[i].NodeInfo.Addr) {
-				rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = ss[i].NodeInfo.Mcpu
-			} else {
-				rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = 1
-			}
-			connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])
-			connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-			ss[i].setRootOperator(connArg)
-			j++
+		if isSameCN(rs.NodeInfo.Addr, ss[i].NodeInfo.Addr) {
+			rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = ss[i].NodeInfo.Mcpu
+		} else {
+			rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = 1
 		}
-=======
-		// waring: `connector` operator is not used as an input/output analyze,
-		// and `connector` operator cannot play the role of IsFirst/IsLast
 		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])
 		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		ss[i].setRootOperator(connArg)
 		j++
->>>>>>> bcf7807c27631cbfa879403b20be5a33e50a8789
 	}
 	return rs
 }
