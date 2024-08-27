@@ -269,7 +269,7 @@ func hanldeTailNodeReceiver(node vm.Operator, mp map[*process.WaitRegister]int, 
 		var receiver = "unknown"
 		arg := node.(*connector.Connector)
 		if receiverId, okk := mp[arg.Reg]; okk {
-			receiver = fmt.Sprintf("%d(%v)", receiverId, arg.Reg.NilBatchCnt)
+			receiver = fmt.Sprintf("%d", receiverId)
 		}
 		buffer.WriteString(fmt.Sprintf(" to MergeReceiver [%s]", receiver))
 	}
@@ -281,7 +281,7 @@ func hanldeTailNodeReceiver(node vm.Operator, mp map[*process.WaitRegister]int, 
 				chs += ", "
 			}
 			if receiverId, okk := mp[arg.LocalRegs[i]]; okk {
-				chs += fmt.Sprintf("%d(%v)", receiverId, arg.LocalRegs[i].NilBatchCnt)
+				chs += fmt.Sprintf("%d", receiverId)
 			} else {
 				chs += "unknown"
 			}
@@ -351,7 +351,7 @@ func getReceiverStr(s *Scope, rs []*process.WaitRegister, rmp map[*process.WaitR
 			str += ", "
 		}
 		if id, ok := rmp[rs[i]]; ok {
-			str += fmt.Sprintf("%d(%v)%s", id, rs[i].NilBatchCnt, remote)
+			str += fmt.Sprintf("%d%s", id, remote)
 		} else {
 			str += "unknown"
 		}

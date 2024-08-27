@@ -15,7 +15,6 @@
 package colexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"reflect"
 	"time"
 
@@ -24,7 +23,6 @@ import (
 )
 
 func (r *ReceiverOperator) InitReceiver(proc *process.Process, mergeReceivers []*process.WaitRegister) {
-	logutil.Infof("receiver init with length %v channels, first nilbatchcnt  %v, first channel %p", len(mergeReceivers), mergeReceivers[0].NilBatchCnt, mergeReceivers[0].Ch)
 	r.proc = proc
 	r.MergeReceivers = mergeReceivers
 	r.aliveMergeReceiver = len(mergeReceivers)

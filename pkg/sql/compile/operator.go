@@ -18,8 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
@@ -489,9 +487,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Connector:
 		op := connector.NewArgument()
 		op.Reg = sourceOp.(*connector.Connector).Reg
-		if op.Reg.NilBatchCnt != maxParallel {
-			logutil.Warnf("!!!!!!!!!!!!!!!!!!!connector  channel %p nilbatchcnt %v， maxparallel %v", op.Reg.Ch, op.Reg.NilBatchCnt, maxParallel)
-		}
 		op.SetInfo(&info)
 		return op
 	case vm.Shuffle:
@@ -520,9 +515,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
 		for j := range op.LocalRegs {
 			op.LocalRegs[j] = sourceArg.LocalRegs[j]
-			if op.LocalRegs[j].NilBatchCnt != maxParallel {
-				logutil.Infof("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!dispatch  channel %p nilbatchcnt %v， maxparallel %v", op.LocalRegs[j].Ch, op.LocalRegs[j].NilBatchCnt, maxParallel)
-			}
 		}
 		for j := range op.RemoteRegs {
 			op.RemoteRegs[j] = sourceArg.RemoteRegs[j]
