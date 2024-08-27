@@ -415,18 +415,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
-	// case vm.MergeLimit:
-	// 	t := sourceOp.(*mergelimit.MergeLimit)
-	// 	op := mergelimit.NewArgument()
-	// 	op.Limit = t.Limit
-	// 	op.SetInfo(&info)
-	// 	return op
-	// case vm.MergeOffset:
-	// 	t := sourceOp.(*mergeoffset.MergeOffset)
-	// 	op := mergeoffset.NewArgument()
-	// 	op.Offset = t.Offset
-	// 	op.SetInfo(&info)
-	// 	return op
 	case vm.MergeTop:
 		t := sourceOp.(*mergetop.MergeTop)
 		op := mergetop.NewArgument()
@@ -755,14 +743,14 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	return op, nil
 }
 
-func constructPreInsertUk(n *plan.Node, proc *process.Process) *preinsertunique.PreInsertUnique {
+func constructPreInsertUk(n *plan.Node) *preinsertunique.PreInsertUnique {
 	preCtx := n.PreInsertUkCtx
 	op := preinsertunique.NewArgument()
 	op.PreInsertCtx = preCtx
 	return op
 }
 
-func constructPreInsertSk(n *plan.Node, proc *process.Process) *preinsertsecondaryindex.PreInsertSecIdx {
+func constructPreInsertSk(n *plan.Node) *preinsertsecondaryindex.PreInsertSecIdx {
 	op := preinsertsecondaryindex.NewArgument()
 	op.PreInsertCtx = n.PreInsertSkCtx
 	return op
@@ -1581,16 +1569,6 @@ func constructMergeTop(n *plan.Node, topN *plan.Expr) *mergetop.MergeTop {
 	arg.Limit = topN
 	return arg
 }
-
-// func constructMergeOffset(n *plan.Node) *mergeoffset.MergeOffset {
-// 	arg := mergeoffset.NewArgument().WithOffset(n.Offset)
-// 	return arg
-// }
-
-// func constructMergeLimit(n *plan.Node) *mergelimit.MergeLimit {
-// 	arg := mergelimit.NewArgument().WithLimit(n.Limit)
-// 	return arg
-// }
 
 func constructMergeOrder(n *plan.Node) *mergeorder.MergeOrder {
 	arg := mergeorder.NewArgument()
