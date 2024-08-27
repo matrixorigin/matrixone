@@ -3025,7 +3025,7 @@ var supportedMathBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_varchar, types.T_varchar},
+				args:       []types.T{types.T_datalink, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_text.ToType()
 				},

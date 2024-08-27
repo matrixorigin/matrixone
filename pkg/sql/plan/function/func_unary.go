@@ -1511,19 +1511,23 @@ func Chunk(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 			continue
 		}
 
+		inputPath := util.UnsafeBytesToString(inputBytes)
+		moUrl, _, _, err := types.ParseDatalink(inputPath)
+		if err != nil {
+			return err
+		}
+
 		var input string
 		// s3 load file switch
-		var s3_load_file_switch = false
+		var s3_load_file_switch = true
 
 		// unipdf switch
 		var uni_pdf_switch = false
 
 		// s3 Load file logic
 		if s3_load_file_switch {
-			Filepath := string(inputBytes)
-
 			fs := proc.GetFileService()
-			r, err := ReadFromFile(Filepath, fs)
+			r, err := ReadFromFile(moUrl, fs)
 			if err != nil {
 				return err
 			}
@@ -1547,8 +1551,7 @@ func Chunk(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 		// unipdf logic
 		if uni_pdf_switch {
-			Filepath := string(inputBytes)
-			input = unipdfExtractText(Filepath)
+			input = unipdfExtractText(moUrl)
 		}
 		chunkType := string(chunkTypeBytes)
 		resultStr := ChunkString(input, chunkType)
