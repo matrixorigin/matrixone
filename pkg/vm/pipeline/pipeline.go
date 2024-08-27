@@ -85,7 +85,7 @@ func (p *Pipeline) run(proc *process.Process) (end bool, err error) {
 
 	defer catchPanic(proc.Ctx, &err)
 
-	vm.SetAnalyzeInfo(p.rootOp, proc)
+	vm.ModifyOutputOpNodeIdx(p.rootOp, proc)
 
 	for end := false; !end; {
 		result, err := p.rootOp.Call(proc)

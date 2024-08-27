@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -129,9 +130,13 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
+	analyzer := dispatch.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ap := dispatch
 
-	result, err := dispatch.Children[0].Call(proc)
+	result, err := vm.ChildrenCallV1(dispatch.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}

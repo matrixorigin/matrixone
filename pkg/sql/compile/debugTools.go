@@ -205,7 +205,7 @@ func ShowPipelineTree(node vm.Operator, prefix string, isRoot bool, isTail bool,
 
 	analyzeStr := ""
 	if level == VerboseLevel || level == AnalyzeLevel {
-		analyzeStr = fmt.Sprintf("(idx:%v, isFirst:%v, isLast:%v) ",
+		analyzeStr = fmt.Sprintf("(idx:%v, isFirst:%v, isLast:%v)",
 			node.GetOperatorBase().Idx,
 			node.GetOperatorBase().IsFirst,
 			node.GetOperatorBase().IsLast)

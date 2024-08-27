@@ -147,46 +147,6 @@ type SessionInfo struct {
 	SessionId            uuid.UUID
 }
 
-//// AnalyzeInfo  operatorAnalyzer information for query
-//type AnalyzeInfo struct {
-//	// NodeId, index of query's node list
-//	NodeId int32
-//	// InputRows, number of rows accepted by node
-//	InputRows int64
-//	// OutputRows, number of rows output by node
-//	OutputRows int64
-//	// TimeConsumed, time taken by the node in milliseconds
-//	TimeConsumed int64
-//	// WaitTimeConsumed, time taken by the node waiting for channel in milliseconds
-//	WaitTimeConsumed int64
-//	// InputSize, data size accepted by node
-//	InputSize   int64
-//	InputBlocks int64
-//	// OutputSize, data size output by node
-//	OutputSize int64
-//	// MemorySize, memory alloc by node
-//	MemorySize int64
-//	// DiskIO, data size read from disk
-//	DiskIO int64
-//	// S3IOByte, data size read from s3
-//	S3IOByte int64
-//	// S3IOInputCount, count for PUT, COPY, POST and LIST
-//	S3IOInputCount int64
-//	// S3IOOutputCount, count for GET, SELECT and other
-//	S3IOOutputCount int64
-//	// NetworkIO, message size send between CN node
-//	NetworkIO int64
-//	// ScanTime, scan cost time in external scan
-//	ScanTime int64
-//	// InsertTime, insert cost time in load flow
-//	InsertTime int64
-//
-//	// time consumed by every single parallel
-//	mu                     *sync.Mutex
-//	TimeConsumedArrayMajor []int64
-//	TimeConsumedArrayMinor []int64
-//}
-
 type ExecStatus int
 
 const (
@@ -543,45 +503,3 @@ func (si *SessionInfo) GetDatabase() string {
 func (si *SessionInfo) GetVersion() string {
 	return si.Version
 }
-
-//func (a *AnalyzeInfo) AddNewParallel(major bool) int {
-//	a.mu.Lock()
-//	defer a.mu.Unlock()
-//	if major {
-//		a.TimeConsumedArrayMajor = append(a.TimeConsumedArrayMajor, 0)
-//		return len(a.TimeConsumedArrayMajor) - 1
-//	} else {
-//		a.TimeConsumedArrayMinor = append(a.TimeConsumedArrayMinor, 0)
-//		return len(a.TimeConsumedArrayMinor) - 1
-//	}
-//}
-//
-//func (a *AnalyzeInfo) DeepCopyArray(pa *plan.AnalyzeInfo) {
-//	a.mu.Lock()
-//	defer a.mu.Unlock()
-//	pa.TimeConsumedArrayMajor = pa.TimeConsumedArrayMajor[:0]
-//	pa.TimeConsumedArrayMajor = append(pa.TimeConsumedArrayMajor, a.TimeConsumedArrayMajor...)
-//	pa.TimeConsumedArrayMinor = pa.TimeConsumedArrayMinor[:0]
-//	pa.TimeConsumedArrayMinor = append(pa.TimeConsumedArrayMinor, a.TimeConsumedArrayMinor...)
-//}
-//
-//func (a *AnalyzeInfo) MergeArray(pa *plan.AnalyzeInfo) {
-//	a.mu.Lock()
-//	defer a.mu.Unlock()
-//	a.TimeConsumedArrayMajor = append(a.TimeConsumedArrayMajor, pa.TimeConsumedArrayMajor...)
-//	a.TimeConsumedArrayMinor = append(a.TimeConsumedArrayMinor, pa.TimeConsumedArrayMinor...)
-//}
-//
-//func (a *AnalyzeInfo) AddSingleParallelTimeConsumed(major bool, parallelIdx int, t int64) {
-//	a.mu.Lock()
-//	defer a.mu.Unlock()
-//	if major {
-//		if parallelIdx >= 0 && parallelIdx < len(a.TimeConsumedArrayMajor) {
-//			a.TimeConsumedArrayMajor[parallelIdx] += t
-//		}
-//	} else {
-//		if parallelIdx >= 0 && parallelIdx < len(a.TimeConsumedArrayMinor) {
-//			a.TimeConsumedArrayMinor[parallelIdx] += t
-//		}
-//	}
-//}

@@ -247,48 +247,6 @@ type scopeContext struct {
 	regs     map[*process.WaitRegister]int32
 }
 
-//// analyzeModule information
-//type analyzeModule struct {
-//	// curNodeIdx is the current Node index when compilePlanScope
-//	curNodeIdx int
-//	// isFirst is the first opeator in pipeline for plan Node
-//	isFirst   bool
-//	qry       *plan.Query
-//	analInfos []*process.AnalyzeInfo
-//}
-//
-//func (a *analyzeModule) S3IOInputCount(idx int, count int64) {
-//	atomic.AddInt64(&a.analInfos[idx].S3IOInputCount, count)
-//}
-//
-//func (a *analyzeModule) S3IOOutputCount(idx int, count int64) {
-//	atomic.AddInt64(&a.analInfos[idx].S3IOOutputCount, count)
-//}
-//
-//func (a *analyzeModule) Nodes() []*process.AnalyzeInfo {
-//	return a.analInfos
-//}
-//
-//func (a analyzeModule) TypeName() string {
-//	return "compile.analyzeModule"
-//}
-//
-//func newAnalyzeModule() *analyzeModule {
-//	return reuse.Alloc[analyzeModule](nil)
-//}
-//
-//func (a *analyzeModule) release() {
-//	// there are 3 situations to release analyzeInfo
-//	// 1 is free analyzeInfo of Local CN when release analyze
-//	// 2 is free analyzeInfo of remote CN before transfer back
-//	// 3 is free analyzeInfo of remote CN when errors happen before transfer back
-//	// this is situation 1
-//	for i := range a.analInfos {
-//		reuse.Free[process.AnalyzeInfo](a.analInfos[i], nil)
-//	}
-//	reuse.Free[analyzeModule](a, nil)
-//}
-
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scope []*Scope
@@ -317,7 +275,6 @@ type Compile struct {
 	// queryStatus is a structure to record query has done.
 	queryStatus queryDoneWaiter
 
-	//anal *analyzeModule
 	anal *AnalyzeModuleV1
 	// e db engine instance.
 	e engine.Engine

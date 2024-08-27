@@ -266,8 +266,6 @@ type Operator interface {
 	// OpType returns the OpType of an operator.
 	OpType() OpType
 
-	//OpName() string
-
 	//Prepare prepares an operator for execution.
 	Prepare(proc *process.Process) error
 
@@ -433,9 +431,7 @@ func NewCallResult() CallResult {
 }
 
 type OperatorInfo struct {
-	Idx int // plan node index to which the pipeline operator belongs
-	//ParallelIdx   int
-	//ParallelMajor bool
+	Idx     int // plan node index to which the pipeline operator belongs
 	IsFirst bool
 	IsLast  bool
 
