@@ -1441,19 +1441,26 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string,
 	arg.ShuffleRegIdxLocal = make([]int, 0, len(ss))
 	arg.ShuffleRegIdxRemote = make([]int, 0, len(ss))
 	hasRemote := false
-	for i, s := range ss {
 
-		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
-			isSameCN(s.NodeInfo.Addr, currentCNAddr) {
+	for _, s := range ss {
+		if !isSameCN(s.NodeInfo.Addr, currentCNAddr) {
+			hasRemote = true
+			break
+		}
+	}
+
+	for i, s := range ss {
+		if isSameCN(s.NodeInfo.Addr, currentCNAddr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
-			s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = mcpu
+			if !hasRemote {
+				s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = mcpu
+			}
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 			arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
 		} else {
 			// Remote reg.
 			// Generate uuid for them and put into arg.RemoteRegs & scope. receive info
-			hasRemote = true
 			newUuid, _ := uuid.NewV7()
 
 			arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
