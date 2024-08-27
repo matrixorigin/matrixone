@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -1107,7 +1108,7 @@ func (m *mysqlTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.
 			if daemonTask.TaskStatus != task.TaskStatus_Canceled && taskId == details.CreateCdc.TaskId {
 				if (targetStatus == task.TaskStatus_ResumeRequested || targetStatus == task.TaskStatus_RestartRequested) && daemonTask.TaskStatus != task.TaskStatus_Paused ||
 					targetStatus == task.TaskStatus_PauseRequested && daemonTask.TaskStatus != task.TaskStatus_Running {
-					err = moerr.NewInternalError(ctx,
+					err = moerr.NewInternalErrorf(ctx,
 						"status can not be change, now it is %s",
 						daemonTask.TaskStatus.String())
 					return 0, err

@@ -303,7 +303,7 @@ func extractUriInfo(ctx context.Context, uri string) (user string, pwd string, i
 	var portInt int64
 	portInt, err = strconv.ParseInt(portStr, 10, 32)
 	if err != nil {
-		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 5 %v", portStr)
+		return "", "", "", 0, moerr.NewInternalErrorf(ctx, "invalid format of uri 5 %v", portStr)
 	}
 	if portInt < 0 || portInt > 65535 {
 		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 6")

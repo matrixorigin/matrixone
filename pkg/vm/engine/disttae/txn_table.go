@@ -1694,12 +1694,6 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 	return tbl.db.databaseId
 }
 
-func (tbl *txnTable) GetDBName() string {
-	return tbl.db.databaseName
-}
-
-// NewReader creates a new list of Readers to read data from the table.
-
 // for test
 func buildRemoteDS(
 	ctx context.Context,
@@ -1803,7 +1797,6 @@ func (tbl *txnTable) buildLocalDataSource(
 }
 
 // BuildReaders BuildReader creates a new list of Readers to read data from the table.
-
 // Parameters:
 //   - ctx: Context used to control the lifecycle of the request.
 //   - num: The number of Readers to create.

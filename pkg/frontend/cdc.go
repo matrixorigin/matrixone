@@ -447,21 +447,21 @@ func canCreateCdcTask(ctx context.Context, ses *Session, level string, account s
 		}
 	} else if strings.EqualFold(level, AccountLevel) {
 		if !ses.tenant.IsMoAdminRole() && ses.GetTenantName() != account {
-			return moerr.NewInternalError(ctx, "No privilege to create task on %s", account)
+			return moerr.NewInternalErrorf(ctx, "No privilege to create task on %s", account)
 		}
 		for _, pt := range pts {
 			if pt.SourceAccount == "" {
 				pt.SourceAccount = account
 			}
 			if account != pt.SourceAccount {
-				return moerr.NewInternalError(ctx, "No privilege to create task on table %s", pt.OriginString)
+				return moerr.NewInternalErrorf(ctx, "No privilege to create task on table %s", pt.OriginString)
 			}
 			if isBannedDatabase(pt.SourceDatabase) {
 				return moerr.NewInternalError(ctx, "The system database cannot be subscribed to")
 			}
 		}
 	} else {
-		return moerr.NewInternalError(ctx, "Incorrect level %s", level)
+		return moerr.NewInternalErrorf(ctx, "Incorrect level %s", level)
 	}
 	return nil
 }
@@ -581,7 +581,7 @@ func RegisterCdcExecutor(
 			return err
 		}
 		if len(tasks) != 1 {
-			return moerr.NewInternalError(ctx, "invalid tasks count %d", len(tasks))
+			return moerr.NewInternalErrorf(ctx, "invalid tasks count %d", len(tasks))
 		}
 		details, ok := tasks[0].Details.Details.(*task.Details_CreateCdc)
 		if !ok {
@@ -679,9 +679,9 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 	}
 
 	if res.RowCount() < 1 {
-		return moerr.NewInternalError(ctx, "none cdc task for %d %s", cdc.cdcTask.AccountId, cdc.cdcTask.TaskId)
+		return moerr.NewInternalErrorf(ctx, "none cdc task for %d %s", cdc.cdcTask.AccountId, cdc.cdcTask.TaskId)
 	} else if res.RowCount() > 1 {
-		return moerr.NewInternalError(ctx, "duplicate cdc task for %d %s", cdc.cdcTask.AccountId, cdc.cdcTask.TaskId)
+		return moerr.NewInternalErrorf(ctx, "duplicate cdc task for %d %s", cdc.cdcTask.AccountId, cdc.cdcTask.TaskId)
 	}
 
 	//sink uri
@@ -697,7 +697,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 	}
 
 	if sinkTyp != MysqlSink && sinkTyp != MatrixoneSink {
-		return moerr.NewInternalError(ctx, "unsupported sink type: %s", sinkTyp)
+		return moerr.NewInternalErrorf(ctx, "unsupported sink type: %s", sinkTyp)
 	}
 
 	//sink_password
@@ -758,9 +758,9 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		}
 
 		if res.RowCount() < 1 {
-			return moerr.NewInternalError(ctx, "no table %s:%s", dbName, tblName)
+			return moerr.NewInternalErrorf(ctx, "no table %s:%s", dbName, tblName)
 		} else if res.RowCount() > 1 {
-			return moerr.NewInternalError(ctx, "duplicate table %s:%s", dbName, tblName)
+			return moerr.NewInternalErrorf(ctx, "duplicate table %s:%s", dbName, tblName)
 		}
 
 		if dbId, err = res.GetUint64(ctx, 0, 0); err != nil {

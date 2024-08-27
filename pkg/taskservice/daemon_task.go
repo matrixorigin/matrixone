@@ -20,9 +20,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"go.uber.org/zap"
 )
 
 type TaskHandler interface {
@@ -136,13 +137,13 @@ func (t *restartTask) Handle(ctx context.Context) error {
 		return err
 	}
 	if len(tasks) != 1 {
-		return moerr.NewInternalError(ctx, "count of tasks is wrong %d", len(tasks))
+		return moerr.NewInternalErrorf(ctx, "count of tasks is wrong %d", len(tasks))
 	}
 
 	tk := tasks[0]
 	// We cannot resume a task which is not on local runner.
 	if !strings.EqualFold(tk.TaskRunner, t.runner.runnerID) {
-		return moerr.NewInternalError(ctx, "the task is not on local runner, prev runner %s, "+
+		return moerr.NewInternalErrorf(ctx, "the task is not on local runner, prev runner %s, "+
 			"local runner %s", tk.TaskRunner, t.runner.runnerID)
 	}
 
@@ -157,7 +158,7 @@ func (t *restartTask) Handle(ctx context.Context) error {
 
 	ar := t.task.activeRoutine.Load()
 	if ar == nil || *ar == nil {
-		return moerr.NewInternalError(ctx, "cannot handle restart operation, "+
+		return moerr.NewInternalErrorf(ctx, "cannot handle restart operation, "+
 			"active routine not set for task %d", t.task.task.ID)
 	}
 	return (*ar).Restart()

@@ -47,7 +47,6 @@ type PartitionState struct {
 	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
 	//table data objects
 	dataObjects *btree.BTreeG[ObjectEntry]
-
 	//TODO:: It's transient, should be removed in future PR.
 	blockDeltas *btree.BTreeG[BlockDeltaEntry]
 	checkpoints []string
@@ -268,8 +267,6 @@ func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 	return false
 }
 
-// NewPartitionState
-// for cdc application, the cdc is true, other false
 func NewPartitionState(
 	service string,
 	noData bool,

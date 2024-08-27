@@ -556,7 +556,7 @@ func (s *service) initClusterService() {
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.ClusterService, s.moCluster)
 }
 
-func (s *service) getTxnSender(forCn bool) (sender rpc.TxnSender, err error) {
+func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 	// handleTemp is used to manipulate memorystorage stored for temporary table created by sessions.
 	// processing of temporary table is currently on local, so we need to add a WithLocalDispatch logic to service.
 	handleTemp := func(d metadata.TNShard) rpc.TxnRequestHandleFunc {
@@ -623,134 +623,113 @@ func (s *service) getTxnSender(forCn bool) (sender rpc.TxnSender, err error) {
 		}
 	}
 
-	if forCn {
-		s.initTxnSenderOnce.Do(func() {
-			sender, err = s.createTxnSender(handleTemp)
-			if err != nil {
-				return
-			}
-			s._txnSender = sender
-		})
-		sender = s._txnSender
-	} else {
-		sender, err = s.createTxnSender(handleTemp)
+	s.initTxnSenderOnce.Do(func() {
+		sender, err = rpc.NewSender(
+			s.cfg.RPC,
+			runtime.ServiceRuntime(s.cfg.UUID),
+			rpc.WithSenderLocalDispatch(handleTemp),
+		)
 		if err != nil {
 			return
 		}
-	}
-
+		s._txnSender = sender
+	})
+	sender = s._txnSender
 	return
-}
-
-func (s *service) createTxnSender(
-	handleTemp func(d metadata.TNShard) rpc.TxnRequestHandleFunc,
-) (sender rpc.TxnSender, err error) {
-	return rpc.NewSender(
-		s.cfg.RPC,
-		runtime.ServiceRuntime(s.cfg.UUID),
-		rpc.WithSenderLocalDispatch(handleTemp),
-	)
 }
 
 func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	s.initTxnClientOnce.Do(func() {
-		s._txnClient, s.timestampWaiter, err = s.createTxnClient(true)
+		s.timestampWaiter = client.NewTimestampWaiter(runtime.ServiceRuntime(s.cfg.UUID).Logger())
+
+		rt := runtime.ServiceRuntime(s.cfg.UUID)
+		client.SetupRuntimeTxnOptions(
+			rt,
+			txn.GetTxnMode(s.cfg.Txn.Mode),
+			txn.GetTxnIsolation(s.cfg.Txn.Isolation),
+		)
+		var sender rpc.TxnSender
+		sender, err = s.getTxnSender()
 		if err != nil {
 			return
 		}
+		var opts []client.TxnClientCreateOption
+		opts = append(opts,
+			client.WithTimestampWaiter(s.timestampWaiter))
+		if s.cfg.Txn.EnableSacrificingFreshness == 1 {
+			opts = append(opts,
+				client.WithEnableSacrificingFreshness())
+		}
+		if s.cfg.Txn.EnableCNBasedConsistency == 1 {
+			opts = append(opts,
+				client.WithEnableCNBasedConsistency())
+		}
+		if s.cfg.Txn.EnableRefreshExpression == 1 {
+			opts = append(opts,
+				client.WithEnableRefreshExpression())
+		}
+		if s.cfg.Txn.EnableLeakCheck == 1 {
+			opts = append(opts, client.WithEnableLeakCheck(
+				s.cfg.Txn.MaxActiveAges.Duration,
+				func(actives []client.ActiveTxn) {
+					name, _ := uuid.NewV7()
+					profPath := catalog.BuildProfilePath("CN", s.cfg.UUID, "leakcheck_routine", name.String()) + ".gz"
+
+					for _, txn := range actives {
+						fields := []zap.Field{
+							zap.String("txn-id", hex.EncodeToString(txn.ID)),
+							zap.Time("create-at", txn.CreateAt),
+							zap.String("options", txn.Options.String()),
+							zap.String("profile", profPath),
+						}
+						if txn.Options.InRunSql {
+							//the txn runs sql in compile.Run() and doest not exist
+							v2.TxnLongRunningCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found long running txn", fields...)
+						} else if txn.Options.InCommit {
+							v2.TxnInCommitCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found txn in commit", fields...)
+						} else if txn.Options.InRollback {
+							v2.TxnInRollbackCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found txn in rollback", fields...)
+						} else {
+							v2.TxnLeakCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found leak txn", fields...)
+						}
+					}
+
+					SaveProfile(profPath, profile.GOROUTINE, s.etlFS)
+				}))
+		}
+		if s.cfg.Txn.Limit > 0 {
+			opts = append(opts,
+				client.WithTxnLimit(s.cfg.Txn.Limit))
+		}
+		if s.cfg.Txn.MaxActive > 0 {
+			opts = append(opts,
+				client.WithMaxActiveTxn(s.cfg.Txn.MaxActive))
+		}
+		if s.cfg.Txn.PkDedupCount > 0 {
+			opts = append(opts, client.WithCheckDup())
+		}
+		traceService := trace.GetService(s.cfg.UUID)
+		opts = append(opts,
+			client.WithLockService(s.lockService),
+			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
+			client.WithTxnOpenedCallback([]func(op client.TxnOperator){
+				func(op client.TxnOperator) {
+					traceService.TxnCreated(op)
+				},
+			}),
+		)
+		c = client.NewTxnClient(
+			s.cfg.UUID,
+			sender,
+			opts...,
+		)
+		s._txnClient = c
 	})
 	c = s._txnClient
-	return
-}
-
-func (s *service) createTxnClient(forCn bool) (c client.TxnClient, timestampWaiter client.TimestampWaiter, err error) {
-	timestampWaiter = client.NewTimestampWaiter(runtime.ServiceRuntime(s.cfg.UUID).Logger())
-
-	rt := runtime.ServiceRuntime(s.cfg.UUID)
-	client.SetupRuntimeTxnOptions(
-		rt,
-		txn.GetTxnMode(s.cfg.Txn.Mode),
-		txn.GetTxnIsolation(s.cfg.Txn.Isolation),
-	)
-	var sender rpc.TxnSender
-	//TODO: fix shared rpc sender
-	sender, err = s.getTxnSender(forCn)
-	if err != nil {
-		return
-	}
-	var opts []client.TxnClientCreateOption
-	opts = append(opts,
-		client.WithTimestampWaiter(timestampWaiter))
-	if s.cfg.Txn.EnableSacrificingFreshness == 1 {
-		opts = append(opts,
-			client.WithEnableSacrificingFreshness())
-	}
-	if s.cfg.Txn.EnableCNBasedConsistency == 1 {
-		opts = append(opts,
-			client.WithEnableCNBasedConsistency())
-	}
-	if s.cfg.Txn.EnableRefreshExpression == 1 {
-		opts = append(opts,
-			client.WithEnableRefreshExpression())
-	}
-	if s.cfg.Txn.EnableLeakCheck == 1 {
-		opts = append(opts, client.WithEnableLeakCheck(
-			s.cfg.Txn.MaxActiveAges.Duration,
-			func(actives []client.ActiveTxn) {
-				name, _ := uuid.NewV7()
-				profPath := catalog.BuildProfilePath("CN", s.cfg.UUID, "leakcheck_routine", name.String()) + ".gz"
-
-				for _, txn := range actives {
-					fields := []zap.Field{
-						zap.String("txn-id", hex.EncodeToString(txn.ID)),
-						zap.Time("create-at", txn.CreateAt),
-						zap.String("options", txn.Options.String()),
-						zap.String("profile", profPath),
-					}
-					if txn.Options.InRunSql {
-						//the txn runs sql in compile.Run() and doest not exist
-						v2.TxnLongRunningCounter.Inc()
-						runtime.DefaultRuntime().Logger().Error("found long running txn", fields...)
-					} else if txn.Options.InCommit {
-						v2.TxnInCommitCounter.Inc()
-						runtime.DefaultRuntime().Logger().Error("found txn in commit", fields...)
-					} else if txn.Options.InRollback {
-						v2.TxnInRollbackCounter.Inc()
-						runtime.DefaultRuntime().Logger().Error("found txn in rollback", fields...)
-					} else {
-						v2.TxnLeakCounter.Inc()
-						runtime.DefaultRuntime().Logger().Error("found leak txn", fields...)
-					}
-				}
-
-				SaveProfile(profPath, profile.GOROUTINE, s.etlFS)
-			}))
-	}
-	if s.cfg.Txn.Limit > 0 {
-		opts = append(opts,
-			client.WithTxnLimit(s.cfg.Txn.Limit))
-	}
-	if s.cfg.Txn.MaxActive > 0 {
-		opts = append(opts,
-			client.WithMaxActiveTxn(s.cfg.Txn.MaxActive))
-	}
-	if s.cfg.Txn.PkDedupCount > 0 {
-		opts = append(opts, client.WithCheckDup())
-	}
-	opts = append(opts,
-		client.WithLockService(s.lockService),
-		client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
-		client.WithTxnOpenedCallback([]func(op client.TxnOperator){
-			func(op client.TxnOperator) {
-				trace.GetService(s.cfg.UUID).TxnCreated(op)
-			},
-		}),
-	)
-	c = client.NewTxnClient(
-		s.cfg.UUID,
-		sender,
-		opts...,
-	)
 	return
 }
 

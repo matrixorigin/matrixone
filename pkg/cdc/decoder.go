@@ -747,7 +747,7 @@ func getDeleteInBuff(
 			pkColIdx := colName2Index[pkName]
 			pkCol := tableDef.Cols[pkColIdx]
 			if pkTypes[pkIdx] != types.T(pkCol.Typ.Id) {
-				return deleteInBuff, moerr.NewInternalError(ctx, "different pk col Type %v %v", pkTypes[pkIdx], pkCol.Typ.Id)
+				return deleteInBuff, moerr.NewInternalErrorf(ctx, "different pk col Type %v %v", pkTypes[pkIdx], pkCol.Typ.Id)
 			}
 			ttype := types.Type{
 				Oid:   types.T(pkCol.Typ.Id),

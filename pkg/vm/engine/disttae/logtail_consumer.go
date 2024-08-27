@@ -1018,7 +1018,8 @@ func (s *subscribedTable) isSubscribed(dbId, tblId uint64) bool {
 func (c *PushClient) loadAndConsumeLatestCkp(
 	ctx context.Context,
 	tableId uint64,
-	tbl *txnTable) (SubscribeState, *logtailreplay.PartitionState, error) {
+	tbl *txnTable,
+) (SubscribeState, *logtailreplay.PartitionState, error) {
 
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()

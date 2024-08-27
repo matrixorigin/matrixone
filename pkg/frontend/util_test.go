@@ -1299,8 +1299,3 @@ func Test_issue3482(t *testing.T) {
 	ui := UserInput{sql: s}
 	assert.True(t, ui.isIssue3482Sql())
 }
-
-func Test_xxx(t *testing.T) {
-	fmt.Println(strings.Split("abc", ","))
-	fmt.Println(strings.Split("abc,def", ","))
-}

@@ -118,7 +118,7 @@ func NewTestDisttaeEngine(
 		return nil, err
 	}
 
-	err = disttae.InitLogTailPushModel(ctx, de.Engine, de.timestampWaiter)
+	err = de.Engine.InitLogTailPushModel(ctx, de.timestampWaiter)
 	if err != nil {
 		return nil, err
 	}
@@ -139,83 +139,11 @@ func NewTestDisttaeEngine(
 	return de, err
 }
 
-func NewTestDisttaeEngine2(ctx context.Context, mp *mpool.MPool,
-	fs fileservice.FileService, rpcAgent *MockRPCAgent, storage *TestTxnStorage) (*TestDisttaeEngine, error) {
-	de := new(TestDisttaeEngine)
-	de.logtailReceiver = make(chan morpc.Message)
-	de.broken = make(chan struct{})
-
-	de.ctx, de.cancel = context.WithCancel(ctx)
-
-	initRuntime()
-
-	wait := make(chan struct{})
-	de.timestampWaiter = client.NewTimestampWaiter(runtime.GetLogger(""))
-
-	txnSender := service.NewTestSender(storage)
-	de.txnClient = client.NewTxnClient("", txnSender, client.WithTimestampWaiter(de.timestampWaiter))
-
-	de.txnClient.Resume()
-
-	hakeeper := newTestHAKeeperClient()
-	colexec.NewServer(hakeeper)
-
-	catalog.SetupDefines("")
-	de.Engine = disttae.New(ctx, "", mp, fs, de.txnClient, hakeeper, nil, 0)
-	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
-
-	go func() {
-		done := false
-		for !done {
-			select {
-			case <-wait:
-				done = true
-			default:
-				de.timestampWaiter.NotifyLatestCommitTS(de.Now())
-				time.Sleep(time.Millisecond * 100)
-			}
-		}
-	}()
-
-	op, err := de.txnClient.New(ctx, types.TS{}.ToTimestamp())
-	if err != nil {
-		return nil, err
-	}
-
-	close(wait)
-
-	de.txnOperator = op
-	if err = de.Engine.New(ctx, op); err != nil {
-		return nil, err
-	}
-
-	//err = disttae.InitLogTailPushModel(ctx, de.Engine, de.timestampWaiter)
-	//if err != nil {
-	//	return nil, err
-	//}
-	//
-	//qc, _ := qclient.NewQueryClient("", morpc.Config{})
-	//sqlExecutor := compile.NewSQLExecutor(
-	//	"127.0.0.1:2000",
-	//	de.Engine,
-	//	mp,
-	//	de.txnClient,
-	//	fs,
-	//	qc,
-	//	hakeeper,
-	//	nil, //s.udfService
-	//)
-	//runtime.ServiceRuntime("").SetGlobalVariables(runtime.InternalSQLExecutor, sqlExecutor)
-	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
-	return de, err
-}
-
 func (de *TestDisttaeEngine) NewTxnOperator(
 	ctx context.Context,
 	commitTS timestamp.Timestamp,
 	opts ...client.TxnOption,
 ) (client.TxnOperator, error) {
-
 	op, err := de.txnClient.New(ctx, commitTS, opts...)
 	if err != nil {
 		return nil, err

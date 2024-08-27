@@ -196,7 +196,7 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		logutil.Errorf(
 			"Failed to extract row from vector, unsupported type",
 			zap.Int("typeID", int(vec.GetType().Oid)))
-		return moerr.NewInternalError(ctx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
+		return moerr.NewInternalErrorf(ctx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
 	}
 	return nil
 }
@@ -352,7 +352,7 @@ func convertColIntoSql(
 		logutil.Errorf(
 			"Failed to extract row from vector, unsupported type",
 			zap.Int("typeID", int(typ.Oid)))
-		return nil, moerr.NewInternalError(ctx, "extractRowFromVector : unsupported type %d", typ.Oid)
+		return nil, moerr.NewInternalErrorf(ctx, "extractRowFromVector : unsupported type %d", typ.Oid)
 	}
 
 	return sqlBuff, nil
@@ -455,7 +455,7 @@ func TimestampToStr(ts timestamp.Timestamp) string {
 func StrToTimestamp(tsStr string) (ts timestamp.Timestamp, err error) {
 	splits := strings.Split(tsStr, "-")
 	if len(splits) != 2 {
-		err = moerr.NewInternalErrorNoCtx("strToTimestamp : invalid timestamp string %s", tsStr)
+		err = moerr.NewInternalErrorNoCtxf("strToTimestamp : invalid timestamp string %s", tsStr)
 		return
 	}
 
