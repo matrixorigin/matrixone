@@ -130,8 +130,6 @@ var (
 
 type AggMemoryManager interface {
 	Mp() *mpool.MPool
-	GetVector(typ types.Type) *vector.Vector
-	PutVector(v *vector.Vector)
 }
 
 type SimpleAggMemoryManager struct {
@@ -144,14 +142,6 @@ func NewSimpleAggMemoryManager(mp *mpool.MPool) AggMemoryManager {
 
 func (m SimpleAggMemoryManager) Mp() *mpool.MPool {
 	return m.mp
-}
-
-func (m SimpleAggMemoryManager) GetVector(typ types.Type) *vector.Vector {
-	return vector.NewVec(typ)
-}
-
-func (m SimpleAggMemoryManager) PutVector(v *vector.Vector) {
-	v.Free(m.mp)
 }
 
 // MakeAgg is the only exporting method to create an aggregation function executor.
