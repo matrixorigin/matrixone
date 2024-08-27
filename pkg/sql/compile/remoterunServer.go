@@ -199,13 +199,11 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}()
 
 		err = s.ParallelRun(runCompile)
-
 		//-------------------------------------------------------------------
 		if err == nil {
 			runCompile.GeneratePhyPlan()
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
 		}
-
 		//-------------------------------------------------------------------
 		//if err == nil {
 		//	// record the number of s3 requests

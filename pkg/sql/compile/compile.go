@@ -4026,9 +4026,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
-		if strings.Contains(n.TableDef.Name, "real_time_position") {
-			fmt.Println("-----------wuxiliang entry Disttae engine--------------")
-		}
 		nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
 		return nodes, partialResults, partialResultTypes, err
 	}
@@ -4706,29 +4703,8 @@ func dupType(typ *plan.Type) types.Type {
 	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
 }
 
-// Update the specific scopes's instruction to true
-// then update the current idx
-func (c *Compile) setAnalyzeCurrent(updateScopes []*Scope, nextId int) {
-	if updateScopes != nil {
-		updateScopesLastFlag(updateScopes)
-	}
-
-	c.anal.curNodeIdx = nextId
-	c.anal.isFirst = true
-}
-
-func updateScopesLastFlag(updateScopes []*Scope) {
-	for _, s := range updateScopes {
-		if s.RootOp == nil {
-			continue
-		}
-		s.RootOp.GetOperatorBase().IsLast = true
-	}
-}
-
 func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
-
 	parts1 := strings.Split(addr, ":")
 	if len(parts1) != 2 {
 		logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)

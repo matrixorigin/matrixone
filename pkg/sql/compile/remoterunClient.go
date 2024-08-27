@@ -334,11 +334,6 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 
 				sender.dealRemoteAnalysis(p)
 				//---------------------------------------------------------------
-				//ana := new(pipeline.AnalysisList)
-				//if err = ana.Unmarshal(anaData); err != nil {
-				//	return nil, false, err
-				//}
-				//sender.dealAnalysis(ana)
 			}
 			return nil, true, nil
 		}
@@ -418,38 +413,6 @@ func (sender *messageSenderOnClient) dealRemoteAnalysis(p models.PhyPlan) {
 	//sender.anal.phyPlan.S3IOInputCount += p.S3IOInputCount
 	//sender.anal.phyPlan.S3IOOutputCount += p.S3IOOutputCount
 }
-
-//func (sender *messageSenderOnClient) dealAnalysis(ana *pipeline.AnalysisList) {
-//	if sender.anal == nil {
-//		return
-//	}
-//	mergeAnalyseInfo(sender.anal, ana)
-//}
-//
-//func mergeAnalyseInfo(target *analyzeModule, ana *pipeline.AnalysisList) {
-//	source := ana.List
-//	if len(target.analInfos) != len(source) {
-//		return
-//	}
-//	for i := range target.analInfos {
-//		n := source[i]
-//		atomic.AddInt64(&target.analInfos[i].OutputSize, n.OutputSize)
-//		atomic.AddInt64(&target.analInfos[i].OutputRows, n.OutputRows)
-//		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
-//		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
-//		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
-//		target.analInfos[i].MergeArray(n)
-//		atomic.AddInt64(&target.analInfos[i].TimeConsumed, n.TimeConsumed)
-//		atomic.AddInt64(&target.analInfos[i].WaitTimeConsumed, n.WaitTimeConsumed)
-//		atomic.AddInt64(&target.analInfos[i].DiskIO, n.DiskIO)
-//		atomic.AddInt64(&target.analInfos[i].S3IOByte, n.S3IOByte)
-//		atomic.AddInt64(&target.analInfos[i].S3IOInputCount, n.S3IOInputCount)
-//		atomic.AddInt64(&target.analInfos[i].S3IOOutputCount, n.S3IOOutputCount)
-//		atomic.AddInt64(&target.analInfos[i].NetworkIO, n.NetworkIO)
-//		atomic.AddInt64(&target.analInfos[i].ScanTime, n.ScanTime)
-//		atomic.AddInt64(&target.analInfos[i].InsertTime, n.InsertTime)
-//	}
-//}
 
 func (sender *messageSenderOnClient) close() {
 	sender.waitingTheStopResponse()

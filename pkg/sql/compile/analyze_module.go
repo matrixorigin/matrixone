@@ -94,6 +94,8 @@ func (c *Compile) GetOriginSql() string {
 	return c.sql
 }
 
+// setAnalyzeCurrentV1 Update the specific scopes's instruction to true
+// then update the current idx
 func (c *Compile) setAnalyzeCurrentV1(updateScopes []*Scope, nextId int) {
 	if updateScopes != nil {
 		updateScopesLastFlag(updateScopes)
@@ -103,6 +105,16 @@ func (c *Compile) setAnalyzeCurrentV1(updateScopes []*Scope, nextId int) {
 	c.anal.isFirst = true
 }
 
+func updateScopesLastFlag(updateScopes []*Scope) {
+	for _, s := range updateScopes {
+		if s.RootOp == nil {
+			continue
+		}
+		s.RootOp.GetOperatorBase().IsLast = true
+	}
+}
+
+// ----------------------------------------------------------------------------------------------------------------------
 // addOpStatsToPlanNodes Recursive traversal of PhyOperator and adding OpStats statistics to the corresponding NodeAnalyze Info
 func addOpStatsToPlanNodes(op *models.PhyOperator, nodes []*plan.Node) {
 	if op == nil {
