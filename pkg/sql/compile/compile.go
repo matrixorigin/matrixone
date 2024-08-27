@@ -1570,33 +1570,25 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 
 	t = time.Now()
 	var fileOffset [][]int64
+
 	if param.Parallel {
+		visibleCols := make([]*plan.ColDef, 0)
 		if param.Strict {
-			visibleCols := make([]*plan.ColDef, 0)
 			for _, col := range n.TableDef.Cols {
 				if !col.Hidden {
 					visibleCols = append(visibleCols, col)
 				}
 			}
-			for i := 0; i < len(fileList); i++ {
-				param.Filepath = fileList[i]
-				arr, err := external.ReadFileOffsetStrict(param, mcpu, fileSize[i], visibleCols)
-				fileOffset = append(fileOffset, arr)
-				if err != nil {
-					return nil, err
-				}
-			}
-		} else {
-			for i := 0; i < len(fileList); i++ {
-				param.Filepath = fileList[i]
-				arr, err := external.ReadFileOffsetNoStrict(param, mcpu, fileSize[i])
-				fileOffset = append(fileOffset, arr)
-				if err != nil {
-					return nil, err
-				}
-			}
 		}
 
+		for i := 0; i < len(fileList); i++ {
+			param.Filepath = fileList[i]
+			arr, err := external.ReadFileOffset(param, mcpu, fileSize[i], visibleCols)
+			fileOffset = append(fileOffset, arr)
+			if err != nil {
+				return nil, err
+			}
+		}
 	} else {
 		for i := 0; i < len(fileList); i++ {
 			param.Filepath = fileList[i]
@@ -1641,7 +1633,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
 				}
 			} else {
-				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{0, -1}...)
+				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{param.FileStartOff, -1}...)
 			}
 		}
 		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
@@ -4018,7 +4010,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 					ctx, blk.BlockID, fs,
 				); err2 != nil {
 					return false, err2
-				} else if hasTombstone {
+				} else if blk.Appendable || hasTombstone {
 					newRelData.AppendBlockInfo(blk)
 					return true, nil
 				}
