@@ -209,7 +209,7 @@ func LoadBFWithMeta(
 		return v, nil
 	}
 	extent := meta.BlockHeader().BFExtent()
-	bf, err := ReadBloomFilter(ctx, location.Name().String(), &extent, fileservice.SkipMemoryCache|fileservice.SkipFullFilePreloads, fs)
+	bf, err := ReadBloomFilter(ctx, location.Name().String(), &extent, fileservice.SkipFullFilePreloads, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -226,8 +226,5 @@ func FastLoadObjectMeta(
 ) (ObjectMeta, error) {
 	extent := location.Extent()
 	name := location.Name()
-	var metaReadPolicy fileservice.Policy
-	metaReadPolicy = fileservice.SkipMemoryCache
-	metaReadPolicy |= fileservice.SkipFullFilePreloads
-	return LoadObjectMetaByExtent(ctx, &name, &extent, prefetch, metaReadPolicy, fs)
+	return LoadObjectMetaByExtent(ctx, &name, &extent, prefetch, fileservice.SkipFullFilePreloads, fs)
 }
