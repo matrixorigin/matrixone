@@ -1,5 +1,6 @@
 drop account if exists account_test;
 create account account_test admin_name = 'root' identified by '111' open comment 'account_test';
+-- @ignore:2,7
 show accounts;
 
 -- @session:id=2&user=account_test:root&password=111
