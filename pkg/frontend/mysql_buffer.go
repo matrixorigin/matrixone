@@ -109,8 +109,8 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
 
 	c := &Conn{
 		conn:              conn,
-		localAddr:         conn.RemoteAddr().String(),
-		remoteAddr:        conn.LocalAddr().String(),
+		localAddr:         conn.LocalAddr().String(),
+		remoteAddr:        conn.RemoteAddr().String(),
 		fixBuf:            &ListBlock{},
 		dynamicBuf:        list.New(),
 		allocator:         &BufferAllocator{allocator: getGlobalSessionAlloc()},
