@@ -344,7 +344,7 @@ func LoadCheckpointEntriesFromKey(
 		deletedAt := data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_DeleteAt).Get(i).(types.TS)
 		createAt := data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_CreateAt).Get(i).(types.TS)
 		commitAt := data.bats[ObjectInfoIDX].GetVectorByName(txnbase.SnapshotAttr_CommitTS).Get(i).(types.TS)
-		isAblk := data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_State).Get(i).(bool)
+		isAblk := objectStats.GetAppendable()
 		if objectStats.Extent().End() == 0 {
 			// tn obj is in the batch too
 			continue
@@ -450,7 +450,6 @@ func ReWriteCheckpointAndBlockFromKey(
 	) *containers.Batch {
 		objInfoData := data.bats[idx]
 		objInfoStats := objInfoData.GetVectorByName(ObjectAttr_ObjectStats)
-		objInfoState := objInfoData.GetVectorByName(ObjectAttr_State)
 		objInfoTid := objInfoData.GetVectorByName(SnapshotAttr_TID)
 		objInfoDelete := objInfoData.GetVectorByName(EntryNode_DeleteAt)
 		objInfoCreate := objInfoData.GetVectorByName(EntryNode_CreateAt)
@@ -459,7 +458,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		for i := 0; i < objInfoData.Length(); i++ {
 			stats := objectio.NewObjectStats()
 			stats.UnMarshal(objInfoStats.Get(i).([]byte))
-			appendable := objInfoState.Get(i).(bool)
+			appendable := stats.GetAppendable()
 			deleteAt := objInfoDelete.Get(i).(types.TS)
 			commitTS := objInfoCommit.Get(i).(types.TS)
 			createAt := objInfoCreate.Get(i).(types.TS)
@@ -662,8 +661,9 @@ func ReWriteCheckpointAndBlockFromKey(
 					} else {
 						appendValToBatch(oldMeta, newMeta, i)
 						row := newMeta.Length() - 1
-						newMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, insertObjData[i].stats[:], false)
-						newMeta.GetVectorByName(ObjectAttr_State).Update(row, false, false)
+						objID := insertObjData[i].stats.ObjectName().ObjectId()
+						stats := objectio.NewObjectStatsWithObjectID(objID, false, insertObjData[i].stats.GetSorted(), false)
+						newMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, stats[:], false)
 						newMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
 					}
 				}

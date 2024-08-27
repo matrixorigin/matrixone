@@ -707,10 +707,6 @@ func (h *Handle) HandleWrite(
 				logutil.Errorf("the vec:%d in req.Batch is nil", i)
 				panic("invalid vector : vector is nil")
 			}
-			if vec.Length() == 0 {
-				logutil.Errorf("the vec:%d in req.Batch is empty", i)
-				panic("invalid vector: vector is empty")
-			}
 			if i == 0 {
 				len = vec.Length()
 			}

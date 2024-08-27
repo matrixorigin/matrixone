@@ -494,28 +494,30 @@ func (tbl *txnTable) CreateObject(isTombstone bool) (obj handle.Object, err erro
 	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Object.Create.Add(1)
 	})
-	return tbl.createObject(catalog.ES_Appendable, nil, isTombstone)
+	sorted := isTombstone
+	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, sorted, false)
+	return tbl.createObject(&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone})
 }
 
-func (tbl *txnTable) CreateNonAppendableObject(opts *objectio.CreateObjOpt, isTombstone bool) (obj handle.Object, err error) {
+func (tbl *txnTable) CreateNonAppendableObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Object.CreateNonAppendable.Add(1)
 	})
-	return tbl.createObject(catalog.ES_NotAppendable, opts, isTombstone)
+	return tbl.createObject(opts)
 }
 
-func (tbl *txnTable) createObject(state catalog.EntryState, opts *objectio.CreateObjOpt, isTombstone bool) (obj handle.Object, err error) {
+func (tbl *txnTable) createObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	var factory catalog.ObjectDataFactory
 	if tbl.store.dataFactory != nil {
 		factory = tbl.store.dataFactory.MakeObjectFactory()
 	}
 	var meta *catalog.ObjectEntry
-	if meta, err = tbl.entry.CreateObject(tbl.store.txn, state, opts, factory, isTombstone); err != nil {
+	if meta, err = tbl.entry.CreateObject(tbl.store.txn, opts, factory); err != nil {
 		return
 	}
 	obj = newObject(tbl, meta)
 	tbl.store.IncreateWriteCnt()
-	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, meta.ID(), isTombstone)
+	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, meta.ID(), opts.IsTombstone)
 	tbl.txnEntries.Append(meta)
 	return
 }
@@ -1449,12 +1451,11 @@ func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Locati
 }
 
 func (tbl *txnTable) deltaloc2ObjectStat(loc objectio.Location, fs fileservice.FileService) objectio.ObjectStats {
-	stats := *objectio.NewObjectStats()
+	stats := *objectio.NewObjectStatsWithObjectID(loc.Name().ObjectId(), false, true, true)
 	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &loc, false, fs)
 	if err != nil {
 		panic(err)
 	}
-	objectio.SetObjectStatsObjectName(&stats, loc.Name())
 	objectio.SetObjectStatsExtent(&stats, loc.Extent())
 	objectDataMeta := objMeta.MustTombstoneMeta()
 	objectio.SetObjectStatsRowCnt(&stats, objectDataMeta.BlockHeader().Rows())

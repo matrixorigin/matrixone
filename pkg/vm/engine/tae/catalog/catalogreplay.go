@@ -413,12 +413,7 @@ func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch, isTomb
 		sid := objectNode.ObjectName().ObjectId()
 		txnNode := txnbase.ReadTuple(objectInfo, i)
 		entryNode := ReadEntryNodeTuple(objectInfo, i)
-		state := objectInfo.GetVectorByName(ObjectAttr_State).Get(i).(bool)
-		entryState := ES_Appendable
-		if !state {
-			entryState = ES_NotAppendable
-		}
-		catalog.onReplayCheckpointObject(dbid, tid, sid, objectNode, entryNode, txnNode, entryState, isTombstone, dataFactory)
+		catalog.onReplayCheckpointObject(dbid, tid, sid, objectNode, entryNode, txnNode, isTombstone, dataFactory)
 	}
 }
 
@@ -428,7 +423,6 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	objNode *ObjectMVCCNode,
 	entryNode *EntryMVCCNode,
 	txnNode *txnbase.TxnMVCCNode,
-	state EntryState,
 	isTombstone bool,
 	dataFactory DataFactory,
 ) {
@@ -446,8 +440,6 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		object := NewReplayObjectEntry()
 		object.table = rel
 		object.ObjectNode = ObjectNode{
-			state:       state,
-			sorted:      state == ES_NotAppendable,
 			SortHint:    catalog.NextObject(),
 			IsTombstone: isTombstone,
 		}

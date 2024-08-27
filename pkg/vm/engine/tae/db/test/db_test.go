@@ -2500,9 +2500,9 @@ func TestSegDelLogtail(t *testing.T) {
 		assert.Nil(t, ins)                              // 0 ins
 		assert.Nil(t, del)                              // 0  del
 		assert.Equal(t, uint32(9), dataObj.Vecs[0].Len) // 5 create + 4 delete
-		assert.Equal(t, 12, len(dataObj.Vecs))
+		assert.Equal(t, 10, len(dataObj.Vecs))
 		assert.Equal(t, uint32(4), tombstoneObj.Vecs[0].Len) // 2 create + 2 delete
-		assert.Equal(t, 12, len(tombstoneObj.Vecs))
+		assert.Equal(t, 10, len(tombstoneObj.Vecs))
 	}
 	check()
 
@@ -6049,7 +6049,7 @@ func TestAlterFakePk(t *testing.T) {
 	assert.NoError(t, err)
 	tnDataObjectBat := containers.NewNonNullBatchWithSharedMemory(dataObjectBat, common.DefaultAllocator)
 	t.Log(tnDataObjectBat.Attrs)
-	assert.Equal(t, 12, len(tnDataObjectBat.Vecs))
+	assert.Equal(t, 10, len(tnDataObjectBat.Vecs))
 	for _, v := range tnDataObjectBat.Vecs {
 		assert.Equal(t, 1, v.Length())
 	}
@@ -6058,7 +6058,7 @@ func TestAlterFakePk(t *testing.T) {
 	assert.NoError(t, err)
 	tnTombstoneObjectBat := containers.NewNonNullBatchWithSharedMemory(tombstoneObjectBat, common.DefaultAllocator)
 	t.Log(tnTombstoneObjectBat.Attrs)
-	assert.Equal(t, 12, len(tnTombstoneObjectBat.Vecs)) // 1 fake pk + 1 rowid + 1 committs
+	assert.Equal(t, 10, len(tnTombstoneObjectBat.Vecs)) // 1 fake pk + 1 rowid + 1 committs
 	for _, v := range tnTombstoneObjectBat.Vecs {
 		assert.Equal(t, 1, v.Length())
 	}
@@ -7917,10 +7917,10 @@ func TestDeduplication(t *testing.T) {
 	dataFactory := tables.NewDataFactory(
 		tae.Runtime,
 		tae.Dir)
+	stats := objectio.NewObjectStatsWithObjectID(ObjectIDs[0], true, false, false)
 	obj, err := tbl.CreateObject(
 		txn,
-		catalog.ES_Appendable,
-		new(objectio.CreateObjOpt).WithId(ObjectIDs[0]), dataFactory.MakeObjectFactory(), false)
+		new(objectio.CreateObjOpt).WithObjectStats(stats).WithIsTombstone(false), dataFactory.MakeObjectFactory())
 	assert.NoError(t, err)
 	txn.GetStore().AddTxnEntry(txnif.TxnType_Normal, obj)
 	txn.GetStore().IncreateWriteCnt()

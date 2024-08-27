@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -43,7 +44,8 @@ func TestComposedCmd(t *testing.T) {
 	assert.Nil(t, err)
 	composed.AddCmd(tblCmd)
 
-	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil, false)
+	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, false, false)
+	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
 	objCmd, err := obj.MakeCommand(1)
 	assert.Nil(t, err)
 	composed.AddCmd(objCmd)
