@@ -981,27 +981,7 @@ func (txn *Transaction) compactionBlksLocked() error {
 //}
 
 // TODO::remove it after workspace refactor.
-func (txn *Transaction) getUncommittedS3Tombstone(mp map[types.Blockid][]objectio.Location) (err error) {
-	txn.blockId_tn_delete_metaLoc_batch.RLock()
-	defer txn.blockId_tn_delete_metaLoc_batch.RUnlock()
-
-	for bid, bats := range txn.blockId_tn_delete_metaLoc_batch.data {
-		for _, b := range bats {
-			vs, area := vector.MustVarlenaRawData(b.GetVector(0))
-			for i := range vs {
-				loc, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
-				if err != nil {
-					return err
-				}
-				mp[bid] = append(mp[bid], loc)
-			}
-		}
-	}
-	return nil
-}
-
-// TODO::remove it after workspace refactor.
-func (txn *Transaction) getUncommittedS3TombstoneInProgress(
+func (txn *Transaction) getUncommittedS3Tombstone(
 	statsSlice *objectio.ObjectStatsSlice,
 ) (err error) {
 	txn.blockId_tn_delete_metaLoc_batch.RLock()
