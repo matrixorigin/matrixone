@@ -337,7 +337,6 @@ func newTestCase(rows int, flgs []bool, ts []types.Type, rp []colexec.ResultPos,
 		proc:   proc,
 		cancel: cancel,
 		arg: &InnerJoin{
-			Typs:       ts,
 			Result:     rp,
 			Conditions: cs,
 			Cond:       cond,
