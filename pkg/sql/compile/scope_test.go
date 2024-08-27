@@ -268,7 +268,7 @@ func TestNewParallelScope(t *testing.T) {
 
 		rs, err := newParallelScope(testCompile, scopeToParallel, ss)
 		require.NoError(t, err)
-		require.NoError(t, checkScopeWithExpectedList(rs, []vm.OpType{vm.Merge, vm.MergeLimit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(rs, []vm.OpType{vm.Merge, vm.Limit, vm.Connector}))
 		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
 	}
 
