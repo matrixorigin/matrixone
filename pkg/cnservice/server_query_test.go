@@ -1081,7 +1081,7 @@ func Test_service_handleGetCacheData(t *testing.T) {
 				req: &query.Request{
 					GetCacheDataRequest: &query.GetCacheDataRequest{
 						RequestCacheKey: []*query.RequestCacheKey{
-							&query.RequestCacheKey{
+							{
 								Index:    1,
 								CacheKey: nil,
 							},
