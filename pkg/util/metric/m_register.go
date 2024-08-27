@@ -34,6 +34,7 @@ var InitCollectors = []Collector{
 	// server metric
 	ConnFactory,
 	StorageUsageFactory,
+	ObjectCountFactory,
 	// process metric
 	processCollector,
 	// sys metric

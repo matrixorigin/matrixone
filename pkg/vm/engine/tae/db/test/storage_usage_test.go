@@ -355,6 +355,21 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 		memo.DeltaUpdate(usages[idx], false)
 		gCollector.Usage.ReservedAccIds[usages[idx].AccId] = struct{}{}
 	}
+			insSegIdxes := make(map[int]struct{})
+			var segInserts []*catalog.ObjectEntry
+			{
+				for i := 0; i < len(usages); i++ {
+					insSegIdxes[i] = struct{}{}
+				}
+				_, _, segInserts = mockDeletesAndInserts(usages, nil, nil, nil, insSegIdxes)
+			}
+
+			for idx := range usages {
+				memo.DeltaUpdate(usages[idx], false)
+
+				gCollector.Usage.ObjInserts = append(gCollector.Usage.ObjInserts, segInserts[idx])
+				gCollector.Usage.ReservedAccIds[usages[idx].AccId] = struct{}{}
+			}
 
 	// test memo reply to global ckp
 	{
@@ -374,6 +389,15 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 		sort.Slice(usages, func(i, j int) bool {
 			return memo.GetCache().LessFunc()(usages[i], usages[j])
 		})
+				memUsages := memo.GatherAllAccSize()
+				require.Equal(t, accCnt, len(memUsages))
+
+				abstract := memo.GatherObjectAbstractForAllAccount()
+				require.Equal(t, accCnt, len(abstract))
+				for id, aa := range abstract {
+					require.Equal(t, dbCnt*tblCnt, aa.TotalObjCnt)
+					require.Equal(t, int(memUsages[id]), aa.TotalObjSize)
+				}
 
 		accCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
 		dbCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
