@@ -58,8 +58,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
@@ -230,9 +228,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&merge.Merge{},
 		&mergerecursive.MergeRecursive{},
 		&mergegroup.MergeGroup{},
-		&mergelimit.MergeLimit{},
-		&mergelimit.MergeLimit{},
-		&mergeoffset.MergeOffset{},
 		&mergetop.MergeTop{},
 		&mergeorder.MergeOrder{},
 		&mark.MarkJoin{

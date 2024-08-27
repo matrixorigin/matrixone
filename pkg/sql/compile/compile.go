@@ -2125,7 +2125,7 @@ func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*S
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	rs := c.newScopeListOnCurrentCN(2, 1)
 	rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
 
@@ -2165,7 +2165,7 @@ func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right 
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
-		return c.compileTpMinusAndIntersect(n, left, right, nodeType)
+		return c.compileTpMinusAndIntersect(left, right, nodeType)
 	}
 	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
 	rs = c.newScopeListForMinusAndIntersect(rs, left, right, n)
@@ -3038,7 +3038,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 func (c *Compile) compilePreInsertUk(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		preInsertUkArg := constructPreInsertUk(n, c.proc)
+		preInsertUkArg := constructPreInsertUk(n)
 		preInsertUkArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(preInsertUkArg)
 	}
@@ -3049,7 +3049,7 @@ func (c *Compile) compilePreInsertUk(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compilePreInsertSK(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		preInsertSkArg := constructPreInsertSk(n, c.proc)
+		preInsertSkArg := constructPreInsertSk(n)
 		preInsertSkArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(preInsertSkArg)
 	}
