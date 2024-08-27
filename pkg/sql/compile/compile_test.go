@@ -57,7 +57,7 @@ var (
 	tcs []compileTestCase
 )
 
-func init1() {
+func init() {
 	tcs = []compileTestCase{
 		newTestCase("select 1", new(testing.T)),
 		newTestCase("select * from R", new(testing.T)),

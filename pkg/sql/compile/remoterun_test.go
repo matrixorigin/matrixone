@@ -362,12 +362,12 @@ func Test_convertToProcessSessionInfo(t *testing.T) {
 	require.Nil(t, err)
 }
 
-func Test_convertToPlanAnalyzeInfo(t *testing.T) {
-	info := reuse.Alloc[process.AnalyzeInfo](nil)
-	info.InputRows = 100
-	analyzeInfo := convertToPlanAnalyzeInfo(info)
-	require.Equal(t, analyzeInfo.InputRows, int64(100))
-}
+//func Test_convertToPlanAnalyzeInfo(t *testing.T) {
+//	info := reuse.Alloc[process.AnalyzeInfo](nil)
+//	info.InputRows = 100
+//	analyzeInfo := convertToPlanAnalyzeInfo(info)
+//	require.Equal(t, analyzeInfo.InputRows, int64(100))
+//}
 
 func Test_decodeBatch(t *testing.T) {
 	mp := &mpool.MPool{}

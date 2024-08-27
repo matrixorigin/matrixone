@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -1401,33 +1400,33 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 	return res
 }
 
-func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
-	a := &plan.AnalyzeInfo{
-		InputBlocks:      info.InputBlocks,
-		InputRows:        info.InputRows,
-		OutputRows:       info.OutputRows,
-		InputSize:        info.InputSize,
-		OutputSize:       info.OutputSize,
-		TimeConsumed:     info.TimeConsumed,
-		MemorySize:       info.MemorySize,
-		WaitTimeConsumed: info.WaitTimeConsumed,
-		DiskIO:           info.DiskIO,
-		S3IOByte:         info.S3IOByte,
-		S3IOInputCount:   info.S3IOInputCount,
-		S3IOOutputCount:  info.S3IOOutputCount,
-		NetworkIO:        info.NetworkIO,
-		ScanTime:         info.ScanTime,
-		InsertTime:       info.InsertTime,
-	}
-	info.DeepCopyArray(a)
-	// there are 3 situations to release analyzeInfo
-	// 1 is free analyzeInfo of Local CN when release analyze
-	// 2 is free analyzeInfo of remote CN before transfer back
-	// 3 is free analyzeInfo of remote CN when errors happen before transfer back
-	// this is situation 2
-	reuse.Free[process.AnalyzeInfo](info, nil)
-	return a
-}
+//func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
+//	a := &plan.AnalyzeInfo{
+//		InputBlocks:      info.InputBlocks,
+//		InputRows:        info.InputRows,
+//		OutputRows:       info.OutputRows,
+//		InputSize:        info.InputSize,
+//		OutputSize:       info.OutputSize,
+//		TimeConsumed:     info.TimeConsumed,
+//		MemorySize:       info.MemorySize,
+//		WaitTimeConsumed: info.WaitTimeConsumed,
+//		DiskIO:           info.DiskIO,
+//		S3IOByte:         info.S3IOByte,
+//		S3IOInputCount:   info.S3IOInputCount,
+//		S3IOOutputCount:  info.S3IOOutputCount,
+//		NetworkIO:        info.NetworkIO,
+//		ScanTime:         info.ScanTime,
+//		InsertTime:       info.InsertTime,
+//	}
+//	info.DeepCopyArray(a)
+//	// there are 3 situations to release analyzeInfo
+//	// 1 is free analyzeInfo of Local CN when release analyze
+//	// 2 is free analyzeInfo of remote CN before transfer back
+//	// 3 is free analyzeInfo of remote CN when errors happen before transfer back
+//	// this is situation 2
+//	reuse.Free[process.AnalyzeInfo](info, nil)
+//	return a
+//}
 
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
