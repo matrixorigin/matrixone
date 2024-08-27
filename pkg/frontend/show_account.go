@@ -622,6 +622,4 @@ func updateObjectCountMetricForAllAccounts(accInfosBatches []*batch.Batch, accId
 
 	logutil.Info("update object count metric for all accounts",
 		zap.String("details", buf.String()))
-
-	return
 }
