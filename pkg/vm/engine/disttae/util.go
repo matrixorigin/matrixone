@@ -1474,7 +1474,7 @@ func (i *StatsBlkIter) Entry() objectio.BlockInfo {
 func ForeachCommittedObjects(
 	createObjs map[objectio.ObjectNameShort]struct{},
 	delObjs map[objectio.ObjectNameShort]struct{},
-	p *logtailreplay.PartitionStateInProgress,
+	p *logtailreplay.PartitionState,
 	onObj func(info logtailreplay.ObjectInfo) error) (err error) {
 	for obj := range createObjs {
 		if objInfo, ok := p.GetObject(obj); ok {
@@ -1497,7 +1497,7 @@ func ForeachCommittedObjects(
 func ForeachTombstoneObject(
 	ts types.TS,
 	onTombstone func(tombstone logtailreplay.ObjectEntry) (next bool, err error),
-	pState *logtailreplay.PartitionStateInProgress,
+	pState *logtailreplay.PartitionState,
 ) error {
 	iter, err := pState.NewObjectsIter(ts, true, true)
 	if err != nil {
@@ -1518,7 +1518,7 @@ func ForeachTombstoneObject(
 func ForeachSnapshotObjects(
 	ts timestamp.Timestamp,
 	onObject func(obj logtailreplay.ObjectInfo, isCommitted bool) error,
-	tableSnapshot *logtailreplay.PartitionStateInProgress,
+	tableSnapshot *logtailreplay.PartitionState,
 	extraCommitted []objectio.ObjectStats,
 	uncommitted ...objectio.ObjectStats,
 ) (err error) {

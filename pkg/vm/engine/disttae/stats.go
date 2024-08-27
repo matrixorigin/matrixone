@@ -54,7 +54,7 @@ type updateStatsRequest struct {
 	// tableDef is the main table definition.
 	tableDef *plan2.TableDef
 
-	partitionState  *logtailreplay.PartitionStateInProgress
+	partitionState  *logtailreplay.PartitionState
 	fs              fileservice.FileService
 	ts              types.TS
 	approxObjectNum int64
@@ -62,7 +62,7 @@ type updateStatsRequest struct {
 
 func newUpdateStatsRequest(
 	tableDef *plan2.TableDef,
-	partitionState *logtailreplay.PartitionStateInProgress,
+	partitionState *logtailreplay.PartitionState,
 	fs fileservice.FileService,
 	ts types.TS,
 	approxObjectNum int64,
@@ -334,9 +334,7 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 	} else if tail.Table != nil {
 		var triggered bool
 		for _, cmd := range tail.Commands {
-			if logtailreplay.IsBlkTable(cmd.TableName) ||
-				logtailreplay.IsObjTable(cmd.TableName) ||
-				logtailreplay.IsMetaTable(cmd.TableName) {
+			if logtailreplay.IsMetaEntry(cmd.TableName) {
 				triggered = true
 				if gs.shouldTrigger(key) {
 					gs.triggerUpdate(key, false)

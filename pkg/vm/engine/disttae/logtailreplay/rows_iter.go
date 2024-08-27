@@ -38,20 +38,6 @@ type rowsIter struct {
 	iterDeleted  bool
 }
 
-func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDeleted bool) *rowsIter {
-	iter := p.rows.Copy().Iter()
-	ret := &rowsIter{
-		ts:          ts,
-		iter:        iter,
-		iterDeleted: iterDeleted,
-	}
-	if blockID != nil {
-		ret.checkBlockID = true
-		ret.blockID = *blockID
-	}
-	return ret
-}
-
 var _ RowsIter = new(rowsIter)
 
 func (p *rowsIter) Next() bool {
@@ -399,20 +385,6 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 	}
 }
 
-func (p *PartitionState) NewPrimaryKeyIter(
-	ts types.TS,
-	spec PrimaryKeyMatchSpec,
-) *primaryKeyIter {
-	index := p.primaryIndex.Copy()
-	return &primaryKeyIter{
-		ts:           ts,
-		spec:         spec,
-		iter:         index.Iter(),
-		primaryIndex: index,
-		rows:         p.rows.Copy(),
-	}
-}
-
 var _ RowsIter = new(primaryKeyIter)
 
 func (p *primaryKeyIter) Next() bool {
@@ -478,24 +450,6 @@ type primaryKeyDelIter struct {
 	bid types.Blockid
 }
 
-func (p *PartitionState) NewPrimaryKeyDelIter(
-	ts types.TS,
-	spec PrimaryKeyMatchSpec,
-	bid types.Blockid,
-) *primaryKeyDelIter {
-	index := p.primaryIndex.Copy()
-	return &primaryKeyDelIter{
-		primaryKeyIter: primaryKeyIter{
-			ts:           ts,
-			spec:         spec,
-			primaryIndex: index,
-			iter:         index.Iter(),
-			rows:         p.rows.Copy(),
-		},
-		bid: bid,
-	}
-}
-
 var _ RowsIter = new(primaryKeyDelIter)
 
 func (p *primaryKeyDelIter) Next() bool {
@@ -548,5 +502,56 @@ func (p *primaryKeyDelIter) Next() bool {
 		}
 
 		return true
+	}
+}
+
+func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDeleted bool) *rowsIter {
+	iter := p.rows.Copy().Iter()
+	ret := &rowsIter{
+		ts:          ts,
+		iter:        iter,
+		iterDeleted: iterDeleted,
+	}
+	if blockID != nil {
+		ret.checkBlockID = true
+		ret.blockID = *blockID
+	}
+	return ret
+}
+
+func (p *PartitionState) NewPrimaryKeyIter(
+	ts types.TS,
+	spec PrimaryKeyMatchSpec,
+) *primaryKeyIter {
+	index := p.primaryIndex.Copy()
+	return &primaryKeyIter{
+		ts:           ts,
+		spec:         spec,
+		iter:         index.Iter(),
+		primaryIndex: index,
+		rows:         p.rows.Copy(),
+	}
+}
+
+//type primaryKeyDelIter struct {
+//	primaryKeyIter
+//	bid types.Blockid
+//}
+
+func (p *PartitionState) NewPrimaryKeyDelIter(
+	ts types.TS,
+	spec PrimaryKeyMatchSpec,
+	bid types.Blockid,
+) *primaryKeyDelIter {
+	index := p.primaryIndex.Copy()
+	return &primaryKeyDelIter{
+		primaryKeyIter: primaryKeyIter{
+			ts:           ts,
+			spec:         spec,
+			primaryIndex: index,
+			iter:         index.Iter(),
+			rows:         p.rows.Copy(),
+		},
+		bid: bid,
 	}
 }
