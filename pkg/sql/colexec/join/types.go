@@ -17,7 +17,6 @@ package join
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -73,7 +72,6 @@ InnerJoin.container has 5 *batch or []*batch
 type InnerJoin struct {
 	ctr        container
 	Result     []colexec.ResultPos
-	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 
