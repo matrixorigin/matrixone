@@ -78,20 +78,6 @@ func handleTask(
 		}
 		user := state.GetTaskTableUser()
 		return Result{Method: TaskMethod, Data: user}, nil
-	case retention:
-		cronExpr := strings.Split(strings.TrimSpace(parameter), ":")[1]
-		_, err := proc.GetSessionInfo().SqlHelper.ExecSql(
-			fmt.Sprintf(
-				"update mo_task.sys_cron_task set cron_expr='%s' where task_metadata_id='retention'",
-				cronExpr),
-		)
-		if err != nil {
-			return Result{}, err
-		}
-		return Result{
-			Method: TaskMethod,
-			Data:   "OK",
-		}, nil
 	default:
 	}
 
