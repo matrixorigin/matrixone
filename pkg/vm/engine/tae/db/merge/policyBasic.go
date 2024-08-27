@@ -18,11 +18,13 @@ import (
 	"cmp"
 	"context"
 	"slices"
-	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
@@ -73,10 +75,70 @@ func (g *policyGroup) resetForTable(entry *catalog.TableEntry) {
 	g.config = g.configProvider.getConfig(entry)
 }
 
-func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg *BasicPolicyConfig) {
+func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg *BasicPolicyConfig) (err error) {
 	if tbl == nil || txn == nil {
 		return
 	}
+	schema := tbl.GetLastestSchema(false)
+	ctx := context.Background()
+	defer func() {
+		if err != nil {
+			txn.Rollback(ctx)
+			logutil.Errorf("mergeblocks set %v-%v failed %v", tbl.ID, schema.Name, err)
+		} else {
+			logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, schema.Name, cfg)
+			txn.Commit(ctx)
+			o.configProvider.InvalidCache(tbl)
+		}
+	}()
+
+	moCatalog, err := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	if err != nil {
+		return
+	}
+
+	moTables, err := moCatalog.GetRelationByID(pkgcatalog.MO_TABLES_ID)
+	if err != nil {
+		return
+	}
+
+	moColumns, err := moCatalog.GetRelationByID(pkgcatalog.MO_COLUMNS_ID)
+	if err != nil {
+		return
+	}
+
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	packer.Reset()
+	packer.EncodeUint32(schema.AcInfo.TenantID)
+	packer.EncodeStringType([]byte(tbl.GetDB().GetName()))
+	packer.EncodeStringType([]byte(schema.Name))
+	pk := packer.Bytes()
+	cloned := schema.Clone()
+	cloned.Extra.MaxOsizeMergedObj = cfg.MaxOsizeMergedObj
+	cloned.Extra.MinOsizeQuailifed = cfg.ObjectMinOsize
+	cloned.Extra.MaxObjOnerun = uint32(cfg.MergeMaxOneRun)
+	cloned.Extra.MinCnMergeSize = cfg.MinCNMergeSize
+	cloned.Extra.Hints = cfg.MergeHints
+	err = moTables.UpdateByFilter(ctx, handle.NewEQFilter(pk), uint16(pkgcatalog.MO_TABLES_EXTRA_INFO_IDX), cloned.MustGetExtraBytes(), false)
+	if err != nil {
+		return
+	}
+
+	for _, col := range schema.ColDefs {
+		packer.Reset()
+		packer.EncodeUint32(schema.AcInfo.TenantID)
+		packer.EncodeStringType([]byte(tbl.GetDB().GetName()))
+		packer.EncodeStringType([]byte(schema.Name))
+		packer.EncodeStringType([]byte(col.Name))
+		pk := packer.Bytes()
+		err = moColumns.UpdateByFilter(ctx, handle.NewEQFilter(pk), uint16(pkgcatalog.MO_COLUMNS_ATT_CPKEY_IDX), pk, false)
+		if err != nil {
+			return
+		}
+	}
+
 	db, err := txn.GetDatabaseByID(tbl.GetDB().ID)
 	if err != nil {
 		return
@@ -85,15 +147,10 @@ func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg
 	if err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	tblHandle.AlterTable(
+	return tblHandle.AlterTable(
 		ctx,
 		NewUpdatePolicyReq(cfg),
 	)
-	logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, tbl.GetLastestSchemaLocked(false).Name, cfg)
-	txn.Commit(ctx)
-	g.configProvider.invalidCache(tbl)
 }
 
 func (g *policyGroup) getConfig(tbl *catalog.TableEntry) *BasicPolicyConfig {
@@ -216,7 +273,7 @@ func (o *basic) optimize(objs []*catalog.ObjectEntry, config *BasicPolicyConfig)
 	acc := o.accBuf
 
 	isBigGap := func(small, big int) bool {
-		if big < int(o.schema.BlockMaxRows) {
+		if big < int(o.schema.Extra.BlockMaxRows) {
 			return false
 		}
 		return big-small > 3*small
@@ -230,7 +287,7 @@ func (o *basic) optimize(objs []*catalog.ObjectEntry, config *BasicPolicyConfig)
 	readyToMergeRows := acc[i]
 
 	// avoid frequent small object merge
-	if readyToMergeRows < int(o.schema.BlockMaxRows) &&
+	if readyToMergeRows < int(o.schema.Extra.BlockMaxRows) &&
 		!o.hist.IsLastBefore(constSmallMergeGap) &&
 		i < config.MergeMaxOneRun {
 		return nil
