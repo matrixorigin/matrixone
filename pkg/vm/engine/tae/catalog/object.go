@@ -634,7 +634,7 @@ func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {
 			s = fmt.Sprintf("%s %v.", s, obj.PPString(3, 0, ""))
 		}
 	}
-	logutil.Infof(s)
+	logutil.Info(s)
 }
 
 func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {

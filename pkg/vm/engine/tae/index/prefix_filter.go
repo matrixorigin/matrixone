@@ -132,7 +132,7 @@ func (bf *prefixBloomFilter) PrefixMayContainsKey(
 		panic(fmt.Sprintf("unsupported level: %d", level))
 	}
 	if bf.prefixFnId != prefixFnId {
-		return false, moerr.NewInternalErrorNoCtx("prefixFnId mismatch: %d != %d", bf.prefixFnId, prefixFnId)
+		return false, moerr.NewInternalErrorNoCtxf("prefixFnId mismatch: %d != %d", bf.prefixFnId, prefixFnId)
 	}
 	return bf.bloomFilter.MayContainsKey(key)
 }

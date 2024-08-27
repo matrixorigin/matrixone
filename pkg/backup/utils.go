@@ -67,20 +67,20 @@ func getS3Config(ctx context.Context, option []string) (*s3Config, error) {
 		case "format":
 			format := strings.ToLower(option[i+1])
 			if format != tree.CSV && format != tree.JSONLINE {
-				return nil, moerr.NewBadConfig(ctx, "the format '%s' is not supported", format)
+				return nil, moerr.NewBadConfigf(ctx, "the format '%s' is not supported", format)
 			}
 			conf.format = format
 		case "jsondata":
 			jsondata := strings.ToLower(option[i+1])
 			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
-				return nil, moerr.NewBadConfig(ctx, "the jsondata '%s' is not supported", jsondata)
+				return nil, moerr.NewBadConfigf(ctx, "the jsondata '%s' is not supported", jsondata)
 			}
 			conf.jsonData = jsondata
 			conf.format = tree.JSONLINE
 		case "is_minio":
 			isMinioData := strings.ToLower(option[i+1])
 			if isMinioData != "true" && isMinioData != "false" {
-				return nil, moerr.NewBadConfig(ctx, "the is_minio '%s' is not supported", isMinioData)
+				return nil, moerr.NewBadConfigf(ctx, "the is_minio '%s' is not supported", isMinioData)
 			}
 			if isMinioData == "true" {
 				conf.isMinio = true
@@ -91,11 +91,11 @@ func getS3Config(ctx context.Context, option []string) (*s3Config, error) {
 			parallelismData := strings.ToLower(option[i+1])
 			parall, err := strconv.ParseUint(parallelismData, 10, 16)
 			if err != nil {
-				return nil, moerr.NewBadConfig(ctx, "the parallelism '%s' is invalid", parallelismData)
+				return nil, moerr.NewBadConfigf(ctx, "the parallelism '%s' is invalid", parallelismData)
 			}
 			conf.parallelism = uint16(parall)
 		default:
-			return nil, moerr.NewBadConfig(ctx, "the keyword '%s' is not support", strings.ToLower(option[i]))
+			return nil, moerr.NewBadConfigf(ctx, "the keyword '%s' is not support", strings.ToLower(option[i]))
 		}
 	}
 	if conf.format == tree.JSONLINE && len(conf.jsonData) == 0 {

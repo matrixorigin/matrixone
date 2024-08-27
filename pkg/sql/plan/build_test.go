@@ -1109,7 +1109,7 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 			t.Logf("%+v", err)
 		}
 	} else {
-		t.Logf(string(json))
+		t.Log(string(json))
 	}
 }
 

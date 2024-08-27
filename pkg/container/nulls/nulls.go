@@ -81,6 +81,7 @@ func (nsp *Nulls) Build(size int, rows ...uint64) {
 	nsp.InitWithSize(size)
 	Add(nsp, rows...)
 }
+
 func Build(size int, rows ...uint64) *Nulls {
 	var n Nulls
 	n.Build(size, rows...)
@@ -265,6 +266,57 @@ func Filter(nsp *Nulls, sels []int64, negate bool) {
 			if nsp.np.Contains(uint64(sel)) {
 				bm.Add(uint64(i))
 			}
+		}
+		nsp.np.InitWith(&bm)
+	}
+}
+
+func FilterByMask(nsp *Nulls, sels bitmap.Mask, negate bool) {
+	if nsp.np.EmptyByFlag() {
+		return
+	}
+	length := sels.Count()
+	itr := sels.Iterator()
+	if negate {
+		oldLen := nsp.np.Len()
+		var bm bitmap.Bitmap
+		bm.InitWithSize(oldLen)
+		sel := itr.Next()
+		for oldIdx, newIdx, selIdx := int64(0), 0, 0; oldIdx < oldLen; oldIdx++ {
+			if uint64(oldIdx) != sel {
+				if nsp.np.Contains(uint64(oldIdx)) {
+					bm.Add(uint64(newIdx))
+				}
+				newIdx++
+			} else {
+				selIdx++
+				if !itr.HasNext() {
+					for idx := oldIdx + 1; idx < oldLen; idx++ {
+						if nsp.np.Contains(uint64(idx)) {
+							bm.Add(uint64(newIdx))
+						}
+						newIdx++
+					}
+					break
+				}
+				sel = itr.Next()
+			}
+		}
+		nsp.np.InitWith(&bm)
+	} else {
+		var bm bitmap.Bitmap
+		bm.InitWithSize(int64(length))
+		upperLimit := nsp.np.Len()
+		idx := 0
+		for itr.HasNext() {
+			sel := itr.Next()
+			if sel >= uint64(upperLimit) {
+				continue
+			}
+			if nsp.np.Contains(sel) {
+				bm.Add(uint64(idx))
+			}
+			idx++
 		}
 		nsp.np.InitWith(&bm)
 	}

@@ -305,7 +305,7 @@ func serachNodeIndex(ctx context.Context, nodeID int32, Nodes []*plan.Node) (int
 			return int32(i), nil
 		}
 	}
-	return -1, moerr.NewInvalidInput(ctx, "invliad plan nodeID %d", nodeID)
+	return -1, moerr.NewInvalidInputf(ctx, "invliad plan nodeID %d", nodeID)
 }
 
 func PreOrderPlan(ctx context.Context, node *plan.Node, Nodes []*plan.Node, graphData *GraphData, options *ExplainOptions) error {

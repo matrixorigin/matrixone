@@ -112,6 +112,8 @@ func (tp Tuple) SQLStrings(scales []int32) []string {
 		case []byte:
 			s := *(*string)(unsafe.Pointer(&t))
 			res = append(res, strconv.Quote(s))
+		case Uuid:
+			res = append(res, fmt.Sprintf("'%v'", t.String()))
 		case Date:
 			res = append(res, fmt.Sprintf("'%v'", t.String()))
 		case Time:
@@ -182,30 +184,33 @@ func printTuple(tuple Tuple) string {
 	return res.String()
 }
 
-const nilCode = 0x00
-const bytesCode = 0x01
-const intZeroCode = 0x14
-const float32Code = 0x20
-const float64Code = 0x21
-const falseCode = 0x26
-const trueCode = 0x27
-const int8Code = 0x28
-const int16Code = 0x29
-const int32Code = 0x3a
-const int64Code = 0x3b
-const uint8Code = 0x3c
-const uint16Code = 0x3d
-const uint32Code = 0x3e
-const uint64Code = 0x40
-const dateCode = 0x41
-const datetimeCode = 0x42
-const timestampCode = 0x43
-const decimal64Code = 0x44
-const decimal128Code = 0x45
-const stringTypeCode = 0x46
-const timeCode = 0x47
-const enumCode = 0x50 // TODO: reorder the list to put timeCode next to date type code?
-const bitCode = 0x51
+const (
+	nilCode        = 0x00
+	bytesCode      = 0x01
+	intZeroCode    = 0x14
+	float32Code    = 0x20
+	float64Code    = 0x21
+	falseCode      = 0x26
+	trueCode       = 0x27
+	int8Code       = 0x28
+	int16Code      = 0x29
+	int32Code      = 0x3a
+	int64Code      = 0x3b
+	uint8Code      = 0x3c
+	uint16Code     = 0x3d
+	uint32Code     = 0x3e
+	uint64Code     = 0x40
+	dateCode       = 0x41
+	datetimeCode   = 0x42
+	timestampCode  = 0x43
+	decimal64Code  = 0x44
+	decimal128Code = 0x45
+	stringTypeCode = 0x46
+	timeCode       = 0x47
+	enumCode       = 0x50 // TODO: reorder the list to put timeCode next to date type code?
+	bitCode        = 0x51
+	uuidCode       = 0x52
+)
 
 var sizeLimits = []uint64{
 	1<<(0*8) - 1,
@@ -412,13 +417,19 @@ func decodeDecimal128(b []byte) (Decimal128, int) {
 	return ret, 17
 }
 
+func decodeUuid(b []byte) (Uuid, int) {
+	var ret Uuid
+	copy(ret[:], b[1:])
+	return ret, 17
+}
+
 var DecodeTuple = decodeTuple
 
 func decodeTuple(b []byte) (Tuple, int, []T, error) {
 	var t Tuple
 
 	var i int
-	var schema = make([]T, 0)
+	schema := make([]T, 0)
 	for i < len(b) {
 		var el interface{}
 		var off int
@@ -506,11 +517,15 @@ func decodeTuple(b []byte) (Tuple, int, []T, error) {
 			off += 1
 		case b[i] == enumCode:
 			schema = append(schema, T_enum)
-			//TODO: need to verify @YANGGMM
+			// TODO: need to verify @YANGGMM
 			el, off = decodeUint(uint16Code, b[i+1:])
 			off += 1
+		case b[i] == uuidCode:
+			schema = append(schema, T_uuid)
+			el, off = decodeUuid(b[i:])
+			// off += 1
 		default:
-			return nil, i, nil, moerr.NewInternalErrorNoCtx("unable to decode tuple element with unknown typecode %02x", b[i])
+			return nil, i, nil, moerr.NewInternalErrorNoCtxf("unable to decode tuple element with unknown typecode %02x", b[i])
 		}
 		t = append(t, el)
 		i += off

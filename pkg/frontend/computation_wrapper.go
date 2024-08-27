@@ -323,10 +323,10 @@ func initExecuteStmtParam(reqCtx context.Context, ses *Session, cwft *TxnComputa
 	for _, obj := range preparePlan.GetSchemas() {
 		change, err := ses.txnCompileCtx.checkTableDefChange(obj.SchemaName, obj.ObjName, uint64(obj.Obj), uint32(obj.Server))
 		if err != nil {
-			return nil, nil, nil, originSQL, moerr.NewInternalError(reqCtx, "table '%s' in prepare statement '%s' does not exist anymore", obj.ObjName, stmtName)
+			return nil, nil, nil, originSQL, moerr.NewInternalErrorf(reqCtx, "table '%s' in prepare statement '%s' does not exist anymore", obj.ObjName, stmtName)
 		}
 		if change {
-			return nil, nil, nil, originSQL, moerr.NewInternalError(reqCtx, "table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName)
+			return nil, nil, nil, originSQL, moerr.NewInternalErrorf(reqCtx, "table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName)
 		}
 	}
 

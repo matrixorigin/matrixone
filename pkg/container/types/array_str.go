@@ -40,7 +40,7 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 
 	// If beginning is not [ it is malformed.
 	if runes[strIdx] != '[' {
-		return nil, moerr.NewInternalErrorNoCtx("malformed vector input: %s", str)
+		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
 	}
 
 	// skip [
@@ -59,7 +59,7 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 
 	for strIdx < strLen && runes[strIdx] != ']' {
 		if dim == MaxArrayDimension {
-			return nil, moerr.NewInternalErrorNoCtx("typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
+			return nil, moerr.NewInternalErrorNoCtxf("typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
 		}
 		// skip space in the numStr, Eg:- "[  1, 2]"
 		for strIdx < strLen && unicode.IsSpace(runes[strIdx]) {
@@ -73,7 +73,7 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 
 		// this means that numStr is ""
 		if strIdx == commaPos {
-			return nil, moerr.NewInternalErrorNoCtx("malformed vector input: %s", str)
+			return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
 		}
 
 		// convert numStr to T
@@ -101,12 +101,12 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 	// find next occurrence of "]" from strIdx.
 	endBracketPos := indexFrom(str, "]", strIdx)
 	if endBracketPos == -1 {
-		return nil, moerr.NewInternalErrorNoCtx("malformed vector input: %s", str)
+		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
 	}
 
 	// if numStr is ""
 	if strIdx == endBracketPos {
-		return nil, moerr.NewInternalErrorNoCtx("malformed vector input: %s", str)
+		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
 	}
 
 	// convert numStr to T and incr dim
@@ -128,7 +128,7 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 	// If after TrimEnd, there are still data in the str, then it is malformed.
 	// Eg:- [1,2,3] 1
 	if strIdx != strLen {
-		return nil, moerr.NewInternalErrorNoCtx("malformed vector input: %s", str)
+		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
 	}
 
 	// return subarray of x based on the final dimension.
@@ -147,7 +147,7 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 
 	// If beginning is not [ it is malformed.
 	if unsafeStringAt(str, strIdx) != '[' {
-		return nil, moerr.NewInternalErrorNoCtx("malformed vector input: %s", str)
+		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
 	}
 
 	// skip [
@@ -166,7 +166,7 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 
 	for strIdx < strLen && unsafeStringAt(str, strIdx) != ']' {
 		if dim == MaxArrayDimension {
-			return nil, moerr.NewInternalErrorNoCtx("typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
+			return nil, moerr.NewInternalErrorNoCtxf("typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
 		}
 		// skip space in the numStr, Eg:- "[  1, 2]"
 		for strIdx < strLen && unicode.IsSpace(unsafeStringAt(str, strIdx)) {
@@ -180,7 +180,7 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 
 		// this means that numStr is ""
 		if strIdx == commaPos {
-			return nil, moerr.NewInternalErrorNoCtx("malformed vector input: %s", str)
+			return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
 		}
 
 		// convert numStr to T
@@ -208,12 +208,12 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 	// find next occurrence of "]" from strIdx.
 	endBracketPos := indexFrom(str, "]", strIdx)
 	if endBracketPos == -1 {
-		return nil, moerr.NewInternalErrorNoCtx("malformed vector input: %s", str)
+		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
 	}
 
 	// if numStr is ""
 	if strIdx == endBracketPos {
-		return nil, moerr.NewInternalErrorNoCtx("malformed vector input: %s", str)
+		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
 	}
 
 	// convert numStr to T and incr dim
@@ -235,7 +235,7 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 	// If after TrimEnd, there are still data in the str, then it is malformed.
 	// Eg:- [1,2,3] 1
 	if strIdx != strLen {
-		return nil, moerr.NewInternalErrorNoCtx("malformed vector input: %s", str)
+		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
 	}
 
 	// return subarray of x based on the final dimension.
@@ -266,7 +266,7 @@ func stringToT[T RealNumbers](str string) (t T, err error) {
 	case float32:
 		num, err := strconv.ParseFloat(str, 32)
 		if err != nil {
-			return t, moerr.NewInternalErrorNoCtx("error while casting %s to %s", str, T_float32.String())
+			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_float32.String())
 		}
 		// FIX: https://stackoverflow.com/a/36391858/1609570
 		numf32 := float32(num)
@@ -274,7 +274,7 @@ func stringToT[T RealNumbers](str string) (t T, err error) {
 	case float64:
 		num, err := strconv.ParseFloat(str, 64)
 		if err != nil {
-			return t, moerr.NewInternalErrorNoCtx("error while casting %s to %s", str, T_float64.String())
+			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_float64.String())
 		}
 		return *(*T)(unsafe.Pointer(&num)), nil
 	default:

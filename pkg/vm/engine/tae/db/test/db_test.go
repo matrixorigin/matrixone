@@ -29,6 +29,10 @@ import (
 
 	"sort"
 
+	"github.com/panjf2000/ants/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -41,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -62,9 +67,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/panjf2000/ants/v2"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -3320,7 +3322,7 @@ func TestDelete3(t *testing.T) {
 			}
 		}
 	}
-	t.Logf(tae.Catalog.SimplePPString(common.PPL1))
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestDropCreated1(t *testing.T) {
@@ -3835,50 +3837,50 @@ func TestCollectDelete(t *testing.T) {
 
 	batch, _, err := blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p1, true, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(logtail.BatchToString("", batch, false))
+	t.Log(logtail.BatchToString("", batch, false))
 	for i, vec := range batch.Vecs {
-		t.Logf(batch.Attrs[i])
+		t.Log(batch.Attrs[i])
 		assert.Equal(t, 1, vec.Length())
 	}
 	view, err := blkdata.CollectChangesInRange(context.Background(), 0, types.TS{}, p1, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(view.Deletes.String())
+	t.Log(view.Deletes.String())
 	assert.Equal(t, 1, view.Deletes.GetCardinality())
 
 	batch, _, err = blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p2, true, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(logtail.BatchToString("", batch, false))
+	t.Log(logtail.BatchToString("", batch, false))
 	for i, vec := range batch.Vecs {
-		t.Logf(batch.Attrs[i])
+		t.Log(batch.Attrs[i])
 		assert.Equal(t, 4, vec.Length())
 	}
 	view, err = blkdata.CollectChangesInRange(context.Background(), 0, types.TS{}, p2, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(view.Deletes.String())
+	t.Log(view.Deletes.String())
 	assert.Equal(t, 4, view.Deletes.GetCardinality())
 
 	batch, _, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p2, true, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(logtail.BatchToString("", batch, false))
+	t.Log(logtail.BatchToString("", batch, false))
 	for i, vec := range batch.Vecs {
-		t.Logf(batch.Attrs[i])
+		t.Log(batch.Attrs[i])
 		assert.Equal(t, 3, vec.Length())
 	}
 	view, err = blkdata.CollectChangesInRange(context.Background(), 0, p1.Next(), p2, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(view.Deletes.String())
+	t.Log(view.Deletes.String())
 	assert.Equal(t, 3, view.Deletes.GetCardinality())
 
 	batch, _, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(logtail.BatchToString("", batch, false))
+	t.Log(logtail.BatchToString("", batch, false))
 	for i, vec := range batch.Vecs {
-		t.Logf(batch.Attrs[i])
+		t.Log(batch.Attrs[i])
 		assert.Equal(t, 5, vec.Length())
 	}
 	view, err = blkdata.CollectChangesInRange(context.Background(), 0, p1.Next(), p3, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(view.Deletes.String())
+	t.Log(view.Deletes.String())
 	assert.Equal(t, 5, view.Deletes.GetCardinality())
 
 	blk1Name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
@@ -3905,14 +3907,14 @@ func TestCollectDelete(t *testing.T) {
 
 	batch, _, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(logtail.BatchToString("", batch, false))
+	t.Log(logtail.BatchToString("", batch, false))
 	for i, vec := range batch.Vecs {
-		t.Logf(batch.Attrs[i])
+		t.Log(batch.Attrs[i])
 		assert.Equal(t, 5, vec.Length())
 	}
 	view, err = blkdata.CollectChangesInRange(context.Background(), 0, p1.Next(), p3, common.DefaultAllocator)
 	assert.NoError(t, err)
-	t.Logf(view.Deletes.String())
+	t.Log(view.Deletes.String())
 	assert.Equal(t, 5, view.Deletes.GetCardinality())
 
 }
@@ -4204,9 +4206,24 @@ func TestBlockRead(t *testing.T) {
 			err = blockio.BlockPrefetch("", colIdxs, fs, infos, false)
 			assert.NoError(t, err)
 
-			b1, err := blockio.BlockDataReadInner(
+			var vp engine.VectorPool
+			buildBatch := func(typs []types.Type) *batch.Batch {
+				bat := batch.NewWithSize(len(typs))
+				//bat.Attrs = append(bat.Attrs, cols...)
+
+				for i := 0; i < len(typs); i++ {
+					if vp == nil {
+						bat.Vecs[i] = vector.NewVec(typs[i])
+					} else {
+						bat.Vecs[i] = vp.GetVector(typs[i])
+					}
+				}
+				return bat
+			}
+			b1 := buildBatch(colTyps)
+			err = blockio.BlockDataReadInner(
 				context.Background(), "", info, ds, colIdxs, colTyps,
-				beforeDel, nil, fs, pool, nil, fileservice.Policy(0),
+				beforeDel, nil, fs, pool, nil, fileservice.Policy(0), b1,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b1.Vecs))
@@ -4214,29 +4231,32 @@ func TestBlockRead(t *testing.T) {
 
 			testDS.SetTS(afterFirstDel)
 
-			b2, err := blockio.BlockDataReadInner(
+			b2 := buildBatch(colTyps)
+			err = blockio.BlockDataReadInner(
 				context.Background(), "", info, ds, colIdxs, colTyps,
-				afterFirstDel, nil, fs, pool, nil, fileservice.Policy(0),
+				afterFirstDel, nil, fs, pool, nil, fileservice.Policy(0), b2,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 19, b2.Vecs[0].Length())
 
 			testDS.SetTS(afterSecondDel)
 
-			b3, err := blockio.BlockDataReadInner(
+			b3 := buildBatch(colTyps)
+			err = blockio.BlockDataReadInner(
 				context.Background(), "", info, ds, colIdxs, colTyps,
-				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0),
+				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0), b3,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b2.Vecs))
 			assert.Equal(t, 16, b3.Vecs[0].Length())
 			// read rowid column only
-			b4, err := blockio.BlockDataReadInner(
+			b4 := buildBatch([]types.Type{types.T_Rowid.ToType()})
+			err = blockio.BlockDataReadInner(
 				context.Background(), "", info,
 				ds,
 				[]uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
-				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0),
+				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0), b4,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, len(b4.Vecs))
@@ -4244,11 +4264,12 @@ func TestBlockRead(t *testing.T) {
 
 			// read rowid column only
 			info.Appendable = false
-			b5, err := blockio.BlockDataReadInner(
+			b5 := buildBatch([]types.Type{types.T_Rowid.ToType()})
+			err = blockio.BlockDataReadInner(
 				context.Background(), "", info,
 				ds, []uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
-				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0),
+				afterSecondDel, nil, fs, pool, nil, fileservice.Policy(0), b5,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, len(b5.Vecs))
@@ -5077,7 +5098,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 		require.Equal(t, 10, bat.Length())
 		require.NoError(t, txn.Commit(ctx))
 	}
-	logutil.Infof(tae.Catalog.SimplePPString(3))
+	logutil.Info(tae.Catalog.SimplePPString(3))
 	tae.ForceLongCheckpoint()
 	{
 		txn, rel := tae.GetRelation()
@@ -5087,9 +5108,9 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 		require.Equal(t, 10, bat.Length())
 		require.NoError(t, txn.Commit(ctx))
 	}
-	logutil.Infof(tae.Catalog.SimplePPString(3))
+	logutil.Info(tae.Catalog.SimplePPString(3))
 	tae.Restart(ctx)
-	logutil.Infof(tae.Catalog.SimplePPString(3))
+	logutil.Info(tae.Catalog.SimplePPString(3))
 	{
 		txn, rel := tae.GetRelation()
 		meta := testutil.GetOneBlockMeta(rel)
@@ -6096,7 +6117,7 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	require.Equal(t, "xyz", bat2.Attrs[2+schema1.GetSeqnum("xyz")])
 	require.Equal(t, "xyz", bat2.Attrs[2+schema2.GetSeqnum("xyz")])
 	close()
-	logutil.Infof(tae.Catalog.SimplePPString(common.PPL1))
+	logutil.Info(tae.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestGlobalCheckpoint1(t *testing.T) {
@@ -7669,7 +7690,7 @@ func TestDeduplication(t *testing.T) {
 		txn.Commit(context.Background())
 	}
 	tae.CheckRowsByScan(rows, false)
-	t.Logf(tae.Catalog.SimplePPString(3))
+	t.Log(tae.Catalog.SimplePPString(3))
 }
 
 func TestGCInMemoryDeletesByTS(t *testing.T) {
@@ -7747,14 +7768,14 @@ func TestGCInMemoryDeletesByTS(t *testing.T) {
 
 		batch, _, err := blkData.CollectDeleteInRange(context.Background(), types.TS{}, ts, true, common.DefaultAllocator)
 		assert.NoError(t, err)
-		t.Logf(logtail.BatchToString("", batch, false))
+		t.Log(logtail.BatchToString("", batch, false))
 		for i, vec := range batch.Vecs {
-			t.Logf(batch.Attrs[i])
+			t.Log(batch.Attrs[i])
 			assert.Equal(t, offset+1, vec.Length())
 		}
 		view, err := blkData.CollectChangesInRange(context.Background(), 0, types.TS{}, ts, common.DefaultAllocator)
 		assert.NoError(t, err)
-		t.Logf(view.Deletes.String())
+		t.Log(view.Deletes.String())
 		assert.Equal(t, offset+1, view.Deletes.GetCardinality())
 	}
 	cancel()

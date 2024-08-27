@@ -108,19 +108,19 @@ func (w *TAEWriter) WriteStrings(Line []string) error {
 			val, err := strconv.ParseInt(field, 10, 64)
 			if err != nil {
 				// fixme: help merge to continue
-				return moerr.NewInternalError(w.ctx, "the input value is not int64 type for column %d: %v, err: %s", colIdx, field, err)
+				return moerr.NewInternalErrorf(w.ctx, "the input value is not int64 type for column %d: %v, err: %s", colIdx, field, err)
 			}
 			elems[colIdx] = table.Int64Field(val)
 		case types.T_uint64:
 			val, err := strconv.ParseUint(field, 10, 64)
 			if err != nil {
-				return moerr.NewInternalError(w.ctx, "the input value is not uint64 type for column %d: %v, err: %s", colIdx, field, err)
+				return moerr.NewInternalErrorf(w.ctx, "the input value is not uint64 type for column %d: %v, err: %s", colIdx, field, err)
 			}
 			elems[colIdx] = table.Uint64Field(val)
 		case types.T_float64:
 			val, err := strconv.ParseFloat(field, 64)
 			if err != nil {
-				return moerr.NewInternalError(w.ctx, "the input value is not float64 type for column %d: %v, err: %s", colIdx, field, err)
+				return moerr.NewInternalErrorf(w.ctx, "the input value is not float64 type for column %d: %v, err: %s", colIdx, field, err)
 			}
 			elems[colIdx] = table.Float64Field(val)
 		case types.T_char, types.T_varchar,
@@ -240,7 +240,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 					return err
 				}
 			default:
-				return moerr.NewInternalError(ctx, "not Support string type %v", field.Type)
+				return moerr.NewInternalErrorf(ctx, "not Support string type %v", field.Type)
 			}
 		case types.T_json:
 			switch field.Type {
@@ -248,7 +248,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 				// convert normal json-string to bytejson-bytes
 				jsonBytes, err := bytejson.ParseJsonByteFromString(field.String)
 				if err != nil {
-					return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
+					return moerr.NewInternalErrorf(ctx, "the input value is not json type for column %d: %v", colIdx, field)
 				}
 				err = vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
 				if err != nil {
@@ -273,7 +273,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 				dst := field.EncodedDatetime(buf[:0])
 				d, err := types.ParseDatetime(string(dst), vec.GetType().Scale)
 				if err != nil {
-					return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)
+					return moerr.NewInternalErrorf(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)
 				}
 				cols[rowIdx] = d
 			case table.TVarchar, table.TText:
@@ -283,15 +283,15 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 				} else {
 					d, err := types.ParseDatetime(datetimeStr, vec.GetType().Scale)
 					if err != nil {
-						return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)
+						return moerr.NewInternalErrorf(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)
 					}
 					cols[rowIdx] = d
 				}
 			default:
-				return moerr.NewInternalError(ctx, "not Support datetime type %v", field.Type)
+				return moerr.NewInternalErrorf(ctx, "not Support datetime type %v", field.Type)
 			}
 		default:
-			return moerr.NewInternalError(ctx, "the value type %s is not support now", *vec.GetType())
+			return moerr.NewInternalErrorf(ctx, "the value type %s is not support now", *vec.GetType())
 		}
 	}
 	return nil
@@ -416,7 +416,7 @@ func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
 		cols := vector.MustFixedCol[types.Datetime](vec)
 		return len(cols), nil
 	default:
-		return 0, moerr.NewInternalError(ctx, "the value type with oid %d is not support now", vec.GetType().Oid)
+		return 0, moerr.NewInternalErrorf(ctx, "the value type with oid %d is not support now", vec.GetType().Oid)
 	}
 }
 
@@ -451,6 +451,6 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 		cols := vector.MustFixedCol[types.Datetime](vec)
 		return table.Time2DatetimeString(cols[rowIdx].ConvertToGoTime(time.Local)), nil
 	default:
-		return "", moerr.NewInternalError(ctx, "the value type with oid %d is not support now", vec.GetType().Oid)
+		return "", moerr.NewInternalErrorf(ctx, "the value type with oid %d is not support now", vec.GetType().Oid)
 	}
 }

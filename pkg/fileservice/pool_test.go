@@ -29,7 +29,6 @@ func TestBytesPool(t *testing.T) {
 	wg := new(sync.WaitGroup)
 	for i := 0; i < 200; i++ {
 		wg.Add(1)
-		i := i
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 200; j++ {

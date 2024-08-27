@@ -182,10 +182,10 @@ func strToDate2(cctx context.Context, t *GeneralTime, date string, format string
 func checkMysqlTime(cctx context.Context, t *GeneralTime, ctx map[string]int) error {
 	if valueAMorPm, ok := ctx["%p"]; ok {
 		if _, ok := ctx["%H"]; ok {
-			return moerr.NewInternalError(cctx, "Truncated incorrect %-.64s value: '%-.128s'", "time", t)
+			return moerr.NewInternalErrorf(cctx, "Truncated incorrect %-.64s value: '%-.128s'", "time", t)
 		}
 		if t.getHour() == 0 {
-			return moerr.NewInternalError(cctx, "Truncated incorrect %-.64s value: '%-.128s'", "time", t)
+			return moerr.NewInternalErrorf(cctx, "Truncated incorrect %-.64s value: '%-.128s'", "time", t)
 		}
 		if t.getHour() == 12 {
 			// 12 is a special hour.
