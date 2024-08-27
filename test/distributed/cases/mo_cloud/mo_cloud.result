@@ -656,6 +656,7 @@ mysql    user    r    accountadmin
 system    statement_info    r    accountadmin
 system_metrics    metric    r    accountadmin
 system_metrics    server_connections    v    accountadmin
+system_metrics    server_object_count_total    v    accountadmin
 system_metrics    server_snapshot_usage    v    accountadmin
 system_metrics    server_storage_usage    v    accountadmin
 system_metrics    sql_statement_cu    r    accountadmin
@@ -689,6 +690,7 @@ sql_transaction_errors    accountadmin
 sql_statement_duration_total    accountadmin
 server_connections    accountadmin
 server_storage_usage    accountadmin
+server_object_count_total    accountadmin
 server_snapshot_usage    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='information_schema';
 name    rows    size    owner

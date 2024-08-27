@@ -616,7 +616,7 @@ func updateObjectCountMetricForAllAccounts(accInfosBatches []*batch.Batch, accId
 
 			buf.WriteString(fmt.Sprintf("%s-%f; ", name, objectCnt))
 
-			metric.ObjectCount(name).Set(objectCnt)
+			metric.ObjectCount(name).Set(objectCnt + 0.001)
 		}
 	}
 
