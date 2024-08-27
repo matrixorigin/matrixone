@@ -102,8 +102,13 @@ func (node *persistedNode) Scan(
 	if err != nil {
 		return err
 	}
-	vecs, err := LoadPersistedColumnDatas(
-		ctx, readSchema, node.object.rt, id, colIdxes, location, mp,
+	var tsForAppendable *types.TS
+	if node.object.meta.Load().IsAppendable() {
+		ts := txn.GetStartTS()
+		tsForAppendable = &ts
+	}
+	vecs, deletes, err := LoadPersistedColumnDatas(
+		ctx, readSchema, node.object.rt, id, colIdxes, location, mp, tsForAppendable,
 	)
 	if err != nil {
 		return err
@@ -111,6 +116,7 @@ func (node *persistedNode) Scan(
 	// TODO: check visibility
 	if *bat == nil {
 		*bat = containers.NewBatch()
+		(*bat).Deletes = deletes
 		for i, idx := range colIdxes {
 			var attr string
 			if idx == catalog.COLIDX_COMMITS {
@@ -127,6 +133,14 @@ func (node *persistedNode) Scan(
 			(*bat).AddVector(attr, vecs[i])
 		}
 	} else {
+		if (*bat).Deletes == nil {
+			(*bat).Deletes = nulls.NewWithSize(1024)
+		}
+		len := (*bat).Length()
+		deletes.Foreach(func(i uint64) bool {
+			(*bat).Deletes.Add(i + uint64(len))
+			return true
+		})
 		for i, idx := range colIdxes {
 			var attr string
 			if idx == catalog.COLIDX_COMMITS {
@@ -209,8 +223,8 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		if err != nil {
 			return err
 		}
-		vecs, err := LoadPersistedColumnDatas(
-			ctx, readSchema, node.object.rt, id, colIdxes, location, mp,
+		vecs, _, err := LoadPersistedColumnDatas(
+			ctx, readSchema, node.object.rt, id, colIdxes, location, mp, nil,
 		)
 		if err != nil {
 			return err
@@ -262,6 +276,7 @@ func (node *persistedNode) FillBlockTombstones(
 	txn txnif.TxnReader,
 	blkID *objectio.Blockid,
 	deletes **nulls.Nulls,
+	deleteStartOffset uint64,
 	mp *mpool.MPool) error {
 	startTS := txn.GetStartTS()
 	if !node.object.meta.Load().IsAppendable() {
@@ -302,8 +317,8 @@ func (node *persistedNode) FillBlockTombstones(
 		if err != nil {
 			return err
 		}
-		vecs, err := LoadPersistedColumnDatas(
-			ctx, readSchema, node.object.rt, id, []int{0}, location, mp,
+		vecs, _, err := LoadPersistedColumnDatas(
+			ctx, readSchema, node.object.rt, id, []int{0}, location, mp, nil,
 		)
 		if err != nil {
 			return err
@@ -339,7 +354,7 @@ func (node *persistedNode) FillBlockTombstones(
 					*deletes = &nulls.Nulls{}
 				}
 				offset := rowID.GetRowOffset()
-				(*deletes).Add(uint64(offset))
+				(*deletes).Add(uint64(offset) + deleteStartOffset)
 			}
 		}
 	}

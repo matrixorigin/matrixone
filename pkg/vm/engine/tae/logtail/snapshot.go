@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 const (
@@ -306,62 +305,63 @@ func (sm *SnapshotMeta) CopyTablesLocked() map[uint32]map[uint64]*TableInfo {
 }
 
 func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
-	insTable, insTableTxn, _, _, delTableTxn := data.GetTblBatchs()
-	insAccIDs := vector.MustFixedColWithTypeCheck[uint32](insTable.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
-	insTIDs := vector.MustFixedColWithTypeCheck[uint64](insTable.GetVectorByName(catalog2.SystemRelAttr_ID).GetDownstreamVector())
-	insDBIDs := vector.MustFixedColWithTypeCheck[uint64](insTable.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector())
-	insCreateAts := vector.MustFixedColWithTypeCheck[types.TS](insTableTxn.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector())
-	insTableNameVec := insTable.GetVectorByName(catalog2.SystemRelAttr_Name).GetDownstreamVector()
-	insTableArea := insTableNameVec.GetArea()
-	insTableNames := vector.MustFixedColWithTypeCheck[types.Varlena](insTableNameVec)
-	for i := 0; i < insTable.Length(); i++ {
-		tid := insTIDs[i]
-		name := string(insTableNames[i].GetByteSlice(insTableArea))
-		if name == "mo_snapshots" {
-			if sm.tid == 0 {
-				//for ut
-				sm.SetTid(tid)
-			}
-			logutil.Info("[UpdateSnapTable]", zap.Uint64("tid", tid))
-			sm.tides[tid] = struct{}{}
-		}
-		accID := insAccIDs[i]
-		if sm.tables[accID] == nil {
-			sm.tables[accID] = make(map[uint64]*TableInfo)
-		}
-		dbid := insDBIDs[i]
-		createAt := insCreateAts[i]
-		if sm.tables[accID][tid] != nil {
-			continue
-		}
-		table := &TableInfo{
-			accID:    accID,
-			dbID:     dbid,
-			tid:      tid,
-			createAt: createAt,
-		}
-		sm.tables[accID][tid] = table
+	return
+	// insTable, insTableTxn, _, _, delTableTxn := data.GetTblBatchs()
+	// insAccIDs := vector.MustFixedColWithTypeCheck[uint32](insTable.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
+	// insTIDs := vector.MustFixedColWithTypeCheck[uint64](insTable.GetVectorByName(catalog2.SystemRelAttr_ID).GetDownstreamVector())
+	// insDBIDs := vector.MustFixedColWithTypeCheck[uint64](insTable.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector())
+	// insCreateAts := vector.MustFixedColWithTypeCheck[types.TS](insTableTxn.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector())
+	// insTableNameVec := insTable.GetVectorByName(catalog2.SystemRelAttr_Name).GetDownstreamVector()
+	// insTableArea := insTableNameVec.GetArea()
+	// insTableNames := vector.MustFixedColWithTypeCheck[types.Varlena](insTableNameVec)
+	// for i := 0; i < insTable.Length(); i++ {
+	// 	tid := insTIDs[i]
+	// 	name := string(insTableNames[i].GetByteSlice(insTableArea))
+	// 	if name == "mo_snapshots" {
+	// 		if sm.tid == 0 {
+	// 			//for ut
+	// 			sm.SetTid(tid)
+	// 		}
+	// 		logutil.Info("[UpdateSnapTable]", zap.Uint64("tid", tid))
+	// 		sm.tides[tid] = struct{}{}
+	// 	}
+	// 	accID := insAccIDs[i]
+	// 	if sm.tables[accID] == nil {
+	// 		sm.tables[accID] = make(map[uint64]*TableInfo)
+	// 	}
+	// 	dbid := insDBIDs[i]
+	// 	createAt := insCreateAts[i]
+	// 	if sm.tables[accID][tid] != nil {
+	// 		continue
+	// 	}
+	// 	table := &TableInfo{
+	// 		accID:    accID,
+	// 		dbID:     dbid,
+	// 		tid:      tid,
+	// 		createAt: createAt,
+	// 	}
+	// 	sm.tables[accID][tid] = table
 
-		if sm.acctIndexes[tid] == nil {
-			sm.acctIndexes[tid] = table
-		}
-	}
+	// 	// 	if sm.acctIndexes[tid] == nil {
+	// 	// 		sm.acctIndexes[tid] = table
+	// 	// 	}
+	// }
 
-	delTableIDs := vector.MustFixedColWithTypeCheck[uint64](delTableTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
-	delDropAts := vector.MustFixedColWithTypeCheck[types.TS](delTableTxn.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector())
-	for i := 0; i < delTableTxn.Length(); i++ {
-		tid := delTableIDs[i]
-		dropAt := delDropAts[i]
-		if sm.acctIndexes[tid] == nil {
-			//In the upgraded cluster, because the inc checkpoint is consumed halfway,
-			// there may be no record of the create table entry, only the delete entry
-			continue
-		}
-		table := sm.acctIndexes[tid]
-		table.deleteAt = dropAt
-		sm.acctIndexes[tid] = table
-		sm.tables[table.accID][tid] = table
-	}
+	// delTableIDs := vector.MustFixedColWithTypeCheck[uint64](delTableTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+	// delDropAts := vector.MustFixedColWithTypeCheck[types.TS](delTableTxn.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector())
+	// for i := 0; i < delTableTxn.Length(); i++ {
+	// 	tid := delTableIDs[i]
+	// 	dropAt := delDropAts[i]
+	// 	if sm.acctIndexes[tid] == nil {
+	// 		//In the upgraded cluster, because the inc checkpoint is consumed halfway,
+	// 		// there may be no record of the create table entry, only the delete entry
+	// 		continue
+	// 	}
+	// 	table := sm.acctIndexes[tid]
+	// 	table.deleteAt = dropAt
+	// 	sm.acctIndexes[tid] = table
+	// 	sm.tables[table.accID][tid] = table
+	// }
 }
 
 func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {

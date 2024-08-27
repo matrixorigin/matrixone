@@ -200,7 +200,7 @@ type Policy interface {
 	OnObject(obj *catalog.ObjectEntry)
 	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
 	ResetForTable(*catalog.TableEntry)
-	SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any)
+	SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any) error
 	GetConfig(*catalog.TableEntry) any
 }
 

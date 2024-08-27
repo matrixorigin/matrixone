@@ -139,12 +139,6 @@ func HandleSyncLogTailReq(
 	req.Table.DbName = dbEntry.GetName()
 	req.Table.TbName = schema.Name
 	req.Table.PrimarySeqnum = uint32(schema.GetPrimaryKey().SeqNum)
-	tableEntry.RLock()
-	createTS := tableEntry.GetCreatedAtLocked()
-	tableEntry.RUnlock()
-	if start.Less(&createTS) {
-		start = createTS
-	}
 
 	ckpLoc, checkpointed, err := ckpClient.CollectCheckpointsInRange(ctx, start, end)
 	if err != nil {
@@ -327,8 +321,7 @@ func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNod
 	} else {
 		batch.GetVectorByName(catalog.AttrCommitTs).Append(txnMVCCNode.End, false)
 	}
-	empty := entry.IsAppendable() && create
-	entry.ObjectMVCCNode.AppendTuple(entry.ID(), batch, empty)
+	entry.ObjectMVCCNode.AppendTuple(entry.ID(), batch)
 	if push {
 		txnMVCCNode.AppendTupleWithCommitTS(batch, committs)
 	} else {

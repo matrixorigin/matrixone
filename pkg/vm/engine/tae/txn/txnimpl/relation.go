@@ -363,6 +363,6 @@ func (h *txnRelation) AlterTable(ctx context.Context, req *apipb.AlterTableReq) 
 	return h.table.AlterTable(ctx, req)
 }
 
-func (h *txnRelation) FillInWorkspaceDeletes(blkID types.Blockid, view **nulls.Nulls) error {
-	return h.table.FillInWorkspaceDeletes(blkID, view)
+func (h *txnRelation) FillInWorkspaceDeletes(blkID types.Blockid, view **nulls.Nulls, deleteStartOffset uint64) error {
+	return h.table.FillInWorkspaceDeletes(blkID, view, deleteStartOffset)
 }

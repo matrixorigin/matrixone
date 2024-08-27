@@ -66,8 +66,8 @@ func Test_Append(t *testing.T) {
 
 	schema := catalog.MockSchema(3, 2)
 	schema.Name = tableName
-	schema.BlockMaxRows = 10000
-	batchRows := schema.BlockMaxRows * 2 / 5
+	schema.Extra.BlockMaxRows = 10000
+	batchRows := schema.Extra.BlockMaxRows * 2 / 5
 	cnt := uint32(20)
 	bat := catalog.MockBatch(schema, int(batchRows*cnt))
 	defer bat.Close()
@@ -115,7 +115,7 @@ func Test_Append(t *testing.T) {
 	wg.Wait()
 
 	t.Logf("Append takes: %s", time.Since(now))
-	expectBlkCnt := (uint32(batchRows)*uint32(cnt)-1)/schema.BlockMaxRows + 1
+	expectBlkCnt := (uint32(batchRows)*uint32(cnt)-1)/schema.Extra.BlockMaxRows + 1
 	expectObjCnt := expectBlkCnt
 
 	{
@@ -197,8 +197,8 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 			schema := catalog.MockSchemaAll(3, 2)
 			schema.Name = tableName
 			schema.Comment = "rows:20;blks:2"
-			schema.BlockMaxRows = 20
-			schema.ObjectMaxBlocks = 2
+			schema.Extra.BlockMaxRows = 20
+			schema.Extra.ObjectMaxBlocks = 2
 			taeEngine.BindSchema(schema)
 
 			rowsCnt := 40
@@ -304,8 +304,8 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Name = tableName
 	schema.Comment = "rows:20;blks:2"
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 2
 	taeEngine.BindSchema(schema)
 
 	rowsCnt := 40
@@ -423,8 +423,8 @@ func Test_EmptyObjectStats(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Name = tableName
 	schema.Comment = "rows:20;blks:2"
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 2
 	taeEngine.BindSchema(schema)
 
 	rowsCnt := 40
@@ -528,8 +528,8 @@ func Test_SubscribeUnsubscribeConsistency(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Name = tableName
 	schema.Comment = "rows:20;blks:2"
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 2
 	taeEngine.BindSchema(schema)
 
 	rowsCnt := 40
@@ -619,8 +619,8 @@ func Test_Bug_DupEntryWhenGCInMemTombstones(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Name = tableName
 	schema.Comment = "rows:20;blks:2"
-	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 2
 
 	txnop := p.StartCNTxn()
 	_, _ = p.CreateDBAndTable(txnop, databaseName, schema)

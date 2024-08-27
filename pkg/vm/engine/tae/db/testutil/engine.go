@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -126,9 +125,14 @@ func (e *TestEngine) Close() error {
 	return err
 }
 
-func (e *TestEngine) CreateRelAndAppend(bat *containers.Batch, createDB bool) (handle.Database, handle.Relation) {
+func (e *TestEngine) CreateRelAndAppend(bat *containers.Batch, createDB bool) {
 	clonedSchema := e.schema.Clone()
-	return CreateRelationAndAppend(e.T, e.tenantID, e.DB, DefaultTestDB, clonedSchema, bat, createDB)
+	CreateRelationAndAppend(e.T, e.tenantID, e.DB, DefaultTestDB, clonedSchema, bat, createDB)
+}
+
+func (e *TestEngine) CreateRelAndAppend2(bat *containers.Batch, createDB bool) {
+	clonedSchema := e.schema.Clone()
+	CreateRelationAndAppend2(e.T, e.tenantID, e.DB, DefaultTestDB, clonedSchema, bat, createDB)
 }
 
 func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
@@ -297,15 +301,15 @@ func (e *TestEngine) IncrementalCheckpoint(
 			return flushed
 		})
 		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end, true)
-		assert.True(e.T, flushed)
+		require.True(e.T, flushed)
 	}
 	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(end, false)
-	assert.NoError(e.T, err)
+	require.NoError(e.T, err)
 	if truncate {
 		lsn := e.DB.BGCheckpointRunner.MaxLSNInRange(end)
 		entry, err := e.DB.Wal.RangeCheckpoint(1, lsn)
-		assert.NoError(e.T, err)
-		assert.NoError(e.T, entry.WaitDone())
+		require.NoError(e.T, err)
+		require.NoError(e.T, entry.WaitDone())
 		testutils.WaitExpect(1000, func() bool {
 			return e.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 		})
@@ -384,6 +388,7 @@ func InitTestDB(
 	t *testing.T,
 	opts *options.Options,
 ) *db.DB {
+	blockio.Start("")
 	dir := testutils.InitTestEnv(moduleName, t)
 	db, _ := db.Open(ctx, dir, opts)
 	// only ut executes this checker
@@ -539,64 +544,7 @@ func isProtoTNBatchEqual(ctx context.Context, t *testing.T, bat1 *api.Batch, bat
 }
 
 func checkCNCheckpointData(ctx context.Context, t *testing.T, tid uint64, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	if tid == pkgcatalog.MO_DATABASE_ID {
-		checkMODatabase(ctx, t, ins, del, cnIns, segDel, start, end, c)
-	} else if tid == pkgcatalog.MO_TABLES_ID {
-		checkMOTables(ctx, t, ins, del, cnIns, segDel, start, end, c)
-	} else if tid == pkgcatalog.MO_COLUMNS_ID {
-		checkMOColumns(ctx, t, ins, del, cnIns, segDel, start, end, c)
-	} else {
-		checkUserTables(ctx, t, tid, ins, del, cnIns, segDel, start, end, c)
-	}
-}
-
-func checkMODatabase(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector("", start, end)
-	p := &catalog.LoopProcessor{}
-	p.DatabaseFn = collector.VisitDB
-	err := c.RecurLoop(p)
-	assert.NoError(t, err)
-	data2 := collector.OrphanData()
-	defer data2.Close()
-	ins2, _, del2, _ := data2.GetDBBatchs()
-
-	isProtoTNBatchEqual(ctx, t, ins, ins2)
-	isProtoTNBatchEqual(ctx, t, del, del2)
-	assert.Nil(t, cnIns)
-	assert.Nil(t, segDel)
-}
-
-func checkMOTables(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector("", start, end)
-	p := &catalog.LoopProcessor{}
-	p.TableFn = collector.VisitTable
-	err := c.RecurLoop(p)
-	assert.NoError(t, err)
-	data2 := collector.OrphanData()
-	defer data2.Close()
-	ins2, _, _, del2, _ := data2.GetTblBatchs()
-
-	isProtoTNBatchEqual(ctx, t, ins, ins2)
-	isProtoTNBatchEqual(ctx, t, del, del2)
-	assert.Nil(t, cnIns)
-	assert.Nil(t, segDel)
-}
-
-func checkMOColumns(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector("", start, end)
-	p := &catalog.LoopProcessor{}
-	p.TableFn = collector.VisitTable
-	err := c.RecurLoop(p)
-	assert.NoError(t, err)
-	data2 := collector.OrphanData()
-	bats := data2.GetBatches()
-	ins2 := bats[logtail.TBLColInsertIDX]
-	del2 := bats[logtail.TBLColDeleteIDX]
-
-	isProtoTNBatchEqual(ctx, t, ins, ins2)
-	isProtoTNBatchEqual(ctx, t, del, del2)
-	assert.Nil(t, cnIns)
-	assert.Nil(t, segDel)
+	checkUserTables(ctx, t, tid, ins, del, cnIns, segDel, start, end, c)
 }
 
 func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, dataObject, tombstoneObject *api.Batch, start, end types.TS, c *catalog.Catalog) {
@@ -660,28 +608,6 @@ func CheckCheckpointReadWrite(
 
 	checkTNCheckpointData(context.Background(), t, tnData, start, end, c)
 	p := &catalog.LoopProcessor{}
-
-	ins, del, cnIns, seg, cbs := cnReadCheckpoint(t, pkgcatalog.MO_DATABASE_ID, location, fs)
-	checkCNCheckpointData(context.Background(), t, pkgcatalog.MO_DATABASE_ID, ins, del, cnIns, seg, start, end, c)
-	for _, cb := range cbs {
-		if cb != nil {
-			cb()
-		}
-	}
-	ins, del, cnIns, seg, cbs = cnReadCheckpoint(t, pkgcatalog.MO_TABLES_ID, location, fs)
-	checkCNCheckpointData(context.Background(), t, pkgcatalog.MO_TABLES_ID, ins, del, cnIns, seg, start, end, c)
-	for _, cb := range cbs {
-		if cb != nil {
-			cb()
-		}
-	}
-	ins, del, cnIns, seg, cbs = cnReadCheckpoint(t, pkgcatalog.MO_COLUMNS_ID, location, fs)
-	checkCNCheckpointData(context.Background(), t, pkgcatalog.MO_COLUMNS_ID, ins, del, cnIns, seg, start, end, c)
-	for _, cb := range cbs {
-		if cb != nil {
-			cb()
-		}
-	}
 
 	p.TableFn = func(te *catalog.TableEntry) error {
 		ins, del, cnIns, seg, cbs := cnReadCheckpoint(t, te.ID, location, fs)

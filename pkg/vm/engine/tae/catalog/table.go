@@ -650,6 +650,8 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 			MaxObjOnerun:      newSchema.Extra.MaxObjOnerun,
 			MaxOsizeMergedObj: newSchema.Extra.MaxOsizeMergedObj,
 			MinCnMergeSize:    newSchema.Extra.MinCnMergeSize,
+			BlockMaxRows:      newSchema.Extra.BlockMaxRows,
+			ObjectMaxBlocks:   newSchema.Extra.ObjectMaxBlocks,
 			Hints:             hints,
 		}
 
