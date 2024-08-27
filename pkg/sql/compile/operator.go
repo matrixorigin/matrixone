@@ -71,8 +71,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
@@ -129,7 +127,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		t := sourceOp.(*anti.AntiJoin)
 		op := anti.NewArgument()
 		op.Cond = t.Cond
-		op.Typs = t.Typs
 		op.Conditions = t.Conditions
 		op.Result = t.Result
 		op.HashOnPK = t.HashOnPK
@@ -142,11 +139,9 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 	case vm.Group:
 		t := sourceOp.(*group.Group)
 		op := group.NewArgument()
-		op.IsShuffle = t.IsShuffle
 		op.PreAllocSize = t.PreAllocSize
 		op.NeedEval = t.NeedEval
 		op.Exprs = t.Exprs
-		op.Types = t.Types
 		op.Aggs = t.Aggs
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -161,7 +156,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op := join.NewArgument()
 		op.Result = t.Result
 		op.Cond = t.Cond
-		op.Typs = t.Typs
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
@@ -235,7 +229,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op := loopanti.NewArgument()
 		op.Result = t.Result
 		op.Cond = t.Cond
-		op.Typs = t.Typs
 		op.JoinMapTag = t.JoinMapTag
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -245,7 +238,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op := loopjoin.NewArgument()
 		op.Result = t.Result
 		op.Cond = t.Cond
-		op.Typs = t.Typs
 		op.JoinMapTag = t.JoinMapTag
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -254,7 +246,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		t := sourceOp.(*indexjoin.IndexJoin)
 		op := indexjoin.NewArgument()
 		op.Result = t.Result
-		op.Typs = t.Typs
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -274,7 +265,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op := loopsemi.NewArgument()
 		op.Result = t.Result
 		op.Cond = t.Cond
-		op.Typs = t.Typs
 		op.JoinMapTag = t.JoinMapTag
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -294,7 +284,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op := loopmark.NewArgument()
 		op.Result = t.Result
 		op.Cond = t.Cond
-		op.Typs = t.Typs
 		op.JoinMapTag = t.JoinMapTag
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -315,7 +304,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		t := sourceOp.(*product.Product)
 		op := product.NewArgument()
 		op.Result = t.Result
-		op.Typs = t.Typs
 		op.IsShuffle = t.IsShuffle
 		op.JoinMapTag = t.JoinMapTag
 		op.ProjectList = t.ProjectList
@@ -325,7 +313,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		t := sourceOp.(*productl2.Productl2)
 		op := productl2.NewArgument()
 		op.Result = t.Result
-		op.Typs = t.Typs
 		op.OnExpr = t.OnExpr
 		op.JoinMapTag = t.JoinMapTag
 		op.ProjectList = t.ProjectList
@@ -351,7 +338,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op := semi.NewArgument()
 		op.Result = t.Result
 		op.Cond = t.Cond
-		op.Typs = t.Typs
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
@@ -419,18 +405,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
-	case vm.MergeLimit:
-		t := sourceOp.(*mergelimit.MergeLimit)
-		op := mergelimit.NewArgument()
-		op.Limit = t.Limit
-		op.SetInfo(&info)
-		return op
-	case vm.MergeOffset:
-		t := sourceOp.(*mergeoffset.MergeOffset)
-		op := mergeoffset.NewArgument()
-		op.Offset = t.Offset
-		op.SetInfo(&info)
-		return op
 	case vm.MergeTop:
 		t := sourceOp.(*mergetop.MergeTop)
 		op := mergetop.NewArgument()
@@ -449,7 +423,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op := mark.NewArgument()
 		op.Result = t.Result
 		op.Conditions = t.Conditions
-		op.Typs = t.Typs
 		op.Cond = t.Cond
 		op.OnList = t.OnList
 		op.HashOnPK = t.HashOnPK
@@ -603,7 +576,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		return op
 	case vm.TableScan:
 		t := sourceOp.(*table_scan.TableScan)
-		op := table_scan.NewArgument()
+		op := table_scan.NewArgument().WithTypes(t.Types)
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -645,10 +618,9 @@ func constructDeletion(n *plan.Node, eg engine.Engine) (*deletion.Deletion, erro
 	return op, nil
 }
 
-func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.OnDuplicatekey {
+func constructOnduplicateKey(n *plan.Node, _ engine.Engine) *onduplicatekey.OnDuplicatekey {
 	oldCtx := n.OnDuplicateKey
 	op := onduplicatekey.NewArgument()
-	op.Engine = eg
 	op.OnDuplicateIdx = oldCtx.OnDuplicateIdx
 	op.OnDuplicateExpr = oldCtx.OnDuplicateExpr
 	op.Attrs = oldCtx.Attrs
@@ -760,14 +732,14 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	return op, nil
 }
 
-func constructPreInsertUk(n *plan.Node, proc *process.Process) *preinsertunique.PreInsertUnique {
+func constructPreInsertUk(n *plan.Node) *preinsertunique.PreInsertUnique {
 	preCtx := n.PreInsertUkCtx
 	op := preinsertunique.NewArgument()
 	op.PreInsertCtx = preCtx
 	return op
 }
 
-func constructPreInsertSk(n *plan.Node, proc *process.Process) *preinsertsecondaryindex.PreInsertSecIdx {
+func constructPreInsertSk(n *plan.Node) *preinsertsecondaryindex.PreInsertSecIdx {
 	op := preinsertsecondaryindex.NewArgument()
 	op.PreInsertCtx = n.PreInsertSkCtx
 	return op
@@ -915,7 +887,6 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 	cond, conds := extraJoinConditions(n.OnList)
 
 	arg := join.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
@@ -944,7 +915,6 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	arg := semi.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
@@ -1094,7 +1064,6 @@ func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *p
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := product.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	for i := range n.SendMsgList {
 		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -1118,7 +1087,6 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	arg := anti.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
@@ -1303,9 +1271,13 @@ func constructOffset(n *plan.Node, proc *process.Process) *offset.Argument {
 }
 */
 
+func constructOffset(n *plan.Node) *offset.Offset {
+	arg := offset.NewArgument().WithOffset(n.Offset)
+	return arg
+}
+
 func constructLimit(n *plan.Node) *limit.Limit {
-	arg := limit.NewArgument()
-	arg.LimitExpr = plan2.DeepCopyExpr(n.Limit)
+	arg := limit.NewArgument().WithLimit(n.Limit)
 	return arg
 }
 
@@ -1355,10 +1327,8 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
 	}
 
-	shuffleGroup := false
 	var preAllocSize uint64 = 0
 	if n.Stats != nil && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
-		shuffleGroup = true
 		if cn.NodeType == plan.Node_TABLE_SCAN && len(cn.FilterList) == 0 {
 			// if group on scan without filter, stats for hashmap is accurate to do preAlloc
 			// tune it up a little bit in case it is not so average after shuffle
@@ -1368,10 +1338,8 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 
 	arg := group.NewArgument()
 	arg.Aggs = aggregationExpressions
-	arg.Types = typs
 	arg.NeedEval = needEval
 	arg.Exprs = n.GroupBy
-	arg.IsShuffle = shuffleGroup
 	arg.PreAllocSize = preAllocSize
 	return arg
 }
@@ -1587,16 +1555,6 @@ func constructMergeTop(n *plan.Node, topN *plan.Expr) *mergetop.MergeTop {
 	return arg
 }
 
-func constructMergeOffset(n *plan.Node) *mergeoffset.MergeOffset {
-	arg := mergeoffset.NewArgument().WithOffset(n.Offset)
-	return arg
-}
-
-func constructMergeLimit(n *plan.Node) *mergelimit.MergeLimit {
-	arg := mergelimit.NewArgument().WithLimit(n.Limit)
-	return arg
-}
-
 func constructMergeOrder(n *plan.Node) *mergeorder.MergeOrder {
 	arg := mergeorder.NewArgument()
 	arg.OrderBySpecs = n.OrderBy
@@ -1619,7 +1577,6 @@ func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) 
 		result[i] = pos
 	}
 	arg := indexjoin.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	return arg
@@ -1631,7 +1588,6 @@ func constructProductL2(n *plan.Node, typs []types.Type, proc *process.Process) 
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := productl2.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.OnExpr = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
@@ -1651,7 +1607,6 @@ func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := loopjoin.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
@@ -1675,7 +1630,6 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 		result[i] = pos
 	}
 	arg := loopsemi.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
@@ -1739,7 +1693,6 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 		result[i] = pos
 	}
 	arg := loopanti.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
@@ -1766,7 +1719,6 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 		}
 	}
 	arg := loopmark.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
@@ -2159,8 +2111,12 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 	return e.F.Args[0], e.F.Args[1]
 }
 
-func constructTableScan() *table_scan.TableScan {
-	return table_scan.NewArgument()
+func constructTableScan(n *plan.Node) *table_scan.TableScan {
+	types := make([]plan.Type, len(n.TableDef.Cols))
+	for j, col := range n.TableDef.Cols {
+		types[j] = col.Typ
+	}
+	return table_scan.NewArgument().WithTypes(types)
 }
 
 func constructValueScan() *value_scan.ValueScan {

@@ -43,12 +43,13 @@ func (intersectAll *IntersectAll) OpType() vm.OpType {
 
 func (intersectAll *IntersectAll) Prepare(proc *process.Process) error {
 	var err error
-	intersectAll.ctr = new(container)
 	if intersectAll.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp()); err != nil {
 		return err
 	}
-	intersectAll.ctr.inserted = make([]uint8, hashmap.UnitLimit)
-	intersectAll.ctr.resetInserted = make([]uint8, hashmap.UnitLimit)
+	if len(intersectAll.ctr.inserted) == 0 {
+		intersectAll.ctr.inserted = make([]uint8, hashmap.UnitLimit)
+		intersectAll.ctr.resetInserted = make([]uint8, hashmap.UnitLimit)
+	}
 	return nil
 }
 
@@ -99,7 +100,7 @@ func (intersectAll *IntersectAll) Call(proc *process.Process) (vm.CallResult, er
 
 // build use all batches from proc.Reg.MergeReceiver[1](right relation) to build the hash map.
 func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.Analyze, isFirst bool) error {
-	ctr := intersectAll.ctr
+	ctr := &intersectAll.ctr
 	for {
 		input, err := intersectAll.GetChildren(1).Call(proc)
 		if err != nil {
@@ -151,7 +152,7 @@ func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.
 // send it to the next operator and counter--; else, continue.
 // if batch is the last one, return true, else return false.
 func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
-	ctr := intersectAll.ctr
+	ctr := &intersectAll.ctr
 	for {
 		input, err := intersectAll.GetChildren(0).Call(proc)
 		if err != nil {

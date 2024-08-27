@@ -65,10 +65,6 @@ func (connector *Connector) Release() {
 }
 
 func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	connector.Free(proc, pipelineFailed, err)
-}
-
-func (connector *Connector) Free(proc *process.Process, pipelineFailed bool, err error) {
 	// told the next operator to stop if it is still running.
 	msg := process.NewRegMsg(nil)
 	msg.Err = err
@@ -76,4 +72,7 @@ func (connector *Connector) Free(proc *process.Process, pipelineFailed bool, err
 	case connector.Reg.Ch <- msg:
 	case <-connector.Reg.Ctx.Done():
 	}
+}
+
+func (connector *Connector) Free(proc *process.Process, pipelineFailed bool, err error) {
 }

@@ -32,7 +32,7 @@ const (
 )
 
 type Minus struct {
-	ctr *container
+	ctr container
 
 	vm.OperatorBase
 }
@@ -81,16 +81,17 @@ type container struct {
 }
 
 func (minus *Minus) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	minus.Free(proc, pipelineFailed, err)
+	minus.ctr.state = buildingHashMap
+	if minus.ctr.bat != nil {
+		minus.ctr.bat.CleanOnlyData()
+	}
+	minus.ctr.cleanHashMap()
 }
 
 func (minus *Minus) Free(proc *process.Process, pipelineFailed bool, err error) {
 	mp := proc.Mp()
-	if minus.ctr != nil {
-		minus.ctr.cleanBatch(mp)
-		minus.ctr.cleanHashMap()
-		minus.ctr = nil
-	}
+	minus.ctr.cleanBatch(mp)
+	minus.ctr.cleanHashMap()
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

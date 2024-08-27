@@ -68,7 +68,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -329,7 +328,7 @@ func (c *Compile) run(s *Scope) error {
 		}
 		mergeArg := s.RootOp.(*mergedelete.MergeDelete)
 		if mergeArg.AddAffectedRows {
-			c.addAffectedRows(mergeArg.AffectedRows)
+			c.addAffectedRows(mergeArg.AffectedRows())
 		}
 		return nil
 	case Remote:
@@ -419,6 +418,12 @@ func (c *Compile) IsSingleScope(ss []*Scope) bool {
 
 func (c *Compile) SetIsPrepare(isPrepare bool) {
 	c.isPrepare = isPrepare
+}
+
+func (c *Compile) FreeOperator() {
+	for _, s := range c.scope {
+		s.FreeOperator(c)
+	}
 }
 
 /*
@@ -1790,7 +1795,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, first
 		node: n,
 	}
 
-	op := constructTableScan()
+	op := constructTableScan(n)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, firstFlag)
 	s.setRootOperator(op)
 	s.Proc = c.proc.NewNoContextChildProc(0)
@@ -2116,7 +2121,7 @@ func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*S
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	rs := c.newScopeListOnCurrentCN(2, 1)
 	rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
 
@@ -2156,7 +2161,7 @@ func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right 
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
-		return c.compileTpMinusAndIntersect(n, left, right, nodeType)
+		return c.compileTpMinusAndIntersect(left, right, nodeType)
 	}
 	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
 	rs = c.newScopeListForMinusAndIntersect(rs, left, right, n)
@@ -2660,7 +2665,7 @@ func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
-		op := offset.NewArgument().WithOffset(n.Offset)
+		op := constructOffset(n)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
 		c.anal.isFirst = false
@@ -2670,7 +2675,7 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag := c.anal.isFirst
-	arg := constructMergeOffset(n)
+	arg := constructOffset(n)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -2701,7 +2706,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag = c.anal.isFirst
-	arg := constructMergeLimit(n)
+	arg := constructLimit(n)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -3029,7 +3034,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 func (c *Compile) compilePreInsertUk(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		preInsertUkArg := constructPreInsertUk(n, c.proc)
+		preInsertUkArg := constructPreInsertUk(n)
 		preInsertUkArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(preInsertUkArg)
 	}
@@ -3040,7 +3045,7 @@ func (c *Compile) compilePreInsertUk(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compilePreInsertSK(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		preInsertSkArg := constructPreInsertSk(n, c.proc)
+		preInsertSkArg := constructPreInsertSk(n)
 		preInsertSkArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(preInsertSkArg)
 	}
@@ -3156,7 +3161,7 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	rs.setRootOperator(mergeOp1)
 
 	currentFirstFlag := c.anal.isFirst
-	mergecteArg := mergecte.NewArgument()
+	mergecteArg := mergecte.NewArgument().WithNodeCnt(len(n.SourceStep) - 1)
 	mergecteArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergecteArg)
 	c.anal.isFirst = false
@@ -3304,14 +3309,8 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs.NodeInfo = getEngineNode(c)
 	rs.NodeInfo.Mcpu = 1 //merge scope is single parallel by default
 	rs.PreScopes = ss
-	cnt := 0
-	for _, s := range ss {
-		if s.IsEnd {
-			continue
-		}
-		cnt++
-	}
-	rs.Proc = c.proc.NewNoContextChildProc(cnt)
+
+	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
 	if len(ss) > 0 {
 		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
 	}
@@ -3325,14 +3324,12 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 
 	j := 0
 	for i := range ss {
-		if !ss[i].IsEnd {
-			// waring: `connector` operator is not used as an input/output analyze,
-			// and `connector` operator cannot play the role of IsFirst/IsLast
-			connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])
-			connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-			ss[i].setRootOperator(connArg)
-			j++
-		}
+		// waring: `connector` operator is not used as an input/output analyze,
+		// and `connector` operator cannot play the role of IsFirst/IsLast
+		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])
+		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		ss[i].setRootOperator(connArg)
+		j++
 	}
 	return rs
 }

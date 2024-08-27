@@ -31,7 +31,7 @@ const (
 )
 
 type Intersect struct {
-	ctr *container
+	ctr container
 
 	vm.OperatorBase
 }
@@ -83,26 +83,33 @@ type container struct {
 }
 
 func (intersect *Intersect) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	intersect.Free(proc, pipelineFailed, err)
+	ctr := &intersect.ctr
+	ctr.state = build
+	ctr.cleanHashMap()
+	ctr.putCnts(proc)
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
 }
 
 func (intersect *Intersect) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := intersect.ctr
-	if ctr != nil {
-		if ctr.hashTable != nil {
-			ctr.hashTable.Free()
-			ctr.hashTable = nil
-		}
-		if ctr.buf != nil {
-			ctr.buf.Clean(proc.Mp())
-			ctr.buf = nil
-		}
-		if ctr.cnts != nil {
-			for i := range ctr.cnts {
-				proc.Mp().PutSels(ctr.cnts[i])
-			}
-			ctr.cnts = nil
-		}
-		intersect.ctr = nil
+	ctr := &intersect.ctr
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
 	}
+}
+
+func (ctr *container) cleanHashMap() {
+	if ctr.hashTable != nil {
+		ctr.hashTable.Free()
+		ctr.hashTable = nil
+	}
+}
+
+func (ctr *container) putCnts(proc *process.Process) {
+	for i := range ctr.cnts {
+		proc.Mp().PutSels(ctr.cnts[i])
+	}
+	ctr.cnts = nil
 }
