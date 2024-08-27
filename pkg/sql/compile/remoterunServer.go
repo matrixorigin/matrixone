@@ -186,7 +186,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		s = appendWriteBackOperator(runCompile, s)
 		fmt.Println("after append for remote run", DebugShowScopes([]*Scope{s}, OldLevel))
 
-		runCompile.scope = []*Scope{s}
+		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
 		defer func() {
 			runCompile.clear()

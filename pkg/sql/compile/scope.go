@@ -475,7 +475,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		chp[i].IsEnd = true
 	}
 
-	ms, ss := newParallelScope(s)
+	ms, ss := newParallelScope(s, c)
 	probeScope, buildScope := c.newBroadcastJoinProbeScope(s, ss), c.newJoinBuildScope(s, int32(mcpu))
 
 	if isRight {
@@ -516,7 +516,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 // buildLoadParallelRun deal one case of scope.ParallelRun.
 // this function will create a pipeline to load in parallel.
 func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
-	ms, ss := newParallelScope(s)
+	ms, ss := newParallelScope(s, c)
 	for i := range ss {
 		ss[i].DataSource = &Source{
 			isConst: true,
@@ -554,7 +554,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan must run in only one parallel.")
 	}
 
-	ms, ss := newParallelScope(s)
+	ms, ss := newParallelScope(s, c)
 	for i := range ss {
 		ss[i].DataSource = &Source{
 			R:            readers[i],
@@ -683,7 +683,7 @@ func (s *Scope) isTableScan() bool {
 	return isTableScan
 }
 
-func newParallelScope1(s *Scope) (*Scope, []*Scope) {
+func newParallelScope1(s *Scope, c *Compile) (*Scope, []*Scope) {
 	lenChannels := 0
 	if s.IsJoin {
 		lenChannels = 1
@@ -717,11 +717,11 @@ func newParallelScope1(s *Scope) (*Scope, []*Scope) {
 	}
 
 	rs.PreScopes = parallelScopes
-
+	c.tmpScopes = append(c.tmpScopes, rs)
 	return rs, parallelScopes
 }
 
-func newParallelScope(s *Scope) (*Scope, []*Scope) {
+func newParallelScope(s *Scope, c *Compile) (*Scope, []*Scope) {
 	if s.NodeInfo.Mcpu == 1 {
 		return s, nil
 	}
@@ -730,7 +730,7 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 		if len(op.RemoteRegs) > 0 {
 			// dispatch to remote CN is too complicated
 			// after spool implemented, delete this
-			return newParallelScope1(s)
+			return newParallelScope1(s, c)
 		}
 	}
 
@@ -753,6 +753,7 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 	rs := newScope(Merge)
 	rs.Proc = s.Proc
 	rs.PreScopes = parallelScopes
+	c.tmpScopes = append(c.tmpScopes, rs)
 	return rs, parallelScopes
 }
 

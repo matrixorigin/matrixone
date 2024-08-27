@@ -181,8 +181,14 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		info.Reset()
 	}
 
-	for _, s := range c.scope {
+	for _, s := range c.scopes {
 		s.Reset(c)
+	}
+	if c.tmpScopes != nil {
+		for i := range c.tmpScopes {
+			c.tmpScopes[i].release()
+		}
+		c.tmpScopes = c.tmpScopes[:0]
 	}
 
 	for _, v := range c.nodeRegs {
@@ -209,8 +215,11 @@ func (c *Compile) clear() {
 	if c.anal != nil {
 		c.anal.release()
 	}
-	for i := range c.scope {
-		c.scope[i].release()
+	for i := range c.scopes {
+		c.scopes[i].release()
+	}
+	for i := range c.tmpScopes {
+		c.tmpScopes[i].release()
 	}
 	for i := range c.fuzzys {
 		c.fuzzys[i].release()
@@ -218,7 +227,10 @@ func (c *Compile) clear() {
 
 	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
-	c.scope = c.scope[:0]
+	c.scopes = c.scopes[:0]
+	if c.tmpScopes != nil {
+		c.tmpScopes = c.tmpScopes[:0]
+	}
 	c.pn = nil
 	c.fill = nil
 	c.affectRows.Store(0)
@@ -261,7 +273,7 @@ func (c *Compile) clear() {
 
 // helper function to judge if init temporary engine is needed
 func (c *Compile) NeedInitTempEngine() bool {
-	for _, s := range c.scope {
+	for _, s := range c.scopes {
 		ddl := s.Plan.GetDdl()
 		if ddl == nil {
 			continue
@@ -421,7 +433,10 @@ func (c *Compile) SetIsPrepare(isPrepare bool) {
 }
 
 func (c *Compile) FreeOperator() {
-	for _, s := range c.scope {
+	for _, s := range c.scopes {
+		s.FreeOperator(c)
+	}
+	for _, s := range c.tmpScopes {
 		s.FreeOperator(c)
 	}
 }
@@ -432,7 +447,7 @@ func (c *Compile) printPipeline() {
 	} else {
 		fmt.Println("pipeline for ap query! current cn", c.addr, "sql: ", c.originSQL)
 	}
-	fmt.Println(DebugShowScopes(c.scope, OldLevel))
+	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
 
 // run once
@@ -447,8 +462,8 @@ func (c *Compile) runOnce() error {
 	if err != nil {
 		return err
 	}
-	errC := make(chan error, len(c.scope))
-	for _, s := range c.scope {
+	errC := make(chan error, len(c.scopes))
+	for _, s := range c.scopes {
 		err = s.InitAllDataSource(c)
 		if err != nil {
 			return err
@@ -464,9 +479,9 @@ func (c *Compile) runOnce() error {
 
 	c.printPipeline()
 
-	for i := range c.scope {
+	for i := range c.scopes {
 		wg.Add(1)
-		scope := c.scope[i]
+		scope := c.scopes[i]
 		errSubmit := ants.Submit(func() {
 			defer func() {
 				if e := recover(); e != nil {
@@ -488,7 +503,7 @@ func (c *Compile) runOnce() error {
 	wg.Wait()
 	close(errC)
 
-	errList := make([]error, 0, len(c.scope))
+	errList := make([]error, 0, len(c.scopes))
 	for e := range errC {
 		if e != nil {
 			errList = append(errList, e)
