@@ -3696,6 +3696,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		return rtnErr
 	}
 
+	// disable foreign key checks
+	ctx = context.WithValue(ctx, defines.DisableFkCheck{}, true)
+
 	err = dropAccountFunc()
 	if err != nil {
 		return err
