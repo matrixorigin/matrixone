@@ -18,15 +18,16 @@ import (
 	"container/list"
 	"context"
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"net"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 )
 
 const (
-	fixBufferSize = 1024
+	fixBufferSize = 1024 * 1024
 )
 
 type SessionConn interface {
