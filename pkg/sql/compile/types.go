@@ -275,7 +275,7 @@ type Compile struct {
 	// queryStatus is a structure to record query has done.
 	queryStatus queryDoneWaiter
 
-	anal *AnalyzeModuleV1
+	anal *AnalyzeModule
 	// e db engine instance.
 	e engine.Engine
 

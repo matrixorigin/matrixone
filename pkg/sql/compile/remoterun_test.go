@@ -137,7 +137,7 @@ func Test_refactorScope(t *testing.T) {
 	s := reuse.Alloc[Scope](nil)
 	s.Proc = proc
 	c := reuse.Alloc[Compile](nil)
-	c.anal = newAnalyzeModuleV1()
+	c.anal = newAnalyzeModule()
 	c.proc = proc
 	c.proc.Ctx = ctx
 	rs := appendWriteBackOperator(c, s)

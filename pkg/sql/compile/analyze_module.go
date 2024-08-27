@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type AnalyzeModuleV1 struct {
+type AnalyzeModule struct {
 	// curNodeIdx is the current Node index when compilePlanScope
 	curNodeIdx int
 	// isFirst is the first opeator in pipeline for plan Node
@@ -39,25 +39,25 @@ type AnalyzeModuleV1 struct {
 	mu sync.RWMutex
 }
 
-func (anal *AnalyzeModuleV1) AppendRemotePhyPlan(remotePhyPlan models.PhyPlan) {
+func (anal *AnalyzeModule) AppendRemotePhyPlan(remotePhyPlan models.PhyPlan) {
 	anal.mu.Lock()
 	defer anal.mu.Unlock()
 	anal.remotePhyPlans = append(anal.remotePhyPlans, remotePhyPlan)
 }
 
-func (anal *AnalyzeModuleV1) GetPhyPlan() *models.PhyPlan {
+func (anal *AnalyzeModule) GetPhyPlan() *models.PhyPlan {
 	return anal.phyPlan
 }
 
-func (a AnalyzeModuleV1) TypeName() string {
+func (a AnalyzeModule) TypeName() string {
 	return "compile.analyzeModuleV1"
 }
 
-func newAnalyzeModuleV1() *AnalyzeModuleV1 {
-	return reuse.Alloc[AnalyzeModuleV1](nil)
+func newAnalyzeModule() *AnalyzeModule {
+	return reuse.Alloc[AnalyzeModule](nil)
 }
 
-func (a *AnalyzeModuleV1) release() {
+func (a *AnalyzeModule) release() {
 	// there are 3 situations to release analyzeInfo
 	// 1 is free analyzeInfo of Local CN when release analyze
 	// 2 is free analyzeInfo of remote CN before transfer back
@@ -66,15 +66,15 @@ func (a *AnalyzeModuleV1) release() {
 	//for i := range a.analInfos {
 	//	reuse.Free[process.AnalyzeInfo](a.analInfos[i], nil)
 	//}
-	reuse.Free[AnalyzeModuleV1](a, nil)
+	reuse.Free[AnalyzeModule](a, nil)
 }
 
-func (c *Compile) initAnalyzeModuleV1(qry *plan.Query) {
+func (c *Compile) initAnalyzeModule(qry *plan.Query) {
 	if len(qry.Nodes) == 0 {
 		panic("empty logic plan")
 	}
 
-	c.anal = newAnalyzeModuleV1()
+	c.anal = newAnalyzeModule()
 	c.anal.qry = qry
 	c.anal.curNodeIdx = int(qry.Steps[0])
 	for _, node := range c.anal.qry.Nodes {
@@ -86,7 +86,7 @@ func (c *Compile) initAnalyzeModuleV1(qry *plan.Query) {
 	}
 }
 
-func (c *Compile) GetAnalyzeModuleV1() *AnalyzeModuleV1 {
+func (c *Compile) GetAnalyzeModuleV1() *AnalyzeModule {
 	return c.anal
 }
 

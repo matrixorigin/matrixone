@@ -410,7 +410,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	c.e = cnInfo.storeEngine
 	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
 	c.proc.SetMessageBoard(c.MessageBoard)
-	c.anal = newAnalyzeModuleV1()
+	c.anal = newAnalyzeModule()
 	c.addr = receiver.cnInformation.cnAddr
 
 	// a method to send back.
