@@ -1442,9 +1442,7 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string,
 	arg.ShuffleRegIdxRemote = make([]int, 0, len(ss))
 	hasRemote := false
 	for i, s := range ss {
-		if s.IsEnd {
-			continue
-		}
+
 		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
 			isSameCN(s.NodeInfo.Addr, currentCNAddr) {
 			// Local reg.

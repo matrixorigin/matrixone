@@ -684,7 +684,7 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 
 	lenChannels := 0
 	if s.IsJoin {
-		lenChannels = s.BuildIdx
+		lenChannels = 1
 	}
 
 	parallelScopes := make([]*Scope, s.NodeInfo.Mcpu)

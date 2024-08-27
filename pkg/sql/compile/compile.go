@@ -3345,8 +3345,9 @@ func (c *Compile) newScopeListOnCurrentCN(childrenCount int, blocks int) []*Scop
 
 // all scopes in ss are on the same CN
 func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
-	rs := c.newEmptyMergeScope()
+	rs := newScope(Remote)
 	rs.NodeInfo.Addr = nodeinfo.Addr
+	rs.NodeInfo.Mcpu = 1 // merge scope is single parallel by default
 	rs.PreScopes = ss
 	rs.Proc = c.proc.NewNoContextChildProc(1)
 	rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, len(ss))
