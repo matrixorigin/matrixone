@@ -17,6 +17,7 @@ package trace
 import (
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"os"
 	"path/filepath"
 	"time"
@@ -80,6 +81,7 @@ func (s *service) writeToS3(
 		zap.String("s3", s3),
 		zap.String("size", getFileSize(stat.Size())),
 	)
+	v2.FSWriteTraceCounter.Add(1)
 	return s.options.fs.Write(ctx, writeVec)
 }
 

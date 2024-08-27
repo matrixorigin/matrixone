@@ -94,6 +94,10 @@ type IOVector struct {
 
 	// Caches indicates extra caches to operate on
 	Caches []IOVectorCache
+
+	// module indicates which module is calling methods of file-service interface.
+	// it is just for debug.
+	Module string
 }
 
 type IOEntry struct {

@@ -20,15 +20,14 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/matrixorigin/matrixone/pkg/util"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func ReleaseIOVector(vector *fileservice.IOVector) {
@@ -47,6 +46,7 @@ func ReadExtent(
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 1),
 		Policy:   policy,
+		Module:   v2.ReadExtent,
 	}
 
 	ioVec.Entries[0] = fileservice.IOEntry{
@@ -151,6 +151,7 @@ func ReadOneBlockWithMeta(
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0, len(seqnums)),
 		Policy:   policy,
+		Module:   v2.ReadOneBlockWithMeta,
 	}
 
 	var filledEntries []fileservice.IOEntry
@@ -247,6 +248,7 @@ func ReadMultiBlocksWithMeta(
 	ioVec = &fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0),
+		Module:   v2.ReadMultiBlocksWithMeta,
 	}
 	var dataMeta ObjectDataMeta
 	for _, opt := range options {
@@ -292,6 +294,7 @@ func ReadAllBlocksWithMeta(
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0, len(cols)*int(meta.BlockCount())),
 		Policy:   policy,
+		Module:   v2.ReadAllBlocksWithMeta,
 	}
 	for blk := uint32(0); blk < meta.BlockCount(); blk++ {
 		for _, seqnum := range cols {
@@ -329,6 +332,7 @@ func ReadOneBlockAllColumns(
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0),
 		Policy:   cachePolicy,
+		Module:   v2.ReadOneBlockAllColumns,
 	}
 	for _, seqnum := range cols {
 		blkmeta := meta.GetBlockMeta(id)

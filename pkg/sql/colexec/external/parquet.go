@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
@@ -608,6 +609,7 @@ func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 				Data:   p,
 			},
 		},
+		Module: v2.ReadParquet,
 	}
 
 	err = r.fs.Read(r.ctx, &vec)

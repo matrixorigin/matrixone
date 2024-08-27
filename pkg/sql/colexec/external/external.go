@@ -374,6 +374,7 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 				ReadCloserForRead: &r,
 			},
 		},
+		Module: v2.ExternalReadFile,
 	}
 	if 2*param.Idx >= len(param.FileOffsetTotal[param.Fileparam.FileIndex-1].Offset) {
 		return nil, nil
@@ -411,6 +412,7 @@ func ReadFileOffsetNoStrict(param *tree.ExternParam, mcpu int, fileSize int64) (
 				ReadCloserForRead: &r,
 			},
 		},
+		Module: v2.ExternalReadFileOffsetNoStrict,
 	}
 	var tailSize []int64
 	var offset []int64
@@ -456,6 +458,7 @@ func ReadFileOffsetStrict(param *tree.ExternParam, mcpu int, fileSize int64, vis
 				ReadCloserForRead: &r,
 			},
 		},
+		Module: v2.ExternalReadFileOffsetStrict,
 	}
 
 	var offset []int64

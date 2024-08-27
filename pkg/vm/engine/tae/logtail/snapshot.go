@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync"
 	"time"
 
@@ -590,6 +591,7 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 		}
 	}
 
+	v2.FSWriteSaveMeta2Counter.Add(1)
 	_, err = writer.WriteEnd(context.Background())
 	if err != nil {
 		return 0, err
@@ -658,6 +660,7 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 		return 0, err
 	}
 
+	v2.FSWriteSaveTableInfoCounter.Add(1)
 	_, err = writer.WriteEnd(context.Background())
 	if err != nil {
 		return 0, err

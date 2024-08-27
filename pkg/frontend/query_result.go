@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"strings"
 	"time"
 
@@ -133,6 +134,7 @@ func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
 		Type: objectio.WriteTS,
 		Val:  ses.expiredTime,
 	}
+	v2.FSWriteSaveBatchCounter.Add(1)
 	_, err = writer.WriteEnd(ctx, option)
 	if err != nil {
 		return err
@@ -231,6 +233,7 @@ func saveMeta(ctx context.Context, ses *Session) error {
 		Type: objectio.WriteTS,
 		Val:  ses.expiredTime,
 	}
+	v2.FSWriteSaveMeta1Counter.Add(1)
 	_, err = metaWriter.WriteEnd(ctx, option)
 	if err != nil {
 		return err

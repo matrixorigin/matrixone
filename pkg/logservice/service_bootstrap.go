@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -150,6 +151,7 @@ func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
 	ioVec := &fileservice.IOVector{
 		FilePath: filePath,
 		Entries:  make([]fileservice.IOEntry, 1),
+		Module:   v2.Bootstrap,
 	}
 
 	// Read the whole file to one entry.

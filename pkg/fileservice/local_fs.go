@@ -173,6 +173,8 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 
+	globalProfiler.Sample(0, 1).Write.Add(1)
+
 	var err error
 	var bytesWritten int
 	start := time.Now()
@@ -295,6 +297,8 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 		metric.LocalReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
 		metric.FSReadDurationGetContent.Observe(time.Since(t0).Seconds())
 	}()
+
+	globalProfiler.Sample(0, 1).Read.Add(1)
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
@@ -477,6 +481,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 	numNotDoneEntries := 0
 	defer func() {
 		metric.FSReadLocalCounter.Add(float64(numNotDoneEntries))
+		metric.ReadCounterByModule(float64(numNotDoneEntries), vector.Module)
 	}()
 
 	for i, entry := range vector.Entries {

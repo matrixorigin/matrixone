@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 // ReadFile read all data from file
@@ -35,6 +36,7 @@ func ReadFile(fs fileservice.ReplaceableFileService, file string) ([]byte, error
 				Size:   -1,
 			},
 		},
+		Module: v2.UtilReadFile,
 	}
 	if err := fs.Read(ctx, vec); err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {

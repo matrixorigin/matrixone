@@ -21,6 +21,7 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -336,6 +337,7 @@ func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []
 		}
 	}
 
+	v2.FSWriteSaveTableCounter.Add(1)
 	blocks, err := writer.WriteEnd(context.Background())
 	return blocks, err
 }
@@ -383,6 +385,7 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 		}
 	}
 
+	v2.FSWriteSaveFullTableCounter.Add(1)
 	blocks, err = writer.WriteEnd(context.Background())
 	writeCost = time.Since(now)
 	return blocks, err

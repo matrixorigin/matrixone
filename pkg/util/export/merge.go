@@ -623,6 +623,7 @@ func NewCSVReader(
 				ReadCloserForRead: &reader,
 			},
 		},
+		Module: v2.NewCSVReadr,
 	}
 	// open file reader
 	if err := fs.Read(ctx, &vec); err != nil {
