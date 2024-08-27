@@ -193,6 +193,7 @@ func (c *Compile) fillPlanNodeAnalyzeInfo() {
 func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]int) models.PhyScope {
 	phyScope := models.PhyScope{
 		Magic:        scope.Magic.String(),
+		Mcpu:         int8(scope.NodeInfo.Mcpu),
 		DataSource:   ConvertSourceToPhySource(scope.DataSource),
 		PreScopes:    []models.PhyScope{},
 		RootOperator: ConvertOperatorToPhyOperator(scope.RootOp, receiverMap),

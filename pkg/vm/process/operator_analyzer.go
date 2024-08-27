@@ -282,16 +282,16 @@ func (ps *OperatorStats) String() string {
 	return fmt.Sprintf(" CallNum:%d "+
 		"TimeCost:%dns "+
 		"WaitTime:%dns"+
-		"InputRows:%d "+
-		"OutputRows:%d "+
-		"InputSize:%dbytes "+
-		"InputBlock:%d "+
-		"OutputSize:%dbytes "+
+		"InRows:%d "+
+		"OutRows:%d "+
+		"InSize:%dbytes "+
+		"InBlock:%d "+
+		"OutSize:%dbytes "+
 		"MemSize:%dbytes "+
 		"DiskIO:%dbytes "+
 		"S3IOByte:%dbytes "+
-		"S3InputCount:%d "+
-		"S3OutputCount:%d "+
+		"S3InCount:%d "+
+		"S3OutCount:%d "+
 		"NetworkIO:%dbytes "+
 		"ScanTime:%dns "+
 		"ServiceTime:%dns",
@@ -317,10 +317,10 @@ func (ps *OperatorStats) ReducedString() string {
 	return fmt.Sprintf(" CallNum:%d "+
 		"TimeCost:%dns "+
 		"WaitTime:%dns "+
-		"InputRows:%d "+
-		"OutputRows:%d "+
-		"InputSize:%dbytes "+
-		"OutputSize:%dbytes "+
+		"InRows:%d "+
+		"OutRows:%d "+
+		"InSize:%dbytes "+
+		"OutSize:%dbytes "+
 		"MemSize:%dbytes "+
 		"Network:%dbytes",
 		ps.CallCount,

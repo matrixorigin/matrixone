@@ -24,12 +24,13 @@ type PhyPlan struct {
 	Version         string     `json:"version"`
 	LocalScope      []PhyScope `json:"scope,omitempty"`
 	RemoteScope     []PhyScope `json:"RemoteScope,omitempty"`
-	S3IOInputCount  int64      `json:"S3IOInputCount"`
-	S3IOOutputCount int64      `json:"S3IOOutputCount"`
+	S3IOInputCount  int64      `json:"S3IOInputCount,omitempty"`
+	S3IOOutputCount int64      `json:"S3IOOutputCount,omitempty"`
 }
 
 type PhyScope struct {
 	Magic        string        `json:"Magic"`
+	Mcpu         int8          `json:"Mcpu,omitempty"`
 	Receiver     []PhyReceiver `json:"Receiver,omitempty"`
 	DataSource   *PhySource    `json:"DataSource,omitempty"`
 	PreScopes    []PhyScope    `json:"PreScopes,omitempty"`

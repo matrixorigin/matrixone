@@ -163,7 +163,7 @@ func explainPhyScope(scope PhyScope, index int, gap int, buffer *bytes.Buffer) {
 
 	// Scope Header
 	receiverStr := getReceiverStr(scope.Receiver)
-	buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, mcpu: x, Receiver: %s)", index+1, scope.Magic, receiverStr))
+	buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v, Receiver: %s)", index+1, scope.Magic, scope.Mcpu, receiverStr))
 
 	// Scope DataSource
 	if scope.DataSource != nil {
