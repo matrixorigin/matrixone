@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/fagongzi/goetty/v2/buf"
+
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -105,6 +106,11 @@ func newTxnTable(
 	}
 
 	return tbl, nil
+}
+
+func (tbl *txnTableDelegate) CollectChanges(from, to types.TS) (engine.ChangesHandle, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (tbl *txnTableDelegate) Stats(
@@ -642,16 +648,4 @@ func (tbl *txnTableDelegate) forwardRead(
 	}
 
 	return nil
-}
-
-func (tbl *txnTableDelegate) GetOldTableID() uint64 {
-	return 0
-}
-
-func (tbl *txnTableDelegate) GetDBName() string {
-	return tbl.origin.GetDBName()
-}
-
-func (tbl *txnTableDelegate) GetPrimarySeqNum() int {
-	return tbl.origin.GetPrimarySeqNum()
 }

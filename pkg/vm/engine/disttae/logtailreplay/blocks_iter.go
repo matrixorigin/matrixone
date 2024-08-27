@@ -81,42 +81,6 @@ func (b *objectsIter) Close() error {
 	return nil
 }
 
-var _ ObjectsIter = new(ObjectsIterInCdc)
-
-type ObjectsIterInCdc struct {
-	iter btree.IterG[ObjectEntry]
-}
-
-func (iter *ObjectsIterInCdc) Next() bool {
-	for iter.iter.Next() {
-		entry := iter.iter.Item()
-		if !entry.DeleteTime.IsEmpty() || !entry.objectsCreatedByCn {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
-func (iter *ObjectsIterInCdc) Close() error {
-	iter.iter.Release()
-	return nil
-}
-
-func (iter *ObjectsIterInCdc) Entry() ObjectEntry {
-	return ObjectEntry{
-		ObjectInfo: iter.iter.Item().ObjectInfo,
-	}
-}
-
-func (p *PartitionState) NewObjectsIterInCdc() ObjectsIter {
-	iter := p.dataObjects.Copy().Iter()
-	ret := &ObjectsIterInCdc{
-		iter: iter,
-	}
-	return ret
-}
-
 type BlocksIter interface {
 	Next() bool
 	Close() error
@@ -241,39 +205,6 @@ func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, b
 		}
 	}
 	return ObjectInfo{}, false
-}
-
-type BlockDeltaIter interface {
-	Entry() BlockDeltaEntry
-	Close() error
-	Next() bool
-}
-
-var _ BlockDeltaIter = new(blockDeltaIter)
-
-type blockDeltaIter struct {
-	iter btree.IterG[BlockDeltaEntry]
-}
-
-func (iter *blockDeltaIter) Entry() BlockDeltaEntry {
-	return iter.iter.Item()
-}
-
-func (iter *blockDeltaIter) Close() error {
-	iter.iter.Release()
-	return nil
-}
-
-func (iter *blockDeltaIter) Next() bool {
-	return iter.iter.Next()
-}
-
-func (p *PartitionState) NewBlockDeltaIter() BlockDeltaIter {
-	iter := p.blockDeltas.Copy().Iter()
-	ret := &blockDeltaIter{
-		iter: iter,
-	}
-	return ret
 }
 
 type BlockDeltaInfo struct {

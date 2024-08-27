@@ -780,8 +780,27 @@ type Ranges interface {
 
 var _ Ranges = (*objectio.BlockInfoSlice)(nil)
 
+type Hint int
+
+const (
+	checkpoint Hint = iota
+	tail_wip
+	tail_done
+)
+
+type ChangesHandle interface {
+	Next() (data *batch.Batch, tombstone *batch.Batch, hint Hint, err error)
+	Close() error
+}
+
 type Relation interface {
 	Statistics
+
+	// CollectChanges Parameters:
+	// first parameter: from timestamp
+	// second parameter: to timestamp
+	// return value: ChangesHandle: a iterator to iterate the changes
+	CollectChanges(from, to types.TS) (ChangesHandle, error)
 
 	// Ranges Parameters:
 	// first parameter: Context
@@ -852,11 +871,6 @@ type Relation interface {
 	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 
 	ApproxObjectsNum(ctx context.Context) int
-
-	GetOldTableID() uint64
-	GetDBName() string
-	GetPrimarySeqNum() int
-
 	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)
 	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
 }

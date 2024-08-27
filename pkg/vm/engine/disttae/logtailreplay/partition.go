@@ -47,7 +47,6 @@ type Partition struct {
 }
 
 type TableInfo struct {
-	AccountId     uint64 //for cdc
 	ID            uint64
 	Name          string
 	PrimarySeqnum int
@@ -69,7 +68,7 @@ func NewPartition(
 		lock: lock,
 	}
 	ret.mu.start = types.MaxTs()
-	ret.state.Store(NewPartitionState(service, false, id, false))
+	ret.state.Store(NewPartitionState(service, false, id))
 	return ret
 }
 

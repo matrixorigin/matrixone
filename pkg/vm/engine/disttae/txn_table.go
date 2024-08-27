@@ -75,6 +75,11 @@ func (tbl *txnTable) getTxn() *Transaction {
 	return tbl.db.getTxn()
 }
 
+func (tbl *txnTable) CollectChanges(from, to types.TS) (engine.ChangesHandle, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	_, err := tbl.getPartitionState(ctx)
 	if err != nil {
@@ -2125,7 +2130,7 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
-	part, err := LazyLoadLatestCkp(ctx, tbl.getTxn().engine, tbl)
+	part, err := tbl.getTxn().engine.LazyLoadLatestCkp(ctx, tbl)
 	if err != nil {
 		return false, err
 	}
@@ -2474,12 +2479,4 @@ func (tbl *txnTable) getCommittedRows(
 		return rows, nil
 	}
 	return uint64(s.TableCnt) + rows, nil
-}
-
-func (tbl *txnTable) GetOldTableID() uint64 {
-	return 0
-}
-
-func (tbl *txnTable) GetPrimarySeqNum() int {
-	return tbl.primarySeqnum
 }

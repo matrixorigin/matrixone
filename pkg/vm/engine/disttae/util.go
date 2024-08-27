@@ -21,7 +21,6 @@ import (
 	"os"
 	"reflect"
 	"strings"
-	"sync"
 
 	"go.uber.org/zap"
 
@@ -1659,44 +1658,6 @@ func (e *concurrentExecutor) GetConcurrency() int {
 	return e.concurrency
 }
 
-func getTNServices(service string) []DNStore {
-	cluster := clusterservice.GetMOCluster(service)
-	return cluster.GetAllTNServices()
-}
-
-func copyPartitionsLock(
-	lock sync.Locker,
-	partitions map[[2]uint64]*logtailreplay.Partition) map[[2]uint64]*logtailreplay.Partition {
-	parts := make(map[[2]uint64]*logtailreplay.Partition)
-	lock.Lock()
-	for ids, part := range partitions {
-		parts[ids] = part
-	}
-	lock.Unlock()
-	return parts
-}
-
-func cleanMemoryTableWithTableLock(
-	lock sync.Locker,
-	partitions map[[2]uint64]*logtailreplay.Partition,
-	globalStats *GlobalStats,
-	dbId, tblId uint64,
-) {
-	lock.Lock()
-	defer lock.Unlock()
-	// XXX it's probably not a good way to do that.
-	// after we set it to empty, actually this part of memory was not immediately released.
-	// maybe a very old transaction still using that.
-	delete(partitions, [2]uint64{dbId, tblId})
-
-	//  When removing the PartitionState, you need to remove the tid in globalStats,
-	// When re-subscribing, globalStats will wait for the PartitionState to be consumed before updating the object state.
-	if globalStats != nil {
-		globalStats.RemoveTid(tblId)
-	}
-	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
-}
-
 // for test
 
 func MakeColExprForTest(idx int32, typ types.T, colName ...string) *plan.Expr {
@@ -1783,7 +1744,6 @@ func MakeInExprForTest[T any](
 			},
 		},
 	}
-
 }
 
 func stringifySlice(req any, f func(any) string) string {

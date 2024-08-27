@@ -16,8 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"time"
 
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -33,7 +31,7 @@ import (
 func consumeEntry(
 	ctx context.Context,
 	primarySeqnum int,
-	engine TempEngine,
+	engine *Engine,
 	cache *cache.CatalogCache,
 	state *logtailreplay.PartitionState,
 	e *api.Entry,
@@ -44,12 +42,12 @@ func consumeEntry(
 	}()
 
 	var packer *types.Packer
-	put := engine.Get(&packer)
+	put := engine.packerPool.Get(&packer)
 	defer put.Put()
 
 	if state != nil {
 		t0 := time.Now()
-		state.HandleLogtailEntry(ctx, engine.GetFS(), e, primarySeqnum, packer, engine.GetMPool())
+		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer, engine.mp)
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
@@ -67,34 +65,12 @@ func consumeEntry(
 		case catalog.MO_TABLES_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			if cache != nil {
-				if engine.IsCdcEngine() {
-					fmt.Fprintln(os.Stderr, "%%%%%> insert table into catalog cache")
-					cache.PrintTables2("before", "test")
-				}
-
 				cache.InsertTable(bat)
-
-				if engine.IsCdcEngine() {
-					//recognize ddl
-					engine.GetDDLListener().OnAction(ActionInsertTable, bat)
-					cache.PrintTables2("after", "test")
-				}
-
 			}
 		case catalog.MO_DATABASE_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			if cache != nil {
-				if engine.IsCdcEngine() {
-					fmt.Fprintln(os.Stderr, "%%%%%> insert database into catalog cache")
-					cache.PrintDatabases("before")
-				}
-
 				cache.InsertDatabase(bat)
-
-				if engine.IsCdcEngine() {
-					engine.GetDDLListener().OnAction(ActionInsertDatabase, bat)
-					cache.PrintDatabases("after")
-				}
 			}
 		case catalog.MO_COLUMNS_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
@@ -110,33 +86,12 @@ func consumeEntry(
 	case catalog.MO_TABLES_ID:
 		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			if engine.IsCdcEngine() {
-				fmt.Fprintln(os.Stderr, "%%%%%> delete table from catalog cache")
-				cache.PrintTables2("before", "test")
-			}
-
 			cache.DeleteTable(bat)
-
-			if engine.IsCdcEngine() {
-				//recognize ddl
-				engine.GetDDLListener().OnAction(ActionDeleteTable, bat)
-				cache.PrintTables2("after", "test")
-			}
 		}
 	case catalog.MO_DATABASE_ID:
 		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			if engine.IsCdcEngine() {
-				fmt.Fprintln(os.Stderr, "%%%%%> delete database from catalog cache")
-				cache.PrintDatabases("before")
-			}
-
 			cache.DeleteDatabase(bat)
-
-			if engine.IsCdcEngine() {
-				engine.GetDDLListener().OnAction(ActionDeleteDatabase, bat)
-				cache.PrintDatabases("after")
-			}
 		}
 	}
 	v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())

@@ -36,13 +36,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -870,106 +867,6 @@ type mergeReader struct {
 }
 
 type emptyReader struct {
-}
-
-// TODO: define the suitable name
-var _ TempEngine = new(Engine)
-
-type TempEngine interface {
-	engine.Engine
-	Cli() client.TxnClient
-	init(ctx context.Context) error
-	Enqueue(tail *logtail.TableLogtail)
-	GetOrCreateLatestPart(databaseId uint64, tableId uint64) *logtailreplay.Partition
-	GetLatestCatalogCache() *cache.CatalogCache
-	Get(ptr **types.Packer) fileservice.PutBack[*types.Packer]
-	GetMPool() *mpool.MPool
-	GetFS() fileservice.FileService
-	GetService() string
-	getTNServices() []DNStore
-	setPushClientStatus(ready bool)
-	abortAllRunningTxn()
-	CopyPartitions() map[[2]uint64]*logtailreplay.Partition
-	cleanMemoryTableWithTable(dbId, tblId uint64)
-	PushClient() *PushClient
-	New(ctx context.Context, op client.TxnOperator) error
-	FS() fileservice.FileService
-	TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error
-	IsCdcEngine() bool
-	ToCdc(*TableCtx, *DecoderInput)
-	GetDDLListener() DDLListener
-}
-
-var _ TempEngine = new(CdcEngine)
-
-type CdcEngine struct {
-	sync.RWMutex
-	//!!!Note: inherit the cn
-	service string
-
-	//latest partitions which be protected by e.Lock().
-	partitions map[[2]uint64]*logtailreplay.Partition
-
-	//latest catalog will be loaded from TN when engine is initialized.
-	catalog *cache.CatalogCache
-
-	packerPool *fileservice.Pool[*types.Packer]
-
-	mp *mpool.MPool
-
-	fs    fileservice.FileService
-	etlFs fileservice.FileService
-
-	pClient PushClient
-
-	//TODO: may delete it
-	cli client.TxnClient
-
-	cdcId string
-
-	inQueue Queue[tools.Pair[*TableCtx, *DecoderInput]]
-
-	cnEng       engine.Engine
-	cnTxnClient client.TxnClient
-	ddlListener DDLListener
-}
-
-func (cdcEng *CdcEngine) GetDDLListener() DDLListener {
-	return cdcEng.ddlListener
-}
-
-var _ engine.Relation = new(CdcRelation)
-
-type CdcRelation struct {
-	db, table                string
-	accountId, dbId, tableId uint64
-	cdcEng                   *CdcEngine
-	_partState               atomic.Pointer[logtailreplay.PartitionState]
-}
-
-func (cdcTbl *CdcRelation) Ranges(ctx context.Context, exprs []*plan.Expr, i int) (engine.RelData, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (cdcTbl *CdcRelation) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (cdcTbl *CdcRelation) BuildReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy) ([]engine.Reader, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (cdcTbl *CdcRelation) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (cdcTbl *CdcRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
-	//TODO implement me
-	panic("implement me")
 }
 
 // TableCtx TODO: define suitable names

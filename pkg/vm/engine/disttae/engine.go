@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -704,7 +703,8 @@ func (e *Engine) BuildBlockReaders(
 }
 
 func (e *Engine) getTNServices() []DNStore {
-	return getTNServices(e.service)
+	cluster := clusterservice.GetMOCluster(e.service)
+	return cluster.GetAllTNServices()
 }
 
 func (e *Engine) setPushClientStatus(ready bool) {
@@ -717,7 +717,14 @@ func (e *Engine) setPushClientStatus(ready bool) {
 		e.cli.Pause()
 	}
 
-	e.pClient.setStatusUnlock(ready)
+	e.pClient.receivedLogTailTime.ready.Store(ready)
+	if e.pClient.subscriber != nil {
+		if ready {
+			e.pClient.subscriber.setReady()
+		} else {
+			e.pClient.subscriber.setNotReady()
+		}
+	}
 }
 
 func (e *Engine) abortAllRunningTxn() {
@@ -727,7 +734,17 @@ func (e *Engine) abortAllRunningTxn() {
 }
 
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
-	cleanMemoryTableWithTableLock(&e.RWMutex, e.partitions, e.globalStats, dbId, tblId)
+	e.Lock()
+	defer e.Unlock()
+	// XXX it's probably not a good way to do that.
+	// after we set it to empty, actually this part of memory was not immediately released.
+	// maybe a very old transaction still using that.
+	delete(e.partitions, [2]uint64{dbId, tblId})
+
+	//  When removing the PartitionState, you need to remove the tid in globalStats,
+	// When re-subscribing, globalStats will wait for the PartitionState to be consumed before updating the object state.
+	e.globalStats.RemoveTid(tblId)
+	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }
 
 func (e *Engine) PushClient() *PushClient {
@@ -756,40 +773,6 @@ func (e *Engine) FS() fileservice.FileService {
 	return e.fs
 }
 
-func (e *Engine) Enqueue(tl *logtail.TableLogtail) {
-	e.globalStats.enqueue(tl)
-}
-
-func (e *Engine) Get(ptr **types.Packer) fileservice.PutBack[*types.Packer] {
-	return e.packerPool.Get(ptr)
-}
-
-func (e *Engine) GetMPool() *mpool.MPool {
-	return e.mp
-}
-
-func (e *Engine) GetFS() fileservice.FileService {
-	return e.fs
-}
-
-func (e *Engine) CopyPartitions() map[[2]uint64]*logtailreplay.Partition {
-	return copyPartitionsLock(&e.RWMutex, e.partitions)
-}
-
-func (e *Engine) Cli() client.TxnClient {
-	return e.cli
-}
-
-func (e *Engine) IsCdcEngine() bool {
-	return false
-}
-
-func (e *Engine) ToCdc(*TableCtx, *DecoderInput) {}
-
 func (e *Engine) PackerPool() *fileservice.Pool[*types.Packer] {
 	return e.packerPool
-}
-
-func (e *Engine) GetDDLListener() DDLListener {
-	return nil
 }

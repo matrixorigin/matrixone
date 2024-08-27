@@ -112,30 +112,6 @@ func (p *rowsIter) Close() error {
 	return nil
 }
 
-func (p *PartitionState) NewRowsIterInCdc() *rowsIterInCdc {
-	iter := p.rows.Copy().Iter()
-	ret := &rowsIterInCdc{
-		iter: iter,
-	}
-	return ret
-}
-
-type rowsIterInCdc struct {
-	iter btree.IterG[RowEntry]
-}
-
-func (riter *rowsIterInCdc) Next() bool {
-	return riter.iter.Next()
-}
-func (riter *rowsIterInCdc) Close() error {
-	riter.iter.Release()
-	return nil
-}
-
-func (riter *rowsIterInCdc) Entry() RowEntry {
-	return riter.iter.Item()
-}
-
 type primaryKeyIter struct {
 	ts           types.TS
 	spec         PrimaryKeyMatchSpec

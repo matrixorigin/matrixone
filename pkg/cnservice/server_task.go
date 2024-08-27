@@ -302,7 +302,6 @@ func (s *service) registerExecutorsLocked() {
 			ts,
 			ieFactory,
 			s.task.runner.Attach,
-			s.createTxnClient,
 			s.cfg.UUID,
 			s.fileService,
 			s._txnClient,
