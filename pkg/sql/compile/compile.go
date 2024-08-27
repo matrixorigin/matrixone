@@ -4025,7 +4025,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		if len(n.AggList) == 1 && n.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName == "starcount" {
 			for i := 1; i < ranges.Len(); i++ {
 				blk := ranges.(*objectio.BlockInfoSlice).Get(i)
-				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
+				if blk.EntryState || !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
 					newranges = append(newranges, ranges.(*objectio.BlockInfoSlice).GetBytes(i)...)
 					continue
 				}
