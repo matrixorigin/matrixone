@@ -17,7 +17,9 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"math"
 	goruntime "runtime"
+	"runtime/debug"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -83,6 +85,64 @@ func Test_service_handleGoMaxProcs(t *testing.T) {
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
 				"handleGoMaxProcs(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
+		})
+	}
+}
+
+func Test_service_handleGoMemLimit(t *testing.T) {
+	ctx := context.Background()
+	// set no limit
+	_ = debug.SetMemoryLimit(-1)
+	type fields struct{}
+	type args struct {
+		ctx  context.Context
+		req  *query.Request
+		resp *query.Response
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr error
+		want    *query.Response
+	}{
+		{
+			name:    "nil",
+			fields:  fields{},
+			args:    args{req: &query.Request{}},
+			wantErr: dummyBadRequestErr,
+			want:    nil,
+		},
+		{
+			name:   "set_4Gi",
+			fields: fields{},
+			args: args{
+				ctx:  ctx,
+				req:  &query.Request{GoMemLimitRequest: &query.GoMemLimitRequest{MemLimitBytes: 4 << 30}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{GoMemLimitResponse: query.GoMemLimitResponse{MemLimitBytes: math.MaxInt64}},
+		},
+		{
+			name:   "set_no_limit",
+			fields: fields{},
+			args: args{
+				ctx:  ctx,
+				req:  &query.Request{GoMemLimitRequest: &query.GoMemLimitRequest{MemLimitBytes: -1}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{GoMemLimitResponse: query.GoMemLimitResponse{MemLimitBytes: 4 << 30}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &service{}
+			err := s.handleGoMemLimit(tt.args.ctx, tt.args.req, tt.args.resp, nil)
+			require.Equal(t, tt.wantErr, err)
+			require.Equalf(t, tt.want, tt.args.resp,
+				"handleGoMemLimit(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
