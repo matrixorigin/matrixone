@@ -1308,23 +1308,12 @@ func readPdfToString(path string) (string, error) {
 	return textBuilder.String(), nil
 }
 
-func extractText(pdfPath string, txtPath string, offset int64, size int64) bool {
+func extractText(pdfPath string, txtPath string) bool {
 	content, err := readPdfToString(pdfPath)
 	if err != nil {
 		return false
 	}
-
-	// ensure the offset and size are within valid range
-	contentlength := int64(len(content))
-	if offset > contentlength || offset < 0 {
-		return false
-	}
-	end := offset + size
-	if size == -1 || end > contentlength {
-		end = contentlength
-	}
-	extractedText := content[offset:end]
-	err = os.WriteFile(txtPath, []byte(extractedText), 0666)
+	err = os.WriteFile(txtPath, []byte(content), 0666)
 	if err != nil {
 		return false
 	}
@@ -1360,7 +1349,7 @@ func ExtractText(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		inputPath := util.UnsafeBytesToString(inputBytes)
 		outputPath := util.UnsafeBytesToString(outputBytes)
 
-		moUrl, offsetSize, _, err := types.ParseDatalink(inputPath)
+		moUrl, _, _, err := types.ParseDatalink(inputPath)
 		if err != nil {
 			return err
 		}
@@ -1369,7 +1358,7 @@ func ExtractText(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return err
 		}
 
-		success := extractText(moUrl, outputPathUrl, int64(offsetSize[0]), int64(offsetSize[1]))
+		success := extractText(moUrl, outputPathUrl)
 		if success {
 			if err := rs.Append(true, false); err != nil {
 				return err
