@@ -138,7 +138,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*anti.AntiJoin)
 		op := anti.NewArgument()
 		op.Cond = t.Cond
-		op.Typs = t.Typs
 		op.Conditions = t.Conditions
 		op.Result = t.Result
 		op.HashOnPK = t.HashOnPK
@@ -168,7 +167,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := join.NewArgument()
 		op.Result = t.Result
 		op.Cond = t.Cond
-		op.Typs = t.Typs
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
@@ -242,7 +240,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := loopanti.NewArgument()
 		op.Result = t.Result
 		op.Cond = t.Cond
-		op.Typs = t.Typs
 		op.JoinMapTag = t.JoinMapTag
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -252,7 +249,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := loopjoin.NewArgument()
 		op.Result = t.Result
 		op.Cond = t.Cond
-		op.Typs = t.Typs
 		op.JoinMapTag = t.JoinMapTag
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -261,7 +257,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*indexjoin.IndexJoin)
 		op := indexjoin.NewArgument()
 		op.Result = t.Result
-		op.Typs = t.Typs
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -281,7 +276,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := loopsemi.NewArgument()
 		op.Result = t.Result
 		op.Cond = t.Cond
-		op.Typs = t.Typs
 		op.JoinMapTag = t.JoinMapTag
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -301,7 +295,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := loopmark.NewArgument()
 		op.Result = t.Result
 		op.Cond = t.Cond
-		op.Typs = t.Typs
 		op.JoinMapTag = t.JoinMapTag
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -322,7 +315,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*product.Product)
 		op := product.NewArgument()
 		op.Result = t.Result
-		op.Typs = t.Typs
 		op.IsShuffle = t.IsShuffle
 		op.JoinMapTag = t.JoinMapTag
 		op.ProjectList = t.ProjectList
@@ -332,7 +324,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*productl2.Productl2)
 		op := productl2.NewArgument()
 		op.Result = t.Result
-		op.Typs = t.Typs
 		op.OnExpr = t.OnExpr
 		op.JoinMapTag = t.JoinMapTag
 		op.ProjectList = t.ProjectList
@@ -358,7 +349,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := semi.NewArgument()
 		op.Result = t.Result
 		op.Cond = t.Cond
-		op.Typs = t.Typs
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
@@ -422,7 +412,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := mark.NewArgument()
 		op.Result = t.Result
 		op.Conditions = t.Conditions
-		op.Typs = t.Typs
 		op.Cond = t.Cond
 		op.OnList = t.OnList
 		op.HashOnPK = t.HashOnPK
@@ -876,7 +865,6 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 	cond, conds := extraJoinConditions(n.OnList)
 
 	arg := join.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
@@ -905,7 +893,6 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	arg := semi.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
@@ -1055,7 +1042,6 @@ func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *p
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := product.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	for i := range n.SendMsgList {
 		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -1079,7 +1065,6 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	arg := anti.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
@@ -1576,7 +1561,6 @@ func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) 
 		result[i] = pos
 	}
 	arg := indexjoin.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	return arg
@@ -1588,7 +1572,6 @@ func constructProductL2(n *plan.Node, typs []types.Type, proc *process.Process) 
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := productl2.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.OnExpr = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
@@ -1608,7 +1591,6 @@ func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := loopjoin.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
@@ -1632,7 +1614,6 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 		result[i] = pos
 	}
 	arg := loopsemi.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
@@ -1696,7 +1677,6 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 		result[i] = pos
 	}
 	arg := loopanti.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
@@ -1723,7 +1703,6 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 		}
 	}
 	arg := loopmark.NewArgument()
-	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {

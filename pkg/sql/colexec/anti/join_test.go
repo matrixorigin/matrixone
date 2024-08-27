@@ -252,7 +252,6 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 		proc:   proc,
 		cancel: cancel,
 		arg: &AntiJoin{
-			Typs:       ts,
 			Result:     rp,
 			Conditions: cs,
 			Cond:       cond,
