@@ -697,8 +697,10 @@ func newParallelScope1(s *Scope, c *Compile) (*Scope, []*Scope) {
 	rs.Proc = s.Proc.NewNoContextChildProc(1)
 	rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, s.NodeInfo.Mcpu)
 	rs.Proc.Reg.MergeReceivers[0].NilBatchCnt = s.NodeInfo.Mcpu
+
 	mergeOp := merge.NewArgument()
 	rs.setRootOperator(mergeOp)
+
 	rs.setRootOperator(dispatchOp)
 
 	parallelScopes := make([]*Scope, s.NodeInfo.Mcpu)
@@ -715,6 +717,7 @@ func newParallelScope1(s *Scope, c *Compile) (*Scope, []*Scope) {
 	}
 
 	rs.PreScopes = parallelScopes
+	c.tmpScopes = append(c.tmpScopes, rs)
 	return rs, parallelScopes
 }
 
@@ -750,6 +753,7 @@ func newParallelScope(s *Scope, c *Compile) (*Scope, []*Scope) {
 	rs := newScope(Merge)
 	rs.Proc = s.Proc
 	rs.PreScopes = parallelScopes
+	c.tmpScopes = append(c.tmpScopes, rs)
 	return rs, parallelScopes
 }
 

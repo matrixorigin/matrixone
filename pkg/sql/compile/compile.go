@@ -184,6 +184,12 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	for _, s := range c.scopes {
 		s.Reset(c)
 	}
+	if c.tmpScopes != nil {
+		for i := range c.tmpScopes {
+			c.tmpScopes[i].release()
+		}
+		c.tmpScopes = c.tmpScopes[:0]
+	}
 
 	for _, v := range c.nodeRegs {
 		v.CleanChannel(c.proc.GetMPool())
@@ -212,6 +218,9 @@ func (c *Compile) clear() {
 	for i := range c.scopes {
 		c.scopes[i].release()
 	}
+	for i := range c.tmpScopes {
+		c.tmpScopes[i].release()
+	}
 	for i := range c.fuzzys {
 		c.fuzzys[i].release()
 	}
@@ -219,6 +228,9 @@ func (c *Compile) clear() {
 	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
 	c.scopes = c.scopes[:0]
+	if c.tmpScopes != nil {
+		c.tmpScopes = c.tmpScopes[:0]
+	}
 	c.pn = nil
 	c.fill = nil
 	c.affectRows.Store(0)
@@ -422,6 +434,9 @@ func (c *Compile) SetIsPrepare(isPrepare bool) {
 
 func (c *Compile) FreeOperator() {
 	for _, s := range c.scopes {
+		s.FreeOperator(c)
+	}
+	for _, s := range c.tmpScopes {
 		s.FreeOperator(c)
 	}
 }

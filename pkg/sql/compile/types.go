@@ -245,7 +245,8 @@ func (a *analyzeModule) release() {
 
 // Compile contains all the information needed for compilation.
 type Compile struct {
-	scopes []*Scope
+	scopes    []*Scope // scopes in compile time, don't change this in runtime
+	tmpScopes []*Scope // parallel scopes in runtime
 
 	pn *plan.Plan
 
