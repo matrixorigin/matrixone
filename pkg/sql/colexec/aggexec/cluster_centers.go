@@ -152,7 +152,7 @@ func (exec *clusterCentersExec) GroupGrow(more int) error {
 		return err
 	}
 	for i := 0; i < more; i++ {
-		exec.groupData = append(exec.groupData, exec.ret.mg.GetVector(types.T_varchar.ToType()))
+		exec.groupData = append(exec.groupData, vector.NewVec(types.T_varchar.ToType()))
 	}
 	return nil
 }
@@ -414,11 +414,7 @@ func (exec *clusterCentersExec) Free() {
 			continue
 		}
 
-		if v.NeedDup() {
-			v.Free(exec.ret.mp)
-		} else {
-			exec.ret.mg.PutVector(v)
-		}
+		v.Free(exec.ret.mp)
 	}
 }
 
