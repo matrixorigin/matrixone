@@ -803,18 +803,22 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool) (err
 		return
 	}
 	var zm index.ZM
-	pkColPos := baseTable.schema.GetSingleSortKeyIdx()
-	for _, stats := range baseTable.tableSpace.stats {
-		err = tbl.DoPrecommitDedupByNode(ctx, stats, isTombstone)
-		if err != nil {
-			return
+	dedupType := tbl.store.txn.GetDedupType()
+	if dedupType == txnif.FullDedup {
+		for _, stats := range baseTable.tableSpace.stats {
+			err = tbl.DoPrecommitDedupByNode(ctx, stats, isTombstone)
+			if err != nil {
+				return
+			}
 		}
 	}
 
 	if baseTable.tableSpace.node == nil {
 		return
 	}
+	// FIXME: (jxm)do we need do dedup here for workspace insert?
 	node := baseTable.tableSpace.node
+	pkColPos := baseTable.schema.GetSingleSortKeyIdx()
 	pkVec, err := node.WindowColumn(0, node.Rows(), pkColPos)
 	if err != nil {
 		return err
@@ -929,6 +933,8 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM,
 		}
 		defer rowIDs.Close()
 		if !isTombstone {
+			// FIXME: (jxm) here it will always scan all workspace data including committed s3 files
+			// does Incremental dedup work here?
 			err = tbl.findDeletes(tbl.store.ctx, rowIDs, false, true)
 			if err != nil {
 				return
