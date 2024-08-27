@@ -177,7 +177,6 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) productTe
 		proc:   proc,
 		cancel: cancel,
 		arg: &Product{
-			Typs:   ts,
 			Result: rp,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
