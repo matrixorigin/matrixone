@@ -27,12 +27,12 @@ count(*)
 2
 show create table acc_test04.index03;
 Table    Create Table
-index03    CREATE TABLE `index03` (\n  `emp_no` INT NOT NULL,\n  `birth_date` DATE NOT NULL,\n  `first_name` VARCHAR(14) NOT NULL,\n  `last_name` VARCHAR(16) NOT NULL,\n  `gender` VARCHAR(5) NOT NULL,\n  `hire_date` DATE NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
+index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
 drop snapshot if exists sp04;
 create snapshot sp04 for account acc01;
 show create table acc_test04.index03;
 Table    Create Table
-index03    CREATE TABLE `index03` (\n  `emp_no` INT NOT NULL,\n  `birth_date` DATE NOT NULL,\n  `first_name` VARCHAR(14) NOT NULL,\n  `last_name` VARCHAR(16) NOT NULL,\n  `gender` VARCHAR(5) NOT NULL,\n  `hire_date` DATE NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
+index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
 restore account acc01 database acc_test04 table index03 from snapshot sp04;
 restore account acc01 database acc_test04 table index03 from snapshot sp04 to account acc02;
 select count(*) from acc_test04.index03;
@@ -154,10 +154,10 @@ deptno    dname    loc
 40    OPERATIONS    BOSTON
 show create table acc_test02.pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `deptno` INT UNSIGNED NOT NULL COMMENT '部门编号',\n  `dname` VARCHAR(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` VARCHAR(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
 show create table acc_test02.aff01;
 Table    Create Table
-aff01    CREATE TABLE `aff01` (\n  `empno` INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` VARCHAR(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` VARCHAR(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` INT UNSIGNED DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` DATE DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` DECIMAL(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` DECIMAL(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` INT UNSIGNED DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 select count(*) from acc_test03.table01;
 count(*)
 2
@@ -172,22 +172,22 @@ count(*)
 2
 show create table acc_test03.table01;
 Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  `col3` CHAR(1) DEFAULT NULL,\n  `col4` VARCHAR(20) DEFAULT NULL,\n  `col5` TEXT DEFAULT NULL,\n  `col6` DOUBLE DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+table01    CREATE TABLE `table01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` char(1) DEFAULT NULL,\n  `col4` varchar(20) DEFAULT NULL,\n  `col5` text DEFAULT NULL,\n  `col6` double DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show create table acc_test03.table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(20) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 show create table acc_test03.table03;
 Table    Create Table
-table03    CREATE TABLE `table03` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+table03    CREATE TABLE `table03` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show create table acc_test03.table04;
 Table    Create Table
-table04    CREATE TABLE `table04` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+table04    CREATE TABLE `table04` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 select count(*) from acc_test04.index03;
 count(*)
 2
 show create table acc_test04.index03;
 Table    Create Table
-index03    CREATE TABLE `index03` (\n  `emp_no` INT NOT NULL,\n  `birth_date` DATE NOT NULL,\n  `first_name` VARCHAR(14) NOT NULL,\n  `last_name` VARCHAR(16) NOT NULL,\n  `gender` VARCHAR(5) NOT NULL,\n  `hire_date` DATE NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
+index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
 drop snapshot if exists sp04;
 create snapshot sp04 for account acc01;
 insert into acc_test02.pri01 values (50,'ACCOUNTING','NEW YORK');
@@ -213,7 +213,7 @@ a    b    c
 2    3    4
 show create table acc_test04.index03;
 Table    Create Table
-index03    CREATE TABLE `index03` (\n  `emp_no` INT NOT NULL,\n  `birth_date` DATE NOT NULL,\n  `first_name` VARCHAR(14) NOT NULL,\n  `last_name` VARCHAR(16) NOT NULL,\n  `gender` VARCHAR(5) NOT NULL,\n  `hire_date` DATE NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
+index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
 restore account acc01 from snapshot sp04 to account acc02;
 show databases;
 Database

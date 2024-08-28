@@ -379,7 +379,7 @@ col1    col2    col3
 6    -1    null
 show create table table01;
 Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` INT NOT NULL AUTO_INCREMENT,\n  `col2` DECIMAL(6,0) DEFAULT NULL,\n  `col3` VARCHAR(30) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+table01    CREATE TABLE `table01` (\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` decimal(6,0) DEFAULT NULL,\n  `col3` varchar(30) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 drop database sub06;
 drop publication pub06;
 drop database test06;

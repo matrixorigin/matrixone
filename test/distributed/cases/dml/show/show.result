@@ -4,7 +4,7 @@ use test01;
 create table tt(col2 float comment '"%$^&*()_+@!\'');
 show create table tt;
 Table    Create Table
-tt    CREATE TABLE `tt` (\n  `col2` FLOAT DEFAULT NULL COMMENT '"%$^&*()_+@!'''\n)
+tt    CREATE TABLE `tt` (\n  `col2` float DEFAULT NULL COMMENT '"%$^&*()_+@!'''\n)
 drop table tt;
 create table t1 (id int not null, str char(10),name varchar(10));
 create table t2 (a int);
@@ -216,7 +216,7 @@ drop table if exists t1;
 create table t1(c1 int primary key auto_increment,c2 tinyint not null default 4,c3 smallint,c4 bigint,c5 tinyint unsigned,c6 smallint unsigned,c7 int unsigned,c8 bigint unsigned,c9 float,c10 double,c11 date,c12 datetime,c13 timestamp on update current_timestamp,c14 char,c15 varchar default 'q',c16 json,c17 decimal,c18 text,c19 blob,c20 uuid);
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `c1` INT NOT NULL AUTO_INCREMENT,\n  `c2` TINYINT NOT NULL DEFAULT 4,\n  `c3` SMALLINT DEFAULT NULL,\n  `c4` BIGINT DEFAULT NULL,\n  `c5` TINYINT UNSIGNED DEFAULT NULL,\n  `c6` SMALLINT UNSIGNED DEFAULT NULL,\n  `c7` INT UNSIGNED DEFAULT NULL,\n  `c8` BIGINT UNSIGNED DEFAULT NULL,\n  `c9` FLOAT DEFAULT NULL,\n  `c10` DOUBLE DEFAULT NULL,\n  `c11` DATE DEFAULT NULL,\n  `c12` DATETIME DEFAULT NULL,\n  `c13` TIMESTAMP NULL DEFAULT NULL ON UPDATE current_timestamp(),\n  `c14` CHAR(1) DEFAULT NULL,\n  `c15` VARCHAR(65535) DEFAULT 'q',\n  `c16` JSON DEFAULT NULL,\n  `c17` DECIMAL(38,0) DEFAULT NULL,\n  `c18` TEXT DEFAULT NULL,\n  `c19` BLOB DEFAULT NULL,\n  `c20` UUID DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
+t1    CREATE TABLE `t1` (\n  `c1` int NOT NULL AUTO_INCREMENT,\n  `c2` tinyint NOT NULL DEFAULT 4,\n  `c3` smallint DEFAULT NULL,\n  `c4` bigint DEFAULT NULL,\n  `c5` tinyint unsigned DEFAULT NULL,\n  `c6` smallint unsigned DEFAULT NULL,\n  `c7` int unsigned DEFAULT NULL,\n  `c8` bigint unsigned DEFAULT NULL,\n  `c9` float DEFAULT NULL,\n  `c10` double DEFAULT NULL,\n  `c11` date DEFAULT NULL,\n  `c12` datetime DEFAULT NULL,\n  `c13` timestamp NULL DEFAULT NULL ON UPDATE current_timestamp(),\n  `c14` char(1) DEFAULT NULL,\n  `c15` varchar(65535) DEFAULT 'q',\n  `c16` json DEFAULT NULL,\n  `c17` decimal(38,0) DEFAULT NULL,\n  `c18` text DEFAULT NULL,\n  `c19` blob DEFAULT NULL,\n  `c20` uuid DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
 SHOW TRIGGERS;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 SHOW TRIGGERS like '*%';
@@ -321,7 +321,7 @@ create view va as select a from a;
 begin;
 show create table a;
 Table    Create Table
-a    CREATE TABLE `a` (\n  `a` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL\n)
+a    CREATE TABLE `a` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL\n)
 show create table va;
 View    Create View    character_set_client    collation_connection
 va    create view va as select a from a;    utf8mb4    utf8mb4_general_ci
@@ -360,7 +360,7 @@ CREATE TABLE show_03(a int, b int);
 CREATE unique index x ON show_03(a) comment 'x';
 show CREATE table show_03;
 Table    Create Table
-show_03    CREATE TABLE `show_03` (\n  `a` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL,\n  UNIQUE KEY `x` (`a`) COMMENT 'x'\n)
+show_03    CREATE TABLE `show_03` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL,\n  UNIQUE KEY `x` (`a`) COMMENT 'x'\n)
 show INDEX FROM show_03;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 show_03    0    x    1    a    A    0    NULL    NULL    YES            x        YES    NULL
@@ -368,7 +368,7 @@ DROP TABLE show_03;
 CREATE TABLE show_04(a int, b int, unique key(a));
 show CREATE TABLE show_04;
 Table    Create Table
-show_04    CREATE TABLE `show_04` (\n  `a` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL,\n  UNIQUE KEY `a` (`a`)\n)
+show_04    CREATE TABLE `show_04` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL,\n  UNIQUE KEY `a` (`a`)\n)
 CREATE INDEX b ON show_04(b);
 show INDEX FROM show_04;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression

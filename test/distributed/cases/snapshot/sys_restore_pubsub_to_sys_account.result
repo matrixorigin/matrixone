@@ -273,7 +273,7 @@ create database sub04 from sys publication pub04;
 use sub04;
 show create table table01;
 Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  `col3` CHAR(1) DEFAULT NULL,\n  `col4` VARCHAR(20) DEFAULT NULL,\n  `col5` TEXT DEFAULT NULL,\n  `col6` DOUBLE DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+table01    CREATE TABLE `table01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` char(1) DEFAULT NULL,\n  `col4` varchar(20) DEFAULT NULL,\n  `col5` text DEFAULT NULL,\n  `col6` double DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 select * from table02;
 col1    col2
 133    database
@@ -363,7 +363,7 @@ system_metrics
 use sub05;
 show create table index01;
 Table    Create Table
-index01    CREATE TABLE `index01` (\n  `col1` INT NOT NULL,\n  `col2` DATE NOT NULL,\n  `col3` VARCHAR(16) NOT NULL,\n  `col4` INT UNSIGNED NOT NULL,\n  PRIMARY KEY (`col1`)\n)
+index01    CREATE TABLE `index01` (\n  `col1` int NOT NULL,\n  `col2` date NOT NULL,\n  `col3` varchar(16) NOT NULL,\n  `col4` int unsigned NOT NULL,\n  PRIMARY KEY (`col1`)\n)
 select * from index02;
 col1    col2    col3
 a    33    1
@@ -401,16 +401,16 @@ create  table ti2(a INT primary key AUTO_INCREMENT, b INT, c INT);
 create  table tm2(a INT primary key AUTO_INCREMENT, b INT, c INT);
 show create table ti1;
 Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 show create table tm1;
 Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 show create table ti2;
 Table    Create Table
-ti2    CREATE TABLE `ti2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+ti2    CREATE TABLE `ti2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show create table tm2;
 Table    Create Table
-tm2    CREATE TABLE `tm2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+tm2    CREATE TABLE `tm2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 drop snapshot if exists sp11;
 create snapshot sp11 for account acc01;
 drop publication if exists pub06;
@@ -589,7 +589,7 @@ Tables_in_test03
 t1
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  CONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+t1    CREATE TABLE `t1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  CONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into t1 values (1,1);
 insert into t1 values (2,1);
 insert into t1 values (3,2);
@@ -665,7 +665,7 @@ Tables_in_test04
 t1
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  CONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+t1    CREATE TABLE `t1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  CONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into t1 values (1,1);
 insert into t1 values (2,1);
 insert into t1 values (3,2);
