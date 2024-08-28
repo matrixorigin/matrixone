@@ -458,9 +458,6 @@ func (s *service) handleReloadAutoIncrementCache(
 func (s *service) handleGoMaxProcs(
 	ctx context.Context, req *query.Request, resp *query.Response,
 ) error {
-	if req.GoMaxProcsRequest == nil {
-		return moerr.NewInternalError(ctx, "bad request")
-	}
 	resp.GoMaxProcsResponse.MaxProcs = int32(runtime.GOMAXPROCS(int(req.GoMaxProcsRequest.MaxProcs)))
 	logutil.Info("QueryService::GoMaxProcs",
 		zap.String("op", "set"),
@@ -473,9 +470,6 @@ func (s *service) handleGoMaxProcs(
 func (s *service) handleGoMemLimit(
 	ctx context.Context, req *query.Request, resp *query.Response,
 ) error {
-	if req.GoMemLimitRequest == nil {
-		return moerr.NewInternalError(ctx, "bad request")
-	}
 	resp.GoMemLimitResponse.MemLimitBytes = int64(debug.SetMemoryLimit(req.GoMemLimitRequest.MemLimitBytes))
 	logutil.Info("QueryService::GoMemLimit",
 		zap.String("op", "set"),
@@ -488,9 +482,6 @@ func (s *service) handleGoMemLimit(
 func (s *service) handleFileServiceCacheRequest(
 	ctx context.Context, req *query.Request, resp *query.Response,
 ) error {
-	if req.FileServiceCacheRequest == nil {
-		return moerr.NewInternalError(ctx, "bad request")
-	}
 	resp.FileServiceCacheResponse = &query.FileServiceCacheResponse{}
 	return nil
 }
@@ -498,9 +489,6 @@ func (s *service) handleFileServiceCacheRequest(
 func (s *service) handleFileServiceCacheEvictRequest(
 	ctx context.Context, req *query.Request, resp *query.Response,
 ) error {
-	if req.FileServiceCacheEvictRequest == nil {
-		return moerr.NewInternalError(ctx, "bad request")
-	}
 	resp.FileServiceCacheEvictResponse = &query.FileServiceCacheEvictResponse{}
 	return nil
 }

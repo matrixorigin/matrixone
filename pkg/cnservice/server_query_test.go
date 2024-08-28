@@ -58,13 +58,6 @@ func Test_service_handleGoMaxProcs(t *testing.T) {
 		want    *query.Response
 	}{
 		{
-			name:    "nil",
-			fields:  fields{},
-			args:    args{req: &query.Request{}},
-			wantErr: dummyBadRequestErr,
-			want:    nil,
-		},
-		{
 			name:   "normal",
 			fields: fields{},
 			args: args{
@@ -104,13 +97,6 @@ func Test_service_handleGoMemLimit(t *testing.T) {
 		wantErr error
 		want    *query.Response
 	}{
-		{
-			name:    "nil",
-			fields:  fields{},
-			args:    args{req: &query.Request{}},
-			wantErr: dummyBadRequestErr,
-			want:    nil,
-		},
 		{
 			name:   "set_4Gi",
 			fields: fields{},
@@ -161,13 +147,6 @@ func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 		want    *query.Response
 	}{
 		{
-			name:    "nil",
-			fields:  fields{},
-			args:    args{req: &query.Request{}},
-			wantErr: dummyBadRequestErr,
-			want:    nil,
-		},
-		{
 			name:   "normal",
 			fields: fields{},
 			args: args{
@@ -212,13 +191,6 @@ func Test_service_handleFileServiceCacheEvictRequest(t *testing.T) {
 		wantErr error
 		want    *query.Response
 	}{
-		{
-			name:    "nil",
-			fields:  fields{},
-			args:    args{req: &query.Request{}},
-			wantErr: dummyBadRequestErr,
-			want:    nil,
-		},
 		{
 			name:   "normal",
 			fields: fields{},
