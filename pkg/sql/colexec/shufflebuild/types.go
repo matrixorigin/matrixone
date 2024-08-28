@@ -17,7 +17,7 @@ package shufflebuild
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashmap_util"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -34,7 +34,7 @@ const (
 
 type container struct {
 	state          int
-	hashmapBuilder colexec.HashmapBuilder
+	hashmapBuilder hashmap_util.HashmapBuilder
 }
 
 type ShuffleBuild struct {
