@@ -33,7 +33,20 @@ const opName = "loop_join"
 
 func (loopJoin *LoopJoin) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
-	buf.WriteString(": loop join ")
+	switch loopJoin.JoinType {
+	case LoopInner:
+		buf.WriteString(": loop inner join ")
+	case LoopAnti:
+		buf.WriteString(": loop anti join ")
+	case LoopLeft:
+		buf.WriteString(": loop left join ")
+	case LoopMark:
+		buf.WriteString(": loop mark join ")
+	case LoopSemi:
+		buf.WriteString(": loop semi join ")
+	case LoopSingle:
+		buf.WriteString(": loop single join ")
+	}
 }
 
 func (loopJoin *LoopJoin) OpType() vm.OpType {
