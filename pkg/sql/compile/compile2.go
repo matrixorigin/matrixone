@@ -260,7 +260,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	//--------------------------------------------------------------------------------------------------------------
 	if c.checkSQLHasQueryPlan() {
-		runC.GeneratePhyPlan()
+		runC.GenPhyPlan()
 		runC.fillPlanNodeAnalyzeInfo()
 	}
 	//--------------------------------------------------------------------------------------------------------------
