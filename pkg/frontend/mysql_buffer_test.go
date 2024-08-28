@@ -312,9 +312,6 @@ func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
 				payload := generateRandomBytes(packetSize)
 				exceptPayload = append(exceptPayload, payload)
 				stumblingToWrite(server, append(header, payload...))
-				if err != nil {
-					panic(fmt.Sprintf("Failed to write payload: %v", err))
-				}
 			}
 		}()
 		var data []byte
@@ -343,9 +340,6 @@ func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
 				payload := generateRandomBytes(packetSize)
 				exceptPayload = append(exceptPayload, payload)
 				stumblingToWrite(server, append(header, payload...))
-				if err != nil {
-					panic(fmt.Sprintf("Failed to write payload: %v", err))
-				}
 			}
 		}()
 		var data []byte
@@ -378,9 +372,6 @@ func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
 				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
 				stumblingToWrite(server, append(header, payload...))
-				if err != nil {
-					panic(fmt.Sprintf("Failed to write payload: %v", err))
-				}
 			}
 		}()
 
@@ -406,9 +397,6 @@ func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
 				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
 				stumblingToWrite(server, append(header, payload...))
-				if err != nil {
-					panic(fmt.Sprintf("Failed to write payload: %v", err))
-				}
 			}
 			header := make([]byte, 4)
 			binary.LittleEndian.PutUint32(header[:4], 0)
