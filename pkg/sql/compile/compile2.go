@@ -117,11 +117,11 @@ func (c *Compile) Compile(
 	c.proc.ReplaceTopCtx(topContext)
 
 	// from plan to scope.
-	if c.scope, err = c.compileScope(queryPlan); err != nil {
+	if c.scopes, err = c.compileScope(queryPlan); err != nil {
 		return err
 	}
 	// todo: this is redundant.
-	for _, s := range c.scope {
+	for _, s := range c.scopes {
 		if len(s.NodeInfo.Addr) == 0 {
 			s.NodeInfo.Addr = c.addr
 		}
@@ -316,7 +316,7 @@ func (c *Compile) InitPipelineContextToExecuteQuery() {
 
 	// build pipeline context.
 	currentContext := c.proc.BuildPipelineContext(queryContext)
-	for _, pipeline := range c.scope {
+	for _, pipeline := range c.scopes {
 		if pipeline.Proc == nil {
 			continue
 		}
