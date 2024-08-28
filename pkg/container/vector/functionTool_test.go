@@ -15,7 +15,6 @@
 package vector
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -71,21 +70,12 @@ func BenchmarkGetStrValue2(b *testing.B) {
 func TestPreExtendAndReset(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 
-	wrapper := NewFunctionResultWrapper(
-		NewVec,
-		func(vec *Vector) {
-			vec.Free(mp)
-		},
-		types.T_bool.ToType(),
-		mp)
+	wrapper := NewFunctionResultWrapper(types.T_bool.ToType(), mp)
 
 	result := MustFunctionResult[bool](wrapper)
-	fmt.Printf("length is %d, capacity is %d\n", result.vec.Length(), result.vec.Capacity())
-
 	require.NoError(t, wrapper.PreExtendAndReset(10))
 	require.Equal(t, 10, len(result.cols))
 	require.Equal(t, 10, result.vec.Length())
-	fmt.Printf("length is %d, capacity is %d\n", result.vec.Length(), result.vec.Capacity())
 
 	lastCapacity := result.vec.Capacity()
 	if lastCapacity > 20 {
@@ -104,7 +94,6 @@ func TestPreExtendAndReset(t *testing.T) {
 		require.Equal(t, 20, len(result.cols))
 		require.Equal(t, 20, result.vec.Length())
 	}
-	fmt.Printf("length is %d, capacity is %d\n", result.vec.Length(), result.vec.Capacity())
 
 	wrapper.Free()
 	require.Equal(t, int64(0), mp.CurrNB())
