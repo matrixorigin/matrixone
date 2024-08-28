@@ -172,9 +172,9 @@ func (db *txnDatabase) RelationByAccountID(
 	if _, exist := db.getTxn().deletedTableMap.Load(key); exist {
 		if strings.Contains(name, "_copy_") {
 			stackInfo := debug.Stack()
-			logutil.Error(moerr.NewParseError(context.Background(), "table %q does not exists", name).Error(), zap.String("Stack Trace", string(stackInfo)))
+			logutil.Error(moerr.NewParseErrorf(context.Background(), "table %q does not exists", name).Error(), zap.String("Stack Trace", string(stackInfo)))
 		}
-		return nil, moerr.NewParseError(context.Background(), "table %q does not exist", name)
+		return nil, moerr.NewParseErrorf(context.Background(), "table %q does not exist", name)
 	}
 
 	p := db.getTxn().proc
@@ -234,7 +234,7 @@ func (db *txnDatabase) RelationByAccountID(
 			name,
 			accountID,
 			db.databaseId)
-		return nil, moerr.NewParseError(context.Background(), "table %q does not exist", name)
+		return nil, moerr.NewParseErrorf(context.Background(), "table %q does not exist", name)
 	}
 
 	tbl := &txnTable{
@@ -278,7 +278,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	key := genTableKey(accountId, name, db.databaseId)
 	// check the table is deleted or not
 	if _, exist := db.getTxn().deletedTableMap.Load(key); exist {
-		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
 	}
 
 	p := db.getTxn().proc
@@ -339,9 +339,9 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 			db.databaseId)
 		if strings.Contains(name, "_copy_") {
 			stackInfo := debug.Stack()
-			logutil.Error(moerr.NewParseError(context.Background(), "table %q does not exists", name).Error(), zap.String("Stack Trace", string(stackInfo)))
+			logutil.Error(moerr.NewParseErrorf(context.Background(), "table %q does not exists", name).Error(), zap.String("Stack Trace", string(stackInfo)))
 		}
-		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
 	}
 
 	tbl := &txnTable{

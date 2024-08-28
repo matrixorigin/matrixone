@@ -121,5 +121,5 @@ func (b *LimitBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.E
 }
 
 func (b *LimitBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInput(b.GetContext(), "cannot bind time window functions '%s'", funcName)
+	return nil, moerr.NewInvalidInputf(b.GetContext(), "cannot bind time window functions '%s'", funcName)
 }

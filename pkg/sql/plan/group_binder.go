@@ -41,7 +41,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 			case constant.Int:
 				colPos, _ := constant.Int64Val(numVal.Value)
 				if colPos < 1 || int(colPos) > len(b.selectList) {
-					return nil, moerr.NewSyntaxError(b.GetContext(), "GROUP BY position %v is not in select list", colPos)
+					return nil, moerr.NewSyntaxErrorf(b.GetContext(), "GROUP BY position %v is not in select list", colPos)
 				}
 
 				astExpr = b.selectList[colPos-1].Expr
@@ -100,5 +100,5 @@ func (b *GroupBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.E
 }
 
 func (b *GroupBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInput(b.GetContext(), "cannot bind time window functions '%s'", funcName)
+	return nil, moerr.NewInvalidInputf(b.GetContext(), "cannot bind time window functions '%s'", funcName)
 }

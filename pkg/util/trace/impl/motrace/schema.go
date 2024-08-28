@@ -304,7 +304,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(StatsDatabase).Internal(true).Finish())
 	mustExec := func(sql string) error {
 		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
-			return moerr.NewInternalError(ctx, "[Trace] init table error: %v, sql: %s", err, sql)
+			return moerr.NewInternalErrorf(ctx, "[Trace] init table error: %v, sql: %s", err, sql)
 		}
 		return nil
 	}
@@ -364,7 +364,7 @@ func init() {
 	for _, tbl := range tables {
 		tbl.GetRow(context.Background()).Free()
 		if old := table.RegisterTableDefine(tbl); old != nil {
-			panic(moerr.NewInternalError(context.Background(), "table already registered: %s", old.GetIdentify()))
+			panic(moerr.NewInternalErrorf(context.Background(), "table already registered: %s", old.GetIdentify()))
 		}
 	}
 }

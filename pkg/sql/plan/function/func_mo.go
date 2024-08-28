@@ -388,10 +388,10 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 
 			// Magic code. too confused.
 			if tableStr == "mo_database" || tableStr == "mo_tables" || tableStr == "mo_columns" || tableStr == "sys_async_task" {
-				return moerr.NewInvalidInput(proc.Ctx, "%s has bad input table %s", fnName, tableStr)
+				return moerr.NewInvalidInputf(proc.Ctx, "%s has bad input table %s", fnName, tableStr)
 			}
 			if columnStr == "__mo_rowid" {
-				return moerr.NewInvalidInput(proc.Ctx, "%s has bad input column %s", fnName, columnStr)
+				return moerr.NewInvalidInputf(proc.Ctx, "%s has bad input column %s", fnName, columnStr)
 			}
 
 			if isClusterTable(dbStr, tableStr) {

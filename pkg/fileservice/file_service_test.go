@@ -403,7 +403,7 @@ func testFileService(
 					reader.Close()
 					if !bytes.Equal(parts[i], data) {
 						select {
-						case errCh <- moerr.NewInternalError(context.Background(),
+						case errCh <- moerr.NewInternalErrorf(context.Background(),
 							"not equal: path: %s, entry: %+v, content %v",
 							filePath, entry, content,
 						):

@@ -221,7 +221,7 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot plan2.Snaps
 	}
 	databaseId, err := strconv.ParseUint(database.GetDatabaseId(tempCtx), 10, 64)
 	if err != nil {
-		return 0, moerr.NewInternalError(tempCtx, "The databaseid of '%s' is not a valid number", dbName)
+		return 0, moerr.NewInternalErrorf(tempCtx, "The databaseid of '%s' is not a valid number", dbName)
 	}
 	return databaseId, nil
 }
@@ -610,7 +610,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 
 		return nil, err
 	} else {
-		return nil, moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+		return nil, moerr.NewNotSupportedf(ctx, "function or operator '%s'", name)
 	}
 }
 
@@ -700,7 +700,7 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (account
 			}
 			accountIds = append(accountIds, uint32(targetAccountId))
 		} else {
-			return nil, moerr.NewInternalError(ctx, "there is no account %s", name)
+			return nil, moerr.NewInternalErrorf(ctx, "there is no account %s", name)
 		}
 	}
 	return accountIds, err

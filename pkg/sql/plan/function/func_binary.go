@@ -189,7 +189,7 @@ func CeilDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	if len(ivecs) > 1 {
 		digit := vector.MustFixedCol[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-18 {
-			return moerr.NewOutOfRange(proc.Ctx, "decimal64", "ceil(decimal64(18,%v),%v)", scale, digit[0])
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal64", "ceil(decimal64(18,%v),%v)", scale, digit[0])
 		}
 	}
 	cb := func(x types.Decimal64, digits int64) types.Decimal64 {
@@ -203,7 +203,7 @@ func CeilDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	if len(ivecs) > 1 {
 		digit := vector.MustFixedCol[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-38 {
-			return moerr.NewOutOfRange(proc.Ctx, "decimal128", "ceil(decimal128(38,%v),%v)", scale, digit[0])
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal128", "ceil(decimal128(38,%v),%v)", scale, digit[0])
 		}
 	}
 	cb := func(x types.Decimal128, digits int64) types.Decimal128 {
@@ -324,7 +324,7 @@ func FloorDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	if len(ivecs) > 1 {
 		digit := vector.MustFixedCol[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-18 {
-			return moerr.NewOutOfRange(proc.Ctx, "decimal64", "floor(decimal64(18,%v),%v)", scale, digit[0])
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal64", "floor(decimal64(18,%v),%v)", scale, digit[0])
 		}
 	}
 	cb := func(x types.Decimal64, digits int64) types.Decimal64 {
@@ -339,7 +339,7 @@ func FloorDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	if len(ivecs) > 1 {
 		digit := vector.MustFixedCol[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-38 {
-			return moerr.NewOutOfRange(proc.Ctx, "decimal128", "floor(decimal128(38,%v),%v)", scale, digit[0])
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal128", "floor(decimal128(38,%v),%v)", scale, digit[0])
 		}
 	}
 	cb := func(x types.Decimal128, digits int64) types.Decimal128 {
@@ -1271,13 +1271,13 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 	case 'b':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInput(ctx, "invalud date format for month '%d'", m)
+			return moerr.NewInvalidInputf(ctx, "invalud date format for month '%d'", m)
 		}
 		buf.WriteString(MonthNames[m-1][:3])
 	case 'M':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInput(ctx, "invalud date format for month '%d'", m)
+			return moerr.NewInvalidInputf(ctx, "invalud date format for month '%d'", m)
 		}
 		buf.WriteString(MonthNames[m-1])
 	case 'm':
@@ -2750,7 +2750,7 @@ func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			case "trailing":
 				res = trimTrailing(string(cut), string(src))
 			default:
-				return moerr.NewNotSupported(proc.Ctx, "trim type %s", v1Str)
+				return moerr.NewNotSupportedf(proc.Ctx, "trim type %s", v1Str)
 			}
 
 			if err = rs.AppendBytes([]byte(res), false); err != nil {

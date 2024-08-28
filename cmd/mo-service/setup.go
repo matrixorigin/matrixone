@@ -91,7 +91,7 @@ func getClock(cfg *Config, stopper *stopper.Stopper) (clock.Clock, error) {
 	case localClockBackend:
 		c = newLocalClock(cfg, stopper)
 	default:
-		return nil, moerr.NewInternalError(context.Background(), "not implment for %s", cfg.Clock.Backend)
+		return nil, moerr.NewInternalErrorf(context.Background(), "not implment for %s", cfg.Clock.Backend)
 	}
 	c.SetNodeID(cfg.hashNodeID())
 	return c, nil

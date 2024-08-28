@@ -54,7 +54,7 @@ func checkPartitionExprAllowed(ctx context.Context, tb *plan.TableDef, e tree.Ex
 	case *tree.FuncExpr:
 		funcRef, ok := v.Func.FunctionReference.(*tree.UnresolvedName)
 		if !ok {
-			return moerr.NewNYI(ctx, "invalid function expr '%v'", v)
+			return moerr.NewNYIf(ctx, "invalid function expr '%v'", v)
 		}
 		funcName := funcRef.ColName()
 		if _, ok := AllowedPartitionFuncMap[funcName]; ok {
@@ -85,7 +85,7 @@ func checkPartitionExprArgs(ctx context.Context, tblInfo *plan.TableDef, e tree.
 
 	funcRef, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
 	if !ok {
-		return moerr.NewNYI(ctx, "invalid function expr '%v'", expr)
+		return moerr.NewNYIf(ctx, "invalid function expr '%v'", expr)
 	}
 	funcName := funcRef.ColName()
 

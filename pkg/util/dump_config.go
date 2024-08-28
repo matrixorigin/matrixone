@@ -101,7 +101,7 @@ func flatten(in any, name string, prefix string, userSet string, exp *exporter) 
 
 	switch typ.Kind() {
 	case reflect.Invalid:
-		return moerr.NewInternalErrorNoCtx("unsupported type %v", typ.Kind())
+		return moerr.NewInternalErrorNoCtxf("unsupported type %v", typ.Kind())
 	case reflect.Bool:
 		fallthrough
 	case reflect.Int:
@@ -135,7 +135,7 @@ func flatten(in any, name string, prefix string, userSet string, exp *exporter) 
 	case reflect.String:
 		exp.Export(prefix, fmt.Sprintf("%v", value), userSet)
 	case reflect.Uintptr:
-		return moerr.NewInternalErrorNoCtx("unsupported type %v", typ.Kind())
+		return moerr.NewInternalErrorNoCtxf("unsupported type %v", typ.Kind())
 	case reflect.Slice:
 		fallthrough
 	case reflect.Array:
@@ -152,7 +152,7 @@ func flatten(in any, name string, prefix string, userSet string, exp *exporter) 
 		}
 
 	case reflect.Chan:
-		return moerr.NewInternalErrorNoCtx("unsupported type %v", typ.Kind())
+		return moerr.NewInternalErrorNoCtxf("unsupported type %v", typ.Kind())
 	case reflect.Func:
 		exp.Export(prefix+typ.Name(), "", userSet)
 	case reflect.Interface:
@@ -208,9 +208,9 @@ func flatten(in any, name string, prefix string, userSet string, exp *exporter) 
 			}
 		}
 	case reflect.UnsafePointer:
-		return moerr.NewInternalErrorNoCtx("unsupported type %v", typ.Kind())
+		return moerr.NewInternalErrorNoCtxf("unsupported type %v", typ.Kind())
 	default:
-		return moerr.NewInternalErrorNoCtx("unsupported type %v", typ.Kind())
+		return moerr.NewInternalErrorNoCtxf("unsupported type %v", typ.Kind())
 	}
 	return err
 }

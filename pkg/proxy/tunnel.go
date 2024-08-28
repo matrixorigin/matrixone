@@ -167,10 +167,10 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 	}
 
 	if err := digThrough(); err != nil {
-		return moerr.NewInternalErrorNoCtx("set up tunnel failed: %v", err)
+		return moerr.NewInternalErrorNoCtxf("set up tunnel failed: %v", err)
 	}
 	if err := t.kickoff(); err != nil {
-		return moerr.NewInternalErrorNoCtx("kickoff pipe failed: %v", err)
+		return moerr.NewInternalErrorNoCtxf("kickoff pipe failed: %v", err)
 	}
 
 	func() {
@@ -550,7 +550,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			if errors.Is(re, io.EOF) {
 				return false, re
 			}
-			return false, moerr.NewInternalError(errutil.ContextWithNoReport(ctx, true),
+			return false, moerr.NewInternalErrorf(errutil.ContextWithNoReport(ctx, true),
 				"preRecv message: %s, name %s", re.Error(), p.name)
 		}
 		// set txn status and cmd time within the mutex together.
@@ -618,7 +618,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		p.wg.Wait()
 
 		if err = p.src.sendTo(p.dst); err != nil {
-			return moerr.NewInternalErrorNoCtx("send message error: %v", err)
+			return moerr.NewInternalErrorNoCtxf("send message error: %v", err)
 		}
 	}
 	return ctx.Err()

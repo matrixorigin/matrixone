@@ -66,7 +66,7 @@ func KafkaSinkConnectorExecutor(
 			return err
 		}
 		if len(tasks) != 1 {
-			return moerr.NewInternalError(ctx, "invalid tasks count %d", len(tasks))
+			return moerr.NewInternalErrorf(ctx, "invalid tasks count %d", len(tasks))
 		}
 		details, ok := tasks[0].Details.Details.(*task.Details_Connector)
 		if !ok {

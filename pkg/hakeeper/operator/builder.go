@@ -91,12 +91,12 @@ func (b *Builder) AddPeer(uuid string, peer uint64) *Builder {
 		return b
 	}
 	if old, ok := b.targetPeers[uuid]; ok {
-		b.err = moerr.NewInternalErrorNoCtx("cannot add peer %+v to %s: already have peer %+v on %s", peer, uuid, old, uuid)
+		b.err = moerr.NewInternalErrorNoCtxf("cannot add peer %+v to %s: already have peer %+v on %s", peer, uuid, old, uuid)
 		return b
 	}
 	for oldUuid, old := range b.targetPeers {
 		if old == peer {
-			b.err = moerr.NewInternalErrorNoCtx("cannot add peer %+v to %s: already have peer %+v on %s", peer, uuid, old, oldUuid)
+			b.err = moerr.NewInternalErrorNoCtxf("cannot add peer %+v to %s: already have peer %+v on %s", peer, uuid, old, oldUuid)
 			return b
 		}
 	}
@@ -111,7 +111,7 @@ func (b *Builder) RemovePeer(uuid string) *Builder {
 		return b
 	}
 	if _, ok := b.targetPeers[uuid]; !ok {
-		b.err = moerr.NewInternalErrorNoCtx("cannot remove peer from %s: not found", uuid)
+		b.err = moerr.NewInternalErrorNoCtxf("cannot remove peer from %s: not found", uuid)
 	} else {
 		delete(b.targetPeers, uuid)
 	}
