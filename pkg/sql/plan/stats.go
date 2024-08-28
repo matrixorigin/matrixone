@@ -358,12 +358,15 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 	return -1
 }
 
-func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
+func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.StatsInfo) float64 {
 	// only filter like func(col)=1 or col=? can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
 	col := extractColRefInFilter(expr)
 	if col == nil {
 		return 0.01
+	}
+	if col.Name == catalog.CPrimaryKeyColName {
+		return 1 / s.TableCnt
 	}
 	ndv := getExprNdv(expr, builder)
 	if ndv > 0 {
@@ -514,7 +517,7 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	return 0.1
 }
 
-func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
+func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.StatsInfo) float64 {
 	if expr == nil {
 		return 1.0
 	}
@@ -528,15 +531,15 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
 		case "=":
-			ret = estimateEqualitySelectivity(expr, builder)
+			ret = estimateEqualitySelectivity(expr, builder, s)
 		case "!=", "<>":
 			ret = 0.9
 		case ">", "<", ">=", "<=", "between":
 			ret = estimateNonEqualitySelectivity(expr, funcName, builder)
 		case "and":
-			ret = estimateExprSelectivity(exprImpl.F.Args[0], builder)
+			ret = estimateExprSelectivity(exprImpl.F.Args[0], builder, s)
 			if len(exprImpl.F.Args) == 2 {
-				sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder)
+				sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder, s)
 				if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (ret+sel2) > 1 {
 					ret = ret + sel2 - 1
 				} else {
@@ -544,18 +547,18 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 				}
 			} else {
 				for i := 1; i < len(exprImpl.F.Args); i++ {
-					sel2 := estimateExprSelectivity(exprImpl.F.Args[i], builder)
+					sel2 := estimateExprSelectivity(exprImpl.F.Args[i], builder, s)
 					ret = andSelectivity(ret, sel2)
 				}
 			}
 		case "or":
-			ret = estimateExprSelectivity(exprImpl.F.Args[0], builder)
+			ret = estimateExprSelectivity(exprImpl.F.Args[0], builder, s)
 			for i := 1; i < len(exprImpl.F.Args); i++ {
-				sel2 := estimateExprSelectivity(exprImpl.F.Args[i], builder)
+				sel2 := estimateExprSelectivity(exprImpl.F.Args[i], builder, s)
 				ret = orSelectivity(ret, sel2)
 			}
 		case "not":
-			ret = 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder)
+			ret = 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder, s)
 		case "like":
 			ret = 0.2
 		case "prefix_eq":
@@ -666,8 +669,8 @@ func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryB
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil && len(node.FilterList) >= 1 {
 			sort.Slice(node.FilterList, func(i, j int) bool {
-				cost1 := estimateFilterWeight(node.FilterList[i], 0) * estimateExprSelectivity(node.FilterList[i], builder)
-				cost2 := estimateFilterWeight(node.FilterList[j], 0) * estimateExprSelectivity(node.FilterList[j], builder)
+				cost1 := estimateFilterWeight(node.FilterList[i], 0) * node.FilterList[i].Selectivity
+				cost2 := estimateFilterWeight(node.FilterList[j], 0) * node.FilterList[j].Selectivity
 				return cost1 <= cost2
 			})
 			sort.Slice(node.BlockFilterList, func(i, j int) bool {
@@ -1137,7 +1140,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
-		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
+		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder, s)
 		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s)
 		if builder.optimizerHints != nil {
 			if builder.optimizerHints.blockFilter == 1 { //always trying to pushdown blockfilters if zonemappable
@@ -1165,7 +1168,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
 	node.BlockFilterList = blockExprList
-	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder)
+	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, s)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
