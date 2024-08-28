@@ -1622,6 +1622,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Typ: Type{
 					Id:    colMap[colName].Typ.Id,
 					Width: colMap[colName].Typ.Width,
+					Scale: colMap[colName].Typ.Scale,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,
@@ -2110,6 +2111,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			Typ: Type{
 				Id:    colMap[colName].Typ.Id,
 				Width: colMap[colName].Typ.Width,
+				Scale: colMap[colName].Typ.Scale,
 			},
 			Default: &plan.Default{
 				NullAbility:  true,
@@ -2204,6 +2206,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			Typ: Type{
 				Id:    colMap[colName].Typ.Id,
 				Width: colMap[colName].Typ.Width,
+				Scale: colMap[colName].Typ.Scale,
 			},
 			Default: &plan.Default{
 				NullAbility:  true,

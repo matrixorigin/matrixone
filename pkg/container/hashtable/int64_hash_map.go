@@ -47,32 +47,6 @@ func init() {
 	maxIntCellCntPerBlock = maxBlockSize / intCellSize
 }
 
-func (ht *Int64HashMap) Dup() *Int64HashMap {
-	val := &Int64HashMap{
-		blockCellCnt:    ht.blockCellCnt,
-		blockMaxElemCnt: ht.blockMaxElemCnt,
-		cellCntMask:     ht.cellCntMask,
-
-		cellCnt: ht.cellCnt,
-		elemCnt: ht.elemCnt,
-
-		rawData: make([][]byte, len(ht.rawData)),
-		cells:   make([][]Int64HashMapCell, len(ht.cells)),
-	}
-
-	for i, raw := range ht.rawData {
-		val.rawData[i] = make([]byte, len(raw))
-		copy(val.rawData[i], raw)
-	}
-
-	for i, cell := range ht.cells {
-		val.cells[i] = make([]Int64HashMapCell, len(cell))
-		copy(val.cells[i], cell)
-	}
-
-	return val
-}
-
 func (ht *Int64HashMap) Free(m *mpool.MPool) {
 	for i := range ht.rawData {
 		if len(ht.rawData[i]) > 0 {

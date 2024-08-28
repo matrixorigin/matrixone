@@ -16,12 +16,13 @@ package compile
 
 import (
 	"context"
+	"sync"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	txnClient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"sync"
-	"time"
 )
 
 // todo: Move it to a CN level structure next day.
@@ -127,6 +128,7 @@ func (srv *ServiceOfCompile) recordRunningCompile(runningCompile *Compile) error
 
 func (srv *ServiceOfCompile) removeRunningCompile(c *Compile) (mustReturnError bool, err error) {
 	c.queryStatus.noticeQueryCompleted()
+	c.proc.SetBaseProcessRunningStatus(false)
 
 	srv.Lock()
 

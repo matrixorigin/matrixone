@@ -22,6 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
@@ -59,8 +62,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
@@ -231,9 +232,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&merge.Merge{},
 		&mergerecursive.MergeRecursive{},
 		&mergegroup.MergeGroup{},
-		&mergelimit.MergeLimit{},
-		&mergelimit.MergeLimit{},
-		&mergeoffset.MergeOffset{},
 		&mergetop.MergeTop{},
 		&mergeorder.MergeOrder{},
 		&mark.MarkJoin{
@@ -245,10 +243,9 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 				ExParam: exParam,
 			},
 		},
-		//hashbuild operator dont need to serialize
-		//{
-		//	Arg: &hashbuild.Argument{},
-		//},
+		&hashbuild.HashBuild{},
+		&shufflebuild.ShuffleBuild{},
+		&indexbuild.IndexBuild{},
 		&source.Source{},
 	}
 	ctx := &scopeContext{
@@ -315,17 +312,17 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.IntersectAll), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.Minus), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.Connector), Connect: &pipeline.Connector{}},
-		{Op: int32(vm.Merge)},
+		{Op: int32(vm.Merge), Merge: &pipeline.Merge{}},
 		{Op: int32(vm.MergeRecursive)},
 		{Op: int32(vm.MergeGroup), Agg: &pipeline.Group{}},
-		{Op: int32(vm.MergeLimit), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
-		{Op: int32(vm.MergeOffset), Offset: plan.MakePlan2Int64ConstExprWithType(0)},
 		{Op: int32(vm.MergeTop), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
 		{Op: int32(vm.MergeOrder), OrderBy: []*plan.OrderBySpec{}},
 		{Op: int32(vm.TableFunction), TableFunction: &pipeline.TableFunction{}},
-		//{Op: int32(vm.HashBuild), HashBuild: &pipeline.HashBuild{}},
+		{Op: int32(vm.HashBuild), HashBuild: &pipeline.HashBuild{}},
 		{Op: int32(vm.External), ExternalScan: &pipeline.ExternalScan{}},
 		{Op: int32(vm.Source), StreamScan: &pipeline.StreamScan{}},
+		{Op: int32(vm.ShuffleBuild), ShuffleBuild: &pipeline.Shufflebuild{}},
+		{Op: int32(vm.IndexBuild), IndexBuild: &pipeline.Indexbuild{}},
 	}
 	for _, instruction := range instructions {
 		_, err := convertToVmOperator(instruction, ctx, nil)

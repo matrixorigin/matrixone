@@ -92,7 +92,7 @@ func TestConnector(t *testing.T) {
 			}
 			msg.Batch.Clean(tc.proc.Mp())
 		}
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Reset(tc.proc, false, nil)
 
 		tc.arg.Reset(tc.proc, false, nil)
 
@@ -125,8 +125,10 @@ func TestConnector(t *testing.T) {
 			}
 			msg.Batch.Clean(tc.proc.Mp())
 		}
-		tc.arg.Free(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Reset(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}

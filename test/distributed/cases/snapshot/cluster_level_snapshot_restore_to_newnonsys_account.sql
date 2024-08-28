@@ -362,14 +362,9 @@ drop snapshot sp03;
 drop database test01;
 -- @session
 
-drop account acc01;
-drop account acc02;
--- @bvt:issue
 
 
 
-
--- @bvt:issue#17294
 -- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test_fk;
 create database test_fk;
@@ -406,16 +401,20 @@ INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (2, 101, 'B');
 drop snapshot if exists sp_fk;
 create snapshot sp_fk for cluster;
 
-restore account acc01 database test_fk table Students from snapshot sp_fk to account acc02;
-restore account acc01 database test_fk table Courses from snapshot sp_fk to account acc02;
-restore account acc01 database test_fk table Enrollments from snapshot sp_fk to account acc02;
+restore account acc01 from snapshot sp_fk to account acc02;
 
--- @session:id=1&user=acc01:test_account&password=111
+-- @session:id=2&user=acc02:test_account&password=111
 show databases;
 select * from Students;
 select * from Courses;
 select * from Enrollments;
 -- @session
 
-drop snapshot sp_fk;
+-- @session:id=1&user=acc01:test_account&password=111
 drop database test_fk;
+-- @session
+
+drop snapshot sp_fk;
+
+drop account acc01;
+drop account acc02;
