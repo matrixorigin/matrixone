@@ -263,15 +263,7 @@ func TestNewParallelScope(t *testing.T) {
 			testCompile.proc,
 			[]vm.OpType{vm.Projection, vm.Limit, vm.Connector})
 
-<<<<<<< HEAD
-		scopeToParallel.NodeInfo.Mcpu = 4
-
 		_, ss := newParallelScope(scopeToParallel, testCompile)
-=======
-		rs, err := newParallelScope(testCompile, scopeToParallel, ss)
-		require.NoError(t, err)
-		require.NoError(t, checkScopeWithExpectedList(rs, []vm.OpType{vm.Merge, vm.Limit, vm.Connector}))
->>>>>>> 830d1bbf3c028048b22df61f673ec2858d907157
 		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
 		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
 		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
@@ -287,10 +279,10 @@ func TestNewParallelScope(t *testing.T) {
 		scopeToParallel.NodeInfo.Mcpu = 4
 
 		_, ss := newParallelScope(scopeToParallel, testCompile)
-		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
 	}
 }
 
