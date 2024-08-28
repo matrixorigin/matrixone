@@ -50,7 +50,11 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 
 	f := true
 	for i := len(fill.AggIds) - 1; i >= 0; i-- {
-		if fill.AggIds[i] == function.MAX || fill.AggIds[i] == function.MIN || fill.AggIds[i] == function.SUM || fill.AggIds[i] == function.AVG {
+		if fill.AggIds[i] == function.MAX ||
+			fill.AggIds[i] == function.MIN ||
+			fill.AggIds[i] == function.SUM ||
+			fill.AggIds[i] == function.AVG ||
+			fill.AggIds[i] == function.AVG_TW_RESULT {
 			ctr.colIdx = i
 			f = false
 			break

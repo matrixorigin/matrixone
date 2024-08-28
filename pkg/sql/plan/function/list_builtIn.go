@@ -4969,6 +4969,52 @@ var supportedControlBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `truncate`
+	{
+		functionId: TRUNCATE,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_datetime, types.T_int64, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Truncate
+				},
+			},
+		},
+	},
+
+	// function `divisor`
+	{
+		functionId: DIVISOR,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_int64, types.T_int64, types.T_int64, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Divisor
+				},
+			},
+		},
+	},
+
 	// function `LAST_DAY`
 	{
 		functionId: LAST_DAY,

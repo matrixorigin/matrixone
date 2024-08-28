@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -46,12 +47,14 @@ func init() {
 				WStart: true,
 				WEnd:   true,
 				Types: []types.Type{
-					types.T_datetime.ToType(),
+					types.T_int32.ToType(),
 				},
 				Aggs: []aggexec.AggFuncExecExpression{
-					aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(1)}, nil),
+					aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
 				},
+				TsType:   plan.Type{Id: int32(types.T_datetime)},
 				Ts:       newExpression(0),
+				EndExpr:  newExpression(0),
 				Interval: makeInterval(),
 			},
 		},
@@ -109,9 +112,7 @@ func newExpression(pos int32) *plan.Expr {
 	}
 }
 
-func makeInterval() *Interval {
-	return &Interval{
-		Typ: types.Second,
-		Val: 1,
-	}
+func makeInterval() types.Datetime {
+	t, _ := calcDatetime(5, 2)
+	return t
 }
