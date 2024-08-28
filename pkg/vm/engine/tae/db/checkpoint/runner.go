@@ -1048,7 +1048,7 @@ func (r *runner) scheduleFlush(entry *logtail.DirtyTreeEntry, force bool) {
 	if entry.IsEmpty() {
 		return
 	}
-	logutil.Debugf(entry.String())
+	logutil.Debug(entry.String())
 
 	pressure := r.collectTableMemUsage(entry)
 	r.checkFlushConditionAndFire(entry, force, pressure)

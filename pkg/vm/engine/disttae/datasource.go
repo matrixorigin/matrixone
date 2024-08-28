@@ -1004,10 +1004,7 @@ func applyDeletesWithinDeltaLocations(
 
 		if offsets != nil {
 			leftRows = removeIf(offsets, func(t int64) bool {
-				if mask.Contains(uint64(t)) {
-					return true
-				}
-				return false
+				return mask.Contains(uint64(t))
 			})
 
 		} else if deletedRows != nil {
@@ -1154,10 +1151,7 @@ func (ls *LocalDataSource) applyPStateTombstoneObjects(
 	}
 
 	offsets = removeIf(offsets, func(t int64) bool {
-		if deletedRows.Contains(uint64(t)) {
-			return true
-		}
-		return false
+		return deletedRows.Contains(uint64(t))
 	})
 
 	return offsets, nil
@@ -1185,39 +1179,6 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 	if err != nil {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
-
-	// prefetch blk delta location
-	//for idx := begin; idx < end; idx++ {
-	//	if loc, _, ok := ls.pState.GetBlockDeltaLoc(ls.rangeSlice.Get(idx).BlockID); ok {
-	//		if err = blockio.Prefetch(
-	//			ls.table.proc.Load().GetService(), []uint16{0, 1, 2},
-	//			[]uint16{objectio.Location(loc[:]).ID()}, ls.fs, objectio.Location(loc[:])); err != nil {
-	//			logutil.Errorf("prefetch block delta location: %s", err.Error())
-	//		}
-	//	}
-	//}
-	// prefetch tombstone object
-	//if ls.rc.batchPrefetchCursor == 0 {
-	//	iter, err := ls.pState.NewObjectsIter(ls.snapshotTS, true, true)
-	//	if err != nil {
-	//		logutil.Errorf("pefetch tombstone object: %s", err.Error())
-	//		return
-	//	}
-	//
-	//	for iter.Next() {
-	//		ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-	//			loc := blk.MetaLoc
-	//			if err = blockio.Prefetch(
-	//				ls.table.proc.Load().GetService(), []uint16{0, 1, 2},
-	//				[]uint16{objectio.Location(loc[:]).ID()}, ls.fs, objectio.Location(loc[:])); err != nil {
-	//				logutil.Errorf("prefetch block delta location: %s", err.Error())
-	//			}
-	//			return true
-	//		}, iter.Entry().ObjectStats)
-	//	}
-	//
-	//	iter.Close()
-	//}
 
 	ls.table.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
 	defer ls.table.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()

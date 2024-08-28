@@ -307,10 +307,11 @@ func CompactBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schem
 
 	metas := GetAllAppendableMetas(rel, false)
 	tombstones := GetAllAppendableMetas(rel, true)
+	assert.NoError(t, txn.Commit(context.Background()))
 	if len(metas) == 0 && len(tombstones) == 0 {
 		return
 	}
-	txn, _ = GetRelation(t, tenantID, e, dbName, schema.Name)
+	txn, _ := GetRelation(t, tenantID, e, dbName, schema.Name)
 	task, err := jobs.NewFlushTableTailTask(nil, txn, metas, tombstones, e.Runtime)
 	if skipConflict && err != nil {
 		_ = txn.Rollback(context.Background())

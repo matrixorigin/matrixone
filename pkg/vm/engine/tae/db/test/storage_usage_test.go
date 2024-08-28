@@ -509,25 +509,6 @@ func Test_RemoveStaleAccounts(t *testing.T) {
 	)
 }
 
-func mockCkpDataWithVersion(version uint32, cnt int) (ckpDats []*logtail.CheckpointData, usages [][]logtail.UsageData) {
-	allocator := atomic.Uint64{}
-	allocator.Store(pkgcatalog.MO_RESERVED_MAX + 1)
-
-	for i := 0; i < cnt; i++ {
-		data := logtail.NewCheckpointDataWithVersion(version, common.DebugAllocator)
-
-		usage := logtail.MockUsageData(10, 10, 10, &allocator)
-		for xx := range usage {
-			appendUsageToBatch(data.GetBatches()[logtail.StorageUsageInsIDX], usage[xx])
-		}
-
-		ckpDats = append(ckpDats, data)
-		usages = append(usages, usage)
-	}
-
-	return
-}
-
 func Test_GatherSpecialSize(t *testing.T) {
 	blockio.RunPipelineTest(
 		func() {

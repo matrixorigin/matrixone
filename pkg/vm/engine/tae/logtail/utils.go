@@ -454,8 +454,7 @@ type BaseCollector struct {
 	*catalog.LoopProcessor
 	start, end types.TS
 
-	data                *CheckpointData
-	skipLoadObjectStats bool
+	data *CheckpointData
 
 	// to prefetch object meta when fill in object info batch
 
@@ -678,9 +677,6 @@ func (data *CNCheckpointData) PrefetchFrom(
 	key objectio.Location,
 	tableID uint64,
 ) (err error) {
-	// if version < CheckpointVersion4 {
-	// 	return prefetchCheckpointData(ctx, version, service, key)
-	// }
 	meta := data.GetTableMeta(tableID, version, key)
 	if meta == nil {
 		return
@@ -728,9 +724,6 @@ func (data *CNCheckpointData) PrefetchFrom(
 	return nil
 }
 
-func (data *CNCheckpointData) isMOCatalogTables(tid uint64) bool {
-	return tid == pkgcatalog.MO_DATABASE_ID || tid == pkgcatalog.MO_TABLES_ID || tid == pkgcatalog.MO_COLUMNS_ID
-}
 func (data *CNCheckpointData) GetTableMeta(tableID uint64, version uint32, loc objectio.Location) (meta *CheckpointMeta) {
 	if len(data.meta) != 0 {
 		meta = data.meta[tableID]
@@ -744,8 +737,7 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64, version uint32, loc o
 	usageInsVec = data.bats[MetaIDX].Vecs[Checkpoint_Meta_Usage_Ins_LOC_IDX]
 	usageDelVec = data.bats[MetaIDX].Vecs[Checkpoint_Meta_Usage_Del_LOC_IDX]
 
-	var i int
-	i = vector.OrderedFindFirstIndexInSortedSlice[uint64](tableID, tidVec)
+	i := vector.OrderedFindFirstIndexInSortedSlice[uint64](tableID, tidVec)
 	if i < 0 {
 		return
 	}
@@ -884,18 +876,19 @@ func (data *CNCheckpointData) GetCloseCB(version uint32, m *mpool.MPool) func() 
 	return nil
 }
 
-func (data *CNCheckpointData) closeVector(batIdx uint16, colIdx int, m *mpool.MPool) {
-	bat := data.bats[batIdx]
-	if bat == nil {
-		return
-	}
-	if len(bat.Vecs) <= colIdx {
-		return
-	}
-	vec := data.bats[batIdx].Vecs[colIdx]
-	vec.Free(m)
+// FIXME: (jiangwei)
+// func (data *CNCheckpointData) closeVector(batIdx uint16, colIdx int, m *mpool.MPool) {
+// 	bat := data.bats[batIdx]
+// 	if bat == nil {
+// 		return
+// 	}
+// 	if len(bat.Vecs) <= colIdx {
+// 		return
+// 	}
+// 	vec := data.bats[batIdx].Vecs[colIdx]
+// 	vec.Free(m)
 
-}
+// }
 
 func windowCNBatch(bat *batch.Batch, start, end uint64) {
 	var err error
@@ -1524,28 +1517,6 @@ func (data *CheckpointData) PrefetchFrom(
 		common.AnyField("size", checkpointSize),
 		common.AnyField("count", len(locations)))
 	return
-}
-
-func prefetchCheckpointData(
-	ctx context.Context,
-	sid string,
-	version uint32,
-	service fileservice.FileService,
-	key objectio.Location,
-) (err error) {
-	var pref blockio.PrefetchParams
-	pref, err = blockio.BuildPrefetchParams(service, key)
-	if err != nil {
-		return
-	}
-	for idx, item := range checkpointDataReferVersions[version] {
-		idxes := make([]uint16, len(item.attrs))
-		for i := range item.attrs {
-			idxes[i] = uint16(i)
-		}
-		pref.AddBlock(idxes, []uint16{uint16(idx)})
-	}
-	return blockio.PrefetchWithMerged(sid, pref)
 }
 
 // TODO:

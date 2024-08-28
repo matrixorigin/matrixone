@@ -234,8 +234,6 @@ func addObjectToObjectData(
 	}
 	(*objectsData)[name] = object
 	(*objectsData)[name].ckpRow = row
-	return
-
 }
 
 func trimTombstoneData(
@@ -515,12 +513,10 @@ func ReWriteCheckpointAndBlockFromKey(
 			if err != nil {
 				return err
 			}
-			isEmpty := true
-			isEmpty, err = initData(objectData, writer)
-			if err != nil {
+			var isEmpty bool
+			if isEmpty, err = initData(objectData, writer); err != nil {
 				return err
 			}
-
 			if isEmpty {
 				continue
 			}

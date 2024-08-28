@@ -105,24 +105,6 @@ func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *container
 	return bat
 }
 
-func makeDelRespBatchFromSchema(pkType types.Type, mp *mpool.MPool) *containers.Batch {
-	bat := containers.NewBatch()
-
-	bat.AddVector(
-		catalog.AttrRowID,
-		containers.MakeVector(types.T_Rowid.ToType(), mp),
-	)
-	bat.AddVector(
-		catalog.AttrPKVal,
-		containers.MakeVector(pkType, mp),
-	)
-	bat.AddVector(
-		catalog.AttrCommitTs,
-		containers.MakeVector(types.T_TS.ToType(), mp),
-	)
-	return bat
-}
-
 // GetDataWindowForLogtail returns the batch according to the writeSchema.
 // columns are sorted by seqnum and vacancy is filled with zero value
 func DataChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batch {
