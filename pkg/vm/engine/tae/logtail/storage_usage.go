@@ -970,7 +970,7 @@ func appendToStorageUsageBat(data *CheckpointData, usage UsageData, del bool, mp
 	}
 }
 
-func objects2Usages(objs []*catalog.ObjectEntry, isGlobal bool) (usages []UsageData) {
+func Objects2Usages(objs []*catalog.ObjectEntry, isGlobal bool) (usages []UsageData) {
 	toUsage := func(obj *catalog.ObjectEntry) UsageData {
 		usage := UsageData{
 			DbId:  obj.GetTable().GetDB().GetID(),
@@ -1015,7 +1015,7 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 
 	tblChanges := make(map[[3]uint64]UsageData)
 
-	usages := objects2Usages(collector.Usage.ObjInserts, true)
+	usages := Objects2Usages(collector.Usage.ObjInserts, true)
 	for idx := range usages {
 		uniqueTbl := [3]uint64{usages[idx].AccId, usages[idx].DbId, usages[idx].TblId}
 		final := tblChanges[uniqueTbl]
@@ -1023,7 +1023,7 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 		tblChanges[uniqueTbl] = final
 	}
 
-	usages = objects2Usages(collector.Usage.ObjDeletes, true)
+	usages = Objects2Usages(collector.Usage.ObjDeletes, true)
 	for idx := range usages {
 		uniqueTbl := [3]uint64{usages[idx].AccId, usages[idx].DbId, usages[idx].TblId}
 		final := tblChanges[uniqueTbl]
@@ -1089,14 +1089,14 @@ func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) string {
 
 	// must apply seg insert first
 	// step 1: apply seg insert (non-appendable, committed)
-	usage := objects2Usages(collector.Usage.ObjInserts, false)
+	usage := Objects2Usages(collector.Usage.ObjInserts, false)
 	tnUsageMemo.applySegInserts(usage, collector.data, collector.Allocator())
 
 	// step 2: apply db, tbl deletes
 	log := tnUsageMemo.applyDeletes(collector.Usage.Deletes, collector.data, collector.Allocator())
 
 	// step 3: apply seg deletes
-	usage = objects2Usages(collector.Usage.ObjDeletes, false)
+	usage = Objects2Usages(collector.Usage.ObjDeletes, false)
 	tnUsageMemo.applySegDeletes(usage, collector.data, collector.Allocator())
 
 	return log
