@@ -91,7 +91,6 @@ type Conn struct {
 	maxBytesToFlush   int
 	packetInBuf       int
 	allowedPacketSize int
-	beginReadIndex    int
 	timeout           time.Duration
 	allocator         *BufferAllocator
 	ses               *Session

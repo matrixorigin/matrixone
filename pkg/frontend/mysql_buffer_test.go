@@ -145,7 +145,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 				payload := generateRandomBytes(packetSize)
 				exceptPayload = append(exceptPayload, payload)
-				_, err = server.Write(append(header, payload...))
+				_, err := server.Write(append(header, payload...))
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
@@ -176,7 +176,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 				payload := generateRandomBytes(packetSize)
 				exceptPayload = append(exceptPayload, payload)
-				_, err = server.Write(append(header, payload...))
+				_, err := server.Write(append(header, payload...))
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
@@ -211,7 +211,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
-				_, err = server.Write(append(header, payload...))
+				_, err := server.Write(append(header, payload...))
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
@@ -241,7 +241,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 				header[3] = byte(i)
 				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
-				_, err = server.Write(append(header, payload...))
+				_, err := server.Write(append(header, payload...))
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
