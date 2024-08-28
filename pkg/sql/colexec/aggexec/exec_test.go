@@ -43,12 +43,6 @@ type testAggMemoryManager struct {
 func (m *testAggMemoryManager) Mp() *mpool.MPool {
 	return m.mp
 }
-func (m *testAggMemoryManager) GetVector(typ types.Type) *vector.Vector {
-	return vector.NewVec(typ)
-}
-func (m *testAggMemoryManager) PutVector(v *vector.Vector) {
-	v.Free(m.mp)
-}
 func newTestAggMemoryManager() AggMemoryManager {
 	return &testAggMemoryManager{mp: mpool.MustNewNoFixed("test_agg_exec")}
 }
