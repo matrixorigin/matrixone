@@ -150,7 +150,7 @@ func TestQueryServiceGOMaxProcs(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
 		req := cli.NewRequest(pb.CmdMethod_GOMAXPROCS)
-		req.GoMaxProcsRequest = &pb.GoMaxProcsRequest{MaxProcs: 0}
+		req.GoMaxProcsRequest.MaxProcs = 0
 		resp, err := cli.SendMessage(ctx, addr, req)
 		assert.NoError(t, err)
 		defer cli.Release(resp)
