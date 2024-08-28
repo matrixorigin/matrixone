@@ -16,25 +16,24 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	dto "github.com/prometheus/client_model/go"
 	"math/rand"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_getSqlForAccountInfo(t *testing.T) {
@@ -65,13 +64,13 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 func Test_updateStorageSize(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	ses := newTestSession(t, ctrl)
-	defer ses.Close()
+
+	proc := testutil.NewProc()
 
 	size := uint64(9999 * 1024 * 1024)
 	bat := batch.Batch{}
 	bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_float64.ToType()))
-	vector.AppendFixed[float64](bat.Vecs[0], float64(0x00), false, ses.pool)
+	vector.AppendFixed[float64](bat.Vecs[0], float64(0x00), false, proc.GetMPool())
 	updateStorageSize(bat.Vecs[0], uint64(size), 0)
 	require.Equal(t, float64(size)/1024/1024, vector.GetFixedAt[float64](bat.Vecs[0], 0))
 }
@@ -79,14 +78,13 @@ func Test_updateStorageSize(t *testing.T) {
 func Test_updateCount(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	ses := newTestSession(t, ctrl)
-	defer ses.Close()
+	proc := testutil.NewProc()
 
 	ori := int64(0x12)
 	add := int64(0x12)
 	bat := batch.Batch{}
 	bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_int64.ToType()))
-	vector.AppendFixed[int64](bat.Vecs[0], ori, false, ses.pool)
+	vector.AppendFixed[int64](bat.Vecs[0], ori, false, proc.GetMPool())
 	updateCount(bat.Vecs[0], add, 0)
 	require.Equal(t, ori+add, vector.GetFixedAt[int64](bat.Vecs[0], 0))
 }
