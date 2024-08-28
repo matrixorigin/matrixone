@@ -445,7 +445,11 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		return parallelScope.Run(c)
 	}
 	parallelScope.Magic = Normal
-	return parallelScope.MergeRun(c)
+	err = parallelScope.MergeRun(c)
+	if parallelScope != s {
+		parallelScope.release()
+	}
+	return err
 }
 
 // buildJoinParallelRun deal one case of scope.ParallelRun.
@@ -717,7 +721,6 @@ func newParallelScope1(s *Scope, c *Compile) (*Scope, []*Scope) {
 
 	rs.PreScopes = parallelScopes
 	s.PreScopes = nil
-	c.tmpScopes = append(c.tmpScopes, rs)
 	return rs, parallelScopes
 }
 
@@ -754,7 +757,6 @@ func newParallelScope(s *Scope, c *Compile) (*Scope, []*Scope) {
 	rs.Proc = s.Proc
 	rs.PreScopes = parallelScopes
 	s.PreScopes = nil
-	c.tmpScopes = append(c.tmpScopes, rs)
 	return rs, parallelScopes
 }
 
