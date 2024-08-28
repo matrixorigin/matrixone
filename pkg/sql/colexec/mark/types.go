@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -43,15 +42,6 @@ const (
 	condTrue
 	condUnkown
 )
-
-type evalVector struct {
-	// In MO,for example, select a from t1 where a+1 > 1, col a will be transformed as a vector,
-	// when it comes to be accepted by the operator,will firstly calculate the a+1, so it's up to
-	// the eval implementor whether he store the a+1 result in the old col a vector or create a
-	// new vector to store it.
-	executor colexec.ExpressionExecutor
-	vec      *vector.Vector
-}
 
 // note that, different from other joins,the result vector is like below:
 // Result[0],Result[1],......,Result[n-1],bool
@@ -78,7 +68,7 @@ type container struct {
 	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
 	// records the eval result of the batch from the probe table
-	evecs []evalVector
+	executor []colexec.ExpressionExecutor
 	// vecs is same as the evecs.vec's union, we need this because
 	// when we use the Insert func to build the hashtable, we need
 	// vecs not evecs
@@ -90,8 +80,8 @@ type container struct {
 	sels []int64
 	// the result of eval join condtion for conds[1] and cons[0], those two vectors is used to
 	// check equal condition when zval == 0 or condState is False from JoinMap
-	buildEqVec   []*vector.Vector
-	buildEqEvecs []evalVector
+	buildEqVec      []*vector.Vector
+	buildEqExecutor []colexec.ExpressionExecutor
 
 	markVals  []bool
 	markNulls *nulls.Nulls
@@ -117,7 +107,7 @@ type container struct {
 // and we divide them into 3 buckets. so 13%3 = 1,so 3 is in the 1-th bucket and so on like this
 type MarkJoin struct {
 	// container means the local parameters defined by the operator constructor
-	ctr *container
+	ctr container
 	// the five attributes below are passed by the outside
 
 	// // the input batch's columns' type
@@ -143,7 +133,6 @@ type MarkJoin struct {
 	// they are both ok
 	Conditions [][]*plan.Expr
 
-	Typs []types.Type
 	Cond *plan.Expr
 
 	OnList     []*plan.Expr
@@ -186,44 +175,49 @@ func (markJoin *MarkJoin) Release() {
 }
 
 func (markJoin *MarkJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	markJoin.Free(proc, pipelineFailed, err)
+	ctr := &markJoin.ctr
+	anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
+
+	ctr.resetExecutor()
+	ctr.cleanHashMap()
+	ctr.resetBatch(proc.Mp())
+	ctr.state = Build
+	ctr.sels = nil
+	ctr.nullSels = nil
+	ctr.markVals = nil
+	ctr.markNulls = nil
+
+	if markJoin.ProjectList != nil {
+		anal.Alloc(markJoin.ProjectAllocSize + markJoin.ctr.maxAllocSize)
+		markJoin.ctr.maxAllocSize = 0
+		markJoin.ResetProjection(proc)
+	} else {
+		anal.Alloc(markJoin.ctr.maxAllocSize)
+		markJoin.ctr.maxAllocSize = 0
+	}
 }
 
 func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := markJoin.ctr
-	anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
-	allocSize := int64(0)
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanEvalVectors()
-		ctr.cleanEqVectors()
-		ctr.cleanHashMap()
-		ctr.cleanExprExecutor()
+	ctr := &markJoin.ctr
 
-		allocSize += ctr.maxAllocSize
-		markJoin.ctr = nil
-	}
+	ctr.cleanBatch(proc.Mp())
+	ctr.cleanExecutor()
 
-	if markJoin.ProjectList != nil {
-		allocSize += markJoin.ProjectAllocSize
-		markJoin.FreeProjection(proc)
-	}
-	anal.Alloc(allocSize)
+	markJoin.FreeProjection(proc)
 }
 
-func (ctr *container) cleanExprExecutor() {
-	if ctr.expr != nil {
-		ctr.expr.Free()
-		ctr.expr = nil
-	}
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (ctr *container) resetBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
 	}
+	if ctr.nullWithBatch != nil {
+		ctr.nullWithBatch.Clean(mp)
+		ctr.nullWithBatch = nil
+	}
+}
+
+func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.rbat != nil {
 		ctr.rbat.Clean(mp)
 		ctr.rbat = nil
@@ -249,21 +243,34 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanEvalVectors() {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.Free()
-		}
-		ctr.evecs[i].vec = nil
+func (ctr *container) resetExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
-	ctr.evecs = nil
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].ResetForNextQuery()
+		}
+	}
+	for i := range ctr.buildEqExecutor {
+		if ctr.buildEqExecutor[i] != nil {
+			ctr.buildEqExecutor[i].ResetForNextQuery()
+		}
+	}
 }
 
-func (ctr *container) cleanEqVectors() {
-	for i := range ctr.buildEqEvecs {
-		if ctr.buildEqEvecs[i].executor != nil {
-			ctr.buildEqEvecs[i].executor.Free()
+func (ctr *container) cleanExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.Free()
+	}
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].Free()
 		}
-		ctr.buildEqEvecs[i].vec = nil
+	}
+	for i := range ctr.buildEqExecutor {
+		if ctr.buildEqExecutor[i] != nil {
+			ctr.buildEqExecutor[i].Free()
+		}
 	}
 }

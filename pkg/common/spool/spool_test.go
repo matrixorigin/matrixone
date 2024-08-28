@@ -51,7 +51,6 @@ func TestSpool(t *testing.T) {
 	wg.Add(numConsumers)
 	var count atomic.Int64
 	for i := range numConsumers {
-		i := i
 		cursor := cursors[i]
 		go func() {
 			defer wg.Done()
@@ -128,7 +127,6 @@ func TestSendAny(t *testing.T) {
 	wg.Add(numConsumers)
 	var count atomic.Int64
 	for i := range numConsumers {
-		i := i
 		cursor := cursors[i]
 		go func() {
 			defer wg.Done()
@@ -369,7 +367,6 @@ func TestBytes(t *testing.T) {
 	wg := new(sync.WaitGroup)
 	wg.Add(numCursors)
 	for _, cursor := range cursors {
-		cursor := cursor
 		go func() {
 			defer wg.Done()
 			defer cursor.Close()

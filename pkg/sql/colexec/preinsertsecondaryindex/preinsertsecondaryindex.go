@@ -45,8 +45,30 @@ func (preInsertSecIdx *PreInsertSecIdx) OpType() vm.OpType {
 }
 
 func (preInsertSecIdx *PreInsertSecIdx) Prepare(proc *process.Process) error {
-	preInsertSecIdx.ctr = new(container)
 	return nil
+}
+
+func (preInsertSecIdx *PreInsertSecIdx) initBuf(bat *batch.Batch, secondaryColumnPos []int32, pkPos int, isUpdate bool) {
+	if preInsertSecIdx.ctr.buf != nil {
+		preInsertSecIdx.ctr.buf.CleanOnlyData()
+		return
+	}
+
+	if isUpdate {
+		preInsertSecIdx.ctr.buf = batch.NewWithSize(3)
+		preInsertSecIdx.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
+		preInsertSecIdx.ctr.buf.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
+	} else {
+		preInsertSecIdx.ctr.buf = batch.NewWithSize(2)
+		preInsertSecIdx.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
+	}
+
+	if len(secondaryColumnPos) == 1 {
+		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(*bat.Vecs[secondaryColumnPos[0]].GetType())
+	} else {
+		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	}
+	preInsertSecIdx.ctr.buf.Vecs[1] = vector.NewVec(*bat.Vecs[pkPos].GetType())
 }
 
 func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResult, error) {
@@ -68,24 +90,12 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 		return result, nil
 	}
 	inputBat := result.Batch
-	var vec *vector.Vector
 	var bitMap *nulls.Nulls
 
 	secondaryColumnPos := preInsertSecIdx.PreInsertCtx.Columns
 	pkPos := int(preInsertSecIdx.PreInsertCtx.PkColumn)
-
-	if preInsertSecIdx.ctr.buf != nil {
-		proc.PutBatch(preInsertSecIdx.ctr.buf)
-		preInsertSecIdx.ctr.buf = nil
-	}
 	isUpdate := inputBat.Vecs[len(inputBat.Vecs)-1].GetType().Oid == types.T_Rowid
-	if isUpdate {
-		preInsertSecIdx.ctr.buf = batch.NewWithSize(3)
-		preInsertSecIdx.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
-	} else {
-		preInsertSecIdx.ctr.buf = batch.NewWithSize(2)
-		preInsertSecIdx.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
-	}
+	preInsertSecIdx.initBuf(inputBat, secondaryColumnPos, pkPos, isUpdate)
 
 	colCount := len(secondaryColumnPos)
 
@@ -93,7 +103,7 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 	// colCount >= 2 is more common.
 	if colCount == 1 {
 		pos := secondaryColumnPos[indexColPos]
-		vec, bitMap, err = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)
+		bitMap, err = util.CompactSingleIndexCol(inputBat.Vecs[pos], preInsertSecIdx.ctr.buf.Vecs[indexColPos], proc)
 		if err != nil {
 			return result, err
 		}
@@ -102,23 +112,19 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 		for vIdx, pIdx := range secondaryColumnPos {
 			vs[vIdx] = inputBat.Vecs[pIdx]
 		}
-		vec, bitMap, err = util.SerialWithoutCompacted(vs, proc, &preInsertSecIdx.packer)
+		bitMap, err = util.SerialWithoutCompacted(vs, preInsertSecIdx.ctr.buf.Vecs[indexColPos], proc, &preInsertSecIdx.packer)
 		if err != nil {
 			return result, err
 		}
 	}
-	preInsertSecIdx.ctr.buf.SetVector(indexColPos, vec)
-	preInsertSecIdx.ctr.buf.SetRowCount(vec.Length())
+	preInsertSecIdx.ctr.buf.SetRowCount(preInsertSecIdx.ctr.buf.Vecs[indexColPos].Length())
 
-	vec, err = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
-	if err != nil {
+	if err = util.CompactPrimaryCol(inputBat.Vecs[pkPos], preInsertSecIdx.ctr.buf.Vecs[pkColPos], bitMap, proc); err != nil {
 		return result, err
 	}
-	preInsertSecIdx.ctr.buf.SetVector(pkColPos, vec)
 
 	if isUpdate {
 		rowIdInBat := len(inputBat.Vecs) - 1
-		preInsertSecIdx.ctr.buf.SetVector(rowIdColPos, proc.GetVector(*inputBat.Vecs[rowIdInBat].GetType()))
 		if err = preInsertSecIdx.ctr.buf.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp()); err != nil {
 			return result, err
 		}

@@ -262,7 +262,7 @@ func (kv *KVTxnStorage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint3
 	for idx, key := range req.Keys {
 		if t, ok := kv.uncommittedKeyTxnMap[string(key)]; ok {
 			if !bytes.Equal(t.ID, txnMeta.ID) {
-				return nil, moerr.NewTxnWriteConflictNoCtx("%s %s", t.ID, txnMeta.ID)
+				return nil, moerr.NewTxnWriteConflictNoCtxf("%s %s", t.ID, txnMeta.ID)
 			}
 		} else {
 			kv.uncommittedKeyTxnMap[string(key)] = &newTxn

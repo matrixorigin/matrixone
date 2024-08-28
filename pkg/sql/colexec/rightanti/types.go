@@ -75,7 +75,7 @@ type container struct {
 }
 
 type RightAnti struct {
-	ctr        *container
+	ctr        container
 	Result     []int32
 	RightTypes []types.Type
 	Cond       *plan.Expr
@@ -125,25 +125,38 @@ func (rightAnti *RightAnti) Release() {
 }
 
 func (rightAnti *RightAnti) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	rightAnti.Free(proc, pipelineFailed, err)
+	ctr := &rightAnti.ctr
+	if !ctr.handledLast && rightAnti.NumCPU > 1 && !rightAnti.IsMerger {
+		rightAnti.Channel <- nil
+	}
+	anal := proc.GetAnalyze(rightAnti.GetIdx(), rightAnti.GetParallelIdx(), rightAnti.GetParallelMajor())
+	anal.Alloc(ctr.maxAllocSize)
+	ctr.maxAllocSize = 0
+
+	ctr.cleanBuf(proc)
+	ctr.cleanHashMap()
+	ctr.resetExprExecutor()
+	ctr.resetEvalVectors()
+	ctr.matched = nil
+	ctr.handledLast = false
+	ctr.state = Build
+	ctr.lastpos = 0
 }
 
 func (rightAnti *RightAnti) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := rightAnti.ctr
-	if ctr != nil {
-		if !ctr.handledLast && rightAnti.NumCPU > 1 && !rightAnti.IsMerger {
-			rightAnti.Channel <- nil
-		}
-		ctr.cleanBatch(proc)
-		ctr.cleanEvalVectors()
-		ctr.cleanHashMap()
-		ctr.cleanExprExecutor()
-		ctr.tmpBatches = nil
+	ctr := &rightAnti.ctr
+	ctr.cleanBuf(proc)
+	ctr.cleanBatch(proc)
+	ctr.cleanEvalVectors()
+	ctr.cleanHashMap()
+	ctr.cleanExprExecutor()
+	ctr.tmpBatches = nil
 
-		anal := proc.GetAnalyze(rightAnti.GetIdx(), rightAnti.GetParallelIdx(), rightAnti.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
+}
 
-		rightAnti.ctr = nil
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
 }
 
@@ -154,19 +167,28 @@ func (ctr *container) cleanExprExecutor() {
 	}
 }
 
+func (ctr *container) cleanBuf(proc *process.Process) {
+	for _, bat := range ctr.buf {
+		if bat != ctr.rbat {
+			bat.Clean(proc.GetMPool())
+		}
+	}
+	ctr.buf = nil
+}
+
 func (ctr *container) cleanBatch(proc *process.Process) {
 	ctr.batches = nil
 
 	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
+		ctr.rbat.Clean(proc.GetMPool())
 		ctr.rbat = nil
 	}
 	if ctr.joinBat1 != nil {
-		proc.PutBatch(ctr.joinBat1)
+		ctr.joinBat1.Clean(proc.GetMPool())
 		ctr.joinBat1 = nil
 	}
 	if ctr.joinBat2 != nil {
-		proc.PutBatch(ctr.joinBat2)
+		ctr.joinBat2.Clean(proc.GetMPool())
 		ctr.joinBat2 = nil
 	}
 }
@@ -186,4 +208,12 @@ func (ctr *container) cleanEvalVectors() {
 		ctr.evecs[i].vec = nil
 	}
 	ctr.evecs = nil
+}
+
+func (ctr *container) resetEvalVectors() {
+	for i := range ctr.evecs {
+		if ctr.evecs[i].executor != nil {
+			ctr.evecs[i].executor.ResetForNextQuery()
+		}
+	}
 }

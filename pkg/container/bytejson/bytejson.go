@@ -152,7 +152,7 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeString:
 		buf, err = bj.toString(buf)
 	default:
-		err = moerr.NewInvalidInputNoCtx("invalid json type '%v'", bj.Type)
+		err = moerr.NewInvalidInputNoCtxf("invalid json type '%v'", bj.Type)
 	}
 	return buf, err
 }
@@ -598,7 +598,7 @@ func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool,
 	vals := make([]ByteJson, 0, 1)
 	keys, vals = bj.queryWithSubPath(keys, vals, path, "$")
 	if len(keys) != len(vals) {
-		return nil, moerr.NewInvalidInputNoCtx("len(key) and len(val) are not equal, len(key)=%d, len(val)=%d", len(keys), len(vals))
+		return nil, moerr.NewInvalidInputNoCtxf("len(key) and len(val) are not equal, len(key)=%d, len(val)=%d", len(keys), len(vals))
 	}
 	for i := 0; i < len(keys); i++ {
 		if vals[i].canUnnest() {
@@ -721,14 +721,14 @@ func (p *parser) do() (Node, error) {
 			if p.tz.Remaining() == 0 && errors.As(p.tz.Err, &se) {
 				return z, io.ErrUnexpectedEOF
 			}
-			return z, moerr.NewInternalErrorNoCtx("parse json: %v", p.tz.Err)
+			return z, moerr.NewInternalErrorNoCtxf("parse json: %v", p.tz.Err)
 		case scanEnd:
 			if p.tz.Next() {
 				p.top.Free()
-				return z, moerr.NewInvalidInputNoCtx("invalid json: %s", p.src)
+				return z, moerr.NewInvalidInputNoCtxf("invalid json: %s", p.src)
 			}
 			if p.tz.Err != nil {
-				return z, moerr.NewInternalErrorNoCtx("parse json: %v", p.tz.Err)
+				return z, moerr.NewInternalErrorNoCtxf("parse json: %v", p.tz.Err)
 			}
 			return p.top, nil
 		}
@@ -965,7 +965,7 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 				o := baseOffset + headerSize + i*keyEntrySize
 				length := uint32(len(k))
 				if length > math.MaxUint16 {
-					return 0, 0, moerr.NewInvalidInputNoCtx("json key %s", k)
+					return 0, 0, moerr.NewInvalidInputNoCtxf("json key %s", k)
 				}
 				endian.PutUint32(w.buf[o:], loc)
 				endian.PutUint16(w.buf[o+keyOriginOff:], uint16(length))
@@ -1052,7 +1052,7 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 		w.buf = addString(w.buf, val)
 		return TpCodeString, uint32(len(w.buf) - start), nil
 	default:
-		return 0, 0, moerr.NewInvalidInputNoCtx("unknown type %T", node)
+		return 0, 0, moerr.NewInvalidInputNoCtxf("unknown type %T", node)
 	}
 }
 
@@ -1062,7 +1062,7 @@ func (w *byteJsonWriter) parseNumber(in json.Number) (TpCode, []byte, error) {
 	if strings.ContainsAny(string(in), "Ee.") {
 		val, err := in.Float64()
 		if err != nil {
-			return TpCodeFloat64, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
+			return TpCodeFloat64, nil, moerr.NewInvalidInputNoCtxf("json number %v", in)
 		}
 		if err = checkFloat64(val); err != nil {
 			return TpCodeFloat64, nil, err
@@ -1086,7 +1086,7 @@ func (w *byteJsonWriter) parseNumber(in json.Number) (TpCode, []byte, error) {
 		return TpCodeFloat64, data[:], nil
 	}
 	var tpCode TpCode
-	return tpCode, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
+	return tpCode, nil, moerr.NewInvalidInputNoCtxf("json number %v", in)
 }
 
 type Node struct {

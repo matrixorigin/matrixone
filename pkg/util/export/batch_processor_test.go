@@ -93,7 +93,7 @@ func (s *dummyBuffer) Add(item batchpipe.HasName) {
 		length := len(s.arr)
 		logutil.Debugf("accept: %v, len: %d", *item.(*Num), length)
 		if (val <= 3 && val != length) && (val-3) != length {
-			panic(moerr.NewInternalError(ctx, "len not rignt, elem: %d, len: %d", val, length))
+			panic(moerr.NewInternalErrorf(ctx, "len not rignt, elem: %d, len: %d", val, length))
 		}
 		s.signal()
 	}

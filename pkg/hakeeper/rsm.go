@@ -299,7 +299,7 @@ func GetDeleteCNStoreCmd(cnStore pb.DeleteCNStore) []byte {
 
 func NewStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 	if shardID != DefaultHAKeeperShardID {
-		panic(moerr.NewInvalidInputNoCtx("HAKeeper shard ID %d does not match DefaultHAKeeperShardID %d", shardID, DefaultHAKeeperShardID))
+		panic(moerr.NewInvalidInputNoCtxf("HAKeeper shard ID %d does not match DefaultHAKeeperShardID %d", shardID, DefaultHAKeeperShardID))
 	}
 	return &stateMachine{
 		replicaID: replicaID,
@@ -613,7 +613,7 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 	} else {
 		s.state.NextID = K8SIDRangeEnd
 	}
-	if req.NextIDByKey != nil && len(req.NextIDByKey) > 0 {
+	if len(req.NextIDByKey) > 0 {
 		s.state.NextIDByKey = req.NextIDByKey
 	}
 
@@ -668,7 +668,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	case pb.ProxyHeartbeatUpdate:
 		return s.handleProxyHeartbeat(cmd), nil
 	default:
-		panic(moerr.NewInvalidInputNoCtx("unknown haKeeper cmd '%v'", cmd))
+		panic(moerr.NewInvalidInputNoCtxf("unknown haKeeper cmd '%v'", cmd))
 	}
 }
 

@@ -2593,9 +2593,6 @@ func (data *CheckpointData) readAll(
 						pkVec2 := containers.MakeVector(types.T_uint64.ToType(), data.allocator)
 						for i := 0; i < length; i++ {
 							pkVec2.Append(objectio.HackRowidToU64(rowIDVec.Get(i).(types.Rowid)), false)
-							if err != nil {
-								return err
-							}
 						}
 						bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_ID)
 						bat.Vecs = append(bat.Vecs, pkVec2)
@@ -2609,9 +2606,6 @@ func (data *CheckpointData) readAll(
 						pkVec2 := containers.MakeVector(types.T_varchar.ToType(), data.allocator)
 						for i := 0; i < length; i++ {
 							pkVec2.Append(nil, true)
-							if err != nil {
-								return err
-							}
 						}
 						bat.Attrs = append(bat.Attrs, pkgcatalog.SystemColAttr_UniqName)
 						bat.Vecs = append(bat.Vecs, pkVec2)
