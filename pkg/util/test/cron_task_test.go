@@ -16,6 +16,10 @@ package test
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"testing"
 	"time"
 
@@ -119,4 +123,38 @@ func TestGetTenantInfo(t *testing.T) {
 	require.Equal(t, "sys", tenant.GetTenant())
 	require.Equal(t, "internal", tenant.GetUser())
 	require.Equal(t, "moadmin", tenant.GetDefaultRole())
+}
+
+func TestCalculateObjectCount(t *testing.T) {
+	c, err := embed.NewCluster(embed.WithCNCount(1))
+	require.NoError(t, err)
+	require.NoError(t, c.Start())
+
+	svc, err := c.GetCNService(0)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	exec := svc.RawService().(cnservice.Service).GetSQLExecutor()
+	_, err = exec.Exec(ctx,
+		"create database testdb; use testdb;"+
+			"create table hhh(a int); "+
+			"insert into hhh select * from generate_series(1, 1000)g;"+
+			"select mo_ctl('dn', 'checkpoint', '')",
+		executor.Options{})
+	require.NoError(t, err)
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+
+	queryOpts := ie.NewOptsBuilder().Database(mometric.MetricDBConst).Internal(true).Finish()
+	frontend.NewInternalExecutor("").Query(ctx, mometric.ShowAllAccountSQL, queryOpts)
+
+	w := dto.Metric{}
+	err = metric.ObjectCount("sys").Write(&w)
+	require.NoError(t, err)
+
+	require.Equal(t, float64(0.001), w.GetGauge().GetValue())
+
+	svc.Close()
 }
