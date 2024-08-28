@@ -59,7 +59,6 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.state {
 		case BuildHashMap:
 			if err := ctr.build(ap, proc, anal, hashBuild.GetIsFirst()); err != nil {
-				ctr.hashmapBuilder.Free()
 				return result, err
 			}
 			anal.Alloc(ctr.hashmapBuilder.GetSize())

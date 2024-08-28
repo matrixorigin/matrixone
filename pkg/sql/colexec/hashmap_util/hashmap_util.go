@@ -97,6 +97,16 @@ func (hb *HashmapBuilder) Reset() {
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
+	for i := range hb.vecs {
+		for j := range hb.vecs[i] {
+			hb.vecs[i][j].CleanOnlyData()
+		}
+	}
+	hb.vecs = nil
+	for i := range hb.UniqueJoinKeys {
+		hb.UniqueJoinKeys[i].CleanOnlyData()
+	}
+	hb.UniqueJoinKeys = nil
 	if len(hb.MultiSels) > 0 {
 		hb.MultiSels = hb.MultiSels[:0]
 	}
@@ -107,7 +117,7 @@ func (hb *HashmapBuilder) Reset() {
 	}
 }
 
-func (hb *HashmapBuilder) Free() {
+func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
@@ -118,6 +128,22 @@ func (hb *HashmapBuilder) Free() {
 		}
 	}
 	hb.executor = nil
+	for i := range hb.vecs {
+		for j := range hb.vecs[i] {
+			hb.vecs[i][j].Free(proc.Mp())
+		}
+	}
+	hb.vecs = nil
+	for i := range hb.UniqueJoinKeys {
+		hb.UniqueJoinKeys[i].Free(proc.Mp())
+	}
+	hb.UniqueJoinKeys = nil
+	// can not free hashmap here, only probe operator can free this
+}
+
+// hashmap, multisels and batches are owned by probe operators
+// build operator can only call this when error occurs
+func (hb *HashmapBuilder) FreeWithError(proc *process.Process) {
 	if hb.IntHashMap != nil {
 		hb.IntHashMap.Free()
 		hb.IntHashMap = nil
@@ -126,6 +152,10 @@ func (hb *HashmapBuilder) Free() {
 		hb.StrHashMap.Free()
 		hb.StrHashMap = nil
 	}
+	if hb.MultiSels != nil {
+		hb.MultiSels = nil
+	}
+	hb.Batches.Clean(proc.Mp())
 }
 
 func (hb *HashmapBuilder) evalJoinCondition(proc *process.Process) error {

@@ -29,16 +29,18 @@ func (bs *Batches) Clean(mp *mpool.MPool) {
 	for i := range bs.Buf {
 		bs.Buf[i].Clean(mp)
 	}
+	bs.Buf = nil
 }
 
 func (bs *Batches) CleanOnlyData() {
 	for i := range bs.Buf {
 		bs.Buf[i].CleanOnlyData()
 	}
+	bs.Buf = nil
 }
 func (bs *Batches) Reset() {
 	if bs.Buf != nil {
-		bs.Buf = bs.Buf[:0]
+		bs.Buf = nil
 	}
 }
 

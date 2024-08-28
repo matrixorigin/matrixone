@@ -88,8 +88,14 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
 	hashBuild.ctr.hashmapBuilder.Reset()
+	if pipelineFailed || err != nil {
+		hashBuild.ctr.hashmapBuilder.FreeWithError(proc)
+	}
 }
 
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	hashBuild.ctr.hashmapBuilder.Free()
+	if pipelineFailed || err != nil {
+		hashBuild.ctr.hashmapBuilder.FreeWithError(proc)
+	}
 }

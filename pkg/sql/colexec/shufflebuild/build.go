@@ -66,7 +66,7 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 		case BuildHashMap:
 			err := ctr.hashmapBuilder.BuildHashmap(ap.HashOnPK, ap.NeedAllocateSels, ap.RuntimeFilterSpec, proc)
 			if err != nil {
-				ctr.hashmapBuilder.Free()
+				ctr.hashmapBuilder.Free(proc)
 				return result, err
 			}
 			if !ap.NeedBatches {
