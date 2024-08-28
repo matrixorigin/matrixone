@@ -602,7 +602,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		schema.BlockMaxRows = 20
 		schema.ObjectMaxBlocks = 2
 		txn, _, rel := testutil.CreateRelationNoCommit(t, db, "db", schema, false)
-		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
+		txn.SetDedupType(txnif.DedupPolicy_SkipWorkspace)
 		vec1 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 		vec1.Append(stats1[:], false)
 		defer vec1.Close()
@@ -629,7 +629,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 
 		//do deduplication check against sanpshot data.
 		txn, rel = testutil.GetRelation(t, 0, db, "db", schema.Name)
-		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
+		txn.SetDedupType(txnif.DedupPolicy_SkipWorkspace)
 		err = rel.Append(context.Background(), bats[0])
 		assert.NotNil(t, err)
 		err = rel.Append(context.Background(), bats[1])
@@ -4944,7 +4944,7 @@ func TestMergeMemsize(t *testing.T) {
 	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
 	{
 		txn, _ := tae.StartTxn(nil)
-		txn.SetDedupType(txnif.IncrementalDedup)
+		txn.SetDedupType(txnif.DedupPolicy_Incremental)
 		db, err := txn.CreateDatabase("db", "", "")
 		assert.NoError(t, err)
 		tbl, err := db.CreateRelation(schema)
@@ -5015,7 +5015,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	defer statsVec.Close()
 	{
 		txn, _ := tae.StartTxn(nil)
-		txn.SetDedupType(txnif.IncrementalDedup)
+		txn.SetDedupType(txnif.DedupPolicy_Incremental)
 		db, err := txn.CreateDatabase("db", "", "")
 		assert.NoError(t, err)
 		tbl, err := db.CreateRelation(schema)
@@ -5118,7 +5118,7 @@ func TestAlwaysUpdate(t *testing.T) {
 
 	// var did, tid uint64
 	txn, _ := tae.StartTxn(nil)
-	txn.SetDedupType(txnif.IncrementalDedup)
+	txn.SetDedupType(txnif.DedupPolicy_Incremental)
 	db, err := txn.CreateDatabase("db", "", "")
 	// did = db.GetID()
 	assert.NoError(t, err)
@@ -7694,7 +7694,7 @@ func TestDedupSnapshot1(t *testing.T) {
 	txn, rel := tae.GetRelation()
 	startTS := txn.GetStartTS()
 	txn.SetSnapshotTS(startTS.Next())
-	txn.SetDedupType(txnif.IncrementalDedup)
+	txn.SetDedupType(txnif.DedupPolicy_Incremental)
 	err := rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
 	_ = txn.Commit(context.Background())
@@ -7750,7 +7750,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	txn, rel = tae.GetRelation()
 	startTS := txn.GetStartTS()
 	txn.SetSnapshotTS(startTS.Next())
-	txn.SetDedupType(txnif.IncrementalDedup)
+	txn.SetDedupType(txnif.DedupPolicy_Incremental)
 	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec2)
 	assert.NoError(t, err)
 	_ = txn.Commit(context.Background())
@@ -7793,7 +7793,7 @@ func TestDedupSnapshot3(t *testing.T) {
 			}
 
 			txn2, _ := tae.StartTxn(nil)
-			txn2.SetDedupType(txnif.IncrementalDedup)
+			txn2.SetDedupType(txnif.DedupPolicy_Incremental)
 			txn2.SetSnapshotTS(txn.GetStartTS())
 			database, _ = txn2.GetDatabase("db")
 			rel, _ = database.GetRelationByName(schema.Name)
