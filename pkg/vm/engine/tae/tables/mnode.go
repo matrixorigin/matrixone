@@ -47,9 +47,8 @@ func newMemoryNode(object *baseObject, isTombstone bool) *memoryNode {
 	impl := new(memoryNode)
 	impl.object = object
 
-	var schema *catalog.Schema
 	// Get the lastest schema, it will not be modified, so just keep the pointer
-	schema = object.meta.Load().GetTable().GetLastestSchemaLocked(isTombstone)
+	schema := object.meta.Load().GetTable().GetLastestSchemaLocked(isTombstone)
 	impl.writeSchema = schema
 	// impl.data = containers.BuildBatchWithPool(
 	// 	schema.AllNames(), schema.AllTypes(), 0, object.rt.VectorPool.Memtable,
