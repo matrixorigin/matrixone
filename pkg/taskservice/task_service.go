@@ -26,21 +26,6 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-const (
-	Every1Second   = "*/1 * * * * ?"
-	Every2Seconds  = "*/2 * * * * ?"
-	Every5Seconds  = "*/5 * * * * ?"
-	Every10Seconds = "*/10 * * * * ?"
-	Every15Seconds = "*/15 * * * * ?"
-	Every30Seconds = "*/30 * * * * ?"
-	Every1Minute   = "0 */1 * * * ?"
-	Every5Minutes  = "0 */5 * * * ?"
-	Every10Minutes = "0 */10 * * * ?"
-	Every15Minutes = "0 */15 * * * ?"
-	Every30Minutes = "0 */30 * * * ?"
-	Every1Hour     = "0 0 */1 * * ?"
-)
-
 type taskService struct {
 	store      TaskStorage
 	cronParser cron.Parser

@@ -832,9 +832,6 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 				createTable.TableDef.AutoIncrOffset = opt.Value - 1
 			}
 		case *tree.RetentionOption:
-			if opt.Period == 0 && opt.Unit == "" {
-				continue
-			}
 			duration, err := parseDuration(ctx.GetContext(), opt.Period, opt.Unit)
 			if err != nil {
 				return nil, err
@@ -3748,24 +3745,20 @@ func getAutoIncrementOffsetFromVariables(ctx CompilerContext) (uint64, bool) {
 	return 0, false
 }
 
+var unitDurations = map[string]time.Duration{
+	"second": time.Second,
+	"minute": time.Minute,
+	"hour":   time.Hour,
+	"day":    time.Hour * 24,
+	"week":   time.Hour * 24 * 7,
+	"month":  time.Hour * 24 * 30,
+}
+
 func parseDuration(ctx context.Context, period uint64, unit string) (time.Duration, error) {
-	unitSeconds := uint64(0)
-	switch strings.ToLower(unit) {
-	case "second":
-		unitSeconds = 1
-	case "minute":
-		unitSeconds = 60
-	case "hour":
-		unitSeconds = 3600
-	case "day":
-		unitSeconds = 86400
-	case "week":
-		unitSeconds = 604800
-	case "month":
-		unitSeconds = 2628000
-	default:
+	unitDuration, ok := unitDurations[strings.ToLower(unit)]
+	if !ok {
 		return 0, moerr.NewInvalidArg(ctx, "time unit", unit)
 	}
-	seconds := period * unitSeconds
-	return time.Duration(seconds * uint64(time.Second)), nil
+	seconds := period * uint64(unitDuration)
+	return time.Duration(seconds), nil
 }

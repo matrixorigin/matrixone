@@ -39,3 +39,9 @@ drop table t1;
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
 drop account acc0;
+select mo_ctl('cn', 'task', 'retention:*/5 * * * * ?');
+mo_ctl(cn, task, retention:*/5 * * * * ?)
+{\n  "method": "TASK",\n  "result": "OK"\n}\n
+select mo_ctl('cn', 'task', 'retention:* */10 * * * * ?');
+mo_ctl(cn, task, retention:* */10 * * * * ?)
+{\n  "method": "TASK",\n  "result": "OK"\n}\n

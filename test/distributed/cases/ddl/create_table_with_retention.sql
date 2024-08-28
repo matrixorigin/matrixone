@@ -29,3 +29,5 @@ drop table t1;
 select * from mo_catalog.mo_retention;
 -- @session:id=3&user=sys:dump&password=111
 drop account acc0;
+select mo_ctl('cn', 'task', 'retention:*/5 * * * * ?');
+select mo_ctl('cn', 'task', 'retention:* */10 * * * * ?');
