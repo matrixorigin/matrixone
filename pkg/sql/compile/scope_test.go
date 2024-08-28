@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
@@ -170,10 +169,10 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		})
 		require.NoError(t1, err)
 		// ignore the last operator if it's output
-		if c.scope[0].RootOp.OpType() == vm.Output {
-			c.scope[0].RootOp = c.scope[0].RootOp.GetOperatorBase().GetChildren(0)
+		if c.scopes[0].RootOp.OpType() == vm.Output {
+			c.scopes[0].RootOp = c.scopes[0].RootOp.GetOperatorBase().GetChildren(0)
 		}
-		return c.scope[0]
+		return c.scopes[0]
 	}
 
 	result := make([]*Scope, len(testCases))
@@ -252,7 +251,6 @@ func TestMessageSenderOnClientReceive(t *testing.T) {
 func TestNewParallelScope(t *testing.T) {
 	// function `newParallelScope` will dispatch one scope's work into n scopes.
 	testCompile := &Compile{
-		lock: &sync.RWMutex{},
 		proc: testutil.NewProcess(),
 	}
 
@@ -264,12 +262,13 @@ func TestNewParallelScope(t *testing.T) {
 		scopeToParallel := generateScopeWithRootOperator(
 			testCompile.proc,
 			[]vm.OpType{vm.Projection, vm.Limit, vm.Connector})
-		ss := []*Scope{{}}
 
-		rs, err := newParallelScope(testCompile, scopeToParallel, ss)
-		require.NoError(t, err)
-		require.NoError(t, checkScopeWithExpectedList(rs, []vm.OpType{vm.Merge, vm.Limit, vm.Connector}))
+		scopeToParallel.NodeInfo.Mcpu = 4
+		_, ss := newParallelScope(scopeToParallel, testCompile)
 		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
 	}
 
 	// 2. test (-> filter -> projection -> connector.)
@@ -277,12 +276,14 @@ func TestNewParallelScope(t *testing.T) {
 		scopeToParallel := generateScopeWithRootOperator(
 			testCompile.proc,
 			[]vm.OpType{vm.Filter, vm.Projection, vm.Connector})
-		ss := []*Scope{{}}
 
-		rs, err := newParallelScope(testCompile, scopeToParallel, ss)
-		require.NoError(t, err)
-		require.NoError(t, checkScopeWithExpectedList(rs, []vm.OpType{vm.Merge, vm.Connector}))
+		scopeToParallel.NodeInfo.Mcpu = 4
+
+		_, ss := newParallelScope(scopeToParallel, testCompile)
 		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
 	}
 }
 
