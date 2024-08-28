@@ -17,7 +17,6 @@ package shufflebuild
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -39,9 +38,8 @@ type container struct {
 	state              int
 	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	multiSels          [][]int32
-	batches            []*batch.Batch
+	batches            colexec.Batches
 	inputBatchRowCount int
-	buf                *batch.Batch
 	executor           []colexec.ExpressionExecutor
 	vecs               [][]*vector.Vector
 	intHashMap         *hashmap.IntHashMap
@@ -97,12 +95,7 @@ func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bo
 	ctr.state = ReceiveBatch
 	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
-	if ctr.batches != nil {
-		ctr.batches = ctr.batches[:0]
-	}
-	if ctr.buf != nil {
-		ctr.buf.CleanOnlyData()
-	}
+	ctr.batches.Reset()
 	ctr.intHashMap = nil
 	ctr.strHashMap = nil
 	if ctr.multiSels != nil {
@@ -120,11 +113,7 @@ func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed boo
 	ctr.intHashMap = nil
 	ctr.strHashMap = nil
 	ctr.multiSels = nil
-	ctr.batches = nil
-	if ctr.buf != nil {
-		ctr.buf.Clean(proc.GetMPool())
-		ctr.buf = nil
-	}
+	ctr.batches.Reset()
 	ctr.cleanEvalVectors()
 }
 

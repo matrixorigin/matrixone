@@ -80,9 +80,6 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 		}
 	}
 
-	if shuffleBuild.ctr.batches == nil {
-		shuffleBuild.ctr.batches = make([]*batch.Batch, 0)
-	}
 	return nil
 }
 
@@ -117,10 +114,7 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			}
 			if !ap.NeedBatches {
 				// if do not need merged batch, free it now to save memory
-				for i := range ctr.batches {
-					ctr.batches[i].Clean(proc.GetMPool())
-				}
-				ctr.batches = nil
+				ctr.batches.Clean(proc.Mp())
 			}
 			if ap.ctr.intHashMap != nil {
 				anal.Alloc(ap.ctr.intHashMap.Size())
@@ -135,7 +129,7 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			}
 			var jm *message.JoinMap
 			if ctr.inputBatchRowCount > 0 {
-				jm = message.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
+				jm = message.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches.Buf, proc.Mp())
 				if ap.NeedBatches {
 					jm.SetRowCount(int64(ctr.inputBatchRowCount))
 				}
@@ -148,35 +142,6 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			return result, nil
 		}
 	}
-}
-
-// make sure src is not empty
-func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) error {
-	if src.RowCount() == colexec.DefaultBatchSize {
-		dupbatch, err := src.Dup(proc.Mp())
-		if err != nil {
-			return err
-		}
-		ctr.batches = append(ctr.batches, dupbatch)
-		return nil
-	} else {
-		offset := 0
-		appendRows := 0
-		length := src.RowCount()
-		var err error
-		for offset < length {
-			ctr.buf, appendRows, err = proc.AppendToFixedSizeFromOffset(ctr.buf, src, offset)
-			if err != nil {
-				return err
-			}
-			if ctr.buf.RowCount() == colexec.DefaultBatchSize {
-				ctr.batches = append(ctr.batches, ctr.buf)
-				ctr.buf = nil
-			}
-			offset += appendRows
-		}
-	}
-	return nil
 }
 
 func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
@@ -194,20 +159,16 @@ func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *proc
 		anal.Input(result.Batch, isFirst)
 		anal.Alloc(int64(result.Batch.Size()))
 		ctr.inputBatchRowCount += result.Batch.RowCount()
-		err = ctr.mergeIntoBatches(result.Batch, proc)
+		err = ctr.batches.CopyIntoBatches(result.Batch, proc)
 		if err != nil {
 			return err
 		}
-	}
-	if ctr.buf != nil && ctr.buf.RowCount() > 0 {
-		ctr.batches = append(ctr.batches, ctr.buf)
-		ctr.buf = nil
 	}
 	return nil
 }
 
 func (ctr *container) buildHashmap(ap *ShuffleBuild, proc *process.Process) error {
-	if len(ctr.batches) == 0 {
+	if ctr.inputBatchRowCount == 0 {
 		return nil
 	}
 	var err error
@@ -352,11 +313,11 @@ func (ctr *container) handleRuntimeFilter(ap *ShuffleBuild, proc *process.Proces
 }
 
 func (ctr *container) evalJoinCondition(proc *process.Process) error {
-	for idx1 := range ctr.batches {
+	for idx1 := range ctr.batches.Buf {
 		tmpVes := make([]*vector.Vector, len(ctr.executor))
 		ctr.vecs = append(ctr.vecs, tmpVes)
 		for idx2 := range ctr.executor {
-			vec, err := ctr.executor[idx2].Eval(proc, []*batch.Batch{ctr.batches[idx1]}, nil)
+			vec, err := ctr.executor[idx2].Eval(proc, []*batch.Batch{ctr.batches.Buf[idx1]}, nil)
 			if err != nil {
 				return err
 			}
