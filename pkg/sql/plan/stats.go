@@ -562,7 +562,11 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 		case "like":
 			ret = 0.2
 		case "prefix_eq":
-			ret = 0.0001 // should never go here
+			if containsDynamicParam(expr) {
+				return 100 / s.TableCnt
+			} else {
+				return 0.0001
+			}
 		case "in", "prefix_in":
 			card := 1.0
 			switch arg1Impl := exprImpl.F.Args[1].Expr.(type) {
