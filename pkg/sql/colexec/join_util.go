@@ -25,18 +25,18 @@ type Batches struct {
 	Buf []*batch.Batch
 }
 
-func (bs Batches) Clean(mp *mpool.MPool) {
+func (bs *Batches) Clean(mp *mpool.MPool) {
 	for i := range bs.Buf {
 		bs.Buf[i].Clean(mp)
 	}
 }
 
-func (bs Batches) CleanOnlyData() {
+func (bs *Batches) CleanOnlyData() {
 	for i := range bs.Buf {
 		bs.Buf[i].CleanOnlyData()
 	}
 }
-func (bs Batches) Reset() {
+func (bs *Batches) Reset() {
 	if bs.Buf != nil {
 		bs.Buf = bs.Buf[:0]
 	}
@@ -45,7 +45,7 @@ func (bs Batches) Reset() {
 // copy from input batch into batches
 // the batches structure hold data in fix size 8192 rows, and continue to append from next batch
 // if error return , the batches will clean itself
-func (bs Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err error) {
+func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err error) {
 	defer func() {
 		if err != nil {
 			bs.Clean(proc.Mp())
@@ -77,7 +77,6 @@ func (bs Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err 
 
 	for offset < length {
 		lenBuf := len(bs.Buf)
-		tmp = nil
 		if lenBuf > 0 && bs.Buf[lenBuf-1].RowCount() != DefaultBatchSize {
 			tmp = bs.Buf[lenBuf-1]
 		} else {
