@@ -617,25 +617,23 @@ func (tbl *txnTable) Close() error {
 }
 func (tbl *txnTable) dedup(ctx context.Context, pk containers.Vector, isTombstone bool) (err error) {
 	dedupType := tbl.store.txn.GetDedupType()
-	if dedupType == txnif.FullDedup {
+	if !dedupType.SkipWorkSpace() {
 		//do PK deduplication check against txn's work space.
 		if err = tbl.DedupWorkSpace(
 			pk, isTombstone); err != nil {
 			return
 		}
-		//do PK deduplication check against txn's snapshot data.
+	}
+	if dedupType.SkipOldCommit() && dedupType.SkipNewCommit() {
+		return
+	}
+	if !dedupType.SkipOldCommit() {
 		if err = tbl.DedupSnapByPK(
 			ctx,
 			pk, false, isTombstone); err != nil {
 			return
 		}
-	} else if dedupType == txnif.FullSkipWorkSpaceDedup {
-		if err = tbl.DedupSnapByPK(
-			ctx,
-			pk, false, isTombstone); err != nil {
-			return
-		}
-	} else if dedupType == txnif.IncrementalDedup {
+	} else {
 		if err = tbl.DedupSnapByPK(
 			ctx,
 			pk, true, isTombstone); err != nil {
@@ -804,7 +802,7 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool) (err
 	}
 	var zm index.ZM
 	dedupType := tbl.store.txn.GetDedupType()
-	if dedupType == txnif.FullDedup {
+	if !dedupType.SkipNewCommit() && !dedupType.SkipOldCommit() {
 		for _, stats := range baseTable.tableSpace.stats {
 			err = tbl.DoPrecommitDedupByNode(ctx, stats, isTombstone)
 			if err != nil {
@@ -816,7 +814,6 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool) (err
 	if baseTable.tableSpace.node == nil {
 		return
 	}
-	// FIXME: (jxm)do we need do dedup here for workspace insert?
 	node := baseTable.tableSpace.node
 	pkColPos := baseTable.schema.GetSingleSortKeyIdx()
 	pkVec, err := node.WindowColumn(0, node.Rows(), pkColPos)
@@ -933,8 +930,6 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM,
 		}
 		defer rowIDs.Close()
 		if !isTombstone {
-			// FIXME: (jxm) here it will always scan all workspace data including committed s3 files
-			// does Incremental dedup work here?
 			err = tbl.findDeletes(tbl.store.ctx, rowIDs, false, true)
 			if err != nil {
 				return

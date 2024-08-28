@@ -634,15 +634,15 @@ func (h *Handle) HandleWrite(
 	ctx = perfcounter.WithCounterSetFrom(ctx, h.db.Opts.Ctx)
 	switch req.PkCheck {
 	case db.FullDedup:
-		txn.SetDedupType(txnif.FullDedup)
+		txn.SetDedupType(txnif.DedupPolicy_CheckAll)
 	case db.IncrementalDedup:
 		if h.db.Opts.IncrementalDedup {
-			txn.SetDedupType(txnif.IncrementalDedup)
+			txn.SetDedupType(txnif.DedupPolicy_Incremental)
 		} else {
-			txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
+			txn.SetDedupType(txnif.DedupPolicy_SkipWorkspace)
 		}
 	case db.FullSkipWorkspaceDedup:
-		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
+		txn.SetDedupType(txnif.DedupPolicy_SkipWorkspace)
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s txn: %s",
