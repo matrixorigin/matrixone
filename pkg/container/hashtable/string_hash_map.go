@@ -80,32 +80,6 @@ func (ht *StringHashMap) Init(m *mpool.MPool) (err error) {
 	return
 }
 
-func (ht *StringHashMap) Dup() *StringHashMap {
-	val := &StringHashMap{
-		blockCellCnt:    ht.blockCellCnt,
-		blockMaxElemCnt: ht.blockMaxElemCnt,
-		cellCntMask:     ht.cellCntMask,
-
-		cellCnt: ht.cellCnt,
-		elemCnt: ht.elemCnt,
-
-		rawData: make([][]byte, len(ht.rawData)),
-		cells:   make([][]StringHashMapCell, len(ht.cells)),
-	}
-
-	for i, raw := range ht.rawData {
-		val.rawData[i] = make([]byte, len(raw))
-		copy(val.rawData[i], raw)
-	}
-
-	for i, cell := range ht.cells {
-		val.cells[i] = make([]StringHashMapCell, len(cell))
-		copy(val.cells[i], cell)
-	}
-
-	return val
-}
-
 func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64, m *mpool.MPool) error {
 	if err := ht.ResizeOnDemand(uint64(len(keys)), m); err != nil {
 		return err
