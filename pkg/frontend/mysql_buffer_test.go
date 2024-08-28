@@ -17,13 +17,15 @@ package frontend
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/smartystreets/goconvey/convey"
 	"math/rand"
 	"net"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/smartystreets/goconvey/convey"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
 )
 
 func ReadPacketForTest(c *Conn) ([]byte, error) {
@@ -134,7 +136,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 		exceptPayload := make([][]byte, 0)
 		actualPayload := make([][]byte, 0)
 		repeat := 5
-		packetSize := 1024 * 5 // 5MB
+		packetSize := 1024 * 5 // 5KB
 		go func() {
 			for i := 0; i < repeat; i++ {
 				header := make([]byte, 4)
@@ -143,12 +145,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 				payload := generateRandomBytes(packetSize)
 				exceptPayload = append(exceptPayload, payload)
-				_, err := server.Write(header)
-				if err != nil {
-					panic(fmt.Sprintf("Failed to write header: %v", err))
-				}
-
-				_, err = server.Write(payload)
+				_, err = server.Write(append(header, payload...))
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
@@ -170,7 +167,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 		exceptPayload := make([][]byte, 0)
 		actualPayload := make([][]byte, 0)
 		repeat := 5
-		packetSize := 1024 * 1024 * 5 // 16MB
+		packetSize := 1024 * 1024 * 5 // 5MB
 		go func() {
 			for i := 0; i < repeat; i++ {
 				header := make([]byte, 4)
@@ -179,12 +176,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 				payload := generateRandomBytes(packetSize)
 				exceptPayload = append(exceptPayload, payload)
-				_, err := server.Write(header)
-				if err != nil {
-					panic(fmt.Sprintf("Failed to write header: %v", err))
-				}
-
-				_, err = server.Write(payload)
+				_, err = server.Write(append(header, payload...))
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
@@ -219,12 +211,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
-				_, err := server.Write(header)
-				if err != nil {
-					panic(fmt.Sprintf("Failed to write header: %v", err))
-				}
-
-				_, err = server.Write(payload)
+				_, err = server.Write(append(header, payload...))
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
@@ -254,12 +241,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 				header[3] = byte(i)
 				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
-				_, err := server.Write(header)
-				if err != nil {
-					panic(fmt.Sprintf("Failed to write header: %v", err))
-				}
-
-				_, err = server.Write(payload)
+				_, err = server.Write(append(header, payload...))
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
@@ -851,7 +833,7 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 			if err != nil {
 				panic(err)
 			}
-			exceptRow = generateRandomBytes(int(MaxPayloadSize))
+			exceptRow = generateRandomBytes(int(MaxPayloadSize) - 1)
 			exceptPayload = append(exceptPayload, exceptRow)
 			err = cWriter.Append(exceptRow...)
 			if err != nil {

@@ -92,7 +92,6 @@ type Conn struct {
 	packetInBuf       int
 	allowedPacketSize int
 	beginReadIndex    int
-	readIndex         int
 	timeout           time.Duration
 	allocator         *BufferAllocator
 	ses               *Session
@@ -230,41 +229,56 @@ func (c *Conn) Read() ([]byte, error) {
 	payloads := make([][]byte, 0)
 	var firstPayload []byte
 	var finalPayload []byte
-	var payload []byte
+	var header, payload []byte
 	var err error
 	var n, packetLength, readLength, totalLength int
 	var sequenceId byte
+	var needCopy bool
 	defer func() {
 		for i := range payloads {
 			c.allocator.Free(payloads[i])
 		}
-		if len(firstPayload) != 0 && (CommandType(firstPayload[0]) == COM_STMT_CLOSE || CommandType(firstPayload[0]) == COM_STMT_SEND_LONG_DATA) && c.readIndex > totalLength+HeaderLengthOfTheProtocol {
-			copy(c.fixBuf.data, c.fixBuf.data[totalLength+HeaderLengthOfTheProtocol:c.readIndex])
-			c.readIndex -= totalLength + HeaderLengthOfTheProtocol
+		if needCopy {
+			copy(c.fixBuf.data, c.fixBuf.data[totalLength+HeaderLengthOfTheProtocol:c.fixBuf.writeIndex])
+			c.fixBuf.writeIndex -= totalLength + HeaderLengthOfTheProtocol
 		} else {
-			c.readIndex = 0
+			c.fixBuf.writeIndex = 0
 		}
 	}()
-	for c.readIndex < HeaderLengthOfTheProtocol {
-		n, err = c.ReadFromConn(c.fixBuf.data[c.readIndex:])
+	if c.fixBuf.writeIndex >= HeaderLengthOfTheProtocol {
+		header = c.fixBuf.data[:HeaderLengthOfTheProtocol]
+		packetLength = int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
+	} else {
+		packetLength = int(MaxPayloadSize)
+	}
+	for c.fixBuf.writeIndex < HeaderLengthOfTheProtocol+packetLength && c.fixBuf.writeIndex < fixBufferSize {
+		n, err = c.ReadFromConn(c.fixBuf.data[c.fixBuf.writeIndex:])
 		if err != nil {
 			return nil, err
 		}
-		c.readIndex += n
+		c.fixBuf.writeIndex += n
+		if c.fixBuf.writeIndex >= HeaderLengthOfTheProtocol {
+			header = c.fixBuf.data[:HeaderLengthOfTheProtocol]
+			packetLength = int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
+			sequenceId = header[3]
+			c.sequenceId = sequenceId + 1
+		}
 	}
-	header := c.fixBuf.data[:HeaderLengthOfTheProtocol]
-	packetLength = int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
+	needCopy = false
 	totalLength += packetLength
 	err = c.CheckAllowedPacketSize(totalLength)
 	if err != nil {
 		return nil, err
 	}
-	sequenceId = header[3]
-	c.sequenceId = sequenceId + 1
-	readLength = c.readIndex - HeaderLengthOfTheProtocol
+	readLength = c.fixBuf.writeIndex - HeaderLengthOfTheProtocol
 	firstPayload = make([]byte, packetLength)
 	copy(firstPayload, c.fixBuf.data[HeaderLengthOfTheProtocol:])
-	if packetLength > readLength {
+	if packetLength <= readLength {
+		if packetLength < readLength {
+			needCopy = true
+		}
+		return firstPayload, nil
+	} else {
 		err = c.ReadBytes(firstPayload[readLength:], packetLength-readLength)
 		if err != nil {
 			return nil, err
