@@ -52,7 +52,7 @@ func handleAddFaultPoint() handleFunc {
 			action := parameters[2]
 			iarg, err := strconv.Atoi(parameters[3])
 			if err != nil {
-				return nil, moerr.NewInternalError(proc.Ctx, "handleAddFaultPoint: %s", err.Error())
+				return nil, moerr.NewInternalErrorf(proc.Ctx, "handleAddFaultPoint: %s", err.Error())
 			}
 			sarg := parameters[4]
 			payload, err := types.Encode(&db.FaultPoint{

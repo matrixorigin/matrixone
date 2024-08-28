@@ -1056,15 +1056,14 @@ func (n *MVCCHandle) CollectDeleteInRangeAfterDeltalocation(
 		)
 	}
 	if deletes != nil && deletes.Length() != 0 {
-		if bat == nil {
-			bat = containers.NewBatch()
-			bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType(), mp))
-			bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), mp))
-			bat.AddVector(catalog.AttrPKVal, containers.MakeVector(*deletes.GetVectorByName(catalog.AttrPKVal).GetType(), mp))
-			if withAborted {
-				bat.AddVector(catalog.AttrAborted, containers.MakeVector(types.T_bool.ToType(), mp))
-			}
+		bat = containers.NewBatch()
+		bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType(), mp))
+		bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), mp))
+		bat.AddVector(catalog.AttrPKVal, containers.MakeVector(*deletes.GetVectorByName(catalog.AttrPKVal).GetType(), mp))
+		if withAborted {
+			bat.AddVector(catalog.AttrAborted, containers.MakeVector(types.T_bool.ToType(), mp))
 		}
+
 		bat.Extend(deletes)
 		deletes.Close()
 	}

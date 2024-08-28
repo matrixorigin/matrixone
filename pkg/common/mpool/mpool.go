@@ -23,6 +23,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -120,7 +121,7 @@ func (s *MPoolStats) RecordManyFrees(tag string, nfree, sz int64) int64 {
 
 const (
 	NumFixedPool = 5
-	kMemHdrSz    = 16
+	kMemHdrSz    = 24
 	kStripeSize  = 128
 	B            = 1
 	KB           = 1024
@@ -135,10 +136,11 @@ var PoolElemSize = [NumFixedPool]int32{64, 128, 256, 512, 1024}
 
 // Memory header, kMemHdrSz bytes.
 type memHdr struct {
-	poolId       int64
-	allocSz      int32
-	fixedPoolIdx int8
-	guard        [3]uint8
+	poolId               int64
+	allocSz              int32
+	fixedPoolIdx         int8
+	guard                [3]uint8
+	allocateStacktraceID uint64
 }
 
 func init() {
@@ -264,16 +266,18 @@ type mpoolDetails struct {
 	mu    sync.Mutex
 	alloc map[string]detailInfo
 	free  map[string]detailInfo
+	inuse map[uint64]int
 }
 
 func newMpoolDetails() *mpoolDetails {
 	mpd := mpoolDetails{}
 	mpd.alloc = make(map[string]detailInfo)
 	mpd.free = make(map[string]detailInfo)
+	mpd.inuse = make(map[uint64]int)
 	return &mpd
 }
 
-func (d *mpoolDetails) recordAlloc(nb int64) {
+func (d *mpoolDetails) recordAlloc(nb int64, stacktraceID uint64) {
 	f := stack.Caller(2)
 	k := fmt.Sprintf("%v", f)
 	d.mu.Lock()
@@ -283,9 +287,11 @@ func (d *mpoolDetails) recordAlloc(nb int64) {
 	info.cnt += 1
 	info.bytes += nb
 	d.alloc[k] = info
+
+	d.inuse[stacktraceID]++
 }
 
-func (d *mpoolDetails) recordFree(nb int64) {
+func (d *mpoolDetails) recordFree(nb int64, stacktraceID uint64) {
 	f := stack.Caller(2)
 	k := fmt.Sprintf("%v", f)
 	d.mu.Lock()
@@ -295,6 +301,8 @@ func (d *mpoolDetails) recordFree(nb int64) {
 	info.cnt += 1
 	info.bytes += nb
 	d.free[k] = info
+
+	d.inuse[stacktraceID]--
 }
 
 func (d *mpoolDetails) reportJson() string {
@@ -409,10 +417,10 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 	if cap > 0 {
 		// simple sanity check
 		if cap < 1024*1024 {
-			return nil, moerr.NewInternalErrorNoCtx("mpool cap %d too small", cap)
+			return nil, moerr.NewInternalErrorNoCtxf("mpool cap %d too small", cap)
 		}
 		if cap > GlobalCap() {
-			return nil, moerr.NewInternalErrorNoCtx("mpool cap %d too big, global cap %d", cap, globalCap.Load())
+			return nil, moerr.NewInternalErrorNoCtxf("mpool cap %d too big, global cap %d", cap, globalCap.Load())
 		}
 	}
 
@@ -469,6 +477,17 @@ func MustNewZeroNoFixed() *MPool {
 
 func (mp *MPool) Report() string {
 	ret := fmt.Sprintf("    mpool stats: %s", mp.Stats().Report("        "))
+	if mp.details != nil {
+		for id, n := range mp.details.inuse {
+			if n > 0 {
+				ret += fmt.Sprintf(
+					"inuse: count %d, stacktrace %s\n",
+					n,
+					malloc.StacktraceID(id).String(),
+				)
+			}
+		}
+	}
 	return ret
 }
 
@@ -549,7 +568,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	// reject unexpected alloc size.
 	if sz < 0 || sz > GB {
 		logutil.Errorf("Invalid alloc size %d: %s", sz, string(debug.Stack()))
-		return nil, moerr.NewInternalErrorNoCtx("Invalid alloc size %d", sz)
+		return nil, moerr.NewInternalErrorNoCtxf("Invalid alloc size %d", sz)
 	}
 
 	if sz == 0 {
@@ -557,7 +576,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	}
 
 	if atomic.LoadInt32(&mp.available) == Unavailable {
-		return nil, moerr.NewInternalErrorNoCtx("mpool %s unavailable for alloc", mp.tag)
+		return nil, moerr.NewInternalErrorNoCtxf("mpool %s unavailable for alloc", mp.tag)
 	}
 
 	// update in use count
@@ -583,14 +602,15 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	if mycurr > mp.Cap() {
 		mp.stats.RecordFree(mp.tag, tempSize)
 		globalStats.RecordFree("global", tempSize)
-		return nil, moerr.NewInternalErrorNoCtx("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
+		return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
 	}
 
 	// from fixed pool
 	if idx < NumFixedPool {
 		bs := mp.pools[idx].alloc(int32(requiredSpaceWithoutHeader))
 		if mp.details != nil {
-			mp.details.recordAlloc(int64(bs.allocSz))
+			bs.allocateStacktraceID = uint64(malloc.GetStacktraceID(0))
+			mp.details.recordAlloc(int64(bs.allocSz), bs.allocateStacktraceID)
 		}
 		return bs.ToSlice(sz, int(mp.pools[idx].eleSz)), nil
 	}
@@ -610,7 +630,7 @@ func (mp *MPool) Free(bs []byte) {
 		panic(moerr.NewInternalErrorNoCtx("invalid free, mp header corruption"))
 	}
 	if atomic.LoadInt32(&mp.available) == Unavailable {
-		panic(moerr.NewInternalErrorNoCtx("mpool %s unavailable for free", mp.tag))
+		panic(moerr.NewInternalErrorNoCtxf("mpool %s unavailable for free", mp.tag))
 	}
 
 	// if cross pool free.
@@ -618,7 +638,7 @@ func (mp *MPool) Free(bs []byte) {
 		crossPoolFreeCounter.Add(1)
 		otherPool, ok := globalPools.Load(pHdr.poolId)
 		if !ok {
-			panic(moerr.NewInternalErrorNoCtx("invalid mpool id %d", pHdr.poolId))
+			panic(moerr.NewInternalErrorNoCtxf("invalid mpool id %d", pHdr.poolId))
 		}
 		(otherPool.(*MPool)).Free(bs)
 		return
@@ -635,7 +655,7 @@ func (mp *MPool) Free(bs []byte) {
 	mp.stats.RecordFree(mp.tag, recordSize)
 	globalStats.RecordFree("global", recordSize)
 	if mp.details != nil {
-		mp.details.recordFree(int64(pHdr.allocSz))
+		mp.details.recordFree(int64(pHdr.allocSz), uint64(pHdr.allocateStacktraceID))
 	}
 
 	// free from fixed pool
@@ -693,7 +713,7 @@ func roundupsize(size int) int {
 // the slice.
 func (mp *MPool) Grow(old []byte, sz int) ([]byte, error) {
 	if sz < len(old) {
-		return nil, moerr.NewInternalErrorNoCtx("mpool grow actually shrinks, %d, %d", len(old), sz)
+		return nil, moerr.NewInternalErrorNoCtxf("mpool grow actually shrinks, %d, %d", len(old), sz)
 	}
 	if sz <= cap(old) {
 		return old[:sz], nil
@@ -734,7 +754,7 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int) ([]byte, error) {
 	len1 := len(old)
 	len2 := len(old2)
 	if sz < len1+len2 {
-		return nil, moerr.NewInternalErrorNoCtx("mpool grow2 actually shrinks, %d+%d, %d", len1, len2, sz)
+		return nil, moerr.NewInternalErrorNoCtxf("mpool grow2 actually shrinks, %d+%d, %d", len1, len2, sz)
 	}
 	ret, err := mp.Grow(old, sz)
 	if err != nil {

@@ -360,7 +360,7 @@ func (idx *simpleTableIndex) BatchInsert(
 			row++
 		}
 	default:
-		panic(moerr.NewInternalErrorNoCtx("%s not supported", col.GetType().String()))
+		panic(moerr.NewInternalErrorNoCtxf("%s not supported", col.GetType().String()))
 	}
 	return nil
 }
@@ -469,7 +469,7 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 			}
 		}
 	default:
-		panic(moerr.NewInternalErrorNoCtx("%s not supported", col.GetType().String()))
+		panic(moerr.NewInternalErrorNoCtxf("%s not supported", col.GetType().String()))
 	}
 	return nil
 }

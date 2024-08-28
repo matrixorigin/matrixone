@@ -214,7 +214,6 @@ func TestFuzzingDiskS3(t *testing.T) {
 			numCPU := runtime.GOMAXPROCS(0)
 			wg := new(sync.WaitGroup)
 			for i := 0; i < numCPU; i++ {
-				i := i
 				wg.Add(1)
 				go func() {
 					defer wg.Done()

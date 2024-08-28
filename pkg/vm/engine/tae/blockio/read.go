@@ -178,7 +178,8 @@ func BlockDataRead(
 	vp engine.VectorPool,
 	policy fileservice.Policy,
 	tableName string,
-) (*batch.Batch, error) {
+	bat *batch.Batch,
+) error {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
 	}
@@ -200,7 +201,7 @@ func BlockDataRead(
 			ctx, sid, info, ds, filterSeqnums, filterColTypes,
 			types.TimestampToTS(ts), searchFunc, fs, mp, tableName,
 		); err != nil {
-			return nil, err
+			return err
 		}
 		v2.TaskSelReadFilterTotal.Inc()
 		if len(sels) == 0 {
@@ -211,28 +212,20 @@ func BlockDataRead(
 		}
 
 		if len(sels) == 0 {
-			result := batch.NewWithSize(len(colTypes))
-			for i, typ := range colTypes {
-				if vp == nil {
-					result.Vecs[i] = vector.NewVec(typ)
-				} else {
-					result.Vecs[i] = vp.GetVector(typ)
-				}
-			}
-			return result, nil
+			return nil
 		}
 	}
 
-	columnBatch, err := BlockDataReadInner(
+	err = BlockDataReadInner(
 		ctx, sid, info, ds, columns, colTypes,
-		types.TimestampToTS(ts), sels, fs, mp, vp, policy,
+		types.TimestampToTS(ts), sels, fs, mp, vp, policy, bat,
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	columnBatch.SetRowCount(columnBatch.Vecs[0].Length())
-	return columnBatch, nil
+	bat.SetRowCount(bat.Vecs[0].Length())
+	return nil
 }
 
 func BlockCompactionRead(
@@ -289,7 +282,8 @@ func BlockDataReadInner(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 	policy fileservice.Policy,
-) (result *batch.Batch, err error) {
+	bat *batch.Batch,
+) (err error) {
 	var (
 		rowidPos    int
 		deletedRows []int64
@@ -306,7 +300,7 @@ func BlockDataReadInner(
 	}
 	defer release()
 	// assemble result batch for return
-	result = batch.NewWithSize(len(loaded.Vecs))
+	//result = batch.NewWithSize(len(loaded.Vecs))
 
 	if len(selectRows) > 0 {
 		// NOTE: it always goes here if there is a filter and the block is sorted
@@ -319,32 +313,26 @@ func BlockDataReadInner(
 			); err != nil {
 				return
 			}
+			defer func() {
+				loaded.Vecs[rowidPos].Free(mp)
+			}()
 		}
 
 		// assemble result batch only with selected rows
 		for i, col := range loaded.Vecs {
 			typ := *col.GetType()
 			if typ.Oid == types.T_Rowid {
-				result.Vecs[i] = col
+				err = bat.Vecs[i].UnionBatch(col, 0, col.Length(), nil, mp)
+				if err != nil {
+					return
+				}
 				continue
 			}
-			if vp == nil {
-				result.Vecs[i] = vector.NewVec(typ)
-			} else {
-				result.Vecs[i] = vp.GetVector(typ)
-			}
-			if err = result.Vecs[i].PreExtendWithArea(len(selectRows), 0, mp); err != nil {
+			if err = bat.Vecs[i].PreExtendWithArea(len(selectRows), 0, mp); err != nil {
 				break
 			}
-			if err = result.Vecs[i].Union(col, selectRows, mp); err != nil {
+			if err = bat.Vecs[i].Union(col, selectRows, mp); err != nil {
 				break
-			}
-		}
-		if err != nil {
-			for _, col := range result.Vecs {
-				if col != nil {
-					col.Free(mp)
-				}
 			}
 		}
 		return
@@ -377,39 +365,20 @@ func BlockDataReadInner(
 		); err != nil {
 			return
 		}
+		defer func() {
+			loaded.Vecs[rowidPos].Free(mp)
+		}()
 	}
 
 	// assemble result batch
 	for i, col := range loaded.Vecs {
 		typ := *col.GetType()
-
-		if typ.Oid == types.T_Rowid {
-			// rowid is already allocted by the mpool, no need to create a new vector
-			result.Vecs[i] = col
-		} else {
-			// for other types, we need to create a new vector
-			if vp == nil {
-				result.Vecs[i] = vector.NewVec(typ)
-			} else {
-				result.Vecs[i] = vp.GetVector(typ)
-			}
-			// copy the data from loaded vector to result vector
-			// TODO: avoid this allocation and copy
-			if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], col); err != nil {
-				break
-			}
+		// TODO: avoid this allocation and copy
+		if err = vector.GetUnionAllFunction(typ, mp)(bat.Vecs[i], col); err != nil {
+			break
 		}
 		if len(deletedRows) > 0 {
-			result.Vecs[i].Shrink(deletedRows, true)
-		}
-	}
-
-	// if any error happens, free the result batch allocated
-	if err != nil {
-		for _, col := range result.Vecs {
-			if col != nil {
-				col.Free(mp)
-			}
+			bat.Vecs[i].Shrink(deletedRows, true)
 		}
 	}
 	return
@@ -605,17 +574,18 @@ func EvalDeleteRowsByTimestamp(
 }
 
 func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
-	deletes *batch.Batch, ts types.TS, committs types.TS,
+	blkID types.Blockid, deletes *batch.Batch,
 ) (rows *nulls.Bitmap) {
-	if deletes == nil || ts.Less(&committs) {
+	if deletes == nil {
 		return
 	}
 	// record visible delete rows
 	rows = nulls.NewWithSize(0)
 	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
 
-	for _, rowid := range rowids {
-		row := rowid.GetRowOffset()
+	start, end := FindIntervalForBlock(rowids, &blkID)
+	for i := start; i < end; i++ {
+		row := rowids[i].GetRowOffset()
 		rows.Add(uint64(row))
 	}
 	return

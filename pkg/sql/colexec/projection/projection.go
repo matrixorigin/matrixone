@@ -18,9 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -44,13 +42,10 @@ func (projection *Projection) OpType() vm.OpType {
 }
 
 func (projection *Projection) Prepare(proc *process.Process) (err error) {
-	projection.ctr = new(container)
-	projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
-	projection.ctr.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(projection.ProjectList))
-	for i, e := range projection.ProjectList {
-		if e.Typ.Id != 0 {
-			projection.ctr.uafs[i] = vector.GetUnionAllFunction(plan.MakeTypeByPlan2Expr(e), proc.Mp())
-		}
+	if len(projection.ctr.projExecutors) == 0 {
+		projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
+
+		projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 	}
 	return err
 }
@@ -75,38 +70,21 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	bat := result.Batch
 	anal.Input(bat, projection.GetIsFirst())
 
-	if projection.ctr.buf != nil {
-		proc.PutBatch(projection.ctr.buf)
-		projection.ctr.buf = nil
-	}
-
-	projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 	// keep shuffleIDX unchanged
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX
-	// do projection.
 	for i := range projection.ctr.projExecutors {
 		vec, err := projection.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
-			for _, newV := range projection.ctr.buf.Vecs {
-				if newV != nil {
-					for k, oldV := range bat.Vecs {
-						if oldV != nil && newV == oldV {
-							bat.Vecs[k] = nil
-						}
-					}
-				}
-			}
-			projection.ctr.buf = nil
-			return result, err
+			return vm.CancelResult, err
 		}
+		// for projection operator, all Vectors of projectBat come from executor.Eval
+		// and will not be modified within projection operator. so we can used the result of executor.Eval directly.
+		// (if operator will modify vector/agg of batch, you should make a copy)
+		// however, it should be noted that since they directly come from executor.Eval
+		// these vectors cannot be free by batch.Clean directly and must be handed over executor.Free
 		projection.ctr.buf.Vecs[i] = vec
 	}
-
-	newAlloc, err := colexec.FixProjectionResult(proc, projection.ctr.projExecutors, projection.ctr.uafs, projection.ctr.buf, bat)
-	if err != nil {
-		return result, err
-	}
-	projection.maxAllocSize = max(projection.maxAllocSize, newAlloc)
+	projection.maxAllocSize = max(projection.maxAllocSize, projection.ctr.buf.Size())
 	projection.ctr.buf.SetRowCount(bat.RowCount())
 
 	anal.Output(projection.ctr.buf, projection.GetIsLast())

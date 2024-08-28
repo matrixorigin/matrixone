@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -133,4 +132,26 @@ func (bm BlockObject) GetBlockID(name ObjectName) *Blockid {
 	segmentId := name.SegmentId()
 	num := name.Num()
 	return NewBlockid(&segmentId, num, bm.BlockHeader().Sequence())
+}
+
+func (bm BlockObject) GenerateBlockInfo(objName ObjectName, sorted bool) BlockInfo {
+	location := BuildLocation(
+		objName,
+		bm.GetExtent(),
+		bm.GetRows(),
+		bm.GetID(),
+	)
+
+	sid := location.Name().SegmentId()
+	blkInfo := BlockInfo{
+		BlockID: *NewBlockid(
+			&sid,
+			location.Name().Num(),
+			location.ID()),
+		//non-appendable block
+		Appendable: false,
+		Sorted:     sorted,
+	}
+	blkInfo.SetMetaLocation(location)
+	return blkInfo
 }

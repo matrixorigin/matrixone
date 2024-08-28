@@ -38,8 +38,6 @@ func (intersect *Intersect) OpType() vm.OpType {
 func (intersect *Intersect) Prepare(proc *process.Process) error {
 	var err error
 
-	intersect.ctr = new(container)
-	intersect.ctr.buf = nil
 	intersect.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
 	if err != nil {
 		return err
@@ -90,7 +88,7 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 
 // build hash table
 func (intersect *Intersect) buildHashTable(proc *process.Process, analyse process.Analyze, idx int, isFirst bool) error {
-	c := intersect.ctr
+	ctr := &intersect.ctr
 	for {
 		input, err := intersect.GetChildren(idx).Call(proc)
 		if err != nil {
@@ -110,9 +108,9 @@ func (intersect *Intersect) buildHashTable(proc *process.Process, analyse proces
 		analyse.Input(input.Batch, isFirst)
 
 		cnt := input.Batch.RowCount()
-		itr := c.hashTable.NewIterator()
+		itr := ctr.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
-			rowcnt := c.hashTable.GroupCount()
+			rowcnt := ctr.hashTable.GroupCount()
 
 			n := cnt - i
 			if n > hashmap.UnitLimit {
@@ -130,8 +128,8 @@ func (intersect *Intersect) buildHashTable(proc *process.Process, analyse proces
 				}
 
 				if v > rowcnt {
-					c.cnts = append(c.cnts, proc.Mp().GetSels())
-					c.cnts[v-1] = append(c.cnts[v-1], 1)
+					ctr.cnts = append(ctr.cnts, proc.Mp().GetSels())
+					ctr.cnts[v-1] = append(ctr.cnts[v-1], 1)
 					rowcnt++
 				}
 			}
@@ -141,7 +139,7 @@ func (intersect *Intersect) buildHashTable(proc *process.Process, analyse proces
 }
 
 func (intersect *Intersect) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
-	c := intersect.ctr
+	ctr := &intersect.ctr
 	for {
 		input, err := intersect.GetChildren(idx).Call(proc)
 		if err != nil {
@@ -159,17 +157,17 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyze proces
 		}
 
 		analyze.Input(input.Batch, isFirst)
-		if c.buf == nil {
-			c.buf = batch.NewWithSize(len(input.Batch.Vecs))
+		if ctr.buf == nil {
+			ctr.buf = batch.NewWithSize(len(input.Batch.Vecs))
 			for i := range input.Batch.Vecs {
-				c.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
+				ctr.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
 			}
 		}
-		c.buf.CleanOnlyData()
+		ctr.buf.CleanOnlyData()
 		needInsert := make([]uint8, hashmap.UnitLimit)
 		resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
 		cnt := input.Batch.RowCount()
-		itr := c.hashTable.NewIterator()
+		itr := ctr.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
 			n := cnt - i
 			if n > hashmap.UnitLimit {
@@ -194,28 +192,28 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyze proces
 				}
 
 				// has been added into output batch
-				if c.cnts[v-1][0] == 0 {
+				if ctr.cnts[v-1][0] == 0 {
 					continue
 				}
 
 				needInsert[j] = 1
-				c.cnts[v-1][0] = 0
+				ctr.cnts[v-1][0] = 0
 				insertcnt++
 			}
-			c.buf.AddRowCount(insertcnt)
+			ctr.buf.AddRowCount(insertcnt)
 
 			if insertcnt > 0 {
 				for pos := range input.Batch.Vecs {
-					if err := c.buf.Vecs[pos].UnionBatch(input.Batch.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
+					if err := ctr.buf.Vecs[pos].UnionBatch(input.Batch.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
 						return false, err
 					}
 				}
 			}
 		}
 
-		analyze.Alloc(int64(c.buf.Size()))
-		analyze.Output(c.buf, isLast)
-		result.Batch = c.buf
+		analyze.Alloc(int64(ctr.buf.Size()))
+		analyze.Output(ctr.buf, isLast)
+		result.Batch = ctr.buf
 		return false, nil
 	}
 }

@@ -223,7 +223,7 @@ func (c *Config) Validate() error {
 		c.Txn.Storage.Backend = StorageTAE
 	}
 	if _, ok := supportTxnStorageBackends[c.Txn.Storage.Backend]; !ok {
-		return moerr.NewInternalError(context.Background(), "%s txn storage backend not support", c.Txn.Storage)
+		return moerr.NewInternalErrorf(context.Background(), "%s txn storage backend not support", c.Txn.Storage)
 	}
 	if c.Txn.ZombieTimeout.Duration == 0 {
 		c.Txn.ZombieTimeout.Duration = defaultZombieTimeout
@@ -288,7 +288,7 @@ func (c *Config) Validate() error {
 		c.Txn.Mode = defaultTxnMode.String()
 	} else {
 		if !txn.ValidTxnMode(c.Txn.Mode) {
-			return moerr.NewInternalError(context.Background(), "invalid txn mode %s", c.Txn.Mode)
+			return moerr.NewInternalErrorf(context.Background(), "invalid txn mode %s", c.Txn.Mode)
 		}
 	}
 

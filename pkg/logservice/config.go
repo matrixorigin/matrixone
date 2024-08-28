@@ -281,18 +281,18 @@ func (c *Config) GetInitHAKeeperMembers() (map[uint64]dragonboat.Target, error) 
 			id := strings.TrimSpace(parts[0])
 			target := strings.TrimSpace(parts[1])
 			if _, err := uuid.Parse(target); err != nil {
-				return nil, moerr.NewBadConfigNoCtx("uuid %s", target)
+				return nil, moerr.NewBadConfigNoCtxf("uuid %s", target)
 			}
 			idn, err := strconv.ParseUint(id, 10, 64)
 			if err != nil {
-				return nil, moerr.NewBadConfigNoCtx("replicateID '%v'", id)
+				return nil, moerr.NewBadConfigNoCtxf("replicateID '%v'", id)
 			}
 			if idn >= hakeeper.K8SIDRangeEnd || idn < hakeeper.K8SIDRangeStart {
-				return nil, moerr.NewBadConfigNoCtx("replicateID '%v'", id)
+				return nil, moerr.NewBadConfigNoCtxf("replicateID '%v'", id)
 			}
 			result[idn] = target
 		} else {
-			return nil, moerr.NewBadConfigNoCtx("replicaID:target %s", pair)
+			return nil, moerr.NewBadConfigNoCtxf("replicaID:target %s", pair)
 		}
 	}
 	return result, nil

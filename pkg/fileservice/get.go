@@ -208,7 +208,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 			}
 
 		default:
-			err = moerr.NewInvalidInputNoCtx("no such service: %s", fsPath.Service)
+			err = moerr.NewInvalidInputNoCtxf("no such service: %s", fsPath.Service)
 		}
 
 		readPath = fsPath.File
@@ -266,11 +266,11 @@ func GetForBackup(ctx context.Context, spec string) (res FileService, err error)
 			}
 
 		default:
-			err = moerr.NewInvalidInputNoCtx("no such service: %s", fsPath.Service)
+			err = moerr.NewInvalidInputNoCtxf("no such service: %s", fsPath.Service)
 		}
 
 	} else {
-		return nil, moerr.NewInvalidInputNoCtx("unknown file service: %v", spec)
+		return nil, moerr.NewInvalidInputNoCtxf("unknown file service: %v", spec)
 	}
 
 	return
