@@ -866,6 +866,7 @@ func (task *flushTableTailTask) mergePersistedTombstones(ctx context.Context) er
 	if len(tombstones) < 2 {
 		return nil
 	}
+	// FIXME: (w-zr) this result of append is never used
 	scopes := make([]common.ID, 0, len(tombstones))
 	for _, obj := range tombstones {
 		scopes = append(scopes, *obj.AsCommonID())

@@ -918,7 +918,7 @@ func (c *checkpointCleaner) Process() {
 		return
 	}
 	maxEnd := maxGlobalCKP.GetEnd()
-	if maxGlobalCKP != nil && compareTS.Less(&maxEnd) {
+	if compareTS.Less(&maxEnd) {
 		logutil.Info("[DiskCleaner]", common.OperationField("Try GC"),
 			common.AnyField("maxGlobalCKP :", maxGlobalCKP.String()),
 			common.AnyField("compareTS :", compareTS.ToString()))

@@ -17,12 +17,9 @@ package v1
 import (
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -187,30 +184,4 @@ func (c *checker) Check() error {
 	}
 
 	return nil
-}
-
-func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *containers.Batch {
-	bat := containers.NewBatch()
-
-	bat.AddVector(
-		catalog.PhyAddrColumnName,
-		containers.MakeVector(types.T_Rowid.ToType(), mp),
-	)
-	bat.AddVector(
-		catalog.AttrCommitTs,
-		containers.MakeVector(types.T_TS.ToType(), mp),
-	)
-	// Types() is not used, then empty schema can also be handled here
-	typs := schema.AllTypes()
-	attrs := schema.AllNames()
-	for i, attr := range attrs {
-		if attr == catalog.PhyAddrColumnName {
-			continue
-		}
-		bat.AddVector(
-			attr,
-			containers.MakeVector(typs[i], mp),
-		)
-	}
-	return bat
 }

@@ -71,7 +71,6 @@ func (mh objectMetaV3) TombstoneMeta() (objectDataMetaV1, bool) {
 }
 
 func (mh objectMetaV3) MustTombstoneMeta() objectDataMetaV1 {
-	return mh.MustDataMeta()
 	meta, ok := mh.TombstoneMeta()
 	if !ok {
 		panic("no tombstone meta")
