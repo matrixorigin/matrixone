@@ -923,16 +923,16 @@ func (lockOp *LockOp) getBatch(
 	isFirst bool) (*batch.Batch, error) {
 	fn := lockOp.ctr.batchFetchFunc
 	if fn == nil {
-		//fn = lockOp.GetChildren(0).Call
-		fn = vm.ChildrenCall
+		fn = lockOp.GetChildren(0).Call
 	}
 
-	//input, err := fn(proc)
-	input, err := fn(lockOp.GetChildren(0), proc, analyzer)
+	beforeChildrenCall := time.Now()
+	input, err := fn(proc)
+	analyzer.ChildrenCallStop(beforeChildrenCall)
 	if err != nil {
 		return nil, err
 	}
-	//anal.Input(input.Batch, isFirst)
+	analyzer.Input(input.Batch)
 	return input.Batch, nil
 }
 

@@ -133,7 +133,7 @@ type state struct {
 	step                 int
 	fetchers             []FetchLockRowsFunc
 	cachedBatches        []*batch.Batch
-	batchFetchFunc       func(op vm.Operator, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error)
+	batchFetchFunc       func(proc *process.Process) (vm.CallResult, error)
 	hasNewVersionInRange hasNewVersionInRangeFunc
 }
 
