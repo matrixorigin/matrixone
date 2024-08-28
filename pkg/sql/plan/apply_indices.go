@@ -535,7 +535,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 					for i := range hitFilterIdx {
 						filter := node.FilterList[hitFilterIdx[i]]
 						serialArgs[i] = DeepCopyExpr(filter.GetF().Args[1])
-						estimateExprSelectivity(filter, builder)
+						estimateExprSelectivity(filter, builder, nil)
 						compositeFilterSel = compositeFilterSel * filter.Selectivity
 					}
 					rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
@@ -686,7 +686,7 @@ END0:
 			for i := range filterIdx {
 				filter := node.FilterList[filterIdx[i]]
 				serialArgs[i] = DeepCopyExpr(filter.GetF().Args[1])
-				estimateExprSelectivity(filter, builder)
+				estimateExprSelectivity(filter, builder, nil)
 				compositeFilterSel = compositeFilterSel * filter.Selectivity
 			}
 			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
@@ -821,7 +821,7 @@ END0:
 		col.ColPos = 0
 
 		var idxFilter *plan.Expr
-		estimateExprSelectivity(expr, builder)
+		estimateExprSelectivity(expr, builder, nil)
 		if idxDef.Unique {
 			idxFilter = expr
 		} else {
