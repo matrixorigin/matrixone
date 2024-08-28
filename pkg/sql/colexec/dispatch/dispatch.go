@@ -106,7 +106,19 @@ func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 
 func printShuffleResult(dispatch *Dispatch) {
 	if dispatch.ctr.batchCnt != nil && dispatch.ctr.rowCnt != nil {
-		logutil.Debugf("shuffle type %v,  dispatch result: batchcnt %v, rowcnt %v", dispatch.ShuffleType, dispatch.ctr.batchCnt, dispatch.ctr.rowCnt)
+		maxNum := 0
+		minNum := 100000000
+		for i := range dispatch.ctr.batchCnt {
+			if dispatch.ctr.batchCnt[i] > maxNum {
+				maxNum = dispatch.ctr.batchCnt[i]
+			}
+			if dispatch.ctr.batchCnt[i] < minNum {
+				minNum = dispatch.ctr.batchCnt[i]
+			}
+		}
+		if maxNum > minNum*10 {
+			logutil.Warnf("shuffle imbalance!  type %v,  dispatch result: batchcnt %v, rowcnt %v", dispatch.ShuffleType, dispatch.ctr.batchCnt, dispatch.ctr.rowCnt)
+		}
 	}
 }
 
@@ -154,7 +166,14 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	} else {
 		ap.ctr.hasData = true
 	}
-	bat.AddCnt(1)
+
+	if bat == result.Batch {
+		bat, err = bat.Dup(proc.GetMPool())
+		if err != nil {
+			return vm.CancelResult, nil
+		}
+	}
+
 	ok, err := ap.ctr.sendFunc(bat, ap, proc)
 	if ok {
 		result.Status = vm.ExecStop
@@ -170,7 +189,7 @@ func makeEndBatch(proc *process.Process) (*batch.Batch, error) {
 	b.Attrs = []string{
 		"recursive_col",
 	}
-	b.SetVector(0, proc.GetVector(types.T_varchar.ToType()))
+	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
 	err := vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
 	if err == nil {
 		batch.SetLength(b, 1)

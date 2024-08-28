@@ -1,0 +1,30 @@
+SELECT NOW() AS `current_time`, NOW() - INTERVAL 1 DAY AS `one_day_ago`;
+current_time    one_day_ago
+2024-08-22 16:07:32.064483000    2024-08-21 16:07:32.064483000
+SELECT NOW() AS `current_time`, NOW() + INTERVAL 1 DAY AS `one_day_later`;
+current_time    one_day_later
+2024-08-22 16:07:32.067315000    2024-08-23 16:07:32.067315000
+SELECT NOW() AS `current_time`, NOW() - INTERVAL 1 WEEK AS one_week_ago;
+current_time    one_week_ago
+2024-08-22 16:07:32.068082000    2024-08-15 16:07:32.068082000
+SELECT NOW() AS `current_time`, NOW() + INTERVAL 1 WEEK AS one_week_later;
+current_time    one_week_later
+2024-08-22 16:07:32.068721000    2024-08-29 16:07:32.068721000
+SELECT NOW() AS `current_time`, DATE_SUB(NOW(), INTERVAL 1 MONTH) AS one_month_ago;
+current_time    one_month_ago
+2024-08-22 16:07:32.069398000    2024-07-22 16:07:32.069398000
+SELECT NOW() AS `current_time`, DATE_ADD(NOW(), INTERVAL 1 MONTH) AS one_month_later;
+current_time    one_month_later
+2024-08-22 16:07:32.070025000    2024-09-22 16:07:32.070025000
+SELECT NOW() AS `current_time`, DATE_SUB(NOW(), INTERVAL 1 YEAR) AS one_year_ago;
+current_time    one_year_ago
+2024-08-22 16:07:32.070634000    2023-08-22 16:07:32.070634000
+SELECT NOW() AS `current_time`, DATE_ADD(NOW(), INTERVAL 1 YEAR) AS one_year_later;
+current_time    one_year_later
+2024-08-22 16:07:32.071261000    2025-08-22 16:07:32.071261000
+SELECT NOW() AS `current_time`, NOW() - INTERVAL 30 MINUTE AS thirty_minutes_ago;
+current_time    thirty_minutes_ago
+2024-08-22 16:07:32.071868000    2024-08-22 15:37:32.071868000
+SELECT NOW() AS `current_time`, NOW() + INTERVAL 30 MINUTE AS thirty_minutes_later;
+current_time    thirty_minutes_later
+2024-08-22 16:07:32.072472000    2024-08-22 16:37:32.072472000

@@ -151,11 +151,11 @@ func GetColumnIdxFromShowAccountResult(ctx context.Context, result ie.InternalEx
 			name2idx[colName] = colIdx
 		}
 		if _, ok := name2idx[ColumnAccountName]; !ok {
-			name2IdxErr = moerr.NewInternalError(ctx, "column not found in 'show account': %s", ColumnAccountName)
+			name2IdxErr = moerr.NewInternalErrorf(ctx, "column not found in 'show account': %s", ColumnAccountName)
 			return
 		}
 		if _, ok := name2idx[ColumnSize]; !ok {
-			name2IdxErr = moerr.NewInternalError(ctx, "column not found in 'show account': %s", ColumnSize)
+			name2IdxErr = moerr.NewInternalErrorf(ctx, "column not found in 'show account': %s", ColumnSize)
 			return
 		}
 		if _, ok := name2idx[ColumnSnapshotSize]; !ok {

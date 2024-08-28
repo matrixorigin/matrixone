@@ -106,7 +106,7 @@ func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int
 	}
 	buf.CurrentLine++
 	buf.Lines = append(buf.Lines, prefix+line)
-	logutil.Debugf(buf.Lines[buf.CurrentLine])
+	logutil.Debug(buf.Lines[buf.CurrentLine])
 	buf.End++
 }
 
@@ -116,7 +116,7 @@ func (buf *ExplainDataBuffer) PushPlanTitle(title string) {
 	}
 	buf.CurrentLine++
 	buf.Lines = append(buf.Lines, title)
-	logutil.Infof(buf.Lines[buf.CurrentLine])
+	logutil.Info(buf.Lines[buf.CurrentLine])
 	buf.End++
 }
 

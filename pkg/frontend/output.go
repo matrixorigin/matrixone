@@ -125,7 +125,7 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 		ses.Error(ctx,
 			"Failed to extract row from vector, unsupported type",
 			zap.Int("typeID", int(vec.GetType().Oid)))
-		return moerr.NewInternalError(ctx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
+		return moerr.NewInternalErrorf(ctx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
 	}
 	return nil
 }

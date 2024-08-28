@@ -17,6 +17,10 @@ package compile
 import (
 	"context"
 	"encoding/hex"
+	gotrace "runtime/trace"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -31,8 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
-	gotrace "runtime/trace"
-	"time"
 )
 
 // I create this file to store the two most important entry functions for the Compile struct and their helper functions.
@@ -115,11 +117,11 @@ func (c *Compile) Compile(
 	c.proc.ReplaceTopCtx(topContext)
 
 	// from plan to scope.
-	if c.scope, err = c.compileScope(queryPlan); err != nil {
+	if c.scopes, err = c.compileScope(queryPlan); err != nil {
 		return err
 	}
 	// todo: this is redundant.
-	for _, s := range c.scope {
+	for _, s := range c.scopes {
 		if len(s.NodeInfo.Addr) == 0 {
 			s.NodeInfo.Addr = c.addr
 		}
@@ -149,8 +151,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		seq = txnOperator.NextSequence()
 		writeOffset = uint64(txnOperator.GetWorkspace().GetSnapshotWriteOffset())
 		txnOperator.GetWorkspace().IncrSQLCount()
-		txnOperator.ResetRetry(false)
-
 		txnOperator.EnterRunSql()
 	}
 	defer func() {
@@ -250,6 +250,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		return nil, err
 	}
 	queryResult.AffectRows = runC.getAffectedRows()
+	if c.uid != "mo_logger" && strings.Contains(strings.ToLower(c.sql), "insert") && (strings.Contains(c.sql, "{MO_TS =") || strings.Contains(c.sql, "{SNAPSHOT =")) {
+		getLogger(c.proc.GetService()).Info("insert into with snapshot", zap.String("sql", c.sql), zap.Uint64("affectRows", queryResult.AffectRows))
+	}
 	if txnOperator != nil {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
 	}
@@ -257,9 +260,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 }
 
 // prepareRetry rebuild a new Compile object for retrying the query.
-func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
+func (c *Compile) prepareRetry(
+	defChanged bool,
+) (*Compile, error) {
 	v2.TxnStatementRetryCounter.Inc()
-	c.proc.GetTxnOperator().ResetRetry(true)
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 
 	topContext := c.proc.GetTopContext()
@@ -312,7 +316,7 @@ func (c *Compile) InitPipelineContextToExecuteQuery() {
 
 	// build pipeline context.
 	currentContext := c.proc.BuildPipelineContext(queryContext)
-	for _, pipeline := range c.scope {
+	for _, pipeline := range c.scopes {
 		if pipeline.Proc == nil {
 			continue
 		}

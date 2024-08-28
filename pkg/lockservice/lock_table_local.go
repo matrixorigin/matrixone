@@ -390,6 +390,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
 					c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{key}, l.logger)
+					c.result.NewLockAdd = true
 				}
 				continue
 			}
@@ -455,6 +456,7 @@ func (l *localLockTable) addRowLockLocked(
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
 	c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{row}, l.logger)
+	c.result.NewLockAdd = true
 	l.mu.store.Add(row, lock)
 }
 
@@ -515,6 +517,7 @@ func (l *localLockTable) addRangeLockLocked(
 			}
 			if newHolder {
 				c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end}, l.logger)
+				c.result.NewLockAdd = true
 			}
 			return nil, Lock{}, nil
 		}
@@ -589,6 +592,7 @@ func (l *localLockTable) addRangeLockLocked(
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
 					c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{conflictKey}, l.logger)
+					c.result.NewLockAdd = true
 				}
 				conflictWith = Lock{}
 				conflictKey = nil
@@ -624,6 +628,7 @@ func (l *localLockTable) addRangeLockLocked(
 
 	// similar to row lock
 	c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end}, l.logger)
+	c.result.NewLockAdd = true
 
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)

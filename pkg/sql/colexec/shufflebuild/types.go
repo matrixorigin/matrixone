@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -34,7 +33,6 @@ const (
 	ReceiveBatch = iota
 	BuildHashMap
 	SendJoinMap
-	End
 )
 
 type container struct {
@@ -43,7 +41,7 @@ type container struct {
 	multiSels          [][]int32
 	batches            []*batch.Batch
 	inputBatchRowCount int
-	tmpBatch           *batch.Batch
+	buf                *batch.Batch
 	executor           []colexec.ExpressionExecutor
 	vecs               [][]*vector.Vector
 	intHashMap         *hashmap.IntHashMap
@@ -52,15 +50,11 @@ type container struct {
 }
 
 type ShuffleBuild struct {
-	ctr *container
-	// need to generate a push-down filter expression
-	NeedExpr         bool
-	HashOnPK         bool
-	NeedMergedBatch  bool
-	NeedAllocateSels bool
-	Typs             []types.Type
-	Conditions       []*plan.Expr
-
+	ctr               container
+	HashOnPK          bool
+	NeedBatches       bool
+	NeedAllocateSels  bool
+	Conditions        []*plan.Expr
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
 	JoinMapTag        int32
 	ShuffleIdx        int32
@@ -99,21 +93,39 @@ func (shuffleBuild *ShuffleBuild) Release() {
 }
 
 func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	shuffleBuild.Free(proc, pipelineFailed, err)
+	ctr := &shuffleBuild.ctr
+	ctr.state = ReceiveBatch
+	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
+	if ctr.batches != nil {
+		ctr.batches = ctr.batches[:0]
+	}
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
+	ctr.intHashMap = nil
+	ctr.strHashMap = nil
+	if ctr.multiSels != nil {
+		ctr.multiSels = ctr.multiSels[:0]
+	}
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].ResetForNextQuery()
+		}
+	}
 }
 
 func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := shuffleBuild.ctr
-	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
-	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
-	if ctr != nil {
-		ctr.intHashMap = nil
-		ctr.strHashMap = nil
-		ctr.multiSels = nil
-		ctr.batches = nil
-		ctr.cleanEvalVectors()
-		shuffleBuild.ctr = nil
+	ctr := &shuffleBuild.ctr
+	ctr.intHashMap = nil
+	ctr.strHashMap = nil
+	ctr.multiSels = nil
+	ctr.batches = nil
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.GetMPool())
+		ctr.buf = nil
 	}
+	ctr.cleanEvalVectors()
 }
 
 func (ctr *container) cleanEvalVectors() {

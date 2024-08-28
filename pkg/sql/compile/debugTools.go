@@ -147,7 +147,7 @@ func genReceiverMap(s *Scope, mp map[*process.WaitRegister]int) {
 func showScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int, level DebugLevel) string {
 	buffer := bytes.NewBuffer(make([]byte, 0, 300))
 	for i := range scopes {
-		showSingleScope(scopes[i], i, 0, rmp, level, buffer)
+		showSingleScope(scopes[i], i, gap, rmp, level, buffer)
 	}
 	return buffer.String()
 }
@@ -159,13 +159,16 @@ func showSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegi
 	gapNextLine(gap, buffer)
 
 	// Scope Header
-	receiverStr := getReceiverStr(scope, scope.Proc.Reg.MergeReceivers, rmp)
-	buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s): [", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.NodeInfo.Mcpu, receiverStr))
+	receiverStr := "nil"
+	if scope.Proc != nil {
+		receiverStr = getReceiverStr(scope, scope.Proc.Reg.MergeReceivers, rmp)
+	}
+
+	buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.NodeInfo.Mcpu, receiverStr))
 
 	// Scope DataSource
 	if scope.DataSource != nil {
 		gapNextLine(gap, buffer)
-		showDataSource(scope.DataSource)
 		buffer.WriteString(fmt.Sprintf("  DataSource: %s", showDataSource(scope.DataSource)))
 	}
 
@@ -268,7 +271,7 @@ func hanldeTailNodeReceiver(node vm.Operator, mp map[*process.WaitRegister]int, 
 		if receiverId, okk := mp[arg.Reg]; okk {
 			receiver = fmt.Sprintf("%d", receiverId)
 		}
-		buffer.WriteString(fmt.Sprintf(" to MergeReceiver %s", receiver))
+		buffer.WriteString(fmt.Sprintf(" to MergeReceiver [%s]", receiver))
 	}
 	if id == vm.Dispatch {
 		arg := node.(*dispatch.Dispatch)

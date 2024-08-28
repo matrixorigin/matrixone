@@ -37,13 +37,9 @@ func (minus *Minus) OpType() vm.OpType {
 
 func (minus *Minus) Prepare(proc *process.Process) error {
 	var err error
-	{
-		minus.ctr = new(container)
-		minus.ctr.bat = nil
-		minus.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
-		if err != nil {
-			return err
-		}
+	minus.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -101,7 +97,7 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 
 // buildHashTable use all batches from proc.Reg.MergeReceiver[index] to build the hash map.
 func (minus *Minus) buildHashTable(proc *process.Process, ana process.Analyze, index int, isFirst bool) error {
-	ctr := minus.ctr
+	ctr := &minus.ctr
 	for {
 		input, err := minus.GetChildren(index).Call(proc)
 		if err != nil {
