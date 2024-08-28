@@ -31,8 +31,9 @@ type multiObjConfig struct {
 }
 
 type multiObjPolicy struct {
-	config  *multiObjConfig
-	objects []*catalog.ObjectEntry
+	config     *multiObjConfig
+	objects    []*catalog.ObjectEntry
+	tombstones []*catalog.ObjectEntry
 
 	overlappingObjsSet [][]*catalog.ObjectEntry
 }
@@ -51,18 +52,31 @@ func newMultiObjPolicy(config *multiObjConfig) *multiObjPolicy {
 	return &multiObjPolicy{
 		config:             config,
 		objects:            make([]*catalog.ObjectEntry, 0, config.maxObjs),
+		tombstones:         make([]*catalog.ObjectEntry, 0),
 		overlappingObjsSet: make([][]*catalog.ObjectEntry, 0),
 	}
 }
 
 func (m *multiObjPolicy) onObject(obj *catalog.ObjectEntry) {
-	m.objects = append(m.objects, obj)
+	if obj.IsTombstone {
+		m.tombstones = append(m.tombstones, obj)
+	} else {
+		m.objects = append(m.objects, obj)
+	}
 }
 
-func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
-	if len(m.objects) < 2 {
-		return nil, TaskHostDN
+func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, []*catalog.ObjectEntry, TaskHostKind) {
+	if len(m.objects) < 2 && len(m.tombstones) < 2 {
+		return nil, nil, TaskHostDN
 	}
+	objs, taskHostKind := m.reviseDataObjs(mem)
+	if len(m.tombstones) < 2 {
+		return objs, nil, taskHostKind
+	}
+	return objs, m.tombstones, taskHostKind
+}
+
+func (m *multiObjPolicy) reviseDataObjs(mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	if !m.objects[0].GetSortKeyZonemap().IsInited() {
 		revisedObj := make([]*catalog.ObjectEntry, m.config.maxObjs)
 		n := copy(revisedObj, m.objects)
@@ -147,6 +161,7 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 
 func (m *multiObjPolicy) resetForTable(*catalog.TableEntry) {
 	m.objects = m.objects[:0]
+	m.tombstones = m.tombstones[:0]
 	m.overlappingObjsSet = m.overlappingObjsSet[:0]
 }
 

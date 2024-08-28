@@ -23,13 +23,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
 func TestTombstoneData1(t *testing.T) {
 	location1 := objectio.NewRandomLocation(1, 1111)
 	location2 := objectio.NewRandomLocation(2, 2222)
 	location3 := objectio.NewRandomLocation(3, 3333)
+
+	var stats1, stats2, stats3 objectio.ObjectStats
+	objectio.SetObjectStatsLocation(&stats1, location1)
+	objectio.SetObjectStatsLocation(&stats2, location2)
+	objectio.SetObjectStatsLocation(&stats3, location3)
+
+	objectio.SetObjectStatsBlkCnt(&stats1, 1)
+	objectio.SetObjectStatsBlkCnt(&stats2, 1)
+	objectio.SetObjectStatsBlkCnt(&stats3, 1)
+
+	objectio.SetObjectStatsRowCnt(&stats1, location1.Rows())
+	objectio.SetObjectStatsRowCnt(&stats3, location3.Rows())
+	objectio.SetObjectStatsRowCnt(&stats2, location2.Rows())
 
 	obj1 := objectio.NewObjectid()
 	obj2 := objectio.NewObjectid()
@@ -50,7 +62,7 @@ func TestTombstoneData1(t *testing.T) {
 	tombstones1 := NewEmptyTombstoneData()
 	err := tombstones1.AppendInMemory(rowids...)
 	require.Nil(t, err)
-	err = tombstones1.AppendFiles(location1, location2)
+	err = tombstones1.AppendFiles(stats1, stats2)
 	require.Nil(t, err)
 
 	tombstones1.SortInMemory()
@@ -69,7 +81,7 @@ func TestTombstoneData1(t *testing.T) {
 	}
 	err = tombstones2.AppendInMemory(rowids...)
 	require.Nil(t, err)
-	err = tombstones2.AppendFiles(location3)
+	err = tombstones2.AppendFiles(stats3)
 	require.Nil(t, err)
 	tombstones2.SortInMemory()
 	last = tombstones2.rowids[0]
@@ -156,8 +168,7 @@ func TestTombstoneData1(t *testing.T) {
 	require.Equal(t, 4, deleted.Count())
 }
 
-func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
-
+func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	location := objectio.NewRandomLocation(0, 0)
 	objID := location.ObjectId()
 	metaLoc := objectio.ObjectLocation(location)
@@ -178,103 +189,24 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 		relData.AppendBlockInfo(blkInfo)
 	}
 
-	buildTombstoner := func() *tombstoneDataWithDeltaLoc {
-		tombstoner := NewEmptyTombstoneWithDeltaLoc()
-
-		for i := 0; i < 10; i++ {
-			bid := types.BuildTestBlockid(int64(i), 1)
-			for j := 0; j < 10; j++ {
-				tombstoner.inMemTombstones[bid] = append(tombstoner.inMemTombstones[bid], int32(i))
-				loc := objectio.MockLocation(objectio.MockObjectName())
-				tombstoner.blk2UncommitLoc[bid] = append(tombstoner.blk2UncommitLoc[bid], loc)
-			}
-			tombstoner.blk2CommitLoc[bid] = logtailreplay.BlockDeltaInfo{
-				Cts: *types.BuildTSForTest(1, 1),
-				Loc: objectio.MockLocation(objectio.MockObjectName()),
-			}
-		}
-		return tombstoner
+	tombstone := NewEmptyTombstoneData()
+	for i := 0; i < 3; i++ {
+		rowid := types.RandomRowid()
+		tombstone.AppendInMemory(rowid)
 	}
+	var stats1, stats2 objectio.ObjectStats
+	location1 := objectio.NewRandomLocation(1, 1111)
+	location2 := objectio.NewRandomLocation(2, 1111)
 
-	tombstoner := buildTombstoner()
+	objectio.SetObjectStatsLocation(&stats1, location1)
+	objectio.SetObjectStatsLocation(&stats2, location2)
+	tombstone.AppendFiles(stats1, stats2)
+	relData.AttachTombstones(tombstone)
 
-	relData.AttachTombstones(tombstoner)
-	t.Log(relData.String())
 	buf, err := relData.MarshalBinary()
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	newRelData, err := UnmarshalRelationData(buf)
-	require.Nil(t, err)
-
-	tomIsEqual := func(t1 *tombstoneDataWithDeltaLoc, t2 *tombstoneDataWithDeltaLoc) bool {
-		if t1.Type() != t2.Type() ||
-			len(t1.inMemTombstones) != len(t2.inMemTombstones) ||
-			len(t1.blk2UncommitLoc) != len(t2.blk2UncommitLoc) ||
-			len(t1.blk2CommitLoc) != len(t2.blk2CommitLoc) {
-			return false
-		}
-
-		for bid, offsets1 := range t1.inMemTombstones {
-			if _, ok := t2.inMemTombstones[bid]; !ok {
-				return false
-			}
-			offsets2 := t2.inMemTombstones[bid]
-			if len(offsets1) != len(offsets2) {
-				return false
-			}
-			for i := 0; i < len(offsets1); i++ {
-				if offsets1[i] != offsets2[i] {
-					return false
-				}
-			}
-
-		}
-
-		for bid, locs1 := range t1.blk2UncommitLoc {
-			if _, ok := t2.blk2UncommitLoc[bid]; !ok {
-				return false
-			}
-			locs2 := t2.blk2UncommitLoc[bid]
-			if len(locs1) != len(locs2) {
-				return false
-			}
-			for i := 0; i < len(locs1); i++ {
-				if !bytes.Equal(locs1[i], locs2[i]) {
-					return false
-				}
-			}
-
-		}
-
-		for bid, info1 := range t1.blk2CommitLoc {
-			if _, ok := t2.blk2CommitLoc[bid]; !ok {
-				return false
-			}
-			info2 := t2.blk2CommitLoc[bid]
-			if info1.Cts != info2.Cts {
-				return false
-			}
-			if !bytes.Equal(info1.Loc, info2.Loc) {
-				return false
-			}
-		}
-		return true
-	}
-
-	isEqual := func(rd1 *blockListRelData, rd2 *blockListRelData) bool {
-
-		if rd1.GetType() != rd2.GetType() || rd1.DataCnt() != rd2.DataCnt() {
-			return false
-		}
-
-		if !bytes.Equal(rd1.blklist, rd2.blklist) {
-			return false
-		}
-
-		return tomIsEqual(rd1.tombstones.(*tombstoneDataWithDeltaLoc),
-			rd2.tombstones.(*tombstoneDataWithDeltaLoc))
-
-	}
-	require.True(t, isEqual(relData, newRelData.(*blockListRelData)))
-
+	require.NoError(t, err)
+	require.Equal(t, relData.String(), newRelData.String())
 }

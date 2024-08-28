@@ -32,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v1"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -197,7 +197,6 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
-	db.MergeHandle = newMergeTaskBuilder(db)
 	db.mergeScheduler = merge.NewScheduler(db.Runtime, db.CNMergeSched)
 	scanner.RegisterOp(db.mergeScheduler)
 	db.Wal.Start()
@@ -297,7 +296,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	go TaeMetricsTask(ctx)
 
 	// For debug or test
-	// logutil.Info(db.Catalog.SimplePPString(common.PPL2))
+	//fmt.Println(db.Catalog.SimplePPString(common.PPL3))
 	return
 }
 

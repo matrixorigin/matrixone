@@ -66,12 +66,12 @@ func (be *BaseEntryImpl[T]) String() string {
 	return be.StringLocked()
 }
 
-func (be *BaseEntryImpl[T]) PPString(level common.PPLevel, depth int, prefix string) string {
+func (be *BaseEntryImpl[T]) PPStringLocked(level common.PPLevel, depth int, prefix string) string {
 	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, be.StringLocked())
 	return s
 }
 
-func (be *BaseEntryImpl[T]) CreateWithTS(ts types.TS, baseNode T) {
+func (be *BaseEntryImpl[T]) CreateWithTSLocked(ts types.TS, baseNode T) {
 	node := &MVCCNode[T]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: ts,
@@ -79,10 +79,10 @@ func (be *BaseEntryImpl[T]) CreateWithTS(ts types.TS, baseNode T) {
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(ts),
 		BaseNode:    baseNode,
 	}
-	be.Insert(node)
+	be.InsertLocked(node)
 }
 
-func (be *BaseEntryImpl[T]) CreateWithTxn(txn txnif.AsyncTxn, baseNode T) {
+func (be *BaseEntryImpl[T]) CreateWithTxnLocked(txn txnif.AsyncTxn, baseNode T) {
 	if txn == nil {
 		logutil.Warnf("unexpected txn is nil: %+v", stack.Callers(0))
 	}
@@ -93,11 +93,11 @@ func (be *BaseEntryImpl[T]) CreateWithTxn(txn txnif.AsyncTxn, baseNode T) {
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 		BaseNode:    baseNode,
 	}
-	be.Insert(node)
+	be.InsertLocked(node)
 }
 
 // used when replay
-func (be *BaseEntryImpl[T]) CreateWithStartAndEnd(start, end types.TS, baseNode T) {
+func (be *BaseEntryImpl[T]) CreateWithStartAndEndLocked(start, end types.TS, baseNode T) {
 	node := &MVCCNode[T]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: end,
@@ -105,7 +105,7 @@ func (be *BaseEntryImpl[T]) CreateWithStartAndEnd(start, end types.TS, baseNode 
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithStartEnd(start, end),
 		BaseNode:    baseNode,
 	}
-	be.Insert(node)
+	be.InsertLocked(node)
 }
 
 func (be *BaseEntryImpl[T]) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
@@ -131,12 +131,12 @@ func (be *BaseEntryImpl[T]) PrepareAdd(txn txnif.TxnReader) (err error) {
 	// check duplication then
 	be.RLock()
 	defer be.RUnlock()
-	if txn == nil || be.GetTxn() != txn {
+	if txn == nil || be.GetTxnLocked() != txn {
 		if !be.HasDropCommittedLocked() {
 			return moerr.GetOkExpectedDup()
 		}
 	} else {
-		if be.ensureVisibleAndNotDropped(txn) {
+		if be.ensureVisibleAndNotDroppedLocked(txn) {
 			return moerr.GetOkExpectedDup()
 		}
 	}
@@ -167,7 +167,7 @@ func (be *BaseEntryImpl[T]) getOrSetUpdateNodeLocked(txn txnif.TxnReader) (newNo
 	} else {
 		node := entry.CloneData()
 		node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
-		be.Insert(node)
+		be.InsertLocked(node)
 		return true, node
 	}
 }
@@ -223,14 +223,13 @@ func (be *BaseEntryImpl[T]) HasDropIntentLocked() bool {
 	return un.HasDropIntent()
 }
 
-func (be *BaseEntryImpl[T]) ensureVisibleAndNotDropped(txn txnif.TxnReader) bool {
+func (be *BaseEntryImpl[T]) ensureVisibleAndNotDroppedLocked(txn txnif.TxnReader) bool {
 	visible, dropped := be.GetVisibilityLocked(txn)
 	if !visible {
 		return false
 	}
 	return !dropped
 }
-
 func (be *BaseEntryImpl[T]) GetVisibilityLocked(txn txnif.TxnReader) (visible, dropped bool) {
 	un := be.GetVisibleNodeLocked(txn)
 	if un == nil {
@@ -252,7 +251,7 @@ func (be *BaseEntryImpl[T]) IsVisibleWithLock(txn txnif.TxnReader, mu *sync.RWMu
 		txnToWait.GetTxnState(true)
 		mu.RLock()
 	}
-	ok = be.ensureVisibleAndNotDropped(txn)
+	ok = be.ensureVisibleAndNotDroppedLocked(txn)
 	return
 }
 

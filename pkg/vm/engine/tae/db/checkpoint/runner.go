@@ -570,7 +570,7 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 }
 
 func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.Field, err error) {
-	factory := logtail.IncrementalCheckpointDataFactory(r.rt.SID(), entry.start, entry.end, true, false)
+	factory := logtail.IncrementalCheckpointDataFactory(r.rt.SID(), entry.start, entry.end, true)
 	data, err := factory(r.catalog)
 	if err != nil {
 		return
@@ -867,30 +867,46 @@ func (r *runner) onWaitWaitableItems(items ...any) {
 	logutil.Debugf("Total [%d] WAL Checkpointed | [%s]", len(items), time.Since(start))
 }
 
-func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.TableTree, endTs types.TS) error {
+func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.TableTree) error {
+	tableDesc := fmt.Sprintf("%d-%s", table.ID, table.GetLastestSchemaLocked(false).Name)
 	metas := make([]*catalog.ObjectEntry, 0, 10)
 	for _, obj := range tree.Objs {
-		object, err := table.GetObjectByID(obj.ID)
+		object, err := table.GetObjectByID(obj.ID, false)
 		if err != nil {
 			panic(err)
 		}
 		metas = append(metas, object)
+	}
+	tombstoneMetas := make([]*catalog.ObjectEntry, 0, 10)
+	for _, obj := range tree.Tombstones {
+		object, err := table.GetObjectByID(obj.ID, true)
+		if err != nil {
+			panic(err)
+		}
+		tombstoneMetas = append(tombstoneMetas, object)
 	}
 
 	// freeze all append
 	scopes := make([]common.ID, 0, len(metas))
 	for _, meta := range metas {
 		if !meta.GetObjectData().PrepareCompact() {
-			logutil.Infof("[FlushTabletail] %d-%s / %s false prepareCompact ", table.ID, table.GetLastestSchemaLocked().Name, meta.ID().String())
+			logutil.Info("[FlushTabletail] data prepareCompact false", zap.String("table", tableDesc), zap.String("obj", meta.ID().String()))
+			return moerr.GetOkExpectedEOB()
+		}
+		scopes = append(scopes, *meta.AsCommonID())
+	}
+	for _, meta := range tombstoneMetas {
+		if !meta.GetObjectData().PrepareCompact() {
+			logutil.Info("[FlushTabletail] tomb prepareCompact false", zap.String("table", tableDesc), zap.String("obj", meta.ID().String()))
 			return moerr.GetOkExpectedEOB()
 		}
 		scopes = append(scopes, *meta.AsCommonID())
 	}
 
-	factory := jobs.FlushTableTailTaskFactory(metas, r.rt, endTs)
+	factory := jobs.FlushTableTailTaskFactory(metas, tombstoneMetas, r.rt)
 	if _, err := r.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory); err != nil {
 		if err != tasks.ErrScheduleScopeConflict {
-			logutil.Infof("[FlushTabletail] %d-%s %v", table.ID, table.GetLastestSchemaLocked().Name, err)
+			logutil.Error("[FlushTabletail] Sched Failure", zap.String("table", tableDesc), zap.Error(err))
 		}
 		return moerr.GetOkExpectedEOB()
 	}
@@ -899,26 +915,29 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 
 func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.TableTree) (asize int, dsize int) {
 	for _, obj := range tree.Objs {
-		object, err := table.GetObjectByID(obj.ID)
+		object, err := table.GetObjectByID(obj.ID, false)
 		if err != nil {
 			panic(err)
 		}
-		a, d := object.GetObjectData().EstimateMemSize()
+		a, _ := object.GetObjectData().EstimateMemSize()
 		asize += a
-		dsize += d
+	}
+	for _, obj := range tree.Tombstones {
+		object, err := table.GetObjectByID(obj.ID, true)
+		if err != nil {
+			panic(err)
+		}
+		a, _ := object.GetObjectData().EstimateMemSize()
+		dsize += a
 	}
 	return
 }
 
-func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
-	if entry.IsEmpty() {
-		return
-	}
-	logutil.Debug(entry.String())
-
+func (r *runner) collectTableMemUsage(entry *logtail.DirtyTreeEntry) (memPressureRate float64) {
+	// reuse the list
 	r.objMemSizeList = r.objMemSizeList[:0]
 	sizevisitor := new(model.BaseTreeVisitor)
-	var totalSize, totalASize int
+	var totalSize int
 	sizevisitor.TableFn = func(did, tid uint64) error {
 		db, err := r.catalog.GetDatabaseByID(did)
 		if err != nil {
@@ -936,7 +955,6 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		dirtyTree := entry.GetTree().GetTable(tid)
 		asize, dsize := r.EstimateTableMemSize(table, dirtyTree)
 		totalSize += asize + dsize
-		totalASize += asize
 		r.objMemSizeList = append(r.objMemSizeList, tableAndSize{table, asize, dsize})
 		return moerr.GetOkStopCurrRecur()
 	}
@@ -945,44 +963,37 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 	}
 
 	slices.SortFunc(r.objMemSizeList, func(a, b tableAndSize) int {
-		if a.asize > b.asize {
-			return -1
-		} else if a.asize < b.asize {
-			return 1
-		} else {
-			return 0
-		}
+		return b.asize - a.asize // sort by asize desc
 	})
 
 	pressure := float64(totalSize) / float64(common.RuntimeOverallFlushMemCap.Load())
 	if pressure > 1.0 {
 		pressure = 1.0
 	}
+
+	logutil.Info(
+		"[flushtabletail] mem scan result",
+		zap.Float64("pressure", pressure),
+		zap.String("totalSize", common.HumanReadableBytes(totalSize)),
+	)
+	return pressure
+}
+
+func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force bool, pressure float64) {
 	count := 0
-
-	logutil.Infof("[flushtabletail] scan result: pressure %v, totalsize %v", pressure, common.HumanReadableBytes(totalSize))
-
 	for _, ticket := range r.objMemSizeList {
 		table, asize, dsize := ticket.tbl, ticket.asize, ticket.dsize
 		dirtyTree := entry.GetTree().GetTable(table.ID)
-		_, endTs := entry.GetTimeRange()
 
 		stats := table.Stats
 		stats.Lock()
 		defer stats.Unlock()
 
 		if force {
-			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchemaLocked().Name)
-			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
+			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchemaLocked(false).Name)
+			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
 				stats.ResetDeadlineWithLock()
 			}
-			continue
-		}
-
-		if stats.LastFlush.IsEmpty() {
-			// first boot, just bail out, and never enter this branch again
-			stats.LastFlush = stats.LastFlush.Next()
-			stats.ResetDeadlineWithLock()
 			continue
 		}
 
@@ -990,19 +1001,22 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 			if !table.IsActive() {
 				count++
 				if pressure < 0.5 || count < 200 {
+					// if the table has been dropped, flush it immediately if
+					// resources are available.
+					// count is used to avoid too many flushes in one round
 					return true
 				}
 				return false
 			}
+			// time to flush
 			if stats.FlushDeadline.Before(time.Now()) {
 				return true
 			}
+			// this table is too large, flush it
 			if asize+dsize > stats.FlushMemCapacity {
 				return true
 			}
-			if asize < common.Const1MBytes && dsize > 2*common.Const1MBytes+common.Const1MBytes/2 {
-				return true
-			}
+			// unflushed data is too large, flush it
 			if asize > common.Const1MBytes && rand.Float64() < pressure {
 				return true
 			}
@@ -1010,10 +1024,10 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		}
 
 		ready := flushReady()
-		// debug log, delete later
-		if !stats.LastFlush.IsEmpty() && asize+dsize > 2*1000*1024 {
+
+		if stats.Inited && asize+dsize > 2*1000*1024 {
 			logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v, flushReady %v",
-				table.GetLastestSchemaLocked().Name,
+				table.GetLastestSchemaLocked(false).Name,
 				common.HumanReadableBytes(asize+dsize),
 				common.HumanReadableBytes(dsize),
 				time.Until(stats.FlushDeadline),
@@ -1022,11 +1036,22 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		}
 
 		if ready {
-			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
+			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
 				stats.ResetDeadlineWithLock()
 			}
 		}
 	}
+}
+
+// for a non-forced dirty tree, it contains all unflushed data in the db at the latest moment
+func (r *runner) scheduleFlush(entry *logtail.DirtyTreeEntry, force bool) {
+	if entry.IsEmpty() {
+		return
+	}
+	logutil.Debugf(entry.String())
+
+	pressure := r.collectTableMemUsage(entry)
+	r.checkFlushConditionAndFire(entry, force, pressure)
 }
 
 func (r *runner) onDirtyEntries(entries ...any) {
@@ -1040,31 +1065,26 @@ func (r *runner) onDirtyEntries(entries ...any) {
 			normal.Merge(e.tree)
 		}
 	}
-	if !force.IsEmpty() {
-		r.tryCompactTree(force, true)
-	}
-
-	if !normal.IsEmpty() {
-		r.tryCompactTree(normal, false)
-	}
+	r.scheduleFlush(force, true)
+	r.scheduleFlush(normal, false)
 }
 
 func (r *runner) crontask(ctx context.Context) {
+	// friendly for freezing objects, avoiding fierece refer cnt compectition
 	lag := 3 * time.Second
 	if r.options.maxFlushInterval < time.Second {
+		// test env, no need to lag
 		lag = 0 * time.Second
 	}
 	hb := w.NewHeartBeaterWithFunc(r.options.collectInterval, func() {
 		r.source.Run(lag)
 		entry := r.source.GetAndRefreshMerged()
-		_, endts := entry.GetTimeRange()
-		if entry.IsEmpty() {
-			logutil.Debugf("[flushtabletail]No dirty block found")
-		} else {
+		if !entry.IsEmpty() {
 			e := new(DirtyCtx)
 			e.tree = entry
 			r.dirtyEntryQueue.Enqueue(e)
 		}
+		_, endts := entry.GetTimeRange()
 		r.tryScheduleCheckpoint(endts)
 	}, nil)
 	hb.Start()

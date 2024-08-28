@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -633,15 +634,15 @@ func (h *Handle) HandleWrite(
 	ctx = perfcounter.WithCounterSetFrom(ctx, h.db.Opts.Ctx)
 	switch req.PkCheck {
 	case db.FullDedup:
-		txn.SetDedupType(txnif.FullDedup)
+		txn.SetDedupType(txnif.DedupPolicy_CheckAll)
 	case db.IncrementalDedup:
 		if h.db.Opts.IncrementalDedup {
-			txn.SetDedupType(txnif.IncrementalDedup)
+			txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 		} else {
-			txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
+			txn.SetDedupType(txnif.DedupPolicy_SkipWorkspace)
 		}
 	case db.FullSkipWorkspaceDedup:
-		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
+		txn.SetDedupType(txnif.DedupPolicy_SkipWorkspace)
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s txn: %s",
@@ -682,6 +683,9 @@ func (h *Handle) HandleWrite(
 			statsVec := containers.ToTNVector(statsCNVec, common.WorkspaceAllocator)
 			for i := 0; i < statsVec.Length(); i++ {
 				s := objectio.ObjectStats(statsVec.Get(i).([]byte))
+				if !s.GetCNCreated() {
+					logutil.Fatal("the `CNCreated` mask not set")
+				}
 				delete(metalocations, s.ObjectName().String())
 			}
 			if len(metalocations) != 0 {
@@ -703,10 +707,6 @@ func (h *Handle) HandleWrite(
 				logutil.Errorf("the vec:%d in req.Batch is nil", i)
 				panic("invalid vector : vector is nil")
 			}
-			if vec.Length() == 0 {
-				logutil.Errorf("the vec:%d in req.Batch is empty", i)
-				panic("invalid vector: vector is empty")
-			}
 			if i == 0 {
 				len = vec.Length()
 			}
@@ -716,9 +716,9 @@ func (h *Handle) HandleWrite(
 			}
 		}
 		// TODO: debug for #13342, remove me later
-		if h.IsInterceptTable(tb.Schema().(*catalog.Schema).Name) {
-			if tb.Schema().(*catalog.Schema).HasPK() {
-				idx := tb.Schema().(*catalog.Schema).GetSingleSortKeyIdx()
+		if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {
+			if tb.Schema(false).(*catalog.Schema).HasPK() {
+				idx := tb.Schema(false).(*catalog.Schema).GetSingleSortKeyIdx()
 				for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
 					logutil.Info(
 						"op1",
@@ -754,12 +754,13 @@ func (h *Handle) HandleWrite(
 			//Extend lifetime of vectors is within the function.
 			//No NeedCopy. closeFunc is required after use.
 			//closeFunc is not nil.
-			vectors, closeFunc, err = blockio.LoadTombstoneColumns2(
+			vectors, closeFunc, err = blockio.LoadColumns2(
 				ctx,
 				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 				nil,
 				h.db.Runtime.Fs.Service,
 				location,
+				fileservice.Policy(0),
 				false,
 				nil,
 			)
@@ -769,21 +770,17 @@ func (h *Handle) HandleWrite(
 			defer closeFunc()
 			blkids := getBlkIDsFromRowids(vectors[0].GetDownstreamVector())
 			id := tb.GetMeta().(*catalog.TableEntry).AsCommonID()
-			if len(blkids) == 1 {
-				for blkID := range blkids {
-					id.BlockID = blkID
-				}
-				ok, err = tb.TryDeleteByDeltaloc(id, location)
-				if err != nil {
-					return
-				}
-				if ok {
-					continue
-				}
-				logutil.Warnf("blk %v try delete by deltaloc failed", id.BlockID.String())
-			} else {
-				logutil.Warnf("multiply blocks in one deltalocation")
+			for blkID := range blkids {
+				id.BlockID = blkID
 			}
+			ok, err = tb.TryDeleteByDeltaloc(id, location)
+			if err != nil {
+				return
+			}
+			if ok {
+				continue
+			}
+			logutil.Warnf("blk %v try delete by deltaloc failed", id.BlockID.String())
 			rowIDVec := vectors[0]
 			defer rowIDVec.Close()
 			pkVec := vectors[1]
@@ -802,8 +799,8 @@ func (h *Handle) HandleWrite(
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
-	if h.IsInterceptTable(tb.Schema().(*catalog.Schema).Name) {
-		if tb.Schema().(*catalog.Schema).HasPK() {
+	if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {
+		if tb.Schema(false).(*catalog.Schema).HasPK() {
 			for i := 0; i < rowIDVec.Length(); i++ {
 				rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
 				logutil.Info(

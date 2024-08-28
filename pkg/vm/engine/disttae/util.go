@@ -373,6 +373,8 @@ func mergeFilters(
 
 	switch connector {
 	case function.AND:
+		// use left as default
+		finalFilter = left
 		switch left.op {
 		case function.IN:
 			switch right.op {
@@ -1473,8 +1475,7 @@ func ForeachCommittedObjects(
 	createObjs map[objectio.ObjectNameShort]struct{},
 	delObjs map[objectio.ObjectNameShort]struct{},
 	p *logtailreplay.PartitionState,
-	onObj func(info logtailreplay.ObjectInfo) error,
-) (err error) {
+	onObj func(info logtailreplay.ObjectInfo) error) (err error) {
 	for obj := range createObjs {
 		if objInfo, ok := p.GetObject(obj); ok {
 			if err = onObj(objInfo); err != nil {
@@ -1491,6 +1492,27 @@ func ForeachCommittedObjects(
 	}
 	return nil
 
+}
+
+func ForeachTombstoneObject(
+	ts types.TS,
+	onTombstone func(tombstone logtailreplay.ObjectEntry) (next bool, err error),
+	pState *logtailreplay.PartitionState,
+) error {
+	iter, err := pState.NewObjectsIter(ts, true, true)
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	for iter.Next() {
+		obj := iter.Entry()
+		if next, err := onTombstone(obj); !next || err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func ForeachSnapshotObjects(
@@ -1524,7 +1546,7 @@ func ForeachSnapshotObjects(
 		return
 	}
 
-	iter, err := tableSnapshot.NewObjectsIter(types.TimestampToTS(ts), true)
+	iter, err := tableSnapshot.NewObjectsIter(types.TimestampToTS(ts), true, false)
 	if err != nil {
 		return
 	}
@@ -1679,6 +1701,22 @@ func MakeColExprForTest(idx int32, typ types.T, colName ...string) *plan.Expr {
 	}
 }
 
+// removeIf removes the elements that pred is true.
+func removeIf[T any](data []T, pred func(t T) bool) []T {
+	if len(data) == 0 {
+		return data
+	}
+	res := 0
+	for i := 0; i < len(data); i++ {
+		if !pred(data[i]) {
+			if res != i {
+				data[res] = data[i]
+			}
+			res++
+		}
+	}
+	return data[:res]
+}
 func MakeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	argTypes := make([]types.Type, len(args))
 	for i, arg := range args {

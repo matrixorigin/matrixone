@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
@@ -153,26 +154,48 @@ func GetDefaultRelation(t *testing.T, e *db.DB, name string) (txn txnif.AsyncTxn
 }
 
 func GetOneObject(rel handle.Relation) handle.Object {
-	it := rel.MakeObjectIt()
+	it := rel.MakeObjectIt(false)
 	it.Next()
 	defer it.Close()
 	return it.GetObject()
 }
 
 func GetOneBlockMeta(rel handle.Relation) *catalog.ObjectEntry {
-	it := rel.MakeObjectIt()
-	defer it.Close()
+	it := rel.MakeObjectIt(false)
 	it.Next()
+	defer it.Close()
 	return it.GetObject().GetMeta().(*catalog.ObjectEntry)
 }
 
-func GetAllBlockMetas(rel handle.Relation) (metas []*catalog.ObjectEntry) {
-	it := rel.MakeObjectIt()
+func GetOneTombstoneMeta(rel handle.Relation) *catalog.ObjectEntry {
+	it := rel.MakeObjectIt(true)
+	it.Next()
+	it.Close()
+	return it.GetObject().GetMeta().(*catalog.ObjectEntry)
+}
+
+func GetAllBlockMetas(rel handle.Relation, isTombstone bool) (metas []*catalog.ObjectEntry) {
+	it := rel.MakeObjectIt(isTombstone)
 	for it.Next() {
 		blk := it.GetObject()
 		metas = append(metas, blk.GetMeta().(*catalog.ObjectEntry))
 	}
 	it.Close()
+	return
+}
+func GetAllAppendableMetas(rel handle.Relation, isTombstone bool) (metas []*catalog.ObjectEntry) {
+	it := rel.MakeObjectIt(isTombstone)
+	for it.Next() {
+		blk := it.GetObject()
+		meta := blk.GetMeta().(*catalog.ObjectEntry)
+		if !meta.IsAppendable() {
+			continue
+		}
+		if meta.HasDropCommitted() {
+			continue
+		}
+		metas = append(metas, meta)
+	}
 	return
 }
 
@@ -187,7 +210,7 @@ func MockObjectStats(t *testing.T, obj handle.Object) {
 }
 
 func CheckAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, applyDelete bool) {
-	schema := rel.Schema().(*catalog.Schema)
+	schema := rel.Schema(false).(*catalog.Schema)
 	for _, def := range schema.ColDefs {
 		rows := GetColumnRowsByScan(t, rel, def.Idx, applyDelete)
 		assert.Equal(t, expectRows, rows)
@@ -211,14 +234,15 @@ func ForEachColumnView(t *testing.T, rel handle.Relation, colIdx int, fn func(vi
 	ForEachObject(t, rel, func(blk handle.Object) (err error) {
 		blkCnt := blk.GetMeta().(*catalog.ObjectEntry).BlockCnt()
 		for i := 0; i < blkCnt; i++ {
-			view, err := blk.GetColumnDataById(context.Background(), uint16(i), colIdx, common.DefaultAllocator)
+			var view *containers.Batch
+			err := blk.HybridScan(context.Background(), &view, uint16(i), []int{colIdx}, common.DefaultAllocator)
+			if view == nil {
+				logutil.Warnf("blk %v", blk.String())
+				continue
+			}
 			if err != nil {
 				t.Errorf("blk %v, %v", blk.String(), err)
 				return err
-			}
-			if view == nil {
-				logutil.Errorf("read nil batch blk %v", blk.String())
-				continue
 			}
 			defer view.Close()
 			err = fn(view)
@@ -231,7 +255,14 @@ func ForEachColumnView(t *testing.T, rel handle.Relation, colIdx int, fn func(vi
 }
 
 func ForEachObject(t *testing.T, rel handle.Relation, fn func(obj handle.Object) error) {
-	it := rel.MakeObjectIt()
+	forEachObject(t, rel, fn, false)
+}
+func ForEachTombstone(t *testing.T, rel handle.Relation, fn func(obj handle.Object) error) {
+	forEachObject(t, rel, fn, true)
+}
+
+func forEachObject(t *testing.T, rel handle.Relation, fn func(obj handle.Object) error, isTombstone bool) {
+	it := rel.MakeObjectIt(isTombstone)
 	var err error
 	for it.Next() {
 		obj := it.GetObject()
@@ -274,19 +305,13 @@ func AppendClosure(t *testing.T, data *containers.Batch, name string, e *db.DB, 
 func CompactBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema *catalog.Schema, skipConflict bool) {
 	txn, rel := GetRelation(t, tenantID, e, dbName, schema.Name)
 
-	var metas []*catalog.ObjectEntry
-	it := rel.MakeObjectIt()
-	for it.Next() {
-		blk := it.GetObject()
-		meta := blk.GetMeta().(*catalog.ObjectEntry)
-		metas = append(metas, meta)
-	}
-	_ = txn.Commit(context.Background())
-	if len(metas) == 0 {
+	metas := GetAllAppendableMetas(rel, false)
+	tombstones := GetAllAppendableMetas(rel, true)
+	if len(metas) == 0 && len(tombstones) == 0 {
 		return
 	}
 	txn, _ = GetRelation(t, tenantID, e, dbName, schema.Name)
-	task, err := jobs.NewFlushTableTailTask(nil, txn, metas, e.Runtime, txn.GetStartTS())
+	task, err := jobs.NewFlushTableTailTask(nil, txn, metas, tombstones, e.Runtime)
 	if skipConflict && err != nil {
 		_ = txn.Rollback(context.Background())
 		return
@@ -306,13 +331,17 @@ func CompactBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schem
 }
 
 func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema *catalog.Schema, skipConflict bool) {
+	mergeBlocks(t, tenantID, e, dbName, schema, skipConflict, false)
+	mergeBlocks(t, tenantID, e, dbName, schema, skipConflict, true)
+}
+func mergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema *catalog.Schema, skipConflict, isTombstone bool) {
 	txn, _ := e.StartTxn(nil)
 	txn.BindAccessInfo(tenantID, 0, 0)
 	db, _ := txn.GetDatabase(dbName)
 	rel, _ := db.GetRelationByName(schema.Name)
 
 	var objs []*catalog.ObjectEntry
-	objIt := rel.MakeObjectIt()
+	objIt := rel.MakeObjectIt(isTombstone)
 	for objIt.Next() {
 		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
 		if !obj.IsAppendable() {
@@ -326,7 +355,7 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 		txn.BindAccessInfo(tenantID, 0, 0)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
-		objHandle, err := rel.GetObject(obj.ID())
+		objHandle, err := rel.GetObject(obj.ID(), isTombstone)
 		if err != nil {
 			if skipConflict {
 				continue
@@ -336,7 +365,11 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 		}
 		metas = append(metas, objHandle.GetMeta().(*catalog.ObjectEntry))
 	}
-	task, err := jobs.NewMergeObjectsTask(nil, txn, metas, e.Runtime, 0)
+	if len(metas) == 0 {
+		t.Logf("no objects to merge, type %v", isTombstone)
+		return
+	}
+	task, err := jobs.NewMergeObjectsTask(nil, txn, metas, e.Runtime, 0, isTombstone)
 	if skipConflict && err != nil {
 		_ = txn.Rollback(context.Background())
 		return
@@ -369,7 +402,8 @@ func MockCNDeleteInS3(
 	deleteRows []uint32,
 ) (location objectio.Location, err error) {
 	pkDef := schema.GetPrimaryKey()
-	view, err := obj.GetColumnDataById(context.Background(), txn, schema, blkOffset, pkDef.Idx, common.DefaultAllocator)
+	var view *containers.Batch
+	err = obj.Scan(context.Background(), &view, txn, schema, blkOffset, []int{pkDef.Idx}, common.DefaultAllocator)
 	pkVec := containers.MakeVector(pkDef.Type, common.DefaultAllocator)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 	objID := obj.GetMeta().(*catalog.ObjectEntry).ID()
@@ -388,10 +422,14 @@ func MockCNDeleteInS3(
 	bat.AddVector("pk", pkVec)
 	name := objectio.MockObjectName()
 	writer, err := blockio.NewBlockWriterNew(fs.Service, name, 0, nil)
+	writer.SetDataType(objectio.SchemaTombstone)
+	writer.SetPrimaryKeyWithType(uint16(catalog.TombstonePrimaryKeyIdx), index.HBF,
+		index.ObjectPrefixFn,
+		index.BlockPrefixFn)
 	if err != nil {
 		return
 	}
-	_, err = writer.WriteTombstoneBatch(containers.ToCNBatch(bat))
+	_, err = writer.WriteBatch(containers.ToCNBatch(bat))
 	if err != nil {
 		return
 	}

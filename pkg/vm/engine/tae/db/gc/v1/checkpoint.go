@@ -494,7 +494,7 @@ func getAllowedMergeFiles(
 	snapshot types.TS,
 	listFunc checkpoint.GetCheckpointRange) (ok bool, files []*checkpoint.MetaFile, idxes []int, err error) {
 	var idx int
-	files, idx, err = checkpoint.ListSnapshotMetaWithDiskCleaner(snapshot, listFunc, metas)
+	files, idx, err, _ = checkpoint.ListSnapshotMetaWithDiskCleaner(snapshot, listFunc, metas)
 	if err != nil {
 		return
 	}

@@ -16,19 +16,16 @@ package merge
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 )
 
 type Scheduler struct {
 	tid      uint64
 	executor *Executor
 
-	run      int
-	policies [1]policy
+	policy policy
 
 	tableRowCnt int
 	tableRowDel int
@@ -37,10 +34,7 @@ type Scheduler struct {
 func NewScheduler(rt *dbutils.Runtime, scheduler CNMergeScheduler) *Scheduler {
 	return &Scheduler{
 		executor: NewMergeExecutor(rt, scheduler),
-		policies: [1]policy{
-			//newSingleObjPolicy(nil),
-			newMultiObjPolicy(nil),
-		},
+		policy:   newMultiObjPolicy(nil),
 	}
 }
 
@@ -52,7 +46,7 @@ func (m *Scheduler) OnPostObject(*catalog.ObjectEntry) error {
 	return nil
 }
 
-func (m *Scheduler) OnTombstone(data.Tombstone) error {
+func (m *Scheduler) OnTombstone(*catalog.ObjectEntry) error {
 	return nil
 }
 
@@ -92,18 +86,16 @@ func (m *Scheduler) resetForTable(entry *catalog.TableEntry) {
 		m.tableRowCnt = 0
 		m.tableRowDel = 0
 	}
-	m.policies[m.run].resetForTable(entry)
+	m.policy.resetForTable(entry)
 	m.executor.RefreshMemInfo()
 }
 
 func (m *Scheduler) PreExecute() error {
-	logutil.Infof("[Mergeblocks] Start Run %d", m.run)
 	m.executor.RefreshMemInfo()
 	return nil
 }
 
 func (m *Scheduler) PostExecute() error {
-	m.run = (m.run + 1) % len(m.policies)
 	m.executor.PrintStats()
 	return nil
 }
@@ -115,16 +107,14 @@ func (m *Scheduler) OnPostTable(tableEntry *catalog.TableEntry) (err error) {
 
 	tableEntry.Stats.AddRowStat(m.tableRowCnt, m.tableRowDel)
 	// for multi-object run. determine which objects to merge based on all objects.
-	mobjs, kind := m.policies[m.run].revise(m.executor.CPUPercent(), int64(m.executor.MemAvailBytes()))
-	if len(mobjs) == 0 {
-		return
-	}
+	mobjs, tombstones, kind := m.policy.revise(m.executor.CPUPercent(), int64(m.executor.MemAvailBytes()))
 
-	//if m.run == 0 {
-	//	m.executor.ExecuteSingleObjMerge(tableEntry, mobjs)
-	//} else {
-	m.executor.ExecuteMultiObjMerge(tableEntry, mobjs, kind)
-	//}
+	if len(mobjs) >= 2 {
+		m.executor.ExecuteMultiObjMerge(tableEntry, mobjs, kind)
+	}
+	if len(tombstones) >= 2 {
+		m.executor.ExecuteMultiObjMerge(tableEntry, tombstones, kind)
+	}
 	return
 }
 
@@ -145,10 +135,9 @@ func (m *Scheduler) OnObject(objectEntry *catalog.ObjectEntry) error {
 	dels := objectEntry.GetObjectData().GetTotalChanges()
 
 	// these operations do not require object lock
-	objectEntry.SetRemainingRows(rows - dels)
 	m.tableRowCnt += rows
 	m.tableRowDel += dels
-	m.policies[m.run].onObject(objectEntry)
+	m.policy.onObject(objectEntry)
 	return nil
 }
 

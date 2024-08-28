@@ -19,6 +19,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -141,6 +142,100 @@ func (idx *MutIndex) BatchDedup(
 	return
 }
 
+func (idx *MutIndex) GetDuplicatedRows(
+	ctx context.Context,
+	keys *vector.Vector,
+	keysZM index.ZM,
+	blkID *types.Blockid,
+	rowIDs *vector.Vector,
+	maxVisibleRow uint32,
+	skipFn func(row uint32) error,
+	mp *mpool.MPool,
+) (err error) {
+	if keysZM.Valid() {
+		if exist := idx.zonemap.FastIntersect(keysZM); !exist {
+			return
+		}
+	} else {
+		// 1. all keys are definitely not existed
+		if exist := idx.zonemap.FastContainsAny(keys); !exist {
+			return
+		}
+	}
+	op := func(v []byte, _ bool, offset int) error {
+		rows, err := idx.art.Search(v)
+		if err == index.ErrNotFound {
+			return nil
+		}
+		if skipFn != nil {
+			err = skipFn(rows[len(rows)-1])
+			if err != nil {
+				return err
+			}
+		}
+		var maxRow uint32
+		exist := false
+		for i := len(rows) - 1; i >= 0; i-- {
+			if rows[i] < maxVisibleRow {
+				maxRow = rows[i]
+				exist = true
+				break
+			}
+		}
+		if !exist {
+			return nil
+		}
+		rowID := objectio.NewRowid(blkID, maxRow)
+		containers.UpdateValue(rowIDs, uint32(offset), *rowID, false, mp)
+		return nil
+	}
+	if err = containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil); err != nil {
+		return
+	}
+	return
+}
+
+func (idx *MutIndex) Contains(
+	ctx context.Context,
+	keys *vector.Vector,
+	keysZM index.ZM,
+	blkID *types.Blockid,
+	skipFn func(row uint32) error,
+	mp *mpool.MPool,
+) (err error) {
+	if keysZM.Valid() {
+		if exist := idx.zonemap.FastIntersect(keysZM); !exist {
+			return
+		}
+	} else {
+		// 1. all keys are definitely not existed
+		if exist := idx.zonemap.FastContainsAny(keys); !exist {
+			return
+		}
+	}
+	op := func(v []byte, isNull bool, offset int) error {
+		if isNull {
+			return nil
+		}
+		rows, err := idx.art.Search(v)
+		if err == index.ErrNotFound {
+			return nil
+		}
+		if len(rows) != 1 {
+			panic("logic err: tombstones doesn't have duplicate rows")
+		}
+		err = skipFn(rows[0])
+		if err != nil {
+			return err
+		}
+		containers.UpdateValue(keys, uint32(offset), nil, true, mp)
+		return nil
+	}
+	if err = containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil); err != nil {
+		return err
+	}
+	return
+}
 func (idx *MutIndex) Close() error {
 	idx.art = nil
 	idx.zonemap = nil
