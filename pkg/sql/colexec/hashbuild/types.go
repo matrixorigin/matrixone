@@ -17,7 +17,6 @@ package hashbuild
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -40,9 +39,8 @@ type container struct {
 	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	runtimeFilterIn    bool
 	multiSels          [][]int32
-	batches            []*batch.Batch
+	batches            colexec.Batches
 	inputBatchRowCount int
-	buf                *batch.Batch
 
 	executor []colexec.ExpressionExecutor
 	vecs     [][]*vector.Vector
@@ -104,9 +102,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.inputBatchRowCount = 0
 	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
-	if ctr.batches != nil {
-		ctr.batches = ctr.batches[:0]
-	}
+	ctr.batches.Reset()
 	ctr.intHashMap = nil
 	ctr.strHashMap = nil
 	if len(ctr.multiSels) > 0 {
@@ -121,8 +117,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashBuild.ctr
-	ctr.batches = nil
-	ctr.buf = nil
+	ctr.batches.Reset()
 	ctr.intHashMap = nil
 	ctr.strHashMap = nil
 	ctr.multiSels = nil
