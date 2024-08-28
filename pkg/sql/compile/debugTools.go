@@ -283,7 +283,7 @@ func hanldeTailNodeReceiver(node vm.Operator, mp map[*process.WaitRegister]int, 
 		if receiverId, okk := mp[arg.Reg]; okk {
 			receiver = fmt.Sprintf("%d", receiverId)
 		}
-		buffer.WriteString(fmt.Sprintf(" to MergeReceiver %s", receiver))
+		buffer.WriteString(fmt.Sprintf(" to MergeReceiver [%s]", receiver))
 	}
 	if id == vm.Dispatch {
 		arg := node.(*dispatch.Dispatch)

@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -249,7 +248,7 @@ type scopeContext struct {
 
 // Compile contains all the information needed for compilation.
 type Compile struct {
-	scope []*Scope
+	scopes []*Scope
 
 	pn *plan.Plan
 
@@ -295,8 +294,6 @@ type Compile struct {
 	nodeRegs map[[2]int32]*process.WaitRegister
 	stepRegs map[int32][][2]int32
 
-	lock *sync.RWMutex
-
 	isInternal bool
 
 	// cnLabel is the CN labels which is received from proxy when build connection.
@@ -311,8 +308,6 @@ type Compile struct {
 	metaTables   map[string]struct{}
 	lockTables   map[uint64]*plan.LockTarget
 	disableRetry bool
-
-	lastAllocID int32
 
 	isPrepare bool
 }

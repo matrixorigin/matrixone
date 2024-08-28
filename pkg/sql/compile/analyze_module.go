@@ -361,15 +361,15 @@ func (c *Compile) GenPhyPlan() {
 	}
 
 	receiverMap := make(map[*process.WaitRegister]int)
-	ss := c.scope
+	ss := c.scopes
 	for i := range ss {
 		generateReceiverMap(ss[i], receiverMap)
 	}
 	//------------------------------------------------------------------------------------------------------
 	c.anal.phyPlan = models.NewPhyPlan()
-	if len(c.scope) > 0 {
-		for i := range c.scope {
-			phyScope := ConvertScopeToPhyScope(c.scope[i], receiverMap)
+	if len(c.scopes) > 0 {
+		for i := range c.scopes {
+			phyScope := ConvertScopeToPhyScope(c.scopes[i], receiverMap)
 			c.anal.phyPlan.LocalScope = append(c.anal.phyPlan.LocalScope, phyScope)
 		}
 	}

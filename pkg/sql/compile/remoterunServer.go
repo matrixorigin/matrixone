@@ -181,7 +181,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}
 		s = appendWriteBackOperator(runCompile, s)
 
-		runCompile.scope = []*Scope{s}
+		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
 		defer func() {
 			runCompile.clear()

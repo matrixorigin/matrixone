@@ -18,7 +18,10 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -830,6 +833,31 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 		in.ProjectList = t.ProjectList
 	case *unionall.UnionAll:
 		in.UnionAll = &pipeline.UnionAll{}
+	case *hashbuild.HashBuild:
+		in.HashBuild = &pipeline.HashBuild{
+			NeedHashMap:       t.NeedHashMap,
+			HashOnPK:          t.HashOnPK,
+			NeedBatches:       t.NeedBatches,
+			NeedAllocateSels:  t.NeedAllocateSels,
+			Conditions:        t.Conditions,
+			JoinMapTag:        t.JoinMapTag,
+			JoinMapRefCnt:     t.JoinMapRefCnt,
+			RuntimeFilterSpec: t.RuntimeFilterSpec,
+		}
+	case *shufflebuild.ShuffleBuild:
+		in.ShuffleBuild = &pipeline.Shufflebuild{
+			HashOnPK:          t.HashOnPK,
+			NeedBatches:       t.NeedBatches,
+			NeedAllocateSels:  t.NeedAllocateSels,
+			Conditions:        t.Conditions,
+			RuntimeFilterSpec: t.RuntimeFilterSpec,
+			JoinMapTag:        t.JoinMapTag,
+			ShuffleIdx:        t.ShuffleIdx,
+		}
+	case *indexbuild.IndexBuild:
+		in.IndexBuild = &pipeline.Indexbuild{
+			RuntimeFilterSpec: t.RuntimeFilterSpec,
+		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", op.OpType()))
 	}
@@ -1278,7 +1306,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Limit = t.Limit
 		arg.Offset = t.Offset
 		arg.ProjectList = opr.ProjectList
-		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.TableScan:
 		op = table_scan.NewArgument().WithTypes(opr.TableScan.Types)
@@ -1288,6 +1315,33 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op.(*value_scan.ValueScan).ProjectList = opr.ProjectList
 	case vm.UnionAll:
 		op = unionall.NewArgument()
+	case vm.HashBuild:
+		arg := hashbuild.NewArgument()
+		t := opr.GetHashBuild()
+		arg.NeedHashMap = t.NeedHashMap
+		arg.HashOnPK = t.HashOnPK
+		arg.NeedBatches = t.NeedBatches
+		arg.NeedAllocateSels = t.NeedAllocateSels
+		arg.Conditions = t.Conditions
+		arg.JoinMapTag = t.JoinMapTag
+		arg.JoinMapRefCnt = t.JoinMapRefCnt
+		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
+		op = arg
+	case vm.ShuffleBuild:
+		arg := shufflebuild.NewArgument()
+		t := opr.GetShuffleBuild()
+		arg.HashOnPK = t.HashOnPK
+		arg.NeedBatches = t.NeedBatches
+		arg.NeedAllocateSels = t.NeedAllocateSels
+		arg.Conditions = t.Conditions
+		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
+		arg.JoinMapTag = t.JoinMapTag
+		arg.ShuffleIdx = t.ShuffleIdx
+		op = arg
+	case vm.IndexBuild:
+		arg := indexbuild.NewArgument()
+		arg.RuntimeFilterSpec = opr.GetIndexBuild().RuntimeFilterSpec
+		op = arg
 	default:
 		return op, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
