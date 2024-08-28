@@ -121,7 +121,7 @@ func (ctr *container) build(ap *HashBuild, proc *process.Process, anal process.A
 	if err != nil {
 		return err
 	}
-	if !ap.NeedHashMap {
+	if ap.NeedHashMap {
 		err = ctr.hashmapBuilder.BuildHashmap(ap.HashOnPK, ap.NeedAllocateSels, ap.RuntimeFilterSpec, proc)
 	}
 	if err != nil {
