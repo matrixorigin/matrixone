@@ -482,13 +482,13 @@ func (s *service) handleGoMemLimit(
 func (s *service) handleFileServiceCacheRequest(
 	ctx context.Context, req *query.Request, resp *query.Response,
 ) error {
-	resp.FileServiceCacheResponse = &query.FileServiceCacheResponse{}
+	resp.FileServiceCacheResponse.Message = "Not Implemented"
 	return nil
 }
 
 func (s *service) handleFileServiceCacheEvictRequest(
 	ctx context.Context, req *query.Request, resp *query.Response,
 ) error {
-	resp.FileServiceCacheEvictResponse = &query.FileServiceCacheEvictResponse{}
+	resp.FileServiceCacheEvictResponse.Message = "Not Implemented"
 	return nil
 }
