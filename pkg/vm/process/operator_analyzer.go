@@ -265,7 +265,7 @@ func (ps *OperatorStats) Reset() {
 func (ps *OperatorStats) String() string {
 	return fmt.Sprintf(" CallNum:%d "+
 		"TimeCost:%dns "+
-		"WaitTime:%dns"+
+		"WaitTime:%dns "+
 		"InRows:%d "+
 		"OutRows:%d "+
 		"InSize:%dbytes "+

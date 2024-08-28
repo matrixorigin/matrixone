@@ -15,21 +15,11 @@
 package models
 
 import (
-	"fmt"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"testing"
 )
 
-const (
-	isFirstTrue = 1 << 0 // 0001 : isFirst = true
-	isLastTrue  = 1 << 1 // 0010 : isLast = true
-
-	isFirstFalse = 0 << 0 // 0000 : isFirst = false
-	isLastFalse  = 0 << 1 // 0000 : isLast = false
-)
-
-func TestPhyPlanJSON(t *testing.T) {
+func TestExplainPhyPlan(t *testing.T) {
 	operatorStats := &process.OperatorStats{
 		OperatorName:          "ExampleOperator",
 		CallNum:               10,
@@ -56,37 +46,29 @@ func TestPhyPlanJSON(t *testing.T) {
 		OpName:  "TableScan",
 		NodeIdx: 0,
 		Status:  isFirstTrue | isLastFalse,
-		//IsFirst: true,
-		//IsLast:  false,
 		OpStats: operatorStats,
 	}
 
 	phyOperator3_1 := PhyOperator{
-		OpName:  "Filter",
-		NodeIdx: 0,
-		Status:  isFirstFalse | isLastFalse,
-		//IsFirst:  false,
-		//IsLast:   false,
+		OpName:   "Filter",
+		NodeIdx:  0,
+		Status:   isFirstFalse | isLastFalse,
 		OpStats:  operatorStats,
 		Children: []*PhyOperator{&phyOperator3_0},
 	}
 
 	phyOperator3_2 := PhyOperator{
-		OpName:  "Projection",
-		NodeIdx: 0,
-		Status:  isFirstFalse | isLastTrue,
-		//IsFirst:  false,
-		//IsLast:   true,
+		OpName:   "Projection",
+		NodeIdx:  0,
+		Status:   isFirstFalse | isLastTrue,
 		OpStats:  operatorStats,
 		Children: []*PhyOperator{&phyOperator3_1},
 	}
 
 	phyOperator3_3 := PhyOperator{
-		OpName:  "Group",
-		NodeIdx: 1,
-		Status:  isFirstTrue | isLastFalse,
-		//IsFirst:  true,
-		//IsLast:   false,
+		OpName:   "Group",
+		NodeIdx:  1,
+		Status:   isFirstTrue | isLastFalse,
 		OpStats:  operatorStats,
 		Children: []*PhyOperator{&phyOperator3_2},
 	}
@@ -95,8 +77,6 @@ func TestPhyPlanJSON(t *testing.T) {
 		OpName:  "Connect",
 		NodeIdx: 1,
 		Status:  isFirstFalse | isLastFalse,
-		//IsFirst: false,
-		//IsLast:  false,
 		DestReceiver: []PhyReceiver{
 			{
 				Idx:        0,
@@ -111,27 +91,21 @@ func TestPhyPlanJSON(t *testing.T) {
 		OpName:  "Merge group",
 		NodeIdx: 1,
 		Status:  isFirstFalse | isLastFalse,
-		//IsFirst: false,
-		//IsLast:  false,
 		OpStats: operatorStats,
 	}
 
 	phyOperator2_1 := PhyOperator{
-		OpName:  "Projection",
-		NodeIdx: 1,
-		Status:  isFirstFalse | isLastTrue,
-		//IsFirst:  false,
-		//IsLast:   true,
+		OpName:   "Projection",
+		NodeIdx:  1,
+		Status:   isFirstFalse | isLastTrue,
 		OpStats:  operatorStats,
 		Children: []*PhyOperator{&phyOperator2_0},
 	}
 
 	phyOperator2_2 := PhyOperator{
-		OpName:  "projection",
-		NodeIdx: 2,
-		Status:  isFirstTrue | isLastFalse,
-		//IsFirst:  true,
-		//IsLast:   false,
+		OpName:   "projection",
+		NodeIdx:  2,
+		Status:   isFirstTrue | isLastFalse,
 		OpStats:  operatorStats,
 		Children: []*PhyOperator{&phyOperator2_1},
 	}
@@ -140,8 +114,6 @@ func TestPhyPlanJSON(t *testing.T) {
 		OpName:  "Connect",
 		NodeIdx: 2,
 		Status:  isFirstFalse | isLastFalse,
-		//IsFirst: false,
-		//IsLast:  false,
 		OpStats: operatorStats,
 		DestReceiver: []PhyReceiver{
 			{
@@ -156,17 +128,13 @@ func TestPhyPlanJSON(t *testing.T) {
 		OpName:  "Merge",
 		NodeIdx: 2,
 		Status:  isFirstFalse | isLastTrue,
-		//IsFirst: false,
-		//IsLast:  true,
 		OpStats: operatorStats,
 	}
 
 	phyOperator1_1 := PhyOperator{
-		OpName:  "Output",
-		NodeIdx: -1,
-		Status:  isFirstFalse | isLastFalse,
-		//IsFirst:  false,
-		//IsLast:   false,
+		OpName:   "Output",
+		NodeIdx:  -1,
+		Status:   isFirstFalse | isLastFalse,
 		OpStats:  operatorStats,
 		Children: []*PhyOperator{&phyOperator1_0},
 	}
@@ -205,48 +173,84 @@ func TestPhyPlanJSON(t *testing.T) {
 		DataSource: nil,
 	}
 
+	phyPlan := NewPhyPlan()
+	phyPlan.LocalScope = []PhyScope{phyScope1}
+	phyPlan.RemoteScope = []PhyScope{phyScope1}
+	phyPlan.S3IOInputCount = 5
+	phyPlan.S3IOOutputCount = 0
+
 	//------------------------------------------------------------------------------------------------------------------
-
-	phyPlan := &PhyPlan{
-		Version:         "1.0.0",
-		LocalScope:      []PhyScope{phyScope1},
-		RemoteScope:     []PhyScope{phyScope1},
-		S3IOInputCount:  5,
-		S3IOOutputCount: 0,
+	type args struct {
+		plan   *PhyPlan
+		option ExplainOption
 	}
-
-	// Convert to JSON
-	jsonStr, err := PhyPlanToJSON(phyPlan)
-	if err != nil {
-		fmt.Printf("Error serializing to JSON: %s", err)
-		return
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "test01",
+			args: args{
+				plan:   NewPhyPlan(),
+				option: NormalOption,
+			},
+			want: "Version: 1.0, S3IOInputCount: 0, S3IOOutputCount: 0",
+		},
+		{
+			name: "test02",
+			args: args{
+				plan:   phyPlan,
+				option: NormalOption,
+			},
+			want: `Version: 1.0, S3IOInputCount: 5, S3IOOutputCount: 0
+LOCAL SCOPES:
+Scope 1 (Magic: Normal, mcpu: 0, Receiver: [1])
+  Pipeline: └── Output
+                └── Merge
+  PreScopes: {
+    Scope 1 (Magic: Merge, mcpu: 0, Receiver: [0])
+      Pipeline: └── Connect
+                    └── projection
+                        └── Projection
+                            └── Merge group
+      PreScopes: {
+        Scope 1 (Magic: Merge, mcpu: 0, Receiver: [])
+          DataSource: schema.table[col1 col2]
+          Pipeline: └── Connect
+                        └── Group
+                            └── Projection
+                                └── Filter
+                                    └── TableScan
+      }
+  }
+REMOTE SCOPES:
+Scope 1 (Magic: Normal, mcpu: 0, Receiver: [1])
+  Pipeline: └── Output
+                └── Merge
+  PreScopes: {
+    Scope 1 (Magic: Merge, mcpu: 0, Receiver: [0])
+      Pipeline: └── Connect
+                    └── projection
+                        └── Projection
+                            └── Merge group
+      PreScopes: {
+        Scope 1 (Magic: Merge, mcpu: 0, Receiver: [])
+          DataSource: schema.table[col1 col2]
+          Pipeline: └── Connect
+                        └── Group
+                            └── Projection
+                                └── Filter
+                                    └── TableScan
+      }
+  }`,
+		},
 	}
-	fmt.Printf("JSON: %s\n", jsonStr)
-
-	// Convert back from JSON
-	phyPlanBack, err := JSONToPhyPlan(jsonStr)
-	if err != nil {
-		fmt.Printf("Error deserializing from JSON: %s", err)
-		return
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ExplainPhyPlan(tt.args.plan, tt.args.option); got != tt.want {
+				t.Errorf("result:%v, want: %v", got, tt.want)
+			}
+		})
 	}
-	fmt.Printf("PhyPlan: %+v\n", phyPlanBack)
-
-	//----------------------------------------------------
-	jsonStr2, err := PhyPlanToJSON(&phyPlanBack)
-	if err != nil {
-		fmt.Printf("Error serializing to JSON: %s", err)
-		return
-	}
-	fmt.Printf("JSON2: %s\n", jsonStr2)
-
-	/*
-		// Convert to JSON
-		jsonData, err := json.MarshalIndent(phyPlan, "", "  ")
-		if err != nil {
-			log.Fatalf("Error serializing to JSON: %s", err)
-		}
-
-		// print JSON string
-		fmt.Println(string(jsonData))
-	*/
 }

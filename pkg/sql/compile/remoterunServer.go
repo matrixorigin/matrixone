@@ -201,7 +201,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		err = s.ParallelRun(runCompile)
 		//-------------------------------------------------------------------
 		if err == nil {
-			runCompile.GeneratePhyPlan()
+			runCompile.GenPhyPlan()
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
 		}
 		//-------------------------------------------------------------------

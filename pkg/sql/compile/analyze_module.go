@@ -90,10 +90,6 @@ func (c *Compile) GetAnalyzeModuleV1() *AnalyzeModule {
 	return c.anal
 }
 
-func (c *Compile) GetOriginSql() string {
-	return c.sql
-}
-
 // setAnalyzeCurrent Update the specific scopes's instruction to true
 // then update the current idx
 func (c *Compile) setAnalyzeCurrent(updateScopes []*Scope, nextId int) {
@@ -350,7 +346,7 @@ func ConvertSourceToPhySource(source *Source) *models.PhySource {
 	}
 }
 
-func (c *Compile) GeneratePhyPlan() {
+func (c *Compile) GenPhyPlan() {
 	var generateReceiverMap func(*Scope, map[*process.WaitRegister]int)
 	generateReceiverMap = func(s *Scope, mp map[*process.WaitRegister]int) {
 		for i := range s.PreScopes {

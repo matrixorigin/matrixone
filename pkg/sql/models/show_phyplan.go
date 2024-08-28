@@ -143,23 +143,25 @@ const (
 	AnalyzeOption
 )
 
-func ExplainPhyPlan(plan *PhyPlan, option ExplainOption) string {
+func ExplainPhyPlan(phy *PhyPlan, option ExplainOption) string {
 	buffer := bytes.NewBuffer(make([]byte, 0, 300))
-	fmt.Fprintf(buffer, "Version: %s, S3IOInputCount: %d, S3IOOutputCount: %d\n", plan.Version, plan.S3IOInputCount, plan.S3IOOutputCount)
+	fmt.Fprintf(buffer, "Version: %s, S3IOInputCount: %d, S3IOOutputCount: %d", phy.Version, phy.S3IOInputCount, phy.S3IOOutputCount)
 
-	buffer.WriteString("LOCAL SCOPES:")
-	for i := range plan.LocalScope {
-		explainPhyScope(plan.LocalScope[i], i, 0, option, buffer)
+	if len(phy.LocalScope) > 0 {
+		buffer.WriteString("\n")
+		buffer.WriteString("LOCAL SCOPES:")
+		for i := range phy.LocalScope {
+			explainPhyScope(phy.LocalScope[i], i, 0, option, buffer)
+		}
 	}
 
 	//------------------------------------------------------------------------------------------------------------------
-	if len(plan.RemoteScope) > 0 {
+	if len(phy.RemoteScope) > 0 {
 		buffer.WriteString("\n")
 		buffer.WriteString("REMOTE SCOPES:")
-	}
-
-	for i := range plan.RemoteScope {
-		explainPhyScope(plan.RemoteScope[i], i, 0, option, buffer)
+		for i := range phy.RemoteScope {
+			explainPhyScope(phy.RemoteScope[i], i, 0, option, buffer)
+		}
 	}
 	return buffer.String()
 }
