@@ -455,4 +455,25 @@ drop database test_load_db;
 -- @session
 drop account test_load;
 
+drop table if exists load_data_t9;
+create table load_data_t9(col1 int, col2 varchar(100), col3 varchar(100));
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' parallel 'true';
+select count(*) from load_data_t9;
+delete from load_data_t9;
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' ignore 99999 lines parallel 'true';
+select count(*) from load_data_t9;
+delete from load_data_t9;
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' ignore 9999 lines parallel 'true';
+select count(*) from load_data_t9;
+delete from load_data_t9;
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' enclosed by '"' LINES TERMINATED BY '\n' parallel 'true';
+select count(*) from load_data_t9;
+delete from load_data_t9;
+load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' parallel 'true' strict 'true';
+select count(*) from load_data_t9;
+delete from load_data_t9;
+drop table load_data_t9;
+
+
+
 

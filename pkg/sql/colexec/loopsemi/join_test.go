@@ -214,7 +214,6 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 		proc:   proc,
 		cancel: cancel,
 		arg: &LoopSemi{
-			Typs:   ts,
 			Cond:   cond,
 			Result: rp,
 			OperatorBase: vm.OperatorBase{

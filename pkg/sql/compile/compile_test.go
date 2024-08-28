@@ -89,6 +89,10 @@ func testPrint(_ *batch.Batch) error {
 type Ws struct {
 }
 
+func (w *Ws) Readonly() bool {
+	return false
+}
+
 func (w *Ws) IncrStatementID(ctx context.Context, commit bool) error {
 	return nil
 }
@@ -153,6 +157,7 @@ func TestCompile(t *testing.T) {
 		tc.proc.Base.TxnClient = txnCli
 		tc.proc.Base.TxnOperator = txnOp
 		tc.proc.Ctx = ctx
+		tc.proc.ReplaceTopCtx(ctx)
 		c := NewCompile("test", "test", tc.sql, "", "", tc.e, tc.proc, tc.stmt, false, nil, time.Now())
 		err := c.Compile(ctx, tc.pn, testPrint)
 		require.NoError(t, err)
@@ -216,6 +221,10 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 func newTestCase(sql string, t *testing.T) compileTestCase {
 	proc := testutil.NewProcess()
 	proc.GetSessionInfo().Buf = buffer.New()
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES", nil
+	})
+	catalog.SetupDefines("")
 	e, _, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1)
 	require.NoError(t, err)
