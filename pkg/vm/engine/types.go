@@ -901,8 +901,6 @@ type LogtailEngine interface {
 	TryToSubscribeTable(context.Context, uint64, uint64) error
 	// UnsubscribeTable unsubscribes a table from logtail client.
 	UnsubscribeTable(context.Context, uint64, uint64) error
-
-	LatestLogtailAppliedTime() timestamp.Timestamp
 }
 
 type Engine interface {
@@ -959,6 +957,8 @@ type Engine interface {
 	GetMessageCenter() any
 
 	GetService() string
+
+	LatestLogtailAppliedTime() timestamp.Timestamp
 }
 
 type VectorPool interface {

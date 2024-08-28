@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"container/list"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -1298,4 +1299,8 @@ func Test_issue3482(t *testing.T) {
 	s := issue3482SqlPrefix + " "
 	ui := UserInput{sql: s}
 	assert.True(t, ui.isIssue3482Sql())
+}
+
+func Test_xxx(t *testing.T) {
+	list.New()
 }

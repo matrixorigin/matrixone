@@ -101,6 +101,9 @@ func PollTablesFunc(
 		}
 
 		fun := func() (err error) {
+			//step0: transform cached batches
+			//TODO:
+
 			var txnOp client.TxnOperator
 			//step1 : create an txnop
 			ts := cnEngine.LatestLogtailAppliedTime()
@@ -166,9 +169,9 @@ func pollTable(
 	//	from = last wmark
 	//  to = txn operator snapshot ts
 	wMark := wMarkUpdater.GetTableWatermark(tblInfo.TblId)
-	typTs := types.TimestampToTS(wMark)
+	fromTs := types.TimestampToTS(wMark)
 	toTs := types.TimestampToTS(txnOp.SnapshotTS())
-	changes, err = rel.CollectChanges(typTs, toTs)
+	changes, err = rel.CollectChanges(fromTs, toTs)
 	if err != nil {
 		return
 	}
@@ -197,11 +200,15 @@ func pollTable(
 
 		switch hint {
 		case engine.Checkpoint:
-			//TODO: transform into insert instantly
+			// transform into insert instantly
+			interCh <- tools.NewPair(&disttae.TableCtx{},
+				&DecoderOutput{
+					outputTyp:     OutputTypeCheckpoint,
+					checkpointBat: insertData,
+				})
 		case engine.Tail_wip:
-			//TODO: cache this batch pair
 		case engine.Tail_done:
-			//TODO: cache this batch pair and transforming batches until now
+			//finish current batchlist,begin next batchList
 		}
 	}
 
