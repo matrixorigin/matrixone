@@ -218,10 +218,6 @@ func (hb *HashmapBuilder) Free() {
 		}
 	}
 	hb.executor = nil
-	hb.cleanHashMap()
-}
-
-func (hb *HashmapBuilder) cleanHashMap() {
 	if hb.IntHashMap != nil {
 		hb.IntHashMap.Free()
 		hb.IntHashMap = nil

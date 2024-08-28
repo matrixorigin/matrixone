@@ -116,13 +116,6 @@ func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Pr
 	return nil
 }
 
-func (ctr *container) buildHashmap(ap *HashBuild, proc *process.Process) error {
-	if !ap.NeedHashMap {
-		return nil
-	}
-	return ctr.hashmapBuilder.BuildHashmap(ap.HashOnPK, ap.NeedAllocateSels, ap.RuntimeFilterSpec, proc)
-}
-
 func (ctr *container) build(ap *HashBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	err := ctr.collectBuildBatches(ap, proc, anal, isFirst)
 	if err != nil {

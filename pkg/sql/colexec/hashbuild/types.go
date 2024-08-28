@@ -34,7 +34,6 @@ const (
 
 type container struct {
 	state           int
-	keyWidth        int // keyWidth is the width of hash columns, it determines which hash map to use.
 	runtimeFilterIn bool
 	hashmapBuilder  colexec.HashmapBuilder
 }

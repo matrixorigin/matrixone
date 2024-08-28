@@ -15,9 +15,7 @@
 package shufflebuild
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -35,16 +33,8 @@ const (
 )
 
 type container struct {
-	state              int
-	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
-	multiSels          [][]int32
-	batches            colexec.Batches
-	inputBatchRowCount int
-	executor           []colexec.ExpressionExecutor
-	vecs               [][]*vector.Vector
-	intHashMap         *hashmap.IntHashMap
-	strHashMap         *hashmap.StrHashMap
-	uniqueJoinKeys     []*vector.Vector
+	state          int
+	hashmapBuilder colexec.HashmapBuilder
 }
 
 type ShuffleBuild struct {
@@ -91,48 +81,12 @@ func (shuffleBuild *ShuffleBuild) Release() {
 }
 
 func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := &shuffleBuild.ctr
-	ctr.state = ReceiveBatch
+	shuffleBuild.ctr.state = ReceiveBatch
 	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
-	ctr.batches.Reset()
-	ctr.intHashMap = nil
-	ctr.strHashMap = nil
-	if ctr.multiSels != nil {
-		ctr.multiSels = ctr.multiSels[:0]
-	}
-	for i := range ctr.executor {
-		if ctr.executor[i] != nil {
-			ctr.executor[i].ResetForNextQuery()
-		}
-	}
+	shuffleBuild.ctr.hashmapBuilder.Reset()
 }
 
 func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := &shuffleBuild.ctr
-	ctr.intHashMap = nil
-	ctr.strHashMap = nil
-	ctr.multiSels = nil
-	ctr.batches.Reset()
-	ctr.cleanEvalVectors()
-}
-
-func (ctr *container) cleanEvalVectors() {
-	for i := range ctr.executor {
-		if ctr.executor[i] != nil {
-			ctr.executor[i].Free()
-		}
-	}
-	ctr.executor = nil
-}
-
-func (ctr *container) cleanHashMap() {
-	if ctr.intHashMap != nil {
-		ctr.intHashMap.Free()
-		ctr.intHashMap = nil
-	}
-	if ctr.strHashMap != nil {
-		ctr.strHashMap.Free()
-		ctr.strHashMap = nil
-	}
+	shuffleBuild.ctr.hashmapBuilder.Free()
 }
