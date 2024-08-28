@@ -53,12 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
@@ -208,12 +203,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 			Conditions: [][]*plan.Expr{nil, nil},
 		},
 		&limit.Limit{},
-		&loopanti.LoopAnti{},
 		&loopjoin.LoopJoin{},
-		&loopleft.LoopLeft{},
-		&loopsemi.LoopSemi{},
-		&loopsingle.LoopSingle{},
-		&loopmark.LoopMark{},
 		&offset.Offset{},
 		&order.Order{},
 		&product.Product{},
