@@ -263,6 +263,7 @@ func TestNewParallelScope(t *testing.T) {
 			testCompile.proc,
 			[]vm.OpType{vm.Projection, vm.Limit, vm.Connector})
 
+		scopeToParallel.NodeInfo.Mcpu = 4
 		_, ss := newParallelScope(scopeToParallel, testCompile)
 		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
 		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
