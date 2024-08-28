@@ -232,25 +232,21 @@ func (c *Conn) Read() ([]byte, error) {
 	var header, payload []byte
 	var err error
 	var n, packetLength, readLength, totalLength int
-	var sequenceId byte
-	var needCopy bool
 	defer func() {
 		for i := range payloads {
 			c.allocator.Free(payloads[i])
 		}
-		if needCopy {
-			copy(c.fixBuf.data, c.fixBuf.data[totalLength+HeaderLengthOfTheProtocol:c.fixBuf.writeIndex])
-			c.fixBuf.writeIndex -= totalLength + HeaderLengthOfTheProtocol
-		} else {
-			c.fixBuf.writeIndex = 0
-		}
 	}()
+
+	// Check if the packet header has been read into buffer
 	if c.fixBuf.writeIndex >= HeaderLengthOfTheProtocol {
 		header = c.fixBuf.data[:HeaderLengthOfTheProtocol]
 		packetLength = int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
+		c.sequenceId = header[3] + 1
 	} else {
 		packetLength = int(MaxPayloadSize)
 	}
+	// Read at least 1 packet or until there is no space in the buffer
 	for c.fixBuf.writeIndex < HeaderLengthOfTheProtocol+packetLength && c.fixBuf.writeIndex < fixBufferSize {
 		n, err = c.ReadFromConn(c.fixBuf.data[c.fixBuf.writeIndex:])
 		if err != nil {
@@ -260,25 +256,34 @@ func (c *Conn) Read() ([]byte, error) {
 		if c.fixBuf.writeIndex >= HeaderLengthOfTheProtocol {
 			header = c.fixBuf.data[:HeaderLengthOfTheProtocol]
 			packetLength = int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
-			sequenceId = header[3]
-			c.sequenceId = sequenceId + 1
+			c.sequenceId = header[3] + 1
 		}
 	}
-	needCopy = false
+
 	totalLength += packetLength
 	err = c.CheckAllowedPacketSize(totalLength)
 	if err != nil {
 		return nil, err
 	}
+
 	readLength = c.fixBuf.writeIndex - HeaderLengthOfTheProtocol
 	firstPayload = make([]byte, packetLength)
 	copy(firstPayload, c.fixBuf.data[HeaderLengthOfTheProtocol:])
 	if packetLength <= readLength {
 		if packetLength < readLength {
-			needCopy = true
+			// CASE 1: packet length < 1MB, fixBuf have more than 1 packet, c.fixBuf.writeIndex > HeaderLengthOfTheProtocol + packetLength
+			// So we keep next packet data
+			copy(c.fixBuf.data, c.fixBuf.data[packetLength+HeaderLengthOfTheProtocol:c.fixBuf.writeIndex])
+			c.fixBuf.writeIndex -= packetLength + HeaderLengthOfTheProtocol
+		} else {
+			// CASE 2: packet length < 1MB, fixBuf just have 1 packet, c.fixBuf.writeIndex > HeaderLengthOfTheProtocol = packetLength
+			// indicates that fixBuf have no data
+			c.fixBuf.writeIndex = 0
 		}
-		return firstPayload, nil
 	} else {
+		// CASE 3: packet length > 1MB, c.fixBuf.writeIndex < HeaderLengthOfTheProtocol + packetLength
+		c.fixBuf.writeIndex = 0
+		// NOTE: only read the remaining bytes of the current packet, do not read the next packet
 		err = c.ReadBytes(firstPayload[readLength:], packetLength-readLength)
 		if err != nil {
 			return nil, err
@@ -289,13 +294,13 @@ func (c *Conn) Read() ([]byte, error) {
 	}
 
 	for {
+		// If total package length > 16MB, only one package will be read each iter
 		err = c.ReadBytes(c.header[:], HeaderLengthOfTheProtocol)
 		if err != nil {
 			return nil, err
 		}
 		packetLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
-		sequenceId = c.header[3]
-		c.sequenceId = sequenceId + 1
+		c.sequenceId = c.header[3] + 1
 
 		if packetLength == 0 {
 			break

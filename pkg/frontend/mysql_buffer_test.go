@@ -93,6 +93,26 @@ func ReadPacketForTest(c *Conn) ([]byte, error) {
 	return finalPayload, nil
 }
 
+func stumblingToWrite(conn net.Conn, packet []byte) {
+	numParts := rand.Intn(3) + 2
+	splitPacket := make([][]byte, numParts)
+	currentIndex := 0
+	for i := 0; i < numParts-1; i++ {
+		remainingElements := len(packet) - currentIndex
+		maxSize := remainingElements - (numParts - i - 1)
+		partSize := rand.Intn(maxSize) + 1
+		splitPacket[i] = packet[currentIndex : currentIndex+partSize]
+		currentIndex += partSize
+	}
+	splitPacket[numParts-1] = packet[currentIndex:]
+	for i := range splitPacket {
+		_, err := conn.Write(splitPacket[i])
+		if err != nil {
+			panic(err)
+		}
+	}
+}
+
 func hasData(conn net.Conn) (bool, error) {
 	timeout := 1 * time.Second
 	conn.SetReadDeadline(time.Now().Add(timeout))
@@ -219,8 +239,6 @@ func TestMySQLProtocolRead(t *testing.T) {
 		}()
 
 		actualPayload, err := cm.Read()
-		fmt.Println(len(actualPayload))
-		fmt.Println(len(exceptPayload))
 		if err != nil {
 			t.Fatalf("Failed to read payload: %v", err)
 		}
@@ -242,6 +260,152 @@ func TestMySQLProtocolRead(t *testing.T) {
 				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
 				_, err := server.Write(append(header, payload...))
+				if err != nil {
+					panic(fmt.Sprintf("Failed to write payload: %v", err))
+				}
+			}
+			header := make([]byte, 4)
+			binary.LittleEndian.PutUint32(header[:4], 0)
+			header[3] = byte(totalPackets)
+			_, err := server.Write(header)
+			if err != nil {
+				panic(fmt.Sprintf("Failed to write header: %v", err))
+			}
+		}()
+
+		actualPayload, err := cm.Read()
+		if err != nil {
+			t.Fatalf("Failed to read payload: %v", err)
+		}
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
+	})
+}
+
+func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
+	var err error
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	sv.SessionTimeout.Duration = 24 * time.Hour
+	if err != nil {
+		panic(err)
+	}
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	cm, err := NewIOSession(client, pu)
+	if err != nil {
+		panic(err)
+	}
+	cm.allowedPacketSize = int(MaxPayloadSize) * 16
+	convey.Convey("Bad Network: read small packet < 1MB", t, func() {
+		exceptPayload := make([][]byte, 0)
+		actualPayload := make([][]byte, 0)
+		repeat := 5
+		packetSize := 1024 * 5 // 5KB
+		go func() {
+			for i := 0; i < repeat; i++ {
+				header := make([]byte, 4)
+				binary.LittleEndian.PutUint32(header, uint32(packetSize))
+				header[3] = byte(i)
+
+				payload := generateRandomBytes(packetSize)
+				exceptPayload = append(exceptPayload, payload)
+				stumblingToWrite(server, append(header, payload...))
+				if err != nil {
+					panic(fmt.Sprintf("Failed to write payload: %v", err))
+				}
+			}
+		}()
+		var data []byte
+		for i := 0; i < repeat; i++ {
+			data, err = cm.Read()
+			if err != nil {
+				t.Fatalf("Failed to read payload: %v", err)
+			}
+			actualPayload = append(actualPayload, data)
+		}
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
+	})
+
+	convey.Convey("Bad Network: read small packet > 1MB", t, func() {
+		exceptPayload := make([][]byte, 0)
+		actualPayload := make([][]byte, 0)
+		repeat := 5
+		packetSize := 1024 * 1024 * 5 // 5MB
+		go func() {
+			for i := 0; i < repeat; i++ {
+				header := make([]byte, 4)
+				binary.LittleEndian.PutUint32(header, uint32(packetSize))
+				header[3] = byte(i)
+
+				payload := generateRandomBytes(packetSize)
+				exceptPayload = append(exceptPayload, payload)
+				stumblingToWrite(server, append(header, payload...))
+				if err != nil {
+					panic(fmt.Sprintf("Failed to write payload: %v", err))
+				}
+			}
+		}()
+		var data []byte
+		for i := 0; i < repeat; i++ {
+			data, err = cm.Read()
+			if err != nil {
+				t.Fatalf("Failed to read payload: %v", err)
+			}
+			actualPayload = append(actualPayload, data)
+		}
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
+
+	})
+
+	convey.Convey("Bad Network: read big packet", t, func() {
+		exceptPayload := make([]byte, 0)
+		go func() {
+			packetSize := MaxPayloadSize // 16MB
+			totalPackets := 3
+
+			for i := 0; i < totalPackets; i++ {
+				header := make([]byte, 4)
+				if i == 2 {
+					packetSize -= 1
+				}
+				binary.LittleEndian.PutUint32(header[:4], packetSize)
+				header[3] = byte(i)
+
+				payload := generateRandomBytes(int(packetSize))
+				exceptPayload = append(exceptPayload, payload...)
+				stumblingToWrite(server, append(header, payload...))
+				if err != nil {
+					panic(fmt.Sprintf("Failed to write payload: %v", err))
+				}
+			}
+		}()
+
+		actualPayload, err := cm.Read()
+		if err != nil {
+			t.Fatalf("Failed to read payload: %v", err)
+		}
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
+
+	})
+
+	convey.Convey("Bad Network: read big packet, the last package size is equal to 16MB", t, func() {
+		exceptPayload := make([]byte, 0)
+		go func() {
+			packetSize := MaxPayloadSize // 16MB
+			totalPackets := 3
+
+			for i := 0; i < totalPackets; i++ {
+				header := make([]byte, 4)
+				binary.LittleEndian.PutUint32(header[:4], packetSize)
+				header[3] = byte(i)
+				payload := generateRandomBytes(int(packetSize))
+				exceptPayload = append(exceptPayload, payload...)
+				stumblingToWrite(server, append(header, payload...))
 				if err != nil {
 					panic(fmt.Sprintf("Failed to write payload: %v", err))
 				}
