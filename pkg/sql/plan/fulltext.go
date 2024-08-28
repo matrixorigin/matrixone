@@ -34,7 +34,7 @@ var (
 			},
 		},
 		{
-			Name: "tfidf",
+			Name: "score",
 			Typ: plan.Type{
 				Id:          int32(types.T_float32),
 				NotNullable: false,
@@ -46,6 +46,7 @@ var (
 
 // arg list [index_table_name, pk_type, []indexpart????, search_against]
 func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+	// ERIC TODO: change the doc_id type here
 	colDefs := _getColDefs(ftIndexColdefs)
 	// colName := findColName(tbl.Func)
 
