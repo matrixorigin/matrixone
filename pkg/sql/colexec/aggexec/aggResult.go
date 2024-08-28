@@ -45,8 +45,8 @@ func (r *basicResult) init(
 	}
 	r.mg = mg
 	r.mp = mg.Mp()
-	r.res = mg.GetVector(typ)
-	r.ess = mg.GetVector(types.T_bool.ToType())
+	r.res = vector.NewVec(typ)
+	r.ess = vector.NewVec(types.T_bool.ToType())
 }
 
 func (r *basicResult) extend(more int) (oldLen, newLen int, err error) {
@@ -112,18 +112,12 @@ func (r *basicResult) free() {
 		return
 	}
 	if r.res != nil {
-		if r.res.NeedDup() {
-			r.res.Free(r.mp)
-		} else {
-			r.mg.PutVector(r.res)
-		}
+		r.res.Free(r.mp)
+		r.res = nil
 	}
 	if r.ess != nil {
-		if r.ess.NeedDup() {
-			r.ess.Free(r.mp)
-		} else {
-			r.mg.PutVector(r.ess)
-		}
+		r.ess.Free(r.mp)
+		r.ess = nil
 	}
 }
 
@@ -162,13 +156,8 @@ func (r *basicResult) marshal() ([]byte, error) {
 }
 
 func (r *basicResult) unmarshal0(data []byte) error {
-	if r.mg == nil {
-		r.res = vector.NewVec(r.typ)
-		r.ess = vector.NewVec(types.T_bool.ToType())
-	} else {
-		r.res = r.mg.GetVector(r.typ)
-		r.ess = r.mg.GetVector(types.T_bool.ToType())
-	}
+	r.res = vector.NewVec(r.typ)
+	r.ess = vector.NewVec(types.T_bool.ToType())
 
 	length := types.DecodeUint32(data[:4])
 	data = data[4:]
