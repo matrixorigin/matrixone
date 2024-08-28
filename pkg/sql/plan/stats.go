@@ -369,7 +369,7 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.S
 		if s != nil {
 			return 1 / s.TableCnt
 		} else {
-			return 0.000001
+			return 0.0000001
 		}
 	}
 	ndv := getExprNdv(expr, builder)
@@ -567,7 +567,11 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 			ret = 0.2
 		case "prefix_eq":
 			if containsDynamicParam(expr) {
-				return 100 / s.TableCnt
+				if s != nil {
+					return 100 / s.TableCnt
+				} else {
+					return 0.0000001
+				}
 			} else {
 				return 0.0001
 			}
