@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -117,8 +116,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 	schema := tbl.schema
 	if schema.HasPK() && !tbl.schema.IsSecondaryIndexTable() {
 		dedupType := tbl.txnTable.store.txn.GetDedupType()
-		// FIXME: (jxm)support incremental and skip workspace
-		if dedupType == txnif.FullDedup {
+		if !dedupType.SkipNewCommit() && !dedupType.SkipOldCommit() {
 			for _, loc := range metaLocs {
 				var vectors []containers.Vector
 				var closeFunc func()

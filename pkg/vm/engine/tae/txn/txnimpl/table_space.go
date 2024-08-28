@@ -23,8 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -299,7 +297,7 @@ func (space *tableSpace) Append(data *containers.Batch) (dur float64, err error)
 			return
 		}
 		dedupType := space.table.store.txn.GetDedupType()
-		if schema.HasPK() && dedupType == txnif.FullDedup {
+		if schema.HasPK() && !dedupType.SkipWorkSpace() {
 			now := time.Now()
 			if err = space.index.BatchInsert(
 				data.Attrs[schema.GetSingleSortKeyIdx()],
@@ -330,7 +328,7 @@ func (space *tableSpace) AddObjsWithMetaLoc(
 	for i := range pkVecs {
 		dedupType := space.table.store.txn.GetDedupType()
 		//insert primary keys into space.index
-		if pkVecs != nil && dedupType == txnif.FullDedup {
+		if pkVecs != nil && !dedupType.SkipWorkSpace() {
 			if err = space.index.BatchInsert(
 				space.table.GetLocalSchema(space.isTombstone).GetSingleSortKey().Name,
 				pkVecs[i],
