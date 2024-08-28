@@ -366,7 +366,11 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.S
 		return 0.01
 	}
 	if col.Name == catalog.CPrimaryKeyColName {
-		return 1 / s.TableCnt
+		if s != nil {
+			return 1 / s.TableCnt
+		} else {
+			return 0.000001
+		}
 	}
 	ndv := getExprNdv(expr, builder)
 	if ndv > 0 {
