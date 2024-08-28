@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -39,12 +40,7 @@ func TestInitSQLCanCreated(t *testing.T) {
 			cn1, err := c.GetCNService(0)
 			require.NoError(t, err)
 
-			testutils.ExecSQL(
-				t,
-				catalog.MO_CATALOG,
-				cn1,
-				shardservice.InitSQLs...,
-			)
+			initShardsOnce(t, cn1)
 		},
 	)
 }
@@ -188,12 +184,7 @@ func mustCreatePartitionTable(
 	)
 	defer cancel()
 
-	committedAt := testutils.ExecSQL(
-		t,
-		catalog.MO_CATALOG,
-		cn,
-		shardservice.InitSQLs...,
-	)
+	committedAt := initShardsOnce(t, cn)
 
 	sql := fmt.Sprintf(
 		`
@@ -239,4 +230,26 @@ func mustCreatePartitionTable(
 	)
 	require.NoError(t, err)
 	return tableID, 2
+}
+
+func initShardsOnce(
+	t *testing.T,
+	cn embed.ServiceOperator,
+) timestamp.Timestamp {
+	exists := testutils.TableExists(
+		t,
+		catalog.MO_CATALOG,
+		catalog.MOShards,
+		cn,
+	)
+	if exists {
+		return timestamp.Timestamp{}
+	}
+
+	return testutils.ExecSQL(
+		t,
+		catalog.MO_CATALOG,
+		cn,
+		shardservice.InitSQLs...,
+	)
 }
