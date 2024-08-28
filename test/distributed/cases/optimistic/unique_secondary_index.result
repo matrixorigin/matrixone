@@ -735,7 +735,7 @@ create index int_unsigned_index on create_secondary_07(col1);
 insert into create_secondary_07 values (1,2,20.23,56),(1,4,100.00,90);
 show create table create_secondary_07;
 Table    Create Table
-create_secondary_07    CREATE TABLE `create_secondary_07` (\n  `col1` int UNSIGNED DEFAULT NULL,\n  `col2` int NOT NULL,\n  `col3` float DEFAULT NULL,\n  `col4` int unsigned DEFAULT NULL,\n  PRIMARY KEY (`col2`),\n  KEY `int_unsigned_index` (`col1`)\n)
+create_secondary_07    CREATE TABLE `create_secondary_07` (\n  `col1` int unsigned DEFAULT NULL,\n  `col2` int NOT NULL,\n  `col3` float DEFAULT NULL,\n  `col4` int unsigned DEFAULT NULL,\n  PRIMARY KEY (`col2`),\n  KEY `int_unsigned_index` (`col1`)\n)
 select * from create_secondary_07;
 col1    col2    col3    col4
 1    2    20.23    56
