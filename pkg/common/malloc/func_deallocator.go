@@ -21,3 +21,7 @@ var _ Deallocator = FuncDeallocator(nil)
 func (f FuncDeallocator) Deallocate(hints Hints) {
 	f(hints)
 }
+
+func (FuncDeallocator) As(target Trait) bool {
+	return false
+}

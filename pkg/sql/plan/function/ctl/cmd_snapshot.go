@@ -21,11 +21,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func handleGetSnapshotTS(proc *process.Process,
+func handleGetSnapshotTS(
+	proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (Result, error) {
-	rt := runtime.ProcessLevelRuntime()
+	sender requestSender,
+) (Result, error) {
+	rt := runtime.ServiceRuntime(proc.GetService())
 	now, _ := rt.Clock().Now()
 	return Result{
 		Method: GetSnapshotMethod,
@@ -33,12 +35,14 @@ func handleGetSnapshotTS(proc *process.Process,
 	}, nil
 }
 
-func handleUseSnapshotTS(proc *process.Process,
+func handleUseSnapshotTS(
+	proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (Result, error) {
+	sender requestSender,
+) (Result, error) {
 	var options []client.TxnOption
-	rt := runtime.ProcessLevelRuntime()
+	rt := runtime.ServiceRuntime(proc.GetService())
 	if parameter != "" {
 		ts, err := tspb.ParseTimestamp(parameter)
 		if err != nil {

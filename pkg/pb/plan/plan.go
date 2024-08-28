@@ -14,7 +14,9 @@
 
 package plan
 
-import "bytes"
+import (
+	"bytes"
+)
 
 const (
 	SystemExternalRel = "e"
@@ -109,4 +111,11 @@ func (t *Type) IsEmpty() bool {
 		t.Scale == 0 &&
 		t.Table == "" &&
 		t.Enumvalues == "")
+}
+
+func (def *ColDef) GetOriginCaseName() string {
+	if def.OriginName == "" {
+		return def.Name
+	}
+	return def.OriginName
 }

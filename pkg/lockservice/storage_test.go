@@ -209,5 +209,5 @@ func checkSeek(t *testing.T, s LockStorage, key []byte, expectKey, expectValue [
 }
 
 func newTestLock(txnID []byte) Lock {
-	return newLock(&lockContext{waitTxn: pb.WaitTxn{TxnID: txnID}})
+	return newLock(getLogger(""), &lockContext{waitTxn: pb.WaitTxn{TxnID: txnID}})
 }

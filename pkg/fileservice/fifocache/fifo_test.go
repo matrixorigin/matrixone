@@ -17,11 +17,12 @@ package fifocache
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCacheSetGet(t *testing.T) {
-	cache := New[int, int](8, nil, ShardInt[int])
+	cache := New[int, int](fscache.ConstCapacity(8), nil, ShardInt[int])
 
 	cache.Set(1, 1, 1)
 	n, ok := cache.Get(1)
@@ -38,17 +39,17 @@ func TestCacheSetGet(t *testing.T) {
 }
 
 func TestCacheEvict(t *testing.T) {
-	cache := New[int, int](8, nil, ShardInt[int])
+	cache := New[int, int](fscache.ConstCapacity(8), nil, ShardInt[int])
 	for i := 0; i < 64; i++ {
 		cache.Set(i, i, 1)
-		if cache.used1+cache.used2 > cache.capacity {
+		if cache.used1+cache.used2 > cache.capacity() {
 			t.Fatalf("capacity %v, used1 %v used2 %v", cache.capacity, cache.used1, cache.used2)
 		}
 	}
 }
 
 func TestCacheEvict2(t *testing.T) {
-	cache := New[int, int](2, nil, ShardInt[int])
+	cache := New[int, int](fscache.ConstCapacity(2), nil, ShardInt[int])
 	cache.Set(1, 1, 1)
 	cache.Set(2, 2, 1)
 
@@ -71,13 +72,13 @@ func TestCacheEvict2(t *testing.T) {
 	v, ok = cache.Get(4)
 	assert.True(t, ok)
 	assert.Equal(t, 4, v)
-	assert.Equal(t, 1, cache.used1)
-	assert.Equal(t, 1, cache.used2)
+	assert.Equal(t, int64(1), cache.used1)
+	assert.Equal(t, int64(1), cache.used2)
 }
 
 func TestCacheEvict3(t *testing.T) {
 	nEvict := 0
-	cache := New[int, bool](1024, func(_ int, _ bool) {
+	cache := New[int, bool](fscache.ConstCapacity(1024), func(_ int, _ bool) {
 		nEvict++
 	}, ShardInt[int])
 	for i := 0; i < 1024; i++ {
@@ -94,7 +95,7 @@ func TestCacheEvict3(t *testing.T) {
 		assert.True(t, cache.used1+cache.used2 <= 1024)
 		//assert.True(t, len(cache.values) <= 1024)
 	}
-	assert.Equal(t, 102, cache.used1)
-	assert.Equal(t, 922, cache.used2)
+	assert.Equal(t, int64(102), cache.used1)
+	assert.Equal(t, int64(922), cache.used2)
 	assert.Equal(t, 1024, nEvict)
 }

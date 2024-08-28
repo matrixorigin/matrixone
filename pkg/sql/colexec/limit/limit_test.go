@@ -22,8 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -37,9 +36,9 @@ const (
 
 // add unit tests for cases
 type limitTestCase struct {
-	arg   *Limit
-	types []types.Type
-	proc  *process.Process
+	arg         *Limit
+	proc        *process.Process
+	getRowCount int
 }
 
 var (
@@ -49,12 +48,9 @@ var (
 func init() {
 	tcs = []limitTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-			types: []types.Type{
-				types.T_int8.ToType(),
-			},
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			arg: &Limit{
-				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
+				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(0),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -63,14 +59,12 @@ func init() {
 					},
 				},
 			},
+			getRowCount: 0,
 		},
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-			types: []types.Type{
-				types.T_int8.ToType(),
-			},
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			arg: &Limit{
-				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(10),
+				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(1),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -79,17 +73,15 @@ func init() {
 					},
 				},
 			},
+			getRowCount: 1,
 		},
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-			types: []types.Type{
-				types.T_int8.ToType(),
-			},
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			arg: &Limit{
-				ctr: &container{
+				ctr: container{
 					seen: 0,
 				},
-				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(12),
+				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(5),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -98,6 +90,7 @@ func init() {
 					},
 				},
 			},
+			getRowCount: 2, //if colexec.MakeMockBatchs return more rows, you need to change it
 		},
 	}
 }
@@ -119,30 +112,29 @@ func TestPrepare(t *testing.T) {
 
 func TestLimit(t *testing.T) {
 	for _, tc := range tcs {
+		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		bats := []*batch.Batch{
-			newBatch(tc.types, tc.proc, Rows),
-			newBatch(tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
+		res, _ := tc.arg.Call(tc.proc)
+		if tc.getRowCount > 0 {
+			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
+		} else {
+			require.Equal(t, res.Batch == nil, true)
 		}
-		resetChildren(tc.arg, bats)
-		_, _ = tc.arg.Call(tc.proc)
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.arg.Reset(tc.proc, false, nil)
 
+		resetChildren(tc.arg)
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		bats = []*batch.Batch{
-			newBatch(tc.types, tc.proc, Rows),
-			newBatch(tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
+		res, _ = tc.arg.Call(tc.proc)
+		if tc.getRowCount > 0 {
+			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
+		} else {
+			require.Equal(t, res.Batch == nil, true)
 		}
-		resetChildren(tc.arg, bats)
-		_, _ = tc.arg.Call(tc.proc)
+
 		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -151,12 +143,9 @@ func BenchmarkLimit(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []limitTestCase{
 			{
-				proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-				types: []types.Type{
-					types.T_int8.ToType(),
-				},
+				proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 				arg: &Limit{
-					LimitExpr: plan2.MakePlan2Int64ConstExprWithType(8),
+					LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
 				},
 			},
 		}
@@ -165,30 +154,16 @@ func BenchmarkLimit(b *testing.B) {
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-
-			bats := []*batch.Batch{
-				newBatch(tc.types, tc.proc, BenchmarkRows),
-				batch.EmptyBatch,
-			}
-			resetChildren(tc.arg, bats)
+			resetChildren(tc.arg)
 			_, _ = tc.arg.Call(tc.proc)
 			tc.arg.Free(tc.proc, false, nil)
 		}
 	}
 }
 
-// create a new block based on the type information
-func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
-}
-
-func resetChildren(arg *Limit, bats []*batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: bats,
-	}
-	valueScanArg.Prepare(nil)
-	arg.SetChildren(
-		[]vm.Operator{
-			valueScanArg,
-		})
+func resetChildren(arg *Limit) {
+	bat := colexec.MakeMockBatchs()
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
 }

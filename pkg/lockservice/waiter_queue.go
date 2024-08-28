@@ -17,11 +17,13 @@ package lockservice
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type waiterQueue interface {
+	init(logger *log.MOLogger)
 	close(notify notifyValue)
 	reset()
 
@@ -48,9 +50,16 @@ func newWaiterQueue() waiterQueue {
 
 type sliceBasedWaiterQueue struct {
 	sync.RWMutex
+	logger         *log.MOLogger
 	beginChangeIdx int
 	waiters        []*waiter
 	keyCommittedAt timestamp.Timestamp
+}
+
+func (q *sliceBasedWaiterQueue) init(
+	logger *log.MOLogger,
+) {
+	q.logger = logger
 }
 
 func (q *sliceBasedWaiterQueue) moveTo(to waiterQueue) {
@@ -90,7 +99,7 @@ func (q *sliceBasedWaiterQueue) notifyAll(value notifyValue) {
 	}
 
 	for _, w := range q.waiters {
-		w.notify(value)
+		w.notify(value, q.logger)
 		w.close()
 	}
 	q.resetWaitersLocked()
@@ -118,7 +127,7 @@ func (q *sliceBasedWaiterQueue) notify(value notifyValue) {
 
 	skipAt := -1
 	for i, w := range q.waiters {
-		if w.notify(value) {
+		if w.notify(value, q.logger) {
 			break
 		}
 		// already completed
@@ -147,7 +156,7 @@ func (q *sliceBasedWaiterQueue) removeByTxnID(txnID []byte) {
 	newWaiters := q.waiters[:0]
 	for _, w := range q.waiters {
 		if w.isTxn(txnID) {
-			w.notify(notifyValue{})
+			w.notify(notifyValue{}, q.logger)
 			w.close()
 			continue
 		}
@@ -245,7 +254,7 @@ func (q *sliceBasedWaiterQueue) close(value notifyValue) {
 	idx := q.getCommittedIdx()
 	for i := 0; i < idx; i++ {
 		w := q.waiters[i]
-		w.notify(value)
+		w.notify(value, q.logger)
 		w.close()
 	}
 	q.doResetLocked()

@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -35,8 +34,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state   int
 	lastrow int
 	bat     *batch.Batch
@@ -48,11 +45,13 @@ type container struct {
 }
 
 type LoopSemi struct {
-	ctr    *container
-	Result []int32
-	Cond   *plan.Expr
-	Typs   []types.Type
+	ctr        container
+	Result     []int32
+	Cond       *plan.Expr
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopSemi *LoopSemi) GetOperatorBase() *vm.OperatorBase {
@@ -87,21 +86,30 @@ func (loopSemi *LoopSemi) Release() {
 }
 
 func (loopSemi *LoopSemi) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	loopSemi.Free(proc, pipelineFailed, err)
+	ctr := &loopSemi.ctr
+
+	ctr.resetExprExecutor()
+	ctr.state = Build
+	ctr.lastrow = 0
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.Mp())
+		ctr.bat = nil
+	}
+
+	if loopSemi.ProjectList != nil {
+		anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
+		anal.Alloc(loopSemi.ProjectAllocSize)
+		loopSemi.ResetProjection(proc)
+	}
 }
 
 func (loopSemi *LoopSemi) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := loopSemi.ctr; ctr != nil {
-		ctr.cleanBatch(proc.Mp())
-		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
-		//if arg.ctr.buf != nil {
-		//proc.PutBatch(arg.ctr.buf)
-		//arg.ctr.buf = nil
-		//}
-		loopSemi.ctr.lastrow = 0
-		loopSemi.ctr = nil
-	}
+	ctr := &loopSemi.ctr
+
+	ctr.cleanBatch(proc.Mp())
+	ctr.cleanExprExecutor()
+
+	loopSemi.FreeProjection(proc)
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
@@ -116,6 +124,12 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
+	}
+}
+
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
 }
 

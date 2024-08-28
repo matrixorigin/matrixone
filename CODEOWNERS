@@ -50,6 +50,7 @@
 /pkg/common @zhangxu19830126
 /pkg/common/mpool @m-schen
 /pkg/common/malloc @reusee
+/pkg/common/spool @reusee @m-schen
 /pkg/common/async @zhangxu19830126
 /pkg/common/bitmap @aunjgr
 /pkg/common/hashmap @aunjgr
@@ -77,6 +78,9 @@
 # pkg/defines
 /pkg/defines @daviszhen
 
+# pkg/embed
+/pkg/embed @zhangxu19830126
+
 # pkg/tnservice
 /pkg/tnservice @zhangxu19830126 @XuPeng-SH
 
@@ -95,7 +99,7 @@
 # pkg/lockservice
 /pkg/lockservice @zhangxu19830126
 
-# pkg/shardservice 
+# pkg/shardservice
 /pkg/shardservice @zhangxu19830126
 
 # pkg/logservice
@@ -128,7 +132,7 @@
 /pkg/sort @aunjgr @m-schen
 
 # pkg/bootstrap
-/pkg/bootstrap @daviszhen @zhangxu19830126 @qingxinhome
+/pkg/bootstrap @daviszhen @zhangxu19830126 @qingxinhome @LeftHandCold
 
 # pkg/sql
 /pkg/sql @aunjgr
@@ -138,7 +142,9 @@
 /pkg/sql/plan @ouyuanning @aunjgr @badboynt1
 /pkg/sql/plan/function @m-schen
 /pkg/sql/plan/explain @ouyuanning @aunjgr @badboynt1 @qingxinhome
+/pkg/sql/plan/tools @daviszhen @qingxinhome
 /pkg/sql/colexec/indexjoin @aunjgr @badboynt1
+/pkg/sql/colexec/indexbuild @badboynt1
 /pkg/sql/colexec/intersect @aunjgr @badboynt1
 /pkg/sql/colexec/intersectall @aunjgr @badboynt1
 /pkg/sql/colexec/loopanti @aunjgr @badboynt1
@@ -154,6 +160,7 @@
 /pkg/sql/colexec/mark @aunjgr @badboynt1
 /pkg/sql/colexec/semi @aunjgr @badboynt1
 /pkg/sql/colexec/join @aunjgr @badboynt1
+/pkg/sql/colexec/hashbuild @aunjgr @badboynt1
 /pkg/sql/colexec/left @aunjgr @badboynt1
 /pkg/sql/colexec/shuffle @badboynt1
 /pkg/sql/colexec/shufflebuild @badboynt1
@@ -176,7 +183,7 @@
 # pkg/util
 /pkg/util @zhangxu19830126
 /pkg/util/internalExecutor @aptend
-/pkg/util/metric @aptend
+/pkg/util/metric @aptend @xzxiong
 /pkg/util/toml @zhangxu19830126
 /pkg/util/trace @xzxiong
 /pkg/util/export @xzxiong
@@ -190,6 +197,7 @@
 /pkg/vm/engine @XuPeng-SH
 /pkg/vm/pipeline @m-schen
 /pkg/vm/process @m-schen @XuPeng-SH @aunjgr
+/pkg/vm/message @badboynt1
 /pkg/vm/engine/disttae @XuPeng-SH @triump2020
 /pkg/vm/engine/disttae/logtailreplay @reusee @triump2020
 /pkg/vm/engine/tae @XuPeng-SH

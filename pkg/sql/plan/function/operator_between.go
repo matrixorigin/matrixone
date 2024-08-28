@@ -78,7 +78,7 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return lhs.Le(rhs)
 		})
 
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		return opBetweenBytes(parameters, rs, proc, length)
 	}
 

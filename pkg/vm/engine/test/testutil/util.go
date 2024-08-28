@@ -21,15 +21,22 @@ import (
 	"os/user"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	testutil2 "github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func GetDefaultTestPath(module string, t *testing.T) string {
@@ -90,7 +97,7 @@ func GetDefaultTNShard() metadata.TNShard {
 	}
 }
 
-func TableDefBySchema(schema *catalog.Schema) ([]engine.TableDef, error) {
+func EngineTableDefBySchema(schema *catalog.Schema) ([]engine.TableDef, error) {
 	var defs = make([]engine.TableDef, 0)
 	for idx := range schema.ColDefs {
 		if schema.ColDefs[idx].Name == catalog2.Row_ID {
@@ -123,4 +130,161 @@ func TableDefBySchema(schema *catalog.Schema) ([]engine.TableDef, error) {
 	}
 
 	return defs, nil
+}
+
+func PlanTableDefBySchema(schema *catalog.Schema, tableId uint64, databaseName string) plan.TableDef {
+	tblDef := plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{},
+	}
+
+	tblDef.Name = schema.Name
+	tblDef.TblId = tableId
+
+	for idx := range schema.ColDefs {
+		tblDef.Cols = append(tblDef.Cols, &plan.ColDef{
+			ColId:     uint64(schema.ColDefs[idx].Idx),
+			Name:      schema.ColDefs[idx].Name,
+			Hidden:    schema.ColDefs[idx].Hidden,
+			NotNull:   !schema.ColDefs[idx].Nullable(),
+			TblName:   schema.Name,
+			DbName:    databaseName,
+			ClusterBy: schema.ColDefs[idx].ClusterBy,
+			Primary:   schema.ColDefs[idx].IsPrimary(),
+			Pkidx:     int32(schema.GetPrimaryKey().Idx),
+			Typ: plan.Type{
+				Id:          int32(schema.ColDefs[idx].Type.Oid),
+				NotNullable: !schema.ColDefs[idx].Nullable(),
+				Width:       schema.ColDefs[idx].Type.Oid.ToType().Width,
+			},
+			Seqnum: uint32(schema.ColDefs[idx].Idx),
+		})
+	}
+
+	tblDef.Pkey.PkeyColName = schema.GetPrimaryKey().Name
+	tblDef.Pkey.PkeyColId = uint64(schema.GetPrimaryKey().Idx)
+	tblDef.Pkey.Names = append(tblDef.Pkey.Names, schema.GetPrimaryKey().Name)
+	tblDef.Pkey.CompPkeyCol = nil
+	tblDef.Pkey.Cols = append(tblDef.Pkey.Cols, uint64(schema.GetPrimaryKey().Idx))
+
+	tblDef.Name2ColIndex = make(map[string]int32)
+	for idx := range schema.ColDefs {
+		tblDef.Name2ColIndex[schema.ColDefs[idx].Name] = int32(schema.ColDefs[idx].Idx)
+	}
+
+	return tblDef
+}
+
+func NewDefaultTableReader(
+	ctx context.Context,
+	rel engine.Relation,
+	databaseName string,
+	schema *catalog.Schema,
+	expr *plan.Expr,
+	mp *mpool.MPool,
+	ranges engine.RelData,
+	snapshotTS timestamp.Timestamp,
+	e *disttae.Engine,
+	txnOffset int,
+) (engine.Reader, error) {
+
+	tblDef := PlanTableDefBySchema(schema, rel.GetTableID(ctx), databaseName)
+
+	source, err := disttae.BuildLocalDataSource(ctx, rel, ranges, txnOffset)
+	if err != nil {
+		return nil, err
+	}
+
+	return disttae.NewReader(
+		ctx,
+		testutil2.NewProcessWithMPool("", mp),
+		e,
+		&tblDef,
+		snapshotTS,
+		expr,
+		source,
+	)
+}
+
+type EnginePack struct {
+	D       *TestDisttaeEngine
+	T       *TestTxnStorage
+	R       *MockRPCAgent
+	Mp      *mpool.MPool
+	Ctx     context.Context
+	t       *testing.T
+	cancelF func()
+}
+
+func InitEnginePack(opts TestOptions, t *testing.T) *EnginePack {
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
+	timeout := opts.Timeout
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	pack := &EnginePack{
+		Ctx:     ctx,
+		t:       t,
+		cancelF: cancel,
+	}
+	pack.D, pack.T, pack.R, pack.Mp = CreateEngines(pack.Ctx, opts, t)
+	return pack
+}
+
+func (p *EnginePack) Close() {
+	p.cancelF()
+	p.D.Close(p.Ctx)
+	p.T.Close(true)
+	p.R.Close()
+}
+
+func (p *EnginePack) StartCNTxn(opts ...client.TxnOption) client.TxnOperator {
+	op, err := p.D.NewTxnOperator(p.Ctx, p.D.Now(), opts...)
+	require.NoError(p.t, err)
+	require.NoError(p.t, p.D.Engine.New(p.Ctx, op))
+	return op
+}
+
+func (p *EnginePack) CreateDB(txnop client.TxnOperator, dbname string) engine.Database {
+	err := p.D.Engine.Create(p.Ctx, dbname, txnop)
+	require.NoError(p.t, err)
+	db, err := p.D.Engine.Database(p.Ctx, dbname, txnop)
+	require.NoError(p.t, err)
+	return db
+}
+
+func (p *EnginePack) CreateDBAndTable(txnop client.TxnOperator, dbname string, schema *catalog.Schema) (engine.Database, engine.Relation) {
+	db, rels := p.CreateDBAndTables(txnop, dbname, schema)
+	return db, rels[0]
+}
+
+func (p *EnginePack) CreateDBAndTables(txnop client.TxnOperator, dbname string, schema ...*catalog.Schema) (engine.Database, []engine.Relation) {
+	db := p.CreateDB(txnop, dbname)
+	rels := make([]engine.Relation, 0, len(schema))
+	for _, s := range schema {
+		defs, err := catalog.SchemaToDefs(s)
+		require.NoError(p.t, err)
+		require.NoError(p.t, db.Create(p.Ctx, s.Name, defs))
+		tbl, err := db.Relation(p.Ctx, s.Name, nil)
+		require.NoError(p.t, err)
+		rels = append(rels, tbl)
+	}
+	return db, rels
+}
+
+func (p *EnginePack) CreateTableInDB(txnop client.TxnOperator, dbname string, schema *catalog.Schema) engine.Relation {
+	db, err := p.D.Engine.Database(p.Ctx, dbname, txnop)
+	require.NoError(p.t, err)
+	defs, err := catalog.SchemaToDefs(schema)
+	require.NoError(p.t, err)
+	require.NoError(p.t, db.Create(p.Ctx, schema.Name, defs))
+	tbl, err := db.Relation(p.Ctx, schema.Name, nil)
+	require.NoError(p.t, err)
+	return tbl
+}
+
+func (p *EnginePack) DeleteTableInDB(txnop client.TxnOperator, dbname, tblname string) {
+	db, err := p.D.Engine.Database(p.Ctx, dbname, txnop)
+	require.NoError(p.t, err)
+	require.NoError(p.t, db.Delete(p.Ctx, tblname))
 }

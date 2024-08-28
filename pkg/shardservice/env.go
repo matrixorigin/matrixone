@@ -26,10 +26,13 @@ type env struct {
 	cluster       clusterservice.MOCluster
 }
 
-func NewEnv(selectCNLabel string) Env {
+func NewEnv(
+	service string,
+	selectCNLabel string,
+) Env {
 	return &env{
 		selectCNLabel: selectCNLabel,
-		cluster:       clusterservice.GetMOCluster(),
+		cluster:       clusterservice.GetMOCluster(service),
 	}
 }
 

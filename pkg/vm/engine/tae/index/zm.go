@@ -436,7 +436,7 @@ func (zm ZM) getValue(buf []byte) any {
 	case types.T_Blockid:
 		return types.DecodeFixed[types.Rowid](buf)
 	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		return buf
 	case types.T_array_float32:
 		// Used by MO_TABLE_COL_MAX and ZoneMap.String()
@@ -923,7 +923,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		})
 		return lowerBound, upperBound
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		col, area := vector.MustVarlenaRawData(vec)
 		minVal, maxVal := zm.GetMinBuf(), zm.GetMaxBuf()
 		lowerBound := sort.Search(len(col), func(i int) bool {
@@ -1161,7 +1161,7 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 
 		return lowerBound < len(col) && col[lowerBound].Le(maxVal)
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		col, area := vector.MustVarlenaRawData(vec)
 		minVal, maxVal := zm.GetMinBuf(), zm.GetMaxBuf()
 		lowerBound := sort.Search(len(col), func(i int) bool {

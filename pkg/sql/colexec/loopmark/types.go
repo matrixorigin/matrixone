@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -35,8 +34,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state   int
 	bat     *batch.Batch
 	rbat    *batch.Batch
@@ -46,11 +43,13 @@ type container struct {
 }
 
 type LoopMark struct {
-	ctr    *container
-	Cond   *plan.Expr
-	Typs   []types.Type
-	Result []int32
+	ctr        container
+	Cond       *plan.Expr
+	Result     []int32
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopMark *LoopMark) GetOperatorBase() *vm.OperatorBase {
@@ -85,16 +84,30 @@ func (loopMark *LoopMark) Release() {
 }
 
 func (loopMark *LoopMark) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	loopMark.Free(proc, pipelineFailed, err)
+	ctr := &loopMark.ctr
+
+	ctr.resetExprExecutor()
+	ctr.state = Build
+
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.Mp())
+		ctr.bat = nil
+	}
+
+	if loopMark.ProjectList != nil {
+		anal := proc.GetAnalyze(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor())
+		anal.Alloc(loopMark.ProjectAllocSize)
+		loopMark.ResetProjection(proc)
+	}
 }
 
 func (loopMark *LoopMark) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := loopMark.ctr; ctr != nil {
-		ctr.cleanBatch(proc.Mp())
-		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
-		loopMark.ctr = nil
-	}
+	ctr := &loopMark.ctr
+
+	ctr.cleanBatch(proc.Mp())
+	ctr.cleanExprExecutor()
+
+	loopMark.FreeProjection(proc)
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
@@ -109,6 +122,12 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
+	}
+}
+
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
 }
 

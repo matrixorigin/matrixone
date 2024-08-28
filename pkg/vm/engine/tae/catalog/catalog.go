@@ -43,8 +43,6 @@ const (
 	SnapshotAttr_BlockMaxRow    = "block_max_row"
 	SnapshotAttr_ObjectMaxBlock = "Object_max_block"
 	SnapshotAttr_SchemaExtra    = "schema_extra"
-	AccountIDDbNameTblName      = "account_id_db_name_tbl_name"
-	AccountIDDbName             = "account_id_db_name"
 	ObjectAttr_ObjectStats      = "object_stats"
 	ObjectAttr_State            = "state"
 	ObjectAttr_Sorted           = "sorted"

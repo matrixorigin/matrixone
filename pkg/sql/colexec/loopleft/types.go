@@ -35,8 +35,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state    int
 	probeIdx int
 	bat      *batch.Batch
@@ -48,11 +46,14 @@ type container struct {
 }
 
 type LoopLeft struct {
-	ctr    *container
-	Typs   []types.Type
-	Cond   *plan.Expr
-	Result []colexec.ResultPos
+	ctr        container
+	Typs       []types.Type
+	Cond       *plan.Expr
+	Result     []colexec.ResultPos
+	JoinMapTag int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (loopLeft *LoopLeft) GetOperatorBase() *vm.OperatorBase {
@@ -86,16 +87,32 @@ func (loopLeft *LoopLeft) Release() {
 }
 
 func (loopLeft *LoopLeft) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	loopLeft.Free(proc, pipelineFailed, err)
+	ctr := &loopLeft.ctr
+	anal := proc.GetAnalyze(loopLeft.GetIdx(), loopLeft.GetParallelIdx(), loopLeft.GetParallelMajor())
+
+	ctr.resetExprExecutor()
+	ctr.state = Build
+	ctr.inBat = nil
+	ctr.probeIdx = 0
+
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.Mp())
+		ctr.bat = nil
+	}
+
+	if loopLeft.ProjectList != nil {
+		anal.Alloc(loopLeft.ProjectAllocSize)
+		loopLeft.ResetProjection(proc)
+	}
 }
 
 func (loopLeft *LoopLeft) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := loopLeft.ctr; ctr != nil {
-		ctr.cleanBatch(proc.Mp())
-		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
-		loopLeft.ctr = nil
-	}
+	ctr := &loopLeft.ctr
+
+	ctr.cleanBatch(proc.Mp())
+	ctr.cleanExprExecutor()
+
+	loopLeft.FreeProjection(proc)
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
@@ -111,9 +128,11 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
 	}
-	if ctr.inBat != nil {
-		ctr.inBat.Clean(mp)
-		ctr.inBat = nil
+}
+
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
 }
 

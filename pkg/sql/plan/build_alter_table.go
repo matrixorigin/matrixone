@@ -17,18 +17,15 @@ package plan
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -40,7 +37,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		schemaName = ctx.DefaultDatabase()
 	}
 
-	_, tableDef := ctx.Resolve(schemaName, tableName, Snapshot{TS: &timestamp.Timestamp{}})
+	var snapshot *Snapshot
+	_, tableDef := ctx.Resolve(schemaName, tableName, snapshot)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
@@ -89,15 +87,15 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 			case *tree.PrimaryKeyIndex:
 				err = AddPrimaryKey(ctx, alterTablePlan, optionAdd, alterTableCtx)
 			case *tree.ForeignKey:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			case *tree.UniqueIndex:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			case *tree.Index:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			case *tree.ColumnTableDef:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			default:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			}
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
@@ -105,24 +103,24 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 				//return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
 				err = DropColumn(ctx, alterTablePlan, string(option.Name), alterTableCtx)
 			case tree.AlterTableDropIndex:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", option)
 			case tree.AlterTableDropKey:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", option)
 			case tree.AlterTableDropPrimaryKey:
 				err = DropPrimaryKey(ctx, alterTablePlan, alterTableCtx)
 			case tree.AlterTableDropForeignKey:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", option)
 			default:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", option)
 			}
 		case *tree.AlterOptionAlterIndex:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterOptionAlterReIndex:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.TableOptionComment:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterOptionTableName:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterAddCol:
 			err = AddColumn(ctx, alterTablePlan, option, alterTableCtx)
 		case *tree.AlterTableModifyColumnClause:
@@ -136,7 +134,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(ctx, alterTablePlan, option, alterTableCtx)
 		case *tree.TableOptionAutoIncrement:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		default:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now.")
 		}
@@ -145,7 +143,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		}
 	}
 
-	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName)
+	createTmpDdl, _, err := ConstructCreateTableSQL(ctx, copyTableDef, snapshot, true)
 	if err != nil {
 		return nil, err
 	}
@@ -171,338 +169,6 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 			},
 		},
 	}, nil
-}
-
-// restoreDDL Get the DDL statement for the corresponding table based on tableDef,
-// skipConstraint: Skip foreign key and index constraints
-func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblName string) (string, error) {
-	var createStr string
-	if tableDef.TableType == catalog.SystemOrdinaryRel {
-		createStr = fmt.Sprintf("CREATE TABLE `%s`.`%s` (", formatStr(schemaName), formatStr(tblName))
-	} else if tableDef.TableType == catalog.SystemExternalRel {
-		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE `%s`.`%s` (", formatStr(schemaName), formatStr(tblName))
-	} else if tableDef.TableType == catalog.SystemClusterRel {
-		createStr = fmt.Sprintf("CREATE CLUSTER TABLE `%s`.`%s` (", formatStr(schemaName), formatStr(tblName))
-	} else if tblName == catalog.MO_DATABASE || tblName == catalog.MO_TABLES || tblName == catalog.MO_COLUMNS {
-		createStr = fmt.Sprintf("CREATE TABLE `%s`.`%s` (", formatStr(schemaName), formatStr(tblName))
-	}
-
-	rowCount := 0
-	var pkDefs []string
-	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
-
-	colIdToName := make(map[uint64]string)
-	for _, col := range tableDef.Cols {
-		if col.Hidden {
-			continue
-		}
-		colName := col.Name
-		colIdToName[col.ColId] = col.Name
-		if colName == catalog.Row_ID {
-			continue
-		}
-		//the non-sys account skips the column account_id of the cluster table
-		accountId, err := ctx.GetAccountId()
-		if err != nil {
-			return "", err
-		}
-		if util.IsClusterTableAttribute(colName) &&
-			isClusterTable &&
-			accountId != catalog.System_Account {
-			continue
-		}
-
-		buf := bytes.NewBuffer(make([]byte, 0, 64))
-
-		if rowCount == 0 {
-			buf.WriteString("\n")
-		} else {
-			buf.WriteString(",\n")
-		}
-
-		typeStr := FormatColType(col.Typ)
-		fmt.Fprintf(buf, "  `%s` %s", formatStr(colName), typeStr)
-
-		if col.Typ.AutoIncr {
-			buf.WriteString(" NOT NULL AUTO_INCREMENT")
-		} else {
-			if !col.Default.NullAbility {
-				buf.WriteString(" NOT NULL")
-			}
-
-			if strings.EqualFold(col.Default.OriginString, "null") ||
-				len(col.Default.OriginString) == 0 {
-				if col.Default.NullAbility {
-					if col.Typ.Id == int32(types.T_timestamp) {
-						buf.WriteString(" NULL")
-					}
-					buf.WriteString(" DEFAULT NULL")
-				}
-			} else if len(col.Default.OriginString) > 0 {
-				buf.WriteString(" DEFAULT " + formatStr(col.Default.OriginString))
-			}
-
-			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
-				buf.WriteString(" ON UPDATE " + col.OnUpdate.OriginString)
-			}
-		}
-
-		if col.Comment != "" {
-			buf.WriteString(" COMMENT '" + col.Comment + "'")
-		}
-
-		createStr += buf.String()
-		rowCount++
-		if col.Primary {
-			pkDefs = append(pkDefs, colName)
-		}
-	}
-
-	// If it is a composite primary key, get the component columns of the composite primary key
-	if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
-		pkDefs = append(pkDefs, tableDef.Pkey.Names...)
-	}
-
-	if len(pkDefs) != 0 {
-		pkStr := "  PRIMARY KEY ("
-		for i, def := range pkDefs {
-			if i == len(pkDefs)-1 {
-				pkStr += fmt.Sprintf("`%s`", formatStr(def))
-			} else {
-				pkStr += fmt.Sprintf("`%s`,", formatStr(def))
-			}
-		}
-		pkStr += ")"
-		if rowCount != 0 {
-			createStr += ",\n"
-		}
-		createStr += pkStr
-	}
-
-	if tableDef.Indexes != nil {
-
-		// We only print distinct index names. This is used to avoid printing the same index multiple times for IVFFLAT or
-		// other multi-table indexes.
-		indexNames := make(map[string]bool)
-
-		for _, indexdef := range tableDef.Indexes {
-			if _, ok := indexNames[indexdef.IndexName]; ok {
-				continue
-			} else {
-				indexNames[indexdef.IndexName] = true
-			}
-
-			var indexStr string
-			if indexdef.Unique {
-				indexStr = "  UNIQUE KEY "
-			} else {
-				indexStr = "  KEY "
-			}
-			indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
-			if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
-				indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
-			}
-			indexStr += "("
-			i := 0
-			for _, part := range indexdef.Parts {
-				if catalog.IsAlias(part) {
-					continue
-				}
-				if i > 0 {
-					indexStr += ","
-				}
-
-				indexStr += fmt.Sprintf("`%s`", formatStr(part))
-				i++
-			}
-
-			indexStr += ")"
-			if indexdef.IndexAlgoParams != "" {
-				var paramList string
-				paramList, err := catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
-				if err != nil {
-					return "", err
-				}
-				indexStr += paramList
-			}
-			if indexdef.Comment != "" {
-				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
-				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
-			}
-			if rowCount != 0 {
-				createStr += ",\n"
-			}
-			createStr += indexStr
-		}
-	}
-
-	for _, fk := range tableDef.Fkeys {
-		colNames := make([]string, len(fk.Cols))
-		for i, colId := range fk.Cols {
-			colNames[i] = colIdToName[colId]
-		}
-
-		var fkTableDef *TableDef
-
-		//fk self reference
-		if fk.ForeignTbl == 0 {
-			fkTableDef = tableDef
-		} else {
-			if ctx.GetQueryingSubscription() != nil {
-				_, fkTableDef = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
-			} else {
-				_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
-			}
-		}
-
-		fkColIdToName := make(map[uint64]string)
-		for _, col := range fkTableDef.Cols {
-			fkColIdToName[col.ColId] = col.Name
-		}
-		fkColNames := make([]string, len(fk.ForeignCols))
-		for i, colId := range fk.ForeignCols {
-			fkColNames[i] = fkColIdToName[colId]
-		}
-
-		if rowCount != 0 {
-			createStr += ",\n"
-		}
-		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
-			formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
-	}
-
-	if rowCount != 0 {
-		createStr += "\n"
-	}
-	createStr += ")"
-
-	var comment string
-	var partition string
-	for _, def := range tableDef.Defs {
-		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
-			for _, kv := range proDef.Properties.Properties {
-				if kv.Key == catalog.SystemRelAttr_Comment {
-					comment = " COMMENT='" + kv.Value + "'"
-				}
-			}
-		}
-	}
-
-	if tableDef.Partition != nil {
-		partition = ` ` + tableDef.Partition.PartitionMsg
-	}
-
-	createStr += comment
-	createStr += partition
-
-	/**
-	Fix issue: https://github.com/matrixorigin/MO-Cloud/issues/1028#issuecomment-1667642384
-	Based on the grammar of the 'create table' in the file pkg/sql/parsers/dialect/mysql/mysql_sql.y
-		https://github.com/matrixorigin/matrixone/blob/68db7260e411e5a4541eaccf78ca9bb57e810f24/pkg/sql/parsers/dialect/mysql/mysql_sql.y#L6076C7-L6076C7
-		https://github.com/matrixorigin/matrixone/blob/68db7260e411e5a4541eaccf78ca9bb57e810f24/pkg/sql/parsers/dialect/mysql/mysql_sql.y#L6097
-	The 'cluster by' is after the 'partition by' and the 'table options', so we need to add the 'cluster by' string after the 'partition by' and the 'table options'.
-	*/
-	if tableDef.ClusterBy != nil {
-		clusterby := " CLUSTER BY ("
-		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-			//multi column clusterby
-			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
-			for i, cbName := range cbNames {
-				if i != 0 {
-					clusterby += fmt.Sprintf(", `%s`", formatStr(cbName))
-				} else {
-					clusterby += fmt.Sprintf("`%s`", formatStr(cbName))
-				}
-			}
-		} else {
-			//single column cluster by
-			clusterby += fmt.Sprintf("`%s`", formatStr(tableDef.ClusterBy.Name))
-		}
-		clusterby += ")"
-		createStr += clusterby
-	}
-
-	if tableDef.TableType == catalog.SystemExternalRel {
-		param := tree.ExternParam{}
-		err := json.Unmarshal([]byte(tableDef.Createsql), &param)
-		if err != nil {
-			return "", err
-		}
-		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='%s','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.Filepath, param.CompressType, param.Format, param.JsonData)
-
-		fields := ""
-		if param.Tail.Fields.Terminated != nil {
-			if param.Tail.Fields.Terminated.Value == "" {
-				fields += " TERMINATED BY \"\""
-			} else {
-				fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
-			}
-		}
-		if param.Tail.Fields.EnclosedBy != nil {
-			if param.Tail.Fields.EnclosedBy.Value == byte(0) {
-				fields += " ENCLOSED BY ''"
-			} else if param.Tail.Fields.EnclosedBy.Value == byte('\\') {
-				fields += " ENCLOSED BY '\\\\'"
-			} else {
-				fields += fmt.Sprintf(" ENCLOSED BY '%c'", param.Tail.Fields.EnclosedBy.Value)
-			}
-		}
-		if param.Tail.Fields.EscapedBy != nil {
-			if param.Tail.Fields.EscapedBy.Value == byte(0) {
-				fields += " ESCAPED BY ''"
-			} else if param.Tail.Fields.EscapedBy.Value == byte('\\') {
-				fields += " ESCAPED BY '\\\\'"
-			} else {
-				fields += fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy.Value)
-			}
-		}
-
-		line := ""
-		if param.Tail.Lines.StartingBy != "" {
-			line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
-		}
-		if param.Tail.Lines.TerminatedBy != nil {
-			if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
-				line += " TERMINATED BY '\\\\n'"
-			} else {
-				line += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
-			}
-		}
-
-		if len(fields) > 0 {
-			fields = " FIELDS" + fields
-			createStr += fields
-		}
-		if len(line) > 0 {
-			line = " LINES" + line
-			createStr += line
-		}
-
-		if param.Tail.IgnoredLines > 0 {
-			createStr += fmt.Sprintf(" IGNORE %d LINES", param.Tail.IgnoredLines)
-		}
-	}
-
-	var buf bytes.Buffer
-	for _, ch := range createStr {
-		if ch == '"' {
-			buf.WriteRune('"')
-		}
-		buf.WriteRune(ch)
-	}
-
-	sql := buf.String()
-	stmt, err := getRewriteSQLStmt(ctx, sql)
-	defer func() {
-		if stmt != nil {
-			stmt.Free()
-		}
-	}()
-
-	if err != nil {
-		return "", err
-	}
-	return sql, nil
 }
 
 func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (string, error) {
@@ -543,7 +209,7 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 const UnKnownColId uint64 = math.MaxUint64
 
 type AlterTableContext struct {
-	// key   --> Copy table column name
+	// key   --> Copy table column name, letter case: lower
 	// value --> Original table column name
 	alterColMap     map[string]selectExpr
 	schemaName      string
@@ -573,16 +239,16 @@ func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, sch
 		if coldef.Hidden {
 			continue
 		}
+
 		alterTblColMap[coldef.Name] = selectExpr{
 			sexprType: columnName,
 			sexprStr:  coldef.Name,
 		}
 
-		if !coldef.Hidden {
-			changTblColIdMap[coldef.ColId] = &plan.ColDef{
-				ColId: UnKnownColId,
-				Name:  coldef.Name,
-			}
+		changTblColIdMap[coldef.ColId] = &plan.ColDef{
+			ColId:      UnKnownColId,
+			Name:       coldef.Name,
+			OriginName: coldef.OriginName,
 		}
 	}
 	return &AlterTableContext{
@@ -613,7 +279,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if schemaName == "" {
 		schemaName = ctx.DefaultDatabase()
 	}
-	objRef, tableDef := ctx.Resolve(schemaName, tableName, Snapshot{TS: &timestamp.Timestamp{}})
+	objRef, tableDef := ctx.Resolve(schemaName, tableName, nil)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
@@ -743,6 +409,7 @@ func buildNotNullColumnVal(col *ColDef) string {
 	} else if col.Typ.Id == int32(types.T_varchar) ||
 		col.Typ.Id == int32(types.T_char) ||
 		col.Typ.Id == int32(types.T_text) ||
+		col.Typ.Id == int32(types.T_datalink) ||
 		col.Typ.Id == int32(types.T_binary) ||
 		col.Typ.Id == int32(types.T_blob) {
 		defaultValue = "''"

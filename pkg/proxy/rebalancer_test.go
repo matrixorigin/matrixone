@@ -39,16 +39,16 @@ func testRebalancer(
 		withRebalancerInterval(200*time.Millisecond),
 		withRebalancerTolerance(0.3),
 	)
-	re, err := newRebalancer(st, logger, mc, opts...)
+	re, err := newRebalancer("", st, logger, mc, opts...)
 	require.NoError(t, err)
 	return re
 }
 
 func TestCollectTunnels(t *testing.T) {
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	logger := rt.Logger()
@@ -126,7 +126,7 @@ func TestCollectTunnels(t *testing.T) {
 
 func TestCollectTunnels_Mixed(t *testing.T) {
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
@@ -144,7 +144,7 @@ func TestCollectTunnels_Mixed(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.TODO())
 		defer cancel()
 		hc := &mockHAKeeperClient{}
-		mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+		mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 		defer mc.Close()
 		rt.SetGlobalVariables(runtime.ClusterService, mc)
 
@@ -169,7 +169,7 @@ func TestCollectTunnels_Mixed(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.TODO())
 		defer cancel()
 		hc := &mockHAKeeperClient{}
-		mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+		mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 		defer mc.Close()
 		rt.SetGlobalVariables(runtime.ClusterService, mc)
 
@@ -196,7 +196,7 @@ func TestCollectTunnels_Mixed(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.TODO())
 		defer cancel()
 		hc := &mockHAKeeperClient{}
-		mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+		mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 		defer mc.Close()
 		rt.SetGlobalVariables(runtime.ClusterService, mc)
 
@@ -222,7 +222,7 @@ func TestCollectTunnels_Mixed(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.TODO())
 		defer cancel()
 		hc := &mockHAKeeperClient{}
-		mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+		mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 		defer mc.Close()
 		rt.SetGlobalVariables(runtime.ClusterService, mc)
 

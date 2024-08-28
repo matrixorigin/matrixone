@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -88,6 +89,7 @@ var (
 		frontend.MoCatalogMoVersionDDL,
 		frontend.MoCatalogMoUpgradeDDL,
 		frontend.MoCatalogMoUpgradeTenantDDL,
+		frontend.MoCatalogMoPitrDDL,
 	}
 
 	initMoVersionFormat = `insert into %s.%s values ('%s', %d, %d, current_timestamp(), current_timestamp())`
@@ -111,6 +113,8 @@ func init() {
 }
 
 type service struct {
+	sid     string
+	logger  *log.MOLogger
 	lock    Locker
 	clock   clock.Clock
 	client  client.TxnClient
@@ -134,17 +138,21 @@ type service struct {
 
 // NewService create service to bootstrap mo database
 func NewService(
+	sid string,
 	lock Locker,
 	clock clock.Clock,
 	client client.TxnClient,
 	exec executor.SQLExecutor,
-	opts ...Option) Service {
+	opts ...Option,
+) Service {
 	s := &service{
+		sid:     sid,
 		clock:   clock,
 		exec:    exec,
 		lock:    lock,
 		client:  client,
-		stopper: stopper.NewStopper("upgrade", stopper.WithLogger(getLogger().RawLogger())),
+		logger:  getLogger(sid).Named("upgrade-framework"),
+		stopper: stopper.NewStopper("upgrade", stopper.WithLogger(getLogger(sid).RawLogger())),
 	}
 	s.mu.tenants = make(map[int32]bool)
 	s.initUpgrade()
@@ -156,10 +164,10 @@ func NewService(
 }
 
 func (s *service) Bootstrap(ctx context.Context) error {
-	getLogger().Info("start to check bootstrap state")
+	s.logger.Info("start to check bootstrap state")
 
 	if ok, err := s.checkAlreadyBootstrapped(ctx); ok {
-		getLogger().Info("mo already bootstrapped")
+		s.logger.Info("mo already bootstrapped")
 		return nil
 	} else if err != nil {
 		return err
@@ -184,7 +192,7 @@ func (s *service) Bootstrap(ctx context.Context) error {
 		case <-time.After(time.Second):
 		}
 		if ok, err := s.checkAlreadyBootstrapped(ctx); ok || err != nil {
-			getLogger().Info("waiting bootstrap completed",
+			s.logger.Info("waiting bootstrap completed",
 				zap.Bool("result", ok),
 				zap.Error(err))
 			return err
@@ -209,6 +217,8 @@ func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
 			return true, nil
 		}
 	}
+	// todo: these should do a log here to indicate that the system is not bootstrapped like the following
+	//  "show databases cannot find the bootstrappedCheckerDB."
 	return false, nil
 }
 
@@ -240,20 +250,20 @@ func (s *service) execBootstrap(ctx context.Context) error {
 	}, opts)
 
 	if err != nil {
-		getLogger().Error("bootstrap system init failed", zap.Error(err))
+		s.logger.Error("bootstrap system init failed", zap.Error(err))
 		return err
 	}
-	getLogger().Info("bootstrap system init completed")
+	s.logger.Info("bootstrap system init completed")
 
 	if s.client != nil {
-		getLogger().Info("wait bootstrap logtail applied")
+		s.logger.Info("wait bootstrap logtail applied")
 
 		// if we bootstrapped, in current cn, we must wait logtails to be applied. All subsequence operations need to see the
 		// bootstrap data.
 		s.client.SyncLatestCommitTS(s.now())
 	}
 
-	getLogger().Info("successfully completed bootstrap")
+	s.logger.Info("successfully completed bootstrap")
 	return nil
 }
 

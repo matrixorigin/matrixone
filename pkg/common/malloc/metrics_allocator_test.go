@@ -19,7 +19,7 @@ import "testing"
 func TestMetricsAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
 		return NewMetricsAllocator(
-			NewClassAllocator(NewFixedSizeMmapAllocator),
+			newUpstreamAllocatorForTest(),
 			nil, nil, nil, nil,
 		)
 	})
@@ -29,7 +29,7 @@ func BenchmarkMetricsAllocator(b *testing.B) {
 	for _, n := range benchNs {
 		benchmarkAllocator(b, func() Allocator {
 			return NewMetricsAllocator(
-				NewClassAllocator(NewFixedSizeMmapAllocator),
+				newUpstreamAllocatorForTest(),
 				nil, nil, nil, nil,
 			)
 		}, n)
@@ -39,7 +39,7 @@ func BenchmarkMetricsAllocator(b *testing.B) {
 func FuzzMetricsAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
 		return NewMetricsAllocator(
-			NewClassAllocator(NewFixedSizeMmapAllocator),
+			newUpstreamAllocatorForTest(),
 			nil, nil, nil, nil,
 		)
 	})

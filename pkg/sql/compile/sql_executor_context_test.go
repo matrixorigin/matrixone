@@ -74,14 +74,14 @@ func TestCompilerContext_Database(t *testing.T) {
 	engine.EXPECT().Database(gomock.Any(), "", nil).Return(database, nil).Times(2)
 
 	c := &compilerContext{
-		proc:   testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		proc:   testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 		engine: engine,
 	}
 
-	exists := c.DatabaseExists("", plan.Snapshot{})
+	exists := c.DatabaseExists("", &plan.Snapshot{})
 	require.Equal(t, exists, true)
 
-	_, err := c.GetDatabaseId("", plan.Snapshot{})
+	_, err := c.GetDatabaseId("", &plan.Snapshot{})
 	require.Nil(t, err)
 
 	sql := c.GetRootSql()

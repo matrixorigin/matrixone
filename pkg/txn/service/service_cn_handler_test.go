@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -986,10 +985,11 @@ func newTestLockTablesAllocator(
 		"dn-uuid",
 		logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).
 			With(zap.String("case", t.Name())))
-	runtime.SetupProcessLevelRuntime(r)
-	c := clusterservice.NewMOCluster(nil, time.Hour, clusterservice.WithDisableRefresh())
+	runtime.SetupServiceBasedRuntime("", r)
+	c := clusterservice.NewMOCluster("", nil, time.Hour, clusterservice.WithDisableRefresh())
 	r.SetGlobalVariables(runtime.ClusterService, c)
 	return lockservice.NewLockTableAllocator(
+		"",
 		"unix://"+address,
 		keepTimeout,
 		morpc.Config{})

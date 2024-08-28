@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"go/constant"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -89,7 +88,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	}
 	query.DetectSqls = detectSqls
 	reduceSinkSinkScanNodes(query)
-	ReCalcQueryStats(builder, query)
+	builder.tempOptimizeForDML()
 	reCheckifNeedLockWholeTable(builder)
 	query.StmtType = plan.Query_UPDATE
 	return &Plan{
@@ -216,7 +215,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 						return 0, nil, err
 					}
 					exprs := []tree.Expr{
-						tree.NewNumValWithType(constant.MakeString(coldef.Typ.Enumvalues), coldef.Typ.Enumvalues, false, tree.P_char),
+						tree.NewNumVal(coldef.Typ.Enumvalues, coldef.Typ.Enumvalues, false, tree.P_char),
 						updateKey,
 					}
 					if updateKeyExpr.Typ.Id >= 20 && updateKeyExpr.Typ.Id <= 29 {

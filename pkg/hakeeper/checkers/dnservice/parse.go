@@ -53,7 +53,7 @@ func (d tnShardToLogShard) getLogShardID(tnShardID uint64) (uint64, error) {
 	if logShardID, ok := d[tnShardID]; ok {
 		return logShardID, nil
 	}
-	return 0, moerr.NewInvalidStateNoCtx("shard %d not recorded", tnShardID)
+	return 0, moerr.NewInvalidStateNoCtxf("shard %d not recorded", tnShardID)
 }
 
 // parseTnState parses cluster tn state.
@@ -87,7 +87,13 @@ func parseTnState(cfg hakeeper.Config,
 
 // checkReportedState generates Operators for reported state.
 // NB: the order of list is deterministic.
-func checkReportedState(rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator) []*operator.Operator {
+func checkReportedState(
+	service string,
+	rs *reportedShards,
+	mapper ShardMapper,
+	workingStores []*util.Store,
+	idAlloc util.IDAllocator,
+) []*operator.Operator {
 	var ops []*operator.Operator
 
 	reported := rs.listShards()
@@ -103,7 +109,7 @@ func checkReportedState(rs *reportedShards, mapper ShardMapper, workingStores []
 			panic(fmt.Sprintf("shard `%d` not register", shardID))
 		}
 
-		steps := checkShard(shard, mapper, workingStores, idAlloc)
+		steps := checkShard(service, shard, mapper, workingStores, idAlloc)
 		// avoid Operator with nil steps
 		if len(steps) > 0 {
 			ops = append(ops,
@@ -112,7 +118,7 @@ func checkReportedState(rs *reportedShards, mapper ShardMapper, workingStores []
 		}
 	}
 
-	runtime.ProcessLevelRuntime().Logger().Debug(fmt.Sprintf("construct %d operators for reported tn shards", len(ops)))
+	runtime.ServiceRuntime(service).Logger().Debug(fmt.Sprintf("construct %d operators for reported tn shards", len(ops)))
 
 	return ops
 }
@@ -120,8 +126,15 @@ func checkReportedState(rs *reportedShards, mapper ShardMapper, workingStores []
 // checkInitiatingShards generates Operators for newly-created shards.
 // NB: the order of list is deterministic.
 func checkInitiatingShards(
-	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
-	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64) []*operator.Operator {
+	service string,
+	rs *reportedShards,
+	mapper ShardMapper,
+	workingStores []*util.Store,
+	idAlloc util.IDAllocator,
+	cluster pb.ClusterInfo,
+	cfg hakeeper.Config,
+	currTick uint64,
+) []*operator.Operator {
 	// update the registered newly-created shards
 	for _, record := range cluster.TNShards {
 		shardID := record.ShardID
@@ -130,22 +143,22 @@ func checkInitiatingShards(
 			if moerr.IsMoErrCode(err, moerr.ErrShardNotReported) {
 				// if a shard not reported, register it,
 				// and launch its replica after a while.
-				waitingShards.register(shardID, currTick)
+				getCheckState(service).waitingShards.register(shardID, currTick)
 			}
 			continue
 		}
 		// shard reported via heartbeat, no need to wait
-		waitingShards.remove(shardID)
+		getCheckState(service).waitingShards.remove(shardID)
 	}
 
 	// list newly-created shards which had been waiting for a while
-	expired := waitingShards.listEligibleShards(func(start uint64) bool {
+	expired := getCheckState(service).waitingShards.listEligibleShards(func(start uint64) bool {
 		return cfg.TNStoreExpired(start, currTick)
 	})
 
 	var ops []*operator.Operator
 	for _, id := range expired {
-		steps := checkShard(newTnShard(id), mapper, workingStores, idAlloc)
+		steps := checkShard(service, newTnShard(id), mapper, workingStores, idAlloc)
 		if len(steps) > 0 { // avoid Operator with nil steps
 			ops = append(ops,
 				operator.NewOperator("dnservice", id, operator.NoopEpoch, steps...),
@@ -153,9 +166,9 @@ func checkInitiatingShards(
 		}
 	}
 
-	runtime.ProcessLevelRuntime().Logger().Debug(fmt.Sprintf("construct %d operators for initiating tn shards", len(ops)))
-	if bootstrapping && len(ops) != 0 {
-		bootstrapping = false
+	runtime.ServiceRuntime(service).Logger().Debug(fmt.Sprintf("construct %d operators for initiating tn shards", len(ops)))
+	if getCheckState(service).bootstrapping && len(ops) != 0 {
+		getCheckState(service).bootstrapping = false
 	}
 
 	return ops
@@ -167,11 +180,13 @@ type earliestTick struct {
 
 // initialShards records all fresh tn shards.
 type initialShards struct {
+	sid    string
 	shards map[uint64]earliestTick
 }
 
-func newInitialShards() *initialShards {
+func newInitialShards(sid string) *initialShards {
 	return &initialShards{
+		sid:    sid,
 		shards: make(map[uint64]earliestTick),
 	}
 }
@@ -202,7 +217,7 @@ func (w *initialShards) remove(shardID uint64) bool {
 func (w *initialShards) listEligibleShards(fn func(tick uint64) bool) []uint64 {
 	ids := make([]uint64, 0)
 	for id, earliest := range w.shards {
-		if bootstrapping || fn(earliest.tick) {
+		if getCheckState(w.sid).bootstrapping || fn(earliest.tick) {
 			ids = append(ids, id)
 		}
 	}

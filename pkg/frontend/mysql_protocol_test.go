@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"net"
 	"sync"
@@ -30,11 +31,6 @@ import (
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -52,6 +48,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func registerConn(clientConn net.Conn) {
@@ -1930,7 +1930,7 @@ func Test_writePackets(t *testing.T) {
 		if err != nil {
 			panic(err)
 		}
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 		err = proto.writePackets(make([]byte, MaxPayloadSize))
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -1987,7 +1987,7 @@ func Test_beginPacket(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		proto.beginPacket()
 		convey.So(err, convey.ShouldBeNil)
@@ -2005,9 +2005,9 @@ func Test_beginPacket(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 		// fill proto.ses
-		ses := NewSession(context.TODO(), proto, nil)
+		ses := NewSession(context.TODO(), "", proto, nil)
 		proto.ses = ses
 
 		err = proto.append(make([]byte, MaxPayloadSize)...)
@@ -2029,9 +2029,9 @@ func Test_beginPacket(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 		// fill proto.ses
-		ses := NewSession(context.TODO(), proto, nil)
+		ses := NewSession(context.TODO(), "", proto, nil)
 		proto.ses = ses
 
 		proto.beginPacket()
@@ -2052,7 +2052,7 @@ func Test_beginPacket(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		proto.tcpConn.maxBytesToFlush = 1024 * 1024 * 1024
 		mysqlPack := func(payload []byte) []byte {
@@ -2159,7 +2159,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 		proto.SetSession(&Session{
 			feSessionImpl: feSessionImpl{
 				txnHandler: &TxnHandler{},
@@ -2196,7 +2196,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		st := tree.NewPrepareString("stmt1", "select ?, 1")
 		stmts, err := mysql.Parse(ctx, st.Sql, 1)
@@ -2239,7 +2239,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	if err != nil {
 		f.Error(err)
 	}
-	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 	st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
 	stmts, err := mysql.Parse(ctx, st.Sql, 1)
@@ -2369,9 +2369,9 @@ func Test_resultset(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
-		ses := NewSession(ctx, proto, nil)
+		ses := NewSession(ctx, "", proto, nil)
 		proto.ses = ses
 
 		res := make9ColumnsResultSet()
@@ -2390,9 +2390,9 @@ func Test_resultset(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
-		ses := NewSession(ctx, proto, nil)
+		ses := NewSession(ctx, "", proto, nil)
 		proto.ses = ses
 
 		res := make9ColumnsResultSet()
@@ -2411,9 +2411,9 @@ func Test_resultset(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
-		ses := NewSession(ctx, proto, nil)
+		ses := NewSession(ctx, "", proto, nil)
 		proto.ses = ses
 
 		res := make9ColumnsResultSet()
@@ -2435,9 +2435,9 @@ func Test_resultset(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
-		ses := NewSession(ctx, proto, nil)
+		ses := NewSession(ctx, "", proto, nil)
 		ses.cmd = COM_STMT_EXECUTE
 		proto.ses = ses
 
@@ -2464,7 +2464,7 @@ func Test_send_packet(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		err = proto.sendErrPacket(1, "fake state", "fake error")
 		convey.So(err, convey.ShouldBeNil)
@@ -2479,7 +2479,7 @@ func Test_send_packet(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		err = proto.sendEOFPacket(1, 0)
 		convey.So(err, convey.ShouldBeNil)
@@ -2508,7 +2508,7 @@ func Test_analyse320resp(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		var data []byte = nil
 		var cap uint16 = 0
@@ -2551,7 +2551,7 @@ func Test_analyse320resp(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		type kase struct {
 			data []byte
@@ -2597,7 +2597,7 @@ func Test_analyse41resp(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		var data []byte = nil
 		var cap uint32 = 0
@@ -2644,7 +2644,7 @@ func Test_analyse41resp(t *testing.T) {
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
 		convey.ShouldBeNil(err)
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		type kase struct {
 			data []byte
@@ -2829,7 +2829,7 @@ func TestMysqlProtocolImpl_Close(t *testing.T) {
 	setGlobalPu(pu)
 	ioses, err := NewIOSession(serverConn, pu)
 	convey.ShouldBeNil(err)
-	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 	proto.Close()
 	assert.Nil(t, proto.GetSalt())
 	assert.Nil(t, proto.strconvBuffer)
@@ -2893,6 +2893,11 @@ func (fp *testMysqlWriter) WriteEOFIF(warnings uint16, status uint16) error {
 	panic("implement me")
 }
 
+func (fp *testMysqlWriter) WriteEOFIFAndNoFlush(warnings uint16, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (fp *testMysqlWriter) WriteEOFOrOK(warnings uint16, status uint16) error {
 	//TODO implement me
 	panic("implement me")
@@ -2909,6 +2914,11 @@ func (fp *testMysqlWriter) WriteLengthEncodedNumber(u uint64) error {
 }
 
 func (fp *testMysqlWriter) WriteColumnDef(ctx context.Context, column Column, i int) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteColumnDefBytes(payload []byte) error {
 	//TODO implement me
 	panic("implement me")
 }
@@ -2940,6 +2950,10 @@ func (fp *testMysqlWriter) WritePrepareResponse(ctx context.Context, stmt *Prepa
 
 func (fp *testMysqlWriter) Read() ([]byte, error) {
 	return fp.ioses.Read()
+}
+
+func (fp *testMysqlWriter) ReadLoadLocalPacket() ([]byte, error) {
+	return fp.ioses.ReadLoadLocalPacket()
 }
 
 func (fp *testMysqlWriter) Free(buf []byte) {
@@ -2994,6 +3008,7 @@ func (fp *testMysqlWriter) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) er
 }
 
 func (fp *testMysqlWriter) ResetStatistics() {}
+func (fp *testMysqlWriter) Reset(_ *Session) {}
 
 func (fp *testMysqlWriter) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
@@ -3035,4 +3050,8 @@ func (fp *testMysqlWriter) WriteLocalInfileRequest(filename string) error {
 
 func (fp *testMysqlWriter) Flush() error {
 	return nil
+}
+
+func (fp *testMysqlWriter) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+	return nil, nil
 }

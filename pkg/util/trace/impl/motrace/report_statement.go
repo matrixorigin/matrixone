@@ -61,7 +61,7 @@ func mustDecimal128(v types.Decimal128, err error) types.Decimal128 {
 	return v
 }
 
-func StatementInfoNew(i Item, ctx context.Context) Item {
+func StatementInfoNew(i table.Item, ctx context.Context) table.Item {
 	if s, ok := i.(*StatementInfo); ok {
 
 		// execute the stat plan
@@ -87,7 +87,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 	return nil
 }
 
-func StatementInfoUpdate(ctx context.Context, existing, new Item) {
+func StatementInfoUpdate(ctx context.Context, existing, new table.Item) {
 
 	e := existing.(*StatementInfo)
 	n := new.(*StatementInfo)
@@ -129,12 +129,16 @@ func StatementInfoUpdate(ctx context.Context, existing, new Item) {
 	n.exported = true
 }
 
-func StatementInfoFilter(i Item) bool {
+func StatementInfoFilter(i table.Item) bool {
 	// Attempt to perform a type assertion to *StatementInfo
 	statementInfo, ok := i.(*StatementInfo)
 
 	if !ok {
 		// The item couldn't be cast to *StatementInfo
+		return false
+	}
+
+	if statementInfo.disableAgg {
 		return false
 	}
 
@@ -227,6 +231,10 @@ type StatementInfo struct {
 	statsArray statistic.StatsArray
 	stated     bool
 
+	// disableAgg true, do NOT aggregate statement
+	// co-operate with Aggregator and StatementInfoFilter
+	disableAgg bool
+
 	// skipTxnOnce, readonly, for flow control
 	// see more on NeedSkipTxn() and SkipTxnId()
 	skipTxnOnce bool
@@ -239,6 +247,10 @@ type Key struct {
 	Window        time.Time
 	Status        StatementInfoStatus
 	SqlSourceType string
+}
+
+func (k Key) Before(end time.Time) bool {
+	return k.Window.Before(end)
 }
 
 var stmtPool = sync.Pool{
@@ -259,7 +271,7 @@ type Statistic struct {
 	BytesScan int64
 }
 
-func (s *StatementInfo) Key(duration time.Duration) interface{} {
+func (s *StatementInfo) Key(duration time.Duration) table.WindowKey {
 	return Key{SessionID: s.SessionID, StatementType: s.StatementType, Window: s.ResponseAt.Truncate(duration), Status: s.Status, SqlSourceType: s.SqlSourceType}
 }
 
@@ -393,6 +405,8 @@ func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	stmt.jsonByte = nil // without ExecPlan
 	stmt.statsArray = s.statsArray
 	stmt.stated = s.stated
+	// part: disableAgg ctl
+	stmt.disableAgg = s.disableAgg
 	// part: skipTxn ctrl
 	stmt.skipTxnOnce = s.skipTxnOnce
 	stmt.skipTxnID = s.skipTxnID
@@ -592,6 +606,8 @@ func (s *StatementInfo) MarkResponseAt() {
 		s.Duration = s.ResponseAt.Sub(s.RequestAt)
 	}
 }
+
+func (s *StatementInfo) DisableAgg() { s.disableAgg = true }
 
 // TcpIpv4HeaderSize default tcp header bytes.
 const TcpIpv4HeaderSize = 66

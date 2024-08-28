@@ -50,6 +50,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp,
 		types.T_array_float32, types.T_array_float64,
+		types.T_datalink,
 	},
 
 	types.T_bool: {
@@ -59,6 +60,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_bit: {
@@ -71,6 +73,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_int8: {
@@ -83,6 +86,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_int16: {
@@ -95,6 +99,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_int32: {
@@ -107,6 +112,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_int64: {
@@ -119,6 +125,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_uint8: {
@@ -131,6 +138,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_uint16: {
@@ -143,6 +151,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_uint32: {
@@ -155,6 +164,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_uint64: {
@@ -167,6 +177,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_float32: {
@@ -178,6 +189,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_float64: {
@@ -189,6 +201,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_date: {
@@ -197,6 +210,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_datetime: {
@@ -206,6 +220,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_timestamp: {
@@ -215,6 +230,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_time: {
@@ -226,6 +242,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_binary, types.T_varbinary,
 		types.T_bit,
+		types.T_datalink,
 	},
 
 	types.T_decimal64: {
@@ -237,6 +254,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_time, types.T_timestamp,
+		types.T_datalink,
 	},
 
 	types.T_decimal128: {
@@ -247,6 +265,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_char: {
@@ -262,6 +281,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_varchar: {
@@ -278,6 +298,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
+		types.T_datalink,
 	},
 
 	types.T_binary: {
@@ -292,6 +313,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_varbinary, types.T_binary,
+		types.T_datalink,
 	},
 
 	types.T_varbinary: {
@@ -306,6 +328,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_blob: {
@@ -322,6 +345,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
+		types.T_datalink,
 	},
 
 	types.T_text: {
@@ -339,14 +363,31 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
 	},
+	types.T_datalink: {
+		types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_bool,
+		types.T_json,
+		types.T_uuid,
+		types.T_text,
+		types.T_date, types.T_datetime,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary,
+		types.T_array_float32, types.T_array_float64,
+		types.T_datalink,
+	},
 
 	types.T_json: {
-		types.T_char, types.T_varchar, types.T_text,
+		types.T_char, types.T_varchar, types.T_text, types.T_datalink,
 	},
 
 	types.T_uuid: {
 		types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
 	},
 
 	types.T_TS: {
@@ -360,7 +401,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_enum: {
 		types.T_enum, types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128,
 		types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
 	},
 
 	types.T_array_float32: {
@@ -446,7 +487,7 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_timestamp:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from)
 		err = timestampToOthers(proc, s, *toType, result, length, selectList)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = strTypeToOthers(proc, s, *toType, result, length, selectList)
 	case types.T_array_float32, types.T_array_float64:
@@ -505,7 +546,7 @@ func scalarNullToOthers(ctx context.Context,
 		return appendNulls[uint64](result, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_json,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return appendNulls[types.Varlena](result, length, selectList)
 	case types.T_float32:
 		return appendNulls[float32](result, length, selectList)
@@ -538,7 +579,7 @@ func boolToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[uint64](result)
 		return boolToInteger(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary,
-		types.T_varbinary, types.T_blob, types.T_text:
+		types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return boolToStr(source, rs, length, toType)
@@ -617,7 +658,7 @@ func bitToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return bitToStr(ctx, source, rs, length, toType)
 	case types.T_time:
@@ -683,7 +724,7 @@ func int8ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return signedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return signedToStr(ctx, source, rs, length, toType)
@@ -744,7 +785,7 @@ func int16ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return signedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return signedToStr(ctx, source, rs, length, toType)
@@ -805,7 +846,7 @@ func int32ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return signedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return signedToStr(ctx, source, rs, length, toType)
@@ -866,7 +907,7 @@ func int64ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return signedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return signedToStr(ctx, source, rs, length, toType)
@@ -930,7 +971,7 @@ func uint8ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
@@ -993,7 +1034,7 @@ func uint16ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
@@ -1056,7 +1097,7 @@ func uint32ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
@@ -1119,7 +1160,7 @@ func uint64ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
@@ -1188,7 +1229,7 @@ func float32ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return floatToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return floatToStr(ctx, source, rs, length, toType)
 	}
@@ -1248,7 +1289,7 @@ func float64ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return floatToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return floatToStr(ctx, source, rs, length, toType)
 	}
@@ -1282,7 +1323,7 @@ func dateToOthers(proc *process.Process,
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		return dateToDatetime(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return dateToStr(proc.Ctx, source, rs, length, toType)
 	}
@@ -1318,7 +1359,7 @@ func datetimeToOthers(proc *process.Process,
 		rs := vector.MustFunctionResult[types.Time](result)
 		return datetimeToTime(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return datetimeToStr(proc.Ctx, source, rs, length, toType)
 	case types.T_decimal64:
@@ -1358,7 +1399,7 @@ func timestampToOthers(proc *process.Process,
 		v.SetType(toType)
 		return rs.DupFromParameter(source, length)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return timestampToStr(proc.Ctx, source, rs, length, zone, toType)
 	case types.T_decimal64:
@@ -1414,7 +1455,7 @@ func timeToOthers(ctx context.Context,
 		v.SetType(toType)
 		return rs.DupFromParameter(source, length)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return timeToStr(ctx, source, rs, length, toType)
 	case types.T_decimal64:
@@ -1485,7 +1526,7 @@ func decimal64ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Time](result)
 		return decimal64ToTime(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return decimal64ToStr(ctx, source, rs, length, toType)
 	}
@@ -1550,7 +1591,7 @@ func decimal128ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return decimal128ToTimestamp(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return decimal128ToStr(ctx, source, rs, length, toType)
 	}
@@ -1647,7 +1688,7 @@ func strTypeToOthers(proc *process.Process,
 		}
 		return strToTimestamp(source, rs, zone, length, selectList)
 	case types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(ctx, source, rs, length, toType)
 	case types.T_array_float32:
@@ -1692,7 +1733,7 @@ func uuidToOthers(ctx context.Context,
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return uuidToStr(ctx, source, rs, length, toType)
 	}
@@ -1733,7 +1774,7 @@ func jsonToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return jsonToStr(ctx, source, rs, length, selectList)
 	}
@@ -1747,7 +1788,7 @@ func enumToOthers(ctx context.Context,
 	case types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128:
 		rs := vector.MustFunctionResult[uint16](result)
 		return enumToUint16(source, rs, length, selectList)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return enumToStr(ctx, source, rs, length, selectList)
 	case types.T_enum:
@@ -1772,7 +1813,7 @@ func integerToFixFloat[T1, T2 constraints.Integer | constraints.Float](
 			}
 		} else {
 			if float64(v) < -max_value || float64(v) > max_value {
-				return moerr.NewOutOfRange(ctx, "float", "value '%v'", v)
+				return moerr.NewOutOfRangef(ctx, "float", "value '%v'", v)
 			}
 			if err := to.Append(T2(v), false); err != nil {
 				return err
@@ -1802,7 +1843,7 @@ func floatToFixFloat[T1, T2 constraints.Float](
 			tmp := math.Round((v2-math.Floor(v2))*pow) / pow
 			v2 = math.Floor(v2) + tmp
 			if v2 < -max_value || v2 > max_value {
-				return moerr.NewOutOfRange(ctx, "float", "value '%v'", v)
+				return moerr.NewOutOfRangef(ctx, "float", "value '%v'", v)
 			}
 			if err := to.Append(T2(v2), false); err != nil {
 				return err
@@ -1823,9 +1864,9 @@ func floatNumToFixFloat[T1 constraints.Float](
 	v := math.Floor(from) + tmp
 	if v < -max_value || v > max_value {
 		if originStr == "" {
-			return 0, moerr.NewOutOfRange(ctx, "float", "value '%v'", from)
+			return 0, moerr.NewOutOfRangef(ctx, "float", "value '%v'", from)
 		} else {
-			return 0, moerr.NewOutOfRange(ctx, "float", "value '%s'", originStr)
+			return 0, moerr.NewOutOfRangef(ctx, "float", "value '%s'", originStr)
 		}
 	}
 	return T1(v), nil
@@ -1884,7 +1925,7 @@ func numericToBit[T constraints.Integer | constraints.Float](
 			}
 
 			if val > uint64(1<<bitSize-1) {
-				return moerr.NewOutOfRange(ctx, fmt.Sprintf("int%d", bitSize), "value %d", val)
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("int%d", bitSize), "value %d", val)
 			}
 			if err := to.Append(val, false); err != nil {
 				return err
@@ -2055,7 +2096,7 @@ func bitToStr(
 				b = append(b, byte(0))
 			}
 		}
-		if len(b) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+		if len(b) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 			return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 				"%v is larger than Dest length %v", v, toType.Width))
 		}
@@ -2255,7 +2296,7 @@ func signedToStr[T constraints.Integer](
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
@@ -2303,7 +2344,7 @@ func unsignedToStr[T constraints.Unsigned](
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
@@ -2353,7 +2394,7 @@ func floatToStr[T constraints.Float](
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
@@ -2405,7 +2446,7 @@ func integerToTime[T constraints.Integer](
 			}
 		} else {
 			if vI64 < types.MinInputIntTime || vI64 > types.MaxInputIntTime {
-				return moerr.NewOutOfRange(ctx, "time", "value %d", v)
+				return moerr.NewOutOfRangef(ctx, "time", "value %d", v)
 			}
 			result, err := types.ParseInt64ToTime(vI64, toType.Scale)
 			if err != nil {
@@ -2435,7 +2476,7 @@ func integerToEnum[T constraints.Integer](
 			}
 		} else {
 			if vI64 < 1 || vI64 > types.MaxEnumLen {
-				return moerr.NewOutOfRange(ctx, "enum", "value %d", v)
+				return moerr.NewOutOfRangef(ctx, "enum", "value %d", v)
 			}
 			result, err := types.ParseIntToEnum(vI64)
 			if err != nil {
@@ -2546,7 +2587,7 @@ func datetimeToInt32(
 		} else {
 			val := v.SecsSinceUnixEpoch()
 			if val < math.MinInt32 || val > math.MaxInt32 {
-				return moerr.NewOutOfRange(ctx, "int32", "value '%v'", val)
+				return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", val)
 			}
 			if err := to.Append(int32(val), false); err != nil {
 				return err
@@ -2748,7 +2789,7 @@ func timestampToInt32(
 		} else {
 			val := v.Unix()
 			if val < math.MinInt32 || val > math.MaxInt32 {
-				return moerr.NewOutOfRange(ctx, "int32", "value '%v'", val)
+				return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", val)
 			}
 			if err := to.Append(int32(val), false); err != nil {
 				return err
@@ -2946,7 +2987,7 @@ func dateToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -2995,7 +3036,7 @@ func datetimeToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -3045,7 +3086,7 @@ func timestampToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -3094,7 +3135,7 @@ func timeToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -3188,7 +3229,7 @@ func decimal64ToSigned[T constraints.Signed](
 			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, bitSize)
 			if err != nil {
-				return moerr.NewOutOfRange(ctx,
+				return moerr.NewOutOfRangef(ctx,
 					fmt.Sprintf("int%d", bitSize),
 					"value '%v'", xStr)
 			}
@@ -3219,7 +3260,7 @@ func decimal128ToSigned[T constraints.Signed](
 			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, bitSize)
 			if err != nil {
-				return moerr.NewOutOfRange(ctx,
+				return moerr.NewOutOfRangef(ctx,
 					fmt.Sprintf("int%d", bitSize),
 					"value '%v'", xStr)
 			}
@@ -3251,7 +3292,7 @@ func decimal64ToUnsigned[T constraints.Unsigned](
 			xStr = strings.Split(xStr, ".")[0]
 			result, err := strconv.ParseUint(xStr, 10, bitSize)
 			if err != nil {
-				return moerr.NewOutOfRange(ctx,
+				return moerr.NewOutOfRangef(ctx,
 					fmt.Sprintf("uint%d", bitSize),
 					"value '%v'", xStr)
 			}
@@ -3283,7 +3324,7 @@ func decimal128ToUnsigned[T constraints.Unsigned](
 			xStr = strings.Split(xStr, ".")[0]
 			result, err := strconv.ParseUint(xStr, 10, bitSize)
 			if err != nil {
-				return moerr.NewOutOfRange(ctx,
+				return moerr.NewOutOfRangef(ctx,
 					fmt.Sprintf("uint%d", bitSize),
 					"value '%v'", xStr)
 			}
@@ -3408,7 +3449,7 @@ func decimal64ToFloat[T constraints.Float](
 			xStr := v.Format(fromType.Scale)
 			result, err := strconv.ParseFloat(xStr, bitSize)
 			if err != nil {
-				return moerr.NewOutOfRange(ctx, "float32", "value '%v'", xStr)
+				return moerr.NewOutOfRangef(ctx, "float32", "value '%v'", xStr)
 			}
 			if bitSize == 32 {
 				result, _ = strconv.ParseFloat(xStr, 64)
@@ -3449,7 +3490,7 @@ func decimal128ToFloat[T constraints.Float](
 			xStr := v.Format(fromType.Scale)
 			result, err := strconv.ParseFloat(xStr, bitSize)
 			if err != nil {
-				return moerr.NewOutOfRange(ctx, "float32", "value '%v'", xStr)
+				return moerr.NewOutOfRangef(ctx, "float32", "value '%v'", xStr)
 			}
 			if bitSize == 32 {
 				result, _ = strconv.ParseFloat(xStr, 64)
@@ -3708,7 +3749,7 @@ func decimal64ToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
 			}
@@ -3757,7 +3798,7 @@ func decimal128ToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
 			}
@@ -3785,7 +3826,7 @@ func decimal64ToBit(
 			xStr := v.Format(from.GetType().Scale)
 			xStr = strings.Split(xStr, ".")[0]
 			if result, err = strconv.ParseUint(xStr, 10, bitSize); err != nil {
-				return moerr.NewOutOfRange(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
 			}
 			if err = to.Append(result, false); err != nil {
 				return err
@@ -3811,7 +3852,7 @@ func decimal128ToBit(
 			xStr := v.Format(from.GetType().Scale)
 			xStr = strings.Split(xStr, ".")[0]
 			if result, err = strconv.ParseUint(xStr, 10, bitSize); err != nil {
-				return moerr.NewOutOfRange(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
 			}
 			if err = to.Append(result, false); err != nil {
 				return err
@@ -3862,7 +3903,7 @@ func strToSigned[T constraints.Signed](
 					// XXX I'm not sure if we should return the int8 / int16 / int64 info. or
 					// just return the int. the old code just return the int. too much bvt result needs to update.
 					if strings.Contains(err.Error(), "value out of range") {
-						return moerr.NewOutOfRange(ctx, fmt.Sprintf("int%d", bitSize), "value '%s'", s)
+						return moerr.NewOutOfRangef(ctx, fmt.Sprintf("int%d", bitSize), "value '%s'", s)
 					}
 					return moerr.NewInvalidArg(ctx, "cast to int", s)
 				}
@@ -3910,7 +3951,7 @@ func strToUnsigned[T constraints.Unsigned](
 			}
 			if tErr != nil {
 				if strings.Contains(tErr.Error(), "value out of range") {
-					return moerr.NewOutOfRange(ctx, fmt.Sprintf("uint%d", bitSize), "value '%s'", *res)
+					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("uint%d", bitSize), "value '%s'", *res)
 				}
 				return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), *res)
 			}
@@ -3947,7 +3988,7 @@ func strToFloat[T constraints.Float](
 				r1, tErr = strconv.ParseUint(s, 16, 64)
 				if tErr != nil {
 					if strings.Contains(tErr.Error(), "value out of range") {
-						return moerr.NewOutOfRange(ctx, "float", "value '%s'", s)
+						return moerr.NewOutOfRangef(ctx, "float", "value '%s'", s)
 					}
 					return moerr.NewInvalidArg(ctx, "cast to float", s)
 				}
@@ -4116,6 +4157,15 @@ func strToUuid(
 	return nil
 }
 
+func ConvertJsonBytes(inBytes []byte) ([]byte, error) {
+	s := convertByteSliceToString(inBytes)
+	json, err := types.ParseStringToByteJson(s)
+	if err != nil {
+		return nil, err
+	}
+	return types.EncodeJson(json)
+}
+
 func strToJson(
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
@@ -4128,12 +4178,7 @@ func strToJson(
 				return err
 			}
 		} else {
-			s := convertByteSliceToString(v)
-			json, err := types.ParseStringToByteJson(s)
-			if err != nil {
-				return err
-			}
-			val, err := types.EncodeJson(json)
+			val, err := ConvertJsonBytes(v)
 			if err != nil {
 				return err
 			}
@@ -4325,7 +4370,7 @@ func strToBit(
 			}
 		} else {
 			if len(v) > 8 {
-				return moerr.NewOutOfRange(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
 			}
 
 			var val uint64
@@ -4333,7 +4378,7 @@ func strToBit(
 				val = (val << 8) | uint64(v[j])
 			}
 			if val > uint64(1<<bitSize-1) {
-				return moerr.NewOutOfRange(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
 			}
 
 			if err := to.Append(val, false); err != nil {
@@ -4453,7 +4498,7 @@ func uuidToStr(
 	if toType.Oid == types.T_binary && toType.Scale == -1 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetValue(i)
-			v1 := []byte(v.ToString())
+			v1 := []byte(v.String())
 			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
 				return err
 			}
@@ -4467,7 +4512,7 @@ func uuidToStr(
 				return err
 			}
 		} else {
-			result := []byte(v.ToString())
+			result := []byte(v.String())
 			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
 				if int32(len(result)) > toType.Width {
 					return moerr.NewDataTruncatedNoCtx("Uuid", "truncated for binary/varbinary")
@@ -4484,9 +4529,9 @@ func uuidToStr(
 					return moerr.NewDataTruncatedNoCtx("Uuid", "truncated for char/varchar")
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
-					"%v is larger than Dest length %v", v.ToString(), toType.Width))
+					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
 				return err
@@ -4514,7 +4559,7 @@ func jsonToStr(
 			if err != nil {
 				return err
 			}
-			if len(val) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(val) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", val, toType.Width))
 			}
@@ -4559,7 +4604,7 @@ func enumToStr(
 			}
 		} else {
 			result := strconv.FormatUint(uint64(v), 10)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
@@ -4591,7 +4636,7 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *uint8, *uint16, *uint32, *uint64:
 			for i, x := range xs {
 				if !nsp.Contains(uint64(i)) && x < 0 {
-					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint", "value '%v'", x)
 				}
 			}
 		}
@@ -4601,19 +4646,19 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt8 || x > math.MaxInt8) {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint8) {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16, *uint32, *uint64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x < 0 {
-					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint", "value '%v'", x)
 				}
 			}
 		}
@@ -4623,31 +4668,31 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt8 || x > math.MaxInt8) {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt16 || x > math.MaxInt16) {
-					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint8) {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint16) {
-					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32, *uint64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x < 0 {
-					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint", "value '%v'", x)
 				}
 			}
 		}
@@ -4657,44 +4702,44 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt8 || x > math.MaxInt8) {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt16 || x > math.MaxInt16) {
-					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt32 || x > math.MaxInt32) {
-					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint8) {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint16) {
-					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint32) {
-					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x < 0 {
 					// XXX for adapt to bvt, but i don't know why we hide the wrong value here.
-					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		}
@@ -4704,7 +4749,7 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt8 {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		}
@@ -4714,19 +4759,19 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt8 {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt16 {
-					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint8 {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		}
@@ -4736,31 +4781,31 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt8 {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt16 {
-					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt32 {
-					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint8 {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint16 {
-					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		}
@@ -4770,43 +4815,43 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt8 {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt16 {
-					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt32 {
-					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt64 {
-					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint8 {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint16 {
-					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint32 {
-					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		}
@@ -4816,49 +4861,49 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt8 {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt16 {
-					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt32 {
-					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt64 {
-					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint8 {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint16 {
-					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint32 {
-					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint64 {
-					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		}
@@ -4868,56 +4913,56 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxInt8 {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxInt16 {
-					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxInt32 {
-					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) &&
 					(math.Round(x) > math.MaxInt64 || math.Round(x) < math.MinInt64) {
-					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint8 {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint16 {
-					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint32 {
-					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint64 {
-					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		case *float32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxFloat32 {
-					return moerr.NewOutOfRange(ctx, "float32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "float32", "value '%v'", x)
 				}
 			}
 		}

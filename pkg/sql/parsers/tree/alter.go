@@ -947,15 +947,17 @@ type AlterPublication struct {
 	Name        Identifier
 	AccountsSet *AccountsSetOption
 	DbName      string
+	Table       TableNames
 	Comment     string
 }
 
-func NewAlterPublication(exist bool, name Identifier, accountsSet *AccountsSetOption, dbName, comment string) *AlterPublication {
+func NewAlterPublication(exist bool, name Identifier, accountsSet *AccountsSetOption, dbName string, table TableNames, comment string) *AlterPublication {
 	a := reuse.Alloc[AlterPublication](nil)
 	a.IfExists = exist
 	a.Name = name
 	a.AccountsSet = accountsSet
 	a.DbName = dbName
+	a.Table = table
 	a.Comment = comment
 	return a
 }
@@ -985,6 +987,14 @@ func (node *AlterPublication) Format(ctx *FmtCtx) {
 				node.AccountsSet.DropAccounts.Format(ctx)
 			}
 		}
+	}
+	if node.DbName != "" {
+		ctx.WriteString(" database ")
+		ctx.WriteString(node.DbName)
+	}
+	if len(node.Table) > 0 {
+		ctx.WriteString(" table ")
+		node.Table.Format(ctx)
 	}
 	if node.Comment != "" {
 		ctx.WriteString(" comment ")

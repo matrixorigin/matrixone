@@ -132,18 +132,25 @@ type LogtailServer struct {
 	stopper    *stopper.Stopper
 }
 
-func defaultRPCServerFactory(name string, address string, logtailServer *LogtailServer,
-	options ...morpc.ServerOption) (morpc.RPCServer, error) {
-
+func defaultRPCServerFactory(
+	name string,
+	address string,
+	logtailServer *LogtailServer,
+	options ...morpc.ServerOption,
+) (morpc.RPCServer, error) {
 	codecOpts := []morpc.CodecOption{
 		morpc.WithCodecMaxBodySize(int(logtailServer.cfg.RpcMaxMessageSize)),
 	}
 	if logtailServer.cfg.RpcEnableChecksum {
 		codecOpts = append(codecOpts, morpc.WithCodecEnableChecksum())
 	}
-	codec := morpc.NewMessageCodec(func() morpc.Message {
-		return logtailServer.pool.requests.Acquire()
-	}, codecOpts...)
+	codec := morpc.NewMessageCodec(
+		logtailServer.rt.ServiceUUID(),
+		func() morpc.Message {
+			return logtailServer.pool.requests.Acquire()
+		},
+		codecOpts...,
+	)
 
 	rpc, err := morpc.NewRPCServer(LogtailServiceRPCName, address, codec,
 		morpc.WithServerLogger(logtailServer.logger.RawLogger()),
@@ -416,6 +423,7 @@ func (s *LogtailServer) pullLogtailsPhase1(ctx context.Context, sub subscription
 	if err != nil {
 		s.logger.Error("failed to get logtail of phase1 of subscription",
 			zap.String("table", string(sub.tableID)),
+			zap.Error(err),
 		)
 		sub.session.Unregister(sub.tableID)
 		return

@@ -27,11 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func getTargets(param string) []string {
+func getTargets(
+	sid string,
+	param string,
+) []string {
 	cns := strings.Split(param, ",")
 	if len(cns) == 1 && strings.ToLower(cns[0]) == "all" {
 		cns = make([]string, 0)
-		clusterservice.GetMOCluster().GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
+		clusterservice.GetMOCluster(sid).GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
 			cns = append(cns, cn.ServiceID)
 			return true
 		})
@@ -40,10 +43,12 @@ func getTargets(param string) []string {
 }
 
 // handleUnsubscribeTable unsubscribes a table from logtail client.
-func handleUnsubscribeTable(proc *process.Process,
+func handleUnsubscribeTable(
+	proc *process.Process,
 	service serviceType,
 	parameter string,
-	_ requestSender) (Result, error) {
+	_ requestSender,
+) (Result, error) {
 	if service != cn {
 		return Result{}, moerr.NewWrongServiceNoCtx("CN", string(service))
 	}
@@ -53,13 +58,13 @@ func handleUnsubscribeTable(proc *process.Process,
 	}
 	dbID, err := strconv.ParseUint(args[1], 10, 64)
 	if err != nil {
-		return Result{}, moerr.NewInternalErrorNoCtx("wrong database ID: %s", args[1])
+		return Result{}, moerr.NewInternalErrorNoCtxf("wrong database ID: %s", args[1])
 	}
 	tbID, err := strconv.ParseUint(args[2], 10, 64)
 	if err != nil {
-		return Result{}, moerr.NewInternalErrorNoCtx("wrong table ID: %s", args[2])
+		return Result{}, moerr.NewInternalErrorNoCtxf("wrong table ID: %s", args[2])
 	}
-	targets := getTargets(args[0])
+	targets := getTargets(proc.GetService(), args[0])
 	for _, c := range targets {
 		if err := doUnsubscribeTable(proc, c, dbID, tbID); err != nil {
 			return Result{}, err
@@ -71,9 +76,13 @@ func handleUnsubscribeTable(proc *process.Process,
 	}, nil
 }
 
-func doUnsubscribeTable(proc *process.Process, uuid string, dbID, tbID uint64) error {
+func doUnsubscribeTable(
+	proc *process.Process,
+	uuid string,
+	dbID, tbID uint64,
+) error {
 	var err error
-	clusterservice.GetMOCluster().GetCNService(clusterservice.NewServiceIDSelector(uuid),
+	clusterservice.GetMOCluster(proc.GetService()).GetCNService(clusterservice.NewServiceIDSelector(uuid),
 		func(cn metadata.CNService) bool {
 			request := proc.GetQueryClient().NewRequest(query.CmdMethod_UnsubscribeTable)
 			request.UnsubscribeTable = &query.UnsubscribeTableRequest{

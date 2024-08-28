@@ -21,9 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func handleCNGC(*process.Process, serviceType, string, requestSender) (Result, error) {
+func handleCNGC(proc *process.Process, _ serviceType, _ string, _ requestSender) (Result, error) {
 	debug.FreeOSMemory()
-	runtime.ProcessLevelRuntime().Logger().Info("force free memory completed")
+	runtime.ServiceRuntime(proc.GetService()).Logger().Info("force free memory completed")
 	return Result{
 		Method: ForceGCMethod,
 		Data:   "OK",

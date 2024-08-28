@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,29 +43,6 @@ func TestPrepare(t *testing.T) {
 	defer ctrl.Finish()
 
 	reader := mock_frontend.NewMockReader(ctrl)
-	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, expr *plan.Expr, b, c interface{}) (*batch.Batch, error) {
-		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
-
-		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-
-		err = vector.AppendFixed(bat.GetVector(1), uint64(272464), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-
-		err = vector.AppendBytes(bat.GetVector(2), []byte("empno"), false, testutil.TestUtilMp)
-		if err != nil {
-			require.Nil(t, err)
-		}
-		bat.SetRowCount(bat.GetVector(1).Length())
-		return bat, nil
-	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
 	arg := &TableScan{
@@ -95,13 +74,40 @@ func TestCall(t *testing.T) {
 	proc.Ctx = ctx
 	proc.Base.TxnOperator = txnOperator
 
-	reader := mock_frontend.NewMockReader(ctrl)
-	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, expr *plan.Expr, b, c interface{}) (*batch.Batch, error) {
-		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	typ1 := types.T_Rowid.ToType()
+	typ2 := types.T_uint64.ToType()
+	typ3 := types.T_varbinary.ToType()
+	reader := getReader(t, ctrl)
+	arg := &TableScan{
+		Reader: reader,
+		Attrs:  []string{catalog.Row_ID, "int_col", "varchar_col"},
+		Types:  []plan.Type{plan.MakePlan2Type(&typ1), plan.MakePlan2Type(&typ2), plan.MakePlan2Type(&typ3)},
+	}
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+	_, err = arg.Call(proc)
+	require.NoError(t, err)
 
+	arg.Reset(proc, false, nil)
+
+	reader = getReader(t, ctrl)
+	arg.Reader = reader
+	err = arg.Prepare(proc)
+	require.NoError(t, err)
+	_, err = arg.Call(proc)
+	require.NoError(t, err)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func getReader(t *testing.T, ctrl *gomock.Controller) engine.Reader {
+	reader := mock_frontend.NewMockReader(ctrl)
+	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, expr *plan.Expr, b, c interface{}, bat *batch.Batch) (bool, error) {
+		// bat = batch.NewWithSize(3)
+		// bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		// bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+		// bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, testutil.TestUtilMp)
 		if err != nil {
 			require.Nil(t, err)
@@ -117,19 +123,10 @@ func TestCall(t *testing.T) {
 			require.Nil(t, err)
 		}
 		bat.SetRowCount(bat.GetVector(1).Length())
-		return bat, nil
+		return false, nil
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
-	arg := &TableScan{
-		Reader: reader,
-	}
 
-	err := arg.Prepare(proc)
-	require.NoError(t, err)
-	_, err = arg.Call(proc)
-	require.NoError(t, err)
-	arg.Free(proc, false, nil)
-	proc.FreeVectors()
-	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+	return reader
 }

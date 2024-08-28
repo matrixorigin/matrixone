@@ -79,6 +79,9 @@ func TestMerge(t *testing.T) {
 			if ok.Status == vm.ExecStop || err != nil {
 				break
 			}
+			if ok.Batch != nil {
+				ok.Batch.Clean(tc.proc.GetMPool())
+			}
 		}
 		tc.arg.Reset(tc.proc, false, nil)
 		// for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
@@ -103,15 +106,18 @@ func TestMerge(t *testing.T) {
 			if ok.Status == vm.ExecStop || err != nil {
 				break
 			}
+			if ok.Batch != nil {
+				ok.Batch.Clean(tc.proc.GetMPool())
+			}
 		}
 		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func newTestCase() mergeTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{

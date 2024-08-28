@@ -16,8 +16,12 @@ package right
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -40,21 +44,20 @@ func (rightJoin *RightJoin) OpType() vm.OpType {
 }
 
 func (rightJoin *RightJoin) Prepare(proc *process.Process) (err error) {
-	rightJoin.ctr = new(container)
-	rightJoin.ctr.InitReceiver(proc, false)
-	rightJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-	rightJoin.ctr.vecs = make([]*vector.Vector, len(rightJoin.Conditions[0]))
-
-	rightJoin.ctr.evecs = make([]evalVector, len(rightJoin.Conditions[0]))
-	for i := range rightJoin.Conditions[0] {
-		rightJoin.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, rightJoin.Conditions[0][i])
-		if err != nil {
-			return err
+	if len(rightJoin.ctr.vecs) == 0 {
+		rightJoin.ctr.vecs = make([]*vector.Vector, len(rightJoin.Conditions[0]))
+		rightJoin.ctr.evecs = make([]evalVector, len(rightJoin.Conditions[0]))
+		for i := range rightJoin.Conditions[0] {
+			rightJoin.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, rightJoin.Conditions[0][i])
+			if err != nil {
+				return err
+			}
+		}
+		if rightJoin.Cond != nil {
+			rightJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, rightJoin.Cond)
 		}
 	}
-	if rightJoin.Cond != nil {
-		rightJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, rightJoin.Cond)
-	}
+	rightJoin.ctr.InitProc(proc)
 	rightJoin.ctr.handledLast = false
 	return err
 }
@@ -67,14 +70,13 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	analyze := proc.GetAnalyze(rightJoin.GetIdx(), rightJoin.GetParallelIdx(), rightJoin.GetParallelMajor())
 	analyze.Start()
 	defer analyze.Stop()
-	ctr := rightJoin.ctr
+	ctr := &rightJoin.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(analyze); err != nil {
-				return result, err
-			}
+			rightJoin.build(analyze, proc)
 			if ctr.mp == nil && !rightJoin.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
@@ -85,23 +87,20 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if rightJoin.ctr.buf == nil {
-				msg := ctr.ReceiveFromSingleReg(0, analyze)
-				if msg.Err != nil {
-					return result, msg.Err
+				result, err = rightJoin.Children[0].Call(proc)
+				if err != nil {
+					return result, err
 				}
-				bat := msg.Batch
+				bat := result.Batch
 
 				if bat == nil {
 					ctr.state = SendLast
-					rightJoin.rbat = nil
 					continue
 				}
 				if bat.IsEmpty() {
-					proc.PutBatch(bat)
 					continue
 				}
 				if ctr.mp == nil {
-					proc.PutBatch(bat)
 					continue
 				}
 				rightJoin.ctr.buf = bat
@@ -113,7 +112,6 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			if rightJoin.ctr.lastpos == 0 {
-				proc.PutBatch(rightJoin.ctr.buf)
 				rightJoin.ctr.buf = nil
 			} else if rightJoin.ctr.lastpos == startrow {
 				return result, moerr.NewInternalErrorNoCtx("right join hanging")
@@ -140,51 +138,20 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
-	}
-	bat := msg.Batch
-	if bat != nil && bat.AuxData != nil {
-		ctr.mp = bat.DupJmAuxData()
+func (rightJoin *RightJoin) build(anal process.Analyze, proc *process.Process) {
+	ctr := &rightJoin.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
+	ctr.mp = message.ReceiveJoinMap(rightJoin.JoinMapTag, rightJoin.IsShuffle, rightJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-	return nil
-}
-
-func (ctr *container) receiveBatch(anal process.Analyze) error {
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat != nil {
-			ctr.batchRowCount += bat.RowCount()
-			ctr.batches = append(ctr.batches, bat)
-		} else {
-			break
-		}
-	}
-	for i := 0; i < len(ctr.batches)-1; i++ {
-		if ctr.batches[i].RowCount() != colexec.DefaultBatchSize {
-			panic("wrong batch received for hash build!")
-		}
-	}
+	ctr.batches = ctr.mp.GetBatches()
+	ctr.batchRowCount = ctr.mp.GetRowCount()
 	if ctr.batchRowCount > 0 {
 		ctr.matched = &bitmap.Bitmap{}
-		ctr.matched.InitWithSize(int64(ctr.batchRowCount))
+		ctr.matched.InitWithSize(ctr.batchRowCount)
 	}
-	return nil
-}
-
-func (ctr *container) build(anal process.Analyze) error {
-	err := ctr.receiveHashMap(anal)
-	if err != nil {
-		return err
-	}
-	return ctr.receiveBatch(anal)
 }
 
 func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyze process.Analyze, _ bool, isLast bool, result *vm.CallResult) (bool, error) {
@@ -211,7 +178,7 @@ func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyze pro
 		}
 	}
 
-	count := ctr.batchRowCount - ctr.matched.Count()
+	count := ctr.batchRowCount - int64(ctr.matched.Count())
 	ctr.matched.Negate()
 	sels := make([]int32, 0, count)
 	itr := ctr.matched.Iterator()
@@ -220,23 +187,11 @@ func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyze pro
 		sels = append(sels, int32(r))
 	}
 
-	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
-	}
-	ctr.rbat = batch.NewWithSize(len(ap.Result))
+	ap.resetRBat()
 
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			ctr.rbat.Vecs[i] = proc.GetVector(ap.LeftTypes[rp.Pos])
-		} else {
-			ctr.rbat.Vecs[i] = proc.GetVector(ap.RightTypes[rp.Pos])
-		}
-	}
-
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			if err := vector.AppendMultiFixed(ctr.rbat.Vecs[i], 0, true, count, proc.Mp()); err != nil {
+			if err := vector.AppendMultiFixed(ctr.rbat.Vecs[i], 0, true, int(count), proc.Mp()); err != nil {
 				return false, err
 			}
 		} else {
@@ -257,18 +212,7 @@ func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyze pro
 
 func (ctr *container) probe(ap *RightJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(ap.ctr.buf, isFirst)
-	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
-	}
-	ctr.rbat = batch.NewWithSize(len(ap.Result))
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			ctr.rbat.Vecs[i] = proc.GetVector(*ap.ctr.buf.Vecs[rp.Pos].GetType())
-		} else {
-			ctr.rbat.Vecs[i] = proc.GetVector(ap.RightTypes[rp.Pos])
-		}
-	}
+	ap.resetRBat()
 
 	if err := ctr.evalJoinCondition(ap.ctr.buf, proc); err != nil {
 		return err
@@ -296,10 +240,9 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, anal process.A
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		copy(ctr.inBuckets, hashmap.OneUInt8s)
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := itr.Find(i, n, ctr.vecs)
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 || zvals[k] == 0 || vals[k] == 0 {
+			if zvals[k] == 0 || vals[k] == 0 {
 				continue
 			}
 			if ap.HashOnPK {
@@ -431,4 +374,21 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 		ctr.evecs[i].vec = vec
 	}
 	return nil
+}
+
+func (rightJoin *RightJoin) resetRBat() {
+	ctr := &rightJoin.ctr
+	if ctr.rbat != nil {
+		ctr.rbat.CleanOnlyData()
+	} else {
+		ctr.rbat = batch.NewWithSize(len(rightJoin.Result))
+
+		for i, rp := range rightJoin.Result {
+			if rp.Rel == 0 {
+				ctr.rbat.Vecs[i] = vector.NewVec(rightJoin.LeftTypes[rp.Pos])
+			} else {
+				ctr.rbat.Vecs[i] = vector.NewVec(rightJoin.RightTypes[rp.Pos])
+			}
+		}
+	}
 }

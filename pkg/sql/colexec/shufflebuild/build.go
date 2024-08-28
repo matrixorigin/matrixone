@@ -17,7 +17,8 @@ package shufflebuild
 import (
 	"bytes"
 	"runtime"
-	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -43,12 +44,15 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 	if shuffleBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
 	}
-	shuffleBuild.RuntimeFilterSpec.Handled = false
-	shuffleBuild.ctr = new(container)
+	ctr := &shuffleBuild.ctr
 
-	shuffleBuild.ctr.vecs = make([][]*vector.Vector, 0)
-	ctr := shuffleBuild.ctr
-	ctr.executor = make([]colexec.ExpressionExecutor, len(shuffleBuild.Conditions))
+	if ctr.vecs == nil {
+		ctr.vecs = make([][]*vector.Vector, 0)
+	}
+	if ctr.executor == nil {
+		ctr.executor = make([]colexec.ExpressionExecutor, len(shuffleBuild.Conditions))
+	}
+
 	ctr.keyWidth = 0
 	for i, expr := range shuffleBuild.Conditions {
 		typ := expr.Typ
@@ -58,9 +62,11 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 			width = 128
 		}
 		ctr.keyWidth += width
-		ctr.executor[i], err = colexec.NewExpressionExecutor(proc, shuffleBuild.Conditions[i])
-		if err != nil {
-			return err
+		if ctr.executor[i] == nil {
+			ctr.executor[i], err = colexec.NewExpressionExecutor(proc, shuffleBuild.Conditions[i])
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -74,8 +80,9 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 		}
 	}
 
-	shuffleBuild.ctr.batches = make([]*batch.Batch, 0)
-
+	if shuffleBuild.ctr.batches == nil {
+		shuffleBuild.ctr.batches = make([]*batch.Batch, 0)
+	}
 	return nil
 }
 
@@ -90,7 +97,7 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 
 	result := vm.NewCallResult()
 	ap := shuffleBuild
-	ctr := ap.ctr
+	ctr := &ap.ctr
 	for {
 		switch ctr.state {
 		case ReceiveBatch:
@@ -108,10 +115,10 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 				ctr.cleanHashMap()
 				return result, err
 			}
-			if !ap.NeedMergedBatch {
+			if !ap.NeedBatches {
 				// if do not need merged batch, free it now to save memory
 				for i := range ctr.batches {
-					proc.PutBatch(ctr.batches[i])
+					ctr.batches[i].Clean(proc.GetMPool())
 				}
 				ctr.batches = nil
 			}
@@ -120,44 +127,22 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			} else if ap.ctr.strHashMap != nil {
 				anal.Alloc(ap.ctr.strHashMap.Size())
 			}
-			ctr.state = SendHashMap
+			ctr.state = SendJoinMap
 
-		case SendHashMap:
-			result.Batch = batch.NewWithSize(0)
-
+		case SendJoinMap:
+			if ap.JoinMapTag <= 0 {
+				panic("wrong joinmap message tag!")
+			}
+			var jm *message.JoinMap
 			if ctr.inputBatchRowCount > 0 {
-				var jm *hashmap.JoinMap
-				if ctr.keyWidth <= 8 {
-					jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
-				} else {
-					jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
+				jm = message.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
+				if ap.NeedBatches {
+					jm.SetRowCount(int64(ctr.inputBatchRowCount))
 				}
-				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-				result.Batch.AuxData = jm
-				ctr.intHashMap = nil
-				ctr.strHashMap = nil
-				ctr.multiSels = nil
-			} else {
-				ctr.cleanHashMap()
+				jm.IncRef(1)
 			}
+			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, IsShuffle: true, ShuffleIdx: ap.ShuffleIdx, Tag: ap.JoinMapTag}, proc.GetMessageBoard())
 
-			// this is just a dummy batch to indicate that the batch is must not empty.
-			// we should make sure this batch can be sent to the next join operator in other pipelines.
-			if result.Batch.IsEmpty() {
-				result.Batch.AddRowCount(1)
-			}
-
-			ctr.state = SendBatch
-			return result, nil
-		case SendBatch:
-			if ctr.batchIdx >= len(ctr.batches) {
-				ctr.state = End
-			} else {
-				result.Batch = ctr.batches[ctr.batchIdx]
-				ctr.batchIdx++
-			}
-			return result, nil
-		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -167,32 +152,34 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 
 // make sure src is not empty
 func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) error {
-	var err error
 	if src.RowCount() == colexec.DefaultBatchSize {
-		ctr.batches = append(ctr.batches, src)
+		dupbatch, err := src.Dup(proc.Mp())
+		if err != nil {
+			return err
+		}
+		ctr.batches = append(ctr.batches, dupbatch)
 		return nil
 	} else {
 		offset := 0
 		appendRows := 0
 		length := src.RowCount()
+		var err error
 		for offset < length {
-			ctr.tmpBatch, appendRows, err = proc.AppendToFixedSizeFromOffset(ctr.tmpBatch, src, offset)
+			ctr.buf, appendRows, err = proc.AppendToFixedSizeFromOffset(ctr.buf, src, offset)
 			if err != nil {
 				return err
 			}
-			if ctr.tmpBatch.RowCount() == colexec.DefaultBatchSize {
-				ctr.batches = append(ctr.batches, ctr.tmpBatch)
-				ctr.tmpBatch = nil
+			if ctr.buf.RowCount() == colexec.DefaultBatchSize {
+				ctr.batches = append(ctr.batches, ctr.buf)
+				ctr.buf = nil
 			}
 			offset += appendRows
 		}
-		proc.PutBatch(src)
 	}
 	return nil
 }
 
 func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	var currentBatch *batch.Batch
 	for {
 		result, err := vm.ChildrenCall(shuffleBuild.Children[0], proc, anal)
 		if err != nil {
@@ -201,28 +188,20 @@ func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *proc
 		if result.Batch == nil {
 			break
 		}
-		currentBatch = result.Batch
-		if currentBatch == nil {
-			break
-		}
-		atomic.AddInt64(&currentBatch.Cnt, 1)
-		if currentBatch.IsEmpty() {
-			proc.PutBatch(currentBatch)
+		if result.Batch.IsEmpty() {
 			continue
 		}
-
-		anal.Input(currentBatch, isFirst)
-		anal.Alloc(int64(currentBatch.Size()))
-
-		ctr.inputBatchRowCount += currentBatch.RowCount()
-		err = ctr.mergeIntoBatches(currentBatch, proc)
+		anal.Input(result.Batch, isFirst)
+		anal.Alloc(int64(result.Batch.Size()))
+		ctr.inputBatchRowCount += result.Batch.RowCount()
+		err = ctr.mergeIntoBatches(result.Batch, proc)
 		if err != nil {
 			return err
 		}
 	}
-	if ctr.tmpBatch != nil && ctr.tmpBatch.RowCount() > 0 {
-		ctr.batches = append(ctr.batches, ctr.tmpBatch)
-		ctr.tmpBatch = nil
+	if ctr.buf != nil && ctr.buf.RowCount() > 0 {
+		ctr.batches = append(ctr.batches, ctr.buf)
+		ctr.buf = nil
 	}
 	return nil
 }
@@ -303,11 +282,7 @@ func (ctr *container) buildHashmap(ap *ShuffleBuild, proc *process.Process) erro
 			return err
 		}
 		for k, v := range vals[:n] {
-			if zvals[k] == 0 {
-				ctr.hasNull = true
-				continue
-			}
-			if v == 0 {
+			if zvals[k] == 0 || v == 0 {
 				continue
 			}
 			ai := int64(v) - 1
@@ -324,7 +299,7 @@ func (ctr *container) buildHashmap(ap *ShuffleBuild, proc *process.Process) erro
 			if len(ap.ctr.uniqueJoinKeys) == 0 {
 				ap.ctr.uniqueJoinKeys = make([]*vector.Vector, len(ctr.executor))
 				for j, vec := range ctr.vecs[vecIdx1] {
-					ap.ctr.uniqueJoinKeys[j] = proc.GetVector(*vec.GetType())
+					ap.ctr.uniqueJoinKeys[j] = vector.NewVec(*vec.GetType())
 				}
 			}
 
@@ -368,16 +343,11 @@ func (ctr *container) handleRuntimeFilter(ap *ShuffleBuild, proc *process.Proces
 	if ap.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
 	}
-	// only shuffle build operator with parallelIdx = 0 send this runtime filter
-	if ap.GetParallelIdx() != 0 {
-		ap.RuntimeFilterSpec.Handled = true
-		return nil
-	}
 	//only support runtime filter pass for now in shuffle join
-	var runtimeFilter process.RuntimeFilterMessage
+	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
-	runtimeFilter.Typ = process.RuntimeFilter_PASS
-	proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+	runtimeFilter.Typ = message.RuntimeFilter_PASS
+	message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 	return nil
 }
 

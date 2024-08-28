@@ -20,8 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/cockroachdb/errors"
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -29,7 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 const (
@@ -86,6 +86,7 @@ type Client interface {
 }
 
 type managedClient struct {
+	sid    string
 	cfg    ClientConfig
 	client *client
 }
@@ -96,15 +97,19 @@ var _ Client = (*managedClient)(nil)
 // to synchronously issue requests to the Log Service. To send multiple requests
 // to the Log Service in parallel, multiple clients should be created and used
 // to do so.
-func NewClient(ctx context.Context, cfg ClientConfig) (Client, error) {
+func NewClient(
+	ctx context.Context,
+	sid string,
+	cfg ClientConfig,
+) (Client, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	client, err := newClient(ctx, cfg)
+	client, err := newClient(ctx, sid, cfg)
 	if err != nil {
 		return nil, err
 	}
-	return &managedClient{cfg: cfg, client: client}, nil
+	return &managedClient{cfg: cfg, client: client, sid: sid}, nil
 }
 
 func (c *managedClient) Close() error {
@@ -126,6 +131,12 @@ func (c *managedClient) GetLogRecord(payloadLength int) pb.LogRecord {
 }
 
 func (c *managedClient) Append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
+	start := time.Now()
+	defer func() {
+		v2.LogServiceAppendDurationHistogram.Observe(time.Since(start).Seconds())
+		v2.LogServiceAppendCounter.Inc()
+		v2.LogServiceAppendBytesHistogram.Observe(float64(len(rec.Data)))
+	}()
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			return 0, err
@@ -236,7 +247,7 @@ func (c *managedClient) prepareClient(ctx context.Context) error {
 	if c.client != nil {
 		return nil
 	}
-	cc, err := newClient(ctx, c.cfg)
+	cc, err := newClient(ctx, c.sid, c.cfg)
 	if err != nil {
 		return err
 	}
@@ -252,17 +263,21 @@ type client struct {
 	respPool *sync.Pool
 }
 
-func newClient(ctx context.Context, cfg ClientConfig) (*client, error) {
+func newClient(
+	ctx context.Context,
+	sid string,
+	cfg ClientConfig,
+) (*client, error) {
 	var c *client
 	var err error
 	// If the discovery address is configured, we used it first.
 	if len(cfg.DiscoveryAddress) > 0 {
-		c, err = connectToLogServiceByReverseProxy(ctx, cfg.DiscoveryAddress, cfg)
+		c, err = connectToLogServiceByReverseProxy(ctx, sid, cfg.DiscoveryAddress, cfg)
 		if c != nil && err == nil {
 			return c, nil
 		}
 	} else if len(cfg.ServiceAddresses) > 0 {
-		c, err = connectToLogService(ctx, cfg.ServiceAddresses, cfg)
+		c, err = connectToLogService(ctx, sid, cfg.ServiceAddresses, cfg)
 		if c != nil && err == nil {
 			return c, nil
 		}
@@ -273,9 +288,13 @@ func newClient(ctx context.Context, cfg ClientConfig) (*client, error) {
 	return nil, moerr.NewLogServiceNotReady(ctx)
 }
 
-func connectToLogServiceByReverseProxy(ctx context.Context,
-	discoveryAddress string, cfg ClientConfig) (*client, error) {
-	si, ok, err := GetShardInfo(discoveryAddress, cfg.LogShardID)
+func connectToLogServiceByReverseProxy(
+	ctx context.Context,
+	sid string,
+	discoveryAddress string,
+	cfg ClientConfig,
+) (*client, error) {
+	si, ok, err := GetShardInfo(sid, discoveryAddress, cfg.LogShardID)
 	if err != nil {
 		return nil, err
 	}
@@ -292,11 +311,15 @@ func connectToLogServiceByReverseProxy(ctx context.Context,
 			addresses = append(addresses, address)
 		}
 	}
-	return connectToLogService(ctx, addresses, cfg)
+	return connectToLogService(ctx, sid, addresses, cfg)
 }
 
-func connectToLogService(ctx context.Context,
-	targets []string, cfg ClientConfig) (*client, error) {
+func connectToLogService(
+	ctx context.Context,
+	sid string,
+	targets []string,
+	cfg ClientConfig,
+) (*client, error) {
 	if len(targets) == 0 {
 		return nil, nil
 	}
@@ -322,6 +345,7 @@ func connectToLogService(ctx context.Context,
 	for _, addr := range addresses {
 		cc, err := getRPCClient(
 			ctx,
+			sid,
 			addr,
 			c.respPool,
 			c.cfg.MaxMessageSize,
@@ -521,12 +545,14 @@ func (c *client) doGetTruncatedLsn(ctx context.Context) (Lsn, error) {
 
 func getRPCClient(
 	ctx context.Context,
+	sid string,
 	target string,
 	pool *sync.Pool,
 	maxMessageSize int,
 	enableCompress bool,
 	readTimeout time.Duration,
-	tag ...string) (morpc.RPCClient, error) {
+	tag ...string,
+) (morpc.RPCClient, error) {
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCResponse)
 	}
@@ -560,7 +586,7 @@ func getRPCClient(
 	// we set connection timeout to a constant value so if ctx's deadline is much
 	// larger, then we can ensure that all specified potential nodes have a chance
 	// to be attempted
-	codec := morpc.NewMessageCodec(mf, codecOpts...)
+	codec := morpc.NewMessageCodec(sid, mf, codecOpts...)
 	bf := morpc.NewGoettyBasedBackendFactory(codec, backendOpts...)
 	return morpc.NewClient("logservice-client", bf, clientOpts...)
 }

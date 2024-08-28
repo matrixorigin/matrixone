@@ -83,8 +83,10 @@ func TestDispatch(t *testing.T) {
 			}
 		}*/
 		_, _ = tc.arg.Call(tc.proc)
-		tc.arg.Free(tc.proc, false, nil)
+		tc.arg.Children[0].Reset(tc.proc, false, nil)
 		tc.arg.Children[0].Free(tc.proc, false, nil)
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
 		for _, re := range tc.arg.LocalRegs {
 			for len(re.Ch) > 0 {
 				msg := <-re.Ch
@@ -94,13 +96,13 @@ func TestDispatch(t *testing.T) {
 				msg.Batch.Clean(tc.proc.Mp())
 			}
 		}
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func newTestCase() dispatchTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	reg := &process.WaitRegister{Ctx: ctx, Ch: make(chan *process.RegisterMessage, 3)}

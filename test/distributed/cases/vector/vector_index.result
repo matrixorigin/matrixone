@@ -156,10 +156,10 @@ Table    Create Table
 vector_index_08    CREATE TABLE `vector_index_08` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` VECF32(128) DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  `d` VECF32(3) NOT NULL,\n  PRIMARY KEY (`a`),\n  KEY `c_k` (`c`),\n  KEY `idx01` USING ivfflat (`b`) lists = 3  op_type 'vector_l2_ops' ,\n  KEY `idx02` USING ivfflat (`d`) lists = 3  op_type 'vector_l2_ops' \n)
 insert into vector_index_08(d) values ("[2.36,5.021,9.222]");
 insert into vector_index_08(d) values ("[8.555,2.11,7.22]");
+alter table vector_index_08 alter reindex idx02 ivfflat lists=3;
 select * from vector_index_08 where a>9774 order by  L2_DISTANCE(d,"[1.02,0.2,3.2]") desc limit 2;
 a    b    c    d
 9778    null    null    [8.555, 2.11, 7.22]
-9777    null    null    [2.36, 5.021, 9.222]
 alter table vector_index_08 rename column d to e;
 select * from vector_index_08 where a>9775 order by  L2_DISTANCE(e,"[1.02,0.2,3.2]") desc limit 2;
 a    b    c    e

@@ -66,7 +66,7 @@ func newTestCase(format, jsondata string) externalTestCase {
 		proc:  proc,
 		types: []types.Type{types.T_int8.ToType()},
 		arg: &External{
-			ctr: &container{},
+			ctr: container{},
 			Es: &ExternalParam{
 				ExParamConst: ExParamConst{
 					Ctx: ctx,
@@ -216,6 +216,180 @@ func Test_Call(t *testing.T) {
 	})
 }
 
+func buildFields(ls []string) []csvparser.Field {
+	ret := make([]csvparser.Field, 0, len(ls))
+	for _, s := range ls {
+		ret = append(ret, csvparser.Field{Val: s})
+	}
+	return ret
+}
+
+func Test_Call2(t *testing.T) {
+	cases2 := []externalTestCase{
+		newTestCase(tree.CSV, ""),
+		newTestCase(tree.JSONLINE, tree.OBJECT),
+		newTestCase(tree.JSONLINE, tree.ARRAY),
+	}
+	convey.Convey("external Call", t, func() {
+		for _, tcs := range cases2 {
+			param := tcs.arg.Es
+			extern := &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{
+					Filepath: "",
+					Tail: &tree.TailParameter{
+						IgnoredLines: 0,
+					},
+					Format:   tcs.format,
+					ScanType: tree.INLINE,
+				},
+				ExParam: tree.ExParam{
+					FileService: tcs.proc.Base.FileService,
+					JsonData:    tcs.jsondata,
+					Ctx:         context.Background(),
+				},
+			}
+			param.Extern = extern
+			attrs := []string{"col1", "col2", "col3"}
+			param.Attrs = attrs
+
+			cols := []*plan.ColDef{
+				{
+					Typ: plan.Type{
+						Id: int32(types.T_bool),
+					},
+				},
+				{
+					Typ: plan.Type{
+						Id: int32(types.T_int8),
+					},
+				},
+				{
+					Typ: plan.Type{
+						Id: int32(types.T_int16),
+					},
+				},
+			}
+			param.Cols = cols
+			param.Fileparam.End = false
+			param.FileList = []string{"abc.txt"}
+			param.FileOffsetTotal = []*pipeline.FileOffset{
+				{
+					Offset: []int64{0, -1},
+				},
+			}
+			param.FileSize = []int64{1}
+
+			var err error
+			err = tcs.arg.Prepare(tcs.proc)
+			convey.So(err, convey.ShouldBeNil)
+			end, err := tcs.arg.Call(tcs.proc)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
+			tcs.arg.Reset(tcs.proc, false, nil)
+
+			err = tcs.arg.Prepare(tcs.proc)
+			convey.So(err, convey.ShouldBeNil)
+			end, err = tcs.arg.Call(tcs.proc)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(end.Status == vm.ExecStop, convey.ShouldBeTrue)
+			tcs.arg.Free(tcs.proc, false, nil)
+			require.Equal(t, int64(0), tcs.proc.Mp().CurrNB())
+		}
+	})
+}
+
+func Test_CALL3(t *testing.T) {
+	case3 := newTestCase(tree.CSV, "")
+
+	convey.Convey("external Call", t, func() {
+		tcs := case3
+		param := tcs.arg.Es
+		extern := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: "",
+				Tail: &tree.TailParameter{
+					IgnoredLines: 0,
+					Fields: &tree.Fields{
+						Terminated: &tree.Terminated{
+							Value: ",",
+						},
+					},
+				},
+				Format:   tcs.format,
+				ScanType: tree.INLINE,
+			},
+			ExParam: tree.ExParam{
+				FileService: tcs.proc.Base.FileService,
+				JsonData:    tcs.jsondata,
+				Ctx:         context.Background(),
+			},
+		}
+		param.Extern = extern
+		attrs := []string{"col1", "col2", "col3"}
+		param.Attrs = attrs
+
+		cols := []*plan.ColDef{
+			{
+				Typ: plan.Type{
+					Id: int32(types.T_int32),
+				},
+			},
+			{
+				Typ: plan.Type{
+					Id: int32(types.T_int8),
+				},
+			},
+			{
+				Typ: plan.Type{
+					Id: int32(types.T_int16),
+				},
+			},
+		}
+		param.Cols = cols
+		param.Fileparam.End = false
+		param.FileList = []string{"abc.txt"}
+		param.FileOffsetTotal = []*pipeline.FileOffset{
+			{
+				Offset: []int64{0, -1},
+			},
+		}
+		param.FileSize = []int64{1}
+
+		// line := []string{"1", "2", "3"}
+		param.Name2ColIndex = make(map[string]int32)
+		for i := 0; i < len(attrs); i++ {
+			param.Name2ColIndex[attrs[i]] = int32(i)
+		}
+		param.TbColToDataCol = make(map[string]int32)
+		for i := 0; i < len(attrs); i++ {
+			param.TbColToDataCol[attrs[i]] = int32(i)
+		}
+
+		param.Extern.Data = "1,2,3"
+		var err error
+
+		err = tcs.arg.Prepare(tcs.proc)
+		convey.So(err, convey.ShouldBeNil)
+		param.plh, err = getMOCSVReader(param, tcs.proc)
+		require.NoError(t, err)
+		end, err := tcs.arg.Call(tcs.proc)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
+		tcs.arg.Reset(tcs.proc, false, nil)
+
+		param.Fileparam.End = false
+		err = tcs.arg.Prepare(tcs.proc)
+		convey.So(err, convey.ShouldBeNil)
+		param.plh, err = getMOCSVReader(param, tcs.proc)
+		require.NoError(t, err)
+		end, err = tcs.arg.Call(tcs.proc)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
+		tcs.arg.Free(tcs.proc, false, nil)
+		require.Equal(t, int64(0), tcs.proc.Mp().CurrNB())
+	})
+}
+
 func Test_getCompressType(t *testing.T) {
 	convey.Convey("getCompressType succ", t, func() {
 		param := &tree.ExternParam{
@@ -293,27 +467,6 @@ func Test_getUnCompressReader(t *testing.T) {
 	})
 }
 
-func Test_makeBatch(t *testing.T) {
-	convey.Convey("makeBatch succ", t, func() {
-		col := &plan.ColDef{
-			Typ: plan.Type{
-				Id: int32(types.T_bool),
-			},
-		}
-		param := &ExternalParam{
-			ExParamConst: ExParamConst{
-				Cols:  []*plan.ColDef{col},
-				Attrs: []string{"a"},
-			},
-		}
-		plh := &ParseLineHandler{
-			batchSize: 1,
-		}
-		_, err := makeBatch(param, plh.batchSize, testutil.NewProc())
-		convey.So(err, convey.ShouldBeNil)
-	})
-}
-
 func Test_getBatchData(t *testing.T) {
 	convey.Convey("getBatchData succ", t, func() {
 		line := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "2020-09-07",
@@ -377,14 +530,6 @@ func Test_getBatchData(t *testing.T) {
 		}
 		buf.WriteString("]")
 		jsonline_array_less := []string{buf.String()}
-
-		buildFields := func(ls []string) []csvparser.Field {
-			ret := make([]csvparser.Field, 0, len(ls))
-			for _, s := range ls {
-				ret = append(ret, csvparser.Field{Val: s})
-			}
-			return ret
-		}
 
 		cols := []*plan.ColDef{
 			{
@@ -486,8 +631,9 @@ func Test_getBatchData(t *testing.T) {
 		}
 		param := &ExternalParam{
 			ExParamConst: ExParamConst{
-				Attrs: attrs,
-				Cols:  cols,
+				Attrs:         attrs,
+				Cols:          cols,
+				StrictSqlMode: true,
 				Extern: &tree.ExternParam{
 					ExParamConst: tree.ExParamConst{
 						Tail: &tree.TailParameter{
@@ -500,52 +646,78 @@ func Test_getBatchData(t *testing.T) {
 					},
 				},
 			},
+			ExParam: ExParam{
+				Fileparam: &ExFileparam{},
+				Filter:    &FilterParam{},
+			},
 		}
+
+		proc := testutil.NewProc()
+		ext := &External{
+			Es: param,
+		}
+		ext.Prepare(proc)
 		param.Name2ColIndex = make(map[string]int32)
 		for i := 0; i < len(attrs); i++ {
 			param.Name2ColIndex[attrs[i]] = int32(i)
+		}
+		param.TbColToDataCol = make(map[string]int32)
+		for i := 0; i < len(attrs); i++ {
+			param.TbColToDataCol[attrs[i]] = int32(i)
 		}
 		plh := &ParseLineHandler{
 			batchSize:      1,
 			moCsvLineArray: [][]csvparser.Field{buildFields(line)},
 		}
 
-		proc := testutil.NewProc()
-		_, err := getBatchData(param, plh, proc)
+		err := getBatchData(param, plh, proc, ext.ctr.buf)
 		convey.So(err, convey.ShouldBeNil)
+		ext.Reset(proc, false, nil)
 
 		plh.moCsvLineArray = [][]csvparser.Field{buildFields(line[:1])}
-		_, err = getBatchData(param, plh, proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
 		convey.So(err, convey.ShouldNotBeNil)
+		ext.Reset(proc, false, nil)
 
 		fields := make([]csvparser.Field, len(attrs))
 		for i := range attrs {
 			fields[i].IsNull = true
 		}
 		plh.moCsvLineArray = [][]csvparser.Field{fields}
-		_, err = getBatchData(param, plh, proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
 		convey.So(err, convey.ShouldBeNil)
+		ext.Reset(proc, false, nil)
 
 		line = []string{"0", "1.0", "2.0", "3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0", "11.0", "13", "2020-09-07",
 			"2020-09-07 00:00:00", "16", "17", "2020-09-07 00:00:00"}
 		plh.moCsvLineArray = [][]csvparser.Field{buildFields(line)}
-		_, err = getBatchData(param, plh, proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
 		convey.So(err, convey.ShouldBeNil)
+		ext.Reset(proc, false, nil)
 
 		line = []string{"truefalse", "128", "32768", "2147483648", "9223372036854775808", "256", "65536", "4294967296", "18446744073709551616",
 			"float32", "float64", "", "13", "date", "datetime", "decimal64", "decimal128", "timestamp"}
 		for i := 0; i < len(attrs); i++ {
+			tempLine := line[:len(line)-i]
 			tmp := attrs[i:]
 			param.Attrs = tmp
+			param.TbColToDataCol = make(map[string]int32)
+			for i := 0; i < len(tmp); i++ {
+				param.TbColToDataCol[tmp[i]] = int32(i)
+			}
 			param.Cols = cols[i:]
-			plh.moCsvLineArray = [][]csvparser.Field{buildFields(line)}
-			_, err = getBatchData(param, plh, proc)
+			plh.moCsvLineArray = [][]csvparser.Field{buildFields(tempLine)}
+			ext.Prepare(proc)
+			err = getBatchData(param, plh, proc, ext.ctr.buf)
 			convey.So(err, convey.ShouldNotBeNil)
+			ext.Free(proc, false, nil)
 		}
 
 		param.Extern.Tail.Fields.EnclosedBy = &tree.EnclosedBy{Value: 't'}
-		_, err = getBatchData(param, plh, proc)
+		ext.Prepare(proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
 		convey.So(err, convey.ShouldNotBeNil)
+		ext.Free(proc, false, nil)
 
 		line[1] = "128.9"
 		line[2] = "32768.9"
@@ -558,62 +730,95 @@ func Test_getBatchData(t *testing.T) {
 		for i := 1; i <= 8; i++ {
 			tmp := attrs[i:]
 			param.Attrs = tmp
+			param.TbColToDataCol = make(map[string]int32)
+			for i := 0; i < len(tmp); i++ {
+				param.TbColToDataCol[tmp[i]] = int32(i)
+			}
 			param.Cols = cols[i:]
+			ext.Prepare(proc)
 			plh.moCsvLineArray = [][]csvparser.Field{buildFields(line)}
-			_, err = getBatchData(param, plh, proc)
+
+			err = getBatchData(param, plh, proc, ext.ctr.buf)
 			convey.So(err, convey.ShouldNotBeNil)
+			ext.Free(proc, false, nil)
 		}
 
 		//test jsonline
 		param.Extern.Format = tree.JSONLINE
 		param.Extern.JsonData = tree.OBJECT
 		param.Attrs = attrs
+		param.TbColToDataCol = make(map[string]int32)
+		for i := 0; i < len(attrs); i++ {
+			param.TbColToDataCol[attrs[i]] = int32(i)
+		}
 		param.Cols = cols
+		ext.Prepare(proc)
 		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_object)}
-		_, err = getBatchData(param, plh, proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
 		convey.So(err, convey.ShouldBeNil)
+		ext.Reset(proc, false, nil)
+		ext.Prepare(proc)
 		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_object_less)}
-		_, err = getBatchData(param, plh, proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
 		convey.So(err, convey.ShouldNotBeNil)
+		ext.Reset(proc, false, nil)
+		ext.Prepare(proc)
 		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_object_key_not_match)}
-		_, err = getBatchData(param, plh, proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
 		convey.So(err, convey.ShouldNotBeNil)
+		ext.Reset(proc, false, nil)
 
 		param.Extern.Format = tree.CSV
-		_, err = getBatchData(param, plh, proc)
+		ext.Prepare(proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
 		convey.So(err, convey.ShouldNotBeNil)
+		ext.Reset(proc, false, nil)
 
 		param.Extern.Format = tree.JSONLINE
 		param.Extern.JsonData = tree.ARRAY
 		param.prevStr = ""
+		ext.Prepare(proc)
 		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_array)}
-		_, err = getBatchData(param, plh, proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
 		convey.So(err, convey.ShouldBeNil)
+		ext.Reset(proc, false, nil)
 		prevStr, str := jsonline_array[0][:len(jsonline_array[0])-2], jsonline_array[0][len(jsonline_array[0])-2:]
+		ext.Prepare(proc)
 		plh.moCsvLineArray = [][]csvparser.Field{{{Val: prevStr}}}
-		_, err = getBatchData(param, plh, proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
+		ext.Reset(proc, false, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(param.prevStr, convey.ShouldEqual, prevStr)
 
+		ext.Prepare(proc)
 		plh.moCsvLineArray = [][]csvparser.Field{{{Val: str}}}
-		_, err = getBatchData(param, plh, proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
 		convey.So(err, convey.ShouldBeNil)
+		ext.Reset(proc, false, nil)
 
 		param.Extern.JsonData = "test"
-		_, err = getBatchData(param, plh, proc)
+		ext.Prepare(proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
 		convey.So(err, convey.ShouldNotBeNil)
+		ext.Reset(proc, false, nil)
 
+		ext.Prepare(proc)
 		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_array_less)}
-		_, err = getBatchData(param, plh, proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
 		convey.So(err, convey.ShouldNotBeNil)
+		ext.Reset(proc, false, nil)
 
 		jsonline_array_less[0] = jsonline_object_less[0][1:]
+		ext.Prepare(proc)
 		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_array_less)}
-		_, err = getBatchData(param, plh, proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
 		convey.So(err, convey.ShouldNotBeNil)
+		ext.Reset(proc, false, nil)
 		jsonline_array = append(jsonline_array, jsonline_array_less...)
+		ext.Prepare(proc)
 		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_array)}
-		_, err = getBatchData(param, plh, proc)
+		err = getBatchData(param, plh, proc, ext.ctr.buf)
+		ext.Reset(proc, false, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }

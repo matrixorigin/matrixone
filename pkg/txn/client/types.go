@@ -174,9 +174,6 @@ type TxnOperator interface {
 	// GetWorkspace from the transaction
 	GetWorkspace() Workspace
 
-	ResetRetry(bool)
-	IsRetry() bool
-
 	// AppendEventCallback append callback. All append callbacks will be called sequentially
 	// if event happen.
 	AppendEventCallback(event EventType, callbacks ...func(TxnEvent))
@@ -238,6 +235,8 @@ type TimestampWaiter interface {
 }
 
 type Workspace interface {
+	Readonly() bool
+
 	// StartStatement tag a statement is running
 	StartStatement()
 	// EndStatement tag end a statement is completed
@@ -268,6 +267,9 @@ type Workspace interface {
 
 	SetHaveDDL(flag bool)
 	GetHaveDDL() bool
+
+	// debug & test
+	PPString() string
 }
 
 // TxnOverview txn overview include meta and status

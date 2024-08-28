@@ -93,10 +93,10 @@ func TestCalculateStorageUsage(t *testing.T) {
 	pu.SV.SetDefaultValues()
 
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor()
+		return frontend.NewInternalExecutor("")
 	}
 
-	err = mometric.CalculateStorageUsage(ctx, ieFactory)
+	err = mometric.CalculateStorageUsage(ctx, "", ieFactory)
 	require.Nil(t, err)
 
 	s := metric.StorageUsage("sys")

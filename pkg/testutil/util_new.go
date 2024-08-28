@@ -37,14 +37,14 @@ import (
 
 func NewProcess() *process.Process {
 	mp := mpool.MustNewZeroNoFixed()
-	return NewProcessWithMPool(mp)
+	return NewProcessWithMPool("", mp)
 }
 
-func SetupAutoIncrService() {
-	rt := runtime.ProcessLevelRuntime()
+func SetupAutoIncrService(sid string) {
+	rt := runtime.ServiceRuntime(sid)
 	if rt == nil {
 		rt = runtime.DefaultRuntime()
-		runtime.SetupProcessLevelRuntime(rt)
+		runtime.SetupServiceBasedRuntime(sid, rt)
 	}
 	rt.SetGlobalVariables(
 		runtime.AutoIncrementService,
@@ -54,9 +54,9 @@ func SetupAutoIncrService() {
 			incrservice.Config{}))
 }
 
-func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
-	SetupAutoIncrService()
-	proc := process.New(
+func NewProcessWithMPool(sid string, mp *mpool.MPool) *process.Process {
+	SetupAutoIncrService(sid)
+	proc := process.NewTopProcess(
 		context.Background(),
 		mp,
 		nil, // no txn client can be set
@@ -248,7 +248,7 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 		}
 		return NewDecimal128Vector(n, typ, m, random, nil)
 	case types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		if vs, ok := Values.([]string); ok {
 			return NewStringVector(n, typ, m, random, vs)
 		}
@@ -289,7 +289,7 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 		}
 		return NewUInt16Vector(n, typ, m, random, nil)
 	default:
-		panic(moerr.NewInternalErrorNoCtx("unsupport vector's type '%v", typ))
+		panic(moerr.NewInternalErrorNoCtxf("unsupport vector's type '%v", typ))
 	}
 }
 

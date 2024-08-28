@@ -39,5 +39,5 @@ func doBackup(ctx context.Context, ses FeSession, bs *tree.BackupStart) error {
 	if err != nil {
 		return err
 	}
-	return backup.Backup(ctx, bs, conf)
+	return backup.Backup(ctx, ses.GetService(), bs, conf)
 }

@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -194,19 +193,16 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 }
 
 func (bat *Batch) Clean(m *mpool.MPool) {
-	if bat == EmptyBatch {
+	// situations that batch was still in use.
+	// we use `!= 0` but not `>0` to avoid the situation that the batch was cleaned more than required.
+	if bat == EmptyBatch || atomic.AddInt64(&bat.Cnt, -1) != 0 {
 		return
 	}
-	if atomic.LoadInt64(&bat.Cnt) == 0 {
-		// panic("batch is already cleaned")
-		return
-	}
-	if atomic.AddInt64(&bat.Cnt, -1) > 0 {
-		return
-	}
+
 	for _, vec := range bat.Vecs {
 		if vec != nil {
 			vec.Free(m)
+			bat.ReplaceVector(vec, nil)
 		}
 	}
 	for _, agg := range bat.Aggs {
@@ -214,9 +210,10 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 			agg.Free()
 		}
 	}
-	bat.Attrs = nil
-	bat.rowCount = 0
+	bat.Aggs = nil
 	bat.Vecs = nil
+	bat.Attrs = nil
+	bat.SetRowCount(0)
 }
 
 func (bat *Batch) Last() bool {
@@ -257,9 +254,11 @@ func (bat *Batch) Log(tag string) {
 	if bat == nil || bat.rowCount < 1 {
 		return
 	}
-	logutil.Infof("\n" + tag + "\n" + bat.String())
+	logutil.Info("\n" + tag + "\n" + bat.String())
 }
 
+// Dup used to copy a Batch object, this method will create a new batch
+// and copy all vectors (Vecs) of the current batch to the new batch.
 func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	var err error
 
@@ -273,9 +272,11 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 			rbat.Clean(mp)
 			return nil, err
 		}
+		rvec.SetSorted(vec.GetSorted())
 		rbat.SetVector(int32(j), rvec)
 	}
 	rbat.rowCount = bat.rowCount
+	rbat.ShuffleIDX = bat.ShuffleIDX
 
 	//if len(bat.Aggs) > 0 {
 	//	rbat.Aggs = make([]aggexec.AggFuncExec, len(bat.Aggs))
@@ -289,13 +290,7 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	//		}
 	//	}
 	//}
-	// if bat.AuxData != nil {
-	// 	if m, ok := bat.AuxData.(*hashmap.JoinMap); ok {
-	// rbat.AuxData = &hashmap.JoinMap{
-	// 	cnt: m
-	// }
-	// 	}
-	// }
+
 	return rbat, nil
 }
 
@@ -386,19 +381,12 @@ func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
 }
 
 func (bat *Batch) IsEmpty() bool {
-	return bat.rowCount == 0 && bat.AuxData == nil && len(bat.Aggs) == 0
+	return bat.rowCount == 0 && len(bat.Aggs) == 0
 }
 
-func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {
-	if bat.AuxData == nil {
-		return
+func (bat *Batch) IsDone() bool {
+	if bat == nil {
+		return true
 	}
-	jm := bat.AuxData.(*hashmap.JoinMap)
-	if jm.IsDup() {
-		ret = jm.Dup()
-	} else {
-		ret = jm
-		bat.AuxData = nil
-	}
-	return
+	return bat.IsEmpty() || bat.Last()
 }

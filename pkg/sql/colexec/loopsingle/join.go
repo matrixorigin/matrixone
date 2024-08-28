@@ -16,6 +16,9 @@ package loopsingle
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,15 +42,15 @@ func (loopSingle *LoopSingle) OpType() vm.OpType {
 func (loopSingle *LoopSingle) Prepare(proc *process.Process) error {
 	var err error
 
-	loopSingle.ctr = new(container)
-	loopSingle.ctr.InitReceiver(proc, false)
-	loopSingle.ctr.bat = batch.NewWithSize(len(loopSingle.Typs))
-	for i, typ := range loopSingle.Typs {
-		loopSingle.ctr.bat.Vecs[i] = proc.GetVector(typ)
+	if loopSingle.Cond != nil && loopSingle.ctr.expr == nil {
+		loopSingle.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopSingle.Cond)
+		if err != nil {
+			return err
+		}
 	}
 
-	if loopSingle.Cond != nil {
-		loopSingle.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopSingle.Cond)
+	if loopSingle.ProjectList != nil && loopSingle.ProjectExecutors == nil {
+		err = loopSingle.PrepareProjection(proc)
 	}
 	return err
 }
@@ -60,39 +63,69 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 	anal := proc.GetAnalyze(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := loopSingle.ctr
+	ctr := &loopSingle.ctr
+	input := vm.NewCallResult()
 	result := vm.NewCallResult()
+	probeResult := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := loopSingle.build(proc, anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
 			var err error
-			msg := ctr.ReceiveFromSingleReg(0, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			input, err = loopSingle.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-
-			bat := msg.Batch
+			bat := input.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
-			if ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(bat, loopSingle, proc, anal, loopSingle.GetIsFirst(), loopSingle.GetIsLast(), &result)
-			} else {
-				err = ctr.probe(bat, loopSingle, proc, anal, loopSingle.GetIsFirst(), loopSingle.GetIsLast(), &result)
-			}
-			proc.PutBatch(bat)
+			anal.Input(bat, loopSingle.GetIsFirst())
 
+			if ctr.rbat == nil {
+				ctr.rbat = batch.NewWithSize(len(loopSingle.Result))
+				for i, rp := range loopSingle.Result {
+					if rp.Rel != 0 {
+						ctr.rbat.Vecs[i] = vector.NewVec(loopSingle.Typs[rp.Pos])
+					} else {
+						ctr.rbat.Vecs[i] = vector.NewVec(*bat.Vecs[rp.Pos].GetType())
+					}
+				}
+			} else {
+				ctr.rbat.CleanOnlyData()
+			}
+			for i, rp := range loopSingle.Result {
+				if rp.Rel == 0 {
+					if err = vector.GetUnionAllFunction(*bat.Vecs[rp.Pos].GetType(), proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
+						return result, err
+					}
+				}
+			}
+
+			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
+				err = ctr.emptyProbe(bat, loopSingle, &probeResult)
+			} else {
+				err = ctr.probe(bat, loopSingle, proc, &probeResult)
+			}
+			if err != nil {
+				return result, err
+			}
+
+			result.Batch, err = loopSingle.EvalProjection(probeResult.Batch, proc)
+			if err != nil {
+				return result, err
+			}
+
+			anal.Output(result.Batch, loopSingle.GetIsLast())
 			return result, err
 
 		default:
@@ -103,59 +136,40 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+func (loopSingle *LoopSingle) build(proc *process.Process, anal process.Analyze) error {
+	ctr := &loopSingle.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(loopSingle.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	if mp == nil {
+		return nil
+	}
+	batches := mp.GetBatches()
 	var err error
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat == nil {
-			break
-		}
-		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+	//maybe optimize this in the future
+	for i := range batches {
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err
 		}
-		proc.PutBatch(bat)
 	}
+	mp.Free()
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopSingle, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
-	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
-	}
-	ctr.rbat = batch.NewWithSize(len(ap.Result))
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopSingle, result *vm.CallResult) error {
 	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			ctr.rbat.Vecs[i] = bat.Vecs[rp.Pos]
-			bat.Vecs[rp.Pos] = nil
-		} else {
-			ctr.rbat.Vecs[i] = vector.NewConstNull(ap.Typs[rp.Pos], bat.RowCount(), proc.Mp())
+		if rp.Rel != 0 {
+			ctr.rbat.Vecs[i].SetClass(vector.CONSTANT)
+			ctr.rbat.Vecs[i].SetLength(bat.RowCount())
 		}
 	}
 	ctr.rbat.SetRowCount(ctr.rbat.RowCount() + bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *LoopSingle, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
-	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
-	}
-	ctr.rbat = batch.NewWithSize(len(ap.Result))
-	for i, rp := range ap.Result {
-		if rp.Rel != 0 {
-			ctr.rbat.Vecs[i] = proc.GetVector(ap.Typs[rp.Pos])
-		}
-	}
+func (ctr *container) probe(bat *batch.Batch, ap *LoopSingle, proc *process.Process, result *vm.CallResult) error {
 	count := bat.RowCount()
 	if ctr.expr == nil {
 		switch ctr.bat.RowCount() {
@@ -241,19 +255,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *LoopSingle, proc *process.Proc
 			}
 		}
 	}
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			// rbat.Vecs[i] = bat.Vecs[rp.Pos]
-			// bat.Vecs[rp.Pos] = nil
-			typ := *bat.Vecs[rp.Pos].GetType()
-			ctr.rbat.Vecs[i] = proc.GetVector(typ)
-			if err := vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
-				return err
-			}
-		}
-	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }

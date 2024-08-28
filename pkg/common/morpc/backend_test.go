@@ -1013,7 +1013,11 @@ func (tm *testMessage) SetPayloadField(data []byte) {
 func newTestCodec(options ...CodecOption) Codec {
 	options = append(options,
 		WithCodecPayloadCopyBufferSize(1024))
-	return NewMessageCodec(func() Message { return messagePool.Get().(*testMessage) }, options...)
+	return NewMessageCodec(
+		"",
+		func() Message { return messagePool.Get().(*testMessage) },
+		options...,
+	)
 }
 
 var (

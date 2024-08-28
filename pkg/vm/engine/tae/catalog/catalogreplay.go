@@ -31,6 +31,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	Backup_Object_Offset uint16 = 1000
+)
+
 //#region Replay related
 
 func (catalog *Catalog) ReplayCmd(
@@ -119,7 +123,7 @@ func (catalog *Catalog) onReplayCreateDB(
 	if db != nil {
 		dbCreatedAt := db.GetCreatedAtLocked()
 		if !dbCreatedAt.Equal(&txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s",
+			panic(moerr.NewInternalErrorNoCtxf("logic err expect %s, get %s",
 				txnNode.End.ToString(), dbCreatedAt.ToString()))
 		}
 		return
@@ -157,7 +161,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	dbDeleteAt := db.GetDeleteAtLocked()
 	if !dbDeleteAt.IsEmpty() {
 		if !dbDeleteAt.Equal(&txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), dbDeleteAt.ToString()))
+			panic(moerr.NewInternalErrorNoCtxf("logic err expect %s, get %s", txnNode.End.ToString(), dbDeleteAt.ToString()))
 		}
 		return
 	}
@@ -272,7 +276,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	if tbl != nil {
 		tblCreatedAt := tbl.GetCreatedAtLocked()
 		if tblCreatedAt.Greater(&txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
+			panic(moerr.NewInternalErrorNoCtxf("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
 		// alter table
 		un := &MVCCNode[*TableMVCCNode]{
@@ -333,7 +337,7 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 	tableDeleteAt := tbl.GetDeleteAtLocked()
 	if !tableDeleteAt.IsEmpty() {
 		if !tableDeleteAt.Equal(&txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tableDeleteAt.ToString()))
+			panic(moerr.NewInternalErrorNoCtxf("logic err expect %s, get %s", txnNode.End.ToString(), tableDeleteAt.ToString()))
 		}
 		return
 	}
@@ -441,31 +445,53 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	var obj *ObjectEntry
-	if entryNode.CreatedAt.Equal(&txnNode.End) {
-		obj = NewReplayObjectEntry()
-		obj.table = rel
-		obj.ObjectNode = ObjectNode{
+	newObject := func() *ObjectEntry {
+		object := NewReplayObjectEntry()
+		object.table = rel
+		object.ObjectNode = ObjectNode{
 			state:    state,
 			sorted:   state == ES_NotAppendable,
 			SortHint: catalog.NextObject(),
 		}
-		obj.EntryMVCCNode = *entryNode
-		obj.ObjectMVCCNode = *objNode
-		obj.CreateNode = *txnNode
-		obj.remainingRows = &common.FixedSampleIII[int]{}
-		obj.ObjectState = ObjectState_Create_ApplyCommit
+		object.EntryMVCCNode = *entryNode
+		object.ObjectMVCCNode = *objNode
+		object.CreateNode = *txnNode
+		object.remainingRows = &common.FixedSampleIII[int]{}
+		object.ObjectState = ObjectState_Create_ApplyCommit
+		return object
+	}
+	var obj *ObjectEntry
+	if entryNode.CreatedAt.Equal(&txnNode.End) {
+		obj = newObject()
 		rel.AddEntryLocked(obj)
 	}
 	if entryNode.DeletedAt.Equal(&txnNode.End) {
 		obj, err = rel.GetObjectByID(objid)
 		if err != nil {
-			panic(fmt.Sprintf("obj %v not existed, table:\n%v", objid.String(), rel.StringWithLevel(3)))
+			panic(fmt.Sprintf("obj %v, [%v %v %v] not existed, table:\n%v", objid.String(),
+				entryNode.String(), objNode.String(),
+				txnNode.String(), rel.StringWithLevel(3)))
 		}
 		obj.EntryMVCCNode = *entryNode
 		obj.ObjectMVCCNode = *objNode
 		obj.DeleteNode = *txnNode
 		obj.ObjectState = ObjectState_Delete_ApplyCommit
+	}
+	if !entryNode.CreatedAt.Equal(&txnNode.End) && !entryNode.DeletedAt.Equal(&txnNode.End) {
+		// In back up, aobj is replaced with naobj and its DeleteAt is removed.
+		// Before back up, txnNode.End equals DeleteAt of naobj.
+		// After back up, DeleteAt is empty.
+		if objid.Offset() == Backup_Object_Offset && entryNode.DeletedAt.IsEmpty() {
+			obj = newObject()
+			rel.AddEntryLocked(obj)
+			logutil.Warnf("obj %v, tbl %v-%d delete %v, create %v, end %v",
+				objid.String(), rel.fullName, rel.ID, entryNode.CreatedAt.ToString(),
+				entryNode.DeletedAt.ToString(), txnNode.End.ToString())
+		} else {
+			panic(fmt.Sprintf("logic error: obj %v, tbl %v-%d create %v, delete %v, end %v",
+				objid.String(), rel.fullName, rel.ID, entryNode.CreatedAt.ToString(),
+				entryNode.DeletedAt.ToString(), txnNode.End.ToString()))
+		}
 	}
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)

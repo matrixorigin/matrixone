@@ -152,8 +152,8 @@ type codecService struct {
 	engine      engine.Engine
 }
 
-func GetCodecService() ProcessCodecService {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ProcessCodecService)
+func GetCodecService(service string) ProcessCodecService {
+	v, ok := runtime.ServiceRuntime(service).GetGlobalVariables(runtime.ProcessCodecService)
 	if !ok {
 		panic("codec service not found")
 	}
@@ -185,7 +185,7 @@ func (c *codecService) Decode(
 		return nil, err
 	}
 
-	proc := New(
+	proc := NewTopProcess(
 		ctx,
 		c.mp,
 		c.txnClient,
@@ -197,6 +197,7 @@ func (c *codecService) Decode(
 		c.udfService,
 		nil,
 	)
+	proc.Base.LockService = c.lockService
 	proc.Base.UnixTime = value.UnixTime
 	proc.Base.Id = value.Id
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)

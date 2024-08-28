@@ -57,25 +57,26 @@ func handleFlush() handleFunc {
 				return payload, nil
 			}
 
+			ctx := proc.Ctx
 			if len(parameters) == 3 {
 				accId, err := strconv.ParseUint(parameters[2], 0, 32)
 				if err != nil {
 					return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: invalid account id")
 				}
-				proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(accId))
+				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(accId))
 			}
 
-			database, err := proc.GetSessionInfo().StorageEngine.Database(proc.Ctx, parameters[0], txnOp)
+			database, err := proc.GetSessionInfo().StorageEngine.Database(ctx, parameters[0], txnOp)
 			if err != nil {
 				return nil, err
 			}
-			rel, err := database.Relation(proc.Ctx, parameters[1], nil)
+			rel, err := database.Relation(ctx, parameters[1], nil)
 			if err != nil {
 				return nil, err
 			}
 			payload, err := types.Encode(&db.FlushTable{TableID: rel.GetTableID(proc.Ctx)})
 			if err != nil {
-				return nil, moerr.NewInternalError(proc.Ctx, "payload encode err")
+				return nil, moerr.NewInternalError(ctx, "payload encode err")
 			}
 			return payload, nil
 		},

@@ -15,8 +15,6 @@
 package preinsert
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
@@ -30,17 +28,18 @@ var _ vm.Operator = new(PreInsert)
 type proc = process.Process
 
 type container struct {
-	buf *batch.Batch
+	buf           *batch.Batch
+	canFreeVecIdx map[int]bool //auto incr & expand constant vecotr.need free
 }
 type PreInsert struct {
-	ctr *container
-	Ctx context.Context
+	ctr container
 
 	HasAutoCol bool
 	IsUpdate   bool
 	SchemaName string
 	TableDef   *pb.TableDef
-	Attrs      []string
+	// letter case: origin
+	Attrs []string
 
 	EstimatedRowCount int64
 
@@ -79,16 +78,16 @@ func (preInsert *PreInsert) Release() {
 }
 
 func (preInsert *PreInsert) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	preInsert.Free(proc, pipelineFailed, err)
 }
 
 func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if preInsert.ctr != nil {
-		if preInsert.ctr.buf != nil {
-			preInsert.ctr.buf.Clean(proc.Mp())
-			preInsert.ctr = nil
+	if preInsert.ctr.buf != nil {
+		for idx := range preInsert.Attrs {
+			if _, ok := preInsert.ctr.canFreeVecIdx[idx]; !ok {
+				preInsert.ctr.buf.SetVector(int32(idx), nil)
+			}
 		}
-		preInsert.ctr = nil
+		preInsert.ctr.buf.Clean(proc.Mp())
+		preInsert.ctr.buf = nil
 	}
-
 }

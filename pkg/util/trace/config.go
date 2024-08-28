@@ -170,12 +170,6 @@ func SpanContextWithIDs(tid TraceID, sid SpanID) SpanContext {
 	return SpanContext{TraceID: tid, SpanID: sid, Kind: SpanKindInternal}
 }
 
-const (
-	FlagProfileGoroutine = 1 << iota
-	FlagProfileHeap
-	FlagProfileCpu
-)
-
 type MoCtledState struct {
 	Enable    bool
 	Threshold time.Duration
@@ -259,13 +253,17 @@ type SpanConfig struct {
 	hungThreshold time.Duration
 	Extra         []zap.Field `json:"-"`
 
+	// backOffStrategy set by WithConstBackOff
+	backOffStrategy BackOffStrategy
+	backOffConfig   *BackOffConfig
+
 	// ProfileSystemStatusFn is used to get status information.
 	ProfileSystemStatusFn func() ([]byte, error)
 }
 
 const (
 	ProfileFlagGoroutine = 1 << iota
-	ProfileFlagThreadcreate
+	ProfileFlagThreadCreate
 	ProfileFlagHeap
 	ProfileFlagAllocs
 	ProfileFlagBlock
@@ -274,6 +272,25 @@ const (
 	ProfileFlagTrace
 	ProfileFlagSystemStatus
 )
+
+type BackOffStrategy uint
+
+const (
+	NoneBackOffStrategy BackOffStrategy = 1 << iota
+	ConstBackOffStrategy
+)
+
+var backOff2String = map[BackOffStrategy]string{
+	NoneBackOffStrategy:  "none",
+	ConstBackOffStrategy: "const",
+}
+
+func (s BackOffStrategy) String() string {
+	if val, ok := backOff2String[s]; ok {
+		return val
+	}
+	return "unknown"
+}
 
 func (c *SpanConfig) Reset() {
 	c.SpanContext.Reset()
@@ -311,7 +328,7 @@ func (c *SpanConfig) ProfileHeap() bool {
 }
 
 func (c *SpanConfig) ProfileThreadCreate() bool {
-	return c.profileFlag&ProfileFlagThreadcreate > 0
+	return c.profileFlag&ProfileFlagThreadCreate > 0
 }
 
 func (c *SpanConfig) ProfileAllocs() bool {
@@ -341,6 +358,10 @@ func (c *SpanConfig) ProfileSystemStatus() bool {
 	return c.profileFlag&ProfileFlagSystemStatus > 0
 }
 
+func (c *SpanConfig) BackOffStrategy() (BackOffStrategy, *BackOffConfig) {
+	return c.backOffStrategy, c.backOffConfig
+}
+
 // SpanStartOption applies an option to a SpanConfig. These options are applicable
 // only when the span is created.
 type SpanStartOption interface {
@@ -367,13 +388,13 @@ func (f spanOptionFunc) ApplySpanStart(cfg *SpanConfig) {
 	f(cfg)
 }
 
-func WithNewRoot(newRoot bool) spanOptionFunc {
+func WithNewRoot(newRoot bool) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.NewRoot = newRoot
 	})
 }
 
-func WithKind(kind SpanKind) spanOptionFunc {
+func WithKind(kind SpanKind) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.Kind = kind
 	})
@@ -410,11 +431,11 @@ func WithProfileHeap() SpanStartOption {
 	})
 }
 
-// WithProfileThreadCreate requests dump pprof/threadcreate. It will trigger profile.ProfileThreadcreate() in Span.End().
+// WithProfileThreadCreate requests dump pprof/ThreadCreate. It will trigger profile.ProfileRuntime(profile.THREADCREATE, ...) or profile.ProfileThreadcreate() in Span.End().
 // More details in MOSpan.doProfile.
 func WithProfileThreadCreate() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileFlag |= ProfileFlagThreadcreate
+		cfg.profileFlag |= ProfileFlagThreadCreate
 	})
 }
 
@@ -487,6 +508,17 @@ func WithStatementExtra(txnID uuid.UUID, stmID uuid.UUID, stm string) SpanEndOpt
 			zap.String("statement_id", stmID.String()),
 			zap.String("statement", stm),
 		)
+	})
+}
+
+// WithConstBackOff set the const interval duration
+// if interval = 0, means no backoff
+func WithConstBackOff(interval time.Duration) SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.backOffStrategy = ConstBackOffStrategy
+		cfg.backOffConfig = &BackOffConfig{
+			Interval: interval,
+		}
 	})
 }
 
@@ -603,7 +635,7 @@ func (tf TraceFlags) IsSampled() bool {
 	return tf&FlagsSampled == FlagsSampled
 }
 
-// WithSampled sets the sampling bit in a new copy of the TraceFlags.
+// WithSampled sets the sampling a bit in a new copy of the TraceFlags.
 func (tf TraceFlags) WithSampled(sampled bool) TraceFlags { // nolint:revive  // sampled is not a control flag.
 	if sampled {
 		return tf | FlagsSampled
@@ -615,4 +647,8 @@ func (tf TraceFlags) WithSampled(sampled bool) TraceFlags { // nolint:revive  //
 // String returns the hex string representation form of TraceFlags.
 func (tf TraceFlags) String() string {
 	return hex.EncodeToString([]byte{byte(tf)}[:])
+}
+
+type BackOffConfig struct {
+	Interval time.Duration // for ConstBackoff
 }

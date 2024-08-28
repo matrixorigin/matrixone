@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/assert"
 )
@@ -33,16 +34,19 @@ func TestTransferPage(t *testing.T) {
 	dest := common.ID{
 		BlockID: *objectio.NewBlockid(sid, 2, 0),
 	}
+	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
-	memo1 := NewTransferHashPage(&src, time.Now(), false, objectio.TmpNewFileservice(context.Background(), "data"), ttl, diskTTL)
+	memo1 := NewTransferHashPage(&src, time.Now(), false, objectio.TmpNewFileservice(context.Background(), "data"), ttl, diskTTL, createdObjs)
 	assert.Zero(t, memo1.RefCount())
 
-	m := make(map[uint32][]byte, 10)
+	transferMap := make(api.TransferMap)
 	for i := 0; i < 10; i++ {
-		rowID := *objectio.NewRowid(&dest.BlockID, uint32(i))
-		m[uint32(i)] = rowID[:]
+		transferMap[uint32(i)] = api.TransferDestPos{
+			BlkIdx: 0,
+			RowIdx: uint32(i),
+		}
 	}
-	memo1.Train(m)
+	memo1.Train(transferMap)
 
 	pinned := memo1.Pin()
 	assert.Equal(t, int64(1), memo1.RefCount())
@@ -50,16 +54,18 @@ func TestTransferPage(t *testing.T) {
 	assert.Zero(t, memo1.RefCount())
 
 	now := time.Now()
-	memo2 := NewTransferHashPage(&src, now, false, objectio.TmpNewFileservice(context.Background(), "data"), ttl, diskTTL)
+	memo2 := NewTransferHashPage(&src, now, false, objectio.TmpNewFileservice(context.Background(), "data"), ttl, diskTTL, createdObjs)
 	defer memo2.Close()
 	assert.Zero(t, memo2.RefCount())
 
-	m = make(map[uint32][]byte, 10)
+	transferMap = make(api.TransferMap)
 	for i := 0; i < 10; i++ {
-		rowID := objectio.NewRowid(&dest.BlockID, uint32(i))
-		m[uint32(i)] = rowID[:]
+		transferMap[uint32(i)] = api.TransferDestPos{
+			BlkIdx: 0,
+			RowIdx: uint32(i),
+		}
 	}
-	memo2.Train(m)
+	memo2.Train(transferMap)
 
 	assert.True(t, memo2.TTL() == 0)
 
@@ -80,15 +86,18 @@ func TestTransferTable(t *testing.T) {
 
 	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
+	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 	now := time.Now()
-	page1 := NewTransferHashPage(&id1, now, false, objectio.TmpNewFileservice(context.Background(), "data"), ttl, 2*time.Second)
-	m := make(map[uint32][]byte, 10)
+	page1 := NewTransferHashPage(&id1, now, false, objectio.TmpNewFileservice(context.Background(), "data"), ttl, 2*time.Second, createdObjs)
+	transferMap := make(api.TransferMap)
 	for i := 0; i < 10; i++ {
-		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
-		m[uint32(i)] = rowID[:]
+		transferMap[uint32(i)] = api.TransferDestPos{
+			BlkIdx: 0,
+			RowIdx: uint32(i),
+		}
 	}
-	page1.Train(m)
+	page1.Train(transferMap)
 
 	assert.False(t, table.AddPage(page1))
 	assert.True(t, table.AddPage(page1))

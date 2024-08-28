@@ -125,7 +125,14 @@ func (c *mockClientConn) RawConn() net.Conn                  { return c.conn }
 func (c *mockClientConn) GetTenant() Tenant                  { return c.tenant }
 func (c *mockClientConn) SendErrToClient(err error)          {}
 func (c *mockClientConn) BuildConnWithServer(_ string) (ServerConn, error) {
-	cn, err := c.router.Route(context.TODO(), c.clientInfo, nil)
+	var err error
+	li := &c.clientInfo.labelInfo
+	c.clientInfo.labelInfo = newLabelInfo(c.clientInfo.Tenant, li.Labels)
+	c.clientInfo.hash, err = c.clientInfo.getHash()
+	if err != nil {
+		return nil, err
+	}
+	cn, err := c.router.Route(context.TODO(), "", c.clientInfo, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -144,6 +151,7 @@ func (c *mockClientConn) BuildConnWithServer(_ string) (ServerConn, error) {
 }
 
 func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error {
+	defer e.notify()
 	switch ev := e.(type) {
 	case *killQueryEvent:
 		cn, err := c.router.SelectByConnID(ev.connID)
@@ -276,7 +284,9 @@ func createNewClientConn(t *testing.T) (ClientConn, func()) {
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()
 	cs := newCounterSet()
-	cc, err := newClientConn(ctx, &Config{}, logger, cs, s, nil, nil, nil, nil, nil)
+	cc, err := newClientConn(
+		ctx, &Config{}, logger, cs, s,
+		nil, nil, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cc)
 	return cc, func() {
@@ -331,7 +341,7 @@ func makeClientHandshakeResp() []byte {
 func TestClientConn_ConnectToBackend(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()
 

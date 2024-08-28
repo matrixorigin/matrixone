@@ -148,3 +148,14 @@ select raw_item,node_uuid,node_type,span_id,statement_id,logger_name,timestamp f
 raw_item    node_uuid    node_type    span_id    statement_id    logger_name    timestamp
 error_info    7c4dccb4-4d3c-41f8-b482-5251dc7a41bf    ALL    0    0        2022-11-01 11:11:24
 drop table if exists rawlog_withnull;
+drop table if exists test;
+CREATE TABLE test (
+account_id BIGINT UNSIGNED NOT NULL,
+task_id UUID NOT NULL,
+task_name VARCHAR(1000) NOT NULL,
+PRIMARY KEY (account_id, task_id)
+);
+insert into test values(3,"019126ce-64a8-78cf-1234-be2626281abd","task3");
+insert into test values(3,"019126ce-64a8-78cf-5678-be2626281abd","task4");
+insert into test values(3,"019126ce-64a8-78cf-5678-be2626281abd","task4");
+Duplicate entry ('(\(\d,\w{8}-\w{4}-\w{4}-\w{4}-\w{12}\))'|'(\d{8}\w{32})'|'40150346017461736b3400') for key '__mo_cpkey_col'

@@ -89,13 +89,13 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 		return err
 	}
 	if len(tasks) != 1 {
-		return moerr.NewInternalError(ctx, "count of tasks is wrong %d", len(tasks))
+		return moerr.NewInternalErrorf(ctx, "count of tasks is wrong %d", len(tasks))
 	}
 
 	tk := tasks[0]
 	// We cannot resume a task which is not on local runner.
 	if !strings.EqualFold(tk.TaskRunner, t.runner.runnerID) {
-		return moerr.NewInternalError(ctx, "the task is not on local runner, prev runner %s, "+
+		return moerr.NewInternalErrorf(ctx, "the task is not on local runner, prev runner %s, "+
 			"local runner %s", tk.TaskRunner, t.runner.runnerID)
 	}
 
@@ -110,7 +110,7 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 
 	ar := t.task.activeRoutine.Load()
 	if ar == nil || *ar == nil {
-		return moerr.NewInternalError(ctx, "cannot handle resume operation, "+
+		return moerr.NewInternalErrorf(ctx, "cannot handle resume operation, "+
 			"active routine not set for task %d", t.task.task.ID)
 	}
 	return (*ar).Resume()
@@ -136,7 +136,7 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 		return err
 	}
 	if len(tasks) != 1 {
-		return moerr.NewInternalError(ctx, "count of tasks is wrong %d", len(tasks))
+		return moerr.NewInternalErrorf(ctx, "count of tasks is wrong %d", len(tasks))
 	}
 
 	tk := tasks[0]
@@ -149,7 +149,7 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 	if t.runner.exists(tk.ID) {
 		ar := t.task.activeRoutine.Load()
 		if ar == nil || *ar == nil {
-			return moerr.NewInternalError(ctx, "cannot handle pause operation, "+
+			return moerr.NewInternalErrorf(ctx, "cannot handle pause operation, "+
 				"active routine not set for task %d", t.task.task.ID)
 		}
 		if err := (*ar).Pause(); err != nil {
@@ -179,7 +179,7 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 		return err
 	}
 	if len(tasks) != 1 {
-		return moerr.NewInternalError(ctx, "count of tasks is wrong %d", len(tasks))
+		return moerr.NewInternalErrorf(ctx, "count of tasks is wrong %d", len(tasks))
 	}
 
 	tk := tasks[0]
@@ -192,7 +192,7 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 	if t.runner.exists(tk.ID) {
 		ar := t.task.activeRoutine.Load()
 		if ar == nil || *ar == nil {
-			return moerr.NewInternalError(ctx, "cannot handle cancel operation, "+
+			return moerr.NewInternalErrorf(ctx, "cannot handle cancel operation, "+
 				"active routine not set for task %d", t.task.task.ID)
 		}
 		return (*ar).Cancel()

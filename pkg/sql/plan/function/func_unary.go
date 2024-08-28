@@ -16,11 +16,15 @@ package function
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/md5"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"math"
 	"runtime"
@@ -442,7 +446,7 @@ func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return opUnaryBytesToFixedWithErrorCheck[types.Date](ivecs, result, proc, length, func(v []byte) (types.Date, error) {
 		d, e := types.ParseDatetime(functionUtil.QuickBytesToStr(v), 6)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtx("date", "'%s'", v)
+			return 0, moerr.NewOutOfRangeNoCtxf("date", "'%s'", v)
 		}
 		return d.ToDate(), nil
 	}, selectList)
@@ -507,6 +511,10 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
+	return ReadFromFileOffsetSize(Filepath, fs, 0, -1)
+}
+
+func ReadFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
 	fs, readPath, err := fileservice.GetForETL(context.TODO(), fs, Filepath)
 	if fs == nil || err != nil {
 		return nil, err
@@ -517,8 +525,8 @@ func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, e
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			0: {
-				Offset:            0,
-				Size:              -1,
+				Offset:            offset, //0 - default
+				Size:              size,   //-1 - default
 				ReadCloserForRead: &r,
 			},
 		},
@@ -563,6 +571,64 @@ func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 
 	if err = rs.AppendBytes(ctx, false); err != nil {
 		return err
+	}
+	return nil
+}
+
+// LoadFileDatalink reads a file from the file service and returns the content as a blob.
+func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		_filePath, null1 := filePathVec.GetStrValue(i)
+		if null1 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		filePath := util.UnsafeBytesToString(_filePath)
+		fs := proc.GetFileService()
+
+		moUrl, offsetSize, ext, err := types.ParseDatalink(filePath)
+		if err != nil {
+			return err
+		}
+		r, err := ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
+		if err != nil {
+			return err
+		}
+
+		defer r.Close()
+
+		fileBytes, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+
+		var contentBytes []byte
+		switch ext {
+		case ".csv", ".txt":
+			contentBytes = fileBytes
+			//nothing to do.
+		default:
+			return moerr.NewInvalidInputf(proc.Ctx, "unsupported file extension: %s", ext)
+		}
+
+		if len(fileBytes) > 65536 /*blob size*/ {
+			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+		}
+		if len(fileBytes) == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			return nil
+		}
+
+		if err = rs.AppendBytes(contentBytes, false); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -621,7 +687,7 @@ func MoMemory(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		case "available":
 			return int64(system.MemoryAvailable()), nil
 		default:
-			return -1, moerr.NewInvalidInput(proc.Ctx, "unsupported memory command: %s", v)
+			return -1, moerr.NewInvalidInputf(proc.Ctx, "unsupported memory command: %s", v)
 		}
 	}, selectList)
 }
@@ -681,7 +747,7 @@ func FillSpaceNumber[T types.BuiltinNumber](v T) (string, error) {
 	} else {
 		ilen = int(v)
 		if ilen > MaxAllowedValue || ilen < 0 {
-			return "", moerr.NewInvalidInputNoCtx("the space count is greater than max allowed value %d", MaxAllowedValue)
+			return "", moerr.NewInvalidInputNoCtxf("the space count is greater than max allowed value %d", MaxAllowedValue)
 		}
 	}
 	return strings.Repeat(" ", ilen), nil
@@ -714,7 +780,7 @@ func Int64ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return opUnaryFixedToFixedWithErrorCheck[int64, types.Time](ivecs, result, proc, length, func(v int64) (types.Time, error) {
 		t, e := types.ParseInt64ToTime(v, 0)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtx("time", "'%d'", v)
+			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%d'", v)
 		}
 		return t, nil
 	}, selectList)
@@ -724,7 +790,7 @@ func DateStringToTime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return opUnaryBytesToFixedWithErrorCheck[types.Time](ivecs, result, proc, length, func(v []byte) (types.Time, error) {
 		t, e := types.ParseTime(string(v), 6)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtx("time", "'%s'", string(v))
+			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", string(v))
 		}
 		return t, nil
 	}, selectList)
@@ -735,7 +801,7 @@ func Decimal128ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return opUnaryFixedToFixedWithErrorCheck[types.Decimal128, types.Time](ivecs, result, proc, length, func(v types.Decimal128) (types.Time, error) {
 		t, e := types.ParseDecimal128ToTime(v, scale, 6)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtx("time", "'%s'", v.Format(0))
+			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", v.Format(0))
 		}
 		return t, nil
 	}, selectList)
@@ -774,9 +840,9 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	toVec := result.GetResultVector()
 	toVec.Reset(*toVec.GetType())
 
-	sels := make([]int32, fromVec.Length())
+	sels := make([]int64, fromVec.Length())
 	for j := 0; j < len(sels); j++ {
-		sels[j] = int32(j)
+		sels[j] = int64(j)
 	}
 
 	err := toVec.Union(fromVec, sels, proc.GetMPool())
@@ -1055,6 +1121,88 @@ func octFloat[T constraints.Float](xs T) (types.Decimal128, error) {
 	return res, nil
 }
 
+func generateSHAKey(key []byte) []byte {
+	// return 32 bytes SHA256 checksum of the key
+	hash := sha256.Sum256(key)
+	return hash[:]
+}
+
+func generateInitializationVector(key []byte, length int) []byte {
+	data := append(key, byte(length))
+	hash := sha256.Sum256(data)
+	return hash[:aes.BlockSize]
+}
+
+// encode function encrypts a string, returns a binary string of the same length of the original string.
+// https://dev.mysql.com/doc/refman/5.7/en/encryption-functions.html#function_encode
+func encodeByAES(plaintext []byte, key []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
+	if null {
+		return rs.AppendMustNullForBytesResult()
+	}
+	fixedKey := generateSHAKey(key)
+	block, err := aes.NewCipher(fixedKey)
+	if err != nil {
+		return err
+	}
+	initializationVector := generateInitializationVector(key, len(plaintext))
+	ciphertext := make([]byte, len(plaintext))
+	stream := cipher.NewCTR(block, initializationVector)
+	stream.XORKeyStream(ciphertext, plaintext)
+	return rs.AppendMustBytesValue(ciphertext)
+}
+
+func Encode(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	key := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		data, nullData := source.GetStrValue(i)
+		keyData, nullKey := key.GetStrValue(i)
+		if err := encodeByAES(data, keyData, nullData || nullKey, rs); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// decode function decodes an encoded string and returns the original string
+// https://dev.mysql.com/doc/refman/5.7/en/encryption-functions.html#function_decode
+func decodeByAES(ciphertext []byte, key []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
+	if null {
+		return rs.AppendMustNullForBytesResult()
+	}
+	fixedKey := generateSHAKey(key)
+	block, err := aes.NewCipher(fixedKey)
+	if err != nil {
+		return err
+	}
+	iv := generateInitializationVector(key, len(ciphertext))
+	plaintext := make([]byte, len(ciphertext))
+	stream := cipher.NewCTR(block, iv)
+	stream.XORKeyStream(plaintext, ciphertext)
+	return rs.AppendMustBytesValue(plaintext)
+}
+
+func Decode(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	key := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		data, nullData := source.GetStrValue(i)
+		keyData, nullKey := key.GetStrValue(i)
+		if err := decodeByAES(data, keyData, nullData || nullKey, rs); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func DateToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Date, uint8](ivecs, result, proc, length, func(v types.Date) uint8 {
 		return v.Month()
@@ -1195,12 +1343,12 @@ func makeQueryIdIdx(loc, cnt int64, proc *process.Process) (int, error) {
 	var idx int
 	if loc < 0 {
 		if loc < -cnt {
-			return 0, moerr.NewInvalidInput(proc.Ctx, "index out of range: %d", loc)
+			return 0, moerr.NewInvalidInputf(proc.Ctx, "index out of range: %d", loc)
 		}
 		idx = int(loc + cnt)
 	} else {
 		if loc > cnt {
-			return 0, moerr.NewInvalidInput(proc.Ctx, "index out of range: %d", loc)
+			return 0, moerr.NewInvalidInputf(proc.Ctx, "index out of range: %d", loc)
 		}
 		idx = int(loc)
 	}
@@ -1408,7 +1556,7 @@ func bitCastBinaryToFixed[T types.FixedSizeTExceptStrType](
 			}
 		} else {
 			if len(v) > byteLen {
-				return moerr.NewOutOfRange(ctx, fmt.Sprintf("%d-byte fixed-length type", byteLen), "binary value '0x%s'", hex.EncodeToString(v))
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("%d-byte fixed-length type", byteLen), "binary value '0x%s'", hex.EncodeToString(v))
 			}
 
 			if len(v) < byteLen {

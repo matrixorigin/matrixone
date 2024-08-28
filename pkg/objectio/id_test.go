@@ -38,7 +38,7 @@ func TestIDAllocate(t *testing.T) {
 	require.Equal(t, unsafe.Pointer(&bidUnsafe[0]), unsafe.Pointer(&rid[0]))
 	require.Zero(t, bid.Compare(*bidUnsafe))
 
-	require.Equal(t, rid.GetObjectString(), fmt.Sprintf("%s-%d", sid.ToString(), 1))
+	require.Equal(t, rid.GetObjectString(), fmt.Sprintf("%s-%d", sid.String(), 1))
 }
 
 func TestWriteID(t *testing.T) {
@@ -54,5 +54,5 @@ func TestWriteID(t *testing.T) {
 	b.Read(desid[:])
 
 	require.True(t, sid.Eq(desid))
-	require.Equal(t, sid.ToString(), desid.ToString())
+	require.Equal(t, sid.String(), desid.String())
 }

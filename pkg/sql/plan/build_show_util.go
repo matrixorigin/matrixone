@@ -24,56 +24,57 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 // ConstructCreateTableSQL used to build CREATE Table statement
-func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDef, snapshot Snapshot, ctx CompilerContext) (string, error) {
+func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snapshot *Snapshot, useDbName bool) (string, tree.Statement, error) {
 	var err error
 	var createStr string
 
 	tblName := tableDef.Name
+	schemaName := tableDef.DbName
+	dbTblName := fmt.Sprintf("`%s`", formatStr(tblName))
+	if useDbName {
+		dbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(schemaName), formatStr(tblName))
+	}
+
 	if tableDef.TableType == catalog.SystemOrdinaryRel {
-		createStr = fmt.Sprintf("CREATE TABLE `%s` (", formatStr(tblName))
+		createStr = fmt.Sprintf("CREATE TABLE %s (", dbTblName)
 	} else if tableDef.TableType == catalog.SystemExternalRel {
-		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE `%s` (", formatStr(tblName))
+		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE %s (", dbTblName)
 	} else if tableDef.TableType == catalog.SystemClusterRel {
-		createStr = fmt.Sprintf("CREATE CLUSTER TABLE `%s` (", formatStr(tblName))
+		createStr = fmt.Sprintf("CREATE CLUSTER TABLE %s (", dbTblName)
 	} else if tblName == catalog.MO_DATABASE || tblName == catalog.MO_TABLES || tblName == catalog.MO_COLUMNS {
-		createStr = fmt.Sprintf("CREATE TABLE `%s` (", formatStr(tblName))
+		createStr = fmt.Sprintf("CREATE TABLE %s (", dbTblName)
 	}
 
 	rowCount := 0
 	var pkDefs []string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
 
-	colIdToName := make(map[uint64]string)
+	// col.Name -> col.OriginName
+	colNameToOriginName := make(map[string]string)
+	colIdToOriginName := make(map[uint64]string)
 	for _, col := range tableDef.Cols {
 		if col.Hidden {
 			continue
 		}
-		colName := col.Name
-		colIdToName[col.ColId] = col.Name
-		if colName == catalog.Row_ID {
+		colNameOrigin := col.GetOriginCaseName()
+		colNameToOriginName[col.Name] = colNameOrigin
+		colIdToOriginName[col.ColId] = colNameOrigin
+		if colNameOrigin == catalog.Row_ID {
 			continue
 		}
 		//the non-sys account skips the column account_id of the cluster table
 		accountId, err := ctx.GetAccountId()
 		if err != nil {
-			return "", err
-		}
-		if util.IsClusterTableAttribute(colName) &&
-			isClusterTable &&
-			accountId != catalog.System_Account {
-			continue
+			return "", nil, err
 		}
 
-		if util.IsClusterTableAttribute(colName) &&
-			isClusterTable &&
-			accountId == catalog.System_Account &&
-			!snapshot.TS.Equal(timestamp.Timestamp{}) {
+		if util.IsClusterTableAttribute(colNameOrigin) && isClusterTable &&
+			(accountId != catalog.System_Account || IsSnapshotValid(snapshot)) {
 			continue
 		}
 
@@ -87,7 +88,7 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 		}
 
 		typeStr := FormatColType(col.Typ)
-		fmt.Fprintf(buf, "  `%s` %s", formatStr(colName), typeStr)
+		fmt.Fprintf(buf, "  `%s` %s", formatStr(colNameOrigin), typeStr)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.Typ.AutoIncr {
@@ -121,7 +122,7 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 		createStr += buf.String()
 		rowCount++
 		if col.Primary {
-			pkDefs = append(pkDefs, colName)
+			pkDefs = append(pkDefs, col.Name)
 		}
 	}
 
@@ -133,13 +134,13 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 	if len(pkDefs) != 0 {
 		pkStr := "  PRIMARY KEY ("
 		for i, def := range pkDefs {
+			def = colNameToOriginName[def]
 			if i == len(pkDefs)-1 {
-				pkStr += fmt.Sprintf("`%s`", formatStr(def))
+				pkStr += fmt.Sprintf("`%s`)", formatStr(def))
 			} else {
 				pkStr += fmt.Sprintf("`%s`,", formatStr(def))
 			}
 		}
-		pkStr += ")"
 		if rowCount != 0 {
 			createStr += ",\n"
 		}
@@ -178,6 +179,7 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 					indexStr += ","
 				}
 
+				part = colNameToOriginName[part]
 				indexStr += fmt.Sprintf("`%s`", formatStr(part))
 				i++
 			}
@@ -187,7 +189,7 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 				var paramList string
 				paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
 				if err != nil {
-					return "", err
+					return "", nil, err
 				}
 				indexStr += paramList
 			}
@@ -211,50 +213,47 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 			dedupFkName.Insert(fk.Name)
 		}
 
-		colNames := make([]string, len(fk.Cols))
+		colOriginNames := make([]string, len(fk.Cols))
 		for i, colId := range fk.Cols {
-			colNames[i] = colIdToName[colId]
+			colOriginNames[i] = colIdToOriginName[colId]
 		}
 
 		var fkTableDef *TableDef
-		var fkTableObjRef *ObjectRef
 		//fk self reference
 		if fk.ForeignTbl == 0 {
 			fkTableDef = tableDef
-			fkTableObjRef = tableObjRef
 		} else {
 			if ctx.GetQueryingSubscription() != nil {
-				fkTableObjRef, fkTableDef = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
+				_, fkTableDef = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
 			} else {
-				fkTableObjRef, fkTableDef = ctx.ResolveById(fk.ForeignTbl, snapshot)
+				_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, snapshot)
 			}
 		}
 
 		// fkTable may not exist in snapshot restoration
-		if fkTableObjRef == nil || fkTableDef == nil {
-			return "", moerr.NewInternalErrorNoCtx("can't find fkTable from fk %s.(%s) {%s}", tableDef.Name, strings.Join(colNames, ","), snapshot.String())
+		if fkTableDef == nil {
+			return "", nil, moerr.NewInternalErrorNoCtxf("can't find fkTable from fk %s.(%s) {%s}", tableDef.Name, strings.Join(colOriginNames, ","), snapshot.String())
 		}
 
-		fkColIdToName := make(map[uint64]string)
+		fkColIdToOriginName := make(map[uint64]string)
 		for _, col := range fkTableDef.Cols {
-			fkColIdToName[col.ColId] = col.Name
+			fkColIdToOriginName[col.ColId] = col.GetOriginCaseName()
 		}
-		fkColNames := make([]string, len(fk.ForeignCols))
+		fkColOriginNames := make([]string, len(fk.ForeignCols))
 		for i, colId := range fk.ForeignCols {
-			fkColNames[i] = fkColIdToName[colId]
+			fkColOriginNames[i] = fkColIdToOriginName[colId]
 		}
 
 		if rowCount != 0 {
 			createStr += ",\n"
 		}
 
-		if tableObjRef.SchemaName == fkTableObjRef.SchemaName {
-			createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
-				formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
-		} else {
-			createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s`.`%s` (`%s`) ON DELETE %s ON UPDATE %s",
-				formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableObjRef.SchemaName), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
+		fkRefDbTblName := fmt.Sprintf("`%s`", formatStr(fkTableDef.Name))
+		if tableDef.DbName != fkTableDef.DbName {
+			fkRefDbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(fkTableDef.DbName), formatStr(fkTableDef.Name))
 		}
+		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES %s (`%s`) ON DELETE %s ON UPDATE %s",
+			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
 	}
 
 	if rowCount != 0 {
@@ -309,12 +308,21 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 	}
 
 	if tableDef.TableType == catalog.SystemExternalRel {
-		param := tree.ExternParam{}
-		err := json.Unmarshal([]byte(tableDef.Createsql), &param)
-		if err != nil {
-			return "", err
+		param := &tree.ExternParam{}
+		if err = json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
+			return "", nil, err
 		}
-		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='%s','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.Filepath, param.CompressType, param.Format, param.JsonData)
+		if param.ScanType == tree.S3 {
+			if err = InitS3Param(param); err != nil {
+				return "", nil, err
+			}
+		} else {
+			if err = InitInfileParam(param); err != nil {
+				return "", nil, err
+			}
+		}
+		// hide file path
+		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.CompressType, param.Format, param.JsonData)
 
 		fields := ""
 		if param.Tail != nil && param.Tail.Fields != nil {
@@ -325,23 +333,20 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 					fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
 				}
 			}
-			if param.Tail.Fields.EnclosedBy != nil {
-				if param.Tail.Fields.EnclosedBy.Value == byte(0) {
-					fields += " ENCLOSED BY ''"
-				} else if param.Tail.Fields.EnclosedBy.Value == byte('\\') {
-					fields += " ENCLOSED BY '\\\\'"
-				} else {
-					fields += fmt.Sprintf(" ENCLOSED BY '%c'", param.Tail.Fields.EnclosedBy.Value)
+
+			escape := func(value byte) string {
+				if value == byte(0) {
+					return ""
+				} else if value == byte('\\') {
+					return "\\\\"
 				}
+				return fmt.Sprintf("%c", value)
+			}
+			if param.Tail.Fields.EnclosedBy != nil {
+				fields += " ENCLOSED BY '" + escape(param.Tail.Fields.EnclosedBy.Value) + "'"
 			}
 			if param.Tail.Fields.EscapedBy != nil {
-				if param.Tail.Fields.EscapedBy.Value == byte(0) {
-					fields += " ESCAPED BY ''"
-				} else if param.Tail.Fields.EscapedBy.Value == byte('\\') {
-					fields += " ESCAPED BY '\\\\'"
-				} else {
-					fields += fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy.Value)
-				}
+				fields += " ESCAPED BY '" + escape(param.Tail.Fields.EscapedBy.Value) + "'"
 			}
 		}
 
@@ -373,17 +378,8 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 		}
 	}
 
-	var buf bytes.Buffer
-	for i, ch := range createStr {
-		if ch == '"' {
-			if i > 0 && createStr[i-1] == '\\' {
-				continue
-			}
-			buf.WriteRune('"')
-		}
-		buf.WriteRune(ch)
-	}
-	return buf.String(), nil
+	stmt, err := getRewriteSQLStmt(ctx, createStr)
+	return createStr, stmt, err
 }
 
 // FormatColType Get the formatted description of the column type.
@@ -414,7 +410,7 @@ func FormatColType(colType plan.Type) string {
 		}
 
 	case types.T_float64, types.T_float32:
-		if colType.Scale != -1 {
+		if colType.Width > 0 && colType.Scale != -1 {
 			suffix = fmt.Sprintf("(%d,%d)", colType.Width, colType.Scale)
 		}
 
@@ -462,4 +458,9 @@ func formatStr(str string) string {
 		return "'" + strings.Replace(tmp[1:strLen-1], "'", "''", -1) + "'"
 	}
 	return strings.Replace(tmp, "'", "''", -1)
+}
+
+func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	return builder.resolveTsHint(AtTsExpr)
 }

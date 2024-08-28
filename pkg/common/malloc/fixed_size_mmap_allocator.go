@@ -36,12 +36,29 @@ type fixedSizeMmapAllocator struct {
 	// buffer2 buffers MADV_DONTNEED objects
 	buffer2 chan unsafe.Pointer
 
-	deallocatorPool *ClosureDeallocatorPool[fixedSizeMmapDeallocatorArgs]
+	deallocatorPool *ClosureDeallocatorPool[fixedSizeMmapDeallocatorArgs, *fixedSizeMmapDeallocatorArgs]
 }
 
 type fixedSizeMmapDeallocatorArgs struct {
-	ptr unsafe.Pointer
+	length uint64
+	ptr    unsafe.Pointer
 }
+
+func (f fixedSizeMmapDeallocatorArgs) As(trait Trait) bool {
+	if info, ok := trait.(*MmapInfo); ok {
+		info.Addr = f.ptr
+		info.Length = f.length
+		return true
+	}
+	return false
+}
+
+type MmapInfo struct {
+	Addr   unsafe.Pointer
+	Length uint64
+}
+
+func (*MmapInfo) IsTrait() {}
 
 func NewFixedSizeMmapAllocator(
 	size uint64,
@@ -143,6 +160,7 @@ func (f *fixedSizeMmapAllocator) Allocate(hints Hints) (slice []byte, dec Deallo
 	}
 
 	return slice, f.deallocatorPool.Get(fixedSizeMmapDeallocatorArgs{
-		ptr: unsafe.Pointer(unsafe.SliceData(slice)),
+		ptr:    unsafe.Pointer(unsafe.SliceData(slice)),
+		length: f.size,
 	}), nil
 }

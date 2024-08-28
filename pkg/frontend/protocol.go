@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"go.uber.org/zap"
 )
@@ -172,7 +173,7 @@ func (mp *MysqlProtocolImpl) IsEstablished() bool {
 }
 
 func (mp *MysqlProtocolImpl) SetEstablished() {
-	getLogger().Debug("SWITCH ESTABLISHED to true", zap.String(ConnectionInfoKey, mp.GetDebugString()))
+	getLogger(mp.sid).Debug("SWITCH ESTABLISHED to true", zap.String(ConnectionInfoKey, mp.GetDebugString()))
 	mp.established.Store(true)
 }
 
@@ -181,7 +182,7 @@ func (mp *MysqlProtocolImpl) IsTlsEstablished() bool {
 }
 
 func (mp *MysqlProtocolImpl) SetTlsEstablished() {
-	getLogger().Debug("SWITCH TLS_ESTABLISHED to true", zap.String(ConnectionInfoKey, mp.GetDebugString()))
+	getLogger(mp.sid).Debug("SWITCH TLS_ESTABLISHED to true", zap.String(ConnectionInfoKey, mp.GetDebugString()))
 	mp.tlsEstablished.Store(true)
 }
 
@@ -198,9 +199,7 @@ func (mp *MysqlProtocolImpl) safeQuit() {
 		return
 	}
 	if mp.tcpConn != nil {
-		if err := mp.tcpConn.Disconnect(); err != nil {
-			return
-		}
+		_ = mp.tcpConn.closeConn()
 	}
 	//release salt
 	if mp.salt != nil {
@@ -275,6 +274,6 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 		s, _ := resp.data.(string)
 		return mp.WriteLocalInfileRequest(s)
 	default:
-		return moerr.NewInternalError(ctx, "unsupported response:%d ", resp.category)
+		return moerr.NewInternalErrorf(ctx, "unsupported response:%d ", resp.category)
 	}
 }

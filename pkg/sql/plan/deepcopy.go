@@ -341,20 +341,21 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		return nil
 	}
 	return &plan.ColDef{
-		ColId:     col.ColId,
-		Name:      col.Name,
-		Alg:       col.Alg,
-		Typ:       col.Typ,
-		Default:   DeepCopyDefault(col.Default),
-		Primary:   col.Primary,
-		Pkidx:     col.Pkidx,
-		Comment:   col.Comment,
-		OnUpdate:  DeepCopyOnUpdate(col.OnUpdate),
-		ClusterBy: col.ClusterBy,
-		Hidden:    col.Hidden,
-		Seqnum:    col.Seqnum,
-		TblName:   col.TblName,
-		DbName:    col.DbName,
+		ColId:      col.ColId,
+		Name:       col.Name,
+		OriginName: col.OriginName,
+		Alg:        col.Alg,
+		Typ:        col.Typ,
+		Default:    DeepCopyDefault(col.Default),
+		Primary:    col.Primary,
+		Pkidx:      col.Pkidx,
+		Comment:    col.Comment,
+		OnUpdate:   DeepCopyOnUpdate(col.OnUpdate),
+		ClusterBy:  col.ClusterBy,
+		Hidden:     col.Hidden,
+		Seqnum:     col.Seqnum,
+		TblName:    col.TblName,
+		DbName:     col.DbName,
 	}
 }
 
@@ -853,7 +854,6 @@ func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSp
 		MatchPrefix: rf.MatchPrefix,
 		UpperLimit:  rf.UpperLimit,
 		Expr:        DeepCopyExpr(rf.Expr),
-		Handled:     false,
 	}
 }
 

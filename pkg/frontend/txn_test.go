@@ -47,6 +47,16 @@ type testWorkspace struct {
 	reportErr1 bool
 }
 
+func (txn *testWorkspace) Readonly() bool {
+	panic("implement me")
+}
+
+func (txn *testWorkspace) PPString() string {
+	//TODO implement me
+	// panic("implement me")
+	return ""
+}
+
 func (txn *testWorkspace) UpdateSnapshotWriteOffset() {
 	//TODO implement me
 	// panic("implement me")

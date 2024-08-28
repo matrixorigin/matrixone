@@ -20,23 +20,26 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"go.uber.org/zap"
 )
 
 // GetMOCluster get mo cluster from process level runtime
-func GetMOCluster() MOCluster {
+func GetMOCluster(
+	service string,
+) MOCluster {
 	timeout := time.Second * 10
 	now := time.Now()
 	for {
-		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ClusterService)
+		v, ok := runtime.ServiceRuntime(service).GetGlobalVariables(runtime.ClusterService)
 		if !ok {
 			if time.Since(now) > timeout {
-				panic("no mocluster service")
+				panic("no mocluster service " + service)
 			}
 			time.Sleep(time.Second)
 			continue
@@ -88,10 +91,11 @@ type cluster struct {
 //
 // TODO(fagongzi): extend hakeeper to support event-driven original message changes
 func NewMOCluster(
+	service string,
 	client ClusterClient,
 	refreshInterval time.Duration,
 	opts ...Option) MOCluster {
-	logger := runtime.ProcessLevelRuntime().Logger().Named("mo-cluster")
+	logger := runtime.ServiceRuntime(service).Logger().Named("mo-cluster")
 	c := &cluster{
 		logger:          logger,
 		stopper:         stopper.NewStopper("mo-cluster", stopper.WithLogger(logger.RawLogger())),
@@ -343,6 +347,10 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 		Labels:                 cn.Labels,
 		QueryAddress:           cn.QueryAddress,
 		CommitID:               cn.CommitID,
+		// why set this cfg, cc https://github.com/matrixorigin/matrixone/issues/16537
+		// should be used in getCNList
+		CPUTotal: cn.Resource.CPUTotal,
+		MemTotal: cn.Resource.MemTotal,
 	}
 }
 

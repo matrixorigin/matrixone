@@ -189,7 +189,7 @@ func buildLogConfig(
 func buildLogOptions(cfg logservice.Config, filter FilterFunc) logOptions {
 	return []logservice.Option{
 		logservice.WithBackendFilter(filter),
-		logservice.WithRuntime(runtime.ProcessLevelRuntime()),
+		logservice.WithRuntime(runtime.ServiceRuntime(cfg.UUID)),
 	}
 }
 

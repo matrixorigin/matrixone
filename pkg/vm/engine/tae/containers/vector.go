@@ -435,9 +435,9 @@ func (vec *vectorWrapper) extendWithOffset(src *vector.Vector, srcOff, srcLen in
 		return
 	}
 
-	sels := make([]int32, srcLen)
+	sels := make([]int64, srcLen)
 	for j := 0; j < srcLen; j++ {
-		sels[j] = int32(j) + int32(srcOff)
+		sels[j] = int64(j) + int64(srcOff)
 	}
 	err = vec.wrapped.Union(src, sels, vec.mpool)
 	return

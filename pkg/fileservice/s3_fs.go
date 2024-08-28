@@ -30,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -159,7 +160,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	if *config.MemoryCapacity > DisableCacheCapacity {
 		s.memCache = NewMemCache(
 			NewMemoryCache(
-				int64(*config.MemoryCapacity),
+				fscache.ConstCapacity(int64(*config.MemoryCapacity)),
 				config.CheckOverlaps,
 				&config.CacheCallbacks,
 			),
@@ -177,7 +178,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 		s.diskCache, err = NewDiskCache(
 			ctx,
 			*config.DiskPath,
-			int(*config.DiskCapacity),
+			fscache.ConstCapacity(int64(*config.DiskCapacity)),
 			s.perfCounterSets,
 			true,
 		)
@@ -326,7 +327,13 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 	return r, nil
 }
 
-func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
+func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
+	defer func() {
+		if errors.Is(err, io.EOF) {
+			panic("found EOF in Write")
+		}
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -448,7 +455,6 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	for _, cache := range vector.Caches {
-		cache := cache
 
 		t0 := time.Now()
 		LogEvent(ctx, str_read_vector_Caches_begin)
@@ -584,7 +590,6 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	for _, cache := range vector.Caches {
-		cache := cache
 		if err := readCache(ctx, cache, vector); err != nil {
 			return err
 		}
@@ -700,7 +705,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		if entry.done {
 			continue
 		}
-		entry := entry
 		numNotDoneEntries++
 
 		start := entry.Offset - *min

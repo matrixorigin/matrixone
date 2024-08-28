@@ -35,26 +35,15 @@ import (
 	"github.com/parquet-go/parquet-go/encoding"
 )
 
-func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
 	_, span := trace.Start(ctx, "scanParquetFile")
 	defer span.End()
-
-	bat := batch.New(false, param.Attrs)
-	for i := range param.Attrs {
-		col := param.Cols[i]
-
-		if col.Hidden {
-			continue
-		}
-
-		bat.Vecs[i] = proc.GetVector(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
-	}
 
 	if param.parqh == nil {
 		var err error
 		param.parqh, err = newParquetHandler(param)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
@@ -68,12 +57,7 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		param.parqh.batchCnt = min(n-o, maxParquetBatchCnt)
 	}
 
-	err := param.parqh.getData(bat, param, proc)
-	if err != nil {
-		return nil, err
-	}
-
-	return bat, nil
+	return param.parqh.getData(bat, param, proc)
 }
 
 var maxParquetBatchCnt int64 = 1000
@@ -129,10 +113,10 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 
 		col := h.file.Root().Column(attr)
 		if col == nil {
-			return moerr.NewInvalidInput(param.Ctx, "column %s not found", attr)
+			return moerr.NewInvalidInputf(param.Ctx, "column %s not found", attr)
 		}
 		if !col.Leaf() {
-			return moerr.NewNYI(param.Ctx, "load group type column %s", attr)
+			return moerr.NewNYIf(param.Ctx, "load group type column %s", attr)
 		}
 
 		h.cols[colIdx] = col
@@ -150,7 +134,7 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			} else {
 				dt += " NULL"
 			}
-			return moerr.NewNYI(param.Ctx, "load %s to %s", st, dt)
+			return moerr.NewNYIf(param.Ctx, "load %s to %s", st, dt)
 		}
 		h.mappers[colIdx] = fn
 	}
@@ -179,7 +163,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			if page.Dictionary() != nil {
-				return moerr.NewNYI(proc.Ctx, "indexed %s page", st)
+				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
 			}
 			p := make([]parquet.Value, page.NumValues())
 			n, err := page.Values().ReadValues(p)
@@ -207,7 +191,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			if page.Dictionary() != nil {
-				return moerr.NewNYI(proc.Ctx, "indexed %s page", st)
+				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
 			}
 			data := page.Data()
 			return copyPageToVec(mp, page, proc, vec, data.Int32())
@@ -218,7 +202,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			if page.Dictionary() != nil {
-				return moerr.NewNYI(proc.Ctx, "indexed %s page", st)
+				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
 			}
 			data := page.Data()
 			return copyPageToVec(mp, page, proc, vec, data.Int64())
@@ -229,7 +213,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			if page.Dictionary() != nil {
-				return moerr.NewNYI(proc.Ctx, "indexed %s page", st)
+				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
 			}
 			data := page.Data()
 			return copyPageToVec(mp, page, proc, vec, data.Uint32())
@@ -240,7 +224,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			if page.Dictionary() != nil {
-				return moerr.NewNYI(proc.Ctx, "indexed %s page", st)
+				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
 			}
 			data := page.Data()
 			return copyPageToVec(mp, page, proc, vec, data.Uint64())
@@ -251,7 +235,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			if page.Dictionary() != nil {
-				return moerr.NewNYI(proc.Ctx, "indexed %s page", st)
+				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
 			}
 			data := page.Data()
 			return copyPageToVec(mp, page, proc, vec, data.Float())
@@ -262,7 +246,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			if page.Dictionary() != nil {
-				return moerr.NewNYI(proc.Ctx, "indexed %s page", st)
+				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
 			}
 			data := page.Data()
 			return copyPageToVec(mp, page, proc, vec, data.Double())
@@ -279,7 +263,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			if page.Dictionary() != nil {
-				return moerr.NewNYI(proc.Ctx, "indexed %s page", dateT)
+				return moerr.NewNYIf(proc.Ctx, "indexed %s page", dateT)
 			}
 			data := page.Data()
 			bs, _ := data.Data()
@@ -298,7 +282,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			if page.Dictionary() != nil {
-				return moerr.NewNYI(proc.Ctx, "indexed page, type %s", tsT)
+				return moerr.NewNYIf(proc.Ctx, "indexed page, type %s", tsT)
 			}
 			data := page.Data()
 			switch {
@@ -329,7 +313,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			if page.Dictionary() != nil {
-				return moerr.NewNYI(proc.Ctx, "indexed page, type %s", dtT)
+				return moerr.NewNYIf(proc.Ctx, "indexed page, type %s", dtT)
 			}
 			data := page.Data()
 			switch {
@@ -361,7 +345,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			if page.Dictionary() != nil {
-				return moerr.NewNYI(proc.Ctx, "indexed %s page", timeT)
+				return moerr.NewNYIf(proc.Ctx, "indexed %s page", timeT)
 			}
 			data := page.Data()
 			switch {
@@ -575,14 +559,6 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 		length = vec.Length()
 	}
 
-	for i := range h.cols {
-		if !param.Cols[i].Hidden {
-			continue
-		}
-		col := param.Cols[i]
-		typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
-		bat.Vecs[i] = vector.NewConstNull(typ, length, proc.GetMPool())
-	}
 	bat.SetRowCount(length)
 
 	if finish {

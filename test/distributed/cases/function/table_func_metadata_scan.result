@@ -22,6 +22,9 @@ count(*)
 select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
 mo_ctl(dn, flush, table_func_metadata_scan.t)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select sleep(1);
+sleep(1)
+0
 select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g;
 count(*)
 5
@@ -85,6 +88,9 @@ count(*)
 select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
 mo_ctl(dn, flush, table_func_metadata_scan.t)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select sleep(1);
+sleep(1)
+0
 select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 bit_cast(sum as bigint)
 2147483648

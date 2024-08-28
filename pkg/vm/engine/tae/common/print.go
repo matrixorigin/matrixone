@@ -116,7 +116,7 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 	case types.T_bit:
 		return fmt.Sprintf("%v", v)
 	case types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		buf := v.([]byte)
 		printable := true
 		for _, c := range buf {
@@ -164,7 +164,7 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 		return j.String()
 	case types.T_uuid:
 		val := v.(types.Uuid)
-		return val.ToString()
+		return val.String()
 	case types.T_TS:
 		val := v.(types.TS)
 		return val.ToString()
@@ -206,6 +206,12 @@ func vec2Str[T any](vec []T, v *vector.Vector, opts ...TypePrintOpt) string {
 }
 
 func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string {
+	if v == nil || v.Length() == 0 {
+		return "empty vector"
+	}
+	if printN > v.Length() {
+		printN = v.Length()
+	}
 	switch v.GetType().Oid {
 	case types.T_bool:
 		return vec2Str(vector.MustFixedCol[bool](v)[:printN], v)
@@ -259,16 +265,16 @@ func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string
 }
 
 func MoBatchToString(moBat *batch.Batch, printN int) string {
-	n := moBat.RowCount()
-	if n > printN {
-		n = printN
-	}
+	n := 0
 	buf := new(bytes.Buffer)
 	for i, vec := range moBat.Vecs {
+		if n = vec.Length(); n < printN {
+			printN = n
+		}
 		if len(moBat.Attrs) == 0 {
-			fmt.Fprintf(buf, "[col%v] = %v\n", i, MoVectorToString(vec, n))
+			fmt.Fprintf(buf, "[col%v] = %v\n", i, MoVectorToString(vec, printN))
 		} else {
-			fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], MoVectorToString(vec, n, WithDoNotPrintBin{}))
+			fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], MoVectorToString(vec, printN, WithDoNotPrintBin{}))
 		}
 	}
 	return buf.String()

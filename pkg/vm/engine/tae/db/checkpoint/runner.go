@@ -570,7 +570,7 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 }
 
 func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.Field, err error) {
-	factory := logtail.IncrementalCheckpointDataFactory(entry.start, entry.end, true, false)
+	factory := logtail.IncrementalCheckpointDataFactory(r.rt.SID(), entry.start, entry.end, true, false)
 	data, err := factory(r.catalog)
 	if err != nil {
 		return
@@ -590,7 +590,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.F
 }
 
 func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string, err error) {
-	factory := logtail.BackupCheckpointDataFactory(entry.start, entry.end)
+	factory := logtail.BackupCheckpointDataFactory(r.rt.SID(), entry.start, entry.end)
 	data, err := factory(r.catalog)
 	if err != nil {
 		return
@@ -617,7 +617,7 @@ func (r *runner) doGlobalCheckpoint(
 	)
 	now := time.Now()
 
-	entry = NewCheckpointEntry(types.TS{}, end.Next(), ET_Global)
+	entry = NewCheckpointEntry(r.rt.SID(), types.TS{}, end.Next(), ET_Global)
 	entry.ckpLSN = ckpLSN
 	entry.truncateLSN = truncateLSN
 
@@ -645,7 +645,7 @@ func (r *runner) doGlobalCheckpoint(
 		}
 	}()
 
-	factory := logtail.GlobalCheckpointDataFactory(entry.end, interval)
+	factory := logtail.GlobalCheckpointDataFactory(r.rt.SID(), entry.end, interval)
 	data, err := factory(r.catalog)
 	if err != nil {
 		errPhase = "collect"
@@ -756,7 +756,7 @@ func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
 	if count < r.options.minCount {
 		return
 	}
-	entry := NewCheckpointEntry(start, end, ET_Incremental)
+	entry := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
 	r.tryAddNewIncrementalCheckpointEntry(entry)
 }
 
@@ -914,7 +914,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 	if entry.IsEmpty() {
 		return
 	}
-	logutil.Debugf(entry.String())
+	logutil.Debug(entry.String())
 
 	r.objMemSizeList = r.objMemSizeList[:0]
 	sizevisitor := new(model.BaseTreeVisitor)
@@ -1109,7 +1109,7 @@ func (r *runner) GetDirtyCollector() logtail.Collector {
 
 func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (locations string, checkpointed types.TS, err error) {
 	if r.IsTSStale(end) {
-		return "", types.TS{}, moerr.NewInternalError(ctx, "ts %v is staled", end.ToString())
+		return "", types.TS{}, moerr.NewInternalErrorf(ctx, "ts %v is staled", end.ToString())
 	}
 	r.storage.Lock()
 	tree := r.storage.entries.Copy()
@@ -1125,7 +1125,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 		ckpStart = global.GetEnd()
 		checkpointed = global.GetEnd()
 	}
-	pivot := NewCheckpointEntry(newStart, newStart, ET_Incremental)
+	pivot := NewCheckpointEntry(r.rt.SID(), newStart, newStart, ET_Incremental)
 
 	// For debug
 	// checkpoints := make([]*CheckpointEntry, 0)

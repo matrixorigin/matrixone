@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/stretchr/testify/require"
 )
@@ -582,7 +583,7 @@ func runRuntimeTest(
 	fn func(*rt),
 ) {
 	initTestCluster(cluster)
-	r := newRuntime(NewEnv(""))
+	r := newRuntime(NewEnv(sid, ""), runtime.ServiceRuntime(sid).Logger())
 	fn(r)
 }
 

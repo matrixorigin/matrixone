@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -26,16 +25,12 @@ import (
 var _ vm.Operator = new(IntersectAll)
 
 type container struct {
-	colexec.ReceiverOperator
 
 	// operator state: Build, Probe or End
 	state int
 
 	// helper data structure during probe
 	counter []uint64
-
-	// process mark
-	inBuckets []uint8
 
 	// built for the smaller of the two relations
 	hashTable *hashmap.StrHashMap
@@ -48,7 +43,7 @@ type container struct {
 
 type IntersectAll struct {
 	// execution container
-	ctr *container
+	ctr container
 
 	vm.OperatorBase
 }
@@ -85,18 +80,21 @@ func (intersectAll *IntersectAll) Release() {
 }
 
 func (intersectAll *IntersectAll) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	intersectAll.Free(proc, pipelineFailed, err)
+	ctr := &intersectAll.ctr
+	ctr.state = Build
+	ctr.cleanHashMap()
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
+	ctr.counter = nil
 }
 
 func (intersectAll *IntersectAll) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := intersectAll.ctr
-	if ctr != nil {
-		ctr.cleanHashMap()
-		if ctr.buf != nil {
-			ctr.buf.Clean(proc.Mp())
-			ctr.buf = nil
-		}
-		intersectAll.ctr = nil
+	ctr := &intersectAll.ctr
+	ctr.cleanHashMap()
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
 	}
 }
 

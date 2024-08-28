@@ -26,8 +26,8 @@ import (
 
 func executeResultRowStmtInBack(backSes *backSession,
 	execCtx *ExecCtx) (err error) {
-	execCtx.ses.EnterFPrint(95)
-	defer execCtx.ses.ExitFPrint(95)
+	execCtx.ses.EnterFPrint(FPResultRowStmtInBack)
+	defer execCtx.ses.ExitFPrint(FPResultRowStmtInBack)
 	var columns []interface{}
 	mrs := backSes.GetMysqlResultSet()
 	// cw.Compile might rewrite sql, here we fetch the latest version

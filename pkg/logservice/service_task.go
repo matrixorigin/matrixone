@@ -19,7 +19,7 @@ import (
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"go.uber.org/zap"
 )
 
@@ -27,7 +27,7 @@ func (s *Service) initSqlWriterFactory() {
 	getClient := func() util.HAKeeperClient {
 		return s.haClient
 	}
-	db_holder.SetSQLWriterDBAddressFunc(util.AddressFunc(getClient))
+	db_holder.SetSQLWriterDBAddressFunc(util.AddressFunc(s.cfg.UUID, getClient))
 }
 
 func (s *Service) createSQLLogger(command *logservicepb.CreateTaskService) {
@@ -47,14 +47,18 @@ func (s *Service) initTaskHolder() {
 
 	if s.task.storageFactory != nil {
 		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
-			runtime.ProcessLevelRuntime(),
-			util.AddressFunc(getClient),
+			runtime.ServiceRuntime(s.cfg.UUID),
+			util.AddressFunc(s.cfg.UUID, getClient),
 			func(_, _, _ string) taskservice.TaskStorageFactory {
 				return s.task.storageFactory
-			})
+			},
+		)
 		return
 	}
-	s.task.holder = taskservice.NewTaskServiceHolder(runtime.ProcessLevelRuntime(), util.AddressFunc(getClient))
+	s.task.holder = taskservice.NewTaskServiceHolder(
+		runtime.ServiceRuntime(s.cfg.UUID),
+		util.AddressFunc(s.cfg.UUID, getClient),
+	)
 }
 
 func (s *Service) createTaskService(command *logservicepb.CreateTaskService) {

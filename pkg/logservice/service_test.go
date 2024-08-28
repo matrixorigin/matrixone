@@ -28,6 +28,7 @@ import (
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	hapkg "github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -56,6 +57,10 @@ func getServiceTestConfig() Config {
 	c.DisableWorkers = true
 	c.UseTeeLogDB = true
 	c.RPC.MaxMessageSize = testServerMaxMsgSize
+
+	rt := runtime.ServiceRuntime("")
+	runtime.SetupServiceBasedRuntime(c.UUID, rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	return c
 }
 
@@ -527,301 +532,319 @@ func TestServiceCheckHAKeeper(t *testing.T) {
 }
 
 func TestShardInfoCanBeQueried(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	cfg1 := DefaultConfig()
-	cfg1.UUID = uuid.New().String()
-	cfg1.FS = vfs.NewStrictMem()
-	cfg1.DeploymentID = 1
-	cfg1.RTTMillisecond = 5
-	cfg1.DataDir = "data-1"
-	cfg1.LogServicePort = 9002
-	cfg1.RaftPort = 9000
-	cfg1.GossipPort = 9001
-	cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011"}
-	cfg1.DisableWorkers = true
-	cfg2 := DefaultConfig()
-	cfg2.UUID = uuid.New().String()
-	cfg2.FS = vfs.NewStrictMem()
-	cfg2.DeploymentID = 1
-	cfg2.RTTMillisecond = 5
-	cfg2.DataDir = "data-2"
-	cfg2.LogServicePort = 9012
-	cfg2.RaftPort = 9010
-	cfg2.GossipPort = 9011
-	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9001"}
-	cfg2.DisableWorkers = true
-	service1, err := NewService(cfg1,
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			defer leaktest.AfterTest(t)()
+			cfg1 := DefaultConfig()
+			cfg1.UUID = uuid.New().String()
+			cfg1.FS = vfs.NewStrictMem()
+			cfg1.DeploymentID = 1
+			cfg1.RTTMillisecond = 5
+			cfg1.DataDir = "data-1"
+			cfg1.LogServicePort = 9002
+			cfg1.RaftPort = 9000
+			cfg1.GossipPort = 9001
+			cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011"}
+			cfg1.DisableWorkers = true
+			cfg2 := DefaultConfig()
+			cfg2.UUID = uuid.New().String()
+			cfg2.FS = vfs.NewStrictMem()
+			cfg2.DeploymentID = 1
+			cfg2.RTTMillisecond = 5
+			cfg2.DataDir = "data-2"
+			cfg2.LogServicePort = 9012
+			cfg2.RaftPort = 9010
+			cfg2.GossipPort = 9011
+			cfg2.GossipSeedAddresses = []string{"127.0.0.1:9001"}
+			cfg2.DisableWorkers = true
+
+			runtime.SetupServiceBasedRuntime(cfg1.UUID, rt)
+			runtime.SetupServiceBasedRuntime(cfg2.UUID, rt)
+
+			service1, err := NewService(
+				cfg1,
+				newFS(),
+				nil,
+				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+					return true
+				}),
+			)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, service1.Close())
+			}()
+			peers1 := make(map[uint64]dragonboat.Target)
+			peers1[1] = service1.ID()
+			assert.NoError(t, service1.store.startReplica(1, 1, peers1, false))
+			service2, err := NewService(cfg2,
+				newFS(),
+				nil,
+				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+					return true
+				}),
+			)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, service2.Close())
+			}()
+			peers2 := make(map[uint64]dragonboat.Target)
+			peers2[1] = service2.ID()
+			assert.NoError(t, service2.store.startReplica(2, 1, peers2, false))
+
+			nhID1 := service1.ID()
+			nhID2 := service2.ID()
+
+			done := false
+
+			// FIXME:
+			// as per #3478, this test is flaky, increased loop count to 6000 to
+			// see whether gossip can finish syncing in 6 seconds time. also added some
+			// logging to get collect more details
+			for i := 0; i < 6000; i++ {
+				si1, ok := service1.getShardInfo(1)
+				if !ok || si1.LeaderID != 1 {
+					testLogger.Error("shard 1 info missing on service 1")
+					time.Sleep(time.Millisecond)
+					continue
+				}
+				assert.Equal(t, 1, len(si1.Replicas))
+				require.Equal(t, uint64(1), si1.ShardID)
+				ri, ok := si1.Replicas[1]
+				assert.True(t, ok)
+				assert.Equal(t, nhID1, ri.UUID)
+				assert.Equal(t, cfg1.LogServiceServiceAddr(), ri.ServiceAddress)
+
+				si2, ok := service1.getShardInfo(2)
+				if !ok || si2.LeaderID != 1 {
+					testLogger.Error("shard 2 info missing on service 1")
+					time.Sleep(time.Millisecond)
+					continue
+				}
+				assert.Equal(t, 1, len(si2.Replicas))
+				require.Equal(t, uint64(2), si2.ShardID)
+				ri, ok = si2.Replicas[1]
+				assert.True(t, ok)
+				assert.Equal(t, nhID2, ri.UUID)
+				assert.Equal(t, cfg2.LogServiceServiceAddr(), ri.ServiceAddress)
+
+				si1, ok = service2.getShardInfo(1)
+				if !ok || si1.LeaderID != 1 {
+					testLogger.Error("shard 1 info missing on service 2")
+					time.Sleep(time.Millisecond)
+					continue
+				}
+				assert.Equal(t, 1, len(si1.Replicas))
+				require.Equal(t, uint64(1), si1.ShardID)
+				ri, ok = si1.Replicas[1]
+				assert.True(t, ok)
+				assert.Equal(t, nhID1, ri.UUID)
+				assert.Equal(t, cfg1.LogServiceServiceAddr(), ri.ServiceAddress)
+
+				si2, ok = service2.getShardInfo(2)
+				if !ok || si2.LeaderID != 1 {
+					testLogger.Error("shard 2 info missing on service 2")
+					time.Sleep(time.Millisecond)
+					continue
+				}
+				assert.Equal(t, 1, len(si2.Replicas))
+				require.Equal(t, uint64(2), si2.ShardID)
+				ri, ok = si2.Replicas[1]
+				assert.True(t, ok)
+				assert.Equal(t, nhID2, ri.UUID)
+				assert.Equal(t, cfg2.LogServiceServiceAddr(), ri.ServiceAddress)
+
+				done = true
+				break
+			}
+			assert.True(t, done)
+		},
 	)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, service1.Close())
-	}()
-	peers1 := make(map[uint64]dragonboat.Target)
-	peers1[1] = service1.ID()
-	assert.NoError(t, service1.store.startReplica(1, 1, peers1, false))
-	service2, err := NewService(cfg2,
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
-	)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, service2.Close())
-	}()
-	peers2 := make(map[uint64]dragonboat.Target)
-	peers2[1] = service2.ID()
-	assert.NoError(t, service2.store.startReplica(2, 1, peers2, false))
-
-	nhID1 := service1.ID()
-	nhID2 := service2.ID()
-
-	done := false
-
-	// FIXME:
-	// as per #3478, this test is flaky, increased loop count to 6000 to
-	// see whether gossip can finish syncing in 6 seconds time. also added some
-	// logging to get collect more details
-	for i := 0; i < 6000; i++ {
-		si1, ok := service1.getShardInfo(1)
-		if !ok || si1.LeaderID != 1 {
-			testLogger.Error("shard 1 info missing on service 1")
-			time.Sleep(time.Millisecond)
-			continue
-		}
-		assert.Equal(t, 1, len(si1.Replicas))
-		require.Equal(t, uint64(1), si1.ShardID)
-		ri, ok := si1.Replicas[1]
-		assert.True(t, ok)
-		assert.Equal(t, nhID1, ri.UUID)
-		assert.Equal(t, cfg1.LogServiceServiceAddr(), ri.ServiceAddress)
-
-		si2, ok := service1.getShardInfo(2)
-		if !ok || si2.LeaderID != 1 {
-			testLogger.Error("shard 2 info missing on service 1")
-			time.Sleep(time.Millisecond)
-			continue
-		}
-		assert.Equal(t, 1, len(si2.Replicas))
-		require.Equal(t, uint64(2), si2.ShardID)
-		ri, ok = si2.Replicas[1]
-		assert.True(t, ok)
-		assert.Equal(t, nhID2, ri.UUID)
-		assert.Equal(t, cfg2.LogServiceServiceAddr(), ri.ServiceAddress)
-
-		si1, ok = service2.getShardInfo(1)
-		if !ok || si1.LeaderID != 1 {
-			testLogger.Error("shard 1 info missing on service 2")
-			time.Sleep(time.Millisecond)
-			continue
-		}
-		assert.Equal(t, 1, len(si1.Replicas))
-		require.Equal(t, uint64(1), si1.ShardID)
-		ri, ok = si1.Replicas[1]
-		assert.True(t, ok)
-		assert.Equal(t, nhID1, ri.UUID)
-		assert.Equal(t, cfg1.LogServiceServiceAddr(), ri.ServiceAddress)
-
-		si2, ok = service2.getShardInfo(2)
-		if !ok || si2.LeaderID != 1 {
-			testLogger.Error("shard 2 info missing on service 2")
-			time.Sleep(time.Millisecond)
-			continue
-		}
-		assert.Equal(t, 1, len(si2.Replicas))
-		require.Equal(t, uint64(2), si2.ShardID)
-		ri, ok = si2.Replicas[1]
-		assert.True(t, ok)
-		assert.Equal(t, nhID2, ri.UUID)
-		assert.Equal(t, cfg2.LogServiceServiceAddr(), ri.ServiceAddress)
-
-		done = true
-		break
-	}
-	assert.True(t, done)
 }
 
 func TestGossipInSimulatedCluster(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	debug.SetMemoryLimit(1 << 30)
-	// start all services
-	nodeCount := 24
-	shardCount := nodeCount / 3
-	configs := make([]Config, 0)
-	services := make([]*Service, 0)
-	for i := 0; i < nodeCount; i++ {
-		cfg := DefaultConfig()
-		cfg.FS = vfs.NewStrictMem()
-		cfg.UUID = uuid.New().String()
-		cfg.DeploymentID = 1
-		cfg.RTTMillisecond = 200
-		cfg.DataDir = fmt.Sprintf("data-%d", i)
-		cfg.LogServicePort = 26000 + 10*i
-		cfg.RaftPort = 26000 + 10*i + 1
-		cfg.GossipPort = 26000 + 10*i + 2
-		cfg.GossipSeedAddresses = []string{
-			"127.0.0.1:26002",
-			"127.0.0.1:26012",
-			"127.0.0.1:26022",
-			"127.0.0.1:26032",
-			"127.0.0.1:26042",
-			"127.0.0.1:26052",
-			"127.0.0.1:26062",
-			"127.0.0.1:26072",
-			"127.0.0.1:26082",
-			"127.0.0.1:26092",
-		}
-		cfg.DisableWorkers = true
-		cfg.LogDBBufferSize = 1024 * 16
-		cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
-		configs = append(configs, cfg)
-		service, err := NewService(cfg,
-			newFS(),
-			nil,
-			WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-				return true
-			}),
-		)
-		require.NoError(t, err)
-		services = append(services, service)
-	}
-	defer func() {
-		testLogger.Info("going to close all services")
-		var wg sync.WaitGroup
-		for _, s := range services {
-			if s != nil {
-				selected := s
-				wg.Add(1)
-				go func() {
-					require.NoError(t, selected.Close())
-					wg.Done()
-					testLogger.Info("closed a service")
-				}()
-			}
-		}
-		wg.Wait()
-		time.Sleep(time.Second * 2)
-	}()
-	// start all replicas
-	// shardID: [1, 16]
-	id := uint64(100)
-	for i := uint64(0); i < uint64(shardCount); i++ {
-		shardID := i + 1
-		r1 := id
-		r2 := id + 1
-		r3 := id + 2
-		id += 3
-		replicas := make(map[uint64]dragonboat.Target)
-		replicas[r1] = services[i*3].ID()
-		replicas[r2] = services[i*3+1].ID()
-		replicas[r3] = services[i*3+2].ID()
-		require.NoError(t, services[i*3+0].store.startReplica(shardID, r1, replicas, false))
-		require.NoError(t, services[i*3+1].store.startReplica(shardID, r2, replicas, false))
-		require.NoError(t, services[i*3+2].store.startReplica(shardID, r3, replicas, false))
-	}
-	wait := func() {
-		time.Sleep(50 * time.Millisecond)
-	}
-	// check & wait all leaders to be elected and known to all services
-	cci := uint64(0)
-	iterations := 1000
-	for retry := 0; retry < iterations; retry++ {
-		notReady := 0
-		for i := 0; i < nodeCount; i++ {
-			shardID := uint64(i/3 + 1)
-			service := services[i]
-			info, ok := service.getShardInfo(shardID)
-			if !ok || info.LeaderID == 0 {
-				notReady++
-				wait()
-				continue
-			}
-			if shardID == 1 && info.Epoch != 0 {
-				cci = info.Epoch
-			}
-		}
-		if notReady <= 1 {
-			break
-		}
-		require.True(t, retry < iterations-1)
-	}
-	require.True(t, cci != 0)
-	// all good now, add a replica to shard 1
-	id += 1
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			defer leaktest.AfterTest(t)()
+			debug.SetMemoryLimit(1 << 30)
+			// start all services
+			nodeCount := 24
+			shardCount := nodeCount / 3
+			configs := make([]Config, 0)
+			services := make([]*Service, 0)
+			for i := 0; i < nodeCount; i++ {
+				cfg := DefaultConfig()
+				cfg.FS = vfs.NewStrictMem()
+				cfg.UUID = uuid.New().String()
+				cfg.DeploymentID = 1
+				cfg.RTTMillisecond = 200
+				cfg.DataDir = fmt.Sprintf("data-%d", i)
+				cfg.LogServicePort = 26000 + 10*i
+				cfg.RaftPort = 26000 + 10*i + 1
+				cfg.GossipPort = 26000 + 10*i + 2
+				cfg.GossipSeedAddresses = []string{
+					"127.0.0.1:26002",
+					"127.0.0.1:26012",
+					"127.0.0.1:26022",
+					"127.0.0.1:26032",
+					"127.0.0.1:26042",
+					"127.0.0.1:26052",
+					"127.0.0.1:26062",
+					"127.0.0.1:26072",
+					"127.0.0.1:26082",
+					"127.0.0.1:26092",
+				}
+				cfg.DisableWorkers = true
+				cfg.LogDBBufferSize = 1024 * 16
+				cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
+				configs = append(configs, cfg)
 
-	for i := 0; i < iterations; i++ {
-		err := services[0].store.addReplica(1, id, services[3].ID(), cci)
-		if err == nil {
-			break
-		} else if err == dragonboat.ErrTimeout || err == dragonboat.ErrSystemBusy ||
-			err == dragonboat.ErrInvalidDeadline || err == dragonboat.ErrTimeoutTooSmall {
-			info, ok := services[0].getShardInfo(1)
-			if ok && info.LeaderID != 0 && len(info.Replicas) == 4 {
-				break
-			}
-			wait()
-			continue
-		} else if err == dragonboat.ErrRejected {
-			break
-		}
-		t.Fatalf("failed to add replica, %v", err)
-	}
+				runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
 
-	// check the above change can be observed by all services
-	for retry := 0; retry < iterations; retry++ {
-		notReady := 0
-		for i := 0; i < nodeCount; i++ {
-			service := services[i]
-			info, ok := service.getShardInfo(1)
-			if !ok || info.LeaderID == 0 || len(info.Replicas) != 4 {
-				notReady++
-				wait()
-				continue
+				service, err := NewService(cfg,
+					newFS(),
+					nil,
+					WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+						return true
+					}),
+				)
+				require.NoError(t, err)
+				services = append(services, service)
 			}
-		}
-		if notReady <= 1 {
-			break
-		}
-		require.True(t, retry < iterations-1)
-	}
-	// restart a service, watch how long will it take to get all required
-	// shard info
-	require.NoError(t, services[12].Close())
-	services[12] = nil
-	time.Sleep(2 * time.Second)
-	service, err := NewService(configs[12],
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
+			defer func() {
+				testLogger.Info("going to close all services")
+				var wg sync.WaitGroup
+				for _, s := range services {
+					if s != nil {
+						selected := s
+						wg.Add(1)
+						go func() {
+							require.NoError(t, selected.Close())
+							wg.Done()
+							testLogger.Info("closed a service")
+						}()
+					}
+				}
+				wg.Wait()
+				time.Sleep(time.Second * 2)
+			}()
+			// start all replicas
+			// shardID: [1, 16]
+			id := uint64(100)
+			for i := uint64(0); i < uint64(shardCount); i++ {
+				shardID := i + 1
+				r1 := id
+				r2 := id + 1
+				r3 := id + 2
+				id += 3
+				replicas := make(map[uint64]dragonboat.Target)
+				replicas[r1] = services[i*3].ID()
+				replicas[r2] = services[i*3+1].ID()
+				replicas[r3] = services[i*3+2].ID()
+				require.NoError(t, services[i*3+0].store.startReplica(shardID, r1, replicas, false))
+				require.NoError(t, services[i*3+1].store.startReplica(shardID, r2, replicas, false))
+				require.NoError(t, services[i*3+2].store.startReplica(shardID, r3, replicas, false))
+			}
+			wait := func() {
+				time.Sleep(50 * time.Millisecond)
+			}
+			// check & wait all leaders to be elected and known to all services
+			cci := uint64(0)
+			iterations := 1000
+			for retry := 0; retry < iterations; retry++ {
+				notReady := 0
+				for i := 0; i < nodeCount; i++ {
+					shardID := uint64(i/3 + 1)
+					service := services[i]
+					info, ok := service.getShardInfo(shardID)
+					if !ok || info.LeaderID == 0 {
+						notReady++
+						wait()
+						continue
+					}
+					if shardID == 1 && info.Epoch != 0 {
+						cci = info.Epoch
+					}
+				}
+				if notReady <= 1 {
+					break
+				}
+				require.True(t, retry < iterations-1)
+			}
+			require.True(t, cci != 0)
+			// all good now, add a replica to shard 1
+			id += 1
+
+			for i := 0; i < iterations; i++ {
+				err := services[0].store.addReplica(1, id, services[3].ID(), cci)
+				if err == nil {
+					break
+				} else if err == dragonboat.ErrTimeout || err == dragonboat.ErrSystemBusy ||
+					err == dragonboat.ErrInvalidDeadline || err == dragonboat.ErrTimeoutTooSmall {
+					info, ok := services[0].getShardInfo(1)
+					if ok && info.LeaderID != 0 && len(info.Replicas) == 4 {
+						break
+					}
+					wait()
+					continue
+				} else if err == dragonboat.ErrRejected {
+					break
+				}
+				t.Fatalf("failed to add replica, %v", err)
+			}
+
+			// check the above change can be observed by all services
+			for retry := 0; retry < iterations; retry++ {
+				notReady := 0
+				for i := 0; i < nodeCount; i++ {
+					service := services[i]
+					info, ok := service.getShardInfo(1)
+					if !ok || info.LeaderID == 0 || len(info.Replicas) != 4 {
+						notReady++
+						wait()
+						continue
+					}
+				}
+				if notReady <= 1 {
+					break
+				}
+				require.True(t, retry < iterations-1)
+			}
+			// restart a service, watch how long will it take to get all required
+			// shard info
+			require.NoError(t, services[12].Close())
+			services[12] = nil
+			time.Sleep(2 * time.Second)
+			service, err := NewService(configs[12],
+				newFS(),
+				nil,
+				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+					return true
+				}),
+			)
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, service.Close())
+			}()
+			for retry := 0; retry < iterations; retry++ {
+				notReady := 0
+				for i := uint64(0); i < uint64(shardCount); i++ {
+					shardID := i + 1
+					info, ok := service.getShardInfo(shardID)
+					if !ok || info.LeaderID == 0 {
+						notReady++
+						wait()
+						continue
+					}
+				}
+				if notReady <= 1 {
+					break
+				}
+				require.True(t, retry < iterations-1)
+			}
+		},
 	)
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, service.Close())
-	}()
-	for retry := 0; retry < iterations; retry++ {
-		notReady := 0
-		for i := uint64(0); i < uint64(shardCount); i++ {
-			shardID := i + 1
-			info, ok := service.getShardInfo(shardID)
-			if !ok || info.LeaderID == 0 {
-				notReady++
-				wait()
-				continue
-			}
-		}
-		if notReady <= 1 {
-			break
-		}
-		require.True(t, retry < iterations-1)
-	}
 }
 
 func TestServiceHandleCNUpdateLabel(t *testing.T) {

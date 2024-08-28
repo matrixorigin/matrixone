@@ -33,7 +33,6 @@ var _ vm.Operator = new(Group)
 const (
 	H8 = iota
 	HStr
-	HIndex
 )
 
 type ExprEvalVector struct {
@@ -69,7 +68,18 @@ func (ev *ExprEvalVector) Free() {
 	}
 }
 
+func (ev *ExprEvalVector) ResetForNextQuery() {
+	for i := range ev.Executor {
+		if ev.Executor[i] != nil {
+			ev.Executor[i].ResetForNextQuery()
+		}
+	}
+}
+
 type container struct {
+	// if skipInitReusableMem is true, we will skip some initialization of reusable.
+	skipInitReusableMem bool
+
 	typ       int
 	state     vm.CtrState
 	inserted  []uint8
@@ -77,7 +87,6 @@ type container struct {
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
-	// idx        *index.LowCardinalityIndex
 
 	aggVecs   []ExprEvalVector
 	groupVecs ExprEvalVector
@@ -90,16 +99,15 @@ type container struct {
 }
 
 type Group struct {
-	ctr          *container
-	IsShuffle    bool // is shuffle group
+	ctr          container
 	NeedEval     bool // need to projection the aggregate column
 	PreAllocSize uint64
 
 	Exprs []*plan.Expr // group Expressions
-	Types []types.Type
 	Aggs  []aggexec.AggFuncExecExpression
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (group *Group) GetOperatorBase() *vm.OperatorBase {
@@ -141,11 +149,6 @@ func (group *Group) WithExprs(exprs []*plan.Expr) *Group {
 	return group
 }
 
-func (group *Group) WithTypes(types []types.Type) *Group {
-	group.Types = types
-	return group
-}
-
 func (group *Group) WithAggsNew(aggs []aggexec.AggFuncExecExpression) *Group {
 	group.Aggs = aggs
 	return group
@@ -157,20 +160,15 @@ func (group *Group) Release() {
 	}
 }
 
-func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	group.Free(proc, pipelineFailed, err)
-}
-
 func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := group.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanHashMap()
-		ctr.cleanAggVectors()
-		ctr.cleanGroupVectors()
-		group.ctr = nil
-	}
+	mp := proc.Mp()
+	group.ctr.cleanBatch(mp)
+	group.ctr.cleanHashMap()
+	group.ctr.cleanAggVectors()
+	group.ctr.cleanGroupVectors()
+	group.ctr.skipInitReusableMem = false
+
+	group.FreeProjection(proc)
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

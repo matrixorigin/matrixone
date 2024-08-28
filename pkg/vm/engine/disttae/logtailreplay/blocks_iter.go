@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/tidwall/btree"
 )
 
 type ObjectsIter interface {
@@ -92,9 +93,9 @@ type dirtyBlocksIter struct {
 }
 
 func (p *PartitionState) NewDirtyBlocksIter() BlocksIter {
-	iter := p.dirtyBlocks.Copy().Iter()
+	//iter := p.dirtyBlocks.Copy().Iter()
 	ret := &dirtyBlocksIter{
-		iter: iter,
+		iter: btree.IterG[types.Blockid]{},
 	}
 	return ret
 }
@@ -160,7 +161,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 	return
 }
 
-func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (objectio.ObjectLocation, types.TS, bool) {
+func (p *PartitionState) GetBlockDeltaLoc(bid types.Blockid) (objectio.ObjectLocation, types.TS, bool) {
 	iter := p.blockDeltas.Copy().Iter()
 	defer iter.Release()
 
@@ -204,4 +205,25 @@ func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, b
 		}
 	}
 	return ObjectInfo{}, false
+}
+
+type BlockDeltaInfo struct {
+	//the commit ts of location.
+	Cts types.TS
+	Loc objectio.Location
+}
+
+func (p *PartitionState) GetTombstoneDeltaLocs(mp map[types.Blockid]BlockDeltaInfo) (err error) {
+	iter := p.blockDeltas.Copy().Iter()
+	defer iter.Release()
+
+	for ok := iter.First(); ok; ok = iter.Next() {
+		item := iter.Item()
+		mp[item.BlockID] = BlockDeltaInfo{
+			Loc: item.DeltaLoc[:],
+			Cts: item.CommitTs,
+		}
+	}
+
+	return nil
 }

@@ -21,14 +21,13 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 const (
@@ -114,56 +113,72 @@ var _ ProxyHAKeeperClient = (*managedHAKeeperClient)(nil)
 // NewCNHAKeeperClient creates a HAKeeper client to be used by a CN node.
 //
 // NB: caller could specify options for morpc.Client via ctx.
-func NewCNHAKeeperClient(ctx context.Context,
-	cfg HAKeeperClientConfig) (CNHAKeeperClient, error) {
+func NewCNHAKeeperClient(
+	ctx context.Context,
+	sid string,
+	cfg HAKeeperClientConfig,
+) (CNHAKeeperClient, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	return newManagedHAKeeperClient(ctx, cfg)
+	return newManagedHAKeeperClient(ctx, sid, cfg)
 }
 
 // NewTNHAKeeperClient creates a HAKeeper client to be used by a TN node.
 //
 // NB: caller could specify options for morpc.Client via ctx.
-func NewTNHAKeeperClient(ctx context.Context,
-	cfg HAKeeperClientConfig) (TNHAKeeperClient, error) {
+func NewTNHAKeeperClient(
+	ctx context.Context,
+	sid string,
+	cfg HAKeeperClientConfig,
+) (TNHAKeeperClient, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	return newManagedHAKeeperClient(ctx, cfg)
+	return newManagedHAKeeperClient(ctx, sid, cfg)
 }
 
 // NewLogHAKeeperClient creates a HAKeeper client to be used by a Log Service node.
 //
 // NB: caller could specify options for morpc.Client via ctx.
-func NewLogHAKeeperClient(ctx context.Context,
-	cfg HAKeeperClientConfig) (LogHAKeeperClient, error) {
+func NewLogHAKeeperClient(
+	ctx context.Context,
+	sid string,
+	cfg HAKeeperClientConfig,
+) (LogHAKeeperClient, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	return newManagedHAKeeperClient(ctx, cfg)
+	return newManagedHAKeeperClient(ctx, sid, cfg)
 }
 
 // NewProxyHAKeeperClient creates a HAKeeper client to be used by a proxy service.
 //
 // NB: caller could specify options for morpc.Client via ctx.
-func NewProxyHAKeeperClient(ctx context.Context,
-	cfg HAKeeperClientConfig) (ProxyHAKeeperClient, error) {
+func NewProxyHAKeeperClient(
+	ctx context.Context,
+	sid string,
+	cfg HAKeeperClientConfig,
+) (ProxyHAKeeperClient, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	return newManagedHAKeeperClient(ctx, cfg)
+	return newManagedHAKeeperClient(ctx, sid, cfg)
 }
 
-func newManagedHAKeeperClient(ctx context.Context,
-	cfg HAKeeperClientConfig) (*managedHAKeeperClient, error) {
-	c, err := newHAKeeperClient(ctx, cfg)
+func newManagedHAKeeperClient(
+	ctx context.Context,
+	sid string,
+	cfg HAKeeperClientConfig,
+) (*managedHAKeeperClient, error) {
+	c, err := newHAKeeperClient(ctx, sid, cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	mc := &managedHAKeeperClient{
 		cfg:            cfg,
+		sid:            sid,
 		backendOptions: GetBackendOptions(ctx),
 		clientOptions:  GetClientOptions(ctx),
 	}
@@ -179,6 +194,7 @@ type allocID struct {
 }
 
 type managedHAKeeperClient struct {
+	sid string
 	cfg HAKeeperClientConfig
 
 	// Method `prepareClient` may update moprc.Client.
@@ -529,7 +545,7 @@ func (c *managedHAKeeperClient) prepareClientLocked(ctx context.Context) error {
 	ctx = SetBackendOptions(ctx, c.backendOptions...)
 	ctx = SetClientOptions(ctx, c.clientOptions...)
 
-	cc, err := newHAKeeperClient(ctx, c.cfg)
+	cc, err := newHAKeeperClient(ctx, c.sid, c.cfg)
 	if err != nil {
 		return err
 	}
@@ -545,18 +561,21 @@ type hakeeperClient struct {
 	respPool *sync.Pool
 }
 
-func newHAKeeperClient(ctx context.Context,
-	cfg HAKeeperClientConfig) (*hakeeperClient, error) {
+func newHAKeeperClient(
+	ctx context.Context,
+	sid string,
+	cfg HAKeeperClientConfig,
+) (*hakeeperClient, error) {
 	var err error
 	var c *hakeeperClient
 	// If the discovery address is configured, we used it first.
 	if len(cfg.DiscoveryAddress) > 0 {
-		c, err = connectByReverseProxy(ctx, cfg.DiscoveryAddress, cfg)
+		c, err = connectByReverseProxy(ctx, sid, cfg.DiscoveryAddress, cfg)
 		if c != nil && err == nil {
 			return c, nil
 		}
 	} else if len(cfg.ServiceAddresses) > 0 {
-		c, err = connectToHAKeeper(ctx, cfg.ServiceAddresses, cfg)
+		c, err = connectToHAKeeper(ctx, sid, cfg.ServiceAddresses, cfg)
 		if c != nil && err == nil {
 			return c, nil
 		}
@@ -567,9 +586,13 @@ func newHAKeeperClient(ctx context.Context,
 	return nil, moerr.NewNoHAKeeper(ctx)
 }
 
-func connectByReverseProxy(ctx context.Context,
-	discoveryAddress string, cfg HAKeeperClientConfig) (*hakeeperClient, error) {
-	si, ok, err := GetShardInfo(discoveryAddress, hakeeper.DefaultHAKeeperShardID)
+func connectByReverseProxy(
+	ctx context.Context,
+	sid string,
+	discoveryAddress string,
+	cfg HAKeeperClientConfig,
+) (*hakeeperClient, error) {
+	si, ok, err := GetShardInfo(sid, discoveryAddress, hakeeper.DefaultHAKeeperShardID)
 	if err != nil {
 		return nil, err
 	}
@@ -586,11 +609,15 @@ func connectByReverseProxy(ctx context.Context,
 			addresses = append(addresses, address)
 		}
 	}
-	return connectToHAKeeper(ctx, addresses, cfg)
+	return connectToHAKeeper(ctx, sid, addresses, cfg)
 }
 
-func connectToHAKeeper(ctx context.Context,
-	targets []string, cfg HAKeeperClientConfig) (*hakeeperClient, error) {
+func connectToHAKeeper(
+	ctx context.Context,
+	sid string,
+	targets []string,
+	cfg HAKeeperClientConfig,
+) (*hakeeperClient, error) {
 	if len(targets) == 0 {
 		return nil, nil
 	}
@@ -616,6 +643,7 @@ func connectToHAKeeper(ctx context.Context,
 	for _, addr := range addresses {
 		cc, err := getRPCClient(
 			ctx,
+			sid,
 			addr,
 			c.respPool,
 			defaultMaxMessageSize,

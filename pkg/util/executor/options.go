@@ -159,6 +159,15 @@ func (opts StatementOption) HasAccountID() bool {
 	return opts.accountId > 0
 }
 
+func (opts StatementOption) WithDisableLog() StatementOption {
+	opts.disableLog = true
+	return opts
+}
+
+func (opts StatementOption) DisableLog() bool {
+	return opts.disableLog
+}
+
 func (opts Options) WithDisableTrace() Options {
 	opts.txnOpts = append(opts.txnOpts, client.WithDisableTrace(true))
 	return opts

@@ -16,6 +16,11 @@ package window
 
 import (
 	"bytes"
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -32,7 +37,6 @@ import (
 // add unit tests for cases
 type winTestCase struct {
 	arg  *Window
-	flgs []bool // flgs[i] == true: nullable
 	proc *process.Process
 }
 
@@ -42,58 +46,21 @@ var (
 
 func init() {
 	tcs = []winTestCase{
-		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{}, []aggexec.AggFuncExecExpression{
-			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
-		}),
-		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{newExpression(0)}, []aggexec.AggFuncExecExpression{
-			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
-		}),
-		newTestCase([]bool{false, true, false, true}, []types.Type{
-			types.T_int8.ToType(),
-			types.T_int16.ToType(),
-		}, []*plan.Expr{newExpression(0), newExpression(1)}, []aggexec.AggFuncExecExpression{
-			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
-		}),
-		newTestCase([]bool{false, true, false, true}, []types.Type{
-			types.T_int8.ToType(),
-			types.T_int16.ToType(),
-			types.T_int32.ToType(),
-			types.T_int64.ToType(),
-		}, []*plan.Expr{newExpression(0), newExpression(3)}, []aggexec.AggFuncExecExpression{
-			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
-		}),
-		newTestCase([]bool{false, true, false, true}, []types.Type{
-			types.T_int64.ToType(),
-			types.T_int64.ToType(),
-			types.T_int64.ToType(),
-			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(3)}, []aggexec.AggFuncExecExpression{
-			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
-		}),
-		newTestCase([]bool{false, true, false, true}, []types.Type{
-			types.T_int64.ToType(),
-			types.T_int64.ToType(),
-			types.T_int64.ToType(),
-			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []aggexec.AggFuncExecExpression{
-			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
-		}),
-		newTestCase([]bool{false, true, false, true}, []types.Type{
-			types.T_int64.ToType(),
-			types.T_int64.ToType(),
-			types.New(types.T_varchar, 2, 0),
-			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []aggexec.AggFuncExecExpression{
-			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
-		}),
-		newTestCase([]bool{false, true, false, true}, []types.Type{
-			types.T_int64.ToType(),
-			types.T_int64.ToType(),
-			types.T_varchar.ToType(),
-			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []aggexec.AggFuncExecExpression{
-			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
-		}),
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			arg: &Window{
+				WinSpecList: []*plan.Expr{makeWindowSpec()},
+				Types:       []types.Type{types.T_int32.ToType()},
+				Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -104,36 +71,64 @@ func TestString(t *testing.T) {
 	}
 }
 
-func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []aggexec.AggFuncExecExpression) winTestCase {
-	for _, expr := range exprs {
-		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
-			idx := col.Col.ColPos
-			expr.Typ = plan.Type{
-				Id:    int32(ts[idx].Oid),
-				Width: ts[idx].Width,
-				Scale: ts[idx].Scale,
-			}
-		}
+func TestPrepare(t *testing.T) {
+	for _, tc := range tcs {
+		err := tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
 	}
-	return winTestCase{
-		flgs: flgs,
-		proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-		arg: &Window{
-			WinSpecList: exprs,
-			Types:       ts,
-			Aggs:        aggs,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
+}
+
+func TestWin(t *testing.T) {
+	for _, tc := range tcs {
+		resetChildren(tc.arg)
+		err := tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		_, _ = tc.arg.Call(tc.proc)
+
+		tc.arg.Reset(tc.proc, false, nil)
+
+		resetChildren(tc.arg)
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		_, _ = tc.arg.Call(tc.proc)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+	}
+}
+
+func resetChildren(arg *Window) {
+	bat := colexec.MakeMockBatchs()
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
+}
+
+func makeWindowSpec() *plan.Expr {
+	f := &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type:      plan.FrameBound_PRECEDING,
+			UnBounded: true,
+		},
+		End: &plan.FrameBound{
+			Type:      plan.FrameBound_FOLLOWING,
+			UnBounded: true,
+		},
+	}
+	return &plan.Expr{
+		Typ: plan.Type{},
+		Expr: &plan.Expr_W{
+			W: &plan.WindowSpec{
+				//OrderBy:    []*plan.OrderBySpec{&plan.OrderBySpec{Expr: newColExpr(0)}},
+				WindowFunc: newFunExpr(),
+				Frame:      f,
 			},
 		},
 	}
 }
 
-func newExpression(pos int32) *plan.Expr {
+func newColExpr(pos int32) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{},
 		Expr: &plan.Expr_Col{
@@ -144,14 +139,20 @@ func newExpression(pos int32) *plan.Expr {
 	}
 }
 
-// create a new block based on the type information, flgs[i] == ture: has null
-// func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-// 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
-// }
+func newAggExpr() aggexec.AggFuncExecExpression {
+	e, _ := function.GetFunctionByName(context.Background(), "sum", []types.Type{types.T_int32.ToType()})
+	id := e.GetEncodedOverloadID()
+	return aggexec.MakeAggFunctionExpression(id, false, []*plan.Expr{newColExpr(0)}, nil)
+}
 
-// func cleanResult(result *vm.CallResult, proc *process.Process) {
-// 	if result.Batch != nil {
-// 		result.Batch.Clean(proc.Mp())
-// 		result.Batch = nil
-// 	}
-// }
+func newFunExpr() *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					ObjName: "sum",
+				},
+			},
+		},
+	}
+}

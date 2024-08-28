@@ -49,11 +49,14 @@ func init() {
 	initProxyMetrics()
 	initFrontendMetrics()
 	initPipelineMetrics()
+	initLogServiceMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
 	registry.MustRegister(HeartbeatRecvHistogram)
 	registry.MustRegister(HeartbeatRecvFailureCounter)
+	registry.MustRegister(statsTriggerCounter)
+	registry.MustRegister(StatsUpdateBlockCounter)
 }
 
 func initMemMetrics() {
@@ -77,6 +80,8 @@ func initTaskMetrics() {
 	registry.MustRegister(transferPageHitHistogram)
 	registry.MustRegister(TransferPageRowHistogram)
 	registry.MustRegister(TaskMergeTransferPageLengthGauge)
+	registry.MustRegister(transferDurationHistogram)
+	registry.MustRegister(transferShortDurationHistogram)
 
 	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
 }
@@ -144,6 +149,9 @@ func initTxnMetrics() {
 
 	registry.MustRegister(txnRangesSelectivityHistogram)
 	registry.MustRegister(txnTNDeduplicateDurationHistogram)
+
+	registry.MustRegister(txnTransferDurationHistogram)
+	registry.MustRegister(TransferTombstonesCountHistogram)
 }
 
 func initRPCMetrics() {
@@ -166,11 +174,6 @@ func initRPCMetrics() {
 
 }
 
-func initTraceMetrics() {
-	registry.MustRegister(traceCollectorDurationHistogram)
-	registry.MustRegister(traceNegativeCUCounter)
-}
-
 func initProxyMetrics() {
 	registry.MustRegister(proxyConnectCounter)
 	registry.MustRegister(proxyDisconnectCounter)
@@ -188,6 +191,8 @@ func initFrontendMetrics() {
 	registry.MustRegister(requestCounter)
 	registry.MustRegister(resolveDurationHistogram)
 	registry.MustRegister(createAccountDurationHistogram)
+	registry.MustRegister(pubSubDurationHistogram)
+	registry.MustRegister(sqlLengthHistogram)
 }
 
 func initPipelineMetrics() {
@@ -195,6 +200,16 @@ func initPipelineMetrics() {
 	registry.MustRegister(pipelineStreamCounter)
 }
 
+func initLogServiceMetrics() {
+	registry.MustRegister(LogServiceAppendDurationHistogram)
+	registry.MustRegister(LogServiceAppendCounter)
+	registry.MustRegister(LogServiceAppendBytesHistogram)
+}
+
 func getDurationBuckets() []float64 {
 	return append(prometheus.ExponentialBuckets(0.00001, 2, 30), math.MaxFloat64)
+}
+
+func getShortDurationBuckets() []float64 {
+	return append(prometheus.ExponentialBuckets(0.0000001, 2, 30), math.MaxFloat64)
 }

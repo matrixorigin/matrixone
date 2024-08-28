@@ -113,17 +113,18 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	// duplicate code from other operators.
-	result, lastErr := sample.GetChildren(0).Call(proc)
-	if lastErr != nil {
-		return result, lastErr
-	}
 	anal := proc.GetAnalyze(sample.GetIdx(), sample.GetParallelIdx(), sample.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
+	// duplicate code from other operators.
+	result, lastErr := vm.ChildrenCall(sample.Children[0], proc, anal)
+	if lastErr != nil {
+		return result, lastErr
+	}
+
 	if sample.ctr.buf != nil {
-		proc.PutBatch(sample.ctr.buf)
+		sample.ctr.buf.Clean(proc.GetMPool())
 		sample.ctr.buf = nil
 	}
 

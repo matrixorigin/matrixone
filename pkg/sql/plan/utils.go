@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -861,7 +863,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	case *tree.ParenSelect:
 		*selects = append(*selects, leftStmt.Select)
 	default:
-		return moerr.NewParseError(ctx, "unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL))
+		return moerr.NewParseErrorf(ctx, "unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL))
 	}
 
 	// right is not UNION always
@@ -885,7 +887,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 
 		*selects = append(*selects, rightStmt.Select)
 	default:
-		return moerr.NewParseError(ctx, "unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
+		return moerr.NewParseErrorf(ctx, "unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
 	}
 
 	switch stmt.Type {
@@ -1271,11 +1273,11 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 		return true
 	}
 	switch constT.Oid {
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		switch columnT.Oid {
 		case types.T_char, types.T_varchar:
 			return constT.Width <= columnT.Width
-		case types.T_text:
+		case types.T_text, types.T_datalink:
 			return true
 		default:
 			return false
@@ -1388,18 +1390,18 @@ func InitInfileParam(param *tree.ExternParam) error {
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
 			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
-				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
 		case "jsondata":
 			jsondata := strings.ToLower(param.Option[i+1])
 			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
-				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+				return moerr.NewBadConfigf(param.Ctx, "the jsondata '%s' is not supported", jsondata)
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
 		default:
-			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
 		}
 	}
 	if len(param.Filepath) == 0 {
@@ -1441,19 +1443,19 @@ func InitS3Param(param *tree.ExternParam) error {
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
 			if format != tree.CSV && format != tree.JSONLINE {
-				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
+				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
 		case "jsondata":
 			jsondata := strings.ToLower(param.Option[i+1])
 			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
-				return moerr.NewBadConfig(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+				return moerr.NewBadConfigf(param.Ctx, "the jsondata '%s' is not supported", jsondata)
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
 
 		default:
-			return moerr.NewBadConfig(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
 		}
 	}
 	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
@@ -1465,6 +1467,131 @@ func InitS3Param(param *tree.ExternParam) error {
 	return nil
 }
 
+func GetFilePathFromParam(param *tree.ExternParam) string {
+	fpath := param.Filepath
+	for i := 0; i < len(param.Option); i += 2 {
+		name := strings.ToLower(param.Option[i])
+		if name == "filepath" {
+			fpath = param.Option[i+1]
+			break
+		}
+	}
+
+	return fpath
+}
+
+func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
+
+	param.ScanType = tree.S3
+	param.S3Param = &tree.S3Parameter{}
+
+	if len(s.Url.RawQuery) > 0 {
+		return moerr.NewBadConfig(param.Ctx, "S3 URL Query does not support in ExternParam")
+	}
+
+	if s.Url.Scheme != function.S3_PROTOCOL {
+		return moerr.NewBadConfig(param.Ctx, "URL protocol is not S3")
+	}
+
+	bucket, prefix, _, err := function.ParseS3Url(s.Url)
+	if err != nil {
+		return err
+	}
+
+	var found bool
+	param.S3Param.Bucket = bucket
+	param.Filepath = prefix
+
+	// mandatory
+	param.S3Param.APIKey, found = s.GetCredentials(function.PARAMKEY_AWS_KEY_ID, "")
+	if !found {
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_KEY_ID)
+	}
+	param.S3Param.APISecret, found = s.GetCredentials(function.PARAMKEY_AWS_SECRET_KEY, "")
+	if !found {
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_SECRET_KEY)
+	}
+
+	param.S3Param.Region, found = s.GetCredentials(function.PARAMKEY_AWS_REGION, "")
+	if !found {
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_REGION)
+	}
+
+	param.S3Param.Endpoint, found = s.GetCredentials(function.PARAMKEY_ENDPOINT, "")
+	if !found {
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_ENDPOINT)
+	}
+
+	// optional
+	param.S3Param.Provider, _ = s.GetCredentials(function.PARAMKEY_PROVIDER, function.S3_PROVIDER_AMAZON)
+	param.CompressType, _ = s.GetCredentials(function.PARAMKEY_COMPRESSION, "auto")
+
+	for i := 0; i < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "format":
+			format := strings.ToLower(param.Option[i+1])
+			if format != tree.CSV && format != tree.JSONLINE {
+				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
+			}
+			param.Format = format
+		case "jsondata":
+			jsondata := strings.ToLower(param.Option[i+1])
+			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
+				return moerr.NewBadConfigf(param.Ctx, "the jsondata '%s' is not supported", jsondata)
+			}
+			param.JsonData = jsondata
+			param.Format = tree.JSONLINE
+
+		default:
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+		}
+	}
+
+	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
+		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
+	}
+	if len(param.Format) == 0 {
+		param.Format = tree.CSV
+	}
+
+	return nil
+
+}
+
+func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) error {
+
+	fpath := GetFilePathFromParam(param)
+
+	if !strings.HasPrefix(fpath, function.STAGE_PROTOCOL+"://") {
+		return InitInfileParam(param)
+	}
+
+	s, err := function.UrlToStageDef(fpath, proc)
+	if err != nil {
+		return err
+	}
+
+	if len(s.Url.RawQuery) > 0 {
+		return moerr.NewBadConfig(param.Ctx, "Invalid URL: query not supported in ExternParam")
+	}
+
+	if s.Url.Scheme == function.S3_PROTOCOL {
+		return InitStageS3Param(param, s)
+	} else if s.Url.Scheme == function.FILE_PROTOCOL {
+
+		err := InitInfileParam(param)
+		if err != nil {
+			return err
+		}
+
+		param.Filepath = s.Url.Path
+
+	} else {
+		return moerr.NewBadConfigf(param.Ctx, "invalid URL: protocol %s not supported", s.Url.Scheme)
+	}
+
+	return nil
+}
 func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
 	if param.ScanType == tree.S3 {
 		buf := new(strings.Builder)
@@ -1813,13 +1940,18 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 }
 
 // databaseIsValid checks whether the database exists or not.
-func databaseIsValid(dbName string, ctx CompilerContext, snapshot Snapshot) (string, error) {
+func databaseIsValid(dbName string, ctx CompilerContext, snapshot *Snapshot) (string, error) {
 	connectDBFirst := false
 	if len(dbName) == 0 {
 		connectDBFirst = true
 	}
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
+	}
+
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
 	}
 
 	if len(dbName) == 0 || !ctx.DatabaseExists(dbName, snapshot) {
@@ -1940,18 +2072,18 @@ func getParamTypes(params []tree.Expr, ctx CompilerContext, isPrepareStmt bool) 
 		switch ast := p.(type) {
 		case *tree.NumVal:
 			if ast.ValType != tree.P_char {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "unsupport value '%s'", ast.String())
 			}
 		case *tree.ParamExpr:
 			if !isPrepareStmt {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "only prepare statement can use ? expr")
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "only prepare statement can use ? expr")
 			}
 			paramTypes = append(paramTypes, int32(types.T_varchar))
 			if ast.Offset != len(paramTypes) {
 				return nil, moerr.NewInternalError(ctx.GetContext(), "offset not match")
 			}
 		default:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "unsupport value '%s'", ast.String())
 		}
 	}
 	return paramTypes, nil

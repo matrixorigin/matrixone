@@ -42,13 +42,11 @@ func (filter *Filter) OpType() vm.OpType {
 }
 
 func (filter *Filter) Prepare(proc *process.Process) (err error) {
-	filter.ctr = new(container)
-	var filterExpr *plan.Expr
-
 	if filter.exeExpr == nil && filter.E == nil {
 		return nil
 	}
 
+	var filterExpr *plan.Expr
 	if filter.exeExpr == nil {
 		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.E), proc, true, true)
 	} else {
@@ -59,6 +57,15 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 	}
 	filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
 	return err
+
+	// if len(filter.ctr.executors) == 0 {
+	// 	if filter.exeExpr == nil {
+	// 		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
+	// 	} else {
+	// 		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.exeExpr}))
+	// 	}
+	// }
+	// return err
 }
 
 func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
@@ -66,55 +73,49 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	result, err := filter.GetChildren(0).Call(proc)
-	if err != nil {
-		return result, err
-	}
-
 	anal := proc.GetAnalyze(filter.GetIdx(), filter.GetParallelIdx(), filter.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
-	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() || len(filter.ctr.executors) == 0 {
-		return result, nil
+	inputResult, err := vm.ChildrenCall(filter.GetChildren(0), proc, anal)
+	if err != nil {
+		return inputResult, err
 	}
-	if filter.ctr.buf != nil {
-		proc.PutBatch(filter.ctr.buf)
-		filter.ctr.buf = nil
+	anal.Input(inputResult.Batch, filter.IsFirst)
+
+	if inputResult.Batch == nil || inputResult.Batch.IsEmpty() || inputResult.Batch.Last() || len(filter.ctr.executors) == 0 {
+		return inputResult, nil
 	}
-	filter.ctr.buf = result.Batch
 
-	anal.Input(filter.ctr.buf, filter.GetIsFirst())
-
+	filterBat := inputResult.Batch
 	var sels []int64
 	for i := range filter.ctr.executors {
-		if filter.ctr.buf.IsEmpty() {
+		if filterBat.IsEmpty() {
 			break
 		}
 
-		vec, err := filter.ctr.executors[i].Eval(proc, []*batch.Batch{filter.ctr.buf}, nil)
+		vec, err := filter.ctr.executors[i].Eval(proc, []*batch.Batch{filterBat}, nil)
 		if err != nil {
-			result.Batch = nil
-			return result, err
+			return vm.CancelResult, err
 		}
 
 		if proc.OperatorOutofMemory(int64(vec.Size())) {
-			return result, moerr.NewOOM(proc.Ctx)
+			return vm.CancelResult, moerr.NewOOM(proc.Ctx)
 		}
 		anal.Alloc(int64(vec.Size()))
 		if !vec.GetType().IsBoolean() {
-			return result, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
+			return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
 
 		bs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
-				filter.ctr.buf, err = tryDupBatch(proc, filter.ctr.buf)
+				filterBat, err = tryDupBatch(&filter.ctr, proc, filterBat)
 				if err != nil {
-					return result, err
+					return vm.CancelResult, err
 				}
-				filter.ctr.buf.Shrink(nil, false)
+				filterBat.Shrink(nil, false)
 			}
 		} else {
 			if sels == nil {
@@ -138,11 +139,13 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 				}
 			}
-			filter.ctr.buf, err = tryDupBatch(proc, filter.ctr.buf)
-			if err != nil {
-				return result, err
+			if len(sels) != filterBat.RowCount() {
+				filterBat, err = tryDupBatch(&filter.ctr, proc, filterBat)
+				if err != nil {
+					return vm.CancelResult, err
+				}
+				filterBat.Shrink(sels, false)
 			}
-			filter.ctr.buf.Shrink(sels, false)
 		}
 	}
 
@@ -152,28 +155,28 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 
 	// bad design here. should compile a pipeline like `-> restrict -> output (just do clean work or memory reuse) -> `
 	// but not use the IsEnd flag to do the clean work.
+	result := vm.NewCallResult()
 	if filter.IsEnd {
 		result.Batch = nil
 	} else {
-		anal.Output(filter.ctr.buf, filter.GetIsLast())
-		if filter.ctr.buf == result.Batch {
-			filter.ctr.buf = nil
-		} else {
-			result.Batch = filter.ctr.buf
-		}
+		anal.Output(filterBat, filter.GetIsLast())
+		result.Batch = filterBat
 	}
 	return result, nil
 }
 
-func tryDupBatch(proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
-	cnt := bat.GetCnt()
-	if cnt == 1 {
+func tryDupBatch(ctr *container, proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
+	if bat == ctr.buf {
 		return bat, nil
 	}
-	newBat, err := bat.Dup(proc.Mp())
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
+	//copy input.Batch to ctr.buf
+	var err error
+	ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.GetMPool(), bat)
 	if err != nil {
 		return nil, err
 	}
-	// proc.PutBatch(bat)
-	return newBat, nil
+	return ctr.buf, nil
 }

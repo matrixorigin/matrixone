@@ -471,7 +471,7 @@ func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) 
 func (store *txnStore) ObserveTxn(
 	visitDatabase func(db any),
 	visitTable func(tbl any),
-	rotateTable func(dbName, tblName string, dbid, tid uint64),
+	rotateTable func(aid uint32, dbName, tblName string, dbid, tid uint64, pkSeqnum uint16),
 	visitMetadata func(block any),
 	visitObject func(obj any),
 	visitAppend func(bat any),
@@ -483,9 +483,15 @@ func (store *txnStore) ObserveTxn(
 		dbName := db.entry.GetName()
 		dbid := db.entry.ID
 		for _, tbl := range db.tables {
-			tblName := tbl.GetLocalSchema().Name
-			tid := tbl.entry.ID
-			rotateTable(dbName, tblName, dbid, tid)
+			schema := tbl.GetLocalSchema()
+			pkseq := uint16(60001)
+			if schema.HasPKOrFakePK() { // view table has no pk or fake pk
+				pkseq = schema.GetPrimaryKey().SeqNum
+			}
+			rotateTable(schema.AcInfo.TenantID,
+				dbName, schema.Name,
+				dbid, tbl.entry.ID,
+				pkseq)
 			if tbl.createEntry != nil || tbl.dropEntry != nil {
 				visitTable(tbl.entry)
 			}

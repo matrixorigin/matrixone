@@ -24,6 +24,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/tidwall/btree"
 )
@@ -49,7 +50,7 @@ func NewMemoryFS(
 
 	fs := &MemoryFS{
 		name:     name,
-		memCache: NewMemCache(NewMemoryCache(1<<20, true, nil), nil),
+		memCache: NewMemCache(NewMemoryCache(fscache.ConstCapacity(1<<20), true, nil), nil),
 		tree: btree.NewBTreeG(func(a, b *_MemFSEntry) bool {
 			return a.FilePath < b.FilePath
 		}),
@@ -190,7 +191,6 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 		vector.Entries[i].allocator = m.memCache
 	}
 	for _, cache := range m.caches {
-		cache := cache
 		if err := cache.Read(ctx, vector); err != nil {
 			return err
 		}

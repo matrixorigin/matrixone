@@ -17,7 +17,6 @@ package projection
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -27,8 +26,8 @@ import (
 var _ vm.Operator = new(Projection)
 
 type Projection struct {
-	ctr *container
-	Es  []*plan.Expr
+	ctr         container
+	ProjectList []*plan.Expr
 	vm.OperatorBase
 
 	maxAllocSize int
@@ -68,28 +67,24 @@ func (projection *Projection) Release() {
 type container struct {
 	buf           *batch.Batch
 	projExecutors []colexec.ExpressionExecutor
-	uafs          []func(v, w *vector.Vector) error // vector.GetUnionAllFunction
 }
 
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	projection.Free(proc, pipelineFailed, err)
+	for i := range projection.ctr.projExecutors {
+		if projection.ctr.projExecutors[i] != nil {
+			projection.ctr.projExecutors[i].ResetForNextQuery()
+		}
+	}
+	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
+	anal.Alloc(int64(projection.maxAllocSize))
+	projection.maxAllocSize = 0
 }
 
 func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if projection.ctr != nil {
-		for i := range projection.ctr.projExecutors {
-			if projection.ctr.projExecutors[i] != nil {
-				projection.ctr.projExecutors[i].Free()
-			}
+	for i := range projection.ctr.projExecutors {
+		if projection.ctr.projExecutors[i] != nil {
+			projection.ctr.projExecutors[i].Free()
 		}
-		projection.ctr.projExecutors = nil
-		if projection.ctr.buf != nil {
-			projection.ctr.buf.Clean(proc.Mp())
-			projection.ctr.buf = nil
-		}
-		projection.ctr = nil
 	}
-
-	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
-	anal.Alloc(int64(projection.maxAllocSize))
+	projection.ctr.projExecutors = nil
 }

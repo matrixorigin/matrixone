@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
@@ -49,7 +50,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var MaxPrepareNumberInOneSession int = 100000
+var (
+	MaxPrepareNumberInOneSession atomic.Uint32
+)
+
+func init() {
+	MaxPrepareNumberInOneSession.Store(100000)
+}
 
 // TODO: this variable should be configure by set variable
 const MoDefaultErrorCount = 64
@@ -106,6 +113,7 @@ const (
 type Session struct {
 	feSessionImpl
 
+	service    string
 	logger     *log.MOLogger
 	logLevel   zapcore.Level
 	loggerOnce sync.Once
@@ -239,6 +247,17 @@ type Session struct {
 	proxyAddr  string
 
 	disableTrace bool
+
+	// disableAgg co-operate with RecordStatement
+	// more can see Benchmark_RecordStatement_IsTrue()
+	disableAgg bool
+
+	// mysql parser
+	mysqlParser mysql.MySQLParser
+}
+
+func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
+	return &ses.mysqlParser
 }
 
 func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
@@ -426,7 +445,9 @@ func (ses *Session) ResetPacketCounter() {
 
 // SetTStmt do set the Session.tStmt
 // 1. init-set at RecordStatement, which means the statement is started.
-// 2. reset at logStatementStringStatus, which means the statement is finished.
+// 2. reset nil, means the statement is finished.
+//   - case 1: logStatementStringStatus()
+//   - case 2: RecordParseErrorStatement()
 func (ses *Session) SetTStmt(stmt *motrace.StatementInfo) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -474,14 +495,20 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool) *Session {
+func NewSession(
+	connCtx context.Context,
+	service string,
+	proto MysqlRrWr,
+	mp *mpool.MPool,
+) *Session {
 	//if the sharedTxnHandler exists,we use its txnCtx and txnOperator in this session.
 	//Currently, we only use the sharedTxnHandler in the background session.
 	var txnOp TxnOperator
 	var err error
-	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, connCtx, txnOp)
+	txnHandler := InitTxnHandler(service, getGlobalPu().StorageEngine, connCtx, txnOp)
 
 	ses := &Session{
+		service: service,
 		feSessionImpl: feSessionImpl{
 			pool:       mp,
 			txnHandler: txnHandler,
@@ -528,7 +555,7 @@ func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool) *Sess
 			panic(err)
 		}
 	}
-	ses.proc = process.New(
+	ses.proc = process.NewTopProcess(
 		context.TODO(),
 		ses.pool,
 		getGlobalPu().TxnClient,
@@ -552,6 +579,16 @@ func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool) *Sess
 		ss.Close()
 	})
 	return ses
+}
+
+func (ses *Session) GetService() string {
+	return ses.service
+}
+
+// ReserveConnAndClose closes the session with the connection is reserved.
+func (ses *Session) ReserveConnAndClose() {
+	ses.ReserveConn()
+	ses.Close()
 }
 
 func (ses *Session) Close() {
@@ -597,28 +634,24 @@ func (ses *Session) Close() {
 		ses.sqlHelper = nil
 	}
 	ses.ClearStmtProfile()
-	//  The mpool cleanup must be placed at the end,
-	// and you must wait for all resources to be cleaned up before you can delete the mpool
-	if ses.proc != nil {
-		ses.proc.FreeVectors()
-		bats := ses.proc.GetValueScanBatchs()
-		for _, bat := range bats {
-			bat.Clean(ses.proc.Mp())
-		}
-		ses.proc = nil
-	}
+
+	ses.proc.Free()
+	ses.proc = nil
+
 	for _, bat := range ses.resultBatches {
 		bat.Clean(ses.pool)
 	}
-
-	pool := ses.GetMemPool()
-	mpool.DeleteMPool(pool)
-	ses.SetMemPool(nil)
 
 	if ses.buf != nil {
 		ses.buf.Free()
 		ses.buf = nil
 	}
+
+	//  The mpool cleanup must be placed at the end,
+	// and you must wait for all resources to be cleaned up before you can delete the mpool
+	pool := ses.GetMemPool()
+	mpool.DeleteMPool(pool)
+	ses.SetMemPool(nil)
 
 	ses.timestampMap = nil
 	ses.upstream = nil
@@ -689,10 +722,10 @@ func (ses *Session) UpdateDebugString() {
 	sb.WriteByte('|')
 	//account info
 	if ses.tenant != nil {
-		sb.WriteString(ses.tenant.String())
+		sb.WriteString(fmt.Sprintf("account %s:%s", ses.tenant.GetTenant(), ses.tenant.GetUser()))
 	} else {
 		acc := getDefaultAccount()
-		sb.WriteString(acc.String())
+		sb.WriteString(fmt.Sprintf("account %s:%s", acc.GetTenant(), acc.GetUser()))
 	}
 	sb.WriteByte('|')
 	//go routine id
@@ -729,16 +762,16 @@ func (ses *Session) InvalidatePrivilegeCache() {
 
 // GetBackgroundExec generates a background executor
 func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
-	ses.EnterFPrint(99)
-	defer ses.ExitFPrint(99)
+	ses.EnterFPrint(FPGetBackgroundExec)
+	defer ses.ExitFPrint(FPGetBackgroundExec)
 	return NewBackgroundExec(ctx, ses)
 }
 
 // GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction.
 // newRawBatch denotes we need the raw batch instead of mysql result set.
 func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
-	ses.EnterFPrint(102)
-	defer ses.ExitFPrint(102)
+	ses.EnterFPrint(FPGetShareTxnBackgroundExec)
+	defer ses.ExitFPrint(FPGetShareTxnBackgroundExec)
 	var txnOp TxnOperator
 	if ses.GetTxnHandler() != nil {
 		txnOp = ses.GetTxnHandler().GetTxn()
@@ -765,8 +798,8 @@ var GetRawBatchBackgroundExec = func(ctx context.Context, ses *Session) Backgrou
 }
 
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec {
-	ses.EnterFPrint(100)
-	defer ses.ExitFPrint(100)
+	ses.EnterFPrint(FPGetRawBatchBackgroundExec)
+	defer ses.ExitFPrint(FPGetRawBatchBackgroundExec)
 
 	backSes := newBackSession(ses, nil, "", batchFetcher2)
 	bh := &backExec{
@@ -905,8 +938,8 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
-		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
-			return moerr.NewInvalidState(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession)
+		if len(ses.prepareStmts) >= int(MaxPrepareNumberInOneSession.Load()) {
+			return moerr.NewInvalidStatef(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession.Load())
 		}
 	} else {
 		stmt.Close()
@@ -935,7 +968,7 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 		connID = ses.respr.GetU32(CONNID)
 	}
 	ses.Errorf(ctx, "prepared statement '%s' does not exist on connection %d", name, connID)
-	return nil, moerr.NewInvalidState(ctx, "prepared statement '%s' does not exist", name)
+	return nil, moerr.NewInvalidStatef(ctx, "prepared statement '%s' does not exist", name)
 }
 
 func (ses *Session) GetPrepareStmts() []*PrepareStmt {
@@ -1048,6 +1081,13 @@ func (ses *Session) GetConnectionID() uint32 {
 	return 0
 }
 
+func (ses *Session) SetConnectionID(v uint32) {
+	protocol := ses.GetResponser()
+	if protocol != nil {
+		ses.GetResponser().SetU32(CONNID, v)
+	}
+}
+
 func (ses *Session) skipAuthForSpecialUser() bool {
 	if ses.GetTenantInfo() != nil {
 		ok, _, _ := isSpecialUser(ses.GetTenantInfo().GetUser())
@@ -1100,7 +1140,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalError(sysTenantCtx, "there is no tenant %s", tenant.GetTenant())
+		return nil, moerr.NewInternalErrorf(sysTenantCtx, "there is no tenant %s", tenant.GetTenant())
 	}
 
 	//account id
@@ -1122,7 +1162,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
-		return nil, moerr.NewInternalError(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
+		return nil, moerr.NewInternalErrorf(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
 	}
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusRestricted.String() {
@@ -1152,7 +1192,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalError(tenantCtx, "there is no user %s", tenant.GetUser())
+		return nil, moerr.NewInternalErrorf(tenantCtx, "there is no user %s", tenant.GetUser())
 	}
 
 	userID, err = rsset[0].GetInt64(tenantCtx, 0, 0)
@@ -1202,7 +1242,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError(tenantCtx, "there is no role %s", tenant.GetDefaultRole())
+			return nil, moerr.NewInternalErrorf(tenantCtx, "there is no role %s", tenant.GetDefaultRole())
 		}
 
 		ses.Debugf(tenantCtx, "check granted role of user %s.", tenant)
@@ -1216,7 +1256,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError(tenantCtx, "the role %s has not been granted to the user %s",
+			return nil, moerr.NewInternalErrorf(tenantCtx, "the role %s has not been granted to the user %s",
 				tenant.GetDefaultRole(), tenant.GetUser())
 		}
 
@@ -1237,7 +1277,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError(tenantCtx, "get the default role of the user %s failed", tenant.GetUser())
+			return nil, moerr.NewInternalErrorf(tenantCtx, "get the default role of the user %s failed", tenant.GetUser())
 		}
 
 		defaultRole, err = rsset[0].GetString(tenantCtx, 0, 0)
@@ -1480,9 +1520,56 @@ func (ses *Session) SetSessionRoutineStatus(status string) error {
 	} else if status == tree.AccountStatusOpen.String() {
 		ses.getRoutine().setResricted(false)
 	} else {
-		err = moerr.NewInternalErrorNoCtx("SetSessionRoutineStatus have invalid status : %s", status)
+		err = moerr.NewInternalErrorNoCtxf("SetSessionRoutineStatus have invalid status : %s", status)
 	}
 	return err
+}
+
+// reset resets the ses instance and copy some fields of prev, then
+// close the prev.
+func (ses *Session) reset(prev *Session) error {
+	if ses == nil || prev == nil {
+		return nil
+	}
+	// update information in the new session.
+	ses.tenant = prev.tenant.Copy()
+	ses.accountId = prev.accountId
+	ses.label = make(map[string]string, len(prev.label))
+	for k, v := range prev.label {
+		ses.label[k] = v
+	}
+	*ses.timeZone = *prev.timeZone
+	ses.uuid = prev.uuid
+	ses.fromRealUser = prev.fromRealUser
+	ses.rm = prev.rm
+	ses.rt = prev.rt
+	ses.requestLabel = make(map[string]string, len(prev.requestLabel))
+	for k, v := range prev.requestLabel {
+		ses.requestLabel[k] = v
+	}
+	ses.connType = prev.connType
+	ses.timestampMap = make(map[TS]time.Time, len(prev.timestampMap))
+	for k, v := range prev.timestampMap {
+		ses.timestampMap[k] = v
+	}
+	ses.fromProxy = prev.fromProxy
+	ses.clientAddr = prev.clientAddr
+	ses.proxyAddr = prev.proxyAddr
+
+	// rollback the transactions in the old session.
+	tempExecCtx := ExecCtx{
+		ses:    prev,
+		txnOpt: FeTxnOption{byRollback: true},
+	}
+	err := prev.GetTxnHandler().Rollback(&tempExecCtx)
+	if err != nil {
+		prev.Error(tempExecCtx.reqCtx, "failed to rollback txn",
+			zap.Error(err))
+		return err
+	}
+	// close the previous session.
+	prev.ReserveConnAndClose()
+	return nil
 }
 
 func checkPlanIsInsertValues(proc *process.Process,
@@ -1557,8 +1644,8 @@ func newDBMigration(db string) *dbMigration {
 }
 
 func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
-	ses.EnterFPrint(90)
-	defer ses.ExitFPrint(90)
+	ses.EnterFPrint(FPMigrateDB)
+	defer ses.ExitFPrint(FPMigrateDB)
 	if d.db == "" {
 		return nil
 	}
@@ -1567,6 +1654,7 @@ func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
 		inMigration: true,
 		ses:         ses,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: "use `" + d.db + "`"})
 }
 
@@ -1587,8 +1675,8 @@ func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepar
 }
 
 func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error {
-	ses.EnterFPrint(103)
-	defer ses.ExitFPrint(103)
+	ses.EnterFPrint(FPMigratePrepareStmt)
+	defer ses.ExitFPrint(FPMigratePrepareStmt)
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
 		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
 	}
@@ -1599,13 +1687,14 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 		ses:               ses,
 		executeParamTypes: p.paramTypes,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: p.sql})
 }
 
 func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	ses.ResetFPrints()
-	ses.EnterFPrint(89)
-	defer ses.ExitFPrint(89)
+	ses.EnterFPrint(FPMigrate)
+	defer ses.ExitFPrint(FPMigrate)
 	defer ses.ResetFPrints()
 	parameters := getGlobalPu().SV
 
@@ -1676,7 +1765,7 @@ func (ses *Session) GetLogLevel() zapcore.Level {
 func (ses *Session) initLogger() {
 	ses.loggerOnce.Do(func() {
 		if ses.logger == nil {
-			ses.logger = getLogger()
+			ses.logger = getLogger(ses.service)
 		}
 		config := logutil.GetDefaultConfig()
 		ses.logLevel = config.GetLevel().Level()
@@ -1693,6 +1782,9 @@ func (ses *Session) log(ctx context.Context, level zapcore.Level, msg string, fi
 	ses.initLogger()
 	if ses.logLevel.Enabled(level) {
 		fields = append(fields, zap.String("session_info", ses.debugStr)) // not use ses.GetDebugStr() because this func may be locked.
+		if ses.tenant != nil {
+			fields = append(fields, zap.String("role", ses.tenant.GetDefaultRole()))
+		}
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
 		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
@@ -1707,6 +1799,9 @@ func (ses *Session) logf(ctx context.Context, level zapcore.Level, format string
 	if ses.logLevel.Enabled(level) {
 		fields := make([]zap.Field, 0, 5)
 		fields = append(fields, zap.String("session_info", ses.debugStr))
+		if ses.tenant != nil {
+			fields = append(fields, zap.String("role", ses.tenant.GetDefaultRole()))
+		}
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
 		ses.logger.Log(fmt.Sprintf(format, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)

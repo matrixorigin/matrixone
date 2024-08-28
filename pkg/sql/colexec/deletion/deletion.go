@@ -58,14 +58,14 @@ func (deletion *Deletion) OpType() vm.OpType {
 }
 
 func (deletion *Deletion) Prepare(proc *process.Process) error {
-	deletion.ctr = new(container)
 	if deletion.RemoteDelete {
-		deletion.ctr.state = vm.Build
-		deletion.ctr.blockId_type = make(map[types.Blockid]int8)
-		deletion.ctr.blockId_bitmap = make(map[types.Blockid]*nulls.Nulls)
-		deletion.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerObject)}
-		deletion.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[types.Blockid]*batch.Batch)
-		deletion.ctr.partitionId_blockId_deltaLoc = make(map[int]map[types.Blockid]*batch.Batch)
+		if deletion.ctr.blockId_type == nil {
+			deletion.ctr.blockId_type = make(map[types.Blockid]int8)
+			deletion.ctr.blockId_bitmap = make(map[types.Blockid]*nulls.Nulls)
+			deletion.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerObject)}
+			deletion.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[types.Blockid]*batch.Batch)
+			deletion.ctr.partitionId_blockId_deltaLoc = make(map[int]map[types.Blockid]*batch.Batch)
+		}
 	} else {
 		ref := deletion.DeleteCtx.Ref
 		eng := deletion.DeleteCtx.Engine
@@ -77,6 +77,7 @@ func (deletion *Deletion) Prepare(proc *process.Process) error {
 		deletion.ctr.source = rel
 		deletion.ctr.partitionSources = partitionRels
 	}
+	deletion.ctr.affectedRows = 0
 
 	return nil
 }
@@ -94,18 +95,14 @@ func (deletion *Deletion) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, error) {
-	var err error
-
 	anal := proc.GetAnalyze(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor())
 	anal.Start()
-	defer func() {
-		anal.Stop()
-	}()
+	defer anal.Stop()
 
+	var err error
 	if deletion.ctr.state == vm.Build {
 		for {
 			result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, anal)
-
 			if err != nil {
 				return result, err
 			}
@@ -116,6 +113,7 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 			if result.Batch.IsEmpty() {
 				continue
 			}
+			anal.Input(result.Batch, deletion.IsFirst)
 
 			if err = deletion.SplitBatch(proc, result.Batch); err != nil {
 				return result, err
@@ -128,21 +126,13 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 		// ToDo: CNBlock Compaction
 		// blkId,delta_metaLoc,type
 		if deletion.ctr.resBat != nil {
-			proc.PutBatch(deletion.ctr.resBat)
-			deletion.ctr.resBat = nil
+			//Vecs[4] is constant， need free first
+			deletion.ctr.resBat.Vecs[4].Free(proc.GetMPool())
+			deletion.ctr.resBat.Vecs[4] = nil
+			deletion.ctr.resBat.CleanOnlyData()
+		} else {
+			deletion.ctr.resBat = makeDelRemoteBatch()
 		}
-		deletion.ctr.resBat = batch.NewWithSize(5)
-		deletion.ctr.resBat.Attrs = []string{
-			catalog.BlockMeta_Delete_ID,
-			catalog.BlockMeta_DeltaLoc,
-			catalog.BlockMeta_Type,
-			catalog.BlockMeta_Partition,
-			catalog.BlockMeta_Deletes_Length,
-		}
-		deletion.ctr.resBat.SetVector(0, proc.GetVector(types.T_text.ToType()))
-		deletion.ctr.resBat.SetVector(1, proc.GetVector(types.T_text.ToType()))
-		deletion.ctr.resBat.SetVector(2, proc.GetVector(types.T_int8.ToType()))
-		deletion.ctr.resBat.SetVector(3, proc.GetVector(types.T_int32.ToType()))
 
 		for pidx, blockidRowidbatch := range deletion.ctr.partitionId_blockId_rowIdBatch {
 			for blkid, bat := range blockidRowidbatch {
@@ -203,7 +193,7 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 	}
 
 	if deletion.ctr.state == vm.End {
-		return result, nil
+		return vm.CancelResult, nil
 	}
 
 	panic("bug")
@@ -211,17 +201,24 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 }
 
 func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, error) {
-	result, err := deletion.GetChildren(0).Call(proc)
+	anal := proc.GetAnalyze(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor())
+	anal.Start()
+	defer anal.Stop()
+
+	result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, anal)
 	if err != nil {
 		return result, err
 	}
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}
+	anal.Input(result.Batch, deletion.IsFirst)
 
-	anal := proc.GetAnalyze(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	if deletion.ctr.resBat == nil {
+		deletion.ctr.resBat = makeDelBatch(*result.Batch.GetVector(int32(deletion.DeleteCtx.PrimaryKeyIdx)).GetType())
+	} else {
+		deletion.ctr.resBat.CleanOnlyData()
+	}
 
 	bat := result.Batch
 
@@ -229,6 +226,7 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 	delCtx := deletion.DeleteCtx
 
 	if len(delCtx.PartitionTableIDs) > 0 {
+		//@todo need reuse delBatches
 		delBatches, err := colexec.GroupByPartitionForDelete(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch,
 			len(delCtx.PartitionTableIDs), delCtx.PrimaryKeyIdx)
 		if err != nil {
@@ -244,29 +242,26 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 					delBatch.Clean(proc.Mp())
 					return result, err
 				}
-				proc.PutBatch(delBatch)
+				delBatch.Clean(proc.Mp())
 			}
 		}
 	} else {
-		delBatch, err := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx,
+		err := colexec.FilterRowIdForDel(proc, deletion.ctr.resBat, bat, delCtx.RowIdIdx,
 			delCtx.PrimaryKeyIdx)
 		if err != nil {
 			return result, err
 		}
-		affectedRows = uint64(delBatch.RowCount())
+		affectedRows = uint64(deletion.ctr.resBat.RowCount())
 		if affectedRows > 0 {
-			err = deletion.ctr.source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
+			err = deletion.ctr.source.Delete(proc.Ctx, deletion.ctr.resBat, catalog.Row_ID)
 			if err != nil {
-				delBatch.Clean(proc.GetMPool())
 				return result, err
 			}
 		}
-		proc.PutBatch(delBatch)
 	}
-	// result.Batch = batch.EmptyBatch
 
 	if delCtx.AddAffectedRows {
-		atomic.AddUint64(&deletion.affectedRows, affectedRows)
+		atomic.AddUint64(&deletion.ctr.affectedRows, affectedRows)
 	}
 	return result, nil
 }

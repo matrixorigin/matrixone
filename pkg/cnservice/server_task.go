@@ -22,13 +22,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/proxy"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -65,15 +65,23 @@ func (s *service) initTaskServiceHolder() {
 	defer s.task.Unlock()
 	if s.task.storageFactory == nil {
 		s.task.holder = taskservice.NewTaskServiceHolder(
-			runtime.ProcessLevelRuntime(),
-			util.AddressFunc(getClient))
+			runtime.ServiceRuntime(s.cfg.UUID),
+			util.AddressFunc(
+				s.cfg.UUID,
+				getClient,
+			),
+		)
 	} else {
 		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
-			runtime.ProcessLevelRuntime(),
-			util.AddressFunc(getClient),
+			runtime.ServiceRuntime(s.cfg.UUID),
+			util.AddressFunc(
+				s.cfg.UUID,
+				getClient,
+			),
 			func(_, _, _ string) taskservice.TaskStorageFactory {
 				return s.task.storageFactory
-			})
+			},
+		)
 	}
 }
 
@@ -100,7 +108,12 @@ func (s *service) initSqlWriterFactory() {
 		client, _ := s.getHAKeeperClient()
 		return client
 	}
-	db_holder.SetSQLWriterDBAddressFunc(util.AddressFunc(getClient))
+	db_holder.SetSQLWriterDBAddressFunc(
+		util.AddressFunc(
+			s.cfg.UUID,
+			getClient,
+		),
+	)
 }
 
 func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
@@ -162,6 +175,10 @@ func (s *service) canClaimDaemonTask(taskAccount string) bool {
 
 	// 4. Otherwise, we could not run this task.
 	return false
+}
+
+func (s *service) createProxyUser(command *logservicepb.CreateTaskService) {
+	frontend.SetSpecialUser(proxy.SQLUsername, []byte(command.User.Password))
 }
 
 func (s *service) startTaskRunner() {
@@ -231,18 +248,8 @@ func (s *service) registerExecutorsLocked() {
 		return
 	}
 
-	pu := config.NewParameterUnit(
-		&s.cfg.Frontend,
-		nil,
-		nil,
-		nil)
-	pu.StorageEngine = s.storeEngine
-	pu.TxnClient = s._txnClient
-	s.cfg.Frontend.SetDefaultValues()
-	pu.FileService = s.fileService
-	pu.LockService = s.lockService
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor()
+		return frontend.NewInternalExecutor(s.cfg.UUID)
 	}
 
 	ts, ok := s.task.holder.Get()
@@ -251,11 +258,17 @@ func (s *service) registerExecutorsLocked() {
 	}
 
 	// init metric/log merge task executor
-	s.task.runner.RegisterExecutor(task.TaskCode_MetricLogMerge,
-		export.MergeTaskExecutorFactory(export.WithFileService(s.etlFS)))
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_MetricLogMerge,
+		export.MergeTaskExecutorFactory(
+			s.cfg.UUID,
+			export.WithFileService(s.etlFS),
+		),
+	)
 	// init metric task
-	s.task.runner.RegisterExecutor(task.TaskCode_MetricStorageUsage,
-		mometric.GetMetricStorageUsageExecutor(ieFactory))
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_MetricStorageUsage,
+		mometric.GetMetricStorageUsageExecutor(s.cfg.UUID, ieFactory))
 	// streaming connector task
 	s.task.runner.RegisterExecutor(task.TaskCode_ConnectorKafkaSink,
 		moconnector.KafkaSinkConnectorExecutor(s.logger, ts, ieFactory, s.task.runner.Attach))
@@ -273,8 +286,8 @@ func (s *service) registerExecutorsLocked() {
 				stats := objectio.ObjectStats(b)
 				objs[i] = stats.ObjectName().String()
 			}
-			sql := fmt.Sprintf("select mo_ctl('DN', 'MERGEOBJECTS', '.%d.%d:%s')",
-				mergeTask.TblId, mergeTask.AccountId, strings.Join(objs, ","))
+			sql := fmt.Sprintf("select mo_ctl('CN', 'MERGEOBJECTS', 'o:%s.%s:%s')",
+				mergeTask.DbName, mergeTask.TableName, strings.Join(objs, ","))
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			defer cancel()
 			opts := executor.Options{}.WithWaitCommittedLogApplied()

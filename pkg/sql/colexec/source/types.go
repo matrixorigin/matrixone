@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -35,7 +36,7 @@ type container struct {
 	buf    *batch.Batch
 }
 type Source struct {
-	ctr    *container
+	ctr    container
 	TblDef *plan.TableDef
 	Offset int64
 	Limit  int64
@@ -46,6 +47,7 @@ type Source struct {
 	Configs map[string]interface{}
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (source *Source) GetOperatorBase() *vm.OperatorBase {
@@ -80,16 +82,23 @@ func (source *Source) Release() {
 }
 
 func (source *Source) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	source.Free(proc, pipelineFailed, err)
+	ctr := &source.ctr
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+	}
+	ctr.status = retrieve
+	if source.ProjectList != nil {
+		anal := proc.GetAnalyze(source.GetIdx(), source.GetParallelIdx(), source.GetParallelMajor())
+		anal.Alloc(source.ProjectAllocSize)
+		source.ResetProjection(proc)
+	}
 }
 
 func (source *Source) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if source.ctr != nil {
-		if source.ctr.buf != nil {
-			source.ctr.buf.Clean(proc.Mp())
-			source.ctr.buf = nil
-		}
-		source.ctr = nil
+	ctr := &source.ctr
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
 	}
-
+	source.FreeProjection(proc)
 }

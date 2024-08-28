@@ -103,10 +103,11 @@ func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.
 		return "", moerr.NewInternalError(proc.Ctx, "Table input is not a sequence")
 	}
 
-	values, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
+	_values, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
 	if err != nil {
 		return "", err
 	}
+	values := _values[0]
 	if values == nil {
 		return "", moerr.NewInternalError(proc.Ctx, "Failed to get sequence meta data.")
 	}
@@ -125,7 +126,7 @@ func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.
 			if cycle {
 				return advanceSeq(lsn, minv, maxv, int16(incrv), cycle, incrv < 0, setEdge, rel, proc, db, tblname)
 			} else {
-				return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
+				return "", moerr.NewInternalErrorf(proc.Ctx, "Reached maximum value of sequence %s", tblname)
 			}
 		}
 		// Tranforming incrv to this datatype and make it positive for generic use.
@@ -165,7 +166,7 @@ func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.
 			if cycle {
 				return advanceSeq(lsn, minv, maxv, uint16(incrv), cycle, incrv < 0, setEdge, rel, proc, db, tblname)
 			} else {
-				return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
+				return "", moerr.NewInternalErrorf(proc.Ctx, "Reached maximum value of sequence %s", tblname)
 			}
 		}
 		return advanceSeq(lsn, minv, maxv, makePosIncr[uint16](incrv), cycle, incrv < 0, !setEdge, rel, proc, db, tblname)
@@ -179,7 +180,7 @@ func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.
 			if cycle {
 				return advanceSeq(lsn, minv, maxv, uint32(incrv), cycle, incrv < 0, setEdge, rel, proc, db, tblname)
 			} else {
-				return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
+				return "", moerr.NewInternalErrorf(proc.Ctx, "Reached maximum value of sequence %s", tblname)
 			}
 		}
 		return advanceSeq(lsn, minv, maxv, makePosIncr[uint32](incrv), cycle, incrv < 0, !setEdge, rel, proc, db, tblname)
@@ -222,7 +223,7 @@ func advanceSeq[T constraints.Integer](lsn, minv, maxv, incrv T,
 	// check descending sequence and reach edge
 	if minus && (adseq < minv || adseq > lsn) {
 		if !cycle {
-			return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
+			return "", moerr.NewInternalErrorf(proc.Ctx, "Reached maximum value of sequence %s", tblname)
 		}
 		return setSeq(proc, maxv, rel, db, tblname)
 	}
@@ -230,7 +231,7 @@ func advanceSeq[T constraints.Integer](lsn, minv, maxv, incrv T,
 	// checkout ascending sequence and reach edge
 	if !minus && (adseq > maxv || adseq < lsn) {
 		if !cycle {
-			return "", moerr.NewInternalError(proc.Ctx, "Reached maximum value of sequence %s", tblname)
+			return "", moerr.NewInternalErrorf(proc.Ctx, "Reached maximum value of sequence %s", tblname)
 		}
 		return setSeq(proc, minv, rel, db, tblname)
 	}
@@ -324,10 +325,11 @@ func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn cl
 		return "", err
 	}
 
-	values, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
+	_values, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
 	if err != nil {
 		return "", err
 	}
+	values := _values[0]
 	if values == nil {
 		return "", moerr.NewInternalError(proc.Ctx, "Failed to get sequence meta data.")
 	}
@@ -459,7 +461,7 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			// If nextval called before this currval.Check add values
 			ss1, existsAdd := proc.GetSessionInfo().SeqAddValues[tblId]
 			if !exists && !existsAdd {
-				err = moerr.NewInternalError(proc.Ctx, "Currvalue of %s in current session is not initialized", v)
+				err = moerr.NewInternalErrorf(proc.Ctx, "Currvalue of %s in current session is not initialized", v)
 				return
 			}
 			// Assign the values of SeqAddValues first, cause this values is the updated curvals.

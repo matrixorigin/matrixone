@@ -34,10 +34,10 @@ func (mergeBlock *MergeBlock) OpType() vm.OpType {
 }
 
 func (mergeBlock *MergeBlock) Prepare(proc *process.Process) error {
-	ap := mergeBlock
-	ap.container = new(Container)
-	ap.container.mp = make(map[int]*batch.Batch)
-	ap.container.mp2 = make(map[int][]*batch.Batch)
+	if mergeBlock.container.mp == nil {
+		mergeBlock.container.mp = make(map[int]*batch.Batch)
+		mergeBlock.container.mp2 = make(map[int][]*batch.Batch)
+	}
 
 	ref := mergeBlock.Ref
 	eng := mergeBlock.Engine
@@ -48,6 +48,8 @@ func (mergeBlock *MergeBlock) Prepare(proc *process.Process) error {
 	}
 	mergeBlock.container.source = rel
 	mergeBlock.container.partitionSources = partitionRels
+
+	mergeBlock.container.affectedRows = 0
 	return nil
 }
 
@@ -56,67 +58,67 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	var err error
-	ap := mergeBlock
-	result, err := mergeBlock.GetChildren(0).Call(proc)
-	if err != nil {
-		return result, err
-	}
-
 	anal := proc.GetAnalyze(mergeBlock.GetIdx(), mergeBlock.GetParallelIdx(), mergeBlock.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
-	if result.Batch == nil {
-		result.Status = vm.ExecStop
-		return result, nil
+	var err error
+	input, err := vm.ChildrenCall(mergeBlock.GetChildren(0), proc, anal)
+	if err != nil {
+		return input, err
 	}
-	if result.Batch.IsEmpty() {
-		result.Batch = batch.EmptyBatch
-		return result, nil
+	anal.Input(input.Batch, mergeBlock.IsFirst)
+
+	if input.Batch == nil {
+		return vm.CancelResult, nil
 	}
-	bat := result.Batch
-	if err := ap.Split(proc, bat); err != nil {
-		return result, err
+	if input.Batch.IsEmpty() {
+		return input, nil
+	}
+	bat := input.Batch
+	if err := mergeBlock.Split(proc, bat); err != nil {
+		return input, err
 	}
 
 	// If the target is a partition table
-	if len(ap.container.partitionSources) > 0 {
+	if len(mergeBlock.container.partitionSources) > 0 {
 		// 'i' aligns with partition number
-		for i := range ap.container.partitionSources {
-			if ap.container.mp[i].RowCount() > 0 {
+		for i := range mergeBlock.container.partitionSources {
+			if mergeBlock.container.mp[i].RowCount() > 0 {
 				// batches in mp will be deeply copied into txn's workspace.
-				if err = ap.container.partitionSources[i].Write(proc.Ctx, ap.container.mp[i]); err != nil {
-					return result, err
+				if err = mergeBlock.container.partitionSources[i].Write(proc.Ctx, mergeBlock.container.mp[i]); err != nil {
+					return input, err
 				}
 			}
 
-			for _, bat := range ap.container.mp2[i] {
+			for _, bat := range mergeBlock.container.mp2[i] {
 				// batches in mp2 will be deeply copied into txn's workspace.
-				if err = ap.container.partitionSources[i].Write(proc.Ctx, bat); err != nil {
-					return result, err
+				if err = mergeBlock.container.partitionSources[i].Write(proc.Ctx, bat); err != nil {
+					return input, err
 				}
-
+				bat.Clean(proc.GetMPool())
 			}
-			ap.container.mp2[i] = ap.container.mp2[i][:0]
+			mergeBlock.container.mp2[i] = mergeBlock.container.mp2[i][:0]
 		}
 	} else {
 		// handle origin/main table.
-		if ap.container.mp[0].RowCount() > 0 {
+		if mergeBlock.container.mp[0].RowCount() > 0 {
 			//batches in mp will be deeply copied into txn's workspace.
-			if err = ap.container.source.Write(proc.Ctx, ap.container.mp[0]); err != nil {
-				return result, err
+			if err = mergeBlock.container.source.Write(proc.Ctx, mergeBlock.container.mp[0]); err != nil {
+				return input, err
 			}
 		}
 
-		for _, bat := range ap.container.mp2[0] {
+		for _, bat := range mergeBlock.container.mp2[0] {
 			//batches in mp2 will be deeply copied into txn's workspace.
-			if err = ap.container.source.Write(proc.Ctx, bat); err != nil {
-				return result, err
+			if err = mergeBlock.container.source.Write(proc.Ctx, bat); err != nil {
+				return input, err
 			}
+			bat.Clean(proc.GetMPool())
 		}
-		ap.container.mp2[0] = ap.container.mp2[0][:0]
+		mergeBlock.container.mp2[0] = mergeBlock.container.mp2[0][:0]
 	}
 
-	return result, nil
+	anal.Output(input.Batch, mergeBlock.IsLast)
+	return input, nil
 }

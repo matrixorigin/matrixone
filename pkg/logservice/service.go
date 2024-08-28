@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/dnservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -113,6 +114,9 @@ func NewService(
 	if service.runtime == nil {
 		service.runtime = runtime.DefaultRuntime()
 	}
+
+	dnservice.InitCheckState(cfg.UUID)
+
 	store, err := newLogStore(cfg, service.getTaskService, service.runtime)
 	if err != nil {
 		service.runtime.Logger().Error("failed to create log store", zap.Error(err))
@@ -145,7 +149,7 @@ func NewService(
 	}
 
 	// TODO: check and fix all these magic numbers
-	codec := morpc.NewMessageCodec(mf, codecOpts...)
+	codec := morpc.NewMessageCodec(cfg.UUID, mf, codecOpts...)
 	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.LogServiceListenAddr(), codec,
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
 			msg := i.(morpc.RPCMessage)

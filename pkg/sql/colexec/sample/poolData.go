@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type poolData struct {
@@ -32,11 +31,11 @@ type poolData struct {
 	invalidBatch *batch.Batch
 }
 
-func (pd *poolData) appendValidRow(proc *process.Process, mp *mpool.MPool, bat *batch.Batch, offset int, length int) error {
+func (pd *poolData) appendValidRow(mp *mpool.MPool, bat *batch.Batch, offset int, length int) error {
 	if pd.validBatch == nil {
 		pd.validBatch = batch.NewWithSize(len(bat.Vecs))
 		for i := range pd.validBatch.Vecs {
-			pd.validBatch.Vecs[i] = proc.GetVector(*bat.Vecs[i].GetType())
+			pd.validBatch.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
 		}
 	}
 
@@ -49,13 +48,13 @@ func (pd *poolData) appendValidRow(proc *process.Process, mp *mpool.MPool, bat *
 	return nil
 }
 
-func (pd *poolData) appendInvalidRow(proc *process.Process, mp *mpool.MPool, bat *batch.Batch, row int) error {
+func (pd *poolData) appendInvalidRow(mp *mpool.MPool, bat *batch.Batch, row int) error {
 	if pd.invalidBatch != nil {
 		return nil
 	}
 	pd.invalidBatch = batch.NewWithSize(len(bat.Vecs))
 	for i := range pd.invalidBatch.Vecs {
-		pd.invalidBatch.Vecs[i] = proc.GetVector(*bat.Vecs[i].GetType())
+		pd.invalidBatch.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
 	}
 
 	for i := range pd.invalidBatch.Vecs {
@@ -176,7 +175,7 @@ func init() {
 	}
 
 	for _, oid := range []types.T{types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text,
+		types.T_json, types.T_blob, types.T_text, types.T_datalink,
 		types.T_array_float32, types.T_array_float64} {
 		replaceMethods[oid] = func(toVec, fromVec *vector.Vector, row1, row2 int, mp *mpool.MPool) error {
 			return vector.SetBytesAt(toVec, row1, fromVec.GetBytesAt(row2), mp)

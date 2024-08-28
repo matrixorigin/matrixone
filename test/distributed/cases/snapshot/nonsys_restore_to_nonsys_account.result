@@ -852,7 +852,7 @@ drop table table01;
 alter table table02 add column newC int first;
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n  `newc` INT DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col2` ENUM('a','b','c') DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+table02    CREATE TABLE `table02` (\n  `newC` INT DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col2` ENUM('a','b','c') DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 show create table table02 {snapshot = 'sp14'};
 Table    Create Table
 table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` ENUM('a','b','c') DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)

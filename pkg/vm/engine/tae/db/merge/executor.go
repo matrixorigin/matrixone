@@ -245,6 +245,7 @@ func (e *Executor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []*cata
 		}
 
 		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
+			txn.GetMemo().IsFlushOrMerge = true
 			return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes)
 		}
 		task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTaskWithObserver(nil, tasks.DataCompactionTask, scopes, factory, e)
@@ -289,7 +290,7 @@ func (e *Executor) CPUPercent() int64 {
 func logSingleObjMergeTask(name string, taskId uint64, obj *catalog.ObjectEntry, blkn, osize, esize int) {
 	rows := obj.GetRemainingRows()
 	infoBuf := &bytes.Buffer{}
-	infoBuf.WriteString(fmt.Sprintf(" %d(%s)", rows, common.ShortObjId(*obj.ID())))
+	infoBuf.WriteString(fmt.Sprintf(" %d(%s)", rows, obj.ID().ShortStringEx()))
 	platform := fmt.Sprintf("t%d", taskId)
 	if taskId == math.MaxUint64 {
 		platform = "CN"
@@ -315,7 +316,7 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 		r := obj.GetRemainingRows()
 		size := obj.GetOriginSize()
 		rows += r
-		infoBuf.WriteString(fmt.Sprintf(" %d(%s)(%s)", r, common.ShortObjId(*obj.ID()), common.HumanReadableBytes(size)))
+		infoBuf.WriteString(fmt.Sprintf(" %d(%s)(%s)", r, obj.ID().ShortStringEx(), common.HumanReadableBytes(size)))
 	}
 	platform := fmt.Sprintf("t%d", taskId)
 	if taskId == math.MaxUint64 {

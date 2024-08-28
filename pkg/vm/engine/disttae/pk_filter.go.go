@@ -26,13 +26,13 @@ import (
 func newBlockReadPKFilter(
 	pkName string,
 	basePKFilter basePKFilter,
-) blockio.BlockReadFilter {
+) (f blockio.BlockReadFilter, err error) {
 	if !basePKFilter.valid {
-		return blockio.BlockReadFilter{}
+		return blockio.BlockReadFilter{}, nil
 	}
 
 	var readFilter blockio.BlockReadFilter
-	var sortedSearchFunc, unSortedSearchFunc func(*vector.Vector) []int32
+	var sortedSearchFunc, unSortedSearchFunc func(*vector.Vector) []int64
 
 	readFilter.HasFakePK = pkName == catalog.FakePrimaryKeyColName
 
@@ -111,7 +111,9 @@ func newBlockReadPKFilter(
 		var vec *vector.Vector
 		if vec, ok = basePKFilter.vec.(*vector.Vector); !ok {
 			vec = vector.NewVec(types.T_any.ToType())
-			vec.UnmarshalBinary(basePKFilter.vec.([]byte))
+			if err = vec.UnmarshalBinary(basePKFilter.vec.([]byte)); err != nil {
+				return blockio.BlockReadFilter{}, err
+			}
 		}
 
 		switch vec.GetType().Oid {
@@ -167,7 +169,7 @@ func newBlockReadPKFilter(
 			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Decimal128](vec), types.CompareDecimal128)
 			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Decimal128](vec), types.CompareDecimal128)
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-			types.T_array_float32, types.T_array_float64:
+			types.T_array_float32, types.T_array_float64, types.T_datalink:
 			sortedSearchFunc = vector.VarlenBinarySearchOffsetByValFactory(vector.InefficientMustBytesCol(vec))
 			unSortedSearchFunc = vector.VarlenLinearSearchOffsetByValFactory(vector.InefficientMustBytesCol(vec))
 		case types.T_enum:
@@ -180,7 +182,9 @@ func newBlockReadPKFilter(
 		var vec *vector.Vector
 		if vec, ok = basePKFilter.vec.(*vector.Vector); !ok {
 			vec = vector.NewVec(types.T_any.ToType())
-			vec.UnmarshalBinary(basePKFilter.vec.([]byte))
+			if err = vec.UnmarshalBinary(basePKFilter.vec.([]byte)); err != nil {
+				return blockio.BlockReadFilter{}, err
+			}
 		}
 
 		sortedSearchFunc = vector.CollectOffsetsByPrefixInFactory(vec)
@@ -404,7 +408,7 @@ func newBlockReadPKFilter(
 
 			sortedSearchFunc = vector.CollectOffsetsByBetweenWithCompareFactory(val1, val2, types.CompareDecimal128)
 			unSortedSearchFunc = vector.FixedSizedLinearCollectOffsetsByBetweenFactory(val1, val2, types.CompareDecimal128)
-		case types.T_text:
+		case types.T_text, types.T_datalink:
 			lb := string(basePKFilter.lb)
 			ub := string(basePKFilter.ub)
 			sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lb, ub, hint)
@@ -423,16 +427,16 @@ func newBlockReadPKFilter(
 	}
 
 	if sortedSearchFunc != nil {
-		readFilter.SortedSearchFunc = func(vecs []*vector.Vector) []int32 {
+		readFilter.SortedSearchFunc = func(vecs []*vector.Vector) []int64 {
 			return sortedSearchFunc(vecs[0])
 		}
-		readFilter.UnSortedSearchFunc = func(vecs []*vector.Vector) []int32 {
+		readFilter.UnSortedSearchFunc = func(vecs []*vector.Vector) []int64 {
 			return unSortedSearchFunc(vecs[0])
 		}
 		readFilter.Valid = true
-		return readFilter
+		return readFilter, nil
 	}
-	return readFilter
+	return readFilter, nil
 }
 
 func evalLiteralExpr2(expr *plan.Literal, oid types.T) (ret []byte, can bool) {

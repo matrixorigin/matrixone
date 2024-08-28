@@ -17,7 +17,8 @@ package hashbuild
 import (
 	"bytes"
 	"runtime"
-	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -40,27 +41,26 @@ func (hashBuild *HashBuild) OpType() vm.OpType {
 }
 
 func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
-	hashBuild.ctr = new(container)
-
+	ctr := &hashBuild.ctr
 	if hashBuild.NeedHashMap {
-		hashBuild.ctr.vecs = make([][]*vector.Vector, 0)
-		ctr := hashBuild.ctr
-		ctr.executor = make([]colexec.ExpressionExecutor, len(hashBuild.Conditions))
-		ctr.keyWidth = 0
-		for i, expr := range hashBuild.Conditions {
-			typ := expr.Typ
-			width := types.T(typ.Id).TypeLen()
-			// todo : for varlena type, always go strhashmap
-			if types.T(typ.Id).FixedLength() < 0 {
-				width = 128
-			}
-			ctr.keyWidth += width
-			ctr.executor[i], err = colexec.NewExpressionExecutor(proc, hashBuild.Conditions[i])
-			if err != nil {
-				return err
+		if len(ctr.executor) == 0 {
+			ctr.vecs = make([][]*vector.Vector, 0)
+			ctr.executor = make([]colexec.ExpressionExecutor, len(hashBuild.Conditions))
+			ctr.keyWidth = 0
+			for i, expr := range hashBuild.Conditions {
+				typ := expr.Typ
+				width := types.T(typ.Id).TypeLen()
+				// todo : for varlena type, always go strhashmap
+				if types.T(typ.Id).FixedLength() < 0 {
+					width = 128
+				}
+				ctr.keyWidth += width
+				ctr.executor[i], err = colexec.NewExpressionExecutor(proc, hashBuild.Conditions[i])
+				if err != nil {
+					return err
+				}
 			}
 		}
-
 		if ctr.keyWidth <= 8 {
 			if ctr.intHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
 				return err
@@ -72,7 +72,9 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 		}
 	}
 
-	hashBuild.ctr.batches = make([]*batch.Batch, 0)
+	if hashBuild.ctr.batches == nil {
+		hashBuild.ctr.batches = make([]*batch.Batch, 0)
+	}
 
 	return nil
 }
@@ -85,9 +87,10 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(hashBuild.GetIdx(), hashBuild.GetParallelIdx(), hashBuild.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
 	result := vm.NewCallResult()
 	ap := hashBuild
-	ctr := ap.ctr
+	ctr := &ap.ctr
 	for {
 		switch ctr.state {
 		case BuildHashMap:
@@ -106,46 +109,23 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
 				return result, err
 			}
-			ctr.state = SendHashMap
+			ctr.state = SendJoinMap
 
-		case SendHashMap:
-			result.Batch = batch.NewWithSize(0)
-
+		case SendJoinMap:
+			var jm *message.JoinMap
 			if ctr.inputBatchRowCount > 0 {
-				var jm *hashmap.JoinMap
-				if ap.NeedHashMap {
-					if ctr.keyWidth <= 8 {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
-					} else {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
-					}
-					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-					result.Batch.AuxData = jm
+				jm = message.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
+				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+				if ap.NeedBatches {
+					jm.SetRowCount(int64(ctr.inputBatchRowCount))
 				}
-				ctr.intHashMap = nil
-				ctr.strHashMap = nil
-				ctr.multiSels = nil
-			} else {
-				ctr.cleanHashMap()
+				jm.IncRef(ap.JoinMapRefCnt)
 			}
+			if ap.JoinMapTag <= 0 {
+				panic("wrong joinmap message tag!")
+			}
+			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag}, proc.GetMessageBoard())
 
-			// this is just a dummy batch to indicate that the batch is must not empty.
-			// we should make sure this batch can be sent to the next join operator in other pipelines.
-			if result.Batch.IsEmpty() && ap.NeedHashMap {
-				result.Batch.AddRowCount(1)
-			}
-
-			ctr.state = SendBatch
-			return result, nil
-		case SendBatch:
-			if ctr.batchIdx >= len(ctr.batches) {
-				ctr.state = End
-			} else {
-				result.Batch = ctr.batches[ctr.batchIdx]
-				ctr.batchIdx++
-			}
-			return result, nil
-		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -155,32 +135,34 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 
 // make sure src is not empty
 func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) error {
-	var err error
 	if src.RowCount() == colexec.DefaultBatchSize {
-		ctr.batches = append(ctr.batches, src)
+		dupbatch, err := src.Dup(proc.Mp())
+		if err != nil {
+			return err
+		}
+		ctr.batches = append(ctr.batches, dupbatch)
 		return nil
 	} else {
 		offset := 0
 		appendRows := 0
 		length := src.RowCount()
+		var err error
 		for offset < length {
-			ctr.tmpBatch, appendRows, err = proc.AppendToFixedSizeFromOffset(ctr.tmpBatch, src, offset)
+			ctr.buf, appendRows, err = proc.AppendToFixedSizeFromOffset(ctr.buf, src, offset)
 			if err != nil {
 				return err
 			}
-			if ctr.tmpBatch.RowCount() == colexec.DefaultBatchSize {
-				ctr.batches = append(ctr.batches, ctr.tmpBatch)
-				ctr.tmpBatch = nil
+			if ctr.buf.RowCount() == colexec.DefaultBatchSize {
+				ctr.batches = append(ctr.batches, ctr.buf)
+				ctr.buf = nil
 			}
 			offset += appendRows
 		}
-		proc.PutBatch(src)
 	}
 	return nil
 }
 
 func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	var currentBatch *batch.Batch
 	for {
 		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, anal)
 		if err != nil {
@@ -189,23 +171,20 @@ func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Pr
 		if result.Batch == nil {
 			break
 		}
-		currentBatch = result.Batch
-		atomic.AddInt64(&currentBatch.Cnt, 1)
-		if currentBatch.IsEmpty() {
-			proc.PutBatch(currentBatch)
+		if result.Batch.IsEmpty() {
 			continue
 		}
-		anal.Input(currentBatch, isFirst)
-		anal.Alloc(int64(currentBatch.Size()))
-		ctr.inputBatchRowCount += currentBatch.RowCount()
-		err = ctr.mergeIntoBatches(currentBatch, proc)
+		anal.Input(result.Batch, isFirst)
+		anal.Alloc(int64(result.Batch.Size()))
+		ctr.inputBatchRowCount += result.Batch.RowCount()
+		err = ctr.mergeIntoBatches(result.Batch, proc)
 		if err != nil {
 			return err
 		}
 	}
-	if ctr.tmpBatch != nil && ctr.tmpBatch.RowCount() > 0 {
-		ctr.batches = append(ctr.batches, ctr.tmpBatch)
-		ctr.tmpBatch = nil
+	if ctr.buf != nil && ctr.buf.RowCount() > 0 {
+		ctr.batches = append(ctr.batches, ctr.buf)
+		ctr.buf = nil
 	}
 	return nil
 }
@@ -286,11 +265,7 @@ func (ctr *container) buildHashmap(ap *HashBuild, proc *process.Process) error {
 			return err
 		}
 		for k, v := range vals[:n] {
-			if zvals[k] == 0 {
-				ctr.hasNull = true
-				continue
-			}
-			if v == 0 {
+			if zvals[k] == 0 || v == 0 {
 				continue
 			}
 			ai := int64(v) - 1
@@ -307,7 +282,7 @@ func (ctr *container) buildHashmap(ap *HashBuild, proc *process.Process) error {
 			if len(ap.ctr.uniqueJoinKeys) == 0 {
 				ap.ctr.uniqueJoinKeys = make([]*vector.Vector, len(ctr.executor))
 				for j, vec := range ctr.vecs[vecIdx1] {
-					ap.ctr.uniqueJoinKeys[j] = proc.GetVector(*vec.GetType())
+					ap.ctr.uniqueJoinKeys[j] = vector.NewVec(*vec.GetType())
 				}
 			}
 
@@ -356,10 +331,10 @@ func (ctr *container) build(ap *HashBuild, proc *process.Process, anal process.A
 	if err != nil {
 		return err
 	}
-	if !ap.NeedMergedBatch {
+	if !ap.NeedBatches {
 		// if do not need merged batch, free it now to save memory
 		for i := range ctr.batches {
-			proc.PutBatch(ctr.batches[i])
+			ctr.batches[i].Clean(proc.Mp())
 		}
 		ctr.batches = nil
 	}
@@ -371,16 +346,16 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 		return nil
 	}
 
-	var runtimeFilter process.RuntimeFilterMessage
+	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
 
 	if ap.RuntimeFilterSpec.Expr == nil {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	} else if ctr.inputBatchRowCount == 0 || len(ctr.uniqueJoinKeys) == 0 || ctr.uniqueJoinKeys[0].Length() == 0 {
-		runtimeFilter.Typ = process.RuntimeFilter_DROP
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		runtimeFilter.Typ = message.RuntimeFilter_DROP
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	}
 
@@ -407,8 +382,8 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 	}()
 
 	if hashmapCount > uint64(inFilterCardLimit) {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	} else {
 		// Composite primary key
@@ -435,10 +410,10 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 			return err
 		}
 
-		runtimeFilter.Typ = process.RuntimeFilter_IN
+		runtimeFilter.Typ = message.RuntimeFilter_IN
 		runtimeFilter.Card = int32(vec.Length())
 		runtimeFilter.Data = data
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		ctr.runtimeFilterIn = true
 	}
 	return nil

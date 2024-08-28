@@ -10,7 +10,6 @@ restore account sys from snapshot sp01;
 
 select * from clu01;
 drop table clu01;
--- @bvt:issue
 
 
 

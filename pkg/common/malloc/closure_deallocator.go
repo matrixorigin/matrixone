@@ -18,32 +18,43 @@ import (
 	"sync"
 )
 
-type ClosureDeallocator[T any] struct {
+type ClosureDeallocator[T any, P interface {
+	*T
+	TraitHolder
+}] struct {
 	argument T
 	fn       func(Hints, *T)
 }
 
-func (a *ClosureDeallocator[T]) SetArgument(arg T) {
+func (a *ClosureDeallocator[T, P]) SetArgument(arg T) {
 	a.argument = arg
 }
 
-var _ Deallocator = &ClosureDeallocator[int]{}
-
-func (a *ClosureDeallocator[T]) Deallocate(hints Hints) {
+func (a *ClosureDeallocator[T, P]) Deallocate(hints Hints) {
 	a.fn(hints, &a.argument)
 }
 
-type ClosureDeallocatorPool[T any] struct {
+func (a *ClosureDeallocator[T, P]) As(target Trait) bool {
+	return P(&a.argument).As(target)
+}
+
+type ClosureDeallocatorPool[T any, P interface {
+	*T
+	TraitHolder
+}] struct {
 	pool sync.Pool
 }
 
-func NewClosureDeallocatorPool[T any](
+func NewClosureDeallocatorPool[T any, P interface {
+	*T
+	TraitHolder
+}](
 	deallocateFunc func(Hints, *T),
-) *ClosureDeallocatorPool[T] {
-	ret := new(ClosureDeallocatorPool[T])
+) *ClosureDeallocatorPool[T, P] {
+	ret := new(ClosureDeallocatorPool[T, P])
 
 	ret.pool.New = func() any {
-		closure := new(ClosureDeallocator[T])
+		closure := new(ClosureDeallocator[T, P])
 		closure.fn = func(hints Hints, args *T) {
 			deallocateFunc(hints, args)
 			ret.pool.Put(closure)
@@ -54,8 +65,14 @@ func NewClosureDeallocatorPool[T any](
 	return ret
 }
 
-func (c *ClosureDeallocatorPool[T]) Get(args T) Deallocator {
-	closure := c.pool.Get().(*ClosureDeallocator[T])
+func (c *ClosureDeallocatorPool[T, P]) Get(args T) Deallocator {
+	closure := c.pool.Get().(*ClosureDeallocator[T, P])
 	closure.SetArgument(args)
+	return closure
+}
+
+func (c *ClosureDeallocatorPool[T, P]) Get2(fn func(*T) T) Deallocator {
+	closure := c.pool.Get().(*ClosureDeallocator[T, P])
+	closure.SetArgument(fn(&closure.argument))
 	return closure
 }

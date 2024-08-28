@@ -28,7 +28,7 @@ func TestLockWithUniqueID(t *testing.T) {
 		t,
 		func(proc *process.Process) {
 			pkType := types.New(types.T_int32, 0, 0)
-			assert.NoError(t, LockTableWithUniqueID(proc.Ctx, "u1", 1, proc.Base.TxnClient, pkType, nil, proc.Mp(), lock.LockMode_Exclusive))
+			assert.NoError(t, LockTableWithUniqueID(proc.Ctx, sid, "u1", 1, proc.Base.TxnClient, pkType, nil, proc.Mp(), lock.LockMode_Exclusive))
 			assert.Equal(t, 1, len(internalProcesses))
 
 			assert.NoError(t, UnlockWithUniqueID(proc.Ctx, "u1"))
@@ -42,10 +42,10 @@ func TestLockWithUniqueIDAndShared(t *testing.T) {
 		t,
 		func(proc *process.Process) {
 			pkType := types.New(types.T_int32, 0, 0)
-			assert.NoError(t, LockTableWithUniqueID(proc.Ctx, "u1", 1, proc.Base.TxnClient, pkType, nil, proc.Mp(), lock.LockMode_Shared))
+			assert.NoError(t, LockTableWithUniqueID(proc.Ctx, sid, "u1", 1, proc.Base.TxnClient, pkType, nil, proc.Mp(), lock.LockMode_Shared))
 			assert.Equal(t, 1, len(internalProcesses))
 
-			assert.NoError(t, LockTableWithUniqueID(proc.Ctx, "u2", 1, proc.Base.TxnClient, pkType, nil, proc.Mp(), lock.LockMode_Shared))
+			assert.NoError(t, LockTableWithUniqueID(proc.Ctx, sid, "u2", 1, proc.Base.TxnClient, pkType, nil, proc.Mp(), lock.LockMode_Shared))
 			assert.Equal(t, 2, len(internalProcesses))
 
 			assert.NoError(t, UnlockWithUniqueID(proc.Ctx, "u1"))

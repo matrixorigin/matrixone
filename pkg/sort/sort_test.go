@@ -235,7 +235,7 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 func newTestCase(desc bool, m *mpool.MPool, typ types.Type) testCase {
 	return testCase{
 		desc: desc,
-		proc: testutil.NewProcessWithMPool(m),
+		proc: testutil.NewProcessWithMPool("", m),
 		vec:  testutil.NewVector(Rows, typ, m, true, nil),
 	}
 }
