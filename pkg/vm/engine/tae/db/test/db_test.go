@@ -4944,7 +4944,7 @@ func TestMergeMemsize(t *testing.T) {
 	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
 	{
 		txn, _ := tae.StartTxn(nil)
-		txn.SetDedupType(txnif.DedupPolicy_Incremental)
+		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 		db, err := txn.CreateDatabase("db", "", "")
 		assert.NoError(t, err)
 		tbl, err := db.CreateRelation(schema)
@@ -5015,7 +5015,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	defer statsVec.Close()
 	{
 		txn, _ := tae.StartTxn(nil)
-		txn.SetDedupType(txnif.DedupPolicy_Incremental)
+		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 		db, err := txn.CreateDatabase("db", "", "")
 		assert.NoError(t, err)
 		tbl, err := db.CreateRelation(schema)
@@ -5118,7 +5118,7 @@ func TestAlwaysUpdate(t *testing.T) {
 
 	// var did, tid uint64
 	txn, _ := tae.StartTxn(nil)
-	txn.SetDedupType(txnif.DedupPolicy_Incremental)
+	txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 	db, err := txn.CreateDatabase("db", "", "")
 	// did = db.GetID()
 	assert.NoError(t, err)
@@ -7694,7 +7694,7 @@ func TestDedupSnapshot1(t *testing.T) {
 	txn, rel := tae.GetRelation()
 	startTS := txn.GetStartTS()
 	txn.SetSnapshotTS(startTS.Next())
-	txn.SetDedupType(txnif.DedupPolicy_Incremental)
+	txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 	err := rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
 	_ = txn.Commit(context.Background())
@@ -7750,7 +7750,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	txn, rel = tae.GetRelation()
 	startTS := txn.GetStartTS()
 	txn.SetSnapshotTS(startTS.Next())
-	txn.SetDedupType(txnif.DedupPolicy_Incremental)
+	txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec2)
 	assert.NoError(t, err)
 	_ = txn.Commit(context.Background())
@@ -7793,7 +7793,7 @@ func TestDedupSnapshot3(t *testing.T) {
 			}
 
 			txn2, _ := tae.StartTxn(nil)
-			txn2.SetDedupType(txnif.DedupPolicy_Incremental)
+			txn2.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 			txn2.SetSnapshotTS(txn.GetStartTS())
 			database, _ = txn2.GetDatabase("db")
 			rel, _ = database.GetRelationByName(schema.Name)
