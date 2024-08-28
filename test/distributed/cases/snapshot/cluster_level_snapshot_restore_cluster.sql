@@ -376,11 +376,11 @@ show tables;
 
 -- @session:id=1&user=acc01:test_account&password=111
 drop database t1;
+drop publication pub02;
 drop database repub02;
 use procedure_test;
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
-drop publication pub02;
 -- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 -- @session
