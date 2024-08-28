@@ -76,7 +76,7 @@ func Test_service_handleGoMaxProcs(t *testing.T) {
 			fields: fields{},
 			args: args{
 				ctx:  ctx,
-				req:  &query.Request{GoMaxProcsRequest: &query.GoMaxProcsRequest{MaxProcs: 0}},
+				req:  &query.Request{GoMaxProcsRequest: query.GoMaxProcsRequest{MaxProcs: 0}},
 				resp: &query.Response{},
 			},
 			wantErr: nil,
@@ -116,7 +116,7 @@ func Test_service_handleGoMemLimit(t *testing.T) {
 			fields: fields{},
 			args: args{
 				ctx:  ctx,
-				req:  &query.Request{GoMemLimitRequest: &query.GoMemLimitRequest{MemLimitBytes: 4 << 30}},
+				req:  &query.Request{GoMemLimitRequest: query.GoMemLimitRequest{MemLimitBytes: 4 << 30}},
 				resp: &query.Response{},
 			},
 			wantErr: nil,
@@ -127,7 +127,7 @@ func Test_service_handleGoMemLimit(t *testing.T) {
 			fields: fields{},
 			args: args{
 				ctx:  ctx,
-				req:  &query.Request{GoMemLimitRequest: &query.GoMemLimitRequest{MemLimitBytes: -1}},
+				req:  &query.Request{GoMemLimitRequest: query.GoMemLimitRequest{MemLimitBytes: -1}},
 				resp: &query.Response{},
 			},
 			wantErr: nil,
@@ -165,17 +165,17 @@ func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 			fields: fields{},
 			args: args{
 				ctx: ctx,
-				req: &query.Request{FileServiceCacheRequest: &query.FileServiceCacheRequest{
+				req: &query.Request{FileServiceCacheRequest: query.FileServiceCacheRequest{
 					Type:      0,
 					CacheSize: 0,
 				}},
 				resp: &query.Response{},
 			},
 			wantErr: nil,
-			want: &query.Response{FileServiceCacheResponse: &query.FileServiceCacheResponse{
+			want: &query.Response{FileServiceCacheResponse: query.FileServiceCacheResponse{
 				CacheSize:     0,
 				CacheCapacity: 0,
-				Message:       "",
+				Message:       "Not Implemented",
 			}},
 		},
 	}
@@ -210,14 +210,14 @@ func Test_service_handleFileServiceCacheEvictRequest(t *testing.T) {
 			fields: fields{},
 			args: args{
 				ctx:  ctx,
-				req:  &query.Request{FileServiceCacheEvictRequest: &query.FileServiceCacheEvictRequest{Type: 0}},
+				req:  &query.Request{FileServiceCacheEvictRequest: query.FileServiceCacheEvictRequest{Type: 0}},
 				resp: &query.Response{},
 			},
 			wantErr: nil,
-			want: &query.Response{FileServiceCacheEvictResponse: &query.FileServiceCacheEvictResponse{
+			want: &query.Response{FileServiceCacheEvictResponse: query.FileServiceCacheEvictResponse{
 				CacheSize:     0,
 				CacheCapacity: 0,
-				Message:       "",
+				Message:       "Not Implemented",
 			}},
 		},
 	}
