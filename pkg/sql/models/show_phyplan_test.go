@@ -248,9 +248,11 @@ Scope 1 (Magic: Normal, mcpu: 0, Receiver: [1])
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ExplainPhyPlan(tt.args.plan, tt.args.option); got != tt.want {
+			got := ExplainPhyPlan(tt.args.plan, tt.args.option)
+			if got != tt.want {
 				t.Errorf("result:%v, want: %v", got, tt.want)
 			}
+			t.Logf("%s", got)
 		})
 	}
 }

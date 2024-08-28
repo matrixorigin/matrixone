@@ -50,7 +50,7 @@ func (anal *AnalyzeModule) GetPhyPlan() *models.PhyPlan {
 }
 
 func (a AnalyzeModule) TypeName() string {
-	return "compile.analyzeModuleV1"
+	return "compile.analyzeModule"
 }
 
 func newAnalyzeModule() *AnalyzeModule {
@@ -86,7 +86,7 @@ func (c *Compile) initAnalyzeModule(qry *plan.Query) {
 	}
 }
 
-func (c *Compile) GetAnalyzeModuleV1() *AnalyzeModule {
+func (c *Compile) GetAnalyzeModule() *AnalyzeModule {
 	return c.anal
 }
 
@@ -110,9 +110,10 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 	}
 }
 
-// ----------------------------------------------------------------------------------------------------------------------
-// addOpStatsToPlanNodes Recursive traversal of PhyOperator and adding OpStats statistics to the corresponding NodeAnalyze Info
-func addOpStatsToPlanNodes(op *models.PhyOperator, nodes []*plan.Node) {
+// ---------------------------------------------------------------------------------------------------------------------
+// addOpStatsToPlanNode Recursive traversal of PhyOperator tree,
+// and add OpStats statistics to the corresponding NodeAnalyze Info
+func addOpStatsToPlanNode(op *models.PhyOperator, nodes []*plan.Node) {
 	if op == nil {
 		return
 	}
@@ -142,7 +143,7 @@ func addOpStatsToPlanNodes(op *models.PhyOperator, nodes []*plan.Node) {
 
 	// Recursive processing of sub operators
 	for _, childOp := range op.Children {
-		addOpStatsToPlanNodes(childOp, nodes)
+		addOpStatsToPlanNode(childOp, nodes)
 	}
 }
 
@@ -154,7 +155,7 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node) {
 
 	// handle current Scope operator pipeline
 	if scope.RootOperator != nil {
-		addOpStatsToPlanNodes(scope.RootOperator, nodes)
+		addOpStatsToPlanNode(scope.RootOperator, nodes)
 	}
 
 	// handle preScopes recursively
@@ -163,7 +164,7 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node) {
 	}
 }
 
-// Check if SQL has a query plan
+// checkSQLHasQueryPlan Check if SQL has a query plan
 func (c *Compile) checkSQLHasQueryPlan() bool {
 	if qry, ok := c.pn.Plan.(*plan.Plan_Query); ok {
 		if qry.Query.StmtType != plan.Query_REPLACE {

@@ -2615,7 +2615,7 @@ func executeStmt(ses *Session,
 	defer func() {
 		if c, ok := ret.(*compile.Compile); ok {
 			var phyPlan *models.PhyPlan
-			analyzeModule := c.GetAnalyzeModuleV1()
+			analyzeModule := c.GetAnalyzeModule()
 			if analyzeModule != nil {
 				phyPlan = analyzeModule.GetPhyPlan()
 			}
