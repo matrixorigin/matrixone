@@ -380,7 +380,7 @@ func execBackup(
 		}
 		var checkpointFiles []string
 		cnLocation, tnLocation, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, sid, srcFs, dstFs,
-			cnLocation, tnLocation, uint32(version), start, softDeletes)
+			cnLocation, uint32(version), start)
 		for _, name := range checkpointFiles {
 			dentry, err := dstFs.StatFile(ctx, name)
 			if err != nil {

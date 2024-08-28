@@ -16,6 +16,7 @@ package v2
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -93,6 +94,9 @@ func MergeCheckpoint(
 	cnLocation, tnLocation, _, err := ckpData.WriteTo(
 		fs, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize,
 	)
+	if err != nil {
+		return nil, "", err
+	}
 	end := ckpEntries[len(ckpEntries)-1].GetEnd()
 	bat := makeBatchFromSchema(checkpoint.CheckpointSchema)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_StartTS).Append(ckpEntries[0].GetEnd(), false)

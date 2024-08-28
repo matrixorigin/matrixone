@@ -397,9 +397,8 @@ func ReWriteCheckpointAndBlockFromKey(
 	ctx context.Context,
 	sid string,
 	fs, dstFs fileservice.FileService,
-	loc, tnLocation objectio.Location,
+	loc objectio.Location,
 	version uint32, ts types.TS,
-	softDeletes map[string]bool,
 ) (objectio.Location, objectio.Location, []string, error) {
 	logutil.Info("[Start]", common.OperationField("ReWrite Checkpoint"),
 		common.OperandField(loc.String()),
@@ -657,9 +656,8 @@ func ReWriteCheckpointAndBlockFromKey(
 					} else {
 						appendValToBatch(oldMeta, newMeta, i)
 						row := newMeta.Length() - 1
-						objID := insertObjData[i].stats.ObjectName().ObjectId()
-						stats := objectio.NewObjectStatsWithObjectID(objID, false, insertObjData[i].stats.GetSorted(), false)
-						newMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, stats[:], false)
+						insertObjData[i].stats.SetSorted()
+						newMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, insertObjData[i].stats[:], false)
 						newMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
 					}
 				}
@@ -716,8 +714,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		common.OperationField("ReWrite Checkpoint"),
 		common.AnyField("new object", checkpointFiles))
 	loc = cnLocation
-	tnLocation = dnLocation
 	files = append(files, checkpointFiles...)
 	files = append(files, cnLocation.Name().String())
-	return loc, tnLocation, files, nil
+	return loc, dnLocation, files, nil
 }
