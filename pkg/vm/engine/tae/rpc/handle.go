@@ -637,7 +637,7 @@ func (h *Handle) HandleWrite(
 		txn.SetDedupType(txnif.DedupPolicy_CheckAll)
 	case db.IncrementalDedup:
 		if h.db.Opts.IncrementalDedup {
-			txn.SetDedupType(txnif.DedupPolicy_Incremental)
+			txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 		} else {
 			txn.SetDedupType(txnif.DedupPolicy_SkipWorkspace)
 		}
