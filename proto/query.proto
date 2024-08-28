@@ -222,10 +222,10 @@ message Request {
   GetReplicaCountRequest GetReplicaCount = 27 [ (gogoproto.nullable) = false ];
   // ResetSessionRequest is the request that resets the session information.
   ResetSessionRequest ResetSessionRequest = 28;
-  GoMaxProcsRequest GoMaxProcsRequest = 29;
-  GoMemLimitRequest GoMemLimitRequest = 30;
-  FileServiceCacheRequest FileServiceCacheRequest = 31;
-  FileServiceCacheEvictRequest FileServiceCacheEvictRequest = 32;
+  GoMaxProcsRequest GoMaxProcsRequest = 29 [ (gogoproto.nullable) = false ];
+  GoMemLimitRequest GoMemLimitRequest = 30 [ (gogoproto.nullable) = false ];
+  FileServiceCacheRequest FileServiceCacheRequest = 31 [ (gogoproto.nullable) = false ];
+  FileServiceCacheEvictRequest FileServiceCacheEvictRequest = 32 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -282,8 +282,8 @@ message Response {
   ResetSessionResponse ResetSessionResponse = 28;
   GoMaxProcsResponse GoMaxProcsResponse = 29  [ (gogoproto.nullable) = false ];
   GoMemLimitResponse GoMemLimitResponse = 30  [ (gogoproto.nullable) = false ];
-  FileServiceCacheResponse FileServiceCacheResponse = 31;
-  FileServiceCacheEvictResponse FileServiceCacheEvictResponse = 32;
+  FileServiceCacheResponse FileServiceCacheResponse = 31 [ (gogoproto.nullable) = false ];
+  FileServiceCacheEvictResponse FileServiceCacheEvictResponse = 32 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
