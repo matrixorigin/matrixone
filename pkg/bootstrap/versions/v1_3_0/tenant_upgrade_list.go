@@ -67,15 +67,6 @@ var upg_mo_retention = versions.UpgradeEntry{
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    frontend.MoCatalogMoRetentionDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		isExist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_RETENTION)
-		if err != nil {
-			return false, err
-		}
-
-		if isExist {
-			return true, nil
-		}
-		needUpgradePubSub = true
-		return false, nil
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_RETENTION)
 	},
 }
