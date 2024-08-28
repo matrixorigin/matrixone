@@ -138,7 +138,6 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 		hb.UniqueJoinKeys[i].Free(proc.Mp())
 	}
 	hb.UniqueJoinKeys = nil
-	// can not free hashmap here, only probe operator can free this
 }
 
 // hashmap, multisels and batches are owned by probe operators
@@ -156,6 +155,22 @@ func (hb *HashmapBuilder) FreeWithError(proc *process.Process) {
 		hb.MultiSels = nil
 	}
 	hb.Batches.Clean(proc.Mp())
+	for i := range hb.executor {
+		if hb.executor[i] != nil {
+			hb.executor[i].Free()
+		}
+	}
+	hb.executor = nil
+	for i := range hb.vecs {
+		for j := range hb.vecs[i] {
+			hb.vecs[i][j].Free(proc.Mp())
+		}
+	}
+	hb.vecs = nil
+	for i := range hb.UniqueJoinKeys {
+		hb.UniqueJoinKeys[i].Free(proc.Mp())
+	}
+	hb.UniqueJoinKeys = nil
 }
 
 func (hb *HashmapBuilder) evalJoinCondition(proc *process.Process) error {

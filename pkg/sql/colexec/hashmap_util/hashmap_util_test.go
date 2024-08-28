@@ -61,7 +61,6 @@ func TestBuildHashMap(t *testing.T) {
 	require.NoError(t, err)
 	require.Less(t, int64(0), hb.GetSize())
 	require.Less(t, uint64(0), hb.GetGroupCount())
-	hb.Free(proc)
 	hb.FreeWithError(proc)
-	require.Equal(t, 0, proc.Mp().CurrNB())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
