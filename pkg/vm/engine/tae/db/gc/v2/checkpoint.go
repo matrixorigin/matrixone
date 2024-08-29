@@ -944,10 +944,6 @@ func (c *checkpointCleaner) Process() {
 	if !c.isEnableCheckGC() {
 		return
 	}
-	ck := checker{
-		cleaner: c,
-	}
-	ck.Check()
 }
 
 func (c *checkpointCleaner) checkExtras(item any) bool {

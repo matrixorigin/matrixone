@@ -422,16 +422,6 @@ func (space *tableSpace) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 	return
 }
 
-func (space *tableSpace) GetPKColumn() containers.Vector {
-	schema := space.table.entry.GetLastestSchemaLocked(false)
-	return space.index.KeyToVector(schema.GetSingleSortKeyType())
-}
-
-func (space *tableSpace) GetPKVecs() []containers.Vector {
-	schema := space.table.entry.GetLastestSchemaLocked(false)
-	return space.index.KeyToVectors(schema.GetSingleSortKeyType())
-}
-
 func (space *tableSpace) BatchDedup(key containers.Vector) error {
 	return space.index.BatchDedup(space.table.GetLocalSchema(space.isTombstone).GetSingleSortKey().Name, key)
 }

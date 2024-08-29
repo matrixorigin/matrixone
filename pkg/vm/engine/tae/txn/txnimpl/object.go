@@ -158,24 +158,6 @@ func (obj *txnObject) Close() (err error) {
 func (obj *txnObject) GetTotalChanges() int {
 	return obj.entry.GetObjectData().GetTotalChanges()
 }
-func (obj *txnObject) RangeDelete(blkID uint16, start, end uint32, dt handle.DeleteType, mp *mpool.MPool) (err error) {
-	schema := obj.table.GetLocalSchema(true)
-	pkDef := schema.GetPrimaryKey()
-	pkVec := makeWorkspaceVector(pkDef.Type)
-	defer pkVec.Close()
-	for row := start; row <= end; row++ {
-		pkVal, _, err := obj.entry.GetObjectData().GetValue(
-			obj.table.store.GetContext(), obj.Txn, schema, blkID, int(row), pkDef.Idx, true, mp,
-		)
-		if err != nil {
-			return err
-		}
-		pkVec.Append(pkVal, false)
-	}
-	id := obj.entry.AsCommonID()
-	id.SetBlockOffset(blkID)
-	return obj.Txn.GetStore().RangeDelete(id, start, end, pkVec, dt)
-}
 func (obj *txnObject) GetMeta() any           { return obj.entry }
 func (obj *txnObject) String() string         { return obj.entry.String() }
 func (obj *txnObject) GetID() *types.Objectid { return obj.entry.ID() }
@@ -218,12 +200,6 @@ func (obj *txnObject) Prefetch(idxes []int) error {
 }
 
 func (obj *txnObject) Fingerprint() *common.ID { return obj.entry.AsCommonID() }
-
-func (obj *txnObject) UpdateDeltaLoc(blkID uint16, deltaLoc objectio.Location) error {
-	id := obj.entry.AsCommonID()
-	id.SetBlockOffset(blkID)
-	return obj.table.store.UpdateDeltaLoc(id, deltaLoc)
-}
 
 func (obj *txnObject) Scan(
 	ctx context.Context,

@@ -16,7 +16,6 @@ package model
 
 import (
 	"bytes"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"unsafe"
@@ -239,14 +238,6 @@ func (tree *Tree) Shrink(tableID uint64) (empty bool) {
 	return
 }
 
-func (tree *Tree) GetObject(tableID uint64, objID types.Objectid, isTombstone bool) *ObjectTree {
-	table := tree.GetTable(tableID)
-	if table == nil {
-		return nil
-	}
-	return table.GetObject(objID, isTombstone)
-}
-
 func (tree *Tree) Compact() (empty bool) {
 	toDelete := make([]uint64, 0)
 	for id, table := range tree.Tables {
@@ -311,13 +302,6 @@ func (tree *Tree) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err err
 	}
 	return
 }
-func (ttree *TableTree) GetObject(id types.Objectid, isTombstone bool) *ObjectTree {
-	if isTombstone {
-		return ttree.Tombstones[id]
-	} else {
-		return ttree.Objs[id]
-	}
-}
 
 func (ttree *TableTree) AddObject(sid *objectio.ObjectId, isTombstone bool) {
 	id := *sid
@@ -330,21 +314,6 @@ func (ttree *TableTree) AddObject(sid *objectio.ObjectId, isTombstone bool) {
 			ttree.Objs[id] = NewObjectTree(&id)
 		}
 	}
-}
-
-func (ttree *TableTree) ShortBlocksString() string {
-	buf := bytes.Buffer{}
-	for _, obj := range ttree.Objs {
-		var shortuuid [8]byte
-		hex.Encode(shortuuid[:], obj.ID[:4])
-		buf.WriteString(fmt.Sprintf(" %s-%d", string(shortuuid[:]), obj.ID.Offset()))
-	}
-	for _, obj := range ttree.Tombstones {
-		var shortuuid [8]byte
-		hex.Encode(shortuuid[:], obj.ID[:4])
-		buf.WriteString(fmt.Sprintf(" %s-%d", string(shortuuid[:]), obj.ID.Offset()))
-	}
-	return buf.String()
 }
 
 func (ttree *TableTree) IsEmpty() bool {

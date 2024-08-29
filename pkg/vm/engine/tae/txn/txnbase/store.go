@@ -112,9 +112,6 @@ func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ bool, _
 func (store *NoopTxnStore) UpdateMetaLoc(id *common.ID, un objectio.Location) (err error) {
 	return
 }
-func (store *NoopTxnStore) UpdateDeltaLoc(id *common.ID, un objectio.Location) (err error) {
-	return
-}
 func (store *NoopTxnStore) SoftDeleteBlock(id *common.ID) (err error)                    { return }
 func (store *NoopTxnStore) SoftDeleteObject(isTombstone bool, id *common.ID) (err error) { return }
 func (store *NoopTxnStore) BatchDedup(
@@ -177,7 +174,4 @@ func (store *NoopTxnStore) UpdateObjectStats(*common.ID, *objectio.ObjectStats, 
 }
 func (store *NoopTxnStore) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls) error {
 	return nil
-}
-func (store *NoopTxnStore) IsDeletedInWorkSpace(id *common.ID, row uint32) (bool, error) {
-	return false, nil
 }

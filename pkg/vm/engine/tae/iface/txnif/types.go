@@ -312,7 +312,6 @@ type TxnStore interface {
 	GetTransactionType() TxnType
 	UpdateObjectStats(*common.ID, *objectio.ObjectStats, bool) error
 	FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls) error
-	IsDeletedInWorkSpace(id *common.ID, row uint32) (bool, error)
 }
 
 type TxnType int8

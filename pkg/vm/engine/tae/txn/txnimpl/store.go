@@ -830,11 +830,3 @@ func (store *txnStore) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nul
 	}
 	return db.FillInWorkspaceDeletes(id, deletes)
 }
-
-func (store *txnStore) IsDeletedInWorkSpace(id *common.ID, row uint32) (bool, error) {
-	db, err := store.getOrSetDB(id.DbID)
-	if err != nil {
-		return false, err
-	}
-	return db.IsDeletedInWorkSpace(id, row)
-}

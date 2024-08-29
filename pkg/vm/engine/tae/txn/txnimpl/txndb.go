@@ -568,11 +568,3 @@ func (db *txnDB) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls) er
 	}
 	return table.FillInWorkspaceDeletes(id.BlockID, deletes)
 }
-
-func (db *txnDB) IsDeletedInWorkSpace(id *common.ID, row uint32) (bool, error) {
-	table, err := db.getOrSetTable(id.TableID)
-	if err != nil {
-		return false, err
-	}
-	return table.IsDeletedInWorkSpace(id.BlockID, row)
-}
