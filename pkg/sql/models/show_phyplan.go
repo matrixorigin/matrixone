@@ -145,7 +145,9 @@ const (
 
 func ExplainPhyPlan(phy *PhyPlan, option ExplainOption) string {
 	buffer := bytes.NewBuffer(make([]byte, 0, 300))
-	fmt.Fprintf(buffer, "Version: %s, S3IOInputCount: %d, S3IOOutputCount: %d", phy.Version, phy.S3IOInputCount, phy.S3IOOutputCount)
+	if len(phy.LocalScope) > 0 || len(phy.RemoteScope) > 0 {
+		fmt.Fprintf(buffer, "RetryTime: %v, S3IOInputCount: %d, S3IOOutputCount: %d", phy.RetryTime, phy.S3IOInputCount, phy.S3IOOutputCount)
+	}
 
 	if len(phy.LocalScope) > 0 {
 		buffer.WriteString("\n")

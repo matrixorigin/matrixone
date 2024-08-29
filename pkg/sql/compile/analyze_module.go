@@ -36,7 +36,8 @@ type AnalyzeModule struct {
 	phyPlan        *models.PhyPlan
 	remotePhyPlans []models.PhyPlan
 	// Added read-write lock
-	mu sync.RWMutex
+	mu         sync.RWMutex
+	retryTimes int
 }
 
 func (anal *AnalyzeModule) AppendRemotePhyPlan(remotePhyPlan models.PhyPlan) {
@@ -368,6 +369,8 @@ func (c *Compile) GenPhyPlan() {
 	}
 	//------------------------------------------------------------------------------------------------------
 	c.anal.phyPlan = models.NewPhyPlan()
+	c.anal.phyPlan.RetryTime = c.anal.retryTimes
+
 	if len(c.scopes) > 0 {
 		for i := range c.scopes {
 			phyScope := ConvertScopeToPhyScope(c.scopes[i], receiverMap)

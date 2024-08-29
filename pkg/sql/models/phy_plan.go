@@ -22,6 +22,7 @@ import (
 
 type PhyPlan struct {
 	Version         string     `json:"version"`
+	RetryTime       int        `json:"retryTime,omitempty"`
 	LocalScope      []PhyScope `json:"scope,omitempty"`
 	RemoteScope     []PhyScope `json:"RemoteScope,omitempty"`
 	S3IOInputCount  int64      `json:"S3IOInputCount,omitempty"`
