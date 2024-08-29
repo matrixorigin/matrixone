@@ -155,14 +155,13 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, de
 	if err = index.BatchUpdateZM(keysZM, pks.GetDownstreamVector()); err != nil {
 		return
 	}
-	vector.AppendMultiFixed[types.Rowid](
+	if err = vector.AppendMultiFixed[types.Rowid](
 		rowIDs.GetDownstreamVector(),
 		types.EmptyRowid,
 		true,
 		pks.Length(),
 		common.WorkspaceAllocator,
-	)
-	if err != nil {
+	); err != nil {
 		return
 	}
 	maxAObjectHint, maxNAObjectHint := uint64(0), uint64(0)
@@ -312,28 +311,5 @@ func quickSkipThisObject(
 		return
 	}
 	ok = !zm.FastIntersect(keysZM)
-	return
-}
-
-func tryGetCurrentObjectBF(
-	ctx context.Context,
-	currLocation objectio.Location,
-	prevBF objectio.BloomFilter,
-	prevObjName *objectio.ObjectNameShort,
-	fs fileservice.FileService,
-) (currBf objectio.BloomFilter, err error) {
-	if len(currLocation) == 0 {
-		return
-	}
-	if objectio.IsSameObjectLocVsShort(currLocation, prevObjName) {
-		currBf = prevBF
-		return
-	}
-	currBf, err = objectio.FastLoadBF(
-		ctx,
-		currLocation,
-		false,
-		fs,
-	)
 	return
 }

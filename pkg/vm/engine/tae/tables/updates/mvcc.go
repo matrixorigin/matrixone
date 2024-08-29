@@ -165,7 +165,6 @@ func (n *AppendMVCCHandle) FillInCommitTSVecLocked(commitTSVec containers.Vector
 			return true
 		},
 		true)
-	return
 }
 
 func (n *AppendMVCCHandle) GetCommitTSVecInRange(start, end types.TS, mp *mpool.MPool) containers.Vector {

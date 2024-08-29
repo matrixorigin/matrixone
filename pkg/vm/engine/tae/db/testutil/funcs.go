@@ -307,6 +307,7 @@ func CompactBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schem
 
 	metas := GetAllAppendableMetas(rel, false)
 	tombstones := GetAllAppendableMetas(rel, true)
+	assert.NoError(t, txn.Commit(context.Background()))
 	if len(metas) == 0 && len(tombstones) == 0 {
 		return
 	}

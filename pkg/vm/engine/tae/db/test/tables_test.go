@@ -680,12 +680,13 @@ func TestCompaction2(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
-		err := rel.Append(context.Background(), bats[0])
+		err := rel.Append(ctx, bats[0])
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit(context.Background()))
+		assert.Nil(t, txn.Commit(ctx))
 	}
 
-	testutils.WaitExpect(5000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
+		t.Log("run ScanInRangePruned")
 		dirty := db.BGCheckpointRunner.GetDirtyCollector().ScanInRangePruned(types.TS{}, types.MaxTs())
 		return dirty.GetTree().Compact()
 	})
@@ -701,11 +702,12 @@ func TestCompaction2(t *testing.T) {
 				blk.Scan(ctx, &view, uint16(j), []int{3}, common.DefaultAllocator)
 				assert.NotNil(t, view)
 				view.Close()
+				t.Log(blk.GetMeta().(*catalog.ObjectEntry))
 				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).IsAppendable())
 				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
 			}
 		}
-		it.Close()
+		assert.NoError(t, it.Close())
 	}
 	{
 		txn, _ := db.TxnMgr.StartTxn(nil)
@@ -723,7 +725,7 @@ func TestCompaction2(t *testing.T) {
 				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
 			}
 		}
-		it.Close()
+		assert.NoError(t, it.Close())
 	}
 }
 

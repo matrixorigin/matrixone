@@ -110,9 +110,9 @@ func ListSnapshotMetaWithDiskCleaner(
 	snapshot types.TS,
 	listFunc GetCheckpointRange,
 	metas map[string]struct{},
-) ([]*MetaFile, int, error, []*MetaFile) {
+) ([]*MetaFile, []*MetaFile, int, error) {
 	if len(metas) == 0 {
-		return nil, 0, nil, nil
+		return nil, nil, 0, nil
 	}
 	metaFiles := make([]*MetaFile, 0)
 	idx := 0
@@ -150,7 +150,7 @@ func ListSnapshotMetaWithDiskCleaner(
 		listFunc = AllAfterAndGCheckpoint
 	}
 	files, num, err := listFunc(snapshot, metaFiles)
-	return files, num, err, mergeMetaFiles
+	return files, mergeMetaFiles, num, err
 }
 
 func ListSnapshotCheckpointWithMeta(

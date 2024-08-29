@@ -588,9 +588,7 @@ func (tbl *txnTable) CollectTombstones(
 				//deletes in txn.Write maybe comes from PartitionState.Rows ,
 				// PartitionReader need to skip them.
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				for _, v := range vs {
-					tombstone.rowids = append(tombstone.rowids, v)
-				}
+				tombstone.rowids = append(tombstone.rowids, vs...)
 			}
 		})
 

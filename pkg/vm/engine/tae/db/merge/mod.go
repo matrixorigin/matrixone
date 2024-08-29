@@ -192,7 +192,8 @@ func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService
 }
 
 const (
-	constMaxMemCap = 12 * common.Const1GBytes // max original memory for an object
+	constMaxMemCap     = 12 * common.Const1GBytes // max original memory for an object
+	constSmallMergeGap = 3 * time.Minute
 )
 
 type policy interface {

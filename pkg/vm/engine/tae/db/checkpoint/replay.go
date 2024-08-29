@@ -393,10 +393,8 @@ func replayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entr
 				typ = ET_Incremental
 			}
 		}
-		var version uint32
-		version = bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
-		var tnLoc objectio.Location
-		tnLoc = objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
+		version := bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
+		tnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
 		var ckpLSN, truncateLSN uint64
 		ckpLSN = bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(i).(uint64)
 		truncateLSN = bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(i).(uint64)

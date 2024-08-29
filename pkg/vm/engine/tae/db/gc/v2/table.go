@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -26,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
-	"sync"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -85,12 +86,6 @@ func (t *GCTable) addObjectLocked(
 	}
 }
 
-func (t *GCTable) deleteObject(name string, objects map[string]*ObjectEntry) {
-	t.Lock()
-	defer t.Unlock()
-	delete(objects, name)
-}
-
 // Merge can merge two GCTables
 func (t *GCTable) Merge(GCTable *GCTable) {
 	for name, entry := range GCTable.objects {
@@ -108,21 +103,17 @@ func (t *GCTable) getObjects() map[string]*ObjectEntry {
 	return t.objects
 }
 
-func (t *GCTable) getObjectsLocked() map[string]*ObjectEntry {
-	return t.objects
-}
-
 func (t *GCTable) getTombstones() map[string]*ObjectEntry {
 	t.Lock()
 	defer t.Unlock()
 	return t.tombstones
 }
 
-func (t *GCTable) getTombstonesLocked() map[string]*ObjectEntry {
-	t.Lock()
-	defer t.Unlock()
-	return t.tombstones
-}
+// func (t *GCTable) getTombstonesLocked() map[string]*ObjectEntry {
+// 	t.Lock()
+// 	defer t.Unlock()
+// 	return t.tombstones
+// }
 
 // SoftGC is to remove objectentry that can be deleted from GCTable
 func (t *GCTable) SoftGC(

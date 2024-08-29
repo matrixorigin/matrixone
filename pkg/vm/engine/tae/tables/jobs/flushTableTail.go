@@ -867,10 +867,6 @@ func (task *flushTableTailTask) mergePersistedTombstones(ctx context.Context) er
 	if len(tombstones) < 2 {
 		return nil
 	}
-	scopes := make([]common.ID, 0, len(tombstones))
-	for _, obj := range tombstones {
-		scopes = append(scopes, *obj.AsCommonID())
-	}
 	tombstoneTask, err := NewMergeObjectsTask(
 		tasks.WaitableCtx,
 		task.txn,

@@ -1458,7 +1458,7 @@ func (tbl *txnTable) deltaloc2ObjectStat(loc objectio.Location, fs fileservice.F
 		panic(err)
 	}
 	objectio.SetObjectStatsExtent(&stats, loc.Extent())
-	objectDataMeta := objMeta.MustTombstoneMeta()
+	objectDataMeta := objMeta.MustDataMeta()
 	objectio.SetObjectStatsRowCnt(&stats, objectDataMeta.BlockHeader().Rows())
 	objectio.SetObjectStatsBlkCnt(&stats, objectDataMeta.BlockCount())
 	objectio.SetObjectStatsSize(&stats, loc.Extent().End()+objectio.FooterSize)
