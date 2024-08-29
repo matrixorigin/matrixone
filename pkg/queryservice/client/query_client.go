@@ -103,7 +103,7 @@ func (c *queryClient) ServiceID() string {
 // SendMessage implements the QueryService interface.
 func (c *queryClient) SendMessage(ctx context.Context, address string, req *pb.Request) (*pb.Response, error) {
 	if address == "" {
-		return nil, moerr.NewInternalError(ctx, "invalid CN query address %s", address)
+		return nil, moerr.NewInternalErrorf(ctx, "invalid CN query address %s", address)
 	}
 	if err := checkMethodVersion(ctx, req); err != nil {
 		return nil, err

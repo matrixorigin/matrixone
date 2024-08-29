@@ -212,7 +212,7 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 		ses.SetSeqLastValue(execCtx.proc)
 		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
 		if err2 != nil {
-			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+			err = moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return
 		}
@@ -274,7 +274,7 @@ func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
 	res := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, execCtx.isLastStmt)
 	if err := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err != nil {
-		return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed, error: %v ", err)
+		return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed, error: %v ", err)
 	}
 	return err
 }
@@ -312,14 +312,14 @@ func (resper *MysqlResp) respBySituation(ses *Session,
 	resp := NewGeneralOkResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus())
 	if len(execCtx.results) == 0 {
 		if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
-			return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err)
+			return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 		}
 	} else {
 		for i, result := range execCtx.results {
 			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
 			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i == len(execCtx.results)-1)
 			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
-				return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err)
+				return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 			}
 		}
 	}

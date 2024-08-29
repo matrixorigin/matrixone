@@ -150,7 +150,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 		case *tree.AttributeComment:
 			comment := attribute.CMT.String()
 			if getNumOfCharacters(comment) > maxLengthOfColumnComment {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", specNewColumn.Name.ColNameOrigin())
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "comment for column '%s' is too long", specNewColumn.Name.ColNameOrigin())
 			}
 			newCol.Comment = comment
 		case *tree.AttributeAutoIncrement:
@@ -207,7 +207,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 			}
 			newCol.OnUpdate = onUpdateExpr
 		default:
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport column definition %v", attribute)
+			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
 	}
 	if auto_incr && hasDefaultValue {

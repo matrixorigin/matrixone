@@ -237,7 +237,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	for _, e := range emptyFile {
 		if e.end.GreaterEq(&maxTs) {
 			return types.TS{}, 0, false,
-				moerr.NewInternalError(ctx,
+				moerr.NewInternalErrorf(ctx,
 					"read checkpoint %v failed",
 					e.String())
 		}

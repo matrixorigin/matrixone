@@ -332,7 +332,7 @@ func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txn txnif.AsyncTxn
 	e.Lock()
 	defer e.Unlock()
 	if tableId < pkgcatalog.MO_RESERVED_MAX {
-		return nil, moerr.NewInternalErrorNoCtx("reserved table ID %d", tableId)
+		return nil, moerr.NewInternalErrorNoCtxf("reserved table ID %d", tableId)
 	}
 	//Deduplicate for tableId
 	if _, exist := e.entries[tableId]; exist {

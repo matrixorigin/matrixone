@@ -524,7 +524,7 @@ func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
 			}
 			n += int64(nr)
 		default:
-			panic(moerr.NewInternalErrorNoCtx("%T:%v not supported", v, v))
+			panic(moerr.NewInternalErrorNoCtxf("%T:%v not supported", v, v))
 		}
 	}
 	return

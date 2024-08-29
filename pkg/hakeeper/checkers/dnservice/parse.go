@@ -53,7 +53,7 @@ func (d tnShardToLogShard) getLogShardID(tnShardID uint64) (uint64, error) {
 	if logShardID, ok := d[tnShardID]; ok {
 		return logShardID, nil
 	}
-	return 0, moerr.NewInvalidStateNoCtx("shard %d not recorded", tnShardID)
+	return 0, moerr.NewInvalidStateNoCtxf("shard %d not recorded", tnShardID)
 }
 
 // parseTnState parses cluster tn state.

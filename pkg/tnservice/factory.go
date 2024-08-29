@@ -78,7 +78,7 @@ func (s *store) createTxnStorage(ctx context.Context, shard metadata.TNShard) (s
 		}
 		return ts, nil
 	default:
-		return nil, moerr.NewInternalError(ctx, "not implment for %s", s.cfg.Txn.Storage.Backend)
+		return nil, moerr.NewInternalErrorf(ctx, "not implment for %s", s.cfg.Txn.Storage.Backend)
 	}
 }
 
