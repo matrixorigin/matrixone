@@ -133,12 +133,6 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 	// 4. delete retention info
-	// remove entry in mo_retention if exists
-	// skip tables in mo_catalog.
-	// These tables do not have retention info.
-	if dbName == catalog.MO_CATALOG {
-		return nil
-	}
 	return c.runSql(fmt.Sprintf(deleteMoRetentionWithDatabaseNameFormat, dbName))
 }
 
