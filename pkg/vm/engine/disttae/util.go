@@ -1292,12 +1292,12 @@ func evalExprListToVec(
 	canEval, vec = recurEvalExprList(oid, expr, nil, proc)
 	if !canEval {
 		if vec != nil {
-			proc.PutVector(vec)
+			vec.Free(proc.GetMPool())
 		}
 		return false, nil, nil
 	}
 	put = func() {
-		proc.PutVector(vec)
+		vec.Free(proc.GetMPool())
 	}
 	vec.InplaceSort()
 	return
@@ -1315,7 +1315,7 @@ func recurEvalExprList(
 				return false, outputVec
 			}
 			if outputVec == nil {
-				outputVec = proc.GetVector(oid.ToType())
+				outputVec = vector.NewVec(oid.ToType())
 			}
 			// TODO: not use appendAny
 			if err := vector.AppendAny(outputVec, val, false, proc.Mp()); err != nil {
@@ -1327,7 +1327,7 @@ func recurEvalExprList(
 				return false, outputVec
 			}
 			if outputVec == nil {
-				outputVec = proc.GetVector(oid.ToType())
+				outputVec = vector.NewVec(oid.ToType())
 			}
 			sels := make([]int32, vec.Length())
 			for i := 0; i < vec.Length(); i++ {
