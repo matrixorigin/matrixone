@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v1
+package v2
 
 import (
 	"context"
@@ -29,9 +29,9 @@ const (
 
 const MinMergeCount = 20
 
-// DiskCleaner is the main structure of gc operation,
+// DiskCleaner is the main structure of v2 operation,
 // and provides "JobFactory" to let tae notify itself
-// to perform a gc
+// to perform a v2
 type DiskCleaner struct {
 	cleaner Cleaner
 

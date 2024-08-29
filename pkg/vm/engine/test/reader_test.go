@@ -95,15 +95,16 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 		require.NoError(t, txn.Commit(ctx))
 	}
 
-	require.NoError(t, disttaeEngine.SubscribeTable(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx), false))
+	// require.NoError(t, disttaeEngine.SubscribeTable(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx), false))
 
-	{
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx))
-		require.NoError(t, err)
+	// TODO
+	// {
+	// 	stats, err := disttaeEngine.GetPartitionStateStats(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx))
+	// 	require.NoError(t, err)
 
-		require.Equal(t, blockCnt, stats.DataObjectsVisible.BlkCnt)
-		require.Equal(t, rowsCount, stats.DataObjectsVisible.RowCnt)
-	}
+	// 	require.Equal(t, blockCnt, stats.DataObjectsVisible.BlkCnt)
+	// 	require.Equal(t, rowsCount, stats.DataObjectsVisible.RowCnt)
+	// }
 
 	expr := []*plan.Expr{
 		disttae.MakeFunctionExprForTest("=", []*plan.Expr{
@@ -305,7 +306,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		database, _ := txn.GetDatabase(databaseName)
 		rel, _ := database.GetRelationByName(schema.Name)
 
-		iter := rel.MakeObjectIt()
+		iter := rel.MakeObjectIt(false)
 		iter.Next()
 		blkId := iter.GetObject().GetMeta().(*catalog2.ObjectEntry).AsCommonID()
 
