@@ -2710,7 +2710,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc := ses.proc
 	proc.ReplaceTopCtx(execCtx.reqCtx)
 
-	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
 	proc.Base.Id = ses.getNextProcessId()
 	proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
