@@ -210,8 +210,6 @@ func (m BatchMessage) SpoolFree() {
 	if m.releaseToCache != nil {
 		m.releaseToCache(m.content)
 	}
-	m.content = nil
-	m.err = nil
 }
 func (m BatchMessage) isEndMessage() bool {
 	return m.content == nil
