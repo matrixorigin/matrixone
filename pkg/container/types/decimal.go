@@ -1954,6 +1954,9 @@ func (x Decimal64) Ceil(scale1, scale2 int32, isConst bool) Decimal64 {
 			x, _, _ = x.Add(Decimal64(1), k, 0)
 		}
 		if isConst {
+			if scale2 < 0 {
+				k = scale1
+			}
 			x, _ = x.Scale(-k)
 		}
 	}
@@ -1971,6 +1974,9 @@ func (x Decimal64) Floor(scale1, scale2 int32, isConst bool) Decimal64 {
 		y, _, _ := x.Mod(Decimal64(1), k, 0)
 		x, _ = x.Sub64(y)
 		if isConst {
+			if scale2 < 0 {
+				k = scale1
+			}
 			x, _ = x.Scale(-k)
 		}
 	}
@@ -1988,6 +1994,8 @@ func (x Decimal64) Round(scale1, scale2 int32, isConst bool) Decimal64 {
 	x, _ = x.Scale(-k)
 	if !isConst {
 		x, _ = x.Scale(k)
+	} else if scale2 < 0 {
+		x, _ = x.Scale(-scale2)
 	}
 	return x
 }
@@ -2007,6 +2015,9 @@ func (x Decimal128) Ceil(scale1, scale2 int32, isConst bool) Decimal128 {
 			x, _, _ = x.Add(Decimal128{1, 0}, k, 0)
 		}
 		if isConst {
+			if scale2 < 0 {
+				k = scale1
+			}
 			x, _ = x.Scale(-k)
 		}
 	}
@@ -2024,6 +2035,9 @@ func (x Decimal128) Floor(scale1, scale2 int32, isConst bool) Decimal128 {
 		y, _, _ := x.Mod(Decimal128{1, 0}, k, 0)
 		x, _ = x.Sub128(y)
 		if isConst {
+			if scale2 < 0 {
+				k = scale1
+			}
 			x, _ = x.Scale(-k)
 		}
 	}
@@ -2041,6 +2055,8 @@ func (x Decimal128) Round(scale1, scale2 int32, isConst bool) Decimal128 {
 	x, _ = x.Scale(-k)
 	if !isConst {
 		x, _ = x.Scale(k)
+	} else if scale2 < 0 {
+		x, _ = x.Scale(-scale2)
 	}
 	return x
 }
