@@ -455,19 +455,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 // buildJoinParallelRun deal one case of scope.ParallelRun.
 // this function will create a pipeline to run a join in parallel.
 func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
-	if c.IsTpQuery() {
-		//tp query build scope in compile time, not runtime
-		return s, nil
-	}
 	mcpu := s.NodeInfo.Mcpu
-
-	if s.ShuffleIdx > 0 { //shuffle join
-		buildScope := c.newJoinBuildScope(s, 1)
-		s.PreScopes = append(s.PreScopes, buildScope)
-		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx]
-		return s, nil
-	}
-
 	if mcpu <= 1 { // broadcast join with no parallel
 		return s, nil
 	}
