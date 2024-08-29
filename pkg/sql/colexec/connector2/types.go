@@ -42,11 +42,11 @@ func NewArgument(sender pipelineSpool.SenderToLocalPipeline) *SimpleDispatch {
 	return d
 }
 
-func (dispatch *SimpleDispatch) Reset(proc *process.Process, isPipelineFail bool, pipelineErr error) {
+func (dispatch *SimpleDispatch) Reset(_ *process.Process, _ bool, _ error) {
 	dispatch.next.Reset()
 }
 
-func (dispatch *SimpleDispatch) Free(proc *process.Process, isPipelineFail bool, pipelineErr error) {
+func (dispatch *SimpleDispatch) Free(_ *process.Process, _ bool, _ error) {
 	dispatch.next.Close()
 }
 

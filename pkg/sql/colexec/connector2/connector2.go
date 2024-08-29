@@ -24,7 +24,7 @@ func (dispatch *SimpleDispatch) String(buf *bytes.Buffer) {
 	buf.WriteString(thisOperatorName)
 }
 
-func (dispatch *SimpleDispatch) Prepare(proc *process.Process) error {
+func (dispatch *SimpleDispatch) Prepare(_ *process.Process) error {
 	return nil
 }
 
