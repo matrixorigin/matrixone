@@ -1290,11 +1290,13 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		groupInfo := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], false, 0, c.proc)
 		defer groupInfo.Release()
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
-
-		if c.IsTpQuery() && ss[0].PartialResults == nil {
+		if n.WithRollup {
+			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileMergeGroup(n, ss, ns, anyDistinctAgg))))
+			return ss, nil
+		} else if c.IsTpQuery() && ss[0].PartialResults == nil {
 			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
 			return ss, nil
-		} else if !anyDistinctAgg && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && !n.WithRollup {
+		} else if !anyDistinctAgg && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
 			ss = c.compileSort(n, c.compileShuffleGroup(n, ss, ns))
 			return ss, nil
 		} else {

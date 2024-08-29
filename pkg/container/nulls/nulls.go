@@ -26,6 +26,7 @@ import (
 )
 
 type Bitmap = Nulls
+type RollUp = Nulls
 
 type Nulls struct {
 	np bitmap.Bitmap

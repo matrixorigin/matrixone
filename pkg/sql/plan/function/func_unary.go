@@ -1597,8 +1597,9 @@ func GroupingFunc(parameters []*vector.Vector,
 		var ans int64 = 0
 		power := 0
 		for j := len(parameters) - 1; j >= 0; j-- {
-			rollup := parameters[j].GetFlagAt(i)
-			if rollup {
+			rollup := parameters[j].GetRollups()
+			isRollup := rollup.Contains(uint64(i))
+			if isRollup {
 				ans += 1 << power
 			}
 			power++

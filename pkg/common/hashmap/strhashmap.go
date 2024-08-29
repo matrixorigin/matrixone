@@ -187,6 +187,12 @@ func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 // these are the rules of multi-cols
 // for one col, just give the value bytes
 func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int, lenCols int) {
+	if vec.IsRollup() {
+		for i := 0; i < n; i++ {
+			m.keys[i] = append(m.keys[i], byte(2))
+		}
+		return
+	}
 	if vec.IsConstNull() {
 		if m.hasNull {
 			for i := 0; i < n; i++ {
@@ -201,7 +207,13 @@ func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int, len
 	}
 	if !vec.GetNulls().Any() {
 		if m.hasNull {
+			rsp := vec.GetRollups()
 			for i := 0; i < n; i++ {
+				hasRollup := rsp.Contains(uint64(i + start))
+				if hasRollup {
+					m.keys[i] = append(m.keys[i], byte(2))
+					continue
+				}
 				bytes := vec.GetBytesAt(i + start)
 				// for "a"，"bc" and "ab","c", we need to distinct
 				// this is not null value
@@ -225,11 +237,15 @@ func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int, len
 		}
 	} else {
 		nsp := vec.GetNulls()
+		rsp := vec.GetRollups()
 		for i := 0; i < n; i++ {
 			hasNull := nsp.Contains(uint64(i + start))
+			hasRollup := rsp.Contains(uint64(i + start))
 			if m.hasNull {
 				if hasNull {
 					m.keys[i] = append(m.keys[i], byte(1))
+				} else if hasRollup {
+					m.keys[i] = append(m.keys[i], byte(2))
 				} else {
 					bytes := vec.GetBytesAt(i + start)
 					// for "a"，"bc" and "ab","c", we need to distinct
@@ -259,6 +275,12 @@ func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int, len
 }
 
 func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, scale int32, lenCols int) {
+	if vec.IsRollup() {
+		for i := 0; i < n; i++ {
+			m.keys[i] = append(m.keys[i], byte(2))
+		}
+		return
+	}
 	if vec.IsConstNull() {
 		if m.hasNull {
 			for i := 0; i < n; i++ {
@@ -301,11 +323,15 @@ func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, s
 		}
 	} else {
 		nsp := vec.GetNulls()
+		rsp := vec.GetRollups()
 		for i := 0; i < n; i++ {
 			isNull := nsp.Contains(uint64(i + start))
+			isRollup := rsp.Contains(uint64(i + start))
 			if m.hasNull {
 				if isNull {
 					m.keys[i] = append(m.keys[i], 1)
+				} else if isRollup {
+					m.keys[i] = append(m.keys[i], 2)
 				} else {
 					bytes := data[(i+start)*sz : (i+start+1)*sz]
 					m.keys[i] = append(m.keys[i], 0)

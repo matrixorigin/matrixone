@@ -48,12 +48,12 @@ type Vector struct {
 
 	// area for holding large strings.
 	area []byte
-	flag []bool
 
 	capacity int
 	length   int
 
 	nsp *nulls.Nulls // nulls list
+	rsp *nulls.RollUp
 
 	cantFreeData bool
 	cantFreeArea bool
@@ -113,18 +113,6 @@ func (v *Vector) Reset(typ types.Type) {
 
 func (v *Vector) ResetArea() {
 	v.area = v.area[:0]
-}
-
-func (v *Vector) AddFlag(val []bool) {
-	v.flag = append(v.flag, val...)
-}
-
-func (v *Vector) GetFlag() []bool {
-	return v.flag
-}
-
-func (v *Vector) GetFlagAt(i int) bool {
-	return v.flag[i]
 }
 
 // TODO: It is semantically same as Reset, need to merge them later.
@@ -190,6 +178,10 @@ func (v *Vector) SetTypeScale(scale int32) {
 
 func (v *Vector) GetNulls() *nulls.Nulls {
 	return v.nsp
+}
+
+func (v *Vector) GetRollups() *nulls.Nulls {
+	return v.rsp
 }
 
 func (v *Vector) SetNulls(nsp *nulls.Nulls) {
@@ -323,6 +315,16 @@ func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	return vec
 }
 
+func NewRollupConst(typ types.Type, length int, mp *mpool.MPool) *Vector {
+	vec := NewVecFromReuse()
+	vec.rsp.AddRange(0, uint64(length)-1)
+	vec.typ = typ
+	vec.class = CONSTANT
+	vec.length = length
+
+	return vec
+}
+
 func NewConstFixed[T any](typ types.Type, val T, length int, mp *mpool.MPool) (vec *Vector, err error) {
 	vec = NewVecFromReuse()
 	vec.typ = typ
@@ -424,6 +426,10 @@ func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {
 //	a + Null, and the vector of right part will return true
 func (v *Vector) IsConstNull() bool {
 	return v.IsConst() && len(v.data) == 0
+}
+
+func (v *Vector) IsRollup() bool {
+	return v.length == int(v.rsp.GetBitmap().Len())
 }
 
 func (v *Vector) GetArea() []byte {
@@ -728,8 +734,8 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	w.typ = v.typ
 	w.length = v.length
 	w.sorted = v.sorted
-	w.flag = v.flag
 	w.GetNulls().InitWith(v.GetNulls())
+	w.GetRollups().InitWith(v.GetRollups())
 
 	dataLen := v.typ.TypeSize()
 	if v.IsConst() {
@@ -819,10 +825,6 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		shrinkFixed[types.Blockid](v, sels, negate)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
-	}
-
-	if len(v.flag) > 0 {
-		v.flag = getElementsByIndexes(v.flag, sels, negate)
 	}
 }
 
@@ -957,7 +959,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -988,7 +989,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1019,7 +1019,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1050,7 +1049,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1081,7 +1079,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1112,7 +1109,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1143,7 +1139,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1174,7 +1169,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1205,7 +1199,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1236,7 +1229,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1267,7 +1259,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1298,7 +1289,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1329,7 +1319,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1360,7 +1349,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1391,7 +1379,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1422,7 +1409,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1453,7 +1439,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1484,7 +1469,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1515,7 +1499,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1546,7 +1529,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1577,7 +1559,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1608,7 +1589,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -1616,7 +1596,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64:
 		return func(v, w *Vector) error {
-			v.flag = append(v.flag, w.flag...)
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
 					return err
@@ -1683,7 +1662,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.flag = append(v.flag, w.flag...)
 			v.length += w.length
 			return nil
 		}
@@ -2480,13 +2458,6 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			addCnt += int(flags[i])
 		}
 	}
-	if len(w.flag) > 0 {
-		for i, flag := range flags {
-			if int(offset)+i < len(w.flag) && flag > 0 {
-				v.flag = append(v.flag, w.flag[int(offset)+i])
-			}
-		}
-	}
 
 	if addCnt == 0 {
 		return nil
@@ -2499,6 +2470,9 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 	if w.IsConst() {
 		oldLen := v.length
 		v.length += addCnt
+		if w.IsRollup() {
+			nulls.AddRange(v.rsp, uint64(oldLen), uint64(v.length))
+		}
 		if w.IsConstNull() {
 			nulls.AddRange(v.nsp, uint64(oldLen), uint64(v.length))
 		} else if v.GetType().IsVarlen() {
@@ -2533,6 +2507,9 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
+					if w.rsp.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(v.rsp, uint64(v.length))
+					}
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.nsp, uint64(v.length))
 					} else {
@@ -2547,6 +2524,9 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				for i := range flags {
 					if flags[i] == 0 {
 						continue
+					}
+					if w.rsp.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(v.rsp, uint64(v.length))
 					}
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.nsp, uint64(v.length))
@@ -2586,6 +2566,9 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
+					if w.rsp.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(v.rsp, uint64(v.length))
+					}
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.nsp, uint64(v.length))
 					} else {
@@ -2597,6 +2580,9 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				for i := range flags {
 					if flags[i] == 0 {
 						continue
+					}
+					if w.rsp.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(v.rsp, uint64(v.length))
 					}
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.nsp, uint64(v.length))
@@ -4440,31 +4426,5 @@ func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 			prevVal = bb
 			AppendBytes(ret, bb, false, mp)
 		}
-	}
-}
-
-func getElementsByIndexes(arr []bool, indexes []int64, negate bool) []bool {
-	if negate {
-		result := make([]bool, len(arr)-len(indexes))
-		count := 0
-		for i, v := range arr {
-			if count == len(indexes) {
-				break
-			}
-			if i != int(indexes[count]) {
-				result = append(result, v)
-				continue
-			}
-			count += 1
-		}
-		return result
-	} else {
-		result := make([]bool, len(indexes))
-		for i, index := range indexes {
-			if index >= 0 && int(index) < len(arr) {
-				result[i] = arr[index]
-			}
-		}
-		return result
 	}
 }

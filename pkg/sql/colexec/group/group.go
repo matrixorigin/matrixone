@@ -196,7 +196,6 @@ func (ctr *container) processGroupByAndAgg(
 				if ap.NeedRollup {
 					for i := len(ctr.groupVecs.Vec) - 1; i >= 0; i-- {
 						ctr.rollupColumn = i
-						last := ctr.rollupBat.RowCount()
 						switch ctr.typ {
 						case H8:
 							err = ctr.processH8(bat, proc, true)
@@ -205,17 +204,7 @@ func (ctr *container) processGroupByAndAgg(
 						default:
 							err = moerr.NewInternalError(proc.Ctx, "unexpected hashmap typ for group-operator.")
 						}
-						now := ctr.rollupBat.RowCount()
-						for j := 0; j < i; j++ {
-							for k := 0; k < now-last; k++ {
-								ctr.rollupBat.Vecs[j].AddFlag([]bool{false})
-							}
-						}
-						for j := i; j < len(ctr.groupVecs.Vec); j++ {
-							for k := 0; k < now-last; k++ {
-								ctr.rollupBat.Vecs[j].AddFlag([]bool{true})
-							}
-						}
+
 					}
 				}
 
@@ -332,12 +321,12 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process, rollup 
 			vals, _, err = itr.Insert(i, n, vecs)
 		} else {
 			rows = ctr.rollupIntMap.GroupCount()
-			rollVec := vecs[:ctr.rollupColumn]
+			rollVecs := vecs[:ctr.rollupColumn]
 			for k, vec := range vecs[ctr.rollupColumn:] {
-				nullVec := vector.NewConstNull(ctr.groupVecs.Typ[ctr.rollupColumn+k], vec.Length(), proc.Mp())
-				rollVec = append(rollVec, nullVec)
+				rollVec := vector.NewRollupConst(ctr.groupVecs.Typ[ctr.rollupColumn+k], vec.Length(), proc.Mp())
+				rollVecs = append(rollVecs, rollVec)
 			}
-			vals, _, err = itr.Insert(i, n, rollVec)
+			vals, _, err = itr.Insert(i, n, rollVecs)
 		}
 		if err != nil {
 			return err
@@ -376,12 +365,12 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process, rollu
 			vals, _, err = itr.Insert(i, n, vecs)
 		} else {
 			rows = ctr.rollupStrMap.GroupCount()
-			rollVec := vecs[:ctr.rollupColumn]
+			rollVecs := vecs[:ctr.rollupColumn]
 			for k, vec := range vecs[ctr.rollupColumn:] {
-				nullVec := vector.NewConstNull(ctr.groupVecs.Typ[ctr.rollupColumn+k], vec.Length(), proc.Mp())
-				rollVec = append(rollVec, nullVec)
+				rollVec := vector.NewRollupConst(ctr.groupVecs.Typ[ctr.rollupColumn+k], vec.Length(), proc.Mp())
+				rollVecs = append(rollVecs, rollVec)
 			}
-			vals, _, err = itr.Insert(i, n, rollVec)
+			vals, _, err = itr.Insert(i, n, rollVecs)
 		}
 		if err != nil {
 			return err
@@ -605,11 +594,6 @@ func (ctr *container) aggWithoutGroupByCannotEmptySet(bat **batch.Batch, proc *p
 
 func (ctr *container) concatRollup(rollupBat *batch.Batch, proc *process.Process) error {
 	count := rollupBat.RowCount()
-	for _, vec := range ctr.bat.Vecs {
-		for i := 0; i < vec.Length(); i++ {
-			vec.AddFlag([]bool{false})
-		}
-	}
 	for offset := 0; offset < count; offset += hashmap.UnitLimit { // batch
 		n := count - offset
 		if n > hashmap.UnitLimit {
