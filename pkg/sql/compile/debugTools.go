@@ -17,7 +17,6 @@ package compile
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -250,13 +249,6 @@ func ShowPipelineLink(node vm.Operator, mp map[*process.WaitRegister]int, buffer
 		}
 
 		buffer.WriteString(name)
-		if name == "sample" {
-			opsample := op.(*sample.Sample)
-			if opsample.NeedOutputRowSeen {
-				buffer.WriteString(" need output row seen")
-			}
-
-		}
 		hanldeTailNodeReceiver(op, mp, buffer)
 		return nil
 	})
