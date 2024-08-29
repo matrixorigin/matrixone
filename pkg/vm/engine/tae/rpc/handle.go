@@ -141,6 +141,7 @@ func (h *Handle) GetDB() *db.DB {
 }
 
 func (h *Handle) IsInterceptTable(name string) bool {
+	return name == "bmsql_stock"
 	printMatchRegexp := h.getInterceptMatchRegexp()
 	if printMatchRegexp == nil {
 		return false
@@ -730,7 +731,7 @@ func (h *Handle) HandleWrite(
 							"op1",
 							zap.String("txn", txn.String()),
 							zap.String("pk", common.TypeStringValue(*req.Batch.Vecs[idx].GetType(), pkbuf, false)),
-							zap.Any("detail", tuple.String()),
+							zap.Any("detail", tuple.SQLStrings(nil)),
 						)
 					} else {
 						logutil.Info(
@@ -828,7 +829,7 @@ func (h *Handle) HandleWrite(
 						zap.String("txn", txn.String()),
 						zap.String("pk", common.TypeStringValue(*req.Batch.Vecs[1].GetType(), pkbuf, false)),
 						zap.String("rowid", rowID.String()),
-						zap.Any("detail", tuple.String()),
+						zap.Any("detail", tuple.SQLStrings(nil)),
 					)
 				} else {
 					logutil.Info(
