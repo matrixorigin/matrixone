@@ -61,12 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
@@ -235,21 +230,14 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.LimitExpr = t.LimitExpr
 		op.SetInfo(&info)
 		return op
-	case vm.LoopAnti:
-		t := sourceOp.(*loopanti.LoopAnti)
-		op := loopanti.NewArgument()
-		op.Result = t.Result
-		op.Cond = t.Cond
-		op.JoinMapTag = t.JoinMapTag
-		op.ProjectList = t.ProjectList
-		op.SetInfo(&info)
-		return op
 	case vm.LoopJoin:
 		t := sourceOp.(*loopjoin.LoopJoin)
 		op := loopjoin.NewArgument()
 		op.Result = t.Result
+		op.Typs = t.Typs
 		op.Cond = t.Cond
 		op.JoinMapTag = t.JoinMapTag
+		op.JoinType = t.JoinType
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -258,44 +246,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := indexjoin.NewArgument()
 		op.Result = t.Result
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
-		op.ProjectList = t.ProjectList
-		op.SetInfo(&info)
-		return op
-	case vm.LoopLeft:
-		t := sourceOp.(*loopleft.LoopLeft)
-		op := loopleft.NewArgument()
-		op.Cond = t.Cond
-		op.Typs = t.Typs
-		op.Result = t.Result
-		op.JoinMapTag = t.JoinMapTag
-		op.ProjectList = t.ProjectList
-		op.SetInfo(&info)
-		return op
-	case vm.LoopSemi:
-		t := sourceOp.(*loopsemi.LoopSemi)
-		op := loopsemi.NewArgument()
-		op.Result = t.Result
-		op.Cond = t.Cond
-		op.JoinMapTag = t.JoinMapTag
-		op.ProjectList = t.ProjectList
-		op.SetInfo(&info)
-		return op
-	case vm.LoopSingle:
-		t := sourceOp.(*loopsingle.LoopSingle)
-		op := loopsingle.NewArgument()
-		op.Result = t.Result
-		op.Cond = t.Cond
-		op.Typs = t.Typs
-		op.JoinMapTag = t.JoinMapTag
-		op.ProjectList = t.ProjectList
-		op.SetInfo(&info)
-		return op
-	case vm.LoopMark:
-		t := sourceOp.(*loopmark.LoopMark)
-		op := loopmark.NewArgument()
-		op.Result = t.Result
-		op.Cond = t.Cond
-		op.JoinMapTag = t.JoinMapTag
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -1585,126 +1535,16 @@ func constructProductL2(n *plan.Node, typs []types.Type, proc *process.Process) 
 	return arg
 }
 
-func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *loopjoin.LoopJoin {
+func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process, jointype int) *loopjoin.LoopJoin {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := loopjoin.NewArgument()
 	arg.Result = result
-	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
-	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
-			arg.JoinMapTag = n.SendMsgList[i].MsgTag
-		}
-	}
-	if arg.JoinMapTag <= 0 {
-		panic("wrong joinmap tag!")
-	}
-	return arg
-}
-
-func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *loopsemi.LoopSemi {
-	result := make([]int32, len(n.ProjectList))
-	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr, proc)
-		if rel != 0 {
-			panic(moerr.NewNYIf(proc.GetTopContext(), "loop semi result '%s'", expr))
-		}
-		result[i] = pos
-	}
-	arg := loopsemi.NewArgument()
-	arg.Result = result
-	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
-	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
-			arg.JoinMapTag = n.SendMsgList[i].MsgTag
-		}
-	}
-	if arg.JoinMapTag <= 0 {
-		panic("wrong joinmap tag!")
-	}
-	return arg
-}
-
-func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *loopleft.LoopLeft {
-	result := make([]colexec.ResultPos, len(n.ProjectList))
-	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
-	}
-	arg := loopleft.NewArgument()
 	arg.Typs = typs
-	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
-	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
-			arg.JoinMapTag = n.SendMsgList[i].MsgTag
-		}
-	}
-	if arg.JoinMapTag <= 0 {
-		panic("wrong joinmap tag!")
-	}
-	return arg
-}
-
-func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process) *loopsingle.LoopSingle {
-	result := make([]colexec.ResultPos, len(n.ProjectList))
-	for i, expr := range n.ProjectList {
-		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
-	}
-	arg := loopsingle.NewArgument()
-	arg.Typs = typs
-	arg.Result = result
-	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
-	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
-			arg.JoinMapTag = n.SendMsgList[i].MsgTag
-		}
-	}
-	if arg.JoinMapTag <= 0 {
-		panic("wrong joinmap tag!")
-	}
-	return arg
-}
-
-func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *loopanti.LoopAnti {
-	result := make([]int32, len(n.ProjectList))
-	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr, proc)
-		if rel != 0 {
-			panic(moerr.NewNYIf(proc.GetTopContext(), "loop anti result '%s'", expr))
-		}
-		result[i] = pos
-	}
-	arg := loopanti.NewArgument()
-	arg.Result = result
-	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
-	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
-			arg.JoinMapTag = n.SendMsgList[i].MsgTag
-		}
-	}
-	if arg.JoinMapTag <= 0 {
-		panic("wrong joinmap tag!")
-	}
-	return arg
-}
-
-func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *loopmark.LoopMark {
-	result := make([]int32, len(n.ProjectList))
-	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr, proc)
-		if rel == 0 {
-			result[i] = pos
-		} else if rel == -1 {
-			result[i] = -1
-		} else {
-			panic(moerr.NewNYIf(proc.GetTopContext(), "loop mark result '%s'", expr))
-		}
-	}
-	arg := loopmark.NewArgument()
-	arg.Result = result
-	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	arg.JoinType = jointype
 	for i := range n.SendMsgList {
 		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
@@ -1882,48 +1722,12 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
-	case vm.LoopAnti:
-		arg := op.(*loopanti.LoopAnti)
-		ret.NeedHashMap = false
-		ret.NeedBatches = true
-		ret.NeedAllocateSels = true
-		ret.JoinMapTag = arg.JoinMapTag
-
 	case vm.LoopJoin:
 		arg := op.(*loopjoin.LoopJoin)
 		ret.NeedHashMap = false
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
-
-	case vm.LoopLeft:
-		arg := op.(*loopleft.LoopLeft)
-		ret.NeedHashMap = false
-		ret.NeedBatches = true
-		ret.NeedAllocateSels = true
-		ret.JoinMapTag = arg.JoinMapTag
-
-	case vm.LoopSemi:
-		arg := op.(*loopsemi.LoopSemi)
-		ret.NeedHashMap = false
-		ret.NeedBatches = true
-		ret.NeedAllocateSels = true
-		ret.JoinMapTag = arg.JoinMapTag
-
-	case vm.LoopSingle:
-		arg := op.(*loopsingle.LoopSingle)
-		ret.NeedHashMap = false
-		ret.NeedBatches = true
-		ret.NeedAllocateSels = true
-		ret.JoinMapTag = arg.JoinMapTag
-
-	case vm.LoopMark:
-		arg := op.(*loopmark.LoopMark)
-		ret.NeedHashMap = false
-		ret.NeedBatches = true
-		ret.NeedAllocateSels = true
-		ret.JoinMapTag = arg.JoinMapTag
-
 	default:
 		ret.Release()
 		panic(moerr.NewInternalErrorf(proc.Ctx, "unsupport join type '%v'", op.OpType()))
