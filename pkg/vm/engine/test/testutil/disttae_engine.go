@@ -48,7 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 type TestDisttaeEngine struct {
@@ -263,38 +262,25 @@ func (de *TestDisttaeEngine) analyzeTombstone(
 	ts types.TS,
 ) (outErr error) {
 
-	iter, err := state.NewObjectsIter(ts, true, true)
+	iter, err := state.NewObjectsIter(ts, false, true)
 	if err != nil {
-		return nil
+		return err
 	}
+
 	for iter.Next() {
-		disttae.ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-			loc, _, ok := state.GetBlockDeltaLoc(blk.BlockID)
-			if ok {
-				bat, _, release, err := blockio.ReadBlockDelete(context.Background(), loc[:], de.Engine.FS())
-				if err != nil {
-					outErr = err
-					return false
-				}
-				stats.DeltaLocationRowsCnt += bat.RowCount()
-				stats.Details.DeletedRows = append(stats.Details.DeletedRows, bat)
-
-				release()
-			}
-			return true
-		}, iter.Entry().ObjectStats)
-
-		if outErr != nil {
-			return
+		item := iter.Entry()
+		if item.Visible(ts) {
+			stats.TombstoneObjectsVisible.ObjCnt += 1
+			stats.TombstoneObjectsVisible.BlkCnt += int(item.BlkCnt())
+			stats.TombstoneObjectsVisible.RowCnt += int(item.Rows())
+			stats.Details.TombstoneObjectList.Visible = append(stats.Details.TombstoneObjectList.Visible, item)
+		} else {
+			stats.TombstoneObjectsInvisible.ObjCnt += 1
+			stats.TombstoneObjectsInvisible.BlkCnt += int(item.BlkCnt())
+			stats.TombstoneObjectsInvisible.RowCnt += int(item.Rows())
+			stats.Details.TombstoneObjectList.Invisible = append(stats.Details.TombstoneObjectList.Invisible, item)
 		}
 	}
-
-	//stats.Details.DirtyBlocks = make(map[types.Blockid]struct{})
-	//iter2 := state.NewDirtyBlocksIter()
-	//for iter2.Next() {
-	//	item := iter2.Entry()
-	//	stats.Details.DirtyBlocks[item] = struct{}{}
-	//}
 
 	return
 }

@@ -337,7 +337,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 		stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
-		fmt.Println(stats.String(), stats.Details.DirtyBlocks)
+		fmt.Println(stats.String())
 		require.Equal(t, 40, stats.InmemRows.VisibleCnt)
 		require.Equal(t, 2, stats.InmemRows.VisibleDistinctBlockCnt)
 	}
@@ -349,7 +349,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 		stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
-		fmt.Println(stats.String(), stats.Details.DirtyBlocks)
+		fmt.Println(stats.String())
 		require.Equal(t, 0, stats.InmemRows.VisibleCnt)
 		require.Equal(t, 1, stats.DataObjectsVisible.ObjCnt)
 		require.Equal(t, 2, stats.DataObjectsVisible.BlkCnt)
@@ -382,7 +382,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 		stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
-		fmt.Println(stats.String(), stats.Details.DirtyBlocks)
+		fmt.Println(stats.String())
 		require.Equal(t, 3, stats.InmemRows.InvisibleCnt)
 	}
 
@@ -393,10 +393,9 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 		stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
-		fmt.Println(stats.String(), stats.Details.DirtyBlocks)
+		fmt.Println(stats.String())
 		require.Equal(t, 0, stats.InmemRows.InvisibleCnt)
-		require.Equal(t, 0, len(stats.Details.DirtyBlocks))
-		require.Equal(t, 3, stats.DeltaLocationRowsCnt)
+		require.Equal(t, 3, stats.TombstoneObjectsVisible.RowCnt)
 	}
 }
 

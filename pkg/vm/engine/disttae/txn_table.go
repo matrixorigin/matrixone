@@ -912,7 +912,6 @@ func (tbl *txnTable) rangesOnePart(
 
 				blk.Sorted = obj.Sorted
 				blk.Appendable = obj.Appendable
-				blk.CommitTs = obj.CommitTS
 
 				outBlocks.AppendBlockInfo(blk)
 

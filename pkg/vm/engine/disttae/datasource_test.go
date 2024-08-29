@@ -172,7 +172,6 @@ func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	location := objectio.NewRandomLocation(0, 0)
 	objID := location.ObjectId()
 	metaLoc := objectio.ObjectLocation(location)
-	cts := types.BuildTSForTest(1, 1)
 
 	relData := NewEmptyBlockListRelationData()
 	blkNum := 10
@@ -183,7 +182,6 @@ func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 			Appendable:   true,
 			Sorted:       false,
 			MetaLoc:      metaLoc,
-			CommitTs:     *cts,
 			PartitionNum: int16(i),
 		}
 		relData.AppendBlockInfo(blkInfo)

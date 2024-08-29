@@ -38,8 +38,8 @@ import (
 type PartitionState struct {
 	service string
 
-	dataObjects     *btree.BTreeG[ObjectEntry]
-	tombstoneObjets *btree.BTreeG[ObjectEntry]
+	dataObjects      *btree.BTreeG[ObjectEntry]
+	tombstoneObjects *btree.BTreeG[ObjectEntry]
 
 	// also modify the Copy method if adding fields
 	tid uint64
@@ -142,7 +142,6 @@ func (p *PartitionState) HandleDataObjectList(
 		objEntry.Appendable = objEntry.ObjectStats.GetAppendable()
 		objEntry.CreateTime = createTSCol[idx]
 		objEntry.DeleteTime = deleteTSCol[idx]
-		objEntry.CommitTS = commitTSCol[idx]
 		objEntry.Sorted = objEntry.ObjectStats.GetSorted()
 
 		old, exist := p.dataObjects.Get(objEntry)
@@ -301,10 +300,9 @@ func (p *PartitionState) HandleTombstoneObjectList(
 		objEntry.Appendable = objEntry.ObjectStats.GetAppendable()
 		objEntry.CreateTime = createTSCol[idx]
 		objEntry.DeleteTime = deleteTSCol[idx]
-		objEntry.CommitTS = commitTSCol[idx]
 		objEntry.Sorted = objEntry.ObjectStats.GetSorted()
 
-		old, exist := p.tombstoneObjets.Get(objEntry)
+		old, exist := p.tombstoneObjects.Get(objEntry)
 		if exist {
 			// why check the deleteTime here? consider this situation:
 			// 		1. insert on an object, then these insert operations recorded into a CKP.
@@ -320,7 +318,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 			}
 		}
 
-		p.tombstoneObjets.Set(objEntry)
+		p.tombstoneObjects.Set(objEntry)
 
 		if objEntry.Appendable && objEntry.DeleteTime.IsEmpty() {
 			panic("logic error")
@@ -541,11 +539,11 @@ func (p *PartitionState) HandleRowsInsert(
 
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
-		service:         p.service,
-		tid:             p.tid,
-		rows:            p.rows.Copy(),
-		dataObjects:     p.dataObjects.Copy(),
-		tombstoneObjets: p.tombstoneObjets.Copy(),
+		service:          p.service,
+		tid:              p.tid,
+		rows:             p.rows.Copy(),
+		dataObjects:      p.dataObjects.Copy(),
+		tombstoneObjects: p.tombstoneObjects.Copy(),
 		//blockDeltas:     p.blockDeltas.Copy(),
 		primaryIndex:        p.primaryIndex.Copy(),
 		inMemTombstoneIndex: p.inMemTombstoneIndex.Copy(),
@@ -604,12 +602,12 @@ func NewPartitionState(
 		Degree: 64,
 	}
 	return &PartitionState{
-		service:         service,
-		tid:             tid,
-		noData:          noData,
-		rows:            btree.NewBTreeGOptions((RowEntry).Less, opts),
-		dataObjects:     btree.NewBTreeGOptions((ObjectEntry).Less, opts),
-		tombstoneObjets: btree.NewBTreeGOptions((ObjectEntry).Less, opts),
+		service:          service,
+		tid:              tid,
+		noData:           noData,
+		rows:             btree.NewBTreeGOptions((RowEntry).Less, opts),
+		dataObjects:      btree.NewBTreeGOptions((ObjectEntry).Less, opts),
+		tombstoneObjects: btree.NewBTreeGOptions((ObjectEntry).Less, opts),
 		//blockDeltas:     btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
 		primaryIndex:        btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
 		inMemTombstoneIndex: btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),

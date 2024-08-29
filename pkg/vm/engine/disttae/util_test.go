@@ -917,20 +917,23 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		"a>=99",
 	}
 
+	var needFreeVecs []*vector.Vector
+
 	encodeVal := func(val int64) []byte {
 		return types.EncodeInt64(&val)
 	}
-	encodeVec := func(vals []int64) []byte {
+	encodeVec := func(vals []int64) *vector.Vector {
 		vec := vector.NewVec(types.T_int64.ToType())
 		for i := range vals {
 			vector.AppendFixed(vec, vals[i], false, m)
 		}
 
-		bb, err := vec.MarshalBinary()
-		require.Nil(t, err)
-		vec.Free(m)
+		needFreeVecs = append(needFreeVecs, vec)
+		//bb, err := vec.MarshalBinary()
+		//require.Nil(t, err)
+		//vec.Free(m)
 
-		return bb
+		return vec
 	}
 
 	filters := []basePKFilter{
@@ -1555,6 +1558,10 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 			require.Equal(t, filters[i].lb, basePKFilter.lb, exprStrings[i])
 			require.Equal(t, filters[i].ub, basePKFilter.ub, exprStrings[i])
 		}
+	}
+
+	for i := range needFreeVecs {
+		needFreeVecs[i].Free(m)
 	}
 
 	require.Zero(t, m.CurrNB())

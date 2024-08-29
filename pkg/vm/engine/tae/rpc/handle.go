@@ -717,16 +717,31 @@ func (h *Handle) HandleWrite(
 		}
 		// TODO: debug for #13342, remove me later
 		if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {
-			if tb.Schema(false).(*catalog.Schema).HasPK() {
-				idx := tb.Schema(false).(*catalog.Schema).GetSingleSortKeyIdx()
+			schema := tb.Schema(false).(*catalog.Schema)
+			if schema.HasPK() {
+				pkDef := schema.GetSingleSortKey()
+				idx := pkDef.Idx
+				isCompositeKey := pkDef.IsCompositeColumn()
 				for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
-					logutil.Info(
-						"op1",
-						zap.String("start-ts", txn.GetStartTS().ToString()),
-						zap.String("pk", common.MoVectorToString(req.Batch.Vecs[idx], i)),
-					)
+					if isCompositeKey {
+						pkbuf := req.Batch.Vecs[idx].GetBytesAt(i)
+						tuple, _ := types.Unpack(pkbuf)
+						logutil.Info(
+							"op1",
+							zap.String("txn", txn.String()),
+							zap.String("pk", common.TypeStringValue(*req.Batch.Vecs[idx].GetType(), pkbuf, false)),
+							zap.Any("detail", tuple.String()),
+						)
+					} else {
+						logutil.Info(
+							"op1",
+							zap.String("txn", txn.String()),
+							zap.String("pk", common.MoVectorToString(req.Batch.Vecs[idx], i)),
+						)
+					}
 				}
 			}
+
 		}
 		//Appends a batch of data into table.
 		err = AppendDataToTable(ctx, tb, req.Batch)
@@ -800,15 +815,29 @@ func (h *Handle) HandleWrite(
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
 	if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {
-		if tb.Schema(false).(*catalog.Schema).HasPK() {
+		schema := tb.Schema(false).(*catalog.Schema)
+		if schema.HasPK() {
+			isCompositeKey := schema.GetSingleSortKey().IsCompositeColumn()
 			for i := 0; i < rowIDVec.Length(); i++ {
 				rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
-				logutil.Info(
-					"op2",
-					zap.String("start-ts", txn.GetStartTS().ToString()),
-					zap.String("pk", common.MoVectorToString(req.Batch.Vecs[1], i)),
-					zap.String("rowid", rowID.String()),
-				)
+				if isCompositeKey {
+					pkbuf := req.Batch.Vecs[1].GetBytesAt(i)
+					tuple, _ := types.Unpack(pkbuf)
+					logutil.Info(
+						"op2",
+						zap.String("txn", txn.String()),
+						zap.String("pk", common.TypeStringValue(*req.Batch.Vecs[1].GetType(), pkbuf, false)),
+						zap.String("rowid", rowID.String()),
+						zap.Any("detail", tuple.String()),
+					)
+				} else {
+					logutil.Info(
+						"op2",
+						zap.String("txn", txn.String()),
+						zap.String("pk", common.MoVectorToString(req.Batch.Vecs[1], i)),
+						zap.String("rowid", rowID.String()),
+					)
+				}
 			}
 		}
 	}

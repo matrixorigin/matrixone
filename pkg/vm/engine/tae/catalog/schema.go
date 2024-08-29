@@ -78,14 +78,15 @@ type ColDef struct {
 func (def *ColDef) GetName() string     { return def.Name }
 func (def *ColDef) GetType() types.Type { return def.Type }
 
-func (def *ColDef) Nullable() bool        { return def.NullAbility }
-func (def *ColDef) IsHidden() bool        { return def.Hidden }
-func (def *ColDef) IsPhyAddr() bool       { return def.PhyAddr }
-func (def *ColDef) IsPrimary() bool       { return def.Primary }
-func (def *ColDef) IsRealPrimary() bool   { return def.Primary && !def.FakePK }
-func (def *ColDef) IsAutoIncrement() bool { return def.AutoIncrement }
-func (def *ColDef) IsSortKey() bool       { return def.SortKey }
-func (def *ColDef) IsClusterBy() bool     { return def.ClusterBy }
+func (def *ColDef) Nullable() bool          { return def.NullAbility }
+func (def *ColDef) IsHidden() bool          { return def.Hidden }
+func (def *ColDef) IsPhyAddr() bool         { return def.PhyAddr }
+func (def *ColDef) IsPrimary() bool         { return def.Primary }
+func (def *ColDef) IsRealPrimary() bool     { return def.Primary && !def.FakePK }
+func (def *ColDef) IsAutoIncrement() bool   { return def.AutoIncrement }
+func (def *ColDef) IsSortKey() bool         { return def.SortKey }
+func (def *ColDef) IsClusterBy() bool       { return def.ClusterBy }
+func (def *ColDef) IsCompositeColumn() bool { return def.Name == pkgcatalog.CPrimaryKeyColName }
 
 type SortKey struct {
 	Defs      []*ColDef

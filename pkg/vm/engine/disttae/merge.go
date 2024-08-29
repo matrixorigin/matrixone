@@ -185,7 +185,6 @@ func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.
 		obj := t.targets[objIdx]
 		blk.Sorted = obj.Sorted
 		blk.Appendable = obj.Appendable
-		blk.CommitTs = obj.CommitTS
 		return t.readblock(ctx, &blk)
 	}
 	return nil, nil, nil, mergesort.ErrNoMoreBlocks
@@ -260,7 +259,7 @@ func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfo) (
 	// read data
 	bat, dels, release, err = blockio.BlockDataReadNoCopy(
 		ctx, "", info, t.ds, t.colseqnums, t.coltypes,
-		info.CommitTs, t.fs, t.proc.GetMPool(), nil, fileservice.Policy(0))
+		t.snapshot, t.fs, t.proc.GetMPool(), nil, fileservice.Policy(0))
 	if err != nil {
 		logutil.Infof("read block data failed: %v", err.Error())
 		return

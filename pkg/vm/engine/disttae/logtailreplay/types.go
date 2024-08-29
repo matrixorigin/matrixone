@@ -27,18 +27,16 @@ import (
 type ObjectInfo struct {
 	objectio.ObjectStats
 
-	Appendable  bool
-	Sorted      bool
-	HasDeltaLoc bool
-	CommitTS    types.TS
-	CreateTime  types.TS
-	DeleteTime  types.TS
+	Appendable bool
+	Sorted     bool
+	CreateTime types.TS
+	DeleteTime types.TS
 }
 
 func (o ObjectInfo) String() string {
 	return fmt.Sprintf(
-		"%s; appendable: %v; sorted: %v; commitTS: %s; createTS: %s; deleteTS: %s",
-		o.ObjectStats.String(), o.Appendable, o.Sorted, o.CommitTS.ToString(),
+		"%s; appendable: %v; sorted: %v; createTS: %s; deleteTS: %s",
+		o.ObjectStats.String(), o.Appendable, o.Sorted,
 		o.CreateTime.ToString(), o.DeleteTime.ToString())
 }
 
