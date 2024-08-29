@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
@@ -187,6 +189,12 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Right:
 		t := sourceOp.(*right.RightJoin)
 		op := right.NewArgument()
+		if t.Channel == nil {
+			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+		}
+		op.Channel = t.Channel
+		op.NumCPU = uint64(maxParallel)
+		op.IsMerger = (index == 0)
 		op.Cond = t.Cond
 		op.Result = t.Result
 		op.RightTypes = t.RightTypes
@@ -201,6 +209,12 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.RightSemi:
 		t := sourceOp.(*rightsemi.RightSemi)
 		op := rightsemi.NewArgument()
+		if t.Channel == nil {
+			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+		}
+		op.Channel = t.Channel
+		op.NumCPU = uint64(maxParallel)
+		op.IsMerger = (index == 0)
 		op.Cond = t.Cond
 		op.Result = t.Result
 		op.RightTypes = t.RightTypes
@@ -214,6 +228,12 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.RightAnti:
 		t := sourceOp.(*rightanti.RightAnti)
 		op := rightanti.NewArgument()
+		if t.Channel == nil {
+			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+		}
+		op.Channel = t.Channel
+		op.NumCPU = uint64(maxParallel)
+		op.IsMerger = (index == 0)
 		op.Cond = t.Cond
 		op.Result = t.Result
 		op.RightTypes = t.RightTypes
