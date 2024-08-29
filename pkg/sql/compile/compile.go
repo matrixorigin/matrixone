@@ -62,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
@@ -2333,7 +2334,7 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, probeScopes
 					op.SetIdx(c.anal.curNodeIdx)
 					rs[i].setRootOperator(op)
 				} else {
-					op := constructLoopJoin(node, rightTyps, c.proc)
+					op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopInner)
 					op.SetIdx(c.anal.curNodeIdx)
 					rs[i].setRootOperator(op)
 				}
@@ -2375,7 +2376,7 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, probeScopes
 		} else {
 			rs, buildScopes = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node, false)
 			for i := range rs {
-				op := constructLoopSemi(node, rightTyps, c.proc)
+				op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopSemi)
 				op.SetIdx(c.anal.curNodeIdx)
 				rs[i].setRootOperator(op)
 			}
@@ -2388,7 +2389,7 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, probeScopes
 				op.SetIdx(c.anal.curNodeIdx)
 				rs[i].setRootOperator(op)
 			} else {
-				op := constructLoopLeft(node, rightTyps, c.proc)
+				op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopLeft)
 				op.SetIdx(c.anal.curNodeIdx)
 				rs[i].setRootOperator(op)
 			}
@@ -2412,7 +2413,7 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, probeScopes
 				op.SetIdx(c.anal.curNodeIdx)
 				rs[i].setRootOperator(op)
 			} else {
-				op := constructLoopSingle(node, rightTyps, c.proc)
+				op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopSingle)
 				op.SetIdx(c.anal.curNodeIdx)
 				rs[i].setRootOperator(op)
 			}
@@ -2437,7 +2438,7 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, probeScopes
 		} else {
 			rs, buildScopes = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node, false)
 			for i := range rs {
-				op := constructLoopAnti(node, rightTyps, c.proc)
+				op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopAnti)
 				op.SetIdx(c.anal.curNodeIdx)
 				rs[i].setRootOperator(op)
 			}
@@ -2452,7 +2453,7 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, probeScopes
 			//		Arg: constructMark(n, typs, c.proc),
 			//	})
 			//} else {
-			op := constructLoopMark(node, rightTyps, c.proc)
+			op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopMark)
 			op.SetIdx(c.anal.curNodeIdx)
 			rs[i].setRootOperator(op)
 			//}
