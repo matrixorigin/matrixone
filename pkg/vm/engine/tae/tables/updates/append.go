@@ -51,24 +51,6 @@ func MockAppendNode(ts types.TS, startRow, maxRow uint32, mvcc *AppendMVCCHandle
 	}
 }
 
-func NewCommittedAppendNode(
-	ts types.TS,
-	startRow, maxRow uint32,
-	isTombstone bool,
-	mvcc *AppendMVCCHandle) *AppendNode {
-	return &AppendNode{
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start:   ts,
-			Prepare: ts,
-			End:     ts,
-		},
-		startRow:    startRow,
-		maxRow:      maxRow,
-		mvcc:        mvcc,
-		isTombstone: isTombstone,
-	}
-}
-
 func NewAppendNode(
 	txn txnif.AsyncTxn,
 	startRow, maxRow uint32,

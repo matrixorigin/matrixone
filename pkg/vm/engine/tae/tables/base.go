@@ -198,25 +198,25 @@ func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector,
 	return
 }
 
-func (obj *baseObject) LoadPersistedColumnData(
-	ctx context.Context, schema *catalog.Schema, colIdx int, mp *mpool.MPool, blkID uint16,
-) (vec containers.Vector, err error) {
-	def := schema.ColDefs[colIdx]
-	location, err := obj.buildMetalocation(blkID)
-	if err != nil {
-		return nil, err
-	}
-	id := obj.meta.Load().AsCommonID()
-	id.SetBlockOffset(blkID)
-	return LoadPersistedColumnData(
-		ctx,
-		obj.rt,
-		id,
-		def,
-		location,
-		mp,
-	)
-}
+// func (obj *baseObject) LoadPersistedColumnData(
+// 	ctx context.Context, schema *catalog.Schema, colIdx int, mp *mpool.MPool, blkID uint16,
+// ) (vec containers.Vector, err error) {
+// 	def := schema.ColDefs[colIdx]
+// 	location, err := obj.buildMetalocation(blkID)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	id := obj.meta.Load().AsCommonID()
+// 	id.SetBlockOffset(blkID)
+// 	return LoadPersistedColumnData(
+// 		ctx,
+// 		obj.rt,
+// 		id,
+// 		def,
+// 		location,
+// 		mp,
+// 	)
+// }
 
 func (obj *baseObject) Prefetch(idxes []uint16, blkID uint16) error {
 	node := obj.PinNode()

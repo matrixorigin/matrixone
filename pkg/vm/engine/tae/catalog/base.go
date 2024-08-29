@@ -96,18 +96,6 @@ func (be *BaseEntryImpl[T]) CreateWithTxnLocked(txn txnif.AsyncTxn, baseNode T) 
 	be.InsertLocked(node)
 }
 
-// used when replay
-func (be *BaseEntryImpl[T]) CreateWithStartAndEndLocked(start, end types.TS, baseNode T) {
-	node := &MVCCNode[T]{
-		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: end,
-		},
-		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithStartEnd(start, end),
-		BaseNode:    baseNode,
-	}
-	be.InsertLocked(node)
-}
-
 func (be *BaseEntryImpl[T]) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
 	be.RLock()
 	defer be.RUnlock()

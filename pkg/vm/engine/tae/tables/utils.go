@@ -31,32 +31,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-func LoadPersistedColumnData(
-	ctx context.Context,
-	rt *dbutils.Runtime,
-	id *common.ID,
-	def *catalog.ColDef,
-	location objectio.Location,
-	mp *mpool.MPool,
-) (vec containers.Vector, err error) {
-	if def.IsPhyAddr() {
-		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
-	}
-	//Extend lifetime of vectors is without the function.
-	//need to copy. closeFunc will be nil.
-	vectors, _, err := blockio.LoadColumns2(
-		ctx, []uint16{uint16(def.SeqNum)},
-		[]types.Type{def.Type},
-		rt.Fs.Service,
-		location,
-		fileservice.Policy(0),
-		true,
-		rt.VectorPool.Transient)
-	if err != nil {
-		return
-	}
-	return vectors[0], nil
-}
+//func LoadPersistedColumnData(
+//	ctx context.Context,
+//	rt *dbutils.Runtime,
+//	id *common.ID,
+//	def *catalog.ColDef,
+//	location objectio.Location,
+//	mp *mpool.MPool,
+//) (vec containers.Vector, err error) {
+//	if def.IsPhyAddr() {
+//		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
+//	}
+//	//Extend lifetime of vectors is without the function.
+//	//need to copy. closeFunc will be nil.
+//	vectors, _, err := blockio.LoadColumns2(
+//		ctx, []uint16{uint16(def.SeqNum)},
+//		[]types.Type{def.Type},
+//		rt.Fs.Service,
+//		location,
+//		fileservice.Policy(0),
+//		true,
+//		rt.VectorPool.Transient)
+//	if err != nil {
+//		return
+//	}
+//	return vectors[0], nil
+//}
 
 func LoadPersistedColumnDatas(
 	ctx context.Context,
