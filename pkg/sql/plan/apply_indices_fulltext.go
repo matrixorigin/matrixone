@@ -14,7 +14,10 @@
 package plan
 
 import (
+	"fmt"
 	"go/constant"
+	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,84 +30,129 @@ import (
 //     -- FilterList but remove the fulltext_match func expr
 //   - TABLE_FUNCTION_SCAN (fulltext_index_scan)
 //     -- Node_Value_Scan
-func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int32, scanNode *plan.Node, indexDef *plan.IndexDef) (int32, error) {
+func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int32, scanNode *plan.Node, filterids []int32, indexDefs []*plan.IndexDef) int32 {
+
+	//idxScanTag := builder.genNewTag()
+	ctx := builder.ctxByNode[nodeID]
 
 	var pkPos = scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
 	var pkType = scanNode.TableDef.Cols[pkPos].Typ
 	//var colDefs = scanNode.TableDef.Cols
 
-	//idxScanTag := builder.genNewTag()
-	ctx := builder.ctxByNode[nodeID]
-
-	// remove the fulltext_match filter from TABLE_SCAN
+	pkJson := fmt.Sprintf("{\"type\":%d}", pkType.Id)
 
 	// buildFullTextIndexScan
 	// rewrite sltStmt to select distinct * from (sltStmt) a
 
-	fulltext_func := tree.NewCStr("fulltext_index_scan", 1)
+	var last_node_id int32
+	var last_ftnode_pkcol *Expr
 
-	var exprs tree.Exprs
-	/*
-		exprs = append(exprs, tree.NewStrVal("idx"))
-		exprs = append(exprs, tree.NewStrVal("pk_type"))
-		exprs = append(exprs, tree.NewStrVal("keyparts"))
-		exprs = append(exprs, tree.NewStrVal("pattern"))
+	for i := 0; i < len(filterids); i++ {
+		ftidxscan := scanNode.FilterList[i]
+		idxdef := indexDefs[i]
+		idxtblname := idxdef.IndexTableName
+		keyparts := strings.Join(idxdef.Parts, ",")
+		fn := ftidxscan.GetF()
+		pattern := fn.Args[0].GetLit().GetSval()
+		mode := fn.Args[1].GetLit().GetI64Val()
 
-	*/
-	exprs = append(exprs, tree.NewNumVal(constant.MakeString("idx"), "idx", false))
-	exprs = append(exprs, tree.NewNumVal(constant.MakeString("pk_type"), "pk_type", false))
-	exprs = append(exprs, tree.NewNumVal(constant.MakeString("keyparts"), "keyparts", false))
-	exprs = append(exprs, tree.NewNumVal(constant.MakeString("pattern"), "pattern", false))
+		fulltext_func := tree.NewCStr("fulltext_index_scan", 1)
 
-	// SELECT doc_id from fulltext_index_scan('a', 'b', 'c', 'd') as f;
-	name := tree.NewUnresolvedName(fulltext_func)
-	tmpSltStmt := &tree.Select{
-		Select: &tree.SelectClause{
-			Distinct: true,
+		var exprs tree.Exprs
+		/*
+			exprs = append(exprs, tree.NewStrVal("idx"))
+			exprs = append(exprs, tree.NewStrVal("pk_type"))
+			exprs = append(exprs, tree.NewStrVal("keyparts"))
+			exprs = append(exprs, tree.NewStrVal("pattern"))
 
-			Exprs: []tree.SelectExpr{
-				//{Expr: tree.StarExpr()},
-				{Expr: tree.NewUnresolvedColName("fulltext_alias_table_name.doc_id")},
-			},
-			From: &tree.From{
-				Tables: tree.TableExprs{
-					&tree.AliasedTableExpr{
-						Expr: &tree.AliasedTableExpr{
-							Expr: &tree.TableFunction{
-								Func: &tree.FuncExpr{
-									Func:     tree.FuncName2ResolvableFunctionReference(name),
-									FuncName: fulltext_func,
-									Exprs:    exprs,
-									Type:     tree.FUNC_TYPE_TABLE,
+		*/
+		exprs = append(exprs, tree.NewNumVal(constant.MakeString(idxtblname), idxtblname, false))
+		exprs = append(exprs, tree.NewNumVal(constant.MakeString(pkJson), pkJson, false))
+		exprs = append(exprs, tree.NewNumVal(constant.MakeString(keyparts), keyparts, false))
+		exprs = append(exprs, tree.NewNumVal(constant.MakeString(pattern), pattern, false))
+		exprs = append(exprs, tree.NewNumValWithType(constant.MakeInt64(mode), strconv.FormatInt(mode, 10), false, tree.P_int64))
+
+		// SELECT doc_id from fulltext_index_scan('a', 'b', 'c', 'd') as f;
+		name := tree.NewUnresolvedName(fulltext_func)
+		tmpSltStmt := &tree.Select{
+			Select: &tree.SelectClause{
+				Distinct: true,
+
+				Exprs: []tree.SelectExpr{
+					//{Expr: tree.StarExpr()},
+					{Expr: tree.NewUnresolvedColName("fulltext_alias_table_name.doc_id")},
+				},
+				From: &tree.From{
+					Tables: tree.TableExprs{
+						&tree.AliasedTableExpr{
+							Expr: &tree.AliasedTableExpr{
+								Expr: &tree.TableFunction{
+									Func: &tree.FuncExpr{
+										Func:     tree.FuncName2ResolvableFunctionReference(name),
+										FuncName: fulltext_func,
+										Exprs:    exprs,
+										Type:     tree.FUNC_TYPE_TABLE,
+									},
 								},
 							},
-						},
-						As: tree.AliasClause{
-							Alias: "fulltext_alias_table_name",
+							As: tree.AliasClause{
+								Alias: "fulltext_alias_table_name",
+							},
 						},
 					},
 				},
 			},
-		},
+		}
+
+		isRoot := false
+		curr_ftnode_id, err := builder.buildSelect(tmpSltStmt, ctx, isRoot)
+		if err != nil {
+			panic(err.Error())
+		}
+		curr_ftnode := builder.qry.Nodes[curr_ftnode_id]
+		curr_ftnode_tag := curr_ftnode.BindingTags[0]
+		curr_ftnode_pkcol := &Expr{
+			Typ: pkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: curr_ftnode_tag, // last idxTbl (may be join) relPos
+					ColPos: 0,               // idxTbl.pk
+				},
+			},
+		}
+
+		logutil.Infof("TABLE_FUNCTION %v", curr_ftnode)
+
+		if i > 0 {
+			// JOIN last_node_id and curr_ftnode_id
+			// JOIN INNER with children (curr_ftnode_id, last_node_id)
+
+			// oncond
+			wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+				curr_ftnode_pkcol, last_ftnode_pkcol,
+			})
+
+			last_node_id = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN,
+				Children: []int32{curr_ftnode_id, last_node_id},
+				JoinType: plan.Node_INNER,
+				OnList:   []*Expr{wherePkEqPk},
+			}, ctx)
+
+		} else {
+			last_node_id = curr_ftnode_id
+		}
+		last_ftnode_pkcol = DeepCopyExpr(curr_ftnode_pkcol)
+
 	}
 
-	isRoot := false
-	tblfn_nodeId, err := builder.buildSelect(tmpSltStmt, ctx, isRoot)
-	if err != nil {
-		return 0, err
+	// remove the fulltext_match filter from TABLE_SCAN
+	for i := len(filterids) - 1; i >= 0; i-- {
+		ftid := filterids[i]
+		scanNode.FilterList = append(scanNode.FilterList[:ftid], scanNode.FilterList[ftid+1:]...)
 	}
-	tblfn_node := builder.qry.Nodes[tblfn_nodeId]
-
-	logutil.Infof("TABLE_FUNCTION %v", tblfn_node)
 
 	// JOIN INNER with children (nodeId, FullTextIndexScanId)
-	joinnodeID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{nodeID, tblfn_nodeId},
-		JoinType: plan.Node_INNER,
-	}, ctx)
-
-	joinnode := builder.qry.Nodes[joinnodeID]
 
 	// oncond
 	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
@@ -121,16 +169,28 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: tblfn_node.BindingTags[0], // last idxTbl (may be join) relPos
-					ColPos: 0,                         // idxTbl.pk
+					RelPos: last_ftnode_pkcol.GetCol().RelPos, // last idxTbl (may be join) relPos
+					ColPos: 0,                                 // idxTbl.pk
 				},
 			},
 		},
 	})
 
-	joinnode.OnList = []*Expr{wherePkEqPk}
+	joinnodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{nodeID, last_node_id},
+		JoinType: plan.Node_INNER,
+		OnList:   []*Expr{wherePkEqPk},
+		Limit:    DeepCopyExpr(scanNode.Limit),
+		Offset:   DeepCopyExpr(scanNode.Offset),
+	}, ctx)
+
+	scanNode.Limit = nil
+	scanNode.Offset = nil
+
+	joinnode := builder.qry.Nodes[joinnodeID]
 
 	logutil.Infof("JOIN INNER %v", joinnode)
 
-	return joinnodeID, nil
+	return joinnodeID
 }

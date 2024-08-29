@@ -17,6 +17,7 @@ package plan
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -110,7 +111,9 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	logutil.Infof("applyIndciesForFilters START")
 	// ERIC
 	{
-		ftid := -1
+		var filterids []int32
+		var ftidxs []*plan.IndexDef
+
 		for i, expr := range node.FilterList {
 			fn := expr.GetF()
 			if fn == nil {
@@ -121,8 +124,6 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			logutil.Infof("FUNCTION HERE : %s", fn.Func.ObjName)
 			switch fn.Func.ObjName {
 			case "fulltext_match":
-				ftid = i
-
 				// arg0 is string
 				logutil.Infof("PATTERN %s", fn.Args[0].GetLit().GetSval())
 				// arg1 is int64
@@ -138,8 +139,26 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 						logutil.Infof("COL %d %s", j, c.GetCol().GetName())
 					}
 				*/
+
 				for _, idx := range node.TableDef.Indexes {
 					logutil.Infof("INDX name = %s , keys  = %v", idx.IndexTableName, idx.Parts)
+
+					nfound := 0
+					for _, p := range idx.Parts {
+						for j := 2; j < len(fn.Args); j++ {
+							if strings.EqualFold(p, fn.Args[j].GetCol().GetName()) {
+								// found
+								nfound++
+								break
+							}
+						}
+					}
+
+					if nfound == len(idx.Parts) {
+						ftidxs = append(ftidxs, idx)
+						filterids = append(filterids, int32(i))
+						break
+					}
 				}
 				pkid := node.TableDef.Name2ColIndex[node.TableDef.Pkey.GetNames()[0]]
 				logutil.Infof("Primary Key POS =%d, %s", pkid, node.TableDef.Pkey.String())
@@ -151,7 +170,10 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			}
 		}
 
-		logutil.Infof("fulltext found %d", ftid)
+		logutil.Infof("fulltext found %d", len(filterids))
+		if len(filterids) > 0 {
+			return builder.applyIndicesForFiltersUsingFullTextIndex(nodeID, node, filterids, ftidxs)
+		}
 		/*
 			if ftid != -1 {
 				node.FilterList = append(node.FilterList[:ftid], node.FilterList[ftid+1:]...)
