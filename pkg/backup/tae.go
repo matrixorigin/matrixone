@@ -329,7 +329,7 @@ func execBackup(
 	}
 
 	// trim checkpoint and block
-	var cnLoc, tnLoc, mergeStart, mergeEnd string
+	var cnLoc, mergeStart, mergeEnd string
 	var end, start types.TS
 	var version uint64
 	if trimInfo != "" {
@@ -340,7 +340,7 @@ func execBackup(
 		}
 		cnLoc = ckpStr[0]
 		mergeEnd = ckpStr[2]
-		tnLoc = ckpStr[3]
+		// tnLoc = ckpStr[3]
 		mergeStart = ckpStr[4]
 		end = types.StringToTS(mergeEnd)
 		start = types.StringToTS(mergeStart)
@@ -374,11 +374,10 @@ func execBackup(
 		if err != nil {
 			return err
 		}
-		tnLocation, err := blockio.EncodeLocationFromString(tnLoc)
-		if err != nil {
-			return err
-		}
-		var checkpointFiles []string
+		var (
+			checkpointFiles []string
+			tnLocation      objectio.Location
+		)
 		cnLocation, tnLocation, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, sid, srcFs, dstFs,
 			cnLocation, uint32(version), start)
 		for _, name := range checkpointFiles {
