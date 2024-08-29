@@ -51,12 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
@@ -634,54 +629,15 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 		}
 	case *limit.Limit:
 		in.Limit = t.LimitExpr
-	case *loopanti.LoopAnti:
-		in.Anti = &pipeline.AntiJoin{
-			Result:     t.Result,
-			Expr:       t.Cond,
-			JoinMapTag: t.JoinMapTag,
-		}
-		in.ProjectList = t.ProjectList
 	case *loopjoin.LoopJoin:
 		relList, colList := getRelColList(t.Result)
 		in.Join = &pipeline.Join{
 			RelList:    relList,
 			ColList:    colList,
-			Expr:       t.Cond,
-			JoinMapTag: t.JoinMapTag,
-		}
-		in.ProjectList = t.ProjectList
-	case *loopleft.LoopLeft:
-		relList, colList := getRelColList(t.Result)
-		in.LeftJoin = &pipeline.LeftJoin{
-			RelList:    relList,
-			ColList:    colList,
-			Expr:       t.Cond,
 			Types:      convertToPlanTypes(t.Typs),
-			JoinMapTag: t.JoinMapTag,
-		}
-		in.ProjectList = t.ProjectList
-	case *loopsemi.LoopSemi:
-		in.SemiJoin = &pipeline.SemiJoin{
-			Result:     t.Result,
 			Expr:       t.Cond,
 			JoinMapTag: t.JoinMapTag,
-		}
-		in.ProjectList = t.ProjectList
-	case *loopsingle.LoopSingle:
-		relList, colList := getRelColList(t.Result)
-		in.SingleJoin = &pipeline.SingleJoin{
-			RelList:    relList,
-			ColList:    colList,
-			Expr:       t.Cond,
-			Types:      convertToPlanTypes(t.Typs),
-			JoinMapTag: t.JoinMapTag,
-		}
-		in.ProjectList = t.ProjectList
-	case *loopmark.LoopMark:
-		in.MarkJoin = &pipeline.MarkJoin{
-			Expr:       t.Cond,
-			Result:     t.Result,
-			JoinMapTag: t.JoinMapTag,
+			JoinType:   int32(t.JoinType),
 		}
 		in.ProjectList = t.ProjectList
 	case *offset.Offset:
@@ -1103,37 +1059,14 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 	case vm.Limit:
 		op = limit.NewArgument().WithLimit(opr.Limit)
-	case vm.LoopAnti:
-		t := opr.GetAnti()
-		arg := loopanti.NewArgument()
-		arg.Result = t.Result
-		arg.Cond = t.Expr
-		arg.JoinMapTag = t.JoinMapTag
-		arg.ProjectList = opr.ProjectList
-		op = arg
 	case vm.LoopJoin:
 		t := opr.GetJoin()
 		arg := loopjoin.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
-		arg.Cond = t.Expr
-		arg.JoinMapTag = t.JoinMapTag
-		arg.ProjectList = opr.ProjectList
-		op = arg
-	case vm.LoopLeft:
-		t := opr.GetLeftJoin()
-		arg := loopleft.NewArgument()
-		arg.Result = convertToResultPos(t.RelList, t.ColList)
-		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
-		arg.JoinMapTag = t.JoinMapTag
-		arg.ProjectList = opr.ProjectList
-		op = arg
-	case vm.LoopSemi:
-		t := opr.GetSemiJoin()
-		arg := loopsemi.NewArgument()
-		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.JoinMapTag = t.JoinMapTag
+		arg.JoinType = int(t.JoinType)
 		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.IndexJoin:
@@ -1141,23 +1074,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := indexjoin.NewArgument()
 		arg.Result = t.Result
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
-		arg.ProjectList = opr.ProjectList
-		op = arg
-	case vm.LoopSingle:
-		t := opr.GetSingleJoin()
-		arg := loopsingle.NewArgument()
-		arg.Result = convertToResultPos(t.RelList, t.ColList)
-		arg.Cond = t.Expr
-		arg.Typs = convertToTypes(t.Types)
-		arg.JoinMapTag = t.JoinMapTag
-		arg.ProjectList = opr.ProjectList
-		op = arg
-	case vm.LoopMark:
-		t := opr.GetMarkJoin()
-		arg := loopmark.NewArgument()
-		arg.Result = t.Result
-		arg.Cond = t.Expr
-		arg.JoinMapTag = t.JoinMapTag
 		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Offset:
