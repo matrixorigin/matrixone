@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -33,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"io"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -160,7 +161,7 @@ func (proc *Process) GetAnalyze(idx, parallelIdx int, parallelMajor bool) Analyz
 }
 
 func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {
-	vec := proc.GetVector(typ)
+	vec := vector.NewVec(typ)
 	err := vec.PreExtend(nele, proc.Mp())
 	if err != nil {
 		return nil, err
@@ -176,20 +177,12 @@ func (proc *Process) CopyValueScanBatch(src *Process) {
 	proc.Base.valueScanBatch = src.Base.valueScanBatch
 }
 
-func (proc *Process) SetVectorPoolSize(limit int) {
-	proc.Base.vp.modifyCapacity(limit, proc.Mp())
-}
-
-func (proc *Process) CopyVectorPool(src *Process) {
-	proc.Base.vp = src.Base.vp
-}
-
 func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(src.Vecs))
 	bat.SetAttributes(src.Attrs)
 	bat.Recursive = src.Recursive
 	for i := range bat.Vecs {
-		v := proc.GetVector(*src.Vecs[i].GetType())
+		v := vector.NewVec(*src.Vecs[i].GetType())
 		if v.Capacity() < preAllocSize {
 			err := v.PreExtend(preAllocSize, proc.Mp())
 			if err != nil {
