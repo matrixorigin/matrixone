@@ -69,6 +69,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 		mode := fn.Args[1].GetLit().GetI64Val()
 
 		fulltext_func := tree.NewCStr("fulltext_index_scan", 1)
+		alias_name := fmt.Sprintf("fulltext_alias_%d", i)
 
 		var exprs tree.Exprs
 		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(idxtblname), idxtblname, false, tree.P_char))
@@ -78,63 +79,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 		exprs = append(exprs, tree.NewNumValWithType(constant.MakeInt64(mode), strconv.FormatInt(mode, 10), false, tree.P_int64))
 
 		name := tree.NewUnresolvedName(fulltext_func)
-
-		/*
-			tmpSltStmt := &tree.Select{
-				Select: &tree.SelectClause{
-					Distinct: true,
-
-					Exprs: []tree.SelectExpr{
-						{Expr: tree.StarExpr()},
-						//{Expr: tree.NewUnresolvedColName("fulltext_alias_inner.doc_id")},
-						//{Expr: tree.NewUnresolvedColName("fulltext_alias_table_name.doc_id")},
-					},
-					From: &tree.From{
-						Tables: tree.TableExprs{
-							&tree.AliasedTableExpr{
-								Expr: &tree.AliasedTableExpr{
-									Expr: &tree.TableFunction{
-										Func: &tree.FuncExpr{
-											Func:     tree.FuncName2ResolvableFunctionReference(name),
-											FuncName: fulltext_func,
-											Exprs:    exprs,
-											Type:     tree.FUNC_TYPE_TABLE,
-										},
-									},
-									As: tree.AliasClause{
-										Alias: "fulltext_alias_inner",
-									},
-								},
-								As: tree.AliasClause{
-									Alias: "fulltext_alias_table_name",
-								},
-							},
-						},
-					},
-				},
-			}
-
-			isRoot := false
-			curr_ftnode_id, err := builder.buildSelect(tmpSltStmt, ctx, isRoot)
-			if err != nil {
-				panic(err.Error())
-			}
-
-		*/
-
-		// SELECT doc_id from fulltext_index_scan('a', 'b', 'c', 'd') as f;
-		/*
-			tmpTableFunc := &tree.TableFunction{
-				Func: &tree.FuncExpr{
-					Func:     tree.FuncName2ResolvableFunctionReference(name),
-					FuncName: fulltext_func,
-					Exprs:    exprs,
-					Type:     tree.FUNC_TYPE_TABLE,
-				},
-			}
-
-			curr_ftnode_id, err := builder.buildTableFunction(tmpTableFunc, ctx, -1, nil)
-		*/
 
 		tmpTableFunc := &tree.AliasedTableExpr{
 			Expr: &tree.TableFunction{
@@ -146,7 +90,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 				},
 			},
 			As: tree.AliasClause{
-				Alias: "fulltext_alias",
+				Alias: tree.Identifier(alias_name),
 			},
 		}
 		curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, nodeID, ctx)
