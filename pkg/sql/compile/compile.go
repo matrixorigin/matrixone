@@ -2750,12 +2750,11 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 		ss[i].setRootOperator(op)
 	}
 	c.anal.isFirst = false
-
-	rs := c.newMergeScope(ss)
-	if len(ss) == 1 {
-		return []*Scope{rs}
+	if c.IsSingleScope(ss) {
+		return ss
 	}
 
+	rs := c.newMergeScope(ss)
 	// should sample again if sample by rows.
 	if n.SampleFunc.Rows != plan2.NotSampleByRows {
 		currentFirstFlag = c.anal.isFirst
