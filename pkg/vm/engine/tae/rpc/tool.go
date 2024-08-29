@@ -38,6 +38,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -799,6 +800,16 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 	for i, entry := range v.Entries {
 		obj, _ := objectio.Decode(entry.CachedData.Bytes())
 		vec := obj.(*vector.Vector)
+		if ret, ok := executeVecMethod(vec, c.method); ok {
+			col := ColumnJson{
+				Index: uint16(c.cols[i]),
+				Type:  vec.GetType().String(),
+				Data:  ret,
+			}
+			cols = append(cols, col)
+			continue
+		}
+
 		ret := c.getPrintableVec(vec)
 		left, right := 0, 0
 		if len(c.rows) != 0 {
@@ -812,7 +823,6 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 			right = min(len(ret), 10)
 			ret = ret[left:right]
 		}
-
 		col := ColumnJson{
 			Index: uint16(c.cols[i]),
 			Type:  vec.GetType().String(),
@@ -884,10 +894,6 @@ func (c *objGetArg) getPrintableVec(v *vector.Vector) []string {
 		return getDataFromVec[types.Timestamp](v, oid, c.method, c.target)
 	case types.T_enum:
 		return getDataFromVec[types.Enum](v, oid, c.method, c.target)
-	case types.T_decimal64:
-		return getDataFromVec[types.Decimal64](v, oid, c.method, c.target)
-	case types.T_decimal128:
-		return getDataFromVec[types.Decimal128](v, oid, c.method, c.target)
 	case types.T_uuid:
 		return getDataFromVec[types.Uuid](v, oid, c.method, c.target)
 	case types.T_TS:
@@ -897,7 +903,56 @@ func (c *objGetArg) getPrintableVec(v *vector.Vector) []string {
 	case types.T_Blockid:
 		return getDataFromVec[types.Blockid](v, oid, c.method, c.target)
 	default:
-		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", oid.String()))
+		return []string{v.String()}
+	}
+}
+
+func executeVecMethod(v *vector.Vector, method string) ([]string, bool) {
+	oid := v.GetType().Oid
+	switch method {
+	case "sum":
+		if !checkSumType(oid) {
+			return []string{fmt.Sprintf("method %v dose not support type %v", method, oid.String())}, true
+		}
+		_, val := v.GetSumValue()
+		return decodeVec(oid, val), true
+	case "min":
+		if !checkMinMaxType(oid) {
+			return []string{fmt.Sprintf("method %v dose not support type %v", method, oid.String())}, true
+		}
+		_, val, _ := v.GetMinMaxValue()
+		return decodeVec(oid, val), true
+	case "max":
+		if !checkMinMaxType(oid) {
+			return []string{fmt.Sprintf("method %v dose not support type %v", method, oid.String())}, true
+		}
+		_, _, val := v.GetMinMaxValue()
+		return decodeVec(oid, val), true
+	default:
+		return nil, false
+	}
+}
+
+func checkSumType(oid types.T) bool {
+	switch oid {
+	case types.T_bit, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8,
+		types.T_uint16, types.T_uint32, types.T_uint64, types.T_float32, types.T_float64, types.T_decimal64:
+		return true
+	default:
+		return false
+	}
+}
+
+func checkMinMaxType(oid types.T) bool {
+	switch oid {
+	case types.T_bit, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8,
+		types.T_uint16, types.T_uint32, types.T_uint64, types.T_float32, types.T_float64, types.T_date,
+		types.T_datetime, types.T_time, types.T_timestamp, types.T_enum, types.T_decimal64, types.T_decimal128,
+		types.T_TS, types.T_uuid, types.T_Rowid, types.T_char, types.T_varchar, types.T_json, types.T_binary,
+		types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_array_float32, types.T_array_float64:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -907,7 +962,7 @@ func executeMethod(v []string, oid types.T, method string) []string {
 		return v
 	case "location":
 		if oid != types.T_varchar {
-			return []string{fmt.Sprintf("method %v dose not support for type %v", method, oid.String())}
+			return []string{fmt.Sprintf("method %v dose not support type %v", method, oid.String())}
 		}
 		res := make([]string, len(v))
 		for i := range v {
@@ -916,7 +971,7 @@ func executeMethod(v []string, oid types.T, method string) []string {
 		return res
 	case "rowid":
 		if oid != types.T_varchar {
-			return []string{fmt.Sprintf("method %v dose not support for type %v", method, oid.String())}
+			return []string{fmt.Sprintf("method %v dose not support type %v", method, oid.String())}
 		}
 		res := make([]string, len(v))
 		for i := range v {
@@ -926,7 +981,7 @@ func executeMethod(v []string, oid types.T, method string) []string {
 		return res
 	case "blkid":
 		if oid != types.T_varchar {
-			return []string{fmt.Sprintf("method %v dose not support for type %v", method, oid.String())}
+			return []string{fmt.Sprintf("method %v dose not support type %v", method, oid.String())}
 		}
 		res := make([]string, len(v))
 		for i := range v {
@@ -1035,6 +1090,67 @@ func getString(oid types.T, v any) string {
 		return val.String()
 	default:
 		return ""
+	}
+}
+
+func decodeVec(oid types.T, v []byte) []string {
+	switch oid {
+	case types.T_bit:
+		val := types.DecodeUint64(v)
+		return []string{getString(oid, val)}
+	case types.T_int8:
+		val := types.DecodeInt8(v)
+		return []string{getString(oid, val)}
+	case types.T_int16:
+		val := types.DecodeInt16(v)
+		return []string{getString(oid, val)}
+	case types.T_int32:
+		val := types.DecodeInt32(v)
+		return []string{getString(oid, val)}
+	case types.T_int64:
+		val := types.DecodeInt64(v)
+		return []string{getString(oid, val)}
+	case types.T_uint8:
+		val := types.DecodeUint8(v)
+		return []string{getString(oid, val)}
+	case types.T_uint16:
+		val := types.DecodeUint16(v)
+		return []string{getString(oid, val)}
+	case types.T_uint32:
+		val := types.DecodeUint32(v)
+		return []string{getString(oid, val)}
+	case types.T_uint64:
+		val := types.DecodeUint64(v)
+		return []string{getString(oid, val)}
+	case types.T_float32:
+		val := types.DecodeFloat32(v)
+		return []string{getString(oid, val)}
+	case types.T_float64:
+		val := types.DecodeFloat64(v)
+		return []string{getString(oid, val)}
+	case types.T_date:
+		val := types.DecodeDate(v)
+		return []string{getString(oid, val)}
+	case types.T_datetime:
+		val := types.DecodeDatetime(v)
+		return []string{getString(oid, val)}
+	case types.T_time:
+		val := types.DecodeTime(v)
+		return []string{getString(oid, val)}
+	case types.T_timestamp:
+		val := types.DecodeTimestamp(v)
+		return []string{getString(oid, val)}
+	case types.T_enum:
+		val := types.DecodeEnum(v)
+		return []string{getString(oid, val)}
+	case types.T_uuid:
+		val := types.DecodeUuid(v)
+		return []string{getString(oid, val)}
+	case types.T_TS:
+		val := *(*types.TS)(unsafe.Pointer(&v[0]))
+		return []string{getString(oid, val)}
+	default:
+		return []string{fmt.Sprintf("unsupported type %s", oid.String())}
 	}
 }
 
