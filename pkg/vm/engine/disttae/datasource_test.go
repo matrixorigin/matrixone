@@ -16,32 +16,67 @@ package disttae
 
 import (
 	"bytes"
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"testing"
+	"time"
 
-	"github.com/stretchr/testify/require"
-
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTombstoneData1(t *testing.T) {
-	location1 := objectio.NewRandomLocation(1, 1111)
-	location2 := objectio.NewRandomLocation(2, 2222)
-	location3 := objectio.NewRandomLocation(3, 3333)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	blockio.Start("")
+	defer blockio.Stop("")
+
+	proc := testutil.NewProc()
+
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	var stats []objectio.ObjectStats
+
+	var tombstoneRowIds []types.Rowid
+	for i := 0; i < 3; i++ {
+		writer, err := colexec.NewS3TombstoneWriter()
+		require.NoError(t, err)
+
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+		for j := 0; j < 10; j++ {
+			row := types.RandomRowid()
+			tombstoneRowIds = append(tombstoneRowIds, row)
+			vector.AppendFixed[types.Rowid](bat.Vecs[0], row, false, proc.GetMPool())
+			vector.AppendFixed[int32](bat.Vecs[1], int32(j), false, proc.GetMPool())
+		}
+
+		bat.SetRowCount(bat.Vecs[0].Length())
+
+		writer.StashBatch(proc, bat)
+
+		_, ss, err := writer.SortAndSync(proc)
+		require.NoError(t, err)
+		require.Equal(t, 2, len(ss))
+
+		stats = append(stats, ss[0])
+	}
 
 	var stats1, stats2, stats3 objectio.ObjectStats
-	objectio.SetObjectStatsLocation(&stats1, location1)
-	objectio.SetObjectStatsLocation(&stats2, location2)
-	objectio.SetObjectStatsLocation(&stats3, location3)
-
-	objectio.SetObjectStatsBlkCnt(&stats1, 1)
-	objectio.SetObjectStatsBlkCnt(&stats2, 1)
-	objectio.SetObjectStatsBlkCnt(&stats3, 1)
-
-	objectio.SetObjectStatsRowCnt(&stats1, location1.Rows())
-	objectio.SetObjectStatsRowCnt(&stats3, location3.Rows())
-	objectio.SetObjectStatsRowCnt(&stats2, location2.Rows())
+	stats1 = stats[0]
+	stats2 = stats[1]
+	stats3 = stats[2]
 
 	obj1 := objectio.NewObjectid()
 	obj2 := objectio.NewObjectid()
@@ -60,10 +95,34 @@ func TestTombstoneData1(t *testing.T) {
 
 	// Test AppendInMemory and AppendFiles and SortInMemory
 	tombstones1 := NewEmptyTombstoneData()
-	err := tombstones1.AppendInMemory(rowids...)
+	err = tombstones1.AppendInMemory(rowids...)
 	require.Nil(t, err)
 	err = tombstones1.AppendFiles(stats1, stats2)
 	require.Nil(t, err)
+
+	deleteMask := nulls.Nulls{}
+	tombstones1.PrefetchTombstones("", fs, nil)
+	for i := range tombstoneRowIds {
+		sIdx := i / int(stats1.Rows())
+		if sIdx == 2 {
+			continue
+		}
+
+		bid := tombstoneRowIds[i].BorrowBlockID()
+		exist, err := tombstones1.HasBlockTombstone(ctx, *bid, fs)
+		require.NoError(t, err)
+		require.True(t, exist)
+
+		left, err := tombstones1.ApplyPersistedTombstones(
+			ctx, fs, types.MaxTs(), *bid,
+			[]int64{int64(tombstoneRowIds[i].GetRowOffset())},
+			&deleteMask)
+
+		require.NoError(t, err)
+		require.Equal(t, 0, len(left))
+		require.Equal(t, 1, deleteMask.Count())
+		deleteMask.Reset()
+	}
 
 	tombstones1.SortInMemory()
 	last := tombstones1.rowids[0]
