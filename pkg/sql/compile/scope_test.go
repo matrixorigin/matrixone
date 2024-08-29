@@ -17,6 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"testing"
 	"time"
 
@@ -308,6 +311,12 @@ func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpTy
 			return shuffle.NewArgument()
 		case vm.TableScan:
 			return table_scan.NewArgument()
+		case vm.RightSemi:
+			return rightsemi.NewArgument()
+		case vm.RightAnti:
+			return rightanti.NewArgument()
+		case vm.Right:
+			return right.NewArgument()
 		default:
 			panic("unsupported for ut.")
 		}
