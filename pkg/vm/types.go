@@ -45,17 +45,12 @@ const (
 	Join
 	LoopJoin
 	Left
-	LoopLeft
 	Single
-	LoopSingle
 	Semi
 	RightSemi
-	LoopSemi
 	Anti
 	RightAnti
-	LoopAnti
 	Mark
-	LoopMark
 	IndexJoin
 	IndexBuild
 
