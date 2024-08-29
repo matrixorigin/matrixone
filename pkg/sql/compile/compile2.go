@@ -176,6 +176,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(runStart.Sub(c.startAt).Seconds())
 	sp := c.proc.GetStmtProfile()
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
+
 	stats := statistic.StatsInfoFromContext(execTopContext)
 	stats.ExecutionStart()
 	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOperator, executeSQL, seq)
@@ -208,6 +209,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		runC.InitPipelineContextToExecuteQuery()
 
 		if err = runC.runOnce(); err == nil {
+			if runC.anal != nil {
+				runC.anal.retryTimes = retryTimes
+			}
 			break
 		}
 
