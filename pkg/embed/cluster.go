@@ -35,7 +35,7 @@ const (
 )
 
 var (
-	basePort     = uint64(10000)
+	basePort     = uint64(60000)
 	basePortStep = uint64(100)
 
 	clusterID atomic.Uint64
