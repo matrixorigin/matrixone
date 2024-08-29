@@ -399,7 +399,7 @@ func TestS3FSMinioServer(t *testing.T) {
 	exePath, err := exec.LookPath("minio")
 	if errors.Is(err, exec.ErrNotFound) {
 		// minio not found in machine
-		return
+		t.Skip("minio executable not found")
 	}
 
 	// start minio
