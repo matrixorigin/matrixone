@@ -63,7 +63,12 @@ func (sample *Sample) OpType() vm.OpType {
 }
 
 func (sample *Sample) Prepare(proc *process.Process) (err error) {
-	sample.OpAnalyzer = process.NewAnalyzer(sample.GetIdx(), sample.IsFirst, sample.IsLast, "sample")
+	if sample.OpAnalyzer == nil {
+		sample.OpAnalyzer = process.NewAnalyzer(sample.GetIdx(), sample.IsFirst, sample.IsLast, "sample")
+	} else {
+		sample.OpAnalyzer.Reset()
+	}
+
 	sample.ctr = &container{
 		isGroupBy:     len(sample.GroupExprs) != 0,
 		isMultiSample: len(sample.SampleExprs) > 1,
@@ -114,9 +119,6 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(sample.GetIdx(), sample.GetParallelIdx(), sample.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := sample.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

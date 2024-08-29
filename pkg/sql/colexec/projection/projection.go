@@ -42,7 +42,12 @@ func (projection *Projection) OpType() vm.OpType {
 }
 
 func (projection *Projection) Prepare(proc *process.Process) (err error) {
-	projection.OpAnalyzer = process.NewAnalyzer(projection.GetIdx(), projection.IsFirst, projection.IsLast, "projection")
+	if projection.OpAnalyzer == nil {
+		projection.OpAnalyzer = process.NewAnalyzer(projection.GetIdx(), projection.IsFirst, projection.IsLast, "projection")
+	} else {
+		projection.OpAnalyzer.Reset()
+	}
+
 	if len(projection.ctr.projExecutors) == 0 {
 		projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
 
@@ -56,9 +61,6 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := projection.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

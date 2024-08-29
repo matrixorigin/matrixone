@@ -40,7 +40,12 @@ func (fill *Fill) OpType() vm.OpType {
 }
 
 func (fill *Fill) Prepare(proc *process.Process) (err error) {
-	fill.OpAnalyzer = process.NewAnalyzer(fill.GetIdx(), fill.IsFirst, fill.IsLast, "fill")
+	if fill.OpAnalyzer == nil {
+		fill.OpAnalyzer = process.NewAnalyzer(fill.GetIdx(), fill.IsFirst, fill.IsLast, "fill")
+	} else {
+		fill.OpAnalyzer.Reset()
+	}
+
 	ctr := &fill.ctr
 
 	f := true
@@ -119,9 +124,6 @@ func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := fill.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

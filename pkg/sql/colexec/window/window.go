@@ -45,7 +45,12 @@ func (window *Window) OpType() vm.OpType {
 }
 
 func (window *Window) Prepare(proc *process.Process) (err error) {
-	window.OpAnalyzer = process.NewAnalyzer(window.GetIdx(), window.IsFirst, window.IsLast, "window")
+	if window.OpAnalyzer == nil {
+		window.OpAnalyzer = process.NewAnalyzer(window.GetIdx(), window.IsFirst, window.IsLast, "window")
+	} else {
+		window.OpAnalyzer.Reset()
+	}
+
 	ctr := &window.ctr
 
 	if len(ctr.aggVecs) == 0 {
@@ -71,14 +76,12 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	var err error
-	ctr := &window.ctr
-	//anal := proc.GetAnalyze(window.GetIdx(), window.GetParallelIdx(), window.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := window.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()
+
+	var err error
+	ctr := &window.ctr
 
 	for {
 		switch ctr.status {

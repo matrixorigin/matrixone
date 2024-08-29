@@ -37,7 +37,12 @@ func (source *Source) OpType() vm.OpType {
 }
 
 func (source *Source) Prepare(proc *process.Process) error {
-	source.OpAnalyzer = process.NewAnalyzer(source.GetIdx(), source.IsFirst, source.IsLast, "source scan")
+	if source.OpAnalyzer == nil {
+		source.OpAnalyzer = process.NewAnalyzer(source.GetIdx(), source.IsFirst, source.IsLast, "source scan")
+	} else {
+		source.OpAnalyzer.Reset()
+	}
+
 	_, span := trace.Start(proc.Ctx, "SourcePrepare")
 	defer span.End()
 

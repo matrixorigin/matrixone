@@ -44,7 +44,12 @@ func (rightJoin *RightJoin) OpType() vm.OpType {
 }
 
 func (rightJoin *RightJoin) Prepare(proc *process.Process) (err error) {
-	rightJoin.OpAnalyzer = process.NewAnalyzer(rightJoin.GetIdx(), rightJoin.IsFirst, rightJoin.IsLast, "right join")
+	if rightJoin.OpAnalyzer == nil {
+		rightJoin.OpAnalyzer = process.NewAnalyzer(rightJoin.GetIdx(), rightJoin.IsFirst, rightJoin.IsLast, "right join")
+	} else {
+		rightJoin.OpAnalyzer.Reset()
+	}
+
 	if len(rightJoin.ctr.vecs) == 0 {
 		rightJoin.ctr.vecs = make([]*vector.Vector, len(rightJoin.Conditions[0]))
 		rightJoin.ctr.evecs = make([]evalVector, len(rightJoin.Conditions[0]))
@@ -68,9 +73,6 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//analyze := proc.GetAnalyze(rightJoin.GetIdx(), rightJoin.GetParallelIdx(), rightJoin.GetParallelMajor())
-	//analyze.Start()
-	//defer analyze.Stop()
 	analyzer := rightJoin.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

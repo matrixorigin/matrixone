@@ -41,7 +41,12 @@ func (shuffleBuild *ShuffleBuild) OpType() vm.OpType {
 }
 
 func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
-	shuffleBuild.OpAnalyzer = process.NewAnalyzer(shuffleBuild.GetIdx(), shuffleBuild.IsFirst, shuffleBuild.IsLast, "shuffle build")
+	if shuffleBuild.OpAnalyzer == nil {
+		shuffleBuild.OpAnalyzer = process.NewAnalyzer(shuffleBuild.GetIdx(), shuffleBuild.IsFirst, shuffleBuild.IsLast, "shuffle build")
+	} else {
+		shuffleBuild.OpAnalyzer.Reset()
+	}
+
 	if shuffleBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
 	}
@@ -92,9 +97,6 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(shuffleBuild.GetIdx(), shuffleBuild.GetParallelIdx(), shuffleBuild.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := shuffleBuild.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

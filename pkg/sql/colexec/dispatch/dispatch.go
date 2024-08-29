@@ -43,7 +43,11 @@ func (dispatch *Dispatch) OpType() vm.OpType {
 }
 
 func (dispatch *Dispatch) Prepare(proc *process.Process) error {
-	dispatch.OpAnalyzer = process.NewAnalyzer(dispatch.GetIdx(), dispatch.IsFirst, dispatch.IsLast, "dispatch")
+	if dispatch.OpAnalyzer == nil {
+		dispatch.OpAnalyzer = process.NewAnalyzer(dispatch.GetIdx(), dispatch.IsFirst, dispatch.IsLast, "dispatch")
+	} else {
+		dispatch.OpAnalyzer.Reset()
+	}
 
 	ctr := new(container)
 	dispatch.ctr = ctr

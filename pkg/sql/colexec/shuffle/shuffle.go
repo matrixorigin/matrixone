@@ -41,7 +41,12 @@ func (shuffle *Shuffle) OpType() vm.OpType {
 }
 
 func (shuffle *Shuffle) Prepare(proc *process.Process) error {
-	shuffle.OpAnalyzer = process.NewAnalyzer(shuffle.GetIdx(), shuffle.IsFirst, shuffle.IsLast, "shuffle")
+	if shuffle.OpAnalyzer == nil {
+		shuffle.OpAnalyzer = process.NewAnalyzer(shuffle.GetIdx(), shuffle.IsFirst, shuffle.IsLast, "shuffle")
+	} else {
+		shuffle.OpAnalyzer.Reset()
+	}
+
 	if shuffle.RuntimeFilterSpec != nil {
 		shuffle.ctr.runtimeFilterHandled = false
 	}
@@ -67,11 +72,7 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
-	//anal := proc.GetAnalyze(shuffle.GetIdx(), shuffle.GetParallelIdx(), shuffle.GetParallelMajor())
-	//anal.Start()
-	//defer func() {
-	//	anal.Stop()
-	//}()
+
 	analyzer := shuffle.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

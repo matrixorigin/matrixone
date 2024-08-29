@@ -58,7 +58,12 @@ func (deletion *Deletion) OpType() vm.OpType {
 }
 
 func (deletion *Deletion) Prepare(proc *process.Process) error {
-	deletion.OpAnalyzer = process.NewAnalyzer(deletion.GetIdx(), deletion.IsFirst, deletion.IsLast, "deletion")
+	if deletion.OpAnalyzer == nil {
+		deletion.OpAnalyzer = process.NewAnalyzer(deletion.GetIdx(), deletion.IsFirst, deletion.IsLast, "deletion")
+	} else {
+		deletion.OpAnalyzer.Reset()
+	}
+
 	if deletion.RemoteDelete {
 		if deletion.ctr.blockId_type == nil {
 			deletion.ctr.blockId_type = make(map[types.Blockid]int8)
@@ -96,9 +101,6 @@ func (deletion *Deletion) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, error) {
-	//anal := proc.GetAnalyze(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := deletion.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

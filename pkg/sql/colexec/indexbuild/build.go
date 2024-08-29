@@ -34,7 +34,12 @@ func (indexBuild *IndexBuild) OpType() vm.OpType {
 }
 
 func (indexBuild *IndexBuild) Prepare(proc *process.Process) (err error) {
-	indexBuild.OpAnalyzer = process.NewAnalyzer(indexBuild.GetIdx(), indexBuild.IsFirst, indexBuild.IsLast, "index build")
+	if indexBuild.OpAnalyzer == nil {
+		indexBuild.OpAnalyzer = process.NewAnalyzer(indexBuild.GetIdx(), indexBuild.IsFirst, indexBuild.IsLast, "index build")
+	} else {
+		indexBuild.OpAnalyzer.Reset()
+	}
+
 	if indexBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in index build!")
 	}
@@ -45,10 +50,6 @@ func (indexBuild *IndexBuild) Call(proc *process.Process) (vm.CallResult, error)
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
-
-	//anal := proc.GetAnalyze(indexBuild.GetIdx(), indexBuild.GetParallelIdx(), indexBuild.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := indexBuild.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

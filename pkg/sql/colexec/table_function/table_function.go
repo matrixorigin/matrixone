@@ -34,9 +34,6 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(tableFunction.GetIdx(), tableFunction.GetParallelIdx(), tableFunction.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := tableFunction.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()
@@ -108,7 +105,12 @@ func (tableFunction *TableFunction) OpType() vm.OpType {
 }
 
 func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
-	tableFunction.OpAnalyzer = process.NewAnalyzer(tableFunction.GetIdx(), tableFunction.IsFirst, tableFunction.IsLast, "tableFunction")
+	if tableFunction.OpAnalyzer == nil {
+		tableFunction.OpAnalyzer = process.NewAnalyzer(tableFunction.GetIdx(), tableFunction.IsFirst, tableFunction.IsLast, "tableFunction")
+	} else {
+		tableFunction.OpAnalyzer.Reset()
+	}
+
 	var err error
 	tblArg := tableFunction
 

@@ -37,7 +37,12 @@ func (mergeGroup *MergeGroup) OpType() vm.OpType {
 }
 
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
-	mergeGroup.OpAnalyzer = process.NewAnalyzer(mergeGroup.GetIdx(), mergeGroup.IsFirst, mergeGroup.IsLast, "merge_group")
+	if mergeGroup.OpAnalyzer == nil {
+		mergeGroup.OpAnalyzer = process.NewAnalyzer(mergeGroup.GetIdx(), mergeGroup.IsFirst, mergeGroup.IsLast, "merge_group")
+	} else {
+		mergeGroup.OpAnalyzer.Reset()
+	}
+
 	if mergeGroup.ProjectList != nil {
 		err := mergeGroup.PrepareProjection(proc)
 		if err != nil {
@@ -57,9 +62,6 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 	defer analyzer.Stop()
 
 	ctr := &mergeGroup.ctr
-	//anal := proc.GetAnalyze(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {

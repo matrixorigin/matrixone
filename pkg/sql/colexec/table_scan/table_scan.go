@@ -42,7 +42,12 @@ func (tableScan *TableScan) OpType() vm.OpType {
 }
 
 func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
-	tableScan.OpAnalyzer = process.NewAnalyzer(tableScan.GetIdx(), tableScan.IsFirst, tableScan.IsLast, "table_scan")
+	if tableScan.OpAnalyzer == nil {
+		tableScan.OpAnalyzer = process.NewAnalyzer(tableScan.GetIdx(), tableScan.IsFirst, tableScan.IsLast, "table_scan")
+	} else {
+		tableScan.OpAnalyzer.Reset()
+	}
+
 	if tableScan.TopValueMsgTag > 0 {
 		tableScan.ctr.msgReceiver = message.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress(), proc.GetMessageBoard())
 	}
@@ -73,9 +78,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		tableScan.TableID,
 		0,
 		nil)
-
-	//anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
-	//anal.Start()
 
 	analyzer := tableScan.OpAnalyzer
 	analyzer.Start()

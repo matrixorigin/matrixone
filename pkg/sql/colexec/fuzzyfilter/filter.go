@@ -83,7 +83,11 @@ func (fuzzyFilter *FuzzyFilter) OpType() vm.OpType {
 }
 
 func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
-	fuzzyFilter.OpAnalyzer = process.NewAnalyzer(fuzzyFilter.GetIdx(), fuzzyFilter.IsFirst, fuzzyFilter.IsLast, "fuzzy_filter")
+	if fuzzyFilter.OpAnalyzer == nil {
+		fuzzyFilter.OpAnalyzer = process.NewAnalyzer(fuzzyFilter.GetIdx(), fuzzyFilter.IsFirst, fuzzyFilter.IsLast, "fuzzy_filter")
+	} else {
+		fuzzyFilter.OpAnalyzer.Reset()
+	}
 
 	ctr := &fuzzyFilter.ctr
 	if ctr.rbat == nil {
@@ -152,9 +156,6 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(fuzzyFilter.GetIdx(), fuzzyFilter.GetParallelIdx(), fuzzyFilter.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := fuzzyFilter.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

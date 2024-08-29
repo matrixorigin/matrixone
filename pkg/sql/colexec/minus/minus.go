@@ -37,7 +37,12 @@ func (minus *Minus) OpType() vm.OpType {
 
 func (minus *Minus) Prepare(proc *process.Process) error {
 	var err error
-	minus.OpAnalyzer = process.NewAnalyzer(minus.GetIdx(), minus.IsFirst, minus.IsLast, "minus")
+	if minus.OpAnalyzer == nil {
+		minus.OpAnalyzer = process.NewAnalyzer(minus.GetIdx(), minus.IsFirst, minus.IsLast, "minus")
+	} else {
+		minus.OpAnalyzer.Reset()
+	}
+
 	minus.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
 	if err != nil {
 		return err
@@ -59,11 +64,6 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 	defer analyzer.Stop()
 
 	var err error
-	// prepare the analysis work.
-	//analyze := proc.GetAnalyze(minus.GetIdx(), minus.GetParallelIdx(), minus.GetParallelMajor())
-	//analyze.Start()
-	//defer analyze.Stop()
-
 	for {
 		switch minus.ctr.state {
 		case buildingHashMap:

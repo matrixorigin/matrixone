@@ -41,7 +41,12 @@ func (innerJoin *InnerJoin) OpType() vm.OpType {
 }
 
 func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
-	innerJoin.OpAnalyzer = process.NewAnalyzer(innerJoin.GetIdx(), innerJoin.IsFirst, innerJoin.IsLast, "innerJoin")
+
+	if innerJoin.OpAnalyzer == nil {
+		innerJoin.OpAnalyzer = process.NewAnalyzer(innerJoin.GetIdx(), innerJoin.IsFirst, innerJoin.IsLast, "innerJoin")
+	} else {
+		innerJoin.OpAnalyzer.Reset()
+	}
 	if len(innerJoin.ctr.vecs) == 0 {
 		innerJoin.ctr.vecs = make([]*vector.Vector, len(innerJoin.Conditions[0]))
 		innerJoin.ctr.executor = make([]colexec.ExpressionExecutor, len(innerJoin.Conditions[0]))
@@ -67,9 +72,6 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := innerJoin.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

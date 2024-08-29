@@ -36,7 +36,12 @@ func (mergeCTE *MergeCTE) OpType() vm.OpType {
 }
 
 func (mergeCTE *MergeCTE) Prepare(proc *process.Process) error {
-	mergeCTE.OpAnalyzer = process.NewAnalyzer(mergeCTE.GetIdx(), mergeCTE.IsFirst, mergeCTE.IsLast, "merge cte")
+	if mergeCTE.OpAnalyzer == nil {
+		mergeCTE.OpAnalyzer = process.NewAnalyzer(mergeCTE.GetIdx(), mergeCTE.IsFirst, mergeCTE.IsLast, "merge cte")
+	} else {
+		mergeCTE.OpAnalyzer.Reset()
+	}
+
 	mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
 	mergeCTE.ctr.status = sendInitial
 	return nil
@@ -47,9 +52,6 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(mergeCTE.GetIdx(), mergeCTE.GetParallelIdx(), mergeCTE.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := mergeCTE.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

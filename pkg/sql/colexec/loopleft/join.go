@@ -40,7 +40,12 @@ func (loopLeft *LoopLeft) OpType() vm.OpType {
 
 func (loopLeft *LoopLeft) Prepare(proc *process.Process) error {
 	var err error
-	loopLeft.OpAnalyzer = process.NewAnalyzer(loopLeft.GetIdx(), loopLeft.IsFirst, loopLeft.IsLast, "loop_left")
+	if loopLeft.OpAnalyzer == nil {
+		loopLeft.OpAnalyzer = process.NewAnalyzer(loopLeft.GetIdx(), loopLeft.IsFirst, loopLeft.IsLast, "loop_left")
+	} else {
+		loopLeft.OpAnalyzer.Reset()
+	}
+
 	if loopLeft.Cond != nil && loopLeft.ctr.expr == nil {
 		loopLeft.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopLeft.Cond)
 		if err != nil {
@@ -59,9 +64,6 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(loopLeft.GetIdx(), loopLeft.GetParallelIdx(), loopLeft.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := loopLeft.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

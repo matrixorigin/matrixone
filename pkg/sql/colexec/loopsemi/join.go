@@ -40,7 +40,12 @@ func (loopSemi *LoopSemi) OpType() vm.OpType {
 
 func (loopSemi *LoopSemi) Prepare(proc *process.Process) error {
 	var err error
-	loopSemi.OpAnalyzer = process.NewAnalyzer(loopSemi.GetIdx(), loopSemi.IsFirst, loopSemi.IsLast, "loop semi join")
+	if loopSemi.OpAnalyzer == nil {
+		loopSemi.OpAnalyzer = process.NewAnalyzer(loopSemi.GetIdx(), loopSemi.IsFirst, loopSemi.IsLast, "loop semi join")
+	} else {
+		loopSemi.OpAnalyzer.Reset()
+	}
+
 	if loopSemi.Cond != nil && loopSemi.ctr.expr == nil {
 		loopSemi.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopSemi.Cond)
 		if err != nil {
@@ -57,9 +62,6 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := loopSemi.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

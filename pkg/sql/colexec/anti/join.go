@@ -40,7 +40,11 @@ func (antiJoin *AntiJoin) OpType() vm.OpType {
 }
 
 func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
-	antiJoin.OpAnalyzer = process.NewAnalyzer(antiJoin.GetIdx(), antiJoin.IsFirst, antiJoin.IsLast, "anti join")
+	if antiJoin.OpAnalyzer == nil {
+		antiJoin.OpAnalyzer = process.NewAnalyzer(antiJoin.GetIdx(), antiJoin.IsFirst, antiJoin.IsLast, "anti join")
+	} else {
+		antiJoin.OpAnalyzer.Reset()
+	}
 
 	if antiJoin.ctr.vecs == nil {
 		antiJoin.ctr.vecs = make([]*vector.Vector, len(antiJoin.Conditions[0]))
@@ -65,10 +69,6 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
-
-	//anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 
 	analyzer := antiJoin.OpAnalyzer
 	analyzer.Start()

@@ -42,7 +42,12 @@ func (rightAnti *RightAnti) OpType() vm.OpType {
 }
 
 func (rightAnti *RightAnti) Prepare(proc *process.Process) (err error) {
-	rightAnti.OpAnalyzer = process.NewAnalyzer(rightAnti.GetIdx(), rightAnti.IsFirst, rightAnti.IsLast, "right anti join")
+	if rightAnti.OpAnalyzer == nil {
+		rightAnti.OpAnalyzer = process.NewAnalyzer(rightAnti.GetIdx(), rightAnti.IsFirst, rightAnti.IsLast, "right anti join")
+	} else {
+		rightAnti.OpAnalyzer.Reset()
+	}
+
 	if len(rightAnti.ctr.tmpBatches) == 0 {
 		rightAnti.ctr.vecs = make([]*vector.Vector, len(rightAnti.Conditions[0]))
 		rightAnti.ctr.evecs = make([]evalVector, len(rightAnti.Conditions[0]))
@@ -67,9 +72,6 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//analyze := proc.GetAnalyze(rightAnti.GetIdx(), rightAnti.GetParallelIdx(), rightAnti.GetParallelMajor())
-	//analyze.Start()
-	//defer analyze.Stop()
 	analyzer := rightAnti.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

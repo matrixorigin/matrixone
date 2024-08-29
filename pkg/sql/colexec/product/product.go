@@ -41,7 +41,12 @@ func (product *Product) OpType() vm.OpType {
 }
 
 func (product *Product) Prepare(proc *process.Process) error {
-	product.OpAnalyzer = process.NewAnalyzer(product.GetIdx(), product.IsFirst, product.IsLast, "cross join")
+	if product.OpAnalyzer == nil {
+		product.OpAnalyzer = process.NewAnalyzer(product.GetIdx(), product.IsFirst, product.IsLast, "cross join")
+	} else {
+		product.OpAnalyzer.Reset()
+	}
+
 	if product.ProjectList != nil {
 		return product.PrepareProjection(proc)
 	}
@@ -53,9 +58,6 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(product.GetIdx(), product.GetParallelIdx(), product.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := product.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

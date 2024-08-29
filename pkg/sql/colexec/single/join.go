@@ -41,7 +41,12 @@ func (singleJoin *SingleJoin) OpType() vm.OpType {
 }
 
 func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
-	singleJoin.OpAnalyzer = process.NewAnalyzer(singleJoin.GetIdx(), singleJoin.IsFirst, singleJoin.IsLast, "single_left")
+	if singleJoin.OpAnalyzer == nil {
+		singleJoin.OpAnalyzer = process.NewAnalyzer(singleJoin.GetIdx(), singleJoin.IsFirst, singleJoin.IsLast, "single_left")
+	} else {
+		singleJoin.OpAnalyzer.Reset()
+	}
+
 	if singleJoin.ctr.vecs == nil {
 		singleJoin.ctr.vecs = make([]*vector.Vector, len(singleJoin.Conditions[0]))
 		singleJoin.ctr.executor = make([]colexec.ExpressionExecutor, len(singleJoin.Conditions[0]))
@@ -71,9 +76,6 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := singleJoin.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

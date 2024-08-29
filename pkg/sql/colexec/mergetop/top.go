@@ -47,7 +47,12 @@ func (mergeTop *MergeTop) OpType() vm.OpType {
 }
 
 func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
-	mergeTop.OpAnalyzer = process.NewAnalyzer(mergeTop.GetIdx(), mergeTop.IsFirst, mergeTop.IsLast, "mergetop")
+	if mergeTop.OpAnalyzer == nil {
+		mergeTop.OpAnalyzer = process.NewAnalyzer(mergeTop.GetIdx(), mergeTop.IsFirst, mergeTop.IsLast, "mergetop")
+	} else {
+		mergeTop.OpAnalyzer.Reset()
+	}
+
 	// limit executor
 	if mergeTop.ctr.limitExecutor == nil {
 		mergeTop.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, mergeTop.Limit)
@@ -86,9 +91,6 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(mergeTop.GetIdx(), mergeTop.GetParallelIdx(), mergeTop.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := mergeTop.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

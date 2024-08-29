@@ -37,7 +37,12 @@ func (intersect *Intersect) OpType() vm.OpType {
 
 func (intersect *Intersect) Prepare(proc *process.Process) error {
 	var err error
-	intersect.OpAnalyzer = process.NewAnalyzer(intersect.GetIdx(), intersect.IsFirst, intersect.IsLast, "intersect")
+	if intersect.OpAnalyzer == nil {
+		intersect.OpAnalyzer = process.NewAnalyzer(intersect.GetIdx(), intersect.IsFirst, intersect.IsLast, "intersect")
+	} else {
+		intersect.OpAnalyzer.Reset()
+	}
+
 	intersect.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
 	if err != nil {
 		return err
@@ -50,9 +55,6 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//analyze := proc.GetAnalyze(intersect.GetIdx(), intersect.GetParallelIdx(), intersect.GetParallelMajor())
-	//analyze.Start()
-	//defer analyze.Stop()
 	analyzer := intersect.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

@@ -126,7 +126,12 @@ func (order *Order) OpType() vm.OpType {
 }
 
 func (order *Order) Prepare(proc *process.Process) (err error) {
-	order.OpAnalyzer = process.NewAnalyzer(order.GetIdx(), order.IsFirst, order.IsLast, "order")
+	if order.OpAnalyzer == nil {
+		order.OpAnalyzer = process.NewAnalyzer(order.GetIdx(), order.IsFirst, order.IsLast, "order")
+	} else {
+		order.OpAnalyzer.Reset()
+	}
+
 	ctr := &order.ctr
 	if len(ctr.desc) == 0 {
 		ctr.desc = make([]bool, len(order.OrderBySpec))
@@ -166,12 +171,6 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 	defer analyzer.Stop()
 
 	ctr := &order.ctr
-	//anal := proc.GetAnalyze(order.GetIdx(), order.GetParallelIdx(), order.GetParallelMajor())
-	//anal.Start()
-	//defer func() {
-	//	anal.Stop()
-	//}()
-
 	if ctr.state == vm.Build {
 		for {
 			input, err := vm.ChildrenCall(order.GetChildren(0), proc, analyzer)

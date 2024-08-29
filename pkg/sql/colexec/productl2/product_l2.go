@@ -43,7 +43,12 @@ func (productl2 *Productl2) OpType() vm.OpType {
 }
 
 func (productl2 *Productl2) Prepare(proc *process.Process) error {
-	productl2.OpAnalyzer = process.NewAnalyzer(productl2.GetIdx(), productl2.IsFirst, productl2.IsLast, "product_l2")
+	if productl2.OpAnalyzer == nil {
+		productl2.OpAnalyzer = process.NewAnalyzer(productl2.GetIdx(), productl2.IsFirst, productl2.IsLast, "product_l2")
+	} else {
+		productl2.OpAnalyzer.Reset()
+	}
+
 	if productl2.ProjectList != nil {
 		return productl2.PrepareProjection(proc)
 	}
@@ -55,9 +60,6 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := productl2.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

@@ -40,7 +40,12 @@ func (loopJoin *LoopJoin) OpType() vm.OpType {
 
 func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 	var err error
-	loopJoin.OpAnalyzer = process.NewAnalyzer(loopJoin.GetIdx(), loopJoin.IsFirst, loopJoin.IsLast, "loop_join")
+	if loopJoin.OpAnalyzer == nil {
+		loopJoin.OpAnalyzer = process.NewAnalyzer(loopJoin.GetIdx(), loopJoin.IsFirst, loopJoin.IsLast, "loop_join")
+	} else {
+		loopJoin.OpAnalyzer.Reset()
+	}
+
 	if loopJoin.Cond != nil && loopJoin.ctr.expr == nil {
 		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.Cond)
 		if err != nil {
@@ -59,9 +64,6 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := loopJoin.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

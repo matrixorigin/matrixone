@@ -33,7 +33,12 @@ func (unionall *UnionAll) OpType() vm.OpType {
 }
 
 func (unionall *UnionAll) Prepare(proc *process.Process) error {
-	unionall.OpAnalyzer = process.NewAnalyzer(unionall.GetIdx(), unionall.IsFirst, unionall.IsLast, "unionall")
+	if unionall.OpAnalyzer == nil {
+		unionall.OpAnalyzer = process.NewAnalyzer(unionall.GetIdx(), unionall.IsFirst, unionall.IsLast, "unionall")
+	} else {
+		unionall.OpAnalyzer.Reset()
+	}
+
 	return nil
 }
 
@@ -42,9 +47,6 @@ func (unionall *UnionAll) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(unionall.GetIdx(), unionall.GetParallelIdx(), unionall.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := unionall.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

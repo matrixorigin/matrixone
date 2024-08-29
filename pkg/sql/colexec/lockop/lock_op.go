@@ -68,7 +68,11 @@ func (lockOp *LockOp) OpType() vm.OpType {
 }
 
 func (lockOp *LockOp) Prepare(proc *process.Process) error {
-	lockOp.OpAnalyzer = process.NewAnalyzer(lockOp.GetIdx(), lockOp.IsFirst, lockOp.IsLast, "lock_op")
+	if lockOp.OpAnalyzer == nil {
+		lockOp.OpAnalyzer = process.NewAnalyzer(lockOp.GetIdx(), lockOp.IsFirst, lockOp.IsLast, "lock_op")
+	} else {
+		lockOp.OpAnalyzer.Reset()
+	}
 
 	if len(lockOp.ctr.fetchers) == 0 {
 		lockOp.logger = getLogger(proc.GetService())
@@ -110,9 +114,6 @@ func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
 func callNonBlocking(
 	proc *process.Process,
 	lockOp *LockOp) (vm.CallResult, error) {
-	//anal := proc.GetAnalyze(lockOp.GetIdx(), lockOp.GetParallelIdx(), lockOp.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := lockOp.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()
@@ -147,10 +148,6 @@ func callBlocking(
 	lockOp *LockOp,
 	isFirst bool,
 	_ bool) (vm.CallResult, error) {
-
-	//anal := proc.GetAnalyze(lockOp.GetIdx(), lockOp.GetParallelIdx(), lockOp.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := lockOp.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

@@ -34,7 +34,11 @@ func (mergeBlock *MergeBlock) OpType() vm.OpType {
 }
 
 func (mergeBlock *MergeBlock) Prepare(proc *process.Process) error {
-	mergeBlock.OpAnalyzer = process.NewAnalyzer(mergeBlock.GetIdx(), mergeBlock.IsFirst, mergeBlock.IsLast, "merge_block")
+	if mergeBlock.OpAnalyzer == nil {
+		mergeBlock.OpAnalyzer = process.NewAnalyzer(mergeBlock.GetIdx(), mergeBlock.IsFirst, mergeBlock.IsLast, "merge_block")
+	} else {
+		mergeBlock.OpAnalyzer.Reset()
+	}
 
 	if mergeBlock.container.mp == nil {
 		mergeBlock.container.mp = make(map[int]*batch.Batch)
@@ -60,9 +64,6 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(mergeBlock.GetIdx(), mergeBlock.GetParallelIdx(), mergeBlock.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := mergeBlock.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

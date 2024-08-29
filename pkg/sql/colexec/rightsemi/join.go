@@ -41,7 +41,12 @@ func (rightSemi *RightSemi) OpType() vm.OpType {
 }
 
 func (rightSemi *RightSemi) Prepare(proc *process.Process) (err error) {
-	rightSemi.OpAnalyzer = process.NewAnalyzer(rightSemi.GetIdx(), rightSemi.IsFirst, rightSemi.IsLast, "right semi join")
+	if rightSemi.OpAnalyzer == nil {
+		rightSemi.OpAnalyzer = process.NewAnalyzer(rightSemi.GetIdx(), rightSemi.IsFirst, rightSemi.IsLast, "right semi join")
+	} else {
+		rightSemi.OpAnalyzer.Reset()
+	}
+
 	if len(rightSemi.ctr.tmpBatches) == 0 {
 		rightSemi.ctr.vecs = make([]*vector.Vector, len(rightSemi.Conditions[0]))
 		rightSemi.ctr.evecs = make([]evalVector, len(rightSemi.Conditions[0]))
@@ -66,9 +71,6 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//analyze := proc.GetAnalyze(rightSemi.GetIdx(), rightSemi.GetParallelIdx(), rightSemi.GetParallelMajor())
-	//analyze.Start()
-	//defer analyze.Stop()
 	analyzer := rightSemi.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

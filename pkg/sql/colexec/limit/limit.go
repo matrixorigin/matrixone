@@ -38,7 +38,11 @@ func (limit *Limit) OpType() vm.OpType {
 
 func (limit *Limit) Prepare(proc *process.Process) error {
 	var err error
-	limit.OpAnalyzer = process.NewAnalyzer(limit.GetIdx(), limit.IsFirst, limit.IsLast, "limit")
+	if limit.OpAnalyzer == nil {
+		limit.OpAnalyzer = process.NewAnalyzer(limit.GetIdx(), limit.IsFirst, limit.IsLast, "limit")
+	} else {
+		limit.OpAnalyzer.Reset()
+	}
 
 	if limit.ctr.limitExecutor == nil {
 		limit.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, limit.LimitExpr)
@@ -70,9 +74,6 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
-	//anal := proc.GetAnalyze(limit.GetIdx(), limit.GetParallelIdx(), limit.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := limit.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

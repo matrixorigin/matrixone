@@ -41,7 +41,12 @@ func (hashBuild *HashBuild) OpType() vm.OpType {
 }
 
 func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
-	hashBuild.OpAnalyzer = process.NewAnalyzer(hashBuild.GetIdx(), hashBuild.IsFirst, hashBuild.IsLast, "hash build")
+	if hashBuild.OpAnalyzer == nil {
+		hashBuild.OpAnalyzer = process.NewAnalyzer(hashBuild.GetIdx(), hashBuild.IsFirst, hashBuild.IsLast, "hash build")
+	} else {
+		hashBuild.OpAnalyzer.Reset()
+	}
+
 	ctr := &hashBuild.ctr
 	if hashBuild.NeedHashMap {
 		if len(ctr.executor) == 0 {
@@ -85,9 +90,6 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(hashBuild.GetIdx(), hashBuild.GetParallelIdx(), hashBuild.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := hashBuild.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

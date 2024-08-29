@@ -33,7 +33,12 @@ func (valueScan *ValueScan) OpType() vm.OpType {
 }
 
 func (valueScan *ValueScan) Prepare(proc *process.Process) (err error) {
-	valueScan.OpAnalyzer = process.NewAnalyzer(valueScan.GetIdx(), valueScan.IsFirst, valueScan.IsLast, "value_scan")
+	if valueScan.OpAnalyzer == nil {
+		valueScan.OpAnalyzer = process.NewAnalyzer(valueScan.GetIdx(), valueScan.IsFirst, valueScan.IsLast, "value_scan")
+	} else {
+		valueScan.OpAnalyzer.Reset()
+	}
+
 	//@todo need move make batchs function from Scope.run to value_scan.Prepare
 	err = valueScan.PrepareProjection(proc)
 	return
@@ -44,11 +49,6 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(valueScan.GetIdx(), valueScan.GetParallelIdx(), valueScan.GetParallelMajor())
-	//anal.Start()
-	//defer func() {
-	//	anal.Stop()
-	//}()
 	analyzer := valueScan.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

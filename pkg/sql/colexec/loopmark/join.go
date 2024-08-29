@@ -42,7 +42,12 @@ func (loopMark *LoopMark) OpType() vm.OpType {
 
 func (loopMark *LoopMark) Prepare(proc *process.Process) error {
 	var err error
-	loopMark.OpAnalyzer = process.NewAnalyzer(loopMark.GetIdx(), loopMark.IsFirst, loopMark.IsLast, "loop mark join")
+	if loopMark.OpAnalyzer == nil {
+		loopMark.OpAnalyzer = process.NewAnalyzer(loopMark.GetIdx(), loopMark.IsFirst, loopMark.IsLast, "loop mark join")
+	} else {
+		loopMark.OpAnalyzer.Reset()
+	}
+
 	if loopMark.Cond != nil && loopMark.ctr.expr == nil {
 		loopMark.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopMark.Cond)
 		if err != nil {
@@ -58,9 +63,6 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := loopMark.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

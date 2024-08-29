@@ -44,7 +44,12 @@ func (markJoin *MarkJoin) OpType() vm.OpType {
 
 func (markJoin *MarkJoin) Prepare(proc *process.Process) error {
 	var err error
-	markJoin.OpAnalyzer = process.NewAnalyzer(markJoin.GetIdx(), markJoin.IsFirst, markJoin.IsLast, "mark join")
+	if markJoin.OpAnalyzer == nil {
+		markJoin.OpAnalyzer = process.NewAnalyzer(markJoin.GetIdx(), markJoin.IsFirst, markJoin.IsLast, "mark join")
+	} else {
+		markJoin.OpAnalyzer.Reset()
+	}
+
 	if markJoin.ctr.vecs == nil {
 		markJoin.ctr.vecs = make([]*vector.Vector, len(markJoin.Conditions[0]))
 		markJoin.ctr.executor = make([]colexec.ExpressionExecutor, len(markJoin.Conditions[0]))
@@ -104,9 +109,6 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := markJoin.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

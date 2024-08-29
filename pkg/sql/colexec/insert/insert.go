@@ -41,7 +41,12 @@ func (insert *Insert) OpType() vm.OpType {
 }
 
 func (insert *Insert) Prepare(proc *process.Process) error {
-	insert.OpAnalyzer = process.NewAnalyzer(insert.GetIdx(), insert.IsFirst, insert.IsLast, "insert")
+	if insert.OpAnalyzer == nil {
+		insert.OpAnalyzer = process.NewAnalyzer(insert.GetIdx(), insert.IsFirst, insert.IsLast, "insert")
+	} else {
+		insert.OpAnalyzer.Reset()
+	}
+
 	insert.ctr.state = vm.Build
 	if insert.ToWriteS3 {
 		if len(insert.InsertCtx.PartitionTableIDs) > 0 {

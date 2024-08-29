@@ -54,7 +54,12 @@ func (top *Top) OpType() vm.OpType {
 }
 
 func (top *Top) Prepare(proc *process.Process) (err error) {
-	top.OpAnalyzer = process.NewAnalyzer(top.GetIdx(), top.IsFirst, top.IsLast, "top")
+	if top.OpAnalyzer == nil {
+		top.OpAnalyzer = process.NewAnalyzer(top.GetIdx(), top.IsFirst, top.IsLast, "top")
+	} else {
+		top.OpAnalyzer.Reset()
+	}
+
 	// limit executor
 	if top.ctr.limitExecutor == nil {
 		top.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, top.Limit)
@@ -99,11 +104,6 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(top.GetIdx(), top.GetParallelIdx(), top.GetParallelMajor())
-	//anal.Start()
-	//defer func() {
-	//	anal.Stop()
-	//}()
 	analyzer := top.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

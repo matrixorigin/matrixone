@@ -239,9 +239,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if runC != c {
 			runC.Release()
 		}
-		defChanged := moerr.IsMoErrCode(
-			err,
-			moerr.ErrTxnNeedRetryWithDefChanged)
+		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 		if runC, err = c.prepareRetry(defChanged); err != nil {
 			return nil, err
 		}
@@ -269,9 +267,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 }
 
 // prepareRetry rebuild a new Compile object for retrying the query.
-func (c *Compile) prepareRetry(
-	defChanged bool,
-) (*Compile, error) {
+func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	v2.TxnStatementRetryCounter.Inc()
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 

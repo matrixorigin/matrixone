@@ -41,7 +41,12 @@ func (loopAnti *LoopAnti) OpType() vm.OpType {
 
 func (loopAnti *LoopAnti) Prepare(proc *process.Process) error {
 	var err error
-	loopAnti.OpAnalyzer = process.NewAnalyzer(loopAnti.GetIdx(), loopAnti.IsFirst, loopAnti.IsLast, "loop anti join")
+	if loopAnti.OpAnalyzer == nil {
+		loopAnti.OpAnalyzer = process.NewAnalyzer(loopAnti.GetIdx(), loopAnti.IsFirst, loopAnti.IsLast, "loop anti join")
+	} else {
+		loopAnti.OpAnalyzer.Reset()
+	}
+
 	if loopAnti.Cond != nil && loopAnti.ctr.expr == nil {
 		loopAnti.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopAnti.Cond)
 		if err != nil {
@@ -60,9 +65,6 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := loopAnti.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

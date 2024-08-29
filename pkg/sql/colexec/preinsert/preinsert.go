@@ -43,7 +43,12 @@ func (preInsert *PreInsert) OpType() vm.OpType {
 }
 
 func (preInsert *PreInsert) Prepare(_ *proc) error {
-	preInsert.OpAnalyzer = process.NewAnalyzer(preInsert.GetIdx(), preInsert.IsFirst, preInsert.IsLast, "preinsert")
+	if preInsert.OpAnalyzer == nil {
+		preInsert.OpAnalyzer = process.NewAnalyzer(preInsert.GetIdx(), preInsert.IsFirst, preInsert.IsLast, "preinsert")
+	} else {
+		preInsert.OpAnalyzer.Reset()
+	}
+
 	if preInsert.ctr.canFreeVecIdx == nil {
 		preInsert.ctr.canFreeVecIdx = make(map[int]bool)
 	}
@@ -106,9 +111,6 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(preInsert.GetIdx(), preInsert.GetParallelIdx(), preInsert.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := preInsert.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

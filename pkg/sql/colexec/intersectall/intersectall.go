@@ -43,7 +43,13 @@ func (intersectAll *IntersectAll) OpType() vm.OpType {
 
 func (intersectAll *IntersectAll) Prepare(proc *process.Process) error {
 	var err error
-	intersectAll.OpAnalyzer = process.NewAnalyzer(intersectAll.GetIdx(), intersectAll.IsFirst, intersectAll.IsLast, "intersectAll")
+
+	if intersectAll.OpAnalyzer == nil {
+		intersectAll.OpAnalyzer = process.NewAnalyzer(intersectAll.GetIdx(), intersectAll.IsFirst, intersectAll.IsLast, "intersectAll")
+	} else {
+		intersectAll.OpAnalyzer.Reset()
+	}
+
 	if intersectAll.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp()); err != nil {
 		return err
 	}
@@ -65,14 +71,11 @@ func (intersectAll *IntersectAll) Call(proc *process.Process) (vm.CallResult, er
 		return vm.CancelResult, err
 	}
 
-	var err error
-	//analyzer := proc.GetAnalyze(intersectAll.GetIdx(), intersectAll.GetParallelIdx(), intersectAll.GetParallelMajor())
-	//analyzer.Start()
-	//defer analyzer.Stop()
 	analyzer := intersectAll.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()
 
+	var err error
 	for {
 		switch intersectAll.ctr.state {
 		case Build:

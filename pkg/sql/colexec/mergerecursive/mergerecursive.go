@@ -32,7 +32,12 @@ func (mergeRecursive *MergeRecursive) OpType() vm.OpType {
 }
 
 func (mergeRecursive *MergeRecursive) Prepare(proc *process.Process) error {
-	mergeRecursive.OpAnalyzer = process.NewAnalyzer(mergeRecursive.GetIdx(), mergeRecursive.IsFirst, mergeRecursive.IsLast, "merge recursive")
+	if mergeRecursive.OpAnalyzer == nil {
+		mergeRecursive.OpAnalyzer = process.NewAnalyzer(mergeRecursive.GetIdx(), mergeRecursive.IsFirst, mergeRecursive.IsLast, "merge recursive")
+	} else {
+		mergeRecursive.OpAnalyzer.Reset()
+	}
+
 	return nil
 }
 
@@ -41,9 +46,6 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(mergeRecursive.GetIdx(), mergeRecursive.GetParallelIdx(), mergeRecursive.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := mergeRecursive.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

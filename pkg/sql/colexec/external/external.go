@@ -85,7 +85,11 @@ func (external *External) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
 	defer span.End()
 
-	external.OpAnalyzer = process.NewAnalyzer(external.GetIdx(), external.IsFirst, external.IsLast, "external")
+	if external.OpAnalyzer == nil {
+		external.OpAnalyzer = process.NewAnalyzer(external.GetIdx(), external.IsFirst, external.IsLast, "external")
+	} else {
+		external.OpAnalyzer.Reset()
+	}
 
 	param := external.Es
 	if proc.GetLim().MaxMsgSize == 0 {
@@ -168,8 +172,6 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	t1 := time.Now()
-	//anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
-	//anal.Start()
 
 	analyzer := external.OpAnalyzer
 	analyzer.Start()

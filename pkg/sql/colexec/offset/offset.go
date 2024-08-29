@@ -38,7 +38,13 @@ func (offset *Offset) OpType() vm.OpType {
 
 func (offset *Offset) Prepare(proc *process.Process) error {
 	var err error
-	offset.OpAnalyzer = process.NewAnalyzer(offset.GetIdx(), offset.IsFirst, offset.IsLast, "offset")
+
+	if offset.OpAnalyzer == nil {
+		offset.OpAnalyzer = process.NewAnalyzer(offset.GetIdx(), offset.IsFirst, offset.IsLast, "offset")
+	} else {
+		offset.OpAnalyzer.Reset()
+	}
+
 	if offset.ctr.offsetExecutor == nil {
 		offset.ctr.offsetExecutor, err = colexec.NewExpressionExecutor(proc, offset.OffsetExpr)
 		if err != nil {
@@ -59,9 +65,6 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(offset.GetIdx(), offset.GetParallelIdx(), offset.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := offset.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

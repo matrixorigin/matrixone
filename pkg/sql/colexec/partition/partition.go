@@ -47,7 +47,11 @@ func (partition *Partition) OpType() vm.OpType {
 }
 
 func (partition *Partition) Prepare(proc *process.Process) (err error) {
-	partition.OpAnalyzer = process.NewAnalyzer(partition.GetIdx(), partition.IsFirst, partition.IsLast, "partition")
+	if partition.OpAnalyzer == nil {
+		partition.OpAnalyzer = process.NewAnalyzer(partition.GetIdx(), partition.IsFirst, partition.IsLast, "partition")
+	} else {
+		partition.OpAnalyzer.Reset()
+	}
 
 	if len(partition.ctr.executors) > 0 {
 		return nil
@@ -73,9 +77,6 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(partition.GetIdx(), partition.GetParallelIdx(), partition.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := partition.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

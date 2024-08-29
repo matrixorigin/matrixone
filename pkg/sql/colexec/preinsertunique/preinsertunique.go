@@ -45,7 +45,12 @@ func (preInsertUnique *PreInsertUnique) OpType() vm.OpType {
 }
 
 func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
-	preInsertUnique.OpAnalyzer = process.NewAnalyzer(preInsertUnique.GetIdx(), preInsertUnique.IsFirst, preInsertUnique.IsLast, "pre_insert_unique")
+	if preInsertUnique.OpAnalyzer == nil {
+		preInsertUnique.OpAnalyzer = process.NewAnalyzer(preInsertUnique.GetIdx(), preInsertUnique.IsFirst, preInsertUnique.IsLast, "pre_insert_unique")
+	} else {
+		preInsertUnique.OpAnalyzer.Reset()
+	}
+
 	return nil
 }
 
@@ -77,9 +82,6 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(preInsertUnique.GetIdx(), preInsertUnique.GetParallelIdx(), preInsertUnique.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := preInsertUnique.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

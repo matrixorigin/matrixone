@@ -59,7 +59,11 @@ func (group *Group) OpType() vm.OpType {
 }
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
-	group.OpAnalyzer = process.NewAnalyzer(group.GetIdx(), group.IsFirst, group.IsLast, "group")
+	if group.OpAnalyzer == nil {
+		group.OpAnalyzer = process.NewAnalyzer(group.GetIdx(), group.IsFirst, group.IsLast, "group")
+	} else {
+		group.OpAnalyzer.Reset()
+	}
 
 	if !group.ctr.skipInitReusableMem {
 		group.ctr.inserted = make([]uint8, hashmap.UnitLimit)
@@ -158,10 +162,6 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
-
-	//anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 
 	analyzer := group.OpAnalyzer
 	analyzer.Start()

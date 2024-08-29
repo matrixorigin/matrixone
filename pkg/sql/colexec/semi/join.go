@@ -40,7 +40,12 @@ func (semiJoin *SemiJoin) OpType() vm.OpType {
 }
 
 func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {
-	semiJoin.OpAnalyzer = process.NewAnalyzer(semiJoin.GetIdx(), semiJoin.IsFirst, semiJoin.IsLast, "semi join")
+	if semiJoin.OpAnalyzer == nil {
+		semiJoin.OpAnalyzer = process.NewAnalyzer(semiJoin.GetIdx(), semiJoin.IsFirst, semiJoin.IsLast, "semi join")
+	} else {
+		semiJoin.OpAnalyzer.Reset()
+	}
+
 	if semiJoin.ctr.vecs == nil {
 		semiJoin.ctr.vecs = make([]*vector.Vector, len(semiJoin.Conditions[0]))
 		semiJoin.ctr.executor = make([]colexec.ExpressionExecutor, len(semiJoin.Conditions[0]))
@@ -70,9 +75,6 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := semiJoin.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

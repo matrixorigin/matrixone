@@ -41,7 +41,12 @@ func (loopSingle *LoopSingle) OpType() vm.OpType {
 
 func (loopSingle *LoopSingle) Prepare(proc *process.Process) error {
 	var err error
-	loopSingle.OpAnalyzer = process.NewAnalyzer(loopSingle.GetIdx(), loopSingle.IsFirst, loopSingle.IsLast, "loop_single")
+	if loopSingle.OpAnalyzer == nil {
+		loopSingle.OpAnalyzer = process.NewAnalyzer(loopSingle.GetIdx(), loopSingle.IsFirst, loopSingle.IsLast, "loop_single")
+	} else {
+		loopSingle.OpAnalyzer.Reset()
+	}
+
 	if loopSingle.Cond != nil && loopSingle.ctr.expr == nil {
 		loopSingle.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopSingle.Cond)
 		if err != nil {
@@ -60,9 +65,6 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := loopSingle.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

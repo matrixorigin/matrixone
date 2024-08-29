@@ -30,7 +30,11 @@ func (connector *Connector) String(buf *bytes.Buffer) {
 }
 
 func (connector *Connector) Prepare(_ *process.Process) error {
-	connector.OpAnalyzer = process.NewAnalyzer(connector.GetIdx(), connector.IsFirst, connector.IsLast, "connector")
+	if connector.OpAnalyzer == nil {
+		connector.OpAnalyzer = process.NewAnalyzer(connector.GetIdx(), connector.IsFirst, connector.IsLast, "connector")
+	} else {
+		connector.OpAnalyzer.Reset()
+	}
 	return nil
 }
 

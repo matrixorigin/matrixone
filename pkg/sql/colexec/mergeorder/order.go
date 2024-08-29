@@ -185,7 +185,12 @@ func (mergeOrder *MergeOrder) OpType() vm.OpType {
 }
 
 func (mergeOrder *MergeOrder) Prepare(proc *process.Process) (err error) {
-	mergeOrder.OpAnalyzer = process.NewAnalyzer(mergeOrder.GetIdx(), mergeOrder.IsFirst, mergeOrder.IsLast, "merge order")
+	if mergeOrder.OpAnalyzer == nil {
+		mergeOrder.OpAnalyzer = process.NewAnalyzer(mergeOrder.GetIdx(), mergeOrder.IsFirst, mergeOrder.IsLast, "merge order")
+	} else {
+		mergeOrder.OpAnalyzer.Reset()
+	}
+
 	ctr := &mergeOrder.ctr
 	if len(mergeOrder.ctr.executors) == 0 {
 		ctr.batchList = make([]*batch.Batch, 0, defaultCacheBatchSize)
@@ -211,9 +216,6 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 	defer analyzer.Stop()
 
 	ctr := &mergeOrder.ctr
-	//anal := proc.GetAnalyze(mergeOrder.GetIdx(), mergeOrder.GetParallelIdx(), mergeOrder.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	for {
 		switch ctr.status {
 		case receiving:

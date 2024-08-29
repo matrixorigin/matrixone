@@ -37,7 +37,11 @@ func (mergeDelete *MergeDelete) OpType() vm.OpType {
 }
 
 func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
-	mergeDelete.OpAnalyzer = process.NewAnalyzer(mergeDelete.GetIdx(), mergeDelete.IsFirst, mergeDelete.IsLast, "merge_delete")
+	if mergeDelete.OpAnalyzer == nil {
+		mergeDelete.OpAnalyzer = process.NewAnalyzer(mergeDelete.GetIdx(), mergeDelete.IsFirst, mergeDelete.IsLast, "merge_delete")
+	} else {
+		mergeDelete.OpAnalyzer.Reset()
+	}
 
 	ref := mergeDelete.Ref
 	eng := mergeDelete.Engine
@@ -57,9 +61,6 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(mergeDelete.GetIdx(), mergeDelete.GetParallelIdx(), mergeDelete.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 	analyzer := mergeDelete.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()

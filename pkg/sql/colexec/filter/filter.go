@@ -42,7 +42,11 @@ func (filter *Filter) OpType() vm.OpType {
 }
 
 func (filter *Filter) Prepare(proc *process.Process) (err error) {
-	filter.OpAnalyzer = process.NewAnalyzer(filter.GetIdx(), filter.IsFirst, filter.IsLast, "filter")
+	if filter.OpAnalyzer == nil {
+		filter.OpAnalyzer = process.NewAnalyzer(filter.GetIdx(), filter.IsFirst, filter.IsLast, "filter")
+	} else {
+		filter.OpAnalyzer.Reset()
+	}
 
 	if filter.exeExpr == nil && filter.E == nil {
 		return nil
@@ -74,10 +78,6 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
-
-	//anal := proc.GetAnalyze(filter.GetIdx(), filter.GetParallelIdx(), filter.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
 
 	analyzer := filter.OpAnalyzer
 	analyzer.Start()
