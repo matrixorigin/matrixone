@@ -50,6 +50,10 @@ type Router interface {
 	// SelectByConnID selects the CN server which has the connection ID.
 	SelectByConnID(connID uint32) (*CNServer, error)
 
+	// AllServers returns all CN servers. Note that the request user have to be
+	// sys tenant.
+	AllServers(sid string) ([]*CNServer, error)
+
 	// Connect connects to the CN server and returns the connection.
 	// It should take a handshakeResp as a parameter, which is the auth
 	// request from client including tenant, username, database and others.
@@ -133,6 +137,21 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 		uuid:   cn.uuid,
 		addr:   cn.addr,
 	}, nil
+}
+
+// AllServers implements the Router interface.
+func (r *router) AllServers(sid string) ([]*CNServer, error) {
+	var cns []*CNServer
+	route.RouteForSuperTenant(
+		sid,
+		clusterservice.NewSelectAll(), "dump", nil,
+		func(s *metadata.CNService) {
+			cns = append(cns, &CNServer{
+				uuid: s.ServiceID,
+				addr: s.SQLAddress,
+			})
+		})
+	return cns, nil
 }
 
 // selectForSuperTenant is used to select CN servers for sys tenant.
