@@ -21,7 +21,6 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -192,34 +191,6 @@ func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch
 		bat.Vecs[i] = v
 	}
 	return bat, nil
-}
-
-func (proc *Process) AppendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int) (*batch.Batch, int, error) {
-	var err error
-	if dst == nil {
-		dst, err = proc.NewBatchFromSrc(src, 0)
-		if err != nil {
-			return nil, 0, err
-		}
-	}
-	if dst.RowCount() >= DefaultBatchSize {
-		panic("can't call AppendToFixedSizeFromOffset when batch is full!")
-	}
-	if len(dst.Vecs) != len(src.Vecs) {
-		return nil, 0, moerr.NewInternalError(proc.Ctx, "unexpected error happens in batch append")
-	}
-	length := DefaultBatchSize - dst.RowCount()
-	if length+offset > src.RowCount() {
-		length = src.RowCount() - offset
-	}
-	for i := range dst.Vecs {
-		if err = dst.Vecs[i].UnionBatch(src.Vecs[i], int64(offset), length, nil, proc.Mp()); err != nil {
-			return dst, 0, err
-		}
-		dst.Vecs[i].SetSorted(false)
-	}
-	dst.AddRowCount(length)
-	return dst, length, nil
 }
 
 // log do logging.
