@@ -61,6 +61,7 @@ func (s *service) initDistributedTAE(
 	if err != nil {
 		return err
 	}
+	s.distributeTaeMp = distributeTaeMp
 	s.storeEngine = disttae.New(
 		ctx,
 		s.cfg.UUID,

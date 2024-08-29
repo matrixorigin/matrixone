@@ -869,33 +869,6 @@ type mergeReader struct {
 type emptyReader struct {
 }
 
-// TableCtx TODO: define suitable names
-type TableCtx struct {
-	db, table     string
-	dbId, tableId uint64
-	tblDef        *plan.TableDef
-}
-
-func (tctx *TableCtx) Db() string {
-	return tctx.db
-}
-
-func (tctx *TableCtx) Table() string {
-	return tctx.table
-}
-
-func (tctx *TableCtx) DBId() uint64 {
-	return tctx.dbId
-}
-
-func (tctx *TableCtx) TableId() uint64 {
-	return tctx.tableId
-}
-
-func (tctx *TableCtx) TableDef() *plan.TableDef {
-	return tctx.tblDef
-}
-
 type InputType int
 
 const (

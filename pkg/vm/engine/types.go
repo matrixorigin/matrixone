@@ -784,7 +784,8 @@ var _ Ranges = (*objectio.BlockInfoSlice)(nil)
 type Hint int
 
 const (
-	Checkpoint Hint = iota
+	Invalid Hint = iota
+	Checkpoint
 	Tail_wip
 	Tail_done
 )

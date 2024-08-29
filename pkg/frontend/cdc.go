@@ -29,6 +29,7 @@ import (
 	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -40,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
 const (
@@ -562,6 +562,7 @@ func RegisterCdcExecutor(
 	fileService fileservice.FileService,
 	cnTxnClient client.TxnClient,
 	cnEngine engine.Engine,
+	cnEngMp *mpool.MPool,
 ) func(ctx context.Context, task task.Task) error {
 	return func(ctx context.Context, T task.Task) error {
 		fmt.Fprintln(os.Stderr, "====>", "cdc task executor")
@@ -596,6 +597,7 @@ func RegisterCdcExecutor(
 			fileService,
 			cnTxnClient,
 			cnEngine,
+			cnEngMp,
 		)
 		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
 		if err := attachToTask(ctx, T.GetID(), cdc); err != nil {
@@ -618,19 +620,17 @@ type CdcTask struct {
 
 	cdcTask *task.CreateCdcDetails
 
-	cdcTsWaiter client.TimestampWaiter
-	cdcEngMp    *mpool.MPool
+	mp         *mpool.MPool
+	packerPool *fileservice.Pool[*types.Packer]
 
 	// tableId -> *disttae.CdcRelation
-	cdcTables *sync.Map
+	tables *sync.Map
 
 	sinkUri string
 
 	activeRoutine *cdc2.ActiveRoutine
-	// inputChs are channels between partitioner and decoder; key is tableId
-	inputChs map[uint64]chan tools.Pair[*disttae.TableCtx, *disttae.DecoderInput]
 	// interChs are channels between decoder and sinker; key is tableId
-	interChs map[uint64]chan tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput]
+	interChs map[uint64]chan tools.Pair[*cdc2.TableCtx, *cdc2.DecoderOutput]
 	// TODO receivedWatermarkUpdater update the watermark of the items received from upstream
 	//receivedWatermarkUpdater *cdc2.WatermarkUpdater
 	// sunkWatermarkUpdater update the watermark of the items that has been sunk to downstream
@@ -645,6 +645,7 @@ func NewCdcTask(
 	fileService fileservice.FileService,
 	cnTxnClient client.TxnClient,
 	cnEngine engine.Engine,
+	cdcMp *mpool.MPool,
 ) *CdcTask {
 	return &CdcTask{
 		logger:      logger,
@@ -654,6 +655,19 @@ func NewCdcTask(
 		fileService: fileService,
 		cnTxnClient: cnTxnClient,
 		cnEngine:    cnEngine,
+		mp:          cdcMp,
+		packerPool: fileservice.NewPool(
+			128,
+			func() *types.Packer {
+				return types.NewPacker()
+			},
+			func(packer *types.Packer) {
+				packer.Reset()
+			},
+			func(packer *types.Packer) {
+				packer.Close()
+			},
+		),
 	}
 }
 
@@ -765,10 +779,12 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		}
 
 		dbTableInfos = append(dbTableInfos, &cdc2.DbTableInfo{
-			DbName:  dbName,
-			TblName: tblName,
-			DbId:    dbId,
-			TblId:   tblId,
+			DbName:             dbName,
+			TblName:            tblName,
+			DbId:               dbId,
+			TblId:              tblId,
+			TsColIdx:           0, //FIXME
+			CompositedPkColIdx: 3, //FIXME
 		})
 	}
 
@@ -781,8 +797,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 	cdc.sunkWatermarkUpdater = cdc2.NewWatermarkUpdater(cdc.persistWatermark)
 
 	// make channels between partitioner and decoder
-	cdc.inputChs = make(map[uint64]chan tools.Pair[*disttae.TableCtx, *disttae.DecoderInput], len(dbTableInfos))
-	cdc.interChs = make(map[uint64]chan tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput], len(dbTableInfos))
+	cdc.interChs = make(map[uint64]chan tools.Pair[*cdc2.TableCtx, *cdc2.DecoderOutput], len(dbTableInfos))
 
 	for _, info := range dbTableInfos {
 		if err = cdc.addExePipelineForTable(info.TblId, watermark, cdc.sunkWatermarkUpdater); err != nil {
@@ -793,8 +808,20 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 	// start watermark updater
 	go cdc.sunkWatermarkUpdater.Run(cdc.activeRoutine)
 
-	//step4 : subscribe the table
+	//step4 : boot the table reader
 	if firstTime {
+		for _, info := range dbTableInfos {
+			reader := cdc2.NewTableReader(
+				cdc.cnTxnClient,
+				cdc.cnEngine,
+				cdc.mp,
+				cdc.packerPool,
+				info,
+				cdc.interChs[info.TblId],
+				cdc.sunkWatermarkUpdater,
+			)
+			go reader.Run(ctx, cdc.activeRoutine)
+		}
 
 		// hold
 		ch := make(chan int, 1)
@@ -823,9 +850,7 @@ func (cdc *CdcTask) Restart() error {
 // Pause stops the components after inQueue (partitioner, decoder and sinker)
 func (cdc *CdcTask) Pause() error {
 	close(cdc.activeRoutine.Pause)
-	for _, c := range cdc.inputChs {
-		close(c)
-	}
+
 	for _, c := range cdc.interChs {
 		close(c)
 	}
@@ -836,18 +861,16 @@ func (cdc *CdcTask) Pause() error {
 func (cdc *CdcTask) Cancel() error {
 	close(cdc.activeRoutine.Pause)
 	close(cdc.activeRoutine.Cancel)
-	for _, c := range cdc.inputChs {
-		close(c)
-	}
+
 	for _, c := range cdc.interChs {
 		close(c)
 	}
 
-	cdc.cdcTables.Range(func(k, v any) bool {
+	cdc.tables.Range(func(k, v any) bool {
 		//TODO:
 		return true
 	})
-	cdc.cdcTables = nil
+	cdc.tables = nil
 	return nil
 }
 
@@ -948,15 +971,8 @@ func (cdc *CdcTask) addExePipelineForTable(tableId uint64, watermark timestamp.T
 
 	ctx := defines.AttachAccountId(context.Background(), uint32(cdc.cdcTask.AccountId))
 
-	// make inputCh for table
-	cdc.inputChs[tableId] = make(chan tools.Pair[*disttae.TableCtx, *disttae.DecoderInput])
-
 	// make interCh for table
-	cdc.interChs[tableId] = make(chan tools.Pair[*disttae.TableCtx, *cdc2.DecoderOutput])
-
-	// make decoder for table
-	decoder := cdc2.NewDecoder(cdc.cdcEngMp, nil, tableId, cdc.inputChs[tableId], cdc.interChs[tableId], wmarkUpdater)
-	go decoder.Run(ctx, cdc.activeRoutine)
+	cdc.interChs[tableId] = make(chan tools.Pair[*cdc2.TableCtx, *cdc2.DecoderOutput])
 
 	// make sinker for table
 	sinker, err := cdc2.NewSinker(ctx, cdc.sinkUri, cdc.interChs[tableId], watermark, cdc.sunkWatermarkUpdater.UpdateTableWatermark)
@@ -972,9 +988,6 @@ func (cdc *CdcTask) addExePipelineForTable(tableId uint64, watermark timestamp.T
 }
 
 func (cdc *CdcTask) removeExePipelineForTable(tableId uint64) (err error) {
-	// close and delete inputCh
-	close(cdc.inputChs[tableId])
-	delete(cdc.inputChs, tableId)
 
 	// close and delete interChs
 	close(cdc.interChs[tableId])

@@ -109,8 +109,20 @@ func newTxnTable(
 }
 
 func (tbl *txnTableDelegate) CollectChanges(from, to types.TS) (engine.ChangesHandle, error) {
-	//TODO implement me
-	panic("implement me")
+	var packer *types.Packer
+	put := tbl.origin.getTxn().engine.packerPool.Get(&packer)
+	defer put.Put()
+
+	//TODO: fix me
+	return newTestChangesHandle(
+		tbl.origin.db.databaseName,
+		tbl.origin.tableName,
+		tbl.origin.db.databaseId,
+		tbl.origin.tableId,
+		to,
+		tbl.origin.getTxn().engine.mp,
+		packer,
+	), nil
 }
 
 func (tbl *txnTableDelegate) Stats(

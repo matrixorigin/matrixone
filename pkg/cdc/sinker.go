@@ -23,22 +23,20 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
 func NewSinker(
 	ctx context.Context,
 	sinkUri string,
-	inputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput],
+	inputCh chan tools.Pair[*TableCtx, *DecoderOutput],
 	curWaterMark timestamp.Timestamp,
 	updateWatermarkFunc func(tableId uint64, watermark timestamp.Timestamp),
 ) (Sinker, error) {
 	//TODO: remove console
 	if strings.HasPrefix(strings.ToLower(sinkUri), "console://") {
-		return NewConsoleSinker(inputCh), nil
+		return NewConsoleSinker(inputCh, curWaterMark, updateWatermarkFunc), nil
 	}
 
 	//extract the info from the sink uri
@@ -57,45 +55,37 @@ func NewSinker(
 var _ Sinker = new(consoleSinker)
 
 type consoleSinker struct {
-	inputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput]
+	inputCh             chan tools.Pair[*TableCtx, *DecoderOutput]
+	watermark           timestamp.Timestamp
+	updateWatermarkFunc func(tableId uint64, watermark timestamp.Timestamp)
 }
 
-func NewConsoleSinker(inputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput]) Sinker {
+func NewConsoleSinker(
+	inputCh chan tools.Pair[*TableCtx, *DecoderOutput],
+	watermark timestamp.Timestamp,
+	updateWatermarkFunc func(tableId uint64, watermark timestamp.Timestamp),
+) Sinker {
 	return &consoleSinker{
-		inputCh: inputCh,
+		inputCh:             inputCh,
+		watermark:           watermark,
+		updateWatermarkFunc: updateWatermarkFunc,
 	}
 }
 
-func (s *consoleSinker) Sink(_ context.Context, data *DecoderOutput) error {
+func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 	fmt.Fprintln(os.Stderr, "====console sinker====")
-	//fmt.Fprintln(os.Stderr, cdcCtx.Db(), cdcCtx.DBId(), cdcCtx.Table(), cdcCtx.TableId(), data.ts)
-	if value, ok := data.sqlOfRows.Load().([][]byte); !ok {
-		fmt.Fprintln(os.Stderr, "no sqlOfrows")
-	} else {
-		fmt.Fprintln(os.Stderr, "total rows sql", len(value))
-		for i, sqlBytes := range value {
-			plen := min(len(sqlBytes), 200)
-			fmt.Fprintln(os.Stderr, i, string(sqlBytes[:plen]))
-		}
-	}
 
-	if value, ok := data.sqlOfObjects.Load().([][]byte); !ok {
-		fmt.Fprintln(os.Stderr, "no sqlOfObjects")
-	} else {
-		fmt.Fprintln(os.Stderr, "total objects sql", len(value))
-		for i, sqlBytes := range value {
-			plen := min(len(sqlBytes), 200)
-			fmt.Fprintln(os.Stderr, i, string(sqlBytes[:plen]))
-		}
-	}
+	fmt.Fprintln(os.Stderr, "output type", data.outputTyp)
 
-	if value, ok := data.sqlOfDeletes.Load().([][]byte); !ok {
-		fmt.Fprintln(os.Stderr, "no sqlOfDeltas")
-	} else {
-		fmt.Fprintln(os.Stderr, "total deltas sql", len(value))
-		for i, sqlBytes := range value {
-			plen := min(len(sqlBytes), 200)
-			fmt.Fprintln(os.Stderr, i, string(sqlBytes[:plen]))
+	if data.outputTyp == OutputTypeTailDone {
+		//TODO:only test here
+		row := make([]any, 2)
+		if data.insertAtmBatch != nil {
+			iter := data.insertAtmBatch.GetRowIterator()
+			for iter.Next() {
+				_ = iter.Row(ctx, []int{1, 2}, row)
+				fmt.Fprintln(os.Stderr, "insert", row)
+			}
 		}
 	}
 
@@ -114,12 +104,26 @@ func (s *consoleSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 		case entry := <-s.inputCh:
 			tableCtx := entry.Key
 			decodeOutput := entry.Value
-			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: {%s} [%v(%v)].[%v(%v)]\n",
-				decodeOutput.ts.DebugString(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: [%v(%v)].[%v(%v)]\n",
+				tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+
+			if decodeOutput.noMoreData {
+				s.watermark = decodeOutput.toTs.ToTimestamp()
+				s.updateWatermarkFunc(tableCtx.TableId(), s.watermark)
+				continue
+			}
 
 			err := s.Sink(ctx, decodeOutput)
 			if err != nil {
 				return
+			}
+
+			if decodeOutput.insertAtmBatch != nil {
+				s.watermark = decodeOutput.insertAtmBatch.To.ToTimestamp()
+				s.updateWatermarkFunc(tableCtx.TableId(), s.watermark)
+			} else if decodeOutput.deleteAtmBatch != nil {
+				s.watermark = decodeOutput.deleteAtmBatch.To.ToTimestamp()
+				s.updateWatermarkFunc(tableCtx.TableId(), s.watermark)
 			}
 		}
 	}
@@ -129,14 +133,14 @@ var _ Sinker = new(mysqlSinker)
 
 type mysqlSinker struct {
 	mysql               Sink
-	inputCh             chan tools.Pair[*disttae.TableCtx, *DecoderOutput]
+	inputCh             chan tools.Pair[*TableCtx, *DecoderOutput]
 	watermark           timestamp.Timestamp
 	updateWatermarkFunc func(tableId uint64, watermark timestamp.Timestamp)
 }
 
 func NewMysqlSinker(
 	mysql Sink,
-	inputCh chan tools.Pair[*disttae.TableCtx, *DecoderOutput],
+	inputCh chan tools.Pair[*TableCtx, *DecoderOutput],
 	watermark timestamp.Timestamp,
 	updateWatermarkFunc func(tableId uint64, watermark timestamp.Timestamp),
 ) Sinker {
@@ -171,28 +175,34 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 			tableCtx := entry.Key
 			decodeOutput := entry.Value
 
-			if s.watermark.GreaterEq(decodeOutput.ts) {
-				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: Unexpect watermark: %v, cur watermark: %v \n", decodeOutput.ts, s.watermark)
+			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: [%v(%v)].[%v(%v)]\n",
+				tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+
+			if decodeOutput.noMoreData {
+				s.watermark = decodeOutput.toTs.ToTimestamp()
+				s.updateWatermarkFunc(tableCtx.TableId(), s.watermark)
 				continue
 			}
 
-			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: {%s} [%v(%v)].[%v(%v)]\n",
-				decodeOutput.ts.DebugString(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
+			//err := s.Sink(ctx, decodeOutput)
+			//if err != nil {
+			//	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: [%v(%v)].[%v(%v)], sink error: %v\n",
+			//		tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId(),
+			//		err,
+			//	)
+			//	// TODO handle error
+			//	continue
+			//}
+			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: [%v(%v)].[%v(%v)], sink over\n",
+				tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
 
-			err := s.Sink(ctx, decodeOutput)
-			if err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: {%s} [%v(%v)].[%v(%v)], sink error: %v\n",
-					decodeOutput.ts.DebugString(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId(),
-					err,
-				)
-				// TODO handle error
-				continue
+			if decodeOutput.insertAtmBatch != nil {
+				s.watermark = decodeOutput.insertAtmBatch.To.ToTimestamp()
+				s.updateWatermarkFunc(tableCtx.TableId(), s.watermark)
+			} else if decodeOutput.deleteAtmBatch != nil {
+				s.watermark = decodeOutput.deleteAtmBatch.To.ToTimestamp()
+				s.updateWatermarkFunc(tableCtx.TableId(), s.watermark)
 			}
-			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: {%s} [%v(%v)].[%v(%v)], sink over\n",
-				decodeOutput.ts.DebugString(), tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
-
-			s.watermark = decodeOutput.ts
-			s.updateWatermarkFunc(tableCtx.TableId(), s.watermark)
 		}
 	}
 }
@@ -226,40 +236,24 @@ func (s *mysqlSink) connect() (err error) {
 }
 
 func (s *mysqlSink) Send(ctx context.Context, data *DecoderOutput) (err error) {
-	sendRows := func(info string, rows [][]byte) (serr error) {
-		fmt.Fprintln(os.Stderr, "----mysql sink----", info, len(rows))
-		for _, row := range rows {
-			if len(row) == 0 {
-				continue
-			}
-			plen := min(len(row), 200)
-			fmt.Fprintln(os.Stderr, "----mysql sink----", info, string(row[:plen]))
-			_, serr = s.conn.ExecContext(ctx, util.UnsafeBytesToString(row))
-			if serr != nil {
-				return serr
-			}
-		}
-		return
-	}
+	//sendRows := func(info string, rows [][]byte) (serr error) {
+	//	fmt.Fprintln(os.Stderr, "----mysql sink----", info, len(rows))
+	//	for _, row := range rows {
+	//		if len(row) == 0 {
+	//			continue
+	//		}
+	//		plen := min(len(row), 200)
+	//		fmt.Fprintln(os.Stderr, "----mysql sink----", info, string(row[:plen]))
+	//		_, serr = s.conn.ExecContext(ctx, util.UnsafeBytesToString(row))
+	//		if serr != nil {
+	//			return serr
+	//		}
+	//	}
+	//	return
+	//}
 	fmt.Fprintln(os.Stderr, "----mysql sink begin----")
 	defer fmt.Fprintln(os.Stderr, "----mysql sink end----")
-	sqlOfRows := data.sqlOfRows.Load().([][]byte)
-	err = sendRows("rows", sqlOfRows)
-	if err != nil {
-		return err
-	}
 
-	sqlOfObjects := data.sqlOfObjects.Load().([][]byte)
-	err = sendRows("objects", sqlOfObjects)
-	if err != nil {
-		return err
-	}
-
-	sqlOfDeletes := data.sqlOfDeletes.Load().([][]byte)
-	err = sendRows("deletes", sqlOfDeletes)
-	if err != nil {
-		return err
-	}
 	return
 }
 

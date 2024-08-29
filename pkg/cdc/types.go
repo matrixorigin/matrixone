@@ -15,16 +15,18 @@
 package cdc
 
 import (
-	"container/list"
+	"bytes"
 	"context"
-	"sync/atomic"
+	"fmt"
+
+	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
 /*
@@ -40,17 +42,9 @@ Cdc process
 
 */
 
-// Partitioner partition the entry from queue by table
-type Partitioner interface {
-	Partition(entry tools.Pair[*disttae.TableCtx, *disttae.DecoderInput])
+type Reader interface {
 	Run(ctx context.Context, ar *ActiveRoutine)
-}
-
-// Decoder convert binary data into sql parts
-type Decoder interface {
-	Decode(ctx context.Context, cdcCtx *disttae.TableCtx, input *disttae.DecoderInput) *DecoderOutput
-	Run(ctx context.Context, ar *ActiveRoutine)
-	TableId() uint64
+	Close()
 }
 
 // Sinker manages and drains the sql parts
@@ -68,54 +62,32 @@ type Sink interface {
 type OutputType int
 
 const (
-	OutputTypeCheckpoint OutputType = iota
+	OutputTypeCheckpoint        OutputType = iota
+	OutputTypeTailDone          OutputType = iota
+	OutputTypeUnfinishedTailWIP OutputType = iota
 )
 
+func (t OutputType) String() string {
+	switch t {
+	case OutputTypeCheckpoint:
+		return "Checkpoint"
+	case OutputTypeTailDone:
+		return "TailDone"
+	case OutputTypeUnfinishedTailWIP:
+		return "UnfinishedTailWIP"
+	default:
+		return "usp output type"
+	}
+}
+
 type DecoderOutput struct {
-	/*
-		ts denotes the watermark of logtails in this batch of logtail.
-
-		the algorithm of evaluating ts:
-			Assume we already have a watermark OldWMark.
-			To evaluate the NewWMark.
-
-			Init: NewWMark = OldWMark
-
-			for rowTs in Rows (Insert or Delete):
-				if rowTs <= OldWMark:
-					drop this row
-				else
-					NewWMark = max(NewWMark,rowTs)
-
-			for commitTs in Objects(only cn):
-				if commitTs <= OldWMark:
-					drop this object
-				else
-					NewWMark = max(NewWMark,commitTs)
-
-			for commitTs in Deltas(cn):
-				if commitTs <= OldWMark:
-					drop this delta
-				else
-					NewWMark = max(NewWMark,commitTs)
-
-			for rowTs in rows of Deltas(dn):
-				load rows of Deltas(dn);
-
-				if rowTs <= OldWMark:
-					drop this row
-				else
-					NewWMark = max(NewWMark,rowTs)
-	*/
-
-	outputTyp     OutputType
-	ts            timestamp.Timestamp
-	logtailTs     timestamp.Timestamp
-	sqlOfRows     atomic.Value
-	sqlOfObjects  atomic.Value
-	sqlOfDeletes  atomic.Value
-	checkpointBat *batch.Batch
-	err           error
+	outputTyp      OutputType
+	noMoreData     bool
+	toTs           types.TS
+	checkpointBat  *batch.Batch
+	insertAtmBatch *AtomicBatch
+	deleteAtmBatch *AtomicBatch
+	err            error
 }
 
 type RowType int
@@ -127,140 +99,174 @@ const (
 
 type RowIterator interface {
 	Next() bool
-	Row(row []any)
+	Row(ctx context.Context, wantedColsIndices []int, row []any) error
 	Close() error
 }
 
 type DbTableInfo struct {
-	DbName  string
-	TblName string
-	DbId    uint64
-	TblId   uint64
-	Rows    *Rows
+	DbName                       string
+	TblName                      string
+	DbId                         uint64
+	TblId                        uint64
+	TsColIdx, CompositedPkColIdx int
 }
 
-// Rows denotes all rows have been read.
-// Iterator hierarchy:
-//
-//	InsertRows iterator
-//		--> AtomicBatch row iterator
-//
-//	DeleteRows iterator
-//		--> AtomicBatch row iterator
-//
-// InsertRows holds the list of AtomicBatch for insert
-// DeleteRows holds the list of AtomicBatch for delete
-type Rows struct {
-	InsertRows *list.List
-	DeleteRows *list.List
+func (info DbTableInfo) String() string {
+	return fmt.Sprintf("%v %v %v %v %v %v",
+		info.DbName,
+		info.TblName,
+		info.DbId,
+		info.TblId,
+		info.TsColIdx,
+		info.CompositedPkColIdx,
+	)
 }
 
-func (rows *Rows) GetInsertRowIterator() RowIterator {
-	return &rowIter{}
-}
-
-func (rows *Rows) GetDeleteRowIterator() RowIterator {
-	return &rowIter{}
+// Batches denotes all rows have been read.
+type Batches struct {
+	Inserts []*AtomicBatch
+	Deletes []*AtomicBatch
 }
 
 // AtomicBatch holds batches from [Tail_wip,...,Tail_done] or [Tail_done].
 // These batches have atomicity
 type AtomicBatch struct {
-	MP       *mpool.MPool
-	From, To types.TS
-	List     *list.List
+	Mp                           *mpool.MPool
+	From, To                     types.TS
+	Batches                      []*batch.Batch
+	Rows                         *btree.BTreeG[AtomicBatchRow]
+	TsColIdx, CompositedPkColIdx int
 }
 
-func (bat *AtomicBatch) Append(batch *batch.Batch) {
+func NewAtomicBatch(
+	mp *mpool.MPool,
+	from, to types.TS,
+	tsColIdx, compositedPkColIdx int,
+) *AtomicBatch {
+	opts := btree.Options{
+		Degree: 64,
+	}
+	ret := &AtomicBatch{
+		Mp:                 mp,
+		From:               from,
+		To:                 to,
+		Rows:               btree.NewBTreeGOptions(AtomicBatchRow.Less, opts),
+		TsColIdx:           tsColIdx,
+		CompositedPkColIdx: compositedPkColIdx,
+	}
+	return ret
+}
+
+type AtomicBatchRow struct {
+	Ts     types.TS
+	Pk     []byte
+	Offset int
+	Src    *batch.Batch
+}
+
+func (row AtomicBatchRow) Less(other AtomicBatchRow) bool {
+	//ts asc
+	if row.Ts.Less(&other.Ts) {
+		return true
+	}
+	if row.Ts.Greater(&other.Ts) {
+		return false
+	}
+	//pk asc
+	return bytes.Compare(row.Pk, other.Pk) < 0
+}
+
+func (bat *AtomicBatch) Append(
+	packer *types.Packer,
+	batch *batch.Batch) {
 	if batch != nil {
-		bat.List.PushBack(batch)
+		bat.Batches = append(bat.Batches, batch)
+		//ts columns
+		tsVec := vector.MustFixedCol[types.TS](batch.Vecs[bat.TsColIdx])
+		//composited pk columns
+		compositedPkBytes := logtailreplay.EncodePrimaryKeyVector(batch.Vecs[bat.CompositedPkColIdx], packer)
+
+		for i, ts := range tsVec {
+			row := AtomicBatchRow{
+				Ts:     ts,
+				Pk:     compositedPkBytes[i],
+				Offset: i,
+				Src:    batch,
+			}
+			bat.Rows.Set(row)
+		}
 	}
 }
 
 func (bat *AtomicBatch) Close() {
-	for le := bat.List.Front(); le != nil; le = le.Next() {
-		data := le.Value.(*batch.Batch)
-		data.Clean(bat.MP)
+	for _, oneBat := range bat.Batches {
+		oneBat.Clean(bat.Mp)
 	}
+	bat.Rows.Clear()
+	bat.Rows = nil
+	bat.Batches = nil
+	bat.Mp = nil
 }
 
 func (bat *AtomicBatch) GetRowIterator() RowIterator {
 	return &atomicBatchRowIter{
-		offset: -1,
-		ele:    bat.List.Front(),
+		iter: bat.Rows.Iter(),
 	}
 }
 
 var _ RowIterator = new(atomicBatchRowIter)
 
 type atomicBatchRowIter struct {
-	offset int
-	ele    *list.Element
+	iter btree.IterG[AtomicBatchRow]
 }
 
 func (iter *atomicBatchRowIter) Next() bool {
-	if iter == nil || iter.ele == nil {
-		return false
-	}
-	//step 1: check left rows
-	data := iter.ele.(*batch.Batch)
-	iter.offset++
-	if iter.offset < data.Vecs[0].Length() {
-		return true
-	}
-	//or step 2: move to next batch has data
-	iter.offset = -1
-	for ; iter.ele != nil; iter.ele = iter.ele.Next() {
-		data = iter.ele.(*batch.Batch)
-		if data.Vecs[0].Length() != 0 {
-			break
-		}
-	}
-	return iter.ele != nil && data.Vecs[0].Length() != 0
+	return iter.iter.Next()
 }
 
-func (iter *atomicBatchRowIter) Row(row []any) {
-	data = iter.ele.(*batch.Batch)
-	vecCnt := len(data.Vecs)
-	if vecCnt > len(row) {
+func (iter *atomicBatchRowIter) Row(ctx context.Context, wantedColsIndices []int, row []any) (err error) {
+	batchRow := iter.iter.Item()
+	err = extractRowFromEveryVector2(
+		ctx,
+		batchRow.Src,
+		wantedColsIndices,
+		batchRow.Offset,
+		row,
+	)
+	if err != nil {
 		return
 	}
-	//TODO:
+	return
 }
 
 func (iter *atomicBatchRowIter) Close() error {
-	iter.offset = -1
-	iter.ele = nil
+	iter.iter.Release()
 	return nil
 }
 
-var _ RowIterator = new(rowIter)
-
-type rowIter struct {
-	eleIter RowIterator
-	ele     *list.Element
-	list    *list.List
+// TableCtx TODO: define suitable names
+type TableCtx struct {
+	db, table     string
+	dbId, tableId uint64
+	tblDef        *plan.TableDef
 }
 
-func (iter *rowIter) Next() bool {
-	if iter == nil || iter.ele == nil || iter.eleIter == nil || iter.list == nil {
-		return false
-	}
-	if iter.eleIter.Next() {
-		return true
-	}
-	iter.eleIter = nil
-	for ele = iter.ele.Next(); ele != nil; ele = ele.Next() {
-
-	}
-
-	return false
+func (tctx *TableCtx) Db() string {
+	return tctx.db
 }
 
-func (iter *rowIter) Row(row []any) {
-	return 0, nil
+func (tctx *TableCtx) Table() string {
+	return tctx.table
 }
 
-func (iter *rowIter) Close() error {
-	return nil
+func (tctx *TableCtx) DBId() uint64 {
+	return tctx.dbId
+}
+
+func (tctx *TableCtx) TableId() uint64 {
+	return tctx.tableId
+}
+
+func (tctx *TableCtx) TableDef() *plan.TableDef {
+	return tctx.tblDef
 }

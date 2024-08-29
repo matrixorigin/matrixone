@@ -76,8 +76,20 @@ func (tbl *txnTable) getTxn() *Transaction {
 }
 
 func (tbl *txnTable) CollectChanges(from, to types.TS) (engine.ChangesHandle, error) {
-	//TODO implement me
-	panic("implement me")
+	var packer *types.Packer
+	put := tbl.getTxn().engine.packerPool.Get(&packer)
+	defer put.Put()
+
+	//TODO: fix me
+	return newTestChangesHandle(
+		tbl.db.databaseName,
+		tbl.tableName,
+		tbl.db.databaseId,
+		tbl.tableId,
+		to,
+		tbl.getTxn().engine.mp,
+		packer,
+	), nil
 }
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {

@@ -116,6 +116,38 @@ func extractRowFromEveryVector(
 	return nil
 }
 
+// extractRowFromEveryVector2 gets the j row from the every vector and outputs the row
+// wantedColsIndices denotes the index of columns wanted. every index must < len(dataSet.Vecs)
+// row filled with indices by the sequence designated in the wantedColsIndices
+// len(row) == len(wantedColsIndices) <= len(dataSet.Vecs)
+func extractRowFromEveryVector2(
+	ctx context.Context,
+	dataSet *batch.Batch,
+	wantedColsIndices []int,
+	rowIndex int,
+	row []any,
+) error {
+	for resColIdx, colIdx := range wantedColsIndices {
+		vec := dataSet.Vecs[colIdx]
+		rowIndexBackup := rowIndex
+		if vec.IsConstNull() {
+			row[colIdx] = nil
+			continue
+		}
+		if vec.IsConst() {
+			rowIndex = 0
+		}
+
+		err := extractRowFromVector(ctx, vec, resColIdx, row, rowIndex)
+		if err != nil {
+			return err
+		}
+		rowIndex = rowIndexBackup
+	}
+
+	return nil
+}
+
 // extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []any, rowIndex int) error {
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
