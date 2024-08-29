@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type Scheduler struct {
@@ -34,7 +35,7 @@ type Scheduler struct {
 func NewScheduler(rt *dbutils.Runtime, scheduler CNMergeScheduler) *Scheduler {
 	return &Scheduler{
 		executor: NewMergeExecutor(rt, scheduler),
-		policy:   newMultiObjPolicy(nil),
+		policy:   newMultiObjPolicy(),
 	}
 }
 
@@ -46,8 +47,8 @@ func (m *Scheduler) OnPostObject(*catalog.ObjectEntry) error {
 	return nil
 }
 
-func (m *Scheduler) OnTombstone(*catalog.ObjectEntry) error {
-	return nil
+func (m *Scheduler) OnTombstone(obj *catalog.ObjectEntry) error {
+	return m.OnObject(obj)
 }
 
 func (m *Scheduler) OnDatabase(*catalog.DBEntry) error {
@@ -110,10 +111,10 @@ func (m *Scheduler) OnPostTable(tableEntry *catalog.TableEntry) (err error) {
 	mobjs, tombstones, kind := m.policy.revise(m.executor.CPUPercent(), int64(m.executor.MemAvailBytes()))
 
 	if len(mobjs) >= 2 {
-		m.executor.ExecuteMultiObjMerge(tableEntry, mobjs, kind)
+		m.executor.ExecuteObjMerge(tableEntry, mobjs, kind)
 	}
 	if len(tombstones) >= 2 {
-		m.executor.ExecuteMultiObjMerge(tableEntry, tombstones, kind)
+		m.executor.ExecuteObjMerge(tableEntry, tombstones, kind)
 	}
 	return
 }
@@ -134,7 +135,6 @@ func (m *Scheduler) OnObject(objectEntry *catalog.ObjectEntry) error {
 	}
 	dels := objectEntry.GetObjectData().GetTotalChanges()
 
-	// these operations do not require object lock
 	m.tableRowCnt += rows
 	m.tableRowDel += dels
 	m.policy.onObject(objectEntry)
@@ -143,13 +143,18 @@ func (m *Scheduler) OnObject(objectEntry *catalog.ObjectEntry) error {
 
 func objectValid(objectEntry *catalog.ObjectEntry) bool {
 	// Skip uncommitted entries
-	// TODO: consider the case: add metaloc, is it possible to see a constructing object?
+	// TODO: is it possible to see a constructing object?
 	if !objectEntry.IsCommitted() || objectEntry.HasDropCommitted() {
 		return false
 	}
 
-	if objectEntry.IsAppendable() {
-		return false
-	}
-	return true
+	return !objectEntry.IsAppendable()
+}
+
+func (m *Scheduler) ConfigPolicy(tbl *catalog.TableEntry, txn txnif.AsyncTxn, c *BasicPolicyConfig) {
+	m.policy.setConfig(tbl, txn, c)
+}
+
+func (m *Scheduler) GetPolicy(tbl *catalog.TableEntry) *BasicPolicyConfig {
+	return m.policy.getConfig(tbl)
 }

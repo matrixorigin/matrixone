@@ -16,48 +16,39 @@ package merge
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
-type multiObjConfig struct {
-	maxObjs int
-}
-
-type multiObjPolicy struct {
-	config     *multiObjConfig
+type objOverlapPolicy struct {
 	objects    []*catalog.ObjectEntry
 	tombstones []*catalog.ObjectEntry
 
 	overlappingObjsSet [][]*catalog.ObjectEntry
+
+	basicConfig    *BasicPolicyConfig
+	configProvider *customConfigProvider
 }
 
-func (m *multiObjConfig) adjust() {
-	if m.maxObjs == 0 {
-		m.maxObjs = common.DefaultMaxMergeObjN / 2
-	}
-}
-
-func newMultiObjPolicy(config *multiObjConfig) *multiObjPolicy {
-	if config == nil {
-		config = &multiObjConfig{}
-	}
-	config.adjust()
-	return &multiObjPolicy{
-		config:             config,
-		objects:            make([]*catalog.ObjectEntry, 0, config.maxObjs),
+func newMultiObjPolicy() *objOverlapPolicy {
+	return &objOverlapPolicy{
+		objects:            make([]*catalog.ObjectEntry, 0),
 		tombstones:         make([]*catalog.ObjectEntry, 0),
 		overlappingObjsSet: make([][]*catalog.ObjectEntry, 0),
+		configProvider:     newCustomConfigProvider(),
 	}
 }
 
-func (m *multiObjPolicy) onObject(obj *catalog.ObjectEntry) {
+func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry) {
 	if obj.IsTombstone {
 		m.tombstones = append(m.tombstones, obj)
 	} else {
@@ -65,7 +56,7 @@ func (m *multiObjPolicy) onObject(obj *catalog.ObjectEntry) {
 	}
 }
 
-func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, []*catalog.ObjectEntry, TaskHostKind) {
+func (m *objOverlapPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, []*catalog.ObjectEntry, TaskHostKind) {
 	if len(m.objects) < 2 && len(m.tombstones) < 2 {
 		return nil, nil, TaskHostDN
 	}
@@ -76,9 +67,9 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, []*cata
 	return objs, m.tombstones, taskHostKind
 }
 
-func (m *multiObjPolicy) reviseDataObjs(mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (m *objOverlapPolicy) reviseDataObjs(mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	if !m.objects[0].GetSortKeyZonemap().IsInited() {
-		revisedObj := make([]*catalog.ObjectEntry, m.config.maxObjs)
+		revisedObj := make([]*catalog.ObjectEntry, m.basicConfig.MergeMaxOneRun)
 		n := copy(revisedObj, m.objects)
 		return revisedObj[:n], TaskHostDN
 	}
@@ -149,8 +140,8 @@ func (m *multiObjPolicy) reviseDataObjs(mem int64) ([]*catalog.ObjectEntry, Task
 	if len(objs) < 3 {
 		return nil, TaskHostDN
 	}
-	if len(objs) > m.config.maxObjs {
-		objs = objs[:m.config.maxObjs]
+	if len(objs) > m.basicConfig.MergeMaxOneRun {
+		objs = objs[:m.basicConfig.MergeMaxOneRun]
 	}
 	objs = controlMem(objs, mem)
 	if len(objs) < 2 {
@@ -159,10 +150,11 @@ func (m *multiObjPolicy) reviseDataObjs(mem int64) ([]*catalog.ObjectEntry, Task
 	return objs, TaskHostDN
 }
 
-func (m *multiObjPolicy) resetForTable(*catalog.TableEntry) {
+func (m *objOverlapPolicy) resetForTable(tbl *catalog.TableEntry) {
 	m.objects = m.objects[:0]
 	m.tombstones = m.tombstones[:0]
 	m.overlappingObjsSet = m.overlappingObjsSet[:0]
+	m.basicConfig = m.configProvider.GetConfig(tbl)
 }
 
 type entrySet struct {
@@ -238,4 +230,39 @@ func minValue(t types.T) any {
 	default:
 		panic(fmt.Sprintf("unsupported type: %v", t))
 	}
+}
+
+func (m *objOverlapPolicy) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg *BasicPolicyConfig) {
+	if tbl == nil || txn == nil {
+		return
+	}
+	db, err := txn.GetDatabaseByID(tbl.GetDB().ID)
+	if err != nil {
+		return
+	}
+	tblHandle, err := db.GetRelationByID(tbl.ID)
+	if err != nil {
+		return
+	}
+	ctx := context.Background()
+	tblHandle.AlterTable(
+		ctx,
+		NewUpdatePolicyReq(cfg),
+	)
+	logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, tbl.GetLastestSchemaLocked(false).Name, cfg)
+	txn.Commit(ctx)
+	m.configProvider.invalidCache(tbl)
+}
+
+func (m *objOverlapPolicy) getConfig(tbl *catalog.TableEntry) *BasicPolicyConfig {
+	r := m.configProvider.GetConfig(tbl)
+	if r == nil {
+		r = &BasicPolicyConfig{
+			ObjectMinOsize:    common.RuntimeOsizeRowsQualified.Load(),
+			MaxOsizeMergedObj: common.RuntimeMaxObjOsize.Load(),
+			MergeMaxOneRun:    int(common.RuntimeMaxMergeObjN.Load()),
+			MinCNMergeSize:    common.RuntimeMinCNMergeSize.Load(),
+		}
+	}
+	return r
 }

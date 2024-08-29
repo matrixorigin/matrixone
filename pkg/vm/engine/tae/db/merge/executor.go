@@ -15,7 +15,6 @@
 package merge
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -159,7 +158,7 @@ func (e *Executor) OnExecDone(v any) {
 	e.activeEstimateBytes.Add(-int64(stat.estBytes))
 }
 
-func (e *Executor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry, kind TaskHostKind) {
+func (e *Executor) ExecuteObjMerge(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry, kind TaskHostKind) {
 	tableName := fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema(false).Name)
 
 	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
@@ -276,28 +275,6 @@ func (e *Executor) TransferPageSizeLimit() uint64 {
 
 func (e *Executor) CPUPercent() int64 {
 	return int64(e.cpuPercent)
-}
-
-func logSingleObjMergeTask(name string, taskId uint64, obj *catalog.ObjectEntry, blkn, osize, esize int) {
-	rows := obj.GetRows()
-	infoBuf := &bytes.Buffer{}
-	infoBuf.WriteString(fmt.Sprintf(" %d(%s)", rows, obj.ID().ShortStringEx()))
-	platform := fmt.Sprintf("t%d", taskId)
-	if taskId == math.MaxUint64 {
-		platform = "CN"
-		v2.TaskCNMergeScheduledByCounter.Inc()
-		v2.TaskCNMergedSizeCounter.Add(float64(osize))
-	} else {
-		v2.TaskDNMergeScheduledByCounter.Inc()
-		v2.TaskDNMergedSizeCounter.Add(float64(osize))
-	}
-	logutil.Infof(
-		"[Mergeblocks] Scheduled %v [%v|on1,bn%d|%s,%s], merged(%v): %s", name,
-		platform, blkn,
-		common.HumanReadableBytes(osize), common.HumanReadableBytes(esize),
-		rows,
-		infoBuf.String(),
-	)
 }
 
 func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blkn, osize, esize int) {

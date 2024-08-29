@@ -192,22 +192,15 @@ func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService
 }
 
 const (
-	constMaxMemCap     = 12 * common.Const1GBytes // max original memory for an object
-	constSmallMergeGap = 3 * time.Minute
+	constMaxMemCap = 12 * common.Const1GBytes // max original memory for an object
 )
-
-type Policy interface {
-	OnObject(obj *catalog.ObjectEntry, force bool)
-	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
-	ResetForTable(*catalog.TableEntry)
-	SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any)
-	GetConfig(*catalog.TableEntry) any
-}
 
 type policy interface {
 	revise(cpu, mem int64) ([]*catalog.ObjectEntry, []*catalog.ObjectEntry, TaskHostKind)
 	onObject(*catalog.ObjectEntry)
 	resetForTable(*catalog.TableEntry)
+	setConfig(*catalog.TableEntry, txnif.AsyncTxn, *BasicPolicyConfig)
+	getConfig(*catalog.TableEntry) *BasicPolicyConfig
 }
 
 func NewUpdatePolicyReq(c *BasicPolicyConfig) *api.AlterTableReq {
