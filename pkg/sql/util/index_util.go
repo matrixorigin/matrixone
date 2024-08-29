@@ -528,7 +528,6 @@ func serialWithoutCompacted(vs []*vector.Vector, vec *vector.Vector, proc *proce
 
 	for i := 0; i < rowCount; i++ {
 		if err := vector.AppendBytes(vec, ps[i].GetBuf(), false, proc.Mp()); err != nil {
-			proc.PutVector(vec)
 			return nil, err
 		}
 	}
