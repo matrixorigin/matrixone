@@ -2744,13 +2744,14 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 
 func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
+	isSingle := c.IsSingleScope(ss)
 	for i := range ss {
-		op := constructSample(n, len(ss) != 1)
+		op := constructSample(n, !isSingle)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
 	c.anal.isFirst = false
-	if c.IsSingleScope(ss) {
+	if isSingle {
 		return ss
 	}
 
