@@ -257,33 +257,33 @@ func TestNewParallelScope(t *testing.T) {
 	var reg process.WaitRegister
 	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
 
-	// 1. test (-> projection -> limit -> connector.)
+	// 1. test (rightSemi -> projection -> limit -> connector.)
 	{
 		scopeToParallel := generateScopeWithRootOperator(
 			testCompile.proc,
-			[]vm.OpType{vm.Projection, vm.Limit, vm.Connector})
+			[]vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector})
 
 		scopeToParallel.NodeInfo.Mcpu = 4
 		_, ss := newParallelScope(scopeToParallel, testCompile)
-		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
 	}
 
-	// 2. test (-> filter -> projection -> connector.)
+	// 2. test (right -> filter -> projection -> connector.)
 	{
 		scopeToParallel := generateScopeWithRootOperator(
 			testCompile.proc,
-			[]vm.OpType{vm.Filter, vm.Projection, vm.Connector})
+			[]vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector})
 
 		scopeToParallel.NodeInfo.Mcpu = 4
 
 		_, ss := newParallelScope(scopeToParallel, testCompile)
-		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
 	}
 }
 
