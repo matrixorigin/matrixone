@@ -1576,7 +1576,7 @@ func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process, j
 	return arg
 }
 
-func constructJoinBuildOperator(c *Compile, op vm.Operator, isShuffle bool, mcpu int32) vm.Operator {
+func constructJoinBuildOperator(c *Compile, op vm.Operator, mcpu int32) vm.Operator {
 	switch op.OpType() {
 	case vm.IndexJoin:
 		indexJoin := op.(*indexjoin.IndexJoin)
@@ -1588,12 +1588,6 @@ func constructJoinBuildOperator(c *Compile, op vm.Operator, isShuffle bool, mcpu
 		ret.SetIsFirst(true)
 		return ret
 	default:
-		if isShuffle {
-			res := constructShuffleBuild(op, c.proc)
-			res.SetIdx(op.GetOperatorBase().GetIdx())
-			res.SetIsFirst(true)
-			return res
-		}
 		res := constructHashBuild(op, c.proc, mcpu)
 		res.SetIdx(op.GetOperatorBase().GetIdx())
 		res.SetIsFirst(true)
