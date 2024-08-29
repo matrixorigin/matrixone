@@ -38,7 +38,6 @@ drop snapshot sp01;
 
 
 
--- @bvt:issue#17318
 -- sys account restore to account: single db, single table
 drop database if exists test01;
 create database test01;
@@ -68,6 +67,9 @@ select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database 
 restore account sys from snapshot sp01;
 select count(*) from rs01 {snapshot = 'sp01'};
 select count(*) from rs01 {snapshot = 'sp01'};
+select count(*) from rs01 {snapshot = 'sp01'};
+select count(*) from rs01 {snapshot = 'sp01'};
+select count(*) from rs01 {snapshot = 'sp01'};
 select * from rs01 {snapshot = 'sp01'};
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
 -- @ignore:0,6,7
@@ -75,7 +77,6 @@ select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01'
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 drop snapshot sp01;
 drop database test01;
--- @bvt:issue
 
 
 
