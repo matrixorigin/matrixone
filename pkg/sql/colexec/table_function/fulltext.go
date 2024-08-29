@@ -31,11 +31,11 @@ import (
 
 const (
 	project_doc_id              = "t1.doc_id"
-	project_tfidf               = "CAST ((nmatch/nword) * log10((SELECT count(*) from idx) / (SELECT COUNT(1) FROM %s WHERE word='%s')) AS float) AS tfidf"
+	project_tfidf               = "CAST ((nmatch/nword) * log10((SELECT count(*) from %s) / (SELECT COUNT(1) FROM %s WHERE word='%s')) AS float) AS tfidf"
 	single_word_exact_match_sql = `SELECT %s FROM 
 	(SELECT MIN(first_doc_id) AS first_doc_id, MAX(last_doc_id) AS last_doc_id, MAX(doc_count) AS nmatch, doc_id FROM %s WHERE word ='%s' GROUP BY doc_id ) AS t1  
 	LEFT JOIN  
-	(SELECT COUNT(1) as nword, doc_id FROM %s WHERE doc_id in (SELECT doc_id FROM idx WHERE word = '%s') GROUP BY doc_id) AS t2 
+	(SELECT COUNT(1) as nword, doc_id FROM %s WHERE doc_id in (SELECT doc_id FROM %s WHERE word = '%s') GROUP BY doc_id) AS t2 
 	ON 
 	t1.doc_id = t2.doc_id ORDER BY tfidf;`
 )
@@ -155,16 +155,16 @@ func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, tbl
 
 	if len(tableFunction.Attrs) == 2 {
 		projects = append(projects, project_doc_id)
-		tfidf := fmt.Sprintf(project_tfidf, tblname, pattern)
+		tfidf := fmt.Sprintf(project_tfidf, tblname, tblname, pattern)
 		projects = append(projects, tfidf)
 
 	} else if len(tableFunction.Attrs) == 1 {
 		if tableFunction.Attrs[0] == "DOC_ID" {
 			projects = append(projects, project_doc_id)
-			tfidf := fmt.Sprintf(project_tfidf, tblname, pattern)
+			tfidf := fmt.Sprintf(project_tfidf, tblname, tblname, pattern)
 			projects = append(projects, tfidf)
 		} else {
-			tfidf := fmt.Sprintf(project_tfidf, tblname, pattern)
+			tfidf := fmt.Sprintf(project_tfidf, tblname, tblname, pattern)
 			projects = append(projects, tfidf)
 			projects = append(projects, project_doc_id)
 		}
@@ -180,13 +180,15 @@ func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, tbl
 			}
 		}
 	*/
-	projects = append(projects, project_doc_id)
-	tfidf := fmt.Sprintf(project_tfidf, tblname, pattern)
-	projects = append(projects, tfidf)
+	/*
+		projects = append(projects, project_doc_id)
+		tfidf := fmt.Sprintf(project_tfidf, tblname, tblname, pattern)
+		projects = append(projects, tfidf)
+	*/
 
 	project := strings.Join(projects, ",")
 
-	sql := fmt.Sprintf(single_word_exact_match_sql, project, tblname, pattern, tblname, pattern)
+	sql := fmt.Sprintf(single_word_exact_match_sql, project, tblname, pattern, tblname, tblname, pattern)
 	logutil.Infof("FULLTEXT SQL = %s", sql)
 	res, err := ft_runSql(proc, sql)
 	if err != nil {

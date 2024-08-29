@@ -328,12 +328,12 @@ const (
 
 	/************ 3. FULLTEXT Index **************/
 
-	FullTextIndex_TabCol_Word       = "__mo_index_ft_word"
-	FullTextIndex_TabCol_Id         = "__mo_index_ft_fk_id"
-	FullTextIndex_TabCol_Position   = "__mo_index_ft_pos"
-	FullTextIndex_TabCol_DocCount   = "__mo_index_ft_doc_count"
-	FullTextIndex_TabCol_Firstrowid = "__mo_index_ft_first_fk_id"
-	FullTextIndex_TabCol_Lastrowid  = "__mo_index_ft_last_fk_id"
+	FullTextIndex_TabCol_Word       = "word"
+	FullTextIndex_TabCol_Id         = "doc_id"
+	FullTextIndex_TabCol_Position   = "pos"
+	FullTextIndex_TabCol_DocCount   = "doc_count"
+	FullTextIndex_TabCol_Firstrowid = "first_doc_id"
+	FullTextIndex_TabCol_Lastrowid  = "last_doc_id"
 )
 
 const (

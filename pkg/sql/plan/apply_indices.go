@@ -102,8 +102,6 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
-	// ERIC BUG HERE:  fulltext_match need to check first instead of len(Indexes) == 0... error out if fullmatch found but len(index) == 0
-
 	logutil.Infof("applyINdicesForFilters..... node.FilterList = %d, Index = %d", len(node.FilterList), len(node.TableDef.Indexes))
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
@@ -165,7 +163,6 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 
 				logutil.Infof("Src table name %s", node.TableDef.Name)
 
-				// TEST REMOVE THIS FILTER
 			default:
 			}
 		}
@@ -174,12 +171,6 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 		if len(filterids) > 0 {
 			return builder.applyIndicesForFiltersUsingFullTextIndex(nodeID, node, filterids, ftidxs)
 		}
-		/*
-			if ftid != -1 {
-				node.FilterList = append(node.FilterList[:ftid], node.FilterList[ftid+1:]...)
-
-			}
-		*/
 	}
 	logutil.Infof("applyIndciesForFilters END")
 	// 1. Master Index Check

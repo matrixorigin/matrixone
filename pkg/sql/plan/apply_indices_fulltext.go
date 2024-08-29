@@ -50,7 +50,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 	for i := 0; i < len(filterids); i++ {
 		ftidxscan := scanNode.FilterList[i]
 		idxdef := indexDefs[i]
-		idxtblname := idxdef.IndexTableName
+		idxtblname := fmt.Sprintf("`%s`", idxdef.IndexTableName)
 		keyparts := strings.Join(idxdef.Parts, ",")
 		fn := ftidxscan.GetF()
 		pattern := fn.Args[0].GetLit().GetSval()
@@ -59,56 +59,89 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 		fulltext_func := tree.NewCStr("fulltext_index_scan", 1)
 
 		var exprs tree.Exprs
-		/*
-			exprs = append(exprs, tree.NewStrVal("idx"))
-			exprs = append(exprs, tree.NewStrVal("pk_type"))
-			exprs = append(exprs, tree.NewStrVal("keyparts"))
-			exprs = append(exprs, tree.NewStrVal("pattern"))
-
-		*/
-		exprs = append(exprs, tree.NewNumVal(constant.MakeString(idxtblname), idxtblname, false))
-		exprs = append(exprs, tree.NewNumVal(constant.MakeString(pkJson), pkJson, false))
-		exprs = append(exprs, tree.NewNumVal(constant.MakeString(keyparts), keyparts, false))
-		exprs = append(exprs, tree.NewNumVal(constant.MakeString(pattern), pattern, false))
+		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(idxtblname), idxtblname, false, tree.P_char))
+		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(pkJson), pkJson, false, tree.P_char))
+		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(keyparts), keyparts, false, tree.P_char))
+		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(pattern), pattern, false, tree.P_char))
 		exprs = append(exprs, tree.NewNumValWithType(constant.MakeInt64(mode), strconv.FormatInt(mode, 10), false, tree.P_int64))
 
-		// SELECT doc_id from fulltext_index_scan('a', 'b', 'c', 'd') as f;
 		name := tree.NewUnresolvedName(fulltext_func)
-		tmpSltStmt := &tree.Select{
-			Select: &tree.SelectClause{
-				Distinct: true,
 
-				Exprs: []tree.SelectExpr{
-					//{Expr: tree.StarExpr()},
-					{Expr: tree.NewUnresolvedColName("fulltext_alias_table_name.doc_id")},
-				},
-				From: &tree.From{
-					Tables: tree.TableExprs{
-						&tree.AliasedTableExpr{
-							Expr: &tree.AliasedTableExpr{
-								Expr: &tree.TableFunction{
-									Func: &tree.FuncExpr{
-										Func:     tree.FuncName2ResolvableFunctionReference(name),
-										FuncName: fulltext_func,
-										Exprs:    exprs,
-										Type:     tree.FUNC_TYPE_TABLE,
+		/*
+			tmpSltStmt := &tree.Select{
+				Select: &tree.SelectClause{
+					Distinct: true,
+
+					Exprs: []tree.SelectExpr{
+						{Expr: tree.StarExpr()},
+						//{Expr: tree.NewUnresolvedColName("fulltext_alias_inner.doc_id")},
+						//{Expr: tree.NewUnresolvedColName("fulltext_alias_table_name.doc_id")},
+					},
+					From: &tree.From{
+						Tables: tree.TableExprs{
+							&tree.AliasedTableExpr{
+								Expr: &tree.AliasedTableExpr{
+									Expr: &tree.TableFunction{
+										Func: &tree.FuncExpr{
+											Func:     tree.FuncName2ResolvableFunctionReference(name),
+											FuncName: fulltext_func,
+											Exprs:    exprs,
+											Type:     tree.FUNC_TYPE_TABLE,
+										},
+									},
+									As: tree.AliasClause{
+										Alias: "fulltext_alias_inner",
 									},
 								},
-							},
-							As: tree.AliasClause{
-								Alias: "fulltext_alias_table_name",
+								As: tree.AliasClause{
+									Alias: "fulltext_alias_table_name",
+								},
 							},
 						},
 					},
 				},
+			}
+
+			isRoot := false
+			curr_ftnode_id, err := builder.buildSelect(tmpSltStmt, ctx, isRoot)
+			if err != nil {
+				panic(err.Error())
+			}
+
+		*/
+
+		// SELECT doc_id from fulltext_index_scan('a', 'b', 'c', 'd') as f;
+		/*
+			tmpTableFunc := &tree.TableFunction{
+				Func: &tree.FuncExpr{
+					Func:     tree.FuncName2ResolvableFunctionReference(name),
+					FuncName: fulltext_func,
+					Exprs:    exprs,
+					Type:     tree.FUNC_TYPE_TABLE,
+				},
+			}
+
+			curr_ftnode_id, err := builder.buildTableFunction(tmpTableFunc, ctx, -1, nil)
+		*/
+
+		tmpTableFunc := &tree.AliasedTableExpr{
+			Expr: &tree.TableFunction{
+				Func: &tree.FuncExpr{
+					Func:     tree.FuncName2ResolvableFunctionReference(name),
+					FuncName: fulltext_func,
+					Exprs:    exprs,
+					Type:     tree.FUNC_TYPE_TABLE,
+				},
+			},
+			As: tree.AliasClause{
+				Alias: "fulltext_alias",
 			},
 		}
-
-		isRoot := false
-		curr_ftnode_id, err := builder.buildSelect(tmpSltStmt, ctx, isRoot)
+		curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, -1, nil)
 		if err != nil {
 			panic(err.Error())
 		}
+
 		curr_ftnode := builder.qry.Nodes[curr_ftnode_id]
 		curr_ftnode_tag := curr_ftnode.BindingTags[0]
 		curr_ftnode_pkcol := &Expr{
@@ -120,6 +153,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 				},
 			},
 		}
+
+		// add the column label
+		builder.addNameByColRef(curr_ftnode_tag, curr_ftnode.TableDef)
 
 		logutil.Infof("TABLE_FUNCTION %v", curr_ftnode)
 
