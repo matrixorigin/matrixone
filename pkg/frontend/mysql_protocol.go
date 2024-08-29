@@ -733,7 +733,7 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 	}
 
 	if stmt.params == nil {
-		stmt.params = proc.GetVector(types.T_text.ToType())
+		stmt.params = vector.NewVec(types.T_text.ToType())
 		for i := 0; i < numParams; i++ {
 			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
 			if err != nil {
@@ -760,7 +760,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 	numParams := len(dcPrepare.Prepare.ParamTypes)
 
 	if stmt.params == nil {
-		stmt.params = proc.GetVector(types.T_text.ToType())
+		stmt.params = vector.NewVec(types.T_text.ToType())
 		for i := 0; i < numParams; i++ {
 			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
 			if err != nil {

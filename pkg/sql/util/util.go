@@ -45,7 +45,7 @@ func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	rbat := batch.NewWithSize(len(bat.Vecs))
 	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
 	for i, srcVec := range bat.Vecs {
-		vec := proc.GetVector(*srcVec.GetType())
+		vec := vector.NewVec(*srcVec.GetType())
 		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
 			rbat.Clean(proc.Mp())
 			return nil, err

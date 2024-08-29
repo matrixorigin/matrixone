@@ -211,8 +211,8 @@ func (t *cnMergeTask) GetTransferMaps() api.TransferMaps {
 
 // impl DisposableVecPool
 func (t *cnMergeTask) GetVector(typ *types.Type) (*vector.Vector, func()) {
-	v := t.proc.GetVector(*typ)
-	return v, func() { t.proc.PutVector(v) }
+	v := vector.NewVec(*typ)
+	return v, func() { v.Free(t.proc.GetMPool()) }
 }
 
 func (t *cnMergeTask) GetMPool() *mpool.MPool {
