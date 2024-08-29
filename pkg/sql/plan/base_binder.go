@@ -1643,8 +1643,18 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			returnType.Scale = 0
 		} else if lit, ok := args[1].Expr.(*plan.Expr_Lit); ok {
 			if litval, ok := lit.Lit.GetValue().(*plan.Literal_I64Val); ok {
-				if returnType.Scale > int32(litval.I64Val) {
-					returnType.Scale = int32(litval.I64Val)
+				scale := litval.I64Val
+				if scale > 38 {
+					scale = 38
+				}
+				if scale < 0 {
+					scale = 0
+				}
+				if returnType.Scale > int32(scale) {
+					returnType.Scale = int32(scale)
+					if returnType.Scale < 0 {
+						returnType.Scale = 0
+					}
 				}
 			}
 		}
