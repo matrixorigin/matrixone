@@ -666,7 +666,7 @@ func Test_service_handleMigrateConnFrom(t *testing.T) {
 				}},
 				resp: &query.Response{},
 			},
-			wantErr: moerr.NewInternalError(ctx, "cannot get routine to migrate connection %d", 1),
+			wantErr: moerr.NewInternalErrorf(ctx, "cannot get routine to migrate connection %d", 1),
 			want:    &query.Response{MigrateConnFromResponse: &query.MigrateConnFromResponse{}},
 		},
 	}
@@ -722,7 +722,7 @@ func Test_service_handleMigrateConnTo(t *testing.T) {
 				}},
 				resp: &query.Response{},
 			},
-			wantErr: moerr.NewInternalError(ctx, "cannot get routine to migrate connection %d", 1),
+			wantErr: moerr.NewInternalErrorf(ctx, "cannot get routine to migrate connection %d", 1),
 			want:    &query.Response{MigrateConnToResponse: nil},
 		},
 	}
