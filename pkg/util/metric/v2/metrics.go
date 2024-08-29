@@ -150,6 +150,9 @@ func initTxnMetrics() {
 	registry.MustRegister(txnRangesSelectivityHistogram)
 	registry.MustRegister(txnTNDeduplicateDurationHistogram)
 
+	registry.MustRegister(TxnReaderScannedTotalTombstoneHistogram)
+	registry.MustRegister(TxnReaderEachBLKLoadedTombstoneHistogram)
+	registry.MustRegister(txnReaderTombstoneSelectivityHistogram)
 	registry.MustRegister(txnTransferDurationHistogram)
 	registry.MustRegister(TransferTombstonesCountHistogram)
 }

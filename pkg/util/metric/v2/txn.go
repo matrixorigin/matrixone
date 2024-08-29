@@ -322,7 +322,36 @@ var (
 )
 
 var (
-	TransferTombstonesCountHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+	TxnReaderScannedTotalTombstoneHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "reader_scanned_total_tombstone",
+			Help:      "Bucketed histogram of read scanned total tombstone.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 11),
+		})
+
+	TxnReaderEachBLKLoadedTombstoneHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "reader_each_blk_loaded",
+			Help:      "Bucketed histogram of read each blk loaded.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 11),
+		})
+
+	txnReaderTombstoneSelectivityHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "reader_tombstone_selectivity",
+			Help:      "Bucketed histogram of read tombstone.",
+			Buckets:   prometheus.ExponentialBucketsRange(0.001, 1, 21),
+		}, []string{"type"})
+
+	TxnReaderTombstoneZMSelectivityHistogram = txnReaderTombstoneSelectivityHistogram.WithLabelValues("zm_selectivity")
+	TxnReaderTombstoneBLSelectivityHistogram = txnReaderTombstoneSelectivityHistogram.WithLabelValues("bl_selectivity")
+	TransferTombstonesCountHistogram         = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "mo",
 		Subsystem: "txn",
 		Name:      "transfer_tombstones_count",

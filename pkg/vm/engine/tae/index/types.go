@@ -17,6 +17,7 @@ package index
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -31,6 +32,16 @@ const (
 	BF = iota
 	PBF
 	HBF
+)
+
+const (
+	PrefixFnID_Object uint8 = iota
+	PrefixFnID_Block
+)
+
+var (
+	ObjectPrefixFn = PrefixFn{Id: PrefixFnID_Object, Fn: func(b []byte) []byte { return b[:types.ObjectBytesSize] }}
+	BlockPrefixFn  = PrefixFn{Id: PrefixFnID_Block, Fn: func(b []byte) []byte { return b[:types.BlockidSize] }}
 )
 
 type PrefixFn struct {

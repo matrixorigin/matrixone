@@ -16,7 +16,6 @@ package db
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -66,6 +65,7 @@ func newMergeTaskBuilder(db *DB) *MergeTaskBuilder {
 	op.DatabaseFn = op.onDataBase
 	op.TableFn = op.onTable
 	op.ObjectFn = op.onObject
+	op.TombstoneFn = op.onTombstone
 	op.PostObjectFn = op.onPostObject
 	op.PostTableFn = op.onPostTable
 	return op
@@ -88,7 +88,7 @@ func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 	s.tid = 0
 	if entry != nil {
 		s.tid = entry.ID
-		s.name = entry.GetLastestSchemaLocked().Name
+		s.name = entry.GetLastestSchemaLocked(false).Name
 		s.tableRowCnt = 0
 		s.tableRowDel = 0
 
@@ -155,46 +155,6 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	tableEntry.RUnlock()
 	s.resetForTable(tableEntry)
 
-	deltaLocRows := uint32(0)
-	distinctDeltaLocs := 0
-	tblRows := 0
-	objIt := tableEntry.MakeObjectIt(true)
-	defer objIt.Release()
-	for objIt.Next() {
-		objectEntry := objIt.Item()
-		if !objectValid(objectEntry) {
-			continue
-		}
-
-		var rows int
-		rows, err = objectEntry.GetObjectData().Rows()
-		if err != nil {
-			return
-		}
-		dels := objectEntry.GetObjectData().GetTotalChanges()
-		objectEntry.SetRemainingRows(rows - dels)
-		s.tableRowCnt += rows
-		s.tableRowDel += dels
-		tblRows += rows - dels
-
-		tombstone := tableEntry.TryGetTombstone(*objectEntry.ID())
-		if tombstone == nil {
-			continue
-		}
-		for j := range objectEntry.BlockCnt() {
-			deltaLoc := tombstone.GetLatestDeltaloc(uint16(j))
-			if deltaLoc == nil || deltaLoc.IsEmpty() {
-				continue
-			}
-			if _, ok := s.distinctDeltaLocs[util.UnsafeBytesToString(deltaLoc)]; !ok {
-				s.distinctDeltaLocs[util.UnsafeBytesToString(deltaLoc)] = struct{}{}
-				s.objDeltaLocCnt[objectEntry]++
-				s.objDeltaLocRowCnt[objectEntry] += deltaLoc.Rows()
-				deltaLocRows += deltaLoc.Rows()
-				distinctDeltaLocs++
-			}
-		}
-	}
 	return
 }
 
@@ -229,21 +189,12 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 	}
 
 	// Rows will check objectStat, and if not loaded, it will load it.
-	remainingRows := objectEntry.GetRemainingRows()
-	deltaLocRows := s.objDeltaLocRowCnt[objectEntry]
-	if !merge.DisableDeltaLocMerge.Load() && deltaLocRows > uint32(remainingRows) {
-		deltaLocCnt := s.objDeltaLocCnt[objectEntry]
-		rate := float64(deltaLocRows) / float64(remainingRows)
-		logutil.Infof(
-			"[DeltaLoc Merge] tblId: %s(%d), obj: %s, deltaLoc: %d, rows: %d, deltaLocRows: %d, rate: %f",
-			s.name, s.tid, objectEntry.ID().String(), deltaLocCnt, remainingRows, deltaLocRows, rate)
-		s.objPolicy.OnObject(objectEntry, true)
-	} else {
-		s.objPolicy.OnObject(objectEntry, false)
-	}
+	s.objPolicy.OnObject(objectEntry, false)
 	return
 }
-
+func (s *MergeTaskBuilder) onTombstone(objectEntry *catalog.ObjectEntry) (err error) {
+	return s.onObject(objectEntry)
+}
 func (s *MergeTaskBuilder) onPostObject(obj *catalog.ObjectEntry) (err error) {
 	return nil
 }

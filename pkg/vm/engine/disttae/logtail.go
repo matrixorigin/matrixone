@@ -51,7 +51,7 @@ func consumeEntry(
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
-	if logtailreplay.IsMetaTable(e.TableName) {
+	if logtailreplay.IsMetaEntry(e.TableName) {
 		return nil
 	}
 

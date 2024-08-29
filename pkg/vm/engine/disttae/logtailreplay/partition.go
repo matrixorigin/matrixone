@@ -166,7 +166,12 @@ func (p *Partition) ConsumeSnapCkps(
 			return
 		}
 		if ckp.GetType() == checkpoint.ET_Global {
-			start = ckp.GetEnd()
+			ckpStart := ckp.GetStart()
+			if ckpStart.IsEmpty() {
+				start = ckp.GetEnd()
+			} else {
+				start = ckp.GetStart()
+			}
 		}
 		if ckp.GetType() == checkpoint.ET_Incremental {
 			ckpstart := ckp.GetStart()
