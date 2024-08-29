@@ -30,9 +30,15 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 	proc := testutil.NewProc()
 
 	var locs []objectio.Location = make([]objectio.Location, 3)
+	var objs = make(map[objectio.ObjectId]objectio.Location)
+
 	locs[0] = objectio.NewRandomLocation(uint16(0), uint32(10))
-	locs[1] = objectio.NewRandomLocation(uint16(1), uint32(10))
-	locs[2] = objectio.NewRandomLocation(uint16(2), uint32(10))
+	locs[1] = objectio.NewRandomLocation(uint16(1), uint32(20))
+	locs[2] = objectio.NewRandomLocation(uint16(2), uint32(30))
+
+	objs[locs[0].ObjectId()] = locs[0]
+	objs[locs[1].ObjectId()] = locs[1]
+	objs[locs[2].ObjectId()] = locs[2]
 
 	txn := &Transaction{
 		blockId_tn_delete_metaLoc_batch: struct {
@@ -57,9 +63,9 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 	require.NoError(t, txn.getUncommittedS3Tombstone(&objectSlice))
 	require.Equal(t, len(locs), objectSlice.Len())
 
-	for i := range locs {
-		require.Equal(t, locs[i].Rows(), objectSlice.Get(i).Rows())
-		require.Equal(t, locs[i].ObjectId(), objectSlice.Get(i).ObjectLocation().ObjectId())
+	for i := range objectSlice.Len() {
+		loc := objs[*objectSlice.Get(i).ObjectName().ObjectId()]
+		require.Equal(t, loc.Rows(), objectSlice.Get(i).Rows())
 	}
 
 }
