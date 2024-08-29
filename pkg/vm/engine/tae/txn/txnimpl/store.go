@@ -333,6 +333,17 @@ func (store *txnStore) TryDeleteByDeltaloc(
 	return db.TryDeleteByDeltaloc(id, deltaloc)
 }
 
+func (store *txnStore) TryDeleteByStats(
+	id *common.ID, stats objectio.ObjectStats,
+) (ok bool, err error) {
+	store.IncreateWriteCnt()
+	db, err := store.getOrSetDB(id.DbID)
+	if err != nil {
+		return
+	}
+	return db.TryDeleteByStats(id, stats)
+}
+
 func (store *txnStore) GetByFilter(ctx context.Context, dbId, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {

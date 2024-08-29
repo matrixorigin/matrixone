@@ -157,27 +157,23 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 			}
 		}
 
-		for pidx, blockidDeltaloc := range deletion.ctr.partitionId_blockId_deltaLoc {
-			for blkid, bat := range blockidDeltaloc {
-				if err = vector.AppendBytes(deletion.ctr.resBat.GetVector(0), blkid[:], false, proc.GetMPool()); err != nil {
-					return result, err
-				}
-				//bat.Attrs = {catalog.BlockMeta_DeltaLoc}
-				bat.SetRowCount(bat.GetVector(0).Length())
-				byts, err1 := bat.MarshalBinary()
-				if err1 != nil {
-					result.Status = vm.ExecStop
-					return result, err1
-				}
-				if err = vector.AppendBytes(deletion.ctr.resBat.GetVector(1), byts, false, proc.GetMPool()); err != nil {
-					return result, err
-				}
-				if err = vector.AppendFixed(deletion.ctr.resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool()); err != nil {
-					return result, err
-				}
-				if err = vector.AppendFixed(deletion.ctr.resBat.GetVector(3), int32(pidx), false, proc.GetMPool()); err != nil {
-					return result, err
-				}
+		for pIdx, stats := range deletion.ctr.partitionId_tombstoneObjectStats {
+			if err = vector.AppendBytes(
+				deletion.ctr.resBat.GetVector(0), stats.ObjectName().ObjectId()[:], false, proc.GetMPool()); err != nil {
+				return result, err
+			}
+
+			if err = vector.AppendBytes(
+				deletion.ctr.resBat.GetVector(1), stats.Marshal(), false, proc.GetMPool()); err != nil {
+				return result, err
+			}
+			if err = vector.AppendFixed(
+				deletion.ctr.resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool()); err != nil {
+				return result, err
+			}
+			if err = vector.AppendFixed(
+				deletion.ctr.resBat.GetVector(3), int32(pIdx), false, proc.GetMPool()); err != nil {
+				return result, err
 			}
 		}
 

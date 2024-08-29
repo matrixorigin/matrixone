@@ -167,6 +167,20 @@ func (db *txnDB) TryDeleteByDeltaloc(
 	return table.TryDeleteByDeltaloc(id, deltaloc)
 }
 
+func (db *txnDB) TryDeleteByStats(
+	id *common.ID,
+	stats objectio.ObjectStats,
+) (ok bool, err error) {
+	table, err := db.getOrSetTable(id.TableID)
+	if err != nil {
+		return
+	}
+	if table.IsDeleted() {
+		return false, moerr.NewNotFoundNoCtx()
+	}
+	return table.TryDeleteByStats(id, stats)
+}
+
 func (db *txnDB) GetByFilter(ctx context.Context, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	table, err := db.getOrSetTable(tid)
 	if err != nil {

@@ -335,6 +335,10 @@ func (h *txnRelation) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Locat
 	return h.Txn.GetStore().TryDeleteByDeltaloc(id, deltaloc)
 }
 
+func (h *txnRelation) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
+	return h.Txn.GetStore().TryDeleteByStats(id, stats)
+}
+
 // Only used by test.
 func (h *txnRelation) GetValueByPhyAddrKey(key any, col int) (any, bool, error) {
 	rid := key.(types.Rowid)

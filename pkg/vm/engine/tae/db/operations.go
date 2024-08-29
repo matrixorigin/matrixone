@@ -17,6 +17,7 @@ package db
 import (
 	"context"
 	fmt "fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"time"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -168,7 +169,7 @@ type WriteReq struct {
 	FileName string
 	MetaLocs []string
 	//for delete on S3
-	DeltaLocs []string
+	TombstoneStats []objectio.ObjectStats
 	//tasks for loading primary keys or deleted row ids
 	Jobs []*tasks.Job
 	//loaded sorted primary keys or deleted row ids.

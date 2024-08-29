@@ -15,6 +15,7 @@
 package deletion
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -57,9 +58,10 @@ func (pool *BatchPool) get() *batch.Batch {
 
 // for now, we won't do compaction for cn block
 type container struct {
-	blockId_bitmap                 map[types.Blockid]*nulls.Nulls
-	partitionId_blockId_rowIdBatch map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
-	partitionId_blockId_deltaLoc   map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> MetaLocation
+	blockId_bitmap                   map[types.Blockid]*nulls.Nulls
+	partitionId_blockId_rowIdBatch   map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
+	partitionId_blockId_deltaLoc     map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> MetaLocation
+	partitionId_tombstoneObjectStats map[int]objectio.ObjectStats           // PartitionId -> tombstone object stats
 	// don't flush cn block rowId and rawBatch
 	// we just do compaction for cn block in the
 	// future
@@ -283,6 +285,62 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			bat := blockId_deltaLoc[blkids[i]]
 			vector.AppendBytes(bat.GetVector(0), []byte(blkInfo.MetaLocation().String()), false, proc.GetMPool())
 		}
+	}
+	return resSize, nil
+}
+
+func (ctr *container) flushInProgress(proc *process.Process) (uint32, error) {
+	resSize := uint32(0)
+	for pidx, blockId_rowIdBatch := range ctr.partitionId_blockId_rowIdBatch {
+		s3writer, err := colexec.NewS3TombstoneWriter()
+		if err != nil {
+			return 0, err
+		}
+		blkids := make([]types.Blockid, 0, len(blockId_rowIdBatch))
+		for blkid := range blockId_rowIdBatch {
+			//Don't flush rowids belong to uncommitted cn block and raw data batch in txn's workspace.
+			if ctr.blockId_type[blkid] != RawRowIdBatch {
+				continue
+			}
+			blkids = append(blkids, blkid)
+		}
+		slices.SortFunc(blkids, func(a, b types.Blockid) int {
+			return a.Compare(b)
+		})
+		for _, blkid := range blkids {
+			bat := blockId_rowIdBatch[blkid]
+
+			s3writer.StashBatch(proc, bat)
+			resSize += uint32(bat.Size())
+			bat.CleanOnlyData()
+			ctr.pool.put(bat)
+			delete(blockId_rowIdBatch, blkid)
+		}
+
+		_, stats, err := s3writer.SortAndSync(proc)
+		if err != nil {
+			return 0, err
+		}
+
+		//bat := batch.New(false, []string{catalog.ObjectMeta_ObjectStats})
+		//bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		//vector.AppendBytes(bat.GetVector(0), stats.Marshal(), false, proc.GetMPool())
+
+		ctr.partitionId_tombstoneObjectStats[pidx] = stats
+
+		//for i, s := range stats {
+		//	if _, has := ctr.partitionId_blockId_deltaLoc[pidx]; !has {
+		//		ctr.partitionId_blockId_deltaLoc[pidx] = make(map[types.Blockid]*batch.Batch)
+		//	}
+		//	blockId_deltaLoc := ctr.partitionId_blockId_deltaLoc[pidx]
+		//	if _, ok := blockId_deltaLoc[blkids[i]]; !ok {
+		//		bat := batch.New(false, []string{catalog.BlockMeta_DeltaLoc})
+		//		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		//		blockId_deltaLoc[blkids[i]] = bat
+		//	}
+		//	bat := blockId_deltaLoc[blkids[i]]
+		//	vector.AppendBytes(bat.GetVector(0), []byte(blkInfo.MetaLocation().String()), false, proc.GetMPool())
+		//}
 	}
 	return resSize, nil
 }
