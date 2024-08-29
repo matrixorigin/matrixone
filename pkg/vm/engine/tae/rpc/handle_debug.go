@@ -399,17 +399,13 @@ func (h *Handle) HandleCommitMerge(
 		}
 
 		blkCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[0]))
-		rowsCnt := make([]int32, blkCnt)
-		idx := 1
-		for i := range blkCnt {
-			rowsCnt[i] = types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[idx]))
-			idx++
-		}
 		booking = make(api.TransferMaps, blkCnt)
 		for i := range blkCnt {
-			booking[i] = make(api.TransferMap, rowsCnt[i])
+			rowCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[i+1]))
+			booking[i] = make(api.TransferMap, rowCnt)
 		}
-		locations := req.BookingLoc[idx:]
+		req.BookingLoc = req.BookingLoc[blkCnt+1:]
+		locations := req.BookingLoc
 		for _, filepath := range locations {
 			reader, err := blockio.NewFileReader(h.db.Runtime.Fs.Service, filepath)
 			if err != nil {
