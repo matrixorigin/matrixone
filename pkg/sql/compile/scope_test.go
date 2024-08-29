@@ -288,6 +288,20 @@ func TestNewParallelScope(t *testing.T) {
 		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
 		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
 	}
+
+	// 3. test (rightanti -> shuffle  -> dispatch.)
+	{
+		scopeToParallel := generateScopeWithRootOperator(
+			testCompile.proc,
+			[]vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch})
+
+		scopeToParallel.NodeInfo.Mcpu = 3
+
+		_, ss := newParallelScope(scopeToParallel, testCompile)
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
+	}
 }
 
 func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {
