@@ -2209,7 +2209,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 			panic("build scopes should be single parallel!")
 		}
 		//construct join build operator for tp join
-		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, rs[0].RootOp, false, 1))
+		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, rs[0].RootOp, 1))
 		buildScopes[0].IsEnd = true
 		rs[0].Magic = Merge
 	}
@@ -2299,6 +2299,15 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		}
 	default:
 		panic(moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("shuffle join do not support join type '%v'", node.JoinType)))
+	}
+
+	//construct shuffle build
+	for i := range shuffleJoins {
+		buildScope := shuffleJoins[i].PreScopes[0]
+		mergeOp := merge.NewArgument()
+		buildScope.setRootOperator(mergeOp)
+		buildOp := constructShuffleBuild(shuffleJoins[i].RootOp, c.proc)
+		buildScope.setRootOperator(buildOp)
 	}
 
 	return shuffleJoins
@@ -3527,10 +3536,9 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 			joins[i].NodeInfo.Addr = cn.Addr
 			joins[i].NodeInfo.Mcpu = 1
 			joins[i].Proc = c.proc.NewNoContextChildProc(lenLeft)
-			joins[i].BuildIdx = lenLeft
 			builds[i] = newScope(Remote)
 			builds[i].NodeInfo = joins[i].NodeInfo
-			builds[i].Proc = joins[i].Proc.NewContextChildProc(lenRight)
+			builds[i].Proc = c.proc.NewNoContextChildProc(lenRight)
 			joins[i].PreScopes = []*Scope{builds[i]}
 			shuffleIdx++
 			joins[i].ShuffleIdx = shuffleIdx
@@ -3607,7 +3615,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
 	mergeOp.SetIdx(c.anal.curNodeIdx)
 	mergeOp.SetIsFirst(c.anal.isFirst)
 	rs.setRootOperator(mergeOp)
-	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, (s.RootOp)), s.ShuffleIdx > 0, mcpu))
+	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, s.RootOp), mcpu))
 
 	rs.IsEnd = true
 
