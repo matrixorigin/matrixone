@@ -322,6 +322,8 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 			}
 		}()
 		return nil
+	case *upgradeEvent:
+		return c.handleUpgradeEvent(ev, resp)
 	default:
 	}
 	return nil
@@ -421,6 +423,50 @@ func (c *clientConn) handleQuitEvent(ctx context.Context) error {
 		if err := c.sc.Quit(); err != nil {
 			c.log.Error("failed to quit from cn server", zap.Error(err))
 		}
+	}
+	return nil
+}
+
+func (c *clientConn) handleUpgradeEvent(e *upgradeEvent, resp chan<- []byte) error {
+	defer e.notify()
+
+	if !c.clientInfo.isSuperTenant() {
+		err := moerr.NewInternalErrorNoCtx("do not have privilege to execute the statement")
+		c.log.Error("failed to exec upgrade event", zap.Error(err))
+		c.sendErr(err, resp)
+		return err
+	}
+
+	servers, err := c.router.AllServers(c.sid)
+	if err != nil {
+		c.log.Error("failed to select CN server", zap.Error(err))
+		c.sendErr(err, resp)
+		return err
+	}
+
+	for _, cn := range servers {
+		// Before connect to backend server, update the salt.
+		cn.salt = c.mysqlProto.GetSalt()
+
+		// And also update the connection ID.
+		cid, err := c.genConnID()
+		if err != nil {
+			c.log.Error("failed to generate conn ID for upgrade query", zap.Error(err))
+			c.sendErr(err, resp)
+			return err
+		}
+		cn.connID = cid
+
+		// In the loop, do not pass the resp, because it only receives response once.
+		// It everything is ok, send ok response at last out of the loop.
+		if err := c.connAndExec(cn, e.stmt, nil); err != nil {
+			c.log.Error("failed to execute upgrade query", zap.Error(err))
+			c.sendErr(err, resp)
+			return err
+		}
+	}
+	if resp != nil {
+		sendResp(makeOKPacket(8), resp)
 	}
 	return nil
 }

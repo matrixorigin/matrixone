@@ -61,7 +61,6 @@ type BlockInfo struct {
 	Appendable bool
 	Sorted     bool
 	MetaLoc    ObjectLocation
-	CommitTs   types.TS
 
 	//TODO:: remove it.
 	PartitionNum int16
@@ -93,11 +92,6 @@ func (b *BlockInfo) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
 	}
 	space += uint32(LocationLen)
 
-	if _, err := w.Write(types.EncodeFixed(b.CommitTs)); err != nil {
-		return 0, err
-	}
-	space += types.TxnTsSize
-
 	if _, err := w.Write(types.EncodeInt16(&b.PartitionNum)); err != nil {
 		return 0, err
 	}
@@ -117,8 +111,6 @@ func (b *BlockInfo) Unmarshal(buf []byte) error {
 	copy(b.MetaLoc[:], buf[:LocationLen])
 	buf = buf[LocationLen:]
 
-	b.CommitTs = types.DecodeFixed[types.TS](buf[:types.TxnTsSize])
-	buf = buf[types.TxnTsSize:]
 	b.PartitionNum = types.DecodeFixed[int16](buf[:2])
 	return nil
 }

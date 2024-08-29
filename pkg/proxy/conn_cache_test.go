@@ -251,8 +251,8 @@ func TestConnCache(t *testing.T) {
 func TestResetSession(t *testing.T) {
 	c1, _ := net.Pipe()
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: c1.RemoteAddr().String()}
-	runTestWithQueryService(t, cn, func(qc qclient.QueryClient, addr string) {
-		runTestWithNewConnCacheWithQueryClient(t, qc, func(cc ConnCache) {
+	runTestWithQueryService(t, cn, func(cc *clientConn, addr string) {
+		runTestWithNewConnCacheWithQueryClient(t, cc.queryClient, func(cc ConnCache) {
 			mockConn1 := newMockServerConn(c1)
 			_, err := cc.(*connCache).resetSession(mockConn1)
 			assert.NoError(t, err)

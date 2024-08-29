@@ -20,6 +20,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -257,33 +261,47 @@ func TestNewParallelScope(t *testing.T) {
 	var reg process.WaitRegister
 	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
 
-	// 1. test (-> projection -> limit -> connector.)
+	// 1. test (rightSemi -> projection -> limit -> connector.)
 	{
 		scopeToParallel := generateScopeWithRootOperator(
 			testCompile.proc,
-			[]vm.OpType{vm.Projection, vm.Limit, vm.Connector})
+			[]vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector})
 
 		scopeToParallel.NodeInfo.Mcpu = 4
 		_, ss := newParallelScope(scopeToParallel, testCompile)
-		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
 	}
 
-	// 2. test (-> filter -> projection -> connector.)
+	// 2. test (right -> filter -> projection -> connector.)
 	{
 		scopeToParallel := generateScopeWithRootOperator(
 			testCompile.proc,
-			[]vm.OpType{vm.Filter, vm.Projection, vm.Connector})
+			[]vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector})
 
 		scopeToParallel.NodeInfo.Mcpu = 4
 
 		_, ss := newParallelScope(scopeToParallel, testCompile)
-		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
+	}
+
+	// 3. test (rightanti -> shuffle  -> dispatch.)
+	{
+		scopeToParallel := generateScopeWithRootOperator(
+			testCompile.proc,
+			[]vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch})
+
+		scopeToParallel.NodeInfo.Mcpu = 3
+
+		_, ss := newParallelScope(scopeToParallel, testCompile)
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
 	}
 }
 
@@ -308,6 +326,12 @@ func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpTy
 			return shuffle.NewArgument()
 		case vm.TableScan:
 			return table_scan.NewArgument()
+		case vm.RightSemi:
+			return rightsemi.NewArgument()
+		case vm.RightAnti:
+			return rightanti.NewArgument()
+		case vm.Right:
+			return right.NewArgument()
 		default:
 			panic("unsupported for ut.")
 		}

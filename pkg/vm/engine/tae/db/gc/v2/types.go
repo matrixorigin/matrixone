@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v1
+package v2
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,8 +35,7 @@ type CleanerState int8
 const CurrentVersion = uint16(3)
 
 const (
-	Versions BatchType = iota
-	ObjectList
+	ObjectList BatchType = iota
 	TombstoneList
 )
 
@@ -165,6 +164,7 @@ type Cleaner interface {
 	SetTid(tid uint64)
 	EnableGCForTest()
 	DisableGCForTest()
+	IsEnableGC() bool
 	SetCheckGC(enable bool)
 	GetMPool() *mpool.MPool
 	GetSnapshots() (map[uint32]containers.Vector, error)
