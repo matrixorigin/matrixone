@@ -661,7 +661,7 @@ message OriginTableMessageForFuzzy {
 message Node {
 	enum NodeType {
 		UNKNOWN = 0;
-		// Node Types
+		ASSERT = 100;
 
 		// Scans
 		VALUE_SCAN = 1;
@@ -670,64 +670,52 @@ message Node {
 		EXTERNAL_SCAN = 4;
 		MATERIAL_SCAN = 5;
 		SOURCE_SCAN = 6;
-
-		// Proj, for convenience
-		PROJECT = 10;
-		// External function call (UDF)
-		EXTERNAL_FUNCTION = 11;
-
-		// Material, CTE, etc.
-		MATERIAL = 20;
-		RECURSIVE_CTE = 21;
-		SINK = 22;
-		SINK_SCAN = 23;
-		RECURSIVE_SCAN = 24;
+		EXTERNAL_FUNCTION = 7;
 
 		// Proper Relational Operators
-		AGG = 30;
-		DISTINCT = 31;
-		FILTER = 32;
-		JOIN = 33;
-		SAMPLE = 34;
-		SORT = 35;
-		UNION = 36;
-		UNION_ALL = 37;
-		UNIQUE = 38;
-		WINDOW = 39;
+		PROJECT = 10;
+		AGG = 11;
+		DISTINCT = 12;
+		FILTER = 13;
+		JOIN = 14;
+		SAMPLE = 15;
+		SORT = 16;
+		WINDOW = 17;
+		DEDUP_JOIN = 18;
+		UNION = 19;
+		UNION_ALL = 20;
+		UNIQUE = 21;
+		INTERSECT = 22;
+		INTERSECT_ALL = 23;
+		MINUS = 24;
+		MINUS_ALL = 25;
 
-		// Physical tuple mover
-		BROADCAST = 40;
-		SPLIT = 41;
-		GATHER = 42;
-
-		// Misc
-		ASSERT = 50;
-
-		//
-		INSERT = 51;
-		DELETE = 52;
-		REPLACE = 53;
-		//
-		LOCK_OP = 54;
-
-		//
-		INTERSECT = 55;
-		INTERSECT_ALL = 56;
-		MINUS = 57;
-		MINUS_ALL = 58;
-
-		//
-		ON_DUPLICATE_KEY = 59;
-		PRE_INSERT = 60;
-		PRE_DELETE = 61;
+		// DML
+		INSERT = 30;
+		DELETE = 31;
+		REPLACE = 32;
+		LOCK_OP = 33;
+		ON_DUPLICATE_KEY = 34;
+		PRE_INSERT = 35;
+		PRE_DELETE = 36;
+		FUZZY_FILTER = 37;
 		// the node which build insert batch for hidden table(unique key)
-		PRE_INSERT_UK = 62;
-		PRE_INSERT_SK = 63;
-		//
-		TIME_WINDOW = 64;
-		FILL = 65;
-		PARTITION = 66;
-		FUZZY_FILTER = 67;
+		PRE_INSERT_UK = 38;
+		PRE_INSERT_SK = 39;
+
+		// Material, CTE, etc.
+		MATERIAL = 40;
+		RECURSIVE_CTE = 41;
+		SINK = 42;
+		SINK_SCAN = 43;
+		RECURSIVE_SCAN = 44;
+		BROADCAST = 45;
+		SPLIT = 46;
+		GATHER = 47;
+
+		TIME_WINDOW = 50;
+		FILL = 51;
+		PARTITION = 52;
 	}
 
 	enum JoinType {
@@ -757,6 +745,12 @@ message Node {
 		NULL = 3;
 		VALUE = 4;
 		LINEAR = 5;
+	}
+
+	enum OnDuplicateAction {
+		ERROR = 0;
+		IGNORE = 1;
+		UPDATE = 2;
 	}
 
 	NodeType node_type = 1;
@@ -851,6 +845,8 @@ message Node {
 	repeated msgHeader recv_msg_list = 57;
 
 	Snapshot scan_snapshot = 58;
+
+	OnDuplicateAction on_duplicate_action = 59;
 
 }
 

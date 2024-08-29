@@ -37,6 +37,7 @@ type JoinMap struct {
 	mpool            *mpool.MPool
 	multiSels        [][]int32
 	batches          []*batch.Batch
+	ignoreRows       [][]uint8
 }
 
 func NewJoinMap(sels [][]int32, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
@@ -78,6 +79,10 @@ func (jm *JoinMap) PushedRuntimeFilterIn() bool {
 
 func (jm *JoinMap) Sels() [][]int32 {
 	return jm.multiSels
+}
+
+func (jm *JoinMap) IgnoreRows() [][]uint8 {
+	return jm.ignoreRows
 }
 
 func (jm *JoinMap) NewIterator() hashmap.Iterator {

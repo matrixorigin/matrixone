@@ -53,6 +53,7 @@ const (
 	Mark
 	IndexJoin
 	IndexBuild
+	DedupJoin
 
 	Merge
 	MergeTop

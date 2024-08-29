@@ -17,17 +17,15 @@ package hashmap_util
 import (
 	"runtime"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type HashmapBuilder struct {
@@ -40,6 +38,11 @@ type HashmapBuilder struct {
 	Batches            colexec.Batches
 	executor           []colexec.ExpressionExecutor
 	UniqueJoinKeys     []*vector.Vector
+
+	IsDedup     bool
+	OnDupAction pbplan.Node_OnDuplicateAction
+	DupColName  string
+	ignoreRow   [][]uint8
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -208,7 +211,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 		itr = hb.StrHashMap.NewIterator()
 	}
 
-	if hashOnPK {
+	if hashOnPK || hb.IsDedup {
 		// if hash on primary key, prealloc hashmap size to the count of batch
 		if hb.keyWidth <= 8 {
 			err := hb.IntHashMap.PreAlloc(uint64(hb.InputBatchRowCount), proc.Mp())
@@ -232,6 +235,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 		sels        []int32
 	)
 
+	vOld := uint64(0)
 	for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
 		if i%(hashmap.UnitLimit*32) == 0 {
 			runtime.Gosched()
@@ -279,7 +283,19 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 			}
 			ai := int64(v) - 1
 
-			if !hashOnPK && needAllocateSels {
+			if hb.IsDedup {
+				if v <= vOld {
+					switch hb.OnDupAction {
+					case pbplan.Node_ERROR:
+						return moerr.NewDuplicateEntry(proc.Ctx, "", hb.DupColName)
+					case pbplan.Node_IGNORE:
+						hb.ignoreRow[vecIdx1][vecIdx2+k] = 1
+					case pbplan.Node_UPDATE:
+					}
+				} else {
+					vOld = v
+				}
+			} else if !hashOnPK && needAllocateSels {
 				if hb.MultiSels[ai] == nil {
 					hb.MultiSels[ai] = make([]int32, 0)
 				}
@@ -300,6 +316,22 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 					err = hb.UniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, nil, proc.Mp())
 					if err != nil {
 						return err
+					}
+				}
+			} else if hb.IsDedup {
+				if hb.OnDupAction == pbplan.Node_ERROR {
+					for j, vec := range hb.vecs[vecIdx1] {
+						err = hb.UniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, nil, proc.Mp())
+						if err != nil {
+							return err
+						}
+					}
+				} else {
+					for j, vec := range hb.vecs[vecIdx1] {
+						err = hb.UniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, hb.ignoreRow[vecIdx1][vecIdx2:], proc.Mp())
+						if err != nil {
+							return err
+						}
 					}
 				}
 			} else {
