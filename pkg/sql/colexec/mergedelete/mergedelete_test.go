@@ -16,6 +16,7 @@ package mergedelete
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -164,6 +165,7 @@ func TestMergeDelete(t *testing.T) {
 	}
 
 	// require.NoError(t, argument1.Prepare(proc))
+	argument1.OpAnalyzer = process.NewAnalyzer(0, false, false, "mergedelete")
 	resetChildren(&argument1, batch1)
 	_, err = argument1.Call(proc)
 	require.NoError(t, err)
