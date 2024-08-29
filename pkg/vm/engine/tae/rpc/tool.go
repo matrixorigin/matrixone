@@ -63,13 +63,14 @@ func offlineInit() {
 }
 
 type ColumnJson struct {
-	Index       uint16 `json:"col_index"`
-	Ndv         uint32 `json:"ndv,omitempty"`
-	NullCnt     uint32 `json:"null_count,omitempty"`
-	DataSize    string `json:"data_size,omitempty"`
-	OriDataSize string `json:"original_data_size,omitempty"`
-	Zonemap     string `json:"zonemap,omitempty"`
-	Data        string `json:"data,omitempty"`
+	Index       uint16   `json:"col_index"`
+	Type        string   `json:"col_type"`
+	Ndv         uint32   `json:"ndv,omitempty"`
+	NullCnt     uint32   `json:"null_count,omitempty"`
+	DataSize    string   `json:"data_size,omitempty"`
+	OriDataSize string   `json:"original_data_size,omitempty"`
+	Zonemap     string   `json:"zonemap,omitempty"`
+	Data        []string `json:"data,omitempty"`
 }
 
 type BlockJson struct {
@@ -326,6 +327,9 @@ func (c *moObjStatArg) Usage() (res string) {
 }
 
 func (c *moObjStatArg) Run() (err error) {
+	if c.ctx == nil {
+		offlineInit()
+	}
 	ctx := context.Background()
 	if err = c.checkInputs(); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n", err))
@@ -551,9 +555,10 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 
 		cols := make([]ColumnJson, 0, colCnt)
 		addColumn := func(idx uint16) {
-			col := data.MustGetColumn(idx)
+			col := blk.ColumnMeta(idx)
 			cols = append(cols, ColumnJson{
 				Index:       idx,
+				Type:        types.T(col.DataType()).String(),
 				DataSize:    formatBytes(col.Location().Length()),
 				OriDataSize: formatBytes(col.Location().OriginSize()),
 				Zonemap:     col.ZoneMap().String(),
@@ -625,7 +630,9 @@ type objGetArg struct {
 	fs         fileservice.FileService
 	reader     *objectio.ObjectReader
 	res        string
-	local      bool
+	target     string
+	method     string
+	local, all bool
 }
 
 func (c *objGetArg) PrepareCommand() *cobra.Command {
@@ -643,6 +650,9 @@ func (c *objGetArg) PrepareCommand() *cobra.Command {
 	getCmd.Flags().StringP("col", "c", "", "col")
 	getCmd.Flags().StringP("row", "r", "", "row")
 	getCmd.Flags().BoolP("local", "", false, "local")
+	getCmd.Flags().StringP("method", "m", "", "method")
+	getCmd.Flags().StringP("find", "f", "", "find")
+	getCmd.Flags().BoolP("all", "a", false, "all")
 
 	return getCmd
 }
@@ -652,6 +662,9 @@ func (c *objGetArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.col, _ = cmd.Flags().GetString("col")
 	c.row, _ = cmd.Flags().GetString("row")
 	c.local, _ = cmd.Flags().GetBool("local")
+	c.target, _ = cmd.Flags().GetString("find")
+	c.method, _ = cmd.Flags().GetString("method")
+	c.all, _ = cmd.Flags().GetBool("all")
 	path, _ := cmd.Flags().GetString("name")
 	c.dir, c.name = filepath.Split(path)
 	if cmd.Flag("ictx") != nil {
@@ -691,6 +704,9 @@ func (c *objGetArg) Usage() (res string) {
 }
 
 func (c *objGetArg) Run() (err error) {
+	if c.ctx == nil {
+		offlineInit()
+	}
 	ctx := context.Background()
 	if err = c.checkInputs(); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n\n", err))
@@ -783,24 +799,24 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 	for i, entry := range v.Entries {
 		obj, _ := objectio.Decode(entry.CachedData.Bytes())
 		vec := obj.(*vector.Vector)
+		ret := c.getPrintableVec(vec)
+		left, right := 0, 0
 		if len(c.rows) != 0 {
-			var left, right int
 			left = c.rows[0]
-			if len(c.rows) == 1 {
-				right = left + 1
-			} else {
+			right = c.rows[0]
+			if len(c.rows) > 1 {
 				right = c.rows[1]
 			}
-			if uint32(left) >= blk.GetRows() || uint32(right) > blk.GetRows() {
-				err = moerr.NewInfoNoCtx(fmt.Sprintf("invalid rows %v out of row count %v\n", c.rows, blk.GetRows()))
-				return
-			}
-			vec, _ = vec.Window(left, right)
+			ret = ret[left:right]
+		} else if !c.all {
+			right = min(len(ret), 10)
+			ret = ret[left:right]
 		}
 
 		col := ColumnJson{
 			Index: uint16(c.cols[i]),
-			Data:  vec.String(),
+			Type:  vec.GetType().String(),
+			Data:  ret,
 		}
 		cols = append(cols, col)
 	}
@@ -808,6 +824,7 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	o := BlockJson{
 		Index:   blk.GetID(),
+		Rows:    blk.GetRows(),
 		Cols:    blk.GetColumnCount(),
 		Columns: cols,
 	}
@@ -819,6 +836,206 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 	res = string(data)
 
 	return
+}
+
+func (c *objGetArg) getPrintableVec(v *vector.Vector) []string {
+	oid := v.GetType().Oid
+	switch oid {
+	case types.T_bool:
+		return getDataFromVec[bool](v, oid, c.method, c.target)
+	case types.T_bit:
+		return getDataFromVec[uint64](v, oid, c.method, c.target)
+	case types.T_int8:
+		return getDataFromVec[int8](v, oid, c.method, c.target)
+	case types.T_int16:
+		return getDataFromVec[int16](v, oid, c.method, c.target)
+	case types.T_int32:
+		return getDataFromVec[int32](v, oid, c.method, c.target)
+	case types.T_int64:
+		return getDataFromVec[int64](v, oid, c.method, c.target)
+	case types.T_uint8:
+		return getDataFromVec[uint8](v, oid, c.method, c.target)
+	case types.T_uint16:
+		return getDataFromVec[uint16](v, oid, c.method, c.target)
+	case types.T_uint32:
+		return getDataFromVec[uint32](v, oid, c.method, c.target)
+	case types.T_uint64:
+		return getDataFromVec[uint64](v, oid, c.method, c.target)
+	case types.T_float32:
+		return getDataFromVec[float32](v, oid, c.method, c.target)
+	case types.T_float64:
+		return getDataFromVec[float64](v, oid, c.method, c.target)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		area := v.GetArea()
+		vec := vector.MustFixedCol[types.Varlena](v)
+		data := make([][]byte, len(vec))
+		for i := range vec {
+			data[i] = vec[i].GetByteSlice(area)
+		}
+		return getVarcharFromVec(data, oid, c.method, c.target)
+	case types.T_date:
+		return getDataFromVec[types.Date](v, oid, c.method, c.target)
+	case types.T_datetime:
+		return getDataFromVec[types.Datetime](v, oid, c.method, c.target)
+	case types.T_time:
+		return getDataFromVec[types.Time](v, oid, c.method, c.target)
+	case types.T_timestamp:
+		return getDataFromVec[types.Timestamp](v, oid, c.method, c.target)
+	case types.T_enum:
+		return getDataFromVec[types.Enum](v, oid, c.method, c.target)
+	case types.T_decimal64:
+		return getDataFromVec[types.Decimal64](v, oid, c.method, c.target)
+	case types.T_decimal128:
+		return getDataFromVec[types.Decimal128](v, oid, c.method, c.target)
+	case types.T_uuid:
+		return getDataFromVec[types.Uuid](v, oid, c.method, c.target)
+	case types.T_TS:
+		return getDataFromVec[types.TS](v, oid, c.method, c.target)
+	case types.T_Rowid:
+		return getDataFromVec[types.Rowid](v, oid, c.method, c.target)
+	case types.T_Blockid:
+		return getDataFromVec[types.Blockid](v, oid, c.method, c.target)
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", oid.String()))
+	}
+}
+
+func executeMethod(v []string, oid types.T, method string) []string {
+	switch method {
+	case "":
+		return v
+	case "location":
+		if oid != types.T_varchar {
+			return []string{fmt.Sprintf("method %v dose not support for type %v", method, oid.String())}
+		}
+		res := make([]string, len(v))
+		for i := range v {
+			res[i] = objectio.Location(v[i]).String()
+		}
+		return res
+	case "rowid":
+		if oid != types.T_varchar {
+			return []string{fmt.Sprintf("method %v dose not support for type %v", method, oid.String())}
+		}
+		res := make([]string, len(v))
+		for i := range v {
+			rowid := types.Rowid([]byte(v[i]))
+			res[i] = rowid.String()
+		}
+		return res
+	case "blkid":
+		if oid != types.T_varchar {
+			return []string{fmt.Sprintf("method %v dose not support for type %v", method, oid.String())}
+		}
+		res := make([]string, len(v))
+		for i := range v {
+			rowid := types.Blockid([]byte(v[i]))
+			res[i] = rowid.String()
+		}
+		return res
+	default:
+		return []string{fmt.Sprintf("unsupport method %s", method)}
+	}
+}
+
+func getDataFromVec[T any](v *vector.Vector, oid types.T, method, target string) []string {
+	vec := vector.MustFixedCol[T](v)
+	str := make([]string, 0, len(vec))
+	res := make([]string, 0, len(vec))
+	for _, val := range vec {
+		str = append(str, getString(oid, val))
+	}
+	data := executeMethod(str, oid, method)
+	for i, val := range data {
+		if target == "" || target == val {
+			res = append(res, fmt.Sprintf("idx: %-4v, val: %v", i, val))
+		}
+	}
+
+	return res
+}
+
+func getVarcharFromVec(vec [][]byte, oid types.T, method, target string) []string {
+	str := make([]string, 0, len(vec))
+	res := make([]string, 0, len(vec))
+	for _, val := range vec {
+		str = append(str, getString(oid, val))
+	}
+	data := executeMethod(str, oid, method)
+	for i, val := range data {
+		if target == "" || target == val {
+			res = append(res, fmt.Sprintf("idx: %-4v, val: %v", i, val))
+		}
+	}
+
+	return res
+}
+
+func getString(oid types.T, v any) string {
+	switch oid {
+	case types.T_bool:
+		val := v.(bool)
+		if val {
+			return "true"
+		} else {
+			return "false"
+		}
+	case types.T_bit:
+		return strconv.FormatUint(v.(uint64), 10)
+	case types.T_int8:
+		return strconv.FormatInt(int64(v.(int8)), 10)
+	case types.T_int16:
+		return strconv.FormatInt(int64(v.(int16)), 10)
+	case types.T_int32:
+		return strconv.FormatInt(int64(v.(int32)), 10)
+	case types.T_int64:
+		return strconv.FormatInt(v.(int64), 10)
+	case types.T_uint8:
+		return strconv.FormatUint(uint64(v.(uint8)), 10)
+	case types.T_uint16:
+		return strconv.FormatUint(uint64(v.(uint16)), 10)
+	case types.T_uint32:
+		return strconv.FormatUint(uint64(v.(uint32)), 10)
+	case types.T_uint64:
+		return strconv.FormatUint(v.(uint64), 10)
+	case types.T_float32:
+		return strconv.FormatFloat(float64(v.(float32)), 'f', -1, 32)
+	case types.T_float64:
+		return strconv.FormatFloat(v.(float64), 'f', -1, 64)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		return string(v.([]byte))
+	case types.T_date:
+		val := v.(types.Date)
+		return val.String()
+	case types.T_datetime:
+		val := v.(types.Datetime)
+		return val.String()
+	case types.T_time:
+		val := v.(types.Time)
+		return val.String()
+	case types.T_timestamp:
+		val := v.(types.Timestamp)
+		return val.String()
+	case types.T_enum:
+		val := v.(types.Enum)
+		return val.String()
+	case types.T_uuid:
+		val := v.(types.Uuid)
+		return val.String()
+	case types.T_TS:
+		val := v.(types.TS)
+		return val.ToString()
+	case types.T_Rowid:
+		val := v.(types.Rowid)
+		return val.String()
+	case types.T_Blockid:
+		val := v.(types.Blockid)
+		return val.String()
+	default:
+		return ""
+	}
 }
 
 type TableArg struct {
@@ -1217,7 +1434,8 @@ func readCkpFromDisk(ctx context.Context, path, name string) (res []*checkpoint.
 	return
 }
 
-func getCkpEntries(ctx context.Context, context *inspectContext, path, name string, all bool) (entries []*checkpoint.CheckpointEntry, err error) {
+func getCkpEntries(ctx context.Context, context *inspectContext, path, name string, all bool,
+) (entries []*checkpoint.CheckpointEntry, err error) {
 	if context == nil {
 		entries, err = readCkpFromDisk(ctx, path, name)
 		for _, entry := range entries {
