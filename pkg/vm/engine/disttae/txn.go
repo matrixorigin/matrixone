@@ -116,7 +116,7 @@ func (txn *Transaction) WriteBatch(
 		}
 		txn.genBlock()
 		len := bat.RowCount()
-		genRowidVec = txn.proc.GetVector(types.T_Rowid.ToType())
+		genRowidVec = vector.NewVec(types.T_Rowid.ToType())
 		for i := 0; i < len; i++ {
 			if err := vector.AppendFixed(genRowidVec, txn.genRowId(), false,
 				txn.proc.Mp()); err != nil {

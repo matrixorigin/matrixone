@@ -297,7 +297,6 @@ func (exec *txnExecutor) Exec(
 		nil,
 	)
 	proc.Base.WaitPolicy = statementOption.WaitPolicy()
-	proc.SetVectorPoolSize(0)
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	proc.Base.SessionInfo.StorageEngine = exec.s.eng
@@ -396,7 +395,6 @@ func (exec *txnExecutor) LockTable(table string) error {
 		exec.s.us,
 		nil,
 	)
-	proc.SetVectorPoolSize(0)
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {
