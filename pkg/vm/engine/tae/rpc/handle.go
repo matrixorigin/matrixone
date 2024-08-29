@@ -276,8 +276,8 @@ func (h *Handle) HandlePreCommitWrite(
 					if req.Type == db.EntryInsert {
 						req.MetaLocs = append(req.MetaLocs, col.GetStringAt(i))
 					} else {
-						req.TombstoneStats = append(
-							req.TombstoneStats, objectio.ObjectStats(col.GetBytesAt(i)))
+						stats := objectio.ObjectStats(col.GetBytesAt(i))
+						req.TombstoneStats = append(req.TombstoneStats, stats)
 					}
 				}
 			}

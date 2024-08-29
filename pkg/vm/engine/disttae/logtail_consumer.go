@@ -687,11 +687,6 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 	defer result.Close()
 	logutil.Infof("FIND_TABLE read mo_catalog.mo_columns %v rows", rowCntF(result.Batches))
 
-	if len(result.Batches) == 0 {
-		x := 0
-		x++
-	}
-
 	if isColumnsBatchPerfectlySplitted(result.Batches) {
 		for _, b := range result.Batches {
 			if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
