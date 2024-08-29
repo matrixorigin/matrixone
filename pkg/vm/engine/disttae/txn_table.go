@@ -24,9 +24,9 @@ import (
 	"time"
 	"unsafe"
 
-	"go.uber.org/zap"
-
 	"github.com/docker/go-units"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -2576,7 +2576,8 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		}
 		var locStr strings.Builder
 		locations := taskHost.commitEntry.BookingLoc
-		for _, filepath := range locations {
+		blkCnt := types.DecodeInt32(commonUtil.UnsafeStringToBytes(locations[0]))
+		for _, filepath := range locations[blkCnt+1:] {
 			locStr.WriteString(filepath)
 			locStr.WriteString(",")
 		}
@@ -2641,7 +2642,7 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 			objRowCnt++
 
 			if objRowCnt*len(columns)*int(unsafe.Sizeof(int32(0))) > 200*mpool.MB {
-				filename := blockio.EncodeTmpFileName("tmp", "merge", time.Now().UTC().Unix())
+				filename := blockio.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
 				writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 				if err != nil {
 					return err
@@ -2665,7 +2666,7 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 
 	// write remaining data
 	if buffer.RowCount() != 0 {
-		filename := blockio.EncodeTmpFileName("tmp", "merge", time.Now().UTC().Unix())
+		filename := blockio.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
 		writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 		if err != nil {
 			return err
