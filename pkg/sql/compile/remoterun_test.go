@@ -20,12 +20,16 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/golang/mock/gomock"
@@ -33,10 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -53,12 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
@@ -208,12 +203,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 			Conditions: [][]*plan.Expr{nil, nil},
 		},
 		&limit.Limit{},
-		&loopanti.LoopAnti{},
 		&loopjoin.LoopJoin{},
-		&loopleft.LoopLeft{},
-		&loopsemi.LoopSemi{},
-		&loopsingle.LoopSingle{},
-		&loopmark.LoopMark{},
 		&offset.Offset{},
 		&order.Order{},
 		&product.Product{},
@@ -292,12 +282,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.RightSemi), RightSemiJoin: &pipeline.RightSemiJoin{}},
 		{Op: int32(vm.RightAnti), RightAntiJoin: &pipeline.RightAntiJoin{}},
 		{Op: int32(vm.Limit), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
-		{Op: int32(vm.LoopAnti), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.LoopJoin), Join: &pipeline.Join{}},
-		{Op: int32(vm.LoopLeft), LeftJoin: &pipeline.LeftJoin{}},
-		{Op: int32(vm.LoopSemi), SemiJoin: &pipeline.SemiJoin{}},
-		{Op: int32(vm.LoopSingle), SingleJoin: &pipeline.SingleJoin{}},
-		{Op: int32(vm.LoopMark), MarkJoin: &pipeline.MarkJoin{}},
 		{Op: int32(vm.Offset), Offset: plan.MakePlan2Int64ConstExprWithType(0)},
 		{Op: int32(vm.Order), OrderBy: []*plan.OrderBySpec{}},
 		{Op: int32(vm.Product), Product: &pipeline.Product{}},
