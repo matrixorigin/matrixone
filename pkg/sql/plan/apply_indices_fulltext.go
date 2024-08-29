@@ -41,6 +41,18 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 
 	pkJson := fmt.Sprintf("{\"type\":%d}", pkType.Id)
 
+	// copy filters and then delete the fulltext_match from scanNode.FilterList
+	ft_filters := make([]*plan.Expr, len(filterids))
+	for i, id := range filterids {
+		ft_filters[i] = scanNode.FilterList[id]
+	}
+
+	// remove the fulltext_match filter from TABLE_SCAN
+	for i := len(filterids) - 1; i >= 0; i-- {
+		ftid := filterids[i]
+		scanNode.FilterList = append(scanNode.FilterList[:ftid], scanNode.FilterList[ftid+1:]...)
+	}
+
 	// buildFullTextIndexScan
 	// rewrite sltStmt to select distinct * from (sltStmt) a
 
@@ -48,7 +60,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 	var last_ftnode_pkcol *Expr
 
 	for i := 0; i < len(filterids); i++ {
-		ftidxscan := scanNode.FilterList[i]
+		ftidxscan := ft_filters[i]
 		idxdef := indexDefs[i]
 		idxtblname := fmt.Sprintf("`%s`", idxdef.IndexTableName)
 		keyparts := strings.Join(idxdef.Parts, ",")
@@ -137,7 +149,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 				Alias: "fulltext_alias",
 			},
 		}
-		curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, -1, nil)
+		curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, nodeID, ctx)
 		if err != nil {
 			panic(err.Error())
 		}
@@ -182,12 +194,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 
 	}
 
-	// remove the fulltext_match filter from TABLE_SCAN
-	for i := len(filterids) - 1; i >= 0; i-- {
-		ftid := filterids[i]
-		scanNode.FilterList = append(scanNode.FilterList[:ftid], scanNode.FilterList[ftid+1:]...)
-	}
-
 	// JOIN INNER with children (nodeId, FullTextIndexScanId)
 
 	// oncond
@@ -219,10 +225,12 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 		OnList:   []*Expr{wherePkEqPk},
 		Limit:    DeepCopyExpr(scanNode.Limit),
 		Offset:   DeepCopyExpr(scanNode.Offset),
+		//FilterList: scanNode.FilterList,
 	}, ctx)
 
 	scanNode.Limit = nil
 	scanNode.Offset = nil
+	//scanNode.FilterList = nil
 
 	joinnode := builder.qry.Nodes[joinnodeID]
 
