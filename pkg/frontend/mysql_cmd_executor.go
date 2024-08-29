@@ -404,13 +404,15 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 				return err
 			}
 		} else if r.GetTableDef(ctx).TableType == catalog.SystemViewRel {
-			for i := 0; i < 17; i++ {
+			for i := 0; i < 16; i++ {
 				// only remain name and created_time
 				if i == 0 || i == 10 {
 					continue
 				}
 				row[i] = nil
 			}
+			// comment
+			row[16] = "VIEW"
 		}
 		roleId := row[17].(uint32)
 		// role name
