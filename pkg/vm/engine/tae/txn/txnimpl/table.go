@@ -802,7 +802,7 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool) (err
 	}
 	var zm index.ZM
 	dedupType := tbl.store.txn.GetDedupType()
-	if !dedupType.SkipNewCommit() && !dedupType.SkipOldCommit() {
+	if !dedupType.SkipPersisted() {
 		for _, stats := range baseTable.tableSpace.stats {
 			err = tbl.DoPrecommitDedupByNode(ctx, stats, isTombstone)
 			if err != nil {

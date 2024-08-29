@@ -116,7 +116,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 	schema := tbl.schema
 	if schema.HasPK() && !tbl.schema.IsSecondaryIndexTable() {
 		dedupType := tbl.txnTable.store.txn.GetDedupType()
-		if !dedupType.SkipNewCommit() && !dedupType.SkipOldCommit() {
+		if !dedupType.SkipPersisted() {
 			for _, loc := range metaLocs {
 				var vectors []containers.Vector
 				var closeFunc func()

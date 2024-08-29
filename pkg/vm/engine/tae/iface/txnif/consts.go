@@ -59,6 +59,9 @@ func (p DedupPolicy) SkipOldCommit() bool {
 func (p DedupPolicy) SkipNewCommit() bool {
 	return p&DedupPolicy_SkipNewCommitted != 0
 }
+func (p DedupPolicy) SkipPersisted() bool {
+	return p&DedupPolicy_SkipPersisted != 0
+}
 
 const (
 	// Do not dedup all uncommitted data and tombstones
@@ -67,6 +70,7 @@ const (
 	DedupPolicy_SkipOldCommitted
 	// Do not dedup committed data and tombstones after the snapshot ts
 	DedupPolicy_SkipNewCommitted
+	DedupPolicy_SkipPersisted
 )
 
 const (
@@ -77,7 +81,7 @@ const (
 	// data and tombstones, skip the deduplication.
 	// Skip the workspace data and tombstones internal deduplication
 	// Skip the committed data and tombstones after the snapshot ts
-	DedupPolicy_CheckIncremental = DedupPolicy_SkipWorkspace | DedupPolicy_SkipOldCommitted
+	DedupPolicy_CheckIncremental = DedupPolicy_SkipWorkspace | DedupPolicy_SkipOldCommitted | DedupPolicy_SkipPersisted
 
 	// Disable deduplication
 	DedupPolicy_SkipAll = DedupPolicy_SkipOldCommitted | DedupPolicy_SkipNewCommitted | DedupPolicy_SkipWorkspace

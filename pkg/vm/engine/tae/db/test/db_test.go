@@ -5267,7 +5267,7 @@ func TestUpdatePerf(t *testing.T) {
 				err = txn.Commit(context.Background())
 				assert.NoError(t, err)
 				if i%50 == 0 {
-					t.Logf("lalala %d", i)
+					t.Logf("update %d", i)
 				}
 			}
 		}
@@ -5326,7 +5326,7 @@ func TestUpdatePerf2(t *testing.T) {
 			}
 			blkIdx++
 			if blkIdx%50 == 0 {
-				t.Logf("lalala %d blk", blkIdx)
+				t.Logf("update %d blk", blkIdx)
 			}
 		}
 		txn2.Commit(ctx)
@@ -5348,7 +5348,7 @@ func TestUpdatePerf2(t *testing.T) {
 				rel.UpdateByFilter(context.Background(), filter, 0, int8(0), false)
 				txn.Commit(context.Background())
 				if index == 0 && i%50 == 0 {
-					logutil.Infof("lalala %d", i)
+					logutil.Infof("update %d", i)
 				}
 			}
 		}
