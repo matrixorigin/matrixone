@@ -13,6 +13,7 @@
 // limitations under the License.
 
 package merge2
+
 //
 //import (
 //	"github.com/matrixorigin/matrixone/pkg/common/reuse"
