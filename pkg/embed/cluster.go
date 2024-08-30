@@ -439,7 +439,7 @@ func getInitPort(name string) uint64 {
 		panic(err)
 	}
 
-	n, err = file.Write(data)
+	_, err = file.Write(data)
 	if err != nil {
 		panic(err)
 	}
