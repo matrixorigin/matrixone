@@ -111,7 +111,7 @@ type DbTableInfo struct {
 }
 
 func (info DbTableInfo) String() string {
-	return fmt.Sprintf("%v %v %v %v %v %v",
+	return fmt.Sprintf("%v %v %v %v",
 		info.DbName,
 		info.TblName,
 		info.DbId,
