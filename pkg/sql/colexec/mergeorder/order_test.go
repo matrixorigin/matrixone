@@ -78,50 +78,53 @@ func TestOrder(t *testing.T) {
 		resetChildren(tc.arg, bats)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
+		var bat *batch.Batch
 		for {
-			if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
-				require.NoError(t, err)
-				// do the result check
-				if len(tc.arg.OrderBySpecs) > 0 {
-					desc := tc.arg.OrderBySpecs[0].Flag&plan.OrderBySpec_DESC != 0
-					index := tc.arg.OrderBySpecs[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos
-					bat := ok.Batch
-					vec := bat.Vecs[index]
-					if vec.GetType().Oid == types.T_int8 {
-						i8c := vector.MustFixedCol[int8](vec)
-						if desc {
-							for j := range i8c {
-								if j > 0 {
-									require.True(t, i8c[j] <= i8c[j-1], fmt.Sprintf("tc %d require desc, but get %v", tci, i8c))
-								}
-							}
-						} else {
-							for j := range i8c {
-								if j > 0 {
-									require.True(t, i8c[j] >= i8c[j-1])
-								}
+			ok, err := tc.arg.Call(tc.proc)
+			if ok.Batch != nil {
+				bat = ok.Batch
+				continue
+			}
+			require.NoError(t, err)
+			// do the result check
+			if len(tc.arg.OrderBySpecs) > 0 {
+				desc := tc.arg.OrderBySpecs[0].Flag&plan.OrderBySpec_DESC != 0
+				index := tc.arg.OrderBySpecs[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos
+				vec := bat.Vecs[index]
+				if vec.GetType().Oid == types.T_int8 {
+					i8c := vector.MustFixedCol[int8](vec)
+					if desc {
+						for j := range i8c {
+							if j > 0 {
+								require.True(t, i8c[j] <= i8c[j-1], fmt.Sprintf("tc %d require desc, but get %v", tci, i8c))
 							}
 						}
-					} else if vec.GetType().Oid == types.T_int64 {
-						i64c := vector.MustFixedCol[int64](vec)
-						if desc {
-							for j := range i64c {
-								if j > 0 {
-									require.True(t, i64c[j] <= i64c[j-1])
-								}
+					} else {
+						for j := range i8c {
+							if j > 0 {
+								require.True(t, i8c[j] >= i8c[j-1])
 							}
-						} else {
-							for j := range i64c {
-								if j > 0 {
-									require.True(t, i64c[j] >= i64c[j-1])
-								}
+						}
+					}
+				} else if vec.GetType().Oid == types.T_int64 {
+					i64c := vector.MustFixedCol[int64](vec)
+					if desc {
+						for j := range i64c {
+							if j > 0 {
+								require.True(t, i64c[j] <= i64c[j-1])
+							}
+						}
+					} else {
+						for j := range i64c {
+							if j > 0 {
+								require.True(t, i64c[j] >= i64c[j-1])
 							}
 						}
 					}
 				}
-
-				break
 			}
+
+			break
 		}
 		tc.arg.Children[0].Free(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
