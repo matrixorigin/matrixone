@@ -22,6 +22,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -85,7 +86,7 @@ func fulltextIndexScanCall(_ int, proc *process.Process, tableFunction *TableFun
 		return false, err
 	}
 	if v.GetType().Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: first argument must be string, but got %s", v.GetType().String()))
+		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: first argument (index table name) must be string, but got %s", v.GetType().String()))
 	}
 
 	index_table := v.UnsafeGetStringAt(0)
@@ -95,32 +96,22 @@ func fulltextIndexScanCall(_ int, proc *process.Process, tableFunction *TableFun
 		return false, err
 	}
 	if v.GetType().Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: second argument must be string, but got %s", v.GetType().String()))
+		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: second argument (search pattern) must be string, but got %s", v.GetType().String()))
 	}
 
-	pk_json := v.UnsafeGetStringAt(0)
+	pattern := v.UnsafeGetStringAt(0)
 
 	v, err = tableFunction.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return false, err
 	}
-	if v.GetType().Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: third argument must be string, but got %s", v.GetType().String()))
+	if v.GetType().Oid != types.T_int64 {
+		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: third argument (mode) must be string, but got %s", v.GetType().String()))
 	}
 
-	keys := v.UnsafeGetStringAt(0)
+	mode := vector.GetFixedAt[int64](v, 0)
 
-	v, err = tableFunction.ctr.executorsForArgs[3].Eval(proc, []*batch.Batch{bat}, nil)
-	if err != nil {
-		return false, err
-	}
-	if v.GetType().Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: fourth argument must be string, but got %s", v.GetType().String()))
-	}
-
-	pattern := v.UnsafeGetStringAt(0)
-
-	logutil.Infof("index %s, pk_json %s, key %s, pattern %s", index_table, pk_json, keys, pattern)
+	logutil.Infof("index %s, pattern %s mode %d", index_table, pattern, mode)
 
 	rbat, err = fulltextIndexMatch(proc, tableFunction, index_table, pattern)
 	if err != nil {

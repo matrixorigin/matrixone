@@ -4077,6 +4077,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId  int32
 	)
 
+	// ERIC TODO: move childId code to buildXXXXX() to let them full control of the child creation. VALUE_SCAN or preNodeId
 	if preNodeId == -1 {
 		scanNode := &plan.Node{
 			NodeType: plan.Node_VALUE_SCAN,

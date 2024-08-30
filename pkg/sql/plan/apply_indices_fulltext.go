@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"go/constant"
 	"strconv"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -39,7 +38,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 	var pkType = scanNode.TableDef.Cols[pkPos].Typ
 	//var colDefs = scanNode.TableDef.Cols
 
-	pkJson := fmt.Sprintf("{\"type\":%d}", pkType.Id)
+	//pkJson := fmt.Sprintf("{\"type\":%d}", pkType.Id)
 
 	// copy filters and then delete the fulltext_match from scanNode.FilterList
 	ft_filters := make([]*plan.Expr, len(filterids))
@@ -63,7 +62,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 		ftidxscan := ft_filters[i]
 		idxdef := indexDefs[i]
 		idxtblname := fmt.Sprintf("`%s`", idxdef.IndexTableName)
-		keyparts := strings.Join(idxdef.Parts, ",")
 		fn := ftidxscan.GetF()
 		pattern := fn.Args[0].GetLit().GetSval()
 		mode := fn.Args[1].GetLit().GetI64Val()
@@ -73,10 +71,10 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 
 		var exprs tree.Exprs
 		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(idxtblname), idxtblname, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(pkJson), pkJson, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(keyparts), keyparts, false, tree.P_char))
 		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(pattern), pattern, false, tree.P_char))
 		exprs = append(exprs, tree.NewNumValWithType(constant.MakeInt64(mode), strconv.FormatInt(mode, 10), false, tree.P_int64))
+		//exprs = append(exprs, tree.NewNumValWithType(constant.MakeInt64(int64(pkType.Id)), strconv.FormatInt(int64(pkType.Id), 10), false, tree.P_char))
+		//exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(pkJson), pkJson, false, tree.P_char))
 
 		name := tree.NewUnresolvedName(fulltext_func)
 
