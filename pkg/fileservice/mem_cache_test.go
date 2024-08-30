@@ -46,7 +46,7 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 
 	size := int64(4 * runtime.GOMAXPROCS(0))
-	m := NewMemCache(NewMemoryCache(fscache.ConstCapacity(size), true, nil), nil)
+	m := NewMemCache(newMemoryCache(fscache.ConstCapacity(size), true, nil), nil)
 
 	vec := &IOVector{
 		FilePath: "foo",
@@ -104,7 +104,7 @@ func TestMemCacheLeak(t *testing.T) {
 // TestHighConcurrency this test is to mainly test concurrency issue in objectCache
 // and dataOverlap-checker.
 func TestHighConcurrency(t *testing.T) {
-	m := NewMemCache(NewMemoryCache(fscache.ConstCapacity(2), true, nil), nil)
+	m := NewMemCache(newMemoryCache(fscache.ConstCapacity(2), true, nil), nil)
 	ctx := context.Background()
 
 	n := 10
@@ -144,7 +144,7 @@ func TestHighConcurrency(t *testing.T) {
 }
 
 func TestMemoryCacheGlobalSizeHint(t *testing.T) {
-	cache := NewMemoryCache(
+	cache := newMemoryCache(
 		fscache.ConstCapacity(1<<20),
 		false,
 		nil,

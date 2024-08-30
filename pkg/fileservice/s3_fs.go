@@ -150,7 +150,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	// memory cache
 	if *config.MemoryCapacity > DisableCacheCapacity {
 		s.memCache = NewMemCache(
-			NewMemoryCache(
+			newMemoryCache(
 				fscache.ConstCapacity(int64(*config.MemoryCapacity)),
 				config.CheckOverlaps,
 				&config.CacheCallbacks,

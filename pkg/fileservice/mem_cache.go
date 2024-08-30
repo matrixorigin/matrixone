@@ -40,7 +40,7 @@ func NewMemCache(
 	return ret
 }
 
-func NewMemoryCache(
+func newMemoryCache(
 	capacity fscache.CapacityFunc,
 	checkOverlaps bool,
 	callbacks *CacheCallbacks,
