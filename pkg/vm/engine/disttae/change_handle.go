@@ -16,19 +16,29 @@ package disttae
 
 import (
 	"context"
-	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
-func (tbl *txnTable) CollectChanges(from, to types.TS) (ChangesHandle, error)
+func (tbl *txnTable) CollectChanges(from, to types.TS) (ChangesHandle, error) {
+	if from.IsEmpty() {
+		return NewCheckpointChangesHandle(to, tbl)
+	}
+	state, err := tbl.getPartitionState(context.TODO())
+	if err != nil {
+		return nil, err
+	}
+	return logtailreplay.NewChangesHandler(state, from, to, tbl.getTxn().engine.mp, 8192, tbl.getTxn().engine.fs), nil
+}
 
 type ChangesHandle interface {
 	//两个batch都为空，结束。然后close
@@ -39,36 +49,71 @@ type ChangesHandle interface {
 	Close() error
 }
 type CheckpointChangesHandle struct {
-	end   types.TS
-	table *txnTable
-	fs fileservice.FileService
-	mp *mpool.MPool
+	end    types.TS
+	table  *txnTable
+	fs     fileservice.FileService
+	mp     *mpool.MPool
+	reader engine.Reader
+	attrs  []string
+}
+
+func NewCheckpointChangesHandle(end types.TS, table *txnTable) (*CheckpointChangesHandle, error) {
+	handle := &CheckpointChangesHandle{
+		end:   end,
+		table: table,
+		fs:    table.getTxn().engine.fs,
+		mp:    table.getTxn().engine.mp,
+	}
+	err := handle.initReader()
+	return handle, err
 }
 
 func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Batch, hint logtailreplay.Hint, err error) {
 	hint = logtailreplay.Checkpoint
+
+	isEnd, err := h.reader.Read(
+		context.TODO(),
+		h.attrs,
+		nil,
+		h.mp,
+		nil,
+		data,
+	)
+	if err != nil {
+		return
+	}
+	if isEnd {
+		err = moerr.GetOkExpectedEOF()
+	}
 	return
 }
 func (h *CheckpointChangesHandle) Close() error {
+	h.reader.Close()
 	return nil
 }
-func (h *CheckpointChangesHandle) readData(ctx context.Context, table *txnTable) (err error) {
-	tblDef:=table.GetTableDef(ctx)
-	pkColumName := table.GetTableDef(ctx).Pkey.PkeyColName
+func (h *CheckpointChangesHandle) initReader() (err error) {
+	tblDef := h.table.GetTableDef(context.TODO())
+	h.attrs = []string{
+		catalog.Row_ID,
+		catalog2.AttrCommitTs,
+	}
+	for _, col := range tblDef.Cols {
+		h.attrs = append(h.attrs, col.Name)
+	}
 
 	var blockList objectio.BlockInfoSlice
 	if _, err = TryFastFilterBlocks(
-		ctx,
-		table,
-		table.db.op.SnapshotTS(),
-		table.GetTableDef(ctx),
+		context.TODO(),
+		h.table,
+		h.end.ToTimestamp(),
+		tblDef,
 		nil,
 		nil,
-		objectList,
+		nil,
 		nil,
 		&blockList,
 		h.fs,
-		table.proc.Load(),
+		h.table.proc.Load(),
 	); err != nil {
 		return
 	}
@@ -78,9 +123,9 @@ func (h *CheckpointChangesHandle) readData(ctx context.Context, table *txnTable)
 		relData.AppendBlockInfo(*blockList.Get(i))
 	}
 
-	readers, err := table.BuildReaders(
-		ctx,
-		table.proc.Load(),
+	readers, err := h.table.BuildReaders(
+		context.TODO(),
+		h.table.proc.Load(),
 		nil,
 		relData,
 		1,
@@ -91,60 +136,7 @@ func (h *CheckpointChangesHandle) readData(ctx context.Context, table *txnTable)
 	if err != nil {
 		return
 	}
-	defer func() {
-		readers[0].Close()
-	}()
-
-	attrs := []string{
-		pkColumName,
-		catalog.Row_ID,
-	}
-	buildBatch := func() *batch.Batch {
-		bat := batch.NewWithSize(2)
-		bat.Attrs = append(bat.Attrs, attrs...)
-
-		bat.Vecs[0] = vector.NewVec(*readPKColumn.GetType())
-		bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
-		return bat
-	}
-	bat := buildBatch()
-	defer func() {
-		bat.Clean(h.mp)
-	}()
-	var isEnd bool
-	for {
-		bat.CleanOnlyData()
-		isEnd, err = readers[0].Read(
-			ctx,
-			attrs,
-			nil,
-			h.mp,
-			nil,
-			bat,
-		)
-		if err != nil {
-			return
-		}
-		if isEnd {
-			break
-		}
-		if err = vector.GetUnionAllFunction(
-			*readPKColumn.GetType(), h.mp,
-		)(
-			readPKColumn, bat.GetVector(0),
-		); err != nil {
-			return
-		}
-
-		if err = vector.GetUnionAllFunction(
-			*targetRowids.GetType(), h.mp,
-		)(
-			targetRowids, bat.GetVector(1),
-		); err != nil {
-			return
-		}
-	}
+	h.reader = readers[0]
 
 	return
 }
-

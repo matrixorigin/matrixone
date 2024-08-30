@@ -305,16 +305,17 @@ type ChangeHandler struct {
 	dataHandle      *baseHandle
 }
 
-func NewTailHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService) *ChangeHandler {
+func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService) *ChangeHandler {
 	return &ChangeHandler{
 		tombstoneHandle: NewBaseHandler(state, start, end, mp, maxRow, true, fs),
 		dataHandle:      NewBaseHandler(state, start, end, mp, maxRow, false, fs),
 	}
 }
 
-func (p *ChangeHandler) Close() {
+func (p *ChangeHandler) Close() error {
 	p.dataHandle.Close()
 	p.tombstoneHandle.Close()
+	return nil
 }
 func (p *ChangeHandler) Next() (data, tombstone *batch.Batch, hint Hint, err error) {
 	data, err = p.dataHandle.Next()
