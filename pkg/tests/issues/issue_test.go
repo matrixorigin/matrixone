@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
@@ -42,10 +43,10 @@ func TestWWConflict(t *testing.T) {
 			cn2, err := c.GetCNService(1)
 			require.NoError(t, err)
 
-			db := getDatabaseName(t)
+			db := testutils.GetDatabaseName(t)
 			table := "t"
 
-			createTableAndWaitCNApplied(
+			testutils.CreateTableAndWaitCNApplied(
 				t,
 				db,
 				table,
@@ -54,11 +55,11 @@ func TestWWConflict(t *testing.T) {
 				cn2,
 			)
 
-			committedAt := execSQL(
+			committedAt := testutils.ExecSQL(
 				t,
 				db,
-				"insert into "+table+" values (1, 1)",
 				cn1,
+				"insert into "+table+" values (1, 1)",
 			)
 
 			// workflow:
@@ -84,7 +85,7 @@ func TestWWConflict(t *testing.T) {
 
 				var retried atomic.Bool
 				var txn2Triggered atomic.Bool
-				exec1 := getSQLExecutor(cn1)
+				exec1 := testutils.GetSQLExecutor(cn1)
 				err := exec1.ExecTxn(
 					ctx,
 					func(txn executor.TxnExecutor) error {
@@ -167,7 +168,7 @@ func TestWWConflict(t *testing.T) {
 				}()
 
 				<-txn2StartedC
-				exec := getSQLExecutor(cn2)
+				exec := testutils.GetSQLExecutor(cn2)
 
 				res, err := exec.Exec(
 					ctx,

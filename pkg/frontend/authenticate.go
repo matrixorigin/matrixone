@@ -954,6 +954,7 @@ var (
 		"mo_foreign_keys":             0,
 		"mo_snapshots":                0,
 		"mo_subs":                     0,
+		catalog.MO_RETENTION:          0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -978,6 +979,7 @@ var (
 		MoCatalogMoMysqlCompatibilityModeDDL,
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
+		MoCatalogMoRetentionDDL,
 		MoCatalogMoSubsDDL,
 		MoCatalogMoStoredProcedureDDL,
 		MoCatalogMoStagesDDL,
@@ -1013,6 +1015,7 @@ var (
 	dropMoIndexes                   = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
 	dropMoTablePartitions           = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
+	dropMoRetention                 = `drop table if exists mo_catalog.mo_retention;`
 
 	initMoMysqlCompatibilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
@@ -3639,6 +3642,11 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			return rtnErr
 		}
 
+		rtnErr = bh.Exec(deleteCtx, dropMoRetention)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
 		rtnErr = bh.Exec(deleteCtx, dropMoForeignKeys)
 		if rtnErr != nil {
 			return rtnErr
@@ -3695,6 +3703,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		}
 		return rtnErr
 	}
+
+	// disable foreign key checks
+	ctx = context.WithValue(ctx, defines.DisableFkCheck{}, true)
 
 	err = dropAccountFunc()
 	if err != nil {

@@ -62,33 +62,42 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
-	input, err := vm.ChildrenCall(offset.GetChildren(0), proc, anal)
-	if err != nil {
-		return vm.CancelResult, err
-	}
-	if input.Batch == nil || input.Batch.IsEmpty() || input.Batch.Last() {
-		return input, nil
-	}
-	anal.Input(input.Batch, offset.GetIsFirst())
 	if offset.ctr.seen > offset.ctr.offset {
-		return input, nil
+		return vm.CancelResult, nil
 	}
-	length := input.Batch.RowCount()
-	if offset.ctr.buf != nil {
-		offset.ctr.buf.CleanOnlyData()
-	}
-	if offset.ctr.seen+uint64(length) > offset.ctr.offset {
-		sels := newSels(int64(offset.ctr.offset-offset.ctr.seen), int64(length)-int64(offset.ctr.offset-offset.ctr.seen), proc)
-		offset.ctr.buf, err = offset.ctr.buf.AppendWithCopy(proc.Ctx, proc.GetMPool(), input.Batch)
+
+	for {
+		input, err := vm.ChildrenCall(offset.GetChildren(0), proc, anal)
 		if err != nil {
 			return vm.CancelResult, err
 		}
-		offset.ctr.buf.Shrink(sels, false)
-		proc.Mp().PutSels(sels)
+		if input.Batch == nil || input.Batch.Last() {
+			return input, nil
+		}
+		if input.Batch.IsEmpty() {
+			continue
+		}
+		if offset.ctr.seen > offset.ctr.offset {
+			return input, nil
+		}
+		anal.Input(input.Batch, offset.GetIsFirst())
+		length := input.Batch.RowCount()
+		if offset.ctr.buf != nil {
+			offset.ctr.buf.CleanOnlyData()
+		}
+		if offset.ctr.seen+uint64(length) > offset.ctr.offset {
+			sels := newSels(int64(offset.ctr.offset-offset.ctr.seen), int64(length)-int64(offset.ctr.offset-offset.ctr.seen), proc)
+			offset.ctr.buf, err = offset.ctr.buf.AppendWithCopy(proc.Ctx, proc.GetMPool(), input.Batch)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			offset.ctr.buf.Shrink(sels, false)
+			proc.Mp().PutSels(sels)
+			offset.ctr.seen += uint64(length)
+			return vm.CallResult{Batch: offset.ctr.buf, Status: vm.ExecNext}, nil
+		}
 		offset.ctr.seen += uint64(length)
-		return vm.CallResult{Batch: offset.ctr.buf, Status: vm.ExecNext}, nil
 	}
-	return vm.CancelResult, nil
 }
 
 func newSels(start, count int64, proc *process.Process) []int64 {

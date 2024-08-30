@@ -114,6 +114,13 @@ func (s *taskService) fetchCronTasks(ctx context.Context) {
 							zap.Uint64("new-trigger-times", v.TriggerTimes),
 							zap.String("task", v.DebugString()))
 						s.replaceCronTask(v)
+					} else if job.task.CronExpr != v.CronExpr {
+						s.rt.Logger().Info("cron task updated",
+							zap.String("cause", "cron expr changed"),
+							zap.String("old-cron-expr", job.task.CronExpr),
+							zap.String("new-cron-expr", v.CronExpr),
+							zap.String("task", v.DebugString()))
+						s.replaceCronTask(v)
 					}
 					job.state.endUpdate()
 				}
@@ -130,7 +137,13 @@ func (s *taskService) fetchCronTasks(ctx context.Context) {
 }
 
 func (s *taskService) addCronTask(task task.CronTask) {
-	job := newCronJob(task, s)
+	job, err := newCronJob(task, s)
+	if err != nil {
+		s.rt.Logger().Error("failed to parse cron expr",
+			zap.String("cron expr", task.CronExpr),
+			zap.Error(err))
+		return
+	}
 	if time.Now().After(time.UnixMilli(task.NextTime)) {
 		s.rt.Logger().Info("cron task triggered",
 			zap.String("cause", "now > next"),
@@ -157,7 +170,13 @@ func (s *taskService) removeCronTask(id uint64) {
 func (s *taskService) replaceCronTask(v task.CronTask) {
 	s.crons.cron.Remove(s.crons.entries[v.ID])
 
-	job := newCronJob(v, s)
+	job, err := newCronJob(v, s)
+	if err != nil {
+		s.rt.Logger().Error("failed to parse cron expr",
+			zap.String("cron expr", v.CronExpr),
+			zap.Error(err))
+		return
+	}
 	entryId, err := s.crons.cron.AddJob(v.CronExpr, job)
 	if err != nil {
 		panic(err)
@@ -181,16 +200,16 @@ type cronJob struct {
 	task     task.CronTask
 }
 
-func newCronJob(task task.CronTask, s *taskService) *cronJob {
+func newCronJob(task task.CronTask, s *taskService) (*cronJob, error) {
 	schedule, err := s.cronParser.Parse(task.CronExpr)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	return &cronJob{
 		schedule: schedule,
 		task:     task,
 		s:        s,
-	}
+	}, nil
 }
 
 func (j *cronJob) Run() {

@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -182,15 +181,7 @@ func newMemPKFilter(
 		filter.SetFullData(basePKFilter.op, false, packed...)
 
 	case function.IN, function.PREFIX_IN:
-		if vec, ok := basePKFilter.vec.(*vector.Vector); ok {
-			packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
-		} else {
-			vec := vector.NewVec(types.T_any.ToType())
-			if err = vec.UnmarshalBinary(basePKFilter.vec.([]byte)); err != nil {
-				return MemPKFilter{}, err
-			}
-			packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
-		}
+		packed = logtailreplay.EncodePrimaryKeyVector(basePKFilter.vec, packer)
 
 		if basePKFilter.op == function.PREFIX_IN {
 			for x := range packed {

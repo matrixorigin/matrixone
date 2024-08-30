@@ -266,11 +266,14 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 			result := vm.NewCallResult()
 			sendOver, err := ctr.pickAndSend(proc, &result)
 			if sendOver {
-				result.Status = vm.ExecStop
+				ctr.status = finish
 				return result, err
 			}
 			result.Status = vm.ExecHasMore
 			return result, err
+
+		case finish:
+			return vm.CancelResult, nil
 		}
 	}
 }

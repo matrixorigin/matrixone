@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -54,4 +55,39 @@ func TestSortKey(t *testing.T) {
 	for i := range cols {
 		require.Equal(t, cols2[i], res[i])
 	}
+}
+
+func TestSetStatsCNCreated(t *testing.T) {
+	proc := testutil.NewProc()
+	s3writer := &S3Writer{}
+	s3writer.sortIndex = 0
+	s3writer.isTombstone = true
+	_, err := s3writer.generateWriter(proc)
+	require.NoError(t, err)
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+
+	for i := 0; i < 100; i++ {
+		row := types.RandomRowid()
+		err = vector.AppendFixed[types.Rowid](bat.Vecs[0], row, false, proc.GetMPool())
+		require.NoError(t, err)
+	}
+	bat.SetRowCount(100)
+
+	s3writer.StashBatch(proc, bat)
+	_, stats, err := s3writer.SortAndSync(proc)
+	require.NoError(t, err)
+
+	cnt := 0
+	for _, s := range stats {
+		if !s.IsZero() {
+			cnt++
+			require.True(t, s.GetCNCreated())
+			require.Equal(t, uint32(bat.VectorCount()), s.BlkCnt())
+			require.Equal(t, uint32(bat.Vecs[0].Length()), s.Rows())
+		}
+	}
+
+	require.Equal(t, 1, cnt)
 }
