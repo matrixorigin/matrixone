@@ -270,6 +270,7 @@ func (h *Handle) HandlePreCommitWrite(
 				Batch:        moBat,
 				PkCheck:      db.PKCheckType(pe.GetPkCheckByTn()),
 			}
+
 			if req.FileName != "" {
 				col := req.Batch.Vecs[0]
 				for i := 0; i < req.Batch.RowCount(); i++ {
@@ -770,9 +771,11 @@ func (h *Handle) HandleWrite(
 		)
 
 		for _, stats := range req.TombstoneStats {
-
 			id := tb.GetMeta().(*catalog.TableEntry).AsCommonID()
 			copy(id.BlockID.Object()[:], stats.ObjectName().ObjectId()[:])
+
+			fmt.Println("handle cn committed tombstone", stats.String())
+
 			if ok, err = tb.TryDeleteByStats(id, stats); err != nil {
 				logutil.Errorf("try delete by stats faild: %s, %v", stats.String(), err)
 				return err

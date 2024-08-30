@@ -16,6 +16,7 @@ package deletion
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -64,7 +65,8 @@ func (deletion *Deletion) Prepare(proc *process.Process) error {
 			deletion.ctr.blockId_bitmap = make(map[types.Blockid]*nulls.Nulls)
 			deletion.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerObject)}
 			deletion.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[types.Blockid]*batch.Batch)
-			deletion.ctr.partitionId_blockId_deltaLoc = make(map[int]map[types.Blockid]*batch.Batch)
+			//deletion.ctr.partitionId_blockId_deltaLoc = make(map[int]map[types.Blockid]*batch.Batch)
+			deletion.ctr.partitionId_tombstoneObjectStatsBats = make(map[int][]*batch.Batch)
 		}
 	} else {
 		ref := deletion.DeleteCtx.Ref
@@ -157,28 +159,45 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 			}
 		}
 
-		for pIdx, stats := range deletion.ctr.partitionId_tombstoneObjectStats {
-			if err = vector.AppendBytes(
-				deletion.ctr.resBat.GetVector(0), stats.ObjectName().ObjectId()[:], false, proc.GetMPool()); err != nil {
-				return result, err
-			}
+		// cn flushed s3 tombstone objects
+		for pIdx, bats := range deletion.ctr.partitionId_tombstoneObjectStatsBats {
+			for _, bat := range bats {
+				data, area := vector.MustVarlenaRawData(bat.Vecs[0])
+				stats := objectio.ObjectStats(data[0].GetByteSlice(area))
 
-			if err = vector.AppendBytes(
-				deletion.ctr.resBat.GetVector(1), stats.Marshal(), false, proc.GetMPool()); err != nil {
-				return result, err
-			}
-			if err = vector.AppendFixed(
-				deletion.ctr.resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool()); err != nil {
-				return result, err
-			}
-			if err = vector.AppendFixed(
-				deletion.ctr.resBat.GetVector(3), int32(pIdx), false, proc.GetMPool()); err != nil {
-				return result, err
+				if err = vector.AppendBytes(
+					deletion.ctr.resBat.GetVector(0),
+					stats.ObjectName().ObjectId()[:], false, proc.GetMPool()); err != nil {
+					return result, err
+				}
+
+				batBytes, err := bat.MarshalBinary()
+				if err != nil {
+					result.Status = vm.ExecStop
+					return result, err
+				}
+
+				if err = vector.AppendBytes(
+					deletion.ctr.resBat.GetVector(1),
+					batBytes, false, proc.GetMPool()); err != nil {
+					return result, err
+				}
+				if err = vector.AppendFixed(
+					deletion.ctr.resBat.GetVector(2),
+					int8(FlushDeltaLoc), false, proc.GetMPool()); err != nil {
+					return result, err
+				}
+				if err = vector.AppendFixed(
+					deletion.ctr.resBat.GetVector(3),
+					int32(pIdx), false, proc.GetMPool()); err != nil {
+					return result, err
+				}
 			}
 		}
 
 		deletion.ctr.resBat.SetRowCount(deletion.ctr.resBat.Vecs[0].Length())
-		deletion.ctr.resBat.Vecs[4], err = vector.NewConstFixed(types.T_uint32.ToType(), deletion.ctr.deleted_length, deletion.ctr.resBat.RowCount(), proc.GetMPool())
+		deletion.ctr.resBat.Vecs[4], err = vector.NewConstFixed(
+			types.T_uint32.ToType(), deletion.ctr.deleted_length, deletion.ctr.resBat.RowCount(), proc.GetMPool())
 		if err != nil {
 			result.Status = vm.ExecStop
 			return result, err
