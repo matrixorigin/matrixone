@@ -93,7 +93,10 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 				Alias: tree.Identifier(alias_name),
 			},
 		}
-		curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, nodeID, ctx)
+
+		// link with source table have duplicate answer
+		//curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, nodeID, ctx)
+		curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, -1, nil)
 		if err != nil {
 			panic(err.Error())
 		}
