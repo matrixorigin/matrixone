@@ -2243,7 +2243,7 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	case plan.Node_INNER:
 		for i := range shuffleJoins {
 			op := constructJoin(node, rightTyps, c.proc)
-			op.ShuffleIdx = int32(shuffleJoins[i].ShuffleIdx)
+			op.ShuffleIdx = int32(i)
 			op.SetIdx(c.anal.curNodeIdx)
 			shuffleJoins[i].setRootOperator(op)
 		}
@@ -2252,14 +2252,14 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		if node.BuildOnLeft {
 			for i := range shuffleJoins {
 				op := constructRightAnti(node, rightTyps, c.proc)
-				op.ShuffleIdx = int32(shuffleJoins[i].ShuffleIdx)
+				op.ShuffleIdx = int32(i)
 				op.SetIdx(c.anal.curNodeIdx)
 				shuffleJoins[i].setRootOperator(op)
 			}
 		} else {
 			for i := range shuffleJoins {
 				op := constructAnti(node, rightTyps, c.proc)
-				op.ShuffleIdx = int32(shuffleJoins[i].ShuffleIdx)
+				op.ShuffleIdx = int32(i)
 				op.SetIdx(c.anal.curNodeIdx)
 				shuffleJoins[i].setRootOperator(op)
 			}
@@ -2269,14 +2269,14 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		if node.BuildOnLeft {
 			for i := range shuffleJoins {
 				op := constructRightSemi(node, rightTyps, c.proc)
-				op.ShuffleIdx = int32(shuffleJoins[i].ShuffleIdx)
+				op.ShuffleIdx = int32(i)
 				op.SetIdx(c.anal.curNodeIdx)
 				shuffleJoins[i].setRootOperator(op)
 			}
 		} else {
 			for i := range shuffleJoins {
 				op := constructSemi(node, rightTyps, c.proc)
-				op.ShuffleIdx = int32(shuffleJoins[i].ShuffleIdx)
+				op.ShuffleIdx = int32(i)
 				op.SetIdx(c.anal.curNodeIdx)
 				shuffleJoins[i].setRootOperator(op)
 			}
@@ -2285,7 +2285,7 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	case plan.Node_LEFT:
 		for i := range shuffleJoins {
 			op := constructLeft(node, rightTyps, c.proc)
-			op.ShuffleIdx = int32(shuffleJoins[i].ShuffleIdx)
+			op.ShuffleIdx = int32(i)
 			op.SetIdx(c.anal.curNodeIdx)
 			shuffleJoins[i].setRootOperator(op)
 		}
@@ -2293,7 +2293,7 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	case plan.Node_RIGHT:
 		for i := range shuffleJoins {
 			op := constructRight(node, leftTyps, rightTyps, c.proc)
-			op.ShuffleIdx = int32(shuffleJoins[i].ShuffleIdx)
+			op.ShuffleIdx = int32(i)
 			op.SetIdx(c.anal.curNodeIdx)
 			shuffleJoins[i].setRootOperator(op)
 		}
@@ -3527,7 +3527,6 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 	lenLeft := len(left)
 	lenRight := len(right)
 
-	shuffleIdx := 0
 	for _, cn := range c.cnList {
 		joins := make([]*Scope, dop)
 		builds := make([]*Scope, dop)
@@ -3541,8 +3540,6 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 			builds[i].NodeInfo = joins[i].NodeInfo
 			builds[i].Proc = c.proc.NewNoContextChildProc(lenRight)
 			joins[i].PreScopes = []*Scope{builds[i]}
-			shuffleIdx++
-			joins[i].ShuffleIdx = shuffleIdx
 			for _, rr := range joins[i].Proc.Reg.MergeReceivers {
 				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 			}
