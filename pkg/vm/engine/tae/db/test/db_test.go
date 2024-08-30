@@ -9227,3 +9227,25 @@ func TestDedup3(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(ctx))
 }
+func TestDedup4(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 1
+	schema.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.DeleteAll(true)
+	tae.DoAppend(bat)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+	txn, rel := tae.GetRelation()
+	err := rel.Append(context.Background(), bat)
+	assert.Error(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+}

@@ -164,6 +164,9 @@ func (idx *MutIndex) GetDuplicatedRows(
 		}
 	}
 	op := func(v []byte, _ bool, offset int) error {
+		if !rowIDs.IsNull(uint64(offset)) {
+			return nil
+		}
 		rows, err := idx.art.Search(v)
 		if err == index.ErrNotFound {
 			return nil
