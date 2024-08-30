@@ -240,7 +240,7 @@ func (s *Scope) handleLLMIndexChunkEmbeddingTable(c *Compile, indexDef *plan.Ind
 	selectSQL := fmt.Sprintf("SELECT "+
 		"`%s` AS `tbl_pk`, "+
 		"`%s` AS `chunk`, "+
-		"embedding(`%s`) AS `embedding` "+
+		"llm_embedding(`%s`) AS `embedding` "+
 		"FROM `%s`.`%s`",
 		catalog.SystemSI_LLM_TblCol_Basic_key,
 		catalog.SystemSI_LLM_TblCol_Basic_url,
