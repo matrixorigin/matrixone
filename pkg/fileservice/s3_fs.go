@@ -173,6 +173,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			fscache.ConstCapacity(int64(*config.DiskCapacity)),
 			s.perfCounterSets,
 			true,
+			s.name,
 		)
 		if err != nil {
 			return err
@@ -904,7 +905,12 @@ func (*S3FS) ETLCompatible() {}
 var _ CachingFileService = new(S3FS)
 
 func (s *S3FS) Close() {
-	s.FlushCache()
+	if s.memCache != nil {
+		s.memCache.Close()
+	}
+	if s.diskCache != nil {
+		s.diskCache.Close()
+	}
 }
 
 func (s *S3FS) FlushCache() {

@@ -206,4 +206,5 @@ var (
 	GlobalDiskCacheSizeHint   atomic.Int64
 
 	allMemoryCaches sync.Map // *MemCache -> name
+	allDiskCaches   sync.Map // *DiskCache -> name
 )

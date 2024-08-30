@@ -38,7 +38,9 @@ func NewMemCache(
 		cache:       dataCache,
 		counterSets: counterSets,
 	}
-	allMemoryCaches.Store(ret, name)
+	if name != "" {
+		allMemoryCaches.Store(ret, name)
+	}
 	return ret
 }
 

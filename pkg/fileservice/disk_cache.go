@@ -55,6 +55,7 @@ func NewDiskCache(
 	capacity fscache.CapacityFunc,
 	perfCounterSets []*perfcounter.CounterSet,
 	asyncLoad bool,
+	name string,
 ) (ret *DiskCache, err error) {
 
 	err = os.MkdirAll(path, 0755)
@@ -101,6 +102,10 @@ func NewDiskCache(
 		go ret.loadCache()
 	} else {
 		ret.loadCache()
+	}
+
+	if name != "" {
+		allDiskCaches.Store(ret, name)
 	}
 
 	return ret, nil
@@ -611,4 +616,8 @@ func fileSize(info fs.FileInfo) int64 {
 		return int64(sys.Blocks) * 512 // it's always 512, not sys.Blksize
 	}
 	return info.Size()
+}
+
+func (d *DiskCache) Close() {
+	allDiskCaches.Delete(d)
 }

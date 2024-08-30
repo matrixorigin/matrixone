@@ -69,7 +69,9 @@ func (m *MemoryFS) Name() string {
 }
 
 func (m *MemoryFS) Close() {
-	m.memCache.Flush()
+	if m.memCache != nil {
+		m.memCache.Close()
+	}
 }
 
 func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
