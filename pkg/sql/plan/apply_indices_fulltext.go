@@ -112,6 +112,11 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 			},
 		}
 
+		// change doc_id type to the primary type here
+		curr_ftnode.TableDef.Cols[0].Typ.Id = pkType.Id
+		curr_ftnode.TableDef.Cols[0].Typ.Width = pkType.Width
+		curr_ftnode.TableDef.Cols[0].Typ.Scale = pkType.Scale
+
 		logutil.Infof("TABLE_FUNCTION %v", curr_ftnode)
 		if i > 0 {
 			// JOIN last_node_id and curr_ftnode_id
@@ -179,4 +184,21 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 	logutil.Infof("JOIN INNER %v", joinnode)
 
 	return joinnodeID
+}
+
+func (builder *QueryBuilder) resolveFullTextIndexScanNode(node *plan.Node) *plan.Node {
+
+	if node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef.TableType == "func_table" &&
+		node.TableDef.TblFunc.Name == fulltext_index_scan_func_name {
+		return node
+	}
+
+	for _, nodeId := range node.Children {
+		node = builder.resolveFullTextIndexScanNode(builder.qry.Nodes[nodeId])
+		if node != nil {
+			return node
+		}
+	}
+
+	return nil
 }

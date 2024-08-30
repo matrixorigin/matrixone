@@ -25,6 +25,8 @@ import (
 
 // coldef shall copy index type
 var (
+	fulltext_index_scan_func_name = "fulltext_index_scan"
+
 	ftIndexColdefs = []*plan.ColDef{
 		// row_id type should be same as index type
 		{
@@ -74,7 +76,7 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  "fulltext_index_scan",
+				Name:  fulltext_index_scan_func_name,
 				Param: []byte(""),
 			},
 			Cols: colDefs,

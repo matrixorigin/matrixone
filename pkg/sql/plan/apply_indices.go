@@ -244,6 +244,12 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 	// ERIC
 	{
+		// check fulltext_index_scan TABLE_FUNCTION exists
+		ftnode := builder.resolveFullTextIndexScanNode(projNode)
+		if ftnode != nil {
+			logutil.Infof("AAAAAAAAAAAAAAAAAAAAAAA FOUND it.... %v", ftnode)
+		}
+
 		// TODO: it is possible that there is a sort node.   i.e. project -> sort -> scan or project -> scan
 		scanNode := builder.resolveScanNodeFromProject(projNode, 1)
 		if scanNode == nil {
