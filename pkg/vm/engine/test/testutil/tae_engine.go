@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
+	dbutil "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 )
@@ -37,7 +37,7 @@ type TestTxnStorage struct {
 	t *testing.T
 	//accountId     uint32
 	schema        *catalog.Schema
-	taeDelegate   *testutil.TestEngine
+	taeDelegate   *dbutil.TestEngine
 	txnHandler    *rpc.Handle
 	logtailServer *TestLogtailServer
 }
@@ -147,7 +147,7 @@ func NewTestTAEEngine(
 		t:             t,
 		txnHandler:    handle,
 		logtailServer: logtailServer,
-		taeDelegate: &testutil.TestEngine{
+		taeDelegate: &dbutil.TestEngine{
 			DB: handle.GetDB(), T: t,
 		},
 	}

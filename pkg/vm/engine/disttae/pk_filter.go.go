@@ -107,14 +107,7 @@ func newBlockReadPKFilter(
 		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixBetweenFactory(basePKFilter.lb, basePKFilter.ub)
 
 	case function.IN:
-		var ok bool
-		var vec *vector.Vector
-		if vec, ok = basePKFilter.vec.(*vector.Vector); !ok {
-			vec = vector.NewVec(types.T_any.ToType())
-			if err = vec.UnmarshalBinary(basePKFilter.vec.([]byte)); err != nil {
-				return blockio.BlockReadFilter{}, err
-			}
-		}
+		var vec *vector.Vector = basePKFilter.vec
 
 		switch vec.GetType().Oid {
 		case types.T_bit:
@@ -178,14 +171,7 @@ func newBlockReadPKFilter(
 		}
 
 	case function.PREFIX_IN:
-		var ok bool
-		var vec *vector.Vector
-		if vec, ok = basePKFilter.vec.(*vector.Vector); !ok {
-			vec = vector.NewVec(types.T_any.ToType())
-			if err = vec.UnmarshalBinary(basePKFilter.vec.([]byte)); err != nil {
-				return blockio.BlockReadFilter{}, err
-			}
-		}
+		var vec *vector.Vector = basePKFilter.vec
 
 		sortedSearchFunc = vector.CollectOffsetsByPrefixInFactory(vec)
 		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixInFactory(vec)

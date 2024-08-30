@@ -3220,13 +3220,13 @@ func getLockVector(proc *process.Process, accountId uint32, names []string) (*ve
 	defer func() {
 		for _, v := range vecs {
 			if v != nil {
-				proc.PutVector(v)
+				v.Free(proc.GetMPool())
 			}
 		}
 	}()
 
 	// append account_id
-	accountIdVec := proc.GetVector(types.T_uint32.ToType())
+	accountIdVec := vector.NewVec(types.T_uint32.ToType())
 	err := vector.AppendFixed(accountIdVec, accountId, false, proc.GetMPool())
 	if err != nil {
 		return nil, err
@@ -3234,7 +3234,7 @@ func getLockVector(proc *process.Process, accountId uint32, names []string) (*ve
 	vecs[0] = accountIdVec
 	// append names
 	for i, name := range names {
-		nameVec := proc.GetVector(types.T_varchar.ToType())
+		nameVec := vector.NewVec(types.T_varchar.ToType())
 		err := vector.AppendBytes(nameVec, []byte(name), false, proc.GetMPool())
 		if err != nil {
 			return nil, err
