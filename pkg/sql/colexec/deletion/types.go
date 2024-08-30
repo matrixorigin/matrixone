@@ -15,7 +15,6 @@
 package deletion
 
 import (
-	"fmt"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -281,7 +280,6 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			return 0, err
 		}
 
-		fmt.Println("cn flushed tombstone")
 		bat := batch.New(false, []string{catalog.ObjectMeta_ObjectStats})
 		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 		if err = vector.AppendBytes(
@@ -359,7 +357,7 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 		batchSize += bat.Size()
 		bat.SetRowCount(bat.Vecs[0].Length())
 	}
-	fmt.Println("batch size mb", float64(batchSize)/1024.0/1024.0)
+
 	deletion.ctr.batch_size = uint32(batchSize)
 }
 
