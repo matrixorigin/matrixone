@@ -355,7 +355,6 @@ func (h *Handle) HandleToolsTn(
 		logutil.Debug("Tools", zap.Strings("args", args))
 	})
 	b := &bytes.Buffer{}
-
 	inspectCtx := &cmd.InspectContext{
 		Db:     h.db,
 		Acinfo: &req.AccessInfo,

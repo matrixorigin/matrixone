@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -233,10 +232,8 @@ func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
 }
 
 func RunInspect(ctx context.Context, inspectCtx *InspectContext) {
-	logutil.Infof("asdf inspect mo_ctl %v by account %+v", inspectCtx.Args, inspectCtx.Acinfo)
 	rootCmd := initCommand(ctx, inspectCtx)
-	err := rootCmd.Execute()
-	logutil.Infof("asdf inspect mo_ctl %v ", err)
+	rootCmd.Execute()
 }
 
 func initCommand(_ context.Context, inspectCtx *InspectContext) *cobra.Command {
@@ -268,7 +265,6 @@ func (c *MoInspectArg) PrepareCommand() *cobra.Command {
 		Long:  "Mo inspect is a visualization analysis tool",
 		Run:   RunFactory(c),
 	}
-	logutil.Infof("asdf inspect mo_ctl %v", c)
 	moInspectCmd.SetUsageTemplate(c.Usage())
 
 	obj := ObjArg{}
@@ -1855,8 +1851,6 @@ func (c *ckpListArg) Run() (err error) {
 	} else {
 		c.res, err = c.getTableList(ctx)
 	}
-
-	logutil.Infof("asdf checkpoint list: %v", c.res)
 
 	return
 }
