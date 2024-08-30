@@ -23,7 +23,6 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 )
 
@@ -31,12 +30,12 @@ func NewSinker(
 	ctx context.Context,
 	sinkUri string,
 	inputCh chan tools.Pair[*TableCtx, *DecoderOutput],
-	curWaterMark timestamp.Timestamp,
-	updateWatermarkFunc func(tableId uint64, watermark timestamp.Timestamp),
+	tableId uint64,
+	watermarkUpdater *WatermarkUpdater,
 ) (Sinker, error) {
 	//TODO: remove console
 	if strings.HasPrefix(strings.ToLower(sinkUri), "console://") {
-		return NewConsoleSinker(inputCh, curWaterMark, updateWatermarkFunc), nil
+		return NewConsoleSinker(inputCh, tableId, watermarkUpdater), nil
 	}
 
 	//extract the info from the sink uri
@@ -49,26 +48,26 @@ func NewSinker(
 		return nil, err
 	}
 
-	return NewMysqlSinker(sink, inputCh, curWaterMark, updateWatermarkFunc), nil
+	return NewMysqlSinker(sink, inputCh, tableId, watermarkUpdater), nil
 }
 
 var _ Sinker = new(consoleSinker)
 
 type consoleSinker struct {
-	inputCh             chan tools.Pair[*TableCtx, *DecoderOutput]
-	watermark           timestamp.Timestamp
-	updateWatermarkFunc func(tableId uint64, watermark timestamp.Timestamp)
+	inputCh          chan tools.Pair[*TableCtx, *DecoderOutput]
+	tableId          uint64
+	watermarkUpdater *WatermarkUpdater
 }
 
 func NewConsoleSinker(
 	inputCh chan tools.Pair[*TableCtx, *DecoderOutput],
-	watermark timestamp.Timestamp,
-	updateWatermarkFunc func(tableId uint64, watermark timestamp.Timestamp),
+	tableId uint64,
+	watermarkUpdater *WatermarkUpdater,
 ) Sinker {
 	return &consoleSinker{
-		inputCh:             inputCh,
-		watermark:           watermark,
-		updateWatermarkFunc: updateWatermarkFunc,
+		inputCh:          inputCh,
+		tableId:          tableId,
+		watermarkUpdater: watermarkUpdater,
 	}
 }
 
@@ -95,9 +94,6 @@ func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 func (s *consoleSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 	for {
 		select {
-		case <-ar.Pause:
-			return
-
 		case <-ar.Cancel:
 			return
 
@@ -108,8 +104,7 @@ func (s *consoleSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 				tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
 
 			if decodeOutput.noMoreData {
-				s.watermark = decodeOutput.toTs.ToTimestamp()
-				s.updateWatermarkFunc(tableCtx.TableId(), s.watermark)
+				s.watermarkUpdater.UpdateTableWatermark(tableCtx.TableId(), decodeOutput.toTs.ToTimestamp())
 				continue
 			}
 
@@ -119,11 +114,9 @@ func (s *consoleSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 			}
 
 			if decodeOutput.insertAtmBatch != nil {
-				s.watermark = decodeOutput.insertAtmBatch.To.ToTimestamp()
-				s.updateWatermarkFunc(tableCtx.TableId(), s.watermark)
+				s.watermarkUpdater.UpdateTableWatermark(tableCtx.TableId(), decodeOutput.insertAtmBatch.To.ToTimestamp())
 			} else if decodeOutput.deleteAtmBatch != nil {
-				s.watermark = decodeOutput.deleteAtmBatch.To.ToTimestamp()
-				s.updateWatermarkFunc(tableCtx.TableId(), s.watermark)
+				s.watermarkUpdater.UpdateTableWatermark(tableCtx.TableId(), decodeOutput.deleteAtmBatch.To.ToTimestamp())
 			}
 		}
 	}
@@ -132,23 +125,23 @@ func (s *consoleSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 var _ Sinker = new(mysqlSinker)
 
 type mysqlSinker struct {
-	mysql               Sink
-	inputCh             chan tools.Pair[*TableCtx, *DecoderOutput]
-	watermark           timestamp.Timestamp
-	updateWatermarkFunc func(tableId uint64, watermark timestamp.Timestamp)
+	mysql            Sink
+	inputCh          chan tools.Pair[*TableCtx, *DecoderOutput]
+	tableId          uint64
+	watermarkUpdater *WatermarkUpdater
 }
 
 func NewMysqlSinker(
 	mysql Sink,
 	inputCh chan tools.Pair[*TableCtx, *DecoderOutput],
-	watermark timestamp.Timestamp,
-	updateWatermarkFunc func(tableId uint64, watermark timestamp.Timestamp),
+	tableId uint64,
+	watermarkUpdater *WatermarkUpdater,
 ) Sinker {
 	return &mysqlSinker{
-		mysql:               mysql,
-		inputCh:             inputCh,
-		watermark:           watermark,
-		updateWatermarkFunc: updateWatermarkFunc,
+		mysql:            mysql,
+		inputCh:          inputCh,
+		tableId:          tableId,
+		watermarkUpdater: watermarkUpdater,
 	}
 }
 
@@ -165,9 +158,6 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 
 	for {
 		select {
-		case <-ar.Pause:
-			return
-
 		case <-ar.Cancel:
 			return
 
@@ -179,8 +169,7 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 				tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
 
 			if decodeOutput.noMoreData {
-				s.watermark = decodeOutput.toTs.ToTimestamp()
-				s.updateWatermarkFunc(tableCtx.TableId(), s.watermark)
+				s.watermarkUpdater.UpdateTableWatermark(tableCtx.TableId(), decodeOutput.toTs.ToTimestamp())
 				continue
 			}
 
@@ -197,11 +186,9 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 				tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
 
 			if decodeOutput.insertAtmBatch != nil {
-				s.watermark = decodeOutput.insertAtmBatch.To.ToTimestamp()
-				s.updateWatermarkFunc(tableCtx.TableId(), s.watermark)
+				s.watermarkUpdater.UpdateTableWatermark(tableCtx.TableId(), decodeOutput.insertAtmBatch.To.ToTimestamp())
 			} else if decodeOutput.deleteAtmBatch != nil {
-				s.watermark = decodeOutput.deleteAtmBatch.To.ToTimestamp()
-				s.updateWatermarkFunc(tableCtx.TableId(), s.watermark)
+				s.watermarkUpdater.UpdateTableWatermark(tableCtx.TableId(), decodeOutput.deleteAtmBatch.To.ToTimestamp())
 			}
 		}
 	}

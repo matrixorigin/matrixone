@@ -991,6 +991,7 @@ var (
 		MoCatalogMoTransactionsDDL,
 		MoCatalogMoCacheDDL,
 		MoCatalogMoCdcTaskDDL,
+		MoCatalogMoCdcWatermarkDDL,
 	}
 
 	//drop tables for the tenant

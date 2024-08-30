@@ -29,19 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
-/*
-Cdc process
-	logtail replayer
-=>  Queue[DecoderInput]
-=>  Partitioner.Partition
-=>  chan[DecoderInput]
-=>  Decoder.Decode
-=>  chan[DecoderOutput]
-=>  Sinker.Sink
-=>  Sink.Send
-
-*/
-
 type Reader interface {
 	Run(ctx context.Context, ar *ActiveRoutine)
 	Close()
@@ -62,9 +49,9 @@ type Sink interface {
 type OutputType int
 
 const (
-	OutputTypeCheckpoint        OutputType = iota
-	OutputTypeTailDone          OutputType = iota
-	OutputTypeUnfinishedTailWIP OutputType = iota
+	OutputTypeCheckpoint OutputType = iota
+	OutputTypeTailDone
+	OutputTypeUnfinishedTailWIP
 )
 
 func (t OutputType) String() string {
@@ -151,8 +138,11 @@ func NewAtomicBatch(
 }
 
 type AtomicBatchRow struct {
-	Ts     types.TS
-	Pk     []byte
+	Ts types.TS
+	Pk []byte
+	// idx of batch in AtomicBatch.Batches
+	batIdx int
+	// row offset of batch
 	Offset int
 	Src    *batch.Batch
 }
@@ -175,7 +165,6 @@ func (bat *AtomicBatch) Append(
 	tsColIdx, compositedPkColIdx int,
 ) {
 	if batch != nil {
-		bat.Batches = append(bat.Batches, batch)
 		//ts columns
 		tsVec := vector.MustFixedCol[types.TS](batch.Vecs[tsColIdx])
 		//composited pk columns
@@ -185,11 +174,13 @@ func (bat *AtomicBatch) Append(
 			row := AtomicBatchRow{
 				Ts:     ts,
 				Pk:     compositedPkBytes[i],
+				batIdx: len(bat.Batches),
 				Offset: i,
 				Src:    batch,
 			}
 			bat.Rows.Set(row)
 		}
+		bat.Batches = append(bat.Batches, batch)
 	}
 }
 
@@ -219,19 +210,15 @@ func (iter *atomicBatchRowIter) Next() bool {
 	return iter.iter.Next()
 }
 
-func (iter *atomicBatchRowIter) Row(ctx context.Context, wantedColsIndices []int, row []any) (err error) {
+func (iter *atomicBatchRowIter) Row(ctx context.Context, wantedColsIndices []int, row []any) error {
 	batchRow := iter.iter.Item()
-	err = extractRowFromEveryVector2(
+	return extractRowFromEveryVector2(
 		ctx,
 		batchRow.Src,
 		wantedColsIndices,
 		batchRow.Offset,
 		row,
 	)
-	if err != nil {
-		return
-	}
-	return
 }
 
 func (iter *atomicBatchRowIter) Close() error {

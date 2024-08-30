@@ -246,6 +246,14 @@ var (
     			unique key(account_id, task_name)
 			)`
 
+	MoCatalogMoCdcWatermarkDDL = `create table mo_catalog.mo_cdc_watermark (
+    			account_id bigint unsigned,			
+    			task_id uuid,
+    			table_id bigint unsigned,			
+    			watermark varchar(128),			
+    			primary key(account_id,task_id,table_id)
+	)`
+
 	MoCatalogMoSessionsDDL       = `CREATE VIEW mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`
 	MoCatalogMoConfigurationsDDL = `CREATE VIEW mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`
 	MoCatalogMoLocksDDL          = `CREATE VIEW mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp`

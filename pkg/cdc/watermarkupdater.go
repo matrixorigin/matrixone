@@ -31,10 +31,10 @@ type WatermarkUpdater struct {
 	// watermarkMap saves the watermark of each table
 	watermarkMap *sync.Map
 
-	persistFunc func(watermark timestamp.Timestamp) error
+	persistFunc func(tableId uint64, watermark timestamp.Timestamp) error
 }
 
-func NewWatermarkUpdater(persistFunc func(watermark timestamp.Timestamp) error) *WatermarkUpdater {
+func NewWatermarkUpdater(persistFunc func(tableId uint64, watermark timestamp.Timestamp) error) *WatermarkUpdater {
 	return &WatermarkUpdater{
 		watermarkMap: &sync.Map{},
 		persistFunc:  persistFunc,
@@ -50,9 +50,6 @@ func (u *WatermarkUpdater) Run(ar *ActiveRoutine) {
 
 	for {
 		select {
-		case <-ar.Pause:
-			return
-
 		case <-ar.Cancel:
 			return
 
@@ -79,19 +76,13 @@ func (u *WatermarkUpdater) GetTableWatermark(tableId uint64) timestamp.Timestamp
 }
 
 func (u *WatermarkUpdater) updateWatermark() {
-	// get min ts of all table
-	var watermark timestamp.Timestamp
 	u.watermarkMap.Range(func(k, v any) bool {
+		tableId := k.(uint64)
 		ts := v.(timestamp.Timestamp)
-		if watermark.IsEmpty() || ts.Less(watermark) {
-			watermark = ts
-		}
+		// TODO handle error
+		_ = u.persistFunc(tableId, ts)
 		return true
 	})
-
-	// TODO handle error
-	_ = u.persistFunc(watermark)
-	//_, _ = fmt.Fprintf(os.Stderr, "^^^^^ updateWatermark persisted new watermark: %s\n", watermark.DebugString())
 }
 
 type WatermarkPair struct {

@@ -67,10 +67,11 @@ func (reader *tableReader) Close() {
 func (reader *tableReader) Run(
 	ctx context.Context,
 	ar *ActiveRoutine) {
+	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ tableReader(%s).Run: start\n", reader.info.TblName)
+	defer fmt.Fprintf(os.Stderr, "^^^^^ tableReader(%s).Run: end\n", reader.info.TblName)
+
 	for {
 		select {
-		case <-ar.Pause:
-			return
 		case <-ar.Cancel:
 			return
 		case <-reader.tick.C:
@@ -186,8 +187,6 @@ func (reader *tableReader) readTableWithTxn(
 	var curHint engine.Hint
 	for {
 		select {
-		case <-ar.Pause:
-			return
 		case <-ar.Cancel:
 			return
 		default:
