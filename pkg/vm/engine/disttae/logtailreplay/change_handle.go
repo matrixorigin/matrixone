@@ -34,18 +34,17 @@ import (
 	"github.com/tidwall/btree"
 )
 
+type Hint int
+
 const (
-	Checkpoint uint8 = iota
+	Checkpoint Hint = iota
 	Tail_wip
 	Tail_done
 )
 
 const (
-	DataObject uint8 = iota
-	TombstoneObject
-	DataRow
-	TombstoneRow
-	End
+	ChangesHandle_Object uint8 = iota
+	ChangesHandle_Row
 )
 
 const (
@@ -53,55 +52,63 @@ const (
 	RowHandle_TombstoneBatchIDX
 )
 
-type RowHandle struct {
-	rows       btree.IterG[RowEntry]
-	start, end types.TS
-	maxRow     uint32
-	mp         *mpool.MPool
+type BatchHandle struct {
+	maxRow      uint32
+	mp          *mpool.MPool
+	isTombstone bool
 
-	batches     [2]*batch.Batch
-	batchLength [2]int
-	dataOffsets [2]int
+	batches     *batch.Batch
+	batchLength int
+	dataOffsets int
 }
 
-func NewRowHandle(changeHandle *TailHandler) (handle *RowHandle, err error) {
-	handle = &RowHandle{
-		rows:  changeHandle.rows,
-		start: changeHandle.start,
-		end:   changeHandle.end,
-		mp:    changeHandle.mp,
-	}
-	err = handle.init()
-	return
-}
-func (r *RowHandle) Close() {
-	for _, bat := range r.batches {
-		if bat != nil {
-			for _, vec := range bat.Vecs {
-				if !vec.NeedDup() {
-					vec.Free(r.mp)
-				}
-			}
-		}
-	}
-}
-func (r *RowHandle) Next() (data, tombstone *batch.Batch, err error) {
-	data, err = r.next(RowHandle_DataBatchIDX)
+func NewRowHandle(data *batch.Batch, maxRow uint32, mp *mpool.MPool) (handle *BatchHandle, err error) {
+	err = sortBatch(data, 1, mp)
 	if err != nil {
 		return
 	}
-	tombstone, err = r.next(RowHandle_TombstoneBatchIDX)
-	if data == nil && tombstone == nil {
-		return nil, nil, moerr.GetOkExpectedEOF()
+	handle = &BatchHandle{
+		maxRow:  maxRow,
+		mp:      mp,
+		batches: data,
+	}
+	if data != nil {
+		handle.batchLength = data.Vecs[0].Length()
 	}
 	return
 }
-func (r *RowHandle) next(idx uint8) (bat *batch.Batch, err error) {
-	src := r.batches[idx]
+
+func closeBatch(bat *batch.Batch, mp *mpool.MPool) {
+	if bat == nil {
+		return
+	}
+	for _, vec := range bat.Vecs {
+		if !vec.NeedDup() {
+			vec.Free(mp)
+		}
+	}
+}
+func (r *BatchHandle) Close() {
+	// for _, bat := range r.batches {
+	// 	closeBatch(bat, r.mp)
+	// }
+}
+func (r *BatchHandle) Next() (data *batch.Batch, err error) {
+	data, err = r.next()
+	if err != nil {
+		return
+	}
+	if data == nil {
+		return nil, moerr.GetOkExpectedEOF()
+	}
+	return
+}
+func (r *BatchHandle) next() (bat *batch.Batch, err error) {
+	src := r.batches
 	if src == nil {
 		return nil, nil
 	}
-	start := r.dataOffsets[idx]
+	start := r.dataOffsets
 	batchLength := src.Vecs[0].Length()
 	if start == batchLength {
 		return nil, nil
@@ -112,7 +119,7 @@ func (r *RowHandle) next(idx uint8) (bat *batch.Batch, err error) {
 	} else {
 		end = start + int(r.maxRow)
 	}
-	r.dataOffsets[idx] = end
+	r.dataOffsets = end
 	bat = batch.NewWithSize(0)
 	bat.Attrs = append(bat.Attrs, src.Attrs...)
 	for _, vec := range src.Vecs {
@@ -121,50 +128,6 @@ func (r *RowHandle) next(idx uint8) (bat *batch.Batch, err error) {
 			return nil, err
 		}
 		bat.Vecs = append(bat.Vecs, newVec)
-	}
-	return
-}
-func (r *RowHandle) init() error {
-	r.getData()
-	err := r.sort(RowHandle_DataBatchIDX, 1)
-	if err != nil {
-		return err
-	}
-	err = r.sort(RowHandle_TombstoneBatchIDX, 1)
-	return err
-}
-func (r *RowHandle) sort(idx uint8, sortIdx int) error {
-	bat := r.batches[idx]
-	if bat == nil {
-		return nil
-	}
-	if bat.Vecs[sortIdx].GetType().Oid != types.T_TS {
-		panic(fmt.Sprintf("logic error, batch type %d, sort idx %d", idx, sortIdx))
-	}
-	sortedIdx := make([]int64, bat.Vecs[0].Length())
-	for i := 0; i < len(sortedIdx); i++ {
-		sortedIdx[i] = int64(i)
-	}
-	sort.Sort(false, false, true, sortedIdx, bat.Vecs[sortIdx])
-	for i := 0; i < len(bat.Vecs); i++ {
-		err := bat.Vecs[i].Shuffle(sortedIdx, r.mp)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (r *RowHandle) getData() {
-	for r.rows.Next() {
-		entry := r.rows.Item()
-		if checkTS(r.start, r.end, entry.Time) {
-			if !entry.Deleted {
-				fillInInsertBatch(&r.batches[RowHandle_DataBatchIDX], &entry, r.mp)
-			} else {
-				fillInDeleteBatch(&r.batches[RowHandle_TombstoneBatchIDX], &entry, r.mp)
-			}
-		}
 	}
 	return
 }
@@ -179,69 +142,232 @@ func readObjects(stats objectio.ObjectStats, blockID uint32, fs fileservice.File
 	return
 }
 
-type TailHandler struct {
-	dataObjects     btree.IterG[ObjectEntry]
-	tombstoneObjets btree.IterG[ObjectEntry]
-	rows            btree.IterG[RowEntry] // use value type to avoid locking on elements
+type ObjectHandle struct {
+	entry       *ObjectEntry
+	blockOffset uint32
+	fs          fileservice.FileService
+	isTombstone bool
+	mp          *mpool.MPool
+}
+
+func newObjectHandle(entry *ObjectEntry, fs fileservice.FileService, tombstone bool) (h *ObjectHandle) {
+	return &ObjectHandle{
+		entry:       entry,
+		fs:          fs,
+		isTombstone: tombstone,
+	}
+}
+
+func (r *ObjectHandle) Close() {
+}
+func (r *ObjectHandle) Next() (batch *batch.Batch, err error) {
+	if r.blockOffset == r.entry.BlkCnt() {
+		return nil, moerr.GetOkExpectedEOF()
+	}
+	batch, err = readObjects(r.entry.ObjectStats, r.blockOffset, r.fs, r.isTombstone)
+	if err != nil {
+		return
+	}
+	r.blockOffset++
+	if r.entry.ObjectStats.GetCNCreated() || r.isTombstone {
+		return
+	}
+	sortBatch(batch, 1, r.mp)
+	return
+}
+
+type baseHandle struct {
+	objectIter  btree.IterG[ObjectEntry]
+	rowIter     btree.IterG[RowEntry]
+	isTombstone bool
+
+	rowHandle    *BatchHandle
+	ObjectHandle *ObjectHandle
 
 	start, end  types.TS
 	currentType uint8
 	tid         uint64
 	maxRow      uint32
 	mp          *mpool.MPool
+	fs          fileservice.FileService
 }
 
-func NewTailHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32) *TailHandler {
-	return &TailHandler{
-		dataObjects:     state.dataObjects.Copy().Iter(),
-		tombstoneObjets: state.tombstoneObjets.Copy().Iter(),
-		rows:            state.rows.Copy().Iter(),
-		start:           start,
-		end:             end,
-		tid:             state.tid,
-		maxRow:          maxRow,
-		mp:              mp,
+func NewBaseHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, tombstone bool, fs fileservice.FileService) *baseHandle {
+	var iter btree.IterG[ObjectEntry]
+	if tombstone {
+		iter = state.tombstoneObjects.Copy().Iter()
+	} else {
+		iter = state.dataObjects.Copy().Iter()
+	}
+	return &baseHandle{
+		objectIter:  iter,
+		rowIter:     state.rows.Copy().Iter(),
+		start:       start,
+		end:         end,
+		tid:         state.tid,
+		maxRow:      maxRow,
+		mp:          mp,
+		isTombstone: tombstone,
 	}
 }
-func (p *TailHandler) Close() {
-	p.dataObjects.Release()
-	p.tombstoneObjets.Release()
-	p.rows.Release()
+func (p *baseHandle) Close() {
+	p.objectIter.Release()
+	p.rowIter.Release()
 }
-func (p *TailHandler) Next() (data, tombstone *batch.Batch, hint uint8, err error) {
+func (p *baseHandle) Next() (bat *batch.Batch, err error) {
 	for {
 		switch p.currentType {
-		case DataObject:
-			bat := p.dataObject(false, p.mp)
-			if bat != nil {
-				return bat, nil, Tail_wip, nil
+		case ChangesHandle_Object:
+			if p.ObjectHandle == nil {
+				p.ObjectHandle, err = p.newObjectHandle()
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+					p.currentType = ChangesHandle_Row
+					continue
+				}
 			}
-			p.currentType = TombstoneObject
-		case TombstoneObject:
-			bat := p.dataObject(true, p.mp)
-			if bat != nil {
-				return nil, bat, Tail_wip, nil
+			for {
+				bat, err = p.ObjectHandle.Next()
+				if err == nil {
+					return
+				}
+				if !moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+					return
+				}
+				p.ObjectHandle, err = p.newObjectHandle()
+				if err == nil {
+					continue
+				} else if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+					p.currentType = ChangesHandle_Row
+					break
+				} else {
+					return
+				}
 			}
-			p.currentType = DataRow
-		case DataRow:
-			bat := p.getData(p.mp, false)
-			if bat != nil {
-				return bat, nil, Tail_wip, nil
+		case ChangesHandle_Row:
+			if p.rowHandle == nil {
+				p.rowHandle, err = p.newBatchHandleWithRowIterator()
+				if err != nil {
+					return
+				}
 			}
-			p.currentType = TombstoneRow
-			p.rows.First()
-		case TombstoneRow:
-			bat := p.getData(p.mp, false)
-			if bat != nil {
-				return nil, bat, Tail_wip, nil
+			for {
+				bat, err = p.rowHandle.Next()
+				if err == nil {
+					return
+				}
+				if !moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+					return
+				}
+				p.rowHandle, err = p.newBatchHandleWithRowIterator()
+				if err != nil {
+					return
+				}
 			}
-			p.currentType = End
-			return nil, nil, Tail_done, nil
-		case End:
-			return nil, nil, Tail_done, nil
 		default:
 			panic(fmt.Sprintf("invalid type %d", p.currentType))
 		}
+	}
+}
+func (p *baseHandle) newBatchHandleWithRowIterator() (h *BatchHandle, err error) {
+	data, tombstone := p.getBatchesFromRowIterator()
+	h, err = NewRowHandle(data, p.maxRow, p.mp)
+	if err != nil {
+		closeBatch(data, p.mp)
+		closeBatch(tombstone, p.mp)
+	}
+	return
+}
+func (r *baseHandle) getBatchesFromRowIterator() (data, tombstone *batch.Batch) {
+	for r.rowIter.Next() {
+		entry := r.rowIter.Item()
+		if checkTS(r.start, r.end, entry.Time) {
+			if !entry.Deleted {
+				fillInInsertBatch(&data, &entry, r.mp)
+			} else {
+				fillInDeleteBatch(&tombstone, &entry, r.mp)
+			}
+		}
+	}
+	return
+}
+func (r *baseHandle) newObjectHandle() (h *ObjectHandle, err error) {
+	for r.objectIter.Next() {
+		entry := r.objectIter.Item()
+		if checkObjectEntry(&entry, r.start, r.end) {
+			return newObjectHandle(&entry, r.fs, r.isTombstone), nil
+		}
+	}
+	return nil, moerr.GetOkExpectedEOF()
+}
+
+type ChangeHandler struct {
+	tombstoneHandle *baseHandle
+	dataHandle      *baseHandle
+}
+
+func NewTailHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService) *ChangeHandler {
+	return &ChangeHandler{
+		tombstoneHandle: NewBaseHandler(state, start, end, mp, maxRow, true, fs),
+		dataHandle:      NewBaseHandler(state, start, end, mp, maxRow, false, fs),
+	}
+}
+
+func (p *ChangeHandler) Close() {
+	p.dataHandle.Close()
+	p.tombstoneHandle.Close()
+}
+func (p *ChangeHandler) Next() (data, tombstone *batch.Batch, hint Hint, err error) {
+	data, err = p.dataHandle.Next()
+	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+		return
+	}
+	tombstone, err = p.tombstoneHandle.Next()
+	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+		return
+	}
+	if tombstone == nil && data == nil {
+		err = moerr.GetOkExpectedEOF()
+	} else {
+		err = nil
+	}
+	hint = Tail_wip
+	return
+}
+func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
+	if bat == nil {
+		return nil
+	}
+	if bat.Vecs[sortIdx].GetType().Oid != types.T_TS {
+		panic(fmt.Sprintf("logic error, batch attrs %v, sort idx %d", bat.Attrs, sortIdx))
+	}
+	sortedIdx := make([]int64, bat.Vecs[0].Length())
+	for i := 0; i < len(sortedIdx); i++ {
+		sortedIdx[i] = int64(i)
+	}
+	sort.Sort(false, false, true, sortedIdx, bat.Vecs[sortIdx])
+	for i := 0; i < len(bat.Vecs); i++ {
+		err := bat.Vecs[i].Shuffle(sortedIdx, mp)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkObjectEntry(entry *ObjectEntry, start, end types.TS) bool {
+	if entry.Appendable {
+		if entry.CreateTime.Greater(&end) {
+			return false
+		}
+		if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.Less(&start) {
+			return false
+		}
+		return true
+	} else {
+		if !entry.ObjectStats.GetCNCreated() {
+			return false
+		}
+		return entry.CreateTime.GreaterEq(&start) && entry.DeleteTime.LessEq(&end)
 	}
 }
 
@@ -253,26 +379,6 @@ func newDataBatchWithBatch(src *batch.Batch) (data *batch.Batch) {
 		data.Vecs = append(data.Vecs, newVec)
 	}
 	return
-}
-
-func fillInObjectBatch(bat **batch.Batch, entry *ObjectEntry, mp *mpool.MPool) {
-	if *bat == nil {
-		(*bat) = batch.NewWithSize(4)
-		(*bat).SetAttributes([]string{
-			taeCatalog.ObjectAttr_ObjectStats,
-			taeCatalog.EntryNode_CreateAt,
-			taeCatalog.EntryNode_DeleteAt,
-			taeCatalog.AttrCommitTs,
-		})
-		(*bat).Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-		(*bat).Vecs[1] = vector.NewVec(types.T_TS.ToType())
-		(*bat).Vecs[2] = vector.NewVec(types.T_TS.ToType())
-		(*bat).Vecs[3] = vector.NewVec(types.T_TS.ToType())
-	}
-	vector.AppendBytes((*bat).Vecs[0], entry.ObjectStats[:], false, mp)
-	vector.AppendFixed((*bat).Vecs[1], entry.CreateTime, false, mp)
-	vector.AppendFixed((*bat).Vecs[2], entry.DeleteTime, false, mp)
-	vector.AppendFixed((*bat).Vecs[3], entry.CommitTS, false, mp)
 }
 
 func fillInInsertBatch(bat **batch.Batch, entry *RowEntry, mp *mpool.MPool) {
@@ -359,39 +465,11 @@ func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, mp *mpool.MPool) {
 	vector.AppendBytes((*bat).Vecs[1], entry.PrimaryIndexBytes, false, mp)
 	vector.AppendFixed((*bat).Vecs[2], entry.Time, false, mp)
 }
+
 func isCreatedByCN(entry *ObjectEntry) bool {
 	return entry.ObjectStats.GetCNCreated()
 }
 
 func checkTS(start, end types.TS, ts types.TS) bool {
 	return ts.LessEq(&end) && ts.GreaterEq(&start)
-}
-func (p *TailHandler) dataObject(isTombstone bool, mp *mpool.MPool) (bat *batch.Batch) {
-	var iter *btree.IterG[ObjectEntry]
-	if isTombstone {
-		iter = &p.tombstoneObjets
-	} else {
-		iter = &p.dataObjects
-	}
-	for iter.Next() {
-		entry := iter.Item()
-		if entry.Appendable {
-			if entry.Appendable {
-				if entry.DeleteTime.GreaterEq(&p.start) || entry.CreateTime.LessEq(&p.end) {
-					fillInObjectBatch(&bat, &entry, mp)
-					if bat.Vecs[0].Length() == int(p.maxRow) {
-						break
-					}
-				}
-			}
-		} else {
-			if checkTS(p.start, p.end, entry.CreateTime) && isCreatedByCN(&entry) {
-				fillInObjectBatch(&bat, &entry, mp)
-				if bat.Vecs[0].Length() == int(p.maxRow) {
-					break
-				}
-			}
-		}
-	}
-	return
 }
