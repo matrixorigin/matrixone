@@ -603,3 +603,32 @@ func TestDiskCacheBadWrite(t *testing.T) {
 	assert.Empty(t, files)
 
 }
+
+func TestDiskCacheGlobalSizeHint(t *testing.T) {
+	dir := t.TempDir()
+	cache, err := NewDiskCache(
+		context.Background(),
+		dir,
+		fscache.ConstCapacity(1<<20),
+		nil,
+		false,
+	)
+	assert.Nil(t, err)
+
+	ch := make(chan int64, 1)
+	cache.Evict(ch)
+	n := <-ch
+	if n > 1<<20 {
+		t.Fatalf("got %v", n)
+	}
+
+	// shrink
+	GlobalDiskCacheSizeHint.Store(1 << 10)
+	defer GlobalDiskCacheSizeHint.Store(0)
+	cache.Evict(ch)
+	n = <-ch
+	if n > 1<<10 {
+		t.Fatalf("got %v", n)
+	}
+
+}

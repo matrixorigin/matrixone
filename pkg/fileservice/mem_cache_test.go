@@ -142,3 +142,27 @@ func TestHighConcurrency(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestMemoryCacheGlobalSizeHint(t *testing.T) {
+	cache := NewMemoryCache(
+		fscache.ConstCapacity(1<<20),
+		false,
+		nil,
+	)
+	ch := make(chan int64, 1)
+	cache.Evict(ch)
+	n := <-ch
+	if n > 1<<20 {
+		t.Fatalf("got %v", n)
+	}
+
+	// shrink
+	GlobalMemoryCacheSizeHint.Store(1 << 10)
+	defer GlobalMemoryCacheSizeHint.Store(0)
+	cache.Evict(ch)
+	n = <-ch
+	if n > 1<<10 {
+		t.Fatalf("got %v", n)
+	}
+
+}

@@ -67,7 +67,15 @@ func NewDiskCache(
 		perfCounterSets: perfCounterSets,
 
 		cache: fifocache.New(
-			capacity,
+			func() int64 {
+				// read from global size hint
+				if n := GlobalDiskCacheSizeHint.Load(); n > 0 {
+					return n
+				}
+				// fallback
+				return capacity()
+			},
+
 			func(path string, _ struct{}) {
 				err := os.Remove(path)
 				if err == nil {
@@ -80,6 +88,7 @@ func NewDiskCache(
 					)
 				}
 			},
+
 			func(key string) uint8 {
 				return uint8(xxhash.Sum64String(key))
 			},

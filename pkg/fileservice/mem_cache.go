@@ -86,7 +86,19 @@ func NewMemoryCache(
 			}
 		}
 	}
-	return memorycache.NewCache(capacity, postSetFn, postGetFn, postEvictFn, getMemoryCacheAllocator())
+
+	return memorycache.NewCache(
+		func() int64 {
+			// read from global hint
+			if n := GlobalMemoryCacheSizeHint.Load(); n > 0 {
+				return n
+			}
+			// fallback
+			return capacity()
+		},
+		postSetFn, postGetFn, postEvictFn,
+		getMemoryCacheAllocator(),
+	)
 }
 
 var _ IOVectorCache = new(MemCache)

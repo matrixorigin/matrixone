@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -199,3 +200,8 @@ func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error
 }
 
 type CacheKey = pb.CacheKey
+
+var (
+	GlobalMemoryCacheSizeHint atomic.Int64
+	GlobalDiskCacheSizeHint   atomic.Int64
+)
