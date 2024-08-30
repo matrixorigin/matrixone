@@ -621,19 +621,14 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 		rows += len(sels)
 
 		for i, destVec := range bat.Vecs {
-			uf := vector.GetUnionOneFunction(*destVec.GetType(), mp)
-
 			colIdx := int(seqNums[i])
 			if colIdx != objectio.SEQNUM_ROWID {
 				colIdx++
 			} else {
 				colIdx = 0
 			}
-
-			for j := range sels {
-				if err = uf(destVec, entry.bat.Vecs[colIdx], int64(j)); err != nil {
-					return err
-				}
+			if err = destVec.Union(entry.bat.Vecs[colIdx], sels, mp); err != nil {
+				return err
 			}
 		}
 	}
