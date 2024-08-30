@@ -51,21 +51,27 @@ func TestChangesHandle1(t *testing.T) {
 		taeHandler.Close(true)
 		rpcAgent.Close()
 	}()
+	startTS := taeHandler.GetDB().TxnMgr.Now()
 	schema := catalog2.MockSchemaAll(10, 0)
 	schema.Name = tableName
 	bat := catalog2.MockBatch(schema, 10)
 
-	testutil2.CreateRelationAndAppend(t, accountId, taeHandler.GetDB(), databaseName, schema, bat, true)
-
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
 	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bat))
+	require.Nil(t, txn.Commit(ctx))
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
 	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
 	obj := testutil2.GetOneBlockMeta(rel)
-	err := rel.RangeDelete(obj.AsCommonID(), 0, 0, handle.DT_Normal)
+	err = rel.RangeDelete(obj.AsCommonID(), 0, 0, handle.DT_Normal)
 	require.Nil(t, err)
 	require.Nil(t, txn.Commit(ctx))
 
 	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
 	require.Nil(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	// check partition state, before flush
 	{
@@ -82,9 +88,110 @@ func TestChangesHandle1(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.Checkpoint)
 			assert.Nil(t, tombstone)
-			assert.Equal(t, len(data.Attrs), 12)
+			t.Log(data.Attrs)
+			assert.Equal(t, len(data.Attrs), 11) //10 rows + rowid
 			assert.Equal(t, data.Vecs[0].Length(), 9)
 		}
+		assert.NoError(t, handle.Close())
 
+		handle, err = rel.CollectChanges(startTS, taeHandler.GetDB().TxnMgr.Now())
+		assert.NoError(t, err)
+		for {
+			data, tombstone, hint, err := handle.Next()
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+				break
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, hint, engine.Tail_wip)
+			t.Log(tombstone.Attrs)
+			assert.Equal(t, len(tombstone.Attrs), 3) //rowid, commits, pk
+			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
+			t.Log(data.Attrs)
+			assert.Equal(t, len(data.Attrs), 12) //rowid, committs, 10 rows
+			assert.Equal(t, data.Vecs[0].Length(), 10)
+		}
+		assert.NoError(t, handle.Close())
+	}
+}
+
+func TestChangesHandle2(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test1"
+		databaseName = "db1"
+	)
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+	startTS := taeHandler.GetDB().TxnMgr.Now()
+	schema := catalog2.MockSchemaAll(10, 0)
+	schema.Name = tableName
+	bat := catalog2.MockBatch(schema, 10)
+
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bat))
+	require.Nil(t, txn.Commit(ctx))
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	obj := testutil2.GetOneBlockMeta(rel)
+	err = rel.RangeDelete(obj.AsCommonID(), 0, 0, handle.DT_Normal)
+	require.Nil(t, err)
+	require.Nil(t, txn.Commit(ctx))
+
+	testutil2.CompactBlocks(t, accountId, taeHandler.GetDB(), databaseName, schema, true)
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	require.Nil(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	// check partition state, before flush
+	{
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+
+		handle, err := rel.CollectChanges(types.TS{}, taeHandler.GetDB().TxnMgr.Now())
+		assert.NoError(t, err)
+		for {
+			data, tombstone, hint, err := handle.Next()
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+				break
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, hint, engine.Checkpoint)
+			assert.Nil(t, tombstone)
+			t.Log(data.Attrs)
+			assert.Equal(t, len(data.Attrs), 11) //10 rows + rowid
+			assert.Equal(t, data.Vecs[0].Length(), 8)
+		}
+		assert.NoError(t, handle.Close())
+
+		handle, err = rel.CollectChanges(startTS, taeHandler.GetDB().TxnMgr.Now())
+		assert.NoError(t, err)
+		for {
+			data, tombstone, hint, err := handle.Next()
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+				break
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, hint, engine.Tail_wip)
+			assert.Equal(t, len(tombstone.Attrs), 3) //rowid, pk, rowid, ts
+			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
+			assert.Equal(t, len(data.Attrs), 12) //10 rows, rowid, committs,
+			assert.Equal(t, data.Vecs[0].Length(), 10)
+		}
+		assert.NoError(t, handle.Close())
 	}
 }

@@ -107,7 +107,7 @@ func newTxnTable(
 	return tbl, nil
 }
 func (tbl *txnTableDelegate) CollectChanges(from, to types.TS) (engine.ChangesHandle, error) {
-	panic("not support")
+	return tbl.origin.CollectChanges(from, to)
 }
 func (tbl *txnTableDelegate) Stats(
 	ctx context.Context,

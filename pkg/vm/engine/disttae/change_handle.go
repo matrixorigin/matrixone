@@ -17,16 +17,15 @@ package disttae
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func (tbl *txnTable) CollectChanges(from, to types.TS) (engine.ChangesHandle, error) {
@@ -70,7 +69,18 @@ func NewCheckpointChangesHandle(end types.TS, table *txnTable) (*CheckpointChang
 
 func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Batch, hint engine.Hint, err error) {
 	hint = engine.Checkpoint
+	tblDef := h.table.GetTableDef(context.TODO())
 
+	buildBatch := func() *batch.Batch {
+		bat := batch.NewWithSize(len(tblDef.Cols))
+		for i, col := range tblDef.Cols {
+			bat.Attrs = append(bat.Attrs, col.Name)
+			typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+			bat.Vecs[i] = vector.NewVec(typ)
+		}
+		return bat
+	}
+	data = buildBatch()
 	isEnd, err := h.reader.Read(
 		context.TODO(),
 		h.attrs,
@@ -93,10 +103,7 @@ func (h *CheckpointChangesHandle) Close() error {
 }
 func (h *CheckpointChangesHandle) initReader() (err error) {
 	tblDef := h.table.GetTableDef(context.TODO())
-	h.attrs = []string{
-		catalog.Row_ID,
-		catalog2.AttrCommitTs,
-	}
+	h.attrs = make([]string, 0)
 	for _, col := range tblDef.Cols {
 		h.attrs = append(h.attrs, col.Name)
 	}
