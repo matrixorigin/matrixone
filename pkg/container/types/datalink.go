@@ -46,11 +46,6 @@ func ParseDatalink(fsPath string) (string, []int, string, error) {
 
 	// 2. get file extension
 	extension := filepath.Ext(u.Path)
-	switch extension {
-	case ".txt", ".csv":
-	default:
-		return "", nil, "", moerr.NewNYINoCtxf("unsupported file type %s", extension)
-	}
 
 	// 3. get size and offset from the query
 	urlParams := make(map[string]string)
