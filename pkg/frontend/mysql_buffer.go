@@ -542,6 +542,15 @@ func (c *Conn) Write(payload []byte) error {
 // WriteToConn is the base method for write data to network, calling net.Conn.Write().
 func (c *Conn) WriteToConn(buf []byte) error {
 	sendLength := 0
+	/*
+		if c.ses != nil {
+			dbg, _ := debugBreakIsTrue(c.ses)
+			if dbg {
+				sendLength = 0
+			}
+		}
+	*/
+
 	for sendLength < len(buf) {
 		n, err := c.conn.Write(buf[sendLength:])
 		if err != nil {

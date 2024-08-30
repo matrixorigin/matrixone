@@ -37,15 +37,26 @@ func BenchmarkSelect1(b *testing.B) {
 			require.NoError(b, err)
 			defer db.Close()
 
+			// ctx := context.Background()
+			// conn, err := db.Conn(ctx)
+			// require.NoError(b, err)
+			// defer conn.Close()
+
+			// _, err = conn.ExecContext(ctx, `set debug_break=on`)
+			// require.NoError(b, err)
+
 			b.ResetTimer()
 			for range b.N {
 
 				tx, err := db.Begin()
 				require.NoError(b, err)
-				_, err = tx.Exec(`select 1`)
+				_, err = tx.Query(`select 1`)
 				require.NoError(b, err)
 				err = tx.Commit()
 				require.NoError(b, err)
+
+				// _, err = conn.QueryContext(context.Background(), `select 1`)
+				// require.NoError(b, err)
 
 			}
 			b.StopTimer()
