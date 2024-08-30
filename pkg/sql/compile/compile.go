@@ -3477,18 +3477,18 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		rs[i].NodeInfo.Mcpu = c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
 	}
 
-	if c.IsSingleScope(rs) {
+	if len(rs) == 1 {
 		if !c.IsSingleScope(buildScopes) {
 			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
 		}
-		// for single parallel join, can directly return
+		// for join on single CN, can directly return
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 		return rs, buildScopes
 	}
 
-	//construct build part
+	//construct build part for join on multi CN
 	if len(buildScopes) > 1 {
-		buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, false)
+		buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, true)
 	}
 
 	mergeBuildScopes := make([]*Scope, len(rs))
