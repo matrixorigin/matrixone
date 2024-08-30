@@ -533,7 +533,11 @@ func (ls *LocalDataSource) iterateInMemData(
 	return nil
 }
 
-func checkWorkspaceEntryType(tbl *txnTable, entry Entry, isInsert bool) bool {
+func checkWorkspaceEntryType(
+	tbl *txnTable,
+	entry Entry,
+	isInsert bool,
+) bool {
 	if entry.DatabaseId() != tbl.db.databaseId || entry.TableId() != tbl.tableId {
 		return false
 	}
@@ -638,7 +642,10 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 }
 
 func (ls *LocalDataSource) filterInMemCommittedInserts(
-	colTypes []types.Type, seqNums []uint16, mp *mpool.MPool, bat *batch.Batch,
+	colTypes []types.Type,
+	seqNums []uint16,
+	mp *mpool.MPool,
+	bat *batch.Batch,
 ) error {
 
 	// in meme committed insert only need to apply deletes that exists
@@ -1052,7 +1059,8 @@ func (ls *LocalDataSource) applyWorkspaceFlushedS3Deletes(
 		types.TS{},
 		offsets,
 		deletedRows,
-		locations...)
+		locations...,
+	)
 }
 
 func (ls *LocalDataSource) applyWorkspaceRawRowIdDeletes(
