@@ -15,13 +15,9 @@
 package embed
 
 import (
-	"fmt"
-	"os"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
-	"go.uber.org/zap"
 )
 
 var (
@@ -49,9 +45,6 @@ func RunBaseClusterTests(
 	var c Cluster
 	basicOnce.Do(
 		func() {
-			logutil.Info(">>>>>>>>>>> init embed cluster",
-				zap.Int("pid", os.Getpid()),
-				zap.String("once", fmt.Sprintf("%p", &basicOnce)))
 			c, err = NewCluster(
 				WithCNCount(3),
 				WithTesting(),
