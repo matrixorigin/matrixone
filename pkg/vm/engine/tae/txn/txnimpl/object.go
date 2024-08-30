@@ -62,10 +62,12 @@ type txnObject struct {
 
 type ObjectIt struct {
 	sync.RWMutex
-	linkIt btree.IterG[*catalog.ObjectEntry]
-	curr   *catalog.ObjectEntry
-	table  *txnTable
-	err    error
+	linkIt      btree.IterG[*catalog.ObjectEntry]
+	curr        *catalog.ObjectEntry
+	table       *txnTable
+	reverse     bool
+	firstCalled bool
+	err         error
 }
 
 type composedObjectIt struct {
@@ -73,16 +75,17 @@ type composedObjectIt struct {
 	uncommitted *catalog.ObjectEntry
 }
 
-func newObjectItOnSnap(table *txnTable, isTombstone bool) handle.ObjectIt {
+func newObjectItOnSnap(table *txnTable, isTombstone bool, reverse bool) handle.ObjectIt {
 	it := &ObjectIt{
-		linkIt: table.entry.MakeObjectIt(isTombstone),
-		table:  table,
+		linkIt:  table.entry.MakeObjectIt(isTombstone),
+		table:   table,
+		reverse: reverse,
 	}
 	return it
 }
 
 func newObjectIt(table *txnTable, isTombstone bool) handle.ObjectIt {
-	it := newObjectItOnSnap(table, isTombstone)
+	it := newObjectItOnSnap(table, isTombstone, false)
 	if table.getBaseTable(isTombstone) != nil && table.getBaseTable(isTombstone).tableSpace != nil {
 		cit := &composedObjectIt{
 			ObjectIt:    it.(*ObjectIt),
@@ -101,6 +104,26 @@ func (it *ObjectIt) Close() error {
 func (it *ObjectIt) GetError() error { return it.err }
 
 func (it *ObjectIt) Next() bool {
+	if it.reverse {
+		for {
+			var ok bool
+			if !it.firstCalled {
+				ok = it.linkIt.Last()
+				it.firstCalled = true
+			} else {
+				ok = it.linkIt.Prev()
+			}
+			if !ok {
+				return false
+			}
+			entry := it.linkIt.Item()
+			valid := entry.IsVisible(it.table.store.txn)
+			if valid {
+				it.curr = entry
+				return true
+			}
+		}
+	}
 	var valid bool
 	for {
 		if !it.linkIt.Next() {

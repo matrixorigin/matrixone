@@ -201,7 +201,7 @@ func (h *txnRelation) SoftDeleteObject(id *types.Objectid, isTombstone bool) (er
 }
 
 func (h *txnRelation) MakeObjectItOnSnap(isTombstone bool) handle.ObjectIt {
-	return newObjectItOnSnap(h.table, isTombstone)
+	return newObjectItOnSnap(h.table, isTombstone, false)
 }
 
 func (h *txnRelation) MakeObjectIt(isTombstone bool) handle.ObjectIt {

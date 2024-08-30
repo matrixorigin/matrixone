@@ -20,3 +20,7 @@ drop table if exists t1;
 create table t1 (a int primary key, b int);
 insert into t1 select result, 1 from generate_series (1, 800000)g;
 select * from t1 order by a limit 700000, 2;
+drop table if exists t1;
+create table t1 (a int primary key, b varchar);
+insert into t1 select result, repeat("abcdefg",500) from generate_series (1, 30000)g;
+select a, left(b,3) from t1 order by a desc limit 32000, 2;
