@@ -49,8 +49,12 @@ func NewMemoryFS(
 ) (*MemoryFS, error) {
 
 	fs := &MemoryFS{
-		name:     name,
-		memCache: NewMemCache(newMemoryCache(fscache.ConstCapacity(1<<20), true, nil), nil),
+		name: name,
+		memCache: NewMemCache(
+			newMemoryCache(fscache.ConstCapacity(1<<20), true, nil),
+			nil,
+			name,
+		),
 		tree: btree.NewBTreeG(func(a, b *_MemFSEntry) bool {
 			return a.FilePath < b.FilePath
 		}),

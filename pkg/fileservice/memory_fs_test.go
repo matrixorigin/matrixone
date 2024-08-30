@@ -63,6 +63,7 @@ func BenchmarkMemoryFSWithMemoryCache(b *testing.B) {
 		fs.caches = append(fs.caches, NewMemCache(
 			newMemoryCache(fscache.ConstCapacity(128*1024*1024), true, nil),
 			nil,
+			"",
 		))
 		return fs
 	})
@@ -85,6 +86,7 @@ func BenchmarkMemoryFSWithMemoryCacheLowCapacity(b *testing.B) {
 		fs.caches = append(fs.caches, NewMemCache(
 			newMemoryCache(fscache.ConstCapacity(2*1024*1024), true, nil),
 			nil,
+			"",
 		))
 		return fs
 	})

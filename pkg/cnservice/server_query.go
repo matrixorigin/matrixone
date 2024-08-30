@@ -16,7 +16,6 @@ package cnservice
 
 import (
 	"context"
-	"fmt"
 	"runtime"
 	"runtime/debug"
 

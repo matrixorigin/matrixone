@@ -134,6 +134,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 		l.memCache = NewMemCache(
 			newMemoryCache(fscache.ConstCapacity(int64(*config.MemoryCapacity)), true, &config.CacheCallbacks),
 			l.perfCounterSets,
+			l.name,
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", l.name),

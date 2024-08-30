@@ -204,4 +204,6 @@ type CacheKey = pb.CacheKey
 var (
 	GlobalMemoryCacheSizeHint atomic.Int64
 	GlobalDiskCacheSizeHint   atomic.Int64
+
+	allMemoryCaches sync.Map // *MemCache -> name
 )
