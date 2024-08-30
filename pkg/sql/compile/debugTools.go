@@ -51,11 +51,6 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Mark:                    "mark",
 	vm.IndexJoin:               "index join",
 	vm.LoopJoin:                "loop join",
-	vm.LoopLeft:                "loop left",
-	vm.LoopSemi:                "loop semi",
-	vm.LoopAnti:                "loop anti",
-	vm.LoopSingle:              "loop single",
-	vm.LoopMark:                "loop mark",
 	vm.MergeTop:                "merge top",
 	vm.MergeLimit:              "merge limit",
 	vm.MergeOrder:              "merge order",
@@ -271,7 +266,7 @@ func hanldeTailNodeReceiver(node vm.Operator, mp map[*process.WaitRegister]int, 
 		if receiverId, okk := mp[arg.Reg]; okk {
 			receiver = fmt.Sprintf("%d", receiverId)
 		}
-		buffer.WriteString(fmt.Sprintf(" to MergeReceiver %s", receiver))
+		buffer.WriteString(fmt.Sprintf(" to MergeReceiver [%s]", receiver))
 	}
 	if id == vm.Dispatch {
 		arg := node.(*dispatch.Dispatch)

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -93,10 +94,22 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	if task.isAObj {
 		writer.SetAppendable()
 	}
-	if task.meta.GetSchema().HasPK() {
-		writer.SetPrimaryKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
-	} else if task.meta.GetSchema().HasSortKey() {
-		writer.SetSortKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
+
+	if task.meta.IsTombstone {
+		writer.SetDataType(objectio.SchemaTombstone)
+		writer.SetPrimaryKeyWithType(
+			uint16(catalog.TombstonePrimaryKeyIdx),
+			index.HBF,
+			index.ObjectPrefixFn,
+			index.BlockPrefixFn,
+		)
+	} else {
+		writer.SetDataType(objectio.SchemaData)
+		if task.meta.GetSchema().HasPK() {
+			writer.SetPrimaryKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
+		} else if task.meta.GetSchema().HasSortKey() {
+			writer.SetSortKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
+		}
 	}
 
 	cnBatch := containers.ToCNBatch(task.data)
@@ -119,7 +132,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 				return nil
 			}
 		}
-		_, err := writer.WriteTombstoneBatch(cnBatch)
+		_, err := writer.WriteBatch(cnBatch)
 		if err != nil {
 			return err
 		}

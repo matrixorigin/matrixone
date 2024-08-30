@@ -48,6 +48,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnTNDeduplicateDurationRow(),
 			c.initTxnTableRangesRow(),
 			c.initTxnRangesSelectivityRow(),
+			c.initTxnTombstoneRow(),
 			c.initTxnRangesCountRow(),
 			c.initTxnShowAccountsRow(),
 			c.initCNCommittedObjectQuantityRow(),
@@ -87,6 +88,30 @@ func (c *DashboardCreator) initTxnTableRangesRow() dashboard.Option {
 			12,
 			axis.Unit("s"),
 			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initTxnTombstoneRow() dashboard.Option {
+	rows := c.getMultiHistogram(
+		[]string{
+			c.getMetricWithFilter(`mo_txn_reader_scanned_total_tombstone_bucket`, ``),
+			c.getMetricWithFilter(`mo_txn_reader_each_blk_loaded_bucket`, ``),
+			c.getMetricWithFilter(`mo_txn_reader_tombstone_selectivity_bucket`, `type="zm_selectivity"`),
+			c.getMetricWithFilter(`mo_txn_reader_tombstone_selectivity_bucket`, `type="bl_selectivity"`),
+		},
+		[]string{
+			"total_scanned_each_read",
+			"total_loaded_each_read",
+			"zm_selectivity_on_obj",
+			"bl_selectivity_on_blk",
+		},
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		[]float32{3, 3, 3, 3},
+		axis.Min(0))
+
+	return dashboard.Row(
+		"Tombstone Overview",
+		rows...,
 	)
 }
 

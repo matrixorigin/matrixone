@@ -15,7 +15,6 @@
 package logtail
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"time"
@@ -34,13 +33,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
 const (
-	blkMetaInsBatch int8 = iota
-	blkMetaDelBatch
-	dataInsBatch
+	dataInsBatch int8 = iota
 	dataDelBatch
 	dbInsBatch
 	dbDelBatch
@@ -48,7 +44,8 @@ const (
 	tblDelBatch
 	columnInsBatch
 	columnDelBatch
-	objectInfoBatch
+	dataObjectInfoBatch
+	tombstoneObjectInfoBatch
 	batchTotalNum
 )
 
@@ -97,10 +94,8 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.T
 		b.visitDatabase,
 		b.visitTable,
 		b.rotateTable,
-		b.visitDeltaloc,
 		b.visitObject,
-		b.visitAppend,
-		b.visitDelete)
+		b.visitAppend)
 	b.BuildResp()
 	logtails := b.logtails
 	newlogtails := make([]logtail.TableLogtail, 0)
@@ -110,48 +105,72 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.T
 
 func (b *TxnLogtailRespBuilder) visitObject(iobj any) {
 	obj := iobj.(*catalog.ObjectEntry).GetLatestNode()
-	if obj.IsAppendable() && obj.CreatedAt.Equal(&txnif.UncommitTS) {
-		return
+	node := obj.GetLastMVCCNode()
+	var batchIdx int8
+	if obj.IsTombstone {
+		batchIdx = tombstoneObjectInfoBatch
+	} else {
+		batchIdx = dataObjectInfoBatch
 	}
 	if !obj.DeletedAt.Equal(&txnif.UncommitTS) {
-		if b.batches[objectInfoBatch] == nil {
-			b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
+		if b.batches[batchIdx] == nil {
+			b.batches[batchIdx] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 		}
-		visitObject(b.batches[objectInfoBatch], obj, obj.GetLastMVCCNode(), true, true, b.txn.GetPrepareTS(), true)
+		visitObject(b.batches[batchIdx], obj, node, true, true, b.txn.GetPrepareTS())
 		return
 	}
 
-	if b.batches[objectInfoBatch] == nil {
-		b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
+	if b.batches[batchIdx] == nil {
+		b.batches[batchIdx] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 	}
-	visitObject(b.batches[objectInfoBatch], obj, obj.GetLastMVCCNode(), false, true, b.txn.GetPrepareTS(), true)
+	visitObject(b.batches[batchIdx], obj, node, false, true, b.txn.GetPrepareTS())
 }
 
-func (b *TxnLogtailRespBuilder) visitDeltaloc(ideltalocChain any) {
-	deltalocChain := ideltalocChain.(*updates.DeltalocChain)
-	node := deltalocChain.GetLatestNodeLocked()
-	if node.BaseNode.DeltaLoc.IsEmpty() {
-		return
-	}
-	if b.batches[blkMetaInsBatch] == nil {
-		b.batches[blkMetaInsBatch] = makeRespBatchFromSchema(BlkMetaSchema, common.LogtailAllocator)
-	}
-	commitTS := b.txn.GetPrepareTS()
-	createAt := node.CreatedAt
-	if createAt.Equal(&txnif.UncommitTS) {
-		createAt = b.txn.GetPrepareTS()
-	}
-	updates.VisitDeltaloc(b.batches[blkMetaInsBatch], nil, deltalocChain.GetMeta(), deltalocChain.GetBlockID(), node, commitTS, createAt)
-}
-
-func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
+func (b *TxnLogtailRespBuilder) visitAppend(ibat any, isTombstone bool) {
 	src := ibat.(*containers.BatchWithVersion)
 	// sort by seqnums
-	sort.Sort(src)
-	mybat := containers.NewBatchWithCapacity(int(src.NextSeqnum) + 2)
+	if isTombstone {
+		b.visitAppendTombstone(src)
+	} else {
+		b.visitAppendData(src)
+	}
+}
+func (b *TxnLogtailRespBuilder) visitAppendTombstone(src *containers.BatchWithVersion) {
+
+	mybat := containers.NewBatchWithCapacity(3)
 	mybat.AddVector(
 		catalog.AttrRowID,
 		src.GetVectorByName(catalog.AttrRowID).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
+	)
+	tsType := types.T_TS.ToType()
+	commitVec := b.rt.VectorPool.Small.GetVector(&tsType)
+	commitVec.PreExtend(src.Length())
+	for i := 0; i < src.Length(); i++ {
+		commitVec.Append(b.txn.GetPrepareTS(), false)
+	}
+	mybat.AddVector(catalog.AttrCommitTs, commitVec)
+	mybat.AddVector(
+		catalog.AttrPKVal,
+		src.GetVectorByName(catalog.AttrPKVal).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
+	)
+	mybat.AddVector(
+		catalog.PhyAddrColumnName,
+		src.GetVectorByName(catalog.PhyAddrColumnName).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
+	)
+
+	if b.batches[dataDelBatch] == nil {
+		b.batches[dataDelBatch] = mybat
+	} else {
+		b.batches[dataDelBatch].Extend(mybat)
+		mybat.Close()
+	}
+}
+func (b *TxnLogtailRespBuilder) visitAppendData(src *containers.BatchWithVersion) {
+	sort.Sort(src)
+	mybat := containers.NewBatchWithCapacity(int(src.NextSeqnum) + 2)
+	mybat.AddVector(
+		catalog.PhyAddrColumnName,
+		src.GetVectorByName(catalog.PhyAddrColumnName).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
 	)
 	tsType := types.T_TS.ToType()
 	commitVec := b.rt.VectorPool.Small.GetVector(&tsType)
@@ -177,50 +196,6 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 	} else {
 		b.batches[dataInsBatch].Extend(mybat)
 		mybat.Close()
-	}
-}
-
-func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.DeleteNode) {
-	if vnode.IsPersistedDeletedNode() {
-		return
-	}
-	if b.batches[dataDelBatch] == nil {
-		b.batches[dataDelBatch] = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
-	}
-	node := vnode.(*updates.DeleteNode)
-	meta := node.GetMeta()
-	schema := meta.GetSchema()
-	pkDef := schema.GetPrimaryKey()
-	deletes := node.GetRowMaskRefLocked()
-	blkID := node.GetBlockID()
-
-	batch := b.batches[dataDelBatch]
-	rowIDVec := batch.GetVectorByName(catalog.AttrRowID)
-	commitTSVec := batch.GetVectorByName(catalog.AttrCommitTs)
-	var pkVec containers.Vector
-	if len(batch.Vecs) == 2 {
-		pkVec = containers.MakeVector(pkDef.Type, common.LogtailAllocator)
-		batch.AddVector(catalog.AttrPKVal, pkVec)
-	} else {
-		pkVec = batch.GetVectorByName(catalog.AttrPKVal)
-	}
-
-	it := deletes.Iterator()
-	rowid2PK := node.DeletedPK()
-	for it.HasNext() {
-		del := it.Next()
-		rowid := objectio.NewRowid(blkID, del)
-		rowIDVec.Append(*rowid, false)
-		commitTSVec.Append(b.txn.GetPrepareTS(), false)
-
-		v, ok := rowid2PK[del]
-		if ok {
-			pkVec.Extend(v)
-		}
-		//if !ok {
-		//	panic(fmt.Sprintf("rowid %d 's pk not found in rowid2PK.\n", del))
-		//}
-		//pkVec.Extend(v)
 	}
 }
 
@@ -300,21 +275,16 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 }
 
 func (b *TxnLogtailRespBuilder) rotateTable(aid uint32, dbName, tableName string, dbid, tid uint64, pkSeqnum uint16) {
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaInsBatch, false)
-	if b.batches[blkMetaInsBatch] != nil {
-		b.batchToClose = append(b.batchToClose, b.batches[blkMetaInsBatch])
-		b.batches[blkMetaInsBatch] = nil
-	}
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
-	if b.batches[blkMetaDelBatch] != nil {
-		b.batchToClose = append(b.batchToClose, b.batches[blkMetaDelBatch])
-		b.batches[blkMetaDelBatch] = nil
-	}
 
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_obj", b.currTableID), b.currDBName, objectInfoBatch, false)
-	if b.batches[objectInfoBatch] != nil {
-		b.batchToClose = append(b.batchToClose, b.batches[objectInfoBatch])
-		b.batches[objectInfoBatch] = nil
+	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_data_meta", b.currTableID), b.currDBName, dataObjectInfoBatch, false)
+	if b.batches[dataObjectInfoBatch] != nil {
+		b.batchToClose = append(b.batchToClose, b.batches[dataObjectInfoBatch])
+		b.batches[dataObjectInfoBatch] = nil
+	}
+	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_tombstone_meta", b.currTableID), b.currDBName, tombstoneObjectInfoBatch, false)
+	if b.batches[tombstoneObjectInfoBatch] != nil {
+		b.batchToClose = append(b.batchToClose, b.batches[tombstoneObjectInfoBatch])
+		b.batches[tombstoneObjectInfoBatch] = nil
 	}
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, true)
 	if b.batches[dataDelBatch] != nil {
@@ -336,9 +306,8 @@ func (b *TxnLogtailRespBuilder) rotateTable(aid uint32, dbName, tableName string
 }
 
 func (b *TxnLogtailRespBuilder) BuildResp() {
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaInsBatch, false)
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_obj", b.currTableID), b.currDBName, objectInfoBatch, false)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_data_meta", b.currTableID), b.currDBName, dataObjectInfoBatch, false)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_tombstone_meta", b.currTableID), b.currDBName, tombstoneObjectInfoBatch, false)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, true)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, false)
 

@@ -42,7 +42,7 @@ func NewMVCCChain[T txnif.MVCCNode[T]](comparefn func(T, T) int, newnodefn func(
 		newnodefn: newnodefn,
 	}
 }
-func (be *MVCCChain[T]) Depth() int {
+func (be *MVCCChain[T]) DepthLocked() int {
 	return be.MVCC.Depth()
 }
 func (be *MVCCChain[T]) StringLocked() string {
@@ -50,7 +50,7 @@ func (be *MVCCChain[T]) StringLocked() string {
 	it := common.NewGenericSortedDListIt(nil, be.MVCC, false)
 	for it.Valid() {
 		version := it.Get().GetPayload()
-		_, _ = w.WriteString(" -> \n")
+		_, _ = w.WriteString(" -> ")
 		_, _ = w.WriteString(version.String())
 		it.Next()
 	}
@@ -58,13 +58,13 @@ func (be *MVCCChain[T]) StringLocked() string {
 }
 
 // for replay
-func (be *MVCCChain[T]) GetPrepareTs() types.TS {
+func (be *MVCCChain[T]) GetPrepareTsLocked() types.TS {
 	return be.GetLatestNodeLocked().GetPrepare()
 }
 
-func (be *MVCCChain[T]) GetTxn() txnif.TxnReader { return be.GetLatestNodeLocked().GetTxn() }
+func (be *MVCCChain[T]) GetTxnLocked() txnif.TxnReader { return be.GetLatestNodeLocked().GetTxn() }
 
-func (be *MVCCChain[T]) Insert(vun T) (node *common.GenericDLNode[T]) {
+func (be *MVCCChain[T]) InsertLocked(vun T) (node *common.GenericDLNode[T]) {
 	un := vun
 	node = be.MVCC.Insert(un)
 	return
@@ -78,7 +78,7 @@ func (be *MVCCChain[T]) Insert(vun T) (node *common.GenericDLNode[T]) {
 //	    |     start    |       end         |
 //	commitTs <----- commitTs <--------- commitTs|uncommitted  <=  MVCCChain Header
 //	   (1)            (2)                 (3)
-func (be *MVCCChain[T]) HasCommittedNodeInRange(start, end types.TS) (ok bool) {
+func (be *MVCCChain[T]) HasCommittedNodeInRangeLocked(start, end types.TS) (ok bool) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[T]) bool {
 		un := n.GetPayload()
 		in, before := un.CommittedIn(start, end)
@@ -218,7 +218,7 @@ func (be *MVCCChain[T]) HasCommittedNodeLocked() bool {
 	return found
 }
 
-func (be *MVCCChain[T]) IsCreatingOrAborted() bool {
+func (be *MVCCChain[T]) IsCreatingOrAbortedLocked() bool {
 	un, empty := be.MustOneNodeLocked()
 	if empty {
 		return true

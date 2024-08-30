@@ -83,7 +83,6 @@ func TestBackupData(t *testing.T) {
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
-	db.ForceLongCheckpoint()
 
 	dir := path.Join(db.Dir, "/local")
 	c := fileservice.Config{
