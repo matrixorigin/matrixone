@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"runtime/debug"
 
@@ -482,13 +483,27 @@ func (s *service) handleGoMemLimit(
 func (s *service) handleFileServiceCacheRequest(
 	ctx context.Context, req *query.Request, resp *query.Response,
 ) error {
-	resp.FileServiceCacheResponse.Message = "Not Implemented"
+
+	if n := req.FileServiceCacheRequest.CacheSize; n > 0 {
+		switch req.FileServiceCacheRequest.Type {
+		case query.FileServiceCacheType_Disk:
+			fileservice.GlobalDiskCacheSizeHint.Store(n)
+		case query.FileServiceCacheType_Memory:
+			fileservice.GlobalMemoryCacheSizeHint.Store(n)
+		}
+		logutil.Info("cache size adjusted",
+			zap.Any("type", req.FileServiceCacheRequest.Type),
+			zap.Any("size", n),
+		)
+	}
+
 	return nil
 }
 
 func (s *service) handleFileServiceCacheEvictRequest(
 	ctx context.Context, req *query.Request, resp *query.Response,
 ) error {
+	//TODO
 	resp.FileServiceCacheEvictResponse.Message = "Not Implemented"
 	return nil
 }
