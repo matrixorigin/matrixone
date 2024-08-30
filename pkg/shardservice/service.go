@@ -148,6 +148,10 @@ func (s *service) Config() Config {
 	return s.cfg
 }
 
+func (s *service) GetStorage() ShardStorage {
+	return s.storage
+}
+
 func (s *service) Create(
 	ctx context.Context,
 	table uint64,
