@@ -92,7 +92,7 @@ func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *
 	if accountMgr == nil {
 		return moerr.NewInternalError(ctx, "account routine manager not initialized")
 	}
-	logutil.Infof("[set suspend] %s get handle kill resuqest set account id %d, version %d to kill queue, ", s.ID(), req.KillConnRequest.AccountID, req.KillConnRequest.Version)
+	logutil.Infof("[receive kill request] %s get handle kill resuqest, req add account id %d, version %d to kill queue, ", s.ID(), req.KillConnRequest.AccountID, req.KillConnRequest.Version)
 	accountMgr.EnKillQueue(req.KillConnRequest.AccountID, req.KillConnRequest.Version)
 	return nil
 }
