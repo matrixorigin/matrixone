@@ -23,7 +23,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func BenchmarkSelect1Tx(b *testing.B) {
+// BenchmarkRoTx benchmarks the performance of read-only, noop transactions.
+func BenchmarkRoTx(b *testing.B) {
 	RunBaseClusterTests(
 		func(c Cluster) {
 
@@ -42,17 +43,16 @@ func BenchmarkSelect1Tx(b *testing.B) {
 			for range b.N {
 				tx, err := db.Begin()
 				require.NoError(b, err)
-				_, err = tx.Query(`select 1`)
-				require.NoError(b, err)
 				err = tx.Commit()
 				require.NoError(b, err)
 			}
 			b.StopTimer()
-
 		},
 	)
 }
 
+// BenchmarkSelect1Conn benchmarks the performance of running select 1
+// from one connection, in autocommit mode.
 func BenchmarkSelect1Conn(b *testing.B) {
 	RunBaseClusterTests(
 		func(c Cluster) {
@@ -73,22 +73,14 @@ func BenchmarkSelect1Conn(b *testing.B) {
 			require.NoError(b, err)
 			defer conn.Close()
 
+			_, err = conn.ExecContext(ctx, `set debug_break=on`)
+			require.NoError(b, err)
+
 			b.ResetTimer()
 			for range b.N {
-				// Bug: #18420
-				if true {
-					// This branch runs fine.
-					tx, err := conn.BeginTx(ctx, nil)
-					require.NoError(b, err)
-					_, err = tx.Query(`select 1`)
-					require.NoError(b, err)
-					err = tx.Commit()
-					require.NoError(b, err)
-				} else {
-					// This branch will hung.
-					_, err = conn.QueryContext(context.Background(), `select 1`)
-					require.NoError(b, err)
-				}
+				rows, err := conn.QueryContext(ctx, `select 1`)
+				require.NoError(b, err)
+				rows.Close()
 			}
 			b.StopTimer()
 		},
