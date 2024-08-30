@@ -43,6 +43,7 @@ enum OpCode {
     OpCommitMerge      = 2011;
     OpDiskDiskCleaner   = 2012;
     OpReader = 2013;
+    OpTools = 2014;
 }
 
 // TNPingRequest ping request

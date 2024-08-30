@@ -606,3 +606,54 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, d
 	}
 	return hasher.Sum(nil), nil
 }
+
+func DownloadFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, newName, srcDir, dstDir string) error {
+	if newName == "" {
+		newName = name
+	}
+	if dstDir != "" {
+		newName = path.Join(dstDir, newName)
+	}
+	if srcDir != "" {
+		name = path.Join(srcDir, name)
+	}
+
+	var reader io.ReadCloser
+	ioVec := &fileservice.IOVector{
+		FilePath: name,
+		Entries: []fileservice.IOEntry{
+			{
+				ReadCloserForRead: &reader,
+				Offset:            0,
+				Size:              -1,
+			},
+		},
+		Policy: fileservice.SkipAllCache,
+	}
+
+	err := srcFs.Read(ctx, ioVec)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	// hash
+	hasher := sha256.New()
+	hashingReader := io.TeeReader(reader, hasher)
+	dstIoVec := fileservice.IOVector{
+		FilePath: newName,
+		Entries: []fileservice.IOEntry{
+			{
+				ReaderForWrite: hashingReader,
+				Offset:         0,
+				Size:           -1,
+			},
+		},
+		Policy: fileservice.SkipAllCache,
+	}
+
+	err = dstFs.Write(ctx, dstIoVec)
+	if err != nil {
+		return err
+	}
+	return nil
+}

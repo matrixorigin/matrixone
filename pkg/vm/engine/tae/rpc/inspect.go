@@ -100,9 +100,6 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 	transfer := &transferArg{}
 	rootCmd.AddCommand(transfer.PrepareCommand())
 
-	inspect := &MoInspectArg{}
-	rootCmd.AddCommand(inspect.PrepareCommand())
-
 	return rootCmd
 }
 

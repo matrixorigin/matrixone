@@ -103,6 +103,12 @@ type Handler interface {
 		req *db.InspectTN,
 		resp *db.InspectResp,
 	) (func(), error)
+	HandleToolsTn(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.InspectTN,
+		resp *db.InspectResp,
+	) (func(), error)
 
 	HandleAddFaultPoint(
 		ctx context.Context,
