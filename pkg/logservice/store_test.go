@@ -55,7 +55,7 @@ var (
 func TestNodeHostConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DeploymentID = 1234
-	cfg.DataDir = "data dir"
+	cfg.DataDir = "lalala"
 	nhConfig := getNodeHostConfig(cfg)
 	assert.Equal(t, cfg.DeploymentID, nhConfig.DeploymentID)
 	assert.Equal(t, cfg.DataDir, nhConfig.NodeHostDir)
