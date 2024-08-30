@@ -169,7 +169,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 
 		logutil.Infof("fulltext found %d", len(filterids))
 		if len(filterids) > 0 {
-			return builder.applyIndicesForFiltersUsingFullTextIndex(nodeID, node, filterids, ftidxs)
+			return builder.applyIndicesForFiltersUsingFullTextIndex(nodeID, node, filterids, ftidxs, colRefCnt, idxColMap)
 		}
 	}
 	logutil.Infof("applyIndciesForFilters END")

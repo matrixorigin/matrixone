@@ -29,7 +29,8 @@ import (
 //     -- FilterList but remove the fulltext_match func expr
 //   - TABLE_FUNCTION_SCAN (fulltext_index_scan)
 //     -- Node_Value_Scan
-func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int32, scanNode *plan.Node, filterids []int32, indexDefs []*plan.IndexDef) int32 {
+func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int32, scanNode *plan.Node, filterids []int32, indexDefs []*plan.IndexDef,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
 	//idxScanTag := builder.genNewTag()
 	ctx := builder.ctxByNode[nodeID]
@@ -112,7 +113,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 		}
 
 		logutil.Infof("TABLE_FUNCTION %v", curr_ftnode)
-
 		if i > 0 {
 			// JOIN last_node_id and curr_ftnode_id
 			// JOIN INNER with children (curr_ftnode_id, last_node_id)
