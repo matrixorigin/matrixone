@@ -38,35 +38,33 @@ const (
 	TxnStateUnknown
 )
 
-type TxnStatus int32
-
-const (
-// TxnStatusActive TxnStatus = iota
-// TxnStatusPrepared
-// TxnStatusCommittingFinished
-// TxnStatusCommitted
-// TxnStatusRollbacked
-)
-
 type DedupPolicy uint8
 
 func (p DedupPolicy) SkipWorkSpace() bool {
 	return p&DedupPolicy_SkipWorkspace != 0
 }
-func (p DedupPolicy) SkipOldCommit() bool {
-	return p&DedupPolicy_SkipOldCommitted != 0
+func (p DedupPolicy) SkipTargetAllCommitted() bool {
+	return (p&DedupPolicy_SkipTargetOldCommitted != 0) && (p&DedupPolicy_SkipTargetNewCommitted != 0)
 }
-func (p DedupPolicy) SkipNewCommit() bool {
-	return p&DedupPolicy_SkipNewCommitted != 0
+func (p DedupPolicy) SkipTargetOldCommitted() bool {
+	return p&DedupPolicy_SkipTargetOldCommitted != 0
+}
+
+//	func (p DedupPolicy) SkipTargetNewCommitted() bool {
+//		return p&DedupPolicy_SkipTargetNewCommitted != 0
+//	}
+func (p DedupPolicy) SkipSourcePersisted() bool {
+	return p&DedupPolicy_SkipSourcePersisted != 0
 }
 
 const (
 	// Do not dedup all uncommitted data and tombstones
 	DedupPolicy_SkipWorkspace DedupPolicy = 1 << iota
 	// Do not dedup committed data and tombstones before the snapshot ts
-	DedupPolicy_SkipOldCommitted
+	DedupPolicy_SkipTargetOldCommitted
 	// Do not dedup committed data and tombstones after the snapshot ts
-	DedupPolicy_SkipNewCommitted
+	DedupPolicy_SkipTargetNewCommitted
+	DedupPolicy_SkipSourcePersisted
 )
 
 const (
@@ -77,10 +75,10 @@ const (
 	// data and tombstones, skip the deduplication.
 	// Skip the workspace data and tombstones internal deduplication
 	// Skip the committed data and tombstones after the snapshot ts
-	DedupPolicy_CheckIncremental = DedupPolicy_SkipWorkspace | DedupPolicy_SkipOldCommitted
+	DedupPolicy_CheckIncremental = DedupPolicy_SkipWorkspace | DedupPolicy_SkipTargetOldCommitted | DedupPolicy_SkipSourcePersisted
 
 	// Disable deduplication
-	DedupPolicy_SkipAll = DedupPolicy_SkipOldCommitted | DedupPolicy_SkipNewCommitted | DedupPolicy_SkipWorkspace
+	DedupPolicy_SkipAll = DedupPolicy_SkipTargetOldCommitted | DedupPolicy_SkipTargetNewCommitted | DedupPolicy_SkipWorkspace
 )
 
 func TxnStrState(state TxnState) string {
