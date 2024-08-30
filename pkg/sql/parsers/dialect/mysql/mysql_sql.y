@@ -1006,27 +1006,25 @@ create_cdc_opt:
     }
 
 show_cdc_stmt:
-    SHOW CDC STRING all_cdc_opt
+    SHOW CDC all_cdc_opt
     {
         $$ = &tree.ShowCDC{
-                    SourceUri:   $3,
-                    Option:      $4,
+                    Option:      $3,
         }
     }
 
 pause_cdc_stmt:
-    PAUSE CDC STRING all_cdc_opt
+    PAUSE CDC all_cdc_opt
     {
         $$ = &tree.PauseCDC{
-                    SourceUri:   $3,
-                    Option:      $4,
+                    Option:      $3,
         }
     }
 
 drop_cdc_stmt:
-    DROP CDC STRING all_cdc_opt
+    DROP CDC all_cdc_opt
     {
-        $$ = tree.NewDropCDC($3, $4)
+        $$ = tree.NewDropCDC($3)
     }
 
 all_cdc_opt:
@@ -1046,20 +1044,18 @@ all_cdc_opt:
     }
 
 resume_cdc_stmt:
-    RESUME CDC STRING TASK STRING
+    RESUME CDC TASK STRING
     {
         $$ = &tree.ResumeCDC{
-                    SourceUri:   $3,
-                    TaskName:    $5,
+                    TaskName:    $4,
         }
     }
 
 restart_cdc_stmt:
-    RESUME CDC STRING TASK STRING STRING
+    RESUME CDC TASK STRING STRING
     {
         $$ = &tree.RestartCDC{
-                    SourceUri:   $3,
-                    TaskName:    $5,
+                    TaskName:    $4,
         }
     }
 

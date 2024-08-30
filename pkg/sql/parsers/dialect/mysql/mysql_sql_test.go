@@ -2534,28 +2534,28 @@ var (
 			input: `create cdc 'test_create_task' 'mysql://dump:111@127.0.0.1:6001' 'mysql' 'mysql://root:123456@127.0.0.1:3306' 'a,b' { "StartTS"='',"EndTS"='',"NoFull"='false',"FullConcurrency"='16',"IncrementalConcurrency"='16',"ConfigFile"='',"FullTaskRetry"='',"IncrementalTaskRetry"='',"FullDDLRetry"='0',"FullDMLRetry"='0',"IncrementalDDLRetry"='0',"IncrementalDMLRetry"='0',};`,
 		},
 		{
-			input: `show cdc 'mysql://dump:111@127.0.0.1:6001' all;`,
+			input: `show cdc all;`,
 		},
 		{
-			input: `show cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+			input: `show cdc task 't1';`,
 		},
 		{
-			input: `drop cdc 'mysql://dump:111@127.0.0.1:6001' all;`,
+			input: `drop cdc all;`,
 		},
 		{
-			input: `drop cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+			input: `drop cdc task 't1';`,
 		},
 		{
-			input: `pause cdc 'mysql://dump:111@127.0.0.1:6001' all;`,
+			input: `pause cdc all;`,
 		},
 		{
-			input: `pause cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+			input: `pause cdc task 't1';`,
 		},
 		{
-			input: `resume cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+			input: `resume cdc task 't1';`,
 		},
 		{
-			input: `resume cdc 'mysql://dump:111@127.0.0.1:6001' task 't1' 'restart';`,
+			input: `resume cdc task 't1' 'restart';`,
 		},
 		{
 			input: "alter publication pub1 account add acc0, acc1",

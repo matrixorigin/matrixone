@@ -16,6 +16,7 @@ package tree
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
@@ -84,13 +85,11 @@ type AllOrNotCDC struct {
 }
 type ShowCDC struct {
 	statementImpl
-	SourceUri string
-	Option    *AllOrNotCDC
+	Option *AllOrNotCDC
 }
 
 func (node *ShowCDC) Format(ctx *FmtCtx) {
-	ctx.WriteString("show cdc ")
-	ctx.WriteString(fmt.Sprintf("'%s'", node.SourceUri))
+	ctx.WriteString("show cdc")
 	if node.Option.All {
 		ctx.WriteString(" all")
 	} else {
@@ -108,13 +107,11 @@ func (node ShowCDC) TypeName() string { return "tree.ShowCDC" }
 
 type PauseCDC struct {
 	statementImpl
-	SourceUri string
-	Option    *AllOrNotCDC
+	Option *AllOrNotCDC
 }
 
 func (node *PauseCDC) Format(ctx *FmtCtx) {
-	ctx.WriteString("pause cdc ")
-	ctx.WriteString(fmt.Sprintf("'%s'", node.SourceUri))
+	ctx.WriteString("pause cdc")
 	if node.Option.All {
 		ctx.WriteString(" all")
 	} else {
@@ -132,20 +129,17 @@ func (node PauseCDC) TypeName() string { return "tree.PauseCDC" }
 
 type DropCDC struct {
 	statementImpl
-	SourceUri string
-	Option    *AllOrNotCDC
+	Option *AllOrNotCDC
 }
 
-func NewDropCDC(sourceUri string, option *AllOrNotCDC) *DropCDC {
+func NewDropCDC(option *AllOrNotCDC) *DropCDC {
 	drop := reuse.Alloc[DropCDC](nil)
-	drop.SourceUri = sourceUri
 	drop.Option = option
 	return drop
 }
 
 func (node *DropCDC) Format(ctx *FmtCtx) {
-	ctx.WriteString("drop cdc ")
-	ctx.WriteString(fmt.Sprintf("'%s'", node.SourceUri))
+	ctx.WriteString("drop cdc")
 	if node.Option.All {
 		ctx.WriteString(" all")
 	} else {
@@ -170,13 +164,11 @@ func (node *DropCDC) reset() {
 
 type ResumeCDC struct {
 	statementImpl
-	SourceUri string
-	TaskName  string
+	TaskName string
 }
 
 func (node *ResumeCDC) Format(ctx *FmtCtx) {
-	ctx.WriteString("resume cdc ")
-	ctx.WriteString(fmt.Sprintf("'%s'", node.SourceUri))
+	ctx.WriteString("resume cdc")
 	ctx.WriteString(" task ")
 	ctx.WriteString(fmt.Sprintf("'%s'", node.TaskName))
 	ctx.WriteByte(';')
@@ -190,13 +182,11 @@ func (node ResumeCDC) TypeName() string { return "tree.ResumeCDC" }
 
 type RestartCDC struct {
 	statementImpl
-	SourceUri string
-	TaskName  string
+	TaskName string
 }
 
 func (node *RestartCDC) Format(ctx *FmtCtx) {
-	ctx.WriteString("resume cdc ")
-	ctx.WriteString(fmt.Sprintf("'%s'", node.SourceUri))
+	ctx.WriteString("resume cdc")
 	ctx.WriteString(" task ")
 	ctx.WriteString(fmt.Sprintf("'%s'", node.TaskName))
 	ctx.WriteString(" 'restart'")
