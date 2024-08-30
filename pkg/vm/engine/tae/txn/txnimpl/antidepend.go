@@ -67,7 +67,8 @@ func newWarChecker(txn txnif.AsyncTxn, c *catalog.Catalog) *warChecker {
 func (checker *warChecker) CacheGet(
 	dbID uint64,
 	tableID uint64,
-	ObjectID *types.Objectid) (object *catalog.ObjectEntry, err error) {
+	ObjectID *types.Objectid,
+	isTombstone bool) (object *catalog.ObjectEntry, err error) {
 	object = checker.cacheGet(ObjectID)
 	if object != nil {
 		return
@@ -80,7 +81,7 @@ func (checker *warChecker) CacheGet(
 	if err != nil {
 		return
 	}
-	object, err = table.GetObjectByID(ObjectID)
+	object, err = table.GetObjectByID(ObjectID, isTombstone)
 	if err != nil {
 		return
 	}
@@ -91,9 +92,10 @@ func (checker *warChecker) CacheGet(
 func (checker *warChecker) InsertByID(
 	dbID uint64,
 	tableID uint64,
-	ObjectID *types.Objectid,
+	objectID *types.Objectid,
+	isTombstone bool,
 ) {
-	obj, err := checker.CacheGet(dbID, tableID, ObjectID)
+	obj, err := checker.CacheGet(dbID, tableID, objectID, isTombstone)
 	if err != nil {
 		panic(err)
 	}

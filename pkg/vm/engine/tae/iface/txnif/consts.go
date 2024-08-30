@@ -38,22 +38,47 @@ const (
 	TxnStateUnknown
 )
 
-type TxnStatus int32
+type DedupPolicy uint8
+
+func (p DedupPolicy) SkipWorkSpace() bool {
+	return p&DedupPolicy_SkipWorkspace != 0
+}
+func (p DedupPolicy) SkipTargetAllCommitted() bool {
+	return (p&DedupPolicy_SkipTargetOldCommitted != 0) && (p&DedupPolicy_SkipTargetNewCommitted != 0)
+}
+func (p DedupPolicy) SkipTargetOldCommitted() bool {
+	return p&DedupPolicy_SkipTargetOldCommitted != 0
+}
+
+//	func (p DedupPolicy) SkipTargetNewCommitted() bool {
+//		return p&DedupPolicy_SkipTargetNewCommitted != 0
+//	}
+func (p DedupPolicy) SkipSourcePersisted() bool {
+	return p&DedupPolicy_SkipSourcePersisted != 0
+}
 
 const (
-// TxnStatusActive TxnStatus = iota
-// TxnStatusPrepared
-// TxnStatusCommittingFinished
-// TxnStatusCommitted
-// TxnStatusRollbacked
+	// Do not dedup all uncommitted data and tombstones
+	DedupPolicy_SkipWorkspace DedupPolicy = 1 << iota
+	// Do not dedup committed data and tombstones before the snapshot ts
+	DedupPolicy_SkipTargetOldCommitted
+	// Do not dedup committed data and tombstones after the snapshot ts
+	DedupPolicy_SkipTargetNewCommitted
+	DedupPolicy_SkipSourcePersisted
 )
 
-type DedupType uint8
-
 const (
-	FullDedup DedupType = iota
-	FullSkipWorkSpaceDedup
-	IncrementalDedup
+	// Do dedup all data and tombstones
+	DedupPolicy_CheckAll DedupPolicy = 0x00
+
+	// Dedup only uncommitted in-memory data and tombstones. For peristed
+	// data and tombstones, skip the deduplication.
+	// Skip the workspace data and tombstones internal deduplication
+	// Skip the committed data and tombstones after the snapshot ts
+	DedupPolicy_CheckIncremental = DedupPolicy_SkipWorkspace | DedupPolicy_SkipTargetOldCommitted | DedupPolicy_SkipSourcePersisted
+
+	// Disable deduplication
+	DedupPolicy_SkipAll = DedupPolicy_SkipTargetOldCommitted | DedupPolicy_SkipTargetNewCommitted | DedupPolicy_SkipWorkspace
 )
 
 func TxnStrState(state TxnState) string {

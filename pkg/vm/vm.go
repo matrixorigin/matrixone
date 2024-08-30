@@ -88,7 +88,7 @@ func SetAnalyzeInfo(rootOp Operator, proc *process.Process) {
 				info.ParallelIdx = -1
 			}
 
-		case TableScan, External, Order, Window, Group, Join, LoopJoin, Left, LoopLeft, Single, LoopSingle, Semi, RightSemi, LoopSemi, Anti, RightAnti, LoopAnti, Mark, LoopMark, Product, ProductL2:
+		case TableScan, External, Order, Window, Group, Join, LoopJoin, Left, Single, Semi, RightSemi, Anti, RightAnti, Mark, Product, ProductL2:
 			info.ParallelMajor = true
 			if info.Idx >= 0 && info.Idx < len(proc.Base.AnalInfos) {
 				if pidx, ok := idxMapMajor[info.Idx]; ok {

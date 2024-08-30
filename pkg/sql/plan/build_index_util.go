@@ -57,7 +57,7 @@ func checkDuplicateConstraint(namesMap map[string]bool, name string, foreign boo
 	nameLower := strings.ToLower(name)
 	if namesMap[nameLower] {
 		if foreign {
-			return moerr.NewInvalidInput(ctx, "Duplicate foreign key constraint name '%s'", name)
+			return moerr.NewInvalidInputf(ctx, "Duplicate foreign key constraint name '%s'", name)
 		}
 		return moerr.NewDuplicateKey(ctx, name)
 	}

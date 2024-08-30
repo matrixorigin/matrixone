@@ -219,7 +219,7 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, err
 		}
 		if typ.Oid != types.T_enum {
-			return nil, moerr.NewNotSupported(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
+			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
 		}
 
 		// get enum values
@@ -621,7 +621,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 			break
 		}
 		if !found {
-			return moerr.NewNotSupported(proc.Ctx, "purge '%s'", tblName)
+			return moerr.NewNotSupportedf(proc.Ctx, "purge '%s'", tblName)
 		}
 
 	}
@@ -1486,6 +1486,25 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 				ps[i].EncodeDecimal128(b)
 			}
 		}
+	case types.T_uuid:
+		s := vector.ExpandFixedCol[types.Uuid](v)
+		if hasNull {
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					if isFull {
+						ps[i].EncodeNull()
+					} else {
+						nulls.Add(bitMap, uint64(i))
+					}
+				} else {
+					ps[i].EncodeUuid(b)
+				}
+			}
+		} else {
+			for i, b := range s {
+				ps[i].EncodeUuid(b)
+			}
+		}
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		if hasNull {
@@ -1582,7 +1601,7 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return serialExtractForString(p1, p2, rs, proc, length, selectList)
 	}
-	return moerr.NewInternalError(proc.Ctx, "not supported type %s", resTyp.String())
+	return moerr.NewInternalErrorf(proc.Ctx, "not supported type %s", resTyp.String())
 
 }
 

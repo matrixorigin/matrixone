@@ -131,7 +131,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 		})
 		return resp, nil
 	default:
-		return nil, moerr.NewNotSupportedNoCtx("TAEStorage not support ctl method %d", opCode)
+		return nil, moerr.NewNotSupportedNoCtxf("TAEStorage not support ctl method %d", opCode)
 	}
 }
 

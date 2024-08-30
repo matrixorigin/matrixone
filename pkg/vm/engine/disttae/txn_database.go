@@ -122,7 +122,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 
 	// check the table is deleted or not
 	if txn.tableOps.existAndDeleted(key) {
-		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
 	}
 
 	// get relation from the txn created tables cache: created by this txn
@@ -573,7 +573,7 @@ func (db *txnDatabase) loadTableFromStorage(
 		}
 		defer res.Close()
 		if len(res.Batches) == 0 {
-			err = moerr.NewParseError(ctx, "FIND_TABLE columns of table %q does not exist, cnt: %v, sql:%v", name, len(res.Batches), colSql)
+			err = moerr.NewParseErrorf(ctx, "FIND_TABLE columns of table %q does not exist, cnt: %v, sql:%v", name, len(res.Batches), colSql)
 			return
 		}
 		bat := res.Batches[0]
@@ -622,10 +622,10 @@ func (db *txnDatabase) getTableItem(
 		if tableitem == nil {
 			if strings.Contains(name, "_copy_") {
 				stackInfo := debug.Stack()
-				logutil.Error(moerr.NewParseError(context.Background(), "table %q does not exists", name).Error(),
+				logutil.Error(moerr.NewParseErrorf(context.Background(), "table %q does not exists", name).Error(),
 					zap.String("Stack Trace", string(stackInfo)))
 			}
-			return cache.TableItem{}, moerr.NewParseError(ctx, "table %q does not exist", name)
+			return cache.TableItem{}, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
 		}
 		return *tableitem, nil
 	}

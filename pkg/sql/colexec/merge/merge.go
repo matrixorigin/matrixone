@@ -34,7 +34,6 @@ func (merge *Merge) OpType() vm.OpType {
 }
 
 func (merge *Merge) Prepare(proc *process.Process) error {
-	merge.ctr = new(container)
 	if merge.Partial {
 		merge.ctr.InitReceiver(proc, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
 	} else {
@@ -53,32 +52,44 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
-	if merge.ctr.buf != nil {
-		proc.PutBatch(merge.ctr.buf)
-		merge.ctr.buf = nil
-	}
 
 	for {
 		msg = merge.ctr.ReceiveFromAllRegs(anal)
 		if msg.Err != nil {
-			result.Status = vm.ExecStop
-			return result, msg.Err
+			return vm.CancelResult, msg.Err
 		}
 		if msg.Batch == nil {
 			result.Status = vm.ExecStop
 			return result, nil
 		}
-
-		merge.ctr.buf = msg.Batch
-		if merge.ctr.buf.Last() && merge.SinkScan {
-			proc.PutBatch(merge.ctr.buf)
+		if msg.Batch.Last() && merge.SinkScan {
+			proc.PutBatch(msg.Batch)
 			continue
 		}
+
+		if merge.ctr.buf != nil {
+			proc.PutBatch(merge.ctr.buf)
+			// merge.ctr.buf.Clean(proc.GetMPool())
+			merge.ctr.buf = nil
+		}
+
+		// merge.ctr.buf, err = msg.Batch.Dup(proc.GetMPool())
+		// if err != nil {
+		// 	proc.PutBatch(msg.Batch)
+		// 	return vm.CancelResult, err
+		// }
+		// if msg.Batch.Aggs != nil {
+		// 	merge.ctr.buf.Aggs = msg.Batch.Aggs
+		// 	msg.Batch.Aggs = nil
+		// }
+		// result.Batch = merge.ctr.buf
+		// proc.PutBatch(msg.Batch)
+		merge.ctr.buf = msg.Batch
+		result.Batch = merge.ctr.buf
 		break
 	}
 
 	anal.Input(merge.ctr.buf, merge.GetIsFirst())
 	anal.Output(merge.ctr.buf, merge.GetIsLast())
-	result.Batch = merge.ctr.buf
 	return result, nil
 }

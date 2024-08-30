@@ -266,7 +266,7 @@ func getAddColPos(cols []*plan.ColDef, def *plan.ColDef, colName string, pos int
 			return cols, int32(idx + 1), nil
 		}
 	}
-	return nil, 0, moerr.NewInvalidInputNoCtx("column '%s' doesn't exist in table", colName)
+	return nil, 0, moerr.NewInvalidInputNoCtxf("column '%s' doesn't exist in table", colName)
 }
 
 func (s *Scope) AlterTableInplace(c *Compile) error {
@@ -940,7 +940,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
 		for i, fkey := range qry.GetTableDef().Fkeys {
 			if dedupFkName.Find(fkey.Name) {
-				return moerr.NewInternalError(c.proc.Ctx, "deduplicate fk name %s", fkey.Name)
+				return moerr.NewInternalErrorf(c.proc.Ctx, "deduplicate fk name %s", fkey.Name)
 			}
 			dedupFkName.Insert(fkey.Name)
 			newDef := &plan.ForeignKeyDef{
@@ -1094,7 +1094,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 				if id, has := colNameToId[colReferred]; has {
 					newDef.ForeignCols[j] = id
 				} else {
-					err := moerr.NewInternalError(c.proc.Ctx, "no column %s", colReferred)
+					err := moerr.NewInternalErrorf(c.proc.Ctx, "no column %s", colReferred)
 					c.proc.Info(c.proc.Ctx, "createTable",
 						zap.String("databaseName", c.db),
 						zap.String("tableName", qry.GetTableDef().GetName()),
@@ -2510,7 +2510,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		if qry.GetIfExists() {
 			return nil
 		}
-		return moerr.NewInternalError(c.proc.Ctx, "sequence %s not exists", tblName)
+		return moerr.NewInternalErrorf(c.proc.Ctx, "sequence %s not exists", tblName)
 	}
 
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
@@ -3048,10 +3048,10 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 // Checkout values.
 func valueCheckOut[T constraints.Integer](maxValue, minValue, startNum T, ctx context.Context) error {
 	if maxValue <= minValue {
-		return moerr.NewInvalidInput(ctx, "MAXVALUE (%d) of sequence must be bigger than MINVALUE (%d) of it", maxValue, minValue)
+		return moerr.NewInvalidInputf(ctx, "MAXVALUE (%d) of sequence must be bigger than MINVALUE (%d) of it", maxValue, minValue)
 	}
 	if startNum < minValue || startNum > maxValue {
-		return moerr.NewInvalidInput(ctx, "STARTVALUE (%d) for sequence must between MINVALUE (%d) and MAXVALUE (%d)", startNum, minValue, maxValue)
+		return moerr.NewInvalidInputf(ctx, "STARTVALUE (%d) for sequence must between MINVALUE (%d) and MAXVALUE (%d)", startNum, minValue, maxValue)
 	}
 	return nil
 }
@@ -3220,13 +3220,13 @@ func getLockVector(proc *process.Process, accountId uint32, names []string) (*ve
 	defer func() {
 		for _, v := range vecs {
 			if v != nil {
-				proc.PutVector(v)
+				v.Free(proc.GetMPool())
 			}
 		}
 	}()
 
 	// append account_id
-	accountIdVec := proc.GetVector(types.T_uint32.ToType())
+	accountIdVec := vector.NewVec(types.T_uint32.ToType())
 	err := vector.AppendFixed(accountIdVec, accountId, false, proc.GetMPool())
 	if err != nil {
 		return nil, err
@@ -3234,7 +3234,7 @@ func getLockVector(proc *process.Process, accountId uint32, names []string) (*ve
 	vecs[0] = accountIdVec
 	// append names
 	for i, name := range names {
-		nameVec := proc.GetVector(types.T_varchar.ToType())
+		nameVec := vector.NewVec(types.T_varchar.ToType())
 		err := vector.AppendBytes(nameVec, []byte(name), false, proc.GetMPool())
 		if err != nil {
 			return nil, err

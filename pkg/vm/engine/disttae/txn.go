@@ -116,7 +116,7 @@ func (txn *Transaction) WriteBatch(
 		}
 		txn.genBlock()
 		len := bat.RowCount()
-		genRowidVec = txn.proc.GetVector(types.T_Rowid.ToType())
+		genRowidVec = vector.NewVec(types.T_Rowid.ToType())
 		for i := 0; i < len; i++ {
 			if err := vector.AppendFixed(genRowidVec, txn.genRowId(), false,
 				txn.proc.Mp()); err != nil {
@@ -275,7 +275,7 @@ func checkPKDup(
 			mp[v] = true
 		}
 	default:
-		panic(moerr.NewInternalErrorNoCtx("%s not supported", pk.GetType().String()))
+		panic(moerr.NewInternalErrorNoCtxf("%s not supported", pk.GetType().String()))
 	}
 	return false, ""
 }
@@ -497,18 +497,19 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
 
-		s3Writer, err := colexec.AllocS3Writer(txn.proc, tableDef)
+		s3Writer, err := colexec.NewS3Writer(txn.proc, tableDef, 0)
 		if err != nil {
 			return err
 		}
 		defer s3Writer.Free(txn.proc)
-
-		s3Writer.InitBuffers(txn.proc, mp[tbKey][0])
 		for i := 0; i < len(mp[tbKey]); i++ {
-			s3Writer.Put(mp[tbKey][i], txn.proc)
+			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
 		}
-		err = s3Writer.SortAndFlush(txn.proc)
-
+		blockInfos, stats, err := s3Writer.SortAndSync(txn.proc)
+		if err != nil {
+			return err
+		}
+		err = s3Writer.FillBlockInfoBat(blockInfos, stats, txn.proc.GetMPool())
 		if err != nil {
 			return err
 		}
@@ -980,22 +981,36 @@ func (txn *Transaction) compactionBlksLocked() error {
 //}
 
 // TODO::remove it after workspace refactor.
-func (txn *Transaction) getUncommittedS3Tombstone(mp map[types.Blockid][]objectio.Location) (err error) {
+func (txn *Transaction) getUncommittedS3Tombstone(
+	statsSlice *objectio.ObjectStatsSlice,
+) (err error) {
 	txn.blockId_tn_delete_metaLoc_batch.RLock()
 	defer txn.blockId_tn_delete_metaLoc_batch.RUnlock()
 
-	for bid, bats := range txn.blockId_tn_delete_metaLoc_batch.data {
-		for _, b := range bats {
-			vs, area := vector.MustVarlenaRawData(b.GetVector(0))
+	for _, bats := range txn.blockId_tn_delete_metaLoc_batch.data {
+		for _, bat := range bats {
+			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
 			for i := range vs {
 				loc, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
 				if err != nil {
 					return err
 				}
-				mp[bid] = append(mp[bid], loc)
+
+				stats := objectio.ObjectStats{}
+				if err = objectio.SetObjectStatsRowCnt(&stats, loc.Rows()); err != nil {
+					return err
+				}
+				if err = objectio.SetObjectStatsBlkCnt(&stats, 1); err != nil {
+					return err
+				}
+				if err = objectio.SetObjectStatsLocation(&stats, loc[:]); err != nil {
+					return err
+				}
+				statsSlice.Append(stats[:])
 			}
 		}
 	}
+
 	return nil
 }
 

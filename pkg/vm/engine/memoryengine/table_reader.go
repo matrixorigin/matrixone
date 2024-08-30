@@ -146,15 +146,21 @@ func (t *Table) BuildReaders(
 
 var _ engine.Reader = new(TableReader)
 
-func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Expr, mp *mpool.MPool, _ engine.VectorPool) (*batch.Batch, error) {
+func (t *TableReader) Read(
+	ctx context.Context,
+	colNames []string,
+	plan *plan.Expr,
+	mp *mpool.MPool,
+	_ engine.VectorPool,
+	bat *batch.Batch) (bool, error) {
 	if t == nil {
-		return nil, nil
+		return true, nil
 	}
 
 	for {
 
 		if len(t.iterInfos) == 0 {
-			return nil, nil
+			return true, nil
 		}
 
 		resps, err := DoTxnRequest[ReadResp](
@@ -169,7 +175,7 @@ func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Ex
 			},
 		)
 		if err != nil {
-			return nil, err
+			return true, err
 		}
 
 		resp := resps[0]
@@ -181,7 +187,12 @@ func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Ex
 		}
 
 		logutil.Debug(testutil.OperatorCatchBatch("table reader", resp.Batch))
-		return resp.Batch, nil
+		_, err = bat.Append(t.ctx, mp, resp.Batch)
+		resp.Batch.Clean(mp)
+		if err != nil {
+			return true, err
+		}
+		return false, nil
 	}
 
 }

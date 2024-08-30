@@ -38,11 +38,17 @@ func init() {
 }
 
 type CreateObjOpt struct {
-	Id *types.Objectid
+	Stats       *ObjectStats
+	IsTombstone bool
 }
 
-func (o *CreateObjOpt) WithId(id *types.Objectid) *CreateObjOpt {
-	o.Id = id
+func (o *CreateObjOpt) WithObjectStats(stats *ObjectStats) *CreateObjOpt {
+	o.Stats = stats
+	return o
+}
+
+func (o *CreateObjOpt) WithIsTombstone(tombstone bool) *CreateObjOpt {
+	o.IsTombstone = tombstone
 	return o
 }
 
@@ -408,7 +414,7 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 		}
 		return NewEnumVector(n, typ, m, random, nil)
 	default:
-		panic(moerr.NewInternalErrorNoCtx("unsupport vector's type '%v", typ))
+		panic(moerr.NewInternalErrorNoCtxf("unsupport vector's type '%v", typ))
 	}
 }
 

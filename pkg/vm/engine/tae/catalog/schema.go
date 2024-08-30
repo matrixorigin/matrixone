@@ -46,6 +46,14 @@ func IsFakePkName(name string) bool {
 	return name == pkgcatalog.FakePrimaryKeyColName
 }
 
+const (
+	COLIDX_COMMITS = objectio.SEQNUM_COMMITTS
+)
+
+var (
+	CommitTSType = types.T_TS.ToType()
+)
+
 type ColDef struct {
 	// letter case: origin
 	Name          string
@@ -70,14 +78,15 @@ type ColDef struct {
 func (def *ColDef) GetName() string     { return def.Name }
 func (def *ColDef) GetType() types.Type { return def.Type }
 
-func (def *ColDef) Nullable() bool        { return def.NullAbility }
-func (def *ColDef) IsHidden() bool        { return def.Hidden }
-func (def *ColDef) IsPhyAddr() bool       { return def.PhyAddr }
-func (def *ColDef) IsPrimary() bool       { return def.Primary }
-func (def *ColDef) IsRealPrimary() bool   { return def.Primary && !def.FakePK }
-func (def *ColDef) IsAutoIncrement() bool { return def.AutoIncrement }
-func (def *ColDef) IsSortKey() bool       { return def.SortKey }
-func (def *ColDef) IsClusterBy() bool     { return def.ClusterBy }
+func (def *ColDef) Nullable() bool          { return def.NullAbility }
+func (def *ColDef) IsHidden() bool          { return def.Hidden }
+func (def *ColDef) IsPhyAddr() bool         { return def.PhyAddr }
+func (def *ColDef) IsPrimary() bool         { return def.Primary }
+func (def *ColDef) IsRealPrimary() bool     { return def.Primary && !def.FakePK }
+func (def *ColDef) IsAutoIncrement() bool   { return def.AutoIncrement }
+func (def *ColDef) IsSortKey() bool         { return def.SortKey }
+func (def *ColDef) IsClusterBy() bool       { return def.ClusterBy }
+func (def *ColDef) IsCompositeColumn() bool { return def.Name == pkgcatalog.CPrimaryKeyColName }
 
 type SortKey struct {
 	Defs      []*ColDef
@@ -191,17 +200,17 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		var targetCol *ColDef
 		for _, def := range s.ColDefs {
 			if def.Name == rename.NewName {
-				return moerr.NewInternalErrorNoCtx("duplicate column %q", def.Name)
+				return moerr.NewInternalErrorNoCtxf("duplicate column %q", def.Name)
 			}
 			if def.Name == rename.OldName {
 				targetCol = def
 			}
 		}
 		if targetCol == nil {
-			return moerr.NewInternalErrorNoCtx("column %q not found", rename.OldName)
+			return moerr.NewInternalErrorNoCtxf("column %q not found", rename.OldName)
 		}
 		if targetCol.SeqNum != uint16(rename.SequenceNum) {
-			return moerr.NewInternalErrorNoCtx("unmatched seqnumn: %d != %d", targetCol.SeqNum, rename.SequenceNum)
+			return moerr.NewInternalErrorNoCtxf("unmatched seqnumn: %d != %d", targetCol.SeqNum, rename.SequenceNum)
 		}
 		targetCol.Name = rename.NewName
 		// a -> b, z -> a, m -> z
@@ -277,7 +286,7 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		}
 		s.Partition = string(bytes)
 	default:
-		return moerr.NewNYINoCtx("unsupported alter kind: %v", req.Kind)
+		return moerr.NewNYINoCtxf("unsupported alter kind: %v", req.Kind)
 	}
 	return nil
 }
@@ -661,7 +670,7 @@ func (s *Schema) AppendColDef(def *ColDef) (err error) {
 	s.ColDefs = append(s.ColDefs, def)
 	_, existed := s.NameMap[def.Name]
 	if existed {
-		err = moerr.NewConstraintViolationNoCtx("duplicate column \"%s\"", def.Name)
+		err = moerr.NewConstraintViolationNoCtxf("duplicate column \"%s\"", def.Name)
 		return
 	}
 	s.NameMap[def.Name] = def.Idx
@@ -887,6 +896,9 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 	// check duplicate column names
 	names := make(map[string]bool)
 	for idx, def := range s.ColDefs {
+		if idx == COLIDX_COMMITS {
+			panic(fmt.Sprintf("bad column idx %d, table %v", idx, s.Name))
+		}
 		// Check column sequence idx validility
 		if idx != def.Idx {
 			return moerr.NewInvalidInputNoCtx(fmt.Sprintf("schema: wrong column index %d specified for \"%s\"", def.Idx, def.Name))
@@ -897,7 +909,7 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		}
 		// Check unique name
 		if _, ok := names[def.Name]; ok {
-			return moerr.NewInvalidInputNoCtx("schema: duplicate column \"%s\"", def.Name)
+			return moerr.NewInvalidInputNoCtxf("schema: duplicate column \"%s\"", def.Name)
 		}
 		names[def.Name] = true
 		// Fake pk
@@ -931,7 +943,7 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 	if len(sortColIdx) == 1 {
 		def := s.ColDefs[sortColIdx[0]]
 		if def.SortIdx != 0 {
-			err = moerr.NewConstraintViolationNoCtx("bad sort idx %d, should be 0", def.SortIdx)
+			err = moerr.NewConstraintViolationNoCtxf("bad sort idx %d, should be 0", def.SortIdx)
 			return
 		}
 		s.SortKey = NewSortKey()
@@ -1012,6 +1024,9 @@ func MockSnapShotSchema() *Schema {
 	schema.AppendCol("col6", types.T_uint64.ToType())
 	schema.AppendCol("id", types.T_uint64.ToType())
 	schema.Constraint, _ = constraintDef.MarshalBinary()
+	// mock fake pk
+	schema.AppendFakePKCol()
+	schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
 
 	_ = schema.Finalize(false)
 	return schema
