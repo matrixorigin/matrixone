@@ -27,7 +27,7 @@ import (
 
 var _ vm.Operator = new(Order)
 
-const maxBatchSizeToSort = 24 * mpool.MB
+const maxBatchSizeToSort = 64 * mpool.MB
 
 type Order struct {
 	ctr container
