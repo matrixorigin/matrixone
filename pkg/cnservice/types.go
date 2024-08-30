@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
@@ -78,6 +79,9 @@ type Service interface {
 	GetTaskService() (taskservice.TaskService, bool)
 	GetSQLExecutor() executor.SQLExecutor
 	GetBootstrapService() bootstrap.Service
+	GetTimestampWaiter() client.TimestampWaiter
+	GetEngine() engine.Engine
+	GetClock() clock.Clock
 }
 
 type EngineType string

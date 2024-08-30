@@ -224,6 +224,7 @@ func (obj *aobject) GetDuplicatedRows(
 			rowIDs,
 			precommit,
 			checkWWConflict,
+			skipCommittedBeforeTxnForAblk,
 			mp,
 		)
 	} else {

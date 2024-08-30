@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -125,6 +126,31 @@ func TestRunSQLWithFrontend(t *testing.T) {
 			require.NoError(t, err)
 		},
 	)
+}
+
+func TestGetInitPort(t *testing.T) {
+	var wg sync.WaitGroup
+	var ports []uint64
+	var lock sync.Mutex
+	add := func(v uint64) {
+		lock.Lock()
+		defer lock.Unlock()
+		ports = append(ports, v)
+	}
+
+	n := 4
+	name := fmt.Sprintf("%d.port", time.Now().Nanosecond())
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			port := getInitPort(name)
+			add(port)
+		}()
+	}
+
+	wg.Wait()
+	require.Equal(t, []uint64{10000, 11000, 12000, 13000}, ports)
 }
 
 func validCNCanWork(
