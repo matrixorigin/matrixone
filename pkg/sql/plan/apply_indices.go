@@ -212,10 +212,35 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 	// ERIC
 	{
+
+		// First, check there is fulltext_index_scan FUNCTION_SCAN node
+		// If exists, it means that fulltext index is already converted from applyIndicesForFilter.
+		// However, we didn't add SORT node in applyIndicesForFilter and we will add SORT node here only when SORT node does not exist
+		// I don't think we can support both fulltext_match appear in projection and filter at the same time so
+		// we are done here after adding SORT Node
+
+		// Second, check project list to have fulltext_match expression.
+		// If exists, create the fulltext_index_scan with applyIndicesForFilter
+		// search for all fulltext_index_scan nodes and change match to according fulltext_index_scan.score column
+
 		// check fulltext_index_scan TABLE_FUNCTION exists
 		ftnode := builder.resolveFullTextIndexScanNode(projNode)
 		if ftnode != nil {
 			logutil.Infof("AAAAAAAAAAAAAAAAAAAAAAA FOUND it.... %v", ftnode)
+
+			tag := ftnode.BindingTags[0]
+			expr := &Expr{
+				Typ: ftnode.TableDef.Cols[1].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: tag,
+						ColPos: 1,
+					},
+				},
+			}
+			projNode.ProjectList = append(projNode.ProjectList, expr)
+			//ctx := builder.ctxByNode[nodeID]
+			builder.qry.Headings = append(builder.qry.Headings, "score")
 		}
 
 		// TODO: it is possible that there is a sort node.   i.e. project -> sort -> scan or project -> scan
