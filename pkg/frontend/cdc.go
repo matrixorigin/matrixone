@@ -779,12 +779,10 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		}
 
 		dbTableInfos = append(dbTableInfos, &cdc2.DbTableInfo{
-			DbName:             dbName,
-			TblName:            tblName,
-			DbId:               dbId,
-			TblId:              tblId,
-			TsColIdx:           0, //FIXME
-			CompositedPkColIdx: 3, //FIXME
+			DbName:  dbName,
+			TblName: tblName,
+			DbId:    dbId,
+			TblId:   tblId,
 		})
 	}
 

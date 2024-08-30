@@ -104,11 +104,10 @@ type RowIterator interface {
 }
 
 type DbTableInfo struct {
-	DbName                       string
-	TblName                      string
-	DbId                         uint64
-	TblId                        uint64
-	TsColIdx, CompositedPkColIdx int
+	DbName  string
+	TblName string
+	DbId    uint64
+	TblId   uint64
 }
 
 func (info DbTableInfo) String() string {
@@ -117,8 +116,6 @@ func (info DbTableInfo) String() string {
 		info.TblName,
 		info.DbId,
 		info.TblId,
-		info.TsColIdx,
-		info.CompositedPkColIdx,
 	)
 }
 
@@ -131,28 +128,24 @@ type Batches struct {
 // AtomicBatch holds batches from [Tail_wip,...,Tail_done] or [Tail_done].
 // These batches have atomicity
 type AtomicBatch struct {
-	Mp                           *mpool.MPool
-	From, To                     types.TS
-	Batches                      []*batch.Batch
-	Rows                         *btree.BTreeG[AtomicBatchRow]
-	TsColIdx, CompositedPkColIdx int
+	Mp       *mpool.MPool
+	From, To types.TS
+	Batches  []*batch.Batch
+	Rows     *btree.BTreeG[AtomicBatchRow]
 }
 
 func NewAtomicBatch(
 	mp *mpool.MPool,
 	from, to types.TS,
-	tsColIdx, compositedPkColIdx int,
 ) *AtomicBatch {
 	opts := btree.Options{
 		Degree: 64,
 	}
 	ret := &AtomicBatch{
-		Mp:                 mp,
-		From:               from,
-		To:                 to,
-		Rows:               btree.NewBTreeGOptions(AtomicBatchRow.Less, opts),
-		TsColIdx:           tsColIdx,
-		CompositedPkColIdx: compositedPkColIdx,
+		Mp:   mp,
+		From: from,
+		To:   to,
+		Rows: btree.NewBTreeGOptions(AtomicBatchRow.Less, opts),
 	}
 	return ret
 }
@@ -178,13 +171,15 @@ func (row AtomicBatchRow) Less(other AtomicBatchRow) bool {
 
 func (bat *AtomicBatch) Append(
 	packer *types.Packer,
-	batch *batch.Batch) {
+	batch *batch.Batch,
+	tsColIdx, compositedPkColIdx int,
+) {
 	if batch != nil {
 		bat.Batches = append(bat.Batches, batch)
 		//ts columns
-		tsVec := vector.MustFixedCol[types.TS](batch.Vecs[bat.TsColIdx])
+		tsVec := vector.MustFixedCol[types.TS](batch.Vecs[tsColIdx])
 		//composited pk columns
-		compositedPkBytes := logtailreplay.EncodePrimaryKeyVector(batch.Vecs[bat.CompositedPkColIdx], packer)
+		compositedPkBytes := logtailreplay.EncodePrimaryKeyVector(batch.Vecs[compositedPkColIdx], packer)
 
 		for i, ts := range tsVec {
 			row := AtomicBatchRow{

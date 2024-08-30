@@ -176,8 +176,6 @@ func (reader *tableReader) readTableWithTxn(
 			atmBatch = NewAtomicBatch(
 				reader.mp,
 				fromTs, toTs,
-				reader.info.TsColIdx,
-				reader.info.CompositedPkColIdx,
 			)
 		}
 		return atmBatch
@@ -197,6 +195,8 @@ func (reader *tableReader) readTableWithTxn(
 		if err != nil {
 			return
 		}
+		//FIXME: define the rule with changes handle
+		tsColIdx, compositedPkColIdx := 0, 3
 		//both nil denote no more data
 		if insertData == nil && deleteData == nil {
 			//only has checkpoint
@@ -223,13 +223,13 @@ func (reader *tableReader) readTableWithTxn(
 		case engine.Tail_wip:
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
-			insertAtmBatch.Append(packer, insertData)
-			deleteAtmBatch.Append(packer, deleteData)
+			insertAtmBatch.Append(packer, insertData, tsColIdx, compositedPkColIdx)
+			deleteAtmBatch.Append(packer, deleteData, tsColIdx, compositedPkColIdx)
 		case engine.Tail_done:
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
-			insertAtmBatch.Append(packer, insertData)
-			deleteAtmBatch.Append(packer, deleteData)
+			insertAtmBatch.Append(packer, insertData, tsColIdx, compositedPkColIdx)
+			deleteAtmBatch.Append(packer, deleteData, tsColIdx, compositedPkColIdx)
 			reader.interCh <- tools.NewPair(
 				tableCtx,
 				&DecoderOutput{
