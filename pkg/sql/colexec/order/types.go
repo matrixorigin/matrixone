@@ -27,7 +27,7 @@ import (
 
 var _ vm.Operator = new(Order)
 
-const maxBatchSizeToSort = 64 * mpool.MB
+const maxBatchSizeToSort = 24 * mpool.MB
 
 type Order struct {
 	ctr container
@@ -71,6 +71,7 @@ func (order *Order) Release() {
 type container struct {
 	state          vm.CtrState
 	batWaitForSort *batch.Batch
+	rbat           *batch.Batch
 
 	desc      []bool // ds[i] == true: the attrs[i] are in descending order
 	nullsLast []bool
@@ -89,6 +90,10 @@ func (order *Order) Reset(proc *process.Process, pipelineFailed bool, err error)
 		} else {
 			ctr.batWaitForSort.CleanOnlyData()
 		}
+	}
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(proc.Mp())
+		ctr.rbat = nil
 	}
 	ctr.state = vm.Build
 	for i := range ctr.sortExprExecutor {
@@ -117,5 +122,9 @@ func (order *Order) cleanBatch(proc *process.Process) {
 	if ctr.batWaitForSort != nil {
 		ctr.batWaitForSort.Clean(proc.Mp())
 		ctr.batWaitForSort = nil
+	}
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(proc.Mp())
+		ctr.rbat = nil
 	}
 }
