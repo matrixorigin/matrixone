@@ -37,6 +37,7 @@ var (
 	GlobalCheckpointMethod = "GLOBALCHECKPOINT"
 	ForceGCMethod          = "FORCEGC"
 	InspectMethod          = "INSPECT"
+	ToolsMethod            = "TOOLS"
 	LabelMethod            = "LABEL"
 	WorkStateMethod        = "WORKSTATE"
 	SyncCommitMethod       = "SYNCCOMMIT"
@@ -81,6 +82,7 @@ var (
 		GlobalCheckpointMethod: handleGlobalCheckpoint(),
 		ForceGCMethod:          handleCNGC,
 		InspectMethod:          handleInspectTN(),
+		ToolsMethod:            handleToolsTN(),
 		LabelMethod:            handleSetLabel,
 		WorkStateMethod:        handleSetWorkState,
 		SyncCommitMethod:       handleSyncCommit,

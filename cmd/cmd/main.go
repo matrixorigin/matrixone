@@ -12,15 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rpc
+package cmd
 
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+	"unsafe"
+
 	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/backup"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,20 +38,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/spf13/cobra"
-	"path/filepath"
-	"sort"
-	"strconv"
-	"strings"
-	"time"
-	"unsafe"
 )
 
 const (
-	invalidId    = 0xffffff
-	invalidLimit = 0xffffff
+	invalidId    = -1
+	invalidLimit = -1
 
 	brief    = 0
 	standard = 1
@@ -53,11 +56,14 @@ const (
 	checkpointDir = "ckp/"
 )
 
-func offlineInit() {
-	logutil.SetupMOLogger(&logutil.LogConfig{
-		Level:  "fatal",
-		Format: "console",
-	})
+//func init() {
+//	logutil.SetupMOLogger(&logutil.LogConfig{
+//		Level:  "fatal",
+//		Format: "console",
+//	})
+//}
+
+func initPipeline() {
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime(sid, rt)
 	blockio.Start(sid)
@@ -65,7 +71,7 @@ func offlineInit() {
 
 type ColumnJson struct {
 	Index       uint16   `json:"col_index"`
-	Type        string   `json:"col_type"`
+	Type        string   `json:"col_type,omitempty"`
 	Ndv         uint32   `json:"ndv,omitempty"`
 	NullCnt     uint32   `json:"null_count,omitempty"`
 	DataSize    string   `json:"data_size,omitempty"`
@@ -100,6 +106,23 @@ type tableStatJson struct {
 	ObjectCount  int    `json:"object_count"`
 	Size         string `json:"size"`
 	OriginalSize string `json:"original_size"`
+}
+
+type InputJson struct {
+	FileName   string `json:"file_name,omitempty"`
+	Level      int    `json:"level,omitempty"`
+	BlockId    int    `json:"block_id,omitempty"`
+	Columns    []int  `json:"columns,omitempty"`
+	Rows       []int  `json:"rows,omitempty"`
+	TableId    int    `json:"table_id,omitempty"`
+	DatabaseId int    `json:"db_id,omitempty"`
+	Local      bool   `json:"local,omitempty"`
+	All        bool   `json:"all,omitempty"`
+	Download   bool   `json:"download,omitempty"`
+	Target     string `json:"target,omitempty"`
+	Method     string `json:"method,omitempty"`
+	CkpEndTs   string `json:"ckp_end_ts,omitempty"`
+	Limit      int    `json:"limit,omitempty"`
 }
 
 func getInputs(input string, result *[]int) error {
@@ -147,6 +170,94 @@ func formatBytes[T Integer](size T) string {
 	}
 }
 
+func initFs(ctx context.Context, dir string, local bool) (fs fileservice.FileService, err error) {
+	if local {
+		cfg := fileservice.Config{
+			Name:    defines.LocalFileServiceName,
+			Backend: "DISK",
+			DataDir: dir,
+			Cache:   fileservice.DisabledCacheConfig,
+		}
+		fs, err = fileservice.NewFileService(ctx, cfg, nil)
+		return
+	}
+
+	arg := fileservice.ObjectStorageArguments{
+		Name:     defines.SharedFileServiceName,
+		Endpoint: "DISK",
+		Bucket:   dir,
+	}
+	return fileservice.NewS3FS(ctx, arg, fileservice.DisabledCacheConfig, nil, false, true)
+}
+
+func InitReader(fs fileservice.FileService, name string) (reader *objectio.ObjectReader, err error) {
+	return objectio.NewObjectReaderWithStr(name, fs)
+}
+
+type InspectContext struct {
+	Db     *db.DB
+	Acinfo *db.AccessInfo
+	Args   []string
+	Out    io.Writer
+	Resp   *db.InspectResp
+}
+
+// impl Pflag.Value interface
+func (i *InspectContext) String() string   { return "" }
+func (i *InspectContext) Set(string) error { return nil }
+func (i *InspectContext) Type() string     { return "ictx" }
+
+type InspectCmd interface {
+	FromCommand(cmd *cobra.Command) error
+	String() string
+	Run() error
+}
+
+func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
+	return func(cmd *cobra.Command, args []string) {
+		if err := t.FromCommand(cmd); err != nil {
+			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("parse err: %v", err)))
+			return
+		}
+		err := t.Run()
+		if err != nil {
+			cmd.OutOrStdout().Write(
+				[]byte(fmt.Sprintf("run err: %v", err)),
+			)
+		} else {
+			cmd.OutOrStdout().Write(
+				[]byte(fmt.Sprintf("%v", t.String())),
+			)
+		}
+	}
+}
+
+func RunInspect(ctx context.Context, inspectCtx *InspectContext) {
+	logutil.Infof("asdf inspect mo_ctl %v by account %+v", inspectCtx.Args, inspectCtx.Acinfo)
+	rootCmd := initCommand(ctx, inspectCtx)
+	err := rootCmd.Execute()
+	logutil.Infof("asdf inspect mo_ctl %v ", err)
+}
+
+func initCommand(_ context.Context, inspectCtx *InspectContext) *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use: "tools",
+	}
+
+	rootCmd.PersistentFlags().VarPF(inspectCtx, "ictx", "", "").Hidden = true
+
+	rootCmd.SetArgs(inspectCtx.Args)
+	rootCmd.SetErr(inspectCtx.Out)
+	rootCmd.SetOut(inspectCtx.Out)
+
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
+
+	inspectArg := &MoInspectArg{}
+	rootCmd.AddCommand(inspectArg.PrepareCommand())
+
+	return rootCmd
+}
+
 type MoInspectArg struct {
 }
 
@@ -157,7 +268,7 @@ func (c *MoInspectArg) PrepareCommand() *cobra.Command {
 		Long:  "Mo inspect is a visualization analysis tool",
 		Run:   RunFactory(c),
 	}
-
+	logutil.Infof("asdf inspect mo_ctl %v", c)
 	moInspectCmd.SetUsageTemplate(c.Usage())
 
 	obj := ObjArg{}
@@ -182,9 +293,9 @@ func (c *MoInspectArg) String() string {
 
 func (c *MoInspectArg) Usage() (res string) {
 	res += "Commands:\n"
-	res += fmt.Sprintf("  %-15v object analysis tool (offline)\n", "object")
-	res += fmt.Sprintf("  %-15v table analysis tool (online)\n", "table")
-	res += fmt.Sprintf("  %-15v checkpoint analysis tool (online/offline)\n", "checkpoint")
+	res += fmt.Sprintf("  %-15v object analysis tool \n", "object")
+	res += fmt.Sprintf("  %-15v table analysis tool \n", "table")
+	res += fmt.Sprintf("  %-15v checkpoint analysis tool \n", "checkpoint")
 
 	res += "\n"
 	res += "Usage:\n"
@@ -250,7 +361,7 @@ func (c *ObjArg) Run() (err error) {
 }
 
 type moObjStatArg struct {
-	ctx    *inspectContext
+	ctx    *InspectContext
 	level  int
 	dir    string
 	name   string
@@ -259,6 +370,7 @@ type moObjStatArg struct {
 	fs     fileservice.FileService
 	reader *objectio.ObjectReader
 	res    string
+	input  string
 	local  bool
 }
 
@@ -277,6 +389,7 @@ func (c *moObjStatArg) PrepareCommand() *cobra.Command {
 	statCmd.Flags().IntP("level", "l", brief, "level")
 	statCmd.Flags().StringP("name", "n", "", "name")
 	statCmd.Flags().BoolP("local", "", false, "local")
+	statCmd.Flags().StringP("input", "", "", "input file")
 
 	return statCmd
 }
@@ -287,10 +400,10 @@ func (c *moObjStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.level, _ = cmd.Flags().GetInt("level")
 	c.local, _ = cmd.Flags().GetBool("local")
 	path, _ := cmd.Flags().GetString("name")
+	c.input, _ = cmd.Flags().GetString("input")
 	c.dir, c.name = filepath.Split(path)
 	if cmd.Flag("ictx") != nil {
-		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-
+		c.ctx = cmd.Flag("ictx").Value.(*InspectContext)
 	}
 
 	return nil
@@ -328,24 +441,22 @@ func (c *moObjStatArg) Usage() (res string) {
 }
 
 func (c *moObjStatArg) Run() (err error) {
-	if c.ctx == nil {
-		offlineInit()
-	}
 	ctx := context.Background()
-	if err = c.checkInputs(); err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n", err))
+	if c.input != "" {
+		if err = c.getInputs(); err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get inputs: %v\n", err))
+		}
 	}
 
 	if c.ctx != nil {
-		c.fs = c.ctx.db.Runtime.Fs.Service
+		c.fs = c.ctx.Db.Runtime.Fs.Service
+	} else {
+		if c.fs, err = initFs(ctx, c.dir, c.local); err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs: %v\n", err))
+		}
 	}
 
-	fs, err := initFs(ctx, c.dir, c.local)
-	if err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs: %v\n", err))
-	}
-
-	if c.reader, err = InitReader(fs, c.name); err != nil {
+	if c.reader, err = InitReader(c.fs, c.name); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader %v\n", err))
 	}
 
@@ -354,50 +465,28 @@ func (c *moObjStatArg) Run() (err error) {
 	return
 }
 
-func initFs(ctx context.Context, dir string, local bool) (fs fileservice.FileService, err error) {
-	if local {
-		cfg := fileservice.Config{
-			Name:    defines.LocalFileServiceName,
-			Backend: "DISK",
-			DataDir: dir,
-			Cache:   fileservice.DisabledCacheConfig,
-		}
-		fs, err = fileservice.NewFileService(ctx, cfg, nil)
-		return
+func (c *moObjStatArg) getInputs() error {
+	var input InputJson
+	data, err := os.ReadFile(c.input)
+	if err != nil {
+		return err
 	}
-
-	arg := fileservice.ObjectStorageArguments{
-		Name:     defines.SharedFileServiceName,
-		Endpoint: "DISK",
-		Bucket:   dir,
+	if err = jsoniter.Unmarshal(data, &input); err != nil {
+		return err
 	}
-	return fileservice.NewS3FS(ctx, arg, fileservice.DisabledCacheConfig, nil, false, true)
-}
-
-func InitReader(fs fileservice.FileService, name string) (reader *objectio.ObjectReader, err error) {
-	return objectio.NewObjectReaderWithStr(name, fs)
-}
-
-func (c *moObjStatArg) checkInputs() error {
-	if c.level != brief && c.level != standard && c.level != detailed {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid level %v, should be 0, 1, 2 \n", c.level))
+	c.dir, c.name = filepath.Split(input.FileName)
+	c.id = input.BlockId
+	if len(input.Columns) > 0 {
+		c.col = input.Columns[0]
 	}
-
-	if c.name == "" {
-		return moerr.NewInfoNoCtx("empty name\n")
-	}
-
+	c.level = input.Level
+	c.local = input.Local
 	return nil
 }
 
 func (c *moObjStatArg) GetStat(ctx context.Context) (res string, err error) {
-	var m *mpool.MPool
 	var meta objectio.ObjectMeta
-	if m, err = mpool.NewMPool("data", 0, mpool.NoFixed); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to init mpool, err: %v\n", err))
-		return
-	}
-	if meta, err = c.reader.ReadAllMeta(ctx, m); err != nil {
+	if meta, err = c.reader.ReadAllMeta(ctx, common.DefaultAllocator); err != nil {
 		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to read meta, err: %v\n", err))
 		return
 	}
@@ -417,6 +506,8 @@ func (c *moObjStatArg) GetStat(ctx context.Context) (res string, err error) {
 		res, err = c.GetStandardStat(&meta)
 	case detailed:
 		res, err = c.GetDetailedStat(&meta)
+	default:
+		return "", moerr.NewInfoNoCtx("invalid level, should be 0, 1, 2\n")
 	}
 	return
 }
@@ -622,7 +713,7 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 }
 
 type objGetArg struct {
-	ctx        *inspectContext
+	ctx        *InspectContext
 	dir        string
 	name       string
 	id         int
@@ -633,6 +724,7 @@ type objGetArg struct {
 	res        string
 	target     string
 	method     string
+	input      string
 	local, all bool
 }
 
@@ -654,6 +746,7 @@ func (c *objGetArg) PrepareCommand() *cobra.Command {
 	getCmd.Flags().StringP("method", "m", "", "method")
 	getCmd.Flags().StringP("find", "f", "", "find")
 	getCmd.Flags().BoolP("all", "a", false, "all")
+	getCmd.Flags().StringP("input", "", "", "input file")
 
 	return getCmd
 }
@@ -666,11 +759,11 @@ func (c *objGetArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.target, _ = cmd.Flags().GetString("find")
 	c.method, _ = cmd.Flags().GetString("method")
 	c.all, _ = cmd.Flags().GetBool("all")
+	c.input, _ = cmd.Flags().GetString("input")
 	path, _ := cmd.Flags().GetString("name")
 	c.dir, c.name = filepath.Split(path)
 	if cmd.Flag("ictx") != nil {
-		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-
+		c.ctx = cmd.Flag("ictx").Value.(*InspectContext)
 	}
 
 	return nil
@@ -704,25 +797,48 @@ func (c *objGetArg) Usage() (res string) {
 	return
 }
 
-func (c *objGetArg) Run() (err error) {
-	if c.ctx == nil {
-		offlineInit()
+func (c *objGetArg) getInputs() error {
+	var input InputJson
+	data, err := os.ReadFile(c.input)
+	if err != nil {
+		return err
 	}
+	if err = jsoniter.Unmarshal(data, &input); err != nil {
+		return err
+	}
+	c.dir, c.name = filepath.Split(input.FileName)
+	c.id = input.BlockId
+	c.cols = input.Columns
+	c.rows = input.Rows
+	c.local = input.Local
+	c.all = input.All
+	c.target = input.Target
+	c.method = input.Method
+
+	return nil
+}
+
+func (c *objGetArg) Run() (err error) {
 	ctx := context.Background()
-	if err = c.checkInputs(); err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n\n", err))
+	if c.input != "" {
+		if err = c.getInputs(); err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get inputs: %v\n", err))
+		}
+	} else {
+		if err = c.checkInputs(); err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n", err))
+		}
 	}
 
 	if c.ctx != nil {
-		c.fs = c.ctx.db.Runtime.Fs.Service
+		c.fs = c.ctx.Db.Runtime.Fs.Service
+	} else {
+		if c.fs, err = initFs(ctx, c.dir, c.local); err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs: %v\n", err))
+		}
 	}
 
-	fs, err := initFs(ctx, c.dir, c.local)
-	if err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs: %v\n", err))
-	}
-
-	if c.reader, err = InitReader(fs, c.name); err != nil {
+	if c.reader, err = InitReader(c.fs, c.name); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader %v\n", err))
 	}
 
@@ -749,15 +865,10 @@ func (c *objGetArg) checkInputs() error {
 }
 
 func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
-	var m *mpool.MPool
 	var meta objectio.ObjectMeta
-	if m, err = mpool.NewMPool("data", 0, mpool.NoFixed); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to init mpool, err: %v\n", err))
-		return
-	}
 	ctx1, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if meta, err = c.reader.ReadAllMeta(ctx1, m); err != nil {
+	if meta, err = c.reader.ReadAllMeta(ctx1, common.DefaultAllocator); err != nil {
 		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to read meta, err: %v\n", err))
 		return
 	}
@@ -794,7 +905,7 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 
 	ctx2, cancel2 := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel2()
-	v, _ := c.reader.ReadOneBlock(ctx2, idxs, typs, uint16(c.id), m)
+	v, _ := c.reader.ReadOneBlock(ctx2, idxs, typs, uint16(c.id), common.DefaultAllocator)
 	defer v.Release()
 	cols := make([]ColumnJson, 0, len(v.Entries))
 	for i, entry := range v.Entries {
@@ -1200,9 +1311,9 @@ func (c *TableArg) Run() error {
 }
 
 type tableStatArg struct {
-	ctx                     *inspectContext
+	ctx                     *InspectContext
 	did, tid, ori, com, cnt int
-	name, res               string
+	name, res, input        string
 }
 
 func (c *tableStatArg) PrepareCommand() *cobra.Command {
@@ -1224,7 +1335,7 @@ func (c *tableStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.tid, _ = cmd.Flags().GetInt("tid")
 	c.did, _ = cmd.Flags().GetInt("did")
 	if cmd.Flag("ictx") != nil {
-		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+		c.ctx = cmd.Flag("ictx").Value.(*InspectContext)
 	}
 	return nil
 }
@@ -1249,16 +1360,15 @@ func (c *tableStatArg) Usage() (res string) {
 }
 
 func (c *tableStatArg) Run() (err error) {
+	if c.input != "" {
+		if err = c.getInputs(); err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get inputs: %v\n", err))
+		}
+	}
 	if c.ctx == nil {
 		return moerr.NewInfoNoCtx("it is an online command\n")
 	}
-	if c.did == 0 {
-		return moerr.NewInfoNoCtx("invalid database id\n")
-	}
-	if c.tid == 0 {
-		return moerr.NewInfoNoCtx("invalid table id\n")
-	}
-	db, err := c.ctx.db.Catalog.GetDatabaseByID(uint64(c.did))
+	db, err := c.ctx.Db.Catalog.GetDatabaseByID(uint64(c.did))
 	if err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get db %v\n", c.did))
 	}
@@ -1292,6 +1402,21 @@ func (c *tableStatArg) Run() (err error) {
 	c.res = string(data)
 
 	return
+}
+
+func (c *tableStatArg) getInputs() error {
+	var input InputJson
+	data, err := os.ReadFile(c.input)
+	if err != nil {
+		return err
+	}
+	if err = jsoniter.Unmarshal(data, &input); err != nil {
+		return err
+	}
+	c.did = input.DatabaseId
+	c.tid = input.TableId
+
+	return nil
 }
 
 type CheckpointArg struct {
@@ -1344,13 +1469,13 @@ func (c *CheckpointArg) Run() error {
 }
 
 type ckpStatArg struct {
-	ctx   *inspectContext
+	ctx   *InspectContext
 	cid   string
 	tid   uint64
 	limit int
 	all   bool
 
-	path, name, res string
+	path, name, res, input string
 }
 
 func (c *ckpStatArg) PrepareCommand() *cobra.Command {
@@ -1368,6 +1493,7 @@ func (c *ckpStatArg) PrepareCommand() *cobra.Command {
 	ckpStatCmd.Flags().IntP("limit", "l", invalidLimit, "checkpoint limit")
 	ckpStatCmd.Flags().BoolP("all", "a", false, "checkpoint all tables")
 	ckpStatCmd.Flags().StringP("name", "n", "", "checkpoint name")
+	ckpStatCmd.Flags().StringP("input", "", "", "checkpoint input")
 
 	return ckpStatCmd
 }
@@ -1378,10 +1504,11 @@ func (c *ckpStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.tid = uint64(id)
 	c.all, _ = cmd.Flags().GetBool("all")
 	c.limit, _ = cmd.Flags().GetInt("limit")
+	c.input, _ = cmd.Flags().GetString("input")
 	dir, _ := cmd.Flags().GetString("name")
 	c.path, c.name = filepath.Split(dir)
 	if cmd.Flag("ictx") != nil {
-		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+		c.ctx = cmd.Flag("ictx").Value.(*InspectContext)
 	}
 	return nil
 }
@@ -1415,9 +1542,33 @@ func (c *ckpStatArg) Usage() (res string) {
 	return
 }
 
+func (c *ckpStatArg) getInputs() error {
+	var input InputJson
+	data, err := os.ReadFile(c.input)
+	if err != nil {
+		return err
+	}
+	if err = jsoniter.Unmarshal(data, &input); err != nil {
+		return err
+	}
+
+	c.path, c.name = filepath.Split(input.FileName)
+	c.cid = input.CkpEndTs
+	c.tid = uint64(input.TableId)
+	c.limit = input.Limit
+	c.all = input.All
+
+	return nil
+}
+
 func (c *ckpStatArg) Run() (err error) {
 	if c.ctx == nil {
-		offlineInit()
+		initPipeline()
+	}
+	if c.input != "" {
+		if err = c.getInputs(); err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get inputs, err %v\n", err))
+		}
 	}
 	ctx := context.Background()
 	var fs fileservice.FileService
@@ -1427,7 +1578,7 @@ func (c *ckpStatArg) Run() (err error) {
 			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs %v, %v\n", c.cid, err))
 		}
 	} else {
-		fs = c.ctx.db.Runtime.Fs.Service
+		fs = c.ctx.Db.Runtime.Fs.Service
 	}
 	checkpointJson := logtail.ObjectInfoJson{}
 	entries, err := getCkpEntries(ctx, c.ctx, c.path, c.name, false)
@@ -1550,7 +1701,7 @@ func readCkpFromDisk(ctx context.Context, path, name string) (res []*checkpoint.
 	return
 }
 
-func getCkpEntries(ctx context.Context, context *inspectContext, path, name string, all bool,
+func getCkpEntries(ctx context.Context, context *InspectContext, path, name string, all bool,
 ) (entries []*checkpoint.CheckpointEntry, err error) {
 	if context == nil {
 		entries, err = readCkpFromDisk(ctx, path, name)
@@ -1559,10 +1710,10 @@ func getCkpEntries(ctx context.Context, context *inspectContext, path, name stri
 		}
 	} else {
 		if all {
-			entries = context.db.BGCheckpointRunner.GetAllGlobalCheckpoints()
-			entries = append(entries, context.db.BGCheckpointRunner.GetAllIncrementalCheckpoints()...)
+			entries = context.Db.BGCheckpointRunner.GetAllGlobalCheckpoints()
+			entries = append(entries, context.Db.BGCheckpointRunner.GetAllIncrementalCheckpoints()...)
 		} else {
-			entries = context.db.BGCheckpointRunner.GetAllCheckpoints()
+			entries = context.Db.BGCheckpointRunner.GetAllCheckpoints()
 		}
 	}
 
@@ -1605,9 +1756,10 @@ type CkpEntries struct {
 }
 
 type ckpListArg struct {
-	ctx   *inspectContext
+	ctx   *InspectContext
 	cid   string
 	limit int
+	input string
 
 	all, download   bool
 	res, path, name string
@@ -1627,18 +1779,20 @@ func (c *ckpListArg) PrepareCommand() *cobra.Command {
 	ckpListCmd.Flags().BoolP("all", "a", false, "all")
 	ckpListCmd.Flags().StringP("name", "n", "", "name")
 	ckpListCmd.Flags().BoolP("download", "d", false, "download")
+	ckpListCmd.Flags().StringP("input", "", "", "input")
 
 	return ckpListCmd
 }
 
 func (c *ckpListArg) FromCommand(cmd *cobra.Command) (err error) {
 	if cmd.Flag("ictx") != nil {
-		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+		c.ctx = cmd.Flag("ictx").Value.(*InspectContext)
 	}
 	c.cid, _ = cmd.Flags().GetString("cid")
 	c.limit, _ = cmd.Flags().GetInt("limit")
 	c.all, _ = cmd.Flags().GetBool("all")
 	c.download, _ = cmd.Flags().GetBool("download")
+	c.input, _ = cmd.Flags().GetString("input")
 	dir, _ := cmd.Flags().GetString("name")
 	c.path, c.name = filepath.Split(dir)
 	return nil
@@ -1676,7 +1830,12 @@ func (c *ckpListArg) Usage() (res string) {
 
 func (c *ckpListArg) Run() (err error) {
 	if c.ctx == nil {
-		offlineInit()
+		initPipeline()
+	}
+	if c.input != "" {
+		if err = c.getInputs(); err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get inputs, err %v\n", err))
+		}
 	}
 	ctx := context.Background()
 	if c.download {
@@ -1696,7 +1855,29 @@ func (c *ckpListArg) Run() (err error) {
 	} else {
 		c.res, err = c.getTableList(ctx)
 	}
+
+	logutil.Infof("asdf checkpoint list: %v", c.res)
+
 	return
+}
+
+func (c *ckpListArg) getInputs() error {
+	var input InputJson
+	data, err := os.ReadFile(c.input)
+	if err != nil {
+		return err
+	}
+	if err = jsoniter.Unmarshal(data, &input); err != nil {
+		return err
+	}
+
+	c.path, c.name = filepath.Split(input.FileName)
+	c.cid = input.CkpEndTs
+	c.limit = input.Limit
+	c.all = input.All
+	c.download = input.Download
+
+	return nil
 }
 
 func (c *ckpListArg) getCkpList() (res string, err error) {
@@ -1761,7 +1942,7 @@ func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
 			return "", moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fileservice, err %v\n", err))
 		}
 	} else {
-		fs = c.ctx.db.Runtime.Fs.Service
+		fs = c.ctx.Db.Runtime.Fs.Service
 	}
 	var ids []uint64
 	for _, entry := range entries {
@@ -1793,7 +1974,7 @@ func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
 }
 
 func (c *ckpListArg) DownLoadEntries(ctx context.Context) (cnt int, err error) {
-	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	entries := c.ctx.Db.BGCheckpointRunner.GetAllCheckpoints()
 	entry := entries[len(entries)-1]
 	metaDir := "meta_0-0_" + entry.GetEnd().ToString()
 	metaName := "meta_" + entry.GetStart().ToString() + "_" + entry.GetEnd().ToString() + ".ckp"
@@ -1802,8 +1983,8 @@ func (c *ckpListArg) DownLoadEntries(ctx context.Context) (cnt int, err error) {
 		cnt++
 		return backup.DownloadFile(
 			ctx,
-			c.ctx.db.Runtime.Fs.Service,
-			c.ctx.db.Runtime.LocalFs.Service,
+			c.ctx.Db.Runtime.Fs.Service,
+			c.ctx.Db.Runtime.LocalFs.Service,
 			name,
 			newName,
 			dir,
@@ -1824,7 +2005,7 @@ func (c *ckpListArg) DownLoadEntries(ctx context.Context) (cnt int, err error) {
 				return 0, err
 			}
 		}
-		data, err := getCkpData(context.Background(), entry, c.ctx.db.Runtime.Fs)
+		data, err := getCkpData(context.Background(), entry, c.ctx.Db.Runtime.Fs)
 		if err != nil {
 			return 0, err
 		}

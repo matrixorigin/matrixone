@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/shlex"
+	"github.com/matrixorigin/matrixone/cmd/cmd"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -331,6 +332,38 @@ func (h *Handle) HandleInspectTN(
 		resp:   resp,
 	}
 	RunInspect(ctx, inspectCtx)
+	resp.Message = b.String()
+	return nil, nil
+}
+
+func (h *Handle) HandleToolsTn(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.InspectTN,
+	resp *db.InspectResp) (cb func(), err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(ctx, e)
+			logutil.Error(
+				"panic in tools dn",
+				zap.String("cmd", req.Operation),
+				zap.String("error", err.Error()))
+		}
+	}()
+	args, _ := shlex.Split(req.Operation)
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("Tools", zap.Strings("args", args))
+	})
+	b := &bytes.Buffer{}
+
+	inspectCtx := &cmd.InspectContext{
+		Db:     h.db,
+		Acinfo: &req.AccessInfo,
+		Args:   args,
+		Out:    b,
+		Resp:   resp,
+	}
+	cmd.RunInspect(ctx, inspectCtx)
 	resp.Message = b.String()
 	return nil, nil
 }

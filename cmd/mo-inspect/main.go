@@ -15,12 +15,12 @@
 package mo_inspect
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
+	"github.com/matrixorigin/matrixone/cmd/cmd"
 	"github.com/spf13/cobra"
 )
 
 func PrepareCommand() *cobra.Command {
-	inspect := rpc.MoInspectArg{}
+	inspect := cmd.MoInspectArg{}
 
 	return inspect.PrepareCommand()
 }

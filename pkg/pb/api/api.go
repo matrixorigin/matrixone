@@ -32,6 +32,7 @@ var (
 		OpCode_OpInterceptCommit:  "InterceptCommit",
 		OpCode_OpCommitMerge:      "CommitMerge",
 		OpCode_OpDiskDiskCleaner:  "DiskCleaner",
+		OpCode_OpTools:            "Tools",
 	}
 )
 
