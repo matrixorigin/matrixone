@@ -74,6 +74,10 @@ func NewDiskCache(
 					perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
 						set.FileService.Cache.Disk.Evict.Add(1)
 					}, perfCounterSets...)
+				} else if !os.IsNotExist(err) {
+					logutil.Error("delete disk cache file",
+						zap.Any("error", err),
+					)
 				}
 			},
 			func(key string) uint8 {
@@ -155,6 +159,13 @@ func (d *DiskCache) loadCache() {
 		zap.Any("all files", numFiles),
 		zap.Any("cache files", numCacheFiles),
 		zap.Any("time", time.Since(t0)),
+	)
+
+	done := make(chan int64, 1)
+	d.cache.Evict(done)
+	target := <-done
+	logutil.Info("disk cache evict done",
+		zap.Any("target", target),
 	)
 
 }
@@ -360,6 +371,9 @@ func (d *DiskCache) writeFile(
 	diskPath string,
 	openReader func(context.Context) (io.ReadCloser, error),
 ) (written bool, err error) {
+
+	// do eviction before write
+	d.cache.Evict(nil)
 
 	var numCreate, numStat, numError, numWrite int64
 	defer func() {

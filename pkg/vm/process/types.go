@@ -460,7 +460,7 @@ func (proc *Process) GetValueScanBatchs() []*batch.Batch {
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 	if i < 0 || i >= proc.prepareParams.Length() {
-		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
+		return nil, moerr.NewInternalErrorf(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
 	if proc.prepareParams.IsNull(uint64(i)) {
 		return nil, nil

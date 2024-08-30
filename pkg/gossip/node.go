@@ -115,7 +115,7 @@ func (n *Node) Create() error {
 
 	ml, err := memberlist.Create(cfg)
 	if err != nil {
-		return moerr.NewInternalError(n.ctx, "CN gossip create node failed: %s", err)
+		return moerr.NewInternalErrorf(n.ctx, "CN gossip create node failed: %s", err)
 	}
 	n.list = ml
 	n.created = true

@@ -79,7 +79,7 @@ func init() {
 	traceIDSpanIDCsvStr = fmt.Sprintf(`%s,%s`, sc.TraceID.String(), sc.SpanID.String())
 
 	if err := agent.Listen(agent.Options{}); err != nil {
-		_ = moerr.NewInternalError(DefaultContext(), "listen gops agent failed: %s", err)
+		_ = moerr.NewInternalErrorf(DefaultContext(), "listen gops agent failed: %s", err)
 		panic(err)
 	}
 	fmt.Println("Finish tests init.")

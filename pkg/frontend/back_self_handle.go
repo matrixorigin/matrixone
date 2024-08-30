@@ -89,7 +89,7 @@ func execInFrontendInBack(backSes *backSession,
 			return
 		}
 	default:
-		return moerr.NewInternalError(execCtx.reqCtx, "backExec does not support %s", execCtx.sqlOfStmt)
+		return moerr.NewInternalErrorf(execCtx.reqCtx, "backExec does not support %s", execCtx.sqlOfStmt)
 	}
 	return
 }

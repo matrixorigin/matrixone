@@ -204,7 +204,7 @@ func validateArgs(vectorList [][]float64, clusterCnt,
 		return moerr.NewInternalErrorNoCtx("input vectors is empty")
 	}
 	if clusterCnt > len(vectorList) {
-		return moerr.NewInternalErrorNoCtx("cluster count is larger than vector count %d > %d", clusterCnt, len(vectorList))
+		return moerr.NewInternalErrorNoCtxf("cluster count is larger than vector count %d > %d", clusterCnt, len(vectorList))
 	}
 	if maxIterations < 0 {
 		return moerr.NewInternalErrorNoCtx("max iteration is out of bounds (must be >= 0)")

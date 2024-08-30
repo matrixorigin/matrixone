@@ -52,7 +52,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 				colPos = -colPos
 			}
 			if colPos < 1 || int(colPos) > len(b.ctx.projects) {
-				return nil, moerr.NewSyntaxError(b.GetContext(), "ORDER BY position %v is not in select list", colPos)
+				return nil, moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is not in select list", colPos)
 			}
 
 			colPos = colPos - 1

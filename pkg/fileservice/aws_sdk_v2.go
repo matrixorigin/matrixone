@@ -185,7 +185,7 @@ func NewAwsSDKv2(
 			Bucket: ptrTo(args.Bucket),
 		})
 		if err != nil {
-			return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
+			return nil, moerr.NewInternalErrorNoCtxf("bad s3 config: %v", err)
 		}
 	}
 
@@ -476,7 +476,7 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 		}
 	}
 	if message.Len() > 0 {
-		return moerr.NewInternalErrorNoCtx("S3 Delete failed: %s", message.String())
+		return moerr.NewInternalErrorNoCtxf("S3 Delete failed: %s", message.String())
 	}
 	return nil
 }

@@ -89,7 +89,7 @@ func Sin(v float64) (float64, error) {
 func Sinh(v float64) (float64, error) {
 	r := math.Sinh(v)
 	if math.IsInf(r, 0) {
-		return 0, moerr.NewOutOfRangeNoCtx("float64", "DOUBLE value is out of range in 'sinh(%v)'", v)
+		return 0, moerr.NewOutOfRangeNoCtxf("float64", "DOUBLE value is out of range in 'sinh(%v)'", v)
 	}
 	return r, nil
 }
@@ -107,7 +107,7 @@ func AbsSigned[T constraints.Signed | constraints.Float](v T) (T, error) {
 	if v < 0 {
 		// This could occur for int8 (-128 to 127)
 		// If the v is -128 and if we multiply by -1 = 128, which is out of range of int8. It could give a -ve value for such case.
-		return 0, moerr.NewOutOfRangeNoCtx("int", "'%v'", v)
+		return 0, moerr.NewOutOfRangeNoCtxf("int", "'%v'", v)
 	}
 	return v, nil
 }

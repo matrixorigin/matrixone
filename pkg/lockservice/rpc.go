@@ -322,7 +322,7 @@ func (s *server) onMessage(
 
 	handler, ok := s.handlers[req.Method]
 	if !ok {
-		err := moerr.NewNotSupportedNoCtx("method [%s], from %s, current %s",
+		err := moerr.NewNotSupportedNoCtxf("method [%s], from %s, current %s",
 			req.Method.String(),
 			cs.RemoteAddress(),
 			s.address)

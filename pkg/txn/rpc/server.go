@@ -34,9 +34,10 @@ import (
 )
 
 var methodVersions = map[txn.TxnMethod]int64{
-	txn.TxnMethod_Read:   defines.MORPCVersion1,
-	txn.TxnMethod_Write:  defines.MORPCVersion1,
-	txn.TxnMethod_Commit: defines.MORPCVersion1,
+	txn.TxnMethod_Read:     defines.MORPCVersion1,
+	txn.TxnMethod_Write:    defines.MORPCVersion1,
+	txn.TxnMethod_Commit:   defines.MORPCVersion1,
+	txn.TxnMethod_Rollback: defines.MORPCVersion1,
 
 	txn.TxnMethod_Prepare:         defines.MORPCVersion1,
 	txn.TxnMethod_CommitTNShard:   defines.MORPCVersion1,
@@ -212,7 +213,7 @@ func (s *server) onMessage(
 	}
 	handler, ok := s.handlers[m.Method]
 	if !ok {
-		return moerr.NewNotSupported(ctx, "unknown txn request method: %s", m.Method.String())
+		return moerr.NewNotSupportedf(ctx, "unknown txn request method: %s", m.Method.String())
 	}
 
 	select {
