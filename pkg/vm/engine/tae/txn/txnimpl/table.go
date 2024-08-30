@@ -624,10 +624,10 @@ func (tbl *txnTable) dedup(ctx context.Context, pk containers.Vector, isTombston
 			return
 		}
 	}
-	if dedupType.SkipOldCommit() && dedupType.SkipNewCommit() {
+	if dedupType.SkipTargetAllCommitted() {
 		return
 	}
-	if !dedupType.SkipOldCommit() {
+	if !dedupType.SkipTargetOldCommitted() {
 		if err = tbl.DedupSnapByPK(
 			ctx,
 			pk, false, isTombstone); err != nil {
@@ -802,7 +802,7 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool) (err
 	}
 	var zm index.ZM
 	dedupType := tbl.store.txn.GetDedupType()
-	if !dedupType.SkipPersisted() {
+	if !dedupType.SkipSourcePersisted() {
 		for _, stats := range baseTable.tableSpace.stats {
 			err = tbl.DoPrecommitDedupByNode(ctx, stats, isTombstone)
 			if err != nil {
