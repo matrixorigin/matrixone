@@ -778,6 +778,21 @@ type Ranges interface {
 
 var _ Ranges = (*objectio.BlockInfoSlice)(nil)
 
+type Hint int
+
+const (
+	Checkpoint Hint = iota
+	Tail_wip
+	Tail_done
+)
+type ChangesHandle interface {
+	//两个batch都为空，结束。然后close
+	//batch每列的字段
+	//    data 用户定义列，ts
+	//    tombstone 主键，ts
+	Next() (data *batch.Batch, tombstone *batch.Batch, hint Hint, err error)
+	Close() error
+}
 type Relation interface {
 	Statistics
 
@@ -788,7 +803,7 @@ type Relation interface {
 	Ranges(context.Context, []*plan.Expr, int) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int) (Tombstoner, error)
-
+	CollectChanges(from, to types.TS) (ChangesHandle, error)
 	TableDefs(context.Context) ([]TableDef, error)
 
 	// Get complete tableDef information, including columns, constraints, partitions, version, comments, etc

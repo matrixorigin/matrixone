@@ -29,7 +29,7 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
-func (tbl *txnTable) CollectChanges(from, to types.TS) (ChangesHandle, error) {
+func (tbl *txnTable) CollectChanges(from, to types.TS) (engine.ChangesHandle, error) {
 	if from.IsEmpty() {
 		return NewCheckpointChangesHandle(to, tbl)
 	}
@@ -45,7 +45,7 @@ type ChangesHandle interface {
 	//batch每列的字段
 	//    data 用户定义列，ts
 	//    tombstone 主键，ts
-	Next() (data *batch.Batch, tombstone *batch.Batch, hint logtailreplay.Hint, err error)
+	Next() (data *batch.Batch, tombstone *batch.Batch, hint engine.Hint, err error)
 	Close() error
 }
 type CheckpointChangesHandle struct {
@@ -68,8 +68,8 @@ func NewCheckpointChangesHandle(end types.TS, table *txnTable) (*CheckpointChang
 	return handle, err
 }
 
-func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Batch, hint logtailreplay.Hint, err error) {
-	hint = logtailreplay.Checkpoint
+func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Batch, hint engine.Hint, err error) {
+	hint = engine.Checkpoint
 
 	isEnd, err := h.reader.Read(
 		context.TODO(),

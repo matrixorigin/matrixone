@@ -28,18 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	taeCatalog "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/tidwall/btree"
-)
-
-type Hint int
-
-const (
-	Checkpoint Hint = iota
-	Tail_wip
-	Tail_done
 )
 
 const (
@@ -317,7 +310,7 @@ func (p *ChangeHandler) Close() error {
 	p.tombstoneHandle.Close()
 	return nil
 }
-func (p *ChangeHandler) Next() (data, tombstone *batch.Batch, hint Hint, err error) {
+func (p *ChangeHandler) Next() (data, tombstone *batch.Batch, hint engine.Hint, err error) {
 	data, err = p.dataHandle.Next()
 	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 		return
@@ -331,7 +324,7 @@ func (p *ChangeHandler) Next() (data, tombstone *batch.Batch, hint Hint, err err
 	} else {
 		err = nil
 	}
-	hint = Tail_wip
+	hint = engine.Tail_wip
 	return
 }
 func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {

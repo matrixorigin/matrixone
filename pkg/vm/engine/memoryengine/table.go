@@ -43,6 +43,7 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
+func (t *Table) CollectChanges(from, to types.TS) (engine.ChangesHandle, error) { panic("not support") }
 func (t *Table) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	return nil, nil
 }
