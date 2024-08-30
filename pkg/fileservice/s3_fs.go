@@ -525,6 +525,7 @@ read_memory_cache:
 		goto read_memory_cache
 	}
 
+	// Record diskIO and netwokIO(un memory IO) resource
 	ioStart := time.Now()
 	defer func() {
 		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
