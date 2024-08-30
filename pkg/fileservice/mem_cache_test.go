@@ -146,11 +146,17 @@ func TestHighConcurrency(t *testing.T) {
 }
 
 func TestMemoryCacheGlobalSizeHint(t *testing.T) {
-	cache := newMemoryCache(
-		fscache.ConstCapacity(1<<20),
-		false,
+	cache := NewMemCache(
+		newMemoryCache(
+			fscache.ConstCapacity(1<<20),
+			false,
+			nil,
+		),
 		nil,
+		"test",
 	)
+	defer cache.Close()
+
 	ch := make(chan int64, 1)
 	cache.Evict(ch)
 	n := <-ch
@@ -165,6 +171,14 @@ func TestMemoryCacheGlobalSizeHint(t *testing.T) {
 	n = <-ch
 	if n > 1<<10 {
 		t.Fatalf("got %v", n)
+	}
+
+	// shrink
+	GlobalMemoryCacheSizeHint.Store(1 << 9)
+	defer GlobalMemoryCacheSizeHint.Store(0)
+	ret := EvictMemoryCaches()
+	if ret["test"] > 1<<9 {
+		t.Fatalf("got %v", ret)
 	}
 
 }

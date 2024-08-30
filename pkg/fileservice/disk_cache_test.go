@@ -615,9 +615,10 @@ func TestDiskCacheGlobalSizeHint(t *testing.T) {
 		fscache.ConstCapacity(1<<20),
 		nil,
 		false,
-		"",
+		"test",
 	)
 	assert.Nil(t, err)
+	defer cache.Close()
 
 	ch := make(chan int64, 1)
 	cache.Evict(ch)
@@ -633,6 +634,14 @@ func TestDiskCacheGlobalSizeHint(t *testing.T) {
 	n = <-ch
 	if n > 1<<10 {
 		t.Fatalf("got %v", n)
+	}
+
+	// shrink
+	GlobalDiskCacheSizeHint.Store(1 << 9)
+	defer GlobalDiskCacheSizeHint.Store(0)
+	ret := EvictDiskCaches()
+	if ret["test"] > 1<<9 {
+		t.Fatalf("got %v", ret)
 	}
 
 }
