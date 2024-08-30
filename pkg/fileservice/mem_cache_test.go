@@ -47,7 +47,6 @@ func TestMemCacheLeak(t *testing.T) {
 
 	size := int64(4 * runtime.GOMAXPROCS(0))
 	m := NewMemCache(newMemoryCache(fscache.ConstCapacity(size), true, nil), nil, "")
-	defer m.Close()
 
 	vec := &IOVector{
 		FilePath: "foo",

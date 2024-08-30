@@ -502,7 +502,21 @@ func (s *service) handleFileServiceCacheRequest(
 func (s *service) handleFileServiceCacheEvictRequest(
 	ctx context.Context, req *query.Request, resp *query.Response,
 ) error {
-	//TODO
-	resp.FileServiceCacheEvictResponse.Message = "Not Implemented"
+
+	var ret map[string]int64
+	switch req.FileServiceCacheEvictRequest.Type {
+	case query.FileServiceCacheType_Disk:
+		ret = fileservice.EvictDiskCaches()
+	case query.FileServiceCacheType_Memory:
+		ret = fileservice.EvictMemoryCaches()
+	}
+
+	for _, target := range ret {
+		resp.FileServiceCacheEvictResponse.CacheSize = target
+		resp.FileServiceCacheEvictResponse.CacheCapacity = target
+		// usually one instance
+		break
+	}
+
 	return nil
 }
