@@ -124,13 +124,14 @@ func (d *DiskCache) loadCache() {
 		}()
 	}
 
-	var numFiles, numCacheFiles int
+	var numFiles, numCacheFiles, numTempFiles, numDeleted int
 
 	_ = filepath.WalkDir(d.path, func(path string, entry os.DirEntry, err error) error {
 		numFiles++
 		if err != nil {
 			return nil //ignore
 		}
+
 		if entry.IsDir() {
 			// try remove if empty. for cleaning old structure
 			if path != d.path {
@@ -138,9 +139,27 @@ func (d *DiskCache) loadCache() {
 				_ = os.Remove(path)
 			}
 			return nil
-		}
-		if !strings.HasSuffix(entry.Name(), cacheFileSuffix) {
-			return nil
+
+		} else {
+			// plain files
+			if !strings.HasSuffix(entry.Name(), cacheFileSuffix) {
+				// not cache file
+				if strings.HasSuffix(entry.Name(), cacheFileTempSuffix) {
+					numTempFiles++
+					// temp file
+					info, err := entry.Info()
+					if err == nil && time.Since(info.ModTime()) > time.Hour*8 {
+						// old temp file
+						_ = os.Remove(path)
+						numDeleted++
+					}
+				} else {
+					// unknown file
+					_ = os.Remove(path)
+					numDeleted++
+				}
+				return nil
+			}
 		}
 
 		numCacheFiles++
@@ -158,6 +177,8 @@ func (d *DiskCache) loadCache() {
 	logutil.Info("disk cache info loaded",
 		zap.Any("all files", numFiles),
 		zap.Any("cache files", numCacheFiles),
+		zap.Any("temp files", numTempFiles),
+		zap.Any("deleted files", numDeleted),
 		zap.Any("time", time.Since(t0)),
 	)
 
@@ -419,10 +440,17 @@ func (d *DiskCache) writeFile(
 	if err != nil {
 		return false, err
 	}
-	f, err := os.CreateTemp(dir, "*")
+	f, err := os.CreateTemp(dir, "*"+cacheFileTempSuffix)
 	if err != nil {
 		return false, err
 	}
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(f.Name())
+		}
+	}()
+
 	numCreate++
 	from, err := openReader(ctx)
 	if err != nil {
@@ -434,8 +462,6 @@ func (d *DiskCache) writeFile(
 	defer put.Put()
 	_, err = io.CopyBuffer(f, from, buf)
 	if err != nil {
-		f.Close()
-		os.Remove(f.Name())
 		return false, err
 	}
 
@@ -468,7 +494,10 @@ func (d *DiskCache) writeFile(
 func (d *DiskCache) Flush() {
 }
 
-const cacheFileSuffix = ".mofscache"
+const (
+	cacheFileSuffix     = ".mofscache"
+	cacheFileTempSuffix = cacheFileSuffix + ".tmp"
+)
 
 func (d *DiskCache) pathForIOEntry(path string, entry IOEntry) string {
 	if entry.Size < 0 {
