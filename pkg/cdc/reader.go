@@ -10,6 +10,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -80,7 +81,7 @@ func (reader *tableReader) Run(
 			ar,
 		)
 		if err != nil {
-			//TODO:
+			logutil.Errorf("reader %v failed err:%v", reader.info, err)
 		}
 	}
 }
