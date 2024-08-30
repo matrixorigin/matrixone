@@ -570,7 +570,7 @@ func TestDiskCacheClearFiles(t *testing.T) {
 	assert.Nil(t, err)
 	numFiles := len(files)
 
-	_, err = NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false)
+	_, err = NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, "")
 	assert.Nil(t, err)
 
 	files, err = filepath.Glob(filepath.Join(dir, "*"))
@@ -584,7 +584,7 @@ func TestDiskCacheClearFiles(t *testing.T) {
 func TestDiskCacheBadWrite(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
-	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false)
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, "")
 	assert.Nil(t, err)
 
 	written, err := cache.writeFile(
