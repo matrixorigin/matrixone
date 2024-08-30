@@ -149,7 +149,7 @@ func (relData *blockListRelData) MarshalBinaryWithBuffer(w *bytes.Buffer) (err e
 		if err = relData.tombstones.MarshalBinaryWithBuffer(w); err != nil {
 			return
 		}
-		tombstoneLen = uint32(w.Len() - offset)
+		tombstoneLen = uint32(w.Len() - offset - 4)
 		buf := w.Bytes()
 		copy(buf[offset:], types.EncodeUint32(&tombstoneLen))
 	}

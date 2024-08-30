@@ -34,6 +34,8 @@ func (t eventType) String() string {
 		return "SetVar"
 	case TypeQuit:
 		return "Quit"
+	case TypeUpgrade:
+		return "Upgrade"
 	}
 	return "Unknown"
 }
@@ -45,6 +47,8 @@ const (
 	TypeSetVar eventType = 2
 	// TypeQuit indicates the exit cmd.
 	TypeQuit eventType = 3
+	// TypeUpgrade indicates the "upgrade account all" statement.
+	TypeUpgrade eventType = 4
 )
 
 // IEvent is the event interface.
@@ -106,6 +110,8 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 		case *tree.SetVar:
 			// This event should be sent to dst, so return false,
 			return makeSetVarEvent(sql), false
+		case *tree.UpgradeStatement:
+			return makeUpgradeEvent(sql), true
 		default:
 			return nil, false
 		}
@@ -178,5 +184,21 @@ func makeQuitEvent() IEvent {
 		},
 	}
 	e.typ = TypeQuit
+	return e
+}
+
+type upgradeEvent struct {
+	baseEvent
+	stmt string
+}
+
+func makeUpgradeEvent(stmt string) IEvent {
+	e := &upgradeEvent{
+		baseEvent: baseEvent{
+			waitC: make(chan struct{}),
+		},
+		stmt: stmt,
+	}
+	e.typ = TypeUpgrade
 	return e
 }

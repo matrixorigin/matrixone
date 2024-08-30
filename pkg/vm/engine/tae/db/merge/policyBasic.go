@@ -79,7 +79,7 @@ func (o *customConfigProvider) GetConfig(tbl *catalog.TableEntry) *BasicPolicyCo
 	p, ok := o.configs[tbl.ID]
 	if !ok {
 		// load from an atomic value
-		extra := tbl.GetLastestSchemaLocked().Extra
+		extra := tbl.GetLastestSchemaLocked(false).Extra
 		if extra.MaxObjOnerun != 0 || extra.MinOsizeQuailifed != 0 {
 			// compatible with old version
 			cnSize := extra.MinCnMergeSize
@@ -171,7 +171,7 @@ func NewBasicPolicy() Policy {
 
 // impl Policy for Basic
 func (o *basic) OnObject(obj *catalog.ObjectEntry, force bool) {
-	rowsLeftOnObj := obj.GetRemainingRows()
+	rowsLeftOnObj := obj.GetRows()
 	osize := obj.GetOriginSize()
 
 	isCandidate := func() bool {
@@ -217,7 +217,7 @@ func (o *basic) SetConfig(tbl *catalog.TableEntry, f func() txnif.AsyncTxn, c an
 		ctx,
 		NewUpdatePolicyReq(cfg),
 	)
-	logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, tbl.GetLastestSchemaLocked().Name, cfg)
+	logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, tbl.GetLastestSchemaLocked(false).Name, cfg)
 	txn.Commit(ctx)
 	o.configProvider.InvalidCache(tbl)
 }
@@ -238,7 +238,7 @@ func (o *basic) GetConfig(tbl *catalog.TableEntry) any {
 func (o *basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	objs := o.objHeap.finish()
 	slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
-		return cmp.Compare(a.GetRemainingRows(), b.GetRemainingRows())
+		return cmp.Compare(a.GetRows(), b.GetRows())
 	})
 
 	isStandalone := common.IsStandaloneBoost.Load()
@@ -247,7 +247,7 @@ func (o *basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	dnobjs := o.controlMem(objs, mem)
 	dnobjs = o.optimize(dnobjs)
 
-	dnosize, _, _ := estimateMergeConsume(dnobjs)
+	dnosize, _ := estimateMergeConsume(dnobjs)
 
 	schedDN := func() ([]*catalog.ObjectEntry, TaskHostKind) {
 		if cpu > 85 {
@@ -289,7 +289,7 @@ func (o *basic) optimize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 	// objs are sorted by remaining rows
 	o.accBuf = o.accBuf[:1]
 	for i, obj := range objs {
-		o.accBuf = append(o.accBuf, o.accBuf[i]+obj.GetRemainingRows())
+		o.accBuf = append(o.accBuf, o.accBuf[i]+obj.GetRows())
 	}
 	acc := o.accBuf
 
@@ -325,15 +325,8 @@ func (o *basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.Ob
 	}
 
 	needPopout := func(ss []*catalog.ObjectEntry) bool {
-		_, esize, _ := estimateMergeConsume(ss)
-		if esize > int(2*mem/3) {
-			return true
-		}
-
-		if len(ss) <= 2 {
-			return false
-		}
-		return false
+		_, esize := estimateMergeConsume(ss)
+		return esize > int(2*mem/3)
 	}
 	for needPopout(objs) {
 		objs = objs[:len(objs)-1]
@@ -344,7 +337,7 @@ func (o *basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.Ob
 
 func (o *basic) ResetForTable(entry *catalog.TableEntry) {
 	o.id = entry.ID
-	o.schema = entry.GetLastestSchemaLocked()
+	o.schema = entry.GetLastestSchemaLocked(false)
 	o.hist = entry.Stats.GetLastMerge()
 	o.guessType = entry.Stats.GetWorkloadGuess()
 	o.objHeap.reset()
