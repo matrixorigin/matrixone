@@ -3494,15 +3494,11 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 	appended := false
 	for i := range rs {
 		bs := newScope(Remote)
-		bs.NodeInfo.Addr = rs[i].NodeInfo.Addr
-		bs.NodeInfo.Mcpu = 1
+		bs.NodeInfo = engine.Node{Addr: rs[i].NodeInfo.Addr, Mcpu: 1}
 		bs.Proc = c.proc.NewNoContextChildProc(0)
 		w := &process.WaitRegister{Ch: make(chan *process.RegisterMessage, 10)}
 		bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, w)
-		mergeOp := merge.NewArgument()
-		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		bs.setRootOperator(mergeOp)
-
+		bs.setRootOperator(merge.NewArgument())
 		if isSameCN(buildScopes[0].NodeInfo.Addr, bs.NodeInfo.Addr) {
 			if appended {
 				panic("wrong probe scopes for broadcast join!")
@@ -3515,7 +3511,6 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		buildOpScopes[i] = bs
 	}
 	buildScopes[0].setRootOperator(constructDispatch(0, buildOpScopes, buildScopes[0].NodeInfo.Addr, n, false, 1))
-	buildScopes[0].IsEnd = true
 	return rs, buildOpScopes
 }
 
