@@ -1455,6 +1455,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		if err != nil {
 			return err
 		}
+		fmt.Println("cn commit tombstone", stats.ObjectName(), stats.BlkCnt(), stats.Rows())
 		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
 			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.getTxn().tnStores[0]); err != nil {
 			return err

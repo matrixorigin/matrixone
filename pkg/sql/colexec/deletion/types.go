@@ -15,6 +15,7 @@
 package deletion
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -34,9 +35,15 @@ import (
 
 var _ vm.Operator = new(Deletion)
 
-const (
+// make it mutable in ut
+var (
 	flushThreshold = 32 * mpool.MB
 )
+
+// SetCNFlushDeletesThreshold update threshold to n MB
+func SetCNFlushDeletesThreshold(n int) {
+	flushThreshold = n * mpool.MB
+}
 
 type BatchPool struct {
 	pools []*batch.Batch
@@ -231,7 +238,7 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch)
 		collectBatchInfo(proc, deletion, srcBat, deletion.DeleteCtx.RowIdIdx, 0, delCtx.PrimaryKeyIdx)
 	}
 	// we will flush all
-	if deletion.ctr.batch_size >= flushThreshold {
+	if deletion.ctr.batch_size >= uint32(flushThreshold) {
 		size, err := deletion.ctr.flush(proc)
 		if err != nil {
 			return err
@@ -274,6 +281,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			return 0, err
 		}
 
+		fmt.Println("cn flushed tombstone")
 		bat := batch.New(false, []string{catalog.ObjectMeta_ObjectStats})
 		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 		if err = vector.AppendBytes(
@@ -351,6 +359,7 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 		batchSize += bat.Size()
 		bat.SetRowCount(bat.Vecs[0].Length())
 	}
+	fmt.Println("batch size mb", float64(batchSize)/1024.0/1024.0)
 	deletion.ctr.batch_size = uint32(batchSize)
 }
 
