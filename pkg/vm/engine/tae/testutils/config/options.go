@@ -133,7 +133,7 @@ func WithLongScanAndCKPOptsAndQuickGC(in *options.Options) (opts *options.Option
 	opts.CheckpointCfg.GlobalMinCount = 10000000
 	opts.CheckpointCfg.BlockRows = 10
 	opts.GCCfg = new(options.GCCfg)
-	opts.GCCfg.ScanGCInterval = time.Second * 1
+	opts.GCCfg.ScanGCInterval = time.Second * 10
 	opts.GCCfg.GCTTL = time.Millisecond * 1
 	opts.Ctx = context.Background()
 	return opts

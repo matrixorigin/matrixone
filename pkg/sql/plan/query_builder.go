@@ -2193,7 +2193,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 		ctx.binder = NewWhereBinder(builder, ctx)
 		for i := 0; i < colCount; i++ {
-			vec := proc.GetVector(types.T_text.ToType())
+			vec := vector.NewVec(types.T_text.ToType())
 			bat.Vecs[i] = vec
 			rowSetData.Cols[i] = &plan.ColData{}
 			for j := 0; j < rowCount; j++ {
