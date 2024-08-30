@@ -82,6 +82,7 @@ func (reader *tableReader) Run(
 		)
 		if err != nil {
 			logutil.Errorf("reader %v failed err:%v", reader.info, err)
+			break
 		}
 	}
 }
