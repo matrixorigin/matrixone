@@ -28,6 +28,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -36,7 +38,6 @@ import (
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
-	"go.uber.org/zap"
 )
 
 // S3FS is a FileService implementation backed by S3
@@ -508,11 +509,6 @@ read_memory_cache:
 	}
 
 	stats := statistic.StatsInfoFromContext(ctx)
-	ioStart := time.Now()
-	defer func() {
-		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
-	}()
-
 	LogEvent(ctx, str_ioMerger_Merge_begin)
 	startLock := time.Now()
 	done, wait := s.ioMerger.Merge(vector.ioMergeKey())
@@ -528,6 +524,11 @@ read_memory_cache:
 		LogEvent(ctx, str_ioMerger_Merge_end)
 		goto read_memory_cache
 	}
+
+	ioStart := time.Now()
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
 
 	if s.diskCache != nil {
 
