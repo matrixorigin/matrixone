@@ -2204,15 +2204,22 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 	}
 	var rs []*Scope
 	rs, buildScopes = c.compileBroadcastJoin(node, left, right, probeScopes, buildScopes)
+
+	//construct join build operator
 	if c.IsSingleScope(rs) {
 		if !c.IsSingleScope(buildScopes) {
 			panic("build scopes should be single parallel!")
 		}
-		//construct join build operator for tp join
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, rs[0].RootOp, 1))
 		buildScopes[0].IsEnd = true
 		rs[0].Magic = Merge
+	} else {
+		for i := range buildScopes {
+			buildScopes[i].setRootOperator(constructJoinBuildOperator(c, rs[i].RootOp, int32(rs[i].NodeInfo.Mcpu)))
+			buildScopes[i].IsEnd = true
+		}
 	}
+
 	return rs
 }
 
@@ -3469,7 +3476,6 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		rs[i].Magic = Remote
 		rs[i].IsJoin = true
 		rs[i].NodeInfo.Mcpu = c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
-		rs[i].BuildIdx = len(rs[i].Proc.Reg.MergeReceivers)
 	}
 
 	if c.IsSingleScope(rs) {
@@ -3482,33 +3488,38 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 	}
 
 	//construct build part
-	for i := range rs {
-		w := &process.WaitRegister{
-			Ctx: rs[i].Proc.Ctx,
-			Ch:  make(chan *process.RegisterMessage, 10),
-		}
-		rs[i].Proc.Reg.MergeReceivers = append(rs[i].Proc.Reg.MergeReceivers, w)
-	}
-
-	idx := 0
-	// all join's first flag will setting in newLeftScope and newRightScope
-	// so we set it to false now
-	c.anal.isFirst = false
-	for i := range rs {
-		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
-			idx = i
-			break
-		}
-	}
-
 	if len(buildScopes) > 1 {
 		buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, false)
-		buildScopes = []*Scope{c.newMergeScope(buildScopes)}
 	}
-	buildScopes[0].setRootOperator(constructDispatch(rs[idx].BuildIdx, rs, c.addr, n, false, buildScopes[0].NodeInfo.Mcpu))
-	buildScopes[0].IsEnd = true
-	rs[idx].PreScopes = append(rs[idx].PreScopes, buildScopes[0])
-	return rs, buildScopes
+
+	mergeBuildScopes := make([]*Scope, len(rs))
+	for i := range rs {
+		bs := newScope(Remote)
+		bs.NodeInfo.Addr = rs[i].NodeInfo.Addr
+		bs.NodeInfo.Mcpu = 1
+		bs.Proc = c.proc.NewNoContextChildProc(0)
+		w := &process.WaitRegister{Ch: make(chan *process.RegisterMessage, 10)}
+		bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, w)
+		mergeOp := merge.NewArgument()
+		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		bs.setRootOperator(mergeOp)
+
+		for j := range buildScopes {
+			if isSameCN(buildScopes[j].NodeInfo.Addr, bs.NodeInfo.Addr) {
+				bs.PreScopes = append(bs.PreScopes, buildScopes[j])
+				break
+			}
+		}
+		rs[i].PreScopes = append(rs[i].PreScopes, bs)
+		mergeBuildScopes[i] = bs
+	}
+
+	for i := range buildScopes {
+		buildScopes[i].setRootOperator(constructDispatch(0, mergeBuildScopes, buildScopes[i].NodeInfo.Addr, n, false, buildScopes[i].NodeInfo.Mcpu))
+		buildScopes[i].IsEnd = true
+	}
+
+	return rs, mergeBuildScopes
 }
 
 func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []*Scope {
@@ -3592,31 +3603,15 @@ func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
 	mergeOp.SetIsFirst(true)
 	rs.setRootOperator(mergeOp)
-	rs.Proc = s.Proc.NewContextChildProc(s.BuildIdx)
-	for i := 0; i < s.BuildIdx; i++ {
+
+	lenChannels := len(s.Proc.Reg.MergeReceivers)
+	rs.Proc = s.Proc.NewContextChildProc(lenChannels)
+	for i := 0; i < lenChannels; i++ {
 		regTransplant(s, rs, i, i)
 	}
 
 	rs.setRootOperator(constructDispatchLocal(false, false, false, extraRegisters(ss, 0)))
 	rs.IsEnd = true
-	return rs
-}
-
-func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
-	rs := c.newEmptyMergeScope()
-	buildLen := len(s.Proc.Reg.MergeReceivers) - s.BuildIdx
-	rs.Proc = s.Proc.NewContextChildProc(buildLen)
-	for i := 0; i < buildLen; i++ {
-		regTransplant(s, rs, i+s.BuildIdx, i)
-	}
-	mergeOp := merge.NewArgument()
-	mergeOp.SetIdx(c.anal.curNodeIdx)
-	mergeOp.SetIsFirst(c.anal.isFirst)
-	rs.setRootOperator(mergeOp)
-	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, s.RootOp), mcpu))
-
-	rs.IsEnd = true
-
 	return rs
 }
 

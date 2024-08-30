@@ -174,7 +174,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.IsJoin = s.IsJoin
 	p.IsLoad = s.IsLoad
 	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
-	p.BuildIdx = int32(s.BuildIdx)
 
 	// Plan
 	if ctxId == 1 {
@@ -321,7 +320,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	s.IsJoin = p.IsJoin
 	s.IsLoad = p.IsLoad
 	s.IsRemote = isRemote
-	s.BuildIdx = int(p.BuildIdx)
 	if err = convertPipelineUuid(p, s); err != nil {
 		return nil, err
 	}
