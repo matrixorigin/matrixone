@@ -67,7 +67,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 		mode := fn.Args[1].GetLit().GetI64Val()
 
 		fulltext_func := tree.NewCStr("fulltext_index_scan", 1)
-		alias_name := fmt.Sprintf("fulltext_alias_%d", i)
+		alias_name := fmt.Sprintf("mo_ftidx_alias_%d", i)
 
 		var exprs tree.Exprs
 		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(idxtblname), idxtblname, false, tree.P_char))
@@ -110,9 +110,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 				},
 			},
 		}
-
-		// add the column label
-		builder.addNameByColRef(curr_ftnode_tag, curr_ftnode.TableDef)
 
 		logutil.Infof("TABLE_FUNCTION %v", curr_ftnode)
 
