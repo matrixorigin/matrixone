@@ -49,8 +49,13 @@ func NewMemoryFS(
 ) (*MemoryFS, error) {
 
 	fs := &MemoryFS{
-		name:     name,
-		memCache: NewMemCache(fscache.ConstCapacity(1<<20), nil, nil),
+		name: name,
+		memCache: NewMemCache(
+			fscache.ConstCapacity(1<<20),
+			nil,
+			nil,
+			name,
+		),
 		tree: btree.NewBTreeG(func(a, b *_MemFSEntry) bool {
 			return a.FilePath < b.FilePath
 		}),
@@ -65,7 +70,12 @@ func (m *MemoryFS) Name() string {
 }
 
 func (m *MemoryFS) Close() {
-	m.memCache.Flush()
+	if m.memCache != nil {
+		m.memCache.Close()
+	}
+	for _, cache := range m.caches {
+		cache.Close()
+	}
 }
 
 func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {

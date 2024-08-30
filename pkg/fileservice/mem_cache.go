@@ -26,12 +26,14 @@ import (
 type MemCache struct {
 	cache       fscache.DataCache
 	counterSets []*perfcounter.CounterSet
+	closed      bool
 }
 
 func NewMemCache(
 	capacity fscache.CapacityFunc,
 	callbacks *CacheCallbacks,
 	counterSets []*perfcounter.CounterSet,
+	name string,
 ) *MemCache {
 
 	postSetFn := func(key fscache.CacheKey, value fscache.Data) {
@@ -64,7 +66,15 @@ func NewMemCache(
 		}
 	}
 
-	dataCache := fifocache.NewDataCache(capacity, postSetFn, postGetFn, postEvictFn)
+	capacityFunc := func() int64 {
+		// read from global hint
+		if n := GlobalMemoryCacheSizeHint.Load(); n > 0 {
+			return n
+		}
+		// fallback
+		return capacity()
+	}
+	dataCache := fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn)
 
 	return &MemCache{
 		cache:       dataCache,
@@ -80,6 +90,9 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
+	if m.closed {
+		panic("closed")
+	}
 
 	if vector.Policy.Any(SkipMemoryCacheReads) {
 		return nil
@@ -131,6 +144,9 @@ func (m *MemCache) Update(
 	vector *IOVector,
 	async bool,
 ) error {
+	if m.closed {
+		panic("closed")
+	}
 
 	if vector.Policy.Any(SkipMemoryCacheWrites) {
 		return nil
@@ -161,6 +177,9 @@ func (m *MemCache) Update(
 }
 
 func (m *MemCache) Flush() {
+	if m.closed {
+		panic("closed")
+	}
 	m.cache.Flush()
 }
 
@@ -168,10 +187,25 @@ func (m *MemCache) DeletePaths(
 	ctx context.Context,
 	paths []string,
 ) error {
+	if m.closed {
+		panic("closed")
+	}
 	m.cache.DeletePaths(ctx, paths)
 	return nil
 }
 
 func (m *MemCache) Evict(done chan int64) {
+	if m.closed {
+		panic("closed")
+	}
 	m.cache.Evict(done)
+}
+
+func (m *MemCache) Close() {
+	if m.closed {
+		panic("closed")
+	}
+	m.Flush()
+	allMemoryCaches.Delete(m)
+	m.closed = true
 }
