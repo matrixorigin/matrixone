@@ -9198,7 +9198,7 @@ func TestMergeBlocks4(t *testing.T) {
 	tae.CheckRowsByScan(0, true)
 }
 
-func TestXxx(t *testing.T) {
+func TestDedup3(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)

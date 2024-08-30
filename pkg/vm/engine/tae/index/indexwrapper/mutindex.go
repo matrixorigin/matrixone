@@ -150,6 +150,7 @@ func (idx *MutIndex) GetDuplicatedRows(
 	rowIDs *vector.Vector,
 	maxVisibleRow uint32,
 	skipFn func(row uint32) error,
+	skipCommittedBeforeTxnForAblk bool,
 	mp *mpool.MPool,
 ) (err error) {
 	if keysZM.Valid() {
@@ -172,6 +173,9 @@ func (idx *MutIndex) GetDuplicatedRows(
 			if err != nil {
 				return err
 			}
+		}
+		if skipCommittedBeforeTxnForAblk {
+			return nil
 		}
 		var maxRow uint32
 		exist := false

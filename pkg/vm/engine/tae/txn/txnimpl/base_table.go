@@ -164,7 +164,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, de
 	); err != nil {
 		return
 	}
-	maxAObjectHint,maxNAObjectHint := uint64(0), uint64(0)
+	maxAObjectHint, maxNAObjectHint := uint64(0), uint64(0)
 	for it.Next() {
 		obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
 		objectHint := obj.SortHint
