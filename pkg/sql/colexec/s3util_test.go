@@ -79,15 +79,8 @@ func TestSetStatsCNCreated(t *testing.T) {
 	_, stats, err := s3writer.SortAndSync(proc)
 	require.NoError(t, err)
 
-	cnt := 0
-	for _, s := range stats {
-		if !s.IsZero() {
-			cnt++
-			require.True(t, s.GetCNCreated())
-			require.Equal(t, uint32(bat.VectorCount()), s.BlkCnt())
-			require.Equal(t, uint32(bat.Vecs[0].Length()), s.Rows())
-		}
-	}
+	require.True(t, stats.GetCNCreated())
+	require.Equal(t, uint32(bat.VectorCount()), stats.BlkCnt())
+	require.Equal(t, uint32(bat.Vecs[0].Length()), stats.Rows())
 
-	require.Equal(t, 1, cnt)
 }

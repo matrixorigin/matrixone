@@ -68,9 +68,9 @@ func TestTombstoneData1(t *testing.T) {
 
 		_, ss, err := writer.SortAndSync(proc)
 		require.NoError(t, err)
-		require.Equal(t, 2, len(ss))
+		require.False(t, ss.IsZero())
 
-		stats = append(stats, ss[0])
+		stats = append(stats, ss)
 	}
 
 	var stats1, stats2, stats3 objectio.ObjectStats
