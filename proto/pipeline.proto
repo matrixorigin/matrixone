@@ -212,13 +212,15 @@ message Join {
   repeated int32 rel_list = 1;
   repeated int32 col_list = 2;
   plan.Expr  expr = 3;
-  repeated plan.Expr left_cond = 4;
-  repeated plan.Expr right_cond = 5;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
-  bool hash_on_pk = 7;
-  bool is_shuffle =8;
-  int32 join_map_tag = 9;
-  int32 shuffle_idx = 10;
+  repeated plan.Type  types = 4 [(gogoproto.nullable) = false];
+  repeated plan.Expr left_cond = 5;
+  repeated plan.Expr right_cond = 6;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
+  bool hash_on_pk = 8;
+  bool is_shuffle =9;
+  int32 join_map_tag = 10;
+  int32 shuffle_idx = 11;
+  int32 join_type = 12;
 }
 
 message AntiJoin{
@@ -394,6 +396,31 @@ message UnionAll {
 
 }
 
+message HashBuild {
+	bool NeedHashMap = 1;
+	bool HashOnPK = 2;
+	bool NeedBatches = 3;
+	bool NeedAllocateSels = 4;
+	repeated plan.Expr Conditions = 5;
+	int32 JoinMapTag = 6;
+	int32 JoinMapRefCnt = 7;
+	plan.RuntimeFilterSpec RuntimeFilterSpec = 8;
+}
+
+message Shufflebuild {
+	bool HashOnPK = 1;
+	bool NeedBatches = 2;
+	bool NeedAllocateSels = 3;
+	repeated plan.Expr Conditions = 4;    
+	plan.RuntimeFilterSpec RuntimeFilterSpec = 5;
+	int32 JoinMapTag = 6;
+	int32 ShuffleIdx = 7;
+}
+
+message Indexbuild {
+	plan.RuntimeFilterSpec RuntimeFilterSpec = 1;
+}
+
 message SampleFunc {
   enum SampleType {
     Rows = 0;
@@ -459,6 +486,9 @@ message Instruction{
   TableScan table_scan = 45;
   ValueScan value_scan = 46;
   UnionAll union_all = 47;
+  HashBuild hash_build = 48;
+  Shufflebuild shuffle_build = 49;
+  Indexbuild index_build = 50;
 }
 
 message AnalysisList {

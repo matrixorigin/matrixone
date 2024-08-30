@@ -369,26 +369,7 @@ func Prefetch(
 	return MustGetPipeline(sid).Prefetch(params)
 }
 
-func PrefetchTombstone(
-	sid string,
-	idxes []uint16,
-	ids []uint16,
-	service fileservice.FileService,
-	key objectio.Location,
-) error {
-	params, err := BuildPrefetchParams(service, key)
-	if err != nil {
-		return err
-	}
-	params.AddBlockWithType(idxes, ids, uint16(objectio.SchemaTombstone))
-	return MustGetPipeline(sid).Prefetch(params)
-}
-
-func PrefetchMeta(
-	sid string,
-	service fileservice.FileService,
-	key objectio.Location,
-) error {
+func PrefetchMeta(sid string, service fileservice.FileService, key objectio.Location) error {
 	params, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err

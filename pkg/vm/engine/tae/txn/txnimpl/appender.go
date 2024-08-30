@@ -21,7 +21,7 @@ import (
 
 type appendCtx struct {
 	driver data.ObjectAppender
-	node   InsertNode
+	node   *anode
 	anode  txnif.AppendNode
 	start  uint32
 	count  uint32

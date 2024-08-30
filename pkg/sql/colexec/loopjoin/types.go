@@ -18,10 +18,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -33,21 +35,35 @@ const (
 	End
 )
 
+const (
+	LoopInner = iota
+	LoopAnti
+	LoopLeft
+	LoopMark
+	LoopSemi
+	LoopSingle
+)
+
 type container struct {
 	state    int
 	probeIdx int
-	bat      *batch.Batch
+	batIdx   int
+	inbat    *batch.Batch
 	rbat     *batch.Batch
 	joinBat  *batch.Batch
 	expr     colexec.ExpressionExecutor
 	cfs      []func(*vector.Vector, *vector.Vector, int64, int) error
+	mp       *message.JoinMap
 }
 
 type LoopJoin struct {
 	ctr        container
+	Typs       []types.Type
 	Cond       *plan.Expr
 	Result     []colexec.ResultPos
 	JoinMapTag int32
+	JoinType   int
+	MarkPos    int
 
 	vm.OperatorBase
 	colexec.Projection
@@ -88,13 +104,9 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr := &loopJoin.ctr
 
 	ctr.resetExprExecutor()
+	ctr.cleanHashMap()
 	ctr.state = Build
-	ctr.probeIdx = 0
-
-	if ctr.bat != nil {
-		ctr.bat.Clean(proc.Mp())
-		ctr.bat = nil
-	}
+	ctr.inbat = nil
 
 	if loopJoin.ProjectList != nil {
 		anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
@@ -115,10 +127,6 @@ func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err e
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
 	if ctr.rbat != nil {
 		ctr.rbat.Clean(mp)
 		ctr.rbat = nil
@@ -141,4 +149,11 @@ func (ctr *container) cleanExprExecutor() {
 		ctr.expr = nil
 	}
 	ctr.expr = nil
+}
+
+func (ctr *container) cleanHashMap() {
+	if ctr.mp != nil {
+		ctr.mp.Free()
+		ctr.mp = nil
+	}
 }

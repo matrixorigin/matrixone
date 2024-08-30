@@ -450,7 +450,7 @@ func (m *TNUsageMemo) checkSpecial(usage UsageData, tbl *catalog.TableEntry) tri
 		return yeah
 	}
 
-	schema := tbl.GetLastestSchema()
+	schema := tbl.GetLastestSchema(false)
 	if strings.ToLower(schema.Relkind) == cluster {
 		return yeah
 	}
@@ -653,40 +653,6 @@ func (m *TNUsageMemo) replayIntoGCKP(collector *GlobalCollector) {
 	iter.Release()
 }
 
-func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, string, bool) {
-	if c == nil {
-		return usage, "", false
-	}
-
-	var err error
-	var dbEntry *catalog.DBEntry
-	var tblEntry *catalog.TableEntry
-
-	dbEntry, err = c.GetDatabaseByID(usage.DbId)
-	if err != nil || dbEntry.HasDropCommitted() {
-		// the db has been deleted
-		name := "deleted"
-		if dbEntry != nil {
-			name = dbEntry.GetName()
-		}
-		log := fmt.Sprintf("[d-db]%s_%d_%d_%d; ", name, usage.AccId, usage.DbId, usage.Size)
-		return usage, log, true
-	}
-
-	tblEntry, err = dbEntry.GetTableEntryByID(usage.TblId)
-	if err != nil || tblEntry.HasDropCommitted() {
-		// the tbl has been deleted
-		name := "deleted"
-		if tblEntry != nil {
-			name = tblEntry.GetFullName()
-		}
-		log := fmt.Sprintf("[d-tbl]%s_%d_%d_%d_%d; ", name, usage.AccId, usage.DbId, usage.TblId, usage.Size)
-		return usage, log, true
-	}
-
-	return usage, "", false
-}
-
 func (m *TNUsageMemo) deleteAccount(accId uint64) (size uint64) {
 	trash := make([]UsageData, 0)
 	povit := UsageData{accId, 0, 0, 0, unknown}
@@ -756,50 +722,21 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 	}()
 
 	for x := range m.pendingReplay.datas {
-		if m.pendingReplay.vers[x] < CheckpointVersion9 {
-			// haven't StorageUsageIns batch
-			// haven't StorageUsageDel batch
-			continue
-		}
 
 		insVecs := getStorageUsageBatVectors(m.pendingReplay.datas[x].bats[StorageUsageInsIDX])
 		accCol, dbCol, tblCol, sizeCol := getStorageUsageVectorCols(insVecs)
 
-		var skip bool
-		var log string
+		// var skip bool
+		// var log string
 		for y := 0; y < len(accCol); y++ {
 			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y], unknown}
-
-			// these ckps, older than version 11, haven't del bat, we need clear the
-			// usage data which belongs the deleted databases or tables.
-			//
-			// (if a table or db recreate, it's id will change)
-			//
-			if m.pendingReplay.vers[x] < CheckpointVersion11 {
-				// here only remove the deleted db and table.
-				// if table has deletes, we update it in gckp
-				usage, log, skip = try2RemoveStaleData(usage, c)
-				if skip {
-					buf.WriteString(log)
-					continue
-				}
-				if m.pendingReplay.delayed == nil {
-					m.pendingReplay.delayed = make(map[uint64]UsageData)
-				}
-				if old, ok := m.pendingReplay.delayed[usage.TblId]; !ok {
-					m.pendingReplay.delayed[usage.TblId] = usage
-				} else {
-					old.Size += usage.Size
-					m.pendingReplay.delayed[usage.TblId] = old
-				}
-			}
 			m.DeltaUpdate(usage, false)
 		}
 
-		if m.pendingReplay.vers[x] < CheckpointVersion11 {
-			// haven't StorageUsageDel batch
-			continue
-		}
+		// if m.pendingReplay.vers[x] < CheckpointVersion11 {
+		// 	// haven't StorageUsageDel batch
+		// 	continue
+		// }
 
 		delVecs := getStorageUsageBatVectors(m.pendingReplay.datas[x].bats[StorageUsageDelIDX])
 		accCol, dbCol, tblCol, sizeCol = getStorageUsageVectorCols(delVecs)
@@ -1253,10 +1190,10 @@ func loadMetaBat(
 	var idxes []uint16
 
 	for idx := 0; idx < len(locations); idx++ {
-		if versions[idx] < CheckpointVersion11 {
-			// start with version 11, storage usage ins/del bat's locations is recorded in meta bat.
-			continue
-		}
+		// if versions[idx] < CheckpointVersion11 {
+		// 	// start with version 11, storage usage ins/del bat's locations is recorded in meta bat.
+		// 	continue
+		// }
 
 		data := NewCNCheckpointData(sid)
 

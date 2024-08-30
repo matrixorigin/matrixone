@@ -66,12 +66,20 @@ type ObjectReader interface {
 	// GetByFilter(filter Filter, offsetOnly bool) (map[uint64]*batch.Batch, error)
 	String() string
 	GetMeta() any
-	GetByFilter(ctx context.Context, filter *Filter, mp *mpool.MPool) (uint16, uint32, error)
-	GetColumnDataByNames(ctx context.Context, blkID uint16, attrs []string, mp *mpool.MPool) (*containers.Batch, error)
-	GetColumnDataByIds(ctx context.Context, blkID uint16, colIdxes []int, mp *mpool.MPool) (*containers.Batch, error)
-	GetColumnDataByName(context.Context, uint16, string, *mpool.MPool) (*containers.Batch, error)
-	GetColumnDataById(context.Context, uint16, int, *mpool.MPool) (*containers.Batch, error)
-
+	Scan(
+		ctx context.Context,
+		bat **containers.Batch,
+		blkID uint16,
+		colIdxes []int,
+		mp *mpool.MPool,
+	) (err error)
+	HybridScan(
+		ctx context.Context,
+		bat **containers.Batch,
+		blkOffset uint16,
+		colIdxs []int,
+		mp *mpool.MPool,
+	) error
 	GetRelation() Relation
 
 	BatchDedup(pks containers.Vector) error
@@ -82,14 +90,11 @@ type ObjectReader interface {
 type ObjectWriter interface {
 	io.Closer
 	String() string
-	Update(blk uint64, row uint32, col uint16, v any) error
-	RangeDelete(blk uint16, start, end uint32, dt DeleteType, mp *mpool.MPool) error
 
 	PushDeleteOp(filter Filter) error
 	PushUpdateOp(filter Filter, attr string, val any) error
 
 	UpdateStats(objectio.ObjectStats) error
-	UpdateDeltaLoc(blkID uint16, deltaLoc objectio.Location) error
 }
 
 type Object interface {

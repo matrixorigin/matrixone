@@ -487,8 +487,9 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 			metaHeader.SetDataMetaOffset(idxStart)
 			metaHeader.SetDataMetaCount(uint16(len(w.blocks[i])))
 		} else if i == int(SchemaTombstone) {
-			metaHeader.SetTombstoneMetaOffset(idxStart)
-			metaHeader.SetTombstoneMetaCount(uint16(len(w.blocks[SchemaTombstone])))
+			if len(w.blocks[i]) != 0 {
+				panic("invalid data meta type")
+			}
 		} else {
 			subMetachIndex.SetSchemaMeta(uint16(i-2), uint16(i-2), uint16(len(w.blocks[i])), idxStart)
 		}
