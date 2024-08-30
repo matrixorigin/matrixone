@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v1_2_2
+package v1_2_3
 
 import (
 	"context"
@@ -27,15 +27,14 @@ import (
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{}
-var tenantUpgEntries = []versions.UpgradeEntry{}
 
 var (
 	Handler = &versionHandle{
 		metadata: versions.Version{
-			Version:           "1.2.2",
-			MinUpgradeVersion: "1.2.1",
-			UpgradeCluster:    versions.No,
-			UpgradeTenant:     versions.No,
+			Version:           "1.2.3",
+			MinUpgradeVersion: "1.2.2",
+			UpgradeCluster:    versions.Yes,
+			UpgradeTenant:     versions.Yes,
 			VersionOffset:     uint32(len(clusterUpgEntries) + len(tenantUpgEntries)),
 		},
 	}
