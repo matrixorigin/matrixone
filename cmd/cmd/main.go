@@ -17,6 +17,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 	"os"
 	"path/filepath"
@@ -45,7 +46,7 @@ import (
 
 const (
 	invalidId    = -1
-	invalidLimit = -1
+	invalidLimit = 0xffffff
 
 	brief    = 0
 	standard = 1
@@ -55,14 +56,11 @@ const (
 	checkpointDir = "ckp/"
 )
 
-//func init() {
-//	logutil.SetupMOLogger(&logutil.LogConfig{
-//		Level:  "fatal",
-//		Format: "console",
-//	})
-//}
-
-func initPipeline() {
+func offlineInit() {
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:  "fatal",
+		Format: "console",
+	})
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime(sid, rt)
 	blockio.Start(sid)
@@ -437,6 +435,9 @@ func (c *moObjStatArg) Usage() (res string) {
 }
 
 func (c *moObjStatArg) Run() (err error) {
+	if c.ctx == nil {
+		offlineInit()
+	}
 	ctx := context.Background()
 	if c.input != "" {
 		if err = c.getInputs(); err != nil {
@@ -815,6 +816,9 @@ func (c *objGetArg) getInputs() error {
 }
 
 func (c *objGetArg) Run() (err error) {
+	if c.ctx == nil {
+		offlineInit()
+	}
 	ctx := context.Background()
 	if c.input != "" {
 		if err = c.getInputs(); err != nil {
@@ -1559,7 +1563,7 @@ func (c *ckpStatArg) getInputs() error {
 
 func (c *ckpStatArg) Run() (err error) {
 	if c.ctx == nil {
-		initPipeline()
+		offlineInit()
 	}
 	if c.input != "" {
 		if err = c.getInputs(); err != nil {
@@ -1826,7 +1830,7 @@ func (c *ckpListArg) Usage() (res string) {
 
 func (c *ckpListArg) Run() (err error) {
 	if c.ctx == nil {
-		initPipeline()
+		offlineInit()
 	}
 	if c.input != "" {
 		if err = c.getInputs(); err != nil {
