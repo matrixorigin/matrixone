@@ -56,18 +56,29 @@ func GenInitCronTaskSQL() (string, error) {
 		}, nil
 	}
 
-	cronTasks := make([]*task.CronTask, 0, 2)
+	cronTasks := make([]*task.CronTask, 0, 3)
 	task1, err := createCronTask(export.MergeTaskMetadata(task.TaskCode_MetricLogMerge), export.MergeTaskCronExprEvery05Min)
 	if err != nil {
 		return "", err
 	}
 	cronTasks = append(cronTasks, task1)
 
-	task2, err := createCronTask(mometric.TaskMetadata(mometric.StorageUsageCronTask, task.TaskCode_MetricStorageUsage), mometric.StorageUsageTaskCronExpr)
+	task2, err := createCronTask(mometric.TaskMetadata(mometric.StorageUsageCronTask, task.TaskCode_MetricStorageUsage), export.MergeTaskCronExprEvery05Min)
 	if err != nil {
 		return "", err
 	}
 	cronTasks = append(cronTasks, task2)
+
+	task3, err := createCronTask(
+		task.TaskMetadata{
+			ID:       "retention",
+			Executor: task.TaskCode_Retention,
+			Options:  task.TaskOptions{Concurrency: 1},
+		}, export.MergeTaskCronExprEvery15Min)
+	if err != nil {
+		return "", err
+	}
+	cronTasks = append(cronTasks, task3)
 
 	sql := fmt.Sprintf(`insert into %s.sys_cron_task (
                            task_metadata_id,
