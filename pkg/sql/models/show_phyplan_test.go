@@ -15,8 +15,9 @@
 package models
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func TestExplainPhyPlan(t *testing.T) {
@@ -195,7 +196,7 @@ func TestExplainPhyPlan(t *testing.T) {
 				plan:   NewPhyPlan(),
 				option: NormalOption,
 			},
-			want: "Version: 1.0, S3IOInputCount: 0, S3IOOutputCount: 0",
+			want: "",
 		},
 		{
 			name: "test02",
@@ -203,7 +204,7 @@ func TestExplainPhyPlan(t *testing.T) {
 				plan:   phyPlan,
 				option: NormalOption,
 			},
-			want: `Version: 1.0, S3IOInputCount: 5, S3IOOutputCount: 0
+			want: `RetryTime: 0, S3IOInputCount: 5, S3IOOutputCount: 0
 LOCAL SCOPES:
 Scope 1 (Magic: Normal, mcpu: 0, Receiver: [1])
   Pipeline: └── Output
