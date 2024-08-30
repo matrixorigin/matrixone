@@ -73,7 +73,6 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 		return nodeID
 	}
 
-	logutil.Infof("applyIndices START")
 	node := builder.qry.Nodes[nodeID]
 	for i, childID := range node.Children {
 		node.Children[i] = builder.applyIndices(childID, colRefCnt, idxColMap)
@@ -82,31 +81,26 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
-		logutil.Infof("TABLE_SCAN HERE")
 		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap)
 
 	case plan.Node_JOIN:
 		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap)
 
 	case plan.Node_PROJECT:
-		logutil.Infof("PROJECT HERE")
 		//NOTE: This is the entry point for vector index rule on SORT NODE.
 		return builder.applyIndicesForProject(nodeID, node, colRefCnt, idxColMap)
 
 	}
 
-	logutil.Infof("applyIndices END")
 	return nodeID
 }
 
 func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
-	logutil.Infof("applyINdicesForFilters..... node.FilterList = %d, Index = %d", len(node.FilterList), len(node.TableDef.Indexes))
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
-	logutil.Infof("applyIndciesForFilters START")
 	// ERIC
 	{
 		var filterids []int32
@@ -116,31 +110,11 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			fn := expr.GetF()
 			if fn == nil {
 				continue
-				// goto END0
 			}
 
-			logutil.Infof("FUNCTION HERE : %s", fn.Func.ObjName)
 			switch fn.Func.ObjName {
 			case "fulltext_match":
-				// arg0 is string
-				logutil.Infof("PATTERN %s", fn.Args[0].GetLit().GetSval())
-				// arg1 is int64
-				logutil.Infof("MODE %d", fn.Args[1].GetLit().GetI64Val())
-
-				// arg2...N is ColRef Expr_List
-				for j := 2; j < len(fn.Args); j++ {
-					cref := fn.Args[j].GetCol()
-					logutil.Infof("COL %d %s relpos %d colpos %d", j-2, cref.GetName(), cref.RelPos, cref.ColPos)
-				}
-				/*
-					for j, c := range fn.Args[0].GetList().GetList() {
-						logutil.Infof("COL %d %s", j, c.GetCol().GetName())
-					}
-				*/
-
 				for _, idx := range node.TableDef.Indexes {
-					logutil.Infof("INDX name = %s , keys  = %v", idx.IndexTableName, idx.Parts)
-
 					nfound := 0
 					for _, p := range idx.Parts {
 						for j := 2; j < len(fn.Args); j++ {
@@ -158,21 +132,15 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 						break
 					}
 				}
-				pkid := node.TableDef.Name2ColIndex[node.TableDef.Pkey.GetNames()[0]]
-				logutil.Infof("Primary Key POS =%d, %s", pkid, node.TableDef.Pkey.String())
-
-				logutil.Infof("Src table name %s", node.TableDef.Name)
-
 			default:
 			}
 		}
 
-		logutil.Infof("fulltext found %d", len(filterids))
 		if len(filterids) > 0 {
 			return builder.applyIndicesForFiltersUsingFullTextIndex(nodeID, node, filterids, ftidxs, colRefCnt, idxColMap)
 		}
 	}
-	logutil.Infof("applyIndciesForFilters END")
+
 	// 1. Master Index Check
 	{
 		masterIndexes := make([]*plan.IndexDef, 0)

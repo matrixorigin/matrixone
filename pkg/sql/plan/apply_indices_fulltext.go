@@ -18,7 +18,6 @@ import (
 	"go/constant"
 	"strconv"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -67,7 +66,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 		pattern := fn.Args[0].GetLit().GetSval()
 		mode := fn.Args[1].GetLit().GetI64Val()
 
-		fulltext_func := tree.NewCStr("fulltext_index_scan", 1)
+		fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
 		alias_name := fmt.Sprintf("mo_ftidx_alias_%d", i)
 
 		var exprs tree.Exprs
@@ -117,7 +116,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 		curr_ftnode.TableDef.Cols[0].Typ.Width = pkType.Width
 		curr_ftnode.TableDef.Cols[0].Typ.Scale = pkType.Scale
 
-		logutil.Infof("TABLE_FUNCTION %v", curr_ftnode)
 		if i > 0 {
 			// JOIN last_node_id and curr_ftnode_id
 			// JOIN INNER with children (curr_ftnode_id, last_node_id)
@@ -172,16 +170,10 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 		OnList:   []*Expr{wherePkEqPk},
 		Limit:    DeepCopyExpr(scanNode.Limit),
 		Offset:   DeepCopyExpr(scanNode.Offset),
-		//FilterList: scanNode.FilterList,
 	}, ctx)
 
 	scanNode.Limit = nil
 	scanNode.Offset = nil
-	//scanNode.FilterList = nil
-
-	joinnode := builder.qry.Nodes[joinnodeID]
-
-	logutil.Infof("JOIN INNER %v", joinnode)
 
 	return joinnodeID
 }
