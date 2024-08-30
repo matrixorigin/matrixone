@@ -116,7 +116,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 	schema := tbl.schema
 	if schema.HasPK() && !tbl.schema.IsSecondaryIndexTable() {
 		dedupType := tbl.txnTable.store.txn.GetDedupType()
-		if !dedupType.SkipNewCommit() && !dedupType.SkipOldCommit() {
+		if !dedupType.SkipSourcePersisted() {
 			for _, loc := range metaLocs {
 				var vectors []containers.Vector
 				var closeFunc func()
@@ -148,7 +148,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 	return tbl.tableSpace.AddObjsWithMetaLoc(pkVecs, stats)
 }
 func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, dedupAfterSnapshotTS bool, checkWW bool) (rowIDs containers.Vector, err error) {
-	it := newObjectItOnSnap(tbl.txnTable, tbl.isTombstone)
+	it := newObjectItOnSnap(tbl.txnTable, tbl.isTombstone, true)
 	rowIDs = tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	pkType := pks.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
