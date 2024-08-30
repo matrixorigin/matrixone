@@ -72,6 +72,7 @@ func (node *persistedNode) GetDuplicatedRows(
 	rowIDs containers.Vector,
 	isCommitting bool,
 	_ bool,
+	_ bool,
 	mp *mpool.MPool,
 ) (err error) {
 	panic("should not be balled")
