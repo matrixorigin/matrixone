@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package issues
+package testutils
 
 import (
 	"context"
@@ -30,32 +30,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func createTableAndWaitCNApplied(
+func CreateTableAndWaitCNApplied(
 	t *testing.T,
 	db string,
 	tableName string,
 	tableSQL string,
 	createOnCN embed.ServiceOperator,
 	waitOnCNs ...embed.ServiceOperator,
-) {
-	createTestDatabase(t, db, createOnCN)
+) timestamp.Timestamp {
+	CreateTestDatabase(t, db, createOnCN)
 	for _, cn := range waitOnCNs {
-		waitDatabaseCreated(t, db, cn)
+		WaitDatabaseCreated(t, db, cn)
 	}
 
-	execSQL(
+	committedAt := ExecSQL(
 		t,
 		db,
-		tableSQL,
 		createOnCN,
+		tableSQL,
 	)
 
 	for _, cn := range waitOnCNs {
-		waitTableCreated(t, db, tableName, cn)
+		WaitTableCreated(t, db, tableName, cn)
 	}
+	return committedAt
 }
 
-func createTestDatabase(
+func CreateTestDatabase(
 	t *testing.T,
 	name string,
 	cn embed.ServiceOperator,
@@ -71,14 +72,42 @@ func createTestDatabase(
 	require.NoError(t, err)
 	res.Close()
 
-	waitDatabaseCreated(t, name, cn)
+	WaitDatabaseCreated(t, name, cn)
 }
 
-func execSQL(
+func WaitTableCreated(
 	t *testing.T,
 	db string,
-	sql string,
+	name string,
 	cn embed.ServiceOperator,
+) {
+	for {
+		if TableExists(t, db, name, cn) {
+			return
+		}
+		time.Sleep(time.Millisecond * 100)
+	}
+}
+
+func WaitDatabaseCreated(
+	t *testing.T,
+	name string,
+	cn embed.ServiceOperator,
+) {
+	for {
+		if DBExists(t, name, cn) {
+			return
+
+		}
+		time.Sleep(time.Millisecond * 100)
+	}
+}
+
+func ExecSQL(
+	t *testing.T,
+	db string,
+	cn embed.ServiceOperator,
+	sql ...string,
 ) timestamp.Timestamp {
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -89,11 +118,13 @@ func execSQL(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			txnOp = txn.Txn()
-			res, err := txn.Exec(sql, executor.StatementOption{})
-			if err != nil {
-				return err
+			for _, s := range sql {
+				res, err := txn.Exec(s, executor.StatementOption{})
+				if err != nil {
+					return err
+				}
+				res.Close()
 			}
-			res.Close()
 			return nil
 		},
 		executor.Options{}.WithDatabase(db),
@@ -103,58 +134,7 @@ func execSQL(
 	return txnOp.Txn().CommitTS
 }
 
-func waitDatabaseCreated(
-	t *testing.T,
-	name string,
-	cn embed.ServiceOperator,
-) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	sql := cn.RawService().(cnservice.Service).GetSQLExecutor()
-
-	for {
-		res, err := sql.Exec(
-			ctx,
-			"show databases",
-			executor.Options{},
-		)
-		require.NoError(t, err)
-
-		if hasName(name, res) {
-			return
-		}
-		time.Sleep(time.Millisecond * 100)
-	}
-}
-
-func waitTableCreated(
-	t *testing.T,
-	db string,
-	name string,
-	cn embed.ServiceOperator,
-) {
-	ctx, cancel := context.WithTimeout(context.Background(), 1000000000*time.Second)
-	defer cancel()
-
-	sql := cn.RawService().(cnservice.Service).GetSQLExecutor()
-
-	for {
-		res, err := sql.Exec(
-			ctx,
-			"show tables",
-			executor.Options{}.WithDatabase(db),
-		)
-		require.NoError(t, err)
-
-		if hasName(name, res) {
-			return
-		}
-		time.Sleep(time.Millisecond * 100)
-	}
-}
-
-func hasName(
+func HasName(
 	name string,
 	res executor.Result,
 ) bool {
@@ -176,7 +156,7 @@ func hasName(
 	return has
 }
 
-func getDatabaseName(
+func GetDatabaseName(
 	t *testing.T,
 ) string {
 	return fmt.Sprintf(
@@ -186,8 +166,47 @@ func getDatabaseName(
 	)
 }
 
-func getSQLExecutor(
+func GetSQLExecutor(
 	cn embed.ServiceOperator,
 ) executor.SQLExecutor {
 	return cn.RawService().(cnservice.Service).GetSQLExecutor()
+}
+
+func DBExists(
+	t *testing.T,
+	name string,
+	cn embed.ServiceOperator,
+) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+	res, err := exec.Exec(
+		ctx,
+		"show databases",
+		executor.Options{},
+	)
+	require.NoError(t, err)
+
+	return HasName(name, res)
+}
+
+func TableExists(
+	t *testing.T,
+	db string,
+	name string,
+	cn embed.ServiceOperator,
+) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+	res, err := exec.Exec(
+		ctx,
+		"show tables",
+		executor.Options{}.WithDatabase(db),
+	)
+	require.NoError(t, err)
+
+	return HasName(name, res)
 }
