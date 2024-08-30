@@ -15,10 +15,9 @@
 package merge
 
 import (
-	"bytes"
-	"cmp"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -68,7 +67,7 @@ func newCustomConfigProvider() *customConfigProvider {
 	}
 }
 
-func (o *customConfigProvider) GetConfig(tbl *catalog.TableEntry) *BasicPolicyConfig {
+func (o *customConfigProvider) getConfig(tbl *catalog.TableEntry) *BasicPolicyConfig {
 	o.Lock()
 	defer o.Unlock()
 	p, ok := o.configs[tbl.ID]
@@ -113,12 +112,6 @@ func (o *customConfigProvider) invalidCache(tbl *catalog.TableEntry) {
 	delete(o.configs, tbl.ID)
 }
 
-func (o *customConfigProvider) SetCache(tbl *catalog.TableEntry, cfg *BasicPolicyConfig) {
-	o.Lock()
-	defer o.Unlock()
-	o.configs[tbl.ID] = cfg
-}
-
 func (o *customConfigProvider) String() string {
 	o.Lock()
 	defer o.Unlock()
@@ -126,18 +119,12 @@ func (o *customConfigProvider) String() string {
 	for k := range o.configs {
 		keys = append(keys, k)
 	}
-	slices.SortFunc(keys, func(a, b uint64) int { return cmp.Compare(a, b) })
-	buf := bytes.Buffer{}
-	buf.WriteString("customConfigProvider: ")
+	slices.Sort(keys)
+	var builder strings.Builder
+	builder.WriteString("customConfigProvider: ")
 	for _, k := range keys {
 		c := o.configs[k]
-		buf.WriteString(fmt.Sprintf("%d:%v,%v | ", k, c.ObjectMinOsize, c.MergeMaxOneRun))
+		builder.WriteString(fmt.Sprintf("%d:%v,%v | ", k, c.ObjectMinOsize, c.MergeMaxOneRun))
 	}
-	return buf.String()
-}
-
-func (o *customConfigProvider) ResetConfig() {
-	o.Lock()
-	defer o.Unlock()
-	o.configs = make(map[uint64]*BasicPolicyConfig)
+	return builder.String()
 }

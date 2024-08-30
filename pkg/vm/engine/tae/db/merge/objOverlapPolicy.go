@@ -69,7 +69,8 @@ func (m *objOverlapPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, []*ca
 
 func (m *objOverlapPolicy) reviseDataObjs(mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	if !m.objects[0].GetSortKeyZonemap().IsInited() {
-		revisedObj := make([]*catalog.ObjectEntry, m.basicConfig.MergeMaxOneRun)
+		size := min(m.basicConfig.MergeMaxOneRun, len(m.objects))
+		revisedObj := make([]*catalog.ObjectEntry, size)
 		n := copy(revisedObj, m.objects)
 		return revisedObj[:n], TaskHostDN
 	}
@@ -86,43 +87,43 @@ func (m *objOverlapPolicy) reviseDataObjs(mem int64) ([]*catalog.ObjectEntry, Ta
 	})
 	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: minValue(t)}
 	for _, obj := range m.objects {
-		zm := obj.GetSortKeyZonemap()
 		if len(set.entries) == 0 {
 			set.add(t, obj)
 			continue
 		}
-		if obj.GetOriginSize()*3 < set.size || set.size < obj.GetOriginSize()/3 {
+
+		if compute.CompareGeneric(set.maxValue, obj.GetSortKeyZonemap().GetMin(), t) > 0 {
+			// zm is overlapped
+			set.add(t, obj)
+			continue
+		}
+
+		if set.size < common.Const1MBytes {
+			set.add(t, obj)
+			continue
+		}
+
+		if set.size < obj.GetOriginSize()/3 {
 			if len(set.entries) < 2 {
 				set.reset(t)
 				set.add(t, obj)
 				continue
 			}
+		}
+
+		// obj is not added in the set.
+		// either dismiss the set or add the set in m.overlappingObjsSet
+		if len(set.entries) > 1 {
 			objs := make([]*catalog.ObjectEntry, len(set.entries))
 			copy(objs, set.entries)
 			m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
-			set.reset(t)
-			continue
 		}
 
-		if compute.CompareGeneric(set.maxValue, zm.GetMin(), t) > 0 {
-			set.add(t, obj)
-			continue
-		}
-		if set.size < common.Const1MBytes {
-			set.add(t, obj)
-			continue
-		}
-		if len(set.entries) < 2 {
-			set.reset(t)
-			set.add(t, obj)
-			continue
-		}
-		objs := make([]*catalog.ObjectEntry, len(set.entries))
-		copy(objs, set.entries)
-		m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
 		set.reset(t)
+		set.add(t, obj)
 	}
-	if len(set.entries) > 0 {
+	// there is still more than one entry in set.
+	if len(set.entries) > 1 {
 		objs := make([]*catalog.ObjectEntry, len(set.entries))
 		copy(objs, set.entries)
 		m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
@@ -136,8 +137,9 @@ func (m *objOverlapPolicy) reviseDataObjs(mem int64) ([]*catalog.ObjectEntry, Ta
 		return cmp.Compare(len(a), len(b))
 	})
 
+	// get the overlapping set with most objs.
 	objs := m.overlappingObjsSet[len(m.overlappingObjsSet)-1]
-	if len(objs) < 3 {
+	if len(objs) < 2 {
 		return nil, TaskHostDN
 	}
 	if len(objs) > m.basicConfig.MergeMaxOneRun {
@@ -154,7 +156,7 @@ func (m *objOverlapPolicy) resetForTable(tbl *catalog.TableEntry) {
 	m.objects = m.objects[:0]
 	m.tombstones = m.tombstones[:0]
 	m.overlappingObjsSet = m.overlappingObjsSet[:0]
-	m.basicConfig = m.configProvider.GetConfig(tbl)
+	m.basicConfig = m.configProvider.getConfig(tbl)
 }
 
 type entrySet struct {
@@ -255,7 +257,7 @@ func (m *objOverlapPolicy) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn
 }
 
 func (m *objOverlapPolicy) getConfig(tbl *catalog.TableEntry) *BasicPolicyConfig {
-	r := m.configProvider.GetConfig(tbl)
+	r := m.configProvider.getConfig(tbl)
 	if r == nil {
 		r = &BasicPolicyConfig{
 			ObjectMinOsize:    common.RuntimeOsizeRowsQualified.Load(),
