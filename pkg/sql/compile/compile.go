@@ -3478,21 +3478,20 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		rs[i].NodeInfo.Mcpu = c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
 	}
 
+	if !c.IsSingleScope(buildScopes) {
+		buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, false)
+		buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+	}
+
 	if len(rs) == 1 {
-		if !c.IsSingleScope(buildScopes) {
-			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
-		}
 		// for join on single CN, can directly return
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 		return rs, buildScopes
 	}
 
 	//construct build part for join on multi CN
-	if len(buildScopes) > 1 {
-		buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, true)
-	}
-
-	mergeBuildScopes := make([]*Scope, len(rs))
+	buildOpScopes := make([]*Scope, len(rs))
+	appended := false
 	for i := range rs {
 		bs := newScope(Remote)
 		bs.NodeInfo.Addr = rs[i].NodeInfo.Addr
@@ -3504,21 +3503,20 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		bs.setRootOperator(mergeOp)
 
-		for j := range buildScopes {
-			if isSameCN(buildScopes[j].NodeInfo.Addr, bs.NodeInfo.Addr) {
-				bs.PreScopes = append(bs.PreScopes, buildScopes[j])
+		if isSameCN(buildScopes[0].NodeInfo.Addr, bs.NodeInfo.Addr) {
+			if appended {
+				panic("wrong probe scopes for broadcast join!")
+			} else {
+				appended = true
+				bs.PreScopes = append(bs.PreScopes, buildScopes[0])
 			}
 		}
 		rs[i].PreScopes = append(rs[i].PreScopes, bs)
-		mergeBuildScopes[i] = bs
+		buildOpScopes[i] = bs
 	}
-
-	for i := range buildScopes {
-		buildScopes[i].setRootOperator(constructDispatch(0, mergeBuildScopes, buildScopes[i].NodeInfo.Addr, n, false, buildScopes[i].NodeInfo.Mcpu))
-		buildScopes[i].IsEnd = true
-	}
-
-	return rs, mergeBuildScopes
+	buildScopes[0].setRootOperator(constructDispatch(0, buildOpScopes, buildScopes[0].NodeInfo.Addr, n, false, 1))
+	buildScopes[0].IsEnd = true
+	return rs, buildOpScopes
 }
 
 func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []*Scope {
