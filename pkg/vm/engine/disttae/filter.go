@@ -1162,14 +1162,6 @@ func ExecuteBlockFilter(
 
 				blk.Sorted = obj.Sorted
 				blk.Appendable = obj.Appendable
-				blk.CommitTs = obj.CommitTS
-
-				//if obj.HasDeltaLoc {
-				//	_, commitTs, ok := snapshot.GetBlockDeltaLoc(blk.BlockID)
-				//	if ok {
-				//		blk.CommitTs = commitTs
-				//	}
-				//}
 				outBlocks.AppendBlockInfo(blk)
 			}
 

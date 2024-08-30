@@ -502,3 +502,19 @@ func TestHandler_HandleTxn(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+func TestHandler_HandleEventUpgrade(t *testing.T) {
+	testWithServer(t, func(t *testing.T, addr string, s *Server) {
+		db1, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
+		// connect to server.
+		require.NoError(t, err)
+		require.NotNil(t, db1)
+		defer func() {
+			_ = db1.Close()
+		}()
+		_, err = db1.Exec("upgrade account all")
+		require.NoError(t, err)
+
+		require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
+	})
+}

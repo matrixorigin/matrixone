@@ -30,7 +30,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -42,9 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -455,60 +451,20 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 // buildJoinParallelRun deal one case of scope.ParallelRun.
 // this function will create a pipeline to run a join in parallel.
 func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
-	if c.IsTpQuery() {
-		//tp query build scope in compile time, not runtime
-		return s, nil
-	}
 	mcpu := s.NodeInfo.Mcpu
-
-	if s.ShuffleIdx > 0 { //shuffle join
-		buildScope := c.newJoinBuildScope(s, 1)
-		s.PreScopes = append(s.PreScopes, buildScope)
-		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx]
-		return s, nil
-	}
-
 	if mcpu <= 1 { // broadcast join with no parallel
 		return s, nil
 	}
-
-	isRight := s.isRight()
 
 	chp := s.PreScopes
 	for i := range chp {
 		chp[i].IsEnd = true
 	}
 
+	buildScope := c.newJoinBuildScope(s, int32(mcpu))
 	ms, ss := newParallelScope(s, c)
-	probeScope, buildScope := c.newBroadcastJoinProbeScope(s, ss), c.newJoinBuildScope(s, int32(mcpu))
+	probeScope := c.newBroadcastJoinProbeScope(s, ss)
 
-	if isRight {
-		channel := make(chan *bitmap.Bitmap, mcpu)
-		for i := range ms.PreScopes {
-			switch arg := vm.GetLeafOpParent(nil, ms.PreScopes[i].RootOp).(type) {
-			case *right.RightJoin:
-				arg.Channel = channel
-				arg.NumCPU = uint64(mcpu)
-				if i == 0 {
-					arg.IsMerger = true
-				}
-
-			case *rightsemi.RightSemi:
-				arg.Channel = channel
-				arg.NumCPU = uint64(mcpu)
-				if i == 0 {
-					arg.IsMerger = true
-				}
-
-			case *rightanti.RightAnti:
-				arg.Channel = channel
-				arg.NumCPU = uint64(mcpu)
-				if i == 0 {
-					arg.IsMerger = true
-				}
-			}
-		}
-	}
 	ms.PreScopes = append(ms.PreScopes, chp...)
 	ms.PreScopes = append(ms.PreScopes, buildScope)
 	ms.PreScopes = append(ms.PreScopes, probeScope)
@@ -668,14 +624,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 	}
 	return nil
-}
-
-func (s *Scope) isRight() bool {
-	if s == nil {
-		return false
-	}
-	OpType := vm.GetLeafOpParent(nil, s.RootOp).OpType()
-	return OpType == vm.Right || OpType == vm.RightSemi || OpType == vm.RightAnti
 }
 
 func (s *Scope) isTableScan() bool {

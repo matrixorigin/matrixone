@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
@@ -187,6 +189,12 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Right:
 		t := sourceOp.(*right.RightJoin)
 		op := right.NewArgument()
+		if t.Channel == nil {
+			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+		}
+		op.Channel = t.Channel
+		op.NumCPU = uint64(maxParallel)
+		op.IsMerger = (index == 0)
 		op.Cond = t.Cond
 		op.Result = t.Result
 		op.RightTypes = t.RightTypes
@@ -201,6 +209,12 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.RightSemi:
 		t := sourceOp.(*rightsemi.RightSemi)
 		op := rightsemi.NewArgument()
+		if t.Channel == nil {
+			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+		}
+		op.Channel = t.Channel
+		op.NumCPU = uint64(maxParallel)
+		op.IsMerger = (index == 0)
 		op.Cond = t.Cond
 		op.Result = t.Result
 		op.RightTypes = t.RightTypes
@@ -214,6 +228,12 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.RightAnti:
 		t := sourceOp.(*rightanti.RightAnti)
 		op := rightanti.NewArgument()
+		if t.Channel == nil {
+			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+		}
+		op.Channel = t.Channel
+		op.NumCPU = uint64(maxParallel)
+		op.IsMerger = (index == 0)
 		op.Cond = t.Cond
 		op.Result = t.Result
 		op.RightTypes = t.RightTypes
@@ -1556,7 +1576,7 @@ func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process, j
 	return arg
 }
 
-func constructJoinBuildOperator(c *Compile, op vm.Operator, isShuffle bool, mcpu int32) vm.Operator {
+func constructJoinBuildOperator(c *Compile, op vm.Operator, mcpu int32) vm.Operator {
 	switch op.OpType() {
 	case vm.IndexJoin:
 		indexJoin := op.(*indexjoin.IndexJoin)
@@ -1568,12 +1588,6 @@ func constructJoinBuildOperator(c *Compile, op vm.Operator, isShuffle bool, mcpu
 		ret.SetIsFirst(true)
 		return ret
 	default:
-		if isShuffle {
-			res := constructShuffleBuild(op, c.proc)
-			res.SetIdx(op.GetOperatorBase().GetIdx())
-			res.SetIsFirst(true)
-			return res
-		}
 		res := constructHashBuild(op, c.proc, mcpu)
 		res.SetIdx(op.GetOperatorBase().GetIdx())
 		res.SetIsFirst(true)
