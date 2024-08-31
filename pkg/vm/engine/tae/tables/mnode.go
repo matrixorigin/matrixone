@@ -117,10 +117,20 @@ func (node *memoryNode) getDuplicatedRowsLocked(
 	rowIDs containers.Vector,
 	maxRow uint32,
 	skipFn func(uint32) error,
+	skipCommittedBeforeTxnForAblk bool,
 	mp *mpool.MPool,
 ) (err error) {
 	blkID := objectio.NewBlockidWithObjectID(node.object.meta.Load().ID(), 0)
-	return node.pkIndex.GetDuplicatedRows(ctx, keys.GetDownstreamVector(), keysZM, blkID, rowIDs.GetDownstreamVector(), maxRow, skipFn, mp)
+	return node.pkIndex.GetDuplicatedRows(
+		ctx,
+		keys.GetDownstreamVector(),
+		keysZM,
+		blkID,
+		rowIDs.GetDownstreamVector(),
+		maxRow,
+		skipFn,
+		skipCommittedBeforeTxnForAblk,
+		mp)
 }
 
 func (node *memoryNode) Rows() (uint32, error) {
@@ -250,6 +260,7 @@ func (node *memoryNode) GetDuplicatedRows(
 	rowIDs containers.Vector,
 	isCommitting bool,
 	checkWWConflict bool,
+	skipCommittedBeforeTxnForAblk bool,
 	mp *mpool.MPool,
 ) (err error) {
 	node.object.RLock()
@@ -258,7 +269,7 @@ func (node *memoryNode) GetDuplicatedRows(
 	if checkWWConflict {
 		checkFn = node.checkConflictLocked(txn, isCommitting)
 	}
-	err = node.getDuplicatedRowsLocked(ctx, keys, keysZM, rowIDs, maxVisibleRow, checkFn, mp)
+	err = node.getDuplicatedRowsLocked(ctx, keys, keysZM, rowIDs, maxVisibleRow, checkFn, skipCommittedBeforeTxnForAblk, mp)
 
 	return
 }

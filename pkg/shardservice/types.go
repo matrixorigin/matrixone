@@ -67,6 +67,8 @@ type ShardServer interface {
 type ShardService interface {
 	// GetConfig returns the configuration of the shard service.
 	Config() Config
+	// GetStorage returns the storage of the shard service.
+	GetStorage() ShardStorage
 	// Read read data from shards.
 	Read(ctx context.Context, req ReadRequest, opts ReadOptions) error
 	// HasLocalReplica returns whether the shard has a local replica.
