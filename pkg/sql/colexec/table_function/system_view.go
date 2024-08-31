@@ -104,7 +104,7 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 			col = strings.ToLower(col)
 			idx, ok := plan2.MoLocksColName2Index[col]
 			if !ok {
-				return false, moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", col)
+				return false, moerr.NewInternalErrorf(proc.Ctx, "bad input select columns name %v", col)
 			}
 
 			tp := plan2.MoLocksColTypes[idx]
@@ -212,7 +212,7 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 		result.Batch = nil
 		return true, nil
 	default:
-		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
+		return false, moerr.NewInternalErrorf(proc.Ctx, "unknown state %v", arg.ctr.state)
 	}
 }
 
@@ -285,7 +285,7 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *v
 			col = strings.ToLower(col)
 			idx, ok := plan2.MoConfigColName2Index[col]
 			if !ok {
-				return false, moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", col)
+				return false, moerr.NewInternalErrorf(proc.Ctx, "bad input select columns name %v", col)
 			}
 
 			tp := plan2.MoConfigColTypes[idx]
@@ -351,7 +351,7 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *v
 		result.Batch = nil
 		return true, nil
 	default:
-		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
+		return false, moerr.NewInternalErrorf(proc.Ctx, "unknown state %v", arg.ctr.state)
 	}
 }
 
@@ -438,7 +438,7 @@ func moTransactionsCall(_ int, proc *process.Process, arg *Argument, result *vm.
 			col = strings.ToLower(col)
 			idx, ok := plan2.MoTransactionsColName2Index[col]
 			if !ok {
-				return false, moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", col)
+				return false, moerr.NewInternalErrorf(proc.Ctx, "bad input select columns name %v", col)
 			}
 
 			tp := plan2.MoTransactionsColTypes[idx]
@@ -562,7 +562,7 @@ func moTransactionsCall(_ int, proc *process.Process, arg *Argument, result *vm.
 	case dataFinished:
 		return true, nil
 	default:
-		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
+		return false, moerr.NewInternalErrorf(proc.Ctx, "unknown state %v", arg.ctr.state)
 	}
 }
 
@@ -630,7 +630,7 @@ func moCacheCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 			col = strings.ToLower(col)
 			idx, ok := plan2.MoCacheColName2Index[col]
 			if !ok {
-				return false, moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", col)
+				return false, moerr.NewInternalErrorf(proc.Ctx, "bad input select columns name %v", col)
 			}
 
 			tp := plan2.MoCacheColTypes[idx]
@@ -662,7 +662,7 @@ func moCacheCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 		result.Batch = nil
 		return true, nil
 	default:
-		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
+		return false, moerr.NewInternalErrorf(proc.Ctx, "unknown state %v", arg.ctr.state)
 	}
 }
 

@@ -390,10 +390,10 @@ func replacePlan(reqCtx context.Context, ses *Session, cwft *TxnComputationWrapp
 	for _, obj := range preparePlan.GetSchemas() {
 		newObj, newTableDef := ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
 		if newObj == nil {
-			return nil, nil, originSQL, moerr.NewInternalError(reqCtx, "table '%s' in prepare statement '%s' does not exist anymore", obj.ObjName, stmtName)
+			return nil, nil, originSQL, moerr.NewInternalErrorf(reqCtx, "table '%s' in prepare statement '%s' does not exist anymore", obj.ObjName, stmtName)
 		}
 		if newObj.Obj != obj.Obj || newTableDef.Version != uint32(obj.Server) {
-			return nil, nil, originSQL, moerr.NewInternalError(reqCtx, "table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName)
+			return nil, nil, originSQL, moerr.NewInternalErrorf(reqCtx, "table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName)
 		}
 	}
 

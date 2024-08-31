@@ -59,7 +59,7 @@ func (c rbcolor) String() string {
 	case red:
 		return "red"
 	default:
-		panic(moerr.NewInternalErrorNoCtx("unknown color %d", c))
+		panic(moerr.NewInternalErrorNoCtxf("unknown color %d", c))
 	}
 }
 

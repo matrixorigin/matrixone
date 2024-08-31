@@ -1772,7 +1772,7 @@ func integerToFixFloat[T1, T2 constraints.Integer | constraints.Float](
 			}
 		} else {
 			if float64(v) < -max_value || float64(v) > max_value {
-				return moerr.NewOutOfRange(ctx, "float", "value '%v'", v)
+				return moerr.NewOutOfRangef(ctx, "float", "value '%v'", v)
 			}
 			if err := to.Append(T2(v), false); err != nil {
 				return err
@@ -1802,7 +1802,7 @@ func floatToFixFloat[T1, T2 constraints.Float](
 			tmp := math.Round((v2-math.Floor(v2))*pow) / pow
 			v2 = math.Floor(v2) + tmp
 			if v2 < -max_value || v2 > max_value {
-				return moerr.NewOutOfRange(ctx, "float", "value '%v'", v)
+				return moerr.NewOutOfRangef(ctx, "float", "value '%v'", v)
 			}
 			if err := to.Append(T2(v2), false); err != nil {
 				return err
@@ -1823,9 +1823,9 @@ func floatNumToFixFloat[T1 constraints.Float](
 	v := math.Floor(from) + tmp
 	if v < -max_value || v > max_value {
 		if originStr == "" {
-			return 0, moerr.NewOutOfRange(ctx, "float", "value '%v'", from)
+			return 0, moerr.NewOutOfRangef(ctx, "float", "value '%v'", from)
 		} else {
-			return 0, moerr.NewOutOfRange(ctx, "float", "value '%s'", originStr)
+			return 0, moerr.NewOutOfRangef(ctx, "float", "value '%s'", originStr)
 		}
 	}
 	return T1(v), nil
@@ -1884,7 +1884,7 @@ func numericToBit[T constraints.Integer | constraints.Float](
 			}
 
 			if val > uint64(1<<bitSize-1) {
-				return moerr.NewOutOfRange(ctx, fmt.Sprintf("int%d", bitSize), "value %d", val)
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("int%d", bitSize), "value %d", val)
 			}
 			if err := to.Append(val, false); err != nil {
 				return err
@@ -2405,7 +2405,7 @@ func integerToTime[T constraints.Integer](
 			}
 		} else {
 			if vI64 < types.MinInputIntTime || vI64 > types.MaxInputIntTime {
-				return moerr.NewOutOfRange(ctx, "time", "value %d", v)
+				return moerr.NewOutOfRangef(ctx, "time", "value %d", v)
 			}
 			result, err := types.ParseInt64ToTime(vI64, toType.Scale)
 			if err != nil {
@@ -2435,7 +2435,7 @@ func integerToEnum[T constraints.Integer](
 			}
 		} else {
 			if vI64 < 1 || vI64 > types.MaxEnumLen {
-				return moerr.NewOutOfRange(ctx, "enum", "value %d", v)
+				return moerr.NewOutOfRangef(ctx, "enum", "value %d", v)
 			}
 			result, err := types.ParseIntToEnum(vI64)
 			if err != nil {
@@ -2546,7 +2546,7 @@ func datetimeToInt32(
 		} else {
 			val := v.SecsSinceUnixEpoch()
 			if val < math.MinInt32 || val > math.MaxInt32 {
-				return moerr.NewOutOfRange(ctx, "int32", "value '%v'", val)
+				return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", val)
 			}
 			if err := to.Append(int32(val), false); err != nil {
 				return err
@@ -2748,7 +2748,7 @@ func timestampToInt32(
 		} else {
 			val := v.Unix()
 			if val < math.MinInt32 || val > math.MaxInt32 {
-				return moerr.NewOutOfRange(ctx, "int32", "value '%v'", val)
+				return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", val)
 			}
 			if err := to.Append(int32(val), false); err != nil {
 				return err
@@ -3188,7 +3188,7 @@ func decimal64ToSigned[T constraints.Signed](
 			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, bitSize)
 			if err != nil {
-				return moerr.NewOutOfRange(ctx,
+				return moerr.NewOutOfRangef(ctx,
 					fmt.Sprintf("int%d", bitSize),
 					"value '%v'", xStr)
 			}
@@ -3219,7 +3219,7 @@ func decimal128ToSigned[T constraints.Signed](
 			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, bitSize)
 			if err != nil {
-				return moerr.NewOutOfRange(ctx,
+				return moerr.NewOutOfRangef(ctx,
 					fmt.Sprintf("int%d", bitSize),
 					"value '%v'", xStr)
 			}
@@ -3251,7 +3251,7 @@ func decimal64ToUnsigned[T constraints.Unsigned](
 			xStr = strings.Split(xStr, ".")[0]
 			result, err := strconv.ParseUint(xStr, 10, bitSize)
 			if err != nil {
-				return moerr.NewOutOfRange(ctx,
+				return moerr.NewOutOfRangef(ctx,
 					fmt.Sprintf("uint%d", bitSize),
 					"value '%v'", xStr)
 			}
@@ -3283,7 +3283,7 @@ func decimal128ToUnsigned[T constraints.Unsigned](
 			xStr = strings.Split(xStr, ".")[0]
 			result, err := strconv.ParseUint(xStr, 10, bitSize)
 			if err != nil {
-				return moerr.NewOutOfRange(ctx,
+				return moerr.NewOutOfRangef(ctx,
 					fmt.Sprintf("uint%d", bitSize),
 					"value '%v'", xStr)
 			}
@@ -3408,7 +3408,7 @@ func decimal64ToFloat[T constraints.Float](
 			xStr := v.Format(fromType.Scale)
 			result, err := strconv.ParseFloat(xStr, bitSize)
 			if err != nil {
-				return moerr.NewOutOfRange(ctx, "float32", "value '%v'", xStr)
+				return moerr.NewOutOfRangef(ctx, "float32", "value '%v'", xStr)
 			}
 			if bitSize == 32 {
 				result, _ = strconv.ParseFloat(xStr, 64)
@@ -3449,7 +3449,7 @@ func decimal128ToFloat[T constraints.Float](
 			xStr := v.Format(fromType.Scale)
 			result, err := strconv.ParseFloat(xStr, bitSize)
 			if err != nil {
-				return moerr.NewOutOfRange(ctx, "float32", "value '%v'", xStr)
+				return moerr.NewOutOfRangef(ctx, "float32", "value '%v'", xStr)
 			}
 			if bitSize == 32 {
 				result, _ = strconv.ParseFloat(xStr, 64)
@@ -3785,7 +3785,7 @@ func decimal64ToBit(
 			xStr := v.Format(from.GetType().Scale)
 			xStr = strings.Split(xStr, ".")[0]
 			if result, err = strconv.ParseUint(xStr, 10, bitSize); err != nil {
-				return moerr.NewOutOfRange(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
 			}
 			if err = to.Append(result, false); err != nil {
 				return err
@@ -3811,7 +3811,7 @@ func decimal128ToBit(
 			xStr := v.Format(from.GetType().Scale)
 			xStr = strings.Split(xStr, ".")[0]
 			if result, err = strconv.ParseUint(xStr, 10, bitSize); err != nil {
-				return moerr.NewOutOfRange(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
 			}
 			if err = to.Append(result, false); err != nil {
 				return err
@@ -3862,7 +3862,7 @@ func strToSigned[T constraints.Signed](
 					// XXX I'm not sure if we should return the int8 / int16 / int64 info. or
 					// just return the int. the old code just return the int. too much bvt result needs to update.
 					if strings.Contains(err.Error(), "value out of range") {
-						return moerr.NewOutOfRange(ctx, fmt.Sprintf("int%d", bitSize), "value '%s'", s)
+						return moerr.NewOutOfRangef(ctx, fmt.Sprintf("int%d", bitSize), "value '%s'", s)
 					}
 					return moerr.NewInvalidArg(ctx, "cast to int", s)
 				}
@@ -3910,7 +3910,7 @@ func strToUnsigned[T constraints.Unsigned](
 			}
 			if tErr != nil {
 				if strings.Contains(tErr.Error(), "value out of range") {
-					return moerr.NewOutOfRange(ctx, fmt.Sprintf("uint%d", bitSize), "value '%s'", *res)
+					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("uint%d", bitSize), "value '%s'", *res)
 				}
 				return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), *res)
 			}
@@ -3947,7 +3947,7 @@ func strToFloat[T constraints.Float](
 				r1, tErr = strconv.ParseUint(s, 16, 64)
 				if tErr != nil {
 					if strings.Contains(tErr.Error(), "value out of range") {
-						return moerr.NewOutOfRange(ctx, "float", "value '%s'", s)
+						return moerr.NewOutOfRangef(ctx, "float", "value '%s'", s)
 					}
 					return moerr.NewInvalidArg(ctx, "cast to float", s)
 				}
@@ -4325,7 +4325,7 @@ func strToBit(
 			}
 		} else {
 			if len(v) > 8 {
-				return moerr.NewOutOfRange(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
 			}
 
 			var val uint64
@@ -4333,7 +4333,7 @@ func strToBit(
 				val = (val << 8) | uint64(v[j])
 			}
 			if val > uint64(1<<bitSize-1) {
-				return moerr.NewOutOfRange(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
 			}
 
 			if err := to.Append(val, false); err != nil {
@@ -4591,7 +4591,7 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *uint8, *uint16, *uint32, *uint64:
 			for i, x := range xs {
 				if !nsp.Contains(uint64(i)) && x < 0 {
-					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint", "value '%v'", x)
 				}
 			}
 		}
@@ -4601,19 +4601,19 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt8 || x > math.MaxInt8) {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint8) {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16, *uint32, *uint64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x < 0 {
-					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint", "value '%v'", x)
 				}
 			}
 		}
@@ -4623,31 +4623,31 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt8 || x > math.MaxInt8) {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt16 || x > math.MaxInt16) {
-					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint8) {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint16) {
-					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32, *uint64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x < 0 {
-					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint", "value '%v'", x)
 				}
 			}
 		}
@@ -4657,44 +4657,44 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt8 || x > math.MaxInt8) {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt16 || x > math.MaxInt16) {
-					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt32 || x > math.MaxInt32) {
-					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint8) {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint16) {
-					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint32) {
-					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x < 0 {
 					// XXX for adapt to bvt, but i don't know why we hide the wrong value here.
-					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		}
@@ -4704,7 +4704,7 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt8 {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		}
@@ -4714,19 +4714,19 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt8 {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt16 {
-					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint8 {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		}
@@ -4736,31 +4736,31 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt8 {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt16 {
-					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt32 {
-					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint8 {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint16 {
-					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		}
@@ -4770,43 +4770,43 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt8 {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt16 {
-					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt32 {
-					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt64 {
-					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint8 {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint16 {
-					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint32 {
-					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		}
@@ -4816,49 +4816,49 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt8 {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt16 {
-					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt32 {
-					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt64 {
-					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint8 {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint16 {
-					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint32 {
-					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint64 {
-					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		}
@@ -4868,56 +4868,56 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		case *int8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxInt8 {
-					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxInt16 {
-					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxInt32 {
-					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) &&
 					(math.Round(x) > math.MaxInt64 || math.Round(x) < math.MinInt64) {
-					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint8 {
-					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint16 {
-					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint32 {
-					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint64 {
-					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		case *float32:
 			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxFloat32 {
-					return moerr.NewOutOfRange(ctx, "float32", "value '%v'", x)
+					return moerr.NewOutOfRangef(ctx, "float32", "value '%v'", x)
 				}
 			}
 		}

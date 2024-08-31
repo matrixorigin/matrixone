@@ -122,7 +122,7 @@ func (catalog *Catalog) onReplayCreateDB(
 	if db != nil {
 		dbCreatedAt := db.GetCreatedAtLocked()
 		if !dbCreatedAt.Equal(&txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s",
+			panic(moerr.NewInternalErrorNoCtxf("logic err expect %s, get %s",
 				txnNode.End.ToString(), dbCreatedAt.ToString()))
 		}
 		return
@@ -160,7 +160,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	dbDeleteAt := db.GetDeleteAtLocked()
 	if !dbDeleteAt.IsEmpty() {
 		if !dbDeleteAt.Equal(&txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), dbDeleteAt.ToString()))
+			panic(moerr.NewInternalErrorNoCtxf("logic err expect %s, get %s", txnNode.End.ToString(), dbDeleteAt.ToString()))
 		}
 		return
 	}
@@ -281,7 +281,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	if tbl != nil {
 		tblCreatedAt := tbl.GetCreatedAtLocked()
 		if tblCreatedAt.Greater(&txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
+			panic(moerr.NewInternalErrorNoCtxf("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
 		// alter table
 		un := &MVCCNode[*TableMVCCNode]{
@@ -342,7 +342,7 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 	tableDeleteAt := tbl.GetDeleteAtLocked()
 	if !tableDeleteAt.IsEmpty() {
 		if !tableDeleteAt.Equal(&txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tableDeleteAt.ToString()))
+			panic(moerr.NewInternalErrorNoCtxf("logic err expect %s, get %s", txnNode.End.ToString(), tableDeleteAt.ToString()))
 		}
 		return
 	}

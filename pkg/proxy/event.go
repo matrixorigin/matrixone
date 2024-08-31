@@ -32,6 +32,8 @@ func (t eventType) String() string {
 		return "KillQuery"
 	case TypeSetVar:
 		return "SetVar"
+	case TypeUpgrade:
+		return "Upgrade"
 	}
 	return "Unknown"
 }
@@ -43,6 +45,8 @@ const (
 	TypeKillQuery eventType = 1
 	// TypeSetVar indicates the set variable statement.
 	TypeSetVar eventType = 2
+	// TypeUpgrade indicates the "upgrade account all" statement.
+	TypeUpgrade eventType = 4
 )
 
 // IEvent is the event interface.
@@ -95,6 +99,8 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 		case *tree.SetVar:
 			// This event should be sent to dst, so return false,
 			return makeSetVarEvent(sql), false
+		case *tree.UpgradeStatement:
+			return makeUpgradeEvent(sql), true
 		default:
 			return nil, false
 		}
@@ -149,4 +155,17 @@ func makeSetVarEvent(stmt string) IEvent {
 // eventType implements the IEvent interface.
 func (e *setVarEvent) eventType() eventType {
 	return TypeSetVar
+}
+
+type upgradeEvent struct {
+	baseEvent
+	stmt string
+}
+
+func makeUpgradeEvent(stmt string) IEvent {
+	e := &upgradeEvent{
+		stmt: stmt,
+	}
+	e.typ = TypeUpgrade
+	return e
 }

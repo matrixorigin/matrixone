@@ -370,7 +370,7 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 					_ = writeValues(row)
 				}
 			default:
-				panic(moerr.NewInternalError(ctx, "unsupported metric type %v", mf.GetType()))
+				panic(moerr.NewInternalErrorf(ctx, "unsupported metric type %v", mf.GetType()))
 			}
 		}
 	}

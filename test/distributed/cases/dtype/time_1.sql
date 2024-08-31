@@ -121,4 +121,26 @@ insert into mysql_ts_test values (4, {d '2024-03-16'}, {t '23:59:59'}, {ts curre
 select * from mysql_ts_test;
 drop table mysql_ts_test;
 
+drop table if exists stockpriceus2_5min_copy1;
+create table stockpriceus2_5min_copy1 (
+id int auto_increment primary key,
+time_1 datetime,
+price decimal(10, 2));
+
+insert into stockpriceus2_5min_copy1 (time_1, price) values
+ ('2023-06-25 14:00:00', 150.50),
+ ('2023-06-25 14:05:00', 151.00),
+ ('2022-06-25 14:10:00', 149.75),
+ ('2021-06-25 14:15:00', 148.25),
+ ('2020-06-25 14:20:00', 147.00);
+
+select * from stockpriceus2_5min_copy1;
+select year(`time_1`) as yr_time_1_ok
+    from stockpriceus2_5min_copy1
+    group by year(`time_1`);
+select year(`time_1`) as yr_time_1_ok
+    from stockpriceus2_5min_copy1
+    group by 1;
+drop table stockpriceus2_5min_copy1;
+
 drop database test;

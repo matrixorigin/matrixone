@@ -217,7 +217,7 @@ func (c *Config) validate() error {
 		c.Clock.Backend = localClockBackend
 	}
 	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
-		return moerr.NewInternalError(context.Background(), "%s clock backend not support", c.Clock.Backend)
+		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
 	}
 	if !c.Clock.EnableCheckMaxClockOffset {
 		c.Clock.MaxClockOffset.Duration = 0
@@ -253,7 +253,7 @@ func (c *Config) setDefaultValue() error {
 		c.Clock.Backend = localClockBackend
 	}
 	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
-		return moerr.NewInternalError(context.Background(), "%s clock backend not support", c.Clock.Backend)
+		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
 	}
 	if !c.Clock.EnableCheckMaxClockOffset {
 		c.Clock.MaxClockOffset.Duration = 0
@@ -466,7 +466,7 @@ func (c *Config) resolveGossipSeedAddresses() error {
 			}
 		}
 		if len(filtered) != 1 {
-			return moerr.NewBadConfig(context.Background(), "GossipSeedAddress %s", addr)
+			return moerr.NewBadConfigf(context.Background(), "GossipSeedAddress %s", addr)
 		}
 		result = append(result, net.JoinHostPort(filtered[0], port))
 	}
@@ -508,7 +508,7 @@ func (c *Config) getServiceType() (metadata.ServiceType, error) {
 	if v, ok := supportServiceTypes[strings.ToUpper(c.ServiceType)]; ok {
 		return v, nil
 	}
-	return metadata.ServiceType(0), moerr.NewInternalError(context.Background(), "service type %s not support", c.ServiceType)
+	return metadata.ServiceType(0), moerr.NewInternalErrorf(context.Background(), "service type %s not support", c.ServiceType)
 }
 
 func (c *Config) mustGetServiceType() metadata.ServiceType {

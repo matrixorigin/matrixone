@@ -134,7 +134,7 @@ func initMetadataInfoBat(proc process.Process, arg *Argument) (*batch.Batch, err
 	for i, a := range arg.Attrs {
 		idx, ok := plan.MetadataScanInfo_MetadataScanInfoType_value[a]
 		if !ok {
-			return nil, moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", a)
+			return nil, moerr.NewInternalErrorf(proc.Ctx, "bad input select columns name %v", a)
 		}
 
 		tp := plan2.MetadataScanColTypes[idx]
@@ -153,7 +153,7 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 		idx, ok := plan.MetadataScanInfo_MetadataScanInfoType_value[colname]
 		if !ok {
 			opBat.Clean(proc.GetMPool())
-			return moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", colname)
+			return moerr.NewInternalErrorf(proc.Ctx, "bad input select columns name %v", colname)
 		}
 
 		switch plan.MetadataScanInfo_MetadataScanInfoType(idx) {

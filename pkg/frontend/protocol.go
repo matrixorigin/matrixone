@@ -287,7 +287,7 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 		s, _ := resp.data.(string)
 		return mp.WriteLocalInfileRequest(s)
 	default:
-		return moerr.NewInternalError(ctx, "unsupported response:%d ", resp.category)
+		return moerr.NewInternalErrorf(ctx, "unsupported response:%d ", resp.category)
 	}
 }
 
