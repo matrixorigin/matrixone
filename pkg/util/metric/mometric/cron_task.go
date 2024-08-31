@@ -17,6 +17,8 @@ package mometric
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"math"
 	"path"
 	"strings"
 	"sync/atomic"
@@ -85,6 +87,7 @@ const (
 	ColumnSize        = "size"         // result column in `show accounts`, or column in table mo_catalog.mo_account
 	ColumnCreatedTime = "created_time" // column in table mo_catalog.mo_account
 	ColumnStatus      = "status"       // column in table mo_catalog.mo_account
+	ColumnObjectCount = "object_count"
 )
 
 var (
@@ -194,6 +197,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			}
 			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
 
+			metric.ObjectCount(account).Set(objectCount)
 			metric.StorageUsage(account).Set(sizeMB)
 		}
 
