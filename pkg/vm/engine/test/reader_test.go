@@ -116,7 +116,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
 
-	ranges, err := testutil.TxnRanges(ctx, relation, txn, expr)
+	ranges, err := testutil.TxnRanges(ctx, txn, relation, expr)
 
 	require.NoError(t, err)
 
@@ -218,7 +218,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	//_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	//require.NoError(t, err)
 
-	ranges, err := testutil.TxnRanges(ctx, relation, txn, expr)
+	ranges, err := testutil.TxnRanges(ctx, txn, relation, expr)
 
 	require.NoError(t, err)
 
@@ -314,7 +314,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		_, relation, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 
-		ranges, err := testutil.TxnRanges(ctx, relation, txn, nil)
+		ranges, err := testutil.TxnRanges(ctx, txn, relation, nil)
 
 		require.NoError(t, err)
 
