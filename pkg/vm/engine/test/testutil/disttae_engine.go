@@ -78,8 +78,8 @@ func NewTestDisttaeEngine(
 	}
 
 	if de.mp == nil {
-		de.mp, err = mpool.NewMPool("test", 0, mpool.NoFixed)
-		if err != nil {
+		var err error
+		if de.mp, err = mpool.NewMPool("test", 0, mpool.NoFixed); err != nil {
 			return nil, err
 		}
 	}
