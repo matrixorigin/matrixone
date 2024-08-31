@@ -15,14 +15,17 @@
 package merge
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 var (
@@ -127,4 +130,82 @@ func (o *customConfigProvider) String() string {
 		builder.WriteString(fmt.Sprintf("%d:%v,%v | ", k, c.ObjectMinOsize, c.MergeMaxOneRun))
 	}
 	return builder.String()
+}
+
+type policyGroup struct {
+	policies [3]policy
+
+	basicConfig    *BasicPolicyConfig
+	configProvider *customConfigProvider
+}
+
+func newPolicyGroup() *policyGroup {
+	return &policyGroup{
+		policies: [3]policy{
+			newObjSizePolicy(),
+			newObjOverlapPolicy(),
+			newTombstonePolicy(),
+		},
+
+		configProvider: newCustomConfigProvider(),
+	}
+}
+
+func (m *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg *BasicPolicyConfig) {
+	if tbl == nil || txn == nil {
+		return
+	}
+	db, err := txn.GetDatabaseByID(tbl.GetDB().ID)
+	if err != nil {
+		return
+	}
+	tblHandle, err := db.GetRelationByID(tbl.ID)
+	if err != nil {
+		return
+	}
+	ctx := context.Background()
+	tblHandle.AlterTable(
+		ctx,
+		NewUpdatePolicyReq(cfg),
+	)
+	logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, tbl.GetLastestSchemaLocked(false).Name, cfg)
+	txn.Commit(ctx)
+	m.configProvider.invalidCache(tbl)
+}
+
+func (m *policyGroup) getConfig(tbl *catalog.TableEntry) *BasicPolicyConfig {
+	r := m.configProvider.getConfig(tbl)
+	if r == nil {
+		r = &BasicPolicyConfig{
+			ObjectMinOsize:    common.RuntimeOsizeRowsQualified.Load(),
+			MaxOsizeMergedObj: common.RuntimeMaxObjOsize.Load(),
+			MergeMaxOneRun:    int(common.RuntimeMaxMergeObjN.Load()),
+			MinCNMergeSize:    common.RuntimeMinCNMergeSize.Load(),
+		}
+	}
+	return r
+}
+
+func (m *policyGroup) onObject(obj *catalog.ObjectEntry) {
+	for _, p := range m.policies {
+		p.onObject(obj)
+	}
+}
+
+func (m *policyGroup) revise(cpu, mem int64) ([][]*catalog.ObjectEntry, TaskHostKind) {
+	targets := make([][]*catalog.ObjectEntry, 0)
+	for _, p := range m.policies {
+		objs, _ := p.revise(cpu, mem, m.basicConfig)
+		if len(objs) > 1 {
+			targets = append(targets, objs)
+		}
+	}
+	return targets, TaskHostDN
+}
+
+func (m *policyGroup) resetForTable(tbl *catalog.TableEntry) {
+	for _, p := range m.policies {
+		p.resetForTable(tbl)
+	}
+	m.basicConfig = m.getConfig(tbl)
 }

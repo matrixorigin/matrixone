@@ -26,7 +26,7 @@ type Scheduler struct {
 	tid      uint64
 	executor *Executor
 
-	policy policy
+	policyGroup *policyGroup
 
 	tableRowCnt int
 	tableRowDel int
@@ -34,8 +34,8 @@ type Scheduler struct {
 
 func NewScheduler(rt *dbutils.Runtime, scheduler CNMergeScheduler) *Scheduler {
 	return &Scheduler{
-		executor: NewMergeExecutor(rt, scheduler),
-		policy:   newMultiObjPolicy(),
+		executor:    NewMergeExecutor(rt, scheduler),
+		policyGroup: newPolicyGroup(),
 	}
 }
 
@@ -87,7 +87,7 @@ func (m *Scheduler) resetForTable(entry *catalog.TableEntry) {
 		m.tableRowCnt = 0
 		m.tableRowDel = 0
 	}
-	m.policy.resetForTable(entry)
+	m.policyGroup.resetForTable(entry)
 	m.executor.RefreshMemInfo()
 }
 
@@ -108,13 +108,11 @@ func (m *Scheduler) OnPostTable(tableEntry *catalog.TableEntry) (err error) {
 
 	tableEntry.Stats.AddRowStat(m.tableRowCnt, m.tableRowDel)
 	// for multi-object run. determine which objects to merge based on all objects.
-	mobjs, tombstones, kind := m.policy.revise(m.executor.CPUPercent(), int64(m.executor.MemAvailBytes()))
-
-	if len(mobjs) >= 2 {
-		m.executor.ExecuteObjMerge(tableEntry, mobjs, kind)
-	}
-	if len(tombstones) >= 2 {
-		m.executor.ExecuteObjMerge(tableEntry, tombstones, kind)
+	targets, kind := m.policyGroup.revise(m.executor.CPUPercent(), int64(m.executor.MemAvailBytes()))
+	for _, target := range targets {
+		if len(target) > 1 {
+			m.executor.ExecuteObjMerge(tableEntry, target, kind)
+		}
 	}
 	return
 }
@@ -137,7 +135,7 @@ func (m *Scheduler) OnObject(objectEntry *catalog.ObjectEntry) error {
 
 	m.tableRowCnt += rows
 	m.tableRowDel += dels
-	m.policy.onObject(objectEntry)
+	m.policyGroup.onObject(objectEntry)
 	return nil
 }
 
@@ -152,9 +150,9 @@ func objectValid(objectEntry *catalog.ObjectEntry) bool {
 }
 
 func (m *Scheduler) ConfigPolicy(tbl *catalog.TableEntry, txn txnif.AsyncTxn, c *BasicPolicyConfig) {
-	m.policy.setConfig(tbl, txn, c)
+	m.policyGroup.setConfig(tbl, txn, c)
 }
 
 func (m *Scheduler) GetPolicy(tbl *catalog.TableEntry) *BasicPolicyConfig {
-	return m.policy.getConfig(tbl)
+	return m.policyGroup.getConfig(tbl)
 }
