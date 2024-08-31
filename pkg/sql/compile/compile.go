@@ -2212,7 +2212,6 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		}
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, rs[0].RootOp, 1))
 		buildScopes[0].IsEnd = true
-		rs[0].Magic = Merge
 	} else {
 		for i := range buildScopes {
 			buildScopes[i].setRootOperator(constructJoinBuildOperator(c, rs[i].RootOp, int32(rs[i].NodeInfo.Mcpu)))

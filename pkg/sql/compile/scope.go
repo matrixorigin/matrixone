@@ -171,6 +171,11 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 	}()
 
+	if s.RootOp == nil {
+		// it's a fake scope
+		return nil
+	}
+
 	if s.DataSource == nil {
 		p = pipeline.NewMerge(s.RootOp)
 		_, err = p.MergeRun(s.Proc)
@@ -250,8 +255,11 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
-	var wg sync.WaitGroup
+	if len(s.PreScopes) == 0 {
+		return s.ParallelRun(c)
+	}
 
+	var wg sync.WaitGroup
 	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		wg.Add(1)
