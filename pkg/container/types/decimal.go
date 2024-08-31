@@ -1939,9 +1939,9 @@ func (x Decimal256) Format(scale int32) string {
 	return a
 }
 
-func (x Decimal64) Ceil(scale1, scale2 int32) Decimal64 {
+func (x Decimal64) Ceil(scale1, scale2 int32, isConst bool) Decimal64 {
 	if x.Sign() {
-		return x.Minus().Floor(scale1, scale2).Minus()
+		return x.Minus().Floor(scale1, scale2, isConst).Minus()
 	}
 	if scale1 > scale2 {
 		k := scale1 - scale2
@@ -1953,12 +1953,18 @@ func (x Decimal64) Ceil(scale1, scale2 int32) Decimal64 {
 			x, _ = x.Sub64(y)
 			x, _, _ = x.Add(Decimal64(1), k, 0)
 		}
+		if isConst {
+			if scale2 < 0 {
+				k = scale1
+			}
+			x, _ = x.Scale(-k)
+		}
 	}
 	return x
 }
-func (x Decimal64) Floor(scale1, scale2 int32) Decimal64 {
+func (x Decimal64) Floor(scale1, scale2 int32, isConst bool) Decimal64 {
 	if x.Sign() {
-		return x.Minus().Ceil(scale1, scale2).Minus()
+		return x.Minus().Ceil(scale1, scale2, isConst).Minus()
 	}
 	if scale1 > scale2 {
 		k := scale1 - scale2
@@ -1967,11 +1973,17 @@ func (x Decimal64) Floor(scale1, scale2 int32) Decimal64 {
 		}
 		y, _, _ := x.Mod(Decimal64(1), k, 0)
 		x, _ = x.Sub64(y)
+		if isConst {
+			if scale2 < 0 {
+				k = scale1
+			}
+			x, _ = x.Scale(-k)
+		}
 	}
 	return x
 }
 
-func (x Decimal64) Round(scale1, scale2 int32) Decimal64 {
+func (x Decimal64) Round(scale1, scale2 int32, isConst bool) Decimal64 {
 	if scale2 >= scale1 {
 		return x
 	}
@@ -1980,13 +1992,17 @@ func (x Decimal64) Round(scale1, scale2 int32) Decimal64 {
 		k = 18
 	}
 	x, _ = x.Scale(-k)
-	x, _ = x.Scale(k)
+	if !isConst {
+		x, _ = x.Scale(k)
+	} else if scale2 < 0 {
+		x, _ = x.Scale(-scale2)
+	}
 	return x
 }
 
-func (x Decimal128) Ceil(scale1, scale2 int32) Decimal128 {
+func (x Decimal128) Ceil(scale1, scale2 int32, isConst bool) Decimal128 {
 	if x.Sign() {
-		return x.Minus().Floor(scale1, scale2).Minus()
+		return x.Minus().Floor(scale1, scale2, isConst).Minus()
 	}
 	if scale1 > scale2 {
 		k := scale1 - scale2
@@ -1998,12 +2014,18 @@ func (x Decimal128) Ceil(scale1, scale2 int32) Decimal128 {
 			x, _ = x.Sub128(y)
 			x, _, _ = x.Add(Decimal128{1, 0}, k, 0)
 		}
+		if isConst {
+			if scale2 < 0 {
+				k = scale1
+			}
+			x, _ = x.Scale(-k)
+		}
 	}
 	return x
 }
-func (x Decimal128) Floor(scale1, scale2 int32) Decimal128 {
+func (x Decimal128) Floor(scale1, scale2 int32, isConst bool) Decimal128 {
 	if x.Sign() {
-		return x.Minus().Ceil(scale1, scale2).Minus()
+		return x.Minus().Ceil(scale1, scale2, isConst).Minus()
 	}
 	if scale1 > scale2 {
 		k := scale1 - scale2
@@ -2012,11 +2034,17 @@ func (x Decimal128) Floor(scale1, scale2 int32) Decimal128 {
 		}
 		y, _, _ := x.Mod(Decimal128{1, 0}, k, 0)
 		x, _ = x.Sub128(y)
+		if isConst {
+			if scale2 < 0 {
+				k = scale1
+			}
+			x, _ = x.Scale(-k)
+		}
 	}
 	return x
 }
 
-func (x Decimal128) Round(scale1, scale2 int32) Decimal128 {
+func (x Decimal128) Round(scale1, scale2 int32, isConst bool) Decimal128 {
 	if scale2 >= scale1 {
 		return x
 	}
@@ -2025,7 +2053,11 @@ func (x Decimal128) Round(scale1, scale2 int32) Decimal128 {
 		k = 38
 	}
 	x, _ = x.Scale(-k)
-	x, _ = x.Scale(k)
+	if !isConst {
+		x, _ = x.Scale(k)
+	} else if scale2 < 0 {
+		x, _ = x.Scale(-scale2)
+	}
 	return x
 }
 
