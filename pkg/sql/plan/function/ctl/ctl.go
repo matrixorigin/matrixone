@@ -74,12 +74,12 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 	parameter := functionUtil.QuickBytesToStr(arg2)
 
 	if _, ok := supportedServiceTypes[service]; !ok {
-		return moerr.NewNotSupported(proc.Ctx, "service type %s not supported", service)
+		return moerr.NewNotSupportedf(proc.Ctx, "service type %s not supported", service)
 	}
 
 	f, ok := supportedCmds[command]
 	if !ok {
-		return moerr.NewNotSupported(proc.Ctx, "command %s not supported", command)
+		return moerr.NewNotSupportedf(proc.Ctx, "command %s not supported", command)
 	}
 
 	res, err := f(proc,

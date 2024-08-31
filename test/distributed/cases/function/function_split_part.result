@@ -71,7 +71,7 @@ INSERT INTO split_part_01 VALUES(9, '442+562++++——----吃饭了',',',NULL);
 INSERT INTO split_part_01 VALUES(1, 'ewjj32..3,l43/.43', 0);
 Column count doesn't match value count at row 1
 INSERT INTO split_part_01 VALUES(11, 'vhjdwewj3902i302o302($#$%^&*()_POJHFTY&(*UIOPL:<DQ87*q8JIFWJLWKMDXKLSMDXKSLMKCw54545484154444489897897o8u8&92)(','few',4);
-internal error: Can't cast 'vhjdwewj3902i302o302($#$%!^(MISSING)&*()_POJHFTY&(*UIOPL:<DQ87*q8JIFWJLWKMDXKLSMDXKSLMKCw545454841544444898978...' to VARCHAR type. Src length 111 is larger than Dest length 100
+internal error: Can't cast 'vhjdwewj3902i302o302($#$%^&*()_POJHFTY&(*UIOPL:<DQ87*q8JIFWJLWKMDXKLSMDXKSLMKCw545454841544444898978...' to VARCHAR type. Src length 111 is larger than Dest length 100
 INSERT INTO split_part_01 VALUES(12, '', 'vjdkelwvrew', 32769);
 Data truncation: data out of range: data type int16, value '32769'
 SELECT split_part(s1,NULL,count1) FROM split_part_01;
@@ -275,7 +275,7 @@ SELECT * FROM split_part_02 WHERE split_part(s1,'的',2) = '功能:用于从字�
 id    s1    delim    count1    count2
 1    SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, start, length)    a    1231    548494515
 SELECT * FROM split_part_02 WHERE split_part(s1,'的',2)spilt( LIKE '功能%';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 61 near "spilt( LIKE '功能%!'(MISSING);";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 61 near "spilt( LIKE '功能%';";
 SELECT * FROM split_part_02 WHERE split_part(s1, 'iii', 3-1) = 'cn';
 id    s1    delim    count1    count2
 SELECT * FROM split_part_02 WHERE LENGTH(split_part(s1,delim,2)) = 14;

@@ -122,7 +122,7 @@ type txnTable struct {
 func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) {
 	schema := entry.GetVisibleSchema(store.txn)
 	if schema == nil {
-		return nil, moerr.NewInternalErrorNoCtx("No visible schema for ts %s", store.txn.GetStartTS().ToString())
+		return nil, moerr.NewInternalErrorNoCtxf("No visible schema for ts %s", store.txn.GetStartTS().ToString())
 	}
 	tbl := &txnTable{
 		store:       store,
@@ -941,7 +941,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 		apipb.AlterKind_AddPartition,
 		apipb.AlterKind_RenameColumn:
 	default:
-		return moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
+		return moerr.NewNYIf(ctx, "alter table %s", req.Kind.String())
 	}
 	tbl.store.IncreateWriteCnt()
 	tbl.store.txn.GetMemo().AddCatalogChange()

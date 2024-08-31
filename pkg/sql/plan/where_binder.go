@@ -39,11 +39,11 @@ func (b *WhereBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRo
 }
 
 func (b *WhereBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewSyntaxError(b.GetContext(), "aggregate function %s not allowed in WHERE clause", funcName)
+	return nil, moerr.NewSyntaxErrorf(b.GetContext(), "aggregate function %s not allowed in WHERE clause", funcName)
 }
 
 func (b *WhereBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewSyntaxError(b.GetContext(), "window function %s not allowed in WHERE clause", funcName)
+	return nil, moerr.NewSyntaxErrorf(b.GetContext(), "window function %s not allowed in WHERE clause", funcName)
 }
 
 func (b *WhereBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
@@ -51,5 +51,5 @@ func (b *WhereBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.E
 }
 
 func (b *WhereBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInput(b.GetContext(), "cannot bind time window functions '%s'", funcName)
+	return nil, moerr.NewInvalidInputf(b.GetContext(), "cannot bind time window functions '%s'", funcName)
 }

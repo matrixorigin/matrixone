@@ -53,11 +53,11 @@ func handleUnsubscribeTable(proc *process.Process,
 	}
 	dbID, err := strconv.ParseUint(args[1], 10, 64)
 	if err != nil {
-		return Result{}, moerr.NewInternalErrorNoCtx("wrong database ID: %s", args[1])
+		return Result{}, moerr.NewInternalErrorNoCtxf("wrong database ID: %s", args[1])
 	}
 	tbID, err := strconv.ParseUint(args[2], 10, 64)
 	if err != nil {
-		return Result{}, moerr.NewInternalErrorNoCtx("wrong table ID: %s", args[2])
+		return Result{}, moerr.NewInternalErrorNoCtxf("wrong table ID: %s", args[2])
 	}
 	targets := getTargets(args[0])
 	for _, c := range targets {

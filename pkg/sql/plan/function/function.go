@@ -140,7 +140,7 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	}
 	f := allSupportedFunctions[r.fid]
 	if len(f.Overloads) == 0 || f.checkFn == nil {
-		return r, moerr.NewNYI(ctx, "should implement the function %s", name)
+		return r, moerr.NewNYIf(ctx, "should implement the function %s", name)
 	}
 
 	check := f.checkFn(f.Overloads, args)
@@ -309,7 +309,7 @@ func getFunctionIdByName(ctx context.Context, name string) (int32, error) {
 	if fid, ok := functionIdRegister[name]; ok {
 		return fid, nil
 	}
-	return -1, moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+	return -1, moerr.NewNotSupportedf(ctx, "function or operator '%s'", name)
 }
 
 func getFunctionIdByNameWithoutErr(name string) (int32, bool) {

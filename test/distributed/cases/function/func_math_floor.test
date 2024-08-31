@@ -182,3 +182,24 @@ select floor(123.342, null);
 select floor(null, 1);
 
 select floor(null, null);
+
+select floor(1.999,2);
+
+drop table if exists t1;
+create table t1(a int ,b decimal(10,5));
+insert into t1 values(1,0.5);
+insert into t1 values(2,0.499);
+insert into t1 values(3,0.501);
+insert into t1 values(4,20.5);
+insert into t1 values(5,20.499);
+insert into t1 values(6,13.500);
+insert into t1 values(7,-0.500);
+insert into t1 values(8,-0.499);
+insert into t1 values(9,-0.501);
+insert into t1 values(10,-20.499);
+insert into t1 values(11,-20.500);
+insert into t1 values(12,-13.500);
+insert into t1 values (13, 20.89123);
+insert into t1 values (14, 23.40123);
+insert into t1 values (15, 123.45678);
+select a, b, floor(b,2) from t1;

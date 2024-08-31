@@ -165,7 +165,7 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeString:
 		buf = bj.toString(buf)
 	default:
-		err = moerr.NewInvalidInputNoCtx("invalid json type '%v'", bj.Type)
+		err = moerr.NewInvalidInputNoCtxf("invalid json type '%v'", bj.Type)
 	}
 	return buf, err
 }
@@ -606,7 +606,7 @@ func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool,
 	vals := make([]ByteJson, 0, 1)
 	keys, vals = bj.queryWithSubPath(keys, vals, path, "$")
 	if len(keys) != len(vals) {
-		return nil, moerr.NewInvalidInputNoCtx("len(key) and len(val) are not equal, len(key)=%d, len(val)=%d", len(keys), len(vals))
+		return nil, moerr.NewInvalidInputNoCtxf("len(key) and len(val) are not equal, len(key)=%d, len(val)=%d", len(keys), len(vals))
 	}
 	for i := 0; i < len(keys); i++ {
 		if vals[i].canUnnest() {
@@ -699,7 +699,7 @@ func ParseJsonByteFromString(s string) ([]byte, error) {
 			val, err := x.Float64()
 			buf[0] = byte(TpCodeFloat64)
 			if err != nil {
-				return nil, moerr.NewInvalidInputNoCtx("json number %v", in)
+				return nil, moerr.NewInvalidInputNoCtxf("json number %v", in)
 			}
 			if err = checkFloat64(val); err != nil {
 				return nil, err
@@ -734,7 +734,7 @@ func ParseJsonByteFromString(s string) ([]byte, error) {
 		buf[0] = byte(TpCodeObject)
 		buf, err = addObject(buf, x)
 	default:
-		return nil, moerr.NewInvalidInputNoCtx("json element %v", in)
+		return nil, moerr.NewInvalidInputNoCtxf("json element %v", in)
 	}
 	return buf, err
 }
