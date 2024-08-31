@@ -92,8 +92,12 @@ func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *
 	if accountMgr == nil {
 		return moerr.NewInternalError(ctx, "account routine manager not initialized")
 	}
-	logutil.Infof("[receive kill request] %s get handle kill resuqest, req add account id %d, version %d to kill queue, ", s.ID(), req.KillConnRequest.AccountID, req.KillConnRequest.Version)
+	logutil.Infof("[handle kill request] handle kill conn, add account id %d, version %d to kill queue, ", req.KillConnRequest.AccountID, req.KillConnRequest.Version)
 	accountMgr.EnKillQueue(req.KillConnRequest.AccountID, req.KillConnRequest.Version)
+
+	resp.KillConnResponse = &query.KillConnResponse{
+		Success: true,
+	}
 	return nil
 }
 
@@ -111,6 +115,9 @@ func (s *service) handleAlterAccount(ctx context.Context, req *query.Request, re
 	}
 
 	accountMgr.AlterRoutineStatue(req.AlterAccountRequest.TenantId, req.AlterAccountRequest.Status)
+	resp.AlterAccountResponse = &query.AlterAccountResponse{
+		AlterSuccess: true,
+	}
 	return nil
 }
 
