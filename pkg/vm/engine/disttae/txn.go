@@ -405,9 +405,6 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 	//offset < 0 indicates commit.
 	if offset < 0 {
-		//if txn.workspaceSize < WorkspaceThreshold {
-		//	return nil
-		//}
 		if txn.workspaceSize < WorkspaceThreshold && txn.insertCount < InsertEntryThreshold {
 			return nil
 		}
