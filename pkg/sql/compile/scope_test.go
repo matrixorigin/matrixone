@@ -316,7 +316,7 @@ func TestBroadcastJoinScope(t *testing.T) {
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001"}, engine.Node{Addr: "cn2:6001"}}
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
-	testCompile.anal = &analyzeModule{}
+	testCompile.anal = &AnalyzeModule{}
 	probe1 := generateScopeWithRootOperator(
 		testCompile.proc,
 		[]vm.OpType{vm.TableScan, vm.Projection})
