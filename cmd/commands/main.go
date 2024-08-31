@@ -242,6 +242,9 @@ func initCommand(_ context.Context, inspectCtx *InspectContext) *cobra.Command {
 	table := &TableArg{}
 	rootCmd.AddCommand(table.PrepareCommand())
 
+	//ckp := &CheckpointArg{}
+	//rootCmd.AddCommand(ckp.PrepareCommand())
+
 	return rootCmd
 }
 
