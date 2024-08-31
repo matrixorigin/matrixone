@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+ // Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -348,7 +348,7 @@ func (p *ChangeHandler) Close() error {
 	p.tombstoneHandle.Close()
 	return nil
 }
-func (p *ChangeHandler) Next() (data, tombstone *batch.Batch, hint engine.Hint, err error) {
+func (p *ChangeHandler) Next() (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
 	data, err = p.dataHandle.Next()
 	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 		return
@@ -362,7 +362,7 @@ func (p *ChangeHandler) Next() (data, tombstone *batch.Batch, hint engine.Hint, 
 	} else {
 		err = nil
 	}
-	hint = engine.Tail_wip
+	hint = engine.ChangesHandle_Tail_wip
 	return
 }
 func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {

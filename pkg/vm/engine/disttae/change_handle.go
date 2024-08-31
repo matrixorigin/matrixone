@@ -45,7 +45,7 @@ type ChangesHandle interface {
 	//batch每列的字段
 	//    data 用户定义列，ts
 	//    tombstone 主键，ts
-	Next() (data *batch.Batch, tombstone *batch.Batch, hint engine.Hint, err error)
+	Next() (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error)
 	Close() error
 }
 type CheckpointChangesHandle struct {
@@ -69,8 +69,8 @@ func NewCheckpointChangesHandle(end types.TS, table *txnTable) (*CheckpointChang
 	return handle, err
 }
 
-func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Batch, hint engine.Hint, err error) {
-	hint = engine.Checkpoint
+func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	hint = engine.ChangesHandle_Snapshot
 	tblDef := h.table.GetTableDef(context.TODO())
 
 	buildBatch := func() *batch.Batch {

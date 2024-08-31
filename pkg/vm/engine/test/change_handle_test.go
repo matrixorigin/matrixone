@@ -89,7 +89,7 @@ func TestChangesHandle1(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, hint, engine.Checkpoint)
+			assert.Equal(t, hint, engine.ChangesHandle_Snapshot)
 			assert.Nil(t, tombstone)
 			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
@@ -107,7 +107,7 @@ func TestChangesHandle1(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, hint, engine.Tail_wip)
+			assert.Equal(t, hint, engine.ChangesHandle_Tail_wip)
 			t.Log(tombstone.Attrs)
 			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
 			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
@@ -176,7 +176,7 @@ func TestChangesHandle2(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, hint, engine.Checkpoint)
+			assert.Equal(t, hint, engine.ChangesHandle_Snapshot)
 			assert.Nil(t, tombstone)
 			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
@@ -194,7 +194,7 @@ func TestChangesHandle2(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, hint, engine.Tail_wip)
+			assert.Equal(t, hint, engine.ChangesHandle_Tail_wip)
 			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
 			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
 			checkInsertBatch(bat, data, t)
@@ -288,7 +288,7 @@ func TestChangesHandle3(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, hint, engine.Checkpoint)
+			assert.Equal(t, hint, engine.ChangesHandle_Snapshot)
 			assert.Nil(t, tombstone)
 			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
@@ -310,7 +310,7 @@ func TestChangesHandle3(t *testing.T) {
 			if batchCount > 1 {
 				assert.Nil(t, tombstone)
 			} else {
-				assert.Equal(t, hint, engine.Tail_wip)
+				assert.Equal(t, hint, engine.ChangesHandle_Tail_wip)
 				checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
 				assert.Equal(t, tombstone.Vecs[0].Length(), 20)
 			}
