@@ -120,36 +120,14 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 }
 
 func (s *Scope) initDataSource(c *Compile) (err error) {
-	if s.DataSource == nil {
+	if s.DataSource == nil || s.DataSource.isConst {
 		return nil
 	}
-	if s.DataSource.isConst {
-		if s.DataSource.Bat != nil {
-			return
-		}
 
-		if err := vm.HandleLeafOp(nil, s.RootOp, func(leafOpParent vm.Operator, leafOp vm.Operator) error {
-			if leafOp.OpType() == vm.ValueScan {
-				if s.DataSource.node.NodeType == plan.Node_VALUE_SCAN {
-					bat, err := constructValueScanBatch(c.proc, s.DataSource.node)
-					if err != nil {
-						return err
-					}
-					s.DataSource.Bat = bat
-				}
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-
-	} else {
-		if s.DataSource.Rel != nil {
-			return nil
-		}
-		return c.compileTableScanDataSource(s)
+	if s.DataSource.Rel != nil {
+		return nil
 	}
-	return nil
+	return c.compileTableScanDataSource(s)
 }
 
 // Run read data from storage engine and run the instructions of scope.
@@ -183,7 +161,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 		if s.DataSource.isConst {
-			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
+			_, err = p.ConstRun(s.Proc)
 		} else {
 			if s.DataSource.R == nil {
 				s.NodeInfo.Data = engine.BuildEmptyRelData()

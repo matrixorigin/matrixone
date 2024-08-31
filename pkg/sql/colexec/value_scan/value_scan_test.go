@@ -88,5 +88,5 @@ func TestValueScan(t *testing.T) {
 
 func resetBatchs(arg *ValueScan) {
 	bat := colexec.MakeMockBatchs()
-	arg.Batchs = append(arg.Batchs, bat)
+	arg.ctr.bat = bat
 }
