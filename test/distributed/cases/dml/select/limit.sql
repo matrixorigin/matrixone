@@ -19,6 +19,7 @@ select * from t1 order by a limit 0,0;
 drop table if exists t1;
 create table t1 (a int primary key, b int);
 insert into t1 select result, 1 from generate_series (1, 800000)g;
+select count(*) from (select a from t1 limit 200, 900000) a;
 select * from t1 order by a limit 700000, 2;
 drop table if exists t1;
 create table t1 (a int primary key, b varchar);
