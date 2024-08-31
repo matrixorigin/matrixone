@@ -33,7 +33,7 @@ func (tbl *txnTable) CollectChanges(from, to types.TS, mp *mpool.MPool, ctx cont
 	if from.IsEmpty() {
 		return NewCheckpointChangesHandle(to, tbl, mp, ctx)
 	}
-	state, err := tbl.getPartitionState(context.TODO())
+	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Ba
 	default:
 	}
 	hint = engine.ChangesHandle_Snapshot
-	tblDef := h.table.GetTableDef(context.TODO())
+	tblDef := h.table.GetTableDef(h.ctx)
 
 	buildBatch := func() *batch.Batch {
 		bat := batch.NewWithSize(len(tblDef.Cols))
@@ -87,7 +87,7 @@ func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Ba
 	}
 	data = buildBatch()
 	h.isEnd, err = h.reader.Read(
-		context.TODO(),
+		h.ctx,
 		h.attrs,
 		nil,
 		h.mp,
@@ -118,20 +118,20 @@ func (h *CheckpointChangesHandle) Close() error {
 	return nil
 }
 func (h *CheckpointChangesHandle) initReader() (err error) {
-	tblDef := h.table.GetTableDef(context.TODO())
+	tblDef := h.table.GetTableDef(h.ctx)
 	h.attrs = make([]string, 0)
 	for _, col := range tblDef.Cols {
 		h.attrs = append(h.attrs, col.Name)
 	}
 
 	var part *logtailreplay.PartitionState
-	if part, err = h.table.getPartitionState(context.TODO()); err != nil {
+	if part, err = h.table.getPartitionState(h.ctx); err != nil {
 		return
 	}
 
 	var blockList objectio.BlockInfoSlice
 	if _, err = TryFastFilterBlocks(
-		context.TODO(),
+		h.ctx,
 		h.table,
 		h.end.ToTimestamp(),
 		tblDef,
@@ -152,7 +152,7 @@ func (h *CheckpointChangesHandle) initReader() (err error) {
 	}
 
 	readers, err := h.table.BuildReaders(
-		context.TODO(),
+		h.ctx,
 		h.table.proc.Load(),
 		nil,
 		relData,
