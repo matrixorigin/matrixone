@@ -787,7 +787,7 @@ const (
 )
 
 type ChangesHandle interface {
-	Next() (data *batch.Batch, tombstone *batch.Batch, hint ChangesHandle_Hint, err error)
+	Next(mp *mpool.MPool, ctx context.Context) (data *batch.Batch, tombstone *batch.Batch, hint ChangesHandle_Hint, err error)
 	Close() error
 }
 type Relation interface {

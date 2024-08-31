@@ -230,9 +230,7 @@ type baseHandle struct {
 	currentType uint8
 	tid         uint64
 	maxRow      uint32
-	mp          *mpool.MPool
 	fs          fileservice.FileService
-	ctx         context.Context
 }
 
 func NewBaseHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, tombstone bool, fs fileservice.FileService, ctx context.Context) *baseHandle {
@@ -249,27 +247,25 @@ func NewBaseHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool,
 		end:         end,
 		tid:         state.tid,
 		maxRow:      maxRow,
-		mp:          mp,
 		fs:          fs,
 		isTombstone: tombstone,
-		ctx:         ctx,
 	}
 }
 func (p *baseHandle) Close() {
 	p.objectIter.Release()
 	p.rowIter.Release()
 }
-func (p *baseHandle) Next() (bat *batch.Batch, err error) {
+func (p *baseHandle) Next(mp *mpool.MPool, ctx context.Context) (bat *batch.Batch, err error) {
 	for {
 		select {
-		case <-p.ctx.Done():
+		case <-ctx.Done():
 			return
 		default:
 		}
 		switch p.currentType {
 		case ChangesHandle_Object:
 			if p.ObjectHandle == nil {
-				p.ObjectHandle, err = p.newObjectHandle()
+				p.ObjectHandle, err = p.newObjectHandle(mp, ctx)
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 					p.currentType = ChangesHandle_Row
 					continue
@@ -283,7 +279,7 @@ func (p *baseHandle) Next() (bat *batch.Batch, err error) {
 				if !moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 					return
 				}
-				p.ObjectHandle, err = p.newObjectHandle()
+				p.ObjectHandle, err = p.newObjectHandle(mp, ctx)
 				if err == nil {
 					continue
 				} else if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
@@ -295,7 +291,7 @@ func (p *baseHandle) Next() (bat *batch.Batch, err error) {
 			}
 		case ChangesHandle_Row:
 			if p.rowHandle == nil {
-				p.rowHandle, err = p.newBatchHandleWithRowIterator()
+				p.rowHandle, err = p.newBatchHandleWithRowIterator(mp, ctx)
 				if err != nil {
 					return
 				}
@@ -307,36 +303,36 @@ func (p *baseHandle) Next() (bat *batch.Batch, err error) {
 		}
 	}
 }
-func (p *baseHandle) newBatchHandleWithRowIterator() (h *BatchHandle, err error) {
-	bat := p.getBatchesFromRowIterator()
+func (p *baseHandle) newBatchHandleWithRowIterator(mp *mpool.MPool, ctx context.Context) (h *BatchHandle, err error) {
+	bat := p.getBatchesFromRowIterator(mp, ctx)
 	if bat == nil {
 		return nil, moerr.GetOkExpectedEOF()
 	}
-	h, err = NewRowHandle(bat, p.maxRow, p.mp, p.ctx)
+	h, err = NewRowHandle(bat, p.maxRow, mp, ctx)
 	if err != nil {
-		closeBatch(bat, p.mp)
+		closeBatch(bat, mp)
 	}
 	return
 }
-func (r *baseHandle) getBatchesFromRowIterator() (bat *batch.Batch) {
+func (r *baseHandle) getBatchesFromRowIterator(mp *mpool.MPool, ctx context.Context) (bat *batch.Batch) {
 	for r.rowIter.Next() {
 		entry := r.rowIter.Item()
 		if checkTS(r.start, r.end, entry.Time) {
 			if !entry.Deleted && !r.isTombstone {
-				fillInInsertBatch(&bat, &entry, r.mp)
+				fillInInsertBatch(&bat, &entry, mp)
 			}
 			if entry.Deleted && r.isTombstone {
-				fillInDeleteBatch(&bat, &entry, r.mp)
+				fillInDeleteBatch(&bat, &entry, mp)
 			}
 		}
 	}
 	return
 }
-func (r *baseHandle) newObjectHandle() (h *ObjectHandle, err error) {
+func (r *baseHandle) newObjectHandle(mp *mpool.MPool, ctx context.Context) (h *ObjectHandle, err error) {
 	for r.objectIter.Next() {
 		entry := r.objectIter.Item()
 		if checkObjectEntry(&entry, r.start, r.end) {
-			return newObjectHandle(&entry, r.fs, r.isTombstone, r.mp, r.ctx), nil
+			return newObjectHandle(&entry, r.fs, r.isTombstone, mp, ctx), nil
 		}
 	}
 	return nil, moerr.GetOkExpectedEOF()
@@ -359,12 +355,12 @@ func (p *ChangeHandler) Close() error {
 	p.tombstoneHandle.Close()
 	return nil
 }
-func (p *ChangeHandler) Next() (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
-	data, err = p.dataHandle.Next()
+func (p *ChangeHandler) Next(mp *mpool.MPool, ctx context.Context) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	data, err = p.dataHandle.Next(mp, ctx)
 	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 		return
 	}
-	tombstone, err = p.tombstoneHandle.Next()
+	tombstone, err = p.tombstoneHandle.Next(mp, ctx)
 	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 		return
 	}

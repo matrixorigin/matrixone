@@ -86,7 +86,7 @@ func TestChangesHandle1(t *testing.T) {
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
-			data, tombstone, hint, err := handle.Next()
+			data, tombstone, hint, err := handle.Next(mp, ctx)
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 				break
 			}
@@ -104,7 +104,7 @@ func TestChangesHandle1(t *testing.T) {
 		handle, err = rel.CollectChanges(startTS, taeHandler.GetDB().TxnMgr.Now(), mp, ctx)
 		assert.NoError(t, err)
 		for {
-			data, tombstone, hint, err := handle.Next()
+			data, tombstone, hint, err := handle.Next(mp, ctx)
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 				break
 			}
@@ -176,7 +176,7 @@ func TestChangesHandle2(t *testing.T) {
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
-			data, tombstone, hint, err := handle.Next()
+			data, tombstone, hint, err := handle.Next(mp, ctx)
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 				break
 			}
@@ -195,7 +195,7 @@ func TestChangesHandle2(t *testing.T) {
 		handle, err = rel.CollectChanges(startTS, taeHandler.GetDB().TxnMgr.Now(), mp, ctx)
 		assert.NoError(t, err)
 		for {
-			data, tombstone, hint, err := handle.Next()
+			data, tombstone, hint, err := handle.Next(mp, ctx)
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 				break
 			}
@@ -292,7 +292,7 @@ func TestChangesHandle3(t *testing.T) {
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
-			data, tombstone, hint, err := handle.Next()
+			data, tombstone, hint, err := handle.Next(mp, ctx)
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 				break
 			}
@@ -311,7 +311,7 @@ func TestChangesHandle3(t *testing.T) {
 		assert.NoError(t, err)
 		batchCount := 0
 		for {
-			data, tombstone, hint, err := handle.Next()
+			data, tombstone, hint, err := handle.Next(mp, ctx)
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 				break
 			}

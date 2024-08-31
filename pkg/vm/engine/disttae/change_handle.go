@@ -41,18 +41,16 @@ func (tbl *txnTable) CollectChanges(from, to types.TS, mp *mpool.MPool, ctx cont
 }
 
 type ChangesHandle interface {
-	Next() (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error)
+	Next(mp *mpool.MPool, ctx context.Context) (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error)
 	Close() error
 }
 type CheckpointChangesHandle struct {
 	end    types.TS
 	table  *txnTable
 	fs     fileservice.FileService
-	mp     *mpool.MPool
 	reader engine.Reader
 	attrs  []string
 	isEnd  bool
-	ctx    context.Context
 }
 
 func NewCheckpointChangesHandle(end types.TS, table *txnTable, mp *mpool.MPool, ctx context.Context) (*CheckpointChangesHandle, error) {
@@ -60,21 +58,19 @@ func NewCheckpointChangesHandle(end types.TS, table *txnTable, mp *mpool.MPool, 
 		end:   end,
 		table: table,
 		fs:    table.getTxn().engine.fs,
-		mp:    mp,
-		ctx:   ctx,
 	}
-	err := handle.initReader()
+	err := handle.initReader(ctx)
 	return handle, err
 }
 
-func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+func (h *CheckpointChangesHandle) Next(mp *mpool.MPool, ctx context.Context) (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
 	select {
-	case <-h.ctx.Done():
+	case <-ctx.Done():
 		return
 	default:
 	}
 	hint = engine.ChangesHandle_Snapshot
-	tblDef := h.table.GetTableDef(h.ctx)
+	tblDef := h.table.GetTableDef(ctx)
 
 	buildBatch := func() *batch.Batch {
 		bat := batch.NewWithSize(len(tblDef.Cols))
@@ -87,10 +83,10 @@ func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Ba
 	}
 	data = buildBatch()
 	h.isEnd, err = h.reader.Read(
-		h.ctx,
+		ctx,
 		h.attrs,
 		nil,
-		h.mp,
+		mp,
 		nil,
 		data,
 	)
@@ -102,13 +98,13 @@ func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Ba
 		return
 	}
 
-	committs, err := vector.NewConstFixed(types.T_TS.ToType(), h.end, data.Vecs[0].Length(), h.mp)
+	committs, err := vector.NewConstFixed(types.T_TS.ToType(), h.end, data.Vecs[0].Length(), mp)
 	if err != nil {
-		data.Clean(h.mp)
+		data.Clean(mp)
 		return
 	}
 	rowidVec := data.Vecs[len(data.Vecs)-1]
-	rowidVec.Free(h.mp)
+	rowidVec.Free(mp)
 	data.Vecs[len(data.Vecs)-1] = committs
 	data.Attrs[len(data.Attrs)-1] = catalog.AttrCommitTs
 	return
@@ -117,21 +113,21 @@ func (h *CheckpointChangesHandle) Close() error {
 	h.reader.Close()
 	return nil
 }
-func (h *CheckpointChangesHandle) initReader() (err error) {
-	tblDef := h.table.GetTableDef(h.ctx)
+func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
+	tblDef := h.table.GetTableDef(ctx)
 	h.attrs = make([]string, 0)
 	for _, col := range tblDef.Cols {
 		h.attrs = append(h.attrs, col.Name)
 	}
 
 	var part *logtailreplay.PartitionState
-	if part, err = h.table.getPartitionState(h.ctx); err != nil {
+	if part, err = h.table.getPartitionState(ctx); err != nil {
 		return
 	}
 
 	var blockList objectio.BlockInfoSlice
 	if _, err = TryFastFilterBlocks(
-		h.ctx,
+		ctx,
 		h.table,
 		h.end.ToTimestamp(),
 		tblDef,
@@ -152,7 +148,7 @@ func (h *CheckpointChangesHandle) initReader() (err error) {
 	}
 
 	readers, err := h.table.BuildReaders(
-		h.ctx,
+		ctx,
 		h.table.proc.Load(),
 		nil,
 		relData,
