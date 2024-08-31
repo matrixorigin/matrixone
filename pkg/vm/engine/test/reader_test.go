@@ -16,6 +16,8 @@ package test
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -259,7 +262,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
-	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema := catalog2.MockSchemaAll(4+9, primaryKeyIdx+9, 9)
 	schema.Name = tableName
 
 	{
@@ -340,6 +343,56 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, 2, ret.RowCount())
+		require.NoError(t, txn.Commit(ctx))
+	}
+	{
+		_, relation, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		rowsCnt := 4000
+		bat := catalog2.MockBatch(schema, rowsCnt)
+		pkVec := bat.Vecs[primaryKeyIdx].GetDownstreamVector()
+		pkVec.CleanOnlyData()
+		for i := 0; i < rowsCnt; i++ {
+			buf := fmt.Sprintf("%s:%d", strings.Repeat("a", 200), i)
+			vector.AppendBytes(pkVec, []byte(buf), false, mp)
+		}
+		defer bat.Close()
+		require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bat)))
+
+		ranges, err := testutil.TxnRanges(ctx, txn, relation, nil)
+		require.NoError(t, err)
+		// nbat := containers.ToCNBatch(bat)
+		// t.Logf("yyyyy:%d:%d:%s", nbat.RowCount(), nbat.Allocated(), ranges.String())
+
+		nmp, _ := mpool.NewMPool("test", mpool.MB, mpool.NoFixed)
+		reader, err := testutil.NewDefaultTableReader(
+			ctx, relation, databaseName, schema,
+			nil,
+			nmp,
+			ranges,
+			txn.SnapshotTS(),
+			disttaeEngine.Engine,
+			1)
+		require.NoError(t, err)
+
+		ret := batch.NewWithSize(1)
+		for _, col := range schema.ColDefs {
+			if col.Name == schema.ColDefs[primaryKeyIdx].Name {
+				vec := vector.NewVec(col.Type)
+				ret.Vecs[0] = vec
+				ret.Attrs = []string{col.Name}
+				break
+			}
+		}
+		// t.Logf("xxx-%d", ret.Allocated())
+		var done bool
+		done, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, nmp, nil, ret)
+		t.Logf("xxx-%d:%v:%s", ret.Allocated(), done, common.MoBatchToString(ret, 1))
+		require.NoError(t, err)
+		done, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, nmp, nil, ret)
+		t.Logf("xxx-%d:%v:%s", ret.Allocated(), done, common.MoBatchToString(ret, ret.RowCount()))
+		require.NoError(t, err)
 	}
 
 }
