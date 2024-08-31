@@ -2876,7 +2876,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 			// merge here to avoid bugs, delete this in the future
 			for i := range ss {
 				if ss[i].NodeInfo.Mcpu > 1 {
-					ss[i] = c.newMergeScope([]*Scope{ss[i]})
+					ss[i] = c.newMergeScopeByCN([]*Scope{ss[i]}, ss[i].NodeInfo)
 				}
 			}
 		}
@@ -3534,12 +3534,12 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 		// merge here to avoid bugs, delete this in the future
 		for i := range left {
 			if left[i].NodeInfo.Mcpu > 1 {
-				left[i] = c.newMergeScope([]*Scope{left[i]})
+				left[i] = c.newMergeScopeByCN([]*Scope{left[i]}, left[i].NodeInfo)
 			}
 		}
 		for i := range right {
 			if right[i].NodeInfo.Mcpu > 1 {
-				right[i] = c.newMergeScope([]*Scope{right[i]})
+				right[i] = c.newMergeScopeByCN([]*Scope{right[i]}, right[i].NodeInfo)
 			}
 		}
 	}
