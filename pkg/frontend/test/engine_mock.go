@@ -916,6 +916,9 @@ func NewMockRelation(ctrl *gomock.Controller) *MockRelation {
 	return mock
 }
 
+func (m *MockRelation) CollectChanges(from, to types.TS, _ *mpool.MPool, _ context.Context) (engine.ChangesHandle, error) {
+	panic("not support")
+}
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockRelation) EXPECT() *MockRelationMockRecorder {
 	return m.recorder
