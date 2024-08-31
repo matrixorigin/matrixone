@@ -21,15 +21,18 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -330,6 +333,113 @@ func TestChangesHandle3(t *testing.T) {
 			data.Clean(mp)
 		}
 		assert.Equal(t, batchCount, 20)
+		assert.NoError(t, handle.Close())
+	}
+}
+func TestChangesHandleForCNWrite(t *testing.T) {
+	var (
+		err          error
+		txn          client.TxnOperator
+		mp           *mpool.MPool
+		accountId    = catalog.System_Account
+		tableName    = "test_reader_table"
+		databaseName = "test_reader_database"
+
+		primaryKeyIdx int = 3
+
+		relation engine.Relation
+		_        engine.Database
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
+	require.NoError(t, err)
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+	startTS := taeEngine.GetDB().TxnMgr.Now()
+
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	blockCnt := 10
+	rowsCount := int(options.DefaultBlockMaxRows) * blockCnt
+	bat := catalog2.MockBatch(schema, rowsCount)
+	bats := bat.Split(blockCnt)
+
+	// write table
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		for idx := 0; idx < blockCnt; idx++ {
+			require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[idx])))
+		}
+
+		require.NoError(t, txn.Commit(ctx))
+	}
+	dnTxn, dnRel := testutil2.GetRelation(t, accountId, taeEngine.GetDB(), databaseName, tableName)
+	id := dnRel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	t.Log(taeEngine.GetDB().Catalog.SimplePPString(3))
+	assert.NoError(t, dnTxn.Commit(ctx))
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	require.Nil(t, err)
+
+	// check partition state, before flush
+	{
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+
+		handle, err := rel.CollectChanges(types.TS{}, taeEngine.GetDB().TxnMgr.Now(), mp, ctx)
+		assert.NoError(t, err)
+		totalRows := 0
+		for {
+			data, tombstone, hint, err := handle.Next(mp, ctx)
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+				break
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, hint, engine.ChangesHandle_Snapshot)
+			assert.Nil(t, tombstone)
+			t.Log(data.Attrs)
+			checkInsertBatch(bat, data, t)
+			totalRows += data.Vecs[0].Length()
+			data.Clean(mp)
+		}
+		assert.Equal(t, totalRows, bat.Length())
+		assert.NoError(t, handle.Close())
+
+		handle, err = rel.CollectChanges(startTS, taeEngine.GetDB().TxnMgr.Now(), mp, ctx)
+		assert.NoError(t, err)
+		batchCount := 0
+		for {
+			data, tombstone, _, err := handle.Next(mp, ctx)
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+				break
+			}
+			batchCount++
+			assert.NoError(t, err)
+			assert.Nil(t, tombstone)
+			checkInsertBatch(bat, data, t)
+			assert.Equal(t, data.Vecs[0].Length(), 8192)
+			data.Clean(mp)
+		}
+		assert.Equal(t, batchCount, 10)
 		assert.NoError(t, handle.Close())
 	}
 }
