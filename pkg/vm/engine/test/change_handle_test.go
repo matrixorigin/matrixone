@@ -58,7 +58,7 @@ func TestChangesHandle1(t *testing.T) {
 		rpcAgent.Close()
 	}()
 	startTS := taeHandler.GetDB().TxnMgr.Now()
-	schema := catalog2.MockSchemaAll(10, 0)
+	schema := catalog2.MockSchemaAll(20, 0)
 	schema.Name = tableName
 	bat := catalog2.MockBatch(schema, 10)
 
