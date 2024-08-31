@@ -785,6 +785,7 @@ const (
 	ChangesHandle_Tail_wip
 	ChangesHandle_Tail_done
 )
+
 type ChangesHandle interface {
 	//两个batch都为空，结束。然后close
 	//batch每列的字段
@@ -803,7 +804,7 @@ type Relation interface {
 	Ranges(context.Context, []*plan.Expr, int) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int) (Tombstoner, error)
-	CollectChanges(from, to types.TS) (ChangesHandle, error)
+	CollectChanges(from, to types.TS, mp *mpool.MPool, ctx context.Context) (ChangesHandle, error)
 	TableDefs(context.Context) ([]TableDef, error)
 
 	// Get complete tableDef information, including columns, constraints, partitions, version, comments, etc

@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -43,7 +44,9 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (t *Table) CollectChanges(from, to types.TS) (engine.ChangesHandle, error) { panic("not support") }
+func (t *Table) CollectChanges(from, to types.TS, _ *mpool.MPool, _ context.Context) (engine.ChangesHandle, error) {
+	panic("not support")
+}
 func (t *Table) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	return nil, nil
 }

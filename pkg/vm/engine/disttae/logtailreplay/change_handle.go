@@ -1,4 +1,4 @@
- // Copyright 2023 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -53,9 +53,10 @@ type BatchHandle struct {
 	batches     *batch.Batch
 	batchLength int
 	dataOffsets int
+	ctx         context.Context
 }
 
-func NewRowHandle(data *batch.Batch, maxRow uint32, mp *mpool.MPool) (handle *BatchHandle, err error) {
+func NewRowHandle(data *batch.Batch, maxRow uint32, mp *mpool.MPool, ctx context.Context) (handle *BatchHandle, err error) {
 	err = sortBatch(data, len(data.Vecs)-1, mp)
 	if err != nil {
 		return
@@ -64,6 +65,7 @@ func NewRowHandle(data *batch.Batch, maxRow uint32, mp *mpool.MPool) (handle *Ba
 		maxRow:  maxRow,
 		mp:      mp,
 		batches: data,
+		ctx:     ctx,
 	}
 	if data != nil {
 		handle.batchLength = data.Vecs[0].Length()
@@ -125,13 +127,13 @@ func (r *BatchHandle) next() (bat *batch.Batch, err error) {
 	return
 }
 
-func readObjects(stats objectio.ObjectStats, blockID uint32, fs fileservice.FileService, isTombstone bool) (bat *batch.Batch, err error) {
+func readObjects(stats objectio.ObjectStats, blockID uint32, fs fileservice.FileService, isTombstone bool, ctx context.Context) (bat *batch.Batch, err error) {
 	metaType := objectio.SchemaData
 	if isTombstone {
 		metaType = objectio.SchemaTombstone
 	}
 	loc := catalog.BuildLocation(stats, uint16(blockID), 8192) //TODO
-	bat, _, err = blockio.LoadOneBlock(context.TODO(), fs, loc, metaType)
+	bat, _, err = blockio.LoadOneBlock(ctx, fs, loc, metaType)
 	return
 }
 
@@ -176,14 +178,16 @@ type ObjectHandle struct {
 	fs          fileservice.FileService
 	isTombstone bool
 	mp          *mpool.MPool
+	ctx         context.Context
 }
 
-func newObjectHandle(entry *ObjectEntry, fs fileservice.FileService, tombstone bool, mp *mpool.MPool) (h *ObjectHandle) {
+func newObjectHandle(entry *ObjectEntry, fs fileservice.FileService, tombstone bool, mp *mpool.MPool, ctx context.Context) (h *ObjectHandle) {
 	return &ObjectHandle{
 		entry:       entry,
 		fs:          fs,
 		isTombstone: tombstone,
 		mp:          mp,
+		ctx:         ctx,
 	}
 }
 
@@ -193,7 +197,7 @@ func (r *ObjectHandle) Next() (bat *batch.Batch, err error) {
 	if r.blockOffset == r.entry.BlkCnt() {
 		return nil, moerr.GetOkExpectedEOF()
 	}
-	bat, err = readObjects(r.entry.ObjectStats, r.blockOffset, r.fs, r.isTombstone)
+	bat, err = readObjects(r.entry.ObjectStats, r.blockOffset, r.fs, r.isTombstone, r.ctx)
 	if err != nil {
 		return
 	}
@@ -228,9 +232,10 @@ type baseHandle struct {
 	maxRow      uint32
 	mp          *mpool.MPool
 	fs          fileservice.FileService
+	ctx         context.Context
 }
 
-func NewBaseHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, tombstone bool, fs fileservice.FileService) *baseHandle {
+func NewBaseHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, tombstone bool, fs fileservice.FileService, ctx context.Context) *baseHandle {
 	var iter btree.IterG[ObjectEntry]
 	if tombstone {
 		iter = state.tombstoneObjects.Copy().Iter()
@@ -247,6 +252,7 @@ func NewBaseHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool,
 		mp:          mp,
 		fs:          fs,
 		isTombstone: tombstone,
+		ctx:         ctx,
 	}
 }
 func (p *baseHandle) Close() {
@@ -255,6 +261,11 @@ func (p *baseHandle) Close() {
 }
 func (p *baseHandle) Next() (bat *batch.Batch, err error) {
 	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		default:
+		}
 		switch p.currentType {
 		case ChangesHandle_Object:
 			if p.ObjectHandle == nil {
@@ -301,7 +312,7 @@ func (p *baseHandle) newBatchHandleWithRowIterator() (h *BatchHandle, err error)
 	if bat == nil {
 		return nil, moerr.GetOkExpectedEOF()
 	}
-	h, err = NewRowHandle(bat, p.maxRow, p.mp)
+	h, err = NewRowHandle(bat, p.maxRow, p.mp, p.ctx)
 	if err != nil {
 		closeBatch(bat, p.mp)
 	}
@@ -325,7 +336,7 @@ func (r *baseHandle) newObjectHandle() (h *ObjectHandle, err error) {
 	for r.objectIter.Next() {
 		entry := r.objectIter.Item()
 		if checkObjectEntry(&entry, r.start, r.end) {
-			return newObjectHandle(&entry, r.fs, r.isTombstone, r.mp), nil
+			return newObjectHandle(&entry, r.fs, r.isTombstone, r.mp, r.ctx), nil
 		}
 	}
 	return nil, moerr.GetOkExpectedEOF()
@@ -336,10 +347,10 @@ type ChangeHandler struct {
 	dataHandle      *baseHandle
 }
 
-func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService) *ChangeHandler {
+func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) *ChangeHandler {
 	return &ChangeHandler{
-		tombstoneHandle: NewBaseHandler(state, start, end, mp, maxRow, true, fs),
-		dataHandle:      NewBaseHandler(state, start, end, mp, maxRow, false, fs),
+		tombstoneHandle: NewBaseHandler(state, start, end, mp, maxRow, true, fs, ctx),
+		dataHandle:      NewBaseHandler(state, start, end, mp, maxRow, false, fs, ctx),
 	}
 }
 

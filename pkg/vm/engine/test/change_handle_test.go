@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -74,13 +75,14 @@ func TestChangesHandle1(t *testing.T) {
 	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
 	require.Nil(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+	mp := common.DebugAllocator
 
 	// check partition state, before flush
 	{
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(types.TS{}, taeHandler.GetDB().TxnMgr.Now())
+		handle, err := rel.CollectChanges(types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp, ctx)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -99,7 +101,7 @@ func TestChangesHandle1(t *testing.T) {
 		assert.Equal(t, totalRows, 9)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(startTS, taeHandler.GetDB().TxnMgr.Now())
+		handle, err = rel.CollectChanges(startTS, taeHandler.GetDB().TxnMgr.Now(), mp, ctx)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next()
@@ -111,9 +113,11 @@ func TestChangesHandle1(t *testing.T) {
 			t.Log(tombstone.Attrs)
 			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
 			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
+			tombstone.Clean(mp)
 			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
 			assert.Equal(t, data.Vecs[0].Length(), 10)
+			data.Clean(mp)
 		}
 		assert.NoError(t, handle.Close())
 	}
@@ -142,6 +146,7 @@ func TestChangesHandle2(t *testing.T) {
 	schema := catalog2.MockSchemaAll(10, 0)
 	schema.Name = tableName
 	bat := catalog2.MockBatch(schema, 10)
+	mp := common.DebugAllocator
 
 	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
@@ -167,7 +172,7 @@ func TestChangesHandle2(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(types.TS{}, taeHandler.GetDB().TxnMgr.Now())
+		handle, err := rel.CollectChanges(types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp, ctx)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -182,11 +187,12 @@ func TestChangesHandle2(t *testing.T) {
 			checkInsertBatch(bat, data, t)
 			totalRows += data.Vecs[0].Length()
 			assert.NotEqual(t, data.Vecs[0].Length(), 0)
+			data.Clean(mp)
 		}
 		assert.Equal(t, totalRows, 9)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(startTS, taeHandler.GetDB().TxnMgr.Now())
+		handle, err = rel.CollectChanges(startTS, taeHandler.GetDB().TxnMgr.Now(), mp, ctx)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next()
@@ -197,8 +203,10 @@ func TestChangesHandle2(t *testing.T) {
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_wip)
 			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
 			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
+			tombstone.Clean(mp)
 			checkInsertBatch(bat, data, t)
 			assert.Equal(t, data.Vecs[0].Length(), 10)
+			data.Clean(mp)
 		}
 		assert.NoError(t, handle.Close())
 	}
@@ -251,6 +259,7 @@ func TestChangesHandle3(t *testing.T) {
 	schema := catalog2.MockSchemaAll(10, 9)
 	schema.Name = tableName
 	bat := catalog2.MockBatch(schema, 163840)
+	mp := common.DebugAllocator
 
 	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
@@ -279,7 +288,7 @@ func TestChangesHandle3(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(types.TS{}, taeHandler.GetDB().TxnMgr.Now())
+		handle, err := rel.CollectChanges(types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp, ctx)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -293,11 +302,12 @@ func TestChangesHandle3(t *testing.T) {
 			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
 			totalRows += data.Vecs[0].Length()
+			data.Clean(mp)
 		}
 		assert.Equal(t, totalRows, 163820)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(startTS, taeHandler.GetDB().TxnMgr.Now())
+		handle, err = rel.CollectChanges(startTS, taeHandler.GetDB().TxnMgr.Now(), mp, ctx)
 		assert.NoError(t, err)
 		batchCount := 0
 		for {
@@ -313,9 +323,11 @@ func TestChangesHandle3(t *testing.T) {
 				assert.Equal(t, hint, engine.ChangesHandle_Tail_wip)
 				checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
 				assert.Equal(t, tombstone.Vecs[0].Length(), 20)
+				tombstone.Clean(mp)
 			}
 			checkInsertBatch(bat, data, t)
 			assert.Equal(t, data.Vecs[0].Length(), 8192)
+			data.Clean(mp)
 		}
 		assert.Equal(t, batchCount, 20)
 		assert.NoError(t, handle.Close())

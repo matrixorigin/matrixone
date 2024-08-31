@@ -29,15 +29,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
-func (tbl *txnTable) CollectChanges(from, to types.TS) (engine.ChangesHandle, error) {
+func (tbl *txnTable) CollectChanges(from, to types.TS, mp *mpool.MPool, ctx context.Context) (engine.ChangesHandle, error) {
 	if from.IsEmpty() {
-		return NewCheckpointChangesHandle(to, tbl)
+		return NewCheckpointChangesHandle(to, tbl, mp, ctx)
 	}
 	state, err := tbl.getPartitionState(context.TODO())
 	if err != nil {
 		return nil, err
 	}
-	return logtailreplay.NewChangesHandler(state, from, to, tbl.getTxn().engine.mp, 8192, tbl.getTxn().engine.fs), nil
+	return logtailreplay.NewChangesHandler(state, from, to, mp, 8192, tbl.getTxn().engine.fs, ctx), nil
 }
 
 type ChangesHandle interface {
@@ -56,20 +56,27 @@ type CheckpointChangesHandle struct {
 	reader engine.Reader
 	attrs  []string
 	isEnd  bool
+	ctx    context.Context
 }
 
-func NewCheckpointChangesHandle(end types.TS, table *txnTable) (*CheckpointChangesHandle, error) {
+func NewCheckpointChangesHandle(end types.TS, table *txnTable, mp *mpool.MPool, ctx context.Context) (*CheckpointChangesHandle, error) {
 	handle := &CheckpointChangesHandle{
 		end:   end,
 		table: table,
 		fs:    table.getTxn().engine.fs,
-		mp:    table.getTxn().engine.mp,
+		mp:    mp,
+		ctx:   ctx,
 	}
 	err := handle.initReader()
 	return handle, err
 }
 
 func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	select {
+	case <-h.ctx.Done():
+		return
+	default:
+	}
 	hint = engine.ChangesHandle_Snapshot
 	tblDef := h.table.GetTableDef(context.TODO())
 
@@ -120,7 +127,7 @@ func (h *CheckpointChangesHandle) initReader() (err error) {
 	for _, col := range tblDef.Cols {
 		h.attrs = append(h.attrs, col.Name)
 	}
-	
+
 	var part *logtailreplay.PartitionState
 	if part, err = h.table.getPartitionState(context.TODO()); err != nil {
 		return
