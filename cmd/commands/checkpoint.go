@@ -163,8 +163,7 @@ func (c *ckpStatArg) Usage() (res string) {
 	res += "  \"ckp_end_ts\": \"\",\n"
 	res += "  \"table_id\": -1,\n"
 	res += "  \"limit\": 10000,\n"
-	res += "  \"all\": false,\n"
-	res += "  \"download\": false\n"
+	res += "  \"all\": false\n"
 	res += "}\n"
 
 	return

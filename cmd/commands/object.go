@@ -169,7 +169,7 @@ func (c *objStatArg) Usage() (res string) {
 	res += "  \"block_id\": -1,\n"
 	res += "  \"level\": 0,\n"
 	res += "  \"columns\": [],\n"
-	res += "  \"local\": false,\n"
+	res += "  \"local\": false\n"
 	res += "}\n"
 
 	return
@@ -568,7 +568,7 @@ func (c *objGetArg) Usage() (res string) {
 	res += "  \"target\": \"\",\n"
 	res += "  \"method\": \"\",\n"
 	res += "  \"local\": false,\n"
-	res += "  \"all\": false,\n"
+	res += "  \"all\": false\n"
 	res += "}\n"
 
 	return
