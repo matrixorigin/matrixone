@@ -366,7 +366,6 @@ func (c *Conn) CleanConsumedPacket() {
 func (c *Conn) ResetReadBufIndex() {
 	c.readIndex = 0
 	c.fixBuf.writeIndex = 0
-	return
 }
 
 // ReadBufIsFull check read buf full or not
