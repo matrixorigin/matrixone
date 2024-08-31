@@ -70,10 +70,6 @@ func NewCheckpointChangesHandle(end types.TS, table *txnTable) (*CheckpointChang
 }
 
 func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Batch, hint engine.Hint, err error) {
-	if h.isEnd {
-		err = moerr.GetOkExpectedEOF()
-		return
-	}
 	hint = engine.Checkpoint
 	tblDef := h.table.GetTableDef(context.TODO())
 
@@ -95,6 +91,10 @@ func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Ba
 		nil,
 		data,
 	)
+	if h.isEnd {
+		err = moerr.GetOkExpectedEOF()
+		return
+	}
 	if err != nil {
 		return
 	}
@@ -120,6 +120,11 @@ func (h *CheckpointChangesHandle) initReader() (err error) {
 	for _, col := range tblDef.Cols {
 		h.attrs = append(h.attrs, col.Name)
 	}
+	
+	var part *logtailreplay.PartitionState
+	if part, err = h.table.getPartitionState(context.TODO()); err != nil {
+		return
+	}
 
 	var blockList objectio.BlockInfoSlice
 	if _, err = TryFastFilterBlocks(
@@ -128,7 +133,7 @@ func (h *CheckpointChangesHandle) initReader() (err error) {
 		h.end.ToTimestamp(),
 		tblDef,
 		nil,
-		nil,
+		part,
 		nil,
 		nil,
 		&blockList,
