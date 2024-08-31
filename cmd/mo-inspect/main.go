@@ -15,12 +15,12 @@
 package mo_inspect
 
 import (
-	"github.com/matrixorigin/matrixone/cmd/cmd"
+	"github.com/matrixorigin/matrixone/cmd/commands"
 	"github.com/spf13/cobra"
 )
 
 func PrepareCommand() *cobra.Command {
-	inspect := cmd.MoInspectArg{}
+	inspect := commands.MoInspectArg{}
 
 	return inspect.PrepareCommand()
 }

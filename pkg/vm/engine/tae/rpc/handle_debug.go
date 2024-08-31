@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/google/shlex"
-	"github.com/matrixorigin/matrixone/cmd/cmd"
+	"github.com/matrixorigin/matrixone/cmd/commands"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -355,14 +355,14 @@ func (h *Handle) HandleToolsTn(
 		logutil.Debug("Tools", zap.Strings("args", args))
 	})
 	b := &bytes.Buffer{}
-	inspectCtx := &cmd.InspectContext{
+	inspectCtx := &commands.InspectContext{
 		Db:     h.db,
 		Acinfo: &req.AccessInfo,
 		Args:   args,
 		Out:    b,
 		Resp:   resp,
 	}
-	cmd.RunInspect(ctx, inspectCtx)
+	commands.RunInspect(ctx, inspectCtx)
 	resp.Message = b.String()
 	return nil, nil
 }
