@@ -28,6 +28,8 @@ import (
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -302,4 +304,14 @@ func (p *EnginePack) DeleteTableInDB(txnop client.TxnOperator, dbname, tblname s
 	db, err := p.D.Engine.Database(p.Ctx, dbname, txnop)
 	require.NoError(p.t, err)
 	require.NoError(p.t, db.Delete(p.Ctx, tblname))
+}
+
+func EmptyBatchFromSchema(schema *catalog.Schema) *batch.Batch {
+	ret := batch.NewWithSize(len(schema.ColDefs))
+	for i, col := range schema.ColDefs {
+		vec := vector.NewVec(col.Type.Oid.ToType())
+		ret.Vecs[i] = vec
+		ret.Attrs = append(ret.Attrs, col.Name)
+	}
+	return ret
 }

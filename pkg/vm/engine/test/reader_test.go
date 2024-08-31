@@ -129,11 +129,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	resultHit := 0
-	ret := batch.NewWithSize(len(schema.ColDefs))
-	for i, col := range schema.ColDefs {
-		vec := vector.NewVec(col.Type.Oid.ToType())
-		ret.Vecs[i] = vec
-	}
+	ret := testutil.EmptyBatchFromSchema(schema)
 	for idx := 0; idx < blockCnt; idx++ {
 		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, expr[0], mp, nil, ret)
 		require.NoError(t, err)
@@ -233,11 +229,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 		disttaeEngine.Engine, 1)
 	require.NoError(t, err)
 
-	ret := batch.NewWithSize(len(schema.ColDefs))
-	for i, col := range schema.ColDefs {
-		vec := vector.NewVec(col.Type.Oid.ToType())
-		ret.Vecs[i] = vec
-	}
+	ret := testutil.EmptyBatchFromSchema(schema)
 	_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, expr[0], mp, nil, ret)
 	require.NoError(t, err)
 
