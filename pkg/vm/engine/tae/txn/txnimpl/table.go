@@ -667,7 +667,11 @@ func (tbl *txnTable) AddObjsWithMetaLoc(ctx context.Context, stats containers.Ve
 		return tbl.addObjsWithMetaLoc(ctx, s, false)
 	}, nil)
 }
-func (tbl *txnTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.ObjectStats, isTombstone bool) (err error) {
+func (tbl *txnTable) addObjsWithMetaLoc(
+	ctx context.Context,
+	stats objectio.ObjectStats,
+	isTombstone bool,
+) (err error) {
 	if isTombstone {
 		if tbl.tombstoneTable == nil {
 			tbl.tombstoneTable = newBaseTable(tbl.entry.GetLastestSchema(true), true, tbl)
@@ -678,7 +682,9 @@ func (tbl *txnTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obje
 	}
 }
 
-func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
+func (tbl *txnTable) GetByFilter(
+	ctx context.Context, filter *handle.Filter,
+) (id *common.ID, offset uint32, err error) {
 	if filter.Op != handle.FilterEq {
 		panic("logic error")
 	}
@@ -726,7 +732,9 @@ func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id
 	return
 }
 
-func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, col uint16, skipCheckDelete bool) (v any, isNull bool, err error) {
+func (tbl *txnTable) GetValue(
+	ctx context.Context, id *common.ID, row uint32, col uint16, skipCheckDelete bool,
+) (v any, isNull bool, err error) {
 	if tbl.dataTable.tableSpace != nil && id.ObjectID().Eq(*tbl.dataTable.tableSpace.entry.ID()) {
 		return tbl.dataTable.tableSpace.GetValue(row, col)
 	}
@@ -741,7 +749,9 @@ func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, co
 	_, blkIdx := id.BlockID.Offsets()
 	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(false), blkIdx, int(row), int(col), skipCheckDelete, common.WorkspaceAllocator)
 }
-func (tbl *txnTable) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStats, isTombstone bool) error {
+func (tbl *txnTable) UpdateObjectStats(
+	id *common.ID, stats *objectio.ObjectStats, isTombstone bool,
+) error {
 	meta, err := tbl.entry.GetObjectByID(id.ObjectID(), isTombstone)
 	if err != nil {
 		return err
@@ -841,7 +851,12 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool) (err
 // DedupSnapByPK 1. checks whether these primary keys exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending data into this table.
-func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, dedupAfterSnapshotTS bool, isTombstone bool) (err error) {
+func (tbl *txnTable) DedupSnapByPK(
+	ctx context.Context,
+	keys containers.Vector,
+	dedupAfterSnapshotTS bool,
+	isTombstone bool,
+) (err error) {
 	r := trace.StartRegion(ctx, "DedupSnapByPK")
 	defer r.End()
 	rowIDs, err := tbl.getBaseTable(isTombstone).getRowsByPK(ctx, keys, dedupAfterSnapshotTS, true)
@@ -870,7 +885,12 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 	}
 	return
 }
-func (tbl *txnTable) findDeletes(ctx context.Context, rowIDs containers.Vector, dedupAfterSnapshotTS, isCommitting bool) (err error) {
+func (tbl *txnTable) findDeletes(
+	ctx context.Context,
+	rowIDs containers.Vector,
+	dedupAfterSnapshotTS,
+	isCommitting bool,
+) (err error) {
 	pkType := rowIDs.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
 	if err = index.BatchUpdateZM(keysZM, rowIDs.GetDownstreamVector()); err != nil {
@@ -921,7 +941,11 @@ func (tbl *txnTable) findDeletes(ctx context.Context, rowIDs containers.Vector, 
 //  2. it is called when txn dequeues from preparing queue.
 //  3. we should make this function run quickly as soon as possible.
 //     TODO::it would be used to do deduplication with the logtail.
-func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM, isTombstone bool) (err error) {
+func (tbl *txnTable) DoPrecommitDedupByPK(
+	pks containers.Vector,
+	pksZM index.ZM,
+	isTombstone bool,
+) (err error) {
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
 		var rowIDs containers.Vector
 		rowIDs, err = tbl.getBaseTable(isTombstone).preCommitGetRowsByPK(tbl.store.ctx, pks)
