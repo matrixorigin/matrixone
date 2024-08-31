@@ -301,7 +301,7 @@ func CalculateStorageUsage(
 		}
 
 		// next round
-		ticker.Reset(time.Second * 5)
+		ticker.Reset(GetUpdateStorageUsageInterval())
 		logger.Info("wait next round")
 	}
 }
