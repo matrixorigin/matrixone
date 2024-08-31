@@ -60,18 +60,29 @@ type TestDisttaeEngine struct {
 	txnClient       client.TxnClient
 	txnOperator     client.TxnOperator
 	timestampWaiter client.TimestampWaiter
+	mp              *mpool.MPool
 }
 
 func NewTestDisttaeEngine(
 	ctx context.Context,
-	mp *mpool.MPool,
 	fs fileservice.FileService,
 	rpcAgent *MockRPCAgent,
 	storage *TestTxnStorage,
+	options ...TestDisttaeEngineOptions,
 ) (*TestDisttaeEngine, error) {
 	de := new(TestDisttaeEngine)
 	de.logtailReceiver = make(chan morpc.Message)
 	de.broken = make(chan struct{})
+	for _, opt := range options {
+		opt(de)
+	}
+
+	if de.mp == nil {
+		de.mp, err = mpool.NewMPool("test", 0, mpool.NoFixed)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	de.ctx, de.cancel = context.WithCancel(ctx)
 
@@ -89,7 +100,7 @@ func NewTestDisttaeEngine(
 	colexec.NewServer(hakeeper)
 
 	catalog.SetupDefines("")
-	de.Engine = disttae.New(ctx, "", mp, fs, de.txnClient, hakeeper, nil, 1)
+	de.Engine = disttae.New(ctx, "", de.mp, fs, de.txnClient, hakeeper, nil, 1)
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
 	go func() {

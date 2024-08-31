@@ -62,9 +62,25 @@ func InitTestEnv(module string, t *testing.T) string {
 	return MakeDefaultTestPath(module, t)
 }
 
-func CreateEngines(ctx context.Context, opts TestOptions,
-	t *testing.T) (disttaeEngine *TestDisttaeEngine, taeEngine *TestTxnStorage,
-	rpcAgent *MockRPCAgent, mp *mpool.MPool) {
+type TestDisttaeEngineOptions func(*TestDisttaeEngine)
+
+func WithDisttaeEngineMPool(mp *mpool.MPool) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.mp = mp
+	}
+}
+
+func CreateEngines(
+	ctx context.Context,
+	opts TestOptions,
+	t *testing.T,
+	options ...TestDisttaeEngineOptions,
+) (
+	disttaeEngine *TestDisttaeEngine,
+	taeEngine *TestTxnStorage,
+	rpcAgent *MockRPCAgent,
+	mp *mpool.MPool,
+) {
 
 	if v := ctx.Value(defines.TenantIDKey{}); v == nil {
 		panic("cannot find account id in ctx")
@@ -72,16 +88,15 @@ func CreateEngines(ctx context.Context, opts TestOptions,
 
 	var err error
 
-	mp, err = mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.Nil(t, err)
-
 	rpcAgent = NewMockLogtailAgent()
 
 	taeEngine, err = NewTestTAEEngine(ctx, "partition_state", t, rpcAgent, opts.TaeEngineOptions)
 	require.Nil(t, err)
 
-	disttaeEngine, err = NewTestDisttaeEngine(ctx, mp, taeEngine.GetDB().Runtime.Fs.Service, rpcAgent, taeEngine)
+	disttaeEngine, err = NewTestDisttaeEngine(ctx, taeEngine.GetDB().Runtime.Fs.Service, rpcAgent, taeEngine, options)
 	require.Nil(t, err)
+
+	mp = disttaeEngine.mp
 
 	return
 }
