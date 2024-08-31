@@ -202,6 +202,7 @@ type StorageUsageCache struct {
 	// when two requests happens within [lastUpdate, lastUpdate + lazyThreshold],
 	// it will reuse the cached result, no new query to TN.
 	sync.Mutex
+	id2Name       map[uint64]string
 	lazyThreshold time.Duration
 	lastUpdate    time.Time
 	// accId -> dbId -> [tblId, size]
