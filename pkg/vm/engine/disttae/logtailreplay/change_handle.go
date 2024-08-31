@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	taeCatalog "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/tidwall/btree"
 )
 
@@ -46,9 +45,8 @@ const (
 )
 
 type BatchHandle struct {
-	maxRow      uint32
-	mp          *mpool.MPool
-	isTombstone bool
+	maxRow uint32
+	mp     *mpool.MPool
 
 	batches     *batch.Batch
 	batchLength int
@@ -314,25 +312,25 @@ func (p *baseHandle) newBatchHandleWithRowIterator(mp *mpool.MPool, ctx context.
 	}
 	return
 }
-func (r *baseHandle) getBatchesFromRowIterator(mp *mpool.MPool, ctx context.Context) (bat *batch.Batch) {
-	for r.rowIter.Next() {
-		entry := r.rowIter.Item()
-		if checkTS(r.start, r.end, entry.Time) {
-			if !entry.Deleted && !r.isTombstone {
+func (p *baseHandle) getBatchesFromRowIterator(mp *mpool.MPool, ctx context.Context) (bat *batch.Batch) {
+	for p.rowIter.Next() {
+		entry := p.rowIter.Item()
+		if checkTS(p.start, p.end, entry.Time) {
+			if !entry.Deleted && !p.isTombstone {
 				fillInInsertBatch(&bat, &entry, mp)
 			}
-			if entry.Deleted && r.isTombstone {
+			if entry.Deleted && p.isTombstone {
 				fillInDeleteBatch(&bat, &entry, mp)
 			}
 		}
 	}
 	return
 }
-func (r *baseHandle) newObjectHandle(mp *mpool.MPool, ctx context.Context) (h *ObjectHandle, err error) {
-	for r.objectIter.Next() {
-		entry := r.objectIter.Item()
-		if checkObjectEntry(&entry, r.start, r.end) {
-			return newObjectHandle(&entry, r.fs, r.isTombstone, mp, ctx), nil
+func (p *baseHandle) newObjectHandle(mp *mpool.MPool, ctx context.Context) (h *ObjectHandle, err error) {
+	for p.objectIter.Next() {
+		entry := p.objectIter.Item()
+		if checkObjectEntry(&entry, p.start, p.end) {
+			return newObjectHandle(&entry, p.fs, p.isTombstone, mp, ctx), nil
 		}
 	}
 	return nil, moerr.GetOkExpectedEOF()
@@ -508,18 +506,14 @@ func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, mp *mpool.MPool) {
 	if *bat == nil {
 		(*bat) = batch.NewWithSize(2)
 		(*bat).SetAttributes([]string{
-			taeCatalog.AttrPKVal,
-			taeCatalog.AttrCommitTs,
+			catalog.AttrPKVal,
+			catalog.AttrCommitTs,
 		})
 		(*bat).Vecs[0] = vector.NewVec(*pkVec.GetType())
 		(*bat).Vecs[1] = vector.NewVec(types.T_TS.ToType())
 	}
 	appendFromEntry(pkVec, (*bat).Vecs[0], int(entry.Offset), mp)
 	vector.AppendFixed((*bat).Vecs[1], entry.Time, false, mp)
-}
-
-func isCreatedByCN(entry *ObjectEntry) bool {
-	return entry.ObjectStats.GetCNCreated()
 }
 
 func checkTS(start, end types.TS, ts types.TS) bool {
