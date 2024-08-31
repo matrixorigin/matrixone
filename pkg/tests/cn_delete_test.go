@@ -47,6 +47,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 
 		_, err = exec.Exec(ctx, "create table t1 (a int primary key, b varchar(1024));",
 			executor.Options{}.WithDatabase("a"))
+		require.NoError(t, err)
 
 		_, err = exec.Exec(ctx, "insert into t1 select *,'yep' from generate_series(1,512*1024)g;",
 			executor.Options{}.WithDatabase("a"))

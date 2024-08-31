@@ -16,11 +16,8 @@ package rpc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -29,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 )
@@ -67,16 +65,6 @@ func (is *itemSet) Pop() any {
 func (is *itemSet) Clear() {
 	old := *is
 	*is = old[:0]
-}
-
-func getBlkIDsFromRowids(vec *vector.Vector) map[types.Blockid]struct{} {
-	rowids := vector.MustFixedCol[types.Rowid](vec)
-	blkids := make(map[types.Blockid]struct{})
-	for _, rowid := range rowids {
-		blkID := *rowid.BorrowBlockID()
-		blkids[blkID] = struct{}{}
-	}
-	return blkids
 }
 
 func (h *Handle) prefetchDeleteRowID(_ context.Context, req *db.WriteReq) error {

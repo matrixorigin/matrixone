@@ -979,44 +979,6 @@ func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 	return leftRows
 }
 
-// if blks comes from unCommitted flushed s3 deletes, the
-// blkCommitTS can be zero.
-func applyDeletesWithinDeltaLocations(
-	ctx context.Context,
-	fs fileservice.FileService,
-	bid objectio.Blockid,
-	snapshotTS types.TS,
-	blkCommitTS types.TS,
-	offsets []int64,
-	deletedRows *nulls.Nulls,
-	locations ...objectio.Location,
-) (leftRows []int64, err error) {
-
-	if offsets != nil {
-		leftRows = make([]int64, 0, len(offsets))
-	}
-
-	var mask *nulls.Nulls
-
-	for _, loc := range locations {
-		if mask, err = loadBlockDeletesByLocation(
-			ctx, fs, bid, loc[:], snapshotTS); err != nil {
-			return nil, err
-		}
-
-		if offsets != nil {
-			leftRows = removeIf(offsets, func(t int64) bool {
-				return mask.Contains(uint64(t))
-			})
-
-		} else if deletedRows != nil {
-			deletedRows.Or(mask)
-		}
-	}
-
-	return leftRows, nil
-}
-
 func (ls *LocalDataSource) applyWorkspaceFlushedS3Deletes(
 	bid objectio.Blockid,
 	offsets []int64,
