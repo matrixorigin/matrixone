@@ -215,11 +215,15 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 				return err
 			}
 			hasConflict = true
+			var pkType *types.Type
 			for i := 0; i < vectors[0].Length(); i++ {
 				rowID := vectors[0].Get(i).(types.Rowid)
 				blkID2, offset := rowID.Decode()
 				if *blkID2.Object() != *id.ObjectID() {
 					panic(fmt.Sprintf("logic err, id.Object %v, rowID %v", id.ObjectID().String(), rowID.String()))
+				}
+				if pkType == nil {
+					pkType = vectors[1].GetType()
 				}
 				pk := vectors[1].Get(i)
 				// try to transfer the delete node
@@ -227,7 +231,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 				// nil: transferred successfully
 				// ErrTxnRWConflict: the target block was also be compacted
 				// ErrTxnWWConflict: w-w error
-				if _, err = tbl.TransferDeleteRows(id, offset, pk, phase, ts); err != nil {
+				if _, err = tbl.TransferDeleteRows(id, offset, pk, pkType, phase, ts); err != nil {
 					return err
 				}
 			}
@@ -248,6 +252,8 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 		return
 	}
 	deletes := tbl.tombstoneTable.tableSpace.node.data
+	pkVec := deletes.GetVectorByName(catalog.AttrPKVal)
+	var pkType *types.Type
 	for i := 0; i < deletes.Length(); i++ {
 		rowID := deletes.GetVectorByName(catalog.AttrRowID).Get(i).(types.Rowid)
 		id.SetObjectID(rowID.BorrowObjectID())
@@ -271,14 +277,17 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 		}
 		transferd.Add(uint64(i))
 		tbl.store.warChecker.Delete(id)
-		pk := deletes.GetVectorByName(catalog.AttrPKVal).Get(i)
+		pk := pkVec.Get(i)
+		if pkType == nil {
+			pkType = pkVec.GetType()
+		}
 
 		// try to transfer the delete node
 		// here are some possible returns
 		// nil: transferred successfully
 		// ErrTxnRWConflict: the target block was also be compacted
 		// ErrTxnWWConflict: w-w error
-		if _, err = tbl.TransferDeleteRows(id, rowOffset, pk, phase, ts); err != nil {
+		if _, err = tbl.TransferDeleteRows(id, rowOffset, pk, pkType, phase, ts); err != nil {
 			return
 		}
 	}
@@ -305,8 +314,10 @@ func (tbl *txnTable) recurTransferDelete(
 	id *common.ID, // the block had been deleted and committed.
 	row uint32,
 	pk any,
+	pkType *types.Type,
 	depth int,
-	ts types.TS) error {
+	ts types.TS,
+) error {
 
 	var page2 *common.PinnedItem[*model.TransferHashPage]
 
@@ -335,8 +346,7 @@ func (tbl *txnTable) recurTransferDelete(
 	//otherwise recursively transfer the deletes to the next target block.
 	err := tbl.store.warChecker.checkOne(newID, ts)
 	if err == nil {
-		pkType := tbl.dataTable.schema.GetSingleSortKeyType()
-		pkVec := tbl.store.rt.VectorPool.Small.GetVector(&pkType)
+		pkVec := tbl.store.rt.VectorPool.Small.GetVector(pkType)
 		pkVec.Append(pk, false)
 		defer pkVec.Close()
 		//transfer the deletes to the target block.
@@ -377,6 +387,7 @@ func (tbl *txnTable) recurTransferDelete(
 		newID,
 		offset,
 		pk,
+		pkType,
 		depth+1,
 		ts)
 }
@@ -385,8 +396,10 @@ func (tbl *txnTable) TransferDeleteRows(
 	id *common.ID,
 	row uint32,
 	pk any,
+	pkType *types.Type,
 	phase string,
-	ts types.TS) (transferred bool, err error) {
+	ts types.TS,
+) (transferred bool, err error) {
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
 	common.DoIfInfoEnabled(func() {
 		logutil.Info("[Start]",
@@ -421,7 +434,7 @@ func (tbl *txnTable) TransferDeleteRows(
 	// logutil.Infof("TransferDeleteNode deletenode %s", node.DeleteNode.(*updates.DeleteNode).GeneralVerboseString())
 	page := pinned.Item()
 	depth := 0
-	if err = tbl.recurTransferDelete(memo, page, id, row, pk, depth, ts); err != nil {
+	if err = tbl.recurTransferDelete(memo, page, id, row, pk, pkType, depth, ts); err != nil {
 		return
 	}
 
