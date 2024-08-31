@@ -429,7 +429,7 @@ func (v *Vector) IsConstNull() bool {
 }
 
 func (v *Vector) IsRollup() bool {
-	return v.length == int(v.rsp.GetBitmap().Len())
+	return v.length > 0 && v.length == int(v.rsp.GetBitmap().Len())
 }
 
 func (v *Vector) GetArea() []byte {
@@ -2399,6 +2399,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 
 	oldLen := v.length
 	v.length++
+	if nulls.Contains(w.rsp, uint64(sel)) {
+		nulls.Add(v.rsp, uint64(oldLen))
+		return nil
+	}
 	if w.IsConst() {
 		if w.IsConstNull() {
 			nulls.Add(v.nsp, uint64(oldLen))
@@ -2455,6 +2459,10 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 
 	oldLen := v.length
 	v.length += cnt
+	if nulls.Contains(w.rsp, uint64(sel)) {
+		nulls.AddRange(v.rsp, uint64(oldLen), uint64(oldLen+cnt))
+		return nil
+	}
 	if w.IsConst() {
 		if w.IsConstNull() {
 			nulls.AddRange(v.nsp, uint64(oldLen), uint64(oldLen+cnt))
@@ -2518,7 +2526,9 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 	oldLen := v.length
 	v.length += len(sels)
 	if w.IsConst() {
-		if w.IsConstNull() {
+		if w.IsRollup() {
+			nulls.AddRange(v.rsp, uint64(oldLen), uint64(oldLen+len(sels)))
+		} else if w.IsConstNull() {
 			nulls.AddRange(v.nsp, uint64(oldLen), uint64(oldLen+len(sels)))
 		} else if v.GetType().IsVarlen() {
 			var err error
@@ -2555,6 +2565,10 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 					nulls.Add(v.nsp, uint64(oldLen+i))
 					continue
 				}
+				if w.rsp.Contains(uint64(sel)) {
+					nulls.Add(v.rsp, uint64(oldLen+i))
+					continue
+				}
 				err = BuildVarlenaFromValena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
 				if err != nil {
 					return err
@@ -2575,6 +2589,10 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 			for i, sel := range sels {
 				if w.nsp.Contains(uint64(sel)) {
 					nulls.Add(v.nsp, uint64(oldLen+i))
+					continue
+				}
+				if w.rsp.Contains(uint64(sel)) {
+					nulls.Add(v.rsp, uint64(oldLen+i))
 					continue
 				}
 				copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
@@ -2634,9 +2652,6 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 	if w.IsConst() {
 		oldLen := v.length
 		v.length += addCnt
-		if w.IsRollup() {
-			nulls.AddRange(v.rsp, uint64(oldLen), uint64(v.length))
-		}
 		if w.IsConstNull() {
 			nulls.AddRange(v.nsp, uint64(oldLen), uint64(v.length))
 		} else if v.GetType().IsVarlen() {
@@ -2658,6 +2673,10 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			for i := oldLen; i < v.length; i++ {
 				copy(v.data[i*tlen:(i+1)*tlen], w.data[:tlen])
 			}
+		}
+
+		if w.IsRollup() {
+			nulls.AddRange(v.rsp, uint64(oldLen), uint64(v.length))
 		}
 
 		return nil
@@ -3330,6 +3349,7 @@ func shuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) 
 	ws = ws[:ns]
 	shuffle.FixedLengthShuffle(vs, ws, sels)
 	nulls.Filter(v.nsp, sels, false)
+	nulls.Filter(v.rsp, sels, false)
 	// XXX We should never allow "half-owned" vectors later. And unowned vector should be strictly read-only.
 	if v.cantFreeData {
 		v.cantFreeData = false
