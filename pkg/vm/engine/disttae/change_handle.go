@@ -41,10 +41,6 @@ func (tbl *txnTable) CollectChanges(from, to types.TS, mp *mpool.MPool, ctx cont
 }
 
 type ChangesHandle interface {
-	//两个batch都为空，结束。然后close
-	//batch每列的字段
-	//    data 用户定义列，ts
-	//    tombstone 主键，ts
 	Next() (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error)
 	Close() error
 }
