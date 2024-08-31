@@ -150,6 +150,7 @@ func (idx *MutIndex) GetDuplicatedRows(
 	rowIDs *vector.Vector,
 	maxVisibleRow uint32,
 	skipFn func(row uint32) error,
+	skipCommittedBeforeTxnForAblk bool,
 	mp *mpool.MPool,
 ) (err error) {
 	if keysZM.Valid() {
@@ -163,6 +164,9 @@ func (idx *MutIndex) GetDuplicatedRows(
 		}
 	}
 	op := func(v []byte, _ bool, offset int) error {
+		if !rowIDs.IsNull(uint64(offset)) {
+			return nil
+		}
 		rows, err := idx.art.Search(v)
 		if err == index.ErrNotFound {
 			return nil
@@ -172,6 +176,9 @@ func (idx *MutIndex) GetDuplicatedRows(
 			if err != nil {
 				return err
 			}
+		}
+		if skipCommittedBeforeTxnForAblk {
+			return nil
 		}
 		var maxRow uint32
 		exist := false
