@@ -916,7 +916,7 @@ func NewMockRelation(ctrl *gomock.Controller) *MockRelation {
 	return mock
 }
 
-func (m *MockRelation) CollectChanges(from, to types.TS, _ *mpool.MPool, _ context.Context) (engine.ChangesHandle, error) {
+func (m *MockRelation) CollectChanges(_ context.Context, from, to types.TS, _ *mpool.MPool) (engine.ChangesHandle, error) {
 	panic("not support")
 }
 

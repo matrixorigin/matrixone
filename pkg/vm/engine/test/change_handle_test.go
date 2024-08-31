@@ -85,11 +85,11 @@ func TestChangesHandle1(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp, ctx)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
-			data, tombstone, hint, err := handle.Next(mp, ctx)
+			data, tombstone, hint, err := handle.Next(ctx, mp)
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 				break
 			}
@@ -104,10 +104,10 @@ func TestChangesHandle1(t *testing.T) {
 		assert.Equal(t, totalRows, 9)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(startTS, taeHandler.GetDB().TxnMgr.Now(), mp, ctx)
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
 		assert.NoError(t, err)
 		for {
-			data, tombstone, hint, err := handle.Next(mp, ctx)
+			data, tombstone, hint, err := handle.Next(ctx, mp)
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 				break
 			}
@@ -175,11 +175,11 @@ func TestChangesHandle2(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp, ctx)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
-			data, tombstone, hint, err := handle.Next(mp, ctx)
+			data, tombstone, hint, err := handle.Next(ctx, mp)
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 				break
 			}
@@ -195,10 +195,10 @@ func TestChangesHandle2(t *testing.T) {
 		assert.Equal(t, totalRows, 9)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(startTS, taeHandler.GetDB().TxnMgr.Now(), mp, ctx)
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
 		assert.NoError(t, err)
 		for {
-			data, tombstone, hint, err := handle.Next(mp, ctx)
+			data, tombstone, hint, err := handle.Next(ctx, mp)
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 				break
 			}
@@ -291,11 +291,11 @@ func TestChangesHandle3(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp, ctx)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
-			data, tombstone, hint, err := handle.Next(mp, ctx)
+			data, tombstone, hint, err := handle.Next(ctx, mp)
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 				break
 			}
@@ -310,11 +310,11 @@ func TestChangesHandle3(t *testing.T) {
 		assert.Equal(t, totalRows, 163820)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(startTS, taeHandler.GetDB().TxnMgr.Now(), mp, ctx)
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
 		assert.NoError(t, err)
 		batchCount := 0
 		for {
-			data, tombstone, hint, err := handle.Next(mp, ctx)
+			data, tombstone, hint, err := handle.Next(ctx, mp)
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 				break
 			}
@@ -405,11 +405,11 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(types.TS{}, taeEngine.GetDB().TxnMgr.Now(), mp, ctx)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeEngine.GetDB().TxnMgr.Now(), mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
-			data, tombstone, hint, err := handle.Next(mp, ctx)
+			data, tombstone, hint, err := handle.Next(ctx, mp)
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 				break
 			}
@@ -424,11 +424,11 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 		assert.Equal(t, totalRows, bat.Length())
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(startTS, taeEngine.GetDB().TxnMgr.Now(), mp, ctx)
+		handle, err = rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), mp)
 		assert.NoError(t, err)
 		batchCount := 0
 		for {
-			data, tombstone, _, err := handle.Next(mp, ctx)
+			data, tombstone, _, err := handle.Next(ctx, mp)
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 				break
 			}

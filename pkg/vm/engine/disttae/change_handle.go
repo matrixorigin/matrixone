@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
-func (tbl *txnTable) CollectChanges(from, to types.TS, mp *mpool.MPool, ctx context.Context) (engine.ChangesHandle, error) {
+func (tbl *txnTable) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
 	if from.IsEmpty() {
 		return NewCheckpointChangesHandle(to, tbl, mp, ctx)
 	}
@@ -63,7 +63,7 @@ func NewCheckpointChangesHandle(end types.TS, table *txnTable, mp *mpool.MPool, 
 	return handle, err
 }
 
-func (h *CheckpointChangesHandle) Next(mp *mpool.MPool, ctx context.Context) (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+func (h *CheckpointChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
 	select {
 	case <-ctx.Done():
 		return

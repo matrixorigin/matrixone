@@ -787,7 +787,7 @@ const (
 )
 
 type ChangesHandle interface {
-	Next(mp *mpool.MPool, ctx context.Context) (data *batch.Batch, tombstone *batch.Batch, hint ChangesHandle_Hint, err error)
+	Next(ctx context.Context, mp *mpool.MPool) (data *batch.Batch, tombstone *batch.Batch, hint ChangesHandle_Hint, err error)
 	Close() error
 }
 type Relation interface {
@@ -800,7 +800,7 @@ type Relation interface {
 	Ranges(context.Context, []*plan.Expr, int) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int) (Tombstoner, error)
-	CollectChanges(from, to types.TS, mp *mpool.MPool, ctx context.Context) (ChangesHandle, error)
+	CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (ChangesHandle, error)
 	TableDefs(context.Context) ([]TableDef, error)
 
 	// Get complete tableDef information, including columns, constraints, partitions, version, comments, etc
