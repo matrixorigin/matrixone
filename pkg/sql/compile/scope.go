@@ -160,6 +160,7 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 func (s *Scope) Run(c *Compile) (err error) {
 	var p *pipeline.Pipeline
 	defer func() {
+
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
 			c.proc.Error(c.proc.Ctx, "panic in scope run",
@@ -310,16 +311,18 @@ func (s *Scope) MergeRun(c *Compile) error {
 		}
 	}()
 
+	preScopeCount := len(s.PreScopes)
+	remoteScopeCount := len(s.RemoteReceivRegInfos)
+	//after parallelRun, prescope count may change. we need to save this before parallelRun
+
 	err := s.ParallelRun(c)
 	if err != nil {
 		return err
 	}
 
 	// receive and check error from pre-scopes and remote scopes.
-	preScopeCount := len(s.PreScopes)
-	remoteScopeCount := len(s.RemoteReceivRegInfos)
 	if remoteScopeCount == 0 {
-		for i := 0; i < len(s.PreScopes); i++ {
+		for i := 0; i < preScopeCount; i++ {
 			if err := <-preScopeResultReceiveChan; err != nil {
 				return err
 			}
