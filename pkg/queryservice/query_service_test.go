@@ -19,10 +19,13 @@ import (
 	"fmt"
 	"math"
 	"os"
+	goruntime "runtime"
 	"testing"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -36,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"github.com/stretchr/testify/assert"
 )
 
 func testCreateQueryService(t *testing.T) QueryService {
@@ -137,6 +139,21 @@ func TestQueryServiceKillConn(t *testing.T) {
 		defer cli.Release(resp)
 		assert.NotNil(t, resp.KillConnResponse)
 		assert.Equal(t, true, resp.KillConnResponse.Success)
+	})
+}
+
+func TestQueryServiceGOMaxProcs(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1"}
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+		defer cancel()
+		req := cli.NewRequest(pb.CmdMethod_GOMAXPROCS)
+		req.GoMaxProcsRequest.MaxProcs = 0
+		resp, err := cli.SendMessage(ctx, addr, req)
+		assert.NoError(t, err)
+		defer cli.Release(resp)
+		assert.NotNil(t, resp.GoMaxProcsResponse)
+		assert.Equal(t, int32(goruntime.NumCPU()), resp.GoMaxProcsResponse.MaxProcs)
 	})
 }
 
@@ -266,6 +283,14 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice
 					TableCnt: 100,
 				},
 			}
+			return nil
+		},
+		false,
+	)
+
+	qs.AddHandleFunc(pb.CmdMethod_GOMAXPROCS,
+		func(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+			resp.GoMaxProcsResponse.MaxProcs = int32(goruntime.NumCPU())
 			return nil
 		},
 		false,

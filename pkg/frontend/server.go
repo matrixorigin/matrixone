@@ -44,6 +44,13 @@ type MOServer struct {
 	readTimeout time.Duration
 }
 
+// Server interface is for mock MOServer
+type Server interface {
+	GetRoutineManager() *RoutineManager
+	Start() error
+	Stop() error
+}
+
 // BaseService is an interface which indicates that the instance is
 // the base CN service and should implement the following methods.
 type BaseService interface {

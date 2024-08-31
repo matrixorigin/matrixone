@@ -742,7 +742,7 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 	}
 	pos = newPos
 	if int(paramIdx) >= numParams {
-		return moerr.NewInternalError(ctx, "get param index out of range. get %d, param length is %d", paramIdx, numParams)
+		return moerr.NewInternalErrorf(ctx, "get param index out of range. get %d, param length is %d", paramIdx, numParams)
 	}
 
 	if stmt.params == nil {
@@ -790,7 +790,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 	}
 	if flag != 0 {
 		// TODO only support CURSOR_TYPE_NO_CURSOR flag now
-		return moerr.NewInvalidInput(ctx, "unsupported Prepare flag '%v'", flag)
+		return moerr.NewInvalidInputf(ctx, "unsupported Prepare flag '%v'", flag)
 	}
 
 	// skip iteration-count, always 1
@@ -1665,7 +1665,7 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(ctx context.Context, dat
 		if info.clientPluginName != AuthNativePassword {
 			var err error
 			if info.authResponse, err = mp.negotiateAuthenticationMethod(ctx); err != nil {
-				return false, info, moerr.NewInternalError(ctx, "negotiate authentication method failed. error:%v", err)
+				return false, info, moerr.NewInternalErrorf(ctx, "negotiate authentication method failed. error:%v", err)
 			}
 			info.clientPluginName = AuthNativePassword
 		}
@@ -2479,7 +2479,7 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 				data = mp.appendStringLenEnc(data, value)
 			}
 		default:
-			return nil, moerr.NewInternalError(mp.ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
+			return nil, moerr.NewInternalErrorf(mp.ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
 		}
 	}
 	return data, nil
@@ -2634,7 +2634,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 		curLen = int(MaxPayloadSize) - hasDataLen
 		curLen = Min(curLen, n-i)
 		if curLen < 0 {
-			return moerr.NewInternalError(mp.ctx, "needLen %d < 0. hasDataLen %d n - i %d", curLen, hasDataLen, n-i)
+			return moerr.NewInternalErrorf(mp.ctx, "needLen %d < 0. hasDataLen %d n - i %d", curLen, hasDataLen, n-i)
 		}
 		outbuf.Grow(curLen)
 		buf = outbuf.RawBuf()
@@ -2670,7 +2670,7 @@ func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 	outbuf := mp.tcpConn.OutBuf()
 	payLoadLen := outbuf.GetWriteIndex() - beginWriteIndex(outbuf, mp.beginOffset) - 4
 	if payLoadLen < 0 || payLoadLen > int(MaxPayloadSize) {
-		return moerr.NewInternalError(mp.ctx, "invalid payload len :%d curWriteIdx %d beginWriteIdx %d ",
+		return moerr.NewInternalErrorf(mp.ctx, "invalid payload len :%d curWriteIdx %d beginWriteIdx %d ",
 			payLoadLen, outbuf.GetWriteIndex(), beginWriteIndex(outbuf, mp.beginOffset))
 	}
 

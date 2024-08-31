@@ -1690,7 +1690,7 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 				} else if strings.EqualFold(v.Value, "FALSE") {
 					es.Verbose = false
 				} else {
-					return nil, moerr.NewInvalidInput(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 				}
 			} else if strings.EqualFold(v.Name, "ANALYZE") {
 				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
@@ -1698,20 +1698,20 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 				} else if strings.EqualFold(v.Value, "FALSE") {
 					es.Analyze = false
 				} else {
-					return nil, moerr.NewInvalidInput(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 				}
 			} else if strings.EqualFold(v.Name, "FORMAT") {
 				if strings.EqualFold(v.Value, "TEXT") {
 					es.Format = explain.EXPLAIN_FORMAT_TEXT
 				} else if strings.EqualFold(v.Value, "JSON") {
-					return nil, moerr.NewNotSupported(reqCtx, "Unsupport explain format '%s'", v.Value)
+					return nil, moerr.NewNotSupportedf(reqCtx, "Unsupport explain format '%s'", v.Value)
 				} else if strings.EqualFold(v.Value, "DOT") {
-					return nil, moerr.NewNotSupported(reqCtx, "Unsupport explain format '%s'", v.Value)
+					return nil, moerr.NewNotSupportedf(reqCtx, "Unsupport explain format '%s'", v.Value)
 				} else {
-					return nil, moerr.NewInvalidInput(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 				}
 			} else {
-				return nil, moerr.NewInvalidInput(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 			}
 		}
 		return es, nil
@@ -2101,7 +2101,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 			return nil
 		}
 		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-			err = moerr.NewInvalidInput(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
+			err = moerr.NewInvalidInputf(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
 		}
 		return
 	}
@@ -2587,7 +2587,7 @@ func executeStmt(ses *Session,
 		}
 	case tree.OUTPUT_UNDEFINED:
 		if _, ok := execCtx.stmt.(*tree.Execute); !ok {
-			return moerr.NewInternalError(execCtx.reqCtx, "need set result type for %s", execCtx.sqlOfStmt)
+			return moerr.NewInternalErrorf(execCtx.reqCtx, "need set result type for %s", execCtx.sqlOfStmt)
 		}
 	}
 
@@ -3010,7 +3010,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return NewGeneralOkResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus()), nil
 
 	default:
-		resp = NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), moerr.NewInternalError(execCtx.reqCtx, "unsupported command. 0x%x", req.GetCmd()))
+		resp = NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), moerr.NewInternalErrorf(execCtx.reqCtx, "unsupported command. 0x%x", req.GetCmd()))
 	}
 	return resp, nil
 }
@@ -3137,7 +3137,7 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_enum:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	default:
-		return moerr.NewInternalError(ctx, "RunWhileSend : unsupported type %d", engineType)
+		return moerr.NewInternalErrorf(ctx, "RunWhileSend : unsupported type %d", engineType)
 	}
 	return nil
 }
@@ -3309,7 +3309,7 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 		encoder.SetEscapeHTML(false)
 		err = encoder.Encode(h.marshalPlan)
 		if err != nil {
-			moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
+			moError := moerr.NewInternalErrorf(ctx, "serialize plan to json error: %s", err.Error())
 			h.buffer.Reset()
 			jsonBytes = buildErrorJsonPlan(h.buffer, h.uuid, moError.ErrorCode(), moError.Error())
 		} else {

@@ -24,9 +24,9 @@ import (
 	"time"
 	"unsafe"
 
-	"go.uber.org/zap"
-
 	"github.com/docker/go-units"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -224,7 +224,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	}
 
 	if !found {
-		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", columnName)
+		return 0, moerr.NewInvalidInputf(ctx, "bad input column name %v", columnName)
 	}
 
 	deletes := make(map[types.Rowid]struct{})
@@ -289,7 +289,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	}
 	sz, ok := s.SizeMap[columnName]
 	if !ok {
-		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", columnName)
+		return 0, moerr.NewInvalidInputf(ctx, "bad input column name %v", columnName)
 	}
 
 	return sz + szInPart, nil
@@ -429,7 +429,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		}
 	}
 	if !found {
-		return nil, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
+		return nil, moerr.NewInvalidInputf(ctx, "bad input column name %v", name)
 	}
 
 	needCols := make([]*plan.ColDef, 0, n)
@@ -1611,7 +1611,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		tbl.writeTnPartition(tbl.getTxn().proc.Ctx, bat)
 	default:
 		tbl.getTxn().hasS3Op.Store(true)
-		panic(moerr.NewInternalErrorNoCtx("Unsupport type for table delete %d", typ))
+		panic(moerr.NewInternalErrorNoCtxf("Unsupport type for table delete %d", typ))
 	}
 	return nil
 }
@@ -2486,7 +2486,7 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 			info, exist := state.GetObject(*objstat.ObjectShortName())
 			if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
 				logutil.Errorf("object not visible: %s", info.String())
-				return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
+				return nil, moerr.NewInternalErrorNoCtxf("object %s not exist", objstat.ObjectName().String())
 			}
 			objInfos = append(objInfos, info)
 		}
@@ -2576,7 +2576,8 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		}
 		var locStr strings.Builder
 		locations := taskHost.commitEntry.BookingLoc
-		for _, filepath := range locations {
+		blkCnt := types.DecodeInt32(commonUtil.UnsafeStringToBytes(locations[0]))
+		for _, filepath := range locations[blkCnt+1:] {
 			locStr.WriteString(filepath)
 			locStr.WriteString(",")
 		}
@@ -2641,7 +2642,7 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 			objRowCnt++
 
 			if objRowCnt*len(columns)*int(unsafe.Sizeof(int32(0))) > 200*mpool.MB {
-				filename := blockio.EncodeTmpFileName("tmp", "merge", time.Now().UTC().Unix())
+				filename := blockio.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
 				writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 				if err != nil {
 					return err
@@ -2665,7 +2666,7 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 
 	// write remaining data
 	if buffer.RowCount() != 0 {
-		filename := blockio.EncodeTmpFileName("tmp", "merge", time.Now().UTC().Unix())
+		filename := blockio.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
 		writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 		if err != nil {
 			return err

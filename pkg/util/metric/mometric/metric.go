@@ -270,20 +270,20 @@ func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
 	createSql := SingleMetricTable.ToCreateSql(ctx, true)
 	if _, err := txn.Exec(createSql, executor.StatementOption{}); err != nil {
 		//panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
-		return moerr.NewInternalError(ctx, "[Metric] init metric tables error: %v, sql: %s", err, createSql)
+		return moerr.NewInternalErrorf(ctx, "[Metric] init metric tables error: %v, sql: %s", err, createSql)
 	}
 
 	createSql = SqlStatementCUTable.ToCreateSql(ctx, true)
 	if _, err := txn.Exec(createSql, executor.StatementOption{}); err != nil {
 		//panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
-		return moerr.NewInternalError(ctx, "[Metric] init metric tables error: %v, sql: %s", err, createSql)
+		return moerr.NewInternalErrorf(ctx, "[Metric] init metric tables error: %v, sql: %s", err, createSql)
 	}
 
 	for desc := range descChan {
 		view := getView(ctx, desc)
 		sql := view.ToCreateSql(ctx, true)
 		if _, err := txn.Exec(sql, executor.StatementOption{}); err != nil {
-			return moerr.NewInternalError(ctx, "[Metric] init metric tables error: %v, sql: %s", err, sql)
+			return moerr.NewInternalErrorf(ctx, "[Metric] init metric tables error: %v, sql: %s", err, sql)
 		}
 	}
 	createCost = time.Since(instant)
@@ -510,7 +510,7 @@ func NewMetricViewWithLabels(ctx context.Context, tbl string, lbls []string) *ta
 		}
 	}
 	if subSystem == nil {
-		panic(moerr.NewNotSupported(ctx, "metric unknown SubSystem: %s", tbl))
+		panic(moerr.NewNotSupportedf(ctx, "metric unknown SubSystem: %s", tbl))
 	}
 	options = append(options, table.SupportUserAccess(subSystem.SupportUserAccess))
 	// construct columns

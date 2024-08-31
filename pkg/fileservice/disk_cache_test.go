@@ -22,9 +22,11 @@ import (
 	"io"
 	"io/fs"
 	mrand "math/rand"
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -533,4 +535,71 @@ func BenchmarkDiskCacheMultipleIOEntries(b *testing.B) {
 			b.Fatal()
 		}
 	}
+}
+
+func TestDiskCacheClearFiles(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	// write garbage temp file
+	err := os.WriteFile(
+		filepath.Join(dir, "a"+cacheFileTempSuffix),
+		[]byte("foo"),
+		0644,
+	)
+	assert.Nil(t, err)
+	err = os.Chtimes(
+		filepath.Join(dir, "a"+cacheFileTempSuffix),
+		time.Now().Add(-time.Hour*24),
+		time.Now().Add(-time.Hour*24),
+	)
+	assert.Nil(t, err)
+
+	// write garbage file
+	err = os.WriteFile(
+		filepath.Join(dir, "foo"),
+		[]byte("foo"),
+		0644,
+	)
+	assert.Nil(t, err)
+
+	files, err := filepath.Glob(filepath.Join(dir, "*"))
+	assert.Nil(t, err)
+	numFiles := len(files)
+
+	_, err = NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false)
+	assert.Nil(t, err)
+
+	files, err = filepath.Glob(filepath.Join(dir, "*"))
+	assert.Nil(t, err)
+	if len(files) != numFiles-2 {
+		t.Fatalf("got %v", files)
+	}
+
+}
+
+func TestDiskCacheBadWrite(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false)
+	assert.Nil(t, err)
+
+	written, err := cache.writeFile(
+		ctx,
+		filepath.Join(dir, "foo"),
+		func(ctx context.Context) (io.ReadCloser, error) {
+			// bad reader
+			return nil, io.ErrUnexpectedEOF
+		},
+	)
+	assert.Nil(t, err)
+	if written {
+		t.Fatal()
+	}
+
+	// ensure no temp files
+	files, err := filepath.Glob(filepath.Join(dir, "*"))
+	assert.Nil(t, err)
+	assert.Empty(t, files)
+
 }

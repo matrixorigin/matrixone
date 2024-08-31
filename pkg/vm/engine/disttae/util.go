@@ -1384,7 +1384,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 			mp[v] = true
 		}
 	default:
-		panic(moerr.NewInternalErrorNoCtx("%s not supported", pk.GetType().String()))
+		panic(moerr.NewInternalErrorNoCtxf("%s not supported", pk.GetType().String()))
 	}
 
 	return func(vec *vector.Vector) []int32 {
@@ -1585,7 +1585,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 				}
 			}
 		default:
-			panic(moerr.NewInternalErrorNoCtx("%s not supported", vec.GetType().String()))
+			panic(moerr.NewInternalErrorNoCtxf("%s not supported", vec.GetType().String()))
 		}
 		return sels
 	}
