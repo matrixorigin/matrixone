@@ -146,24 +146,25 @@ func (shuffle *Shuffle) handleRuntimeFilter(proc *process.Process) error {
 	if shuffle.RuntimeFilterSpec != nil && !shuffle.ctr.runtimeFilterHandled {
 		shuffle.msgReceiver = message.NewMessageReceiver([]int32{shuffle.RuntimeFilterSpec.Tag}, message.AddrBroadCastOnCurrentCN(), proc.GetMessageBoard())
 		msgs, ctxDone, err := shuffle.msgReceiver.ReceiveMessage(true, proc.Ctx)
-		if err != nil {
-			return err
-		}
 		if ctxDone {
 			shuffle.ctr.runtimeFilterHandled = true
 			return nil
 		}
-		for i := range msgs {
-			msg, ok := msgs[i].(message.RuntimeFilterMessage)
-			if !ok {
-				panic("expect runtime filter message, receive unknown message!")
-			}
-			switch msg.Typ {
-			case message.RuntimeFilter_PASS, message.RuntimeFilter_DROP:
-				shuffle.ctr.runtimeFilterHandled = true
-				continue
-			default:
-				panic("unsupported runtime filter type!")
+		if err != nil {
+			return err
+		} else {
+			for i := range msgs {
+				msg, ok := msgs[i].(message.RuntimeFilterMessage)
+				if !ok {
+					panic("expect runtime filter message, receive unknown message!")
+				}
+				switch msg.Typ {
+				case message.RuntimeFilter_PASS, message.RuntimeFilter_DROP:
+					shuffle.ctr.runtimeFilterHandled = true
+					continue
+				default:
+					panic("unsupported runtime filter type!")
+				}
 			}
 		}
 	}
