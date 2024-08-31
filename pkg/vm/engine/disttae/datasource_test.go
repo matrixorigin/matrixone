@@ -19,6 +19,8 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"testing"
 	"time"
@@ -266,4 +268,74 @@ func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	newRelData, err := UnmarshalRelationData(buf)
 	require.NoError(t, err)
 	require.Equal(t, relData.String(), newRelData.String())
+}
+
+func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
+	defer closeFunc()
+
+	txnOp.AddWorkspace(&Transaction{})
+
+	txnDB := txnDatabase{
+		op: txnOp,
+	}
+
+	txnTbl := txnTable{
+		db: &txnDB,
+	}
+
+	pState := logtailreplay.NewPartitionState("", true, 0)
+
+	proc := testutil.NewProc()
+
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	ls := &LocalDataSource{
+		fs:     fs,
+		ctx:    ctx,
+		table:  &txnTbl,
+		pState: pState,
+	}
+
+	//var stats []objectio.ObjectStats
+	var tombstoneRowIds []types.Rowid
+	for i := 0; i < 3; i++ {
+		writer, err := colexec.NewS3TombstoneWriter()
+		require.NoError(t, err)
+
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+		for j := 0; j < 10; j++ {
+			row := types.RandomRowid()
+			tombstoneRowIds = append(tombstoneRowIds, row)
+			vector.AppendFixed[types.Rowid](bat.Vecs[0], row, false, proc.GetMPool())
+			vector.AppendFixed[int32](bat.Vecs[1], int32(j), false, proc.GetMPool())
+		}
+
+		bat.SetRowCount(bat.Vecs[0].Length())
+
+		writer.StashBatch(proc, bat)
+
+		_, ss, err := writer.SortAndSync(proc)
+		require.NoError(t, err)
+		require.False(t, ss.IsZero())
+
+		//stats = append(stats, ss)
+		txnOp.GetWorkspace().(*Transaction).StashFlushedTombstones(ss)
+	}
+
+	deletedMask := &nulls.Nulls{}
+	for i := range tombstoneRowIds {
+		bid := tombstoneRowIds[i].BorrowBlockID()
+		left, err := ls.applyWorkspaceFlushedS3Deletes(*bid, nil, deletedMask)
+		require.NoError(t, err)
+		require.Zero(t, len(left))
+
+		require.True(t, deletedMask.Contains(uint64(tombstoneRowIds[i].GetRowOffset())))
+	}
 }

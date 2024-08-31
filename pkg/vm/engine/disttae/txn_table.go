@@ -1461,12 +1461,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			return err
 		}
 
-		{
-			tbl.getTxn().cn_flushed_s3_tombstone_object_stats_list.RWMutex.Lock()
-			tbl.getTxn().cn_flushed_s3_tombstone_object_stats_list.data =
-				append(tbl.getTxn().cn_flushed_s3_tombstone_object_stats_list.data, stats)
-			tbl.getTxn().cn_flushed_s3_tombstone_object_stats_list.RWMutex.Unlock()
-		}
+		tbl.getTxn().StashFlushedTombstones(stats)
 
 	case deletion.CNBlockOffset:
 	case deletion.RawBatchOffset:

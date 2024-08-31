@@ -369,6 +369,14 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
 }
 
+func (txn *Transaction) StashFlushedTombstones(stats objectio.ObjectStats) {
+	txn.cn_flushed_s3_tombstone_object_stats_list.Lock()
+	defer txn.cn_flushed_s3_tombstone_object_stats_list.Unlock()
+
+	txn.cn_flushed_s3_tombstone_object_stats_list.data =
+		append(txn.cn_flushed_s3_tombstone_object_stats_list.data, stats)
+}
+
 func (txn *Transaction) Readonly() bool {
 	return txn.readOnly.Load()
 }
