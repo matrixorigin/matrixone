@@ -98,9 +98,6 @@ func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector, containers.Vector
 func (rel *TxnRelation) RangeDelete(*common.ID, uint32, uint32, handle.DeleteType) (err error) {
 	return
 }
-func (rel *TxnRelation) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
-	return
-}
 
 func (rel *TxnRelation) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
 	return

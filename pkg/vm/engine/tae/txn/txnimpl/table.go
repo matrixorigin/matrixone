@@ -1488,29 +1488,6 @@ func (tbl *txnTable) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats)
 	return
 }
 
-func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
-	stats := tbl.deltaloc2ObjectStat(deltaloc, tbl.store.rt.Fs.Service)
-	return tbl.TryDeleteByStats(id, stats)
-	//if tbl.tombstoneTable == nil {
-	//	tbl.tombstoneTable = newBaseTable(tbl.entry.GetLastestSchema(true), true, tbl)
-	//}
-	//obj, err := tbl.store.GetObject(id, false)
-	//if err != nil {
-	//	if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-	//		return false, nil
-	//	}
-	//	return
-	//}
-	//tbl.store.warChecker.Insert(obj.GetMeta().(*catalog.ObjectEntry))
-	//stats := tbl.deltaloc2ObjectStat(deltaloc, tbl.store.rt.Fs.Service)
-	//err = tbl.addObjsWithMetaLoc(tbl.store.ctx, stats, true)
-	//if err == nil {
-	//	tbl.tombstoneTable.tableSpace.objs = append(tbl.tombstoneTable.tableSpace.objs, id.ObjectID())
-	//	ok = true
-	//}
-	//return
-}
-
 func (tbl *txnTable) deltaloc2ObjectStat(loc objectio.Location, fs fileservice.FileService) objectio.ObjectStats {
 	stats := *objectio.NewObjectStatsWithObjectID(loc.Name().ObjectId(), false, true, true)
 	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &loc, false, fs)

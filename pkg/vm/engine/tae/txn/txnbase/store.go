@@ -127,9 +127,6 @@ func (store *NoopTxnStore) RangeDelete(
 ) (err error) {
 	return
 }
-func (store *NoopTxnStore) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
-	return
-}
 
 func (store *NoopTxnStore) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
 	return

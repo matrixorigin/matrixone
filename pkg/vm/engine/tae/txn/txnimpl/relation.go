@@ -331,9 +331,10 @@ func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.De
 	}
 	return h.Txn.GetStore().RangeDelete(id, start, end, pkVec, dt)
 }
-func (h *txnRelation) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
-	return h.Txn.GetStore().TryDeleteByDeltaloc(id, deltaloc)
-}
+
+//func (h *txnRelation) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
+//	return h.Txn.GetStore().TryDeleteByDeltaloc(id, deltaloc)
+//}
 
 func (h *txnRelation) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
 	return h.Txn.GetStore().TryDeleteByStats(id, stats)

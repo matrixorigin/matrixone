@@ -269,7 +269,7 @@ type TxnStore interface {
 		id *common.ID, start, end uint32, pkVec containers.Vector, dt handle.DeleteType,
 	) error
 	TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error)
-	TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error)
+	//TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error)
 	GetByFilter(
 		ctx context.Context, dbId uint64, id uint64, filter *handle.Filter,
 	) (*common.ID, uint32, error)

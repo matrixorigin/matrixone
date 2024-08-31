@@ -322,17 +322,6 @@ func (store *txnStore) RangeDelete(
 	return db.RangeDelete(id, start, end, pkVec, dt)
 }
 
-func (store *txnStore) TryDeleteByDeltaloc(
-	id *common.ID, deltaloc objectio.Location,
-) (ok bool, err error) {
-	store.IncreateWriteCnt()
-	db, err := store.getOrSetDB(id.DbID)
-	if err != nil {
-		return
-	}
-	return db.TryDeleteByDeltaloc(id, deltaloc)
-}
-
 func (store *txnStore) TryDeleteByStats(
 	id *common.ID, stats objectio.ObjectStats,
 ) (ok bool, err error) {
