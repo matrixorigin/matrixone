@@ -20,7 +20,7 @@ import (
 )
 
 func PrepareCommand() *cobra.Command {
-	inspect := commands.MoInspectArg{}
+	inspect := commands.InspectArg{}
 
 	return inspect.PrepareCommand()
 }

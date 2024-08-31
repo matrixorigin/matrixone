@@ -245,10 +245,10 @@ func initCommand(_ context.Context, inspectCtx *InspectContext) *cobra.Command {
 	return rootCmd
 }
 
-type MoInspectArg struct {
+type InspectArg struct {
 }
 
-func (c *MoInspectArg) PrepareCommand() *cobra.Command {
+func (c *InspectArg) PrepareCommand() *cobra.Command {
 	moInspectCmd := &cobra.Command{
 		Use:   "inspect",
 		Short: "Mo inspect",
@@ -269,15 +269,15 @@ func (c *MoInspectArg) PrepareCommand() *cobra.Command {
 	return moInspectCmd
 }
 
-func (c *MoInspectArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *InspectArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *MoInspectArg) String() string {
+func (c *InspectArg) String() string {
 	return c.Usage()
 }
 
-func (c *MoInspectArg) Usage() (res string) {
+func (c *InspectArg) Usage() (res string) {
 	res += "Commands:\n"
 	res += fmt.Sprintf("  %-15v object analysis tool \n", "object")
 	res += fmt.Sprintf("  %-15v table analysis tool \n", "table")
@@ -293,6 +293,6 @@ func (c *MoInspectArg) Usage() (res string) {
 	return
 }
 
-func (c *MoInspectArg) Run() (err error) {
+func (c *InspectArg) Run() (err error) {
 	return
 }
