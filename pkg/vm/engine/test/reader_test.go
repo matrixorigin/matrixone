@@ -346,9 +346,11 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		}
 		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, mp, nil, ret)
 		require.NoError(t, err)
+		require.True(t, ret.Allocated() > 0)
 
 		require.Equal(t, 2, ret.RowCount())
 		require.NoError(t, txn.Commit(ctx))
+		ret.Clean(mp)
 	}
 	{
 		_, relation, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
