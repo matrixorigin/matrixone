@@ -146,6 +146,29 @@ func updateDataBatch(bat *batch.Batch, mp *mpool.MPool) {
 	bat.Vecs[len(bat.Vecs)-2].Free(mp) // rowid
 	bat.Vecs = append(bat.Vecs[:len(bat.Vecs)-2], bat.Vecs[len(bat.Vecs)-1])
 }
+func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, mp *mpool.MPool) {
+	var pk *vector.Vector
+	for _, vec := range bat.Vecs {
+		if vec.GetType().Oid != types.T_Rowid {
+			pk = vec
+		} else {
+			vec.Free(mp)
+		}
+	}
+	commitTS, err := vector.NewConstFixed(types.T_TS.ToType(), committs, pk.Length(), mp)
+	if err != nil {
+		return
+	}
+	bat.Vecs = []*vector.Vector{pk, commitTS}
+	bat.Attrs = []string{catalog.AttrPKVal, catalog.AttrCommitTs}
+}
+func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
+	commitTSVec, err := vector.NewConstFixed(types.T_TS.ToType(), commitTS, bat.Vecs[0].Length(), mp)
+	if err != nil {
+		return
+	}
+	bat.Vecs = append(bat.Vecs, commitTSVec)
+}
 
 type ObjectHandle struct {
 	entry       *ObjectEntry
@@ -175,12 +198,17 @@ func (r *ObjectHandle) Next() (bat *batch.Batch, err error) {
 		return
 	}
 	if r.entry.ObjectStats.GetCNCreated() {
-		panic("todo")
-	}
-	if r.isTombstone {
-		updateTombstoneBatch(bat, r.mp)
+		if r.isTombstone {
+			updateCNTombstoneBatch(bat, r.entry.CreateTime, r.mp)
+		} else {
+			updateCNDataBatch(bat, r.entry.CreateTime, r.mp)
+		}
 	} else {
-		updateDataBatch(bat, r.mp)
+		if r.isTombstone {
+			updateTombstoneBatch(bat, r.mp)
+		} else {
+			updateDataBatch(bat, r.mp)
+		}
 	}
 	r.blockOffset++
 	return

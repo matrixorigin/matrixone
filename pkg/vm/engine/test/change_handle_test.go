@@ -221,3 +221,100 @@ func checkInsertBatch(userBatch *containers.Batch, bat *batch.Batch, t *testing.
 	assert.Equal(t, bat.Vecs[len(userBatch.Vecs)].GetType().Oid, types.T_TS)
 	assert.Equal(t, bat.Vecs[len(userBatch.Vecs)].Length(), length)
 }
+
+func TestChangesHandle3(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test1"
+		databaseName = "db1"
+	)
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+	startTS := taeHandler.GetDB().TxnMgr.Now()
+	schema := catalog2.MockSchemaAll(10, 0)
+	schema.Name = tableName
+	bat := catalog2.MockBatch(schema, 100)
+
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	rel.GetMeta().(*catalog2.TableEntry).GetLastestSchema(false).BlockMaxRows = 5
+	rel.GetMeta().(*catalog2.TableEntry).GetLastestSchema(true).BlockMaxRows = 5
+	require.Nil(t, rel.Append(ctx, bat))
+	require.Nil(t, txn.Commit(ctx))
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	iter := rel.MakeObjectIt(false)
+	for iter.Next() {
+		obj := iter.GetObject()
+		err = rel.RangeDelete(obj.Fingerprint(), 0, 0, handle.DT_Normal)
+	}
+	require.Nil(t, err)
+	require.Nil(t, txn.Commit(ctx))
+
+	testutil2.CompactBlocks(t, accountId, taeHandler.GetDB(), databaseName, schema, true)
+
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	require.Nil(t, err)
+
+	// check partition state, before flush
+	{
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+
+		handle, err := rel.CollectChanges(types.TS{}, taeHandler.GetDB().TxnMgr.Now())
+		assert.NoError(t, err)
+		batchCount := 0
+		for {
+			data, tombstone, hint, err := handle.Next()
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+				break
+			}
+			batchCount++
+			assert.NoError(t, err)
+			assert.Equal(t, hint, engine.Checkpoint)
+			assert.Nil(t, tombstone)
+			t.Log(data.Attrs)
+			checkInsertBatch(bat, data, t)
+			assert.Equal(t, data.Vecs[0].Length(), 80)
+		}
+		assert.Equal(t, batchCount, 1)
+		assert.NoError(t, handle.Close())
+
+		handle, err = rel.CollectChanges(startTS, taeHandler.GetDB().TxnMgr.Now())
+		assert.NoError(t, err)
+		batchCount = 0
+		for {
+			data, tombstone, hint, err := handle.Next()
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+				break
+			}
+			batchCount++
+			assert.NoError(t, err)
+			if batchCount > 4 {
+				assert.Nil(t, tombstone)
+			} else {
+				assert.Equal(t, hint, engine.Tail_wip)
+				checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
+				assert.Equal(t, tombstone.Vecs[0].Length(), 5)
+			}
+			checkInsertBatch(bat, data, t)
+			assert.Equal(t, data.Vecs[0].Length(), 5)
+		}
+		assert.Equal(t, batchCount, 20)
+		assert.NoError(t, handle.Close())
+	}
+}

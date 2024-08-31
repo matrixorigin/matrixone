@@ -55,6 +55,7 @@ type CheckpointChangesHandle struct {
 	mp     *mpool.MPool
 	reader engine.Reader
 	attrs  []string
+	isEnd  bool
 }
 
 func NewCheckpointChangesHandle(end types.TS, table *txnTable) (*CheckpointChangesHandle, error) {
@@ -69,6 +70,10 @@ func NewCheckpointChangesHandle(end types.TS, table *txnTable) (*CheckpointChang
 }
 
 func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Batch, hint engine.Hint, err error) {
+	if h.isEnd {
+		err = moerr.GetOkExpectedEOF()
+		return
+	}
 	hint = engine.Checkpoint
 	tblDef := h.table.GetTableDef(context.TODO())
 
@@ -82,7 +87,7 @@ func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Ba
 		return bat
 	}
 	data = buildBatch()
-	isEnd, err := h.reader.Read(
+	h.isEnd, err = h.reader.Read(
 		context.TODO(),
 		h.attrs,
 		nil,
@@ -91,10 +96,6 @@ func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Ba
 		data,
 	)
 	if err != nil {
-		return
-	}
-	if isEnd {
-		err = moerr.GetOkExpectedEOF()
 		return
 	}
 
