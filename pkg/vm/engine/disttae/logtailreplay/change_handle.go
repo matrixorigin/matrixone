@@ -81,11 +81,7 @@ func closeBatch(bat *batch.Batch, mp *mpool.MPool) {
 		}
 	}
 }
-func (r *BatchHandle) Close() {
-	// for _, bat := range r.batches {
-	// 	closeBatch(bat, r.mp)
-	// }
-}
+func (r *BatchHandle) Close() {}
 func (r *BatchHandle) Next() (data *batch.Batch, err error) {
 	data, err = r.next()
 	if err != nil {
@@ -130,8 +126,15 @@ func readObjects(stats objectio.ObjectStats, blockID uint32, fs fileservice.File
 	if isTombstone {
 		metaType = objectio.SchemaTombstone
 	}
-	loc := catalog.BuildLocation(stats, uint16(blockID), 8192) //TODO
-	bat, _, err = blockio.LoadOneBlock(ctx, fs, loc, metaType)
+	loc := catalog.BuildLocation(
+		stats,
+		uint16(blockID),
+		8192)
+	bat, _, err = blockio.LoadOneBlock(
+		ctx,
+		fs,
+		loc,
+		metaType)
 	return
 }
 
@@ -139,7 +142,9 @@ func updateTombstoneBatch(bat *batch.Batch, mp *mpool.MPool) {
 	bat.Vecs[0].Free(mp) // rowid
 	bat.Vecs[2].Free(mp) // phyaddr
 	bat.Vecs = []*vector.Vector{bat.Vecs[1], bat.Vecs[3]}
-	bat.Attrs = []string{catalog.AttrPKVal, catalog.AttrCommitTs}
+	bat.Attrs = []string{
+		catalog.AttrPKVal,
+		catalog.AttrCommitTs}
 	sortBatch(bat, 1, mp)
 }
 func updateDataBatch(bat *batch.Batch, mp *mpool.MPool) {
@@ -201,9 +206,17 @@ func (r *ObjectHandle) Next() (bat *batch.Batch, err error) {
 	}
 	if r.entry.ObjectStats.GetCNCreated() {
 		if r.isTombstone {
-			updateCNTombstoneBatch(bat, r.entry.CreateTime, r.mp)
+			updateCNTombstoneBatch(
+				bat,
+				r.entry.CreateTime,
+				r.mp,
+			)
 		} else {
-			updateCNDataBatch(bat, r.entry.CreateTime, r.mp)
+			updateCNDataBatch(
+				bat,
+				r.entry.CreateTime,
+				r.mp,
+			)
 		}
 	} else {
 		if r.isTombstone {
