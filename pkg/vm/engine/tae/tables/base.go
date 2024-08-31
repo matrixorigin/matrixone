@@ -517,6 +517,7 @@ func (obj *baseObject) GetValue(
 		if err != nil {
 			return
 		}
+		defer bat.Close()
 		err = txn.GetStore().FillInWorkspaceDeletes(obj.meta.Load().AsCommonID(), &bat.Deletes)
 		if err != nil {
 			return
@@ -540,5 +541,6 @@ func (obj *baseObject) GetValue(
 	if !isNull {
 		v = bat.Vecs[0].Get(row)
 	}
+	bat.Close()
 	return
 }

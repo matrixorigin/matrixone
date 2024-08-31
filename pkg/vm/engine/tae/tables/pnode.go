@@ -215,6 +215,11 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		if err != nil {
 			return err
 		}
+		defer func() {
+			for i := range vecs {
+				vecs[i].Close()
+			}
+		}()
 		var commitTSs []types.TS
 		if !persistedByCN {
 			commitTSs = vector.MustFixedCol[types.TS](vecs[2].GetDownstreamVector())
@@ -303,6 +308,11 @@ func (node *persistedNode) FillBlockTombstones(
 		if err != nil {
 			return err
 		}
+		defer func() {
+			for i := range vecs {
+				vecs[i].Close()
+			}
+		}()
 		var commitTSs []types.TS
 		if node.object.meta.Load().IsAppendable() {
 			commitTSVec, err := node.object.LoadPersistedCommitTS(uint16(tombstoneBlkID))
