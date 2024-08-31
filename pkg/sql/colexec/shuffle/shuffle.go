@@ -145,7 +145,10 @@ SENDLAST:
 func (shuffle *Shuffle) handleRuntimeFilter(proc *process.Process) error {
 	if shuffle.RuntimeFilterSpec != nil && !shuffle.ctr.runtimeFilterHandled {
 		shuffle.msgReceiver = message.NewMessageReceiver([]int32{shuffle.RuntimeFilterSpec.Tag}, message.AddrBroadCastOnCurrentCN(), proc.GetMessageBoard())
-		msgs, ctxDone := shuffle.msgReceiver.ReceiveMessage(true, proc.Ctx)
+		msgs, ctxDone, err := shuffle.msgReceiver.ReceiveMessage(true, proc.Ctx)
+		if err != nil {
+			return err
+		}
 		if ctxDone {
 			shuffle.ctr.runtimeFilterHandled = true
 			return nil
