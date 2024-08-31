@@ -3177,9 +3177,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionTableName:
 			oldName := tableDef.Name
 			newName := string(opt.Name.ToTableName().ObjectName)
-			_, tableDef := ctx.Resolve(databaseName, newName, nil)
-			if tableDef != nil {
-				return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
+			if oldName != newName {
+				_, tableDef := ctx.Resolve(databaseName, newName, nil)
+				if tableDef != nil {
+					return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
+				}
 			}
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterName{
