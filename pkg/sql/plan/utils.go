@@ -24,6 +24,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -2333,4 +2334,109 @@ func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
 		return true
 	}
 	return false
+}
+
+// a > current_time() + 1 and b < ? + c and d > ? + 2
+// =>
+// a > foldVal1 and b < foldVal2 + c and d > foldVal3
+func ReplaceFoldVal(proc *process.Process, expr *Expr, executorMap map[int]colexec.ExpressionExecutor) (bool, error) {
+	allCanFold := true
+	var err error
+
+	fn := expr.GetF()
+	if fn == nil {
+		// switch ef := expr.Expr.(type) {
+		switch expr.Expr.(type) {
+		case *plan.Expr_List:
+			//@todo need Expr_List executor
+			// for i := range ef.List.List {
+			// 	if !rule.IsConstant(ef.List.List[i], true) {
+			// 		return false, nil
+			// 	}
+			// }
+			// return true, nil
+			return false, nil
+		case *plan.Expr_Col:
+			return false, nil
+		case *plan.Expr_Vec:
+			return false, nil
+		default:
+			return true, nil
+		}
+	}
+
+	overloadID := fn.Func.GetObj()
+	f, exists := function.GetFunctionByIdWithoutError(overloadID)
+	if !exists {
+		panic("ReplaceFoldVal: function not exist")
+	}
+	if f.IsAgg() || f.IsWin() {
+		panic("ReplaceFoldVal: agg or window function")
+	}
+
+	argFold := make([]bool, len(fn.Args))
+	for i := range fn.Args {
+		argFold[i], err = ReplaceFoldVal(proc, fn.Args[i], executorMap)
+		if err != nil {
+			return false, err
+		}
+		if !argFold[i] {
+			allCanFold = false
+		}
+	}
+
+	if allCanFold {
+		return true, nil
+	} else {
+		for i, canFold := range argFold {
+			if canFold {
+				exprExecutor, err := colexec.NewExpressionExecutor(proc, fn.Args[i])
+				if err != nil {
+					return false, err
+				}
+				newID := len(executorMap)
+				executorMap[newID] = exprExecutor
+
+				fn.Args[i] = &plan.Expr{
+					Typ: fn.Args[i].Typ,
+					Expr: &plan.Expr_Fold{
+						Fold: &plan.FoldVal{
+							Id: int32(newID),
+						},
+					},
+					AuxId:       fn.Args[i].AuxId,
+					Ndv:         fn.Args[i].Ndv,
+					Selectivity: fn.Args[i].Selectivity,
+				}
+
+			}
+		}
+		return false, nil
+	}
+}
+
+func EvalFoldValExpr(proc *process.Process, expr *Expr, executorMap map[int]colexec.ExpressionExecutor) (err error) {
+	switch ef := expr.Expr.(type) {
+	case *plan.Expr_Fold:
+		var vec *vector.Vector
+		exe, ok := executorMap[int(ef.Fold.Id)]
+		if !ok {
+			panic("EvalFoldVal: fold id not exist")
+		}
+		vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		if err != nil {
+			return err
+		}
+		ptr := uintptr(unsafe.Pointer(vec))
+		ef.Fold.Ptr = uint64(ptr)
+	case *plan.Expr_F:
+		for i := range ef.F.Args {
+			err = EvalFoldValExpr(proc, ef.F.Args[i], executorMap)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }

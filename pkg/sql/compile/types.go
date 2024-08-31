@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -82,6 +83,7 @@ type Source struct {
 	Rel                    engine.Relation
 	Bat                    *batch.Batch
 	FilterExpr             *plan.Expr // todo: change this to []*plan.Expr
+	BlockFilter            []*plan.Expr
 	node                   *plan.Node
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
@@ -301,6 +303,8 @@ type Compile struct {
 	metaTables   map[string]struct{}
 	lockTables   map[uint64]*plan.LockTarget
 	disableRetry bool
+
+	rangesExprExecutor map[int]colexec.ExpressionExecutor
 
 	isPrepare bool
 }

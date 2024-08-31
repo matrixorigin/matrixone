@@ -602,9 +602,17 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			panic("can not expand ranges on remote pipeline!")
 		}
 
+		for _, e := range s.DataSource.BlockFilter {
+			err = plan2.EvalFoldValExpr(s.Proc, e, c.rangesExprExecutor)
+			if err != nil {
+				return err
+			}
+		}
+
 		newExprList := plan2.DeepCopyExprList(inExprList)
 		if len(s.DataSource.node.BlockFilterList) > 0 {
-			newExprList = append(newExprList, s.DataSource.node.BlockFilterList...)
+			// newExprList = append(newExprList, s.DataSource.node.BlockFilterList...)
+			newExprList = append(newExprList, s.DataSource.BlockFilter...)
 		}
 
 		relData, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList)

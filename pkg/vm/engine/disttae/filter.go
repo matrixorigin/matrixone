@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"sort"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -111,21 +113,56 @@ func isSortedKey(colDef *plan.ColDef) (isPK, isSorted bool) {
 func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *process.Process) ([][]byte, bool) {
 	vals := make([][]byte, len(exprs))
 	for idx := range exprs {
-		constVal := getConstValueByExpr(exprs[idx], proc)
-		if constVal == nil {
-			return nil, false
-		}
-		colType := types.T(colDef.Typ.Id)
-		val, ok := evalLiteralExpr2(constVal, colType)
-		if !ok {
-			return nil, ok
-		}
+		if fExpr, ok := exprs[idx].Expr.(*plan.Expr_Fold); ok {
+			ptr := uintptr(fExpr.Fold.Ptr)
+			vec := (*vector.Vector)(unsafe.Pointer(ptr))
+			constVal := rule.GetConstantValue(vec, true, 0)
+			if constVal == nil {
+				return nil, false
+			}
+			colType := types.T(colDef.Typ.Id)
+			val, ok := evalLiteralExpr2(constVal, colType)
+			if !ok {
+				return nil, ok
+			}
 
-		vals[idx] = val
+			vals[idx] = val
+		} else {
+			constVal := getConstValueByExpr(exprs[idx], proc)
+			if constVal == nil {
+				return nil, false
+			}
+			colType := types.T(colDef.Typ.Id)
+			val, ok := evalLiteralExpr2(constVal, colType)
+			if !ok {
+				return nil, ok
+			}
+
+			vals[idx] = val
+		}
 	}
 
 	return vals, true
 }
+
+// func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *process.Process) ([][]byte, bool) {
+// 	vals := make([][]byte, len(exprs))
+// 	for idx := range exprs {
+// 		constVal := getConstValueByExpr(exprs[idx], proc)
+// 		if constVal == nil {
+// 			return nil, false
+// 		}
+// 		colType := types.T(colDef.Typ.Id)
+// 		val, ok := evalLiteralExpr2(constVal, colType)
+// 		if !ok {
+// 			return nil, ok
+// 		}
+
+// 		vals[idx] = val
+// 	}
+
+// 	return vals, true
+// }
 
 func mustColVecValueFromBinaryFuncExpr(proc *process.Process, expr *plan.Expr_F) (*plan.Expr_Col, []byte, bool) {
 	var (

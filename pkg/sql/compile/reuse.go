@@ -17,6 +17,7 @@ package compile
 import (
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -31,13 +32,14 @@ func init() {
 	reuse.CreatePool[Compile](
 		func() *Compile {
 			return &Compile{
-				affectRows:   &atomic.Uint64{},
-				counterSet:   &perfcounter.CounterSet{},
-				nodeRegs:     make(map[[2]int32]*process.WaitRegister),
-				stepRegs:     make(map[int32][][2]int32),
-				metaTables:   make(map[string]struct{}),
-				lockTables:   make(map[uint64]*plan.LockTarget),
-				MessageBoard: message.NewMessageBoard(),
+				affectRows:         &atomic.Uint64{},
+				counterSet:         &perfcounter.CounterSet{},
+				nodeRegs:           make(map[[2]int32]*process.WaitRegister),
+				stepRegs:           make(map[int32][][2]int32),
+				metaTables:         make(map[string]struct{}),
+				lockTables:         make(map[uint64]*plan.LockTarget),
+				rangesExprExecutor: make(map[int]colexec.ExpressionExecutor),
+				MessageBoard:       message.NewMessageBoard(),
 			}
 		},
 		func(c *Compile) {
