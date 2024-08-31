@@ -218,6 +218,7 @@ func TestMergeDelete(t *testing.T) {
 
 	argument2.Reset(proc, false, err)
 	resetChildren(&argument2, batch2)
+	argument2.OpAnalyzer = process.NewAnalyzer(0, false, false, "mergedelete")
 	_, err = argument2.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(45), argument2.AffectedRows())

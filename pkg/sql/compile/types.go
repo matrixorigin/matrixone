@@ -181,9 +181,6 @@ type Scope struct {
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
-	BuildIdx   int
-	ShuffleIdx int
-
 	PartialResults     []any
 	PartialResultTypes []types.T
 }

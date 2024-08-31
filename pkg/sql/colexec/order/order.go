@@ -104,7 +104,9 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 			return err
 		}
 	}
-	result.Batch = ctr.batWaitForSort
+	ctr.rbat = ctr.batWaitForSort
+	result.Batch = ctr.rbat
+	ctr.batWaitForSort = nil
 	return nil
 }
 
@@ -171,6 +173,11 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 	defer analyzer.Stop()
 
 	ctr := &order.ctr
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(proc.GetMPool())
+		ctr.rbat = nil
+	}
+
 	if ctr.state == vm.Build {
 		for {
 			input, err := vm.ChildrenCall(order.GetChildren(0), proc, analyzer)

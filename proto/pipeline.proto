@@ -596,8 +596,6 @@ message Pipeline {
   repeated int32 nil_batch_cnt = 14;
 
   repeated UuidToRegIdx uuids_to_reg_idx = 15;
-  int32 build_idx = 16;
-  int32 shuffle_idx = 17;
 }
 
 message WrapNode {

@@ -467,12 +467,10 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		chp[i].IsEnd = true
 	}
 
-	buildScope := c.newJoinBuildScope(s, int32(mcpu))
 	ms, ss := newParallelScope(s, c)
 	probeScope := c.newBroadcastJoinProbeScope(s, ss)
 
 	ms.PreScopes = append(ms.PreScopes, chp...)
-	ms.PreScopes = append(ms.PreScopes, buildScope)
 	ms.PreScopes = append(ms.PreScopes, probeScope)
 
 	return ms, nil
