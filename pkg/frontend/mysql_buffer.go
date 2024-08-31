@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	fixBufferSize = 1024 * 1024
+	fixBufferSize = 1024
 )
 
 type SessionConn interface {
@@ -90,6 +90,7 @@ type Conn struct {
 	// packet data size, used to count header
 	packetLength      int
 	maxBytesToFlush   int
+	readIndex         int
 	packetInBuf       int
 	allowedPacketSize int
 	timeout           time.Duration
@@ -194,7 +195,7 @@ func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
 			c.loadLocalBuf = nil
 		}
 	}()
-	err = c.ReadBytes(c.header[:], HeaderLengthOfTheProtocol)
+	err = c.ReadIntoSlices(c.header[:], HeaderLengthOfTheProtocol)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +217,7 @@ func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
 		}
 	}
 
-	err = c.ReadBytes(c.loadLocalBuf, packetLength)
+	err = c.ReadIntoSlices(c.loadLocalBuf, packetLength)
 	if err != nil {
 		return nil, err
 	}
@@ -229,34 +230,30 @@ func (c *Conn) Read() ([]byte, error) {
 	payloads := make([][]byte, 0)
 	var firstPayload []byte
 	var finalPayload []byte
-	var header, payload []byte
+	var payload []byte
 	var err error
-	var n, packetLength, readLength, totalLength int
+	var packetLength, totalLength int
+	var headerPrepared bool
 	defer func() {
 		for i := range payloads {
 			c.allocator.Free(payloads[i])
 		}
 	}()
+	packetLength, headerPrepared = c.GetPacketLengthFromReadBuf()
 
-	// Check if the packet header has been read into buffer
-	if c.fixBuf.writeIndex >= HeaderLengthOfTheProtocol {
-		header = c.fixBuf.data[:HeaderLengthOfTheProtocol]
-		packetLength = int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
-		c.sequenceId = header[3] + 1
-	} else {
-		packetLength = int(MaxPayloadSize)
+	if c.ReadBufLen() < HeaderLengthOfTheProtocol+packetLength {
+		c.CleanConsumedPacket()
 	}
+
 	// Read at least 1 packet or until there is no space in the buffer
-	for c.fixBuf.writeIndex < HeaderLengthOfTheProtocol+packetLength && c.fixBuf.writeIndex < fixBufferSize {
-		n, err = c.ReadFromConn(c.fixBuf.data[c.fixBuf.writeIndex:])
+	for c.ReadBufLen() < HeaderLengthOfTheProtocol+packetLength && !c.ReadBufIsFull() {
+		err = c.ReadIntoBuf()
 		if err != nil {
 			return nil, err
 		}
-		c.fixBuf.writeIndex += n
-		if c.fixBuf.writeIndex >= HeaderLengthOfTheProtocol {
-			header = c.fixBuf.data[:HeaderLengthOfTheProtocol]
-			packetLength = int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
-			c.sequenceId = header[3] + 1
+		// Check if the packet header has been read into buffer
+		if !headerPrepared {
+			packetLength, headerPrepared = c.GetPacketLengthFromReadBuf()
 		}
 	}
 
@@ -266,36 +263,34 @@ func (c *Conn) Read() ([]byte, error) {
 		return nil, err
 	}
 
-	readLength = c.fixBuf.writeIndex - HeaderLengthOfTheProtocol
-	firstPayload = make([]byte, packetLength)
-	copy(firstPayload, c.fixBuf.data[HeaderLengthOfTheProtocol:])
-	if packetLength <= readLength {
-		if packetLength < readLength {
-			// CASE 1: packet length < 1MB, fixBuf have more than 1 packet, c.fixBuf.writeIndex > HeaderLengthOfTheProtocol + packetLength
-			// So we keep next packet data
-			copy(c.fixBuf.data, c.fixBuf.data[packetLength+HeaderLengthOfTheProtocol:c.fixBuf.writeIndex])
-			c.fixBuf.writeIndex -= packetLength + HeaderLengthOfTheProtocol
-		} else {
-			// CASE 2: packet length < 1MB, fixBuf just have 1 packet, c.fixBuf.writeIndex > HeaderLengthOfTheProtocol = packetLength
-			// indicates that fixBuf have no data
-			c.fixBuf.writeIndex = 0
-		}
+	firstPayload = c.CopyFromBuf(packetLength)
+
+	if packetLength+HeaderLengthOfTheProtocol < c.ReadBufLen() {
+		// CASE 1: packet length < 1MB, fixBuf have more than 1 packet, c.fixBuf.writeIndex > HeaderLengthOfTheProtocol + packetLength
+		// So we keep next packet data
+		c.IncReadIndex(Min(packetLength+HeaderLengthOfTheProtocol, c.ReadBufLen()))
+	} else if packetLength+HeaderLengthOfTheProtocol == c.ReadBufLen() {
+		// CASE 2: packet length < 1MB, fixBuf just have 1 packet, c.fixBuf.writeIndex > HeaderLengthOfTheProtocol = packetLength
+		// indicates that fixBuf have no data, clean it
+		c.ResetReadBufIndex()
 	} else {
 		// CASE 3: packet length > 1MB, c.fixBuf.writeIndex < HeaderLengthOfTheProtocol + packetLength
-		c.fixBuf.writeIndex = 0
 		// NOTE: only read the remaining bytes of the current packet, do not read the next packet
-		err = c.ReadBytes(firstPayload[readLength:], packetLength-readLength)
+		err = c.ReadIntoSlices(firstPayload[c.ReadBufLen()-HeaderLengthOfTheProtocol:], packetLength-(c.ReadBufLen()-HeaderLengthOfTheProtocol))
 		if err != nil {
 			return nil, err
 		}
+		c.ResetReadBufIndex()
 	}
+
 	if packetLength != int(MaxPayloadSize) {
 		return firstPayload, nil
 	}
 
+	// ======================== Packet > 16MB ========================
 	for {
 		// If total package length > 16MB, only one package will be read each iter
-		err = c.ReadBytes(c.header[:], HeaderLengthOfTheProtocol)
+		err = c.ReadIntoSlices(c.header[:], HeaderLengthOfTheProtocol)
 		if err != nil {
 			return nil, err
 		}
@@ -337,6 +332,55 @@ func (c *Conn) Read() ([]byte, error) {
 	return finalPayload, nil
 }
 
+// IncReadIndex increase the read index of read buffer
+func (c *Conn) IncReadIndex(n int) {
+	c.readIndex += n
+}
+
+// ReadBufLen get unconsumed byte from the read buf
+func (c *Conn) ReadBufLen() int {
+	return c.fixBuf.writeIndex - c.readIndex
+}
+
+// GetPacketLengthFromReadBuf try to get packet header from read buf
+func (c *Conn) GetPacketLengthFromReadBuf() (int, bool) {
+	if c.ReadBufLen() < HeaderLengthOfTheProtocol {
+		return int(MaxPayloadSize), false
+	}
+	header := c.fixBuf.data[c.readIndex : c.readIndex+HeaderLengthOfTheProtocol]
+	packetLength := int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
+	c.sequenceId = header[3] + 1
+	return packetLength, true
+}
+
+// CleanConsumedPacket clean up the packet that have been consumed and move that have not been consumed forward
+func (c *Conn) CleanConsumedPacket() {
+	if c.readIndex != 0 {
+		copy(c.fixBuf.data, c.fixBuf.data[c.readIndex:c.fixBuf.writeIndex])
+		c.fixBuf.writeIndex -= c.readIndex
+		c.readIndex = 0
+	}
+}
+
+// ResetReadBufIndex set read and write index = 0
+func (c *Conn) ResetReadBufIndex() {
+	c.readIndex = 0
+	c.fixBuf.writeIndex = 0
+	return
+}
+
+// ReadBufIsFull check read buf full or not
+func (c *Conn) ReadBufIsFull() bool {
+	return c.fixBuf.writeIndex == fixBufferSize
+}
+
+// CopyFromBuf make memory for a payload and copy from read buf
+func (c *Conn) CopyFromBuf(packetLength int) []byte {
+	data := make([]byte, packetLength)
+	copy(data, c.fixBuf.data[c.readIndex+HeaderLengthOfTheProtocol:])
+	return data
+}
+
 // ReadOnePayload allocates memory for a payload and reads it
 func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
 	var err error
@@ -356,7 +400,7 @@ func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
 		return nil, err
 	}
 
-	err = c.ReadBytes(payload, packetLength)
+	err = c.ReadIntoSlices(payload, packetLength)
 	if err != nil {
 		return nil, err
 	}
@@ -364,8 +408,8 @@ func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
 	return payload, nil
 }
 
-// ReadBytes reads specified bytes from the network
-func (c *Conn) ReadBytes(buf []byte, Length int) error {
+// ReadIntoSlices reads specified bytes from the network
+func (c *Conn) ReadIntoSlices(buf []byte, Length int) error {
 	var err error
 	var n int
 	var readLength int
@@ -378,6 +422,15 @@ func (c *Conn) ReadBytes(buf []byte, Length int) error {
 
 	}
 	return err
+}
+
+func (c *Conn) ReadIntoBuf() error {
+	n, err := c.ReadFromConn(c.fixBuf.data[c.fixBuf.writeIndex:])
+	if err != nil {
+		return err
+	}
+	c.fixBuf.writeIndex += n
+	return nil
 }
 
 // ReadFromConn is the base method for receiving from network, calling net.Conn.Read().

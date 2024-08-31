@@ -43,7 +43,7 @@ func ReadPacketForTest(c *Conn) ([]byte, error) {
 
 	for {
 		var packetLength int
-		err = c.ReadBytes(c.header[:], HeaderLengthOfTheProtocol)
+		err = c.ReadIntoSlices(c.header[:], HeaderLengthOfTheProtocol)
 		if err != nil {
 			return nil, err
 		}
@@ -62,7 +62,7 @@ func ReadPacketForTest(c *Conn) ([]byte, error) {
 
 		if totalLength != int(MaxPayloadSize) && len(payloads) == 0 {
 			signalPayload := make([]byte, totalLength)
-			err = c.ReadBytes(signalPayload, totalLength)
+			err = c.ReadIntoSlices(signalPayload, totalLength)
 			if err != nil {
 				return nil, err
 			}
