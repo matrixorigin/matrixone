@@ -178,6 +178,11 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 		ctr.rbat = nil
 	}
 
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(proc.GetMPool())
+		ctr.rbat = nil
+	}
+
 	if ctr.state == vm.Build {
 		for {
 			input, err := vm.ChildrenCall(order.GetChildren(0), proc, analyzer)
