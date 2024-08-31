@@ -209,6 +209,11 @@ func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, name string) bool {
 	if len(snapVec) == 0 {
 		return false
 	}
+	if obj.dropTS.IsEmpty() {
+		logutil.Debug("[soft GC]Snapshot Refers", zap.String("name", name), zap.String("snapTS", snapVec[0].ToString()),
+			zap.String("createTS", obj.createTS.ToString()), zap.String("dropTS", obj.dropTS.ToString()))
+		return true
+	}
 	left, right := 0, len(snapVec)-1
 	for left <= right {
 		mid := left + (right-left)/2
