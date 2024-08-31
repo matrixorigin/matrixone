@@ -78,11 +78,9 @@ func NewTestDisttaeEngine(
 	}
 
 	if de.mp == nil {
-		var err error
-		if de.mp, err = mpool.NewMPool("test", 0, mpool.NoFixed); err != nil {
-			return nil, err
-		}
+		de.mp, _ = mpool.NewMPool("test", 0, mpool.NoFixed)
 	}
+	mp := de.mp
 
 	de.ctx, de.cancel = context.WithCancel(ctx)
 
