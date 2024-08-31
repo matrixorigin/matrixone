@@ -3,8 +3,8 @@ create database d1;
 use d1;
 drop table if exists t1;
 drop table if exists t2;
-create table t1(c1 int, c2 int, c3 int) cluster by c1;
-create table t2(c1 int, c2 int, c3 int) cluster by c1;
+create table t1(c1 int not null, c2 int not null, c3 int not null) cluster by c1;
+create table t2(c1 int not null, c2 int not null, c3 int not null) cluster by c1;
 insert into t1 select *,*,* from generate_series(10000000) g;
 insert into t2 select *,*,* from generate_series(9000000) g;
 -- @separator:table
@@ -36,4 +36,22 @@ select count(*) from t1 group by c1 limit 5;
 -- @separator:table
 explain select count(*) from t1 group by c2 limit 5;
 select count(*) from t1 group by c2 limit 5;
+-- @separator:table
+explain select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
+select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
+-- @separator:table
+explain select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 7000000 );
+select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 7000000 );
+-- @separator:table
+explain select count(*) from t1 where t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 6000000 );
+select count(*) from t1 where  t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 6000000 );
+-- @separator:table
+explain select count(*) from t1 where t1.c1 <300000 and  t1.c2 in ( select c2 from t2 where t2.c3>100000 );
+select count(*) from t1 where t1.c1 <300000 and  t1.c2 in ( select c2 from t2 where t2.c3>100000 );
+-- @separator:table
+explain select count(*) from t1 left join t2 on t1.c1=t2.c1 where t1.c3 >5000000;
+select count(*) from t1 left join t2 on t1.c1=t2.c1 where t1.c3 >5000000;
+-- @separator:table
+explain select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
+select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
 drop database if exists d1;
