@@ -148,6 +148,8 @@ const (
 
 	//MO_Pitr
 	MO_PITR = "mo_pitr"
+
+	MO_RETENTION = "mo_retention"
 )
 
 const (
