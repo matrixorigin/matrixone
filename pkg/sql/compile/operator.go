@@ -1396,11 +1396,11 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 	}
 
 	for i, s := range target {
-		if isSameCN(s.NodeInfo.Addr, s.NodeInfo.Addr) {
+		if isSameCN(s.NodeInfo.Addr, source.NodeInfo.Addr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
 			if !hasRemote {
-				s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = s.NodeInfo.Mcpu
+				s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = source.NodeInfo.Mcpu
 			}
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 			arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
@@ -1417,7 +1417,7 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
 				Idx:      idx,
 				Uuid:     newUuid,
-				FromAddr: s.NodeInfo.Addr,
+				FromAddr: source.NodeInfo.Addr,
 			})
 		}
 	}
