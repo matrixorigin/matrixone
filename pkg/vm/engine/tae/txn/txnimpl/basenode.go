@@ -15,41 +15,16 @@
 package txnimpl
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 const MaxNodeRows = 10000
-
-type InsertNode interface {
-	Close() error
-	Append(data *containers.Batch, offset uint32) (appended uint32, err error)
-	RangeDelete(start, end uint32) error
-	IsRowDeleted(row uint32) bool
-	IsPersisted() bool
-	PrintDeletes() string
-	GetColumnDataByIds([]int, *mpool.MPool) (*containers.Batch, error)
-	GetColumnDataById(context.Context, int, *mpool.MPool) (*containers.Batch, error)
-	Prefetch(idxes []uint16) error
-	FillBlockView(view *containers.Batch, colIdxes []int, mp *mpool.MPool) (err error)
-	FillColumnView(*containers.Batch, int, *mpool.MPool) error
-	Window(start, end uint32) (*containers.Batch, error)
-	WindowColumn(start, end uint32, pos int) (containers.Vector, error)
-	Rows() uint32
-	GetValue(col int, row uint32) (any, bool, error)
-	MakeCommand(uint32) (txnif.TxnCmd, error)
-	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo
-	GetAppends() []*appendInfo
-	GetTxn() txnif.AsyncTxn
-}
 
 type appendInfo struct {
 	seq              uint32

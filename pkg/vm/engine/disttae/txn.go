@@ -116,7 +116,7 @@ func (txn *Transaction) WriteBatch(
 		}
 		txn.genBlock()
 		len := bat.RowCount()
-		genRowidVec = txn.proc.GetVector(types.T_Rowid.ToType())
+		genRowidVec = vector.NewVec(types.T_Rowid.ToType())
 		for i := 0; i < len; i++ {
 			if err := vector.AppendFixed(genRowidVec, txn.genRowId(), false,
 				txn.proc.Mp()); err != nil {
@@ -981,22 +981,36 @@ func (txn *Transaction) compactionBlksLocked() error {
 //}
 
 // TODO::remove it after workspace refactor.
-func (txn *Transaction) getUncommittedS3Tombstone(mp map[types.Blockid][]objectio.Location) (err error) {
+func (txn *Transaction) getUncommittedS3Tombstone(
+	statsSlice *objectio.ObjectStatsSlice,
+) (err error) {
 	txn.blockId_tn_delete_metaLoc_batch.RLock()
 	defer txn.blockId_tn_delete_metaLoc_batch.RUnlock()
 
-	for bid, bats := range txn.blockId_tn_delete_metaLoc_batch.data {
-		for _, b := range bats {
-			vs, area := vector.MustVarlenaRawData(b.GetVector(0))
+	for _, bats := range txn.blockId_tn_delete_metaLoc_batch.data {
+		for _, bat := range bats {
+			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
 			for i := range vs {
 				loc, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
 				if err != nil {
 					return err
 				}
-				mp[bid] = append(mp[bid], loc)
+
+				stats := objectio.ObjectStats{}
+				if err = objectio.SetObjectStatsRowCnt(&stats, loc.Rows()); err != nil {
+					return err
+				}
+				if err = objectio.SetObjectStatsBlkCnt(&stats, 1); err != nil {
+					return err
+				}
+				if err = objectio.SetObjectStatsLocation(&stats, loc[:]); err != nil {
+					return err
+				}
+				statsSlice.Append(stats[:])
 			}
 		}
 	}
+
 	return nil
 }
 

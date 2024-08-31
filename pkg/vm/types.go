@@ -45,17 +45,12 @@ const (
 	Join
 	LoopJoin
 	Left
-	LoopLeft
 	Single
-	LoopSingle
 	Semi
 	RightSemi
-	LoopSemi
 	Anti
 	RightAnti
-	LoopAnti
 	Mark
-	LoopMark
 	IndexJoin
 	IndexBuild
 
@@ -149,28 +144,18 @@ func (op OpType) String() string {
 		return "LoopJoin"
 	case Left:
 		return "Left"
-	case LoopLeft:
-		return "LoopLeft"
 	case Single:
 		return "Single"
-	case LoopSingle:
-		return "LoopSingle"
 	case Semi:
 		return "Semi"
 	case RightSemi:
 		return "RightSemi"
-	case LoopSemi:
-		return "LoopSemi"
 	case Anti:
 		return "Anti"
 	case RightAnti:
 		return "RightAnti"
-	case LoopAnti:
-		return "LoopAnti"
 	case Mark:
 		return "Mark"
-	case LoopMark:
-		return "LoopMark"
 	case IndexJoin:
 		return "IndexJoin"
 	case IndexBuild:

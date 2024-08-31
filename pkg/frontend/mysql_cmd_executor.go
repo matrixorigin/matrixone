@@ -404,8 +404,17 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			if row[5], err = r.Size(ctx, disttae.AllColumns); err != nil {
 				return err
 			}
+		} else if r.GetTableDef(ctx).TableType == catalog.SystemViewRel {
+			for i := 0; i < 16; i++ {
+				// only remain name and created_time
+				if i == 0 || i == 10 {
+					continue
+				}
+				row[i] = nil
+			}
+			// comment
+			row[16] = "VIEW"
 		}
-
 		roleId := row[17].(uint32)
 		// role name
 		if tableName == catalog.MO_DATABASE || tableName == catalog.MO_TABLES || tableName == catalog.MO_COLUMNS {
@@ -2709,7 +2718,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc := ses.proc
 	proc.ReplaceTopCtx(execCtx.reqCtx)
 
-	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
 	proc.Base.Id = ses.getNextProcessId()
 	proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
