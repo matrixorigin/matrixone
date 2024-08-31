@@ -322,5 +322,5 @@ func TxnRanges(
 	relation engine.Relation,
 	exprs []*plan.Expr,
 ) (engine.RelData, error) {
-	return relation.Ranges(ctx, exprs, txn.GetWorkspace()..GetSnapshotWriteOffset())
-)
+	return relation.Ranges(ctx, exprs, txn.GetWorkspace().GetSnapshotWriteOffset())
+}
