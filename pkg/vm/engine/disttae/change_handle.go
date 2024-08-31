@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func (tbl *txnTable) CollectChanges(from, to types.TS) (engine.ChangesHandle, error) {
@@ -94,7 +95,18 @@ func (h *CheckpointChangesHandle) Next() (data *batch.Batch, tombstone *batch.Ba
 	}
 	if isEnd {
 		err = moerr.GetOkExpectedEOF()
+		return
 	}
+
+	committs, err := vector.NewConstFixed(types.T_TS.ToType(), h.end, data.Vecs[0].Length(), h.mp)
+	if err != nil {
+		data.Clean(h.mp)
+		return
+	}
+	rowidVec := data.Vecs[len(data.Vecs)-1]
+	rowidVec.Free(h.mp)
+	data.Vecs[len(data.Vecs)-1] = committs
+	data.Attrs[len(data.Attrs)-1] = catalog.AttrCommitTs
 	return
 }
 func (h *CheckpointChangesHandle) Close() error {

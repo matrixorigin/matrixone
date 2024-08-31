@@ -56,7 +56,7 @@ type BatchHandle struct {
 }
 
 func NewRowHandle(data *batch.Batch, maxRow uint32, mp *mpool.MPool) (handle *BatchHandle, err error) {
-	err = sortBatch(data, 1, mp)
+	err = sortBatch(data, len(data.Vecs)-1, mp)
 	if err != nil {
 		return
 	}
@@ -135,6 +135,18 @@ func readObjects(stats objectio.ObjectStats, blockID uint32, fs fileservice.File
 	return
 }
 
+func updateTombstoneBatch(bat *batch.Batch, mp *mpool.MPool) {
+	bat.Vecs[0].Free(mp) // rowid
+	bat.Vecs[2].Free(mp) // phyaddr
+	bat.Vecs = []*vector.Vector{bat.Vecs[1], bat.Vecs[3]}
+	bat.Attrs = []string{catalog.AttrPKVal, catalog.AttrCommitTs}
+	sortBatch(bat, 1, mp)
+}
+func updateDataBatch(bat *batch.Batch, mp *mpool.MPool) {
+	bat.Vecs[len(bat.Vecs)-2].Free(mp) // rowid
+	bat.Vecs = append(bat.Vecs[:len(bat.Vecs)-2], bat.Vecs[len(bat.Vecs)-1])
+}
+
 type ObjectHandle struct {
 	entry       *ObjectEntry
 	blockOffset uint32
@@ -154,19 +166,23 @@ func newObjectHandle(entry *ObjectEntry, fs fileservice.FileService, tombstone b
 
 func (r *ObjectHandle) Close() {
 }
-func (r *ObjectHandle) Next() (batch *batch.Batch, err error) {
+func (r *ObjectHandle) Next() (bat *batch.Batch, err error) {
 	if r.blockOffset == r.entry.BlkCnt() {
 		return nil, moerr.GetOkExpectedEOF()
 	}
-	batch, err = readObjects(r.entry.ObjectStats, r.blockOffset, r.fs, r.isTombstone)
+	bat, err = readObjects(r.entry.ObjectStats, r.blockOffset, r.fs, r.isTombstone)
 	if err != nil {
 		return
 	}
-	r.blockOffset++
-	if r.entry.ObjectStats.GetCNCreated() || !r.isTombstone {
-		return
+	if r.entry.ObjectStats.GetCNCreated() {
+		panic("todo")
 	}
-	sortBatch(batch, 3, r.mp)
+	if r.isTombstone {
+		updateTombstoneBatch(bat, r.mp)
+	} else {
+		updateDataBatch(bat, r.mp)
+	}
+	r.blockOffset++
 	return
 }
 
@@ -254,6 +270,9 @@ func (p *baseHandle) Next() (bat *batch.Batch, err error) {
 }
 func (p *baseHandle) newBatchHandleWithRowIterator() (h *BatchHandle, err error) {
 	bat := p.getBatchesFromRowIterator()
+	if bat == nil {
+		return nil, moerr.GetOkExpectedEOF()
+	}
 	h, err = NewRowHandle(bat, p.maxRow, p.mp)
 	if err != nil {
 		closeBatch(bat, p.mp)
@@ -358,12 +377,82 @@ func checkObjectEntry(entry *ObjectEntry, start, end types.TS) bool {
 
 func newDataBatchWithBatch(src *batch.Batch) (data *batch.Batch) {
 	data = batch.NewWithSize(0)
-	data.Attrs = append(data.Attrs, src.Attrs...)
+	data.Attrs = append(data.Attrs, src.Attrs[2:]...)
 	for _, vec := range src.Vecs {
+		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
+			continue
+		}
 		newVec := vector.NewVec(*vec.GetType())
 		data.Vecs = append(data.Vecs, newVec)
 	}
+	data.Attrs = append(data.Attrs, catalog.AttrCommitTs)
+	newVec := vector.NewVec(types.T_TS.ToType())
+	data.Vecs = append(data.Vecs, newVec)
 	return
+}
+
+func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
+	if src.IsNull(uint64(offset)) {
+		vector.AppendAny(vec, nil, true, mp)
+	} else {
+		var val any
+		switch vec.GetType().Oid {
+		case types.T_bool:
+			val = vector.GetFixedAt[bool](src, offset)
+		case types.T_bit:
+			val = vector.GetFixedAt[uint64](src, offset)
+		case types.T_int8:
+			val = vector.GetFixedAt[int8](src, offset)
+		case types.T_int16:
+			val = vector.GetFixedAt[int16](src, offset)
+		case types.T_int32:
+			val = vector.GetFixedAt[int32](src, offset)
+		case types.T_int64:
+			val = vector.GetFixedAt[int64](src, offset)
+		case types.T_uint8:
+			val = vector.GetFixedAt[uint8](src, offset)
+		case types.T_uint16:
+			val = vector.GetFixedAt[uint16](src, offset)
+		case types.T_uint32:
+			val = vector.GetFixedAt[uint32](src, offset)
+		case types.T_uint64:
+			val = vector.GetFixedAt[uint64](src, offset)
+		case types.T_decimal64:
+			val = vector.GetFixedAt[types.Decimal64](src, offset)
+		case types.T_decimal128:
+			val = vector.GetFixedAt[types.Decimal128](src, offset)
+		case types.T_uuid:
+			val = vector.GetFixedAt[types.Uuid](src, offset)
+		case types.T_float32:
+			val = vector.GetFixedAt[float32](src, offset)
+		case types.T_float64:
+			val = vector.GetFixedAt[float64](src, offset)
+		case types.T_date:
+			val = vector.GetFixedAt[types.Date](src, offset)
+		case types.T_time:
+			val = vector.GetFixedAt[types.Time](src, offset)
+		case types.T_datetime:
+			val = vector.GetFixedAt[types.Datetime](src, offset)
+		case types.T_timestamp:
+			val = vector.GetFixedAt[types.Timestamp](src, offset)
+		case types.T_enum:
+			val = vector.GetFixedAt[types.Enum](src, offset)
+		case types.T_TS:
+			val = vector.GetFixedAt[types.TS](src, offset)
+		case types.T_Rowid:
+			val = vector.GetFixedAt[types.Rowid](src, offset)
+		case types.T_Blockid:
+			val = vector.GetFixedAt[types.Blockid](src, offset)
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+			types.T_array_float32, types.T_array_float64, types.T_datalink:
+			val = src.GetBytesAt(offset)
+		default:
+			//return vector.ErrVecTypeNotSupport
+			panic(any("No Support"))
+		}
+		vector.AppendAny(vec, val, false, mp)
+	}
+
 }
 
 func fillInInsertBatch(bat **batch.Batch, entry *RowEntry, mp *mpool.MPool) {
@@ -371,84 +460,27 @@ func fillInInsertBatch(bat **batch.Batch, entry *RowEntry, mp *mpool.MPool) {
 		(*bat) = newDataBatchWithBatch(entry.Batch)
 	}
 	for i, vec := range entry.Batch.Vecs {
-		if vec.IsNull(uint64(entry.Offset)) {
-			vector.AppendAny((*bat).Vecs[i], nil, true, mp)
-		} else {
-			var val any
-			switch vec.GetType().Oid {
-			case types.T_bool:
-				val = vector.GetFixedAt[bool](vec, int(entry.Offset))
-			case types.T_bit:
-				val = vector.GetFixedAt[uint64](vec, int(entry.Offset))
-			case types.T_int8:
-				val = vector.GetFixedAt[int8](vec, int(entry.Offset))
-			case types.T_int16:
-				val = vector.GetFixedAt[int16](vec, int(entry.Offset))
-			case types.T_int32:
-				val = vector.GetFixedAt[int32](vec, int(entry.Offset))
-			case types.T_int64:
-				val = vector.GetFixedAt[int64](vec, int(entry.Offset))
-			case types.T_uint8:
-				val = vector.GetFixedAt[uint8](vec, int(entry.Offset))
-			case types.T_uint16:
-				val = vector.GetFixedAt[uint16](vec, int(entry.Offset))
-			case types.T_uint32:
-				val = vector.GetFixedAt[uint32](vec, int(entry.Offset))
-			case types.T_uint64:
-				val = vector.GetFixedAt[uint64](vec, int(entry.Offset))
-			case types.T_decimal64:
-				val = vector.GetFixedAt[types.Decimal64](vec, int(entry.Offset))
-			case types.T_decimal128:
-				val = vector.GetFixedAt[types.Decimal128](vec, int(entry.Offset))
-			case types.T_uuid:
-				val = vector.GetFixedAt[types.Uuid](vec, int(entry.Offset))
-			case types.T_float32:
-				val = vector.GetFixedAt[float32](vec, int(entry.Offset))
-			case types.T_float64:
-				val = vector.GetFixedAt[float64](vec, int(entry.Offset))
-			case types.T_date:
-				val = vector.GetFixedAt[types.Date](vec, int(entry.Offset))
-			case types.T_time:
-				val = vector.GetFixedAt[types.Time](vec, int(entry.Offset))
-			case types.T_datetime:
-				val = vector.GetFixedAt[types.Datetime](vec, int(entry.Offset))
-			case types.T_timestamp:
-				val = vector.GetFixedAt[types.Timestamp](vec, int(entry.Offset))
-			case types.T_enum:
-				val = vector.GetFixedAt[types.Enum](vec, int(entry.Offset))
-			case types.T_TS:
-				val = vector.GetFixedAt[types.TS](vec, int(entry.Offset))
-			case types.T_Rowid:
-				val = vector.GetFixedAt[types.Rowid](vec, int(entry.Offset))
-			case types.T_Blockid:
-				val = vector.GetFixedAt[types.Blockid](vec, int(entry.Offset))
-			case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-				types.T_array_float32, types.T_array_float64, types.T_datalink:
-				val = vec.GetBytesAt(int(entry.Offset))
-			default:
-				//return vector.ErrVecTypeNotSupport
-				panic(any("No Support"))
-			}
-			vector.AppendAny((*bat).Vecs[i], val, false, mp)
+		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
+			continue
 		}
+		appendFromEntry(vec, (*bat).Vecs[i-2], int(entry.Offset), mp)
 	}
+	appendFromEntry(entry.Batch.Vecs[1], (*bat).Vecs[len((*bat).Vecs)-1], int(entry.Offset), mp)
 
 }
 func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, mp *mpool.MPool) {
+	pkVec := entry.Batch.Vecs[2]
 	if *bat == nil {
-		(*bat) = batch.NewWithSize(3)
+		(*bat) = batch.NewWithSize(2)
 		(*bat).SetAttributes([]string{
-			taeCatalog.AttrRowID,
-			taeCatalog.AttrCommitTs,
 			taeCatalog.AttrPKVal,
+			taeCatalog.AttrCommitTs,
 		})
-		(*bat).Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		(*bat).Vecs[0] = vector.NewVec(*pkVec.GetType())
 		(*bat).Vecs[1] = vector.NewVec(types.T_TS.ToType())
-		(*bat).Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 	}
-	vector.AppendFixed((*bat).Vecs[0], entry.RowID, false, mp)
+	appendFromEntry(pkVec, (*bat).Vecs[0], int(entry.Offset), mp)
 	vector.AppendFixed((*bat).Vecs[1], entry.Time, false, mp)
-	vector.AppendBytes((*bat).Vecs[2], entry.PrimaryIndexBytes, false, mp)
 }
 
 func isCreatedByCN(entry *ObjectEntry) bool {

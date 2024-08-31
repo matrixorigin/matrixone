@@ -21,10 +21,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
@@ -89,7 +91,7 @@ func TestChangesHandle1(t *testing.T) {
 			assert.Equal(t, hint, engine.Checkpoint)
 			assert.Nil(t, tombstone)
 			t.Log(data.Attrs)
-			assert.Equal(t, len(data.Attrs), 11) //10 rows + rowid
+			checkInsertBatch(bat, data, t)
 			assert.Equal(t, data.Vecs[0].Length(), 9)
 		}
 		assert.NoError(t, handle.Close())
@@ -104,10 +106,10 @@ func TestChangesHandle1(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.Tail_wip)
 			t.Log(tombstone.Attrs)
-			assert.Equal(t, len(tombstone.Attrs), 3) //rowid, commits, pk
+			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
 			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
 			t.Log(data.Attrs)
-			assert.Equal(t, len(data.Attrs), 12) //rowid, committs, 10 rows
+			checkInsertBatch(bat, data, t)
 			assert.Equal(t, data.Vecs[0].Length(), 10)
 		}
 		assert.NoError(t, handle.Close())
@@ -173,7 +175,7 @@ func TestChangesHandle2(t *testing.T) {
 			assert.Equal(t, hint, engine.Checkpoint)
 			assert.Nil(t, tombstone)
 			t.Log(data.Attrs)
-			assert.Equal(t, len(data.Attrs), 11) //10 rows + rowid
+			checkInsertBatch(bat, data, t)
 			assert.Equal(t, data.Vecs[0].Length(), 8)
 		}
 		assert.NoError(t, handle.Close())
@@ -187,11 +189,35 @@ func TestChangesHandle2(t *testing.T) {
 			}
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.Tail_wip)
-			assert.Equal(t, len(tombstone.Attrs), 3) //rowid, pk, rowid, ts
+			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
 			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
-			assert.Equal(t, len(data.Attrs), 12) //10 rows, rowid, committs,
+			checkInsertBatch(bat, data, t)
 			assert.Equal(t, data.Vecs[0].Length(), 10)
 		}
 		assert.NoError(t, handle.Close())
 	}
+}
+
+func checkTombstoneBatch(bat *batch.Batch, pkType types.Type, t *testing.T) {
+	if bat == nil {
+		return
+	}
+	assert.Equal(t, len(bat.Vecs), 2)
+	assert.Equal(t, bat.Vecs[0].GetType().Oid, pkType.Oid)
+	assert.Equal(t, bat.Vecs[1].GetType().Oid, types.T_TS)
+	assert.Equal(t, bat.Vecs[0].Length(), bat.Vecs[1].Length())
+}
+
+func checkInsertBatch(userBatch *containers.Batch, bat *batch.Batch, t *testing.T) {
+	if bat == nil {
+		return
+	}
+	length := bat.Vecs[0].Length()
+	assert.Equal(t, len(bat.Vecs), len(userBatch.Vecs)+1) // user rows + committs
+	for i, vec := range userBatch.Vecs {
+		assert.Equal(t, bat.Vecs[i].GetType().Oid, vec.GetType().Oid)
+		assert.Equal(t, bat.Vecs[i].Length(), length)
+	}
+	assert.Equal(t, bat.Vecs[len(userBatch.Vecs)].GetType().Oid, types.T_TS)
+	assert.Equal(t, bat.Vecs[len(userBatch.Vecs)].Length(), length)
 }
