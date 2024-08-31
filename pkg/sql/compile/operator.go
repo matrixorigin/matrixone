@@ -1394,14 +1394,15 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 			break
 		}
 	}
+	if hasRemote && source.NodeInfo.Mcpu > 1 {
+		panic("pipeline end with dispatch should have been merged in multi CN!")
+	}
 
 	for i, s := range target {
 		if isSameCN(s.NodeInfo.Addr, source.NodeInfo.Addr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
-			if !hasRemote {
-				s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = source.NodeInfo.Mcpu
-			}
+			s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = source.NodeInfo.Mcpu
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 			arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
 		} else {

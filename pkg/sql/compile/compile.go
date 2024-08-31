@@ -2872,6 +2872,14 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 	default:
 		ss = c.mergeShuffleScopesIfNeeded(ss, true)
+		if len(c.cnList) > 1 {
+			// merge here to avoid bugs, delete this in the future
+			for i := range ss {
+				if ss[i].NodeInfo.Mcpu > 1 {
+					ss[i] = c.newMergeScope([]*Scope{ss[i]})
+				}
+			}
+		}
 
 		shuffleGroups := make([]*Scope, 0, len(c.cnList))
 		//currentFirstFlag := c.anal.isFirst
@@ -3522,6 +3530,19 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 
 	left = c.mergeShuffleScopesIfNeeded(left, true)
 	right = c.mergeShuffleScopesIfNeeded(right, true)
+	if !single {
+		// merge here to avoid bugs, delete this in the future
+		for i := range left {
+			if left[i].NodeInfo.Mcpu > 1 {
+				left[i] = c.newMergeScope([]*Scope{left[i]})
+			}
+		}
+		for i := range right {
+			if right[i].NodeInfo.Mcpu > 1 {
+				right[i] = c.newMergeScope([]*Scope{right[i]})
+			}
+		}
+	}
 
 	dop := plan2.GetShuffleDop(ncpu)
 	shuffleJoins := make([]*Scope, 0, len(c.cnList)*dop)
