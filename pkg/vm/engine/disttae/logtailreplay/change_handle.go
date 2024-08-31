@@ -366,7 +366,7 @@ func (p *ChangeHandler) Close() error {
 	p.tombstoneHandle.Close()
 	return nil
 }
-func (p *ChangeHandler) Next( ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
 	data, err = p.dataHandle.Next(mp, ctx)
 	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 		return
