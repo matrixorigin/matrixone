@@ -236,8 +236,11 @@ func initCommand(_ context.Context, inspectCtx *InspectContext) *cobra.Command {
 
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 
-	inspectArg := &MoInspectArg{}
-	rootCmd.AddCommand(inspectArg.PrepareCommand())
+	obj := &ObjArg{}
+	rootCmd.AddCommand(obj.PrepareCommand())
+
+	table := &TableArg{}
+	rootCmd.AddCommand(table.PrepareCommand())
 
 	return rootCmd
 }
@@ -260,8 +263,8 @@ func (c *MoInspectArg) PrepareCommand() *cobra.Command {
 	table := TableArg{}
 	moInspectCmd.AddCommand(table.PrepareCommand())
 
-	ckp := CheckpointArg{}
-	moInspectCmd.AddCommand(ckp.PrepareCommand())
+	//ckp := CheckpointArg{}
+	//moInspectCmd.AddCommand(ckp.PrepareCommand())
 
 	return moInspectCmd
 }
@@ -278,7 +281,7 @@ func (c *MoInspectArg) Usage() (res string) {
 	res += "Commands:\n"
 	res += fmt.Sprintf("  %-15v object analysis tool \n", "object")
 	res += fmt.Sprintf("  %-15v table analysis tool \n", "table")
-	res += fmt.Sprintf("  %-15v checkpoint analysis tool \n", "checkpoint")
+	//res += fmt.Sprintf("  %-15v checkpoint analysis tool \n", "checkpoint")
 
 	res += "\n"
 	res += "Usage:\n"

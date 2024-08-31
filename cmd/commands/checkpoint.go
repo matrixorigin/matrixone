@@ -356,6 +356,7 @@ func getCkpData(
 	if data, err = entry.PrefetchMetaIdx(ctx, fs); err != nil {
 		return nil, err
 	}
+	fmt.Printf("prefetch meta idx %v\n", data)
 	if err = entry.ReadMetaIdx(ctx, fs, data); err != nil {
 		return nil, err
 	}
