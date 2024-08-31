@@ -17,6 +17,7 @@ package merge
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -54,8 +55,8 @@ type MergeExecutor struct {
 	memUsing            int
 	transPageLimit      uint64
 	cpuPercent          float64
-	activeMergeBlkCount int32
-	activeEstimateBytes int64
+	activeMergeBlkCount atomic.Int32
+	activeEstimateBytes atomic.Int64
 	roundMergeRows      uint64
 	taskConsume         struct {
 		sync.Mutex
@@ -121,7 +122,7 @@ func (e *MergeExecutor) RefreshMemInfo() {
 }
 
 func (e *MergeExecutor) PrintStats() {
-	cnt := atomic.LoadInt32(&e.activeMergeBlkCount)
+	cnt := e.activeMergeBlkCount.Load()
 	if cnt == 0 && e.MemAvailBytes() > 512*common.Const1MBytes {
 		return
 	}
@@ -130,14 +131,14 @@ func (e *MergeExecutor) PrintStats() {
 		"MergeExecutorMemoryStats",
 		common.AnyField("process-limit", common.HumanReadableBytes(e.memLimit)),
 		common.AnyField("process-mem", common.HumanReadableBytes(e.memUsing)),
-		common.AnyField("inuse-mem", common.HumanReadableBytes(int(atomic.LoadInt64(&e.activeEstimateBytes)))),
+		common.AnyField("inuse-mem", common.HumanReadableBytes(int(e.activeEstimateBytes.Load()))),
 		common.AnyField("inuse-cnt", cnt),
 	)
 }
 
 func (e *MergeExecutor) AddActiveTask(taskId uint64, blkn, esize int) {
-	atomic.AddInt64(&e.activeEstimateBytes, int64(esize))
-	atomic.AddInt32(&e.activeMergeBlkCount, int32(blkn))
+	e.activeEstimateBytes.Add(int64(esize))
+	e.activeMergeBlkCount.Add(int32(blkn))
 	e.taskConsume.Lock()
 	if e.taskConsume.m == nil {
 		e.taskConsume.m = make(activeTaskStats)
@@ -157,26 +158,26 @@ func (e *MergeExecutor) OnExecDone(v any) {
 	delete(e.taskConsume.m, task.ID())
 	e.taskConsume.Unlock()
 
-	atomic.AddInt32(&e.activeMergeBlkCount, -int32(stat.blk))
-	atomic.AddInt64(&e.activeEstimateBytes, -int64(stat.estBytes))
+	e.activeMergeBlkCount.Add(-int32(stat.blk))
+	e.activeEstimateBytes.Add(-int64(stat.estBytes))
 }
 
 func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry, kind TaskHostKind) {
 	if e.roundMergeRows*36 /*28 * 1.3 */ > e.transPageLimit/8 {
 		return
 	}
-	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
+	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema(false).Name)
 
 	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
 		return
 	}
 
-	osize, esize, _ := estimateMergeConsume(mobjs)
-	blkCnt := 0
-	for _, obj := range mobjs {
-		blkCnt += obj.BlockCnt()
-	}
 	if kind == TaskHostCN {
+		osize, esize := estimateMergeConsume(mobjs)
+		blkCnt := 0
+		for _, obj := range mobjs {
+			blkCnt += obj.BlockCnt()
+		}
 		stats := make([][]byte, 0, len(mobjs))
 		cids := make([]common.ID, 0, len(mobjs))
 		for _, obj := range mobjs {
@@ -187,14 +188,14 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, mobjs []*catalog.O
 		if e.rt.Scheduler.CheckAsyncScopes(cids) != nil {
 			return
 		}
-		schema := entry.GetLastestSchema()
+		schema := entry.GetLastestSchema(false)
 		cntask := &api.MergeTaskEntry{
 			AccountId:         schema.AcInfo.TenantID,
 			UserId:            schema.AcInfo.UserID,
 			RoleId:            schema.AcInfo.RoleID,
 			TblId:             entry.ID,
 			DbId:              entry.GetDB().GetID(),
-			TableName:         entry.GetLastestSchema().Name,
+			TableName:         entry.GetLastestSchema(false).Name,
 			DbName:            entry.GetDB().GetName(),
 			ToMergeObjs:       stats,
 			EstimatedMemUsage: uint64(esize),
@@ -211,41 +212,62 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, mobjs []*catalog.O
 			)
 			return
 		}
+		entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
 	} else {
-		scopes := make([]common.ID, len(mobjs))
-		for i, obj := range mobjs {
-			scopes[i] = *obj.AsCommonID()
-		}
-
-		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-			txn.GetMemo().IsFlushOrMerge = true
-			task, err := jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes)
-			return task, err
-		}
-		task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTaskWithObserver(nil, tasks.DataCompactionTask, scopes, factory, e)
-		if err != nil {
-			if err != tasks.ErrScheduleScopeConflict {
-				logutil.Info(
-					"MergeExecutorError",
-					common.OperationField("schedule-merge-task"),
-					common.AnyField("error", err),
-					common.AnyField("task", task.Name()),
-				)
-			}
-			return
-		}
-		e.AddActiveTask(task.ID(), blkCnt, esize)
+		objScopes := make([]common.ID, 0)
+		tombstoneScopes := make([]common.ID, 0)
+		objs := make([]*catalog.ObjectEntry, 0)
+		tombstones := make([]*catalog.ObjectEntry, 0)
+		objectBlkCnt := 0
+		tombstoneBlkCnt := 0
 		for _, obj := range mobjs {
-			e.roundMergeRows += uint64(obj.GetRemainingRows())
+			if obj.IsTombstone {
+				tombstoneBlkCnt += obj.BlockCnt()
+				tombstones = append(tombstones, obj)
+				tombstoneScopes = append(tombstoneScopes, *obj.AsCommonID())
+			} else {
+				objectBlkCnt += obj.BlockCnt()
+				objs = append(objs, obj)
+				objScopes = append(objScopes, *obj.AsCommonID())
+			}
 		}
-		logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
+
+		if len(objs) > 1 {
+			e.scheduleMergeObjects(objScopes, objs, objectBlkCnt, entry, false)
+		}
+		if len(tombstones) > 1 {
+			e.scheduleMergeObjects(tombstoneScopes, tombstones, tombstoneBlkCnt, entry, true)
+		}
 	}
-
-	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
 }
+func (e *MergeExecutor) scheduleMergeObjects(scopes []common.ID, mobjs []*catalog.ObjectEntry, blkCnt int, entry *catalog.TableEntry, isTombstone bool) {
+	osize, esize := estimateMergeConsume(mobjs)
+	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
+		txn.GetMemo().IsFlushOrMerge = true
+		return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes, isTombstone)
+	}
+	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTaskWithObserver(nil, tasks.DataCompactionTask, scopes, factory, e)
+	if err != nil {
+		if !errors.Is(err, tasks.ErrScheduleScopeConflict) {
+			logutil.Info(
+				"MergeExecutorError",
+				common.OperationField("schedule-merge-task"),
+				common.AnyField("error", err),
+				common.AnyField("task", task.Name()),
+			)
+		}
+		return
+	}
+	e.AddActiveTask(task.ID(), blkCnt, esize)
+	for _, obj := range mobjs {
+		e.roundMergeRows += uint64(obj.GetRows())
+	}
+	logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
+	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
 
+}
 func (e *MergeExecutor) MemAvailBytes() int {
-	merging := int(atomic.LoadInt64(&e.activeEstimateBytes))
+	merging := int(e.activeEstimateBytes.Load())
 	avail := e.memLimit - e.memUsing - merging
 	if avail < 0 {
 		avail = 0
@@ -265,7 +287,7 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 	rows := 0
 	infoBuf := &bytes.Buffer{}
 	for _, obj := range merges {
-		r := obj.GetRemainingRows()
+		r := obj.GetRows()
 		rows += r
 		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", r, obj.ID().ShortStringEx()))
 	}

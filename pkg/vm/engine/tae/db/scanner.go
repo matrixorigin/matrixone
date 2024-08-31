@@ -30,15 +30,17 @@ type DBScanner interface {
 
 type ErrHandler interface {
 	OnObjectErr(entry *catalog.ObjectEntry, err error) error
+	OnTombstoneErr(entry *catalog.ObjectEntry, err error) error
 	OnTableErr(entry *catalog.TableEntry, err error) error
 	OnDatabaseErr(entry *catalog.DBEntry, err error) error
 }
 
 type NoopErrHandler struct{}
 
-func (h *NoopErrHandler) OnObjectErr(entry *catalog.ObjectEntry, err error) error { return nil }
-func (h *NoopErrHandler) OnTableErr(entry *catalog.TableEntry, err error) error   { return nil }
-func (h *NoopErrHandler) OnDatabaseErr(entry *catalog.DBEntry, err error) error   { return nil }
+func (h *NoopErrHandler) OnObjectErr(entry *catalog.ObjectEntry, err error) error    { return nil }
+func (h *NoopErrHandler) OnTombstoneErr(entry *catalog.ObjectEntry, err error) error { return nil }
+func (h *NoopErrHandler) OnTableErr(entry *catalog.TableEntry, err error) error      { return nil }
+func (h *NoopErrHandler) OnDatabaseErr(entry *catalog.DBEntry, err error) error      { return nil }
 
 type dbScanner struct {
 	*catalog.LoopProcessor
@@ -94,6 +96,7 @@ func NewDBScanner(db *DB, errHandler ErrHandler) *dbScanner {
 		objmask:       roaring.New(),
 	}
 	scanner.ObjectFn = scanner.onObject
+	scanner.TombstoneFn = scanner.onTombstone
 	scanner.PostObjectFn = scanner.onPostObject
 	scanner.TableFn = scanner.onTable
 	scanner.PostTableFn = scanner.onPostTable
@@ -144,6 +147,26 @@ func (scanner *dbScanner) onObject(entry *catalog.ObjectEntry) (err error) {
 			continue
 		}
 		err = op.OnObject(entry)
+		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+			scanner.objmask.Add(uint32(i))
+		}
+		if err = scanner.errHandler.OnObjectErr(entry, err); err != nil {
+			break
+		}
+	}
+	if scanner.objmask.GetCardinality() == uint64(len(scanner.ops)) {
+		err = moerr.GetOkStopCurrRecur()
+	}
+	return
+}
+func (scanner *dbScanner) onTombstone(entry *catalog.ObjectEntry) (err error) {
+	scanner.objmask.Clear()
+	for i, op := range scanner.ops {
+		if scanner.tablemask.Contains(uint32(i)) {
+			scanner.objmask.Add(uint32(i))
+			continue
+		}
+		err = op.OnTombstone(entry)
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			scanner.objmask.Add(uint32(i))
 		}

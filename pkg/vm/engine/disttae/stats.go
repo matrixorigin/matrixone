@@ -334,9 +334,7 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 	} else if tail.Table != nil {
 		var triggered bool
 		for _, cmd := range tail.Commands {
-			if logtailreplay.IsBlkTable(cmd.TableName) ||
-				logtailreplay.IsObjTable(cmd.TableName) ||
-				logtailreplay.IsMetaTable(cmd.TableName) {
+			if logtailreplay.IsMetaEntry(cmd.TableName) {
 				triggered = true
 				if gs.shouldTrigger(key) {
 					gs.triggerUpdate(key, false)
@@ -542,7 +540,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 	}
 
 	partitionState := gs.engine.GetOrCreateLatestPart(key.DatabaseID, key.TableID).Snapshot()
-	approxObjectNum := int64(partitionState.ApproxObjectsNum())
+	approxObjectNum := int64(partitionState.ApproxDataObjectsNum())
 	if approxObjectNum == 0 {
 		// There are no objects flushed yet.
 		return

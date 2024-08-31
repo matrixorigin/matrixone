@@ -48,7 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 type TestDisttaeEngine struct {
@@ -90,7 +89,7 @@ func NewTestDisttaeEngine(
 	colexec.NewServer(hakeeper)
 
 	catalog.SetupDefines("")
-	de.Engine = disttae.New(ctx, "", mp, fs, de.txnClient, hakeeper, nil, 0)
+	de.Engine = disttae.New(ctx, "", mp, fs, de.txnClient, hakeeper, nil, 1)
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
 	go func() {
@@ -118,11 +117,6 @@ func NewTestDisttaeEngine(
 		return nil, err
 	}
 
-	err = de.Engine.InitLogTailPushModel(ctx, de.timestampWaiter)
-	if err != nil {
-		return nil, err
-	}
-
 	qc, _ := qclient.NewQueryClient("", morpc.Config{})
 	sqlExecutor := compile.NewSQLExecutor(
 		"127.0.0.1:2000",
@@ -135,6 +129,9 @@ func NewTestDisttaeEngine(
 		nil, //s.udfService
 	)
 	runtime.ServiceRuntime("").SetGlobalVariables(runtime.InternalSQLExecutor, sqlExecutor)
+
+	// InitLoTailPushModel presupposes that the internal sql executor has been initialized.
+	err = de.Engine.InitLogTailPushModel(ctx, de.timestampWaiter)
 	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
 	return de, err
 }
@@ -186,7 +183,7 @@ func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 func (de *TestDisttaeEngine) analyzeDataObjects(state *logtailreplay.PartitionState,
 	stats *PartitionStateStats, ts types.TS) (err error) {
 
-	iter, err := state.NewObjectsIter(ts, false)
+	iter, err := state.NewObjectsIter(ts, false, false)
 	if err != nil {
 		return err
 	}
@@ -263,37 +260,24 @@ func (de *TestDisttaeEngine) analyzeTombstone(
 	ts types.TS,
 ) (outErr error) {
 
-	iter, err := state.NewObjectsIter(ts, true)
+	iter, err := state.NewObjectsIter(ts, false, true)
 	if err != nil {
-		return nil
+		return err
 	}
+
 	for iter.Next() {
-		disttae.ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-			loc, _, ok := state.GetBlockDeltaLoc(blk.BlockID)
-			if ok {
-				bat, _, release, err := blockio.ReadBlockDelete(context.Background(), loc[:], de.Engine.FS())
-				if err != nil {
-					outErr = err
-					return false
-				}
-				stats.DeltaLocationRowsCnt += bat.RowCount()
-				stats.Details.DeletedRows = append(stats.Details.DeletedRows, bat)
-
-				release()
-			}
-			return true
-		}, iter.Entry().ObjectStats)
-
-		if outErr != nil {
-			return
+		item := iter.Entry()
+		if item.Visible(ts) {
+			stats.TombstoneObjectsVisible.ObjCnt += 1
+			stats.TombstoneObjectsVisible.BlkCnt += int(item.BlkCnt())
+			stats.TombstoneObjectsVisible.RowCnt += int(item.Rows())
+			stats.Details.TombstoneObjectList.Visible = append(stats.Details.TombstoneObjectList.Visible, item)
+		} else {
+			stats.TombstoneObjectsInvisible.ObjCnt += 1
+			stats.TombstoneObjectsInvisible.BlkCnt += int(item.BlkCnt())
+			stats.TombstoneObjectsInvisible.RowCnt += int(item.Rows())
+			stats.Details.TombstoneObjectList.Invisible = append(stats.Details.TombstoneObjectList.Invisible, item)
 		}
-	}
-
-	stats.Details.DirtyBlocks = make(map[types.Blockid]struct{})
-	iter2 := state.NewDirtyBlocksIter()
-	for iter2.Next() {
-		item := iter2.Entry()
-		stats.Details.DirtyBlocks[item] = struct{}{}
 	}
 
 	return
