@@ -71,6 +71,16 @@ func WithDisttaeEngineMPool(mp *mpool.MPool) TestDisttaeEngineOptions {
 		e.mp = mp
 	}
 }
+func WithDisttaeEngineInsertEntryMaxCount(v int) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.insertEntryMaxCount = v
+	}
+}
+func WithDisttaeEngineWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.workspaceThreshold = v
+	}
+}
 
 func CreateEngines(
 	ctx context.Context,

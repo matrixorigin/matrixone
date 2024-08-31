@@ -164,7 +164,7 @@ func WithWorkspaceThreshold(th uint64) EngineOptions {
 	}
 }
 
-func WithInsertMaxCount(th int) EngineOptions {
+func WithInsertEntryMaxCount(th int) EngineOptions {
 	return func(e *Engine) {
 		e.insertEntryMaxCount = th
 	}

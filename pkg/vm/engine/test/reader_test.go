@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -269,7 +268,13 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
 		require.NoError(t, err)
 
-		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
+		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+			ctx,
+			testutil.TestOptions{TaeEngineOptions: opt},
+			t,
+			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
+			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
+		)
 		defer func() {
 			disttaeEngine.Close(ctx)
 			taeEngine.Close(true)
@@ -362,8 +367,6 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 
 		ranges, err := testutil.TxnRanges(ctx, txn, relation, nil)
 		require.NoError(t, err)
-		// nbat := containers.ToCNBatch(bat)
-		// t.Logf("yyyyy:%d:%d:%s", nbat.RowCount(), nbat.Allocated(), ranges.String())
 
 		nmp, _ := mpool.NewMPool("test", mpool.MB, mpool.NoFixed)
 		reader, err := testutil.NewDefaultTableReader(
@@ -385,14 +388,8 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 				break
 			}
 		}
-		// t.Logf("xxx-%d", ret.Allocated())
-		var done bool
-		done, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, nmp, nil, ret)
-		t.Logf("xxx-%d:%v:%s", ret.Allocated(), done, common.MoBatchToString(ret, 1))
-		require.NoError(t, err)
-		done, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, nmp, nil, ret)
-		t.Logf("xxx-%d:%v:%s", ret.Allocated(), done, common.MoBatchToString(ret, ret.RowCount()))
-		require.NoError(t, err)
+		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, nmp, nil, ret)
+		require.Error(t, err)
 	}
 
 }

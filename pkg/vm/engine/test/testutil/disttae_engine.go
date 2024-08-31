@@ -51,16 +51,18 @@ import (
 )
 
 type TestDisttaeEngine struct {
-	Engine          *disttae.Engine
-	logtailReceiver chan morpc.Message
-	broken          chan struct{}
-	wg              sync.WaitGroup
-	ctx             context.Context
-	cancel          context.CancelFunc
-	txnClient       client.TxnClient
-	txnOperator     client.TxnOperator
-	timestampWaiter client.TimestampWaiter
-	mp              *mpool.MPool
+	Engine              *disttae.Engine
+	logtailReceiver     chan morpc.Message
+	broken              chan struct{}
+	wg                  sync.WaitGroup
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	txnClient           client.TxnClient
+	txnOperator         client.TxnOperator
+	timestampWaiter     client.TimestampWaiter
+	mp                  *mpool.MPool
+	workspaceThreshold  uint64
+	insertEntryMaxCount int
 }
 
 func NewTestDisttaeEngine(
@@ -97,8 +99,16 @@ func NewTestDisttaeEngine(
 	hakeeper := newTestHAKeeperClient()
 	colexec.NewServer(hakeeper)
 
+	var engineOpts []disttae.EngineOptions
+	if de.insertEntryMaxCount != 0 {
+		engineOpts = append(engineOpts, disttae.WithInsertEntryMaxCount(de.insertEntryMaxCount))
+	}
+	if de.workspaceThreshold != 0 {
+		engineOpts = append(engineOpts, disttae.WithWorkspaceThreshold(de.workspaceThreshold))
+	}
+
 	catalog.SetupDefines("")
-	de.Engine = disttae.New(ctx, "", de.mp, fs, de.txnClient, hakeeper, nil, 1)
+	de.Engine = disttae.New(ctx, "", de.mp, fs, de.txnClient, hakeeper, nil, 1, engineOpts...)
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
 	go func() {
