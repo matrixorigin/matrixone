@@ -315,3 +315,12 @@ func EmptyBatchFromSchema(schema *catalog.Schema) *batch.Batch {
 	}
 	return ret
 }
+
+func TxnRanges(
+	ctx context.Context,
+	txn client.TxnOperator,
+	relation engine.Relation,
+	exprs []*plan.Expr,
+) (engine.RelData, error) {
+	return relation.Ranges(ctx, exprs, txn.GetWorkspace()..GetSnapshotWriteOffset())
+)

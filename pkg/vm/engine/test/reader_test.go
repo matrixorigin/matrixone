@@ -116,7 +116,8 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
 
-	ranges, err := relation.Ranges(ctx, expr, txn.GetWorkspace().GetSnapshotWriteOffset())
+	ranges, err := testutil.TxnRanges(ctx, relation, txn, expr)
+
 	require.NoError(t, err)
 
 	reader, err := testutil.NewDefaultTableReader(
@@ -217,7 +218,8 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	//_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	//require.NoError(t, err)
 
-	ranges, err := relation.Ranges(ctx, expr, txn.GetWorkspace().GetSnapshotWriteOffset())
+	ranges, err := testutil.TxnRanges(ctx, relation, txn, expr)
+
 	require.NoError(t, err)
 
 	reader, err := testutil.NewDefaultTableReader(
@@ -312,7 +314,8 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		_, relation, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 
-		ranges, err := relation.Ranges(ctx, nil, txn.GetWorkspace().GetSnapshotWriteOffset())
+		ranges, err := testutil.TxnRanges(ctx, relation, txn, nil)
+
 		require.NoError(t, err)
 
 		reader, err := testutil.NewDefaultTableReader(
