@@ -65,10 +65,12 @@ type ColumnJson struct {
 }
 
 type BlockJson struct {
-	Index   uint16       `json:"block_index"`
-	Rows    uint32       `json:"row_count,omitempty"`
-	Cols    uint16       `json:"column_count,omitempty"`
-	Columns []ColumnJson `json:"columns,omitempty"`
+	Index       uint16       `json:"block_index"`
+	Rows        uint32       `json:"row_count,omitempty"`
+	Cols        uint16       `json:"column_count,omitempty"`
+	DataSize    string       `json:"data_size,omitempty"`
+	OriDataSize string       `json:"original_data_size,omitempty"`
+	Columns     []ColumnJson `json:"columns,omitempty"`
 }
 
 type ObjectJson struct {

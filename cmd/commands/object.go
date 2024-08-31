@@ -87,7 +87,8 @@ type objStatArg struct {
 	dir    string
 	name   string
 	id     int
-	col    int
+	col    string
+	cols   []int
 	fs     fileservice.FileService
 	reader *objectio.ObjectReader
 	res    string
@@ -106,7 +107,7 @@ func (c *objStatArg) PrepareCommand() *cobra.Command {
 	statCmd.SetUsageTemplate(c.Usage())
 
 	statCmd.Flags().IntP("id", "i", invalidId, "block id")
-	statCmd.Flags().IntP("col", "c", invalidId, "column id")
+	statCmd.Flags().StringP("col", "c", "", "column id")
 	statCmd.Flags().IntP("level", "l", brief, "level")
 	statCmd.Flags().StringP("name", "n", "", "name")
 	statCmd.Flags().BoolP("local", "", false, "local")
@@ -117,7 +118,7 @@ func (c *objStatArg) PrepareCommand() *cobra.Command {
 
 func (c *objStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.id, _ = cmd.Flags().GetInt("id")
-	c.col, _ = cmd.Flags().GetInt("col")
+	c.col, _ = cmd.Flags().GetString("col")
 	c.level, _ = cmd.Flags().GetInt("level")
 	c.local, _ = cmd.Flags().GetBool("local")
 	path, _ := cmd.Flags().GetString("name")
@@ -154,7 +155,7 @@ func (c *objStatArg) Usage() (res string) {
 	res += "    The path to the object file\n"
 	res += "  -i, --idx=invalidId:\n"
 	res += "    The sequence number of the block in the object\n"
-	res += "  -c, --col=invalidId:\n"
+	res += "  -c, --col=\"\":\n"
 	res += "    The sequence number of the column in the object\n"
 	res += "  -l, --level=0:\n"
 	res += "    The level of detail of the information, should be 0(brief), 1(standard), 2(detailed)\n"
@@ -182,6 +183,10 @@ func (c *objStatArg) Run() (err error) {
 	if c.input != "" {
 		if err = c.getInputs(); err != nil {
 			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get inputs: %v\n", err))
+		}
+	} else {
+		if err = getInputs(c.col, &c.cols); err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n", err))
 		}
 	}
 
@@ -213,9 +218,7 @@ func (c *objStatArg) getInputs() error {
 	}
 	c.dir, c.name = filepath.Split(input.FileName)
 	c.id = input.BlockId
-	if len(input.Columns) > 0 {
-		c.col = input.Columns[0]
-	}
+	c.cols = input.Columns
 	c.level = input.Level
 	c.local = input.Local
 	return nil
@@ -228,7 +231,7 @@ func (c *objStatArg) GetStat(ctx context.Context) (res string, err error) {
 		return
 	}
 
-	if c.level < standard && c.col != invalidId {
+	if c.level < standard && len(c.cols) != 0 {
 		c.level = standard
 	}
 
@@ -310,25 +313,27 @@ func (c *objStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, err 
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 	colCnt := header.ColumnCount()
-	if c.col != invalidId && c.col >= int(colCnt) {
-		return "", moerr.NewInfoNoCtx("invalid column count\n")
+	if len(c.cols) == 0 {
+		c.cols = make([]int, colCnt)
+		for i := range colCnt {
+			c.cols[i] = int(i)
+		}
+	}
+	for _, col := range c.cols {
+		if col >= int(colCnt) {
+			err = moerr.NewInfoNoCtx(fmt.Sprintf("column %v out of column count %v\n", col, colCnt))
+			return
+		}
 	}
 	cols := make([]ColumnJson, 0, colCnt)
-	addColumn := func(idx uint16) {
-		col := data.MustGetColumn(idx)
+	for _, idx := range c.cols {
+		col := data.MustGetColumn(uint16(idx))
 		cols = append(cols, ColumnJson{
-			Index:       idx,
+			Index:       uint16(idx),
 			DataSize:    formatBytes(col.Location().Length()),
 			OriDataSize: formatBytes(col.Location().OriginSize()),
 			Zonemap:     col.ZoneMap().String(),
 		})
-	}
-	if c.col != invalidId {
-		addColumn(uint16(c.col))
-	} else {
-		for i := range colCnt {
-			addColumn(i)
-		}
 	}
 
 	ext := c.reader.GetMetaExtent()
@@ -378,50 +383,49 @@ func (c *objStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, err 
 		}
 	}
 
+	header := data.BlockHeader()
+	colCnt := header.ColumnCount()
+	if len(c.cols) == 0 {
+		c.cols = make([]int, colCnt)
+		for i := range colCnt {
+			c.cols[i] = int(i)
+		}
+	}
+
 	blks := make([]BlockJson, 0, len(blocks))
 	for _, blk := range blocks {
 		colCnt := blk.GetColumnCount()
-
+		var dataSize, oriDataSize uint32
 		cols := make([]ColumnJson, 0, colCnt)
-		addColumn := func(idx uint16) {
-			col := blk.ColumnMeta(idx)
+		for _, i := range c.cols {
+			if i >= int(colCnt) {
+				err = moerr.NewInfoNoCtx(fmt.Sprintf("column %v out of column count %v\n", i, colCnt))
+				return
+			}
+			col := blk.ColumnMeta(uint16(i))
+			dataSize += col.Location().Length()
+			oriDataSize += col.Location().OriginSize()
+
 			cols = append(cols, ColumnJson{
-				Index:       idx,
+				Index:       uint16(i),
 				Type:        types.T(col.DataType()).String(),
 				DataSize:    formatBytes(col.Location().Length()),
 				OriDataSize: formatBytes(col.Location().OriginSize()),
 				Zonemap:     col.ZoneMap().String(),
 			})
 		}
-		if c.col != invalidId {
-			addColumn(uint16(c.col))
-		} else {
-			for i := range colCnt {
-				addColumn(i)
-			}
-		}
 		blkjson := BlockJson{
-			Index:   blk.GetID(),
-			Rows:    blk.GetRows(),
-			Cols:    blk.GetColumnCount(),
-			Columns: cols,
+			Index:       blk.GetID(),
+			Rows:        blk.GetRows(),
+			Cols:        blk.GetColumnCount(),
+			DataSize:    formatBytes(dataSize),
+			OriDataSize: formatBytes(oriDataSize),
+			Columns:     cols,
 		}
 		blks = append(blks, blkjson)
 	}
 
-	header := data.BlockHeader()
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
-	colCnt := header.ColumnCount()
-	cols := make([]ColumnJson, colCnt)
-	for i := range colCnt {
-		col := data.MustGetColumn(i)
-		cols[i] = ColumnJson{
-			Index:       i,
-			DataSize:    formatBytes(col.Location().Length()),
-			OriDataSize: formatBytes(col.Location().OriginSize()),
-			Zonemap:     col.ZoneMap().String(),
-		}
-	}
 
 	ext := c.reader.GetMetaExtent()
 	size := c.GetObjSize(&data)
@@ -436,7 +440,6 @@ func (c *objStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, err 
 		DataSize:    size[0],
 		OriDataSize: size[1],
 		Blocks:      blks,
-		Columns:     cols,
 	}
 
 	data, err = json.MarshalIndent(o, "", "  ")
