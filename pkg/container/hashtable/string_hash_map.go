@@ -17,8 +17,8 @@ package hashtable
 import (
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 type StringRef struct {
@@ -39,10 +39,11 @@ type StringHashMap struct {
 	cellCntMask     uint64
 	//confCnt     uint64
 
-	cellCnt uint64
-	elemCnt uint64
-	rawData [][]byte
-	cells   [][]StringHashMapCell
+	cellCnt             uint64
+	elemCnt             uint64
+	rawData             [][]byte
+	rawDataDeallocators []malloc.Deallocator
+	cells               [][]StringHashMapCell
 }
 
 var (
@@ -55,17 +56,17 @@ func init() {
 	maxStrCellCntPerBlock = maxBlockSize / strCellSize
 }
 
-func (ht *StringHashMap) Free(m *mpool.MPool) {
-	for i := range ht.rawData {
-		if len(ht.rawData[i]) > 0 {
-			m.Free(ht.rawData[i])
+func (ht *StringHashMap) Free() {
+	for i, de := range ht.rawDataDeallocators {
+		if de != nil {
+			de.Deallocate(malloc.NoHints)
 		}
 		ht.rawData[i], ht.cells[i] = nil, nil
 	}
 	ht.rawData, ht.cells = nil, nil
 }
 
-func (ht *StringHashMap) Init(m *mpool.MPool) (err error) {
+func (ht *StringHashMap) Init() (err error) {
 	ht.blockCellCnt = kInitialCellCnt
 	ht.blockMaxElemCnt = maxElemCnt(kInitialCellCnt, strCellSize)
 	ht.elemCnt = 0
@@ -73,15 +74,22 @@ func (ht *StringHashMap) Init(m *mpool.MPool) (err error) {
 	ht.cellCntMask = kInitialCellCnt - 1
 
 	ht.rawData = make([][]byte, 1)
+	ht.rawDataDeallocators = make([]malloc.Deallocator, 1)
 	ht.cells = make([][]StringHashMapCell, 1)
-	if ht.rawData[0], err = m.Alloc(int(ht.blockCellCnt * strCellSize)); err == nil {
-		ht.cells[0] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData[0][0])), ht.blockCellCnt)
+
+	bs, de, err := getAllocator().Allocate(uint64(ht.blockCellCnt*strCellSize), malloc.NoHints)
+	if err != nil {
+		return err
 	}
+	ht.rawData[0] = bs
+	ht.rawDataDeallocators[0] = de
+	ht.cells[0] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData[0][0])), ht.blockCellCnt)
+
 	return
 }
 
-func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64, m *mpool.MPool) error {
-	if err := ht.ResizeOnDemand(uint64(len(keys)), m); err != nil {
+func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64) error {
+	if err := ht.ResizeOnDemand(uint64(len(keys))); err != nil {
 		return err
 	}
 
@@ -99,8 +107,8 @@ func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, va
 	return nil
 }
 
-func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64, m *mpool.MPool) error {
-	if err := ht.ResizeOnDemand(uint64(len(keys)), m); err != nil {
+func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64) error {
+	if err := ht.ResizeOnDemand(uint64(len(keys))); err != nil {
 		return err
 	}
 
@@ -193,8 +201,7 @@ func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
 	return nil
 }
 
-func (ht *StringHashMap) ResizeOnDemand(n uint64, m *mpool.MPool) error {
-	var err error
+func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
 
 	targetCnt := ht.elemCnt + n
 	if targetCnt <= uint64(len(ht.rawData))*ht.blockMaxElemCnt {
@@ -215,15 +222,18 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64, m *mpool.MPool) error {
 		newBlockNum := newAlloc / maxBlockSize
 
 		ht.rawData = append(ht.rawData, make([][]byte, newBlockNum-oldBlockNum)...)
+		ht.rawDataDeallocators = append(ht.rawDataDeallocators, make([]malloc.Deallocator, newBlockNum-oldBlockNum)...)
 		ht.cells = append(ht.cells, make([][]StringHashMapCell, newBlockNum-oldBlockNum)...)
 		ht.cellCnt = ht.blockCellCnt * uint64(newBlockNum)
 		ht.cellCntMask = ht.cellCnt - 1
 
 		for i := oldBlockNum; i < newBlockNum; i++ {
-			ht.rawData[i], err = m.Alloc(int(ht.blockCellCnt * strCellSize))
+			bs, de, err := getAllocator().Allocate(uint64(ht.blockCellCnt*strCellSize), malloc.NoHints)
 			if err != nil {
 				return err
 			}
+			ht.rawData[i] = bs
+			ht.rawDataDeallocators[i] = de
 			ht.cells[i] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData[i][0])), ht.blockCellCnt)
 		}
 
@@ -260,7 +270,7 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64, m *mpool.MPool) error {
 		}
 	} else {
 		oldCells0 := ht.cells[0]
-		oldData0 := ht.rawData[0]
+		oldDeallocator := ht.rawDataDeallocators[0]
 		ht.cellCnt = newCellCnt
 		ht.cellCntMask = ht.cellCnt - 1
 
@@ -268,26 +278,32 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64, m *mpool.MPool) error {
 			ht.blockCellCnt = newCellCnt
 			ht.blockMaxElemCnt = newMaxElemCnt
 
-			ht.rawData[0], err = m.Alloc(newAlloc)
+			bs, de, err := getAllocator().Allocate(uint64(newAlloc), malloc.NoHints)
 			if err != nil {
 				return err
 			}
+			ht.rawData[0] = bs
+			ht.rawDataDeallocators[0] = de
 			ht.cells[0] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData[0][0])), ht.blockCellCnt)
+
 		} else {
 			ht.blockCellCnt = maxStrCellCntPerBlock
 			ht.blockMaxElemCnt = maxElemCnt(ht.blockCellCnt, strCellSize)
 
 			newBlockNum := newAlloc / maxBlockSize
 			ht.rawData = make([][]byte, newBlockNum)
+			ht.rawDataDeallocators = make([]malloc.Deallocator, newBlockNum)
 			ht.cells = make([][]StringHashMapCell, newBlockNum)
 			ht.cellCnt = ht.blockCellCnt * uint64(newBlockNum)
 			ht.cellCntMask = ht.cellCnt - 1
 
 			for i := 0; i < newBlockNum; i++ {
-				ht.rawData[i], err = m.Alloc(int(ht.blockCellCnt * strCellSize))
+				bs, de, err := getAllocator().Allocate(uint64(ht.blockCellCnt*strCellSize), malloc.NoHints)
 				if err != nil {
 					return err
 				}
+				ht.rawData[i] = bs
+				ht.rawDataDeallocators[i] = de
 				ht.cells[i] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData[i][0])), ht.blockCellCnt)
 			}
 		}
@@ -301,7 +317,7 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64, m *mpool.MPool) error {
 			}
 		}
 
-		m.Free(oldData0)
+		oldDeallocator.Deallocate(malloc.NoHints)
 	}
 
 	return nil

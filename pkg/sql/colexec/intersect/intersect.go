@@ -38,7 +38,7 @@ func (intersect *Intersect) OpType() vm.OpType {
 func (intersect *Intersect) Prepare(proc *process.Process) error {
 	var err error
 
-	intersect.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
+	intersect.ctr.hashTable, err = hashmap.NewStrMap(true)
 	if err != nil {
 		return err
 	}
