@@ -98,7 +98,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		// receive topvalue message
 		if tableScan.ctr.msgReceiver != nil {
-			msgs, _ := tableScan.ctr.msgReceiver.ReceiveMessage(false, proc.Ctx)
+			msgs, _, _ := tableScan.ctr.msgReceiver.ReceiveMessage(false, proc.Ctx)
 			for i := range msgs {
 				msg, ok := msgs[i].(message.TopValueMessage)
 				if !ok {
