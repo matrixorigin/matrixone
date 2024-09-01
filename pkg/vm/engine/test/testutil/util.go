@@ -28,6 +28,8 @@ import (
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -62,9 +64,35 @@ func InitTestEnv(module string, t *testing.T) string {
 	return MakeDefaultTestPath(module, t)
 }
 
-func CreateEngines(ctx context.Context, opts TestOptions,
-	t *testing.T) (disttaeEngine *TestDisttaeEngine, taeEngine *TestTxnStorage,
-	rpcAgent *MockRPCAgent, mp *mpool.MPool) {
+type TestDisttaeEngineOptions func(*TestDisttaeEngine)
+
+func WithDisttaeEngineMPool(mp *mpool.MPool) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.mp = mp
+	}
+}
+func WithDisttaeEngineInsertEntryMaxCount(v int) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.insertEntryMaxCount = v
+	}
+}
+func WithDisttaeEngineWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.workspaceThreshold = v
+	}
+}
+
+func CreateEngines(
+	ctx context.Context,
+	opts TestOptions,
+	t *testing.T,
+	options ...TestDisttaeEngineOptions,
+) (
+	disttaeEngine *TestDisttaeEngine,
+	taeEngine *TestTxnStorage,
+	rpcAgent *MockRPCAgent,
+	mp *mpool.MPool,
+) {
 
 	if v := ctx.Value(defines.TenantIDKey{}); v == nil {
 		panic("cannot find account id in ctx")
@@ -72,16 +100,15 @@ func CreateEngines(ctx context.Context, opts TestOptions,
 
 	var err error
 
-	mp, err = mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.Nil(t, err)
-
 	rpcAgent = NewMockLogtailAgent()
 
 	taeEngine, err = NewTestTAEEngine(ctx, "partition_state", t, rpcAgent, opts.TaeEngineOptions)
 	require.Nil(t, err)
 
-	disttaeEngine, err = NewTestDisttaeEngine(ctx, mp, taeEngine.GetDB().Runtime.Fs.Service, rpcAgent, taeEngine)
+	disttaeEngine, err = NewTestDisttaeEngine(ctx, taeEngine.GetDB().Runtime.Fs.Service, rpcAgent, taeEngine, options...)
 	require.Nil(t, err)
+
+	mp = disttaeEngine.mp
 
 	return
 }
@@ -287,4 +314,23 @@ func (p *EnginePack) DeleteTableInDB(txnop client.TxnOperator, dbname, tblname s
 	db, err := p.D.Engine.Database(p.Ctx, dbname, txnop)
 	require.NoError(p.t, err)
 	require.NoError(p.t, db.Delete(p.Ctx, tblname))
+}
+
+func EmptyBatchFromSchema(schema *catalog.Schema) *batch.Batch {
+	ret := batch.NewWithSize(len(schema.ColDefs))
+	for i, col := range schema.ColDefs {
+		vec := vector.NewVec(col.Type.Oid.ToType())
+		ret.Vecs[i] = vec
+		ret.Attrs = append(ret.Attrs, col.Name)
+	}
+	return ret
+}
+
+func TxnRanges(
+	ctx context.Context,
+	txn client.TxnOperator,
+	relation engine.Relation,
+	exprs []*plan.Expr,
+) (engine.RelData, error) {
+	return relation.Ranges(ctx, exprs, txn.GetWorkspace().GetSnapshotWriteOffset())
 }

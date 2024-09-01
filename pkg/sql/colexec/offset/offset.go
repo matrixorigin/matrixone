@@ -62,10 +62,6 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
-	if offset.ctr.seen > offset.ctr.offset {
-		return vm.CancelResult, nil
-	}
-
 	for {
 		input, err := vm.ChildrenCall(offset.GetChildren(0), proc, anal)
 		if err != nil {
