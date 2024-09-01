@@ -132,9 +132,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 		_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, nil, ret)
 		require.NoError(t, err)
 
-		if ret != nil {
-			resultHit += int(ret.RowCount())
-		}
+		resultHit += int(ret.RowCount())
 		ret.CleanOnlyData()
 	}
 
@@ -324,6 +322,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 			mp,
 			t,
 		)
+		require.NoError(t, err)
 
 		ret := batch.NewWithSize(1)
 		for _, col := range schema.ColDefs {
