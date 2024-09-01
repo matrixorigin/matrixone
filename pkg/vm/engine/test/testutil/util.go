@@ -347,7 +347,6 @@ func GetRelationReader(
 	txn client.TxnOperator,
 	relation engine.Relation,
 	exprs []*plan.Expr,
-	txnOffset int,
 	mp *mpool.MPool,
 	t *testing.T,
 ) (reader engine.Reader, err error) {
@@ -365,7 +364,7 @@ func GetRelationReader(
 		ranges,
 		txn.SnapshotTS(),
 		e.Engine,
-		txnOffset)
+		txn.GetWorkspace().GetSnapshotWriteOffset())
 	require.NoError(t, err)
 	return
 }
@@ -375,7 +374,6 @@ func GetTableTxnReader(
 	e *TestDisttaeEngine,
 	dbName, tableName string,
 	exprs []*plan.Expr,
-	txnOffset int,
 	mp *mpool.MPool,
 	t *testing.T,
 ) (
@@ -400,7 +398,7 @@ func GetTableTxnReader(
 		ranges,
 		txn.SnapshotTS(),
 		e.Engine,
-		txnOffset)
+		txn.GetWorkspace().GetSnapshotWriteOffset())
 	require.NoError(t, err)
 	return
 }

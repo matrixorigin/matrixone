@@ -121,7 +121,6 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 		databaseName,
 		tableName,
 		expr,
-		0,
 		mp,
 		t,
 	)
@@ -220,7 +219,6 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 		txn,
 		relation,
 		expr,
-		1,
 		mp,
 		t,
 	)
@@ -323,7 +321,6 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 			databaseName,
 			tableName,
 			nil,
-			0,
 			mp,
 			t,
 		)
@@ -366,7 +363,6 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 			txn,
 			relation,
 			nil,
-			1,
 			mp,
 			t,
 		)
