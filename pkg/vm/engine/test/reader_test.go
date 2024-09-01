@@ -16,6 +16,8 @@ package test
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,7 +118,8 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
 
-	ranges, err := relation.Ranges(ctx, expr, txn.GetWorkspace().GetSnapshotWriteOffset())
+	ranges, err := testutil.TxnRanges(ctx, txn, relation, expr)
+
 	require.NoError(t, err)
 
 	reader, err := testutil.NewDefaultTableReader(
@@ -129,11 +132,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	resultHit := 0
-	ret := batch.NewWithSize(len(schema.ColDefs))
-	for i, col := range schema.ColDefs {
-		vec := vector.NewVec(col.Type.Oid.ToType())
-		ret.Vecs[i] = vec
-	}
+	ret := testutil.EmptyBatchFromSchema(schema)
 	for idx := 0; idx < blockCnt; idx++ {
 		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, expr[0], mp, nil, ret)
 		require.NoError(t, err)
@@ -221,7 +220,8 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	//_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	//require.NoError(t, err)
 
-	ranges, err := relation.Ranges(ctx, expr, txn.GetWorkspace().GetSnapshotWriteOffset())
+	ranges, err := testutil.TxnRanges(ctx, txn, relation, expr)
+
 	require.NoError(t, err)
 
 	reader, err := testutil.NewDefaultTableReader(
@@ -233,11 +233,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 		disttaeEngine.Engine, 1)
 	require.NoError(t, err)
 
-	ret := batch.NewWithSize(len(schema.ColDefs))
-	for i, col := range schema.ColDefs {
-		vec := vector.NewVec(col.Type.Oid.ToType())
-		ret.Vecs[i] = vec
-	}
+	ret := testutil.EmptyBatchFromSchema(schema)
 	_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, expr[0], mp, nil, ret)
 	require.NoError(t, err)
 
@@ -265,14 +261,20 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
-	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema := catalog2.MockSchemaAll(4+9, primaryKeyIdx+9, 9)
 	schema.Name = tableName
 
 	{
 		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
 		require.NoError(t, err)
 
-		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
+		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+			ctx,
+			testutil.TestOptions{TaeEngineOptions: opt},
+			t,
+			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
+			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
+		)
 		defer func() {
 			disttaeEngine.Close(ctx)
 			taeEngine.Close(true)
@@ -320,7 +322,8 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		_, relation, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 
-		ranges, err := relation.Ranges(ctx, nil, txn.GetWorkspace().GetSnapshotWriteOffset())
+		ranges, err := testutil.TxnRanges(ctx, txn, relation, nil)
+
 		require.NoError(t, err)
 
 		reader, err := testutil.NewDefaultTableReader(
@@ -343,8 +346,52 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		}
 		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, mp, nil, ret)
 		require.NoError(t, err)
+		require.True(t, ret.Allocated() > 0)
 
 		require.Equal(t, 2, ret.RowCount())
+		require.NoError(t, txn.Commit(ctx))
+		ret.Clean(mp)
+	}
+	{
+		_, relation, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		rowsCnt := 4000
+		bat := catalog2.MockBatch(schema, rowsCnt)
+		pkVec := bat.Vecs[primaryKeyIdx].GetDownstreamVector()
+		pkVec.CleanOnlyData()
+		for i := 0; i < rowsCnt; i++ {
+			buf := fmt.Sprintf("%s:%d", strings.Repeat("a", 200), i)
+			vector.AppendBytes(pkVec, []byte(buf), false, mp)
+		}
+		defer bat.Close()
+		require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bat)))
+
+		ranges, err := testutil.TxnRanges(ctx, txn, relation, nil)
+		require.NoError(t, err)
+
+		nmp, _ := mpool.NewMPool("test", mpool.MB, mpool.NoFixed)
+		reader, err := testutil.NewDefaultTableReader(
+			ctx, relation, databaseName, schema,
+			nil,
+			nmp,
+			ranges,
+			txn.SnapshotTS(),
+			disttaeEngine.Engine,
+			1)
+		require.NoError(t, err)
+
+		ret := batch.NewWithSize(1)
+		for _, col := range schema.ColDefs {
+			if col.Name == schema.ColDefs[primaryKeyIdx].Name {
+				vec := vector.NewVec(col.Type)
+				ret.Vecs[0] = vec
+				ret.Attrs = []string{col.Name}
+				break
+			}
+		}
+		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, nmp, nil, ret)
+		require.Error(t, err)
 	}
 
 }

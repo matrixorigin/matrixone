@@ -461,12 +461,10 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		chp[i].IsEnd = true
 	}
 
-	buildScope := c.newJoinBuildScope(s, int32(mcpu))
 	ms, ss := newParallelScope(s, c)
 	probeScope := c.newBroadcastJoinProbeScope(s, ss)
 
 	ms.PreScopes = append(ms.PreScopes, chp...)
-	ms.PreScopes = append(ms.PreScopes, buildScope)
 	ms.PreScopes = append(ms.PreScopes, probeScope)
 
 	return ms, nil
@@ -537,7 +535,10 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
 			msgReceiver := message.NewMessageReceiver([]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), c.proc.GetMessageBoard())
-			msgs, ctxDone := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
+			msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
+			if err != nil {
+				return err
+			}
 			if ctxDone {
 				return nil
 			}
