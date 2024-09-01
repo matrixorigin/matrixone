@@ -123,7 +123,8 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	reader, err := testutil.NewDefaultTableReader(
-		ctx, relation, databaseName, schema,
+		ctx,
+		relation,
 		expr[0],
 		mp,
 		ranges,
@@ -225,7 +226,8 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	reader, err := testutil.NewDefaultTableReader(
-		ctx, relation, databaseName, schema,
+		ctx,
+		relation,
 		expr[0],
 		mp,
 		ranges,
@@ -373,7 +375,8 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 
 		nmp, _ := mpool.NewMPool("test", mpool.MB, mpool.NoFixed)
 		reader, err := testutil.NewDefaultTableReader(
-			ctx, relation, databaseName, schema,
+			ctx,
+			relation,
 			nil,
 			nmp,
 			ranges,

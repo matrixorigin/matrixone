@@ -204,8 +204,6 @@ func PlanTableDefBySchema(schema *catalog.Schema, tableId uint64, databaseName s
 func NewDefaultTableReader(
 	ctx context.Context,
 	rel engine.Relation,
-	databaseName string,
-	schema *catalog.Schema,
 	expr *plan.Expr,
 	mp *mpool.MPool,
 	ranges engine.RelData,
@@ -213,8 +211,6 @@ func NewDefaultTableReader(
 	e *disttae.Engine,
 	txnOffset int,
 ) (engine.Reader, error) {
-
-	tblDef := PlanTableDefBySchema(schema, rel.GetTableID(ctx), databaseName)
 
 	source, err := disttae.BuildLocalDataSource(ctx, rel, ranges, txnOffset)
 	if err != nil {
@@ -225,7 +221,7 @@ func NewDefaultTableReader(
 		ctx,
 		testutil2.NewProcessWithMPool("", mp),
 		e,
-		&tblDef,
+		rel.GetTableDef(ctx),
 		snapshotTS,
 		expr,
 		source,
@@ -368,8 +364,6 @@ func GetTableTxnReader(
 	reader, err = NewDefaultTableReader(
 		ctx,
 		relation,
-		dbName,
-		schema,
 		expr,
 		mp,
 		ranges,
