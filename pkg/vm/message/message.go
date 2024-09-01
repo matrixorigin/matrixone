@@ -73,6 +73,7 @@ type MessageCenter struct {
 }
 
 type MessageBoard struct {
+	reset         bool // for debug purpose
 	multiCN       bool
 	stmtId        uuid.UUID
 	MessageCenter *MessageCenter
@@ -92,6 +93,9 @@ func NewMessageBoard() *MessageBoard {
 
 func (m *MessageBoard) DebugString() string {
 	buf := bytes.NewBuffer(make([]byte, 0, 400))
+	if m.reset {
+		buf.WriteString("messageBoard has been reseted!\n")
+	}
 	if m.multiCN {
 		buf.WriteString("messageBoard on MultiCN\n")
 	} else {
@@ -121,6 +125,13 @@ func (m *MessageBoard) SetMultiCN(center *MessageCenter, stmtId uuid.UUID) *Mess
 	return m
 }
 
+func (m *MessageBoard) BeforeRunonce() {
+	// call this before runonce
+	m.RwMutex.Lock()
+	defer m.RwMutex.Unlock()
+	m.reset = false
+}
+
 func (m *MessageBoard) Reset() *MessageBoard {
 	if m.multiCN {
 		m.MessageCenter.RwMutex.Lock()
@@ -135,6 +146,7 @@ func (m *MessageBoard) Reset() *MessageBoard {
 	m.Messages = m.Messages[:0]
 	m.Waiters = m.Waiters[:0]
 	m.multiCN = false
+	m.reset = true
 	return m
 }
 
