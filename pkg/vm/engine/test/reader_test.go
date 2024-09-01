@@ -128,9 +128,9 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	resultHit := 0
-	ret := testutil.EmptyBatchFromSchema(schema)
+	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
 	for idx := 0; idx < blockCnt; idx++ {
-		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, expr[0], mp, nil, ret)
+		_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, nil, ret)
 		require.NoError(t, err)
 
 		if ret != nil {
@@ -226,8 +226,8 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema)
-	_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, expr[0], mp, nil, ret)
+	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, nil, ret)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, int(ret.RowCount()))
@@ -373,16 +373,9 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		require.NoError(t, err)
 
 		nmp, _ := mpool.NewMPool("test", mpool.MB, mpool.NoFixed)
-		ret := batch.NewWithSize(1)
-		for _, col := range schema.ColDefs {
-			if col.Name == schema.ColDefs[primaryKeyIdx].Name {
-				vec := vector.NewVec(col.Type)
-				ret.Vecs[0] = vec
-				ret.Attrs = []string{col.Name}
-				break
-			}
-		}
-		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, nmp, nil, ret)
+
+		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		_, err = reader.Read(ctx, ret.Attrs, nil, nmp, nil, ret)
 		require.Error(t, err)
 		require.NoError(t, txn.Commit(ctx))
 	}
