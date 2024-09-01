@@ -115,21 +115,16 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 		}),
 	}
 
-	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
-	require.NoError(t, err)
-
-	ranges, err := testutil.TxnRanges(ctx, txn, relation, expr)
-
-	require.NoError(t, err)
-
-	reader, err := testutil.NewDefaultTableReader(
+	txn, _, reader, err := testutil.GetTableTxnReader(
 		ctx,
-		relation,
-		expr[0],
+		disttaeEngine,
+		databaseName,
+		tableName,
+		expr,
+		0,
 		mp,
-		ranges,
-		txn.SnapshotTS(),
-		disttaeEngine.Engine, 0)
+		t,
+	)
 	require.NoError(t, err)
 
 	resultHit := 0
@@ -145,6 +140,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	}
 
 	require.Equal(t, 1, resultHit)
+	require.NoError(t, txn.Commit(ctx))
 }
 
 func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
@@ -218,21 +214,16 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 		}),
 	}
 
-	//_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
-	//require.NoError(t, err)
-
-	ranges, err := testutil.TxnRanges(ctx, txn, relation, expr)
-
-	require.NoError(t, err)
-
-	reader, err := testutil.NewDefaultTableReader(
+	reader, err := testutil.GetRelationReader(
 		ctx,
+		disttaeEngine,
+		txn,
 		relation,
-		expr[0],
+		expr,
+		1,
 		mp,
-		ranges,
-		txn.SnapshotTS(),
-		disttaeEngine.Engine, 1)
+		t,
+	)
 	require.NoError(t, err)
 
 	ret := testutil.EmptyBatchFromSchema(schema)
@@ -240,7 +231,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, 1, int(ret.RowCount()))
-
+	require.NoError(t, txn.Commit(ctx))
 }
 
 func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
@@ -329,7 +320,6 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		txn, _, reader, err := testutil.GetTableTxnReader(
 			ctx,
 			disttaeEngine,
-			schema,
 			databaseName,
 			tableName,
 			nil,

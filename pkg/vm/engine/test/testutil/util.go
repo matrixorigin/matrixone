@@ -363,7 +363,6 @@ func GetRelationReader(
 func GetTableTxnReader(
 	ctx context.Context,
 	e *TestDisttaeEngine,
-	schema *catalog.Schema,
 	dbName, tableName string,
 	exprs []*plan.Expr,
 	txnOffset int,
