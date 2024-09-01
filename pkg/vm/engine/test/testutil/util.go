@@ -204,8 +204,6 @@ func PlanTableDefBySchema(schema *catalog.Schema, tableId uint64, databaseName s
 func NewDefaultTableReader(
 	ctx context.Context,
 	rel engine.Relation,
-	databaseName string,
-	schema *catalog.Schema,
 	expr *plan.Expr,
 	mp *mpool.MPool,
 	ranges engine.RelData,
@@ -213,8 +211,6 @@ func NewDefaultTableReader(
 	e *disttae.Engine,
 	txnOffset int,
 ) (engine.Reader, error) {
-
-	tblDef := PlanTableDefBySchema(schema, rel.GetTableID(ctx), databaseName)
 
 	source, err := disttae.BuildLocalDataSource(ctx, rel, ranges, txnOffset)
 	if err != nil {
@@ -225,7 +221,7 @@ func NewDefaultTableReader(
 		ctx,
 		testutil2.NewProcessWithMPool("", mp),
 		e,
-		&tblDef,
+		rel.GetTableDef(ctx),
 		snapshotTS,
 		expr,
 		source,
@@ -316,9 +312,19 @@ func (p *EnginePack) DeleteTableInDB(txnop client.TxnOperator, dbname, tblname s
 	require.NoError(p.t, db.Delete(p.Ctx, tblname))
 }
 
-func EmptyBatchFromSchema(schema *catalog.Schema) *batch.Batch {
-	ret := batch.NewWithSize(len(schema.ColDefs))
-	for i, col := range schema.ColDefs {
+func EmptyBatchFromSchema(schema *catalog.Schema, sels ...int) *batch.Batch {
+	if len(sels) == 0 {
+		ret := batch.NewWithSize(len(schema.ColDefs))
+		for i, col := range schema.ColDefs {
+			vec := vector.NewVec(col.Type.Oid.ToType())
+			ret.Vecs[i] = vec
+			ret.Attrs = append(ret.Attrs, col.Name)
+		}
+		return ret
+	}
+	ret := batch.NewWithSize(len(sels))
+	for i, sel := range sels {
+		col := schema.ColDefs[sel]
 		vec := vector.NewVec(col.Type.Oid.ToType())
 		ret.Vecs[i] = vec
 		ret.Attrs = append(ret.Attrs, col.Name)
@@ -333,4 +339,86 @@ func TxnRanges(
 	exprs []*plan.Expr,
 ) (engine.RelData, error) {
 	return relation.Ranges(ctx, exprs, txn.GetWorkspace().GetSnapshotWriteOffset())
+}
+
+func GetRelationReader(
+	ctx context.Context,
+	e *TestDisttaeEngine,
+	txn client.TxnOperator,
+	relation engine.Relation,
+	exprs []*plan.Expr,
+	mp *mpool.MPool,
+	t *testing.T,
+) (reader engine.Reader, err error) {
+	ranges, err := TxnRanges(ctx, txn, relation, exprs)
+	require.NoError(t, err)
+	var expr *plan.Expr
+	if len(exprs) > 0 {
+		expr = exprs[0]
+	}
+	reader, err = NewDefaultTableReader(
+		ctx,
+		relation,
+		expr,
+		mp,
+		ranges,
+		txn.SnapshotTS(),
+		e.Engine,
+		txn.GetWorkspace().GetSnapshotWriteOffset())
+	require.NoError(t, err)
+	return
+}
+
+func GetTableTxnReader(
+	ctx context.Context,
+	e *TestDisttaeEngine,
+	dbName, tableName string,
+	exprs []*plan.Expr,
+	mp *mpool.MPool,
+	t *testing.T,
+) (
+	txn client.TxnOperator,
+	relation engine.Relation,
+	reader engine.Reader,
+	err error,
+) {
+	_, relation, txn, err = e.GetTable(ctx, dbName, tableName)
+	require.NoError(t, err)
+	ranges, err := TxnRanges(ctx, txn, relation, exprs)
+	require.NoError(t, err)
+	var expr *plan.Expr
+	if len(exprs) > 0 {
+		expr = exprs[0]
+	}
+	reader, err = NewDefaultTableReader(
+		ctx,
+		relation,
+		expr,
+		mp,
+		ranges,
+		txn.SnapshotTS(),
+		e.Engine,
+		txn.GetWorkspace().GetSnapshotWriteOffset())
+	require.NoError(t, err)
+	return
+}
+
+func WriteToRelation(
+	ctx context.Context,
+	txn client.TxnOperator,
+	relation engine.Relation,
+	bat *batch.Batch,
+	toEndStatement bool,
+) (err error) {
+	err = relation.Write(ctx, bat)
+	if err == nil && toEndStatement {
+		EndThisStatement(txn)
+	}
+	return
+}
+
+func EndThisStatement(
+	txn client.TxnOperator,
+) {
+	txn.GetWorkspace().UpdateSnapshotWriteOffset()
 }

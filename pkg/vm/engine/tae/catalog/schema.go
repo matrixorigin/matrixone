@@ -1032,6 +1032,13 @@ func MockSnapShotSchema() *Schema {
 	return schema
 }
 
+// `colCnt` specifies the number of columns in the schema.
+// `pkIdx` specifies the index of the primary in the specified columns.
+// `from` specifies the starting index of the columns in the predefined order.
+func MockSchemaEnhanced(colCnt int, pkIdx int, from int) *Schema {
+	return MockSchemaAll(colCnt+from, pkIdx+from, from)
+}
+
 // MockSchemaAll if char/varchar is needed, colCnt = 14, otherwise colCnt = 12
 // pkIdx == -1 means no pk defined
 func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
