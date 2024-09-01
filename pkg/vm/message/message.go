@@ -17,10 +17,14 @@ package message
 import (
 	"context"
 	"sync"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/google/uuid"
 )
 
+const messageTimeout = 300 * time.Second
 const ALLCN = "ALLCN"
 const CURRENTCN = "CURRENTCN"
 
@@ -188,10 +192,10 @@ func (mr *MessageReceiver) Free() {
 	mr.waiter = nil
 }
 
-func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) ([]Message, bool) {
+func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) ([]Message, bool, error) {
 	var result = mr.receiveMessageNonBlock()
 	if !needBlock || len(result) > 0 {
-		return result, false
+		return result, false, nil
 	}
 	if mr.waiter == nil {
 		mr.waiter = make(chan bool, 1)
@@ -204,13 +208,19 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 		if len(result) > 0 {
 			break
 		}
+		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), messageTimeout)
 		select {
+		case <-timeoutCtx.Done():
+			timeoutCancel()
+			return nil, false, moerr.NewInternalErrorNoCtx("wait message timeout")
 		case <-mr.waiter:
+			timeoutCancel()
 		case <-ctx.Done():
-			return result, true
+			timeoutCancel()
+			return result, true, nil
 		}
 	}
-	return result, false
+	return result, false, nil
 }
 
 func MatchAddress(m Message, raddr *MessageAddress) bool {
