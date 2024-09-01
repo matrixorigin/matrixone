@@ -355,7 +355,12 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 			vector.AppendBytes(pkVec, []byte(buf), false, mp)
 		}
 		defer bat.Close()
-		require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bat)))
+		require.NoError(
+			t,
+			testutil.WriteToRelation(
+				ctx, txn, relation, containers.ToCNBatch(bat), true,
+			),
+		)
 
 		reader, err := testutil.GetRelationReader(
 			ctx,

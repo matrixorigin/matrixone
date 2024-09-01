@@ -402,3 +402,23 @@ func GetTableTxnReader(
 	require.NoError(t, err)
 	return
 }
+
+func WriteToRelation(
+	ctx context.Context,
+	txn client.TxnOperator,
+	relation engine.Relation,
+	bat *batch.Batch,
+	toEndStatement bool,
+) (err error) {
+	err = relation.Write(ctx, bat)
+	if err == nil && toEndStatement {
+		EndThisStatement(txn)
+	}
+	return
+}
+
+func EndThisStatement(
+	txn client.TxnOperator,
+) {
+	txn.GetWorkspace().UpdateSnapshotWriteOffset()
+}
