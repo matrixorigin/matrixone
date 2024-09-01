@@ -6532,6 +6532,37 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// function `LLM_EMBEDDING`
+	{
+		functionId: LLM_EMBEDDING,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return EmbeddingOp
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datalink},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return EmbeddingDatalinkOp
+				},
+			},
+		},
+	},
 }
 
 func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) (err error) {
