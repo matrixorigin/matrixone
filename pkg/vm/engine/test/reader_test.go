@@ -284,7 +284,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 	}
 
 	{
-		txn, err := taeEngine.GetDB().StartTxn(nil)
+		txn, err := taeEngine.StartTxn()
 		require.NoError(t, err)
 
 		database, _ := txn.GetDatabase(databaseName)
@@ -301,7 +301,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 	}
 
 	{
-		txn, _ := taeEngine.GetDB().StartTxn(nil)
+		txn, _ := taeEngine.StartTxn()
 		database, _ := txn.GetDatabase(databaseName)
 		rel, _ := database.GetRelationByName(schema.Name)
 
