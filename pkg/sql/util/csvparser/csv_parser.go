@@ -794,20 +794,27 @@ func (parser *CSVParser) readBlock() error {
 		parser.isLastChunk = true
 		fallthrough
 	case err == nil:
-		// `parser.buf` reference to `appendBuf.Bytes`, so should use remainBuf to
-		// hold the `parser.buf` rest data to prevent slice overlap
-		parser.remainBuf.Reset()
-		parser.remainBuf.Write(parser.buf)
-		parser.appendBuf.Reset()
-		parser.appendBuf.Write(parser.remainBuf.Bytes())
+
 		blockData := parser.blockBuf[:n]
 		if parser.pos == 0 {
 			bomCleanedData := bom.Clean(blockData)
 			parser.pos += int64(n - len(bomCleanedData))
 			blockData = bomCleanedData
 		}
-		parser.appendBuf.Write(blockData)
-		parser.buf = parser.appendBuf.Bytes()
+		if len(parser.buf) == 0 {
+			// `parser.buf` reference to parser.blockBuf, avoid copy from parser.blockBuf to parser.appendBuf
+			parser.buf = blockData
+		} else {
+			// `parser.buf` reference to `appendBuf.Bytes`, so should use remainBuf to
+			// hold the `parser.buf` rest data to prevent slice overlap
+			parser.remainBuf.Reset()
+			parser.remainBuf.Write(parser.buf)
+			parser.appendBuf.Reset()
+			parser.appendBuf.Write(parser.remainBuf.Bytes())
+			parser.appendBuf.Write(blockData)
+			parser.buf = parser.appendBuf.Bytes()
+		}
+
 		return nil
 	default:
 		return err
