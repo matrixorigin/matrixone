@@ -16,6 +16,7 @@ package message
 
 import (
 	"context"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -151,19 +152,23 @@ func (t JoinMapMsg) GetMsgTag() int32 {
 	return t.Tag
 }
 
+func (t JoinMapMsg) DebugString() string {
+	return "joinmap message, tag:" + strconv.Itoa(int(t.Tag))
+}
+
 func (t JoinMapMsg) GetReceiverAddr() MessageAddress {
 	return AddrBroadCastOnCurrentCN()
 }
 
-func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoard, ctx context.Context) *JoinMap {
+func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoard, ctx context.Context) (*JoinMap, error) {
 	msgReceiver := NewMessageReceiver([]int32{tag}, AddrBroadCastOnCurrentCN(), mb)
 	for {
 		msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, ctx)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		if ctxDone {
-			return nil
+			return nil, nil
 		}
 		for i := range msgs {
 			msg, ok := msgs[i].(JoinMapMsg)
@@ -177,12 +182,12 @@ func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoar
 			}
 			jm := msg.JoinMapPtr
 			if jm == nil {
-				return nil
+				return nil, nil
 			}
 			if !jm.IsValid() {
 				panic("join receive a joinmap which has been freed!")
 			}
-			return jm
+			return jm, nil
 		}
 	}
 }

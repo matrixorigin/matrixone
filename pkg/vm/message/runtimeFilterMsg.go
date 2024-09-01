@@ -16,6 +16,7 @@ package message
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"strconv"
 )
 
 const (
@@ -54,6 +55,10 @@ func (rt RuntimeFilterMessage) GetMsgTag() int32 {
 
 func (rt RuntimeFilterMessage) GetReceiverAddr() MessageAddress {
 	return AddrBroadCastOnCurrentCN()
+}
+
+func (rt RuntimeFilterMessage) DebugString() string {
+	return "runtime filter message, tag:" + strconv.Itoa(int(rt.Tag))
 }
 
 func SendRuntimeFilter(rt RuntimeFilterMessage, m *plan.RuntimeFilterSpec, mb *MessageBoard) {

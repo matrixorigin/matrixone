@@ -15,7 +15,10 @@
 package message
 
 import (
+	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"strconv"
 	"sync"
 	"time"
 
@@ -61,6 +64,7 @@ type Message interface {
 	NeedBlock() bool
 	GetMsgTag() int32
 	GetReceiverAddr() MessageAddress
+	DebugString() string
 }
 
 type MessageCenter struct {
@@ -84,6 +88,21 @@ func NewMessageBoard() *MessageBoard {
 		RwMutex:  &sync.RWMutex{},
 	}
 	return m
+}
+
+func (m *MessageBoard) DebugString() string {
+	buf := bytes.NewBuffer(make([]byte, 0, 400))
+	if m.multiCN {
+		buf.WriteString("messageBoard on MultiCN\n")
+	} else {
+		buf.WriteString("messageBoard on single CN\n")
+	}
+	buf.WriteString("messageBoard length: " + strconv.Itoa(len(m.Messages)) + "\n")
+	for i := range m.Messages {
+		message := *m.Messages[i]
+		buf.WriteString(message.DebugString() + "\n")
+	}
+	return buf.String()
 }
 
 func (m *MessageBoard) SetMultiCN(center *MessageCenter, stmtId uuid.UUID) *MessageBoard {
@@ -212,6 +231,7 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 		select {
 		case <-timeoutCtx.Done():
 			timeoutCancel()
+			logutil.Errorf("waiting messsage timeout, waiting for tag %v, messageBoard debug message %v", mr.tags, mr.mb.DebugString())
 			return nil, false, moerr.NewInternalErrorNoCtx("wait message timeout")
 		case <-mr.waiter:
 			timeoutCancel()
