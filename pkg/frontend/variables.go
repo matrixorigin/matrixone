@@ -3628,15 +3628,3 @@ func autocommitValue(ses FeSession) (bool, error) {
 	}
 	return autocommit, err
 }
-
-func debugBreakIsTrue(ses FeSession) (bool, error) {
-	value, err := ses.GetSessionSysVar("debug_break")
-	if err != nil {
-		return false, err
-	}
-	debugBreak, err := valueIsBoolTrue(value)
-	if err != nil {
-		return false, err
-	}
-	return debugBreak, err
-}
