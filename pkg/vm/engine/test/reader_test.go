@@ -261,7 +261,11 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
-	schema := catalog2.MockSchemaAll(4+9, primaryKeyIdx+9, 9)
+	// mock a schema with 4 columns and the 4th column as primary key
+	// the first column is the 9th column in the predefined columns in
+	// the mock function. Here we exepct the type of the primary key
+	// is types.T_char or types.T_varchar
+	schema := catalog2.MockSchemaEnhanced(4, primaryKeyIdx, 9)
 	schema.Name = tableName
 
 	{
