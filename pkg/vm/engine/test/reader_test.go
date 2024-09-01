@@ -370,21 +370,19 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		defer bat.Close()
 		require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bat)))
 
-		ranges, err := testutil.TxnRanges(ctx, txn, relation, nil)
+		reader, err := testutil.GetRelationReader(
+			ctx,
+			disttaeEngine,
+			txn,
+			relation,
+			nil,
+			1,
+			mp,
+			t,
+		)
 		require.NoError(t, err)
 
 		nmp, _ := mpool.NewMPool("test", mpool.MB, mpool.NoFixed)
-		reader, err := testutil.NewDefaultTableReader(
-			ctx,
-			relation,
-			nil,
-			nmp,
-			ranges,
-			txn.SnapshotTS(),
-			disttaeEngine.Engine,
-			1)
-		require.NoError(t, err)
-
 		ret := batch.NewWithSize(1)
 		for _, col := range schema.ColDefs {
 			if col.Name == schema.ColDefs[primaryKeyIdx].Name {
@@ -396,6 +394,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		}
 		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, nmp, nil, ret)
 		require.Error(t, err)
+		require.NoError(t, txn.Commit(ctx))
 	}
 
 }
