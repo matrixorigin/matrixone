@@ -323,21 +323,18 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 	}
 
 	{
-		_, relation, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
-		require.NoError(t, err)
 
-		ranges, err := testutil.TxnRanges(ctx, txn, relation, nil)
-
-		require.NoError(t, err)
-
-		reader, err := testutil.NewDefaultTableReader(
-			ctx, relation, databaseName, schema,
+		txn, _, reader, err := testutil.GetTableTxnReader(
+			ctx,
+			disttaeEngine,
+			schema,
+			databaseName,
+			tableName,
 			nil,
+			0,
 			mp,
-			ranges,
-			txn.SnapshotTS(),
-			disttaeEngine.Engine, 0)
-		require.NoError(t, err)
+			t,
+		)
 
 		ret := batch.NewWithSize(1)
 		for _, col := range schema.ColDefs {

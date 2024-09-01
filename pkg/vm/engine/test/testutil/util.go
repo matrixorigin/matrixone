@@ -334,3 +334,48 @@ func TxnRanges(
 ) (engine.RelData, error) {
 	return relation.Ranges(ctx, exprs, txn.GetWorkspace().GetSnapshotWriteOffset())
 }
+
+// func GetTableTxnReaderByRelation(
+// 	ctx context.Context,
+// 	e *TestDisttaeEngine,
+// 	schema *catalog.Schema,
+// 	relation engine.Relation,
+// )
+
+func GetTableTxnReader(
+	ctx context.Context,
+	e *TestDisttaeEngine,
+	schema *catalog.Schema,
+	dbName, tableName string,
+	exprs []*plan.Expr,
+	txnOffset int,
+	mp *mpool.MPool,
+	t *testing.T,
+) (
+	txn client.TxnOperator,
+	relation engine.Relation,
+	reader engine.Reader,
+	err error,
+) {
+	_, relation, txn, err = e.GetTable(ctx, dbName, tableName)
+	require.NoError(t, err)
+	ranges, err := TxnRanges(ctx, txn, relation, exprs)
+	require.NoError(t, err)
+	var expr *plan.Expr
+	if len(exprs) > 0 {
+		expr = exprs[0]
+	}
+	reader, err = NewDefaultTableReader(
+		ctx,
+		relation,
+		dbName,
+		schema,
+		expr,
+		mp,
+		ranges,
+		txn.SnapshotTS(),
+		e.Engine,
+		txnOffset)
+	require.NoError(t, err)
+	return
+}
