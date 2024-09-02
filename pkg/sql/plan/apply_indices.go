@@ -169,21 +169,8 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
-	// ERIC
+	// FullText
 	{
-
-		// First, check there is fulltext_index_scan FUNCTION_SCAN node
-		// If exists, it means that fulltext index is already converted from applyIndicesForFilter.
-		// However, we didn't add SORT node in applyIndicesForFilter and we will add SORT node here only when SORT node does not exist
-		// I don't think we can support both fulltext_match appear in projection and filter at the same time so
-		// we are done here after adding SORT Node
-
-		// Second, check project list to have fulltext_match expression.
-		// If exists, create the fulltext_index_scan with applyIndicesForFilter
-		// search for all fulltext_index_scan nodes and change match to according fulltext_index_scan.score column
-
-		// check fulltext_index_scan TABLE_FUNCTION exists
-
 		// it is possible that there is a sort node.   i.e. project -> sort -> scan or project -> scan
 		// try to find scanNode, sortNode from projNode
 		var sortNode *plan.Node
@@ -209,8 +196,8 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 
 		// apply fulltext indices when fulltext_match exists
 		if len(filterids) > 0 || len(projids) > 0 {
-			return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, sortNode, scanNode, filterids, filter_ftidxs,
-				projids, proj_ftidxs, colRefCnt, idxColMap)
+			return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, sortNode, scanNode,
+				filterids, filter_ftidxs, projids, proj_ftidxs, colRefCnt, idxColMap)
 		}
 	}
 
