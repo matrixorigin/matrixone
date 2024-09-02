@@ -18,14 +18,6 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -37,12 +29,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
@@ -67,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
@@ -74,14 +70,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/google/uuid"
@@ -812,6 +812,16 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 		in.IndexBuild = &pipeline.Indexbuild{
 			RuntimeFilterSpec: t.RuntimeFilterSpec,
 		}
+	case *dedupjoin.DedupJoin:
+		in.DedupJoin = &pipeline.DedupJoin{
+			LeftCond:               t.Conditions[0],
+			RightCond:              t.Conditions[1],
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			OnDuplicateAction:      t.OnDupAction,
+			IsShuffle:              t.IsShuffle,
+			JoinMapTag:             t.JoinMapTag,
+			ShuffleIdx:             t.ShuffleIdx,
+		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", op.OpType()))
 	}
@@ -1255,6 +1265,16 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.IndexBuild:
 		arg := indexbuild.NewArgument()
 		arg.RuntimeFilterSpec = opr.GetIndexBuild().RuntimeFilterSpec
+		op = arg
+	case vm.DedupJoin:
+		arg := dedupjoin.NewArgument()
+		t := opr.GetDedupJoin()
+		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
+		arg.OnDupAction = t.OnDuplicateAction
+		arg.IsShuffle = t.IsShuffle
+		arg.JoinMapTag = t.JoinMapTag
+		arg.ShuffleIdx = t.ShuffleIdx
 		op = arg
 	default:
 		return op, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))

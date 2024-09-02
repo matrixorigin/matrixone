@@ -332,9 +332,10 @@ message DedupJoin {
   repeated plan.Expr left_cond = 1;
   repeated plan.Expr right_cond = 2;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 3;
-  bool is_shuffle = 4;
-  int32 join_map_tag = 5;
-  int32 shuffle_idx = 6;
+  plan.Node.OnDuplicateAction on_duplicate_action = 4;
+  bool is_shuffle = 5;
+  int32 join_map_tag = 6;
+  int32 shuffle_idx = 7;
 }
 
 message Product {
@@ -451,11 +452,12 @@ message Instruction{
   Connector   connect = 4;
   Dispatch  dispatch = 5;
   Group     agg = 6;
+  Join    join = 7;
   LeftJoin  left_join = 8;
   SemiJoin  semi_join = 9;
   SingleJoin single_join = 10;
   MarkJoin    mark_join = 11;
-  Join    join = 12;
+  DedupJoin   dedup_join = 12;
   Product    product = 13;
   TableFunction table_function = 14;
   ExternalScan external_scan = 16;
