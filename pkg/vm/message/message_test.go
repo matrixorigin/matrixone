@@ -22,9 +22,13 @@ import (
 
 func TestMessage(t *testing.T) {
 	mb := NewMessageBoard()
+	mb.BeforeRunonce()
 	SendMessage(JoinMapMsg{JoinMapPtr: nil, Tag: 1}, mb)
 	SendMessage(JoinMapMsg{JoinMapPtr: nil, IsShuffle: true, ShuffleIdx: 1, Tag: 2}, mb)
 	SendMessage(TopValueMessage{TopValueZM: []byte{}, Tag: 3}, mb)
 	SendRuntimeFilter(RuntimeFilterMessage{Typ: RuntimeFilter_PASS}, &plan.RuntimeFilterSpec{}, mb)
+	mb.DebugString()
+	mb.Reset()
+	mb.multiCN = true
 	mb.DebugString()
 }

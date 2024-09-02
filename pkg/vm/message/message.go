@@ -17,10 +17,11 @@ package message
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -76,17 +77,17 @@ type MessageBoard struct {
 	reset         bool // for debug purpose
 	multiCN       bool
 	stmtId        uuid.UUID
-	MessageCenter *MessageCenter
-	Messages      []*Message
-	Waiters       []chan bool
-	RwMutex       *sync.RWMutex
+	messageCenter *MessageCenter
+	messages      []*Message
+	waiters       []chan bool
+	rwMutex       *sync.RWMutex
 }
 
 func NewMessageBoard() *MessageBoard {
 	m := &MessageBoard{
-		Messages: make([]*Message, 0, 16),
-		Waiters:  make([]chan bool, 0, 16),
-		RwMutex:  &sync.RWMutex{},
+		messages: make([]*Message, 0, 16),
+		waiters:  make([]chan bool, 0, 16),
+		rwMutex:  &sync.RWMutex{},
 	}
 	return m
 }
@@ -101,9 +102,9 @@ func (m *MessageBoard) DebugString() string {
 	} else {
 		buf.WriteString("messageBoard on single CN\n")
 	}
-	buf.WriteString("messageBoard length: " + strconv.Itoa(len(m.Messages)) + "\n")
-	for i := range m.Messages {
-		message := *m.Messages[i]
+	buf.WriteString("messageBoard length: " + strconv.Itoa(len(m.messages)) + "\n")
+	for i := range m.messages {
+		message := *m.messages[i]
 		buf.WriteString(message.DebugString() + "\n")
 	}
 	return buf.String()
@@ -116,35 +117,35 @@ func (m *MessageBoard) SetMultiCN(center *MessageCenter, stmtId uuid.UUID) *Mess
 	if ok {
 		return mb
 	}
-	m.RwMutex.Lock()
+	m.rwMutex.Lock()
 	m.multiCN = true
 	m.stmtId = stmtId
-	m.MessageCenter = center
-	m.RwMutex.Unlock()
+	m.messageCenter = center
+	m.rwMutex.Unlock()
 	center.StmtIDToBoard[stmtId] = m
 	return m
 }
 
 func (m *MessageBoard) BeforeRunonce() {
 	// call this before runonce
-	m.RwMutex.Lock()
-	defer m.RwMutex.Unlock()
+	m.rwMutex.Lock()
+	defer m.rwMutex.Unlock()
 	m.reset = false
 }
 
 func (m *MessageBoard) Reset() *MessageBoard {
 	if m.multiCN {
-		m.MessageCenter.RwMutex.Lock()
-		delete(m.MessageCenter.StmtIDToBoard, m.stmtId)
-		m.MessageCenter.RwMutex.Unlock()
+		m.messageCenter.RwMutex.Lock()
+		delete(m.messageCenter.StmtIDToBoard, m.stmtId)
+		m.messageCenter.RwMutex.Unlock()
 		// other pipeline could still access thie messageBoard
 		// so reset current message board to a new one
 		return NewMessageBoard()
 	}
-	m.RwMutex.Lock()
-	defer m.RwMutex.Unlock()
-	m.Messages = m.Messages[:0]
-	m.Waiters = m.Waiters[:0]
+	m.rwMutex.Lock()
+	defer m.rwMutex.Unlock()
+	m.messages = m.messages[:0]
+	m.waiters = m.waiters[:0]
 	m.multiCN = false
 	m.reset = true
 	return m
@@ -169,17 +170,17 @@ func NewMessageReceiver(tags []int32, addr MessageAddress, mb *MessageBoard) *Me
 
 func SendMessage(m Message, mb *MessageBoard) {
 	if m.GetReceiverAddr().CnAddr == CURRENTCN { // message for current CN
-		mb.RwMutex.Lock()
-		mb.Messages = append(mb.Messages, &m)
+		mb.rwMutex.Lock()
+		mb.messages = append(mb.messages, &m)
 		if m.NeedBlock() {
 			// broadcast for block message
-			for _, ch := range mb.Waiters {
+			for _, ch := range mb.waiters {
 				if ch != nil && len(ch) == 0 {
 					ch <- true
 				}
 			}
 		}
-		mb.RwMutex.Unlock()
+		mb.rwMutex.Unlock()
 	} else {
 		//todo: send message to other CN, need to lookup cnlist
 		panic("unsupported message yet!")
@@ -187,15 +188,15 @@ func SendMessage(m Message, mb *MessageBoard) {
 }
 
 func (mr *MessageReceiver) receiveMessageNonBlock() []Message {
-	mr.mb.RwMutex.RLock()
-	defer mr.mb.RwMutex.RUnlock()
+	mr.mb.rwMutex.RLock()
+	defer mr.mb.rwMutex.RUnlock()
 	var result []Message
-	lenMessages := int32(len(mr.mb.Messages))
+	lenMessages := int32(len(mr.mb.messages))
 	for ; mr.offset < lenMessages; mr.offset++ {
-		if mr.mb.Messages[mr.offset] == nil {
+		if mr.mb.messages[mr.offset] == nil {
 			continue
 		}
-		message := *mr.mb.Messages[mr.offset]
+		message := *mr.mb.messages[mr.offset]
 		if !MatchAddress(message, mr.addr) {
 			continue
 		}
@@ -214,10 +215,10 @@ func (mr *MessageReceiver) Free() {
 	if len(mr.received) == 0 {
 		return
 	}
-	mr.mb.RwMutex.Lock()
-	defer mr.mb.RwMutex.Unlock()
+	mr.mb.rwMutex.Lock()
+	defer mr.mb.rwMutex.Unlock()
 	for i := range mr.received {
-		mr.mb.Messages[mr.received[i]] = nil
+		mr.mb.messages[mr.received[i]] = nil
 	}
 	mr.received = nil
 	mr.waiter = nil
@@ -230,9 +231,9 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 	}
 	if mr.waiter == nil {
 		mr.waiter = make(chan bool, 1)
-		mr.mb.RwMutex.Lock()
-		mr.mb.Waiters = append(mr.mb.Waiters, mr.waiter)
-		mr.mb.RwMutex.Unlock()
+		mr.mb.rwMutex.Lock()
+		mr.mb.waiters = append(mr.mb.waiters, mr.waiter)
+		mr.mb.rwMutex.Unlock()
 	}
 	for {
 		result = mr.receiveMessageNonBlock()
