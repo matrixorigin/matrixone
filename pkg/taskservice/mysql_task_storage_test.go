@@ -252,4 +252,16 @@ func TestDaemonTaskInSqlMock(t *testing.T) {
 	}})
 	assert.NoError(t, err)
 	assert.Equal(t, 1, update)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(heartbeatDaemonTask).WithArgs(time.Time{}, 0).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	heartbeat, err := storage.HeartbeatDaemonTask(context.Background(), []task.DaemonTask{{
+		ID: 0, Metadata: task.TaskMetadata{ID: "test"},
+	}})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, heartbeat)
+
+	mock.ExpectClose()
 }
