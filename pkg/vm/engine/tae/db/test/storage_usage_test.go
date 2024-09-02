@@ -355,21 +355,21 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 		memo.DeltaUpdate(usages[idx], false)
 		gCollector.Usage.ReservedAccIds[usages[idx].AccId] = struct{}{}
 	}
-			insSegIdxes := make(map[int]struct{})
-			var segInserts []*catalog.ObjectEntry
-			{
-				for i := 0; i < len(usages); i++ {
-					insSegIdxes[i] = struct{}{}
-				}
-				_, _, segInserts = mockDeletesAndInserts(usages, nil, nil, nil, insSegIdxes)
-			}
+	insSegIdxes := make(map[int]struct{})
+	var segInserts []*catalog.ObjectEntry
+	{
+		for i := 0; i < len(usages); i++ {
+			insSegIdxes[i] = struct{}{}
+		}
+		_, _, segInserts = mockDeletesAndInserts(usages, nil, nil, nil, insSegIdxes)
+	}
 
-			for idx := range usages {
-				memo.DeltaUpdate(usages[idx], false)
+	for idx := range usages {
+		memo.DeltaUpdate(usages[idx], false)
 
-				gCollector.Usage.ObjInserts = append(gCollector.Usage.ObjInserts, segInserts[idx])
-				gCollector.Usage.ReservedAccIds[usages[idx].AccId] = struct{}{}
-			}
+		gCollector.Usage.ObjInserts = append(gCollector.Usage.ObjInserts, segInserts[idx])
+		gCollector.Usage.ReservedAccIds[usages[idx].AccId] = struct{}{}
+	}
 
 	// test memo reply to global ckp
 	{
@@ -389,15 +389,15 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 		sort.Slice(usages, func(i, j int) bool {
 			return memo.GetCache().LessFunc()(usages[i], usages[j])
 		})
-				memUsages := memo.GatherAllAccSize()
-				require.Equal(t, accCnt, len(memUsages))
+		memUsages := memo.GatherAllAccSize()
+		require.Equal(t, accCnt, len(memUsages))
 
-				abstract := memo.GatherObjectAbstractForAllAccount()
-				require.Equal(t, accCnt, len(abstract))
-				for id, aa := range abstract {
-					require.Equal(t, dbCnt*tblCnt, aa.TotalObjCnt)
-					require.Equal(t, int(memUsages[id]), aa.TotalObjSize)
-				}
+		abstract := memo.GatherObjectAbstractForAllAccount()
+		require.Equal(t, accCnt, len(abstract))
+		for id, aa := range abstract {
+			require.Equal(t, dbCnt*tblCnt, aa.TotalObjCnt)
+			require.Equal(t, int(memUsages[id]), aa.TotalObjSize)
+		}
 
 		accCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
 		dbCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
@@ -806,7 +806,8 @@ func Test_Objects2Usages(t *testing.T) {
 
 	turnA := logtail.Objects2Usages(inserts[:len(inserts)/2], false)
 	for i := range turnA {
-		require.Equal(t, uint64(inserts[i].Size()), turnA[i].Size)
+		stats := inserts[i].GetObjectStats()
+		require.Equal(t, uint64(stats.Size()), turnA[i].Size)
 		require.Equal(t, 0, turnA[i].TotalObjCnt)
 		require.Equal(t, 0, turnA[i].TotalBlkCnt)
 		require.Equal(t, 0, turnA[i].TotalRowCnt)
@@ -815,9 +816,10 @@ func Test_Objects2Usages(t *testing.T) {
 	turnB := logtail.Objects2Usages(inserts[len(inserts)/2:], true)
 	offset := len(inserts) / 2
 	for i := range turnB {
-		require.Equal(t, uint64(inserts[i+offset].Size()), turnB[i].Size)
+		stats := inserts[i+offset].GetObjectStats()
+		require.Equal(t, uint64(stats.Size()), turnB[i].Size)
 		require.Equal(t, 1, turnB[i].TotalObjCnt)
-		require.Equal(t, int(inserts[i+offset].BlkCnt()), turnB[i].TotalBlkCnt)
-		require.Equal(t, int(inserts[i+offset].Rows()), turnB[i].TotalRowCnt)
+		require.Equal(t, int(stats.BlkCnt()), turnB[i].TotalBlkCnt)
+		require.Equal(t, int(stats.Rows()), turnB[i].TotalRowCnt)
 	}
 }
