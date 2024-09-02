@@ -62,10 +62,12 @@ type txnObject struct {
 
 type ObjectIt struct {
 	sync.RWMutex
-	linkIt btree.IterG[*catalog.ObjectEntry]
-	curr   *catalog.ObjectEntry
-	table  *txnTable
-	err    error
+	linkIt      btree.IterG[*catalog.ObjectEntry]
+	curr        *catalog.ObjectEntry
+	table       *txnTable
+	reverse     bool
+	firstCalled bool
+	err         error
 }
 
 type composedObjectIt struct {
@@ -73,16 +75,17 @@ type composedObjectIt struct {
 	uncommitted *catalog.ObjectEntry
 }
 
-func newObjectItOnSnap(table *txnTable, isTombstone bool) handle.ObjectIt {
+func newObjectItOnSnap(table *txnTable, isTombstone bool, reverse bool) handle.ObjectIt {
 	it := &ObjectIt{
-		linkIt: table.entry.MakeObjectIt(isTombstone),
-		table:  table,
+		linkIt:  table.entry.MakeObjectIt(isTombstone),
+		table:   table,
+		reverse: reverse,
 	}
 	return it
 }
 
 func newObjectIt(table *txnTable, isTombstone bool) handle.ObjectIt {
-	it := newObjectItOnSnap(table, isTombstone)
+	it := newObjectItOnSnap(table, isTombstone, false)
 	if table.getBaseTable(isTombstone) != nil && table.getBaseTable(isTombstone).tableSpace != nil {
 		cit := &composedObjectIt{
 			ObjectIt:    it.(*ObjectIt),
@@ -101,6 +104,26 @@ func (it *ObjectIt) Close() error {
 func (it *ObjectIt) GetError() error { return it.err }
 
 func (it *ObjectIt) Next() bool {
+	if it.reverse {
+		for {
+			var ok bool
+			if !it.firstCalled {
+				ok = it.linkIt.Last()
+				it.firstCalled = true
+			} else {
+				ok = it.linkIt.Prev()
+			}
+			if !ok {
+				return false
+			}
+			entry := it.linkIt.Item()
+			valid := entry.IsVisible(it.table.store.txn)
+			if valid {
+				it.curr = entry
+				return true
+			}
+		}
+	}
 	var valid bool
 	for {
 		if !it.linkIt.Next() {
@@ -158,24 +181,6 @@ func (obj *txnObject) Close() (err error) {
 func (obj *txnObject) GetTotalChanges() int {
 	return obj.entry.GetObjectData().GetTotalChanges()
 }
-func (obj *txnObject) RangeDelete(blkID uint16, start, end uint32, dt handle.DeleteType, mp *mpool.MPool) (err error) {
-	schema := obj.table.GetLocalSchema(true)
-	pkDef := schema.GetPrimaryKey()
-	pkVec := makeWorkspaceVector(pkDef.Type)
-	defer pkVec.Close()
-	for row := start; row <= end; row++ {
-		pkVal, _, err := obj.entry.GetObjectData().GetValue(
-			obj.table.store.GetContext(), obj.Txn, schema, blkID, int(row), pkDef.Idx, true, mp,
-		)
-		if err != nil {
-			return err
-		}
-		pkVec.Append(pkVal, false)
-	}
-	id := obj.entry.AsCommonID()
-	id.SetBlockOffset(blkID)
-	return obj.Txn.GetStore().RangeDelete(id, start, end, pkVec, dt)
-}
 func (obj *txnObject) GetMeta() any           { return obj.entry }
 func (obj *txnObject) String() string         { return obj.entry.String() }
 func (obj *txnObject) GetID() *types.Objectid { return obj.entry.ID() }
@@ -218,12 +223,6 @@ func (obj *txnObject) Prefetch(idxes []int) error {
 }
 
 func (obj *txnObject) Fingerprint() *common.ID { return obj.entry.AsCommonID() }
-
-func (obj *txnObject) UpdateDeltaLoc(blkID uint16, deltaLoc objectio.Location) error {
-	id := obj.entry.AsCommonID()
-	id.SetBlockOffset(blkID)
-	return obj.table.store.UpdateDeltaLoc(id, deltaLoc)
-}
 
 func (obj *txnObject) Scan(
 	ctx context.Context,

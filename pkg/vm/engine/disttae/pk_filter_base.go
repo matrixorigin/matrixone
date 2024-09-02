@@ -57,8 +57,8 @@ func newBasePKFilter(
 			}
 
 			for idx := 0; idx < len(filters)-1; {
-				f1 := filters[idx]
-				f2 := filters[idx+1]
+				f1 := &filters[idx]
+				f2 := &filters[idx+1]
 				ff, err := mergeFilters(f1, f2, function.AND, proc)
 				if err != nil {
 					return basePKFilter{}, err
@@ -73,8 +73,8 @@ func newBasePKFilter(
 			}
 
 			for idx := 0; idx < len(filters)-1; idx++ {
-				if vec, ok := filters[idx].vec.(*vector.Vector); ok {
-					vec.Free(proc.Mp())
+				if filters[idx].vec != nil {
+					filters[idx].vec.Free(proc.Mp())
 				}
 			}
 
@@ -100,8 +100,8 @@ func newBasePKFilter(
 			}
 
 			for idx := 0; idx < len(filters)-1; {
-				f1 := filters[idx]
-				f2 := filters[idx+1]
+				f1 := &filters[idx]
+				f2 := &filters[idx+1]
 				ff, err := mergeFilters(f1, f2, function.OR, proc)
 				if err != nil {
 					return basePKFilter{}, nil
@@ -116,8 +116,8 @@ func newBasePKFilter(
 			}
 
 			for idx := 0; idx < len(filters)-1; idx++ {
-				if vec, ok := filters[idx].vec.(*vector.Vector); ok {
-					vec.Free(proc.Mp())
+				if filters[idx].vec != nil {
+					filters[idx].vec.Free(proc.Mp())
 				}
 			}
 
@@ -196,7 +196,13 @@ func newBasePKFilter(
 			}
 			filter.valid = true
 			filter.op = function.IN
-			filter.vec = vals[0]
+			{
+				vec := vector.NewVec(types.T_any.ToType())
+				if err = vec.UnmarshalBinary(vals[0]); err != nil {
+					return basePKFilter{}, err
+				}
+				filter.vec = vec
+			}
 			filter.oid = oid
 
 		case "prefix_in":
@@ -206,7 +212,13 @@ func newBasePKFilter(
 			}
 			filter.valid = true
 			filter.op = function.PREFIX_IN
-			filter.vec = vals[0]
+			{
+				vec := vector.NewVec(types.T_any.ToType())
+				if err = vec.UnmarshalBinary(vals[0]); err != nil {
+					return basePKFilter{}, err
+				}
+				filter.vec = vec
+			}
 			filter.oid = oid
 
 		case "between":

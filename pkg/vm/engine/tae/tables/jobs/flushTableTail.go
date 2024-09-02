@@ -589,6 +589,11 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 
 	// read from aobjects
 	readedBats := make([]*containers.Batch, 0, len(objHandles))
+	defer func() {
+		for i := range readedBats {
+			readedBats[i].Close()
+		}
+	}()
 	for _, block := range objHandles {
 		err = block.Prefetch(readColIdxs)
 		if err != nil {
@@ -867,6 +872,7 @@ func (task *flushTableTailTask) mergePersistedTombstones(ctx context.Context) er
 	if len(tombstones) < 2 {
 		return nil
 	}
+
 	tombstoneTask, err := NewMergeObjectsTask(
 		tasks.WaitableCtx,
 		task.txn,

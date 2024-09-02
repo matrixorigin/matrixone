@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -788,6 +789,17 @@ func (s *service) GetSQLExecutor() executor.SQLExecutor {
 
 func (s *service) GetBootstrapService() bootstrap.Service {
 	return s.bootstrapService
+}
+
+func (s *service) GetTimestampWaiter() client.TimestampWaiter {
+	return s.timestampWaiter
+}
+func (s *service) GetEngine() engine.Engine {
+	return s.storeEngine
+}
+
+func (s *service) GetClock() clock.Clock {
+	return runtime.ServiceRuntime(s.cfg.UUID).Clock()
 }
 
 // put the waiting-next type msg into client session's cache and return directly

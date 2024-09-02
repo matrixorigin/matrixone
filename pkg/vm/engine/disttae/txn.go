@@ -116,7 +116,7 @@ func (txn *Transaction) WriteBatch(
 		}
 		txn.genBlock()
 		len := bat.RowCount()
-		genRowidVec = txn.proc.GetVector(types.T_Rowid.ToType())
+		genRowidVec = vector.NewVec(types.T_Rowid.ToType())
 		for i := 0; i < len; i++ {
 			if err := vector.AppendFixed(genRowidVec, txn.genRowId(), false,
 				txn.proc.Mp()); err != nil {
@@ -405,14 +405,11 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 	//offset < 0 indicates commit.
 	if offset < 0 {
-		//if txn.workspaceSize < WorkspaceThreshold {
-		//	return nil
-		//}
-		if txn.workspaceSize < WorkspaceThreshold && txn.insertCount < InsertEntryThreshold {
+		if txn.workspaceSize < txn.engine.workspaceThreshold && txn.insertCount < txn.engine.insertEntryMaxCount {
 			return nil
 		}
 	} else {
-		if txn.workspaceSize < WorkspaceThreshold {
+		if txn.workspaceSize < txn.engine.workspaceThreshold {
 			return nil
 		}
 	}

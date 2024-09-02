@@ -72,7 +72,7 @@ func (p *PartitionState) ApproxDataObjectsNum() int {
 	return p.dataObjects.Len()
 }
 func (p *PartitionState) ApproxTombstoneObjectsNum() int {
-	return p.tombstoneObjets.Len()
+	return p.tombstoneObjects.Len()
 }
 
 func (p *PartitionState) NewObjectsIter(
@@ -87,7 +87,7 @@ func (p *PartitionState) NewObjectsIter(
 
 	var iter btree.IterG[ObjectEntry]
 	if visitTombstone {
-		iter = p.tombstoneObjets.Copy().Iter()
+		iter = p.tombstoneObjects.Copy().Iter()
 	} else {
 		iter = p.dataObjects.Copy().Iter()
 	}
@@ -143,21 +143,6 @@ func (p *PartitionState) GetChangedObjsBetween(
 
 	}
 	return
-}
-
-func (p *PartitionState) GetBlockDeltaLoc(bid types.Blockid) (objectio.ObjectLocation, types.TS, bool) {
-	iter := p.tombstoneObjets.Copy().Iter()
-	defer iter.Release()
-
-	pivot := ObjectEntry{}
-	objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(&bid))
-	if ok := iter.Seek(pivot); ok {
-		e := iter.Item()
-		if bytes.Equal(e.ObjectShortName()[:], objectio.ShortName(&bid)[:]) {
-			return objectio.ObjectLocation(e.ObjectLocation()), e.CommitTS, true
-		}
-	}
-	return objectio.ObjectLocation{}, types.TS{}, false
 }
 
 func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {

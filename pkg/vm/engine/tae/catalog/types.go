@@ -15,12 +15,9 @@
 package catalog
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -89,19 +86,6 @@ func GetTombstoneSchema(objectSchema *Schema) *Schema {
 	return schema
 }
 
-func NewTombstoneBatch(pkType types.Type, mp *mpool.MPool) *containers.Batch {
-	bat := containers.NewBatch()
-	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), mp)
-	commitTSVec := containers.MakeVector(types.T_TS.ToType(), mp)
-	pkVec := containers.MakeVector(pkType, mp)
-	abortVec := containers.MakeVector(types.T_bool.ToType(), mp)
-	bat.AddVector(AttrRowID, rowIDVec)
-	bat.AddVector(AttrCommitTs, commitTSVec)
-	bat.AddVector(AttrPKVal, pkVec)
-	bat.AddVector(AttrAborted, abortVec)
-	return bat
-}
-
 // rowid, pk
 // used in range delete
 func NewTombstoneBatchWithPKVector(pkVec containers.Vector, mp *mpool.MPool) *containers.Batch {
@@ -136,25 +120,4 @@ func BuildLocation(stats objectio.ObjectStats, blkOffset uint16, blkMaxRows uint
 	}
 	metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, blkOffset)
 	return metaloc
-}
-
-func CNTombstoneView2DNTombstoneView(cnView *containers.Batch, commitTS types.TS) (dnView *containers.Batch) {
-	if cnView == nil {
-		return nil
-	}
-	if len(cnView.Vecs) != 2 {
-		panic(fmt.Sprintf("logic err, cnView length %d", len(cnView.Vecs)))
-	}
-	dnView = containers.NewBatch()
-	length := cnView.Length()
-
-	rowIDVector := cnView.Vecs[0]
-	commitTSVector := containers.NewConstFixed(types.T_TS.ToType(), commitTS, length, containers.Options{Allocator: common.MergeAllocator})
-	pkVector := cnView.Vecs[1]
-	abortVector := containers.NewConstFixed(types.T_bool.ToType(), false, length, containers.Options{Allocator: common.MergeAllocator})
-	dnView.AddVector(AttrRowID, rowIDVector)
-	dnView.AddVector(AttrCommitTs, commitTSVector)
-	dnView.AddVector(AttrPKVal, pkVector)
-	dnView.AddVector(AttrAborted, abortVector)
-	return
 }
