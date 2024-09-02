@@ -125,6 +125,9 @@ func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, in
 				receiver.regs = append(receiver.regs[:chosen], receiver.regs[chosen+1:]...)
 				receiver.nbs = append(receiver.nbs[:idx], receiver.nbs[idx+1:]...)
 				receiver.alive--
+				if receiver.alive == 0 {
+					return nil, info
+				}
 				continue
 			}
 
