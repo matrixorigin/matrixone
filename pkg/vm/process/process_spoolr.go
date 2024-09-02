@@ -39,10 +39,31 @@ type PipelineSignal struct {
 	directly *batch.Batch
 }
 
+// NewPipelineSignalToGetFromSpool return a signal indicate the receiver to get data from source by index.
+func NewPipelineSignalToGetFromSpool(source pSpool.PipelineCommunication, index int) PipelineSignal {
+	return PipelineSignal{
+		typ:      GetFromIndex,
+		source:   source,
+		index:    index,
+		directly: nil,
+	}
+}
+
+// NewPipelineSignalToDirectly return a signal indicates the receiver to get data from signal directly.
+// But users should watch that, the data shouldn't be allocated from mpool.
+func NewPipelineSignalToDirectly(data *batch.Batch) PipelineSignal {
+	return PipelineSignal{
+		typ:      GetDirectly,
+		source:   nil,
+		index:    0,
+		directly: data,
+	}
+}
+
 // Action will get the input batch from one place according to which type this signal is.
 //
 // the result batch of this function is an READ-ONLY one.
-func (signal *PipelineSignal) Action() *batch.Batch {
+func (signal PipelineSignal) Action() *batch.Batch {
 	if signal.typ == GetFromIndex {
 		return signal.source.ReceiveBatch(signal.index)
 	}

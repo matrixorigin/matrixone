@@ -33,9 +33,6 @@ type PipelineCommunication interface {
 	// ReceiveBatch get data from the idx-th receiver.
 	ReceiveBatch(idx int) *batch.Batch
 
-	// Reset the sender and receivers.
-	Reset()
-
 	// Close the sender and receivers.
 	Close()
 }

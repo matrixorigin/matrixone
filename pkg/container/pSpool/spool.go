@@ -87,11 +87,6 @@ func (ps *pipelineSpool) waitReceiversOver() {
 	}
 }
 
-func (ps *pipelineSpool) Reset() {
-	ps.waitReceiversOver()
-	ps.cache.Reset()
-}
-
 func (ps *pipelineSpool) Close() {
 	ps.waitReceiversOver()
 	ps.cache.Free()

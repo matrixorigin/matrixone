@@ -241,11 +241,6 @@ func (cb *cachedBatch) getSuitableVector(
 	return vec
 }
 
-func (cb *cachedBatch) Reset() {
-	// todo: optimized.
-	cb.Free()
-}
-
 func (cb *cachedBatch) Free() {
 	m := cap(cb.freeBatchPointer)
 	for i := 0; i < m; i++ {
