@@ -19,9 +19,6 @@ func (m *tombstonePolicy) onObject(obj *catalog.ObjectEntry) {
 }
 
 func (m *tombstonePolicy) revise(int64, int64, *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
-	if len(m.tombstones) < 2 {
-		return nil, TaskHostDN
-	}
 	if len(m.tombstones) > 1 {
 		return m.tombstones, TaskHostDN
 	}

@@ -79,7 +79,7 @@ func NewBaseTask(impl Task, taskType TaskType, ctx *Context) *BaseTask {
 
 func (task *BaseTask) onDone(_ base.IOp) {
 	logutil.Debug("[Done]", common.OperationField(task.impl.Name()),
-		common.DurationField(time.Duration(task.GetExecuteTime())),
+		common.DurationField(time.Duration(task.GetExecutTime())),
 		common.ErrorField(task.Err))
 }
 func (task *BaseTask) Type() TaskType      { return task.taskType }

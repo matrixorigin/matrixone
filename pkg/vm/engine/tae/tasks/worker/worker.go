@@ -215,7 +215,7 @@ func (w *OpWorker) onOp(op iops.IOp) {
 		w.Stats.AddSuccessed()
 	}
 	op.SetError(err)
-	w.Stats.RecordTime(op.GetExecuteTime())
+	w.Stats.RecordTime(op.GetExecutTime())
 }
 
 func (w *OpWorker) onCmd(cmd Cmd) {

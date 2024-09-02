@@ -44,7 +44,7 @@ type heartbeater struct {
 	interval time.Duration
 	ctx      context.Context
 	cancel   context.CancelFunc
-	wg       sync.WaitGroup
+	wg       *sync.WaitGroup
 }
 
 func NewHeartBeaterWithFunc(interval time.Duration, onExec, onStop func()) *heartbeater {
@@ -62,14 +62,15 @@ func NewHeartBeater(interval time.Duration, handle base.IHBHandle) *heartbeater 
 }
 
 func (c *heartbeater) Start() {
+	c.wg = &sync.WaitGroup{}
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
 		ticker := time.NewTicker(c.interval)
-		defer ticker.Stop()
 		for {
 			select {
 			case <-c.ctx.Done():
+				ticker.Stop()
 				return
 			case <-ticker.C:
 				c.handle.OnExec()

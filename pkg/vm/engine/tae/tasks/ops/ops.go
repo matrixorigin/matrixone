@@ -120,7 +120,7 @@ func (op *Op) GetEndTime() time.Time {
 	return op.EndTime
 }
 
-func (op *Op) GetExecuteTime() int64 {
+func (op *Op) GetExecutTime() int64 {
 	return op.EndTime.Sub(op.StartTime).Microseconds()
 }
 
