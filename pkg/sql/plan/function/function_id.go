@@ -279,6 +279,8 @@ const (
 	TIMESTAMP
 	DATE_FORMAT
 	JSON_EXTRACT
+	JSON_EXTRACT_STRING
+	JSON_EXTRACT_FLOAT64
 	JSON_QUOTE
 	JSON_UNQUOTE
 	JSON_ROW
@@ -582,6 +584,8 @@ var functionIdRegister = map[string]int32{
 	"version":                        VERSION,
 	"collation":                      COLLATION,
 	"json_extract":                   JSON_EXTRACT,
+	"json_extract_string":            JSON_EXTRACT_STRING,
+	"json_extract_float64":           JSON_EXTRACT_FLOAT64,
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
 	"json_row":                       JSON_ROW,

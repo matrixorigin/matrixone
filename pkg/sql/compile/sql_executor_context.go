@@ -69,7 +69,7 @@ func (c *compilerContext) GetSnapshot() *plan.Snapshot {
 func (c *compilerContext) SetSnapshot(snapshot *plan.Snapshot) {
 }
 
-func (c *compilerContext) ReplacePlan(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
+func (c *compilerContext) InitExecuteStmtParam(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -192,7 +192,10 @@ func (c *compilerContext) GetDbLevelConfig(dbName string, varName string) (strin
 }
 
 func (c *compilerContext) DefaultDatabase() string {
-	return c.defaultDB
+	if c.lower == 0 {
+		return c.defaultDB
+	}
+	return strings.ToLower(c.defaultDB)
 }
 
 func (c *compilerContext) GetPrimaryKeyDef(

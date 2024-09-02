@@ -97,9 +97,9 @@ func _dupColDef(src *plan.ColDef) *plan.ColDef {
 	}
 }
 
-func _getColDefs(coldefs []*plan.ColDef) []*plan.ColDef {
-	ret := make([]*plan.ColDef, 0, len(coldefs))
-	for _, v := range coldefs {
+func _getColDefs(colDefs []*plan.ColDef) []*plan.ColDef {
+	ret := make([]*plan.ColDef, 0, len(colDefs))
+	for _, v := range colDefs {
 		ret = append(ret, _dupColDef(v))
 	}
 	return ret

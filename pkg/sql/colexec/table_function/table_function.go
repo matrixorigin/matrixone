@@ -78,6 +78,8 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 		f, e = moCacheCall(idx, proc, tblArg, &result)
 	case FULLTEXT_INDEX_SCAN:
 		f, e = fulltextIndexScanCall(idx, proc, tblArg, &result)
+	case "stage_list":
+		f, e = stageListCall(idx, proc, tblArg, &result)
 	default:
 		result.Status = vm.ExecStop
 		return result, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))
@@ -168,6 +170,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		return moCachePrepare(proc, tblArg)
 	case FULLTEXT_INDEX_SCAN:
 		return fulltextIndexScanPrepare(proc, tblArg)
+	case "stage_list":
+		return stageListPrepare(proc, tblArg)
 	default:
 		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))
 	}

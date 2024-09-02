@@ -2397,6 +2397,14 @@ var (
 			output: "alter table titles partition by range(to_days(from_date)) (partition p01 values less than (to_days(1985-12-31)), partition p02 values less than (to_days(1986-12-31)), partition p03 values less than (to_days(1987-12-31)))",
 		},
 		{
+			input:  "Alter table nation rename to nations",
+			output: "alter table nation rename to nations",
+		},
+		{
+			input:  "Rename table nation to nations",
+			output: "alter table nation rename to nations",
+		},
+		{
 			input:  "create table pt2 (id int, date_column date) partition by range(year(date_column)) (partition p1 values less than (2010) comment 'p1 comment', partition p2 values less than maxvalue comment 'p3 comment')",
 			output: "create table pt2 (id int, date_column date) partition by range(year(date_column)) (partition p1 values less than (2010) comment = 'p1 comment', partition p2 values less than (MAXVALUE) comment = 'p3 comment')",
 		},

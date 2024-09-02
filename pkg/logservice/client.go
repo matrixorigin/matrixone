@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
@@ -130,6 +131,12 @@ func (c *managedClient) GetLogRecord(payloadLength int) pb.LogRecord {
 }
 
 func (c *managedClient) Append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
+	start := time.Now()
+	defer func() {
+		v2.LogServiceAppendDurationHistogram.Observe(time.Since(start).Seconds())
+		v2.LogServiceAppendCounter.Inc()
+		v2.LogServiceAppendBytesHistogram.Observe(float64(len(rec.Data)))
+	}()
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			return 0, err

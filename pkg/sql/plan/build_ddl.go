@@ -269,7 +269,7 @@ func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, err
 		switch opt := option.(type) {
 		case *tree.CreateSourceWithOption:
 			key := strings.ToLower(string(opt.Key))
-			val := opt.Val.(*tree.NumVal).OrigString()
+			val := opt.Val.(*tree.NumVal).String()
 			properties = append(properties, &plan.Property{
 				Key:   key,
 				Value: val,

@@ -981,8 +981,11 @@ message Query {
 	// load Tag
 	bool loadTag = 6;
 
+	// load write S3
+	bool loadWriteS3 = 7;
+
 	//detectSqls are sqls detect fk self refer constraint
-	repeated string detectSqls= 7;
+	repeated string detectSqls= 8;
 }
 
 message TransationControl {

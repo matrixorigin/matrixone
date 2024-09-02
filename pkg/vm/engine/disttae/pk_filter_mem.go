@@ -252,10 +252,10 @@ func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(ts timestamp.Timestamp) {
 		}
 
 	case function.IN, function.PREFIX_IN:
-		// may be it's better to iterate rows instead.
-		if len(f.packed) > 128 {
-			return
-		}
+		// // may be it's better to iterate rows instead.
+		// if len(f.packed) > 128 {
+		// 	return
+		// }
 		//spec = logtailreplay.InKind(f.packed, f.op)
 		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
 			return logtailreplay.InKind(f.packed, f.op)
