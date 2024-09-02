@@ -48,14 +48,21 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) ([]
 	if len(m.objects) < 2 {
 		return nil, TaskHostDN
 	}
-	objs, taskHostKind := m.reviseDataObjs(mem, config)
+	if cpu > 90 {
+		return nil, TaskHostDN
+	}
+	objs, taskHostKind := m.reviseDataObjs(config)
 	if len(objs) > 1 {
 		return objs, taskHostKind
+	}
+	objs = controlMem(objs, mem)
+	if len(objs) < 2 {
+		return nil, TaskHostDN
 	}
 	return nil, taskHostKind
 }
 
-func (m *objOverlapPolicy) reviseDataObjs(mem int64, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
 	if !m.objects[0].GetSortKeyZonemap().IsInited() {
 		size := min(config.MergeMaxOneRun, len(m.objects))
 		revisedObj := make([]*catalog.ObjectEntry, size)
@@ -122,10 +129,6 @@ func (m *objOverlapPolicy) reviseDataObjs(mem int64, config *BasicPolicyConfig) 
 	}
 	if len(objs) > config.MergeMaxOneRun {
 		objs = objs[:config.MergeMaxOneRun]
-	}
-	objs = controlMem(objs, mem)
-	if len(objs) < 2 {
-		return nil, TaskHostDN
 	}
 	return objs, TaskHostDN
 }
