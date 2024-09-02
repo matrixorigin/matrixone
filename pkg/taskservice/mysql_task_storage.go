@@ -257,11 +257,7 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 		return 0, err
 	}
 
-	prepare, err := tx.PrepareContext(ctx, updateAsyncTask+buildWhereClause(newConditions(condition...)))
-	if err != nil {
-		return 0, err
-	}
-	defer prepare.Close()
+	updateSql := updateAsyncTask + buildWhereClause(newConditions(condition...))
 	n := 0
 	for _, t := range tasks {
 		err := func() error {
@@ -278,7 +274,7 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 				return err
 			}
 
-			exec, err := prepare.ExecContext(ctx,
+			exec, err := tx.ExecContext(ctx, updateSql,
 				t.Metadata.Executor,
 				t.Metadata.Context,
 				string(j),
@@ -739,13 +735,7 @@ func (m *mysqlTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 		return 0, err
 	}
 
-	c := newConditions(condition...)
-	updateSql := updateDaemonTask + buildDaemonTaskWhereClause(c)
-	prepare, err := tx.PrepareContext(ctx, updateSql)
-	if err != nil {
-		return 0, err
-	}
-	defer prepare.Close()
+	updateSql := updateDaemonTask + buildDaemonTaskWhereClause(newConditions(condition...))
 	n := 0
 	for _, t := range tasks {
 		err := func() error {
@@ -772,7 +762,7 @@ func (m *mysqlTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 				lastRun = t.LastRun
 			}
 
-			exec, err := prepare.ExecContext(ctx,
+			exec, err := tx.ExecContext(ctx, updateSql,
 				t.Metadata.Executor,
 				t.Metadata.Context,
 				string(j),
@@ -911,11 +901,6 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 		return 0, err
 	}
 
-	prepare, err := tx.PrepareContext(ctx, heartbeatDaemonTask)
-	if err != nil {
-		return 0, err
-	}
-	defer prepare.Close()
 	n := 0
 	for _, t := range tasks {
 		err := func() error {
@@ -924,7 +909,7 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 				lastHeartbeat = t.LastHeartbeat
 			}
 
-			exec, err := prepare.ExecContext(ctx,
+			exec, err := tx.ExecContext(ctx, heartbeatDaemonTask,
 				lastHeartbeat,
 				t.ID,
 			)
