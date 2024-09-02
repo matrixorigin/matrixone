@@ -15,6 +15,7 @@
 package message
 
 import (
+	"context"
 	"sync"
 	"testing"
 
@@ -43,4 +44,9 @@ func TestMessage(t *testing.T) {
 	mb.DebugString()
 	mb.Reset()
 	mb.DebugString()
+
+	msgReceiver := NewMessageReceiver([]int32{4}, AddrBroadCastOnCurrentCN(), mb)
+	msgReceiver.debug = true
+	_, _, err = msgReceiver.ReceiveMessage(true, context.Background())
+	require.Error(t, err)
 }

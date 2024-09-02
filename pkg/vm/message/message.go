@@ -152,6 +152,7 @@ func (m *MessageBoard) Reset() *MessageBoard {
 }
 
 type MessageReceiver struct {
+	debug    bool // for unit test
 	offset   int32
 	tags     []int32
 	received []int32
@@ -240,7 +241,11 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 		if len(result) > 0 {
 			break
 		}
-		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), messageTimeout)
+		timeout := messageTimeout
+		if mr.debug {
+			timeout = 1 * time.Second
+		}
+		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), timeout)
 		select {
 		case <-timeoutCtx.Done():
 			timeoutCancel()
