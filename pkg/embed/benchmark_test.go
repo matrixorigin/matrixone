@@ -78,9 +78,12 @@ func BenchmarkSelect1Conn(b *testing.B) {
 
 			b.ResetTimer()
 			for range b.N {
-				rows, err := conn.QueryContext(ctx, `select 1`)
-				require.NoError(b, err)
-				rows.Close()
+				func() {
+					rows, err := conn.QueryContext(ctx, `select 1`)
+					require.NoError(b, err)
+					require.NoError(b, rows.Err())
+					defer rows.Close()
+				}()
 			}
 			b.StopTimer()
 		},
