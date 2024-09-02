@@ -398,13 +398,13 @@ func (node *SelectExpr) Format(ctx *FmtCtx) {
 
 // a GROUP BY clause.
 type GroupByClause struct {
-	GroupBy []Expr
-	RollUp  bool
+	GroupByExprs []Expr
+	RollUp       bool
 }
 
 func (node *GroupByClause) Format(ctx *FmtCtx) {
 	prefix := "group by "
-	for _, n := range *&node.GroupBy {
+	for _, n := range node.GroupByExprs {
 		ctx.WriteString(prefix)
 		n.Format(ctx)
 		prefix = ", "

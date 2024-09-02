@@ -5605,8 +5605,8 @@ group_by_opt:
 |   GROUP BY expression_list rollup_opt
     {
         $$ = &tree.GroupByClause{
-            GroupBy: $3,
-            RollUp: $4,
+            GroupByExprs: $3,
+            RollUp:       $4,
         }
     }
 

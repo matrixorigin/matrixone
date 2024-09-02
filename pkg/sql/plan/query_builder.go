@@ -2381,7 +2381,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				return 0, moerr.NewParseError(builder.GetContext(), "not support group by in recursive cte: '%v'", tree.String(clause.GroupBy, dialect.MYSQL))
 			}
 			groupBinder := NewGroupBinder(builder, ctx, selectList)
-			for _, group := range clause.GroupBy.GroupBy {
+			for _, group := range clause.GroupBy.GroupByExprs {
 				group, err = ctx.qualifyColumnNames(group, AliasAfterColumn)
 				if err != nil {
 					return 0, err

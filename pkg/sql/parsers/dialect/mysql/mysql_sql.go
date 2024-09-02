@@ -16567,8 +16567,8 @@ yydefault:
 //line mysql_sql.y:5606
 		{
 			yyLOCAL = &tree.GroupByClause{
-				GroupBy: yyDollar[3].exprsUnion(),
-				RollUp:  yyDollar[4].boolValUnion(),
+				GroupByExprs: yyDollar[3].exprsUnion(),
+				RollUp:       yyDollar[4].boolValUnion(),
 			}
 		}
 		yyVAL.union = yyLOCAL
