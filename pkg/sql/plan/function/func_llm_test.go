@@ -48,8 +48,8 @@ func TestChunkString(t *testing.T) {
 		{
 			testName:   "correct chunk with sentence",
 			text:       "Welcome to the MatrixOne documentation center!\n\nThis center holds related concepts and technical architecture introductions, product features, user guides, and reference manuals to help you work with MatrixOne.",
-			mode:       "paragraph",
-			wantReturn: "[[0, 47, \"Welcome to the MatrixOne documentation center!\\n\"], [47, 1, \"\\n\"], [48, 163, \"This center holds related concepts and technical architecture introductions, product features, user guides, and reference manuals to help you work with MatrixOne.\\n\"]]",
+			mode:       "sentence",
+			wantReturn: "[[0, 46, \"Welcome to the MatrixOne documentation center!\"], [46, 164, \"\\n\\nThis center holds related concepts and technical architecture introductions, product features, user guides, and reference manuals to help you work with MatrixOne.\"]]",
 			wantErr:    "",
 		},
 		{
