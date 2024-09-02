@@ -132,10 +132,10 @@ func addOpStatsToPlanNode(op *models.PhyOperator, nodes []*plan.Node) {
 		node.AnalyzeInfo.TimeConsumed += op.OpStats.TotalTimeConsumed
 		node.AnalyzeInfo.MemorySize += op.OpStats.TotalMemorySize
 		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.TotalWaitTimeConsumed
-		node.AnalyzeInfo.DiskIO += op.OpStats.TotalDiskIO
+		//node.AnalyzeInfo.DiskIO += op.OpStats.TotalDiskIO
 		node.AnalyzeInfo.S3IOByte += op.OpStats.TotalS3IOByte
-		node.AnalyzeInfo.S3IOInputCount += op.OpStats.TotalS3InputCount
-		node.AnalyzeInfo.S3IOOutputCount += op.OpStats.TotalS3OutputCount
+		//node.AnalyzeInfo.S3IOInputCount += op.OpStats.TotalS3InputCount
+		//node.AnalyzeInfo.S3IOOutputCount += op.OpStats.TotalS3OutputCount
 		node.AnalyzeInfo.NetworkIO += op.OpStats.TotalNetworkIO
 		node.AnalyzeInfo.ScanTime += op.OpStats.TotalScanTime
 		node.AnalyzeInfo.InsertTime += op.OpStats.TotalInsertTime

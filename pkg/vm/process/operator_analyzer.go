@@ -216,13 +216,13 @@ type OperatorStats struct {
 	TotalOutputSize       int64  `json:"TotalOutputSize,omitempty"`
 	TotalNetworkIO        int64  `json:"TotalNetworkIO,omitempty"`
 	TotalInputBlocks      int64  `json:"-"`
-	TotalDiskIO           int64  `json:"-"`
-	TotalS3IOByte         int64  `json:"-"`
-	TotalS3InputCount     int64  `json:"-"`
-	TotalS3OutputCount    int64  `json:"-"`
-	TotalScanTime         int64  `json:"-"`
-	TotalInsertTime       int64  `json:"-"`
-	TotalServiceTime      int64  `json:"-"`
+	//TotalDiskIO           int64  `json:"-"`
+	TotalS3IOByte int64 `json:"-"`
+	//TotalS3InputCount     int64  `json:"-"`
+	//TotalS3OutputCount    int64  `json:"-"`
+	TotalScanTime    int64 `json:"-"`
+	TotalInsertTime  int64 `json:"-"`
+	TotalServiceTime int64 `json:"-"`
 }
 
 func NewOperatorStats(operatorName string) *OperatorStats {
@@ -245,10 +245,7 @@ func (ps *OperatorStats) String() string {
 		"InBlock:%d "+
 		"OutSize:%dbytes "+
 		"MemSize:%dbytes "+
-		"DiskIO:%dbytes "+
 		"S3IOByte:%dbytes "+
-		"S3InCount:%d "+
-		"S3OutCount:%d "+
 		"NetworkIO:%dbytes "+
 		"ScanTime:%dns "+
 		"ServiceTime:%dns",
@@ -261,10 +258,7 @@ func (ps *OperatorStats) String() string {
 		ps.TotalInputBlocks,
 		ps.TotalOutputSize,
 		ps.TotalMemorySize,
-		ps.TotalDiskIO,
 		ps.TotalS3IOByte,
-		ps.TotalS3InputCount,
-		ps.TotalS3OutputCount,
 		ps.TotalNetworkIO,
 		ps.TotalScanTime,
 		ps.TotalServiceTime)
