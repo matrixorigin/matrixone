@@ -16,14 +16,14 @@ package test
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/cnservice"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -33,9 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
-	"github.com/golang/mock/gomock"
-	"github.com/lni/goutils/leaktest"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -136,25 +133,42 @@ func TestCalculateObjectCount(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	exec := svc.RawService().(cnservice.Service).GetSQLExecutor()
-	_, err = exec.Exec(ctx,
-		"create database testdb; use testdb;"+
-			"create table hhh(a int); "+
-			"insert into hhh select * from generate_series(1, 1000)g;"+
-			"select mo_ctl('dn', 'checkpoint', '')",
-		executor.Options{})
-	require.NoError(t, err)
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
 
-	queryOpts := ie.NewOptsBuilder().Database(mometric.MetricDBConst).Internal(true).Finish()
-	frontend.NewInternalExecutor("").Query(ctx, mometric.ShowAllAccountSQL, queryOpts)
+	// query with metrics db
+	{
+		queryOpts := ie.NewOptsBuilder().Database(mometric.MetricDBConst).Internal(true).Finish()
 
-	w := dto.Metric{}
-	err = metric.ObjectCount("sys").Write(&w)
-	require.NoError(t, err)
+		result := frontend.NewInternalExecutor("").Query(ctx, mometric.ShowAllAccountSQL, queryOpts)
+		require.NoError(t, result.Error())
 
-	require.Equal(t, float64(0.001), w.GetGauge().GetValue())
+		name2idx := make(map[string]uint64)
+		for colIdx := uint64(0); colIdx < result.ColumnCount(); colIdx++ {
+			colName, _, _, err := result.Column(ctx, colIdx)
+			require.NoError(t, err)
+			name2idx[colName] = colIdx
+		}
+
+		_, ok := name2idx[mometric.ColumnObjectCount]
+		require.True(t, ok)
+	}
+
+	{
+		queryOpts := ie.NewOptsBuilder().Internal(true).Finish()
+
+		result := frontend.NewInternalExecutor("").Query(ctx, mometric.ShowAllAccountSQL, queryOpts)
+		require.NoError(t, result.Error())
+
+		name2idx := make(map[string]uint64)
+		for colIdx := uint64(0); colIdx < result.ColumnCount(); colIdx++ {
+			colName, _, _, err := result.Column(ctx, colIdx)
+			require.NoError(t, err)
+			name2idx[colName] = colIdx
+		}
+
+		_, ok := name2idx[mometric.ColumnObjectCount]
+		require.False(t, ok)
+	}
 
 	svc.Close()
 }

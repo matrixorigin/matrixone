@@ -24,7 +24,7 @@ import (
 
 var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_mo_snapshots,
-	upg_system_metrics_account_object_count_total,
+	upg_system_metrics_server_object_count_total,
 }
 
 var upg_mo_snapshots = versions.UpgradeEntry{
@@ -46,15 +46,15 @@ var upg_mo_snapshots = versions.UpgradeEntry{
 	},
 }
 
-var upg_system_metrics_account_object_count_total = versions.UpgradeEntry{
+var upg_system_metrics_server_object_count_total = versions.UpgradeEntry{
 	Schema:    catalog.MO_SYSTEM_METRICS,
-	TableName: "account_object_count_total",
+	TableName: "server_object_count",
 	UpgType:   versions.CREATE_VIEW,
 	UpgSql: fmt.Sprintf("CREATE VIEW IF NOT EXISTS `%s`.`%s` as "+
 		"SELECT `collecttime`, `value`, `node`, `role`, `account`, `type` "+
 		"from `system_metrics`.`metric` "+
-		"where `metric_name` = 'server_object_count_total'",
-		catalog.MO_SYSTEM_METRICS, "account_object_count_total"),
+		"where `metric_name` = 'server_object_count'",
+		catalog.MO_SYSTEM_METRICS, "server_object_count"),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) { return false, nil },
-	PreSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_SYSTEM_METRICS, "account_object_count_total"),
+	PreSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_SYSTEM_METRICS, "server_object_count"),
 }
