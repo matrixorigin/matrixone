@@ -133,7 +133,7 @@ func getSqlForAccountInfo(like *tree.ComparisonExpr, accId int64, needObjectCoun
 
 	clause := fmt.Sprintf("%s %s %s %s", where, likePattern, and, account)
 
-	var objectCountExpr string = ""
+	var objectCountExpr = ""
 	if needObjectCount {
 		objectCountExpr = ", CAST(0 AS BIGINT) AS object_count"
 	}
