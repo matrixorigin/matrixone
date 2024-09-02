@@ -61,8 +61,9 @@ func BenchmarkMemoryFSWithMemoryCache(b *testing.B) {
 		fs, err := NewMemoryFS("memory", DisabledCacheConfig, nil)
 		assert.Nil(b, err)
 		fs.caches = append(fs.caches, NewMemCache(
-			NewMemoryCache(fscache.ConstCapacity(128*1024*1024), true, nil),
+			newMemoryCache(fscache.ConstCapacity(128*1024*1024), true, nil),
 			nil,
+			"",
 		))
 		return fs
 	})
@@ -83,8 +84,9 @@ func BenchmarkMemoryFSWithMemoryCacheLowCapacity(b *testing.B) {
 		fs, err := NewMemoryFS("memory", DisabledCacheConfig, nil)
 		assert.Nil(b, err)
 		fs.caches = append(fs.caches, NewMemCache(
-			NewMemoryCache(fscache.ConstCapacity(2*1024*1024), true, nil),
+			newMemoryCache(fscache.ConstCapacity(2*1024*1024), true, nil),
 			nil,
+			"",
 		))
 		return fs
 	})
