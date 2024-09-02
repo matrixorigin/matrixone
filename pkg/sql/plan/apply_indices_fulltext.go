@@ -50,7 +50,82 @@ import (
 // |                     ->  Table Function on fulltext_index_scan                            |
 // |                           ->  Values Scan "*VALUES*"                                     |
 // +------------------------------------------------------------------------------------------+
-func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int32, projNode *plan.Node, scanNode *plan.Node, filterids []int32, filter_indexDefs []*plan.IndexDef,
+func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID int32, projNode *plan.Node, sortNode *plan.Node, scanNode *plan.Node,
+	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+
+	ctx := builder.ctxByNode[nodeID]
+
+	idxID, filter_node_ids, proj_node_ids := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
+		filterids, filterIndexDefs, projids, projIndexDef, colRefCnt, idxColMap)
+
+	if sortNode != nil {
+		sortNode.Children[0] = idxID
+
+	} else {
+		// create sort node with order by score DESC
+
+		var orderByScore []*OrderBySpec
+		for _, id := range filter_node_ids {
+			ftnode := builder.qry.Nodes[id]
+			orderByScore = append(orderByScore, &OrderBySpec{
+				Expr: &Expr{
+					Typ: ftnode.TableDef.Cols[1].Typ, // score column
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: ftnode.BindingTags[0],
+							ColPos: 1, // score column
+						},
+					},
+				},
+				Flag: plan.OrderBySpec_DESC,
+			})
+		}
+
+		for _, id := range proj_node_ids {
+			ftnode := builder.qry.Nodes[id]
+			orderByScore = append(orderByScore, &OrderBySpec{
+				Expr: &Expr{
+					Typ: ftnode.TableDef.Cols[1].Typ, // score column
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: ftnode.BindingTags[0],
+							ColPos: 1, // score column
+						},
+					},
+				},
+				Flag: plan.OrderBySpec_DESC,
+			})
+		}
+
+		sortByID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_SORT,
+			Children: []int32{idxID},
+			OrderBy:  orderByScore,
+		}, ctx)
+
+		projNode.Children[0] = sortByID
+	}
+
+	// replace the project with ColRef
+	for i, id := range proj_node_ids {
+		idx := projids[i]
+		ftnode := builder.qry.Nodes[id]
+		projNode.ProjectList[idx] = &Expr{
+			Typ: ftnode.TableDef.Cols[1].Typ, // score column
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: ftnode.BindingTags[0],
+					ColPos: 1, // score column
+				},
+			},
+		}
+	}
+	return nodeID
+}
+
+func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
+	filterids []int32, filter_indexDefs []*plan.IndexDef,
 	projids []int32, proj_indexDefs []*plan.IndexDef,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, []int32, []int32) {
 
@@ -86,8 +161,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 	indexDefs = append(indexDefs, proj_indexDefs...)
 
 	// buildFullTextIndexScan
-	// rewrite sltStmt to select distinct * from (sltStmt) a
-
 	var last_node_id int32
 	var last_ftnode_pkcol *Expr
 
@@ -106,11 +179,10 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(idxtblname), idxtblname, false, tree.P_char))
 		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(pattern), pattern, false, tree.P_char))
 		exprs = append(exprs, tree.NewNumValWithType(constant.MakeInt64(mode), strconv.FormatInt(mode, 10), false, tree.P_int64))
-		//exprs = append(exprs, tree.NewNumValWithType(constant.MakeInt64(int64(pkType.Id)), strconv.FormatInt(int64(pkType.Id), 10), false, tree.P_char))
-		//exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(pkJson), pkJson, false, tree.P_char))
 
 		name := tree.NewUnresolvedName(fulltext_func)
 
+		// TableFuncion AST
 		tmpTableFunc := &tree.AliasedTableExpr{
 			Expr: &tree.TableFunction{
 				Func: &tree.FuncExpr{
@@ -216,7 +288,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids
 }
 
-// function works on ScanNode
+// Get the filters that are fulltext_match() in ScanNode
 func (builder *QueryBuilder) getFullTextMatchFiltersFromScanNode(node *plan.Node) ([]int32, []*plan.IndexDef) {
 
 	filterids := make([]int32, 0)
@@ -255,6 +327,7 @@ func (builder *QueryBuilder) getFullTextMatchFiltersFromScanNode(node *plan.Node
 	return filterids, ftidxs
 }
 
+// Get the projection that are fulltext_match() in ProjectList
 func (builder *QueryBuilder) getFullTextMatchFromProject(projNode *plan.Node, scanNode *plan.Node) ([]int32, []*plan.IndexDef) {
 	projids := make([]int32, 0)
 	ftidxs := make([]*plan.IndexDef, 0)
@@ -292,80 +365,6 @@ func (builder *QueryBuilder) getFullTextMatchFromProject(projNode *plan.Node, sc
 	}
 
 	return projids, ftidxs
-}
-
-func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID int32, projNode *plan.Node, sortNode *plan.Node, scanNode *plan.Node,
-	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef,
-	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
-
-	ctx := builder.ctxByNode[nodeID]
-
-	idxID, filter_node_ids, proj_node_ids := builder.applyIndicesForFiltersUsingFullTextIndex(nodeID, projNode, scanNode,
-		filterids, filterIndexDefs, projids, projIndexDef, colRefCnt, idxColMap)
-
-	if sortNode != nil {
-		sortNode.Children[0] = idxID
-
-	} else {
-		// create sort node with order by score DESC
-
-		var orderByScore []*OrderBySpec
-		for _, id := range filter_node_ids {
-			ftnode := builder.qry.Nodes[id]
-			orderByScore = append(orderByScore, &OrderBySpec{
-				Expr: &Expr{
-					Typ: ftnode.TableDef.Cols[1].Typ, // score column
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: ftnode.BindingTags[0],
-							ColPos: 1, // score column
-						},
-					},
-				},
-				Flag: plan.OrderBySpec_DESC,
-			})
-		}
-
-		for _, id := range proj_node_ids {
-			ftnode := builder.qry.Nodes[id]
-			orderByScore = append(orderByScore, &OrderBySpec{
-				Expr: &Expr{
-					Typ: ftnode.TableDef.Cols[1].Typ, // score column
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: ftnode.BindingTags[0],
-							ColPos: 1, // score column
-						},
-					},
-				},
-				Flag: plan.OrderBySpec_DESC,
-			})
-		}
-
-		sortByID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_SORT,
-			Children: []int32{idxID},
-			OrderBy:  orderByScore,
-		}, ctx)
-
-		projNode.Children[0] = sortByID
-	}
-
-	// replace the project with ColRef
-	for i, id := range proj_node_ids {
-		idx := projids[i]
-		ftnode := builder.qry.Nodes[id]
-		projNode.ProjectList[idx] = &Expr{
-			Typ: ftnode.TableDef.Cols[1].Typ, // score column
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: ftnode.BindingTags[0],
-					ColPos: 1, // score column
-				},
-			},
-		}
-	}
-	return nodeID
 }
 
 func (builder *QueryBuilder) resolveFullTextMatchFromScanNode(node *plan.Node) *plan.Node {
