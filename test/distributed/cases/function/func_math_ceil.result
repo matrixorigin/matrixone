@@ -110,6 +110,9 @@ invalid argument the second argument of the ceil, bad value not const
 select ceil(1.001,2);
 ceil(1.001,2)
 1.01
+select ceiling(1.001,2);
+ceiling(1.001,2)
+1.01
 drop table if exists t1;
 create table t1(a int ,b decimal(10,5));
 insert into t1 values(1,0.5);

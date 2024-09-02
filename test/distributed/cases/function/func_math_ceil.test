@@ -106,6 +106,7 @@ select ceil(null, 1);
 select ceil(null, null);
 
 select ceil(1.001,2);
+select ceiling(1.001,2);
 
 drop table if exists t1;
 create table t1(a int ,b decimal(10,5));
