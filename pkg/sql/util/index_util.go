@@ -43,6 +43,11 @@ func (list *PackerList) Free() {
 			p.Close()
 		}
 	}
+	list.ps = nil
+}
+
+func (list *PackerList) PackerCount() int {
+	return len(list.ps)
 }
 
 func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
@@ -102,7 +107,8 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 			v := cIndexVecMap[part]
 			vs = append(vs, v)
 		}
-		b.Vecs[0], bitMap, err = serialWithCompacted(vs, proc, packers)
+		b.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bitMap, err = serialWithCompacted(vs, b.Vecs[0], proc, packers)
 	} else {
 		var vec *vector.Vector
 		for i, name := range attrs {
@@ -111,7 +117,8 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 				break
 			}
 		}
-		b.Vecs[0], bitMap, err = compactSingleIndexCol(vec, proc)
+		b.Vecs[0] = vector.NewVec(*vec.GetType())
+		bitMap, err = compactSingleIndexCol(vec, b.Vecs[0], proc)
 	}
 
 	if len(b.Attrs) > 1 {
@@ -121,7 +128,8 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 				vec = vecs[i]
 			}
 		}
-		b.Vecs[1], err = compactPrimaryCol(vec, bitMap, proc)
+		b.Vecs[1] = vector.NewVec(*vec.GetType())
+		err = compactPrimaryCol(vec, nil, bitMap, proc)
 	}
 
 	if err != nil {
@@ -140,10 +148,9 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, 3)]
 // result bitmap is [2]
-func serialWithCompacted(vs []*vector.Vector, proc *process.Process, packers *PackerList) (*vector.Vector, *nulls.Nulls, error) {
+func serialWithCompacted(vs []*vector.Vector, vec *vector.Vector, proc *process.Process, packers *PackerList) (*nulls.Nulls, error) {
 	// resolve vs
 	length := vs[0].Length()
-	vct := types.T_varchar.ToType()
 	val := make([][]byte, 0, length)
 	if length > cap(packers.ps) {
 		for _, p := range packers.ps {
@@ -474,10 +481,9 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, packers *Pa
 		}
 	}
 
-	vec := proc.GetVector(vct)
 	err := vector.AppendBytesList(vec, val, nil, proc.Mp())
 
-	return vec, bitMap, err
+	return bitMap, err
 }
 
 // serialWithoutCompacted is similar to serialWithCompacted and builtInSerial
@@ -488,10 +494,10 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, packers *Pa
 // result bitmap is [] (empty)
 // Here we are keeping the same function signature of serialWithCompacted so that we can duplicate the same code of
 // `preinsertunique` in `preinsertsecondaryindex`
-func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process, packers *PackerList) (*vector.Vector, *nulls.Nulls, error) {
+func serialWithoutCompacted(vs []*vector.Vector, vec *vector.Vector, proc *process.Process, packers *PackerList) (*nulls.Nulls, error) {
 	if len(vs) == 0 {
-		// return empty vector and empty bitmap
-		return proc.GetVector(types.T_varchar.ToType()), new(nulls.Nulls), nil
+		// return empty bitmap
+		return new(nulls.Nulls), nil
 	}
 
 	rowCount := vs[0].Length()
@@ -520,30 +526,22 @@ func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process, packers 
 		function.SerialHelper(v, nil, ps, true)
 	}
 
-	vec := proc.GetVector(types.T_varchar.ToType())
 	for i := 0; i < rowCount; i++ {
 		if err := vector.AppendBytes(vec, ps[i].GetBuf(), false, proc.Mp()); err != nil {
-			proc.PutVector(vec)
-			return nil, nil, err
+			return nil, err
 		}
 	}
 
-	return vec, new(nulls.Nulls), nil
+	return new(nulls.Nulls), nil
 }
 
-func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls, error) {
-	vec := proc.GetVector(*v.GetType())
+func compactSingleIndexCol(v *vector.Vector, vec *vector.Vector, proc *process.Process) (*nulls.Nulls, error) {
 	var err error
-	defer func() {
-		if err != nil {
-			vec.Free(proc.GetMPool())
-		}
-	}()
 
 	hasNull := v.HasNull()
 	if !hasNull {
 		err = vector.GetUnionAllFunction(*v.GetType(), proc.GetMPool())(vec, v)
-		return vec, v.GetNulls(), err
+		return v.GetNulls(), err
 	}
 	length := v.Length()
 	switch v.GetType().Oid {
@@ -732,21 +730,15 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		err = vector.AppendBytesList(vec, ns, nil, proc.Mp())
 	}
-	return vec, v.GetNulls(), err
+	return v.GetNulls(), err
 }
 
-func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Process) (*vector.Vector, error) {
-	vec := proc.GetVector(*v.GetType())
+func compactPrimaryCol(v *vector.Vector, vec *vector.Vector, bitMap *nulls.Nulls, proc *process.Process) error {
 	var err error
-	defer func() {
-		if err != nil {
-			vec.Free(proc.GetMPool())
-		}
-	}()
 
 	if bitMap.IsEmpty() {
 		err = vector.GetUnionAllFunction(*v.GetType(), proc.GetMPool())(vec, v)
-		return vec, err
+		return err
 	}
 	length := v.Length()
 	switch v.GetType().Oid {
@@ -932,5 +924,5 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 		}
 		err = vector.AppendBytesList(vec, ns, nil, proc.Mp())
 	}
-	return vec, err
+	return err
 }

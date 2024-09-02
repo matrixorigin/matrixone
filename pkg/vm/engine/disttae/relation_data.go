@@ -102,7 +102,7 @@ func (relData *blockListRelData) AppendBlockInfo(blk objectio.BlockInfo) {
 func (relData *blockListRelData) UnmarshalBinary(data []byte) (err error) {
 	typ := engine.RelDataType(types.DecodeUint8(data))
 	if typ != engine.RelDataBlockList {
-		return moerr.NewInternalErrorNoCtx("UnmarshalBinary RelDataBlockList with %v", typ)
+		return moerr.NewInternalErrorNoCtxf("UnmarshalBinary RelDataBlockList with %v", typ)
 	}
 	data = data[1:]
 
@@ -149,7 +149,7 @@ func (relData *blockListRelData) MarshalBinaryWithBuffer(w *bytes.Buffer) (err e
 		if err = relData.tombstones.MarshalBinaryWithBuffer(w); err != nil {
 			return
 		}
-		tombstoneLen = uint32(w.Len() - offset)
+		tombstoneLen = uint32(w.Len() - offset - 4)
 		buf := w.Bytes()
 		copy(buf[offset:], types.EncodeUint32(&tombstoneLen))
 	}

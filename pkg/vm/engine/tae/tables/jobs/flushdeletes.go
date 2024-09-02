@@ -75,7 +75,7 @@ func (task *flushDeletesTask) Execute(ctx context.Context) error {
 			return nil
 		}
 	}
-	_, err = writer.WriteTombstoneBatch(cnBatch)
+	_, err = writer.WriteBatch(cnBatch)
 	if err != nil {
 		return err
 	}

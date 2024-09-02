@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -138,13 +139,13 @@ func NewService(
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
-	if err := srv.initQueryService(); err != nil {
+	if err = srv.initQueryService(); err != nil {
 		return nil, err
 	}
 
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
-	if err := srv.initMetadata(); err != nil {
+	if err = srv.initMetadata(); err != nil {
 		return nil, err
 	}
 
@@ -175,7 +176,8 @@ func NewService(
 	var udfServices []udf.Service
 	// add python client to handle python udf
 	if srv.cfg.PythonUdfClient.ServerAddress != "" {
-		pc, err := pythonservice.NewClient(srv.cfg.PythonUdfClient)
+		var pc *pythonservice.Client
+		pc, err = pythonservice.NewClient(srv.cfg.PythonUdfClient)
 		if err != nil {
 			panic(err)
 		}
@@ -490,7 +492,7 @@ func (s *service) initEngine(
 		}
 
 	default:
-		return moerr.NewInternalError(ctx, "unknown engine type: %s", s.cfg.Engine.Type)
+		return moerr.NewInternalErrorf(ctx, "unknown engine type: %s", s.cfg.Engine.Type)
 
 	}
 
@@ -615,7 +617,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 					resp.Txn.Status = txn.TxnStatus_Aborted
 				}
 			default:
-				return moerr.NewNotSupported(ctx, "unknown txn request method: %s", req.Method.String())
+				return moerr.NewNotSupportedf(ctx, "unknown txn request method: %s", req.Method.String())
 			}
 			return err
 		}
@@ -787,6 +789,17 @@ func (s *service) GetSQLExecutor() executor.SQLExecutor {
 
 func (s *service) GetBootstrapService() bootstrap.Service {
 	return s.bootstrapService
+}
+
+func (s *service) GetTimestampWaiter() client.TimestampWaiter {
+	return s.timestampWaiter
+}
+func (s *service) GetEngine() engine.Engine {
+	return s.storeEngine
+}
+
+func (s *service) GetClock() clock.Clock {
+	return runtime.ServiceRuntime(s.cfg.UUID).Clock()
 }
 
 // put the waiting-next type msg into client session's cache and return directly

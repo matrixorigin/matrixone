@@ -28,6 +28,8 @@ import (
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -62,9 +64,35 @@ func InitTestEnv(module string, t *testing.T) string {
 	return MakeDefaultTestPath(module, t)
 }
 
-func CreateEngines(ctx context.Context, opts TestOptions,
-	t *testing.T) (disttaeEngine *TestDisttaeEngine, taeEngine *TestTxnStorage,
-	rpcAgent *MockRPCAgent, mp *mpool.MPool) {
+type TestDisttaeEngineOptions func(*TestDisttaeEngine)
+
+func WithDisttaeEngineMPool(mp *mpool.MPool) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.mp = mp
+	}
+}
+func WithDisttaeEngineInsertEntryMaxCount(v int) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.insertEntryMaxCount = v
+	}
+}
+func WithDisttaeEngineWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.workspaceThreshold = v
+	}
+}
+
+func CreateEngines(
+	ctx context.Context,
+	opts TestOptions,
+	t *testing.T,
+	options ...TestDisttaeEngineOptions,
+) (
+	disttaeEngine *TestDisttaeEngine,
+	taeEngine *TestTxnStorage,
+	rpcAgent *MockRPCAgent,
+	mp *mpool.MPool,
+) {
 
 	if v := ctx.Value(defines.TenantIDKey{}); v == nil {
 		panic("cannot find account id in ctx")
@@ -72,16 +100,15 @@ func CreateEngines(ctx context.Context, opts TestOptions,
 
 	var err error
 
-	mp, err = mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.Nil(t, err)
-
 	rpcAgent = NewMockLogtailAgent()
 
 	taeEngine, err = NewTestTAEEngine(ctx, "partition_state", t, rpcAgent, opts.TaeEngineOptions)
 	require.Nil(t, err)
 
-	disttaeEngine, err = NewTestDisttaeEngine(ctx, mp, taeEngine.GetDB().Runtime.Fs.Service, rpcAgent, taeEngine)
+	disttaeEngine, err = NewTestDisttaeEngine(ctx, taeEngine.GetDB().Runtime.Fs.Service, rpcAgent, taeEngine, options...)
 	require.Nil(t, err)
+
+	mp = disttaeEngine.mp
 
 	return
 }
@@ -177,8 +204,6 @@ func PlanTableDefBySchema(schema *catalog.Schema, tableId uint64, databaseName s
 func NewDefaultTableReader(
 	ctx context.Context,
 	rel engine.Relation,
-	databaseName string,
-	schema *catalog.Schema,
 	expr *plan.Expr,
 	mp *mpool.MPool,
 	ranges engine.RelData,
@@ -186,8 +211,6 @@ func NewDefaultTableReader(
 	e *disttae.Engine,
 	txnOffset int,
 ) (engine.Reader, error) {
-
-	tblDef := PlanTableDefBySchema(schema, rel.GetTableID(ctx), databaseName)
 
 	source, err := disttae.BuildLocalDataSource(ctx, rel, ranges, txnOffset)
 	if err != nil {
@@ -198,7 +221,7 @@ func NewDefaultTableReader(
 		ctx,
 		testutil2.NewProcessWithMPool("", mp),
 		e,
-		&tblDef,
+		rel.GetTableDef(ctx),
 		snapshotTS,
 		expr,
 		source,
@@ -287,4 +310,115 @@ func (p *EnginePack) DeleteTableInDB(txnop client.TxnOperator, dbname, tblname s
 	db, err := p.D.Engine.Database(p.Ctx, dbname, txnop)
 	require.NoError(p.t, err)
 	require.NoError(p.t, db.Delete(p.Ctx, tblname))
+}
+
+func EmptyBatchFromSchema(schema *catalog.Schema, sels ...int) *batch.Batch {
+	if len(sels) == 0 {
+		ret := batch.NewWithSize(len(schema.ColDefs))
+		for i, col := range schema.ColDefs {
+			vec := vector.NewVec(col.Type.Oid.ToType())
+			ret.Vecs[i] = vec
+			ret.Attrs = append(ret.Attrs, col.Name)
+		}
+		return ret
+	}
+	ret := batch.NewWithSize(len(sels))
+	for i, sel := range sels {
+		col := schema.ColDefs[sel]
+		vec := vector.NewVec(col.Type.Oid.ToType())
+		ret.Vecs[i] = vec
+		ret.Attrs = append(ret.Attrs, col.Name)
+	}
+	return ret
+}
+
+func TxnRanges(
+	ctx context.Context,
+	txn client.TxnOperator,
+	relation engine.Relation,
+	exprs []*plan.Expr,
+) (engine.RelData, error) {
+	return relation.Ranges(ctx, exprs, txn.GetWorkspace().GetSnapshotWriteOffset())
+}
+
+func GetRelationReader(
+	ctx context.Context,
+	e *TestDisttaeEngine,
+	txn client.TxnOperator,
+	relation engine.Relation,
+	exprs []*plan.Expr,
+	mp *mpool.MPool,
+	t *testing.T,
+) (reader engine.Reader, err error) {
+	ranges, err := TxnRanges(ctx, txn, relation, exprs)
+	require.NoError(t, err)
+	var expr *plan.Expr
+	if len(exprs) > 0 {
+		expr = exprs[0]
+	}
+	reader, err = NewDefaultTableReader(
+		ctx,
+		relation,
+		expr,
+		mp,
+		ranges,
+		txn.SnapshotTS(),
+		e.Engine,
+		txn.GetWorkspace().GetSnapshotWriteOffset())
+	require.NoError(t, err)
+	return
+}
+
+func GetTableTxnReader(
+	ctx context.Context,
+	e *TestDisttaeEngine,
+	dbName, tableName string,
+	exprs []*plan.Expr,
+	mp *mpool.MPool,
+	t *testing.T,
+) (
+	txn client.TxnOperator,
+	relation engine.Relation,
+	reader engine.Reader,
+	err error,
+) {
+	_, relation, txn, err = e.GetTable(ctx, dbName, tableName)
+	require.NoError(t, err)
+	ranges, err := TxnRanges(ctx, txn, relation, exprs)
+	require.NoError(t, err)
+	var expr *plan.Expr
+	if len(exprs) > 0 {
+		expr = exprs[0]
+	}
+	reader, err = NewDefaultTableReader(
+		ctx,
+		relation,
+		expr,
+		mp,
+		ranges,
+		txn.SnapshotTS(),
+		e.Engine,
+		txn.GetWorkspace().GetSnapshotWriteOffset())
+	require.NoError(t, err)
+	return
+}
+
+func WriteToRelation(
+	ctx context.Context,
+	txn client.TxnOperator,
+	relation engine.Relation,
+	bat *batch.Batch,
+	toEndStatement bool,
+) (err error) {
+	err = relation.Write(ctx, bat)
+	if err == nil && toEndStatement {
+		EndThisStatement(txn)
+	}
+	return
+}
+
+func EndThisStatement(
+	txn client.TxnOperator,
+) {
+	txn.GetWorkspace().UpdateSnapshotWriteOffset()
 }

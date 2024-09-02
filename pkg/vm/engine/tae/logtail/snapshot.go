@@ -176,8 +176,9 @@ func (d *DeltaLocDataSource) Next(
 	_ any,
 	_ *mpool.MPool,
 	_ engine.VectorPool,
-) (*batch.Batch, *objectio.BlockInfo, engine.DataState, error) {
-	return nil, nil, engine.Persisted, nil
+	_ *batch.Batch,
+) (*objectio.BlockInfo, engine.DataState, error) {
+	return nil, engine.Persisted, nil
 }
 
 func (d *DeltaLocDataSource) Close() {
@@ -188,6 +189,7 @@ func (d *DeltaLocDataSource) ApplyTombstones(
 	ctx context.Context,
 	bid objectio.Blockid,
 	rowsOffset []int64,
+	applyPolicy engine.TombstoneApplyPolicy,
 ) ([]int64, error) {
 	deleteMask, err := d.getAndApplyTombstones(ctx, bid)
 	if err != nil {
@@ -414,26 +416,27 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 			zap.String("object name", objectStats.ObjectName().String()))
 		delete(sm.objects[table], objectStats.ObjectName().SegmentId())
 	}
-	del, delTxn, _, _ := data.GetBlkBatchs()
-	delBlockIDs := vector.MustFixedCol[types.Blockid](del.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector())
-	delTableIDs := vector.MustFixedCol[uint64](delTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
-	for i := 0; i < del.Length(); i++ {
-		blockID := delBlockIDs[i]
-		tableID := delTableIDs[i]
-		deltaLoc := objectio.Location(del.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
-		if _, ok := sm.tides[tableID]; !ok {
-			continue
-		}
-		if sm.objects[tableID] == nil {
-			panic(any(fmt.Sprintf("tableID %d not found", tableID)))
-		}
-		if sm.objects[tableID][*blockID.Segment()] != nil {
-			if sm.objects[tableID][*blockID.Segment()].deltaLocation == nil {
-				sm.objects[tableID][*blockID.Segment()].deltaLocation = make(map[uint32]*objectio.Location)
-			}
-			sm.objects[tableID][*blockID.Segment()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
-		}
-	}
+	// TODO
+	// del, delTxn, _, _ := data.GetBlkBatchs()
+	// delBlockIDs := vector.MustFixedCol[types.Blockid](del.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector())
+	// delTableIDs := vector.MustFixedCol[uint64](delTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+	// for i := 0; i < del.Length(); i++ {
+	// 	blockID := delBlockIDs[i]
+	// 	tableID := delTableIDs[i]
+	// 	deltaLoc := objectio.Location(del.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
+	// 	if _, ok := sm.tides[tableID]; !ok {
+	// 		continue
+	// 	}
+	// 	if sm.objects[tableID] == nil {
+	// 		panic(any(fmt.Sprintf("tableID %d not found", tableID)))
+	// 	}
+	// 	if sm.objects[tableID][*blockID.Segment()] != nil {
+	// 		if sm.objects[tableID][*blockID.Segment()].deltaLocation == nil {
+	// 			sm.objects[tableID][*blockID.Segment()].deltaLocation = make(map[uint32]*objectio.Location)
+	// 		}
+	// 		sm.objects[tableID][*blockID.Segment()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
+	// 	}
+	// }
 	return nil
 }
 
@@ -465,12 +468,27 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, sid string, fs fileserv
 					BlockID: *objectio.BuildObjectBlockid(name, uint16(i)),
 					MetaLoc: objectio.ObjectLocation(loc),
 				}
-				bat, err := blockio.BlockDataRead(ctx, sid, &blk, ds, idxes, colTypes, checkpointTS.ToTimestamp(),
-					nil, nil, blockio.BlockReadFilter{}, fs, mp, nil, fileservice.Policy(0), "")
+
+				var vp engine.VectorPool
+				buildBatch := func() *batch.Batch {
+					result := batch.NewWithSize(len(colTypes))
+					for i, typ := range colTypes {
+						if vp == nil {
+							result.Vecs[i] = vector.NewVec(typ)
+						} else {
+							result.Vecs[i] = vp.GetVector(typ)
+						}
+					}
+					return result
+				}
+
+				bat := buildBatch()
+				defer bat.Clean(mp)
+				err := blockio.BlockDataRead(ctx, sid, &blk, ds, idxes, colTypes, checkpointTS.ToTimestamp(),
+					nil, nil, blockio.BlockReadFilter{}, fs, mp, nil, fileservice.Policy(0), "", bat)
 				if err != nil {
 					return nil, err
 				}
-				defer bat.Clean(mp)
 				tsList := vector.MustFixedCol[int64](bat.Vecs[0])
 				typeList := vector.MustFixedCol[types.Enum](bat.Vecs[1])
 				acctList := vector.MustFixedCol[uint64](bat.Vecs[2])
@@ -886,6 +904,14 @@ func (sm *SnapshotMeta) TableInfoString() string {
 func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint32][]types.TS, tid uint64) []types.TS {
 	sm.RLock()
 	defer sm.RUnlock()
+	if sm.acctIndexes[tid] == nil {
+		return nil
+	}
+	accID := sm.acctIndexes[tid].accID
+	return SnapshotList[accID]
+}
+
+func (sm *SnapshotMeta) GetSnapshotListLocked(SnapshotList map[uint32][]types.TS, tid uint64) []types.TS {
 	if sm.acctIndexes[tid] == nil {
 		return nil
 	}

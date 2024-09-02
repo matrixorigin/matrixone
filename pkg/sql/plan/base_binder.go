@@ -179,7 +179,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindCaseExpr(exprImpl, depth, isRoot)
 
 	case *tree.IntervalExpr:
-		err = moerr.NewNYI(b.GetContext(), "expr interval'%v'", exprImpl)
+		err = moerr.NewNYIf(b.GetContext(), "expr interval'%v'", exprImpl)
 
 	case *tree.XorExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("xor", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
@@ -232,10 +232,10 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 
 	case *tree.StrVal:
-		err = moerr.NewNYI(b.GetContext(), "expr str'%v'", exprImpl)
+		err = moerr.NewNYIf(b.GetContext(), "expr str'%v'", exprImpl)
 
 	case *tree.ExprList:
-		err = moerr.NewNYI(b.GetContext(), "expr plan.ExprList'%v'", exprImpl)
+		err = moerr.NewNYIf(b.GetContext(), "expr plan.ExprList'%v'", exprImpl)
 
 	case tree.UnqualifiedStar:
 		// select * from table
@@ -243,7 +243,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		err = moerr.NewInvalidInput(b.GetContext(), "SELECT clause contains unqualified star")
 
 	default:
-		err = moerr.NewNYI(b.GetContext(), "expr '%+v'", exprImpl)
+		err = moerr.NewNYIf(b.GetContext(), "expr '%+v'", exprImpl)
 	}
 
 	return
@@ -282,7 +282,7 @@ const (
 
 func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	if b.ctx == nil {
-		return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", astExpr.ColNameOrigin())
+		return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", astExpr.ColNameOrigin())
 	}
 
 	col := astExpr.ColName()
@@ -319,25 +319,25 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				typ = DeepCopyType(binding.types[colPos])
 				table = binding.table
 			} else {
-				return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", name)
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
 			}
 		} else {
-			err = moerr.NewInvalidInput(localErrCtx, "column %s does not exist", name)
+			err = moerr.NewInvalidInputf(localErrCtx, "column %s does not exist", name)
 		}
 	} else {
 		if binding, ok := b.ctx.bindingByTable[table]; ok {
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
-				return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", name)
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
 			}
 			if colPos != NotFound {
 				typ = DeepCopyType(binding.types[colPos])
 				relPos = binding.tag
 			} else {
-				err = moerr.NewInvalidInput(localErrCtx, "column '%s' does not exist", name)
+				err = moerr.NewInvalidInputf(localErrCtx, "column '%s' does not exist", name)
 			}
 		} else {
-			err = moerr.NewInvalidInput(localErrCtx, "missing FROM-clause entry for table '%v'", table)
+			err = moerr.NewInvalidInputf(localErrCtx, "missing FROM-clause entry for table '%v'", table)
 		}
 	}
 
@@ -448,7 +448,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		}
 
 	default:
-		return nil, moerr.NewNYI(b.GetContext(), "unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
+		return nil, moerr.NewNYIf(b.GetContext(), "unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
 	}
 
 	rowSize := int32(len(subCtx.results))
@@ -529,7 +529,7 @@ func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot 
 	case tree.UNARY_MARK:
 		return b.bindFuncExprImplByAstExpr("unary_mark", []tree.Expr{astExpr.Expr}, depth)
 	}
-	return nil, moerr.NewNYI(b.GetContext(), "'%v'", astExpr)
+	return nil, moerr.NewNYIf(b.GetContext(), "'%v'", astExpr)
 }
 
 func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -557,7 +557,7 @@ func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoo
 	case tree.RIGHT_SHIFT:
 		return b.bindFuncExprImplByAstExpr(">>", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	}
-	return nil, moerr.NewNYI(b.GetContext(), "'%v' operator", astExpr.Op.ToString())
+	return nil, moerr.NewNYIf(b.GetContext(), "'%v' operator", astExpr.Op.ToString())
 }
 
 func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -591,7 +591,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					}
 					return expr1, nil
 				} else {
-					return nil, moerr.NewInvalidInput(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
+					return nil, moerr.NewInvalidInputf(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
 				}
 			}
 		}
@@ -631,7 +631,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					}
 					return expr1, nil
 				} else {
-					return nil, moerr.NewInvalidInput(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
+					return nil, moerr.NewInvalidInputf(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
 				}
 			}
 		}
@@ -671,7 +671,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					}
 					return expr1, nil
 				} else {
-					return nil, moerr.NewInvalidInput(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
+					return nil, moerr.NewInvalidInputf(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
 				}
 			}
 		}
@@ -711,7 +711,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					}
 					return expr1, nil
 				} else {
-					return nil, moerr.NewInvalidInput(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
+					return nil, moerr.NewInvalidInputf(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
 				}
 			}
 		}
@@ -751,7 +751,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					}
 					return expr1, nil
 				} else {
-					return nil, moerr.NewInvalidInput(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
+					return nil, moerr.NewInvalidInputf(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
 				}
 			}
 		}
@@ -783,7 +783,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					}
 					return expr1, nil
 				} else {
-					return nil, moerr.NewInvalidInput(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
+					return nil, moerr.NewInvalidInputf(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
 				}
 			}
 		}
@@ -821,7 +821,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			if subquery := rightArg.GetSub(); subquery != nil {
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
-						return nil, moerr.NewNYI(b.GetContext(), "subquery should return %d columns", len(list.List))
+						return nil, moerr.NewNYIf(b.GetContext(), "subquery should return %d columns", len(list.List))
 					}
 				} else {
 					if subquery.RowSize > 1 {
@@ -862,7 +862,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			if subquery := rightArg.GetSub(); subquery != nil {
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
-						return nil, moerr.NewInvalidInput(b.GetContext(), "subquery should return %d columns", len(list.List))
+						return nil, moerr.NewInvalidInputf(b.GetContext(), "subquery should return %d columns", len(list.List))
 					}
 				} else {
 					if subquery.RowSize > 1 {
@@ -893,7 +893,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	case tree.NOT_REG_MATCH:
 		op = "not_reg_match"
 	default:
-		return nil, moerr.NewNYI(b.GetContext(), "'%v'", astExpr)
+		return nil, moerr.NewNYIf(b.GetContext(), "'%v'", astExpr)
 	}
 
 	if astExpr.SubOp >= tree.ANY {
@@ -910,7 +910,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		if subquery := expr.GetSub(); subquery != nil {
 			if list := child.GetList(); list != nil {
 				if len(list.List) != int(subquery.RowSize) {
-					return nil, moerr.NewInvalidInput(b.GetContext(), "subquery should return %d columns", len(list.List))
+					return nil, moerr.NewInvalidInputf(b.GetContext(), "subquery should return %d columns", len(list.List))
 				}
 			} else {
 				if subquery.RowSize > 1 {
@@ -935,7 +935,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 			return expr, nil
 		} else {
-			return nil, moerr.NewInvalidInput(b.GetContext(), "subquery '%s' is not a quantifying subquery", astExpr.SubOp.ToString())
+			return nil, moerr.NewInvalidInputf(b.GetContext(), "subquery '%s' is not a quantifying subquery", astExpr.SubOp.ToString())
 		}
 	}
 
@@ -945,7 +945,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bool) (*Expr, error) {
 	funcRef, ok := astExpr.Func.FunctionReference.(*tree.UnresolvedName)
 	if !ok {
-		return nil, moerr.NewNYI(b.GetContext(), "function expr '%v'", astExpr)
+		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
 
@@ -1118,7 +1118,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 
 func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []tree.Expr, depth int32) (*plan.Expr, error) {
 	if udf == nil {
-		return nil, moerr.NewNotSupported(b.GetContext(), "function '%s'", name)
+		return nil, moerr.NewNotSupportedf(b.GetContext(), "function '%s'", name)
 	}
 
 	switch udf.Language {
@@ -1362,6 +1362,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_datetime) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_timestamp) && args[1].Typ.Id == int32(types.T_interval) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_datetime) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
@@ -1392,6 +1395,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		} else if args[0].Typ.Id == int32(types.T_datetime) && args[1].Typ.Id == int32(types.T_interval) {
+			name = "date_sub"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_timestamp) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
@@ -1632,6 +1638,28 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
 
+	if name == "round" || name == "ceil" || name == "floor" && argsType[0].IsDecimal() {
+		if len(argsType) == 1 {
+			returnType.Scale = 0
+		} else if lit, ok := args[1].Expr.(*plan.Expr_Lit); ok {
+			if litval, ok := lit.Lit.GetValue().(*plan.Literal_I64Val); ok {
+				scale := litval.I64Val
+				if scale > 38 {
+					scale = 38
+				}
+				if scale < 0 {
+					scale = 0
+				}
+				if returnType.Scale > int32(scale) {
+					returnType.Scale = int32(scale)
+					if returnType.Scale < 0 {
+						returnType.Scale = 0
+					}
+				}
+			}
+		}
+	}
+
 	if function.GetFunctionIsAggregateByName(name) {
 		if constExpr := args[0].GetLit(); constExpr != nil && constExpr.Isnull {
 			args[0].Typ = makePlan2Type(&returnType)
@@ -1773,7 +1801,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	case tree.P_int64:
 		val, ok := astExpr.Int64()
 		if !ok {
-			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid int value '%s'", astExpr.String())
+			return nil, moerr.NewInvalidInputf(b.GetContext(), "invalid int value '%s'", astExpr.String())
 		}
 		expr := makePlan2Int64ConstExprWithType(val)
 		if !typ.IsEmpty() && typ.Id == int32(types.T_varchar) {
@@ -1783,7 +1811,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	case tree.P_uint64:
 		val, ok := astExpr.Uint64()
 		if !ok {
-			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid int value '%s'", astExpr.String())
+			return nil, moerr.NewInvalidInputf(b.GetContext(), "invalid int value '%s'", astExpr.String())
 		}
 		return makePlan2Uint64ConstExprWithType(val), nil
 	case tree.P_decimal:
@@ -1884,7 +1912,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		expr := MakePlan2NullTextConstExprWithType(astExpr.String())
 		return expr, nil
 	default:
-		return nil, moerr.NewInvalidInput(b.GetContext(), "unsupport value '%s'", astExpr.String())
+		return nil, moerr.NewInvalidInputf(b.GetContext(), "unsupport value '%s'", astExpr.String())
 	}
 }
 

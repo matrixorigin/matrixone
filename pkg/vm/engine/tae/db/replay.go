@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -27,12 +28,19 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+)
+
+var (
+	skippedTbl = map[uint64]bool{
+		pkgcatalog.MO_DATABASE_ID: true,
+		pkgcatalog.MO_TABLES_ID:   true,
+		pkgcatalog.MO_COLUMNS_ID:  true,
+	}
 )
 
 type Replayer struct {
@@ -90,14 +98,13 @@ func (replayer *Replayer) PreReplayWal() {
 func (replayer *Replayer) postReplayWal() {
 	processor := new(catalog.LoopProcessor)
 	processor.ObjectFn = func(entry *catalog.ObjectEntry) (err error) {
-		if entry.InMemoryDeletesExisted() {
-			entry.GetTable().DeletedDirties = append(entry.GetTable().DeletedDirties, entry)
+		if skippedTbl[entry.GetTable().ID] {
+			return nil
+		}
+		if entry.IsAppendable() && entry.HasDropCommitted() {
+			err = entry.GetObjectData().TryUpgrade()
 		}
 		return
-	}
-	processor.TombstoneFn = func(t data.Tombstone) error {
-		t.UpgradeAllDeleteChain()
-		return nil
 	}
 	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
 		panic(err)

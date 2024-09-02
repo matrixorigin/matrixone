@@ -206,14 +206,6 @@ func handleStorageUsageResponse_V0(
 		version := usage.CkpEntries[idx].Version
 		location := usage.CkpEntries[idx].Location
 
-		// storage usage was introduced after `CheckpointVersion9`
-		if version < logtail.CheckpointVersion9 {
-			// exist old version checkpoint which hasn't storage usage data in it,
-			// to avoid inaccurate info leading misunderstand, we chose to return empty result
-			logger.Info(ctx, "[storage usage]: found older ckp when handle storage usage response")
-			return map[int64]uint64{}, nil
-		}
-
 		ckpData, err := logtail.LoadSpecifiedCkpBatch(ctx, sid, location, version, logtail.StorageUsageInsIDX, fs)
 		if err != nil {
 			return nil, err
@@ -424,7 +416,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		}
 
 		if len(accInfosBatches) != 1 {
-			return moerr.NewInternalError(ctx, "no such account %v", account.GetTenantID())
+			return moerr.NewInternalErrorf(ctx, "no such account %v", account.GetTenantID())
 		}
 	}
 

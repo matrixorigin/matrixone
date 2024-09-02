@@ -24,11 +24,11 @@ import (
 
 func (txn *Txn) rollback1PC(ctx context.Context) (err error) {
 	if txn.IsReplay() {
-		panic(moerr.NewTAERollbackNoCtx("1pc txn %s should not be called here", txn.String()))
+		panic(moerr.NewTAERollbackNoCtxf("1pc txn %s should not be called here", txn.String()))
 	}
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
-		return moerr.NewTAERollbackNoCtx("unexpected txn status : %s", txnif.TxnStrState(state))
+		return moerr.NewTAERollbackNoCtxf("unexpected txn status : %s", txnif.TxnStrState(state))
 	}
 
 	txn.Add(1)
@@ -54,7 +54,7 @@ func (txn *Txn) commit1PC(ctx context.Context, _ bool) (err error) {
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
 		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))
-		return moerr.NewTAECommitNoCtx("invalid txn state %s", txnif.TxnStrState(state))
+		return moerr.NewTAECommitNoCtxf("invalid txn state %s", txnif.TxnStrState(state))
 	}
 	txn.Add(1)
 	if err = txn.Freeze(); err == nil {
@@ -115,7 +115,7 @@ func (txn *Txn) rollback2PC(ctx context.Context) (err error) {
 
 	default:
 		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))
-		return moerr.NewTAERollbackNoCtx("unexpected txn status : %s", txnif.TxnStrState(state))
+		return moerr.NewTAERollbackNoCtxf("unexpected txn status : %s", txnif.TxnStrState(state))
 	}
 
 	txn.Mgr.DeleteTxn(txn.GetID())
@@ -165,7 +165,7 @@ func (txn *Txn) commit2PC(inRecovery bool) (err error) {
 
 	default:
 		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))
-		return moerr.NewTAECommitNoCtx("invalid txn state %s", txnif.TxnStrState(state))
+		return moerr.NewTAECommitNoCtxf("invalid txn state %s", txnif.TxnStrState(state))
 	}
 	txn.Mgr.DeleteTxn(txn.GetID())
 

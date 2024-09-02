@@ -211,7 +211,7 @@ func (s *server) onMessage(
 	}
 	handler, ok := s.handlers[m.Method]
 	if !ok {
-		return moerr.NewNotSupported(ctx, "unknown txn request method: %s", m.Method.String())
+		return moerr.NewNotSupportedf(ctx, "unknown txn request method: %s", m.Method.String())
 	}
 
 	select {

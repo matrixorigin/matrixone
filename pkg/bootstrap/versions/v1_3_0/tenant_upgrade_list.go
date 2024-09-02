@@ -19,12 +19,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_systemMetrics_server_snapshot_usage,
 	upg_mo_snapshots,
+	upg_mo_retention,
 }
 
 const viewServerSnapshotUsage = "server_snapshot_usage"
@@ -56,5 +58,15 @@ var upg_mo_snapshots = versions.UpgradeEntry{
 			return true, nil
 		}
 		return false, nil
+	},
+}
+
+var upg_mo_retention = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_RETENTION,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoRetentionDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_RETENTION)
 	},
 }

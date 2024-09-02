@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -27,21 +26,9 @@ func (catalog *Catalog) CheckMetadata() {
 	logutil.Infof("[MetadataCheck] Start")
 	p := &LoopProcessor{}
 	p.ObjectFn = catalog.checkObject
-	p.TombstoneFn = catalog.checkTombstone
+	p.TombstoneFn = catalog.checkObject
 	catalog.RecurLoop(p)
 	logutil.Infof("[MetadataCheck] End")
-}
-func (catalog *Catalog) checkTombstone(t data.Tombstone) error {
-	obj := t.GetObject().(*ObjectEntry).GetLatestNode()
-	_, err := obj.GetTable().GetObjectByID(obj.ID())
-	if err != nil {
-		logutil.Warnf("[MetadataCheck] tombstone and object doesn't match, err %v, obj %v, tombstone %v",
-			err,
-			obj.PPString(3, 0, ""),
-			t.String(3, 0, ""))
-	}
-	t.CheckTombstone()
-	return nil
 }
 func (catalog *Catalog) checkObject(o *ObjectEntry) error {
 	switch o.ObjectState {

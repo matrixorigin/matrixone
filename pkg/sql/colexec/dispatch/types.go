@@ -117,10 +117,6 @@ func (dispatch *Dispatch) Release() {
 }
 
 func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	dispatch.Free(proc, pipelineFailed, err)
-}
-
-func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if dispatch.ctr != nil {
 		if dispatch.ctr.isRemote {
 			for _, r := range dispatch.ctr.remoteReceivers {
@@ -146,4 +142,7 @@ func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err e
 		case dispatch.LocalRegs[i].Ch <- msg:
 		}
 	}
+}
+
+func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err error) {
 }

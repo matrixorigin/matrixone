@@ -70,7 +70,7 @@ func (s *service) AddStatementFilter(
 		}
 	case statementContainsMethod:
 	default:
-		return moerr.NewNotSupportedNoCtx("method %s not support", method)
+		return moerr.NewNotSupportedNoCtxf("method %s not support", method)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

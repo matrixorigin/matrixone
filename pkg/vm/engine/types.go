@@ -580,7 +580,6 @@ type TombstoneType uint8
 
 const (
 	InvalidTombstoneData TombstoneType = iota
-	TombstoneWithDeltaLoc
 	TombstoneData
 )
 
@@ -597,6 +596,7 @@ const (
 	Policy_CheckAll             = 0
 	Policy_CheckCommittedS3Only = Policy_SkipUncommitedInMemory | Policy_SkipCommittedInMemory | Policy_SkipUncommitedS3
 	Policy_CheckCommittedOnly   = Policy_SkipUncommitedInMemory | Policy_SkipUncommitedS3
+	Policy_CheckUnCommittedOnly = Policy_SkipCommittedInMemory | Policy_SkipCommittedS3
 )
 
 type Tombstoner interface {
@@ -630,15 +630,11 @@ type Tombstoner interface {
 	// to the rowsOffset
 	ApplyPersistedTombstones(
 		ctx context.Context,
+		fs fileservice.FileService,
+		snapshot types.TS,
 		bid types.Blockid,
 		rowsOffset []int64,
-		mask *nulls.Nulls,
-		apply func(
-			ctx2 context.Context,
-			loc objectio.Location,
-			cts types.TS,
-			rowsOffset []int64,
-			deleted *nulls.Nulls) (left []int64, err error),
+		deletedMask *nulls.Nulls,
 	) (left []int64, err error)
 
 	// a.merge(b) => a = a U b
@@ -741,12 +737,14 @@ type DataSource interface {
 		memFilter any,
 		mp *mpool.MPool,
 		vp VectorPool,
-	) (*batch.Batch, *objectio.BlockInfo, DataState, error)
+		bat *batch.Batch,
+	) (*objectio.BlockInfo, DataState, error)
 
 	ApplyTombstones(
 		ctx context.Context,
 		bid objectio.Blockid,
 		rowsOffset []int64,
+		applyPolicy TombstoneApplyPolicy,
 	) ([]int64, error)
 
 	GetTombstones(
@@ -858,7 +856,7 @@ type Relation interface {
 
 type Reader interface {
 	Close() error
-	Read(context.Context, []string, *plan.Expr, *mpool.MPool, VectorPool) (*batch.Batch, error)
+	Read(context.Context, []string, *plan.Expr, *mpool.MPool, VectorPool, *batch.Batch) (bool, error)
 	SetOrderBy([]*plan.OrderBySpec)
 	GetOrderBy() []*plan.OrderBySpec
 	SetFilterZM(objectio.ZoneMap)

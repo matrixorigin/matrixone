@@ -118,7 +118,7 @@ func (p *ETLPath) Parse(ctx context.Context) error {
 	// parse path => filename, table
 	elems := strings.Split(p.path, "/")
 	if len(elems) != PathElems {
-		return moerr.NewInternalError(ctx, "invalid etl path: %s", p.path)
+		return moerr.NewInternalErrorf(ctx, "invalid etl path: %s", p.path)
 	}
 	p.filename = elems[PathIdxFilename]
 	p.table = elems[PathIdxTable]
@@ -127,7 +127,7 @@ func (p *ETLPath) Parse(ctx context.Context) error {
 	filename := strings.Trim(p.filename, CsvExtension)
 	fnElems := strings.Split(filename, FilenameSeparator)
 	if len(fnElems) != FilenameElems && len(fnElems) != FilenameElemsV2 {
-		return moerr.NewInternalError(ctx, "invalid etl filename: %s", p.filename)
+		return moerr.NewInternalErrorf(ctx, "invalid etl filename: %s", p.filename)
 	}
 	if fnElems[FilenameIdxType] == string(MergeLogTypeMerged) {
 		p.fileType = MergeLogTypeMerged

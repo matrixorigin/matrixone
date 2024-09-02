@@ -28,10 +28,13 @@ type container struct {
 	bats []*batch.Batch
 	buf  *batch.Batch
 	last bool
+
+	freeBats []*batch.Batch
+	i        int
 }
 
 type MergeRecursive struct {
-	ctr *container
+	ctr container
 
 	vm.OperatorBase
 }
@@ -68,21 +71,15 @@ func (mergeRecursive *MergeRecursive) Release() {
 }
 
 func (mergeRecursive *MergeRecursive) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeRecursive.Free(proc, pipelineFailed, err)
+	mergeRecursive.ctr.last = false
+	mergeRecursive.ctr.i = 0
+	for _, bat := range mergeRecursive.ctr.freeBats {
+		bat.Clean(proc.Mp())
+	}
+	mergeRecursive.ctr.freeBats = nil
+	mergeRecursive.ctr.bats = nil
+	mergeRecursive.ctr.buf = nil
 }
 
 func (mergeRecursive *MergeRecursive) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if mergeRecursive.ctr != nil {
-		for _, b := range mergeRecursive.ctr.bats {
-			if b != nil {
-				b.Clean(proc.Mp())
-			}
-			mergeRecursive.ctr.bats = nil
-		}
-		if mergeRecursive.ctr.buf != nil {
-			mergeRecursive.ctr.buf.Clean(proc.Mp())
-			mergeRecursive.ctr.buf = nil
-		}
-		mergeRecursive.ctr = nil
-	}
 }

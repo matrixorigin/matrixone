@@ -982,7 +982,7 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 		}
 		return nil
 	default:
-		return moerr.NewNotSupportedNoCtx("unknown txn response method: %s", resp.DebugString())
+		return moerr.NewNotSupportedNoCtxf("unknown txn response method: %s", resp.DebugString())
 	}
 }
 
@@ -1025,7 +1025,7 @@ func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap ma
 		return txnError.UnwrapError()
 	}
 
-	panic(moerr.NewInternalErrorNoCtx("invalid txn error, code %d, msg %s", txnCode, txnError.DebugString()))
+	panic(moerr.NewInternalErrorNoCtxf("invalid txn error, code %d, msg %s", txnCode, txnError.DebugString()))
 }
 
 func (tc *txnOperator) checkResponseTxnStatusForCommit(resp txn.TxnResponse) error {
@@ -1042,7 +1042,7 @@ func (tc *txnOperator) checkResponseTxnStatusForCommit(resp txn.TxnResponse) err
 	case txn.TxnStatus_Committed, txn.TxnStatus_Aborted:
 		return nil
 	default:
-		panic(moerr.NewInternalErrorNoCtx("invalid response status for commit, %v", txnMeta.Status))
+		panic(moerr.NewInternalErrorNoCtxf("invalid response status for commit, %v", txnMeta.Status))
 	}
 }
 
@@ -1060,7 +1060,7 @@ func (tc *txnOperator) checkResponseTxnStatusForRollback(resp txn.TxnResponse) e
 	case txn.TxnStatus_Aborted:
 		return nil
 	default:
-		panic(moerr.NewInternalErrorNoCtx("invalid response status for rollback %v", txnMeta.Status))
+		panic(moerr.NewInternalErrorNoCtxf("invalid response status for rollback %v", txnMeta.Status))
 	}
 }
 

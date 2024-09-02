@@ -215,9 +215,6 @@ func (vf *vFile) WriteAt(b []byte, off int64) (n int, err error) {
 	// logutil.Infof("%p|size is %v",vf,vf.size)
 	vf.Unlock()
 	// logutil.Infof("%p|bufpos is %v",vf,vf.bufpos)
-	if err != nil {
-		return
-	}
 	return
 }
 
