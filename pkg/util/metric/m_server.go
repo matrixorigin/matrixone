@@ -36,7 +36,7 @@ var (
 	ObjectCountFactory = NewGaugeVec(
 		GaugeOpts{
 			Subsystem: "server",
-			Name:      "object_count_total",
+			Name:      "object_count",
 			Help:      "object number of each account",
 		},
 		[]string{constTenantKey},

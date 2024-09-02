@@ -17,7 +17,6 @@ package mometric
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"path"
 	"strings"
@@ -25,13 +24,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -39,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 const (
@@ -168,7 +167,7 @@ func GetColumnIdxFromShowAccountResult(ctx context.Context, result ie.InternalEx
 			name2idx[ColumnSnapshotSize] = math.MaxUint64
 		}
 		if _, ok := name2idx[ColumnObjectCount]; !ok {
-			logutil.Infof("column object count does not exists: %v", name2idx)
+			logutil.Errorf("column object count does not exists: %v", name2idx)
 			name2idx[ColumnObjectCount] = math.MaxUint64
 		}
 		accountIdx, sizeIdx, snapshotSizeIdx = name2idx[ColumnAccountName], name2idx[ColumnSize], name2idx[ColumnSnapshotSize]
@@ -292,8 +291,6 @@ func CalculateStorageUsage(
 				zap.Float64("sizeMB", sizeMB),
 				zap.Float64("snapshot", snapshotSizeMB),
 				zap.Float64("object_count", objectCount))
-
-			fmt.Println("update object count", account, objectCount)
 
 			metric.ObjectCount(account).Set(objectCount)
 			metric.StorageUsage(account).Set(sizeMB)

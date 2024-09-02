@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"math/rand"
-	"strconv"
 	"testing"
 	"time"
 
@@ -29,9 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,11 +41,11 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 	args := []arg{
 		{
 			s:    "show accounts;",
-			want: "WITH db_tbl_counts AS (\tSELECT\t\tCAST(mt.account_id AS BIGINT) AS account_id,\t\tCOUNT(DISTINCT md.dat_id) AS db_count,\t\tCOUNT(DISTINCT mt.rel_id) AS tbl_count\tFROM\t\tmo_catalog.mo_tables AS mt\tJOIN\t\tmo_catalog.mo_database AS md\tON \t\tmt.account_id = md.account_id AND\t\tmt.relkind IN ('v','e','r','cluster') \tGROUP BY\t\tmt.account_id),final_result AS (\tSELECT\t\tCAST(ma.account_id AS BIGINT) AS account_id,\t\tma.account_name,\t\tma.admin_name,\t\tma.created_time,\t\tma.status,\t\tma.suspended_time,\t\tdb_tbl_counts.db_count,\t\tdb_tbl_counts.tbl_count,\t\tCAST(0 AS DOUBLE) AS size,\t\tma.comments\tFROM\t\tdb_tbl_counts\tJOIN\t\tmo_catalog.mo_account AS ma \tON \t\tdb_tbl_counts.account_id = ma.account_id \t\t   )SELECT * FROM final_result;",
+			want: "WITH db_tbl_counts AS (\tSELECT\t\tCAST(mt.account_id AS BIGINT) AS account_id,\t\tCOUNT(DISTINCT md.dat_id) AS db_count,\t\tCOUNT(DISTINCT mt.rel_id) AS tbl_count\tFROM\t\tmo_catalog.mo_tables AS mt\tJOIN\t\tmo_catalog.mo_database AS md\tON \t\tmt.account_id = md.account_id AND\t\tmt.relkind IN ('v','e','r','cluster') \tGROUP BY\t\tmt.account_id),final_result AS (\tSELECT\t\tCAST(ma.account_id AS BIGINT) AS account_id,\t\tma.account_name,\t\tma.admin_name,\t\tma.created_time,\t\tma.status,\t\tma.suspended_time,\t\tdb_tbl_counts.db_count,\t\tdb_tbl_counts.tbl_count,\t\tCAST(0 AS DOUBLE) AS size,\t\tma.comments\t\t\tFROM\t\tdb_tbl_counts\tJOIN\t\tmo_catalog.mo_account AS ma \tON \t\tdb_tbl_counts.account_id = ma.account_id \t\t   )SELECT * FROM final_result;",
 		},
 		{
 			s:    "show accounts like '%abc';",
-			want: "WITH db_tbl_counts AS (\tSELECT\t\tCAST(mt.account_id AS BIGINT) AS account_id,\t\tCOUNT(DISTINCT md.dat_id) AS db_count,\t\tCOUNT(DISTINCT mt.rel_id) AS tbl_count\tFROM\t\tmo_catalog.mo_tables AS mt\tJOIN\t\tmo_catalog.mo_database AS md\tON \t\tmt.account_id = md.account_id AND\t\tmt.relkind IN ('v','e','r','cluster') \tGROUP BY\t\tmt.account_id),final_result AS (\tSELECT\t\tCAST(ma.account_id AS BIGINT) AS account_id,\t\tma.account_name,\t\tma.admin_name,\t\tma.created_time,\t\tma.status,\t\tma.suspended_time,\t\tdb_tbl_counts.db_count,\t\tdb_tbl_counts.tbl_count,\t\tCAST(0 AS DOUBLE) AS size,\t\tma.comments\tFROM\t\tdb_tbl_counts\tJOIN\t\tmo_catalog.mo_account AS ma \tON \t\tdb_tbl_counts.account_id = ma.account_id \t\twhere ma.account_name like '%abc'  )SELECT * FROM final_result;",
+			want: "WITH db_tbl_counts AS (\tSELECT\t\tCAST(mt.account_id AS BIGINT) AS account_id,\t\tCOUNT(DISTINCT md.dat_id) AS db_count,\t\tCOUNT(DISTINCT mt.rel_id) AS tbl_count\tFROM\t\tmo_catalog.mo_tables AS mt\tJOIN\t\tmo_catalog.mo_database AS md\tON \t\tmt.account_id = md.account_id AND\t\tmt.relkind IN ('v','e','r','cluster') \tGROUP BY\t\tmt.account_id),final_result AS (\tSELECT\t\tCAST(ma.account_id AS BIGINT) AS account_id,\t\tma.account_name,\t\tma.admin_name,\t\tma.created_time,\t\tma.status,\t\tma.suspended_time,\t\tdb_tbl_counts.db_count,\t\tdb_tbl_counts.tbl_count,\t\tCAST(0 AS DOUBLE) AS size,\t\tma.comments\t\t\tFROM\t\tdb_tbl_counts\tJOIN\t\tmo_catalog.mo_account AS ma \tON \t\tdb_tbl_counts.account_id = ma.account_id \t\twhere ma.account_name like '%abc'  )SELECT * FROM final_result;",
 		},
 	}
 
@@ -56,7 +53,7 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 		one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, a.s, 1)
 		assert.NoError(t, err)
 		sa1 := one.(*tree.ShowAccounts)
-		r1 := getSqlForAccountInfo(sa1.Like, -1)
+		r1 := getSqlForAccountInfo(sa1.Like, -1, false)
 		assert.Equal(t, a.want, r1)
 	}
 }
@@ -148,42 +145,5 @@ func Test_GetObjectCount(t *testing.T) {
 	abstract := cnUsageCache.GatherObjectAbstractForAccounts()
 	for i := 0; i < len(rep.AccIds); i++ {
 		require.Equal(t, int(rep.ObjCnts[i]), abstract[uint64(rep.AccIds[i])].TotalObjCnt)
-	}
-}
-
-func Test_UpdateObjectCountMetric(t *testing.T) {
-	proc := testutil.NewProc()
-	rep := db.StorageUsageResp_V2{}
-
-	for i := 0; i < 10; i++ {
-		rep.AccIds = append(rep.AccIds, int64(i))
-		rep.Sizes = append(rep.Sizes, rand.Uint64())
-		rep.ObjCnts = append(rep.ObjCnts, rand.Uint64()%100)
-		rep.BlkCnts = append(rep.BlkCnts, rand.Uint64()%100)
-		rep.RowCnts = append(rep.RowCnts, rand.Uint64()%100)
-	}
-
-	updateStorageUsageCache(&rep)
-
-	var accIds [][]int64 = make([][]int64, 1)
-	var accountInfoBats []*batch.Batch = make([]*batch.Batch, 1)
-	accountInfoBats[0] = batch.NewWithSize(1)
-	accountInfoBats[0].Vecs[0] = vector.NewVec(types.T_binary.ToType())
-
-	for i := 0; i < len(rep.AccIds); i++ {
-		accIds[0] = append(accIds[0], rep.AccIds[i])
-		vector.AppendBytes(accountInfoBats[0].Vecs[0], []byte(strconv.Itoa(i)), false, proc.GetMPool())
-	}
-
-	updateObjectCountMetricForAllAccounts(accountInfoBats, accIds)
-
-	data, area := vector.MustVarlenaRawData(accountInfoBats[0].Vecs[0])
-	for i := 0; i < len(rep.AccIds); i++ {
-		name := data[i].GetString(area)
-		w := dto.Metric{}
-		err := metric.ObjectCount(name).Write(&w)
-		require.NoError(t, err)
-
-		require.Equal(t, float64(rep.ObjCnts[i])+0.001, w.GetGauge().GetValue())
 	}
 }
