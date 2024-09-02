@@ -43,19 +43,6 @@ func NewFileServices(defaultName string, fss ...FileService) (*FileServices, err
 
 var _ FileService = &FileServices{}
 
-func (f *FileServices) RemoveFileService(name string) {
-	delete(f.mappings, name)
-}
-
-func (f *FileServices) AddFileService(name string) {
-	fs, err := NewMemoryFS(name, DisabledCacheConfig, nil)
-	if err != nil {
-		panic(err)
-	}
-
-	f.mappings[name] = fs
-}
-
 func (f *FileServices) Delete(ctx context.Context, filePaths ...string) error {
 	for _, filePath := range filePaths {
 		if err := f.deleteSingle(ctx, filePath); err != nil {

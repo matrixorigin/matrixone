@@ -43,6 +43,15 @@ func WithMPool(pool *mpool.MPool) ProcOptions {
 	}
 }
 
+func WithFileService(fs fileservice.FileService) ProcOptions {
+	return func(proc *process.Process) {
+		if proc.GetFileService() != nil {
+			proc.GetFileService().Close()
+		}
+		proc.SetFileService(fs)
+	}
+}
+
 func NewProcess(opts ...ProcOptions) *process.Process {
 	mp := mpool.MustNewZeroNoFixed()
 	proc := NewProcessWithMPool("", mp)

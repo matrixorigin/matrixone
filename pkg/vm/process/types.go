@@ -439,6 +439,10 @@ func (proc *Process) SetMPool(mp *mpool.MPool) {
 	proc.Base.mp = mp
 }
 
+func (proc *Process) SetFileService(fs fileservice.FileService) {
+	proc.Base.FileService = fs
+}
+
 func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
 	proc.Base.valueScanBatch[key] = batch
 }
