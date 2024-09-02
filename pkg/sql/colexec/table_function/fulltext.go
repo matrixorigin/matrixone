@@ -41,18 +41,96 @@ const (
 	t1.doc_id = t2.doc_id ORDER BY tfidf;`
 )
 
+type fulltextState struct {
+	inited bool
+
+	called bool
+	// holding one call batch, fulltextState owns it.
+	curr    int
+	batches []*batch.Batch
+}
+
+func (u *fulltextState) reset(tf *TableFunction, proc *process.Process) {
+	if u.batches != nil {
+		for i, _ := range u.batches {
+			u.batches[i].CleanOnlyData()
+			//u.batches[i].Clean(proc.Mp())
+		}
+	}
+	u.called = false
+}
+
+func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
+	var res vm.CallResult
+	if u.called {
+		return res, nil
+	}
+	res.Batch = u.batches[u.curr]
+	u.curr += 1
+	u.called = true
+	return res, nil
+}
+
+func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
+	if u.batches != nil {
+		for i, _ := range u.batches {
+			u.batches[i].Clean(proc.Mp())
+		}
+	}
+}
+
+// start calling tvf on nthRow and put the result in u.batch.  Note that current unnest impl will
+// always return one batch per nthRow.
+func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+	var err error
+
+	if !u.inited {
+		v := tf.ctr.argVecs[0]
+		if v.GetType().Oid != types.T_varchar {
+			return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: first argument (index table name) must be string, but got %s", v.GetType().String()))
+		}
+		index_table := v.UnsafeGetStringAt(0)
+
+		v = tf.ctr.argVecs[1]
+		if v.GetType().Oid != types.T_varchar {
+			return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: first argument (index table name) must be string, but got %s", v.GetType().String()))
+		}
+		pattern := v.UnsafeGetStringAt(0)
+
+		v = tf.ctr.argVecs[1]
+		if v.GetType().Oid != types.T_int64 {
+			return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: first argument (index table name) must be string, but got %s", v.GetType().String()))
+		}
+		mode := vector.GetFixedAt[int64](v, 0)
+
+		u.batches, err = fulltextIndexMatch(proc, tf, index_table, pattern, mode)
+		u.inited = true
+	}
+
+	u.called = false
+	// clean up the batch
+	if u.curr > 0 {
+		u.batches[u.curr-1].CleanOnlyData()
+	}
+
+	return err
+}
+
 // prepare
-func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunction) (err error) {
+func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
+	var err error
+	st := &fulltextState{}
 	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
 
 	logutil.Infof("FULLTEXTINDESCSCAN PREPARE")
 	for i := range tableFunction.Attrs {
 		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
 	}
-	return err
+	return st, err
 }
 
 // run SQL here
+/*
 func fulltextIndexScanCall(_ int, proc *process.Process, tableFunction *TableFunction, result *vm.CallResult) (bool, error) {
 
 	var (
@@ -123,6 +201,8 @@ func fulltextIndexScanCall(_ int, proc *process.Process, tableFunction *TableFun
 	return false, nil
 }
 
+*/
+
 func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
@@ -140,7 +220,7 @@ func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
 	return exec.Exec(proc.GetTopContext(), sql, opts)
 }
 
-func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, tblname, pattern string) (batch *batch.Batch, err error) {
+func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, tblname, pattern string, mode int64) (batches []*batch.Batch, err error) {
 
 	var projects []string
 
@@ -187,10 +267,21 @@ func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, tbl
 	}
 	defer res.Close()
 
-	if res.Batches != nil && len(res.Batches) > 0 {
-		return res.Batches[0].Dup(proc.Mp())
-		//return res.Batches[0], nil
+	batches = make([]*batch.Batch, len(res.Batches))
+	for i, b := range res.Batches {
+		batches[i], err = b.Dup(proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	return nil, nil
+	return batches, nil
+	/*
+		if res.Batches != nil && len(res.Batches) > 0 {
+			return res.Batches[0].Dup(proc.Mp())
+			//return res.Batches[0], nil
+		}
+
+		return nil, nil
+	*/
 }

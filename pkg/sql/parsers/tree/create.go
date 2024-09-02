@@ -29,6 +29,12 @@ func init() {
 		reuse.DefaultOptions[CreateOptionCharset](), //.
 	) //WithEnableChecker()
 
+	reuse.CreatePool[RetentionOption](
+		func() *RetentionOption { return &RetentionOption{} },
+		func(option *RetentionOption) { option.reset() },
+		reuse.DefaultOptions[RetentionOption](),
+	)
+
 	reuse.CreatePool[ClusterByOption](
 		func() *ClusterByOption { return &ClusterByOption{} },
 		func(c *ClusterByOption) { c.reset() },
@@ -1189,6 +1195,8 @@ func (node *CreateTable) reset() {
 			case *TableOptionUnion:
 				opt.Free()
 			case *TableOptionEncryption:
+				opt.Free()
+			case *RetentionOption:
 				opt.Free()
 			default:
 				if opt != nil {
@@ -3986,6 +3994,34 @@ func (node *ClusterByOption) reset() {
 
 func (node *ClusterByOption) Free() {
 	reuse.Free[ClusterByOption](node, nil)
+}
+
+type RetentionOption struct {
+	Period uint64
+	Unit   string
+}
+
+func NewRetentionOption(period uint64, unit string) *RetentionOption {
+	cb := reuse.Alloc[RetentionOption](nil)
+	cb.Period = period
+	cb.Unit = unit
+	return cb
+}
+
+func (node RetentionOption) TypeName() string { return "tree.ClusterByOption" }
+
+func (node *RetentionOption) Free() {
+	reuse.Free[RetentionOption](node, nil)
+}
+
+func (node RetentionOption) Format(ctx *FmtCtx) {
+	ctx.WriteString("with retention period ")
+	ctx.WriteString(strconv.FormatUint(node.Period, 10))
+	ctx.WriteString(" " + node.Unit)
+}
+
+func (node *RetentionOption) reset() {
+	*node = RetentionOption{}
 }
 
 type PartitionOption struct {

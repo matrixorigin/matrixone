@@ -36,5 +36,5 @@ func ParseBool(s string) (bool, error) {
 			return false, nil
 		}
 	}
-	return false, moerr.NewInvalidInputNoCtx("'%s' is not a valid bool expression", s)
+	return false, moerr.NewInvalidInputNoCtxf("'%s' is not a valid bool expression", s)
 }

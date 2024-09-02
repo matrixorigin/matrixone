@@ -102,7 +102,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, err
 	} else if sub != nil {
 		if !pubsub.InSubMetaTables(sub, tblName) {
-			return nil, moerr.NewInternalErrorNoCtx("table %s not found in publication %s", tblName, sub.Name)
+			return nil, moerr.NewInternalErrorNoCtxf("table %s not found in publication %s", tblName, sub.Name)
 		}
 
 		ctx.SetQueryingSubscription(sub)
@@ -170,7 +170,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 
 	_, tableDef := ctx.Resolve(dbName, tblName, snapshot)
 	if tableDef == nil || tableDef.TableType != catalog.SystemViewRel {
-		return nil, moerr.NewInvalidInput(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
+		return nil, moerr.NewInvalidInputf(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
 	}
 	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`, 'utf8mb4' as `character_set_client`, 'utf8mb4_general_ci' as `collation_connection`"
 	var viewStr string
@@ -265,7 +265,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	}
 
 	if stmt.Open {
-		return nil, moerr.NewNYI(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
+		return nil, moerr.NewNYIf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 
 	accountId, err := ctx.GetAccountId()
@@ -1119,7 +1119,7 @@ func getRewriteSQLStmt(ctx CompilerContext, sql string) (tree.Statement, error) 
 		return nil, err
 	}
 	if len(newStmts) != 1 {
-		return nil, moerr.NewInvalidInput(ctx.GetContext(), "rewrite can only contain one statement, %d provided", len(newStmts))
+		return nil, moerr.NewInvalidInputf(ctx.GetContext(), "rewrite can only contain one statement, %d provided", len(newStmts))
 	}
 	return newStmts[0], nil
 }

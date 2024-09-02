@@ -39,7 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v1"
+	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -365,7 +365,7 @@ func (h *Handle) HandleCommitMerge(
 	merge.ActiveCNObj.RemoveActiveCNObj(ids)
 	if req.Err != "" {
 		resp.ReturnStr = req.Err
-		err = moerr.NewInternalError(ctx, "merge err in cn: %s", req.Err)
+		err = moerr.NewInternalErrorf(ctx, "merge err in cn: %s", req.Err)
 		return
 	}
 
@@ -380,7 +380,7 @@ func (h *Handle) HandleCommitMerge(
 	if err != nil {
 		return err
 	}
-	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, transferMaps, h.db.Runtime)
+	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, transferMaps, h.db.Runtime, false)
 	if err != nil {
 		return
 	}

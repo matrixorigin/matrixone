@@ -28,6 +28,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -36,7 +38,6 @@ import (
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
-	"go.uber.org/zap"
 )
 
 // S3FS is a FileService implementation backed by S3
@@ -327,7 +328,13 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 	return r, nil
 }
 
-func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
+func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
+	defer func() {
+		if errors.Is(err, io.EOF) {
+			panic("found EOF in Write")
+		}
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -449,7 +456,6 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	for _, cache := range vector.Caches {
-		cache := cache
 
 		t0 := time.Now()
 		LogEvent(ctx, str_read_vector_Caches_begin)
@@ -503,11 +509,6 @@ read_memory_cache:
 	}
 
 	stats := statistic.StatsInfoFromContext(ctx)
-	ioStart := time.Now()
-	defer func() {
-		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
-	}()
-
 	LogEvent(ctx, str_ioMerger_Merge_begin)
 	startLock := time.Now()
 	done, wait := s.ioMerger.Merge(vector.ioMergeKey())
@@ -523,6 +524,12 @@ read_memory_cache:
 		LogEvent(ctx, str_ioMerger_Merge_end)
 		goto read_memory_cache
 	}
+
+	// Record diskIO and netwokIO(un memory IO) resource
+	ioStart := time.Now()
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
 
 	if s.diskCache != nil {
 
@@ -585,7 +592,6 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	for _, cache := range vector.Caches {
-		cache := cache
 		if err := readCache(ctx, cache, vector); err != nil {
 			return err
 		}
@@ -701,7 +707,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		if entry.done {
 			continue
 		}
-		entry := entry
 		numNotDoneEntries++
 
 		start := entry.Offset - *min

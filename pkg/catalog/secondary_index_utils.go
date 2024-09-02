@@ -124,7 +124,7 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		if opType != IndexAlgoParamOpType_l2 {
 			//	opType != IndexAlgoParamOpType_ip &&
 			//	opType != IndexAlgoParamOpType_cos
-			return "", moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s'", IndexAlgoParamOpType_l2)
+			return "", moerr.NewInternalErrorNoCtxf("invalid op_type. not of type '%s'", IndexAlgoParamOpType_l2)
 			//IndexAlgoParamOpType_ip, , IndexAlgoParamOpType_cos)
 
 		}
@@ -179,7 +179,7 @@ func fullTextIndexParamsToMap(def *tree.FullTextIndex) (map[string]string, error
 	if def.IndexOption != nil {
 		parsername := strings.ToLower(def.IndexOption.ParserName)
 		if parsername != "ngram" {
-			return nil, moerr.NewInternalErrorNoCtx("invalid parser %s", parsername)
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid parser %s", parsername))
 		}
 		res["parser"] = parsername
 		// TODO: get variable ngram_token_size.  default is 2.
@@ -222,10 +222,9 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 					//opType != IndexAlgoParamOpType_ip &&
 					//opType != IndexAlgoParamOpType_cos &&
 
-					return nil, moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s'",
-						IndexAlgoParamOpType_l2,
-						//IndexAlgoParamOpType_ip, IndexAlgoParamOpType_cos,
-					)
+					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. not of type '%s'",
+						IndexAlgoParamOpType_l2))
+					//IndexAlgoParamOpType_ip, IndexAlgoParamOpType_cos,
 				}
 				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 			} else {

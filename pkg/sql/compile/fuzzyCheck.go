@@ -489,7 +489,7 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	case types.T_enum:
 		return fmt.Sprintf("%v", vector.GetFixedAt[uint16](vec, rowIndex)), nil
 	default:
-		return "", moerr.NewInternalErrorNoCtx("fuzzy filter can not parse correct string for type id : %d", vec.GetType().Oid)
+		return "", moerr.NewInternalErrorNoCtxf("fuzzy filter can not parse correct string for type id : %d", vec.GetType().Oid)
 	}
 }
 

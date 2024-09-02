@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"go/constant"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -51,7 +49,7 @@ var (
 func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
 
 	if len(exprs) != 3 {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (%d != 3). fulltext_index_scan(table_name, search_pattern, mode)", len(exprs))
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 3).")
 	}
 
 	colDefs := _getColDefs(ftIndexColdefs)
@@ -94,7 +92,7 @@ func (builder *QueryBuilder) getFullTextColDefs(fn *tree.FuncExpr) ([]*plan.ColD
 	coldefs := _getColDefs(ftIndexColdefs)
 
 	if val, ok := fn.Exprs[3].(*tree.NumVal); ok {
-		oid, ok := constant.Int64Val(val.Value)
+		oid, ok := val.Int64()
 		if !ok {
 			return nil, moerr.NewNoConfig(builder.GetContext(), "invalid primary key type (not int64)")
 		}

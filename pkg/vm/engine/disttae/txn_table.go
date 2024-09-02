@@ -102,7 +102,7 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 		return nil, err
 	}
 	e := tbl.db.getEng()
-	approxObjectNum := int64(partitionState.ApproxObjectsNum())
+	approxObjectNum := int64(partitionState.ApproxDataObjectsNum())
 	if approxObjectNum == 0 {
 		// There are no objects flushed yet.
 		return nil, nil
@@ -161,7 +161,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	}
 
 	if !found {
-		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", columnName)
+		return 0, moerr.NewInvalidInputf(ctx, "bad input column name %v", columnName)
 	}
 
 	deletes := make(map[types.Rowid]struct{})
@@ -214,7 +214,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	}
 	sz, ok := s.SizeMap[columnName]
 	if !ok {
-		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", columnName)
+		return 0, moerr.NewInvalidInputf(ctx, "bad input column name %v", columnName)
 	}
 	return sz + szInPart, nil
 }
@@ -225,7 +225,7 @@ func ForeachVisibleDataObject(
 	fn func(obj logtailreplay.ObjectEntry) error,
 	executor ConcurrentExecutor,
 ) (err error) {
-	iter, err := state.NewObjectsIter(ts, true)
+	iter, err := state.NewObjectsIter(ts, true, false)
 	if err != nil {
 		return err
 	}
@@ -257,7 +257,7 @@ func (tbl *txnTable) ApproxObjectsNum(ctx context.Context) int {
 	if err != nil {
 		return 0
 	}
-	return part.ApproxObjectsNum()
+	return part.ApproxDataObjectsNum()
 }
 
 func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
@@ -353,7 +353,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		}
 	}
 	if !found {
-		return nil, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
+		return nil, moerr.NewInvalidInputf(ctx, "bad input column name %v", name)
 	}
 
 	needCols := make([]*plan.ColDef, 0, n)
@@ -369,7 +369,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	if err != nil {
 		return nil, err
 	}
-	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxObjectsNum())
+	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxDataObjectsNum())
 	var updateMu sync.Mutex
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
@@ -480,13 +480,14 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			if err != nil {
 				return err
 			}
-			rowIdBat, release, err := blockio.LoadTombstoneColumns(
+			rowIdBat, release, err := blockio.LoadColumns(
 				tbl.getTxn().proc.Ctx,
 				[]uint16{0},
 				nil,
 				tbl.getTxn().engine.fs,
 				location,
-				tbl.getTxn().proc.GetMPool())
+				tbl.getTxn().proc.GetMPool(),
+				fileservice.Policy(0))
 			if err != nil {
 				return err
 			}
@@ -504,8 +505,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 // LoadDeletesForMemBlocksIn loads deletes for memory blocks whose data resides in PartitionState.rows
 func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 	state *logtailreplay.PartitionState,
-	deletesRowId map[types.Rowid]uint8,
-) error {
+	deletesRowId map[types.Rowid]uint8) error {
 
 	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
 	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
@@ -522,13 +522,14 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 				if err != nil {
 					return err
 				}
-				rowIdBat, release, err := blockio.LoadTombstoneColumns(
+				rowIdBat, release, err := blockio.LoadColumns(
 					tbl.getTxn().proc.Ctx,
 					[]uint16{0},
 					nil,
 					tbl.getTxn().engine.fs,
 					location,
-					tbl.getTxn().proc.GetMPool())
+					tbl.getTxn().proc.GetMPool(),
+					fileservice.Policy(0))
 				if err != nil {
 					return err
 				}
@@ -554,11 +555,10 @@ func (tbl *txnTable) resetSnapshot() {
 	tbl._partState.Store(nil)
 }
 
-// CollectTombstones collects in memory tombstones and tombstone objects.
 func (tbl *txnTable) CollectTombstones(
 	ctx context.Context, txnOffset int,
 ) (engine.Tombstoner, error) {
-	tombstone := NewEmptyTombstoneWithDeltaLoc()
+	tombstone := NewEmptyTombstoneData()
 
 	offset := txnOffset
 	if tbl.db.op.IsSnapOp() {
@@ -588,15 +588,12 @@ func (tbl *txnTable) CollectTombstones(
 				//deletes in txn.Write maybe comes from PartitionState.Rows ,
 				// PartitionReader need to skip them.
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				for _, v := range vs {
-					bid, o := v.Decode()
-					tombstone.inMemTombstones[bid] = append(tombstone.inMemTombstones[bid], int32(o))
-				}
+				tombstone.rowids = append(tombstone.rowids, vs...)
 			}
 		})
 
 	//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
-	tbl.getTxn().deletedBlocks.getDeletedRowIDs(tombstone.inMemTombstones)
+	tbl.getTxn().deletedBlocks.getDeletedRowIDs(&tombstone.rowids)
 
 	//collect committed in-memory tombstones from partition state.
 	state, err := tbl.getPartitionState(ctx)
@@ -608,21 +605,23 @@ func (tbl *txnTable) CollectTombstones(
 		iter := state.NewRowsIter(types.TimestampToTS(ts), nil, true)
 		for iter.Next() {
 			entry := iter.Entry()
-			bid, o := entry.RowID.Decode()
-			tombstone.inMemTombstones[bid] = append(tombstone.inMemTombstones[bid], int32(o))
+			//bid, o := entry.RowID.Decode()
+			tombstone.rowids = append(tombstone.rowids, entry.RowID)
 		}
 		iter.Close()
 	}
 
 	//collect uncommitted persisted tombstones.
-	if err := tbl.getTxn().getUncommittedS3Tombstone(tombstone.blk2UncommitLoc); err != nil {
+	if err := tbl.getTxn().getUncommittedS3Tombstone(&tombstone.files); err != nil {
 		return nil, err
 	}
+
+	tombstone.SortInMemory()
 	//collect committed persisted tombstones from partition state.
-	if err = state.GetTombstoneDeltaLocs(tombstone.blk2CommitLoc); err != nil {
-		return nil, err
-	}
-	return tombstone, nil
+	//state.GetTombstoneDeltaLocs(tombstone.blk2CommitLoc)
+	snapshot := types.TimestampToTS(tbl.db.op.Txn().SnapshotTS)
+	err = state.CollectTombstoneObjects(snapshot, &tombstone.files)
+	return tombstone, err
 }
 
 // Ranges returns all unmodified blocks from the table.
@@ -913,13 +912,6 @@ func (tbl *txnTable) rangesOnePart(
 
 				blk.Sorted = obj.Sorted
 				blk.Appendable = obj.Appendable
-				blk.CommitTs = obj.CommitTS
-				//if obj.HasDeltaLoc {
-				//	_, commitTs, ok := state.GetBockDeltaLoc(blk.BlockID)
-				//	if ok {
-				//		blk.CommitTs = commitTs
-				//	}
-				//}
 
 				outBlocks.AppendBlockInfo(blk)
 
@@ -1585,7 +1577,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		}
 	default:
 		tbl.getTxn().hasS3Op.Store(true)
-		panic(moerr.NewInternalErrorNoCtx("Unsupport type for table delete %d", typ))
+		panic(moerr.NewInternalErrorNoCtxf("Unsupport type for table delete %d", typ))
 	}
 	return nil
 }
@@ -1610,15 +1602,11 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64,
 ) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
-	s3writer := &colexec.S3Writer{}
-	s3writer.SetTableName(tbl.tableName)
-	s3writer.SetSchemaVer(tbl.version)
-	_, err := s3writer.GenerateWriter(tbl.getTxn().proc)
+	s3writer, err := colexec.NewS3Writer(tbl.getTxn().proc, tbl.tableDef, 0)
 	if err != nil {
 		return nil, nil, err
 	}
 	tbl.ensureSeqnumsAndTypesExpectRowid()
-	s3writer.SetSeqnums(tbl.seqnums)
 
 	for blkmetaloc, deletes := range compactedBlks {
 		//blk.MetaLocation()
@@ -1636,17 +1624,10 @@ func (tbl *txnTable) compaction(
 		if bat.RowCount() == 0 {
 			continue
 		}
-		if err = s3writer.WriteBlock(bat); err != nil {
-			return nil, nil, err
-		}
+		s3writer.StashBatch(tbl.getTxn().proc, bat)
 		bat.Clean(tbl.getTxn().proc.GetMPool())
-
 	}
-	createdBlks, stats, err := s3writer.WriteEndBlocks(tbl.getTxn().proc)
-	if err != nil {
-		return nil, nil, err
-	}
-	return createdBlks, stats, nil
+	return s3writer.SortAndSync(tbl.getTxn().proc)
 }
 
 func (tbl *txnTable) Delete(
@@ -1820,6 +1801,7 @@ func (tbl *txnTable) BuildReaders(
 	orderBy bool,
 	tombstonePolicy engine.TombstoneApplyPolicy,
 ) ([]engine.Reader, error) {
+	var rds []engine.Reader
 	proc := p.(*process.Process)
 	//copy from NewReader.
 	if plan2.IsFalseExpr(expr) {
@@ -1836,17 +1818,20 @@ func (tbl *txnTable) BuildReaders(
 		relData.AppendBlockInfo(objectio.EmptyBlockInfo)
 	}
 	blkCnt := relData.DataCnt()
+	newNum := num
 	if blkCnt < num {
-		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
+		newNum = blkCnt
+		for i := 0; i < num-blkCnt; i++ {
+			rds = append(rds, new(emptyReader))
+		}
 	}
 
-	scanType := determineScanType(relData, num)
+	scanType := determineScanType(relData, newNum)
 	def := tbl.GetTableDef(ctx)
-	mod := blkCnt % num
-	divide := blkCnt / num
+	mod := blkCnt % newNum
+	divide := blkCnt / newNum
 	var shard engine.RelData
-	var rds []engine.Reader
-	for i := 0; i < num; i++ {
+	for i := 0; i < newNum; i++ {
 		if i == 0 {
 			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
 		} else {
@@ -2008,13 +1993,6 @@ func (tbl *txnTable) PKPersistedBetween(
 
 					blk.Sorted = obj.Sorted
 					blk.Appendable = obj.Appendable
-					blk.CommitTs = obj.CommitTS
-					if obj.HasDeltaLoc {
-						_, commitTs, ok := p.GetBockDeltaLoc(blk.BlockID)
-						if ok {
-							blk.CommitTs = commitTs
-						}
-					}
 					blk.PartitionNum = -1
 					candidateBlks[blk.BlockID] = &blk
 					return true
@@ -2174,7 +2152,7 @@ func (tbl *txnTable) MergeObjects(
 		info, exist := state.GetObject(*objstat.ObjectShortName())
 		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
 			logutil.Errorf("object not visible: %s", info.String())
-			return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
+			return nil, moerr.NewInternalErrorNoCtxf("object %s not exist", objstat.ObjectName().String())
 		}
 		objInfos = append(objInfos, info)
 	}
@@ -2194,7 +2172,7 @@ func (tbl *txnTable) MergeObjects(
 		return nil, err
 	}
 
-	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost)
+	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost, false)
 	if err != nil {
 		taskHost.commitEntry.Err = err.Error()
 		return taskHost.commitEntry, err

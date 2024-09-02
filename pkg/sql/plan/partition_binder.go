@@ -78,23 +78,23 @@ func (p *PartitionBinder) BindExpr(expr tree.Expr, i int32, b bool) (*plan.Expr,
 		case tree.PLUS, tree.MINUS, tree.MULTI, tree.INTEGER_DIV, tree.MOD:
 			//suggested by Zhang Xiao, only support operator +,-,*,div in version 0.8
 		default:
-			return nil, moerr.NewInvalidInput(p.GetContext(), "operator %s is not allowed in the partition expression", exprImpl.Op.ToString())
+			return nil, moerr.NewInvalidInputf(p.GetContext(), "operator %s is not allowed in the partition expression", exprImpl.Op.ToString())
 		}
 	case *tree.UnaryExpr:
 		switch exprImpl.Op {
 		case tree.UNARY_MINUS, tree.UNARY_PLUS:
 		default:
-			return nil, moerr.NewInvalidInput(p.GetContext(), "operator %s is not allowed in the partition expression", exprImpl.Op.ToString())
+			return nil, moerr.NewInvalidInputf(p.GetContext(), "operator %s is not allowed in the partition expression", exprImpl.Op.ToString())
 		}
 	case *tree.FuncExpr:
 		//supported function
 		funcRef, ok := exprImpl.Func.FunctionReference.(*tree.UnresolvedName)
 		if !ok {
-			return nil, moerr.NewNYI(p.GetContext(), "invalid function expr '%v'", exprImpl)
+			return nil, moerr.NewNYIf(p.GetContext(), "invalid function expr '%v'", exprImpl)
 		}
 		funcName := funcRef.ColName()
 		if !functionIsSupported(funcName) {
-			return nil, moerr.NewInvalidInput(p.GetContext(), "function %s is not allowed in the partition expression", funcRef.ColNameOrigin())
+			return nil, moerr.NewInvalidInputf(p.GetContext(), "function %s is not allowed in the partition expression", funcRef.ColNameOrigin())
 		}
 	}
 	return p.baseBindExpr(expr, i, b)
@@ -117,5 +117,5 @@ func (p *PartitionBinder) BindSubquery(subquery *tree.Subquery, b bool) (*plan.E
 }
 
 func (p *PartitionBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInput(p.GetContext(), "cannot bind time window functions '%s'", funcName)
+	return nil, moerr.NewInvalidInputf(p.GetContext(), "cannot bind time window functions '%s'", funcName)
 }

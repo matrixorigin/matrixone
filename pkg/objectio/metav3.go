@@ -63,19 +63,21 @@ func (mh objectMetaV3) MustDataMeta() objectDataMetaV1 {
 }
 
 func (mh objectMetaV3) TombstoneMeta() (objectDataMetaV1, bool) {
-	if mh.TombstoneMetaCount() == 0 {
-		return nil, false
-	}
-	offset := types.DecodeUint32(mh[tombstoneMetaCountOff+tombstoneMetaCount : metaDummyOff])
-	return objectDataMetaV1(mh[offset:]), true
+	return mh.DataMeta()
+	// if mh.TombstoneMetaCount() == 0 {
+	// 	return nil, false
+	// }
+	// offset := types.DecodeUint32(mh[tombstoneMetaCountOff+tombstoneMetaCount : metaDummyOff])
+	// return objectDataMetaV1(mh[offset:]), true
 }
 
 func (mh objectMetaV3) MustTombstoneMeta() objectDataMetaV1 {
-	meta, ok := mh.TombstoneMeta()
-	if !ok {
-		panic("no tombstone meta")
-	}
-	return meta
+	return mh.MustDataMeta()
+	// meta, ok := mh.TombstoneMeta()
+	// if !ok {
+	// 	panic("no tombstone meta")
+	// }
+	// return meta
 }
 
 func (mh objectMetaV3) SetDataMetaCount(count uint16) {

@@ -16,6 +16,7 @@ package mergedelete
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -29,11 +30,12 @@ type container struct {
 	delSource engine.Relation
 	// 2. partition sub tables
 	partitionSources []engine.Relation
+	affectedRows     uint64
+	bat              *batch.Batch
 }
 type MergeDelete struct {
-	ctr                 *container
+	ctr                 container
 	AddAffectedRows     bool
-	AffectedRows        uint64
 	Ref                 *plan.ObjectRef
 	Engine              engine.Engine
 	PartitionTableNames []string
@@ -93,8 +95,19 @@ func (mergeDelete *MergeDelete) Release() {
 }
 
 func (mergeDelete *MergeDelete) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeDelete.Free(proc, pipelineFailed, err)
+	//can not reset affectRows because MO need get affectRows after reset
+	if mergeDelete.ctr.bat != nil {
+		mergeDelete.ctr.bat.CleanOnlyData()
+	}
 }
 
 func (mergeDelete *MergeDelete) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if mergeDelete.ctr.bat != nil {
+		mergeDelete.ctr.bat.Clean(proc.Mp())
+		mergeDelete.ctr.bat = nil
+	}
+}
+
+func (mergeDelete *MergeDelete) AffectedRows() uint64 {
+	return mergeDelete.ctr.affectedRows
 }

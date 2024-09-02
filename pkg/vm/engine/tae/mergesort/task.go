@@ -30,7 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"go.uber.org/zap"
 )
 
@@ -86,7 +88,7 @@ func getSimilarBatch(bat *batch.Batch, capacity int, vpool DisposableVecPool) (*
 func GetNewWriter(
 	fs fileservice.FileService,
 	ver uint32, seqnums []uint16,
-	sortkeyPos int, sortkeyIsPK bool,
+	sortkeyPos int, sortkeyIsPK bool, isTombstone bool,
 ) *blockio.BlockWriter {
 	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
 	writer, err := blockio.NewBlockWriterNew(fs, name, ver, seqnums)
@@ -96,7 +98,16 @@ func GetNewWriter(
 	// has sortkey
 	if sortkeyPos >= 0 {
 		if sortkeyIsPK {
-			writer.SetPrimaryKey(uint16(sortkeyPos))
+			if isTombstone {
+				writer.SetPrimaryKeyWithType(
+					uint16(catalog.TombstonePrimaryKeyIdx),
+					index.HBF,
+					index.ObjectPrefixFn,
+					index.BlockPrefixFn,
+				)
+			} else {
+				writer.SetPrimaryKey(uint16(sortkeyPos))
+			}
 		} else { // cluster by
 			writer.SetSortKey(uint16(sortkeyPos))
 		}
@@ -109,6 +120,7 @@ func DoMergeAndWrite(
 	txnInfo string,
 	sortkeyPos int,
 	mergehost MergeTaskHost,
+	isTombstone bool,
 ) (err error) {
 	now := time.Now()
 	/*out args, keep the transfer information*/
@@ -142,7 +154,7 @@ func DoMergeAndWrite(
 	}
 
 	if hasSortKey {
-		if err = mergeObjs(ctx, mergehost, sortkeyPos); err != nil {
+		if err = mergeObjs(ctx, mergehost, sortkeyPos, isTombstone); err != nil {
 			return err
 		}
 	} else {

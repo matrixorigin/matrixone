@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 	"strings"
 	"sync"
@@ -292,7 +293,7 @@ func (e *Engine) getOrCreateSnapPart(
 	if err != nil {
 		return nil, err
 	}
-	snap.ConsumeSnapCkps(ctx, ckps, func(
+	err = snap.ConsumeSnapCkps(ctx, ckps, func(
 		checkpoint *checkpoint.CheckpointEntry,
 		state *logtailreplay.PartitionState) error {
 		locs := make([]string, 0)
@@ -314,7 +315,9 @@ func (e *Engine) getOrCreateSnapPart(
 		}
 		defer func() {
 			for _, cb := range closeCBs {
-				cb()
+				if cb != nil {
+					cb()
+				}
 			}
 		}()
 		for _, entry := range entries {
@@ -330,6 +333,10 @@ func (e *Engine) getOrCreateSnapPart(
 		}
 		return nil
 	})
+	if err != nil {
+		logutil.Infof("Snapshot consumeSnapCkps failed, err:%v", err)
+		return nil, err
+	}
 	if snap.CanServe(ts) {
 		tblSnaps.snaps = append(tblSnaps.snaps, snap)
 		return snap.Snapshot(), nil
@@ -348,7 +355,7 @@ func (e *Engine) getOrCreateSnapPart(
 		return ps, nil
 	}
 	if ts.Less(&start) {
-		return nil, moerr.NewInternalErrorNoCtx(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"No valid checkpoints for snapshot read,maybe snapshot is too old, "+
 				"snapshot op:%s, start:%s, end:%s",
 			tbl.db.op.Txn().DebugString(),
@@ -406,7 +413,9 @@ func (e *Engine) LazyLoadLatestCkp(
 			}
 			defer func() {
 				for _, cb := range closeCBs {
-					cb()
+					if cb != nil {
+						cb()
+					}
 				}
 			}()
 			for _, entry := range entries {

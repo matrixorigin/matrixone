@@ -15,7 +15,6 @@ package plan
 
 import (
 	"fmt"
-	"go/constant"
 	"strconv"
 	"strings"
 
@@ -176,9 +175,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		alias_name := fmt.Sprintf("mo_fulltext_alias_%d", i)
 
 		var exprs tree.Exprs
-		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(idxtblname), idxtblname, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(pattern), pattern, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumValWithType(constant.MakeInt64(mode), strconv.FormatInt(mode, 10), false, tree.P_int64))
+		exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
+		exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
+		exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
 
 		name := tree.NewUnresolvedName(fulltext_func)
 

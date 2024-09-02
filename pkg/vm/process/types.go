@@ -341,12 +341,13 @@ func (sp *StmtProfile) GetStmtId() uuid.UUID {
 type BaseProcess struct {
 	// sqlContext includes the client context and the query context.
 	sqlContext QueryBaseContext
+	// atRuntime indicates whether the process is running in runtime.
+	atRuntime bool
 
 	StmtProfile *StmtProfile
 	// Id, query id.
 	Id              string
 	Lim             Limitation
-	vp              *cachedVectorPool
 	mp              *mpool.MPool
 	prepareBatch    *batch.Batch
 	prepareExprList any
@@ -462,7 +463,7 @@ func (proc *Process) CleanValueScanBatchs() {
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 	if i < 0 || i >= proc.Base.prepareParams.Length() {
-		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
+		return nil, moerr.NewInternalErrorf(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
 	if proc.Base.prepareParams.IsNull(uint64(i)) {
 		return nil, nil
@@ -515,6 +516,14 @@ func (proc *Process) GetCloneTxnOperator() client.TxnOperator {
 
 func (proc *Process) GetTxnOperator() client.TxnOperator {
 	return proc.Base.TxnOperator
+}
+
+func (proc *Process) GetBaseProcessRunningStatus() bool {
+	return proc.Base.atRuntime
+}
+
+func (proc *Process) SetBaseProcessRunningStatus(status bool) {
+	proc.Base.atRuntime = status
 }
 
 // Operator Resource Analzyer

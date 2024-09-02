@@ -31,7 +31,7 @@ type container struct {
 }
 
 type Merge struct {
-	ctr      *container
+	ctr      container
 	SinkScan bool
 	Partial  bool  // false means listening on all merge receivers
 	StartIDX int32 // if partial, listening on receivers[start:end]
@@ -83,17 +83,13 @@ func (merge *Merge) Release() {
 }
 
 func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	merge.Free(proc, pipelineFailed, err)
+	merge.ctr.FreeMergeTypeOperator(pipelineFailed)
 }
 
 func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if merge.ctr != nil {
-		merge.ctr.FreeMergeTypeOperator(pipelineFailed)
-		if merge.ctr.buf != nil {
-			merge.ctr.buf.Clean(proc.Mp())
-			merge.ctr.buf = nil
-		}
-		merge.ctr = nil
+	if merge.ctr.buf != nil {
+		// merge.ctr.buf.Clean(proc.Mp())
+		proc.PutBatch(merge.ctr.buf)
+		merge.ctr.buf = nil
 	}
-
 }

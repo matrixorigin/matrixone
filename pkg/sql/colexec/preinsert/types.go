@@ -28,10 +28,11 @@ var _ vm.Operator = new(PreInsert)
 type proc = process.Process
 
 type container struct {
-	buf *batch.Batch
+	buf           *batch.Batch
+	canFreeVecIdx map[int]bool //auto incr & expand constant vecotr.need free
 }
 type PreInsert struct {
-	ctr *container
+	ctr container
 
 	HasAutoCol bool
 	IsUpdate   bool
@@ -77,16 +78,16 @@ func (preInsert *PreInsert) Release() {
 }
 
 func (preInsert *PreInsert) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	preInsert.Free(proc, pipelineFailed, err)
 }
 
 func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if preInsert.ctr != nil {
-		if preInsert.ctr.buf != nil {
-			preInsert.ctr.buf.Clean(proc.Mp())
-			preInsert.ctr = nil
+	if preInsert.ctr.buf != nil {
+		for idx := range preInsert.Attrs {
+			if _, ok := preInsert.ctr.canFreeVecIdx[idx]; !ok {
+				preInsert.ctr.buf.SetVector(int32(idx), nil)
+			}
 		}
-		preInsert.ctr = nil
+		preInsert.ctr.buf.Clean(proc.Mp())
+		preInsert.ctr.buf = nil
 	}
-
 }

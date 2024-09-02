@@ -235,7 +235,7 @@ func newDBCmd(id uint32, cmdType uint16, entry *DBEntry) *EntryCommand[*EmptyMVC
 }
 
 func (cmd *EntryCommand[T, N]) Desc() string {
-	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;CSN=%d", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID)
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;DEST=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID)
 	return s
 }
 
@@ -280,12 +280,12 @@ func (cmd *EntryCommand[T, N]) GetID() *common.ID {
 }
 
 func (cmd *EntryCommand[T, N]) String() string {
-	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID, cmd.mvccNode.String())
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;DEST=%v;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID, cmd.mvccNode.String())
 	return s
 }
 
 func (cmd *EntryCommand[T, N]) VerboseString() string {
-	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID, cmd.mvccNode.String())
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;DEST=%v;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID, cmd.mvccNode.String())
 	return s
 }
 func (cmd *EntryCommand[T, N]) GetType() uint16 { return cmd.cmdType }

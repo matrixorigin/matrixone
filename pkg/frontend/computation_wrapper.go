@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -323,10 +324,10 @@ func initExecuteStmtParam(reqCtx context.Context, ses *Session, cwft *TxnComputa
 	for _, obj := range preparePlan.GetSchemas() {
 		change, err := ses.txnCompileCtx.checkTableDefChange(obj.SchemaName, obj.ObjName, uint64(obj.Obj), uint32(obj.Server))
 		if err != nil {
-			return nil, nil, nil, originSQL, moerr.NewInternalError(reqCtx, "table '%s' in prepare statement '%s' does not exist anymore", obj.ObjName, stmtName)
+			return nil, nil, nil, originSQL, moerr.NewInternalErrorf(reqCtx, "table '%s' in prepare statement '%s' does not exist anymore", obj.ObjName, stmtName)
 		}
 		if change {
-			return nil, nil, nil, originSQL, moerr.NewInternalError(reqCtx, "table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName)
+			return nil, nil, nil, originSQL, moerr.NewInternalErrorf(reqCtx, "table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName)
 		}
 	}
 
@@ -347,7 +348,7 @@ func initExecuteStmtParam(reqCtx context.Context, ses *Session, cwft *TxnComputa
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params := cwft.proc.GetVector(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType())
 		paramVals := make([]any, numParams)
 		for i, arg := range execPlan.Args {
 			exprImpl := arg.Expr.(*plan.Expr_V)

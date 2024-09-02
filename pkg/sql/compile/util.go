@@ -72,12 +72,14 @@ var (
 )
 
 var (
-	deleteMoIndexesWithDatabaseIdFormat          = `delete from mo_catalog.mo_indexes where database_id = %v;`
-	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
-	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
-	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
-	updateMoIndexesTruncateTableFormat           = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
-	updateMoIndexesAlgoParams                    = `update mo_catalog.mo_indexes set algo_params = '%s' where table_id = %v and name = '%s';`
+	deleteMoIndexesWithDatabaseIdFormat                 = `delete from mo_catalog.mo_indexes where database_id = %v;`
+	deleteMoIndexesWithTableIdFormat                    = `delete from mo_catalog.mo_indexes where table_id = %v;`
+	deleteMoIndexesWithTableIdAndIndexNameFormat        = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
+	deleteMoRetentionWithDatabaseNameFormat             = `delete from mo_catalog.mo_retention where database_name = '%s';`
+	deleteMoRetentionWithDatabaseNameAndTableNameFormat = `delete from mo_catalog.mo_retention where database_name = '%s' and table_name = '%s';`
+	updateMoIndexesVisibleFormat                        = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
+	updateMoIndexesTruncateTableFormat                  = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
+	updateMoIndexesAlgoParams                           = `update mo_catalog.mo_indexes set algo_params = '%s' where table_id = %v and name = '%s';`
 )
 
 var (

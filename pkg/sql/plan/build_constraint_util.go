@@ -133,7 +133,7 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 				if _, colExists := allColumns[tblName][colName]; colExists {
 					appendToTbl(tblName, colName, expr)
 				} else {
-					return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
+					return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
 				}
 			} else {
 				return nil, moerr.NewNoSuchTable(ctx.GetContext(), "", parts.TblNameOrigin())
@@ -145,7 +145,7 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 			for alias, columns := range allColumns {
 				if _, colExists := columns[colName]; colExists {
 					if tblName != "" {
-						return nil, moerr.NewInternalError(ctx.GetContext(), "Column '%v' in field list is ambiguous", parts.ColNameOrigin())
+						return nil, moerr.NewInternalErrorf(ctx.GetContext(), "Column '%v' in field list is ambiguous", parts.ColNameOrigin())
 					}
 					found = true
 					appendToTbl(alias, colName, expr)
@@ -159,9 +159,9 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 					}
 					str += string(c.Name.Alias)
 				}
-				return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table or the target table %s of the UPDATE is not updatable", parts.ColNameOrigin(), str)
+				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table or the target table %s of the UPDATE is not updatable", parts.ColNameOrigin(), str)
 			} else if !found {
-				return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), tblName)
+				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), tblName)
 			}
 		}
 	}
@@ -292,7 +292,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 
 	if util.TableIsClusterTable(tableDef.GetTableType()) && accountId != catalog.System_Account {
-		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
+		return moerr.NewInternalErrorf(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
 	}
 	if obj.PubInfo != nil {
 		return moerr.NewInternalError(ctx.GetContext(), "cannot insert/update/delete from public table")
@@ -472,7 +472,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if node.NodeType == plan.Node_TABLE_SCAN {
 			return node.TableDef
 		} else {
-			if node.Children == nil || len(node.Children) == 0 {
+			if len(node.Children) == 0 {
 				return nil
 			}
 			return findTableDefFromSource(builder.qry.Nodes[node.Children[0]])
@@ -999,7 +999,7 @@ func buildValueScan(
 	for i, colName := range updateColumns {
 		col := tableDef.Cols[colToIdx[colName]]
 		colTyp := makeTypeByPlan2Type(col.Typ)
-		vec := proc.GetVector(colTyp)
+		vec := vector.NewVec(colTyp)
 		bat.Vecs[i] = vec
 		targetTyp := &plan.Expr{
 			Typ: col.Typ,

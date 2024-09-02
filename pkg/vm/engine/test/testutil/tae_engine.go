@@ -28,7 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
+	dbutil "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 )
@@ -37,7 +38,7 @@ type TestTxnStorage struct {
 	t *testing.T
 	//accountId     uint32
 	schema        *catalog.Schema
-	taeDelegate   *testutil.TestEngine
+	taeDelegate   *dbutil.TestEngine
 	txnHandler    *rpc.Handle
 	logtailServer *TestLogtailServer
 }
@@ -48,6 +49,10 @@ func (ts *TestTxnStorage) BindSchema(schema *catalog.Schema) {
 
 func (ts *TestTxnStorage) GetDB() *db.DB {
 	return ts.txnHandler.GetDB()
+}
+
+func (ts *TestTxnStorage) StartTxn() (txnif.AsyncTxn, error) {
+	return ts.txnHandler.GetDB().StartTxn(nil)
 }
 
 func (ts *TestTxnStorage) Shard() metadata.TNShard {
@@ -69,7 +74,7 @@ func (ts *TestTxnStorage) Write(ctx context.Context, request *txn.TxnRequest, re
 		_, err = taestorage.HandleWrite(ctx, req.Txn, req.CNRequest.Payload, ts.txnHandler.HandlePreCommitWrite)
 		//response.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
 	default:
-		err = moerr.NewNotSupported(ctx, "unknown write op: %v", req.CNRequest.OpCode)
+		err = moerr.NewNotSupportedf(ctx, "unknown write op: %v", req.CNRequest.OpCode)
 		//response.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
 	}
 	return err
@@ -147,7 +152,7 @@ func NewTestTAEEngine(
 		t:             t,
 		txnHandler:    handle,
 		logtailServer: logtailServer,
-		taeDelegate: &testutil.TestEngine{
+		taeDelegate: &dbutil.TestEngine{
 			DB: handle.GetDB(), T: t,
 		},
 	}
