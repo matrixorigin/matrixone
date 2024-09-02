@@ -17,11 +17,9 @@ package plan
 import (
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -100,45 +98,6 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
-	}
-	// ERIC
-	{
-		var filterids []int32
-		var ftidxs []*plan.IndexDef
-
-		for i, expr := range node.FilterList {
-			fn := expr.GetF()
-			if fn == nil {
-				continue
-			}
-
-			switch fn.Func.ObjName {
-			case "fulltext_match":
-				for _, idx := range node.TableDef.Indexes {
-					nfound := 0
-					for _, p := range idx.Parts {
-						for j := 2; j < len(fn.Args); j++ {
-							if strings.EqualFold(p, fn.Args[j].GetCol().GetName()) {
-								// found
-								nfound++
-								break
-							}
-						}
-					}
-
-					if nfound == len(idx.Parts) {
-						ftidxs = append(ftidxs, idx)
-						filterids = append(filterids, int32(i))
-						break
-					}
-				}
-			default:
-			}
-		}
-
-		if len(filterids) > 0 {
-			return builder.applyIndicesForFiltersUsingFullTextIndex(nodeID, node, filterids, ftidxs, colRefCnt, idxColMap)
-		}
 	}
 
 	// 1. Master Index Check
@@ -224,30 +183,35 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		// search for all fulltext_index_scan nodes and change match to according fulltext_index_scan.score column
 
 		// check fulltext_index_scan TABLE_FUNCTION exists
-		ftnode := builder.resolveFullTextIndexScanNode(projNode)
-		if ftnode != nil {
-			logutil.Infof("AAAAAAAAAAAAAAAAAAAAAAA FOUND it.... %v", ftnode)
 
-			tag := ftnode.BindingTags[0]
-			expr := &Expr{
-				Typ: ftnode.TableDef.Cols[1].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: tag,
-						ColPos: 1,
+		/*
+			ftnode := builder.resolveFullTextIndexScanNode(projNode)
+			if ftnode != nil {
+				logutil.Infof("AAAAAAAAAAAAAAAAAAAAAAA FOUND it.... %v", ftnode)
+
+				tag := ftnode.BindingTags[0]
+				expr := &Expr{
+					Typ: ftnode.TableDef.Cols[1].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: tag,
+							ColPos: 1,
+						},
 					},
-				},
+				}
+				projNode.ProjectList = append(projNode.ProjectList, expr)
+				//ctx := builder.ctxByNode[nodeID]
+				builder.qry.Headings = append(builder.qry.Headings, "score")
 			}
-			projNode.ProjectList = append(projNode.ProjectList, expr)
-			//ctx := builder.ctxByNode[nodeID]
-			builder.qry.Headings = append(builder.qry.Headings, "score")
-		}
+		*/
 
-		// TODO: it is possible that there is a sort node.   i.e. project -> sort -> scan or project -> scan
+		// it is possible that there is a sort node.   i.e. project -> sort -> scan or project -> scan
+		var sortNode *plan.Node
+		sortNode = nil
 		scanNode := builder.resolveScanNodeFromProject(projNode, 1)
 		if scanNode == nil {
-			sortNode := builder.resolveSortNode(projNode, 1)
-			if sortNode == nil || len(sortNode.OrderBy) != 1 {
+			sortNode = builder.resolveSortNode(projNode, 1)
+			if sortNode == nil {
 				goto END0
 			}
 
@@ -255,42 +219,14 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			if scanNode == nil {
 				goto END0
 			}
-			logutil.Infof("BAD.............BAD    SCAN NULL")
 		}
 
-		logutil.Infof("applyIndciesForFilters PROJECTION START")
-		for _, expr := range projNode.ProjectList {
-			fn := expr.GetF()
-			if fn == nil {
-				continue
-				//goto END0
-			}
-
-			logutil.Infof("FUNCTION HERE : %s", fn.Func.ObjName)
-			switch fn.Func.ObjName {
-			case "fulltext_match":
-
-				// arg0 is string
-				logutil.Infof("PATTERN %s", fn.Args[0].GetLit().GetSval())
-				// arg1 is int64
-				logutil.Infof("MODE %d", fn.Args[1].GetLit().GetI64Val())
-
-				nargs := len(fn.Args)
-				for i := 2; i < nargs; i++ {
-					logutil.Infof("COL %d %s", i-2, fn.Args[i].GetCol().GetName())
-				}
-
-				for _, idx := range scanNode.TableDef.Indexes {
-					logutil.Infof("INDX name = %s , keys  = %v", idx.IndexTableName, idx.Parts)
-				}
-				pkid := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.GetNames()[0]]
-				logutil.Infof("Primary Key POS =%d, %s", pkid, scanNode.TableDef.Pkey.String())
-
-				logutil.Infof("Src table name %s", scanNode.TableDef.Name)
-			default:
-			}
+		projids, proj_ftidxs := builder.getFullTextMatchFromProject(projNode, scanNode)
+		filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+		if len(filterids) > 0 || len(projids) > 0 {
+			return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, sortNode, scanNode, filterids, filter_ftidxs,
+				projids, proj_ftidxs, colRefCnt, idxColMap)
 		}
-		logutil.Infof("applyIndciesForFilters PROJECTION END")
 	}
 
 	// 1. Vector Index Check

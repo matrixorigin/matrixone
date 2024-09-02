@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"go/constant"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -29,7 +30,9 @@ import (
 //   - TABLE_FUNCTION_SCAN (fulltext_index_scan)
 //     -- Node_Value_Scan
 func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int32, scanNode *plan.Node, filterids []int32, indexDefs []*plan.IndexDef,
-	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, []int32) {
+
+	var ret_ftnode_ids = make([]int32, 0)
 
 	//idxScanTag := builder.genNewTag()
 	ctx := builder.ctxByNode[nodeID]
@@ -67,7 +70,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 		mode := fn.Args[1].GetLit().GetI64Val()
 
 		fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
-		alias_name := fmt.Sprintf("mo_ftidx_alias_%d", i)
+		alias_name := fmt.Sprintf("mo_fulltext_alias_%d", i)
 
 		var exprs tree.Exprs
 		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(idxtblname), idxtblname, false, tree.P_char))
@@ -98,6 +101,8 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 		if err != nil {
 			panic(err.Error())
 		}
+
+		ret_ftnode_ids = append(ret_ftnode_ids, curr_ftnode_id)
 
 		curr_ftnode := builder.qry.Nodes[curr_ftnode_id]
 		curr_ftnode_tag := curr_ftnode.BindingTags[0]
@@ -175,7 +180,190 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 	scanNode.Limit = nil
 	scanNode.Offset = nil
 
-	return joinnodeID
+	return joinnodeID, ret_ftnode_ids
+}
+
+// function works on ScanNode
+func (builder *QueryBuilder) getFullTextMatchFiltersFromScanNode(node *plan.Node) ([]int32, []*plan.IndexDef) {
+
+	filterids := make([]int32, 0)
+	ftidxs := make([]*plan.IndexDef, 0)
+
+	for i, expr := range node.FilterList {
+		fn := expr.GetF()
+		if fn == nil {
+			continue
+		}
+
+		switch fn.Func.ObjName {
+		case "fulltext_match":
+			for _, idx := range node.TableDef.Indexes {
+				nfound := 0
+				for _, p := range idx.Parts {
+					for j := 2; j < len(fn.Args); j++ {
+						if strings.EqualFold(p, fn.Args[j].GetCol().GetName()) {
+							// found
+							nfound++
+							break
+						}
+					}
+				}
+
+				if nfound == len(idx.Parts) {
+					ftidxs = append(ftidxs, idx)
+					filterids = append(filterids, int32(i))
+					break
+				}
+			}
+		default:
+		}
+	}
+
+	return filterids, ftidxs
+}
+
+func (builder *QueryBuilder) getFullTextMatchFromProject(projNode *plan.Node, scanNode *plan.Node) ([]int32, []*plan.IndexDef) {
+	projids := make([]int32, 0)
+	ftidxs := make([]*plan.IndexDef, 0)
+
+	for i, expr := range projNode.ProjectList {
+		fn := expr.GetF()
+		if fn == nil {
+			continue
+		}
+
+		switch fn.Func.ObjName {
+		case "fulltext_match":
+
+			for _, idx := range scanNode.TableDef.Indexes {
+				nfound := 0
+				for _, p := range idx.Parts {
+					for j := 2; j < len(fn.Args); j++ {
+						if strings.EqualFold(p, fn.Args[j].GetCol().GetName()) {
+							// found
+							nfound++
+							break
+						}
+					}
+				}
+
+				if nfound == len(idx.Parts) {
+					ftidxs = append(ftidxs, idx)
+					projids = append(projids, int32(i))
+					break
+				}
+			}
+
+			/*
+				logutil.Infof("applyIndciesForFilters PROJECTION START")
+				logutil.Infof("FUNCTION HERE : %s", fn.Func.ObjName)
+
+				// arg0 is string
+				logutil.Infof("PATTERN %s", fn.Args[0].GetLit().GetSval())
+				// arg1 is int64
+				logutil.Infof("MODE %d", fn.Args[1].GetLit().GetI64Val())
+
+				nargs := len(fn.Args)
+				for i := 2; i < nargs; i++ {
+					logutil.Infof("COL %d %s", i-2, fn.Args[i].GetCol().GetName())
+				}
+
+				for _, idx := range scanNode.TableDef.Indexes {
+					logutil.Infof("INDX name = %s , keys  = %v", idx.IndexTableName, idx.Parts)
+				}
+				pkid := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.GetNames()[0]]
+				logutil.Infof("Primary Key POS =%d, %s", pkid, scanNode.TableDef.Pkey.String())
+
+				logutil.Infof("Src table name %s", scanNode.TableDef.Name)
+				logutil.Infof("applyIndciesForFilters PROJECTION END")
+			*/
+		default:
+		}
+	}
+
+	return projids, ftidxs
+}
+
+func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID int32, projNode *plan.Node, sortNode *plan.Node, scanNode *plan.Node,
+	filterids []int32, indexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+
+	ctx := builder.ctxByNode[nodeID]
+
+	idxID, ftnode_ids := builder.applyIndicesForFiltersUsingFullTextIndex(scanNode.NodeId, scanNode, filterids, indexDefs, colRefCnt, idxColMap)
+
+	if sortNode != nil {
+		sortNode.Children[0] = idxID
+
+	} else {
+		// create sort node with order by score DESC
+
+		var orderByScore []*OrderBySpec
+		for _, id := range ftnode_ids {
+			ftnode := builder.qry.Nodes[id]
+			orderByScore = append(orderByScore, &OrderBySpec{
+				Expr: &Expr{
+					Typ: ftnode.TableDef.Cols[1].Typ, // score column
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: ftnode.BindingTags[0],
+							ColPos: 1, // score column
+						},
+					},
+				},
+				Flag: plan.OrderBySpec_DESC,
+			})
+		}
+
+		sortByID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_SORT,
+			Children: []int32{idxID},
+			OrderBy:  orderByScore,
+		}, ctx)
+
+		/*
+			sortByID := builder.appendNode(&plan.Node{
+				NodeType: plan.Node_SORT,
+				Children: []int32{idxID},
+				OrderBy: []*OrderBySpec{
+					{
+						Expr: orderByScore,
+						Flag: plan.OrderBySpec_DESC,
+					},
+				},
+			}, ctx)
+		*/
+
+		projNode.Children[0] = sortByID
+	}
+
+	return nodeID
+}
+
+func (builder *QueryBuilder) resolveFullTextMatchFromScanNode(node *plan.Node) *plan.Node {
+
+	if node.NodeType == plan.Node_TABLE_SCAN && len(node.TableDef.Indexes) > 0 {
+
+		for _, f := range node.FilterList {
+			fn := f.GetF()
+			if fn == nil {
+				continue
+			}
+
+			if fn.Func.ObjName == "fulltext_match" {
+				return node
+			}
+		}
+	}
+
+	for _, nodeId := range node.Children {
+		node = builder.resolveFullTextMatchFromScanNode(builder.qry.Nodes[nodeId])
+		if node != nil {
+			return node
+		}
+	}
+
+	return nil
 }
 
 func (builder *QueryBuilder) resolveFullTextIndexScanNode(node *plan.Node) *plan.Node {
