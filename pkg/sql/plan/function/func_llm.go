@@ -124,17 +124,11 @@ func Chunk(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return err
 		}
-		if len(ctx) > 65536 /*blob size*/ {
-			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
-		}
-		if len(ctx) == 0 {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			return nil
-		}
 
 		input = string(ctx)
+		if len(input) == 0 {
+			return moerr.NewInvalidInputNoCtxf("Empty file is not valid")
+		}
 
 		chunkType := string(chunkTypeBytes)
 		resultStr, err := ChunkString(input, chunkType)
