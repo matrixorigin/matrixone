@@ -57,7 +57,6 @@ func (rightAnti *RightAnti) Prepare(proc *process.Process) (err error) {
 		rightAnti.ctr.tmpBatches = make([]*batch.Batch, 2)
 	}
 
-	rightAnti.ctr.InitProc(proc)
 	return err
 }
 
@@ -168,7 +167,7 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyze pro
 			return true, nil
 		} else {
 			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
-				v := ctr.ReceiveBitmapFromChannel(ap.Channel)
+				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, ap.Channel)
 				if v != nil {
 					ctr.matched.Or(v)
 				} else {

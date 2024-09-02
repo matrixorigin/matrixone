@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"context"
 	"reflect"
 	"time"
 
@@ -205,9 +206,9 @@ func (r *ReceiverOperator) InitProc(proc *process.Process) {
 	r.proc = proc
 }
 
-func (r *ReceiverOperator) ReceiveBitmapFromChannel(ch chan *bitmap.Bitmap) *bitmap.Bitmap {
+func ReceiveBitmapFromChannel(usr context.Context, ch chan *bitmap.Bitmap) *bitmap.Bitmap {
 	select {
-	case <-r.proc.Ctx.Done():
+	case <-usr.Done():
 		return nil
 	case bm, ok := <-ch:
 		if !ok {
