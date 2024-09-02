@@ -50,9 +50,11 @@ func acquireWaiter(txn pb.WaitTxn) *waiter {
 
 func newWaiter() *waiter {
 	w := &waiter{
-		status:   &atomic.Int32{},
-		refCount: &atomic.Int32{},
-		c:        make(chan notifyValue, 1),
+		conflictKey: &atomic.Pointer[[]byte]{},
+		lt:          &atomic.Pointer[localLockTable]{},
+		status:      &atomic.Int32{},
+		refCount:    &atomic.Int32{},
+		c:           make(chan notifyValue, 1),
 	}
 	w.setStatus(ready)
 	return w
@@ -68,8 +70,8 @@ type waiter struct {
 	// belong to which txn
 	txn         pb.WaitTxn
 	waitFor     [][]byte
-	conflictKey atomic.Pointer[[]byte]
-	lt          atomic.Pointer[localLockTable]
+	conflictKey *atomic.Pointer[[]byte]
+	lt          *atomic.Pointer[localLockTable]
 	status      *atomic.Int32
 	refCount    *atomic.Int32
 	c           chan notifyValue
