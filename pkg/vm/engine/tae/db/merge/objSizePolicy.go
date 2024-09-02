@@ -1,6 +1,9 @@
 package merge
 
 import (
+	"cmp"
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
@@ -32,6 +35,10 @@ func (m *objSizePolicy) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*ca
 }
 
 func (m *objSizePolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
+	slices.SortFunc(m.objects, func(a, b *catalog.ObjectEntry) int {
+		return cmp.Compare(a.OriginSize(), b.OriginSize())
+	})
+
 	n := 0
 	for _, obj := range m.objects {
 		if obj.OriginSize() < config.ObjectMinOsize {
