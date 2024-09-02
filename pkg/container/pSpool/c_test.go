@@ -16,10 +16,10 @@ package pSpool
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
@@ -31,15 +31,16 @@ import (
 // 2. CacheBatch: put the byte slices of batch's vectors into the cache.
 // 3. Free: if the cachedBatch is not in use, free the cached byte slices.
 func TestCacheBatchBehavior_Get_Cache_Free(t *testing.T) {
-	proc := testutil.NewProcess()
-	cache := initCachedBatch(proc.Mp(), 1)
+	mp := mpool.MustNewZeroNoFixed()
+	cache := initCachedBatch(mp, 1)
 
 	originBatch := batch.NewWithSize(1)
-	originBatch.Vecs[0] = testutil.NewInt64Vector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1})
+	originBatch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed[int64](originBatch.Vecs[0], int64(1), false, mp))
 	originBatch.SetRowCount(1)
 
 	// 1. get first batch.
-	b1, done, err := cache.GetCopiedBatch(proc.Ctx, originBatch)
+	b1, done, err := cache.GetCopiedBatch(context.TODO(), originBatch)
 	require.NoError(t, err)
 	require.False(t, done)
 	{
@@ -65,7 +66,7 @@ func TestCacheBatchBehavior_Get_Cache_Free(t *testing.T) {
 	require.True(t, len(cache.bytesCache) > 0)
 
 	// 4. get the second batch.
-	b3, done, err := cache.GetCopiedBatch(proc.Ctx, originBatch)
+	b3, done, err := cache.GetCopiedBatch(context.TODO(), originBatch)
 	require.NoError(t, err)
 	require.False(t, done)
 	{
@@ -82,7 +83,7 @@ func TestCacheBatchBehavior_Get_Cache_Free(t *testing.T) {
 	cache.CacheBatch(b3)
 
 	// 6. do free.
-	originBatch.Clean(proc.Mp())
+	originBatch.Clean(mp)
 	cache.Free()
-	require.Equal(t, int64(0), proc.Mp().CurrNB())
+	require.Equal(t, int64(0), mp.CurrNB())
 }
