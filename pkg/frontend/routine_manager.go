@@ -78,6 +78,7 @@ func (ar *AccountRoutineManager) recordRoutine(tenantID int64, rt *Routine, vers
 
 	ar.accountRoutineMu.Lock()
 	defer ar.accountRoutineMu.Unlock()
+	logutil.Infof("[init account] set account id %d, connection id %d to account routine map", tenantID, rt.getConnectionID())
 	if _, ok := ar.accountId2Routine[tenantID]; !ok {
 		ar.accountId2Routine[tenantID] = make(map[*Routine]uint64)
 	}
@@ -91,6 +92,7 @@ func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
 
 	ar.accountRoutineMu.Lock()
 	defer ar.accountRoutineMu.Unlock()
+	logutil.Infof("[delete account] delete account id %d, connection id %d from account routine map", tenantID, rt.getConnectionID())
 	_, ok := ar.accountId2Routine[tenantID]
 	if ok {
 		delete(ar.accountId2Routine[tenantID], rt)
