@@ -16,6 +16,7 @@ package colexec
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -103,6 +104,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 	}
 	bat.SetRowCount(100)
 
+	// test no data to flush
 	{
 		proc := testutil.NewProc()
 
@@ -115,6 +117,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		require.True(t, s.IsZero())
 	}
 
+	// test no SHARED service err
 	{
 		proc := testutil.NewProc()
 		proc.GetFileService().(*fileservice.FileServices).RemoveFileService("shared")
@@ -130,6 +133,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		proc.GetFileService().(*fileservice.FileServices).AddFileService(defines.SharedFileServiceName)
 	}
 
+	// test normal flush
 	{
 		proc := testutil.NewProc()
 
@@ -142,4 +146,33 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	// test data size larger than object size limit
+	{
+		pool, err = mpool.NewMPool("", mpool.GB, 0)
+		require.NoError(t, err)
+
+		proc := testutil.NewProc(
+			testutil.WithMPool(pool))
+
+		bat2 := batch.NewWithSize(1)
+		bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+
+		objectio.SetObjectSizeLimit(mpool.MB * 32)
+		cnt := (objectio.ObjectSizeLimit) / types.RowidSize * 3
+
+		for i := 0; i < cnt; i++ {
+			row := types.RandomRowid()
+			err := vector.AppendFixed[types.Rowid](bat2.Vecs[0], row, false, pool)
+			require.NoError(t, err)
+		}
+		bat2.SetRowCount(cnt)
+
+		s3writer := &S3Writer{}
+		s3writer.sortIndex = 0
+		s3writer.isTombstone = true
+		s3writer.StashBatch(proc, bat2)
+
+		_, _, err = s3writer.SortAndSync(proc)
+		require.Equal(t, err.(*moerr.Error).ErrorCode(), moerr.ErrTooLargeObjectSize)
+	}
 }

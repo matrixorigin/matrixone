@@ -35,9 +35,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func NewProcess() *process.Process {
+type ProcOptions func(proc *process.Process)
+
+func WithMPool(pool *mpool.MPool) ProcOptions {
+	return func(proc *process.Process) {
+		proc.SetMPool(pool)
+	}
+}
+
+func NewProcess(opts ...ProcOptions) *process.Process {
 	mp := mpool.MustNewZeroNoFixed()
-	return NewProcessWithMPool("", mp)
+	proc := NewProcessWithMPool("", mp)
+	for _, opt := range opts {
+		opt(proc)
+	}
+	return proc
 }
 
 func SetupAutoIncrService(sid string) {
