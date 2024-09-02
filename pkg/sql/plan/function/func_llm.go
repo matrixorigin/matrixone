@@ -14,45 +14,51 @@ import (
 
 // LLM_CHUNK
 // Fixed width chunking
-func fixedWidthChunk(text string, width int) [][]interface{} {
-	var chunks [][]interface{}
+type Chunk struct {
+	Start  int
+	Length int
+	Text   string
+}
+
+func fixedWidthChunk(text string, width int) []Chunk {
+	var chunks []Chunk
 	runes := []rune(text)
 	for i := 0; i < len(runes); i += width {
 		end := i + width
 		if end > len(runes) {
 			end = len(runes)
 		}
-		chunks = append(chunks, []interface{}{i, end - i, string(runes[i:end])})
+		chunks = append(chunks, Chunk{Start: i, Length: end - i, Text: string(runes[i:end])})
 	}
 	return chunks
 }
 
 // Sentence-based chunking
-func sentenceChunk(text string) [][]interface{} {
-	var chunks [][]interface{}
+func sentenceChunk(text string) []Chunk {
+	var chunks []Chunk
 	var start int
 	for i, r := range text {
 		if r == '.' || r == '!' || r == '?' {
 			chunk := text[start : i+1]
-			chunks = append(chunks, []interface{}{start, len(chunk), chunk})
+			chunks = append(chunks, Chunk{Start: start, Length: len(chunk), Text: chunk})
 			start = i + 1
 		}
 	}
 	if start < len(text) {
 		chunk := text[start:]
-		chunks = append(chunks, []interface{}{start, len(chunk), chunk})
+		chunks = append(chunks, Chunk{Start: start, Length: len(chunk), Text: chunk})
 	}
 	return chunks
 }
 
 // Paragraph-based chunking
-func paragraphChunk(text string) [][]interface{} {
-	var chunks [][]interface{}
+func paragraphChunk(text string) []Chunk {
+	var chunks []Chunk
 	paragraphs := strings.Split(text, "\n")
 	var start int
 	for _, paragraph := range paragraphs {
 		chunk := paragraph + "\n"
-		chunks = append(chunks, []interface{}{start, len(chunk), chunk})
+		chunks = append(chunks, Chunk{Start: start, Length: len(chunk), Text: chunk})
 		start += len(chunk)
 	}
 	return chunks
@@ -63,7 +69,7 @@ func ChunkString(text, mode string) (string, error) {
 	for i := range modeParts {
 		modeParts[i] = strings.TrimSpace(modeParts[i])
 	}
-	var chunks [][]interface{}
+	var chunks []Chunk
 	if len(modeParts) == 2 && modeParts[0] == "fixed_width" {
 		width, err := strconv.Atoi(modeParts[1])
 		if width < 0 || err != nil {
@@ -83,13 +89,13 @@ func ChunkString(text, mode string) (string, error) {
 
 	var chunkStrings []string
 	for _, chunk := range chunks {
-		chunkStrings = append(chunkStrings, fmt.Sprintf("[%d, %d, %q]", chunk[0], chunk[1], chunk[2]))
+		chunkStrings = append(chunkStrings, fmt.Sprintf("[%d, %d, %q]", chunk.Start, chunk.Length, chunk.Text))
 	}
 
 	return "[" + strings.Join(chunkStrings, ", ") + "]", nil
 }
 
-func Chunk(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func LLMChunk(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	chunkTypeParam := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)

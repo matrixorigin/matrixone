@@ -6548,7 +6548,7 @@ var supportedOthersBuiltIns = []FuncNew{
 					return types.T_text.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return Chunk
+					return LLMChunk
 				},
 			},
 		},
