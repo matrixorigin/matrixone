@@ -76,9 +76,9 @@ type PipelineSignalReceiver struct {
 	alive int
 
 	// receive data channel, first reg is the monitor for runningCtx.
-	regs  []reflect.SelectCase
+	regs []reflect.SelectCase
 	// how much nil batch should each reg wait. its length is 1 less than regs.
-	nbs  []int
+	nbs []int
 }
 
 func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister) *PipelineSignalReceiver {
@@ -98,8 +98,8 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 
 	return &PipelineSignalReceiver{
 		alive: len(regs),
-		regs: scs,
-		nbs:  nbs,
+		regs:  scs,
+		nbs:   nbs,
 	}
 }
 
@@ -114,24 +114,25 @@ func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, in
 			msg := (v.Interface()).(PipelineSignal)
 			content, info = msg.Action()
 			if content == nil {
-				idx := chosen-1
+				idx := chosen - 1
 
 				receiver.nbs[idx]--
 				if receiver.nbs[idx] > 0 {
-					return receiver.GetNextBatch()
+					continue
 				}
 
 				// remove the unused channel.
 				receiver.regs = append(receiver.regs[:chosen], receiver.regs[chosen+1:]...)
 				receiver.nbs = append(receiver.nbs[:idx], receiver.nbs[idx+1:]...)
 				receiver.alive--
+				continue
 			}
 
 			return content, info
 		}
 		break
 	}
-	return nil, nil
+	panic("unexpected sender close during GetNextBatch")
 }
 
 func (receiver *PipelineSignalReceiver) WaitingEnd() {

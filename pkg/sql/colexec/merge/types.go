@@ -16,8 +16,6 @@ package merge
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -26,8 +24,7 @@ import (
 var _ vm.Operator = new(Merge)
 
 type container struct {
-	buf *batch.Batch
-	colexec.ReceiverOperator
+	receiver *process.PipelineSignalReceiver
 }
 
 type Merge struct {
@@ -83,13 +80,12 @@ func (merge *Merge) Release() {
 }
 
 func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	merge.ctr.FreeMergeTypeOperator(pipelineFailed)
+	if merge.ctr.receiver != nil {
+		_ = merge.Prepare(proc)
+	}
+	merge.ctr.receiver.WaitingEnd()
+	merge.ctr.receiver = nil
 }
 
 func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if merge.ctr.buf != nil {
-		// merge.ctr.buf.Clean(proc.Mp())
-		proc.PutBatch(merge.ctr.buf)
-		merge.ctr.buf = nil
-	}
 }

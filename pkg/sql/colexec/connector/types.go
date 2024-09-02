@@ -77,10 +77,6 @@ func (connector *Connector) Release() {
 }
 
 func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	connector.Free(proc, pipelineFailed, err)
-}
-
-func (connector *Connector) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if connector.ctr.sp != nil {
 		_, _ = connector.ctr.sp.SendBatch(context.TODO(), pSpool.SendToAllLocal, nil, err)
 		connector.Reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(connector.ctr.sp, 0)
@@ -90,4 +86,7 @@ func (connector *Connector) Free(proc *process.Process, pipelineFailed bool, err
 	} else {
 		connector.Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil)
 	}
+}
+
+func (connector *Connector) Free(proc *process.Process, pipelineFailed bool, err error) {
 }

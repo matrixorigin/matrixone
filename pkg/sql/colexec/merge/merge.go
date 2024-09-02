@@ -35,9 +35,9 @@ func (merge *Merge) OpType() vm.OpType {
 
 func (merge *Merge) Prepare(proc *process.Process) error {
 	if merge.Partial {
-		merge.ctr.InitReceiver(proc, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
+		merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
 	} else {
-		merge.ctr.InitReceiver(proc, proc.Reg.MergeReceivers)
+		merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, proc.Reg.MergeReceivers)
 	}
 	return nil
 }
@@ -50,46 +50,26 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(merge.GetIdx(), merge.GetParallelIdx(), merge.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	var msg *process.RegisterMessage
-	result := vm.NewCallResult()
 
+	result := vm.NewCallResult()
 	for {
-		msg = merge.ctr.ReceiveFromAllRegs(anal)
-		if msg.Err != nil {
-			return vm.CancelResult, msg.Err
-		}
-		if msg.Batch == nil {
+		b, info := merge.ctr.receiver.GetNextBatch()
+		if b == nil {
 			result.Status = vm.ExecStop
 			return result, nil
 		}
-		if msg.Batch.Last() && merge.SinkScan {
-			proc.PutBatch(msg.Batch)
+		if info != nil {
+			return vm.CancelResult, info
+		}
+
+		if b.Last() && merge.SinkScan {
 			continue
 		}
-
-		if merge.ctr.buf != nil {
-			proc.PutBatch(merge.ctr.buf)
-			// merge.ctr.buf.Clean(proc.GetMPool())
-			merge.ctr.buf = nil
-		}
-
-		// merge.ctr.buf, err = msg.Batch.Dup(proc.GetMPool())
-		// if err != nil {
-		// 	proc.PutBatch(msg.Batch)
-		// 	return vm.CancelResult, err
-		// }
-		// if msg.Batch.Aggs != nil {
-		// 	merge.ctr.buf.Aggs = msg.Batch.Aggs
-		// 	msg.Batch.Aggs = nil
-		// }
-		// result.Batch = merge.ctr.buf
-		// proc.PutBatch(msg.Batch)
-		merge.ctr.buf = msg.Batch
-		result.Batch = merge.ctr.buf
+		result.Batch = b
 		break
 	}
 
-	anal.Input(merge.ctr.buf, merge.GetIsFirst())
-	anal.Output(merge.ctr.buf, merge.GetIsLast())
+	anal.Input(result.Batch, merge.GetIsFirst())
+	anal.Output(result.Batch, merge.GetIsLast())
 	return result, nil
 }
