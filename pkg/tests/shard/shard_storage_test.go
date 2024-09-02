@@ -55,8 +55,10 @@ func TestPartitionBasedShardCanBeCreated(t *testing.T) {
 			testutils.CreateTestDatabase(t, db, cn1)
 
 			store := mustCreateShardStorage(cn1)
-			shardTableID, partitions := mustCreatePartitionTable(
+			partitions := 2
+			shardTableID := mustCreatePartitionTable(
 				t,
+				partitions,
 				db,
 				t.Name(),
 				cn1,
@@ -98,8 +100,9 @@ func TestPartitionBasedShardCanBeDeleted(t *testing.T) {
 			testutils.CreateTestDatabase(t, db, cn1)
 
 			store := mustCreateShardStorage(cn1)
-			tableID, _ := mustCreatePartitionTable(
+			tableID := mustCreatePartitionTable(
 				t,
+				2,
 				db,
 				t.Name(),
 				cn1,
@@ -172,11 +175,12 @@ func mustGetTableID(
 
 func mustCreatePartitionTable(
 	t *testing.T,
+	n int,
 	db string,
 	table string,
 	cn embed.ServiceOperator,
 	store shardservice.ShardStorage,
-) (uint64, int) {
+) uint64 {
 	accountID := uint32(0)
 	ctx, cancel := context.WithTimeout(
 		defines.AttachAccountId(context.Background(), accountID),
@@ -186,18 +190,7 @@ func mustCreatePartitionTable(
 
 	committedAt := initShardsOnce(t, cn)
 
-	sql := fmt.Sprintf(
-		`
-	CREATE TABLE %s (
-		id          INT             NOT NULL,
-		PRIMARY KEY (id)
-	) PARTITION BY RANGE columns (id)(
-		partition p01 values less than (10),
-		partition p02 values less than (20)
-	);
-	`,
-		table,
-	)
+	sql := getPartitionTableSQL(table, n)
 
 	tableID := uint64(0)
 	exec := testutils.GetSQLExecutor(cn)
@@ -229,7 +222,7 @@ func mustCreatePartitionTable(
 			WithMinCommittedTS(committedAt),
 	)
 	require.NoError(t, err)
-	return tableID, 2
+	return tableID
 }
 
 func initShardsOnce(

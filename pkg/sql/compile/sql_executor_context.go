@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -289,11 +290,13 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
+		fmt.Printf(">>>>>>>>>>>>>>>>1 %+v, %s, %s\n", err, dbName, tableName)
 		return nil, nil
 	}
 
 	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
 	if err != nil {
+		fmt.Printf(">>>>>>>>>>>>>>>>2 %+v, %s, %s\n", err, dbName, tableName)
 		return nil, nil
 	}
 	return c.getTableDef(ctx, table, dbName, tableName)
