@@ -386,19 +386,18 @@ func (m *mysqlTaskStorage) QueryAsyncTask(ctx context.Context, condition ...Cond
 			}
 			t.ExecuteResult.Code = task.ResultCode(code.(int64))
 
-			msg, err := msgOption.Value()
-			if err != nil {
-				return nil, err
+			if msgOption.Valid {
+				msg, err := msgOption.Value()
+				if err != nil {
+					return nil, err
+				}
+				t.ExecuteResult.Error = msg.(string)
 			}
-			t.ExecuteResult.Error = msg.(string)
 		}
 
 		tasks = append(tasks, t)
 	}
-	if err := rows.Err(); err != nil {
-		return tasks, err
-	}
-	return tasks, nil
+	return tasks, rows.Err()
 }
 
 func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.CronTask) (int, error) {
