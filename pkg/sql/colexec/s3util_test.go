@@ -15,7 +15,6 @@ package colexec
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"testing"
 
@@ -24,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -119,8 +117,8 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 	// test no SHARED service err
 	{
-		proc := testutil.NewProc()
-		proc.GetFileService().(*fileservice.FileServices).RemoveFileService("shared")
+		proc := testutil.NewProc(
+			testutil.WithFileService(nil))
 
 		s3writer := &S3Writer{}
 		s3writer.sortIndex = -1
@@ -129,8 +127,6 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 		_, _, err := s3writer.SortAndSync(proc)
 		require.Equal(t, err.(*moerr.Error).ErrorCode(), moerr.ErrNoService)
-
-		proc.GetFileService().(*fileservice.FileServices).AddFileService(defines.SharedFileServiceName)
 	}
 
 	// test normal flush
