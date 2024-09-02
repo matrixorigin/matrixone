@@ -23,20 +23,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-// check fulltext_index_scan TABLE_FUNCTION exists
-
-// Convert the table_scan node to the following
-// - JOIN_INNER
-//   - TABLE_SCAN
-//     -- FilterList but remove the fulltext_match func expr
-//   - TABLE_FUNCTION_SCAN (fulltext_index_scan)
-//     -- Node_Value_Scan
+// The idea is as follows:
+// 1. Find fulltext_match() function from projection (projNode) and filters (ScanNode)
+// and then convert fulltext_match() to table function fulltext_index_scan().
+// 2. Do INNER JOIN fulltext_index_scan tables and source table with key doc_id
+// 3. Add SORT node with score key DESC if SORT node does not exist.  If SORT node exists,
+// Add the JOIN node to SORT node.
+// 4. Replace the fulltext_match() in project list with ColRef score in fulltext_index_scan()
+//
+// explain  select *, match(body, title) against('red')  from src where match(body) against('red');
+// +------------------------------------------------------------------------------------------+
+// | TP QURERY PLAN                                                                           |
+// +------------------------------------------------------------------------------------------+
+// | Project                                                                                  |
+// |   ->  Sort                                                                               |
+// |         Sort Key: mo_fulltext_alias_0.score DESC, mo_fulltext_alias_1.score DESC         |
+// |         ->  Join                                                                         |
+// |               Join Type: INNER                                                           |
+// |               Join Cond: (src.doc_id = mo_fulltext_alias_1.doc_id)                       |
+// |               ->  Table Scan on eric.src                                                 |
+// |               ->  Join                                                                   |
+// |                     Join Type: INNER                                                     |
+// |                     Join Cond: (mo_fulltext_alias_1.doc_id = mo_fulltext_alias_0.doc_id) |
+// |                     ->  Table Function on fulltext_index_scan                            |
+// |                           ->  Values Scan "*VALUES*"                                     |
+// |                     ->  Table Function on fulltext_index_scan                            |
+// |                           ->  Values Scan "*VALUES*"                                     |
+// +------------------------------------------------------------------------------------------+
 func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int32, projNode *plan.Node, scanNode *plan.Node, filterids []int32, filter_indexDefs []*plan.IndexDef,
 	projids []int32, proj_indexDefs []*plan.IndexDef,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, []int32, []int32) {
 
-	// nodeID must be scanNode
-	nodeID = scanNode.NodeId
 	ctx := builder.ctxByNode[nodeID]
 
 	var pkPos = scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
@@ -108,8 +125,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 			},
 		}
 
-		// link with source table have duplicate answer
-		//curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, nodeID, ctx)
 		curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, -1, nil)
 		if err != nil {
 			panic(err.Error())
@@ -188,7 +203,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingFullTextIndex(nodeID int
 
 	joinnodeID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
-		Children: []int32{nodeID, last_node_id},
+		Children: []int32{scanNode.NodeId, last_node_id},
 		JoinType: plan.Node_INNER,
 		OnList:   []*Expr{wherePkEqPk},
 		Limit:    DeepCopyExpr(scanNode.Limit),
