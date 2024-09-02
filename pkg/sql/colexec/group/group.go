@@ -386,11 +386,13 @@ func (ctr *container) batchFill(i int, n int, vals []uint64, hashRows uint64, pr
 	cnt := 0
 	valCnt := 0
 	var bat *batch.Batch
+
 	if !rollup {
 		bat = ctr.bat
 	} else {
 		bat = ctr.rollupBat
 	}
+
 	copy(ctr.inserted[:n], ctr.zInserted[:n])
 	for k, v := range vals[:n] {
 		if v == 0 {
