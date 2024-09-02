@@ -15,6 +15,7 @@ package colexec
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -119,12 +120,14 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		proc.GetFileService().(*fileservice.FileServices).RemoveFileService("shared")
 
 		s3writer := &S3Writer{}
-		s3writer.sortIndex = 0
+		s3writer.sortIndex = -1
 		s3writer.isTombstone = true
 		s3writer.StashBatch(proc, bat)
 
 		_, _, err := s3writer.SortAndSync(proc)
 		require.Equal(t, err.(*moerr.Error).ErrorCode(), moerr.ErrNoService)
+
+		proc.GetFileService().(*fileservice.FileServices).AddFileService(defines.SharedFileServiceName)
 	}
 
 	{

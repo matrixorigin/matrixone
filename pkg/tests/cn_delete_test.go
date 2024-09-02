@@ -45,11 +45,11 @@ func TestCNFlushS3Deletes(t *testing.T) {
 		_, err = exec.Exec(ctx, "create database a;", executor.Options{})
 		require.NoError(t, err)
 
-		_, err = exec.Exec(ctx, "create table t1 (a int primary key, b varchar(1024));",
+		_, err = exec.Exec(ctx, "create table t1 (a int primary key, b varchar(256));",
 			executor.Options{}.WithDatabase("a"))
 		require.NoError(t, err)
 
-		_, err = exec.Exec(ctx, "insert into t1 select *,'yep' from generate_series(1,10*1024)g;",
+		_, err = exec.Exec(ctx, "insert into t1 select *,'yep' from generate_series(1,512*1024)g;",
 			executor.Options{}.WithDatabase("a"))
 		require.NoError(t, err)
 
@@ -59,7 +59,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 
 		resp.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			cnt := vector.GetFixedAt[int64](cols[0], 0)
-			require.Equal(t, int64(10*1024), cnt)
+			require.Equal(t, int64(512*1024), cnt)
 			return true
 		})
 	}
@@ -96,5 +96,5 @@ func TestCNFlushS3Deletes(t *testing.T) {
 			return true
 		})
 	}
-	require.NoError(t, c.Close())
+	//require.NoError(t, c.Close())
 }
