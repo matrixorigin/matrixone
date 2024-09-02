@@ -71,13 +71,13 @@ func (ps *pipelineSpool) SendBatch(
 	return false, nil
 }
 
-func (ps *pipelineSpool) ReceiveBatch(idx int) *batch.Batch {
+func (ps *pipelineSpool) ReceiveBatch(idx int) (*batch.Batch, error) {
 	b, done := ps.cs[idx].Next()
 	if !done || b.content == nil {
 		ps.csDoneSignal <- struct{}{}
-		return nil
+		return nil, b.err
 	}
-	return b.content
+	return b.content, b.err
 }
 
 func (ps *pipelineSpool) waitReceiversOver() {

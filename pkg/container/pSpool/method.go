@@ -31,7 +31,7 @@ type PipelineCommunication interface {
 		info error) (queryDone bool, err error)
 
 	// ReceiveBatch get data from the idx-th receiver.
-	ReceiveBatch(idx int) *batch.Batch
+	ReceiveBatch(idx int) (data *batch.Batch, info error)
 
 	// Close the sender and receivers.
 	Close()
