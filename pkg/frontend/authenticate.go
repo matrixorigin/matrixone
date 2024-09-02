@@ -59,7 +59,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 )
 
 type TenantInfo struct {
@@ -4304,21 +4303,11 @@ func postDropSuspendAccount(
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
 	var nodes []string
-	currTenant := ses.GetTenantInfo().GetTenant()
-	currUser := ses.GetTenantInfo().GetUser()
-	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": accountName}, clusterservice.Contain)
-	sysTenant := isSysTenant(currTenant)
-	if sysTenant {
-		route.RouteForSuperTenant(clusterservice.NewSelector(), currUser, nil,
-			func(s *metadata.CNService) {
-				nodes = append(nodes, s.QueryAddress)
-			})
-	} else {
-		route.RouteForCommonTenant(labels, nil, func(s *metadata.CNService) {
+	clusterservice.GetMOCluster().GetCNService(clusterservice.NewSelectAll(),
+		func(s metadata.CNService) bool {
 			nodes = append(nodes, s.QueryAddress)
+			return true
 		})
-	}
 
 	var retErr error
 	genRequest := func() *query.Request {
@@ -4341,6 +4330,7 @@ func postDropSuspendAccount(
 		retErr = moerr.NewInternalError(ctx,
 			fmt.Sprintf("kill connection for account %s failed on node %s", accountName, nodeAddr))
 	}
+	logger.Info("[send kill request]send kill request to nodes", zap.String("qc service:", qc.ServiceID()), zap.Strings("nodes", nodes))
 
 	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
@@ -9246,22 +9236,13 @@ func postAlterSessionStatus(
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
-	currTenant := ses.GetTenantInfo().GetTenant()
-	currUser := ses.GetTenantInfo().GetUser()
+
 	var nodes []string
-	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": accountName}, clusterservice.Contain)
-	sysTenant := isSysTenant(currTenant)
-	if sysTenant {
-		route.RouteForSuperTenant(clusterservice.NewSelector(), currUser, nil,
-			func(s *metadata.CNService) {
-				nodes = append(nodes, s.QueryAddress)
-			})
-	} else {
-		route.RouteForCommonTenant(labels, nil, func(s *metadata.CNService) {
+	clusterservice.GetMOCluster().GetCNService(clusterservice.NewSelectAll(),
+		func(s metadata.CNService) bool {
 			nodes = append(nodes, s.QueryAddress)
+			return true
 		})
-	}
 
 	var retErr, err error
 
