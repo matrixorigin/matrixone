@@ -58,7 +58,7 @@ func paragraphChunk(text string) [][]interface{} {
 	return chunks
 }
 
-func ChunkString(text, mode string) string {
+func ChunkString(text, mode string) (string, error) {
 	modeParts := strings.Split(mode, ";")
 	for i := range modeParts {
 		modeParts[i] = strings.TrimSpace(modeParts[i])
@@ -66,8 +66,8 @@ func ChunkString(text, mode string) string {
 	var chunks [][]interface{}
 	if len(modeParts) == 2 && modeParts[0] == "fixed_width" {
 		width, err := strconv.Atoi(modeParts[1])
-		if err != nil {
-			return ""
+		if width < 0 || err != nil {
+			return "", moerr.NewInvalidInputNoCtxf("'%s' is not a valid chunk strategy", mode)
 		}
 		chunks = fixedWidthChunk(text, width)
 	} else {
@@ -77,7 +77,7 @@ func ChunkString(text, mode string) string {
 		case "paragraph":
 			chunks = paragraphChunk(text)
 		default:
-			return ""
+			return "", moerr.NewInvalidInputNoCtxf("'%s' is not a valid chunk strategy", mode)
 		}
 	}
 
@@ -86,7 +86,7 @@ func ChunkString(text, mode string) string {
 		chunkStrings = append(chunkStrings, fmt.Sprintf("[%d, %d, %q]", chunk[0], chunk[1], chunk[2]))
 	}
 
-	return "[" + strings.Join(chunkStrings, ", ") + "]"
+	return "[" + strings.Join(chunkStrings, ", ") + "]", nil
 }
 
 func Chunk(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -137,7 +137,10 @@ func Chunk(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		input = string(ctx)
 
 		chunkType := string(chunkTypeBytes)
-		resultStr := ChunkString(input, chunkType)
+		resultStr, err := ChunkString(input, chunkType)
+		if err != nil {
+			return err
+		}
 		if err := rs.AppendMustBytesValue([]byte(resultStr)); err != nil {
 			return err
 		}
