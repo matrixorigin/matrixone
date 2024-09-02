@@ -160,7 +160,6 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: ctx,
 		Ch:  make(chan *process.RegisterMessage, 10),
 	}
 	return buildTestCase{

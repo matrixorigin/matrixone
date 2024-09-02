@@ -186,9 +186,6 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		s.Reset(c)
 	}
 
-	for _, v := range c.nodeRegs {
-		v.CleanChannel(c.proc.GetMPool())
-	}
 
 	c.MessageBoard = c.MessageBoard.Reset()
 	proc.SetMessageBoard(c.MessageBoard)
@@ -846,13 +843,11 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 			var wr *process.WaitRegister
 			if c.anal.qry.LoadTag {
 				wr = &process.WaitRegister{
-					Ctx: c.proc.Ctx,
-					Ch:  make(chan *process.RegisterMessage, ncpu),
+					Ch2:  make(chan process.PipelineSignal, ncpu),
 				}
 			} else {
 				wr = &process.WaitRegister{
-					Ctx: c.proc.Ctx,
-					Ch:  make(chan *process.RegisterMessage, 1),
+					Ch2:  make(chan process.PipelineSignal, 1),
 				}
 			}
 			c.appendStepRegs(s, nodeId, wr)
@@ -2887,7 +2882,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 			for _, s := range scopes {
 				for _, rr := range s.Proc.Reg.MergeReceivers {
-					rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
+					rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
 				}
 			}
 			shuffleGroups = append(shuffleGroups, scopes...)
@@ -2966,7 +2961,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 			dataScope := c.newMergeScope(ss)
 			if c.anal.qry.LoadTag {
 				// reset the channel buffer of sink for load
-				dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, dataScope.NodeInfo.Mcpu)
+				dataScope.Proc.Reg.MergeReceivers[0].Ch2 = make(chan process.PipelineSignal, dataScope.NodeInfo.Mcpu)
 			}
 			parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
 			scopes := make([]*Scope, 0, parallelSize)
@@ -2981,7 +2976,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 				scopes[i].Proc = c.proc.NewNoContextChildProc(1)
 				if c.anal.qry.LoadTag {
 					for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
-						rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
+						rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
 					}
 				}
 				regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
@@ -3146,9 +3141,6 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	}
 	rs := c.newEmptyMergeScope()
 	rs.Proc = c.proc.NewNoContextChildProc(len(receivers))
-	for _, r := range receivers {
-		r.Ctx = rs.Proc.Ctx
-	}
 	rs.Proc.Reg.MergeReceivers = receivers
 
 	//for mergecte, children[0] receive from the first channel, and children[1] receive from the rest channels
@@ -3180,9 +3172,6 @@ func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope
 	}
 	rs := c.newEmptyMergeScope()
 	rs.Proc = c.proc.NewNoContextChildProc(len(receivers))
-	for _, r := range receivers {
-		r.Ctx = rs.Proc.Ctx
-	}
 	rs.Proc.Reg.MergeReceivers = receivers
 
 	mergeOp := merge.NewArgument()
@@ -3211,10 +3200,7 @@ func (c *Compile) compileSinkScanNode(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	mergeArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergeArg)
 	c.anal.isFirst = false
-
-	for _, r := range receivers {
-		r.Ctx = rs.Proc.Ctx
-	}
+	
 	rs.Proc.Reg.MergeReceivers = receivers
 	return []*Scope{rs}, nil
 }
@@ -3324,7 +3310,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		} else {
 			rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = 1
 		}
-		rs.Proc.Reg.MergeReceivers[j].Ch = make(chan *process.RegisterMessage, ss[i].NodeInfo.Mcpu)
+		rs.Proc.Reg.MergeReceivers[j].Ch2 = make(chan process.PipelineSignal, ss[i].NodeInfo.Mcpu)
 		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])
 		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		ss[i].setRootOperator(connArg)
@@ -3350,7 +3336,7 @@ func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 	rs.NodeInfo.Mcpu = 1 // merge scope is single parallel by default
 	rs.PreScopes = ss
 	rs.Proc = c.proc.NewNoContextChildProc(1)
-	rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, len(ss))
+	rs.Proc.Reg.MergeReceivers[0].Ch2 = make(chan process.PipelineSignal, len(ss))
 
 	mergeOp := merge.NewArgument()
 	mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
@@ -3421,7 +3407,7 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 	rs := c.mergeScopesByCN(ss)
 	for i := range rs {
 		for _, rr := range rs[i].Proc.Reg.MergeReceivers {
-			rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
+			rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
 		}
 	}
 	return rs
@@ -3496,7 +3482,7 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		bs := newScope(Remote)
 		bs.NodeInfo = engine.Node{Addr: rs[i].NodeInfo.Addr, Mcpu: 1}
 		bs.Proc = c.proc.NewNoContextChildProc(0)
-		w := &process.WaitRegister{Ch: make(chan *process.RegisterMessage, 10)}
+		w := &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 10)}
 		bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, w)
 		bs.setRootOperator(merge.NewArgument())
 		if isSameCN(buildScopes[0].NodeInfo.Addr, bs.NodeInfo.Addr) {
@@ -3544,10 +3530,10 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 			builds[i].Proc = c.proc.NewNoContextChildProc(lenRight)
 			joins[i].PreScopes = []*Scope{builds[i]}
 			for _, rr := range joins[i].Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
+				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
 			}
 			for _, rr := range builds[i].Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
+				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
 			}
 		}
 		shuffleJoins = append(shuffleJoins, joins...)
@@ -3611,7 +3597,6 @@ func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 // target with new index targetIdx
 func regTransplant(source, target *Scope, sourceIdx, targetIdx int) {
 	target.Proc.Reg.MergeReceivers[targetIdx] = source.Proc.Reg.MergeReceivers[sourceIdx]
-	target.Proc.Reg.MergeReceivers[targetIdx].Ctx = target.Proc.Ctx
 	i := 0
 	for i < len(source.RemoteReceivRegInfos) {
 		op := &source.RemoteReceivRegInfos[i]

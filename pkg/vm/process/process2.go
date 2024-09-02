@@ -104,7 +104,7 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
 		for i := range child.Reg.MergeReceivers {
 			child.Reg.MergeReceivers[i] = &WaitRegister{
-				Ch: make(chan *RegisterMessage, 1),
+				Ch2: make(chan PipelineSignal, 1),
 			}
 		}
 	}
@@ -125,7 +125,7 @@ func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channe
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
 		for i := range child.Reg.MergeReceivers {
 			child.Reg.MergeReceivers[i] = &WaitRegister{
-				Ch:          make(chan *RegisterMessage, channelBufferSize[i]),
+				Ch2:          make(chan PipelineSignal, channelBufferSize[i]),
 				NilBatchCnt: int(nilbatchCnt[i]),
 			}
 		}
@@ -151,14 +151,6 @@ func (proc *Process) BuildPipelineContext(parentContext context.Context) context
 		proc.Cancel()
 	}
 	proc.Ctx, proc.Cancel = context.WithCancel(parentContext)
-
-	// update the context held by this process's data producers.
-	for _, sender := range proc.Reg.MergeReceivers {
-		sender.Ctx = proc.Ctx
-
-		// do not clean the channel here, because we cannot ensure that sender was not in progress.
-		//sender.CleanChannel(mp)
-	}
 	return proc.Ctx
 }
 
@@ -205,13 +197,6 @@ func GetQueryCtxFromProc(proc *Process) (context.Context, context.CancelFunc) {
 func ReplacePipelineCtx(proc *Process, ctx context.Context, cancel context.CancelFunc) {
 	proc.Ctx = ctx
 	proc.Cancel = cancel
-
-	for _, sender := range proc.Reg.MergeReceivers {
-		sender.Ctx = proc.Ctx
-
-		// do not clean the channel here, because we cannot ensure that sender was not in progress.
-		//sender.CleanChannel(mp)
-	}
 }
 
 // GetQueryContextError return error once top context or query context with error.

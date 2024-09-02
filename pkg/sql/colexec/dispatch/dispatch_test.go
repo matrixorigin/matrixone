@@ -105,7 +105,7 @@ func newTestCase() dispatchTestCase {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
-	reg := &process.WaitRegister{Ctx: ctx, Ch: make(chan *process.RegisterMessage, 3)}
+	reg := &process.WaitRegister{Ch: make(chan *process.RegisterMessage, 3)}
 	return dispatchTestCase{
 		proc:  proc,
 		types: []types.Type{types.T_int8.ToType()},

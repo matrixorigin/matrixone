@@ -198,7 +198,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.ChildrenCount = int32(len(s.Proc.Reg.MergeReceivers))
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
-			p.ChannelBufferSize = append(p.ChannelBufferSize, int32(cap(s.Proc.Reg.MergeReceivers[i].Ch)))
+			p.ChannelBufferSize = append(p.ChannelBufferSize, int32(cap(s.Proc.Reg.MergeReceivers[i].Ch2)))
 			p.NilBatchCnt = append(p.NilBatchCnt, int32(s.Proc.Reg.MergeReceivers[i].NilBatchCnt))
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
 		}

@@ -32,11 +32,11 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, mergeReceivers []
 	r.receiverListener = make([]reflect.SelectCase, r.aliveMergeReceiver+1)
 	r.receiverListener[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
 	for i, mr := range mergeReceivers {
-		r.chs[i] = mr.Ch
+		//r.chs[i] = mr.Ch
 		r.nilBatchCnt[i] = mr.NilBatchCnt
 		r.receiverListener[i+1] = reflect.SelectCase{
 			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(mr.Ch),
+			//Chan: reflect.ValueOf(mr.Ch),
 		}
 	}
 }

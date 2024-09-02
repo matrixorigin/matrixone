@@ -97,7 +97,6 @@ func TestConnector(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 
 		tc.arg.Reg = &process.WaitRegister{
-			Ctx: tc.arg.Reg.Ctx,
 			Ch:  make(chan *process.RegisterMessage, 3),
 		}
 		err = tc.arg.Prepare(tc.proc)
@@ -143,7 +142,6 @@ func newTestCase() connectorTestCase {
 		types: []types.Type{types.T_int8.ToType()},
 		arg: &Connector{
 			Reg: &process.WaitRegister{
-				Ctx: ctx,
 				Ch:  make(chan *process.RegisterMessage, 3),
 			},
 			OperatorBase: vm.OperatorBase{

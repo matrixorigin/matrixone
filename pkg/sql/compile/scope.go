@@ -647,7 +647,7 @@ func newParallelScope1(s *Scope, c *Compile) (*Scope, []*Scope) {
 	rs := newScope(Merge)
 	rs.NodeInfo = engine.Node{Addr: s.NodeInfo.Addr, Mcpu: 1}
 	rs.Proc = s.Proc.NewNoContextChildProc(1)
-	rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, s.NodeInfo.Mcpu)
+	rs.Proc.Reg.MergeReceivers[0].Ch2 = make(chan process.PipelineSignal, s.NodeInfo.Mcpu)
 	rs.Proc.Reg.MergeReceivers[0].NilBatchCnt = s.NodeInfo.Mcpu
 
 	mergeOp := merge.NewArgument()
@@ -747,12 +747,7 @@ func (s *Scope) ReplaceLeafOp(dstLeafOp vm.Operator) {
 func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		if reg != nil {
-			select {
-			case <-s.Proc.Ctx.Done():
-			case reg.Ch <- nil:
-			}
-		}
+		reg.Ch2 <- process.NewPipelineSignalToDirectly(nil)
 
 		select {
 		case <-s.Proc.Ctx.Done():
@@ -804,7 +799,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 				sender.safeToClose = false
 				sender.alreadyClose = false
 
-				err = receiveMsgAndForward(s.Proc, sender, s.Proc.Reg.MergeReceivers[receiverIdx].Ch)
+				err = receiveMsgAndForward(s.Proc, sender, s.Proc.Reg.MergeReceivers[receiverIdx].Ch2)
 				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 			},
 		)
@@ -816,7 +811,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 	}
 }
 
-func receiveMsgAndForward(proc *process.Process, sender *messageSenderOnClient, forwardCh chan *process.RegisterMessage) error {
+func receiveMsgAndForward(proc *process.Process, sender *messageSenderOnClient, forwardCh chan process.PipelineSignal) error {
 	for {
 		bat, end, err := sender.receiveBatch()
 		if err != nil {
@@ -827,7 +822,7 @@ func receiveMsgAndForward(proc *process.Process, sender *messageSenderOnClient, 
 		}
 
 		if forwardCh != nil {
-			msg := &process.RegisterMessage{Batch: bat}
+			msg := process.NewPipelineSignalToDirectly(bat)
 			select {
 			case <-proc.Ctx.Done():
 				bat.Clean(proc.Mp())
