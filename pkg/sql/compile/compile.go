@@ -3001,6 +3001,9 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 			} else {
 				dispatchArg := constructDispatchLocal(false, false, false, regs)
 				dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+				if dataScope.NodeInfo.Mcpu > 1 {
+					dataScope = c.newMergeScope([]*Scope{dataScope})
+				}
 				dataScope.setRootOperator(dispatchArg)
 			}
 			dataScope.IsEnd = true

@@ -1314,6 +1314,13 @@ func constructDeleteDispatchAndLocal(
 	ss []*Scope,
 	uuids []uuid.UUID,
 	c *Compile) {
+
+	for i := range ss {
+		if ss[i].NodeInfo.Mcpu > 1 {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
+	}
+
 	op := dispatch.NewArgument()
 	op.RemoteRegs = make([]colexec.ReceiveInfo, 0, len(ss)-1)
 	// rs is used to get batch from dispatch operator (include
