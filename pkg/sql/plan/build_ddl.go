@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -830,6 +831,12 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			if opt.Value != 0 {
 				createTable.TableDef.AutoIncrOffset = opt.Value - 1
 			}
+		case *tree.RetentionOption:
+			duration, err := parseDuration(ctx.GetContext(), opt.Period, opt.Unit)
+			if err != nil {
+				return nil, err
+			}
+			createTable.RetentionDeadline = time.Now().Add(duration).Unix()
 
 		// these table options is not support in plan
 		// case *tree.TableOptionEngine, *tree.TableOptionSecondaryEngine, *tree.TableOptionCharset,
@@ -3170,6 +3177,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionTableName:
 			oldName := tableDef.Name
 			newName := string(opt.Name.ToTableName().ObjectName)
+			if oldName != newName {
+				_, tableDef := ctx.Resolve(databaseName, newName, nil)
+				if tableDef != nil {
+					return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
+				}
+			}
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterName{
 					AlterName: &plan.AlterTableName{
@@ -3739,4 +3752,22 @@ func getAutoIncrementOffsetFromVariables(ctx CompilerContext) (uint64, bool) {
 		}
 	}
 	return 0, false
+}
+
+var unitDurations = map[string]time.Duration{
+	"second": time.Second,
+	"minute": time.Minute,
+	"hour":   time.Hour,
+	"day":    time.Hour * 24,
+	"week":   time.Hour * 24 * 7,
+	"month":  time.Hour * 24 * 30,
+}
+
+func parseDuration(ctx context.Context, period uint64, unit string) (time.Duration, error) {
+	unitDuration, ok := unitDurations[strings.ToLower(unit)]
+	if !ok {
+		return 0, moerr.NewInvalidArg(ctx, "time unit", unit)
+	}
+	seconds := period * uint64(unitDuration)
+	return time.Duration(seconds), nil
 }

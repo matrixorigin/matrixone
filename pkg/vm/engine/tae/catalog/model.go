@@ -27,7 +27,7 @@ const (
 	PhyAddrColumnName    = pkgcatalog.Row_ID
 	PhyAddrColumnComment = "Physical address"
 
-	AttrRowID    = PhyAddrColumnName
+	AttrRowID    = pkgcatalog.TableTailAttrDeleteRowID
 	AttrCommitTs = pkgcatalog.TableTailAttrCommitTs
 	AttrAborted  = pkgcatalog.TableTailAttrAborted
 	AttrPKVal    = pkgcatalog.TableTailAttrPKVal

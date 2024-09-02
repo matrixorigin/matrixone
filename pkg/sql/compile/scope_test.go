@@ -20,6 +20,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -257,34 +265,86 @@ func TestNewParallelScope(t *testing.T) {
 	var reg process.WaitRegister
 	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
 
-	// 1. test (-> projection -> limit -> connector.)
+	// 1. test (rightSemi -> projection -> limit -> connector.)
 	{
 		scopeToParallel := generateScopeWithRootOperator(
 			testCompile.proc,
-			[]vm.OpType{vm.Projection, vm.Limit, vm.Connector})
+			[]vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector})
 
 		scopeToParallel.NodeInfo.Mcpu = 4
 		_, ss := newParallelScope(scopeToParallel, testCompile)
-		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
 	}
 
-	// 2. test (-> filter -> projection -> connector.)
+	// 2. test (right -> filter -> projection -> connector.)
 	{
 		scopeToParallel := generateScopeWithRootOperator(
 			testCompile.proc,
-			[]vm.OpType{vm.Filter, vm.Projection, vm.Connector})
+			[]vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector})
 
 		scopeToParallel.NodeInfo.Mcpu = 4
 
 		_, ss := newParallelScope(scopeToParallel, testCompile)
-		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
 	}
+
+	// 3. test (rightanti -> shuffle  -> dispatch.)
+	{
+		scopeToParallel := generateScopeWithRootOperator(
+			testCompile.proc,
+			[]vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch})
+
+		scopeToParallel.NodeInfo.Mcpu = 3
+
+		_, ss := newParallelScope(scopeToParallel, testCompile)
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
+	}
+}
+
+func TestBroadcastJoinScope(t *testing.T) {
+	testCompile := &Compile{
+		proc: testutil.NewProcess(),
+	}
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001"}, engine.Node{Addr: "cn2:6001"}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &analyzeModule{}
+	probe1 := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection})
+	probe1.NodeInfo.Addr = "cn1:6001"
+	probe1.NodeInfo.Mcpu = 4
+	probe2 := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection})
+	probe2.NodeInfo.Addr = "cn2:6001"
+	probe2.NodeInfo.Mcpu = 4
+	build1 := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection})
+	build1.NodeInfo.Addr = "cn1:6001"
+	build1.NodeInfo.Mcpu = 4
+
+	n := &plan.Node{
+		Stats: &plan.Stats{
+			BlockNum:     10000,
+			HashmapStats: &plan.HashMapStats{},
+		},
+	}
+
+	rs, buildScopes := testCompile.newBroadcastJoinScopeList([]*Scope{probe1, probe2}, []*Scope{build1}, n, false)
+	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.Merge}))
+	require.NoError(t, checkScopeWithExpectedList(rs[1], []vm.OpType{vm.Merge}))
+	require.NoError(t, checkScopeWithExpectedList(buildScopes[0], []vm.OpType{vm.Merge}))
+	require.NoError(t, checkScopeWithExpectedList(buildScopes[1], []vm.OpType{vm.Merge}))
 }
 
 func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {
@@ -308,6 +368,14 @@ func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpTy
 			return shuffle.NewArgument()
 		case vm.TableScan:
 			return table_scan.NewArgument()
+		case vm.RightSemi:
+			return rightsemi.NewArgument()
+		case vm.RightAnti:
+			return rightanti.NewArgument()
+		case vm.Right:
+			return right.NewArgument()
+		case vm.Merge:
+			return merge.NewArgument()
 		default:
 			panic("unsupported for ut.")
 		}

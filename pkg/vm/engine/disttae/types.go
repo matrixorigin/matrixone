@@ -156,6 +156,20 @@ type IDGenerator interface {
 	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
 }
 
+type EngineOptions func(*Engine)
+
+func WithWorkspaceThreshold(th uint64) EngineOptions {
+	return func(e *Engine) {
+		e.workspaceThreshold = th
+	}
+}
+
+func WithInsertEntryMaxCount(th int) EngineOptions {
+	return func(e *Engine) {
+		e.insertEntryMaxCount = th
+	}
+}
+
 type Engine struct {
 	sync.RWMutex
 	service  string
@@ -168,6 +182,9 @@ type Engine struct {
 	cli      client.TxnClient
 	idGen    IDGenerator
 	tnID     string
+
+	workspaceThreshold  uint64
+	insertEntryMaxCount int
 
 	//latest catalog will be loaded from TN when engine is initialized.
 	catalog *cache.CatalogCache
@@ -321,12 +338,13 @@ func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64
 	b.offsets[*blockID] = append(b.offsets[*blockID], offsets...)
 }
 
-func (b *deletedBlocks) getDeletedRowIDs(mp map[types.Blockid][]int32) {
+func (b *deletedBlocks) getDeletedRowIDs(dest *[]types.Rowid) {
 	b.RLock()
 	defer b.RUnlock()
 	for bid, offsets := range b.offsets {
 		for _, offset := range offsets {
-			mp[bid] = append(mp[bid], int32(offset))
+			rowId := types.NewRowid(&bid, uint32(offset))
+			*dest = append(*dest, *rowId)
 		}
 	}
 }

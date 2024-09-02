@@ -59,10 +59,11 @@ func init() {
 
 type AppendCmd struct {
 	*txnbase.BaseCustomizedCmd
-	Data  *containers.Batch
-	Infos []*appendInfo
-	Ts    types.TS
-	Node  InsertNode
+	Data        *containers.Batch
+	Infos       []*appendInfo
+	Ts          types.TS
+	Node        *anode
+	IsTombstone bool
 }
 
 func NewEmptyAppendCmd() *AppendCmd {
@@ -71,11 +72,12 @@ func NewEmptyAppendCmd() *AppendCmd {
 	return cmd
 }
 
-func NewAppendCmd(id uint32, node InsertNode, data *containers.Batch) *AppendCmd {
+func NewAppendCmd(id uint32, node *anode, data *containers.Batch, isTombstone bool) *AppendCmd {
 	impl := &AppendCmd{
-		Node:  node,
-		Infos: node.GetAppends(),
-		Data:  data,
+		Node:        node,
+		Infos:       node.GetAppends(),
+		Data:        data,
+		IsTombstone: isTombstone,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -152,6 +154,10 @@ func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 16
+	if _, err = w.Write(types.EncodeBool(&c.IsTombstone)); err != nil {
+		return
+	}
+	n += 1
 	return
 }
 
@@ -183,6 +189,10 @@ func (c *AppendCmd) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 16
+	if _, err = r.Read(types.EncodeBool(&c.IsTombstone)); err != nil {
+		return
+	}
+	n += 1
 	return
 }
 

@@ -1208,6 +1208,8 @@ message CreateTable {
 	repeated string updateFkSqls = 12;
 	// fks forward reference to me
 	repeated ForeignKeyInfo fksReferToMe = 13;
+
+	int64 retention_deadline = 14;
 }
 
 message AlterTableDrop {

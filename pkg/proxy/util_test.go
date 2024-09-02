@@ -200,6 +200,13 @@ func TestIsErrPacket(t *testing.T) {
 	require.True(t, ret)
 }
 
+func TestIsCmdQuit(t *testing.T) {
+	p := makeQuitPacket()
+	require.True(t, isCmdQuit(p))
+	data := []byte{0, 0, 0, 0, 2, 0}
+	require.False(t, isCmdQuit(data))
+}
+
 func TestContainIP(t *testing.T) {
 	cidrs := []string{"192.168.20.0/24", "192.168.10.0/24"}
 	ipNetList := make([]*net.IPNet, 0, 2)

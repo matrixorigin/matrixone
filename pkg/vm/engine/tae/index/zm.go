@@ -639,6 +639,11 @@ func (zm ZM) Or(o ZM) (res bool, ok bool) {
 	return
 }
 
+func (zm ZM) PrefixGT(s []byte) bool {
+	zmin := zm.GetMinBuf()
+	return types.PrefixCompare(zmin, s) > 0
+}
+
 func (zm ZM) PrefixEq(s []byte) bool {
 	zmin := zm.GetMinBuf()
 	zmax := zm.GetMaxBuf()
