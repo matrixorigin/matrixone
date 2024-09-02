@@ -51,27 +51,38 @@ import (
 )
 
 type TestDisttaeEngine struct {
-	Engine          *disttae.Engine
-	logtailReceiver chan morpc.Message
-	broken          chan struct{}
-	wg              sync.WaitGroup
-	ctx             context.Context
-	cancel          context.CancelFunc
-	txnClient       client.TxnClient
-	txnOperator     client.TxnOperator
-	timestampWaiter client.TimestampWaiter
+	Engine              *disttae.Engine
+	logtailReceiver     chan morpc.Message
+	broken              chan struct{}
+	wg                  sync.WaitGroup
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	txnClient           client.TxnClient
+	txnOperator         client.TxnOperator
+	timestampWaiter     client.TimestampWaiter
+	mp                  *mpool.MPool
+	workspaceThreshold  uint64
+	insertEntryMaxCount int
 }
 
 func NewTestDisttaeEngine(
 	ctx context.Context,
-	mp *mpool.MPool,
 	fs fileservice.FileService,
 	rpcAgent *MockRPCAgent,
 	storage *TestTxnStorage,
+	options ...TestDisttaeEngineOptions,
 ) (*TestDisttaeEngine, error) {
 	de := new(TestDisttaeEngine)
 	de.logtailReceiver = make(chan morpc.Message)
 	de.broken = make(chan struct{})
+	for _, opt := range options {
+		opt(de)
+	}
+
+	if de.mp == nil {
+		de.mp, _ = mpool.NewMPool("test", 0, mpool.NoFixed)
+	}
+	mp := de.mp
 
 	de.ctx, de.cancel = context.WithCancel(ctx)
 
@@ -88,8 +99,16 @@ func NewTestDisttaeEngine(
 	hakeeper := newTestHAKeeperClient()
 	colexec.NewServer(hakeeper)
 
+	var engineOpts []disttae.EngineOptions
+	if de.insertEntryMaxCount != 0 {
+		engineOpts = append(engineOpts, disttae.WithInsertEntryMaxCount(de.insertEntryMaxCount))
+	}
+	if de.workspaceThreshold != 0 {
+		engineOpts = append(engineOpts, disttae.WithWorkspaceThreshold(de.workspaceThreshold))
+	}
+
 	catalog.SetupDefines("")
-	de.Engine = disttae.New(ctx, "", mp, fs, de.txnClient, hakeeper, nil, 1)
+	de.Engine = disttae.New(ctx, "", de.mp, fs, de.txnClient, hakeeper, nil, 1, engineOpts...)
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
 	go func() {

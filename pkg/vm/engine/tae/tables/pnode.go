@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -214,6 +215,11 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		if err != nil {
 			return err
 		}
+		defer func() {
+			for i := range vecs {
+				vecs[i].Close()
+			}
+		}()
 		var commitTSs []types.TS
 		if !persistedByCN {
 			commitTSs = vector.MustFixedCol[types.TS](vecs[2].GetDownstreamVector())
@@ -302,6 +308,11 @@ func (node *persistedNode) FillBlockTombstones(
 		if err != nil {
 			return err
 		}
+		defer func() {
+			for i := range vecs {
+				vecs[i].Close()
+			}
+		}()
 		var commitTSs []types.TS
 		if node.object.meta.Load().IsAppendable() {
 			commitTSVec, err := node.object.LoadPersistedCommitTS(uint16(tombstoneBlkID))
@@ -309,6 +320,7 @@ func (node *persistedNode) FillBlockTombstones(
 				return err
 			}
 			commitTSs = vector.MustFixedCol[types.TS](commitTSVec.GetDownstreamVector())
+			commitTSVec.Close()
 		}
 		rowIDs := vector.MustFixedCol[types.Rowid](vecs[0].GetDownstreamVector())
 		// TODO: biselect, check visibility
