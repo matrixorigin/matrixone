@@ -50,23 +50,26 @@ type _TestS3Config struct {
 	RoleARN   string `json:"role-arn"`
 }
 
-func loadS3TestConfig() (config _TestS3Config, err error) {
+func loadS3TestConfig(t testing.TB) (config _TestS3Config, err error) {
+
+	defer func() {
+		// default to disk S3
+		if config.Endpoint == "" {
+			config.Endpoint = "disk"
+			config.Bucket = t.TempDir()
+		}
+	}()
 
 	// load from s3.json
 	content, err := os.ReadFile("s3.json")
-	if err != nil {
-		if os.IsNotExist(err) {
-			err = nil
-		} else {
-			return config, err
+	if err == nil {
+		if len(content) > 0 {
+			if err := json.Unmarshal(content, &config); err == nil {
+				return config, nil
+			}
 		}
 	}
-	if len(content) > 0 {
-		err := json.Unmarshal(content, &config)
-		if err != nil {
-			return config, err
-		}
-	}
+	err = nil // ignore errors
 
 	// load from env
 	loadEnv := func(name string, ptr *string) {
@@ -101,7 +104,7 @@ func testS3FS(
 	t *testing.T,
 	policy Policy,
 ) {
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -249,7 +252,7 @@ func testS3FS(
 
 func TestDynamicS3(t *testing.T) {
 	ctx := context.Background()
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -282,7 +285,7 @@ func TestDynamicS3(t *testing.T) {
 
 func TestDynamicS3NoKey(t *testing.T) {
 	ctx := context.Background()
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -316,7 +319,7 @@ func TestDynamicS3NoKey(t *testing.T) {
 
 func TestDynamicS3Opts(t *testing.T) {
 	ctx := context.Background()
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -350,7 +353,7 @@ func TestDynamicS3Opts(t *testing.T) {
 
 func TestDynamicS3OptsRoleARN(t *testing.T) {
 	ctx := context.Background()
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -386,7 +389,7 @@ func TestDynamicS3OptsRoleARN(t *testing.T) {
 
 func TestDynamicS3OptsNoRegion(t *testing.T) {
 	ctx := context.Background()
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -512,7 +515,7 @@ func TestS3FSMinioServer(t *testing.T) {
 }
 
 func BenchmarkS3FS(b *testing.B) {
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(b)
 	assert.Nil(b, err)
 	if config.Endpoint == "" {
 		// no config
@@ -551,7 +554,7 @@ func BenchmarkS3FS(b *testing.B) {
 }
 
 func TestS3FSWithSubPath(t *testing.T) {
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -585,7 +588,7 @@ func TestS3FSWithSubPath(t *testing.T) {
 }
 
 func BenchmarkS3ConcurrentRead(b *testing.B) {
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(b)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -709,7 +712,7 @@ func BenchmarkS3ConcurrentRead(b *testing.B) {
 }
 
 func TestSequentialS3Read(t *testing.T) {
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -826,7 +829,7 @@ func TestS3RestoreFromCache(t *testing.T) {
 	t.Skip("no longer valid since we delete cache files when calling Delete")
 	ctx := context.Background()
 
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -922,7 +925,7 @@ func TestS3PrefetchFile(t *testing.T) {
 	var pcSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &pcSet)
 
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
