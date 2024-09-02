@@ -74,6 +74,11 @@ func (s *service) initDistributedTAE(
 	)
 	pu.StorageEngine = s.storeEngine
 
+	// internal sql executor.
+	// InitLoTailPushModel presupposes that the internal sql executor has been initialized.
+	internalExecutorMp, _ := mpool.NewMPool("internal_executor", 0, mpool.NoFixed)
+	s.initInternalSQlExecutor(internalExecutorMp)
+
 	// set up log tail client to subscribe table and receive table log.
 	cnEngine := pu.StorageEngine.(*disttae.Engine)
 	err = cnEngine.InitLogTailPushModel(ctx, s.timestampWaiter)
@@ -88,13 +93,7 @@ func (s *service) initDistributedTAE(
 		statusServer.SetLogTailClient(s.cfg.UUID, cnEngine.PushClient())
 	}
 
-	// internal sql executor.
-	internalExecutorMp, err := mpool.NewMPool("internal_executor", 0, mpool.NoFixed)
-	if err != nil {
-		return err
-	}
 	s.initProcessCodecService()
-	s.initInternalSQlExecutor(internalExecutorMp)
 	s.initShardService()
 	return nil
 }

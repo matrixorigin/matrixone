@@ -188,7 +188,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		inputTypes[i] = *inputs[i].GetType()
 	}
 
-	result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, f.retType(inputTypes), mp)
+	result := vector.NewFunctionResultWrapper(f.retType(inputTypes), mp)
 
 	fold := true
 	evaluateLength := length

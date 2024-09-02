@@ -144,6 +144,9 @@ func (s *storage) Get(
 	if err != nil {
 		return 0, pb.ShardsMetadata{}, err
 	}
+	if metadata.IsEmpty() {
+		shardTableID = 0
+	}
 	return shardTableID, metadata, nil
 }
 

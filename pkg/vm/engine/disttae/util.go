@@ -83,7 +83,7 @@ type basePKFilter struct {
 	op    int
 	lb    []byte
 	ub    []byte
-	vec   any
+	vec   *vector.Vector
 	oid   types.T
 }
 
@@ -153,23 +153,11 @@ func evalValue(
 func mergeBaseFilterInKind(
 	left, right basePKFilter, isOR bool, proc *process.Process,
 ) (ret basePKFilter, err error) {
-	var ok bool
 	var va, vb *vector.Vector
 	ret.vec = vector.NewVec(left.oid.ToType())
 
-	if va, ok = left.vec.(*vector.Vector); !ok {
-		va = vector.NewVec(types.T_any.ToType())
-		if err = va.UnmarshalBinary(left.vec.([]byte)); err != nil {
-			return ret, err
-		}
-	}
-
-	if vb, ok = right.vec.(*vector.Vector); !ok {
-		vb = vector.NewVec(types.T_any.ToType())
-		if err = vb.UnmarshalBinary(right.vec.([]byte)); err != nil {
-			return ret, err
-		}
-	}
+	va = left.vec
+	vb = right.vec
 
 	switch va.GetType().Oid {
 	case types.T_int8:
@@ -178,9 +166,9 @@ func mergeBaseFilterInKind(
 		cmp := func(x, y int8) int { return int(x - y) }
 
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_int16:
 		a := vector.MustFixedCol[int16](va)
@@ -188,9 +176,9 @@ func mergeBaseFilterInKind(
 		cmp := func(x, y int16) int { return int(x - y) }
 
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_int32:
 		a := vector.MustFixedCol[int32](va)
@@ -198,9 +186,9 @@ func mergeBaseFilterInKind(
 		cmp := func(x, y int32) int { return int(x - y) }
 
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_int64:
 		a := vector.MustFixedCol[int64](va)
@@ -208,9 +196,9 @@ func mergeBaseFilterInKind(
 		cmp := func(x, y int64) int { return int(x - y) }
 
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_float32:
 		a := vector.MustFixedCol[float32](va)
@@ -218,9 +206,9 @@ func mergeBaseFilterInKind(
 		cmp := func(x, y float32) int { return int(x - y) }
 
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_float64:
 		a := vector.MustFixedCol[float64](va)
@@ -228,9 +216,9 @@ func mergeBaseFilterInKind(
 		cmp := func(x, y float64) int { return int(x - y) }
 
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_uint8:
 		a := vector.MustFixedCol[uint8](va)
@@ -238,9 +226,9 @@ func mergeBaseFilterInKind(
 		cmp := func(x, y uint8) int { return int(x - y) }
 
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_uint16:
 		a := vector.MustFixedCol[uint16](va)
@@ -248,9 +236,9 @@ func mergeBaseFilterInKind(
 		cmp := func(x, y uint16) int { return int(x - y) }
 
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_uint32:
 		a := vector.MustFixedCol[uint32](va)
@@ -258,9 +246,9 @@ func mergeBaseFilterInKind(
 		cmp := func(x, y uint32) int { return int(x - y) }
 
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_uint64:
 		a := vector.MustFixedCol[uint64](va)
@@ -268,9 +256,9 @@ func mergeBaseFilterInKind(
 		cmp := func(x, y uint64) int { return int(x - y) }
 
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_date:
 		a := vector.MustFixedCol[types.Date](va)
@@ -278,9 +266,9 @@ func mergeBaseFilterInKind(
 		cmp := func(x, y types.Date) int { return int(x - y) }
 
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_time:
 		a := vector.MustFixedCol[types.Time](va)
@@ -288,9 +276,9 @@ func mergeBaseFilterInKind(
 		cmp := func(x, y types.Time) int { return int(x - y) }
 
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_datetime:
 		a := vector.MustFixedCol[types.Datetime](va)
@@ -298,45 +286,45 @@ func mergeBaseFilterInKind(
 		cmp := func(x, y types.Datetime) int { return int(x - y) }
 
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_timestamp:
 		a := vector.MustFixedCol[types.Timestamp](va)
 		b := vector.MustFixedCol[types.Timestamp](vb)
 		cmp := func(x, y types.Timestamp) int { return int(x - y) }
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_decimal64:
 		a := vector.MustFixedCol[types.Decimal64](va)
 		b := vector.MustFixedCol[types.Decimal64](vb)
 		cmp := func(x, y types.Decimal64) int { return int(x - y) }
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 
 	case types.T_decimal128:
 		a := vector.MustFixedCol[types.Decimal128](va)
 		b := vector.MustFixedCol[types.Decimal128](vb)
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(),
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(),
 				func(x, y types.Decimal128) int { return types.CompareDecimal128(x, y) })
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(),
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(),
 				func(x, y types.Decimal128) int { return types.CompareDecimal128(x, y) })
 		}
 
 	case types.T_varchar, types.T_char, types.T_json, types.T_binary, types.T_text, types.T_datalink:
 		if isOR {
-			err = vector.Union2VectorValen(va, vb, ret.vec.(*vector.Vector), proc.Mp())
+			err = vector.Union2VectorValen(va, vb, ret.vec, proc.Mp())
 		} else {
-			err = vector.Intersection2VectorVarlen(va, vb, ret.vec.(*vector.Vector), proc.Mp())
+			err = vector.Intersection2VectorVarlen(va, vb, ret.vec, proc.Mp())
 		}
 
 	case types.T_enum:
@@ -344,9 +332,9 @@ func mergeBaseFilterInKind(
 		b := vector.MustFixedCol[types.Enum](vb)
 		cmp := func(x, y types.Enum) int { return int(x - y) }
 		if isOR {
-			err = vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		} else {
-			err = vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), cmp)
+			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 
 	default:
@@ -365,12 +353,25 @@ func mergeBaseFilterInKind(
 // left op AND right op
 // left op OR right op
 func mergeFilters(
-	left, right basePKFilter,
+	left, right *basePKFilter,
 	connector int,
 	proc *process.Process,
 ) (finalFilter basePKFilter, err error) {
 	defer func() {
 		finalFilter.oid = left.oid
+
+		if !finalFilter.valid && connector == function.AND {
+			// choose the left as default
+			finalFilter = *left
+			if left.vec != nil {
+				// why dup here?
+				// once the merge filter generated, the others will be free.
+				//finalFilter.vec, err = left.vec.Dup(proc.Mp())
+
+				// or just set the left.vec = nil to avoid free it
+				(*left).vec = nil
+			}
+		}
 	}()
 
 	switch connector {
@@ -380,7 +381,7 @@ func mergeFilters(
 			switch right.op {
 			case function.IN:
 				// a in (...) and a in (...) and a in (...) and ...
-				finalFilter, err = mergeBaseFilterInKind(left, right, false, proc)
+				finalFilter, err = mergeBaseFilterInKind(*left, *right, false, proc)
 			}
 
 		case function.GREAT_EQUAL:
@@ -389,9 +390,9 @@ func mergeFilters(
 				// a >= x and a >= y --> a >= max(x, y)
 				// a >= x and a > y  --> a > y or a >= x
 				if bytes.Compare(left.lb, right.lb) >= 0 { // x >= y
-					return left, nil
+					return *left, nil
 				} else { // x < y
-					return right, nil
+					return *right, nil
 				}
 
 			case function.LESS_EQUAL, function.LESS_THAN:
@@ -421,9 +422,9 @@ func mergeFilters(
 				// a > x and a >= y
 				// a > x and a > y
 				if bytes.Compare(left.lb, right.lb) >= 0 { // x >= y
-					return left, nil
+					return *left, nil
 				} else { // x < y
-					return right, nil
+					return *right, nil
 				}
 
 			case function.LESS_EQUAL, function.LESS_THAN:
@@ -465,9 +466,9 @@ func mergeFilters(
 				// a <= x and a <= y --> a <= min(x,y)
 				// a <= x and a < y  --> a <= x if x < y | a < y if x >= y
 				if bytes.Compare(left.lb, right.lb) < 0 { // x < y
-					return left, nil
+					return *left, nil
 				} else {
-					return right, nil
+					return *right, nil
 				}
 
 			case function.EQUAL:
@@ -522,24 +523,24 @@ func mergeFilters(
 				// a = x and a >= y --> a = x if x >= y
 				// a = x and a > y  --> a = x if x > y
 				if ret := bytes.Compare(left.lb, right.lb); ret > 0 {
-					return left, nil
+					return *left, nil
 				} else if ret == 0 && right.op == function.GREAT_EQUAL {
-					return left, nil
+					return *left, nil
 				}
 
 			case function.LESS_EQUAL, function.LESS_THAN:
 				// a = x and a <= y --> a = x if x <= y
 				// a = x and a < y  --> a = x if x < y
 				if ret := bytes.Compare(left.lb, right.lb); ret < 0 {
-					return left, nil
+					return *left, nil
 				} else if ret == 0 && right.op == function.LESS_EQUAL {
-					return left, nil
+					return *left, nil
 				}
 
 			case function.EQUAL:
 				// a = x and a = y --> a = y if x = y
 				if bytes.Equal(left.lb, right.lb) {
-					return left, nil
+					return *left, nil
 				}
 			}
 		}
@@ -550,7 +551,7 @@ func mergeFilters(
 			switch right.op {
 			case function.IN:
 				// a in (...) and a in (...)
-				finalFilter, err = mergeBaseFilterInKind(left, right, true, proc)
+				finalFilter, err = mergeBaseFilterInKind(*left, *right, true, proc)
 			}
 
 		case function.GREAT_EQUAL:
@@ -559,9 +560,9 @@ func mergeFilters(
 				// a >= x or a >= y --> a >= min(x, y)
 				// a >= x or a > y  --> a >= x if x <= y | a > y if x > y
 				if bytes.Compare(left.lb, right.lb) <= 0 { // x <= y
-					return left, nil
+					return *left, nil
 				} else { // x > y
-					return right, nil
+					return *right, nil
 				}
 
 			case function.LESS_EQUAL, function.LESS_THAN:
@@ -591,9 +592,9 @@ func mergeFilters(
 				// a > x or a >= y --> a >= y if x >= y | a > x if x < y
 				// a > x or a > y  --> a > y if x >= y | a > x if x < y
 				if bytes.Compare(left.lb, right.lb) >= 0 { // x >= y
-					return right, nil
+					return *right, nil
 				} else { // x < y
-					return left, nil
+					return *left, nil
 				}
 
 			case function.LESS_EQUAL, function.LESS_THAN:
@@ -611,9 +612,9 @@ func mergeFilters(
 			case function.EQUAL:
 				// a > x or a = y --> a > x if x < y | a >= x if x == y
 				if ret := bytes.Compare(left.lb, right.lb); ret < 0 { // x < y
-					return left, nil
+					return *left, nil
 				} else if ret == 0 {
-					finalFilter = left
+					finalFilter = *left
 					finalFilter.op = function.GREAT_EQUAL
 				}
 			}
@@ -636,15 +637,15 @@ func mergeFilters(
 				// a <= x or a <= y --> a <= max(x,y)
 				// a <= x or a < y  --> a <= x if x >= y | a < y if x < y
 				if bytes.Compare(left.lb, right.lb) >= 0 { // x >= y
-					return left, nil
+					return *left, nil
 				} else {
-					return right, nil
+					return *right, nil
 				}
 
 			case function.EQUAL:
 				// a <= x or a = y --> a <= x if x >= y | [], x
 				if bytes.Compare(left.lb, right.lb) >= 0 {
-					return left, nil
+					return *left, nil
 				}
 			}
 
@@ -666,17 +667,17 @@ func mergeFilters(
 				// a < x or a <= y --> a <= y if x <= y | a < x if x > y
 				// a < x or a < y  --> a < y if x <= y | a < x if x > y
 				if bytes.Compare(left.lb, right.lb) <= 0 { // a <= y
-					return right, nil
+					return *right, nil
 				} else {
-					return left, nil
+					return *left, nil
 				}
 
 			case function.EQUAL:
 				// a < x or a = y --> a < x if x > y | a <= x if x = y
 				if ret := bytes.Compare(left.lb, right.lb); ret > 0 {
-					return left, nil
+					return *left, nil
 				} else if ret == 0 {
-					finalFilter = left
+					finalFilter = *left
 					finalFilter.op = function.LESS_EQUAL
 				}
 			}
@@ -687,9 +688,9 @@ func mergeFilters(
 				// a = x or a >= y --> a >= y if x >= y
 				// a = x or a > y  --> a > y if x > y | a >= y if x = y
 				if ret := bytes.Compare(left.lb, right.lb); ret > 0 {
-					return right, nil
+					return *right, nil
 				} else if ret == 0 {
-					finalFilter = right
+					finalFilter = *right
 					finalFilter.op = function.GREAT_EQUAL
 				}
 
@@ -697,9 +698,9 @@ func mergeFilters(
 				// a = x or a <= y --> a <= y if x <= y
 				// a = x or a < y  --> a < y if x < y | a <= y if x = y
 				if ret := bytes.Compare(left.lb, right.lb); ret < 0 {
-					return right, nil
+					return *right, nil
 				} else if ret == 0 {
-					finalFilter = right
+					finalFilter = *right
 					finalFilter.op = function.LESS_EQUAL
 				}
 
@@ -707,7 +708,7 @@ func mergeFilters(
 				// a = x or a = y --> a = x if x = y
 				//                --> a in (x, y) if x != y
 				if bytes.Equal(left.lb, right.lb) {
-					return left, nil
+					return *left, nil
 				}
 
 			}
@@ -1294,12 +1295,12 @@ func evalExprListToVec(
 	canEval, vec = recurEvalExprList(oid, expr, nil, proc)
 	if !canEval {
 		if vec != nil {
-			proc.PutVector(vec)
+			vec.Free(proc.GetMPool())
 		}
 		return false, nil, nil
 	}
 	put = func() {
-		proc.PutVector(vec)
+		vec.Free(proc.GetMPool())
 	}
 	vec.InplaceSort()
 	return
@@ -1317,7 +1318,7 @@ func recurEvalExprList(
 				return false, outputVec
 			}
 			if outputVec == nil {
-				outputVec = proc.GetVector(oid.ToType())
+				outputVec = vector.NewVec(oid.ToType())
 			}
 			// TODO: not use appendAny
 			if err := vector.AppendAny(outputVec, val, false, proc.Mp()); err != nil {
@@ -1329,7 +1330,7 @@ func recurEvalExprList(
 				return false, outputVec
 			}
 			if outputVec == nil {
-				outputVec = proc.GetVector(oid.ToType())
+				outputVec = vector.NewVec(oid.ToType())
 			}
 			sels := make([]int32, vec.Length())
 			for i := 0; i < vec.Length(); i++ {
@@ -1475,8 +1476,7 @@ func ForeachCommittedObjects(
 	createObjs map[objectio.ObjectNameShort]struct{},
 	delObjs map[objectio.ObjectNameShort]struct{},
 	p *logtailreplay.PartitionState,
-	onObj func(info logtailreplay.ObjectInfo) error,
-) (err error) {
+	onObj func(info logtailreplay.ObjectInfo) error) (err error) {
 	for obj := range createObjs {
 		if objInfo, ok := p.GetObject(obj); ok {
 			if err = onObj(objInfo); err != nil {
@@ -1493,6 +1493,27 @@ func ForeachCommittedObjects(
 	}
 	return nil
 
+}
+
+func ForeachTombstoneObject(
+	ts types.TS,
+	onTombstone func(tombstone logtailreplay.ObjectEntry) (next bool, err error),
+	pState *logtailreplay.PartitionState,
+) error {
+	iter, err := pState.NewObjectsIter(ts, true, true)
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	for iter.Next() {
+		obj := iter.Entry()
+		if next, err := onTombstone(obj); !next || err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func ForeachSnapshotObjects(
@@ -1526,7 +1547,7 @@ func ForeachSnapshotObjects(
 		return
 	}
 
-	iter, err := tableSnapshot.NewObjectsIter(types.TimestampToTS(ts), true)
+	iter, err := tableSnapshot.NewObjectsIter(types.TimestampToTS(ts), true, false)
 	if err != nil {
 		return
 	}
@@ -1681,6 +1702,22 @@ func MakeColExprForTest(idx int32, typ types.T, colName ...string) *plan.Expr {
 	}
 }
 
+// removeIf removes the elements that pred is true.
+func removeIf[T any](data []T, pred func(t T) bool) []T {
+	if len(data) == 0 {
+		return data
+	}
+	res := 0
+	for i := 0; i < len(data); i++ {
+		if !pred(data[i]) {
+			if res != i {
+				data[res] = data[i]
+			}
+			res++
+		}
+	}
+	return data[:res]
+}
 func MakeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	argTypes := make([]types.Type, len(args))
 	for i, arg := range args {
@@ -1941,13 +1978,13 @@ func (changes *testChangesHandle) makeData() {
 	}
 }
 
-func (changes *testChangesHandle) Next() (data *batch.Batch, tombstone *batch.Batch, hint engine.Hint, err error) {
+func (changes *testChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
 	if changes.called < batchCnt {
 		data = changes.data[changes.called]
 		changes.called++
-		return data, tombstone, engine.Tail_done, nil
+		return data, tombstone, engine.ChangesHandle_Tail_done, nil
 	}
-	return nil, nil, engine.Invalid, err
+	return nil, nil, engine.ChangesHandle_Tail_wip, err
 }
 
 func (changes *testChangesHandle) Close() error {

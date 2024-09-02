@@ -20,6 +20,7 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -108,21 +109,8 @@ func newTxnTable(
 	return tbl, nil
 }
 
-func (tbl *txnTableDelegate) CollectChanges(from, to types.TS) (engine.ChangesHandle, error) {
-	var packer *types.Packer
-	put := tbl.origin.getTxn().engine.packerPool.Get(&packer)
-	defer put.Put()
-
-	//TODO: fix me
-	return newTestChangesHandle(
-		tbl.origin.db.databaseName,
-		tbl.origin.tableName,
-		tbl.origin.db.databaseId,
-		tbl.origin.tableId,
-		to,
-		tbl.origin.getTxn().engine.mp,
-		packer,
-	), nil
+func (tbl *txnTableDelegate) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+	return tbl.origin.CollectChanges(ctx, from, to, mp)
 }
 
 func (tbl *txnTableDelegate) Stats(

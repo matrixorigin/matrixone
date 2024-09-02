@@ -3016,6 +3016,18 @@ var (
 			input:  "show databases {snapshot = 'sp01'}",
 			output: "show databases {snapshot = sp01}",
 		},
+		{
+			input:  "create table t1 (a int) with retention period 1 day",
+			output: "create table t1 (a int) with retention period 1 day",
+		},
+		{
+			input:  "create table t1 (a int) with retention period 10 week",
+			output: "create table t1 (a int) with retention period 10 week",
+		},
+		{
+			input:  "create table t1 (a int) with retention period 3 second",
+			output: "create table t1 (a int) with retention period 3 second",
+		},
 	}
 )
 
@@ -3223,6 +3235,9 @@ var (
 		},
 		{
 			input: "ALTER TABLE t1 ADD PARTITION (PARTITION p5 VALUES IN (15, 17)",
+		},
+		{
+			input: "create table t (a int) with retention period 2 days",
 		},
 	}
 )

@@ -157,15 +157,22 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		// delete number i at (deleteAt+i) with (i+1) row id
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		tombStoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		pkVec := vector.NewVec(types.T_int32.ToType())
+
 		for i := 0; i < num; i++ {
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(deleteAt+i), 1), false, pool)
+			vector.AppendFixed(tombStoneRowIDVec, types.RandomRowid(), false, pool)
+			vector.AppendFixed(pkVec, int32(i), false, pool)
 		}
 		state.HandleRowsDelete(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time"},
 			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
+				mustVectorToProto(pkVec),
+				mustVectorToProto(tombStoneRowIDVec),
 			},
 		}, packer, pool)
 	}
@@ -233,7 +240,12 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		// duplicate delete
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		tombStoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		pkVec := vector.NewVec(types.T_int32.ToType())
+
 		for i := 0; i < num; i++ {
+			vector.AppendFixed(tombStoneRowIDVec, types.RandomRowid(), false, pool)
+			vector.AppendFixed(pkVec, int32(i), false, pool)
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(deleteAt+i), 1), false, pool)
 		}
@@ -242,6 +254,8 @@ func TestPartitionStateRowsIter(t *testing.T) {
 			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
+				mustVectorToProto(pkVec),
+				mustVectorToProto(tombStoneRowIDVec),
 			},
 		}, packer, pool)
 	}
@@ -304,7 +318,12 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 		// delete number i at the same time
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		tombStoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		pkVec := vector.NewVec(types.T_int32.ToType())
+
 		for i := 0; i < num; i++ {
+			vector.AppendFixed(tombStoneRowIDVec, types.RandomRowid(), false, pool)
+			vector.AppendFixed(pkVec, int32(i), false, pool)
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)
 		}
@@ -313,6 +332,8 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
+				mustVectorToProto(pkVec),
+				mustVectorToProto(tombStoneRowIDVec),
 			},
 		}, packer, pool)
 	}
@@ -376,7 +397,12 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 		// delete number i at time i with (i+1) row id
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		tombStoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		pkVec := vector.NewVec(types.T_int32.ToType())
+
 		for i := 0; i < num; i++ {
+			vector.AppendFixed(tombStoneRowIDVec, types.RandomRowid(), false, pool)
+			vector.AppendFixed(pkVec, int32(i), false, pool)
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)
 		}
@@ -385,6 +411,8 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
+				mustVectorToProto(pkVec),
+				mustVectorToProto(tombStoneRowIDVec),
 			},
 		}, packer, pool)
 	}
@@ -468,11 +496,14 @@ func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
 		// delete number i at time i with (i+1) row id
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		tombStoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+
 		primaryKeyVec := vector.NewVec(types.T_int64.ToType())
 		for i := 0; i < num; i++ {
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)
 			vector.AppendFixed(primaryKeyVec, int64(i), false, pool)
+			vector.AppendFixed(tombStoneRowIDVec, types.RandomRowid(), false, pool)
 		}
 		state.HandleRowsDelete(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "i"},
@@ -480,6 +511,7 @@ func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 				mustVectorToProto(primaryKeyVec), // with primary key
+				mustVectorToProto(tombStoneRowIDVec),
 			},
 		}, packer, pool)
 	}

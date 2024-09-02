@@ -32,6 +32,7 @@ def    mo_catalog    mo_indexes    BASE TABLE    Tae
 def    mo_catalog    mo_mysql_compatibility_mode    BASE TABLE    Tae
 def    mo_catalog    mo_pitr    BASE TABLE    Tae
 def    mo_catalog    mo_pubs    BASE TABLE    Tae
+def    mo_catalog    mo_retention    BASE TABLE    Tae
 def    mo_catalog    mo_role    BASE TABLE    Tae
 def    mo_catalog    mo_role_grant    BASE TABLE    Tae
 def    mo_catalog    mo_role_privs    BASE TABLE    Tae

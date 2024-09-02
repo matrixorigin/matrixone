@@ -32,6 +32,8 @@ import (
 
 */
 
+var EmptyRowid Rowid
+
 const ObjectBytesSize = 18
 
 type ObjectBytes = [ObjectBytesSize]byte

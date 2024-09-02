@@ -72,6 +72,7 @@ func New(
 	hakeeper logservice.CNHAKeeperClient,
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
 	updateWorkerFactor int,
+	options ...EngineOptions,
 ) *Engine {
 	cluster := clusterservice.GetMOCluster(service)
 	services := cluster.GetAllTNServices()
@@ -131,12 +132,31 @@ func New(
 		RwMutex:       &sync.Mutex{},
 	}
 
+	for _, opt := range options {
+		opt(e)
+	}
+	e.fillDefaults()
+
 	if err := e.init(ctx); err != nil {
 		panic(err)
 	}
 
 	e.pClient.LogtailRPCClientFactory = DefaultNewRpcStreamToTnLogTailService
 	return e
+}
+
+func (e *Engine) fillDefaults() {
+	if e.insertEntryMaxCount <= 0 {
+		e.insertEntryMaxCount = InsertEntryThreshold
+	}
+	if e.workspaceThreshold <= 0 {
+		e.workspaceThreshold = WorkspaceThreshold
+	}
+	logutil.Info(
+		"INIT-ENGINE-CONFIG",
+		zap.Int("InsertEntryMaxCount", e.insertEntryMaxCount),
+		zap.Uint64("WorkspaceThreshold", e.workspaceThreshold),
+	)
 }
 
 func (e *Engine) GetService() string {

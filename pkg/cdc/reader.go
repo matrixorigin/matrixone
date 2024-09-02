@@ -83,7 +83,8 @@ func (reader *tableReader) Run(
 		)
 		if err != nil {
 			logutil.Errorf("reader %v failed err:%v", reader.info, err)
-			break
+			//TODO:FIXME
+			//break
 		}
 	}
 }
@@ -164,7 +165,7 @@ func (reader *tableReader) readTableWithTxn(
 	fromTs := types.TimestampToTS(wMark)
 	toTs := types.TimestampToTS(txnOp.SnapshotTS())
 	fmt.Fprintln(os.Stderr, reader.info, "from", fromTs.ToString(), "to", toTs.ToString())
-	changes, err = rel.CollectChanges(fromTs, toTs)
+	changes, err = rel.CollectChanges(ctx, fromTs, toTs, reader.mp)
 	if err != nil {
 		return
 	}
@@ -184,7 +185,7 @@ func (reader *tableReader) readTableWithTxn(
 		return atmBatch
 	}
 
-	var curHint engine.Hint
+	var curHint engine.ChangesHandle_Hint
 	for {
 		select {
 		case <-ar.Cancel:
@@ -192,7 +193,7 @@ func (reader *tableReader) readTableWithTxn(
 		default:
 		}
 
-		insertData, deleteData, curHint, err = changes.Next()
+		insertData, deleteData, curHint, err = changes.Next(ctx, reader.mp)
 		if err != nil {
 			return
 		}
@@ -212,8 +213,7 @@ func (reader *tableReader) readTableWithTxn(
 		}
 
 		switch curHint {
-		case engine.Invalid:
-		case engine.Checkpoint:
+		case engine.ChangesHandle_Snapshot:
 			// transform into insert instantly
 			reader.interCh <- tools.NewPair(
 				tableCtx,
@@ -221,12 +221,12 @@ func (reader *tableReader) readTableWithTxn(
 					outputTyp:     OutputTypeCheckpoint,
 					checkpointBat: insertData,
 				})
-		case engine.Tail_wip:
+		case engine.ChangesHandle_Tail_wip:
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
 			insertAtmBatch.Append(packer, insertData, tsColIdx, compositedPkColIdx)
 			deleteAtmBatch.Append(packer, deleteData, tsColIdx, compositedPkColIdx)
-		case engine.Tail_done:
+		case engine.ChangesHandle_Tail_done:
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
 			insertAtmBatch.Append(packer, insertData, tsColIdx, compositedPkColIdx)

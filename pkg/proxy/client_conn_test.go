@@ -165,6 +165,9 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 		c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdQuery, s: ev.stmt})
 		sendResp([]byte("ok"), resp)
 		return nil
+	case *quitEvent:
+		sendResp([]byte("ok"), resp)
+		return nil
 	default:
 		sendResp([]byte("type not supported"), resp)
 		return moerr.NewInternalErrorNoCtx("type not supported")

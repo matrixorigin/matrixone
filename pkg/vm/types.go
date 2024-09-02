@@ -45,17 +45,12 @@ const (
 	Join
 	LoopJoin
 	Left
-	LoopLeft
 	Single
-	LoopSingle
 	Semi
 	RightSemi
-	LoopSemi
 	Anti
 	RightAnti
-	LoopAnti
 	Mark
-	LoopMark
 	IndexJoin
 	IndexBuild
 
@@ -158,6 +153,10 @@ func (o *OperatorBase) NumChildren() int {
 
 func (o *OperatorBase) AppendChild(child Operator) {
 	o.Children = append(o.Children, child)
+}
+
+func (o *OperatorBase) ResetChildren() {
+	o.Children = o.Children[:0]
 }
 
 func (o *OperatorBase) SetChild(child Operator, idx int) {
