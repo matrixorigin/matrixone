@@ -114,8 +114,8 @@ func testCachingFileService(
 	assert.Equal(t, int64(42), m.M[42])
 	assert.True(t, counterSet.FileService.Cache.Memory.Read.Load() == 2 ||
 		counterSet.FileService.Cache.Disk.Read.Load() == 2)
-	assert.True(t, counterSet.FileService.Cache.Hit.Load() == 1 ||
-		counterSet.FileService.Cache.Hit.Load() == 1)
+	assert.True(t, counterSet.FileService.Cache.Memory.Hit.Load() == 1 ||
+		counterSet.FileService.Cache.Disk.Hit.Load() == 1)
 
 	vec.Release()
 
