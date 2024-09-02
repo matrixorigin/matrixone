@@ -15,12 +15,20 @@
 package message
 
 import (
+	"sync"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func TestMessage(t *testing.T) {
+	mc := &MessageCenter{
+		StmtIDToBoard: make(map[uuid.UUID]*MessageBoard, 64),
+		RwMutex:       &sync.Mutex{},
+	}
 	mb := NewMessageBoard()
 	mb.BeforeRunonce()
 	SendMessage(JoinMapMsg{JoinMapPtr: nil, Tag: 1}, mb)
@@ -29,6 +37,10 @@ func TestMessage(t *testing.T) {
 	SendRuntimeFilter(RuntimeFilterMessage{Typ: RuntimeFilter_PASS}, &plan.RuntimeFilterSpec{}, mb)
 	mb.DebugString()
 	mb.Reset()
-	mb.multiCN = true
+	id, err := uuid.NewUUID()
+	require.NoError(t, err)
+	mb.SetMultiCN(mc, id)
+	mb.DebugString()
+	mb.Reset()
 	mb.DebugString()
 }
