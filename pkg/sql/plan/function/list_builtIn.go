@@ -1517,6 +1517,27 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `strcmp`
+	{
+		functionId: STRCMP,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Strcmp
+				},
+			},
+		},
+	},
+
 	// function `prefix_eq`
 	{
 		functionId: PREFIX_EQ,

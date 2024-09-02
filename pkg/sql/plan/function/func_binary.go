@@ -2198,6 +2198,14 @@ func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	return opBinaryBytesBytesToFixed[bool](ivecs, result, proc, length, bytes.HasSuffix, selectList)
 }
 
+func Strcmp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	return opBinaryStrStrToFixed[int8](ivecs, result, proc, length, strcmp, nil)
+}
+
+func strcmp(s1, s2 string) int8 {
+	return (int8)(strings.Compare(s1, s2))
+}
+
 // https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_sha2
 func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	res := vector.MustFunctionResult[types.Varlena](result)
