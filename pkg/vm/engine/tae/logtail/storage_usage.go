@@ -756,7 +756,12 @@ func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, string
 
 func (m *TNUsageMemo) deleteAccount(accId uint64) (size uint64) {
 	trash := make([]UsageData, 0)
-	povit := UsageData{accId, 0, 0, 0, unknown}
+	povit := UsageData{
+		AccId:   accId,
+		DbId:    0,
+		TblId:   0,
+		Size:    0,
+		special: unknown}
 
 	iter := m.cache.Iter()
 
@@ -835,7 +840,12 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 		var skip bool
 		var log string
 		for y := 0; y < len(accCol); y++ {
-			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y], unknown}
+			usage := UsageData{
+				AccId:   accCol[y],
+				DbId:    dbCol[y],
+				TblId:   tblCol[y],
+				Size:    sizeCol[y],
+				special: unknown}
 
 			// these ckps, older than version 11, haven't del bat, we need clear the
 			// usage data which belongs the deleted databases or tables.
@@ -981,11 +991,12 @@ func Objects2Usages(objs []*catalog.ObjectEntry, isGlobal bool) (usages []UsageD
 		}
 
 		if isGlobal {
+			stats := obj.GetObjectStats()
 			usage.ObjectAbstract = ObjectAbstract{
-				TotalBlkCnt:  int(obj.BlkCnt()),
+				TotalBlkCnt:  int(stats.BlkCnt()),
 				TotalObjCnt:  1,
 				TotalObjSize: int(obj.GetCompSize()),
-				TotalRowCnt:  int(obj.Rows()),
+				TotalRowCnt:  int(stats.Rows()),
 			}
 		}
 

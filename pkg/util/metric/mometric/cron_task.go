@@ -17,7 +17,7 @@ package mometric
 import (
 	"context"
 	"fmt"
-	"math"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"path"
 	"strings"
 	"sync/atomic"
@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -195,6 +194,11 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 				return err
 			}
 			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
+
+			objectCount, err := result.Float64ValueByName(ctx, rowIdx, ColumnObjectCount)
+			if err != nil {
+				logutil.Error("get object count", zap.Error(err))
+			}
 
 			metric.ObjectCount(account).Set(objectCount)
 			metric.StorageUsage(account).Set(sizeMB)

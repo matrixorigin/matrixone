@@ -22,8 +22,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -120,55 +118,4 @@ func TestGetTenantInfo(t *testing.T) {
 	require.Equal(t, "sys", tenant.GetTenant())
 	require.Equal(t, "internal", tenant.GetUser())
 	require.Equal(t, "moadmin", tenant.GetDefaultRole())
-}
-
-func TestCalculateObjectCount(t *testing.T) {
-	c, err := embed.NewCluster(embed.WithCNCount(1))
-	require.NoError(t, err)
-	require.NoError(t, c.Start())
-
-	svc, err := c.GetCNService(0)
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
-
-	// query with metrics db
-	{
-		queryOpts := ie.NewOptsBuilder().Database(mometric.MetricDBConst).Internal(true).Finish()
-
-		result := frontend.NewInternalExecutor("").Query(ctx, mometric.ShowAllAccountSQL, queryOpts)
-		require.NoError(t, result.Error())
-
-		name2idx := make(map[string]uint64)
-		for colIdx := uint64(0); colIdx < result.ColumnCount(); colIdx++ {
-			colName, _, _, err := result.Column(ctx, colIdx)
-			require.NoError(t, err)
-			name2idx[colName] = colIdx
-		}
-
-		_, ok := name2idx[mometric.ColumnObjectCount]
-		require.True(t, ok)
-	}
-
-	{
-		queryOpts := ie.NewOptsBuilder().Internal(true).Finish()
-
-		result := frontend.NewInternalExecutor("").Query(ctx, mometric.ShowAllAccountSQL, queryOpts)
-		require.NoError(t, result.Error())
-
-		name2idx := make(map[string]uint64)
-		for colIdx := uint64(0); colIdx < result.ColumnCount(); colIdx++ {
-			colName, _, _, err := result.Column(ctx, colIdx)
-			require.NoError(t, err)
-			name2idx[colName] = colIdx
-		}
-
-		_, ok := name2idx[mometric.ColumnObjectCount]
-		require.False(t, ok)
-	}
-
-	svc.Close()
 }

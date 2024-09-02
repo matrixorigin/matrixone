@@ -5,6 +5,7 @@ show table_number from mo_task;
 show table_number from information_schema;
 show table_number from mysql;
 show table_number from mo_catalog;
+show table_number from system_metrics;
 show table_number from system;
 
 
