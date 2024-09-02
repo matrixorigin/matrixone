@@ -17,6 +17,7 @@ package hashmap_util
 import (
 	"runtime"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,10 +40,10 @@ type HashmapBuilder struct {
 	executor           []colexec.ExpressionExecutor
 	UniqueJoinKeys     []*vector.Vector
 
-	IsDedup     bool
-	OnDupAction pbplan.Node_OnDuplicateAction
-	DupColName  string
-	ignoreRow   [][]uint8
+	IsDedup      bool
+	OnDupAction  pbplan.Node_OnDuplicateAction
+	DedupColName string
+	IgnoreRow    *bitmap.Bitmap
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -100,13 +101,6 @@ func (hb *HashmapBuilder) Reset() {
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
-	/*
-		for i := range hb.vecs {
-			for j := range hb.vecs[i] {
-				hb.vecs[i][j].CleanOnlyData()
-			}
-		}
-	*/
 	hb.vecs = nil
 	for i := range hb.UniqueJoinKeys {
 		hb.UniqueJoinKeys[i].CleanOnlyData()
@@ -133,13 +127,6 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 		}
 	}
 	hb.executor = nil
-	/*
-		for i := range hb.vecs {
-			for j := range hb.vecs[i] {
-				hb.vecs[i][j].Free(proc.Mp())
-			}
-		}
-	*/
 	hb.vecs = nil
 	for i := range hb.UniqueJoinKeys {
 		hb.UniqueJoinKeys[i].Free(proc.Mp())
@@ -230,6 +217,11 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 		}
 	}
 
+	if hb.IsDedup && hb.InputBatchRowCount > 0 {
+		hb.IgnoreRow = &bitmap.Bitmap{}
+		hb.IgnoreRow.InitWithSize(int64(hb.InputBatchRowCount))
+	}
+
 	var (
 		cardinality uint64
 		sels        []int32
@@ -287,9 +279,9 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 				if v <= vOld {
 					switch hb.OnDupAction {
 					case pbplan.Node_ERROR:
-						return moerr.NewDuplicateEntry(proc.Ctx, "", hb.DupColName)
+						return moerr.NewDuplicateEntry(proc.Ctx, hb.vecs[vecIdx1][0].RowToString(vecIdx2+k), hb.DedupColName)
 					case pbplan.Node_IGNORE:
-						hb.ignoreRow[vecIdx1][vecIdx2+k] = 1
+						hb.IgnoreRow.Add(uint64(i + k))
 					case pbplan.Node_UPDATE:
 					}
 				} else {
@@ -311,27 +303,11 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 				}
 			}
 
-			if hashOnPK {
+			if hashOnPK || hb.IsDedup {
 				for j, vec := range hb.vecs[vecIdx1] {
 					err = hb.UniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, nil, proc.Mp())
 					if err != nil {
 						return err
-					}
-				}
-			} else if hb.IsDedup {
-				if hb.OnDupAction == pbplan.Node_ERROR {
-					for j, vec := range hb.vecs[vecIdx1] {
-						err = hb.UniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, nil, proc.Mp())
-						if err != nil {
-							return err
-						}
-					}
-				} else {
-					for j, vec := range hb.vecs[vecIdx1] {
-						err = hb.UniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, hb.ignoreRow[vecIdx1][vecIdx2:], proc.Mp())
-						if err != nil {
-							return err
-						}
 					}
 				}
 			} else {
@@ -357,6 +333,13 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 					}
 				}
 			}
+		}
+	}
+
+	if hb.IsDedup {
+		err := hb.Batches.Shrink(hb.IgnoreRow, proc)
+		if err != nil {
+			return err
 		}
 	}
 

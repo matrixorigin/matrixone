@@ -73,17 +73,12 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case Build:
 			dedupJoin.build(analyze, proc)
 
-			if ctr.mp == nil && !dedupJoin.IsShuffle {
-				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
-				// shuffle join can't stop early for this moment
-				ctr.state = End
-			} else {
-				ctr.state = Probe
-			}
+			ctr.state = Probe
 			result, err = dedupJoin.Children[0].Call(proc)
 			if err != nil {
 				return result, err
 			}
+
 			bat := result.Batch
 			if bat == nil {
 				ctr.state = SendResult
@@ -114,6 +109,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if setNil {
 					ctr.state = End
 				}
+
 				continue
 			} else {
 				if dedupJoin.ctr.lastpos >= len(dedupJoin.ctr.buf) {
@@ -204,9 +200,9 @@ func (ctr *container) sendResult(ap *DedupJoin, proc *process.Process, analyze p
 			} else {
 				newsels = sels[k*colexec.DefaultBatchSize:]
 			}
-			for j, pos := range ap.Result {
-				for _, sel := range newsels {
-					idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+			for _, sel := range newsels {
+				idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+				for j, pos := range ap.Result {
 					if err := ap.ctr.buf[k].Vecs[j].UnionOne(ctr.batches[idx1].Vecs[pos], int64(idx2), proc.Mp()); err != nil {
 						return false, err
 					}
@@ -217,7 +213,6 @@ func (ctr *container) sendResult(ap *DedupJoin, proc *process.Process, analyze p
 		}
 		return false, nil
 	}
-
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Process, analyze process.Analyze, isFirst bool, _ bool) error {
@@ -247,7 +242,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 
 			switch ap.OnDupAction {
 			case plan.Node_ERROR:
-				return moerr.NewDuplicateEntry(proc.Ctx, ctr.vecs[0].RowToString(i), "")
+				return moerr.NewDuplicateEntry(proc.Ctx, ctr.vecs[0].RowToString(i), ap.pkColName)
 			case plan.Node_IGNORE:
 				ctr.matched.Add(vals[k] - 1)
 			case plan.Node_UPDATE: // TODO

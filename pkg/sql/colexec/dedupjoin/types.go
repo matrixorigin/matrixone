@@ -85,6 +85,7 @@ type DedupJoin struct {
 	JoinMapTag         int32
 
 	OnDupAction plan.Node_OnDuplicateAction
+	pkColName   string
 
 	vm.OperatorBase
 	colexec.Projection

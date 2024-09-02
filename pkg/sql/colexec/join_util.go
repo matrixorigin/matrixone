@@ -15,9 +15,11 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -95,6 +97,47 @@ func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err
 		offset += appendRows
 	}
 	return nil
+}
+
+func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) (err error) {
+	if ignoreRow.Count() == 0 {
+		return nil
+	}
+
+	ignoreRow.Negate()
+	count := int64(ignoreRow.Count())
+	sels := make([]int32, 0, count)
+	itr := ignoreRow.Iterator()
+	for itr.HasNext() {
+		r := itr.Next()
+		sels = append(sels, int32(r))
+	}
+
+	n := (len(sels)-1)/DefaultBatchSize + 1
+	newBuf := make([]*batch.Batch, n)
+	for i := range newBuf {
+		newBuf[i] = batch.NewWithSize(len(bs.Buf[i].Vecs))
+		for j, vec := range bs.Buf[0].Vecs {
+			newBuf[i].Vecs[j] = vector.NewVec(*vec.GetType())
+		}
+		var newsels []int32
+		if (i+1)*DefaultBatchSize <= len(sels) {
+			newsels = sels[i*DefaultBatchSize : (i+1)*DefaultBatchSize]
+		} else {
+			newsels = sels[i*DefaultBatchSize:]
+		}
+		for _, sel := range newsels {
+			idx1, idx2 := sel/DefaultBatchSize, sel%DefaultBatchSize
+			for j, vec := range bs.Buf[idx1].Vecs {
+				if err := newBuf[i].Vecs[j].UnionOne(vec, int64(idx2), proc.Mp()); err != nil {
+					return err
+				}
+			}
+		}
+		newBuf[i].SetRowCount(len(newsels))
+	}
+
+	return
 }
 
 func appendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int, proc *process.Process) (int, error) {
