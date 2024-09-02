@@ -33,7 +33,18 @@ func TestMessage(t *testing.T) {
 	mb := NewMessageBoard()
 	mb.BeforeRunonce()
 	SendMessage(JoinMapMsg{JoinMapPtr: nil, Tag: 1}, mb)
-	SendMessage(JoinMapMsg{JoinMapPtr: nil, IsShuffle: true, ShuffleIdx: 1, Tag: 2}, mb)
+	joinmap := &JoinMap{
+		runtimeFilter_In: false,
+		valid:            true,
+		rowcnt:           100,
+		refCnt:           4,
+	}
+	SendMessage(JoinMapMsg{
+		JoinMapPtr: joinmap,
+		IsShuffle:  true,
+		ShuffleIdx: 1,
+		Tag:        2},
+		mb)
 	SendMessage(TopValueMessage{TopValueZM: []byte{}, Tag: 3}, mb)
 	SendRuntimeFilter(RuntimeFilterMessage{Typ: RuntimeFilter_PASS}, &plan.RuntimeFilterSpec{}, mb)
 	mb.DebugString()

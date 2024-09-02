@@ -15,8 +15,10 @@
 package message
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"bytes"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 const (
@@ -58,7 +60,12 @@ func (rt RuntimeFilterMessage) GetReceiverAddr() MessageAddress {
 }
 
 func (rt RuntimeFilterMessage) DebugString() string {
-	return "runtime filter message, tag:" + strconv.Itoa(int(rt.Tag))
+	buf := bytes.NewBuffer(make([]byte, 0, 400))
+	buf.WriteString("runtime filter message, tag:" + strconv.Itoa(int(rt.Tag)) + "\n")
+	buf.WriteString("type " + strconv.Itoa(int(rt.Typ)) + "\n")
+	buf.WriteString("card " + strconv.Itoa(int(rt.Card)) + "\n")
+	buf.WriteString("data len " + strconv.Itoa(len(rt.Data)) + "\n")
+	return buf.String()
 }
 
 func SendRuntimeFilter(rt RuntimeFilterMessage, m *plan.RuntimeFilterSpec, mb *MessageBoard) {

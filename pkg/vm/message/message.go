@@ -105,7 +105,7 @@ func (m *MessageBoard) DebugString() string {
 	buf.WriteString("messageBoard length: " + strconv.Itoa(len(m.messages)) + "\n")
 	for i := range m.messages {
 		message := *m.messages[i]
-		buf.WriteString(message.DebugString() + "\n")
+		buf.WriteString("message " + strconv.Itoa(i) + ": " + message.DebugString() + "\n")
 	}
 	return buf.String()
 }

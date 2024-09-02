@@ -15,6 +15,7 @@
 package message
 
 import (
+	"bytes"
 	"context"
 	"strconv"
 	"sync/atomic"
@@ -153,7 +154,18 @@ func (t JoinMapMsg) GetMsgTag() int32 {
 }
 
 func (t JoinMapMsg) DebugString() string {
-	return "joinmap message, tag:" + strconv.Itoa(int(t.Tag))
+	buf := bytes.NewBuffer(make([]byte, 0, 400))
+	buf.WriteString("joinmap message, tag:" + strconv.Itoa(int(t.Tag)) + "\n")
+	if t.IsShuffle {
+		buf.WriteString("shuffle index " + strconv.Itoa(int(t.ShuffleIdx)) + "\n")
+	}
+	if t.JoinMapPtr != nil {
+		buf.WriteString("joinmap rowcnt " + strconv.Itoa(int(t.JoinMapPtr.rowcnt)) + "\n")
+		buf.WriteString("joinmap refcnt " + strconv.Itoa(int(t.JoinMapPtr.refCnt)) + "\n")
+	} else {
+		buf.WriteString("joinmapPtr is nil \n")
+	}
+	return buf.String()
 }
 
 func (t JoinMapMsg) GetReceiverAddr() MessageAddress {
