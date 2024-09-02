@@ -52,7 +52,7 @@ type fulltextState struct {
 
 func (u *fulltextState) reset(tf *TableFunction, proc *process.Process) {
 	if u.batches != nil {
-		for i, _ := range u.batches {
+		for i := range u.batches {
 			u.batches[i].CleanOnlyData()
 			//u.batches[i].Clean(proc.Mp())
 		}
@@ -73,7 +73,7 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 
 func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
 	if u.batches != nil {
-		for i, _ := range u.batches {
+		for i := range u.batches {
 			u.batches[i].Clean(proc.Mp())
 		}
 	}
