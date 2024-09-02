@@ -395,6 +395,12 @@ func TestDynamicS3OptsNoRegion(t *testing.T) {
 		// no config
 		t.Skip()
 	}
+
+	// only AWS supports this
+	if !strings.Contains(config.Endpoint, "amazonaws") {
+		t.Skip()
+	}
+
 	t.Setenv("AWS_REGION", "")
 	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
 	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
