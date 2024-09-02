@@ -375,11 +375,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 		return
 	}
-	if tombstone == nil && data == nil {
-		err = moerr.GetOkExpectedEOF()
-	} else {
-		err = nil
-	}
+	err = nil
 	hint = engine.ChangesHandle_Tail_wip
 	return
 }

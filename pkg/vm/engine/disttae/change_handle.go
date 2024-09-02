@@ -91,7 +91,6 @@ func (h *CheckpointChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (da
 		data,
 	)
 	if h.isEnd {
-		err = moerr.GetOkExpectedEOF()
 		return
 	}
 	if err != nil {
