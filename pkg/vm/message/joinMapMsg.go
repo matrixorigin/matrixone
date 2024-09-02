@@ -158,7 +158,10 @@ func (t JoinMapMsg) GetReceiverAddr() MessageAddress {
 func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoard, ctx context.Context) *JoinMap {
 	msgReceiver := NewMessageReceiver([]int32{tag}, AddrBroadCastOnCurrentCN(), mb)
 	for {
-		msgs, ctxDone := msgReceiver.ReceiveMessage(true, ctx)
+		msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, ctx)
+		if err != nil {
+			panic(err)
+		}
 		if ctxDone {
 			return nil
 		}

@@ -156,6 +156,20 @@ type IDGenerator interface {
 	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
 }
 
+type EngineOptions func(*Engine)
+
+func WithWorkspaceThreshold(th uint64) EngineOptions {
+	return func(e *Engine) {
+		e.workspaceThreshold = th
+	}
+}
+
+func WithInsertEntryMaxCount(th int) EngineOptions {
+	return func(e *Engine) {
+		e.insertEntryMaxCount = th
+	}
+}
+
 type Engine struct {
 	sync.RWMutex
 	service  string
@@ -168,6 +182,9 @@ type Engine struct {
 	cli      client.TxnClient
 	idGen    IDGenerator
 	tnID     string
+
+	workspaceThreshold  uint64
+	insertEntryMaxCount int
 
 	//latest catalog will be loaded from TN when engine is initialized.
 	catalog *cache.CatalogCache

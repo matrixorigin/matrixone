@@ -37,3 +37,10 @@ show tables;
 desc staff;
 
 drop database test;
+
+create database test;
+use test;
+create table t1(a int);
+create table t2(a int);
+rename table t2 to t1;
+drop database test;
