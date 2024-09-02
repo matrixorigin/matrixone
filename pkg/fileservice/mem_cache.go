@@ -32,15 +32,19 @@ type MemCache struct {
 func NewMemCache(
 	dataCache *memorycache.Cache,
 	counterSets []*perfcounter.CounterSet,
+	name string,
 ) *MemCache {
 	ret := &MemCache{
 		cache:       dataCache,
 		counterSets: counterSets,
 	}
+	if name != "" {
+		allMemoryCaches.Store(ret, name)
+	}
 	return ret
 }
 
-func NewMemoryCache(
+func newMemoryCache(
 	capacity fscache.CapacityFunc,
 	checkOverlaps bool,
 	callbacks *CacheCallbacks,
@@ -86,7 +90,19 @@ func NewMemoryCache(
 			}
 		}
 	}
-	return memorycache.NewCache(capacity, postSetFn, postGetFn, postEvictFn, getMemoryCacheAllocator())
+
+	return memorycache.NewCache(
+		func() int64 {
+			// read from global hint
+			if n := GlobalMemoryCacheSizeHint.Load(); n > 0 {
+				return n
+			}
+			// fallback
+			return capacity()
+		},
+		postSetFn, postGetFn, postEvictFn,
+		getMemoryCacheAllocator(),
+	)
 }
 
 var _ IOVectorCache = new(MemCache)
@@ -195,4 +211,9 @@ func (m *MemCache) DeletePaths(
 
 func (m *MemCache) Evict(done chan int64) {
 	m.cache.Evict(done)
+}
+
+func (m *MemCache) Close() {
+	m.Flush()
+	allMemoryCaches.Delete(m)
 }
