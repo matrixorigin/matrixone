@@ -141,11 +141,6 @@ func (valueScan *ValueScan) Prepare(proc *process.Process) (err error) {
 		err = valueScan.makeValueScanBatch(proc)
 	}
 
-	valueScan.Batchs = []*batch.Batch{valueScan.ctr.bat}
-	if valueScan.ctr.bat != nil {
-		valueScan.Batchs = append(valueScan.Batchs, nil)
-	}
-
 	return
 }
 
@@ -161,13 +156,15 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}()
 
 	result := vm.NewCallResult()
-	if valueScan.ctr.idx < len(valueScan.Batchs) {
-		result.Batch = valueScan.Batchs[valueScan.ctr.idx]
-		if valueScan.ctr.idx > 0 {
-			valueScan.Batchs[valueScan.ctr.idx-1].Clean(proc.GetMPool())
-			valueScan.Batchs[valueScan.ctr.idx-1] = nil
-		}
+
+	if valueScan.ctr.idx == 0 {
+		result.Batch = valueScan.ctr.bat
 		valueScan.ctr.idx += 1
+	} else {
+		if valueScan.ctr.idx != 1 {
+			panic("valueScan batch idx is out of range")
+		}
+		result.Batch = nil
 	}
 
 	anal.Input(result.Batch, valueScan.IsFirst)

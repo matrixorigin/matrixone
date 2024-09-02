@@ -31,13 +31,11 @@ type container struct {
 	bat *batch.Batch
 }
 type ValueScan struct {
-	ctr container
-	// Batchs     []*batch.Batch
+	ctr        container
 	RowsetData *plan.RowsetData
 	ColCount   int
 	Uuid       []byte
 	NodeType   plan2.Node_NodeType
-	Batchs     []*batch.Batch
 
 	vm.OperatorBase
 	colexec.Projection
@@ -76,6 +74,12 @@ func (valueScan *ValueScan) Release() {
 
 func (valueScan *ValueScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	valueScan.ctr.idx = 0
+	if valueScan.RowsetData == nil {
+		if valueScan.ctr.bat != nil {
+			valueScan.ctr.bat.Clean(proc.GetMPool())
+			valueScan.ctr.bat = nil
+		}
+	}
 	valueScan.ResetProjection(proc)
 }
 
@@ -85,4 +89,8 @@ func (valueScan *ValueScan) Free(proc *process.Process, pipelineFailed bool, err
 
 func (valueScan *ValueScan) SetValueScanBatch(bat *batch.Batch) {
 	valueScan.ctr.bat = bat
+}
+
+func (valueScan *ValueScan) ResetBatchIdx() {
+	valueScan.ctr.idx = 0
 }

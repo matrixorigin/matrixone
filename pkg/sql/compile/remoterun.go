@@ -216,13 +216,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
 		}
-		if s.DataSource.Bat != nil {
-			data, err := types.Encode(s.DataSource.Bat)
-			if err != nil {
-				return nil, -1, err
-			}
-			p.DataSource.Block = string(data)
-		}
 	}
 	// PreScope
 	p.Children = make([]*pipeline.Pipeline, len(s.PreScopes))
@@ -334,14 +327,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			Timestamp:          *dsc.Timestamp,
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
 			isConst:            dsc.IsConst,
-		}
-		if len(dsc.Block) > 0 {
-			bat := new(batch.Batch)
-			if err = types.Decode([]byte(dsc.Block), bat); err != nil {
-				return nil, err
-			}
-			bat.Cnt = 1
-			s.DataSource.Bat = bat
 		}
 	}
 	//var relData engine.RelData

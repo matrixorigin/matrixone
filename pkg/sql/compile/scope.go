@@ -108,13 +108,9 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 		return err
 	}
 
-	if s.DataSource != nil {
-		if s.DataSource.isConst {
-			s.DataSource.Bat = nil
-		} else {
-			s.DataSource.Rel = nil
-			s.DataSource.R = nil
-		}
+	if s.DataSource != nil && !s.DataSource.isConst {
+		s.DataSource.Rel = nil
+		s.DataSource.R = nil
 	}
 	return nil
 }

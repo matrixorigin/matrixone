@@ -124,7 +124,6 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	if err := fakeValueScanOperator.Prepare(s.Proc); err != nil {
 		return err
 	}
-	fakeValueScanOperator.Batchs = nil
 	defer func() {
 		fakeValueScanOperator.Release()
 	}()
@@ -172,10 +171,11 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		}
 
 		lastAnalyze.Network(bat)
-		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
-		//fakeValueScanOperator.SetValueScanBatch(bat)
+		fakeValueScanOperator.SetValueScanBatch(bat)
+		fakeValueScanOperator.ResetBatchIdx()
 
 		result, errCall := LastOperator.Call(s.Proc)
+		bat.Clean(c.proc.GetMPool())
 		if errCall != nil || result.Status == vm.ExecStop {
 			return errCall
 		}
