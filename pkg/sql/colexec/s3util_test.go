@@ -17,9 +17,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -82,5 +85,58 @@ func TestSetStatsCNCreated(t *testing.T) {
 	require.True(t, stats.GetCNCreated())
 	require.Equal(t, uint32(bat.VectorCount()), stats.BlkCnt())
 	require.Equal(t, uint32(bat.Vecs[0].Length()), stats.Rows())
+
+}
+
+func TestS3Writer_SortAndSync(t *testing.T) {
+	pool, err := mpool.NewMPool("", mpool.GB, 0)
+	require.NoError(t, err)
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+
+	for i := 0; i < 100; i++ {
+		row := types.RandomRowid()
+		err := vector.AppendFixed[types.Rowid](bat.Vecs[0], row, false, pool)
+		require.NoError(t, err)
+	}
+	bat.SetRowCount(100)
+
+	{
+		proc := testutil.NewProc()
+
+		s3writer := &S3Writer{}
+		s3writer.sortIndex = 0
+		s3writer.isTombstone = true
+
+		_, s, err := s3writer.SortAndSync(proc)
+		require.NoError(t, err)
+		require.True(t, s.IsZero())
+	}
+
+	{
+		proc := testutil.NewProc()
+		proc.GetFileService().(*fileservice.FileServices).RemoveFileService("shared")
+
+		s3writer := &S3Writer{}
+		s3writer.sortIndex = 0
+		s3writer.isTombstone = true
+		s3writer.StashBatch(proc, bat)
+
+		_, _, err := s3writer.SortAndSync(proc)
+		require.Equal(t, err.(*moerr.Error).ErrorCode(), moerr.ErrNoService)
+	}
+
+	{
+		proc := testutil.NewProc()
+
+		s3writer := &S3Writer{}
+		s3writer.sortIndex = 0
+		s3writer.isTombstone = true
+		s3writer.StashBatch(proc, bat)
+
+		_, _, err = s3writer.SortAndSync(proc)
+		require.NoError(t, err)
+	}
 
 }

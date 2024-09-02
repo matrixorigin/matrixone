@@ -49,7 +49,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 			executor.Options{}.WithDatabase("a"))
 		require.NoError(t, err)
 
-		_, err = exec.Exec(ctx, "insert into t1 select *,'yep' from generate_series(1,512*1024)g;",
+		_, err = exec.Exec(ctx, "insert into t1 select *,'yep' from generate_series(1,10*1024)g;",
 			executor.Options{}.WithDatabase("a"))
 		require.NoError(t, err)
 
@@ -59,12 +59,12 @@ func TestCNFlushS3Deletes(t *testing.T) {
 
 		resp.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			cnt := vector.GetFixedAt[int64](cols[0], 0)
-			require.Equal(t, int64(512*1024), cnt)
+			require.Equal(t, int64(10*1024), cnt)
 			return true
 		})
 	}
 
-	deletion.SetCNFlushDeletesThreshold(10)
+	deletion.SetCNFlushDeletesThreshold(1)
 
 	{
 		_, err = exec.Exec(ctx, "delete from t1 where a > 1;", executor.Options{}.WithDatabase("a"))
