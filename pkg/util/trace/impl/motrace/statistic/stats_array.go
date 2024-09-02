@@ -359,6 +359,36 @@ func (stats *StatsInfo) AddS3FSReadIOMergerTimeConsumption(d time.Duration) {
 	atomic.AddInt64(&stats.S3FSReadIOMergerTimeConsumption, int64(d))
 }
 
+func (stats *StatsInfo) ResetIOMergerTimeConsumption() {
+	if stats == nil {
+		return
+	}
+	atomic.StoreInt64(&stats.LocalFSReadIOMergerTimeConsumption, 0)
+	atomic.StoreInt64(&stats.S3FSPrefetchFileIOMergerTimeConsumption, 0)
+	atomic.StoreInt64(&stats.S3FSReadIOMergerTimeConsumption, 0)
+}
+
+func (stats *StatsInfo) ResetIOAccessTimeConsumption() {
+	if stats == nil {
+		return
+	}
+	atomic.StoreInt64(&stats.IOAccessTimeConsumption, 0)
+}
+
+//func (stats *StatsInfo) AppendRetryPlanTimeConsumption(d time.Duration) {
+//	if stats == nil {
+//		return
+//	}
+//	stats.PlanDuration += d
+//}
+//
+//func (stats *StatsInfo) AppendRetryCompileTimeConsumption(d time.Duration) {
+//	if stats == nil {
+//		return
+//	}
+//	stats.CompileDuration += d
+//}
+
 func (stats *StatsInfo) IOMergerTimeConsumption() int64 {
 	if stats == nil {
 		return 0

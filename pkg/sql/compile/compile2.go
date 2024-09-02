@@ -243,6 +243,13 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if runC != c {
 			runC.Release()
 		}
+
+		//-----------------------------------------------------
+		// After execute failed, reset `StatsInfo` physical resources which in sql context
+		stats.ResetIOAccessTimeConsumption()
+		stats.ResetIOMergerTimeConsumption()
+		//-----------------------------------------------------
+
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 		if runC, err = c.prepareRetry(defChanged); err != nil {
 			return nil, err

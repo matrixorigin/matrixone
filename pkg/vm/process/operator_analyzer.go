@@ -38,10 +38,7 @@ type Analyzer interface {
 	Reset()
 
 	InputBlock()
-	DiskIO(*batch.Batch)   // delete it, unused
 	S3IOByte(*batch.Batch) // delete it, unused
-	S3IOInputCount(int)    // delete it, unused
-	S3IOOutputCount(int)   // delete it, unused
 }
 
 // Operator Resource operatorAnalyzer
@@ -156,16 +153,6 @@ func (opAlyzr *operatorAnalyzer) ChildrenCallStop(start time.Time) {
 	opAlyzr.childrenCallDuration += time.Since(start)
 }
 
-func (opAlyzr *operatorAnalyzer) DiskIO(bat *batch.Batch) {
-	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzer.DiskIO: operatorAnalyzer.opStats is nil")
-	}
-
-	if bat != nil {
-		opAlyzr.opStats.TotalDiskIO += int64(bat.Size())
-	}
-}
-
 func (opAlyzr *operatorAnalyzer) S3IOByte(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.S3IOByte: operatorAnalyzer.opStats is nil")
@@ -174,20 +161,6 @@ func (opAlyzr *operatorAnalyzer) S3IOByte(bat *batch.Batch) {
 	if bat != nil {
 		opAlyzr.opStats.TotalS3IOByte += int64(bat.Size())
 	}
-}
-
-func (opAlyzr *operatorAnalyzer) S3IOInputCount(count int) {
-	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzer.S3IOInputCount: operatorAnalyzer.opStats is nil")
-	}
-	opAlyzr.opStats.TotalS3InputCount += int64(count)
-}
-
-func (opAlyzr *operatorAnalyzer) S3IOOutputCount(count int) {
-	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzer.S3IOOutputCount: operatorAnalyzer.opStats is nil")
-	}
-	opAlyzr.opStats.TotalS3OutputCount += int64(count)
 }
 
 func (opAlyzr *operatorAnalyzer) Network(bat *batch.Batch) {
