@@ -328,6 +328,15 @@ message MarkJoin {
   int32 shuffle_idx = 9;
 }
 
+message DedupJoin {
+  repeated plan.Expr left_cond = 1;
+  repeated plan.Expr right_cond = 2;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 3;
+  bool is_shuffle = 4;
+  int32 join_map_tag = 5;
+  int32 shuffle_idx = 6;
+}
+
 message Product {
   repeated int32 rel_list = 1;
   repeated int32 col_list = 2;
