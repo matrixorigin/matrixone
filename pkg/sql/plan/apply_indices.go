@@ -184,28 +184,8 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 
 		// check fulltext_index_scan TABLE_FUNCTION exists
 
-		/*
-			ftnode := builder.resolveFullTextIndexScanNode(projNode)
-			if ftnode != nil {
-				logutil.Infof("AAAAAAAAAAAAAAAAAAAAAAA FOUND it.... %v", ftnode)
-
-				tag := ftnode.BindingTags[0]
-				expr := &Expr{
-					Typ: ftnode.TableDef.Cols[1].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: tag,
-							ColPos: 1,
-						},
-					},
-				}
-				projNode.ProjectList = append(projNode.ProjectList, expr)
-				//ctx := builder.ctxByNode[nodeID]
-				builder.qry.Headings = append(builder.qry.Headings, "score")
-			}
-		*/
-
 		// it is possible that there is a sort node.   i.e. project -> sort -> scan or project -> scan
+		// try to find scanNode, sortNode from projNode
 		var sortNode *plan.Node
 		sortNode = nil
 		scanNode := builder.resolveScanNodeFromProject(projNode, 1)
@@ -221,8 +201,13 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			}
 		}
 
+		// get the list of project that is fulltext_match func
 		projids, proj_ftidxs := builder.getFullTextMatchFromProject(projNode, scanNode)
+
+		// get the list of filter that is fulltext_match func
 		filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+
+		// apply fulltext indices when fulltext_match exists
 		if len(filterids) > 0 || len(projids) > 0 {
 			return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, sortNode, scanNode, filterids, filter_ftidxs,
 				projids, proj_ftidxs, colRefCnt, idxColMap)
