@@ -46,7 +46,7 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 
 	size := int64(4 * runtime.GOMAXPROCS(0))
-	m := NewMemCache(NewMemoryCache(fscache.ConstCapacity(size), true, nil), nil)
+	m := NewMemCache(newMemoryCache(fscache.ConstCapacity(size), true, nil), nil, "")
 
 	vec := &IOVector{
 		FilePath: "foo",
@@ -104,7 +104,8 @@ func TestMemCacheLeak(t *testing.T) {
 // TestHighConcurrency this test is to mainly test concurrency issue in objectCache
 // and dataOverlap-checker.
 func TestHighConcurrency(t *testing.T) {
-	m := NewMemCache(NewMemoryCache(fscache.ConstCapacity(2), true, nil), nil)
+	m := NewMemCache(newMemoryCache(fscache.ConstCapacity(2), true, nil), nil, "")
+	defer m.Close()
 	ctx := context.Background()
 
 	n := 10
@@ -141,4 +142,42 @@ func TestHighConcurrency(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestMemoryCacheGlobalSizeHint(t *testing.T) {
+	cache := NewMemCache(
+		newMemoryCache(
+			fscache.ConstCapacity(1<<20),
+			false,
+			nil,
+		),
+		nil,
+		"test",
+	)
+	defer cache.Close()
+
+	ch := make(chan int64, 1)
+	cache.Evict(ch)
+	n := <-ch
+	if n > 1<<20 {
+		t.Fatalf("got %v", n)
+	}
+
+	// shrink
+	GlobalMemoryCacheSizeHint.Store(1 << 10)
+	defer GlobalMemoryCacheSizeHint.Store(0)
+	cache.Evict(ch)
+	n = <-ch
+	if n > 1<<10 {
+		t.Fatalf("got %v", n)
+	}
+
+	// shrink
+	GlobalMemoryCacheSizeHint.Store(1 << 9)
+	defer GlobalMemoryCacheSizeHint.Store(0)
+	ret := EvictMemoryCaches()
+	if ret["test"] > 1<<9 {
+		t.Fatalf("got %v", ret)
+	}
+
 }

@@ -104,8 +104,12 @@ func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *
 	if accountMgr == nil {
 		return moerr.NewInternalError(ctx, "account routine manager not initialized")
 	}
-	logutil.Infof("[set suspend] handle set account id %d, version %d to kill queue, ", req.KillConnRequest.AccountID, req.KillConnRequest.Version)
+	logutil.Infof("[handle kill request] handle kill conn, add account id %d, version %d to kill queue", req.KillConnRequest.AccountID, req.KillConnRequest.Version)
 	accountMgr.EnKillQueue(req.KillConnRequest.AccountID, req.KillConnRequest.Version)
+
+	resp.KillConnResponse = &query.KillConnResponse{
+		Success: true,
+	}
 	return nil
 }
 
@@ -121,8 +125,11 @@ func (s *service) handleAlterAccount(ctx context.Context, req *query.Request, re
 	if accountMgr == nil {
 		return moerr.NewInternalError(ctx, "account routine manager not initialized")
 	}
-
+	logutil.Infof("[handle alter request] handle alter conn, account id %d to status %s", req.AlterAccountRequest.TenantId, req.AlterAccountRequest.Status)
 	accountMgr.AlterRoutineStatue(req.AlterAccountRequest.TenantId, req.AlterAccountRequest.Status)
+	resp.AlterAccountResponse = &query.AlterAccountResponse{
+		AlterSuccess: true,
+	}
 	return nil
 }
 
@@ -482,13 +489,41 @@ func (s *service) handleGoMemLimit(
 func (s *service) handleFileServiceCacheRequest(
 	ctx context.Context, req *query.Request, resp *query.Response,
 ) error {
-	resp.FileServiceCacheResponse.Message = "Not Implemented"
+
+	if n := req.FileServiceCacheRequest.CacheSize; n > 0 {
+		switch req.FileServiceCacheRequest.Type {
+		case query.FileServiceCacheType_Disk:
+			fileservice.GlobalDiskCacheSizeHint.Store(n)
+		case query.FileServiceCacheType_Memory:
+			fileservice.GlobalMemoryCacheSizeHint.Store(n)
+		}
+		logutil.Info("cache size adjusted",
+			zap.Any("type", req.FileServiceCacheRequest.Type),
+			zap.Any("size", n),
+		)
+	}
+
 	return nil
 }
 
 func (s *service) handleFileServiceCacheEvictRequest(
 	ctx context.Context, req *query.Request, resp *query.Response,
 ) error {
-	resp.FileServiceCacheEvictResponse.Message = "Not Implemented"
+
+	var ret map[string]int64
+	switch req.FileServiceCacheEvictRequest.Type {
+	case query.FileServiceCacheType_Disk:
+		ret = fileservice.EvictDiskCaches()
+	case query.FileServiceCacheType_Memory:
+		ret = fileservice.EvictMemoryCaches()
+	}
+
+	for _, target := range ret {
+		resp.FileServiceCacheEvictResponse.CacheSize = target
+		resp.FileServiceCacheEvictResponse.CacheCapacity = target
+		// usually one instance
+		break
+	}
+
 	return nil
 }

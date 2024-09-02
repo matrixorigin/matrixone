@@ -50,23 +50,26 @@ type _TestS3Config struct {
 	RoleARN   string `json:"role-arn"`
 }
 
-func loadS3TestConfig() (config _TestS3Config, err error) {
+func loadS3TestConfig(t testing.TB) (config _TestS3Config, err error) {
+
+	defer func() {
+		// default to disk S3
+		if config.Endpoint == "" {
+			config.Endpoint = "disk"
+			config.Bucket = t.TempDir()
+		}
+	}()
 
 	// load from s3.json
 	content, err := os.ReadFile("s3.json")
-	if err != nil {
-		if os.IsNotExist(err) {
-			err = nil
-		} else {
-			return config, err
+	if err == nil {
+		if len(content) > 0 {
+			if err := json.Unmarshal(content, &config); err == nil {
+				return config, nil
+			}
 		}
 	}
-	if len(content) > 0 {
-		err := json.Unmarshal(content, &config)
-		if err != nil {
-			return config, err
-		}
-	}
+	err = nil // ignore errors
 
 	// load from env
 	loadEnv := func(name string, ptr *string) {
@@ -101,7 +104,7 @@ func testS3FS(
 	t *testing.T,
 	policy Policy,
 ) {
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -219,11 +222,37 @@ func testS3FS(
 		})
 	})
 
+	t.Run("mem and disk caching file service", func(t *testing.T) {
+		testCachingFileService(t, func() CachingFileService {
+			ctx := context.Background()
+			fs, err := NewS3FS(
+				ctx,
+				ObjectStorageArguments{
+					Name:      "s3",
+					Endpoint:  config.Endpoint,
+					Bucket:    config.Bucket,
+					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+					RoleARN:   config.RoleARN,
+				},
+				CacheConfig{
+					MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
+					DiskCapacity:   ptrTo[toml.ByteSize](128 * 1024),
+					DiskPath:       ptrTo(t.TempDir()),
+				},
+				nil,
+				false,
+				false,
+			)
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
 }
 
 func TestDynamicS3(t *testing.T) {
 	ctx := context.Background()
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -256,7 +285,7 @@ func TestDynamicS3(t *testing.T) {
 
 func TestDynamicS3NoKey(t *testing.T) {
 	ctx := context.Background()
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -290,7 +319,7 @@ func TestDynamicS3NoKey(t *testing.T) {
 
 func TestDynamicS3Opts(t *testing.T) {
 	ctx := context.Background()
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -324,7 +353,7 @@ func TestDynamicS3Opts(t *testing.T) {
 
 func TestDynamicS3OptsRoleARN(t *testing.T) {
 	ctx := context.Background()
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -360,12 +389,18 @@ func TestDynamicS3OptsRoleARN(t *testing.T) {
 
 func TestDynamicS3OptsNoRegion(t *testing.T) {
 	ctx := context.Background()
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
 		t.Skip()
 	}
+
+	// only AWS supports this
+	if !strings.Contains(config.Endpoint, "amazonaws") {
+		t.Skip()
+	}
+
 	t.Setenv("AWS_REGION", "")
 	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
 	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
@@ -486,7 +521,7 @@ func TestS3FSMinioServer(t *testing.T) {
 }
 
 func BenchmarkS3FS(b *testing.B) {
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(b)
 	assert.Nil(b, err)
 	if config.Endpoint == "" {
 		// no config
@@ -525,7 +560,7 @@ func BenchmarkS3FS(b *testing.B) {
 }
 
 func TestS3FSWithSubPath(t *testing.T) {
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -559,7 +594,7 @@ func TestS3FSWithSubPath(t *testing.T) {
 }
 
 func BenchmarkS3ConcurrentRead(b *testing.B) {
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(b)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -683,7 +718,7 @@ func BenchmarkS3ConcurrentRead(b *testing.B) {
 }
 
 func TestSequentialS3Read(t *testing.T) {
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,7 +835,7 @@ func TestS3RestoreFromCache(t *testing.T) {
 	t.Skip("no longer valid since we delete cache files when calling Delete")
 	ctx := context.Background()
 
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
@@ -896,7 +931,7 @@ func TestS3PrefetchFile(t *testing.T) {
 	var pcSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &pcSet)
 
-	config, err := loadS3TestConfig()
+	config, err := loadS3TestConfig(t)
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
 		// no config
