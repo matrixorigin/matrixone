@@ -15,6 +15,8 @@
 package dispatch
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,6 +42,8 @@ const (
 )
 
 type container struct {
+	sp pSpool.PipelineCommunication
+
 	// the clientsession info for the channel you want to dispatch
 	remoteReceivers []*process.WrapCs
 	// sendFunc is the rule you want to send batch
@@ -106,6 +110,10 @@ func (dispatch Dispatch) TypeName() string {
 	return opName
 }
 
+func (dispatch *Dispatch) OpType() vm.OpType {
+	return vm.Dispatch
+}
+
 func NewArgument() *Dispatch {
 	return reuse.Alloc[Dispatch](nil)
 }
@@ -117,6 +125,10 @@ func (dispatch *Dispatch) Release() {
 }
 
 func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	dispatch.Free(proc, pipelineFailed, err)
+}
+
+func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if dispatch.ctr != nil {
 		if dispatch.ctr.isRemote {
 			for _, r := range dispatch.ctr.remoteReceivers {
@@ -134,15 +146,18 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 	}
 
 	// told the local receiver to stop if it is still running.
-	msg := process.NewRegMsg(nil)
-	msg.Err = err
-	for i := range dispatch.LocalRegs {
-		select {
-		case <-dispatch.LocalRegs[i].Ctx.Done():
-		case dispatch.LocalRegs[i].Ch <- msg:
+	if dispatch.ctr != nil && dispatch.ctr.sp != nil {
+		_, _ = dispatch.ctr.sp.SendBatch(context.TODO(), pSpool.SendToAllLocal, nil, err)
+		for i, reg := range dispatch.LocalRegs {
+			reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(dispatch.ctr.sp, i)
+		}
+
+		dispatch.ctr.sp.Close()
+		dispatch.ctr.sp = nil
+	} else {
+		for _, reg := range dispatch.LocalRegs {
+			reg.Ch2 <- process.NewPipelineSignalToDirectly(nil)
 		}
 	}
-}
-
-func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err error) {
+	dispatch.ctr = nil
 }

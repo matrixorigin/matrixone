@@ -17,6 +17,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
@@ -37,16 +38,13 @@ func (dispatch *Dispatch) String(buf *bytes.Buffer) {
 	buf.WriteString(": dispatch")
 }
 
-func (dispatch *Dispatch) OpType() vm.OpType {
-	return vm.Dispatch
-}
-
 func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 	ctr := new(container)
 	dispatch.ctr = ctr
 	ctr.localRegsCnt = len(dispatch.LocalRegs)
 	ctr.remoteRegsCnt = len(dispatch.RemoteRegs)
 	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt
+	ctr.sp = pSpool.GeneratePipelineSpool(proc.Mp(), ctr.localRegsCnt)
 
 	switch dispatch.FuncId {
 	case SendToAllFunc:
@@ -144,7 +142,7 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			defer func() {
 				if bat != nil {
-					proc.PutBatch(bat)
+					bat.Clean(proc.Mp())
 				}
 			}()
 		} else {
@@ -167,19 +165,11 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		ap.ctr.hasData = true
 	}
 
-	if bat == result.Batch {
-		bat, err = bat.Dup(proc.GetMPool())
-		if err != nil {
-			return vm.CancelResult, nil
-		}
-	}
-
 	ok, err := ap.ctr.sendFunc(bat, ap, proc)
 	if ok {
 		result.Status = vm.ExecStop
 		return result, err
 	} else {
-		// result.Batch = nil
 		return result, err
 	}
 }
