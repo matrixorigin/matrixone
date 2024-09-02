@@ -55,12 +55,16 @@ func HybridScanByBlock(
 		}
 		err := tombstone.GetObjectData().FillBlockTombstones(ctx, txn, blkID, &(*bat).Deletes, mp)
 		if err != nil {
+			(*bat).Close()
 			return err
 		}
 	}
 	id := dataObject.AsCommonID()
 	id.BlockID = *blkID
 	err = txn.GetStore().FillInWorkspaceDeletes(id, &(*bat).Deletes)
+	if err != nil {
+		(*bat).Close()
+	}
 	return err
 }
 

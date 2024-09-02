@@ -159,7 +159,7 @@ func TestSystemDB1(t *testing.T) {
 	txnop.GetWorkspace().StartStatement()
 	require.Equal(t, 2+1, len(dbs))
 
-	txn, err := p.T.GetDB().StartTxn(nil)
+	txn, err := p.T.StartTxn()
 	require.NoError(t, err)
 
 	catalogDB, err := txn.GetDatabase(catalog.MO_CATALOG)
