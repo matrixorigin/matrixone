@@ -254,6 +254,7 @@ func (obj *aobject) GetMaxRowByTS(ts types.TS) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
+		defer vec.Close()
 		for i := uint32(0); i < uint32(vec.Length()); i++ {
 			commitTS := vec.Get(int(i)).(types.TS)
 			if commitTS.Greater(&ts) {
