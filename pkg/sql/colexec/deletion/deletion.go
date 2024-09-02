@@ -65,7 +65,6 @@ func (deletion *Deletion) Prepare(proc *process.Process) error {
 			deletion.ctr.blockId_bitmap = make(map[types.Blockid]*nulls.Nulls)
 			deletion.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerObject)}
 			deletion.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[types.Blockid]*batch.Batch)
-			//deletion.ctr.partitionId_blockId_deltaLoc = make(map[int]map[types.Blockid]*batch.Batch)
 			deletion.ctr.partitionId_tombstoneObjectStatsBats = make(map[int][]*batch.Batch)
 		}
 	} else {

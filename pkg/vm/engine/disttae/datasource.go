@@ -1152,49 +1152,6 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 	ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RLock()
 	defer ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RUnlock()
 
-	// prefetch cn flushed but not committed deletes
-	//var ok bool
-	//var bats []*batch.Batch
-	//var locs []objectio.Location = make([]objectio.Location, 0)
-	//
-	//pkColIdx := ls.table.tableDef.Pkey.PkeyColId
-	//
-	//for idx := begin; idx < end; idx++ {
-	//	if bats, ok = ls.table.getTxn().blockId_tn_delete_metaLoc_batch.data[ls.rangeSlice.Get(idx).BlockID]; !ok {
-	//		continue
-	//	}
-	//
-	//	locs = locs[:0]
-	//	for _, bat := range bats {
-	//		vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
-	//		for i := range vs {
-	//			location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
-	//			if err != nil {
-	//				logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
-	//			}
-	//			locs = append(locs, location)
-	//		}
-	//	}
-	//
-	//	if len(locs) == 0 {
-	//		continue
-	//	}
-	//
-	//	pref, err := blockio.BuildPrefetchParams(ls.fs, locs[0])
-	//	if err != nil {
-	//		logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
-	//	}
-	//
-	//	for _, loc := range locs {
-	//		//rowId + pk
-	//		pref.AddBlockWithType([]uint16{0, uint16(pkColIdx)}, []uint16{loc.ID()}, uint16(objectio.SchemaTombstone))
-	//	}
-	//
-	//	if err = blockio.PrefetchWithMerged(ls.table.proc.Load().GetService(), pref); err != nil {
-	//		logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
-	//	}
-	//}
-
 	ls.rc.batchPrefetchCursor = end
 }
 

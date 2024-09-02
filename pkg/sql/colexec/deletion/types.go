@@ -63,10 +63,9 @@ func (pool *BatchPool) get() *batch.Batch {
 
 // for now, we won't do compaction for cn block
 type container struct {
-	blockId_bitmap                 map[types.Blockid]*nulls.Nulls
-	partitionId_blockId_rowIdBatch map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
-	//partitionId_blockId_deltaLoc         map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> MetaLocation
-	partitionId_tombstoneObjectStatsBats map[int][]*batch.Batch // PartitionId -> tombstone object stats
+	blockId_bitmap                       map[types.Blockid]*nulls.Nulls
+	partitionId_blockId_rowIdBatch       map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
+	partitionId_tombstoneObjectStatsBats map[int][]*batch.Batch                 // PartitionId -> tombstone object stats
 	// don't flush cn block rowId and rawBatch
 	// we just do compaction for cn block in the
 	// future
@@ -195,7 +194,6 @@ func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err e
 		deletion.SegmentMap = nil
 		ctr.blockId_bitmap = nil
 		ctr.partitionId_blockId_rowIdBatch = nil
-		//ctr.partitionId_blockId_deltaLoc = nil
 		ctr.partitionId_tombstoneObjectStatsBats = nil
 		ctr.blockId_type = nil
 		ctr.pool = nil
