@@ -348,7 +348,6 @@ type BaseProcess struct {
 	// Id, query id.
 	Id              string
 	Lim             Limitation
-	vp              *cachedVectorPool
 	mp              *mpool.MPool
 	prepareBatch    *batch.Batch
 	prepareExprList any

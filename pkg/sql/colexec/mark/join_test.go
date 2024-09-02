@@ -246,7 +246,6 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) ma
 		proc:   proc,
 		cancel: cancel,
 		arg: &MarkJoin{
-			Typs:       ts,
 			Result:     rp,
 			Conditions: cs,
 			Cond:       cond,

@@ -48,6 +48,14 @@ func makeErrPacket(l int) []byte {
 	return data
 }
 
+func makeQuitPacket() []byte {
+	data := make([]byte, 5)
+	data[4] = byte(cmdQuit)
+	data[0] = 1
+	data[3] = 1
+	return data
+}
+
 func isCmdQuery(p []byte) bool {
 	if len(p) > 4 && p[4] == byte(cmdQuery) {
 		return true

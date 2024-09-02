@@ -15,6 +15,7 @@
 package mergedelete
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -39,6 +40,17 @@ type mockRelation struct {
 func (e *mockRelation) Delete(ctx context.Context, b *batch.Batch, attrName string) error {
 	e.result = b
 	return nil
+}
+
+func TestString(t *testing.T) {
+	buf := new(bytes.Buffer)
+	arg := new(MergeDelete)
+	arg.String(buf)
+}
+
+func TestOpType(t *testing.T) {
+	arg := new(MergeDelete)
+	require.Equal(t, arg.OpType(), vm.MergeDelete)
 }
 
 func TestMergeDelete(t *testing.T) {
@@ -152,6 +164,7 @@ func TestMergeDelete(t *testing.T) {
 	argument1 := MergeDelete{
 		ctr: container{
 			delSource: &mockRelation{},
+			bat:       &batch.Batch{},
 		},
 		AddAffectedRows: true,
 		OperatorBase: vm.OperatorBase{
@@ -169,10 +182,43 @@ func TestMergeDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(15), argument1.AffectedRows())
 
+	argument1.Reset(proc, false, err)
 	resetChildren(&argument1, batch2)
 	_, err = argument1.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(60), argument1.AffectedRows())
+
+	argument1.ctr.affectedRows = 0
+	argument1.Reset(proc, false, err)
+	resetChildren(&argument1, nil)
+	_, err = argument1.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), argument1.AffectedRows())
+
+	var partitionSources []engine.Relation
+	partitionSources = append(partitionSources, &mockRelation{})
+	argument2 := MergeDelete{
+		ctr: container{
+			delSource:        &mockRelation{},
+			bat:              &batch.Batch{},
+			partitionSources: partitionSources,
+			affectedRows:     0,
+		},
+		AddAffectedRows: true,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+	}
+
+	argument2.Reset(proc, false, err)
+	resetChildren(&argument2, batch2)
+	_, err = argument2.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, uint64(45), argument2.AffectedRows())
 
 	// free resource
 	argument1.Free(proc, false, nil)

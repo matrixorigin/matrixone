@@ -15,13 +15,16 @@
 package embed
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -35,8 +38,8 @@ const (
 )
 
 var (
-	basePort     = uint64(10000)
-	basePortStep = uint64(100)
+	basePort     = getInitPort("")
+	basePortStep = uint64(20)
 
 	clusterID atomic.Uint64
 )
@@ -376,4 +379,81 @@ func genConfig(
 		return err
 	}
 	return nil
+}
+
+func getInitPort(name string) uint64 {
+	if name == "" {
+		name = "mo-test.port"
+	}
+
+	fileName := filepath.Join(
+		os.TempDir(),
+		name,
+	)
+
+	fl := flock.New(fmt.Sprintf("%s.lock", fileName))
+	if err := fl.Lock(); err != nil {
+		panic(err)
+	}
+	defer func() {
+		if err := fl.Unlock(); err != nil {
+			panic(err)
+		}
+	}()
+
+	exists := true
+	f, err := os.Open(fileName)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			panic(err)
+		}
+		exists = false
+	} else {
+		if err := f.Close(); err != nil {
+			panic(err)
+		}
+	}
+
+	flag := os.O_RDWR
+	if !exists {
+		flag |= os.O_CREATE
+	}
+	file, err := os.OpenFile(fileName, flag, 0666)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+
+	data := make([]byte, 8)
+	n, err := file.Read(data)
+	if err != nil && err != io.EOF {
+		panic(err)
+	}
+	value := uint64(10000)
+	if n > 0 {
+		value = binary.BigEndian.Uint64(data)
+	}
+	binary.BigEndian.PutUint64(data, value+1000)
+
+	if _, err = file.Seek(0, 0); err != nil {
+		panic(err)
+	}
+
+	_, err = file.Write(data)
+	if err != nil {
+		panic(err)
+	}
+	if err := file.Sync(); err != nil {
+		panic(err)
+	}
+
+	dir, err := os.Open(filepath.Dir(fileName))
+	if err != nil {
+		panic(err)
+	}
+	if err := dir.Sync(); err != nil {
+		panic(err)
+	}
+
+	return uint64(value)
 }

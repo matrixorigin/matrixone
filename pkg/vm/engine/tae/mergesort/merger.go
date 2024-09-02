@@ -63,11 +63,12 @@ type merger[T any] struct {
 
 	mustColFunc func(*vector.Vector) []T
 
-	rowPerBlk uint32
-	stats     mergeStats
+	isTombstone bool
+	rowPerBlk   uint32
+	stats       mergeStats
 }
 
-func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, mustColFunc func(*vector.Vector) []T) Merger {
+func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, isTombstone bool, mustColFunc func(*vector.Vector) []T) Merger {
 	size := host.GetObjectCnt()
 	rowSizeU64 := host.GetTotalSize() / uint64(host.GetTotalRowCnt())
 	m := &merger[T]{
@@ -92,6 +93,7 @@ func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos 
 		},
 		loadedObjBlkCnts: make([]int, size),
 		mustColFunc:      mustColFunc,
+		isTombstone:      isTombstone,
 	}
 	totalBlkCnt := 0
 	for _, cnt := range m.objBlkCnts {
@@ -176,9 +178,16 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			if m.writer == nil {
 				m.writer = m.host.PrepareNewWriter()
 			}
-
-			if _, err := m.writer.WriteBatch(m.buffer); err != nil {
-				return err
+			if m.isTombstone {
+				m.writer.SetDataType(objectio.SchemaTombstone)
+				if _, err := m.writer.WriteBatch(m.buffer); err != nil {
+					return err
+				}
+			} else {
+				m.writer.SetDataType(objectio.SchemaData)
+				if _, err := m.writer.WriteBatch(m.buffer); err != nil {
+					return err
+				}
 			}
 			// force clean
 			m.buffer.CleanOnlyData()
@@ -208,8 +217,16 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		if m.writer == nil {
 			m.writer = m.host.PrepareNewWriter()
 		}
-		if _, err := m.writer.WriteBatch(m.buffer); err != nil {
-			return err
+		if m.isTombstone {
+			m.writer.SetDataType(objectio.SchemaTombstone)
+			if _, err := m.writer.WriteBatch(m.buffer); err != nil {
+				return err
+			}
+		} else {
+
+			if _, err := m.writer.WriteBatch(m.buffer); err != nil {
+				return err
+			}
 		}
 		m.buffer.CleanOnlyData()
 	}
@@ -296,59 +313,59 @@ func (m *merger[T]) release() {
 	}
 }
 
-func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) error {
+func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int, isTombstone bool) error {
 	var merger Merger
 	typ := mergeHost.GetSortKeyType()
 	if typ.IsVarlen() {
-		merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, vector.InefficientMustStrCol)
+		merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, isTombstone, vector.InefficientMustStrCol)
 	} else {
 		switch typ.Oid {
 		case types.T_bool:
-			merger = newMerger(mergeHost, sort.BoolLess, sortKeyPos, vector.MustFixedCol[bool])
+			merger = newMerger(mergeHost, sort.BoolLess, sortKeyPos, isTombstone, vector.MustFixedCol[bool])
 		case types.T_bit:
-			merger = newMerger(mergeHost, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64])
+			merger = newMerger(mergeHost, sort.GenericLess[uint64], sortKeyPos, isTombstone, vector.MustFixedCol[uint64])
 		case types.T_int8:
-			merger = newMerger(mergeHost, sort.GenericLess[int8], sortKeyPos, vector.MustFixedCol[int8])
+			merger = newMerger(mergeHost, sort.GenericLess[int8], sortKeyPos, isTombstone, vector.MustFixedCol[int8])
 		case types.T_int16:
-			merger = newMerger(mergeHost, sort.GenericLess[int16], sortKeyPos, vector.MustFixedCol[int16])
+			merger = newMerger(mergeHost, sort.GenericLess[int16], sortKeyPos, isTombstone, vector.MustFixedCol[int16])
 		case types.T_int32:
-			merger = newMerger(mergeHost, sort.GenericLess[int32], sortKeyPos, vector.MustFixedCol[int32])
+			merger = newMerger(mergeHost, sort.GenericLess[int32], sortKeyPos, isTombstone, vector.MustFixedCol[int32])
 		case types.T_int64:
-			merger = newMerger(mergeHost, sort.GenericLess[int64], sortKeyPos, vector.MustFixedCol[int64])
+			merger = newMerger(mergeHost, sort.GenericLess[int64], sortKeyPos, isTombstone, vector.MustFixedCol[int64])
 		case types.T_float32:
-			merger = newMerger(mergeHost, sort.GenericLess[float32], sortKeyPos, vector.MustFixedCol[float32])
+			merger = newMerger(mergeHost, sort.GenericLess[float32], sortKeyPos, isTombstone, vector.MustFixedCol[float32])
 		case types.T_float64:
-			merger = newMerger(mergeHost, sort.GenericLess[float64], sortKeyPos, vector.MustFixedCol[float64])
+			merger = newMerger(mergeHost, sort.GenericLess[float64], sortKeyPos, isTombstone, vector.MustFixedCol[float64])
 		case types.T_uint8:
-			merger = newMerger(mergeHost, sort.GenericLess[uint8], sortKeyPos, vector.MustFixedCol[uint8])
+			merger = newMerger(mergeHost, sort.GenericLess[uint8], sortKeyPos, isTombstone, vector.MustFixedCol[uint8])
 		case types.T_uint16:
-			merger = newMerger(mergeHost, sort.GenericLess[uint16], sortKeyPos, vector.MustFixedCol[uint16])
+			merger = newMerger(mergeHost, sort.GenericLess[uint16], sortKeyPos, isTombstone, vector.MustFixedCol[uint16])
 		case types.T_uint32:
-			merger = newMerger(mergeHost, sort.GenericLess[uint32], sortKeyPos, vector.MustFixedCol[uint32])
+			merger = newMerger(mergeHost, sort.GenericLess[uint32], sortKeyPos, isTombstone, vector.MustFixedCol[uint32])
 		case types.T_uint64:
-			merger = newMerger(mergeHost, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64])
+			merger = newMerger(mergeHost, sort.GenericLess[uint64], sortKeyPos, isTombstone, vector.MustFixedCol[uint64])
 		case types.T_date:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Date], sortKeyPos, vector.MustFixedCol[types.Date])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Date], sortKeyPos, isTombstone, vector.MustFixedCol[types.Date])
 		case types.T_timestamp:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Timestamp], sortKeyPos, vector.MustFixedCol[types.Timestamp])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Timestamp], sortKeyPos, isTombstone, vector.MustFixedCol[types.Timestamp])
 		case types.T_datetime:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Datetime], sortKeyPos, vector.MustFixedCol[types.Datetime])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Datetime], sortKeyPos, isTombstone, vector.MustFixedCol[types.Datetime])
 		case types.T_time:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Time], sortKeyPos, vector.MustFixedCol[types.Time])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Time], sortKeyPos, isTombstone, vector.MustFixedCol[types.Time])
 		case types.T_enum:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Enum], sortKeyPos, vector.MustFixedCol[types.Enum])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Enum], sortKeyPos, isTombstone, vector.MustFixedCol[types.Enum])
 		case types.T_decimal64:
-			merger = newMerger(mergeHost, sort.Decimal64Less, sortKeyPos, vector.MustFixedCol[types.Decimal64])
+			merger = newMerger(mergeHost, sort.Decimal64Less, sortKeyPos, isTombstone, vector.MustFixedCol[types.Decimal64])
 		case types.T_decimal128:
-			merger = newMerger(mergeHost, sort.Decimal128Less, sortKeyPos, vector.MustFixedCol[types.Decimal128])
+			merger = newMerger(mergeHost, sort.Decimal128Less, sortKeyPos, isTombstone, vector.MustFixedCol[types.Decimal128])
 		case types.T_uuid:
-			merger = newMerger(mergeHost, sort.UuidLess, sortKeyPos, vector.MustFixedCol[types.Uuid])
+			merger = newMerger(mergeHost, sort.UuidLess, sortKeyPos, isTombstone, vector.MustFixedCol[types.Uuid])
 		case types.T_TS:
-			merger = newMerger(mergeHost, sort.TsLess, sortKeyPos, vector.MustFixedCol[types.TS])
+			merger = newMerger(mergeHost, sort.TsLess, sortKeyPos, isTombstone, vector.MustFixedCol[types.TS])
 		case types.T_Rowid:
-			merger = newMerger(mergeHost, sort.RowidLess, sortKeyPos, vector.MustFixedCol[types.Rowid])
+			merger = newMerger(mergeHost, sort.RowidLess, sortKeyPos, isTombstone, vector.MustFixedCol[types.Rowid])
 		case types.T_Blockid:
-			merger = newMerger(mergeHost, sort.BlockidLess, sortKeyPos, vector.MustFixedCol[types.Blockid])
+			merger = newMerger(mergeHost, sort.BlockidLess, sortKeyPos, isTombstone, vector.MustFixedCol[types.Blockid])
 		default:
 			return moerr.NewErrUnsupportedDataType(ctx, typ)
 		}
