@@ -873,7 +873,13 @@ func (data *CNCheckpointData) GetTableDataFromBats(tid uint64, bats []*batch.Bat
 }
 
 func (data *CNCheckpointData) GetCloseCB(version uint32, m *mpool.MPool) func() {
-	return nil
+	return func() {
+		for _, bat := range data.bats {
+			if bat != nil {
+				bat.Clean(m)
+			}
+		}
+	}
 }
 
 // FIXME: (jiangwei)

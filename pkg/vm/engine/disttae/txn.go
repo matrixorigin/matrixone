@@ -514,6 +514,9 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 		lenVecs := len(blockInfo.Attrs)
 		// only remain the metaLoc col and object stats
+		for i := 0; i < lenVecs-2; i++ {
+			blockInfo.Vecs[i].Free(txn.proc.GetMPool())
+		}
 		blockInfo.Vecs = blockInfo.Vecs[lenVecs-2:]
 		blockInfo.Attrs = blockInfo.Attrs[lenVecs-2:]
 		blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
