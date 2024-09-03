@@ -90,3 +90,5 @@ select count(*) from rs01 {snapshot = 'sp01'};
 
 drop snapshot sp01;
 drop table rs01;
+-- @ignore:1
+show snapshots;
