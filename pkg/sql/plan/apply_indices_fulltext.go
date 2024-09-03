@@ -18,8 +18,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // The idea is as follows:
@@ -359,11 +361,53 @@ func (builder *QueryBuilder) getFullTextMatchFromProject(projNode *plan.Node, sc
 				}
 			}
 
+			// change the fulltext_match function to fulltext_match_score
+			// which has return type float32 instead of bool
+			projNode.ProjectList[i] = builder.getFullTextMatchScoreExpr(expr)
+
 		default:
 		}
 	}
 
 	return projids, ftidxs
+}
+
+func (builder *QueryBuilder) getFullTextMatchScoreExpr(expr *plan.Expr) *plan.Expr {
+	fn := expr.GetF()
+
+	// get args(exprs) & types
+	argsLength := len(fn.Args)
+	argsType := make([]types.Type, argsLength)
+	for idx, expr := range fn.Args {
+		argsType[idx] = makeTypeByPlan2Expr(expr)
+	}
+
+	var funcID int64
+	var returnType types.Type
+
+	funcname := "fulltext_match_score"
+
+	// get function definition
+	fGet, err := function.GetFunctionByName(builder.GetContext(), funcname, argsType)
+	if err != nil {
+		panic(err)
+	}
+
+	funcID = fGet.GetEncodedOverloadID()
+	returnType = fGet.GetReturnType()
+	exprType := makePlan2Type(&returnType)
+	exprType.NotNullable = function.DeduceNotNullable(funcID, fn.Args)
+	newExpr := &Expr{
+		Typ: exprType,
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: getFunctionObjRef(funcID, funcname),
+				Args: fn.Args,
+			},
+		},
+	}
+
+	return newExpr
 }
 
 func (builder *QueryBuilder) resolveFullTextMatchFromScanNode(node *plan.Node) *plan.Node {
