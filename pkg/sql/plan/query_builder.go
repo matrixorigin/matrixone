@@ -1611,7 +1611,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		case *tree.Select:
 			if sltClause, ok := sltStmt.Select.(*tree.SelectClause); ok {
 				sltClause.Distinct = true
-				return builder.buildSelect(sltStmt, ctx, isRoot)
+				return builder.bindSelect(sltStmt, ctx, isRoot)
 			} else {
 				// rewrite sltStmt to select distinct * from (sltStmt) a
 				tmpSltStmt := &tree.Select{
@@ -1637,14 +1637,14 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 					Limit:   astLimit,
 					OrderBy: astOrderBy,
 				}
-				return builder.buildSelect(tmpSltStmt, ctx, isRoot)
+				return builder.bindSelect(tmpSltStmt, ctx, isRoot)
 			}
 
 		case *tree.SelectClause:
 			if !sltStmt.Distinct {
 				sltStmt.Distinct = true
 			}
-			return builder.buildSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
+			return builder.bindSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
 		}
 	}
 
@@ -1659,9 +1659,9 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		subCtx := NewBindContext(builder, ctx)
 		subCtx.unionSelect = subCtx.initSelect
 		if slt, ok := sltStmt.(*tree.Select); ok {
-			nodeID, err = builder.buildSelect(slt, subCtx, isRoot)
+			nodeID, err = builder.bindSelect(slt, subCtx, isRoot)
 		} else {
-			nodeID, err = builder.buildSelect(&tree.Select{Select: sltStmt}, subCtx, isRoot)
+			nodeID, err = builder.bindSelect(&tree.Select{Select: sltStmt}, subCtx, isRoot)
 		}
 		if err != nil {
 			return 0, err
@@ -1977,7 +1977,7 @@ func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 	return windowsSpecList, nil
 }
 
-func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
+func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
 	// preprocess CTEs
 	if stmt.With != nil {
 		ctx.cteByName = make(map[string]*CTERef)
@@ -2047,7 +2047,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 				oldSnapshot := builder.compCtx.GetSnapshot()
 				builder.compCtx.SetSnapshot(subCtx.snapshot)
-				nodeID, err := builder.buildSelect(s, subCtx, false)
+				nodeID, err := builder.bindSelect(s, subCtx, false)
 				builder.compCtx.SetSnapshot(oldSnapshot)
 				if err != nil {
 					return 0, err
@@ -2061,7 +2061,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				initCtx.initSelect = true
 				initCtx.sinkTag = builder.genNewTag()
 				initCtx.isTryBindingCTE = true
-				initLastNodeID, err := builder.buildSelect(&tree.Select{Select: *left}, initCtx, false)
+				initLastNodeID, err := builder.bindSelect(&tree.Select{Select: *left}, initCtx, false)
 				if err != nil {
 					return 0, err
 				}
@@ -2086,7 +2086,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					sourceStep := builder.appendStep(recursiveNodeId)
 					nodeID := appendRecursiveScanNode(builder, subCtx, sourceStep, subCtx.sinkTag)
 					subCtx.recRecursiveScanNodeId = nodeID
-					recursiveNodeId, err = builder.buildSelect(&tree.Select{Select: r}, subCtx, false)
+					recursiveNodeId, err = builder.bindSelect(&tree.Select{Select: r}, subCtx, false)
 					if err != nil {
 						return 0, err
 					}
@@ -2252,7 +2252,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		}
 		// build FROM clause
-		nodeID, err = builder.buildFrom(clause.From.Tables, ctx)
+		nodeID, err = builder.buildFrom(clause.From.Tables, ctx, isRoot)
 		if err != nil {
 			return 0, err
 		}
@@ -3150,9 +3150,9 @@ func (builder *QueryBuilder) rewriteRightJoinToLeftJoin(nodeID int32) {
 	}
 }
 
-func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (int32, error) {
+func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext, isRoot bool) (int32, error) {
 	if len(stmt) == 1 {
-		return builder.buildTable(stmt[0], ctx, -1, nil)
+		return builder.buildTable(stmt[0], ctx, -1, nil, isRoot)
 	}
 	return 0, moerr.NewInternalError(ctx.binder.GetContext(), "stmt's length should be zero")
 	// for now, stmt'length always be zero. if someday that change in parser, you should uncomment these codes
@@ -3282,14 +3282,14 @@ func getSelectTree(s *tree.Select) *tree.Select {
 	}
 }
 
-func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
+func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext, isRoot bool) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
 		if builder.isForUpdate {
 			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from derived table for update")
 		}
 		subCtx := NewBindContext(builder, ctx)
-		nodeID, err = builder.buildSelect(tbl, subCtx, false)
+		nodeID, err = builder.bindSelect(tbl, subCtx, false)
 		if subCtx.isCorrelated {
 			return 0, moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
 		}
@@ -3378,7 +3378,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 					oldSnapshot := builder.compCtx.GetSnapshot()
 					builder.compCtx.SetSnapshot(subCtx.snapshot)
-					nodeID, err = builder.buildSelect(s, subCtx, false)
+					nodeID, err = builder.bindSelect(s, subCtx, false)
 					builder.compCtx.SetSnapshot(oldSnapshot)
 					if err != nil {
 						return
@@ -3406,7 +3406,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					initCtx := NewBindContext(builder, ctx)
 					initCtx.initSelect = true
 					initCtx.sinkTag = builder.genNewTag()
-					initLastNodeID, err1 := builder.buildSelect(&tree.Select{Select: *left}, initCtx, false)
+					initLastNodeID, err1 := builder.bindSelect(&tree.Select{Select: *left}, initCtx, false)
 					if err1 != nil {
 						err = err1
 						return
@@ -3440,7 +3440,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						subCtx.recRecursiveScanNodeId = appendRecursiveScanNode(builder, subCtx, initSourceStep, subCtx.sinkTag)
 						recursiveNodeIDs[i] = subCtx.recRecursiveScanNodeId
 						recursiveSteps[i] = int32(len(builder.qry.Steps))
-						recursiveLastNodeID, err = builder.buildSelect(&tree.Select{Select: r}, subCtx, false)
+						recursiveLastNodeID, err = builder.bindSelect(&tree.Select{Select: r}, subCtx, false)
 						if err != nil {
 							return
 						}
@@ -3652,7 +3652,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					ExplicitCatalog: false,
 					ExplicitSchema:  false,
 				}, nil)
-				return builder.buildTable(newTableName, ctx, preNodeId, leftCtx)
+				return builder.buildTable(newTableName, ctx, preNodeId, leftCtx, false)
 			}
 		}
 
@@ -3667,11 +3667,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 	case *tree.JoinTableExpr:
 		if tbl.Right == nil {
-			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx)
+			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx, isRoot)
 		} else if builder.isForUpdate {
 			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from join table for update")
 		}
-		return builder.buildJoinTable(tbl, ctx)
+		return builder.buildJoinTable(tbl, ctx, isRoot)
 
 	case *tree.TableFunction:
 		if tbl.Id() == "result_scan" {
@@ -3680,7 +3680,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		return builder.buildTableFunction(tbl, ctx, preNodeId, leftCtx)
 
 	case *tree.ParenTableExpr:
-		return builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
+		return builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx, isRoot)
 
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
 		if _, ok := tbl.Expr.(*tree.Select); ok {
@@ -3689,7 +3689,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			}
 		}
 
-		nodeID, err = builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
+		nodeID, err = builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx, isRoot)
 		if err != nil {
 			return
 		}
@@ -3705,6 +3705,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		if midNode.NodeType == plan.Node_TABLE_SCAN {
 			dbName := midNode.ObjRef.SchemaName
 			tableName := midNode.TableDef.Name
+			builder.name2ScanNode[tableName] = nodeID
 			currentAccountID, err := builder.compCtx.GetAccountId()
 			if err != nil {
 				return 0, err
@@ -3936,7 +3937,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	return nil
 }
 
-func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext) (int32, error) {
+func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext, isRoot bool) (int32, error) {
 	var joinType plan.Node_JoinType
 
 	switch tbl.JoinType {
@@ -3955,7 +3956,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	leftCtx := NewBindContext(builder, ctx)
 	rightCtx := NewBindContext(builder, ctx)
 
-	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx)
+	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx, isRoot)
 	if err != nil {
 		return 0, err
 	}
@@ -3964,7 +3965,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	if _, ok := tbl.Right.(*tree.TableFunction); ok {
 		return 0, moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
 	}
-	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, leftChildID, leftCtx)
+	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, leftChildID, leftCtx, isRoot)
 	if err != nil {
 		return 0, err
 	}

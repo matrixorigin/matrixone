@@ -27,7 +27,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
+func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
@@ -39,8 +39,75 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
 
-	rootId, err := builder.buildSelect(stmt, bindCtx, true)
+	rootId, err := builder.bindSelect(stmt, bindCtx, true)
 	if err != nil {
+		return nil, err
+	}
+	ctx.SetViews(bindCtx.views)
+
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	builder.skipStats = skipStats
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
+	}, err
+}
+
+/*
+	func bindAndOptimizeInsertQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Insert, isPrepareStmt bool, skipStats bool) (*Plan, error) {
+		start := time.Now()
+		defer func() {
+			v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
+		}()
+
+		builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
+		bindCtx := NewBindContext(builder, nil)
+		if IsSnapshotValid(ctx.GetSnapshot()) {
+			bindCtx.snapshot = ctx.GetSnapshot()
+		}
+
+		rootId, err := builder.bindInsert(stmt, bindCtx)
+		if err != nil {
+			return nil, err
+		}
+		ctx.SetViews(bindCtx.views)
+
+		builder.qry.Steps = append(builder.qry.Steps, rootId)
+		builder.skipStats = skipStats
+		query, err := builder.createQuery()
+		if err != nil {
+			return nil, err
+		}
+		return &Plan{
+			Plan: &plan.Plan_Query{
+				Query: query,
+			},
+		}, err
+	}
+*/
+
+func bindAndOptimizeDeleteQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Delete, isPrepareStmt bool, skipStats bool) (*Plan, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
+	bindCtx := NewBindContext(builder, nil)
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		bindCtx.snapshot = ctx.GetSnapshot()
+	}
+
+	rootId, err := builder.bindDelete(stmt, bindCtx)
+	if err != nil {
+		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+			return buildDelete(stmt, ctx, isPrepareStmt)
+		}
 		return nil, err
 	}
 	ctx.SetViews(bindCtx.views)
@@ -93,9 +160,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	defer task.End()
 	switch stmt := stmt.(type) {
 	case *tree.Select:
-		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
+		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
 	case *tree.ParenSelect:
-		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
+		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
 	case *tree.ExplainAnalyze:
 		return buildExplainAnalyze(ctx, stmt, isPrepareStmt)
 	case *tree.Insert:
