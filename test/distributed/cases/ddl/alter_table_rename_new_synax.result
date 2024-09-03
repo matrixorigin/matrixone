@@ -44,3 +44,10 @@ first_name    VARCHAR(50)    NO        null
 last_name    VARCHAR(50)    NO        null        
 department    VARCHAR(50)    YES        null        
 drop database test;
+create database test;
+use test;
+create table t1(a int);
+create table t2(a int);
+rename table t2 to t1;
+table t1 already exists
+drop database test;

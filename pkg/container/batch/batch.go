@@ -467,3 +467,16 @@ func (bat *Batch) IsDone() bool {
 	}
 	return bat.IsEmpty() || bat.Last()
 }
+
+func (bat *Batch) Allocated() int {
+	if bat == nil {
+		return 0
+	}
+	ret := 0
+	for i := range bat.Vecs {
+		if bat.Vecs[i] != nil {
+			ret += bat.Vecs[i].Allocated()
+		}
+	}
+	return ret
+}
