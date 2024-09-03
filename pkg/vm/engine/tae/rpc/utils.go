@@ -78,7 +78,7 @@ func (h *Handle) prefetchDeleteRowID(_ context.Context, req *db.WriteReq) error 
 
 	//start loading jobs asynchronously,should create a new root context.
 	for _, stats := range req.TombstoneStats {
-		loc := catalog.BuildLocation(stats, uint16(0), options.DefaultBlockMaxRows)
+		loc := stats.BlockLocation(uint16(0), options.DefaultBlockMaxRows)
 		pref, err := blockio.BuildPrefetchParams(h.db.Runtime.Fs.Service, loc)
 		if err != nil {
 			return err
