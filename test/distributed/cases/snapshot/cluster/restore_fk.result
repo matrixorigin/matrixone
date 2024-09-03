@@ -322,3 +322,5 @@ drop snapshot if exists sys_sp_master;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 drop database Company;
+show databases like 'Company';
+Database
