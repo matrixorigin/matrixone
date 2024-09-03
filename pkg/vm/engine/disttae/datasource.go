@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1169,7 +1168,7 @@ func GetTombstonesByBlockId(
 				continue
 			}
 			loaded++
-			tombstoneLoc := catalog2.BuildLocation(obj.ObjectStats, uint16(pos), options.DefaultBlockMaxRows)
+			tombstoneLoc := obj.ObjectStats.BlockLocation(uint16(pos), options.DefaultBlockMaxRows)
 
 			var mask *nulls.Nulls
 
@@ -1276,7 +1275,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 				return nil, err
 			}
 
-			location = catalog2.BuildLocation(obj.ObjectStats, uint16(idx), options.DefaultBlockMaxRows)
+			location = obj.ObjectStats.BlockLocation(uint16(idx), options.DefaultBlockMaxRows)
 
 			if loaded, persistedByCN, release, err = blockio.ReadBlockDelete(ls.ctx, location, ls.fs); err != nil {
 				return nil, err

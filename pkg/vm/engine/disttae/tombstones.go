@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
@@ -228,7 +227,7 @@ func (tomb *tombstoneData) PrefetchTombstones(
 	for i, end := 0, tomb.files.Len(); i < end; i++ {
 		stats := tomb.files.Get(i)
 		for j := 0; j < int(stats.BlkCnt()); j++ {
-			loc := catalog.BuildLocation(*stats, uint16(j), options.DefaultBlockMaxRows)
+			loc := stats.BlockLocation(uint16(j), options.DefaultBlockMaxRows)
 			if err := blockio.Prefetch(
 				srvId,
 				[]uint16{0, 1, 2},
