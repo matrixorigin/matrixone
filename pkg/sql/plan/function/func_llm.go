@@ -3,6 +3,7 @@ package function
 import (
 	"context"
 	"github.com/ledongthuc/pdf"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -39,7 +40,10 @@ func LLMExtractText(parameters []*vector.Vector, result vector.FunctionResultWra
 		inputPath := util.UnsafeBytesToString(inputBytes)
 		outputPath := util.UnsafeBytesToString(outputBytes)
 
-		moUrl, _, _, err := types.ParseDatalink(inputPath)
+		moUrl, _, ext, err := types.ParseDatalink(inputPath)
+		if ext != ".pdf" {
+			return moerr.NewInvalidInputNoCtxf("Only pdf file supported")
+		}
 		if err != nil {
 			return err
 		}
