@@ -904,54 +904,54 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 
 	switch v.typ.Oid {
 	case types.T_bool:
-		err = shuffleFixed[bool](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[bool](v, sels, mp)
 	case types.T_bit:
-		err = shuffleFixed[uint64](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[uint64](v, sels, mp)
 	case types.T_int8:
-		err = shuffleFixed[int8](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[int8](v, sels, mp)
 	case types.T_int16:
-		err = shuffleFixed[int16](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[int16](v, sels, mp)
 	case types.T_int32:
-		err = shuffleFixed[int32](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[int32](v, sels, mp)
 	case types.T_int64:
-		err = shuffleFixed[int64](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[int64](v, sels, mp)
 	case types.T_uint8:
-		err = shuffleFixed[uint8](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[uint8](v, sels, mp)
 	case types.T_uint16:
-		err = shuffleFixed[uint16](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[uint16](v, sels, mp)
 	case types.T_uint32:
-		err = shuffleFixed[uint32](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[uint32](v, sels, mp)
 	case types.T_uint64:
-		err = shuffleFixed[uint64](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[uint64](v, sels, mp)
 	case types.T_float32:
-		err = shuffleFixed[float32](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[float32](v, sels, mp)
 	case types.T_float64:
-		err = shuffleFixed[float64](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[float64](v, sels, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
-		err = shuffleFixed[types.Varlena](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[types.Varlena](v, sels, mp)
 	case types.T_date:
-		err = shuffleFixed[types.Date](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[types.Date](v, sels, mp)
 	case types.T_datetime:
-		err = shuffleFixed[types.Datetime](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[types.Datetime](v, sels, mp)
 	case types.T_time:
-		err = shuffleFixed[types.Time](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[types.Time](v, sels, mp)
 	case types.T_timestamp:
-		err = shuffleFixed[types.Timestamp](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[types.Timestamp](v, sels, mp)
 	case types.T_enum:
-		err = shuffleFixed[types.Enum](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[types.Enum](v, sels, mp)
 	case types.T_decimal64:
-		err = shuffleFixed[types.Decimal64](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[types.Decimal64](v, sels, mp)
 	case types.T_decimal128:
-		err = shuffleFixed[types.Decimal128](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[types.Decimal128](v, sels, mp)
 	case types.T_uuid:
-		err = shuffleFixed[types.Uuid](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[types.Uuid](v, sels, mp)
 	case types.T_TS:
-		err = shuffleFixed[types.TS](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[types.TS](v, sels, mp)
 	case types.T_Rowid:
-		err = shuffleFixed[types.Rowid](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[types.Rowid](v, sels, mp)
 	case types.T_Blockid:
-		err = shuffleFixed[types.Blockid](v, sels, mp)
+		err = shuffleFixedNoTypeCheck[types.Blockid](v, sels, mp)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.typ))
 	}
@@ -3290,11 +3290,13 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate b
 	}
 }
 
-func shuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) error {
+// shuffleFixedNoTypeCheck is always used after type check. and we can use ToSliceNoTypeCheck here.
+func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) error {
 	sz := v.typ.TypeSize()
 	olddata := v.data[:v.length*sz]
 	ns := len(sels)
-	vs := MustFixedCol[T](v)
+	var vs []T
+	ToFixedColNoTypeCheck(v, &vs)
 	data, err := mp.Alloc(ns * v.GetType().TypeSize())
 	if err != nil {
 		return err
@@ -3302,7 +3304,7 @@ func shuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) 
 	v.data = data
 	v.setupFromData()
 	var ws []T
-	ToSlice(v, &ws)
+	ToSliceNoTypeCheck(v, &ws)
 	ws = ws[:ns]
 	shuffle.FixedLengthShuffle(vs, ws, sels)
 	nulls.Filter(v.nsp, sels, false)

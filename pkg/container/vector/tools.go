@@ -24,6 +24,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+func ToFixedColNoTypeCheck[T any](v *Vector, ret *[]T) {
+	ToSliceNoTypeCheck(v, ret)
+	if v.class == CONSTANT {
+		*ret = (*ret)[:1]
+	} else {
+		*ret = (*ret)[:v.length]
+	}
+}
+
 func ToFixedCol[T any](v *Vector, ret *[]T) {
 	// XXX hack.   Sometimes we generate an t_any, for untyped const null.
 	// This should be handled more carefully and gracefully.
