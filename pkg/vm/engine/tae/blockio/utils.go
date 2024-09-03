@@ -71,6 +71,52 @@ func GetTombstonesByBlockId(
 	return
 }
 
+/*
+func FindTombstonesOfBlock(
+	ctx context.Context,
+	blockId objectio.Blockid,
+	tombstoneObjects []objectio.ObjectStats,
+	fs fileservice.FileService,
+) (sels bitmap.Bitmap, err error) {
+	return findTombstoneOfXXX(ctx, blockId[:], tombstoneObjects, fs)
+}
+
+func FindTombstonesOfObject(
+	ctx context.Context,
+	objectId objectio.ObjectId,
+	tombstoneObjects []objectio.ObjectStats,
+	fs fileservice.FileService,
+) (sels bitmap.Bitmap, err error) {
+	return findTombstoneOfXXX(ctx, objectId[:], tombstoneObjects, fs)
+}
+
+func findTombstoneOfXXX(
+	ctx context.Context,
+	pattern []byte,
+	tombstoneObjects []objectio.ObjectStats,
+	fs fileservice.FileService,
+) (sels bitmap.Bitmap, err error) {
+	sels.InitWithSize(int64(len(tombstoneObjects)))
+	var curr int
+	getTombstoneFile := func() (*objectio.ObjectStats, error) {
+		if curr >= len(tombstoneObjects) {
+			return nil, nil
+		}
+		i := curr
+		curr++
+		return &tombstoneObjects[i], nil
+	}
+	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
+		sels.Add(uint64(curr))
+		return false, nil
+	}
+	_, _, _, err = CheckTombstoneFile(
+		ctx, pattern, getTombstoneFile, onBlockSelectedFn, fs,
+	)
+	return
+}
+*/
+
 func CheckTombstoneFile(
 	ctx context.Context,
 	prefixPattern []byte,
