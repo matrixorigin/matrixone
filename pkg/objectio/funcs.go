@@ -162,9 +162,9 @@ func ReadOneBlockWithMeta(
 			metaColCnt := blkmeta.GetMetaColumnCount()
 			// read appendable block file, the last columns is commits and abort
 			if seqnum == SEQNUM_COMMITTS {
-				seqnum = metaColCnt - 2
-			} else if seqnum == SEQNUM_ABORT {
 				seqnum = metaColCnt - 1
+			} else if seqnum == SEQNUM_ABORT {
+				panic("not support")
 			} else {
 				panic(fmt.Sprintf("bad path to read special column %d", seqnum))
 			}

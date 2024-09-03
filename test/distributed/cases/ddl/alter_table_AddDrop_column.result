@@ -570,7 +570,7 @@ create table `t+1` (c1 INT);
 alter table  `t+1` rename to `t+2`;
 create table `t+1` (c1 INT);
 alter table  `t+1` rename to `t+2`;
-ExpectedDup
+table t+2 already exists
 drop table `t+1`;
 drop table `t+2`;
 drop table if exists `#sql1`;

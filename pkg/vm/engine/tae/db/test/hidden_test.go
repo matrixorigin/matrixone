@@ -54,12 +54,12 @@ func TestHiddenWithPK1(t *testing.T) {
 	err := rel.Append(context.Background(), bats[0])
 	{
 		offsets := make([]uint32, 0)
-		it := rel.MakeObjectIt()
+		it := rel.MakeObjectIt(false)
 		for it.Next() {
 			blk := it.GetObject()
-			view, err := blk.GetColumnDataById(context.Background(), 0, schema.PhyAddrKey.Idx, common.DefaultAllocator)
+			var view *containers.Batch
+			err := blk.Scan(ctx, &view, 0, []int{schema.PhyAddrKey.Idx}, common.DefaultAllocator)
 			assert.NoError(t, err)
-			defer view.Close()
 			fp := blk.Fingerprint()
 			_ = view.Vecs[0].Foreach(func(v any, _ bool, _ int) (err error) {
 				rid := v.(types.Rowid)
@@ -69,6 +69,7 @@ func TestHiddenWithPK1(t *testing.T) {
 				offsets = append(offsets, offset)
 				return
 			}, nil)
+			view.Close()
 		}
 		// sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
 		// assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
@@ -79,7 +80,8 @@ func TestHiddenWithPK1(t *testing.T) {
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		blk := testutil.GetOneObject(rel)
-		view, err := blk.GetColumnDataByName(context.Background(), 0, catalog.PhyAddrColumnName, common.DefaultAllocator)
+		var view *containers.Batch
+		err := blk.Scan(ctx, &view, 0, []int{schema.GetColIdx(catalog.PhyAddrColumnName)}, common.DefaultAllocator)
 		assert.NoError(t, err)
 		defer view.Close()
 		offsets := make([]uint32, 0)
@@ -118,11 +120,12 @@ func TestHiddenWithPK1(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
-		it := rel.MakeObjectIt()
+		it := rel.MakeObjectIt(false)
 		for it.Next() {
 			blk := it.GetObject()
 			for j := 0; j < blk.BlkCnt(); j++ {
-				view, err := blk.GetColumnDataByName(context.Background(), uint16(j), catalog.PhyAddrColumnName, common.DefaultAllocator)
+				var view *containers.Batch
+				err := blk.Scan(ctx, &view, uint16(j), []int{schema.GetColIdx(catalog.PhyAddrColumnName)}, common.DefaultAllocator)
 				assert.NoError(t, err)
 				defer view.Close()
 				offsets := make([]uint32, 0)
@@ -159,13 +162,14 @@ func TestHiddenWithPK1(t *testing.T) {
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
-		it := rel.MakeObjectIt()
+		it := rel.MakeObjectIt(false)
 		objIdx := -1
 		for it.Next() {
 			blk := it.GetObject()
 			objIdx++
 			for j := 0; j < blk.BlkCnt(); j++ {
-				view, err := blk.GetColumnDataByName(context.Background(), uint16(j), catalog.PhyAddrColumnName, common.DefaultAllocator)
+				var view *containers.Batch
+				err := blk.Scan(ctx, &view, uint16(j), []int{schema.GetColIdx(catalog.PhyAddrColumnName)}, common.DefaultAllocator)
 				assert.NoError(t, err)
 				defer view.Close()
 				offsets := make([]uint32, 0)
@@ -220,17 +224,18 @@ func TestHidden2(t *testing.T) {
 	err := rel.Append(context.Background(), bats[0])
 	{
 		blk := testutil.GetOneObject(rel)
-		var hidden *containers.Batch
+		var hidden containers.Vector
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(context.Background(), 0, def.Idx, common.DefaultAllocator)
+			var view *containers.Batch
+			err := blk.Scan(ctx, &view, 0, []int{def.Idx}, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			assert.Equal(t, bats[0].Length(), view.Length())
 			if def.IsPhyAddr() {
-				hidden = view
+				hidden = view.Vecs[0]
 			}
 		}
-		_ = hidden.Vecs[0].Foreach(func(key any, _ bool, _ int) (err error) {
+		_ = hidden.Foreach(func(key any, _ bool, _ int) (err error) {
 			rid := key.(types.Rowid)
 			bid, offset := rid.Decode()
 			t.Logf(",bid=%s,offset=%d", bid, offset)
@@ -244,7 +249,8 @@ func TestHidden2(t *testing.T) {
 			return
 		}, nil)
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(context.Background(), 0, def.Idx, common.DefaultAllocator)
+			var view *containers.Batch
+			err := blk.HybridScan(ctx, &view, 0, []int{def.Idx}, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			view.Compact()
@@ -257,17 +263,18 @@ func TestHidden2(t *testing.T) {
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		blk := testutil.GetOneObject(rel)
-		var hidden *containers.Batch
+		var hidden containers.Vector
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(context.Background(), 0, def.Idx, common.DefaultAllocator)
+			var view *containers.Batch
+			err := blk.Scan(ctx, &view, 0, []int{def.Idx}, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			assert.Equal(t, bats[0].Length()-1, view.Length())
 			if def.IsPhyAddr() {
-				hidden = view
+				hidden = view.Vecs[0]
 			}
 		}
-		_ = hidden.Vecs[0].Foreach(func(key any, _ bool, _ int) (err error) {
+		_ = hidden.Foreach(func(key any, _ bool, _ int) (err error) {
 			rid := key.(types.Rowid)
 			bid, offset := rid.Decode()
 			t.Logf(",bid=%s,offset=%d", bid, offset)
@@ -302,12 +309,13 @@ func TestHidden2(t *testing.T) {
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
-		it := rel.MakeObjectIt()
+		it := rel.MakeObjectIt(false)
 		rows := 0
 		for it.Next() {
 			blk := it.GetObject()
 			for j := 0; j < blk.BlkCnt(); j++ {
-				hidden, err := blk.GetColumnDataById(context.Background(), uint16(j), schema.PhyAddrKey.Idx, common.DefaultAllocator)
+				var hidden *containers.Batch
+				err := blk.HybridScan(ctx, &hidden, uint16(j), []int{schema.PhyAddrKey.Idx}, common.DefaultAllocator)
 				assert.NoError(t, err)
 				defer hidden.Close()
 				hidden.Compact()

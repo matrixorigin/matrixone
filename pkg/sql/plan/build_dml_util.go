@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -4078,6 +4079,10 @@ func IsFkBannedDatabase(db string) bool {
 
 // IsForeignKeyChecksEnabled returns the system variable foreign_key_checks is true or false
 func IsForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
+	if disable := ctx.GetContext().Value(defines.DisableFkCheck{}); disable != nil {
+		return !disable.(bool), nil
+	}
+
 	value, err := ctx.ResolveVariable("foreign_key_checks", true, false)
 	if err != nil {
 		return false, err

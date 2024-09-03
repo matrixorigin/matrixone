@@ -516,7 +516,7 @@ func testDelete(tc TestCase, t *testing.T) {
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
-	tae.CheckCollectDeleteInRange()
+	tae.CheckCollectTombstoneInRange()
 
 	tae.CheckRowsByScan(0, true)
 	tae.CompactBlocks(false)

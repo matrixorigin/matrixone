@@ -1101,3 +1101,5 @@ col2
 drop database db11;
 drop snapshot sp18;
 drop snapshot sp17;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
