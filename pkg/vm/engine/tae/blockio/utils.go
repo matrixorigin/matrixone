@@ -18,28 +18,58 @@ import (
 	"context"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
-// func GetTombstonesByBlockId(
-// 	ctx context.Context,
-// 	blockId objectio.BlockId,
-// 	getTombstoneFile func() (*objectio.ObjectStats, error),
-// 	ts types.TS,
-// 	deletedMask *nulls.Nulls,
-// 	fs fileservice.FileService,
-// ) (err error) {
-// 	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
-// 		location := catalog.BlockLocation(
-// 			*tombstoneObject,
-// 			uint16(pos),
-// 			options.DefaultBlockMaxRows,
-// 		)
-// 		var mask *nulls.Nulls
-// 	}
-// 	return
-// }
+func GetTombstonesByBlockId(
+	ctx context.Context,
+	ts types.TS,
+	blockId objectio.Blockid,
+	getTombstoneFile func() (*objectio.ObjectStats, error),
+	deletedMask *nulls.Nulls,
+	fs fileservice.FileService,
+) (err error) {
+	loadedBlkCnt := 0
+	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
+		location := tombstoneObject.BlockLocation(uint16(pos), options.DefaultBlockMaxRows)
+		if mask, err := FillBlockDeleteMask(
+			ctx, ts, blockId, location, fs,
+		); err != nil {
+			return false, err
+		} else {
+			deletedMask.Or(mask)
+		}
+		loadedBlkCnt++
+		return true, nil
+	}
+
+	var (
+		tombstoneObjectCnt int
+		skipObjectCnt      int
+		totalBlkCnt        int
+	)
+	if tombstoneObjectCnt, skipObjectCnt, totalBlkCnt, err = CheckTombstoneFile(
+		ctx, blockId[:], getTombstoneFile, onBlockSelectedFn, fs,
+	); err != nil {
+		return
+	}
+
+	v2.TxnReaderEachBLKLoadedTombstoneHistogram.Observe(float64(loadedBlkCnt))
+	v2.TxnReaderScannedTotalTombstoneHistogram.Observe(float64(tombstoneObjectCnt))
+	if tombstoneObjectCnt > 0 {
+		v2.TxnReaderTombstoneZMSelectivityHistogram.Observe(float64(skipObjectCnt) / float64(tombstoneObjectCnt))
+	}
+	if totalBlkCnt > 0 {
+		v2.TxnReaderTombstoneBLSelectivityHistogram.Observe(float64(loadedBlkCnt) / float64(totalBlkCnt))
+	}
+
+	return
+}
 
 func CheckTombstoneFile(
 	ctx context.Context,
@@ -47,14 +77,21 @@ func CheckTombstoneFile(
 	getTombstoneFile func() (*objectio.ObjectStats, error),
 	onBlockSelectedFn func(*objectio.ObjectStats, int) (bool, error),
 	fs fileservice.FileService,
-) (err error) {
+) (
+	tombstoneObjectCnt int,
+	skipObjectCnt int,
+	totalBlkCnt int,
+	err error,
+) {
 	if getTombstoneFile == nil {
 		return
 	}
 	var tombstoneObject *objectio.ObjectStats
 	for tombstoneObject, err = getTombstoneFile(); err == nil && tombstoneObject != nil; tombstoneObject, err = getTombstoneFile() {
+		tombstoneObjectCnt++
 		tombstoneZM := tombstoneObject.SortKeyZoneMap()
 		if !tombstoneZM.PrefixEq(prefixPattern) {
+			skipObjectCnt++
 			continue
 		}
 		var objMeta objectio.ObjectMeta
@@ -68,6 +105,7 @@ func CheckTombstoneFile(
 		dataMeta := objMeta.MustDataMeta()
 
 		blkCnt := int(dataMeta.BlockCount())
+		totalBlkCnt += blkCnt
 
 		startIdx := sort.Search(blkCnt, func(i int) bool {
 			return dataMeta.GetBlockMeta(uint32(i)).MustGetColumn(0).ZoneMap().AnyGEByValue(prefixPattern)
