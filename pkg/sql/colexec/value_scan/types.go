@@ -28,10 +28,10 @@ var _ vm.Operator = new(ValueScan)
 
 type container struct {
 	idx int
-	bat *batch.Batch
 }
 type ValueScan struct {
 	ctr        container
+	Batchs     []*batch.Batch
 	RowsetData *plan.RowsetData
 	ColCount   int
 	Uuid       []byte
@@ -74,23 +74,24 @@ func (valueScan *ValueScan) Release() {
 
 func (valueScan *ValueScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	valueScan.ctr.idx = 0
-	if valueScan.RowsetData == nil {
-		if valueScan.ctr.bat != nil {
-			valueScan.ctr.bat.Clean(proc.GetMPool())
-			valueScan.ctr.bat = nil
-		}
+	if valueScan.Batchs != nil {
+		valueScan.cleanBatchs(proc)
 	}
 	valueScan.ResetProjection(proc)
 }
 
 func (valueScan *ValueScan) Free(proc *process.Process, pipelineFailed bool, err error) {
 	valueScan.FreeProjection(proc)
+	if valueScan.Batchs != nil {
+		valueScan.cleanBatchs(proc)
+	}
 }
 
-func (valueScan *ValueScan) SetValueScanBatch(bat *batch.Batch) {
-	valueScan.ctr.bat = bat
-}
-
-func (valueScan *ValueScan) ResetBatchIdx() {
-	valueScan.ctr.idx = 0
+func (valueScan *ValueScan) cleanBatchs(proc *process.Process) {
+	for _, bat := range valueScan.Batchs {
+		if bat != nil {
+			bat.Clean(proc.Mp())
+		}
+	}
+	valueScan.Batchs = nil
 }

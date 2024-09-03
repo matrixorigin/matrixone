@@ -171,8 +171,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		}
 
 		lastAnalyze.Network(bat)
-		fakeValueScanOperator.SetValueScanBatch(bat)
-		fakeValueScanOperator.ResetBatchIdx()
+		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
 
 		result, errCall := LastOperator.Call(s.Proc)
 		bat.Clean(c.proc.GetMPool())
