@@ -258,7 +258,7 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 ) (err error) {
 	schema := obj.meta.Load().GetSchema()
 	def := schema.GetSingleSortKey()
-	view, err := obj.ResolvePersistedColumnData(
+	data, err := obj.ResolvePersistedColumnData(
 		ctx,
 		txn,
 		schema,
@@ -269,16 +269,16 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 	if err != nil {
 		return
 	}
-	defer view.Close()
+	defer data.Close()
 	blkID := objectio.NewBlockidWithObjectID(obj.meta.Load().ID(), blkOffset)
 	var dedupFn any
 	if isAblk {
 		dedupFn = containers.MakeForeachVectorOp(
-			keys.GetType().Oid, getRowIDAlkFunctions, view.Vecs[0], rowIDs, blkID, maxVisibleRow, obj.LoadPersistedCommitTS, txn, skipCommittedBeforeTxnForAblk,
+			keys.GetType().Oid, getRowIDAlkFunctions, data.Vecs[0], rowIDs, blkID, maxVisibleRow, obj.LoadPersistedCommitTS, txn, skipCommittedBeforeTxnForAblk,
 		)
 	} else {
 		dedupFn = containers.MakeForeachVectorOp(
-			keys.GetType().Oid, getDuplicatedRowIDNABlkFunctions, view.Vecs[0], rowIDs, blkID,
+			keys.GetType().Oid, getDuplicatedRowIDNABlkFunctions, data.Vecs[0], rowIDs, blkID,
 		)
 	}
 	err = containers.ForeachVector(keys, dedupFn, sels)
@@ -297,7 +297,7 @@ func (obj *baseObject) containsWithLoad(
 ) (err error) {
 	schema := obj.meta.Load().GetSchema()
 	def := schema.GetSingleSortKey()
-	view, err := obj.ResolvePersistedColumnData(
+	data, err := obj.ResolvePersistedColumnData(
 		ctx,
 		txn,
 		schema,
@@ -308,14 +308,15 @@ func (obj *baseObject) containsWithLoad(
 	if err != nil {
 		return
 	}
+	defer data.Close()
 	var dedupFn any
 	if isAblk {
 		dedupFn = containers.MakeForeachVectorOp(
-			keys.GetType().Oid, containsAlkFunctions, view.Vecs[0], keys, obj.LoadPersistedCommitTS, txn,
+			keys.GetType().Oid, containsAlkFunctions, data.Vecs[0], keys, obj.LoadPersistedCommitTS, txn,
 		)
 	} else {
 		dedupFn = containers.MakeForeachVectorOp(
-			keys.GetType().Oid, containsNABlkFunctions, view.Vecs[0], keys,
+			keys.GetType().Oid, containsNABlkFunctions, data.Vecs[0], keys,
 		)
 	}
 	err = containers.ForeachVector(keys, dedupFn, sels)
@@ -516,6 +517,7 @@ func (obj *baseObject) GetValue(
 		if err != nil {
 			return
 		}
+		defer bat.Close()
 		err = txn.GetStore().FillInWorkspaceDeletes(obj.meta.Load().AsCommonID(), &bat.Deletes)
 		if err != nil {
 			return
@@ -539,5 +541,6 @@ func (obj *baseObject) GetValue(
 	if !isNull {
 		v = bat.Vecs[0].Get(row)
 	}
+	bat.Close()
 	return
 }
