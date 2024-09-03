@@ -813,7 +813,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Outcnt = outcnt
 			node.Stats.Cost = incnt + outcnt
 			node.Stats.HashmapStats.HashmapSize = outcnt
-			node.Stats.Selectivity = outcnt / childStats.Outcnt
+			node.Stats.Selectivity = 1
 			if len(node.FilterList) > 0 {
 				node.Stats.Outcnt *= 0.0001
 				node.Stats.Selectivity *= 0.0001
