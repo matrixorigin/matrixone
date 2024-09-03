@@ -322,15 +322,15 @@ func (store *txnStore) RangeDelete(
 	return db.RangeDelete(id, start, end, pkVec, dt)
 }
 
-func (store *txnStore) TryDeleteByDeltaloc(
-	id *common.ID, deltaloc objectio.Location,
+func (store *txnStore) TryDeleteByStats(
+	id *common.ID, stats objectio.ObjectStats,
 ) (ok bool, err error) {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return
 	}
-	return db.TryDeleteByDeltaloc(id, deltaloc)
+	return db.TryDeleteByStats(id, stats)
 }
 
 func (store *txnStore) GetByFilter(ctx context.Context, dbId, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
