@@ -400,6 +400,10 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			for _, bat := range arg.ctr.cachedBatches {
 				bat.Clean(proc.Mp())
 			}
+			if arg.ctr.buf != nil {
+				arg.ctr.buf.Clean(proc.Mp())
+				arg.ctr.buf = nil
+			}
 			arg.Free(proc, false, nil)
 			proc.Free()
 		},
