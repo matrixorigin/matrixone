@@ -51,6 +51,14 @@ func sentenceChunk(text string) []Chunk {
 	return chunks
 }
 
+// document-based chunking
+func documentChunk(text string) []Chunk {
+	var chunks []Chunk
+	var start = 0
+	chunks = append(chunks, Chunk{Start: start, Length: len(text), Text: text})
+	return chunks
+}
+
 // Paragraph-based chunking
 func paragraphChunk(text string) []Chunk {
 	var chunks []Chunk
@@ -82,6 +90,8 @@ func ChunkString(text, mode string) (string, error) {
 			chunks = sentenceChunk(text)
 		case "paragraph":
 			chunks = paragraphChunk(text)
+		case "document":
+			chunks = documentChunk(text)
 		default:
 			return "", moerr.NewInvalidInputNoCtxf("'%s' is not a valid chunk strategy", mode)
 		}
