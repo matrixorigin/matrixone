@@ -83,7 +83,7 @@ type PipelineSignalReceiver struct {
 
 func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister) *PipelineSignalReceiver {
 	nbs := make([]int, len(regs))
-	scs := make([]reflect.SelectCase, 0, len(regs))
+	scs := make([]reflect.SelectCase, 0, len(regs)+1)
 	scs = append(scs, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(runningCtx.Done())})
 	for i, reg := range regs {
 		// 0 is default number, it takes a same effect as 1.
@@ -93,7 +93,7 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 			nbs[i] = reg.NilBatchCnt
 		}
 
-		scs = append(scs, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(reg.Ch2)})
+		scs = append(scs, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(regs[i].Ch2)})
 	}
 
 	return &PipelineSignalReceiver{
