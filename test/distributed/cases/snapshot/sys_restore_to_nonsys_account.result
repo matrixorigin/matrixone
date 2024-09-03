@@ -426,3 +426,5 @@ internal error: non-sys account's snapshot can't restore to sys account
 drop snapshot sp03;
 drop database test01;
 drop account acc01;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

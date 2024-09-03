@@ -776,3 +776,5 @@ drop snapshot snapshot2;
 drop table if exists cluster_table_1;
 drop table if exists cluster_table_2;
 drop database if exists procedure_test;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

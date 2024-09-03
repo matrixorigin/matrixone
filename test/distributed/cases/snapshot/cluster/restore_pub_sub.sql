@@ -55,3 +55,7 @@ show databases;
 
 drop account acc01;
 drop database if exists test02;
+-- @ignore:1
+show snapshots;
+-- @ignore:5,6
+show publications;

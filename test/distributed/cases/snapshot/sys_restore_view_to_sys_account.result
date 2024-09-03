@@ -865,3 +865,5 @@ drop database test03;
 drop database test05;
 drop snapshot sp100;
 drop snapshot sp101;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

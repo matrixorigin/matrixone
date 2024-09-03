@@ -732,6 +732,5 @@ select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database 
 drop database db11;
 drop snapshot sp18;
 drop snapshot sp17;
-
-
-
+-- @ignore:1
+show snapshots;
