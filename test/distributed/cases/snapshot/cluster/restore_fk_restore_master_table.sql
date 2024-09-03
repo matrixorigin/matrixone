@@ -171,5 +171,3 @@ drop snapshot if exists sys_sp;
 -- @ignore:1
 show snapshots;
 drop database Company;
-
-
