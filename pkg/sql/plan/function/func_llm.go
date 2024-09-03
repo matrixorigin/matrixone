@@ -16,6 +16,7 @@ import (
 func LLMExtractText(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	input := vector.GenerateFunctionStrParameter(parameters[0])
 	output := vector.GenerateFunctionStrParameter(parameters[1])
+	extractorType := vector.GenerateFunctionStrParameter(parameters[2])
 	rs := vector.MustFunctionResult[bool](result)
 
 	rowCount := uint64(length)
@@ -37,12 +38,24 @@ func LLMExtractText(parameters []*vector.Vector, result vector.FunctionResultWra
 			continue
 		}
 
+		extractorTypeBytes, nullInput3 := extractorType.GetStrValue(i)
+		if nullInput3 {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
 		inputPath := util.UnsafeBytesToString(inputBytes)
 		outputPath := util.UnsafeBytesToString(outputBytes)
+		extractorTypeString := util.UnsafeBytesToString(extractorTypeBytes)
 
 		moUrl, _, ext, err := types.ParseDatalink(inputPath)
+		if "."+extractorTypeString != ext {
+			return moerr.NewInvalidInputNoCtxf("File type and extractor type are not equal.")
+		}
 		if ext != ".pdf" {
-			return moerr.NewInvalidInputNoCtxf("Only pdf file supported")
+			return moerr.NewInvalidInputNoCtxf("Only pdf file supported.")
 		}
 		if err != nil {
 			return err

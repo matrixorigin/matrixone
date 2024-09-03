@@ -6543,7 +6543,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_datalink, types.T_datalink},
+				args:       []types.T{types.T_datalink, types.T_datalink, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
