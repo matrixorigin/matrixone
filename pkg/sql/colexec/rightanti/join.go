@@ -289,7 +289,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Proce
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 						continue
 					} else {
-						vcol := vector.MustFixedCol[bool](vec)
+						vcol := vector.MustFixedColWithTypeCheck[bool](vec)
 						if !vcol[0] {
 							continue
 						}
@@ -321,7 +321,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Proce
 						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 							continue
 						} else {
-							vcol := vector.MustFixedCol[bool](vec)
+							vcol := vector.MustFixedColWithTypeCheck[bool](vec)
 							if !vcol[0] {
 								continue
 							}

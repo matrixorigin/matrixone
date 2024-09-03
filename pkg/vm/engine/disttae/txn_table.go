@@ -178,7 +178,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 				}
 			} else {
 				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 					for _, v := range vs {
 						deletes[v] = struct{}{}
 					}
@@ -492,7 +492,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 				return err
 			}
 			defer release()
-			rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
+			rowIds := vector.MustFixedColWithTypeCheck[types.Rowid](rowIdBat.GetVector(0))
 			for _, rowId := range rowIds {
 				_, offset := rowId.Decode()
 				*offsets = append(*offsets, int64(offset))
@@ -534,7 +534,7 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 					return err
 				}
 				defer release()
-				rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
+				rowIds := vector.MustFixedColWithTypeCheck[types.Rowid](rowIdBat.GetVector(0))
 				for _, rowId := range rowIds {
 					if deletesRowId != nil {
 						deletesRowId[rowId] = 0
@@ -587,7 +587,7 @@ func (tbl *txnTable) CollectTombstones(
 				//}
 				//deletes in txn.Write maybe comes from PartitionState.Rows ,
 				// PartitionReader need to skip them.
-				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 				tombstone.rowids = append(tombstone.rowids, vs...)
 			}
 		})
@@ -1023,7 +1023,7 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectS
 //				//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
 //				if entry.fileName == "" &&
 //					entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
-//					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+//					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 //					for _, v := range vs {
 //						id, _ := v.Decode()
 //						dirtyBlks[id] = struct{}{}
@@ -2410,7 +2410,7 @@ func (tbl *txnTable) getUncommittedRows(
 				rows = rows + uint64(entry.bat.RowCount())
 			} else {
 				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 					for _, v := range vs {
 						deletes[v] = struct{}{}
 					}

@@ -924,7 +924,7 @@ func constructValueScanBatch(proc *process.Process, node *plan.Node) (*batch.Bat
 				exprList = exprs.([][]colexec.ExpressionExecutor)[i]
 			}
 			if params != nil {
-				vs := vector.MustFixedCol[types.Varlena](params)
+				vs := vector.MustFixedColWithTypeCheck[types.Varlena](params)
 				for _, row := range colsData[i].Data {
 					if row.Pos >= 0 {
 						isNull := params.GetNulls().Contains(uint64(row.Pos - 1))
@@ -2525,7 +2525,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			}
 			defer vec2.Free(c.proc.Mp())
 
-			limit, offset := vector.MustFixedCol[uint64](vec1)[0], vector.MustFixedCol[uint64](vec2)[0]
+			limit, offset := vector.MustFixedColWithTypeCheck[uint64](vec1)[0], vector.MustFixedColWithTypeCheck[uint64](vec2)[0]
 			topN := limit + offset
 			overflow := false
 			if topN < limit || topN < offset {

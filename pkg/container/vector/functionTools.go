@@ -64,7 +64,7 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 			sourceVector: v,
 		}
 	}
-	cols := MustFixedCol[T](v)
+	cols := MustFixedColWithTypeCheck[T](v)
 	if v.IsConst() {
 		return &FunctionParameterScalar[T]{
 			typ:          *t,
@@ -403,7 +403,7 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 		fr.length = 0
 		fr.vec.length = targetSize
 		if targetSize > oldLength {
-			fr.cols = MustFixedCol[T](fr.vec)
+			fr.cols = MustFixedColWithTypeCheck[T](fr.vec)
 		}
 	}
 	return nil

@@ -222,8 +222,8 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		}()
 		var commitTSs []types.TS
 		if !persistedByCN {
-			commitTSs = vector.MustFixedCol[types.TS](vecs[2].GetDownstreamVector())
-			rowIDs := vector.MustFixedCol[types.Rowid](vecs[0].GetDownstreamVector())
+			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](vecs[2].GetDownstreamVector())
+			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
 			for i := 0; i < len(commitTSs); i++ {
 				commitTS := commitTSs[i]
 				if commitTS.GreaterEq(&start) && commitTS.LessEq(&end) &&
@@ -239,7 +239,7 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 				}
 			}
 		} else {
-			rowIDs := vector.MustFixedCol[types.Rowid](vecs[0].GetDownstreamVector())
+			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
 			for i := 0; i < len(rowIDs); i++ {
 				if types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
@@ -319,10 +319,10 @@ func (node *persistedNode) FillBlockTombstones(
 			if err != nil {
 				return err
 			}
-			commitTSs = vector.MustFixedCol[types.TS](commitTSVec.GetDownstreamVector())
+			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
 			commitTSVec.Close()
 		}
-		rowIDs := vector.MustFixedCol[types.Rowid](vecs[0].GetDownstreamVector())
+		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
 		// TODO: biselect, check visibility
 		for i := 0; i < len(rowIDs); i++ {
 			if node.object.meta.Load().IsAppendable() {

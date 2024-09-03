@@ -556,7 +556,7 @@ func (db *txnDatabase) loadTableFromStorage(
 		if err := fillTsVecForSysTableQueryBatch(bat, ts, res.Mp); err != nil {
 			return nil, err
 		}
-		ids := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_TABLES_REL_ID_IDX + cache.MO_OFF))
+		ids := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(catalog.MO_TABLES_REL_ID_IDX + cache.MO_OFF))
 		tblid = ids[0]
 		cache.ParseTablesBatchAnd(bat, func(ti *cache.TableItem) {
 			tableitem = ti

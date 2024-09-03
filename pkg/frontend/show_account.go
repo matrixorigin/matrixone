@@ -212,10 +212,10 @@ func handleStorageUsageResponse_V0(
 		}
 
 		storageUsageBat := ckpData.GetBatches()[logtail.StorageUsageInsIDX]
-		accIDVec := vector.MustFixedCol[uint64](
+		accIDVec := vector.MustFixedColWithTypeCheck[uint64](
 			storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector(),
 		)
-		sizeVec := vector.MustFixedCol[uint64](
+		sizeVec := vector.MustFixedColWithTypeCheck[uint64](
 			storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector(),
 		)
 
@@ -575,7 +575,7 @@ func getSpecialTableInfo(ctx context.Context, bh BackgroundExec, accId int64) (d
 		return 0, 0, moerr.NewInternalError(ctx, "no special table info")
 	}
 
-	dbCnt = vector.MustFixedCol[int64](ret[0].Vecs[1])[0]
-	tblCnt = vector.MustFixedCol[int64](ret[0].Vecs[0])[0]
+	dbCnt = vector.MustFixedColWithTypeCheck[int64](ret[0].Vecs[1])[0]
+	tblCnt = vector.MustFixedColWithTypeCheck[int64](ret[0].Vecs[0])[0]
 	return dbCnt, tblCnt, nil
 }

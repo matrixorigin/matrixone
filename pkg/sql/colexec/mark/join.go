@@ -250,7 +250,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *MarkJoin, proc *process.Proces
 		return err
 	}
 	markVec.SetLength(bat.RowCount())
-	ctr.markVals = vector.MustFixedCol[bool](markVec)
+	ctr.markVals = vector.MustFixedColWithTypeCheck[bool](markVec)
 	ctr.markNulls = nulls.NewWithSize(bat.RowCount())
 
 	if err = ctr.evalJoinProbeCondition(bat, proc); err != nil {
@@ -366,7 +366,7 @@ func (ctr *container) nonEqJoinInMap(ap *MarkJoin, mSels [][]int32, vals []uint6
 			if vec.GetNulls().Contains(0) {
 				condState = condUnkown
 			}
-			bs := vector.MustFixedCol[bool](vec)
+			bs := vector.MustFixedColWithTypeCheck[bool](vec)
 			if bs[0] {
 				condState = condTrue
 			}
@@ -394,7 +394,7 @@ func (ctr *container) nonEqJoinInMap(ap *MarkJoin, mSels [][]int32, vals []uint6
 				if vec.GetNulls().Contains(0) {
 					condState = condUnkown
 				}
-				bs := vector.MustFixedCol[bool](vec)
+				bs := vector.MustFixedColWithTypeCheck[bool](vec)
 				if bs[0] {
 					condState = condTrue
 					break

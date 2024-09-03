@@ -125,7 +125,7 @@ func (t *GCTable) SoftGC(
 	var gc []string
 	snapList := make(map[uint32][]types.TS)
 	for acct, snap := range snapShotList {
-		snapList[acct] = vector.MustFixedCol[types.TS](snap.GetDownstreamVector())
+		snapList[acct] = vector.MustFixedColWithTypeCheck[types.TS](snap.GetDownstreamVector())
 	}
 	t.Lock()
 	meta.Lock()

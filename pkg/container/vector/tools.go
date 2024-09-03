@@ -52,7 +52,7 @@ func MustFixedColNoTypeCheck[T any](v *Vector) (ret []T) {
 	return
 }
 
-func MustFixedCol[T any](v *Vector) (ret []T) {
+func MustFixedColWithTypeCheck[T any](v *Vector) (ret []T) {
 	ToFixedCol(v, &ret)
 	return
 }
@@ -70,7 +70,7 @@ func InefficientMustBytesCol(v *Vector) [][]byte {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
-	varcol := MustFixedCol[types.Varlena](v)
+	varcol := MustFixedColWithTypeCheck[types.Varlena](v)
 	if v.class == CONSTANT {
 		return [][]byte{(&varcol[0]).GetByteSlice(v.area)}
 	} else {
@@ -101,7 +101,7 @@ func InefficientMustStrCol(v *Vector) []string {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
-	varcol := MustFixedCol[types.Varlena](v)
+	varcol := MustFixedColNoTypeCheck[types.Varlena](v)
 	if v.class == CONSTANT {
 		return []string{(&varcol[0]).UnsafeGetString(v.area)}
 	} else {
@@ -118,7 +118,7 @@ func MustArrayCol[T types.RealNumbers](v *Vector) [][]T {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
-	varcol := MustFixedCol[types.Varlena](v)
+	varcol := MustFixedColWithTypeCheck[types.Varlena](v)
 	if v.class == CONSTANT {
 		return [][]T{types.GetArray[T](&varcol[0], v.area)}
 	} else {
@@ -144,7 +144,7 @@ func ExpandFixedCol[T any](v *Vector) []T {
 		}
 		return vs
 	}
-	return MustFixedCol[T](v)
+	return MustFixedColWithTypeCheck[T](v)
 }
 
 func ExpandStrCol(v *Vector) []string {
@@ -180,13 +180,13 @@ func ExpandBytesCol(v *Vector) [][]byte {
 }
 
 func MustVarlenaToInt64Slice(v *Vector) [][3]int64 {
-	data := MustFixedCol[types.Varlena](v)
+	data := MustFixedColNoTypeCheck[types.Varlena](v)
 	pointer := (*[3]int64)(data[0].UnsafePtr())
 	return unsafe.Slice(pointer, len(data))
 }
 
 func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
-	data = MustFixedCol[types.Varlena](v)
+	data = MustFixedColNoTypeCheck[types.Varlena](v)
 	area = v.area
 	return
 }

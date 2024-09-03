@@ -280,7 +280,7 @@ func (ctr *container) evalApCondForOneSel(bat, rbat *batch.Batch, ap *InnerJoin,
 	if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 		return nil
 	}
-	bs := vector.MustFixedCol[bool](vec)
+	bs := vector.MustFixedColWithTypeCheck[bool](vec)
 	if !bs[0] {
 		return nil
 	}

@@ -146,12 +146,12 @@ func TestNewObjectWriter(t *testing.T) {
 	obj, err := Decode(vec.Entries[0].CachedData.Bytes())
 	assert.Nil(t, err)
 	vector1 := obj.(*vector.Vector)
-	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
+	assert.Equal(t, int8(3), vector.MustFixedColWithTypeCheck[int8](vector1)[3])
 
 	obj, err = Decode(vec.Entries[1].CachedData.Bytes())
 	assert.Nil(t, err)
 	vector2 := obj.(*vector.Vector)
-	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
+	assert.Equal(t, int32(3), vector.MustFixedColWithTypeCheck[int32](vector2)[3])
 
 	obj, err = Decode(vec.Entries[2].CachedData.Bytes())
 	assert.Nil(t, err)
@@ -187,12 +187,12 @@ func TestNewObjectWriter(t *testing.T) {
 	obj, err = Decode(vec.Entries[0].CachedData.Bytes())
 	assert.Nil(t, err)
 	vector1 = obj.(*vector.Vector)
-	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
+	assert.Equal(t, int8(3), vector.MustFixedColWithTypeCheck[int8](vector1)[3])
 
 	obj, err = Decode(vec.Entries[1].CachedData.Bytes())
 	assert.Nil(t, err)
 	vector2 = obj.(*vector.Vector)
-	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
+	assert.Equal(t, int32(3), vector.MustFixedColWithTypeCheck[int32](vector2)[3])
 
 	obj, err = Decode(vec.Entries[2].CachedData.Bytes())
 	assert.Nil(t, err)

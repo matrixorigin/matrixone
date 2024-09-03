@@ -541,8 +541,8 @@ func readBlockData(
 		}
 
 		t0 := time.Now()
-		//aborts := vector.MustFixedCol[bool](loaded.Vecs[len(loaded.Vecs)-1])
-		commits := vector.MustFixedCol[types.TS](loaded.Vecs[len(loaded.Vecs)-1])
+		//aborts := vector.MustFixedColWithTypeCheck[bool](loaded.Vecs[len(loaded.Vecs)-1])
+		commits := vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[len(loaded.Vecs)-1])
 		for i := 0; i < len(commits); i++ {
 			if commits[i].Greater(&ts) {
 				deletes.Add(uint64(i))
@@ -616,8 +616,8 @@ func EvalDeleteRowsByTimestamp(
 	// record visible delete rows
 	rows = nulls.NewWithSize(64)
 
-	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
-	tss := vector.MustFixedCol[types.TS](deletes.Vecs[1])
+	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](deletes.Vecs[0])
+	tss := vector.MustFixedColWithTypeCheck[types.TS](deletes.Vecs[1])
 	//aborts := deletes.Vecs[3]
 
 	start, end := FindIntervalForBlock(rowids, blockid)
@@ -642,7 +642,7 @@ func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
 	}
 	// record visible delete rows
 	rows = nulls.NewWithSize(0)
-	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
+	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](deletes.Vecs[0])
 
 	start, end := FindIntervalForBlock(rowids, &bid)
 

@@ -466,8 +466,8 @@ func testColumnCacheInsert[T constraints.Integer](
 			require.NoError(t, err)
 			assert.Equal(t, expectLastInsertValue, lastInsertValue)
 			assert.Equal(t,
-				vector.MustFixedCol[T](expect),
-				vector.MustFixedCol[T](input))
+				vector.MustFixedColWithTypeCheck[T](expect),
+				vector.MustFixedColWithTypeCheck[T](input))
 		},
 	)
 }

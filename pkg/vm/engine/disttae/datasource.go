@@ -609,7 +609,7 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 			continue
 		}
 
-		retainedRowIds = vector.MustFixedCol[types.Rowid](entry.bat.Vecs[0])
+		retainedRowIds = vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.Vecs[0])
 		offsets := rowIdsToOffset(retainedRowIds, int64(0)).([]int64)
 
 		b, _ := retainedRowIds[0].Decode()
@@ -748,7 +748,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 			}
 		}
 
-		rowIds := vector.MustFixedCol[types.Rowid](bat.Vecs[batRowIdx])
+		rowIds := vector.MustFixedColWithTypeCheck[types.Rowid](bat.Vecs[batRowIdx])
 		deleted, err := ls.batchApplyTombstoneObjects(minTS, rowIds[applyOffset:])
 		if err != nil {
 			return err
@@ -957,7 +957,7 @@ func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 			continue
 		}
 
-		delRowIds = vector.MustFixedCol[types.Rowid](writes[idx].bat.Vecs[0])
+		delRowIds = vector.MustFixedColWithTypeCheck[types.Rowid](writes[idx].bat.Vecs[0])
 		for _, delRowId := range delRowIds {
 			b, o := delRowId.Decode()
 			if bid.Compare(b) != 0 {
@@ -1407,9 +1407,9 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 			var deletedRowIds []types.Rowid
 			var commit []types.TS
 
-			deletedRowIds = vector.MustFixedCol[types.Rowid](loaded.Vecs[0])
+			deletedRowIds = vector.MustFixedColWithTypeCheck[types.Rowid](loaded.Vecs[0])
 			if !persistedByCN {
-				commit = vector.MustFixedCol[types.TS](loaded.Vecs[1])
+				commit = vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[1])
 			}
 
 			for i := range rowIds {

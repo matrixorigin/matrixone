@@ -494,7 +494,7 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 		return err
 	}
 	vec.SetLength(n + length)
-	ret := vector.MustFixedCol[U](vec)
+	ret := vector.MustFixedColWithTypeCheck[U](vec)
 	levels := page.DefinitionLevels()
 	j := 0
 	for i := 0; i < n; i++ {

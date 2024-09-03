@@ -442,7 +442,7 @@ func TestLogtailBasic(t *testing.T) {
 		rowidMap[id] = 1
 	}
 	for i := int64(0); i < 10; i++ {
-		id := vector.MustFixedCol[types.Rowid](rowids)[i]
+		id := vector.MustFixedColWithTypeCheck[types.Rowid](rowids)[i]
 		rowidMap[id] = rowidMap[id] + 1
 	}
 	require.Equal(t, 10, len(rowidMap))

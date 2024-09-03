@@ -741,7 +741,7 @@ func ForeachWindowFixed[T any](
 
 		return
 	}
-	slice := movec.MustFixedCol[T](vec)[start : start+length]
+	slice := movec.MustFixedColWithTypeCheck[T](vec)[start : start+length]
 	if sels.IsEmpty() {
 		if reverse {
 			for i := len(slice) - 1; i >= 0; i-- {

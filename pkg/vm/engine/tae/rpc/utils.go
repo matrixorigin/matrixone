@@ -69,7 +69,7 @@ func (is *itemSet) Clear() {
 }
 
 func getBlkIDsFromRowids(vec *vector.Vector) map[types.Blockid]struct{} {
-	rowids := vector.MustFixedCol[types.Rowid](vec)
+	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
 	blkids := make(map[types.Blockid]struct{})
 	for _, rowid := range rowids {
 		blkID := *rowid.BorrowBlockID()

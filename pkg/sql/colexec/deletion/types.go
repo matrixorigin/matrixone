@@ -289,7 +289,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 
 // Collect relevant information about intermediate batche
 func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batch.Batch, rowIdIdx int, pIdx int, pkIdx int) {
-	vs := vector.MustFixedCol[types.Rowid](destBatch.GetVector(int32(rowIdIdx)))
+	vs := vector.MustFixedColWithTypeCheck[types.Rowid](destBatch.GetVector(int32(rowIdIdx)))
 	var bitmap *nulls.Nulls
 	for i, rowId := range vs {
 		blkid := rowId.CloneBlockID()

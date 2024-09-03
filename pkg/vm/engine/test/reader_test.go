@@ -194,7 +194,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 		var bat2 *batch.Batch
 		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
 			relation.GetDBID(ctx), relation.GetTableID(ctx), 1, func(entry disttae.Entry) {
-				waitedDeletes := vector.MustFixedCol[types.Rowid](entry.Bat().GetVector(0))
+				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
 				waitedDeletes = waitedDeletes[:rowsCount/2]
 				bat2 = batch.NewWithSize(1)
 				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())

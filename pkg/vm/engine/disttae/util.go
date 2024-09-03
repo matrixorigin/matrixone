@@ -159,8 +159,8 @@ func mergeBaseFilterInKind(
 
 	switch va.GetType().Oid {
 	case types.T_int8:
-		a := vector.MustFixedCol[int8](va)
-		b := vector.MustFixedCol[int8](vb)
+		a := vector.MustFixedColNoTypeCheck[int8](va)
+		b := vector.MustFixedColNoTypeCheck[int8](vb)
 		cmp := func(x, y int8) int { return int(x - y) }
 
 		if isOR {
@@ -169,8 +169,8 @@ func mergeBaseFilterInKind(
 			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_int16:
-		a := vector.MustFixedCol[int16](va)
-		b := vector.MustFixedCol[int16](vb)
+		a := vector.MustFixedColNoTypeCheck[int16](va)
+		b := vector.MustFixedColNoTypeCheck[int16](vb)
 		cmp := func(x, y int16) int { return int(x - y) }
 
 		if isOR {
@@ -179,8 +179,8 @@ func mergeBaseFilterInKind(
 			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_int32:
-		a := vector.MustFixedCol[int32](va)
-		b := vector.MustFixedCol[int32](vb)
+		a := vector.MustFixedColNoTypeCheck[int32](va)
+		b := vector.MustFixedColNoTypeCheck[int32](vb)
 		cmp := func(x, y int32) int { return int(x - y) }
 
 		if isOR {
@@ -189,8 +189,8 @@ func mergeBaseFilterInKind(
 			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_int64:
-		a := vector.MustFixedCol[int64](va)
-		b := vector.MustFixedCol[int64](vb)
+		a := vector.MustFixedColNoTypeCheck[int64](va)
+		b := vector.MustFixedColNoTypeCheck[int64](vb)
 		cmp := func(x, y int64) int { return int(x - y) }
 
 		if isOR {
@@ -199,8 +199,8 @@ func mergeBaseFilterInKind(
 			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_float32:
-		a := vector.MustFixedCol[float32](va)
-		b := vector.MustFixedCol[float32](vb)
+		a := vector.MustFixedColNoTypeCheck[float32](va)
+		b := vector.MustFixedColNoTypeCheck[float32](vb)
 		cmp := func(x, y float32) int { return int(x - y) }
 
 		if isOR {
@@ -209,8 +209,8 @@ func mergeBaseFilterInKind(
 			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_float64:
-		a := vector.MustFixedCol[float64](va)
-		b := vector.MustFixedCol[float64](vb)
+		a := vector.MustFixedColNoTypeCheck[float64](va)
+		b := vector.MustFixedColNoTypeCheck[float64](vb)
 		cmp := func(x, y float64) int { return int(x - y) }
 
 		if isOR {
@@ -219,8 +219,8 @@ func mergeBaseFilterInKind(
 			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_uint8:
-		a := vector.MustFixedCol[uint8](va)
-		b := vector.MustFixedCol[uint8](vb)
+		a := vector.MustFixedColNoTypeCheck[uint8](va)
+		b := vector.MustFixedColNoTypeCheck[uint8](vb)
 		cmp := func(x, y uint8) int { return int(x - y) }
 
 		if isOR {
@@ -229,8 +229,8 @@ func mergeBaseFilterInKind(
 			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_uint16:
-		a := vector.MustFixedCol[uint16](va)
-		b := vector.MustFixedCol[uint16](vb)
+		a := vector.MustFixedColNoTypeCheck[uint16](va)
+		b := vector.MustFixedColNoTypeCheck[uint16](vb)
 		cmp := func(x, y uint16) int { return int(x - y) }
 
 		if isOR {
@@ -239,8 +239,8 @@ func mergeBaseFilterInKind(
 			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_uint32:
-		a := vector.MustFixedCol[uint32](va)
-		b := vector.MustFixedCol[uint32](vb)
+		a := vector.MustFixedColNoTypeCheck[uint32](va)
+		b := vector.MustFixedColNoTypeCheck[uint32](vb)
 		cmp := func(x, y uint32) int { return int(x - y) }
 
 		if isOR {
@@ -249,8 +249,8 @@ func mergeBaseFilterInKind(
 			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_uint64:
-		a := vector.MustFixedCol[uint64](va)
-		b := vector.MustFixedCol[uint64](vb)
+		a := vector.MustFixedColNoTypeCheck[uint64](va)
+		b := vector.MustFixedColNoTypeCheck[uint64](vb)
 		cmp := func(x, y uint64) int { return int(x - y) }
 
 		if isOR {
@@ -259,8 +259,8 @@ func mergeBaseFilterInKind(
 			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_date:
-		a := vector.MustFixedCol[types.Date](va)
-		b := vector.MustFixedCol[types.Date](vb)
+		a := vector.MustFixedColNoTypeCheck[types.Date](va)
+		b := vector.MustFixedColNoTypeCheck[types.Date](vb)
 		cmp := func(x, y types.Date) int { return int(x - y) }
 
 		if isOR {
@@ -269,8 +269,8 @@ func mergeBaseFilterInKind(
 			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_time:
-		a := vector.MustFixedCol[types.Time](va)
-		b := vector.MustFixedCol[types.Time](vb)
+		a := vector.MustFixedColNoTypeCheck[types.Time](va)
+		b := vector.MustFixedColNoTypeCheck[types.Time](vb)
 		cmp := func(x, y types.Time) int { return int(x - y) }
 
 		if isOR {
@@ -279,8 +279,8 @@ func mergeBaseFilterInKind(
 			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_datetime:
-		a := vector.MustFixedCol[types.Datetime](va)
-		b := vector.MustFixedCol[types.Datetime](vb)
+		a := vector.MustFixedColNoTypeCheck[types.Datetime](va)
+		b := vector.MustFixedColNoTypeCheck[types.Datetime](vb)
 		cmp := func(x, y types.Datetime) int { return int(x - y) }
 
 		if isOR {
@@ -289,8 +289,8 @@ func mergeBaseFilterInKind(
 			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_timestamp:
-		a := vector.MustFixedCol[types.Timestamp](va)
-		b := vector.MustFixedCol[types.Timestamp](vb)
+		a := vector.MustFixedColNoTypeCheck[types.Timestamp](va)
+		b := vector.MustFixedColNoTypeCheck[types.Timestamp](vb)
 		cmp := func(x, y types.Timestamp) int { return int(x - y) }
 		if isOR {
 			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
@@ -298,8 +298,8 @@ func mergeBaseFilterInKind(
 			err = vector.Intersection2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
 		}
 	case types.T_decimal64:
-		a := vector.MustFixedCol[types.Decimal64](va)
-		b := vector.MustFixedCol[types.Decimal64](vb)
+		a := vector.MustFixedColNoTypeCheck[types.Decimal64](va)
+		b := vector.MustFixedColNoTypeCheck[types.Decimal64](vb)
 		cmp := func(x, y types.Decimal64) int { return int(x - y) }
 		if isOR {
 			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
@@ -308,8 +308,8 @@ func mergeBaseFilterInKind(
 		}
 
 	case types.T_decimal128:
-		a := vector.MustFixedCol[types.Decimal128](va)
-		b := vector.MustFixedCol[types.Decimal128](vb)
+		a := vector.MustFixedColNoTypeCheck[types.Decimal128](va)
+		b := vector.MustFixedColNoTypeCheck[types.Decimal128](vb)
 		if isOR {
 			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(),
 				func(x, y types.Decimal128) int { return types.CompareDecimal128(x, y) })
@@ -326,8 +326,8 @@ func mergeBaseFilterInKind(
 		}
 
 	case types.T_enum:
-		a := vector.MustFixedCol[types.Enum](va)
-		b := vector.MustFixedCol[types.Enum](vb)
+		a := vector.MustFixedColNoTypeCheck[types.Enum](va)
+		b := vector.MustFixedColNoTypeCheck[types.Enum](vb)
 		cmp := func(x, y types.Enum) int { return int(x - y) }
 		if isOR {
 			err = vector.Union2VectorOrdered(a, b, ret.vec, proc.Mp(), cmp)
@@ -814,117 +814,117 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 	mp := make(map[any]bool)
 	switch pk.GetType().Oid {
 	case types.T_bool:
-		vs := vector.MustFixedCol[bool](pk)
+		vs := vector.MustFixedColNoTypeCheck[bool](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_bit:
-		vs := vector.MustFixedCol[uint64](pk)
+		vs := vector.MustFixedColNoTypeCheck[uint64](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_int8:
-		vs := vector.MustFixedCol[int8](pk)
+		vs := vector.MustFixedColNoTypeCheck[int8](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_int16:
-		vs := vector.MustFixedCol[int16](pk)
+		vs := vector.MustFixedColNoTypeCheck[int16](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_int32:
-		vs := vector.MustFixedCol[int32](pk)
+		vs := vector.MustFixedColNoTypeCheck[int32](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_int64:
-		vs := vector.MustFixedCol[int64](pk)
+		vs := vector.MustFixedColNoTypeCheck[int64](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_uint8:
-		vs := vector.MustFixedCol[uint8](pk)
+		vs := vector.MustFixedColNoTypeCheck[uint8](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_uint16:
-		vs := vector.MustFixedCol[uint16](pk)
+		vs := vector.MustFixedColNoTypeCheck[uint16](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_uint32:
-		vs := vector.MustFixedCol[uint32](pk)
+		vs := vector.MustFixedColNoTypeCheck[uint32](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_uint64:
-		vs := vector.MustFixedCol[uint64](pk)
+		vs := vector.MustFixedColNoTypeCheck[uint64](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_decimal64:
-		vs := vector.MustFixedCol[types.Decimal64](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Decimal64](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_decimal128:
-		vs := vector.MustFixedCol[types.Decimal128](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Decimal128](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_uuid:
-		vs := vector.MustFixedCol[types.Uuid](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Uuid](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_float32:
-		vs := vector.MustFixedCol[float32](pk)
+		vs := vector.MustFixedColNoTypeCheck[float32](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_float64:
-		vs := vector.MustFixedCol[float64](pk)
+		vs := vector.MustFixedColNoTypeCheck[float64](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_date:
-		vs := vector.MustFixedCol[types.Date](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Date](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_timestamp:
-		vs := vector.MustFixedCol[types.Timestamp](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Timestamp](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_time:
-		vs := vector.MustFixedCol[types.Time](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Time](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_datetime:
-		vs := vector.MustFixedCol[types.Datetime](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Datetime](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_enum:
-		vs := vector.MustFixedCol[types.Enum](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Enum](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_TS:
-		vs := vector.MustFixedCol[types.TS](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.TS](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_Rowid:
-		vs := vector.MustFixedCol[types.Rowid](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Rowid](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
 	case types.T_Blockid:
-		vs := vector.MustFixedCol[types.Blockid](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Blockid](pk)
 		for _, v := range vs {
 			mp[v] = true
 		}
@@ -936,7 +936,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 				mp[v] = true
 			}
 		} else {
-			vs := vector.MustFixedCol[types.Varlena](pk)
+			vs := vector.MustFixedColNoTypeCheck[types.Varlena](pk)
 			area := pk.GetArea()
 			for i := 0; i < len(vs); i++ {
 				v := vs[i].UnsafeGetString(area)
@@ -961,161 +961,161 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 		var sels []int64
 		switch vec.GetType().Oid {
 		case types.T_bool:
-			vs := vector.MustFixedCol[bool](vec)
+			vs := vector.MustFixedColNoTypeCheck[bool](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_bit:
-			vs := vector.MustFixedCol[uint64](vec)
+			vs := vector.MustFixedColNoTypeCheck[uint64](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_int8:
-			vs := vector.MustFixedCol[int8](vec)
+			vs := vector.MustFixedColNoTypeCheck[int8](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_int16:
-			vs := vector.MustFixedCol[int16](vec)
+			vs := vector.MustFixedColNoTypeCheck[int16](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_int32:
-			vs := vector.MustFixedCol[int32](vec)
+			vs := vector.MustFixedColNoTypeCheck[int32](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_int64:
-			vs := vector.MustFixedCol[int64](vec)
+			vs := vector.MustFixedColNoTypeCheck[int64](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uint8:
-			vs := vector.MustFixedCol[uint8](vec)
+			vs := vector.MustFixedColNoTypeCheck[uint8](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uint16:
-			vs := vector.MustFixedCol[uint16](vec)
+			vs := vector.MustFixedColNoTypeCheck[uint16](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uint32:
-			vs := vector.MustFixedCol[uint32](vec)
+			vs := vector.MustFixedColNoTypeCheck[uint32](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uint64:
-			vs := vector.MustFixedCol[uint64](vec)
+			vs := vector.MustFixedColNoTypeCheck[uint64](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_decimal64:
-			vs := vector.MustFixedCol[types.Decimal64](vec)
+			vs := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_decimal128:
-			vs := vector.MustFixedCol[types.Decimal128](vec)
+			vs := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uuid:
-			vs := vector.MustFixedCol[types.Uuid](vec)
+			vs := vector.MustFixedColNoTypeCheck[types.Uuid](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_float32:
-			vs := vector.MustFixedCol[float32](vec)
+			vs := vector.MustFixedColNoTypeCheck[float32](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_float64:
-			vs := vector.MustFixedCol[float64](vec)
+			vs := vector.MustFixedColNoTypeCheck[float64](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_date:
-			vs := vector.MustFixedCol[types.Date](vec)
+			vs := vector.MustFixedColNoTypeCheck[types.Date](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_timestamp:
-			vs := vector.MustFixedCol[types.Timestamp](vec)
+			vs := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_time:
-			vs := vector.MustFixedCol[types.Time](vec)
+			vs := vector.MustFixedColNoTypeCheck[types.Time](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_datetime:
-			vs := vector.MustFixedCol[types.Datetime](vec)
+			vs := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_enum:
-			vs := vector.MustFixedCol[types.Enum](vec)
+			vs := vector.MustFixedColNoTypeCheck[types.Enum](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_TS:
-			vs := vector.MustFixedCol[types.TS](vec)
+			vs := vector.MustFixedColNoTypeCheck[types.TS](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_Rowid:
-			vs := vector.MustFixedCol[types.Rowid](vec)
+			vs := vector.MustFixedColNoTypeCheck[types.Rowid](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_Blockid:
-			vs := vector.MustFixedCol[types.Blockid](vec)
+			vs := vector.MustFixedColNoTypeCheck[types.Blockid](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
@@ -1131,7 +1131,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 					}
 				}
 			} else {
-				vs := vector.MustFixedCol[types.Varlena](pk)
+				vs := vector.MustFixedColNoTypeCheck[types.Varlena](pk)
 				area := pk.GetArea()
 				for i := 0; i < len(vs); i++ {
 					v := vs[i].UnsafeGetString(area)

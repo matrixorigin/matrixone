@@ -66,7 +66,7 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 	if err != nil {
 		return err
 	}
-	top.ctr.limit = vector.MustFixedCol[uint64](vec)[0]
+	top.ctr.limit = vector.MustFixedColWithTypeCheck[uint64](vec)[0]
 
 	if top.ctr.limit > 1024 {
 		top.ctr.sels = make([]int64, 0, 1024)
