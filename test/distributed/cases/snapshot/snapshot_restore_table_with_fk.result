@@ -211,3 +211,5 @@ drop table fk_test2.t3;
 drop database fk_test1;
 drop database fk_test2;
 drop account acc1;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

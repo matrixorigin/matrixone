@@ -749,3 +749,5 @@ drop snapshot sp19;
 -- @session
 
 drop account acc01;
+-- @ignore:1
+show snapshots;
