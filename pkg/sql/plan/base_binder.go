@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -245,8 +244,6 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 
 	case *tree.FullTextMatchExpr:
 		// ERIC
-		logutil.Infof("FULLTEXT %s", exprImpl.String())
-		//err = moerr.NewInvalidInput(b.GetContext(), "FullTextMatchExpr not supported yet")
 		expr, err = b.bindFullTextMatchExpr(exprImpl, depth, isRoot)
 	default:
 		err = moerr.NewNYIf(b.GetContext(), "expr '%+v'", exprImpl)
@@ -970,33 +967,18 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 // ERIC
 func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, depth int32, isRoot bool) (*Expr, error) {
 
-	logutil.Infof("BIND FULLTEXT")
 	args := make([]*Expr, 2+len(astExpr.KeyParts))
 
 	mode := int64(astExpr.Mode)
 	args[0] = makePlan2StringConstExprWithType(astExpr.Pattern, false)
 	args[1] = makePlan2Int64ConstExprWithType(mode)
 	for i, k := range astExpr.KeyParts {
-		logutil.Infof("Col %s", k.ColName.ColName())
 		c, err := b.baseBindColRef(k.ColName, depth, isRoot)
 		if err != nil {
 			return nil, err
 		}
 		args[i+2] = c
-		logutil.Infof("Col_Ref: %d %s", i, c.GetCol().GetName())
 	}
-	/*
-		args[2] = &plan.Expr{
-			Expr: &plan.Expr_List{
-				List: &plan.ExprList{
-					List: colrefs,
-				},
-			},
-			Typ: plan.Type{Id: int32(types.T_any),
-				NotNullable: false,
-			},
-		}
-	*/
 
 	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
 }
