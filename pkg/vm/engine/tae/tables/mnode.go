@@ -347,12 +347,11 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 	defer node.object.RUnlock()
 	minRow, maxRow, commitTSVec, abort, _ :=
 		node.object.appendMVCC.CollectAppendLocked(start, end, mp)
-	if abort != nil {
-		abort.Close()
-	}
 	if commitTSVec == nil {
 		return nil
 	}
+	defer commitTSVec.Close()
+	defer abort.Close()
 	rowIDs := vector.MustFixedCol[types.Rowid](
 		node.data.GetVectorByName(catalog.AttrRowID).GetDownstreamVector())
 	commitTSs := vector.MustFixedCol[types.TS](commitTSVec.GetDownstreamVector())
