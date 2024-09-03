@@ -228,6 +228,7 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 	if err != nil {
 		return
 	}
+	defer bat.Close()
 	collect = time.Since(inst)
 	if bat == nil || bat.Length() == 0 {
 		return
