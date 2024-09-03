@@ -604,3 +604,5 @@ drop snapshot sp100;
 drop snapshot sp101;
 -- @session
 drop account acc01;
+-- @ignore:1
+show snapshots;

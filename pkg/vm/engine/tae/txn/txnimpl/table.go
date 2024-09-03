@@ -1467,7 +1467,8 @@ func (tbl *txnTable) createTombstoneBatch(
 	}
 	return bat
 }
-func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
+
+func (tbl *txnTable) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
 	if tbl.tombstoneTable == nil {
 		tbl.tombstoneTable = newBaseTable(tbl.entry.GetLastestSchema(true), true, tbl)
 	}
@@ -1479,41 +1480,12 @@ func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Locati
 		return
 	}
 	tbl.store.warChecker.Insert(obj.GetMeta().(*catalog.ObjectEntry))
-	stats := tbl.deltaloc2ObjectStat(deltaloc, tbl.store.rt.Fs.Service)
 	err = tbl.addObjsWithMetaLoc(tbl.store.ctx, stats, true)
 	if err == nil {
 		tbl.tombstoneTable.tableSpace.objs = append(tbl.tombstoneTable.tableSpace.objs, id.ObjectID())
 		ok = true
 	}
 	return
-}
-
-func (tbl *txnTable) deltaloc2ObjectStat(loc objectio.Location, fs fileservice.FileService) objectio.ObjectStats {
-	stats := *objectio.NewObjectStatsWithObjectID(loc.Name().ObjectId(), false, true, true)
-	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &loc, false, fs)
-	if err != nil {
-		panic(err)
-	}
-	objectio.SetObjectStatsExtent(&stats, loc.Extent())
-	objectDataMeta := objMeta.MustDataMeta()
-	objectio.SetObjectStatsRowCnt(&stats, objectDataMeta.BlockHeader().Rows())
-	objectio.SetObjectStatsBlkCnt(&stats, objectDataMeta.BlockCount())
-	objectio.SetObjectStatsSize(&stats, loc.Extent().End()+objectio.FooterSize)
-	schema := tbl.tombstoneTable.schema
-	originSize := uint32(0)
-	for _, col := range schema.ColDefs {
-		if col.IsPhyAddr() {
-			continue
-		}
-		colmata := objectDataMeta.MustGetColumn(uint16(col.SeqNum))
-		originSize += colmata.Location().OriginSize()
-	}
-	objectio.SetObjectStatsOriginSize(&stats, originSize)
-	if schema.HasSortKey() {
-		col := schema.GetSingleSortKey()
-		objectio.SetObjectStatsSortKeyZoneMap(&stats, objectDataMeta.MustGetColumn(col.SeqNum).ZoneMap())
-	}
-	return stats
 }
 
 func (tbl *txnTable) FillInWorkspaceDeletes(blkID types.Blockid, deletes **nulls.Nulls) error {

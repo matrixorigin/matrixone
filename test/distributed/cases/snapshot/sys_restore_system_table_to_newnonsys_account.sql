@@ -556,4 +556,6 @@ drop role r5;
 drop snapshot sp03;
 drop account acc01;
 drop account acc02;
+-- @ignore:1
+show snapshots;
 set global enable_privilege_cache = on;

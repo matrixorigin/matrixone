@@ -401,7 +401,7 @@ func MockCNDeleteInS3(
 	schema *catalog.Schema,
 	txn txnif.AsyncTxn,
 	deleteRows []uint32,
-) (location objectio.Location, err error) {
+) (stats objectio.ObjectStats, err error) {
 	pkDef := schema.GetPrimaryKey()
 	var view *containers.Batch
 	err = obj.Scan(context.Background(), &view, txn, schema, blkOffset, []int{pkDef.Idx}, common.DefaultAllocator)
@@ -434,7 +434,11 @@ func MockCNDeleteInS3(
 	if err != nil {
 		return
 	}
-	blks, _, err := writer.Sync(context.Background())
-	location = blockio.EncodeLocation(name, blks[0].GetExtent(), uint32(bat.Length()), blks[0].GetID())
+	_, _, err = writer.Sync(context.Background())
+	//location = blockio.EncodeLocation(name, blks[0].GetExtent(), uint32(bat.Length()), blks[0].GetID())
+
+	stats = writer.GetObjectStats()[0]
+	stats.SetCNCreated()
+
 	return
 }

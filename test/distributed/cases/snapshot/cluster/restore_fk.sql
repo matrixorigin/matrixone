@@ -177,3 +177,4 @@ drop snapshot if exists sys_sp_master;
 -- @ignore:1
 show snapshots;
 drop database Company;
+show databases like 'Company';
