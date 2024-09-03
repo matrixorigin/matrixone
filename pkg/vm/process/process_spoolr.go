@@ -105,6 +105,10 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 
 func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, info error) {
 	for {
+		if receiver.alive == 0 {
+			return nil, nil
+		}
+
 		chosen, v, ok := reflect.Select(receiver.regs)
 		if chosen == 0 {
 			// user was going to end.
@@ -117,16 +121,11 @@ func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, in
 				idx := chosen - 1
 
 				receiver.nbs[idx]--
-				if receiver.nbs[idx] > 0 {
-					continue
-				}
-
-				// remove the unused channel.
-				receiver.regs = append(receiver.regs[:chosen], receiver.regs[chosen+1:]...)
-				receiver.nbs = append(receiver.nbs[:idx], receiver.nbs[idx+1:]...)
-				receiver.alive--
-				if receiver.alive == 0 {
-					return nil, info
+				if receiver.nbs[idx] == 0 {
+					// remove the unused channel.
+					receiver.regs = append(receiver.regs[:chosen], receiver.regs[chosen+1:]...)
+					receiver.nbs = append(receiver.nbs[:idx], receiver.nbs[idx+1:]...)
+					receiver.alive--
 				}
 				continue
 			}

@@ -54,14 +54,14 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	for {
 		b, info := merge.ctr.receiver.GetNextBatch()
-		if b == nil {
-			result.Status = vm.ExecStop
-			return result, nil
-		}
 		if info != nil {
 			return vm.CancelResult, info
 		}
 
+		if b == nil {
+			result.Status = vm.ExecStop
+			return result, nil
+		}
 		if b.Last() && merge.SinkScan {
 			continue
 		}
