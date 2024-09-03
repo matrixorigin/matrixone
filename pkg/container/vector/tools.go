@@ -152,7 +152,7 @@ func ExpandStrCol(v *Vector) []string {
 		vs := make([]string, v.Length())
 		if len(v.data) > 0 {
 			var cols []types.Varlena
-			ToSlice(v, &cols)
+			ToSliceNoTypeCheck(v, &cols)
 			ss := cols[0].UnsafeGetString(v.area)
 			for i := range vs {
 				vs[i] = ss
@@ -168,7 +168,7 @@ func ExpandBytesCol(v *Vector) [][]byte {
 		vs := make([][]byte, v.Length())
 		if len(v.data) > 0 {
 			var cols []types.Varlena
-			ToSlice(v, &cols)
+			ToSliceNoTypeCheck(v, &cols)
 			ss := cols[0].GetByteSlice(v.area)
 			for i := range vs {
 				vs[i] = ss

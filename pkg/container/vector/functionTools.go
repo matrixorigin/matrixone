@@ -96,7 +96,7 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 		}
 	}
 	var cols []types.Varlena
-	ToSlice(v, &cols)
+	ToSliceNoTypeCheck(v, &cols)
 	if v.IsConst() {
 		return &FunctionParameterScalar[types.Varlena]{
 			typ:          *t,

@@ -315,7 +315,7 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 		i = 0
 	}
 	var bs []types.Varlena
-	ToSlice(v, &bs)
+	ToSliceNoTypeCheck(v, &bs)
 	return types.GetArray[T](&bs[i], v.area)
 }
 
@@ -2841,7 +2841,7 @@ func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.M
 	}
 	vec.class = CONSTANT
 	var col []types.Varlena
-	ToSlice(vec, &col)
+	ToSliceNoTypeCheck(vec, &col)
 	err = BuildVarlenaFromByteJson(vec, &col[0], bj, mp)
 	if err != nil {
 		return err
@@ -2862,7 +2862,7 @@ func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mp
 	}
 	vec.class = CONSTANT
 	var col []types.Varlena
-	ToSlice(vec, &col)
+	ToSliceNoTypeCheck(vec, &col)
 	err = BuildVarlenaFromArray[T](vec, &col[0], &val, mp)
 	if err != nil {
 		return err
@@ -3062,7 +3062,7 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 		nulls.Add(vec.nsp, uint64(length))
 	} else {
 		var col []T
-		ToSlice(vec, &col)
+		ToSliceNoTypeCheck(vec, &col)
 		col[length] = val
 	}
 	return nil
