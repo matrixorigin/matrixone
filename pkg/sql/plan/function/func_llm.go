@@ -51,21 +51,25 @@ func LLMExtractText(parameters []*vector.Vector, result vector.FunctionResultWra
 		extractorTypeString := util.UnsafeBytesToString(extractorTypeBytes)
 
 		moUrl, _, ext, err := types.ParseDatalink(inputPath)
+		if err != nil {
+			return err
+		}
 		if "."+extractorTypeString != ext {
 			return moerr.NewInvalidInputNoCtxf("File type and extractor type are not equal.")
 		}
 		if ext != ".pdf" {
 			return moerr.NewInvalidInputNoCtxf("Only pdf file supported.")
 		}
-		if err != nil {
-			return err
-		}
+
 		outputPathUrl, _, _, err := types.ParseDatalink(outputPath)
 		if err != nil {
 			return err
 		}
 
-		success := extractTextFromPdfAndWriteToFile(moUrl, outputPathUrl, proc)
+		success, err := extractTextFromPdfAndWriteToFile(moUrl, outputPathUrl, proc)
+		if err != nil {
+			return err
+		}
 
 		// return whether the process completes successfully
 		if success {
@@ -83,11 +87,11 @@ func LLMExtractText(parameters []*vector.Vector, result vector.FunctionResultWra
 	return nil
 }
 
-func extractTextFromPdfAndWriteToFile(pdfPath string, txtPath string, proc *process.Process) bool {
+func extractTextFromPdfAndWriteToFile(pdfPath string, txtPath string, proc *process.Process) (bool, error) {
 	// read PDF to string
 	content, err := readPdfToString(pdfPath)
 	if err != nil {
-		return false
+		return false, moerr.NewInvalidInputNoCtxf("Invalid PDF input.")
 	}
 
 	// file service and write file
@@ -99,7 +103,7 @@ func extractTextFromPdfAndWriteToFile(pdfPath string, txtPath string, proc *proc
 	if err == nil {
 		err1 := fs.Delete(ctx, readPath)
 		if err1 != nil {
-			return false
+			return false, moerr.NewInvalidInputNoCtxf("Cannot remove file %s", readPath)
 		}
 	}
 
@@ -121,9 +125,9 @@ func extractTextFromPdfAndWriteToFile(pdfPath string, txtPath string, proc *proc
 		fileservice.IsRetryableError,
 	)
 	if err != nil {
-		return false
+		return false, err
 	}
-	return true
+	return true, nil
 }
 
 func isSameSentence(current, last pdf.Text) bool {
