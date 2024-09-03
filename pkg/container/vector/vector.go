@@ -83,7 +83,7 @@ func (t *typedSlice) setFromVector(v *Vector) {
 	}
 }
 
-func ToSliceNoTypeCheck(vec *Vector, ret *[]T) {
+func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
@@ -1688,7 +1688,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				v.area = area[:len(v.area)]
 			}
 			var vs []types.Varlena
-			ToSlice(v, &vs)
+			ToSliceNoTypeCheck(v, &vs)
 			var err error
 			for i := range ws {
 				if nulls.Contains(w.nsp, uint64(i)) {

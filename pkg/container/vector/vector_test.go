@@ -2375,10 +2375,21 @@ func BenchmarkToTypedSlice(b *testing.B) {
 	vec := NewVec(types.T_int8.ToType())
 	AppendAny(vec, int8(42), false, mp)
 	var slice []int8
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		ToSlice(vec, &slice)
+	b.Run("ToSlice", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			ToSlice(vec, &slice)
+		}
+	})
+	if slice[0] != 42 {
+		b.Fatalf("got %v", slice)
 	}
+	b.Run("ToSliceNoTypeCheck", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			ToSliceNoTypeCheck(vec, &slice)
+		}
+	})
 	if slice[0] != 42 {
 		b.Fatalf("got %v", slice)
 	}
