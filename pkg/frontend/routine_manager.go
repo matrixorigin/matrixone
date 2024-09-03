@@ -94,7 +94,6 @@ func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
 
 	ar.accountRoutineMu.Lock()
 	defer ar.accountRoutineMu.Unlock()
-	logutil.Infof("[delete account] delete account id %d, connection id %d from account routine map", tenantID, rt.getConnectionID())
 	_, ok := ar.accountId2Routine[tenantID]
 	if ok {
 		delete(ar.accountId2Routine[tenantID], rt)
