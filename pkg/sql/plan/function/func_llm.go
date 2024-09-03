@@ -77,7 +77,15 @@ func extractTextFromPdfAndWriteToFile(pdfPath string, txtPath string, proc *proc
 	ctx := context.TODO()
 	fs, readPath, err := fileservice.GetForETL(ctx, proc.Base.FileService, txtPath)
 
-	// NOTE: Write only works when a file does not exist
+	// delete the file if txt file exist because Write() only works when a file does not exist
+	_, err = fs.StatFile(ctx, readPath)
+	if err == nil {
+		err1 := fs.Delete(ctx, readPath)
+		if err1 != nil {
+			return false
+		}
+	}
+
 	_, err = fileservice.DoWithRetry(
 		"BackupWrite",
 		func() (int, error) {
