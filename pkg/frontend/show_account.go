@@ -347,7 +347,7 @@ func updateStorageSize(ori *vector.Vector, size uint64, rowIdx int) {
 }
 
 func updateCount(ori *vector.Vector, delta int64, rowIdx int) {
-	old := vector.GetFixedAt[int64](ori, rowIdx)
+	old := vector.GetFixedAtWithTypeCheck[int64](ori, rowIdx)
 	vector.SetFixedAt[int64](ori, rowIdx, old+delta)
 }
 
@@ -526,7 +526,7 @@ func getAccountInfo(ctx context.Context,
 	for i := 0; i < batchCount; i++ {
 		vecLen := rsOfMoAccount[i].Vecs[0].Length()
 		for row := 0; row < vecLen; row++ {
-			accountIds[i] = append(accountIds[i], vector.GetFixedAt[int64](rsOfMoAccount[i].Vecs[0], row))
+			accountIds[i] = append(accountIds[i], vector.GetFixedAtWithTypeCheck[int64](rsOfMoAccount[i].Vecs[0], row))
 		}
 	}
 

@@ -427,33 +427,33 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
-		flag := vector.GetFixedAt[bool](vec, rowIndex)
+		flag := vector.GetFixedAtWithTypeCheck[bool](vec, rowIndex)
 		if flag {
 			return "true", nil
 		}
 		return "false", nil
 	case types.T_bit:
-		return fmt.Sprintf("%v", vector.GetFixedAt[uint64](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtWithTypeCheck[uint64](vec, rowIndex)), nil
 	case types.T_int8:
-		return fmt.Sprintf("%v", vector.GetFixedAt[int8](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtWithTypeCheck[int8](vec, rowIndex)), nil
 	case types.T_int16:
-		return fmt.Sprintf("%v", vector.GetFixedAt[int16](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtWithTypeCheck[int16](vec, rowIndex)), nil
 	case types.T_int32:
-		return fmt.Sprintf("%v", vector.GetFixedAt[int32](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtWithTypeCheck[int32](vec, rowIndex)), nil
 	case types.T_int64:
-		return fmt.Sprintf("%v", vector.GetFixedAt[int64](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtWithTypeCheck[int64](vec, rowIndex)), nil
 	case types.T_uint8:
-		return fmt.Sprintf("%v", vector.GetFixedAt[uint8](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtWithTypeCheck[uint8](vec, rowIndex)), nil
 	case types.T_uint16:
-		return fmt.Sprintf("%v", vector.GetFixedAt[uint16](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtWithTypeCheck[uint16](vec, rowIndex)), nil
 	case types.T_uint32:
-		return fmt.Sprintf("%v", vector.GetFixedAt[uint32](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtWithTypeCheck[uint32](vec, rowIndex)), nil
 	case types.T_uint64:
-		return fmt.Sprintf("%v", vector.GetFixedAt[uint64](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtWithTypeCheck[uint64](vec, rowIndex)), nil
 	case types.T_float32:
-		return fmt.Sprintf("%v", vector.GetFixedAt[float32](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtWithTypeCheck[float32](vec, rowIndex)), nil
 	case types.T_float64:
-		return fmt.Sprintf("%v", vector.GetFixedAt[float64](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtWithTypeCheck[float64](vec, rowIndex)), nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		return vec.GetStringAt(rowIndex), nil
 	case types.T_array_float32:
@@ -461,33 +461,33 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	case types.T_array_float64:
 		return types.ArrayToString[float64](vector.GetArrayAt[float64](vec, rowIndex)), nil
 	case types.T_decimal64:
-		val := vector.GetFixedAt[types.Decimal64](vec, rowIndex)
+		val := vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, rowIndex)
 		return val.Format(vec.GetType().Scale), nil
 	case types.T_decimal128:
-		val := vector.GetFixedAt[types.Decimal128](vec, rowIndex)
+		val := vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, rowIndex)
 		return val.Format(vec.GetType().Scale), nil
 	case types.T_json:
 		val := vec.GetBytesAt(rowIndex)
 		byteJson := types.DecodeJson(val)
 		return byteJson.String(), nil
 	case types.T_uuid:
-		val := vector.GetFixedAt[types.Uuid](vec, rowIndex)
+		val := vector.GetFixedAtWithTypeCheck[types.Uuid](vec, rowIndex)
 		return val.String(), nil
 	case types.T_date:
-		val := vector.GetFixedAt[types.Date](vec, rowIndex)
+		val := vector.GetFixedAtWithTypeCheck[types.Date](vec, rowIndex)
 		return val.String(), nil
 	case types.T_time:
-		val := vector.GetFixedAt[types.Time](vec, rowIndex)
+		val := vector.GetFixedAtWithTypeCheck[types.Time](vec, rowIndex)
 		return val.String(), nil
 	case types.T_timestamp:
 		loc := time.Local
-		val := vector.GetFixedAt[types.Timestamp](vec, rowIndex)
+		val := vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, rowIndex)
 		return val.String2(loc, vec.GetType().Scale), nil
 	case types.T_datetime:
-		val := vector.GetFixedAt[types.Datetime](vec, rowIndex)
+		val := vector.GetFixedAtWithTypeCheck[types.Datetime](vec, rowIndex)
 		return val.String2(vec.GetType().Scale), nil
 	case types.T_enum:
-		return fmt.Sprintf("%v", vector.GetFixedAt[uint16](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtWithTypeCheck[uint16](vec, rowIndex)), nil
 	default:
 		return "", moerr.NewInternalErrorNoCtxf("fuzzy filter can not parse correct string for type id : %d", vec.GetType().Oid)
 	}

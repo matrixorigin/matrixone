@@ -231,7 +231,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			zap.String("workspace", db.getTxn().PPString()))
 		panic("delete table failed: query failed")
 	}
-	rowid = vector.GetFixedAt[types.Rowid](res.Batches[0].Vecs[0], 0)
+	rowid = vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
 
 	// 1.2 table column rowids
 	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, db.databaseName, name, id), true)
@@ -240,7 +240,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	}
 	for _, b := range res.Batches {
 		for i, v := 0, b.Vecs[0]; i < v.Length(); i++ {
-			rowids = append(rowids, vector.GetFixedAt[types.Rowid](v, i))
+			rowids = append(rowids, vector.GetFixedAtNoTypeCheck[types.Rowid](v, i))
 		}
 	}
 
@@ -449,7 +449,7 @@ func (db *txnDatabase) createWithID(
 			bat.Clean(m)
 			return err
 		}
-		tbl.rowid = vector.GetFixedAt[types.Rowid](rowidVec, 0)
+		tbl.rowid = vector.GetFixedAtNoTypeCheck[types.Rowid](rowidVec, 0)
 	}
 
 	{ // 4. Write create column batch
@@ -469,7 +469,7 @@ func (db *txnDatabase) createWithID(
 			return err
 		}
 		for i := 0; i < rowidVec.Length(); i++ {
-			tbl.rowids = append(tbl.rowids, vector.GetFixedAt[types.Rowid](rowidVec, i))
+			tbl.rowids = append(tbl.rowids, vector.GetFixedAtNoTypeCheck[types.Rowid](rowidVec, i))
 		}
 	}
 

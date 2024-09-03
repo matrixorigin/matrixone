@@ -263,7 +263,7 @@ var oidToConcatFunc = map[types.T]func(*vector.Vector, int, []byte) ([]byte, err
 }
 
 func concatFixed[T types.FixedSizeTExceptStrType](v *vector.Vector, row int, src []byte) ([]byte, error) {
-	value := vector.GetFixedAt[T](v, row)
+	value := vector.GetFixedAtWithTypeCheck[T](v, row)
 	return fmt.Appendf(src, "%v", value), nil
 }
 
@@ -277,16 +277,16 @@ func concatVar(v *vector.Vector, row int, src []byte) ([]byte, error) {
 }
 
 func concatDecimal64(v *vector.Vector, row int, src []byte) ([]byte, error) {
-	value := vector.GetFixedAt[types.Decimal64](v, row)
+	value := vector.GetFixedAtWithTypeCheck[types.Decimal64](v, row)
 	return fmt.Appendf(src, "%v", value.Format(v.GetType().Scale)), nil
 }
 
 func concatDecimal128(v *vector.Vector, row int, src []byte) ([]byte, error) {
-	value := vector.GetFixedAt[types.Decimal128](v, row)
+	value := vector.GetFixedAtWithTypeCheck[types.Decimal128](v, row)
 	return fmt.Appendf(src, "%v", value.Format(v.GetType().Scale)), nil
 }
 
 func concatTime[T fmt.Stringer](v *vector.Vector, row int, src []byte) ([]byte, error) {
-	value := vector.GetFixedAt[T](v, row)
+	value := vector.GetFixedAtWithTypeCheck[T](v, row)
 	return fmt.Appendf(src, "%v", value.String()), nil
 }

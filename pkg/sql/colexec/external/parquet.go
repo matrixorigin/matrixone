@@ -421,7 +421,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				data := loader.loadAt(idx)
 				err = vector.AppendBytes(vec, data, false, proc.Mp())
 				if err == nil {
-					va := vector.GetFixedAt[types.Varlena](vec, vec.Length()-1)
+					va := vector.GetFixedAtNoTypeCheck[types.Varlena](vec, vec.Length()-1)
 					cache[idx] = &va
 				} else {
 					return err

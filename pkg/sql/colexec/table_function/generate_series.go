@@ -48,15 +48,15 @@ type generateSeriesArg struct {
 	batch *batch.Batch
 }
 
-func initStartAndEndNum[T int32 | int64](gs *genNumState[T], proc *process.Process, startVec, endVec, stepVec *vector.Vector, nth int) error {
+func initStartAndEndNumNoTypeCheck[T int32 | int64](gs *genNumState[T], proc *process.Process, startVec, endVec, stepVec *vector.Vector, nth int) error {
 	if startVec == nil {
 		gs.start = 1
 	} else {
-		gs.start = vector.GetFixedAt[T](startVec, nth)
+		gs.start = vector.GetFixedAtNoTypeCheck[T](startVec, nth)
 	}
 
 	// end vec is always not null
-	gs.end = vector.GetFixedAt[T](endVec, nth)
+	gs.end = vector.GetFixedAtNoTypeCheck[T](endVec, nth)
 
 	if stepVec == nil {
 		if gs.start < gs.end {
@@ -65,7 +65,7 @@ func initStartAndEndNum[T int32 | int64](gs *genNumState[T], proc *process.Proce
 			gs.step = -1
 		}
 	} else {
-		gs.step = vector.GetFixedAt[T](stepVec, nth)
+		gs.step = vector.GetFixedAtNoTypeCheck[T](stepVec, nth)
 	}
 	if gs.step == 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "generate_series step cannot be zero")
@@ -101,8 +101,8 @@ func initDateTimeStep(gs *genDatetimeState,
 
 func initStartAndEndDatetime(gs *genDatetimeState,
 	startVec, endVec *vector.Vector, nthRow int) error {
-	gs.start = vector.GetFixedAt[types.Datetime](startVec, nthRow)
-	gs.end = vector.GetFixedAt[types.Datetime](endVec, nthRow)
+	gs.start = vector.GetFixedAtWithTypeCheck[types.Datetime](startVec, nthRow)
+	gs.end = vector.GetFixedAtWithTypeCheck[types.Datetime](endVec, nthRow)
 	gs.next = gs.start
 	return nil
 }
@@ -164,11 +164,11 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 	resTyp := tf.ctr.argVecs[0].GetType()
 	switch resTyp.Oid {
 	case types.T_int32:
-		if err = initStartAndEndNum[int32](&g.i32State, proc, startVec, endVec, stepVec, nthRow); err != nil {
+		if err = initStartAndEndNumNoTypeCheck[int32](&g.i32State, proc, startVec, endVec, stepVec, nthRow); err != nil {
 			return err
 		}
 	case types.T_int64:
-		if err = initStartAndEndNum[int64](&g.i64State, proc, startVec, endVec, stepVec, nthRow); err != nil {
+		if err = initStartAndEndNumNoTypeCheck[int64](&g.i64State, proc, startVec, endVec, stepVec, nthRow); err != nil {
 			return err
 		}
 	case types.T_datetime:

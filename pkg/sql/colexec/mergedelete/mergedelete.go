@@ -122,7 +122,7 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	}
 	// and there are another attr used to record how many rows are deleted
 	if mergeDelete.AddAffectedRows {
-		mergeDelete.ctr.affectedRows += uint64(vector.GetFixedAt[uint32](resBat.GetVector(4), 0))
+		mergeDelete.ctr.affectedRows += uint64(vector.GetFixedAtWithTypeCheck[uint32](resBat.GetVector(4), 0))
 	}
 	return input, nil
 }

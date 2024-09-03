@@ -434,10 +434,10 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, e
 	case types.T_array_float64:
 		return vector.GetArrayAt[float64](vec, 0), nil
 	case types.T_decimal64:
-		val := vector.GetFixedAt[types.Decimal64](vec, 0)
+		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0)
 		return val.Format(expr.Typ.Scale), nil
 	case types.T_decimal128:
-		val := vector.GetFixedAt[types.Decimal128](vec, 0)
+		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0)
 		return val.Format(expr.Typ.Scale), nil
 	case types.T_json:
 		val := vec.GetBytesAt(0)

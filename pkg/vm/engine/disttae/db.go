@@ -16,10 +16,11 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,10 +45,10 @@ func (e *Engine) tryAdjustThreeTablesCreatedTimeWithBatch(b *batch.Batch) {
 	tnameIdx := catalog.MO_TABLES_REL_NAME_IDX + cache.MO_OFF
 	createdTsIdx := catalog.MO_TABLES_CREATED_TIME_IDX + cache.MO_OFF
 	for i := 0; i < b.RowCount(); i++ {
-		aid := vector.GetFixedAt[uint32](b.Vecs[aidIdx], i)
+		aid := vector.GetFixedAtWithTypeCheck[uint32](b.Vecs[aidIdx], i)
 		tname := b.Vecs[tnameIdx].GetStringAt(i)
 		if aid == 0 && tname == "mo_user" {
-			ts := vector.GetFixedAt[types.Timestamp](b.Vecs[createdTsIdx], i)
+			ts := vector.GetFixedAtWithTypeCheck[types.Timestamp](b.Vecs[createdTsIdx], i)
 			vector.SetFixedAt(e.moDatabaseCreatedTime, 0, ts)
 			vector.SetFixedAt(e.moTablesCreatedTime, 0, ts)
 			vector.SetFixedAt(e.moColumnsCreatedTime, 0, ts)

@@ -4957,7 +4957,7 @@ func runDetectSql(c *Compile, sql string) error {
 	if res.Batches != nil {
 		vs := res.Batches[0].Vecs
 		if vs != nil && vs[0].Length() > 0 {
-			yes := vector.GetFixedAt[bool](vs[0], 0)
+			yes := vector.GetFixedAtWithTypeCheck[bool](vs[0], 0)
 			if !yes {
 				return moerr.NewErrFKNoReferencedRow2(c.proc.Ctx)
 			}
@@ -4978,7 +4978,7 @@ func runDetectFkReferToDBSql(c *Compile, sql string) error {
 	if res.Batches != nil {
 		vs := res.Batches[0].Vecs
 		if vs != nil && vs[0].Length() > 0 {
-			yes := vector.GetFixedAt[bool](vs[0], 0)
+			yes := vector.GetFixedAtWithTypeCheck[bool](vs[0], 0)
 			if yes {
 				return moerr.NewInternalError(c.proc.Ctx,
 					"can not drop database. It has been referenced by foreign keys")

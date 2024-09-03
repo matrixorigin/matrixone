@@ -231,7 +231,20 @@ func (v *Vector) NeedDup() bool {
 	return v.cantFreeArea || v.cantFreeData
 }
 
-func GetFixedAt[T any](v *Vector, idx int) T {
+// make sure the type check is done before calling this function
+func GetFixedAtNoTypeCheck[T any](v *Vector, idx int) T {
+	if v.IsConst() {
+		idx = 0
+	}
+	var slice []T
+	ToSliceNoTypeCheck(v, &slice)
+	return slice[idx]
+}
+
+// Note:
+// it is much inefficient than GetFixedAtNoTypeCheck
+// if type check is done before calling this function, use GetFixedAtNoTypeCheck
+func GetFixedAtWithTypeCheck[T any](v *Vector, idx int) T {
 	if v.IsConst() {
 		idx = 0
 	}

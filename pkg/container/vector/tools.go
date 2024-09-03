@@ -47,6 +47,11 @@ func ToFixedCol[T any](v *Vector, ret *[]T) {
 	}
 }
 
+func MustFixedColNoTypeCheck[T any](v *Vector) (ret []T) {
+	ToFixedColNoTypeCheck(v, &ret)
+	return
+}
+
 func MustFixedCol[T any](v *Vector) (ret []T) {
 	ToFixedCol(v, &ret)
 	return

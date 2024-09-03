@@ -1414,8 +1414,8 @@ func TestCloneWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, v4.IsConst())
 	require.Equal(t, 2, v4.Length())
-	require.Equal(t, int32(10), GetFixedAt[int32](v4, 0))
-	require.Equal(t, int32(10), GetFixedAt[int32](v4, 1))
+	require.Equal(t, int32(10), GetFixedAtWithTypeCheck[int32](v4, 0))
+	require.Equal(t, int32(10), GetFixedAtWithTypeCheck[int32](v4, 1))
 }
 
 func TestCloneWindowWithMpNil(t *testing.T) {
@@ -1432,9 +1432,9 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 
 	t.Log(vec2.String())
 	require.True(t, vec2.NeedDup())
-	require.Equal(t, int32(1), GetFixedAt[int32](vec2, 0))
+	require.Equal(t, int32(1), GetFixedAtWithTypeCheck[int32](vec2, 0))
 	require.True(t, vec2.GetNulls().Contains(uint64(1)))
-	require.Equal(t, int32(3), GetFixedAt[int32](vec2, 2))
+	require.Equal(t, int32(3), GetFixedAtWithTypeCheck[int32](vec2, 2))
 
 	vec3 := NewVec(types.T_char.ToType())
 	AppendBytes(vec3, []byte("h"), false, mp)
@@ -1895,9 +1895,9 @@ func TestWindowWith(t *testing.T) {
 
 	t.Log(vec2.String())
 	require.True(t, vec2.NeedDup())
-	require.Equal(t, int32(1), GetFixedAt[int32](vec2, 0))
+	require.Equal(t, int32(1), GetFixedAtWithTypeCheck[int32](vec2, 0))
 	require.True(t, vec2.GetNulls().Contains(uint64(1)))
-	require.Equal(t, int32(3), GetFixedAt[int32](vec2, 2))
+	require.Equal(t, int32(3), GetFixedAtWithTypeCheck[int32](vec2, 2))
 	vec2.Free(mp)
 
 	vec6, err := vec1.Window(1, vec1.Length())
@@ -1906,13 +1906,13 @@ func TestWindowWith(t *testing.T) {
 	t.Log(vec6.String())
 	require.True(t, vec6.NeedDup())
 	require.True(t, vec6.GetNulls().Contains(uint64(0)))
-	require.Equal(t, int32(3), GetFixedAt[int32](vec6, 1))
+	require.Equal(t, int32(3), GetFixedAtWithTypeCheck[int32](vec6, 1))
 	vec6.Free(mp)
 
 	require.False(t, vec1.NeedDup())
-	require.Equal(t, int32(1), GetFixedAt[int32](vec1, 0))
+	require.Equal(t, int32(1), GetFixedAtWithTypeCheck[int32](vec1, 0))
 	require.True(t, vec1.GetNulls().Contains(uint64(1)))
-	require.Equal(t, int32(3), GetFixedAt[int32](vec1, 2))
+	require.Equal(t, int32(3), GetFixedAtWithTypeCheck[int32](vec1, 2))
 	vec1.Free(mp)
 
 	vec3 := NewVec(types.T_char.ToType())

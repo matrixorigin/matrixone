@@ -1851,13 +1851,13 @@ func isColumnsBatchPerfectlySplitted(bs []*batch.Batch) bool {
 	if len(bs) == 1 {
 		return true
 	}
-	prevTableId := vector.GetFixedAt[uint64](bs[0].Vecs[tidIdx], bs[0].RowCount()-1)
+	prevTableId := vector.GetFixedAtNoTypeCheck[uint64](bs[0].Vecs[tidIdx], bs[0].RowCount()-1)
 	for _, b := range bs[1:] {
-		firstId := vector.GetFixedAt[uint64](b.Vecs[tidIdx], 0)
+		firstId := vector.GetFixedAtNoTypeCheck[uint64](b.Vecs[tidIdx], 0)
 		if firstId == prevTableId {
 			return false
 		}
-		prevTableId = vector.GetFixedAt[uint64](b.Vecs[tidIdx], b.RowCount()-1)
+		prevTableId = vector.GetFixedAtNoTypeCheck[uint64](b.Vecs[tidIdx], b.RowCount()-1)
 	}
 	return true
 }

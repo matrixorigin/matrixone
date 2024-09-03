@@ -81,51 +81,51 @@ func getNonNullValue(col *movec.Vector, row uint32) any {
 
 	switch col.GetType().Oid {
 	case types.T_bool:
-		return movec.GetFixedAt[bool](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[bool](col, int(row))
 	case types.T_bit:
-		return movec.GetFixedAt[uint64](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[uint64](col, int(row))
 	case types.T_int8:
-		return movec.GetFixedAt[int8](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[int8](col, int(row))
 	case types.T_int16:
-		return movec.GetFixedAt[int16](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[int16](col, int(row))
 	case types.T_int32:
-		return movec.GetFixedAt[int32](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[int32](col, int(row))
 	case types.T_int64:
-		return movec.GetFixedAt[int64](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[int64](col, int(row))
 	case types.T_uint8:
-		return movec.GetFixedAt[uint8](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[uint8](col, int(row))
 	case types.T_uint16:
-		return movec.GetFixedAt[uint16](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[uint16](col, int(row))
 	case types.T_uint32:
-		return movec.GetFixedAt[uint32](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[uint32](col, int(row))
 	case types.T_uint64:
-		return movec.GetFixedAt[uint64](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[uint64](col, int(row))
 	case types.T_decimal64:
-		return movec.GetFixedAt[types.Decimal64](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Decimal64](col, int(row))
 	case types.T_decimal128:
-		return movec.GetFixedAt[types.Decimal128](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Decimal128](col, int(row))
 	case types.T_uuid:
-		return movec.GetFixedAt[types.Uuid](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Uuid](col, int(row))
 	case types.T_float32:
-		return movec.GetFixedAt[float32](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[float32](col, int(row))
 	case types.T_float64:
-		return movec.GetFixedAt[float64](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[float64](col, int(row))
 	case types.T_date:
-		return movec.GetFixedAt[types.Date](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Date](col, int(row))
 	case types.T_time:
-		return movec.GetFixedAt[types.Time](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Time](col, int(row))
 	case types.T_datetime:
-		return movec.GetFixedAt[types.Datetime](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Datetime](col, int(row))
 	case types.T_timestamp:
-		return movec.GetFixedAt[types.Timestamp](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Timestamp](col, int(row))
 	case types.T_enum:
-		return movec.GetFixedAt[types.Enum](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Enum](col, int(row))
 	case types.T_TS:
-		return movec.GetFixedAt[types.TS](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.TS](col, int(row))
 	case types.T_Rowid:
-		return movec.GetFixedAt[types.Rowid](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Rowid](col, int(row))
 	case types.T_Blockid:
-		return movec.GetFixedAt[types.Blockid](col, int(row))
+		return movec.GetFixedAtNoTypeCheck[types.Blockid](col, int(row))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return col.GetBytesAt(int(row))
@@ -682,7 +682,7 @@ func ForeachWindowFixed[T any](
 		if vec.IsConstNull() {
 			isnull = true
 		} else {
-			v = movec.GetFixedAt[T](vec, 0)
+			v = movec.GetFixedAtNoTypeCheck[T](vec, 0)
 		}
 		if sels.IsEmpty() {
 			if reverse {

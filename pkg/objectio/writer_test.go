@@ -156,7 +156,7 @@ func TestNewObjectWriter(t *testing.T) {
 	obj, err = Decode(vec.Entries[2].CachedData.Bytes())
 	assert.Nil(t, err)
 	vector3 := obj.(*vector.Vector)
-	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
+	assert.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](vector3, 3))
 
 	blk := blocks[0].MustGetColumn(idxs[0])
 	buf := blk.ZoneMap()
@@ -197,7 +197,7 @@ func TestNewObjectWriter(t *testing.T) {
 	obj, err = Decode(vec.Entries[2].CachedData.Bytes())
 	assert.Nil(t, err)
 	vector3 = obj.(*vector.Vector)
-	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
+	assert.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](vector3, 3))
 	blk = blocks[0].MustGetColumn(idxs[0])
 	buf = blk.ZoneMap()
 	assert.Equal(t, uint8(0x1), buf[31])
