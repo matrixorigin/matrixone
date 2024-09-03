@@ -170,15 +170,10 @@ func NewBasicPolicy() Policy {
 }
 
 // impl Policy for Basic
-func (o *basic) OnObject(obj *catalog.ObjectEntry, force bool) {
-	rowsLeftOnObj := obj.GetRows()
+func (o *basic) OnObject(obj *catalog.ObjectEntry) {
 	osize := obj.GetOriginSize()
 
 	isCandidate := func() bool {
-		// object with a lot of holes
-		if rowsLeftOnObj < obj.GetRows()/2 {
-			return true
-		}
 		if osize < int(o.config.ObjectMinOsize) {
 			return true
 		}
@@ -190,9 +185,9 @@ func (o *basic) OnObject(obj *catalog.ObjectEntry, force bool) {
 		return false
 	}
 
-	if force || isCandidate() {
+	if isCandidate() {
 		o.objHeap.pushWithCap(&mItem[*catalog.ObjectEntry]{
-			row:   rowsLeftOnObj,
+			row:   obj.GetRows(),
 			entry: obj,
 		}, o.config.MergeMaxOneRun)
 	}
