@@ -25,14 +25,15 @@ import (
 const (
 	VarlenaInlineSize = 23
 	VarlenaSize       = 24
-	MaxStringSize     = 10485760
 	VarlenaBigHdr     = 0xffffffff
-	MaxVarcharLen     = 65535
 	MaxCharLen        = 255
 	MaxBinaryLen      = 255
-	MaxVarBinaryLen   = 65535
 	MaxEnumLen        = 65535
 	MaxBitLen         = 64
+	MaxBlobLen        = 64 * 1024 * 1024
+	MaxVarcharLen     = MaxBlobLen
+	MaxVarBinaryLen   = MaxBlobLen
+	MaxStringSize     = MaxBlobLen
 )
 
 func (v *Varlena) UnsafePtr() unsafe.Pointer {
