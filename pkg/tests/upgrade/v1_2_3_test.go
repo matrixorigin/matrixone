@@ -41,6 +41,9 @@ func Test_UpgradeEntry(t *testing.T) {
 	defer cancel()
 
 	err = exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+		err = v1_2_3.Handler.HandleClusterUpgrade(ctx, txn)
+		require.NoError(t, err)
+
 		err = v1_2_3.Handler.HandleTenantUpgrade(ctx, 0, txn)
 		require.NoError(t, err)
 
