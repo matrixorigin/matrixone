@@ -979,44 +979,6 @@ func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 	return leftRows
 }
 
-// if blks comes from unCommitted flushed s3 deletes, the
-// blkCommitTS can be zero.
-func applyDeletesWithinDeltaLocations(
-	ctx context.Context,
-	fs fileservice.FileService,
-	bid objectio.Blockid,
-	snapshotTS types.TS,
-	blkCommitTS types.TS,
-	offsets []int64,
-	deletedRows *nulls.Nulls,
-	locations ...objectio.Location,
-) (leftRows []int64, err error) {
-
-	if offsets != nil {
-		leftRows = make([]int64, 0, len(offsets))
-	}
-
-	var mask *nulls.Nulls
-
-	for _, loc := range locations {
-		if mask, err = loadBlockDeletesByLocation(
-			ctx, fs, bid, loc[:], snapshotTS); err != nil {
-			return nil, err
-		}
-
-		if offsets != nil {
-			leftRows = removeIf(offsets, func(t int64) bool {
-				return mask.Contains(uint64(t))
-			})
-
-		} else if deletedRows != nil {
-			deletedRows.Or(mask)
-		}
-	}
-
-	return leftRows, nil
-}
-
 func (ls *LocalDataSource) applyWorkspaceFlushedS3Deletes(
 	bid objectio.Blockid,
 	offsets []int64,
@@ -1024,43 +986,47 @@ func (ls *LocalDataSource) applyWorkspaceFlushedS3Deletes(
 ) (leftRows []int64, err error) {
 
 	leftRows = offsets
-	var locations []objectio.Location
 
-	// cannot hold the lock too long
-	{
-		s3FlushedDeletes := &ls.table.getTxn().blockId_tn_delete_metaLoc_batch
-		s3FlushedDeletes.RWMutex.Lock()
-		defer s3FlushedDeletes.RWMutex.Unlock()
+	s3FlushedDeletes := &ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
+	s3FlushedDeletes.RWMutex.Lock()
+	defer s3FlushedDeletes.RWMutex.Unlock()
 
-		if len(s3FlushedDeletes.data[bid]) == 0 || ls.pState.BlockPersisted(bid) {
-			return
-		}
-
-		locations = make([]objectio.Location, 0, len(s3FlushedDeletes.data[bid]))
-
-		for _, bat := range s3FlushedDeletes.data[bid] {
-			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
-			for i := range vs {
-				loc, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
-				if err != nil {
-					return nil, err
-				}
-
-				locations = append(locations, loc)
-			}
-		}
+	if len(s3FlushedDeletes.data) == 0 || ls.pState.BlockPersisted(bid) {
+		return
 	}
 
-	return applyDeletesWithinDeltaLocations(
+	if deletedRows == nil {
+		deletedRows = &nulls.Nulls{}
+		deletedRows.InitWithSize(8192)
+	}
+
+	var obj logtailreplay.ObjectEntry
+	scanOp := func(onTombstone func(tombstone logtailreplay.ObjectEntry) (bool, error)) error {
+		for _, stats := range s3FlushedDeletes.data {
+			obj.ObjectStats = stats
+			if goOn, err := onTombstone(obj); err != nil || !goOn {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if err = GetTombstonesByBlockId(
 		ls.ctx,
 		ls.fs,
 		bid,
 		ls.snapshotTS,
-		types.TS{},
-		offsets,
 		deletedRows,
-		locations...,
-	)
+		scanOp,
+	); err != nil {
+		return nil, err
+	}
+
+	offsets = removeIf(offsets, func(t int64) bool {
+		return deletedRows.Contains(uint64(t))
+	})
+
+	return offsets, nil
 }
 
 func (ls *LocalDataSource) applyWorkspaceRawRowIdDeletes(
@@ -1183,51 +1149,8 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
 
-	ls.table.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
-	defer ls.table.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
-
-	// prefetch cn flushed but not committed deletes
-	var ok bool
-	var bats []*batch.Batch
-	var locs []objectio.Location = make([]objectio.Location, 0)
-
-	pkColIdx := ls.table.tableDef.Pkey.PkeyColId
-
-	for idx := begin; idx < end; idx++ {
-		if bats, ok = ls.table.getTxn().blockId_tn_delete_metaLoc_batch.data[ls.rangeSlice.Get(idx).BlockID]; !ok {
-			continue
-		}
-
-		locs = locs[:0]
-		for _, bat := range bats {
-			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
-			for i := range vs {
-				location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
-				if err != nil {
-					logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
-				}
-				locs = append(locs, location)
-			}
-		}
-
-		if len(locs) == 0 {
-			continue
-		}
-
-		pref, err := blockio.BuildPrefetchParams(ls.fs, locs[0])
-		if err != nil {
-			logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
-		}
-
-		for _, loc := range locs {
-			//rowId + pk
-			pref.AddBlockWithType([]uint16{0, uint16(pkColIdx)}, []uint16{loc.ID()}, uint16(objectio.SchemaTombstone))
-		}
-
-		if err = blockio.PrefetchWithMerged(ls.table.proc.Load().GetService(), pref); err != nil {
-			logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
-		}
-	}
+	ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RLock()
+	defer ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RUnlock()
 
 	ls.rc.batchPrefetchCursor = end
 }
