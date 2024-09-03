@@ -239,7 +239,7 @@ func (s *handler[REQ, RESP]) getHandler(
 	resp.SetMethod(req.Method())
 	handlerCtx, ok := s.handlers[req.Method()]
 	if !ok {
-		resp.WrapError(moerr.NewNotSupportedNoCtx("%d not support in current service",
+		resp.WrapError(moerr.NewNotSupportedNoCtxf("%d not support in current service",
 			req.Method()))
 	}
 	return handlerCtx, ok

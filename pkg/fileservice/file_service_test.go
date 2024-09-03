@@ -34,7 +34,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
@@ -403,7 +403,7 @@ func testFileService(
 					reader.Close()
 					if !bytes.Equal(parts[i], data) {
 						select {
-						case errCh <- moerr.NewInternalError(context.Background(),
+						case errCh <- moerr.NewInternalErrorf(context.Background(),
 							"not equal: path: %s, entry: %+v, content %v",
 							filePath, entry, content,
 						):
@@ -695,7 +695,7 @@ func testFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
+					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
 						bs, err := io.ReadAll(r)
 						assert.Nil(t, err)
 						if len(data) > 0 {

@@ -49,7 +49,7 @@ func (i *OverlapChecker) Insert(key string, low, high int64) error {
 		for _, v := range overlaps {
 			overlapsMsg += fmt.Sprintf("[%d %d), ", v.Ivl.Begin, v.Ivl.End)
 		}
-		return moerr.NewInternalErrorNoCtx("Overlapping key range found in %s when inserting [%d %d). The key %s contains overlapping intervals %s", i.tag, low, high, key, overlapsMsg)
+		return moerr.NewInternalErrorNoCtxf("Overlapping key range found in %s when inserting [%d %d). The key %s contains overlapping intervals %s", i.tag, low, high, key, overlapsMsg)
 	}
 
 	i.keyRanges[key].Insert(interval, struct{}{})
@@ -62,7 +62,7 @@ func (i *OverlapChecker) Remove(key string, low, high int64) error {
 
 	interval := NewInt64Interval(low, high)
 	if _, ok := i.keyRanges[key]; !ok {
-		return moerr.NewInternalErrorNoCtx("Key Range not found for removal in %s", i.tag)
+		return moerr.NewInternalErrorNoCtxf("Key Range not found for removal in %s", i.tag)
 	}
 
 	i.keyRanges[key].Delete(interval)

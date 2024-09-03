@@ -201,7 +201,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 
 	layout, err := function.GetLayoutById(ctx, funcDef.Obj&function.DistinctMask)
 	if err != nil {
-		return moerr.NewInvalidInput(ctx, "invalid function or opreator '%s'", funcName)
+		return moerr.NewInvalidInputf(ctx, "invalid function or opreator '%s'", funcName)
 	}
 
 	switch layout {

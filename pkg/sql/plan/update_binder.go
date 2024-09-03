@@ -56,7 +56,7 @@ func (b *UpdateBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool)
 		}
 	}
 	if idx == -1 {
-		err = moerr.NewInvalidInput(b.GetContext(), "column '%s' does not exist", astExpr.ColNameOrigin())
+		err = moerr.NewInvalidInputf(b.GetContext(), "column '%s' does not exist", astExpr.ColNameOrigin())
 		return
 	}
 	expr = &plan.Expr{
@@ -75,11 +75,11 @@ func (b *UpdateBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool)
 }
 
 func (b *UpdateBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInput(b.GetContext(), "cannot bind agregate functions '%s'", funcName)
+	return nil, moerr.NewInvalidInputf(b.GetContext(), "cannot bind agregate functions '%s'", funcName)
 }
 
 func (b *UpdateBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInput(b.GetContext(), "cannot bind window functions '%s'", funcName)
+	return nil, moerr.NewInvalidInputf(b.GetContext(), "cannot bind window functions '%s'", funcName)
 }
 
 func (b *UpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
@@ -87,5 +87,5 @@ func (b *UpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.
 }
 
 func (b *UpdateBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInput(b.GetContext(), "cannot bind time window functions '%s'", funcName)
+	return nil, moerr.NewInvalidInputf(b.GetContext(), "cannot bind time window functions '%s'", funcName)
 }

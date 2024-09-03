@@ -84,7 +84,7 @@ func (t batchETLHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 	handle := func(b any) {
 		req, ok := b.(table.WriteRequest) // see genETLData
 		if !ok {
-			panic(moerr.NewInternalError(ctx, "batchETLHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
+			panic(moerr.NewInternalErrorf(ctx, "batchETLHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
 		}
 		if _, err := req.Handle(); err != nil {
 			logutil.Error(fmt.Sprintf("[Trace] failed to write. err: %v", err), logutil.NoReportFiled())
@@ -102,7 +102,7 @@ func (t batchETLHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 				handle(req)
 			}
 		default:
-			panic(moerr.NewNotSupported(ctx, "unknown batch type: %v", reflect.ValueOf(b).Type()))
+			panic(moerr.NewNotSupportedf(ctx, "unknown batch type: %v", reflect.ValueOf(b).Type()))
 		}
 	}
 	return f

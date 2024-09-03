@@ -1,3 +1,4 @@
+-- @bvt:issue#16709
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 
@@ -375,3 +376,4 @@ drop database if exists Projects;
 drop database if exists Company;
 
 drop snapshot snapshot_01;
+-- @bvt:issue

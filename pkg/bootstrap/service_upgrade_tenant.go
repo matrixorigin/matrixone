@@ -58,7 +58,7 @@ func (s *service) MaybeUpgradeTenant(
 				return nil
 			} else if versions.Compare(currentCN.Version, version) < 0 {
 				// tenant create at 1.4.0, current tenant version 1.5.0, it must be cannot work
-				return moerr.NewInvalidInputNoCtx("tenant version %s is greater than current cn version %s",
+				return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
 					version, currentCN.Version)
 			}
 
@@ -247,7 +247,11 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 
 				upgrade.ReadyTenant += updated
 				if upgrade.TotalTenant < upgrade.ReadyTenant {
-					panic(fmt.Sprintf("BUG: invalid upgrade tenant, upgrade %s, updated %d", upgrade.String(), updated))
+					getUpgradeLogger().Error("invalid upgrade tenant",
+						zap.String("upgrade", upgrade.String()),
+						zap.Int32("updated", updated),
+					)
+					return moerr.NewInvalidStateNoCtx("orphan txn or pre lock released by lock table changed")
 				}
 
 				getUpgradeLogger().Info("upgrade tenant ready count changed",

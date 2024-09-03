@@ -154,7 +154,7 @@ func (b *msgBuf) preRecv() (int, error) {
 	// Max length is 3 bytes. 26MB-1 is the legal max length of a MySQL packet.
 	// Reference To : https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_basic_packets.html
 	if bodyLen < 1 || bodyLen > 1<<24-1 {
-		return 0, moerr.NewInternalErrorNoCtx("mysql protocol error: body length %d", bodyLen)
+		return 0, moerr.NewInternalErrorNoCtxf("mysql protocol error: body length %d", bodyLen)
 	}
 
 	// Data length does not count header length, so header length is added to it.
@@ -298,7 +298,7 @@ func (b *msgBuf) receive() ([]byte, error) {
 
 func (b *msgBuf) receiveAtLeast(n int) error {
 	if n < 0 || n > b.availLen {
-		return moerr.NewInternalErrorNoCtx("invalid receive bytes size %d", n)
+		return moerr.NewInternalErrorNoCtxf("invalid receive bytes size %d", n)
 	}
 	// Buffer already has n bytes.
 	if b.readAvail() >= n {

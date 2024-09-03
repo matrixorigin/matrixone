@@ -59,7 +59,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 )
 
 type TenantInfo struct {
@@ -332,7 +331,7 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 	} else {
 		tenant := userInput[:p]
 		if len(tenant) == 0 {
-			return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid tenant name '%s'", tenant)
+			return &TenantInfo{}, moerr.NewInternalErrorf(ctx, "invalid tenant name '%s'", tenant)
 		}
 		userRole := userInput[p+1:]
 		p2 := strings.IndexByte(userRole, delimiter)
@@ -340,7 +339,7 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 			//tenant:user
 			user := userRole
 			if len(user) == 0 {
-				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid user name '%s'", user)
+				return &TenantInfo{}, moerr.NewInternalErrorf(ctx, "invalid user name '%s'", user)
 			}
 			return &TenantInfo{
 				Tenant:    tenant,
@@ -350,11 +349,11 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 		} else {
 			user := userRole[:p2]
 			if len(user) == 0 {
-				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid user name '%s'", user)
+				return &TenantInfo{}, moerr.NewInternalErrorf(ctx, "invalid user name '%s'", user)
 			}
 			role := userRole[p2+1:]
 			if len(role) == 0 {
-				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid role name '%s'", role)
+				return &TenantInfo{}, moerr.NewInternalErrorf(ctx, "invalid role name '%s'", role)
 			}
 			return &TenantInfo{
 				Tenant:      tenant,
@@ -2598,7 +2597,7 @@ func accountNameIsInvalid(name string) bool {
 func normalizeName(ctx context.Context, name string) (string, error) {
 	s := strings.TrimSpace(name)
 	if nameIsInvalid(s) {
-		return "", moerr.NewInternalError(ctx, `the name "%s" is invalid`, name)
+		return "", moerr.NewInternalErrorf(ctx, `the name "%s" is invalid`, name)
 	}
 	return s, nil
 }
@@ -2606,10 +2605,10 @@ func normalizeName(ctx context.Context, name string) (string, error) {
 func normalizeNameOfAccount(ctx context.Context, ca *createAccount) error {
 	s := strings.TrimSpace(ca.Name)
 	if len(s) == 0 {
-		return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
+		return moerr.NewInternalErrorf(ctx, `the name "%s" is invalid`, ca.Name)
 	}
 	if accountNameIsInvalid(s) {
-		return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
+		return moerr.NewInternalErrorf(ctx, `the name "%s" is invalid`, ca.Name)
 	}
 	ca.Name = s
 	return nil
@@ -2745,11 +2744,11 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	}
 
 	if !user.AuthExist {
-		return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', alter Auth is nil", userName, hostName)
+		return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', alter Auth is nil", userName, hostName)
 	}
 
 	if user.IdentTyp != tree.AccountIdentifiedByPassword {
-		return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', only support alter Auth by identified by", userName, hostName)
+		return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', only support alter Auth by identified by", userName, hostName)
 	}
 
 	//check the user exists or not
@@ -2767,7 +2766,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		// false : return an error
 		// true : return and  do nothing
 		if !au.IfExists {
-			return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', user does't exist", userName, hostName)
+			return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', user does't exist", userName, hostName)
 		} else {
 			return err
 		}
@@ -2810,7 +2809,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	} else {
 		if currentUser != userName {
-			return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
+			return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
 		}
 		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 		if err != nil {
@@ -2848,7 +2847,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	var accountStatus string
 	account := ses.GetTenantInfo()
 	if !(account.IsSysTenant() && account.IsMoAdminRole()) {
-		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to alter the account",
+		return moerr.NewInternalErrorf(ctx, "tenant %s user %s role %s do not have the privilege to alter the account",
 			account.GetTenant(), account.GetUser(), account.GetDefaultRole())
 	}
 
@@ -2950,7 +2949,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			// false : return an error
 			// true : skip and do nothing
 			if !aa.IfExists {
-				return moerr.NewInternalError(ctx, "there is no account %s", aa.Name)
+				return moerr.NewInternalErrorf(ctx, "there is no account %s", aa.Name)
 			}
 		}
 
@@ -2977,7 +2976,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 				}
 
 				if !execResultArrayHasData(erArray) {
-					rtnErr = moerr.NewInternalError(accountCtx, "there is no user %s", aa.AdminName)
+					rtnErr = moerr.NewInternalErrorf(accountCtx, "there is no user %s", aa.AdminName)
 					return
 				}
 
@@ -3207,7 +3206,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 					return rtnErr
 				}
 			} else {
-				return moerr.NewInternalError(ctx, "there is no role %s", sr.Role.UserName)
+				return moerr.NewInternalErrorf(ctx, "there is no role %s", sr.Role.UserName)
 			}
 
 			//step2 : check the role has been granted to the user or not
@@ -3224,7 +3223,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 			}
 
 			if !execResultArrayHasData(erArray) {
-				return moerr.NewInternalError(ctx, "the role %s has not be granted to the user %s", sr.Role.UserName, account.GetUser())
+				return moerr.NewInternalErrorf(ctx, "the role %s has not be granted to the user %s", sr.Role.UserName, account.GetUser())
 			}
 			return rtnErr
 		}
@@ -3310,7 +3309,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, a
 	}
 
 	if !execResultArrayHasData(erArray) {
-		return nil, moerr.NewInternalError(newCtx, "there is no publication account %s", accName)
+		return nil, moerr.NewInternalErrorf(newCtx, "there is no publication account %s", accName)
 	}
 	accId, err = erArray[0].GetInt64(newCtx, 0, 0)
 	if err != nil {
@@ -3323,7 +3322,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, a
 	}
 
 	if accStatus == tree.AccountStatusSuspend.String() {
-		return nil, moerr.NewInternalError(newCtx, "the account %s is suspended", accName)
+		return nil, moerr.NewInternalErrorf(newCtx, "the account %s is suspended", accName)
 	}
 
 	//check the publication is already exist or not
@@ -3342,7 +3341,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, a
 		return nil, err
 	}
 	if !execResultArrayHasData(erArray) {
-		return nil, moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
+		return nil, moerr.NewInternalErrorf(newCtx, "there is no publication %s", pubName)
 	}
 
 	databaseName, err = erArray[0].GetString(newCtx, 0, 0)
@@ -3374,7 +3373,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, a
 			return nil, err
 		}
 		if !execResultArrayHasData(erArray) {
-			return nil, moerr.NewInternalError(newCtx, "there is no account, account id %d ", tenantId)
+			return nil, moerr.NewInternalErrorf(newCtx, "there is no account, account id %d ", tenantId)
 		}
 
 		tenantName, err = erArray[0].GetString(newCtx, 0, 0)
@@ -3382,7 +3381,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, a
 			return nil, err
 		}
 		if !canSub(tenantName, accountList) {
-			return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
+			return nil, moerr.NewInternalErrorf(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
 		}
 	} else if !canSub(tenantInfo.GetTenant(), accountList) {
 		ses.Error(ctx,
@@ -3393,7 +3392,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, a
 			zap.String("databaseName", databaseName),
 			zap.String("accountList", accountList),
 			zap.String("tenant", tenantInfo.GetTenant()))
-		return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
+		return nil, moerr.NewInternalErrorf(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
 	}
 
 	subs = &plan.SubscriptionMeta{
@@ -3446,7 +3445,7 @@ func isDbPublishing(ctx context.Context, dbName string, ses FeSession) (ok bool,
 		return false, err
 	}
 	if !execResultArrayHasData(erArray) {
-		return false, moerr.NewInternalError(ctx, "there is no publication for database %s", dbName)
+		return false, moerr.NewInternalErrorf(ctx, "there is no publication for database %s", dbName)
 	}
 	count, err = erArray[0].GetInt64(ctx, 0, 0)
 	if err != nil {
@@ -3526,7 +3525,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 
 	if stageExist {
 		if !cs.IfNotExists {
-			return moerr.NewInternalError(ctx, "the stage %s exists", cs.Name)
+			return moerr.NewInternalErrorf(ctx, "the stage %s exists", cs.Name)
 		} else {
 			// do nothing
 			return err
@@ -3630,7 +3629,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 
 			// is the stage staus is disabled
 			if stageStatus == tree.StageStatusDisabled.String() {
-				return moerr.NewInternalError(ctx, "stage '%s' is invalid, please check", stageName)
+				return moerr.NewInternalErrorf(ctx, "stage '%s' is invalid, please check", stageName)
 			} else if stageStatus == tree.StageStatusEnabled.String() {
 				// replace the filepath using stage url
 				url, err = erArray[0].GetString(ctx, 0, 0)
@@ -3642,7 +3641,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 				ses.ep.userConfig.StageFilePath = filePath
 			}
 		} else {
-			return moerr.NewInternalError(ctx, "stage '%s' is not exists, please check", stageName)
+			return moerr.NewInternalErrorf(ctx, "stage '%s' is not exists, please check", stageName)
 		}
 	}
 	return err
@@ -3700,7 +3699,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 
 	if !stageExist {
 		if !as.IfNotExists {
-			return moerr.NewInternalError(ctx, "the stage %s not exists", as.Name)
+			return moerr.NewInternalErrorf(ctx, "the stage %s not exists", as.Name)
 		} else {
 			// do nothing
 			return err
@@ -3771,7 +3770,7 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 
 	if !stageExist {
 		if !ds.IfNotExists {
-			return moerr.NewInternalError(ctx, "the stage %s not exists", ds.Name)
+			return moerr.NewInternalErrorf(ctx, "the stage %s not exists", ds.Name)
 		} else {
 			// do nothing
 			return err
@@ -3812,7 +3811,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		for _, acct := range cp.AccountsSet.SetAccounts {
 			accName := string(acct)
 			if accountNameIsInvalid(accName) {
-				return moerr.NewInternalError(ctx, "invalid account name '%s'", accName)
+				return moerr.NewInternalErrorf(ctx, "invalid account name '%s'", accName)
 			}
 			accts = append(accts, accName)
 		}
@@ -3823,7 +3822,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	pubDb := string(cp.Database)
 
 	if _, ok := sysDatabases[pubDb]; ok {
-		return moerr.NewInternalError(ctx, "invalid database name '%s', not support publishing system database", pubDb)
+		return moerr.NewInternalErrorf(ctx, "invalid database name '%s', not support publishing system database", pubDb)
 	}
 
 	err = bh.Exec(ctx, "begin;")
@@ -3839,7 +3838,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		return err
 	}
 	if dbType != "" { //TODO: check the dat_type
-		return moerr.NewInternalError(ctx, "database '%s' is not a user database", cp.Database)
+		return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", cp.Database)
 	}
 
 	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), pubDb, dbId, allTable, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
@@ -3897,7 +3896,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		return err
 	}
 	if !execResultArrayHasData(erArray) {
-		return moerr.NewInternalError(ctx, "publication '%s' does not exist", ap.Name)
+		return moerr.NewInternalErrorf(ctx, "publication '%s' does not exist", ap.Name)
 	}
 	bh.ClearExecResultSet()
 
@@ -3917,7 +3916,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			for _, acct := range ap.AccountsSet.SetAccounts {
 				s := string(acct)
 				if accountNameIsInvalid(s) {
-					return moerr.NewInternalError(ctx, "invalid account name '%s'", s)
+					return moerr.NewInternalErrorf(ctx, "invalid account name '%s'", s)
 				}
 				accts = append(accts, s)
 			}
@@ -3930,7 +3929,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			accountListSep = strings.Split(accountList, ",")
 			for _, acct := range ap.AccountsSet.DropAccounts {
 				if accountNameIsInvalid(string(acct)) {
-					return moerr.NewInternalError(ctx, "invalid account name '%s'", acct)
+					return moerr.NewInternalErrorf(ctx, "invalid account name '%s'", acct)
 				}
 				idx := sort.SearchStrings(accountListSep, string(acct))
 				if idx < len(accountListSep) && accountListSep[idx] == string(acct) {
@@ -3945,7 +3944,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			accountListSep = strings.Split(accountList, ",")
 			for _, acct := range ap.AccountsSet.AddAccounts {
 				if accountNameIsInvalid(string(acct)) {
-					return moerr.NewInternalError(ctx, "invalid account name '%s'", acct)
+					return moerr.NewInternalErrorf(ctx, "invalid account name '%s'", acct)
 				}
 				idx := sort.SearchStrings(accountListSep, string(acct))
 				if idx == len(accountListSep) || accountListSep[idx] != string(acct) {
@@ -3976,14 +3975,14 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	if ap.DbName != "" {
 		dbName = ap.DbName
 		if _, ok := sysDatabases[dbName]; ok {
-			return moerr.NewInternalError(ctx, "invalid database name '%s', not support publishing system database", dbName)
+			return moerr.NewInternalErrorf(ctx, "invalid database name '%s', not support publishing system database", dbName)
 		}
 
 		if dbId, dbType, err = getDbIdAndType(ctx, bh, tenantInfo, dbName); err != nil {
 			return err
 		}
 		if dbType != "" { //TODO: check the dat_type
-			return moerr.NewInternalError(ctx, "database '%s' is not a user database", dbName)
+			return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", dbName)
 		}
 	}
 
@@ -4032,7 +4031,7 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 	}
 	if !execResultArrayHasData(erArray) {
 		if !dp.IfExists {
-			return moerr.NewInternalError(ctx, "publication '%s' does not exist", dp.Name)
+			return moerr.NewInternalErrorf(ctx, "publication '%s' does not exist", dp.Name)
 		} else {
 			return err
 		}
@@ -4085,7 +4084,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 	}
 
 	if isSysTenant(da.Name) {
-		return moerr.NewInternalError(ctx, "can not delete the account %s", da.Name)
+		return moerr.NewInternalErrorf(ctx, "can not delete the account %s", da.Name)
 	}
 
 	dropAccountFunc := func() (rtnErr error) {
@@ -4125,7 +4124,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		} else {
 			//no such account
 			if !da.IfExists { //when the "IF EXISTS" is set, just skip it.
-				rtnErr = moerr.NewInternalError(ctx, "there is no account %s", da.Name)
+				rtnErr = moerr.NewInternalErrorf(ctx, "there is no account %s", da.Name)
 				return
 			}
 			hasAccount = false
@@ -4304,21 +4303,11 @@ func postDropSuspendAccount(
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
 	var nodes []string
-	currTenant := ses.GetTenantInfo().GetTenant()
-	currUser := ses.GetTenantInfo().GetUser()
-	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": accountName}, clusterservice.Contain)
-	sysTenant := isSysTenant(currTenant)
-	if sysTenant {
-		route.RouteForSuperTenant(clusterservice.NewSelector(), currUser, nil,
-			func(s *metadata.CNService) {
-				nodes = append(nodes, s.QueryAddress)
-			})
-	} else {
-		route.RouteForCommonTenant(labels, nil, func(s *metadata.CNService) {
+	clusterservice.GetMOCluster().GetCNService(clusterservice.NewSelectAll(),
+		func(s metadata.CNService) bool {
 			nodes = append(nodes, s.QueryAddress)
+			return true
 		})
-	}
 
 	var retErr error
 	genRequest := func() *query.Request {
@@ -4341,6 +4330,7 @@ func postDropSuspendAccount(
 		retErr = moerr.NewInternalError(ctx,
 			fmt.Sprintf("kill connection for account %s failed on node %s", accountName, nodeAddr))
 	}
+	logger.Info("[send kill request]send kill request to nodes", zap.String("qc service:", qc.ServiceID()), zap.Strings("nodes", nodes))
 
 	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
@@ -4384,7 +4374,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 
 		if vr == nil {
 			if !du.IfExists { //when the "IF EXISTS" is set, just skip it.
-				return moerr.NewInternalError(ctx, "there is no user %s", user.Username)
+				return moerr.NewInternalErrorf(ctx, "there is no user %s", user.Username)
 			}
 		}
 
@@ -4415,7 +4405,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 		}
 
 		if execResultArrayHasData(erArray) {
-			return moerr.NewInternalError(ctx, "can not delete the user %s", user.Username)
+			return moerr.NewInternalErrorf(ctx, "can not delete the user %s", user.Username)
 		}
 
 		//step2 : delete mo_user
@@ -4468,7 +4458,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 
 		if vr == nil {
 			if !dr.IfExists { //when the "IF EXISTS" is set, just skip it.
-				return moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
+				return moerr.NewInternalErrorf(ctx, "there is no role %s", role.UserName)
 			}
 		}
 
@@ -4483,7 +4473,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 		//NOTE: if the role is the admin role (moadmin,accountadmin) or public,
 		//the role can not be deleted.
 		if account.IsNameOfAdminRoles(vr.name) || isPublicRole(vr.name) {
-			return moerr.NewInternalError(ctx, "can not delete the role %s", vr.name)
+			return moerr.NewInternalErrorf(ctx, "can not delete the role %s", vr.name)
 		}
 
 		sqls := getSqlForDeleteRole(vr.id)
@@ -4791,7 +4781,7 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 	for i, user := range rp.Roles {
 		//check Revoke privilege on xxx yyy from moadmin(accountadmin)
 		if account.IsNameOfAdminRoles(user.UserName) {
-			return moerr.NewInternalError(ctx, "the privilege can not be revoked from the role %s", user.UserName)
+			return moerr.NewInternalErrorf(ctx, "the privilege can not be revoked from the role %s", user.UserName)
 		}
 		sql, err = getSqlForRoleIdOfRole(ctx, user.UserName)
 		if err != nil {
@@ -4804,7 +4794,7 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 		verifiedRoles[i] = vr
 		if vr == nil {
 			if !rp.IfExists { //when the "IF EXISTS" is set, just skip it.
-				return moerr.NewInternalError(ctx, "there is no role %s", user.UserName)
+				return moerr.NewInternalErrorf(ctx, "there is no role %s", user.UserName)
 			}
 		}
 	}
@@ -4842,7 +4832,7 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 				continue
 			}
 			if privType == PrivilegeTypeConnect && isPublicRole(role.name) {
-				return moerr.NewInternalError(ctx, "the privilege %s can not be revoked from the role %s", privType, role.name)
+				return moerr.NewInternalErrorf(ctx, "the privilege %s can not be revoked from the role %s", privType, role.name)
 			}
 			sql = getSqlForDeleteRolePrivs(role.id, objType.String(), objId, int64(privType), privLevel.String())
 			bh.ClearExecResultSet()
@@ -4888,10 +4878,10 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 		return id, nil
 	}
 	if isDb {
-		return 0, moerr.NewInternalError(ctx, `there is no database "%s"`, dbName)
+		return 0, moerr.NewInternalErrorf(ctx, `there is no database "%s"`, dbName)
 	} else {
 		//TODO: check the database exists or not first
-		return 0, moerr.NewInternalError(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
+		return 0, moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
 	}
 }
 
@@ -4906,7 +4896,7 @@ func convertAstObjectTypeToObjectType(ctx context.Context, ot tree.ObjectType) (
 	case tree.OBJECT_TYPE_ACCOUNT:
 		objType = objectTypeAccount
 	default:
-		return 0, moerr.NewInternalError(ctx, `the object type "%s" is unsupported`, ot.String())
+		return 0, moerr.NewInternalErrorf(ctx, `the object type "%s" is unsupported`, ot.String())
 	}
 	return objType, nil
 }
@@ -4951,7 +4941,7 @@ func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSessio
 				return 0, 0, err
 			}
 		default:
-			err = moerr.NewInternalError(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
+			err = moerr.NewInternalErrorf(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
 			return 0, 0, err
 		}
 	case tree.OBJECT_TYPE_DATABASE:
@@ -4978,7 +4968,7 @@ func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSessio
 				return 0, 0, err
 			}
 		default:
-			err = moerr.NewInternalError(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
+			err = moerr.NewInternalErrorf(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
 			return 0, 0, err
 		}
 	case tree.OBJECT_TYPE_ACCOUNT:
@@ -4987,11 +4977,11 @@ func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSessio
 			privLevel = privilegeLevelStar
 			objId = objectIDAll
 		default:
-			err = moerr.NewInternalError(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
+			err = moerr.NewInternalErrorf(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
 			return 0, 0, err
 		}
 	default:
-		err = moerr.NewInternalError(ctx, `the object type "%s" is unsupported`, ot.String())
+		err = moerr.NewInternalErrorf(ctx, `the object type "%s" is unsupported`, ot.String())
 		return 0, 0, err
 	}
 
@@ -5004,19 +4994,19 @@ func matchPrivilegeTypeWithObjectType(ctx context.Context, privType PrivilegeTyp
 	switch privType.Scope() {
 	case PrivilegeScopeSys, PrivilegeScopeAccount, PrivilegeScopeUser, PrivilegeScopeRole:
 		if objType != objectTypeAccount {
-			err = moerr.NewInternalError(ctx, `the privilege "%s" can only be granted to the object type "account"`, privType)
+			err = moerr.NewInternalErrorf(ctx, `the privilege "%s" can only be granted to the object type "account"`, privType)
 		}
 	case PrivilegeScopeDatabase:
 		if objType != objectTypeDatabase {
-			err = moerr.NewInternalError(ctx, `the privilege "%s" can only be granted to the object type "database"`, privType)
+			err = moerr.NewInternalErrorf(ctx, `the privilege "%s" can only be granted to the object type "database"`, privType)
 		}
 	case PrivilegeScopeTable:
 		if objType != objectTypeTable {
-			err = moerr.NewInternalError(ctx, `the privilege "%s" can only be granted to the object type "table"`, privType)
+			err = moerr.NewInternalErrorf(ctx, `the privilege "%s" can only be granted to the object type "table"`, privType)
 		}
 	case PrivilegeScopeRoutine:
 		if objType != objectTypeFunction {
-			err = moerr.NewInternalError(ctx, `the privilege "%s" can only be granted to the object type "function"`, privType)
+			err = moerr.NewInternalErrorf(ctx, `the privilege "%s" can only be granted to the object type "function"`, privType)
 		}
 	}
 	return err
@@ -5065,7 +5055,7 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 	for i, role := range gp.Roles {
 		//check Grant privilege on xxx yyy to moadmin(accountadmin)
 		if account != nil && account.IsNameOfAdminRoles(role.UserName) {
-			return moerr.NewInternalError(ctx, "the privilege can not be granted to the role %s", role.UserName)
+			return moerr.NewInternalErrorf(ctx, "the privilege can not be granted to the role %s", role.UserName)
 		}
 		sql, err = getSqlForRoleIdOfRole(ctx, role.UserName)
 		if err != nil {
@@ -5090,7 +5080,7 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 				}
 			}
 		} else {
-			return moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
+			return moerr.NewInternalErrorf(ctx, "there is no role %s", role.UserName)
 		}
 		verifiedRoles[i] = &verifiedRole{
 			typ:  roleType,
@@ -5112,7 +5102,7 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 			return err
 		}
 		if isBannedPrivilege(privType) {
-			return moerr.NewInternalError(ctx, "the privilege %s can not be granted", privType)
+			return moerr.NewInternalErrorf(ctx, "the privilege %s can not be granted", privType)
 		}
 		//check the match between the privilegeScope and the objectType
 		err = matchPrivilegeTypeWithObjectType(ctx, privType, objType)
@@ -5241,7 +5231,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 			verifiedToRoles[i] = vr
 			if vr == nil {
 				if !rr.IfExists { //when the "IF EXISTS" is set, just skip the check
-					return moerr.NewInternalError(ctx, "there is no role or user %s", user.Username)
+					return moerr.NewInternalErrorf(ctx, "there is no role or user %s", user.Username)
 				}
 			}
 		}
@@ -5259,7 +5249,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 			return err
 		}
 		if vr == nil {
-			return moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
+			return moerr.NewInternalErrorf(ctx, "there is no role %s", role.UserName)
 		}
 		verifiedFromRoles[i] = vr
 	}
@@ -5275,18 +5265,18 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 				//check Revoke moadmin from root,dump,userX
 				//check Revoke accountadmin from root,dump,userX
 				//check Revoke moadmin(accountadmin) from roleX
-				return moerr.NewInternalError(ctx, "the role %s can not be revoked", from.name)
+				return moerr.NewInternalErrorf(ctx, "the role %s can not be revoked", from.name)
 			} else if isPublicRole(from.name) {
-				return moerr.NewInternalError(ctx, "the role %s can not be revoked", from.name)
+				return moerr.NewInternalErrorf(ctx, "the role %s can not be revoked", from.name)
 			}
 
 			if to.typ == roleType {
 				//check Revoke roleX from moadmin(accountadmin)
 				if account.IsNameOfAdminRoles(to.name) {
-					return moerr.NewInternalError(ctx, "the role %s can not be revoked from the role %s", from.name, to.name)
+					return moerr.NewInternalErrorf(ctx, "the role %s can not be revoked from the role %s", from.name, to.name)
 				} else if isPublicRole(to.name) {
 					//check Revoke roleX from public
-					return moerr.NewInternalError(ctx, "the role %s can not be revoked from the role %s", from.name, to.name)
+					return moerr.NewInternalErrorf(ctx, "the role %s can not be revoked from the role %s", from.name, to.name)
 				}
 			}
 
@@ -5318,25 +5308,25 @@ func verifySpecialRolesInGrant(ctx context.Context, account *TenantInfo, from, t
 			//check Grant moadmin to userX
 			//check Grant accountadmin to userX
 			if !to.userIsAdmin {
-				return moerr.NewInternalError(ctx, "the role %s can not be granted to non administration user %s", from.name, to.name)
+				return moerr.NewInternalErrorf(ctx, "the role %s can not be granted to non administration user %s", from.name, to.name)
 			}
 		} else {
 			//check Grant moadmin(accountadmin) to roleX
 			if !account.IsNameOfAdminRoles(to.name) {
-				return moerr.NewInternalError(ctx, "the role %s can not be granted to the other role %s", from.name, to.name)
+				return moerr.NewInternalErrorf(ctx, "the role %s can not be granted to the other role %s", from.name, to.name)
 			}
 		}
 	} else if isPublicRole(from.name) && to.typ == roleType {
-		return moerr.NewInternalError(ctx, "the role %s can not be granted to the other role %s", from.name, to.name)
+		return moerr.NewInternalErrorf(ctx, "the role %s can not be granted to the other role %s", from.name, to.name)
 	}
 
 	if to.typ == roleType {
 		//check Grant roleX to moadmin(accountadmin)
 		if account.IsNameOfAdminRoles(to.name) {
-			return moerr.NewInternalError(ctx, "the role %s can not be granted to the role %s", from.name, to.name)
+			return moerr.NewInternalErrorf(ctx, "the role %s can not be granted to the role %s", from.name, to.name)
 		} else if isPublicRole(to.name) {
 			//check Grant roleX to public
-			return moerr.NewInternalError(ctx, "the role %s can not be granted to the role %s", from.name, to.name)
+			return moerr.NewInternalErrorf(ctx, "the role %s can not be granted to the role %s", from.name, to.name)
 		}
 	}
 	return nil
@@ -5391,7 +5381,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 			return err
 		}
 		if vr == nil {
-			return moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
+			return moerr.NewInternalErrorf(ctx, "there is no role %s", role.UserName)
 		}
 		verifiedFromRoles[i] = vr
 	}
@@ -5419,7 +5409,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 				return err
 			}
 			if vr == nil {
-				return moerr.NewInternalError(ctx, "there is no role or user %s", user.Username)
+				return moerr.NewInternalErrorf(ctx, "there is no role or user %s", user.Username)
 			}
 			verifiedToRoles[i] = vr
 
@@ -6192,7 +6182,7 @@ func getSqlFromPrivilegeEntry(ctx context.Context, roleId int64, entry privilege
 		case privilegeLevelStarStar:
 			sql = getSqlForCheckRoleHasTableLevelForStarStar(roleId, entry.privilegeId)
 		default:
-			return "", moerr.NewInternalError(ctx, "unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
+			return "", moerr.NewInternalErrorf(ctx, "unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
 		}
 	} else if entry.objType == objectTypeDatabase {
 		switch entry.privilegeLevel {
@@ -6201,14 +6191,14 @@ func getSqlFromPrivilegeEntry(ctx context.Context, roleId int64, entry privilege
 		case privilegeLevelDatabase:
 			sql, err = getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx, roleId, entry.privilegeId, entry.databaseName)
 		default:
-			return "", moerr.NewInternalError(ctx, "unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
+			return "", moerr.NewInternalErrorf(ctx, "unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
 		}
 	} else if entry.objType == objectTypeAccount {
 		switch entry.privilegeLevel {
 		case privilegeLevelStar:
 			sql = getSqlForCheckRoleHasAccountLevelForStar(roleId, entry.privilegeId)
 		default:
-			return "false", moerr.NewInternalError(ctx, "unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
+			return "false", moerr.NewInternalErrorf(ctx, "unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
 		}
 	} else {
 		sql = getSqlForCheckRoleHasPrivilege(roleId, entry.objType, int64(entry.objId), int64(entry.privilegeId))
@@ -6221,7 +6211,7 @@ func getPrivilegeLevelsOfObjectType(ctx context.Context, objType objectType) ([]
 	if ret, ok := objectType2privilegeLevels[objType]; ok {
 		return ret, nil
 	}
-	return nil, moerr.NewInternalError(ctx, "do not support the object type %s", objType.String())
+	return nil, moerr.NewInternalErrorf(ctx, "do not support the object type %s", objType.String())
 }
 
 // getSqlForPrivilege generates the query sql for the privilege entry
@@ -6239,7 +6229,7 @@ func getSqlForPrivilege(ctx context.Context, roleId int64, entry privilegeEntry,
 		case privilegeLevelStarStar:
 			sql = getSqlForCheckRoleHasTableLevelForStarStar(roleId, entry.privilegeId)
 		default:
-			return "", moerr.NewInternalError(ctx, "the privilege level %s for the privilege %s is unsupported", pl, entry.privilegeId)
+			return "", moerr.NewInternalErrorf(ctx, "the privilege level %s for the privilege %s is unsupported", pl, entry.privilegeId)
 		}
 	case objectTypeDatabase:
 		switch pl {
@@ -6248,14 +6238,14 @@ func getSqlForPrivilege(ctx context.Context, roleId int64, entry privilegeEntry,
 		case privilegeLevelDatabase:
 			sql, err = getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx, roleId, entry.privilegeId, entry.databaseName)
 		default:
-			return "", moerr.NewInternalError(ctx, "the privilege level %s for the privilege %s is unsupported", pl, entry.privilegeId)
+			return "", moerr.NewInternalErrorf(ctx, "the privilege level %s for the privilege %s is unsupported", pl, entry.privilegeId)
 		}
 	case objectTypeAccount:
 		switch pl {
 		case privilegeLevelStar:
 			sql = getSqlForCheckRoleHasAccountLevelForStar(roleId, entry.privilegeId)
 		default:
-			return "false", moerr.NewInternalError(ctx, "the privilege level %s for the privilege %s is unsupported", pl, entry.privilegeId)
+			return "false", moerr.NewInternalErrorf(ctx, "the privilege level %s for the privilege %s is unsupported", pl, entry.privilegeId)
 		}
 	default:
 		sql = getSqlForCheckRoleHasPrivilege(roleId, entry.objType, int64(entry.objId), int64(entry.privilegeId))
@@ -6561,7 +6551,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sqlForInheritedRoleIdOfRoleId)
 			if err != nil {
-				return false, moerr.NewInternalError(ctx, "get inherited role id of the role id. error:%v", err)
+				return false, moerr.NewInternalErrorf(ctx, "get inherited role id of the role id. error:%v", err)
 			}
 
 			erArray, err = getResultSet(ctx, bh)
@@ -6689,7 +6679,7 @@ func determineUserCanGrantRolesToOthersInternal(ctx context.Context, bh Backgrou
 			return false, err
 		}
 		if vr == nil {
-			return false, moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
+			return false, moerr.NewInternalErrorf(ctx, "there is no role %s", role.UserName)
 		}
 		verifiedFromRoles[i] = vr
 	}
@@ -7109,7 +7099,7 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
 			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseTable(ctx, int64(tenant.GetDefaultRoleID()), privType, ses.GetDatabaseName(), gp.Level.TabName)
 		default:
-			return "", moerr.NewInternalError(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
+			return "", moerr.NewInternalErrorf(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
 		}
 	case tree.OBJECT_TYPE_DATABASE:
 		switch gp.Level.Level {
@@ -7123,17 +7113,17 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE:
 			sql, err = getSqlForCheckWithGrantOptionForDatabaseDB(ctx, int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
 		default:
-			return "", moerr.NewInternalError(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
+			return "", moerr.NewInternalErrorf(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
 		}
 	case tree.OBJECT_TYPE_ACCOUNT:
 		switch gp.Level.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
 			sql = getSqlForCheckWithGrantOptionForAccountStar(int64(tenant.GetDefaultRoleID()), privType)
 		default:
-			return "", moerr.NewInternalError(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
+			return "", moerr.NewInternalErrorf(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
 		}
 	default:
-		return "", moerr.NewInternalError(ctx, "object type %v is unsupported", gp.ObjType)
+		return "", moerr.NewInternalErrorf(ctx, "object type %v is unsupported", gp.ObjType)
 	}
 	return sql, err
 }
@@ -7412,7 +7402,7 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 		case tree.OBJECT_TYPE_TABLE:
 			privType = PrivilegeTypeTableAll
 		default:
-			return 0, moerr.NewInternalError(ctx, `the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
+			return 0, moerr.NewInternalErrorf(ctx, `the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
 		}
 	case tree.PRIVILEGE_TYPE_STATIC_OWNERSHIP:
 		switch ot {
@@ -7421,7 +7411,7 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 		case tree.OBJECT_TYPE_TABLE:
 			privType = PrivilegeTypeTableOwnership
 		default:
-			return 0, moerr.NewInternalError(ctx, `the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
+			return 0, moerr.NewInternalErrorf(ctx, `the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
 		}
 	case tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES:
 		privType = PrivilegeTypeShowTables
@@ -7456,7 +7446,7 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 	case tree.PRIVILEGE_TYPE_STATIC_VALUES:
 		privType = PrivilegeTypeValues
 	default:
-		return 0, moerr.NewInternalError(ctx, "unsupported privilege type %s", priv.ToString())
+		return 0, moerr.NewInternalErrorf(ctx, "unsupported privilege type %s", priv.ToString())
 	}
 	return privType, nil
 }
@@ -7611,7 +7601,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 	finalVersion := ses.rm.baseService.GetFinalVersion()
 
 	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
-		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
+		return moerr.NewInternalErrorf(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
 	}
 	start := time.Now()
 	defer func() {
@@ -7674,7 +7664,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 
 		if exists {
 			if !ca.IfNotExists { //do nothing
-				return moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
+				return moerr.NewInternalErrorf(ctx, "the tenant %s exists", ca.Name)
 			}
 			return rtnErr
 		} else {
@@ -7822,7 +7812,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 			return nil, nil, err
 		}
 	} else {
-		return nil, nil, moerr.NewInternalError(ctx, "get the id of tenant %s failed", ca.Name)
+		return nil, nil, moerr.NewInternalErrorf(ctx, "get the id of tenant %s failed", ca.Name)
 	}
 
 	newUserId = int64(GetAdminUserId())
@@ -8121,7 +8111,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 			return err
 		}
 		if !execResultArrayHasData(erArray) {
-			return moerr.NewInternalError(ctx, "there is no role %s", cu.Role.UserName)
+			return moerr.NewInternalErrorf(ctx, "there is no role %s", cu.Role.UserName)
 		}
 		newRoleId, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
@@ -8200,7 +8190,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 				continue
 			}
 			if exists == 1 {
-				err = moerr.NewInternalError(ctx, "the user %s exists", user.Username)
+				err = moerr.NewInternalErrorf(ctx, "the user %s exists", user.Username)
 			} else if exists == 2 {
 				err = moerr.NewInternalError(ctx, "there is a role with the same name as the user")
 			}
@@ -8209,7 +8199,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 		}
 
 		if !user.AuthExist {
-			return moerr.NewInternalError(ctx, "the user %s misses the auth_option", user.Username)
+			return moerr.NewInternalErrorf(ctx, "the user %s misses the auth_option", user.Username)
 		}
 
 		if user.IdentTyp != tree.AccountIdentifiedByPassword {
@@ -8256,7 +8246,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 		}
 
 		if !execResultArrayHasData(erArray) {
-			return moerr.NewInternalError(ctx, "get the id of user %s failed", user.Username)
+			return moerr.NewInternalErrorf(ctx, "get the id of user %s failed", user.Username)
 		}
 		newUserId, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
@@ -8353,11 +8343,11 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 				continue
 			}
 			if exists == 1 {
-				err = moerr.NewInternalError(ctx, "the role %s exists", r.UserName)
+				err = moerr.NewInternalErrorf(ctx, "the role %s exists", r.UserName)
 			} else if exists == 2 {
-				err = moerr.NewInternalError(ctx, "there is a user with the same name as the role %s", r.UserName)
+				err = moerr.NewInternalErrorf(ctx, "there is a user with the same name as the role %s", r.UserName)
 			} else if exists == 3 {
-				err = moerr.NewInternalError(ctx, "can not use the name %s. it is the name of the predefined role", r.UserName)
+				err = moerr.NewInternalErrorf(ctx, "can not use the name %s. it is the name of the predefined role", r.UserName)
 			}
 
 			return err
@@ -8704,7 +8694,7 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 		}
 
 		if !execResultArrayHasData(erArray) {
-			rtnErr = moerr.NewInternalError(ctx, "there is no database %s to change config", dbName)
+			rtnErr = moerr.NewInternalErrorf(ctx, "there is no database %s to change config", dbName)
 			return
 		} else {
 			databaseOwner, rtnErr = erArray[0].GetInt64(ctx, 0, 1)
@@ -8782,7 +8772,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 		}
 
 		if !isExist {
-			return moerr.NewInternalError(ctx, "there is no account %s to change config", accountName)
+			return moerr.NewInternalErrorf(ctx, "there is no account %s to change config", accountName)
 		}
 
 		// step2: update the config
@@ -9246,22 +9236,13 @@ func postAlterSessionStatus(
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
-	currTenant := ses.GetTenantInfo().GetTenant()
-	currUser := ses.GetTenantInfo().GetUser()
+
 	var nodes []string
-	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": accountName}, clusterservice.Contain)
-	sysTenant := isSysTenant(currTenant)
-	if sysTenant {
-		route.RouteForSuperTenant(clusterservice.NewSelector(), currUser, nil,
-			func(s *metadata.CNService) {
-				nodes = append(nodes, s.QueryAddress)
-			})
-	} else {
-		route.RouteForCommonTenant(labels, nil, func(s *metadata.CNService) {
+	clusterservice.GetMOCluster().GetCNService(clusterservice.NewSelectAll(),
+		func(s metadata.CNService) bool {
 			nodes = append(nodes, s.QueryAddress)
+			return true
 		})
-	}
 
 	var retErr, err error
 
@@ -9333,7 +9314,7 @@ func getDbIdAndType(ctx context.Context, bh BackgroundExec, tenantInfo *TenantIn
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(ctx, "database '%s' does not exist", dbName)
+		err = moerr.NewInternalErrorf(ctx, "database '%s' does not exist", dbName)
 		return
 	}
 

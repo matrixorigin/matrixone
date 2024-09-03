@@ -65,6 +65,10 @@ func (r *mockRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tun
 	return nil, nil, nil
 }
 
+func (r *mockRouter) AllServers() ([]*CNServer, error) {
+	return nil, nil
+}
+
 func (r *mockRouter) Refresh(sync bool) {
 	r.refreshCount++
 }

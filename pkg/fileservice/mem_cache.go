@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/checks/interval"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -31,16 +32,20 @@ type MemCache struct {
 func NewMemCache(
 	dataCache *memorycache.Cache,
 	counterSets []*perfcounter.CounterSet,
+	name string,
 ) *MemCache {
 	ret := &MemCache{
 		cache:       dataCache,
 		counterSets: counterSets,
 	}
+	if name != "" {
+		allMemoryCaches.Store(ret, name)
+	}
 	return ret
 }
 
-func NewMemoryCache(
-	capacity int64,
+func newMemoryCache(
+	capacity fscache.CapacityFunc,
 	checkOverlaps bool,
 	callbacks *CacheCallbacks,
 ) *memorycache.Cache {
@@ -50,7 +55,7 @@ func NewMemoryCache(
 		overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
 	}
 
-	postSetFn := func(key CacheKey, value memorycache.CacheData) {
+	postSetFn := func(key CacheKey, value fscache.Data) {
 		if overlapChecker != nil {
 			if err := overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
 				panic(err)
@@ -64,7 +69,7 @@ func NewMemoryCache(
 		}
 	}
 
-	postGetFn := func(key CacheKey, value memorycache.CacheData) {
+	postGetFn := func(key CacheKey, value fscache.Data) {
 		if callbacks != nil {
 			for _, fn := range callbacks.PostGet {
 				fn(key, value)
@@ -72,7 +77,7 @@ func NewMemoryCache(
 		}
 	}
 
-	postEvictFn := func(key CacheKey, value memorycache.CacheData) {
+	postEvictFn := func(key CacheKey, value fscache.Data) {
 		if overlapChecker != nil {
 			if err := overlapChecker.Remove(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
 				panic(err)
@@ -85,12 +90,24 @@ func NewMemoryCache(
 			}
 		}
 	}
-	return memorycache.NewCache(capacity, postSetFn, postGetFn, postEvictFn, getMemoryCacheAllocator())
+
+	return memorycache.NewCache(
+		func() int64 {
+			// read from global hint
+			if n := GlobalMemoryCacheSizeHint.Load(); n > 0 {
+				return n
+			}
+			// fallback
+			return capacity()
+		},
+		postSetFn, postGetFn, postEvictFn,
+		getMemoryCacheAllocator(),
+	)
 }
 
 var _ IOVectorCache = new(MemCache)
 
-func (m *MemCache) Alloc(n int) memorycache.CacheData {
+func (m *MemCache) Alloc(n int) fscache.Data {
 	return m.cache.Alloc(n)
 }
 
@@ -190,4 +207,13 @@ func (m *MemCache) DeletePaths(
 ) error {
 	m.cache.DeletePaths(ctx, paths)
 	return nil
+}
+
+func (m *MemCache) Evict(done chan int64) {
+	m.cache.Evict(done)
+}
+
+func (m *MemCache) Close() {
+	m.Flush()
+	allMemoryCaches.Delete(m)
 }

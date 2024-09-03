@@ -270,7 +270,7 @@ func checkPKDup(
 			mp[v] = true
 		}
 	default:
-		panic(moerr.NewInternalErrorNoCtx("%s not supported", pk.GetType().String()))
+		panic(moerr.NewInternalErrorNoCtxf("%s not supported", pk.GetType().String()))
 	}
 	return false, ""
 }

@@ -22,12 +22,15 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -49,9 +52,10 @@ type DiskCache struct {
 func NewDiskCache(
 	ctx context.Context,
 	path string,
-	capacity int,
+	capacity fscache.CapacityFunc,
 	perfCounterSets []*perfcounter.CounterSet,
 	asyncLoad bool,
+	name string,
 ) (ret *DiskCache, err error) {
 
 	err = os.MkdirAll(path, 0755)
@@ -64,15 +68,28 @@ func NewDiskCache(
 		perfCounterSets: perfCounterSets,
 
 		cache: fifocache.New(
-			capacity,
+			func() int64 {
+				// read from global size hint
+				if n := GlobalDiskCacheSizeHint.Load(); n > 0 {
+					return n
+				}
+				// fallback
+				return capacity()
+			},
+
 			func(path string, _ struct{}) {
 				err := os.Remove(path)
 				if err == nil {
 					perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
 						set.FileService.Cache.Disk.Evict.Add(1)
 					}, perfCounterSets...)
+				} else if !os.IsNotExist(err) {
+					logutil.Error("delete disk cache file",
+						zap.Any("error", err),
+					)
 				}
 			},
+
 			func(key string) uint8 {
 				return uint8(xxhash.Sum64String(key))
 			},
@@ -87,18 +104,48 @@ func NewDiskCache(
 		ret.loadCache()
 	}
 
+	if name != "" {
+		allDiskCaches.Store(ret, name)
+	}
+
 	return ret, nil
 }
 
 func (d *DiskCache) loadCache() {
+	t0 := time.Now()
 
-	var numFiles, numCacheFiles int
+	type Info struct {
+		Path  string
+		Entry os.DirEntry
+	}
+	works := make(chan Info)
+
+	numWorkers := runtime.NumCPU()
+	wg := new(sync.WaitGroup)
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for work := range works {
+
+				info, err := work.Entry.Info()
+				if err != nil {
+					continue // ignore
+				}
+
+				d.cache.Set(work.Path, struct{}{}, int64(fileSize(info)))
+			}
+		}()
+	}
+
+	var numFiles, numCacheFiles, numTempFiles, numDeleted int
 
 	_ = filepath.WalkDir(d.path, func(path string, entry os.DirEntry, err error) error {
 		numFiles++
 		if err != nil {
 			return nil //ignore
 		}
+
 		if entry.IsDir() {
 			// try remove if empty. for cleaning old structure
 			if path != d.path {
@@ -106,24 +153,54 @@ func (d *DiskCache) loadCache() {
 				_ = os.Remove(path)
 			}
 			return nil
-		}
-		if !strings.HasSuffix(entry.Name(), cacheFileSuffix) {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return nil // ignore
+
+		} else {
+			// plain files
+			if !strings.HasSuffix(entry.Name(), cacheFileSuffix) {
+				// not cache file
+				if strings.HasSuffix(entry.Name(), cacheFileTempSuffix) {
+					numTempFiles++
+					// temp file
+					info, err := entry.Info()
+					if err == nil && time.Since(info.ModTime()) > time.Hour*8 {
+						// old temp file
+						_ = os.Remove(path)
+						numDeleted++
+					}
+				} else {
+					// unknown file
+					_ = os.Remove(path)
+					numDeleted++
+				}
+				return nil
+			}
 		}
 
-		d.cache.Set(path, struct{}{}, int(fileSize(info)))
 		numCacheFiles++
+		works <- Info{
+			Path:  path,
+			Entry: entry,
+		}
 
 		return nil
 	})
 
+	close(works)
+	wg.Wait()
+
 	logutil.Info("disk cache info loaded",
 		zap.Any("all files", numFiles),
 		zap.Any("cache files", numCacheFiles),
+		zap.Any("temp files", numTempFiles),
+		zap.Any("deleted files", numDeleted),
+		zap.Any("time", time.Since(t0)),
+	)
+
+	done := make(chan int64, 1)
+	d.cache.Evict(done)
+	target := <-done
+	logutil.Info("disk cache evict done",
+		zap.Any("target", target),
 	)
 
 }
@@ -239,7 +316,7 @@ func (d *DiskCache) Read(
 			if err != nil {
 				return err
 			}
-			d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
+			d.cache.Set(diskPath, struct{}{}, fileSize(stat))
 		}
 
 		if err := entry.ReadFromOSFile(ctx, file); err != nil {
@@ -330,6 +407,9 @@ func (d *DiskCache) writeFile(
 	openReader func(context.Context) (io.ReadCloser, error),
 ) (written bool, err error) {
 
+	// do eviction before write
+	d.cache.Evict(nil)
+
 	var numCreate, numStat, numError, numWrite int64
 	defer func() {
 		perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
@@ -363,7 +443,7 @@ func (d *DiskCache) writeFile(
 	stat, err := os.Stat(diskPath)
 	if err == nil {
 		// file exists
-		d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
+		d.cache.Set(diskPath, struct{}{}, fileSize(stat))
 		numStat++
 		return false, nil
 	}
@@ -374,10 +454,17 @@ func (d *DiskCache) writeFile(
 	if err != nil {
 		return false, err
 	}
-	f, err := os.CreateTemp(dir, "*")
+	f, err := os.CreateTemp(dir, "*"+cacheFileTempSuffix)
 	if err != nil {
 		return false, err
 	}
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(f.Name())
+		}
+	}()
+
 	numCreate++
 	from, err := openReader(ctx)
 	if err != nil {
@@ -389,8 +476,6 @@ func (d *DiskCache) writeFile(
 	defer put.Put()
 	_, err = io.CopyBuffer(f, from, buf)
 	if err != nil {
-		f.Close()
-		os.Remove(f.Name())
 		return false, err
 	}
 
@@ -403,7 +488,7 @@ func (d *DiskCache) writeFile(
 	if err != nil {
 		return false, err
 	}
-	d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
+	d.cache.Set(diskPath, struct{}{}, fileSize(stat))
 
 	if err := f.Close(); err != nil {
 		return false, err
@@ -423,7 +508,10 @@ func (d *DiskCache) writeFile(
 func (d *DiskCache) Flush() {
 }
 
-const cacheFileSuffix = ".mofscache"
+const (
+	cacheFileSuffix     = ".mofscache"
+	cacheFileTempSuffix = cacheFileSuffix + ".tmp"
+)
 
 func (d *DiskCache) pathForIOEntry(path string, entry IOEntry) string {
 	if entry.Size < 0 {
@@ -519,9 +607,17 @@ func (d *DiskCache) DeletePaths(
 	return nil
 }
 
+func (d *DiskCache) Evict(done chan int64) {
+	d.cache.Evict(done)
+}
+
 func fileSize(info fs.FileInfo) int64 {
 	if sys, ok := info.Sys().(*syscall.Stat_t); ok {
 		return int64(sys.Blocks) * 512 // it's always 512, not sys.Blksize
 	}
 	return info.Size()
+}
+
+func (d *DiskCache) Close() {
+	allDiskCaches.Delete(d)
 }

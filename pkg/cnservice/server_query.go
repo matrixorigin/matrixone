@@ -16,6 +16,10 @@ package cnservice
 
 import (
 	"context"
+	"runtime"
+	"runtime/debug"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -78,6 +82,14 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnFrom, s.handleMigrateConnFrom, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnTo, s.handleMigrateConnTo, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ReloadAutoIncrementCache, s.handleReloadAutoIncrementCache, false)
+	// ignored in mo 1.2.3
+	//s.queryService.AddHandleFunc(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount, false)
+	//s.queryService.AddHandleFunc(query.CmdMethod_CtlReader, s.handleCtlReader, false)
+	//s.queryService.AddHandleFunc(query.CmdMethod_ResetSession, s.handleResetSession, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GOMEMLIMIT, s.handleGoMemLimit, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -92,8 +104,12 @@ func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *
 	if accountMgr == nil {
 		return moerr.NewInternalError(ctx, "account routine manager not initialized")
 	}
-	logutil.Infof("[set suspend] handle set account id %d, version %d to kill queue, ", req.KillConnRequest.AccountID, req.KillConnRequest.Version)
+	logutil.Infof("[handle kill request] handle kill conn, add account id %d, version %d to kill queue", req.KillConnRequest.AccountID, req.KillConnRequest.Version)
 	accountMgr.EnKillQueue(req.KillConnRequest.AccountID, req.KillConnRequest.Version)
+
+	resp.KillConnResponse = &query.KillConnResponse{
+		Success: true,
+	}
 	return nil
 }
 
@@ -109,8 +125,11 @@ func (s *service) handleAlterAccount(ctx context.Context, req *query.Request, re
 	if accountMgr == nil {
 		return moerr.NewInternalError(ctx, "account routine manager not initialized")
 	}
-
+	logutil.Infof("[handle alter request] handle alter conn, account id %d to status %s", req.AlterAccountRequest.TenantId, req.AlterAccountRequest.Status)
 	accountMgr.AlterRoutineStatue(req.AlterAccountRequest.TenantId, req.AlterAccountRequest.Status)
+	resp.AlterAccountResponse = &query.AlterAccountResponse{
+		AlterSuccess: true,
+	}
 	return nil
 }
 
@@ -441,4 +460,70 @@ func (s *service) handleReloadAutoIncrementCache(
 		ctx,
 		req.ReloadAutoIncrementCache.TableID,
 	)
+}
+
+func (s *service) handleGoMaxProcs(
+	ctx context.Context, req *query.Request, resp *query.Response,
+) error {
+	resp.GoMaxProcsResponse.MaxProcs = int32(runtime.GOMAXPROCS(int(req.GoMaxProcsRequest.MaxProcs)))
+	logutil.Info("QueryService::GoMaxProcs",
+		zap.String("op", "set"),
+		zap.Int32("in", req.GoMaxProcsRequest.MaxProcs),
+		zap.Int32("out", resp.GoMaxProcsResponse.MaxProcs),
+	)
+	return nil
+}
+
+func (s *service) handleGoMemLimit(
+	ctx context.Context, req *query.Request, resp *query.Response,
+) error {
+	resp.GoMemLimitResponse.MemLimitBytes = int64(debug.SetMemoryLimit(req.GoMemLimitRequest.MemLimitBytes))
+	logutil.Info("QueryService::GoMemLimit",
+		zap.String("op", "set"),
+		zap.Int64("in", req.GoMemLimitRequest.MemLimitBytes),
+		zap.Int64("out", resp.GoMemLimitResponse.MemLimitBytes),
+	)
+	return nil
+}
+
+func (s *service) handleFileServiceCacheRequest(
+	ctx context.Context, req *query.Request, resp *query.Response,
+) error {
+
+	if n := req.FileServiceCacheRequest.CacheSize; n > 0 {
+		switch req.FileServiceCacheRequest.Type {
+		case query.FileServiceCacheType_Disk:
+			fileservice.GlobalDiskCacheSizeHint.Store(n)
+		case query.FileServiceCacheType_Memory:
+			fileservice.GlobalMemoryCacheSizeHint.Store(n)
+		}
+		logutil.Info("cache size adjusted",
+			zap.Any("type", req.FileServiceCacheRequest.Type),
+			zap.Any("size", n),
+		)
+	}
+
+	return nil
+}
+
+func (s *service) handleFileServiceCacheEvictRequest(
+	ctx context.Context, req *query.Request, resp *query.Response,
+) error {
+
+	var ret map[string]int64
+	switch req.FileServiceCacheEvictRequest.Type {
+	case query.FileServiceCacheType_Disk:
+		ret = fileservice.EvictDiskCaches()
+	case query.FileServiceCacheType_Memory:
+		ret = fileservice.EvictMemoryCaches()
+	}
+
+	for _, target := range ret {
+		resp.FileServiceCacheEvictResponse.CacheSize = target
+		resp.FileServiceCacheEvictResponse.CacheCapacity = target
+		// usually one instance
+		break
+	}
+
+	return nil
 }

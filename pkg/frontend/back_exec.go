@@ -49,6 +49,17 @@ type backExec struct {
 }
 
 func (back *backExec) Close() {
+	tempExecCtx := ExecCtx{
+		ses:    back.backSes,
+		txnOpt: FeTxnOption{byRollback: true},
+	}
+	defer tempExecCtx.Close()
+	err := back.backSes.GetTxnHandler().Rollback(&tempExecCtx)
+	if err != nil {
+		back.backSes.Error(tempExecCtx.reqCtx,
+			"Failed to rollback txn in back session",
+			zap.Error(err))
+	}
 	back.Clear()
 	back.backSes.Close()
 	back.backSes.Clear()
@@ -86,14 +97,14 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	}()
 
 	if len(statements) > 1 {
-		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
+		return moerr.NewInternalErrorf(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
 	//share txn can not run transaction statement
 	if back.backSes.GetTxnHandler().IsShareTxn() {
 		for _, stmt := range statements {
 			switch stmt.(type) {
 			case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
-				return moerr.NewInternalError(ctx, "Exec() can not run transaction statement in share transaction, sql = %s", sql)
+				return moerr.NewInternalErrorf(ctx, "Exec() can not run transaction statement in share transaction, sql = %s", sql)
 			}
 		}
 	}
@@ -145,14 +156,14 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 		}
 	}()
 	if len(statements) > 1 {
-		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
+		return moerr.NewInternalErrorf(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
 	//share txn can not run transaction statement
 	if back.backSes.GetTxnHandler().IsShareTxn() {
 		for _, stmt := range statements {
 			switch stmt.(type) {
 			case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
-				return moerr.NewInternalError(ctx, "Exec() can not run transaction statement in share transaction, sql = %s", sql)
+				return moerr.NewInternalErrorf(ctx, "Exec() can not run transaction statement in share transaction, sql = %s", sql)
 			}
 		}
 	}
@@ -438,7 +449,7 @@ func executeStmtInBack(backSes *backSession,
 		}
 	case tree.OUTPUT_UNDEFINED:
 		if _, ok := execCtx.stmt.(*tree.Execute); !ok {
-			return moerr.NewInternalError(execCtx.reqCtx, "need set result type for %s", execCtx.sqlOfStmt)
+			return moerr.NewInternalErrorf(execCtx.reqCtx, "need set result type for %s", execCtx.sqlOfStmt)
 		}
 	}
 

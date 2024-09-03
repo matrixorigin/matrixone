@@ -30,7 +30,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -132,8 +132,9 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 
 	if *config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
 		l.memCache = NewMemCache(
-			NewMemoryCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
+			newMemoryCache(fscache.ConstCapacity(int64(*config.MemoryCapacity)), true, &config.CacheCallbacks),
 			l.perfCounterSets,
+			l.name,
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", l.name),
@@ -147,9 +148,10 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			l.diskCache, err = NewDiskCache(
 				ctx,
 				*config.DiskPath,
-				int(*config.DiskCapacity),
+				fscache.ConstCapacity(int64(*config.DiskCapacity)),
 				l.perfCounterSets,
 				true,
+				l.name,
 			)
 			if err != nil {
 				return err
@@ -513,7 +515,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					R: r,
 					C: counter,
 				}
-				var cacheData memorycache.CacheData
+				var cacheData fscache.Data
 				cacheData, err = entry.ToCacheData(cr, nil, GetDefaultCacheDataAllocator())
 				if err != nil {
 					return err
@@ -660,7 +662,7 @@ func (l *LocalFS) handleReadCloserForRead(
 			r: io.TeeReader(r, buf),
 			closeFunc: func() error {
 				defer file.Close()
-				var cacheData memorycache.CacheData
+				var cacheData fscache.Data
 				cacheData, err = entry.ToCacheData(buf, buf.Bytes(), GetDefaultCacheDataAllocator())
 				if err != nil {
 					return err
@@ -1034,7 +1036,12 @@ func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
 var _ CachingFileService = new(LocalFS)
 
 func (l *LocalFS) Close() {
-	l.FlushCache()
+	if l.memCache != nil {
+		l.memCache.Close()
+	}
+	if l.diskCache != nil {
+		l.diskCache.Close()
+	}
 }
 
 func (l *LocalFS) FlushCache() {

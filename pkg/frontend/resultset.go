@@ -261,7 +261,7 @@ func (mrs *MysqlResultSet) GetColumn(ctx context.Context, index uint64) (Column,
 	if index < mrs.GetColumnCount() {
 		return mrs.Columns[index], nil
 	} else {
-		return nil, moerr.NewInternalError(ctx, "index valid column index %d ", index)
+		return nil, moerr.NewInternalErrorf(ctx, "index valid column index %d ", index)
 	}
 }
 
@@ -278,7 +278,7 @@ func (mrs *MysqlResultSet) GetRow(ctx context.Context, index uint64) ([]interfac
 	if index < mrs.GetRowCount() {
 		return mrs.Data[index], nil
 	} else {
-		return nil, moerr.NewInternalError(ctx, "index valid row index %d ", index)
+		return nil, moerr.NewInternalErrorf(ctx, "index valid row index %d ", index)
 	}
 }
 
@@ -286,7 +286,7 @@ func (mrs *MysqlResultSet) GetValue(ctx context.Context, rindex uint64, cindex u
 	if row, err := mrs.GetRow(ctx, rindex); err != nil {
 		return nil, err
 	} else if cindex >= uint64(len(mrs.Columns)) {
-		return nil, moerr.NewInternalError(ctx, "index valid column index %d ", cindex)
+		return nil, moerr.NewInternalErrorf(ctx, "index valid column index %d ", cindex)
 	} else {
 		return row[cindex], nil
 	}
@@ -295,7 +295,7 @@ func (mrs *MysqlResultSet) GetValue(ctx context.Context, rindex uint64, cindex u
 // get the index of the column with name
 func (mrs *MysqlResultSet) columnName2Index(ctx context.Context, name string) (uint64, error) {
 	if cindex, ok := mrs.Name2Index[name]; !ok {
-		return 0, moerr.NewInternalError(ctx, "column name does not exist. %s", name)
+		return 0, moerr.NewInternalErrorf(ctx, "column name does not exist. %s", name)
 	} else {
 		return cindex, nil
 	}
@@ -362,7 +362,7 @@ func (mrs *MysqlResultSet) GetInt64(ctx context.Context, rindex, cindex uint64) 
 	case uint:
 		return int64(v), nil
 	default:
-		return 0, moerr.NewInternalError(ctx, "unsupported type %d ", v)
+		return 0, moerr.NewInternalErrorf(ctx, "unsupported type %d ", v)
 	}
 }
 
@@ -409,7 +409,7 @@ func (mrs *MysqlResultSet) GetUint64(ctx context.Context, rindex, cindex uint64)
 	case uint:
 		return uint64(v), nil
 	default:
-		return 0, moerr.NewInternalError(ctx, "unsupported type %d ", v)
+		return 0, moerr.NewInternalErrorf(ctx, "unsupported type %d ", v)
 	}
 }
 
@@ -456,7 +456,7 @@ func (mrs *MysqlResultSet) GetFloat64(ctx context.Context, rindex, cindex uint64
 	case uint:
 		return float64(v), nil
 	default:
-		return 0, moerr.NewInternalError(ctx, "unsupported type %d ", v)
+		return 0, moerr.NewInternalErrorf(ctx, "unsupported type %d ", v)
 	}
 }
 
@@ -521,7 +521,7 @@ func (mrs *MysqlResultSet) GetString(ctx context.Context, rindex, cindex uint64)
 	case types.Enum:
 		return strconv.FormatUint(uint64(v), 10), nil
 	default:
-		return "", moerr.NewInternalError(ctx, "unsupported type %d ", v)
+		return "", moerr.NewInternalErrorf(ctx, "unsupported type %d ", v)
 	}
 }
 

@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
@@ -165,24 +164,24 @@ func CeilFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return generalMathMulti("ceil", ivecs, result, proc, length, ceilFloat64)
 }
 
-func ceilDecimal64(x types.Decimal64, digits int64, scale int32) types.Decimal64 {
+func ceilDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {
 	if digits > 19 {
 		digits = 19
 	}
 	if digits < -18 {
 		digits = -18
 	}
-	return x.Ceil(scale, int32(digits))
+	return x.Ceil(scale, int32(digits), isConst)
 }
 
-func ceilDecimal128(x types.Decimal128, digits int64, scale int32) types.Decimal128 {
+func ceilDecimal128(x types.Decimal128, digits int64, scale int32, isConst bool) types.Decimal128 {
 	if digits > 39 {
 		digits = 19
 	}
 	if digits < -38 {
 		digits = -38
 	}
-	return x.Ceil(scale, int32(digits))
+	return x.Ceil(scale, int32(digits), isConst)
 }
 
 func CeilDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
@@ -190,11 +189,11 @@ func CeilDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	if len(ivecs) > 1 {
 		digit := vector.MustFixedCol[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-18 {
-			return moerr.NewOutOfRange(proc.Ctx, "decimal64", "ceil(decimal64(18,%v),%v)", scale, digit[0])
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal64", "ceil(decimal64(18,%v),%v)", scale, digit[0])
 		}
 	}
 	cb := func(x types.Decimal64, digits int64) types.Decimal64 {
-		return ceilDecimal64(x, digits, scale)
+		return ceilDecimal64(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
 	return generalMathMulti("ceil", ivecs, result, proc, length, cb)
 }
@@ -204,11 +203,11 @@ func CeilDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	if len(ivecs) > 1 {
 		digit := vector.MustFixedCol[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-38 {
-			return moerr.NewOutOfRange(proc.Ctx, "decimal128", "ceil(decimal128(38,%v),%v)", scale, digit[0])
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal128", "ceil(decimal128(38,%v),%v)", scale, digit[0])
 		}
 	}
 	cb := func(x types.Decimal128, digits int64) types.Decimal128 {
-		return ceilDecimal128(x, digits, scale)
+		return ceilDecimal128(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
 	return generalMathMulti("ceil", ivecs, result, proc, length, cb)
 }
@@ -300,24 +299,24 @@ func FloorFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	return generalMathMulti("floor", ivecs, result, proc, length, floorFloat64)
 }
 
-func floorDecimal64(x types.Decimal64, digits int64, scale int32) types.Decimal64 {
+func floorDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {
 	if digits > 19 {
 		digits = 19
 	}
 	if digits < -18 {
 		digits = -18
 	}
-	return x.Floor(scale, int32(digits))
+	return x.Floor(scale, int32(digits), isConst)
 }
 
-func floorDecimal128(x types.Decimal128, digits int64, scale int32) types.Decimal128 {
+func floorDecimal128(x types.Decimal128, digits int64, scale int32, isConst bool) types.Decimal128 {
 	if digits > 39 {
 		digits = 39
 	}
 	if digits < -38 {
 		digits = -38
 	}
-	return x.Floor(scale, int32(digits))
+	return x.Floor(scale, int32(digits), isConst)
 }
 
 func FloorDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
@@ -325,11 +324,11 @@ func FloorDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	if len(ivecs) > 1 {
 		digit := vector.MustFixedCol[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-18 {
-			return moerr.NewOutOfRange(proc.Ctx, "decimal64", "floor(decimal64(18,%v),%v)", scale, digit[0])
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal64", "floor(decimal64(18,%v),%v)", scale, digit[0])
 		}
 	}
 	cb := func(x types.Decimal64, digits int64) types.Decimal64 {
-		return floorDecimal64(x, digits, scale)
+		return floorDecimal64(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
 
 	return generalMathMulti("floor", ivecs, result, proc, length, cb)
@@ -340,11 +339,11 @@ func FloorDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	if len(ivecs) > 1 {
 		digit := vector.MustFixedCol[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-38 {
-			return moerr.NewOutOfRange(proc.Ctx, "decimal128", "floor(decimal128(38,%v),%v)", scale, digit[0])
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal128", "floor(decimal128(38,%v),%v)", scale, digit[0])
 		}
 	}
 	cb := func(x types.Decimal128, digits int64) types.Decimal128 {
-		return floorDecimal128(x, digits, scale)
+		return floorDecimal128(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
 
 	return generalMathMulti("floor", ivecs, result, proc, length, cb)
@@ -477,30 +476,30 @@ func RoundFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	return generalMathMulti("round", ivecs, result, proc, length, roundFloat64)
 }
 
-func roundDecimal64(x types.Decimal64, digits int64, scale int32) types.Decimal64 {
+func roundDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {
 	if digits > 19 {
 		digits = 19
 	}
 	if digits < -18 {
 		digits = -18
 	}
-	return x.Round(scale, int32(digits))
+	return x.Round(scale, int32(digits), isConst)
 }
 
-func roundDecimal128(x types.Decimal128, digits int64, scale int32) types.Decimal128 {
+func roundDecimal128(x types.Decimal128, digits int64, scale int32, isConst bool) types.Decimal128 {
 	if digits > 39 {
 		digits = 39
 	}
 	if digits < -38 {
 		digits = -38
 	}
-	return x.Round(scale, int32(digits))
+	return x.Round(scale, int32(digits), isConst)
 }
 
 func RoundDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	scale := ivecs[0].GetType().Scale
 	cb := func(x types.Decimal64, digits int64) types.Decimal64 {
-		return roundDecimal64(x, digits, scale)
+		return roundDecimal64(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
 	return generalMathMulti("round", ivecs, result, proc, length, cb)
 }
@@ -508,7 +507,7 @@ func RoundDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 func RoundDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	scale := ivecs[0].GetType().Scale
 	cb := func(x types.Decimal128, digits int64) types.Decimal128 {
-		return roundDecimal128(x, digits, scale)
+		return roundDecimal128(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
 	return generalMathMulti("round", ivecs, result, proc, length, cb)
 }
@@ -1272,13 +1271,13 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 	case 'b':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInput(ctx, "invalud date format for month '%d'", m)
+			return moerr.NewInvalidInputf(ctx, "invalud date format for month '%d'", m)
 		}
 		buf.WriteString(MonthNames[m-1][:3])
 	case 'M':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInput(ctx, "invalud date format for month '%d'", m)
+			return moerr.NewInvalidInputf(ctx, "invalud date format for month '%d'", m)
 		}
 		buf.WriteString(MonthNames[m-1])
 	case 'm':
@@ -2751,7 +2750,7 @@ func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			case "trailing":
 				res = trimTrailing(string(cut), string(src))
 			default:
-				return moerr.NewNotSupported(proc.Ctx, "trim type %s", v1Str)
+				return moerr.NewNotSupportedf(proc.Ctx, "trim type %s", v1Str)
 			}
 
 			if err = rs.AppendBytes([]byte(res), false); err != nil {
@@ -2788,111 +2787,6 @@ func trimTrailing(src, cuts string) string {
 		src = src[:len(src)-len(cuts)]
 	}
 	return src
-}
-
-// JSON_EXTRACT
-func jsonExtractCheckFn(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) > 1 {
-		ts := make([]types.Type, 0, len(inputs))
-		allMatch := true
-		for _, input := range inputs {
-			if input.Oid == types.T_json || input.Oid.IsMySQLString() {
-				ts = append(ts, input)
-			} else {
-				if canCast, _ := fixedImplicitTypeCast(input, types.T_varchar); canCast {
-					ts = append(ts, types.T_varchar.ToType())
-					allMatch = false
-				} else {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
-			}
-		}
-		if allMatch {
-			return newCheckResultWithSuccess(0)
-		}
-		return newCheckResultWithCast(0, ts)
-	}
-	return newCheckResultWithFailure(failedFunctionParametersWrong)
-}
-
-type computeFn func([]byte, []*bytejson.Path) (*bytejson.ByteJson, error)
-
-func computeJson(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, error) {
-	bj := types.DecodeJson(json)
-	return bj.Query(paths), nil
-}
-
-func computeString(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, error) {
-	bj, err := types.ParseSliceToByteJson(json)
-	if err != nil {
-		return nil, err
-	}
-	return bj.Query(paths), nil
-}
-
-func JsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	jsonVec := parameters[0]
-	var fn computeFn
-	switch jsonVec.GetType().Oid {
-	case types.T_json:
-		fn = computeJson
-	default:
-		fn = computeString
-	}
-	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
-	pathWrapers := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters)-1)
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	paths := make([]*bytejson.Path, len(parameters)-1)
-	for i := 0; i < len(parameters)-1; i++ {
-		pathWrapers[i] = vector.GenerateFunctionStrParameter(parameters[i+1])
-	}
-	for i := uint64(0); i < uint64(length); i++ {
-		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
-		if jIsNull {
-			err := rs.AppendBytes(nil, true)
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		skip := false
-		for j := 0; j < len(parameters)-1; j++ {
-			pathBytes, pIsNull := pathWrapers[j].GetStrValue(i)
-			if pIsNull {
-				skip = true
-				break
-			}
-			p, err := types.ParseStringToPath(string(pathBytes))
-			if err != nil {
-				return err
-			}
-			paths[j] = &p
-		}
-		if skip {
-			err := rs.AppendBytes(nil, true)
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		out, err := fn(jsonBytes, paths)
-		if err != nil {
-			return err
-		}
-		if out.IsNull() {
-			err := rs.AppendBytes(nil, true)
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		dt, _ := out.Marshal()
-		err = rs.AppendBytes(dt, false)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // SPLIT PART

@@ -596,7 +596,47 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_json.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return JsonExtract
+					return newOpBuiltInJsonExtract().jsonExtract
+				},
+			},
+		},
+	},
+
+	// function `json_extract_string`
+	{
+		functionId: JSON_EXTRACT_STRING,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonExtractCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonExtract().jsonExtractString
+				},
+			},
+		},
+	},
+
+	// function `json_extract_float64`
+	{
+		functionId: JSON_EXTRACT_FLOAT64,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonExtractCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonExtract().jsonExtractFloat64
 				},
 			},
 		},
