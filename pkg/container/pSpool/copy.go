@@ -126,6 +126,10 @@ func (cb *cachedBatch) GetCopiedBatch(
 	} else {
 		select {
 		case dst = <-cb.freeBatchPointer:
+			dst.Recursive = src.Recursive
+			dst.Ro = src.Ro
+			dst.ShuffleIDX = src.ShuffleIDX
+
 		case <-senderCtx.Done():
 			return nil, true, nil
 		}
@@ -209,6 +213,7 @@ func (cb *cachedBatch) getSuitableVector(
 					vector.SetVecArea(vec, bs)
 				}
 				cb.bytesCache = append(cb.bytesCache[:i], cb.bytesCache[i+1:]...)
+				break
 			}
 		}
 	}
@@ -222,6 +227,7 @@ func (cb *cachedBatch) getSuitableVector(
 					vector.SetVecData(vec, bs)
 				}
 				cb.bytesCache = append(cb.bytesCache[:i], cb.bytesCache[i+1:]...)
+				break
 			}
 		}
 	}

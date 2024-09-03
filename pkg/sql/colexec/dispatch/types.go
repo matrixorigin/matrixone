@@ -125,10 +125,6 @@ func (dispatch *Dispatch) Release() {
 }
 
 func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	dispatch.Free(proc, pipelineFailed, err)
-}
-
-func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if dispatch.ctr != nil {
 		if dispatch.ctr.isRemote {
 			for _, r := range dispatch.ctr.remoteReceivers {
@@ -141,8 +137,6 @@ func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err e
 			}
 			colexec.Get().DeleteUuids(uuids)
 		}
-
-		dispatch.ctr = nil
 	}
 
 	// told the local receiver to stop if it is still running.
@@ -160,4 +154,7 @@ func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err e
 		}
 	}
 	dispatch.ctr = nil
+}
+
+func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err error) {
 }
