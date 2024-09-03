@@ -73,6 +73,8 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 		zap.Int("expired", len(expiredTasks)))
 	s.allocateTasks(createdTasks, workingCNPool)
 	s.allocateTasks(expiredTasks, workingCNPool)
+
+	s.truncateTasks(s.service)
 }
 
 func (s *scheduler) StartScheduleCronTask() {
@@ -163,6 +165,22 @@ func allocateTask(
 		zap.String("task-metadata-id", t.Metadata.ID),
 		zap.String("task-runner", runner.uuid))
 	heap.Push(cnPool, runner)
+}
+
+func (s *scheduler) truncateTasks(service string) {
+	ts := s.taskServiceGetter()
+	if ts == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), taskSchedulerDefaultTimeout)
+	defer cancel()
+
+	err := ts.TruncateCompletedTasks(ctx)
+	if err != nil {
+		runtime.ServiceRuntime(service).Logger().
+			Error("failed to truncate completed tasks",
+				zap.Error(err))
+	}
 }
 
 func getExpiredTasks(tasks []task.AsyncTask, workingCNPool *cnPool) []task.AsyncTask {
