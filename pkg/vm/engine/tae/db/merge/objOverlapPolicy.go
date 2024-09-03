@@ -39,7 +39,7 @@ func newObjOverlapPolicy() *objOverlapPolicy {
 }
 
 func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry) {
-	if !obj.IsTombstone {
+	if !obj.IsTombstone && obj.GetSortKeyZonemap().IsInited() {
 		m.objects = append(m.objects, obj)
 	}
 }
@@ -63,15 +63,7 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) ([]
 }
 
 func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
-	if !m.objects[0].GetSortKeyZonemap().IsInited() {
-		size := min(config.MergeMaxOneRun, len(m.objects))
-		revisedObj := make([]*catalog.ObjectEntry, size)
-		n := copy(revisedObj, m.objects)
-		return revisedObj[:n], TaskHostDN
-	}
-
 	t := m.objects[0].GetSortKeyZonemap().GetType()
-
 	slices.SortFunc(m.objects, func(a, b *catalog.ObjectEntry) int {
 		zmA := a.GetSortKeyZonemap()
 		zmB := b.GetSortKeyZonemap()
@@ -133,7 +125,7 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 	return objs, TaskHostDN
 }
 
-func (m *objOverlapPolicy) resetForTable(tbl *catalog.TableEntry) {
+func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry) {
 	m.objects = m.objects[:0]
 	m.overlappingObjsSet = m.overlappingObjsSet[:0]
 }
