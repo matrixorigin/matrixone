@@ -1,8 +1,6 @@
 package function
 
 import (
-	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -15,8 +13,15 @@ func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// Initialize the Ollama embedding service
-	embeddingService := &OllamaEmbeddingService{}
+	platformStr, proxyStr, llmModelStr, err := getLLMGlobalVariable(proc)
+	if err != nil {
+		return err
+	}
+
+	embeddingService, err := NewEmbeddingService(platformStr)
+	if err != nil {
+		return err
+	}
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -28,45 +33,14 @@ func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 
-		model, err := proc.GetResolveVariableFunc()("llm_embedding_model", true, false)
+		input := string(inputBytes)
+		var embeddingBytes []byte
+
+		embedding, err := embeddingService.GetEmbedding(input, llmModelStr, proxyStr)
 		if err != nil {
 			return err
 		}
-		modelStr, ok := model.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type for llm_embedding_model: %T", model)
-		}
-
-		proxy, err1 := proc.GetResolveVariableFunc()("ollama_server_proxy", true, false)
-		if err1 != nil {
-			return err1
-		}
-		proxyStr, ok := proxy.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type for llm_embedding_model: %T", proxy)
-		}
-
-		ollamaModel, err1 := proc.GetResolveVariableFunc()("ollama_model", true, false)
-		if err1 != nil {
-			return err1
-		}
-		ollamaModelStr, ok := ollamaModel.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type for llm_embedding_model: %T", ollamaModel)
-		}
-
-		input := string(inputBytes)
-		var embeddingBytes []byte
-		switch modelStr {
-		case "ollama":
-			embedding, err := embeddingService.GetEmbedding(input, ollamaModelStr, proxyStr)
-			if err != nil {
-				return err
-			}
-			embeddingBytes = types.ArrayToBytes[float32](embedding)
-		default:
-			return fmt.Errorf("unsupported embedding model: %s", modelStr)
-		}
+		embeddingBytes = types.ArrayToBytes[float32](embedding)
 
 		if err := rs.AppendBytes(embeddingBytes, false); err != nil {
 			return err
@@ -81,25 +55,14 @@ func EmbeddingDatalinkOp(parameters []*vector.Vector, result vector.FunctionResu
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// Initialize the Ollama embedding service
-	embeddingService := &OllamaEmbeddingService{}
-
-	proxy, err := proc.GetResolveVariableFunc()("ollama_server_proxy", true, false)
+	platformStr, proxyStr, llmModelStr, err := getLLMGlobalVariable(proc)
 	if err != nil {
 		return err
 	}
-	proxyStr, ok := proxy.(string)
-	if !ok {
-		return moerr.NewInvalidInputf(proc.Ctx, "unexpected type for llm_embedding_model: %T", proxy)
-	}
 
-	ollamaModel, err1 := proc.GetResolveVariableFunc()("ollama_model", true, false)
-	if err1 != nil {
-		return err1
-	}
-	ollamaModelStr, ok := ollamaModel.(string)
-	if !ok {
-		return moerr.NewInvalidInputf(proc.Ctx, "unexpected type for llm_embedding_model: %T", ollamaModel)
+	embeddingService, err := NewEmbeddingService(platformStr)
+	if err != nil {
+		return err
 	}
 
 	rowCount := uint64(length)
@@ -138,27 +101,14 @@ func EmbeddingDatalinkOp(parameters []*vector.Vector, result vector.FunctionResu
 			return nil
 		}
 
-		model, err := proc.GetResolveVariableFunc()("llm_embedding_model", true, false)
+		input := string(fileBytes)
+		var embeddingBytes []byte
+
+		embedding, err := embeddingService.GetEmbedding(input, llmModelStr, proxyStr)
 		if err != nil {
 			return err
 		}
-		modelStr, ok := model.(string)
-		if !ok {
-			return moerr.NewInvalidInputf(proc.Ctx, "unexpected type for llm_embedding_model: %T", model)
-		}
-
-		input := string(fileBytes)
-		var embeddingBytes []byte
-		switch modelStr {
-		case "ollama":
-			embedding, err := embeddingService.GetEmbedding(input, ollamaModelStr, proxyStr)
-			if err != nil {
-				return err
-			}
-			embeddingBytes = types.ArrayToBytes[float32](embedding)
-		default:
-			return moerr.NewInvalidInputf(proc.Ctx, "unsupported embedding model: %s", modelStr)
-		}
+		embeddingBytes = types.ArrayToBytes[float32](embedding)
 
 		if err := rs.AppendBytes(embeddingBytes, false); err != nil {
 			return err

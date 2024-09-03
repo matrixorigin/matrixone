@@ -3509,28 +3509,28 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int64(0),
 	},
-	"llm_embedding_model": {
-		Name:              "llm_embedding_model",
+	"llm_embedding_platform": {
+		Name:              "llm_embedding_platform",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableStringType("llm_embedding_model"),
+		Type:              InitSystemVariableStringType("llm_embedding_platform"),
 		Default:           "ollama",
 	},
-	"ollama_server_proxy": {
-		Name:              "ollama_server_proxy",
+	"llm_server_proxy": {
+		Name:              "llm_server_proxy",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableStringType("ollama_server_proxy"),
+		Type:              InitSystemVariableStringType("llm_server_proxy"),
 		Default:           "http://localhost:11434/api/embed",
 	},
-	"ollama_model": {
-		Name:              "ollama_model",
+	"llm_model": {
+		Name:              "llm_model",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableStringType("ollama_model"),
+		Type:              InitSystemVariableStringType("llm_model"),
 		Default:           "llama3",
 	},
 	"disable_agg_statement": {
