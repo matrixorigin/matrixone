@@ -140,7 +140,7 @@ type memHdr struct {
 	allocSz              int32
 	fixedPoolIdx         int8
 	guard                [3]uint8
-	allocateStacktraceID uint64
+	allocateStacktraceID malloc.Stacktrace
 }
 
 func init() {
@@ -266,18 +266,18 @@ type mpoolDetails struct {
 	mu    sync.Mutex
 	alloc map[string]detailInfo
 	free  map[string]detailInfo
-	inuse map[uint64]int
+	inuse map[malloc.Stacktrace]int
 }
 
 func newMpoolDetails() *mpoolDetails {
 	mpd := mpoolDetails{}
 	mpd.alloc = make(map[string]detailInfo)
 	mpd.free = make(map[string]detailInfo)
-	mpd.inuse = make(map[uint64]int)
+	mpd.inuse = make(map[malloc.Stacktrace]int)
 	return &mpd
 }
 
-func (d *mpoolDetails) recordAlloc(nb int64, stacktraceID uint64) {
+func (d *mpoolDetails) recordAlloc(nb int64, stacktrace malloc.Stacktrace) {
 	f := stack.Caller(2)
 	k := fmt.Sprintf("%v", f)
 	d.mu.Lock()
@@ -288,10 +288,10 @@ func (d *mpoolDetails) recordAlloc(nb int64, stacktraceID uint64) {
 	info.bytes += nb
 	d.alloc[k] = info
 
-	d.inuse[stacktraceID]++
+	d.inuse[stacktrace]++
 }
 
-func (d *mpoolDetails) recordFree(nb int64, stacktraceID uint64) {
+func (d *mpoolDetails) recordFree(nb int64, stacktrace malloc.Stacktrace) {
 	f := stack.Caller(2)
 	k := fmt.Sprintf("%v", f)
 	d.mu.Lock()
@@ -302,7 +302,7 @@ func (d *mpoolDetails) recordFree(nb int64, stacktraceID uint64) {
 	info.bytes += nb
 	d.free[k] = info
 
-	d.inuse[stacktraceID]--
+	d.inuse[stacktrace]--
 }
 
 func (d *mpoolDetails) reportJson() string {
@@ -483,7 +483,7 @@ func (mp *MPool) Report() string {
 				ret += fmt.Sprintf(
 					"inuse: count %d, stacktrace %s\n",
 					n,
-					malloc.StacktraceID(id).String(),
+					malloc.Stacktrace(id).String(),
 				)
 			}
 		}
@@ -609,7 +609,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	if idx < NumFixedPool {
 		bs := mp.pools[idx].alloc(int32(requiredSpaceWithoutHeader))
 		if mp.details != nil {
-			bs.allocateStacktraceID = uint64(malloc.GetStacktraceID(0))
+			bs.allocateStacktraceID = malloc.GetStacktrace(0)
 			mp.details.recordAlloc(int64(bs.allocSz), bs.allocateStacktraceID)
 		}
 		return bs.ToSlice(sz, int(mp.pools[idx].eleSz)), nil
@@ -655,7 +655,7 @@ func (mp *MPool) Free(bs []byte) {
 	mp.stats.RecordFree(mp.tag, recordSize)
 	globalStats.RecordFree("global", recordSize)
 	if mp.details != nil {
-		mp.details.recordFree(int64(pHdr.allocSz), uint64(pHdr.allocateStacktraceID))
+		mp.details.recordFree(int64(pHdr.allocSz), pHdr.allocateStacktraceID)
 	}
 
 	// free from fixed pool
