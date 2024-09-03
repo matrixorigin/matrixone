@@ -157,8 +157,11 @@ func (node *memoryNode) getDataWindowOnWriteSchema(
 	if node.data == nil {
 		return nil
 	}
-	from, to, commitTSVec, _, _ :=
+	from, to, commitTSVec, abort, _ :=
 		node.object.appendMVCC.CollectAppendLocked(start, end, mp)
+	if abort != nil {
+		abort.Close()
+	}
 	if commitTSVec == nil {
 		return nil
 	}
@@ -342,8 +345,11 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 ) (err error) {
 	node.object.RLock()
 	defer node.object.RUnlock()
-	minRow, maxRow, commitTSVec, _, _ :=
+	minRow, maxRow, commitTSVec, abort, _ :=
 		node.object.appendMVCC.CollectAppendLocked(start, end, mp)
+	if abort != nil {
+		abort.Close()
+	}
 	if commitTSVec == nil {
 		return nil
 	}
