@@ -2220,7 +2220,6 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
 		}
-		return err
 	}
 	if readTime > maxReadTime {
 		maxReadTime = readTime
@@ -2243,7 +2242,6 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 				err = nil
 				break
 			}
-			return err
 		}
 
 		if readTime > maxReadTime {
