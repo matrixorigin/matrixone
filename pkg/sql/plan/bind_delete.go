@@ -331,6 +331,7 @@ func makeOneDeletePlan0(
 	return lastNodeId, nil
 }
 
+/*
 func (builder *QueryBuilder) appendDeletePlan(scanNode *plan.Node, delCtx *dmlPlanCtx, bindCtx *BindContext, canTruncate bool) error {
 	builder.deleteNode[delCtx.tableDef.TblId] = builder.qry.Steps[delCtx.sourceStep]
 	//isUpdate := delCtx.updateColLength > 0
@@ -370,58 +371,51 @@ func (builder *QueryBuilder) appendDeletePlan(scanNode *plan.Node, delCtx *dmlPl
 		}
 		multiTableIndexes := make(map[string]*MultiTableIndex)
 		for idx, indexdef := range delCtx.tableDef.Indexes {
-			/*
-				if isUpdate {
-					pkeyName := delCtx.tableDef.Pkey.PkeyColName
+			if isUpdate {
+				pkeyName := delCtx.tableDef.Pkey.PkeyColName
 
-					// Check if primary key is being updated.
-					isPrimaryKeyUpdated := func() bool {
-						if pkeyName == catalog.CPrimaryKeyColName {
-							// Handle compound primary key.
-							for _, pkPartColName := range delCtx.tableDef.Pkey.Names {
-								if _, exists := delCtx.updateColPosMap[pkPartColName]; exists || colMap[pkPartColName].OnUpdate != nil {
-									return true
-								}
-							}
-						} else if pkeyName == catalog.FakePrimaryKeyColName {
-							// Handle programmatically generated primary key.
-							if _, exists := delCtx.updateColPosMap[pkeyName]; exists || colMap[pkeyName].OnUpdate != nil {
-								return true
-							}
-						} else {
-							// Handle single primary key.
-							if _, exists := delCtx.updateColPosMap[pkeyName]; exists || colMap[pkeyName].OnUpdate != nil {
+				// Check if primary key is being updated.
+				isPrimaryKeyUpdated := func() bool {
+					if pkeyName == catalog.CPrimaryKeyColName {
+						// Handle compound primary key.
+						for _, pkPartColName := range delCtx.tableDef.Pkey.Names {
+							if _, exists := delCtx.updateColPosMap[pkPartColName]; exists || colMap[pkPartColName].OnUpdate != nil {
 								return true
 							}
 						}
-						return false
-					}
-
-					// Check if secondary key is being updated.
-					isSecondaryKeyUpdated := func() bool {
-						for _, colName := range indexdef.Parts {
-							resolvedColName := catalog.ResolveAlias(colName)
-							if colIdx, ok := posMap[resolvedColName]; ok {
-								col := delCtx.tableDef.Cols[colIdx]
-								if _, exists := delCtx.updateColPosMap[resolvedColName]; exists || col.OnUpdate != nil {
-									return true
-								}
-							}
+					} else if pkeyName == catalog.FakePrimaryKeyColName {
+						// Handle programmatically generated primary key.
+						if _, exists := delCtx.updateColPosMap[pkeyName]; exists || colMap[pkeyName].OnUpdate != nil {
+							return true
 						}
-						return false
+					} else {
+						// Handle single primary key.
+						if _, exists := delCtx.updateColPosMap[pkeyName]; exists || colMap[pkeyName].OnUpdate != nil {
+							return true
+						}
 					}
-
-					if !isPrimaryKeyUpdated() && !isSecondaryKeyUpdated() {
-						continue
-					}
+					return false
 				}
-			*/
-			if indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
 
-				/********
-				NOTE: make sure to make the major change applied to secondary index, to IVFFLAT index as well.
-				Else IVFFLAT index would fail
-				********/
+				// Check if secondary key is being updated.
+				isSecondaryKeyUpdated := func() bool {
+					for _, colName := range indexdef.Parts {
+						resolvedColName := catalog.ResolveAlias(colName)
+						if colIdx, ok := posMap[resolvedColName]; ok {
+							col := delCtx.tableDef.Cols[colIdx]
+							if _, exists := delCtx.updateColPosMap[resolvedColName]; exists || col.OnUpdate != nil {
+								return true
+							}
+						}
+					}
+					return false
+				}
+
+				if !isPrimaryKeyUpdated() && !isSecondaryKeyUpdated() {
+					continue
+				}
+			}
+			if indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
 				var isUk = indexdef.Unique
 				var isSK = !isUk && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo)
 
@@ -440,7 +434,6 @@ func (builder *QueryBuilder) appendDeletePlan(scanNode *plan.Node, delCtx *dmlPl
 					uniqueDeleteIdx = getRowIdPos(uniqueTableDef)
 					uniqueTblPkPos, uniqueTblPkTyp = getPkPos(uniqueTableDef, false)
 				} else {
-					lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 					lastNodeId, err = appendDeleteIndexTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, isUk)
 					uniqueDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 					uniqueTblPkPos = uniqueDeleteIdx + 1
@@ -449,14 +442,11 @@ func (builder *QueryBuilder) appendDeletePlan(scanNode *plan.Node, delCtx *dmlPl
 				if err != nil {
 					return err
 				}
-				if false /*isUpdate*/ {
+				if false {
 					// do it like simple update
-					lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 					newSourceStep := builder.appendStep(lastNodeId)
 					// delete uk plan
 					{
-						//sink_scan -> lock -> delete
-						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
 						delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable, delCtx.partitionInfos)
 						lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 						putDeleteNodeInfo(delNodeInfo)
@@ -467,7 +457,6 @@ func (builder *QueryBuilder) appendDeletePlan(scanNode *plan.Node, delCtx *dmlPl
 					}
 					// insert uk plan
 					{
-						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
 						lastProject := builder.qry.Nodes[lastNodeId].ProjectList
 						projectProjection := make([]*Expr, len(delCtx.tableDef.Cols))
 						for j, uCols := range delCtx.tableDef.Cols {
@@ -555,7 +544,6 @@ func (builder *QueryBuilder) appendDeletePlan(scanNode *plan.Node, delCtx *dmlPl
 					masterDeleteIdx = getRowIdPos(masterTableDef)
 					masterTblPkPos, masterTblPkTyp = getPkPos(masterTableDef, false)
 				} else {
-					lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 					lastNodeId, err = appendDeleteMasterTablePlan(builder, bindCtx, masterObjRef, masterTableDef, lastNodeId, delCtx.tableDef, indexdef, typMap, posMap)
 					masterDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 					masterTblPkPos = masterDeleteIdx + 1
@@ -566,14 +554,11 @@ func (builder *QueryBuilder) appendDeletePlan(scanNode *plan.Node, delCtx *dmlPl
 					return err
 				}
 
-				if false /*isUpdate*/ {
+				if false {
 					// do it like simple update
-					lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 					newSourceStep := builder.appendStep(lastNodeId)
 					// delete uk plan
 					{
-						//sink_scan -> lock -> delete
-						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
 						delNodeInfo := makeDeleteNodeInfo(builder.compCtx, masterObjRef, masterTableDef, masterDeleteIdx, -1, false, masterTblPkPos, masterTblPkTyp, delCtx.lockTable, delCtx.partitionInfos)
 						lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, true, false)
 						putDeleteNodeInfo(delNodeInfo)
@@ -584,11 +569,9 @@ func (builder *QueryBuilder) appendDeletePlan(scanNode *plan.Node, delCtx *dmlPl
 					}
 					// insert master sk plan
 					{
-						// This function creates new SinkScanNode for each of Union's inside appendPreInsertSkMasterPlan
 						genLastNodeIdFn := func() int32 {
 							//TODO: verify if this will cause memory leak.
-							newLastNodeId := appendSinkScanNode(builder, bindCtx, newSourceStep)
-							lastProject := builder.qry.Nodes[newLastNodeId].ProjectList
+							lastProject := builder.qry.Nodes[lastNodeId].ProjectList
 							projectProjection := make([]*Expr, len(delCtx.tableDef.Cols))
 							for j, uCols := range delCtx.tableDef.Cols {
 								if nIdx, ok := delCtx.updateColPosMap[uCols.Name]; ok {
@@ -702,7 +685,6 @@ func (builder *QueryBuilder) appendDeletePlan(scanNode *plan.Node, delCtx *dmlPl
 					entriesDeleteIdx = getRowIdPos(entriesTableDef)
 					entriesTblPkPos, entriesTblPkTyp = getPkPos(entriesTableDef, false)
 				} else {
-					lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 					lastNodeId, err = appendDeleteIvfTablePlan(builder, bindCtx, entriesObjRef, entriesTableDef, lastNodeId, delCtx.tableDef)
 					entriesDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength // eg:- <id, embedding, row_id, <... update_col> > + 0/1
 					entriesTblPkPos = entriesDeleteIdx + 1                                // this is the compound primary key of the entries table
@@ -713,14 +695,11 @@ func (builder *QueryBuilder) appendDeletePlan(scanNode *plan.Node, delCtx *dmlPl
 					return err
 				}
 
-				if false /*isUpdate*/ {
+				if false {
 					// do it like simple update
-					lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 					newSourceStep := builder.appendStep(lastNodeId)
 					// delete uk plan
 					{
-						//sink_scan -> lock -> delete
-						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
 						delNodeInfo := makeDeleteNodeInfo(builder.compCtx, entriesObjRef, entriesTableDef, entriesDeleteIdx, -1, false, entriesTblPkPos, entriesTblPkTyp, delCtx.lockTable, delCtx.partitionInfos)
 						lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, true, false)
 						putDeleteNodeInfo(delNodeInfo)
@@ -731,12 +710,8 @@ func (builder *QueryBuilder) appendDeletePlan(scanNode *plan.Node, delCtx *dmlPl
 					}
 					// insert ivf_sk plan
 					{
-						//TODO: verify with ouyuanning, if this is correct
-						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
-						lastNodeIdForTblJoinCentroids := appendSinkScanNode(builder, bindCtx, newSourceStep)
-
 						lastProject := builder.qry.Nodes[lastNodeId].ProjectList
-						lastProjectForTblJoinCentroids := builder.qry.Nodes[lastNodeIdForTblJoinCentroids].ProjectList
+						lastProjectForTblJoinCentroids := builder.qry.Nodes[lastNodeId].ProjectList
 
 						projectProjection := make([]*Expr, len(delCtx.tableDef.Cols))
 						projectProjectionForTblJoinCentroids := make([]*Expr, len(delCtx.tableDef.Cols))
@@ -812,7 +787,7 @@ func (builder *QueryBuilder) appendDeletePlan(scanNode *plan.Node, delCtx *dmlPl
 	}
 
 	// delete origin table
-	lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+	lastNodeId := len(builder.qry.Nodes) - 1
 	partExprIdx := -1
 	if delCtx.tableDef.Partition != nil {
 		partExprIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
@@ -829,3 +804,4 @@ func (builder *QueryBuilder) appendDeletePlan(scanNode *plan.Node, delCtx *dmlPl
 
 	return nil
 }
+*/
