@@ -405,6 +405,21 @@ func (v *Vector) IsNull(i uint64) bool {
 	return v.nsp.Contains(i)
 }
 
+// call this function if type already checked
+func SetFixedAtNoTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
+	vacol := MustFixedColNoTypeCheck[T](v)
+	if idx < 0 {
+		idx = len(vacol) + idx
+	}
+	if idx < 0 || idx >= len(vacol) {
+		return moerr.NewInternalErrorNoCtxf("vector idx out of range: %d > %d", idx, len(vacol))
+	}
+	vacol[idx] = t
+	return nil
+}
+
+// Note:
+// it is 10x slower than SetFixedAtNoTypeCheck
 func SetFixedAtWithTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
 	// Let it panic if v is not a varlena vec
 	vacol := MustFixedCol[T](v)

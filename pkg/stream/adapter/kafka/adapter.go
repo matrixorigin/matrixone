@@ -586,7 +586,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				}
 				val = int8(parsedValue)
 			}
-			if err := vector.SetFixedAtWithTypeCheck(vec, rowIdx, val); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, val); err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
@@ -614,7 +614,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				}
 				val = int16(parsedValue)
 			}
-			if err := vector.SetFixedAtWithTypeCheck(vec, rowIdx, val); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, val); err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
@@ -853,7 +853,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			if err := vector.SetFixedAtWithTypeCheck(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, d); err != nil {
 				return err
 			}
 		case types.T_time:
@@ -863,7 +863,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			if err := vector.SetFixedAtWithTypeCheck(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, d); err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
@@ -875,7 +875,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			if err := vector.SetFixedAtWithTypeCheck(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, d); err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
@@ -886,7 +886,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			if err := vector.SetFixedAtWithTypeCheck(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, d); err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
@@ -895,7 +895,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 
 			d, err := strconv.ParseUint(valueStr, 10, 16)
 			if err == nil {
-				if err := vector.SetFixedAtWithTypeCheck(vec, rowIdx, uint16(d)); err != nil {
+				if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, uint16(d)); err != nil {
 					nulls.Add(vec.GetNulls(), uint64(rowIdx))
 					continue
 				}
@@ -909,7 +909,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 					nulls.Add(vec.GetNulls(), uint64(rowIdx))
 					continue
 				}
-				if err := vector.SetFixedAtWithTypeCheck(vec, rowIdx, uint16(f)); err != nil {
+				if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, uint16(f)); err != nil {
 					return err
 				}
 			}
@@ -923,7 +923,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 					continue
 				}
 			}
-			if err := vector.SetFixedAtWithTypeCheck(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, d); err != nil {
 				return err
 			}
 		case types.T_decimal128:
@@ -936,7 +936,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 					continue
 				}
 			}
-			if err := vector.SetFixedAtWithTypeCheck(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, d); err != nil {
 				return err
 			}
 		case types.T_uuid:
@@ -948,7 +948,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			if err := vector.SetFixedAtWithTypeCheck(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, d); err != nil {
 				return err
 			}
 		default:
