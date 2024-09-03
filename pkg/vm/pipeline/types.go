@@ -15,6 +15,7 @@
 package pipeline
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -92,6 +93,33 @@ type Pipeline struct {
 func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
 	// should cancel the context before clean the pipeline to avoid more batch inputting while cleaning.
 	proc.Cancel()
+
+	// If the last operator of this pipeline is a RecSink Operator.
+	// this is a pipeline at the `pipeline cycle` (like: a send data to b, and b send data to a)
+	// for deal the deadlock of clean-up,
+	// we need to do a special clean logic.
+	// clean the `dispatch` first, and clean from 0 to n-1.
+	if p.rootOp != nil && p.rootOp.OpType() == vm.Dispatch {
+		if d := p.rootOp.(*dispatch.Dispatch); d.RecSink {
+			d.Reset(proc, pipelineFailed, err)
+			if !isPrepare {
+				d.Free(proc, pipelineFailed, err)
+			}
+
+			vm.HandleAllOp(p.rootOp.GetOperatorBase().GetChildren(0), func(_ vm.Operator, op vm.Operator) error {
+				op.Reset(proc, pipelineFailed, err)
+				return nil
+			})
+			if isPrepare {
+				vm.HandleAllOp(p.rootOp.GetOperatorBase().GetChildren(0), func(_ vm.Operator, op vm.Operator) error {
+					op.Free(proc, pipelineFailed, err)
+					return nil
+				})
+			}
+
+			return
+		}
+	}
 
 	// clean operator hold memory.
 	vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
