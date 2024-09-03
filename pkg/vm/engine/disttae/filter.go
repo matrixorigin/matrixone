@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -133,6 +132,17 @@ func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *proces
 
 			vals[idx] = val
 		} else {
+			// constVal := getConstValueByExpr(exprs[idx], proc)
+			// if constVal == nil {
+			// 	return nil, false
+			// }
+			// colType := types.T(colDef.Typ.Id)
+			// val, ok := evalLiteralExpr2(constVal, colType)
+			// if !ok {
+			// 	return nil, ok
+			// }
+
+			// vals[idx] = val
 			return nil, false
 		}
 	}
@@ -175,16 +185,17 @@ func mustColVecValueFromBinaryFuncExpr(proc *process.Process, expr *plan.Expr_F)
 	}
 
 	if exprImpl, ok = valExpr.Expr.(*plan.Expr_Vec); !ok {
-		foldedExprs, err := plan2.ConstandFoldList([]*plan.Expr{valExpr}, proc, true)
-		if err != nil {
-			logutil.Errorf("try const fold val expr failed: %s", plan2.FormatExpr(valExpr))
-			return nil, nil, false
-		}
+		return nil, nil, false
+		// foldedExprs, err := plan2.ConstandFoldList([]*plan.Expr{valExpr}, proc, true)
+		// if err != nil {
+		// 	logutil.Errorf("try const fold val expr failed: %s", plan2.FormatExpr(valExpr))
+		// 	return nil, nil, false
+		// }
 
-		if exprImpl, ok = foldedExprs[0].Expr.(*plan.Expr_Vec); !ok {
-			logutil.Errorf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
-			return nil, nil, false
-		}
+		// if exprImpl, ok = foldedExprs[0].Expr.(*plan.Expr_Vec); !ok {
+		// 	logutil.Errorf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
+		// 	return nil, nil, false
+		// }
 	}
 
 	return colExpr, exprImpl.Vec.Data, ok

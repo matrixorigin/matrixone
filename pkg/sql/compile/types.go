@@ -82,8 +82,9 @@ type Source struct {
 	R                      engine.Reader
 	Rel                    engine.Relation
 	Bat                    *batch.Batch
-	FilterExpr             *plan.Expr // todo: change this to []*plan.Expr
-	BlockFilter            []*plan.Expr
+	FilterExpr             *plan.Expr   // todo: change this to []*plan.Expr,    FilterList + RuntimeFilter
+	FilterList             []*plan.Expr //from node.FilterList, use for reader
+	BlockFilter            []*plan.Expr //from node.BlockFilterList, use for range
 	node                   *plan.Node
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
@@ -304,7 +305,7 @@ type Compile struct {
 	lockTables   map[uint64]*plan.LockTarget
 	disableRetry bool
 
-	rangesExprExecutor map[int]colexec.ExpressionExecutor
+	filterExprExecutor map[int]colexec.ExpressionExecutor
 
 	isPrepare bool
 }

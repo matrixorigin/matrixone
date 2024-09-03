@@ -186,7 +186,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		s.Reset(c)
 	}
 
-	for _, e := range c.rangesExprExecutor {
+	for _, e := range c.filterExprExecutor {
 		e.ResetForNextQuery()
 	}
 
@@ -261,9 +261,9 @@ func (c *Compile) clear() {
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
 	}
-	for k := range c.rangesExprExecutor {
-		c.rangesExprExecutor[k].Free()
-		delete(c.rangesExprExecutor, k)
+	for k := range c.filterExprExecutor {
+		c.filterExprExecutor[k].Free()
+		delete(c.filterExprExecutor, k)
 	}
 }
 
@@ -1887,14 +1887,26 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		}
 	}
 
-	var filterExpr *plan.Expr
-	if len(n.FilterList) > 0 {
-		filterExpr = colexec.RewriteFilterExprList(n.FilterList)
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true, true)
+	if len(n.FilterList) != len(s.DataSource.FilterList) {
+		s.DataSource.FilterList = plan2.DeepCopyExprList(n.FilterList)
+		for _, e := range s.DataSource.FilterList {
+			fn := e.GetF()
+			if fn == nil {
+				panic("not function expr for filter")
+			}
+			_, err := plan2.ReplaceFoldVal(c.proc, e, c.filterExprExecutor)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	for _, e := range s.DataSource.FilterList {
+		err = plan2.EvalFoldValExpr(c.proc, e, c.filterExprExecutor)
 		if err != nil {
 			return err
 		}
 	}
+	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
 
 	if len(n.BlockFilterList) != len(s.DataSource.BlockFilter) {
 		s.DataSource.BlockFilter = plan2.DeepCopyExprList(n.BlockFilterList)
@@ -1903,7 +1915,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 			if fn == nil {
 				panic("not function expr for filter")
 			}
-			_, err := plan2.ReplaceFoldVal(c.proc, e, c.rangesExprExecutor)
+			_, err := plan2.ReplaceFoldVal(c.proc, e, c.filterExprExecutor)
 			if err != nil {
 				return err
 			}
@@ -1918,7 +1930,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.PartitionRelationNames = partitionRelNames
 	s.DataSource.SchemaName = n.ObjRef.SchemaName
 	s.DataSource.AccountId = n.ObjRef.GetPubInfo()
-	s.DataSource.FilterExpr = filterExpr
 	s.DataSource.RuntimeFilterSpecs = n.RuntimeFilterProbeList
 	s.DataSource.OrderBy = n.OrderBy
 	return nil
@@ -3996,13 +4007,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if fn == nil {
 					panic("not function expr for filter")
 				}
-				_, err := plan2.ReplaceFoldVal(c.proc, e, c.rangesExprExecutor)
+				_, err := plan2.ReplaceFoldVal(c.proc, e, c.filterExprExecutor)
 				if err != nil {
 					return nil, nil, nil, err
 				}
 			}
 			for _, e := range filterExpr {
-				err = plan2.EvalFoldValExpr(c.proc, e, c.rangesExprExecutor)
+				err = plan2.EvalFoldValExpr(c.proc, e, c.filterExprExecutor)
 				if err != nil {
 					return nil, nil, nil, err
 				}

@@ -38,7 +38,7 @@ func init() {
 				stepRegs:           make(map[int32][][2]int32),
 				metaTables:         make(map[string]struct{}),
 				lockTables:         make(map[uint64]*plan.LockTarget),
-				rangesExprExecutor: make(map[int]colexec.ExpressionExecutor),
+				filterExprExecutor: make(map[int]colexec.ExpressionExecutor),
 				MessageBoard:       message.NewMessageBoard(),
 			}
 		},
