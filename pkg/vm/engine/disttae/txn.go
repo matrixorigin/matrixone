@@ -498,7 +498,6 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		if err != nil {
 			return err
 		}
-		defer s3Writer.Free(txn.proc)
 		for i := 0; i < len(mp[tbKey]); i++ {
 			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
 		}
@@ -538,6 +537,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			blockInfo,
 			table.getTxn().tnStores[0],
 		)
+		s3Writer.Free(txn.proc)
 		if err != nil {
 			return err
 		}

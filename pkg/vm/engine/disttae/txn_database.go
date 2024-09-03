@@ -276,6 +276,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			txn.tablesInVain[id] = txn.statementID
 			txn.Unlock()
 		}
+		bat.Clean(txn.proc.Mp())
 	}
 
 	{ // 3. delete rows from mo_columns
@@ -296,6 +297,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 				return nil, err
 			}
 		}
+		bat.Clean(txn.proc.Mp())
 	}
 
 	// 4. handle map cache
