@@ -3713,6 +3713,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		return err
 	}
 
+	if !hasAccount {
+		return err
+	}
 	// if drop the account, add the account to kill queue
 	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
 
@@ -3726,6 +3729,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 func postDropSuspendAccount(
 	ctx context.Context, ses *Session, accountName string, accountID int64, version uint64,
 ) (err error) {
+	if accountID == 0 {
+		return err
+	}
 	qc := getGlobalPu().QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
