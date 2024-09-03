@@ -135,7 +135,7 @@ type Handler interface {
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req *db.StorageUsageReq,
-		resp *db.StorageUsageResp,
+		resp *db.StorageUsageResp_V2,
 	) (func(), error)
 
 	HandleInterceptCommit(
