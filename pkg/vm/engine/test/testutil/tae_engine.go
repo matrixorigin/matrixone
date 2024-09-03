@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	dbutil "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 )
@@ -48,6 +49,10 @@ func (ts *TestTxnStorage) BindSchema(schema *catalog.Schema) {
 
 func (ts *TestTxnStorage) GetDB() *db.DB {
 	return ts.txnHandler.GetDB()
+}
+
+func (ts *TestTxnStorage) StartTxn() (txnif.AsyncTxn, error) {
+	return ts.txnHandler.GetDB().StartTxn(nil)
 }
 
 func (ts *TestTxnStorage) Shard() metadata.TNShard {
