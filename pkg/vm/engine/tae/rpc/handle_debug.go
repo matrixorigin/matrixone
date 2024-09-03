@@ -75,7 +75,7 @@ func (h *Handle) HandleTraceSpan(ctx context.Context,
 }
 
 func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
-	req *db.StorageUsageReq, resp *db.StorageUsageResp) (func(), error) {
+	req *db.StorageUsageReq, resp *db.StorageUsageResp_V2) (func(), error) {
 	memo := h.db.GetUsageMemo()
 
 	start := time.Now()
@@ -142,6 +142,13 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	//	resp.Sizes = append(resp.Sizes, specialSize)
 	//	memo.AddReqTrace(uint64(newIds[idx]), specialSize, start, "new, not ready, only special")
 	//}
+
+	abstract := memo.GatherObjectAbstractForAllAccount()
+	for _, acc := range resp.AccIds {
+		resp.ObjCnts = append(resp.ObjCnts, uint64(abstract[uint64(acc)].TotalObjCnt))
+		resp.BlkCnts = append(resp.BlkCnts, uint64(abstract[uint64(acc)].TotalBlkCnt))
+		resp.RowCnts = append(resp.RowCnts, uint64(abstract[uint64(acc)].TotalRowCnt))
+	}
 
 	resp.Succeed = true
 

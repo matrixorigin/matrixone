@@ -152,6 +152,12 @@ func (tcc *TxnCompilerContext) SetDatabase(db string) {
 	tcc.dbName = db
 }
 
+func (tcc *TxnCompilerContext) GetDatabase() string {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.dbName
+}
+
 func (tcc *TxnCompilerContext) DefaultDatabase() string {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()

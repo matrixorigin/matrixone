@@ -18,12 +18,11 @@ import (
 	"context"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{}
@@ -103,5 +102,5 @@ func (v *versionHandle) HandleClusterUpgrade(
 }
 
 func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
-	return moerr.NewInternalErrorNoCtxf("Only v1.2.0 can initialize upgrade framework, current version is:%s", Handler.metadata.Version)
+	return moerr.NewInternalErrorNoCtxf("Only v1.2.3 can initialize upgrade framework, current version is:%s", Handler.metadata.Version)
 }
