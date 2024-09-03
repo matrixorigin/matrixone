@@ -75,17 +75,31 @@ func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 	fmt.Fprintln(os.Stderr, "====console sinker====")
 
 	fmt.Fprintln(os.Stderr, "output type", data.outputTyp)
+	switch data.outputTyp {
+	case OutputTypeCheckpoint:
+		if data.checkpointBat != nil && data.checkpointBat.RowCount() > 0 {
+			//FIXME: only test here
+			fmt.Fprintln(os.Stderr, "checkpoint")
+			fmt.Fprintln(os.Stderr, data.checkpointBat.String())
+		}
+	case OutputTypeTailDone:
+		if data.insertAtmBatch != nil && data.insertAtmBatch.Rows.Len() > 0 {
+			//FIXME: only test here
+			wantedColCnt := len(data.insertAtmBatch.Batches[0].Vecs) - 2
+			row := make([]any, wantedColCnt)
+			wantedColIndice := make([]int, wantedColCnt)
+			for i := 0; i < wantedColCnt; i++ {
+				wantedColIndice[i] = i
+			}
 
-	if data.outputTyp == OutputTypeTailDone {
-		//TODO:only test here
-		row := make([]any, 2)
-		if data.insertAtmBatch != nil {
 			iter := data.insertAtmBatch.GetRowIterator()
 			for iter.Next() {
-				_ = iter.Row(ctx, []int{1, 2}, row)
+				_ = iter.Row(ctx, wantedColIndice, row)
 				fmt.Fprintln(os.Stderr, "insert", row)
 			}
 		}
+	case OutputTypeUnfinishedTailWIP:
+		fmt.Fprintln(os.Stderr, "====tail wip====")
 	}
 
 	return nil

@@ -197,8 +197,7 @@ func (reader *tableReader) readTableWithTxn(
 		if err != nil {
 			return
 		}
-		//FIXME: define the rule with changes handle
-		tsColIdx, compositedPkColIdx := 0, 3
+
 		//both nil denote no more data
 		if insertData == nil && deleteData == nil {
 			//only has checkpoint
@@ -210,6 +209,19 @@ func (reader *tableReader) readTableWithTxn(
 				})
 
 			break
+		}
+
+		//FIXME: define the rule with changes handle
+		insTsColIdx, insCompositedPkColIdx := -1, -1
+		delTsColIdx, delCompositedPkColIdx := -1, -1
+
+		if insertData != nil {
+			insTsColIdx = len(insertData.Vecs) - 1
+			insCompositedPkColIdx = len(insertData.Vecs) - 2
+		}
+		if deleteData != nil {
+			delTsColIdx = len(deleteData.Vecs) - 1
+			delCompositedPkColIdx = len(deleteData.Vecs) - 2
 		}
 
 		switch curHint {
@@ -224,13 +236,13 @@ func (reader *tableReader) readTableWithTxn(
 		case engine.ChangesHandle_Tail_wip:
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
-			insertAtmBatch.Append(packer, insertData, tsColIdx, compositedPkColIdx)
-			deleteAtmBatch.Append(packer, deleteData, tsColIdx, compositedPkColIdx)
+			insertAtmBatch.Append(packer, insertData, insTsColIdx, insCompositedPkColIdx)
+			deleteAtmBatch.Append(packer, deleteData, delTsColIdx, delCompositedPkColIdx)
 		case engine.ChangesHandle_Tail_done:
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
-			insertAtmBatch.Append(packer, insertData, tsColIdx, compositedPkColIdx)
-			deleteAtmBatch.Append(packer, deleteData, tsColIdx, compositedPkColIdx)
+			insertAtmBatch.Append(packer, insertData, insTsColIdx, insCompositedPkColIdx)
+			deleteAtmBatch.Append(packer, deleteData, delTsColIdx, delCompositedPkColIdx)
 			reader.interCh <- tools.NewPair(
 				tableCtx,
 				&DecoderOutput{
