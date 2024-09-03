@@ -421,3 +421,5 @@ drop snapshot sp03;
 drop database test01;
 drop account acc01;
 drop account acc02;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

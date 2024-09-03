@@ -61,3 +61,5 @@ count(*)
 100
 drop database if exists snapshot_read;
 drop snapshot snapshot_01;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
