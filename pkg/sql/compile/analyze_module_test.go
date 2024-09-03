@@ -15,10 +15,11 @@
 package compile
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"testing"
 )
 
 const (
@@ -84,10 +85,7 @@ func Test_processPhyScope(t *testing.T) {
 		TotalInputSize:        2048,
 		TotalInputBlocks:      0,
 		TotalOutputSize:       1900,
-		TotalDiskIO:           0,
 		TotalS3IOByte:         0,
-		TotalS3InputCount:     5,
-		TotalS3OutputCount:    4,
 		TotalNetworkIO:        600,
 		TotalScanTime:         1500,
 		TotalInsertTime:       0,
