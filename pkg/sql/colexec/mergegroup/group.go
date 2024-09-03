@@ -80,9 +80,6 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		case Eval:
 			if ctr.bat != nil {
 				if mergeGroup.NeedEval {
-					for _, vec := range ctr.bat.Vecs {
-						vec.GetNulls().Merge(vec.GetRollups())
-					}
 					for i, agg := range ctr.bat.Aggs {
 						if len(mergeGroup.PartialResults) > i && mergeGroup.PartialResults[i] != nil {
 							if err := agg.SetExtraInformation(mergeGroup.PartialResults[i], 0); err != nil {

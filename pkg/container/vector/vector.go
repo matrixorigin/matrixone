@@ -2404,7 +2404,6 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	v.length++
 	if nulls.Contains(w.rsp, uint64(sel)) {
 		nulls.Add(v.rsp, uint64(oldLen))
-		return nil
 	}
 	if w.IsConst() {
 		if w.IsConstNull() {
@@ -2464,7 +2463,6 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	v.length += cnt
 	if nulls.Contains(w.rsp, uint64(sel)) {
 		nulls.AddRange(v.rsp, uint64(oldLen), uint64(oldLen+cnt))
-		return nil
 	}
 	if w.IsConst() {
 		if w.IsConstNull() {
@@ -2531,7 +2529,6 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 	if w.IsConst() {
 		if w.IsRollup() {
 			nulls.AddRange(v.rsp, uint64(oldLen), uint64(oldLen+len(sels)))
-			return nil
 		}
 		if w.IsConstNull() {
 			nulls.AddRange(v.nsp, uint64(oldLen), uint64(oldLen+len(sels)))
@@ -2566,12 +2563,11 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 		ToSlice(w, &wCol)
 		if !w.GetNulls().EmptyByFlag() {
 			for i, sel := range sels {
-				if w.nsp.Contains(uint64(sel)) {
-					nulls.Add(v.nsp, uint64(oldLen+i))
-					continue
-				}
 				if w.rsp.Contains(uint64(sel)) {
 					nulls.Add(v.rsp, uint64(oldLen+i))
+				}
+				if w.nsp.Contains(uint64(sel)) {
+					nulls.Add(v.nsp, uint64(oldLen+i))
 					continue
 				}
 				err = BuildVarlenaFromValena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
@@ -2581,7 +2577,6 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 			}
 		} else {
 			for i, sel := range sels {
-
 				err = BuildVarlenaFromValena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
 				if err != nil {
 					return err
@@ -2592,12 +2587,11 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 		tlen := v.GetType().TypeSize()
 		if !w.nsp.EmptyByFlag() {
 			for i, sel := range sels {
-				if w.nsp.Contains(uint64(sel)) {
-					nulls.Add(v.nsp, uint64(oldLen+i))
-					continue
-				}
 				if w.rsp.Contains(uint64(sel)) {
 					nulls.Add(v.rsp, uint64(oldLen+i))
+				}
+				if w.nsp.Contains(uint64(sel)) {
+					nulls.Add(v.nsp, uint64(oldLen+i))
 					continue
 				}
 				copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
@@ -2659,7 +2653,6 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		v.length += addCnt
 		if w.IsRollup() {
 			nulls.AddRange(v.rsp, uint64(oldLen), uint64(v.length))
-			return nil
 		}
 		if w.IsConstNull() {
 			nulls.AddRange(v.nsp, uint64(oldLen), uint64(v.length))
@@ -2697,7 +2690,8 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				for i := 0; i < cnt; i++ {
 					if w.rsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.rsp, uint64(v.length))
-					} else if w.nsp.Contains(uint64(offset) + uint64(i)) {
+					}
+					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.nsp, uint64(v.length))
 					} else {
 						err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
@@ -2714,7 +2708,8 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					}
 					if w.rsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.rsp, uint64(v.length))
-					} else if w.nsp.Contains(uint64(offset) + uint64(i)) {
+					}
+					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.nsp, uint64(v.length))
 					} else {
 						err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
@@ -2730,11 +2725,10 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				for i := 0; i < cnt; i++ {
 					if w.rsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.rsp, uint64(v.length))
-					} else {
-						err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
-						if err != nil {
-							return err
-						}
+					}
+					err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
+					if err != nil {
+						return err
 					}
 					v.length++
 				}
@@ -2745,11 +2739,10 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					}
 					if w.rsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.rsp, uint64(v.length))
-					} else {
-						err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
-						if err != nil {
-							return err
-						}
+					}
+					err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
+					if err != nil {
+						return err
 					}
 					v.length++
 				}
@@ -2762,7 +2755,8 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				for i := 0; i < cnt; i++ {
 					if w.rsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.rsp, uint64(v.length))
-					} else if w.nsp.Contains(uint64(offset) + uint64(i)) {
+					}
+					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.nsp, uint64(v.length))
 					} else {
 						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
@@ -2776,7 +2770,8 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					}
 					if w.rsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.rsp, uint64(v.length))
-					} else if w.nsp.Contains(uint64(offset) + uint64(i)) {
+					}
+					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.nsp, uint64(v.length))
 					} else {
 						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
@@ -2795,9 +2790,8 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					}
 					if w.rsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(v.rsp, uint64(v.length))
-					} else {
-						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
 					}
+					copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
 					v.length++
 				}
 			}
