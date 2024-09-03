@@ -556,12 +556,6 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		txn.workspaceSize = 0
 		txn.pkCount -= pkCount
 		// modifies txn.writes.
-		for i := 0; i < len(txn.writes); i++ {
-			if txn.writes[i].bat != nil {
-				txn.writes[i].bat.Clean(txn.proc.GetMPool())
-				txn.writes[i].bat = nil
-			}
-		}
 		writes := txn.writes[:0]
 		for i, write := range txn.writes {
 			if write.bat != nil {
