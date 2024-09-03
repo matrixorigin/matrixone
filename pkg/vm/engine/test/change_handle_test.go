@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -90,7 +89,7 @@ func TestChangesHandle1(t *testing.T) {
 		totalRows := 0
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			if data == nil && tombstone == nil {
 				break
 			}
 			assert.NoError(t, err)
@@ -108,7 +107,7 @@ func TestChangesHandle1(t *testing.T) {
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			if data == nil && tombstone == nil {
 				break
 			}
 			assert.NoError(t, err)
@@ -180,7 +179,7 @@ func TestChangesHandle2(t *testing.T) {
 		totalRows := 0
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			if data == nil && tombstone == nil {
 				break
 			}
 			assert.NoError(t, err)
@@ -199,7 +198,7 @@ func TestChangesHandle2(t *testing.T) {
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			if data == nil && tombstone == nil {
 				break
 			}
 			assert.NoError(t, err)
@@ -296,7 +295,7 @@ func TestChangesHandle3(t *testing.T) {
 		totalRows := 0
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			if data == nil && tombstone == nil {
 				break
 			}
 			assert.NoError(t, err)
@@ -315,7 +314,7 @@ func TestChangesHandle3(t *testing.T) {
 		batchCount := 0
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			if data == nil && tombstone == nil {
 				break
 			}
 			batchCount++
@@ -410,7 +409,7 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 		totalRows := 0
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			if data == nil && tombstone == nil {
 				break
 			}
 			assert.NoError(t, err)
@@ -429,7 +428,7 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 		batchCount := 0
 		for {
 			data, tombstone, _, err := handle.Next(ctx, mp)
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			if data == nil && tombstone == nil {
 				break
 			}
 			batchCount++

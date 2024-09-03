@@ -69,6 +69,9 @@ func (h *CheckpointChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (da
 	default:
 	}
 	hint = engine.ChangesHandle_Snapshot
+	if h.isEnd {
+		return nil, nil, hint, nil
+	}
 	tblDef := h.table.GetTableDef(ctx)
 
 	buildBatch := func() *batch.Batch {
@@ -90,7 +93,7 @@ func (h *CheckpointChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (da
 		data,
 	)
 	if h.isEnd {
-		return
+		return nil, nil, hint, nil
 	}
 	if err != nil {
 		return
