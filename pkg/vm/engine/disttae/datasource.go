@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -954,24 +953,23 @@ func (ls *LocalDataSource) applyWorkspaceFlushedS3Deletes(
 		deletedRows.InitWithSize(8192)
 	}
 
-	var obj logtailreplay.ObjectEntry
-	scanOp := func(onTombstone func(tombstone logtailreplay.ObjectEntry) (bool, error)) error {
-		for _, stats := range s3FlushedDeletes.data {
-			obj.ObjectStats = stats
-			if goOn, err := onTombstone(obj); err != nil || !goOn {
-				return err
-			}
+	var curr int
+	getTombstone := func() (*objectio.ObjectStats, error) {
+		if curr >= len(s3FlushedDeletes.data) {
+			return nil, nil
 		}
-		return nil
+		i := curr
+		curr++
+		return &s3FlushedDeletes.data[i], nil
 	}
 
-	if err = GetTombstonesByBlockId(
+	if err = blockio.GetTombstonesByBlockId(
 		ls.ctx,
-		ls.fs,
-		bid,
 		ls.snapshotTS,
+		bid,
+		getTombstone,
 		deletedRows,
-		scanOp,
+		ls.fs,
 	); err != nil {
 		return nil, err
 	}
@@ -1054,22 +1052,41 @@ func (ls *LocalDataSource) applyPStateTombstoneObjects(
 		return offsets, nil
 	}
 
-	scanOp := func(onTombstone func(tombstone logtailreplay.ObjectEntry) (bool, error)) (err error) {
-		return ForeachTombstoneObject(ls.snapshotTS, onTombstone, ls.pState)
+	var iter logtailreplay.ObjectsIter
+	getTombstone := func() (*objectio.ObjectStats, error) {
+		var err error
+		if iter == nil {
+			if iter, err = ls.pState.NewObjectsIter(
+				ls.snapshotTS, true, true,
+			); err != nil {
+				return nil, err
+			}
+		}
+		if iter.Next() {
+			entry := iter.Entry()
+			return &entry.ObjectStats, nil
+		}
+		return nil, nil
 	}
+	defer func() {
+		if iter != nil {
+			iter.Close()
+		}
+	}()
 
 	if deletedRows == nil {
 		deletedRows = &nulls.Nulls{}
 		deletedRows.InitWithSize(8192)
 	}
 
-	if err := GetTombstonesByBlockId(
+	if err := blockio.GetTombstonesByBlockId(
 		ls.ctx,
-		ls.fs,
-		bid,
 		ls.snapshotTS,
+		bid,
+		getTombstone,
 		deletedRows,
-		scanOp); err != nil {
+		ls.fs,
+	); err != nil {
 		return nil, err
 	}
 
@@ -1107,94 +1124,6 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 	defer ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RUnlock()
 
 	ls.rc.batchPrefetchCursor = end
-}
-
-func GetTombstonesByBlockId(
-	ctx context.Context,
-	fs fileservice.FileService,
-	bid objectio.Blockid,
-	snapshot types.TS,
-	deleteMask *nulls.Nulls,
-	scanOp func(func(tombstone logtailreplay.ObjectEntry) (bool, error)) error,
-) (err error) {
-
-	var (
-		totalBlk     int
-		zmBreak      int
-		blBreak      int
-		loaded       int
-		totalScanned int
-	)
-
-	onTombstone := func(obj logtailreplay.ObjectEntry) (bool, error) {
-		totalScanned++
-		if !obj.ZMIsEmpty() {
-			objZM := obj.SortKeyZoneMap()
-			if skip := !objZM.PrefixEq(bid[:]); skip {
-				zmBreak++
-				return true, nil
-			}
-		}
-
-		var objMeta objectio.ObjectMeta
-
-		location := obj.Location()
-
-		if objMeta, err = objectio.FastLoadObjectMeta(
-			ctx, &location, false, fs,
-		); err != nil {
-			return false, err
-		}
-		dataMeta := objMeta.MustDataMeta()
-
-		blkCnt := int(dataMeta.BlockCount())
-		totalBlk += blkCnt
-
-		startIdx := sort.Search(blkCnt, func(i int) bool {
-			return dataMeta.GetBlockMeta(uint32(i)).MustGetColumn(0).ZoneMap().AnyGEByValue(bid[:])
-		})
-
-		for pos := startIdx; pos < blkCnt; pos++ {
-			blkMeta := dataMeta.GetBlockMeta(uint32(pos))
-			columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
-			// block id is the prefix of the rowid and zonemap is min-max of rowid
-			// !PrefixEq means there is no rowid of this block in this zonemap, so skip
-			if !columnZonemap.PrefixEq(bid[:]) {
-				if columnZonemap.PrefixGT(bid[:]) {
-					// all zone maps are sorted by the rowid
-					// if the block id is less than the prefix of the min rowid, skip the rest blocks
-					break
-				}
-				continue
-			}
-			loaded++
-			tombstoneLoc := obj.ObjectStats.BlockLocation(uint16(pos), options.DefaultBlockMaxRows)
-
-			var mask *nulls.Nulls
-
-			if mask, err = blockio.FillBlockDeleteMask(
-				ctx, snapshot, bid, tombstoneLoc, fs,
-			); err != nil {
-				return false, err
-			}
-
-			deleteMask.Or(mask)
-		}
-		return true, nil
-	}
-
-	err = scanOp(onTombstone)
-
-	v2.TxnReaderEachBLKLoadedTombstoneHistogram.Observe(float64(loaded))
-	v2.TxnReaderScannedTotalTombstoneHistogram.Observe(float64(totalScanned))
-	if totalScanned != 0 {
-		v2.TxnReaderTombstoneZMSelectivityHistogram.Observe(float64(zmBreak) / float64(totalScanned))
-	}
-	if totalBlk != 0 {
-		v2.TxnReaderTombstoneBLSelectivityHistogram.Observe(float64(blBreak) / float64(totalBlk))
-	}
-
-	return err
 }
 
 func (ls *LocalDataSource) batchApplyTombstoneObjects(
