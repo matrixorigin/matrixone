@@ -55,9 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/tidwall/btree"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-	"gorm.io/gorm/logger"
 )
 
 type TenantInfo struct {
@@ -3758,7 +3756,6 @@ func postDropSuspendAccount(
 		retErr = moerr.NewInternalError(ctx,
 			fmt.Sprintf("kill connection for account %s failed on node %s", accountName, nodeAddr))
 	}
-	logger.Info("[send kill request]send kill request to nodes", zap.String("qc service:", qc.ServiceID()), zap.Strings("nodes", nodes))
 
 	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
