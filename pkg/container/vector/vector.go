@@ -245,7 +245,7 @@ func (v *Vector) GetBytesAt(i int) []byte {
 		i = 0
 	}
 	var bs []types.Varlena
-	ToSlice(v, &bs)
+	ToSliceNoTypeCheck(v, &bs)
 	return bs[i].GetByteSlice(v.area)
 }
 
@@ -278,9 +278,9 @@ func (v *Vector) UnsafeGetStringAt(i int) string {
 	if v.IsConst() {
 		i = 0
 	}
-	if !v.typ.Oid.IsFixedLen() {
-		panic(fmt.Sprintf("type mismatch: expect varlen type but actual %s", v.typ.String()))
-	}
+	// if !v.typ.Oid.IsFixedLen() {
+	// 	panic(fmt.Sprintf("type mismatch: expect varlen type but actual %s", v.typ.String()))
+	// }
 	var bs []types.Varlena
 	ToSliceNoTypeCheck(v, &bs)
 	return bs[i].UnsafeGetString(v.area)
@@ -292,7 +292,7 @@ func (v *Vector) GetStringAt(i int) string {
 		i = 0
 	}
 	var bs []types.Varlena
-	ToSlice(v, &bs)
+	ToSliceNoTypeCheck(v, &bs)
 	return bs[i].GetString(v.area)
 }
 
@@ -2316,8 +2316,8 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 
 	if v.GetType().IsVarlen() {
 		var vs, ws []types.Varlena
-		ToSlice(v, &vs)
-		ToSlice(w, &ws)
+		ToSliceNoTypeCheck(v, &vs)
+		ToSliceNoTypeCheck(w, &ws)
 		err := BuildVarlenaFromValena(v, &vs[oldLen], &ws[sel], &w.area, mp)
 		if err != nil {
 			return err
@@ -2436,13 +2436,13 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			var err error
 			var va types.Varlena
 			var ws []types.Varlena
-			ToSlice(w, &ws)
+			ToSliceNoTypeCheck(w, &ws)
 			err = BuildVarlenaFromValena(v, &va, &ws[0], &w.area, mp)
 			if err != nil {
 				return err
 			}
 			var col []types.Varlena
-			ToSlice(v, &col)
+			ToSliceNoTypeCheck(v, &col)
 			for i := oldLen; i < v.length; i++ {
 				col[i] = va
 			}
@@ -2459,8 +2459,8 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	if v.GetType().IsVarlen() {
 		var err error
 		var vCol, wCol []types.Varlena
-		ToSlice(v, &vCol)
-		ToSlice(w, &wCol)
+		ToSliceNoTypeCheck(v, &vCol)
+		ToSliceNoTypeCheck(w, &wCol)
 		if !w.GetNulls().EmptyByFlag() {
 			for i, sel := range sels {
 				if w.nsp.Contains(uint64(sel)) {
@@ -2807,7 +2807,7 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 	}
 	vec.class = CONSTANT
 	var col []types.Varlena
-	ToSlice(vec, &col)
+	ToSliceNoTypeCheck(vec, &col)
 	err = BuildVarlenaFromByteSlice(vec, &col[0], &val, mp)
 	if err != nil {
 		return err
@@ -3129,7 +3129,7 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 		nulls.AddRange(vec.nsp, uint64(length), uint64(length+cnt))
 	} else {
 		var col []types.Varlena
-		ToSlice(vec, &col)
+		ToSliceNoTypeCheck(vec, &col)
 		err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
 		if err != nil {
 			return err
@@ -3450,8 +3450,8 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 		w.length = end - start
 		if v.GetType().IsVarlen() {
 			var vCol, wCol []types.Varlena
-			ToSlice(v, &vCol)
-			ToSlice(w, &wCol)
+			ToSliceNoTypeCheck(v, &vCol)
+			ToSliceNoTypeCheck(w, &wCol)
 			for i := start; i < end; i++ {
 				if !nulls.Contains(v.nsp, uint64(i)) {
 					bs := vCol[i].GetByteSlice(v.area)
