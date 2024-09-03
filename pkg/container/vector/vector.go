@@ -83,6 +83,10 @@ func (t *typedSlice) setFromVector(v *Vector) {
 	}
 }
 
+func ToSliceNoTypeCheck(vec *Vector, ret *[]T) {
+	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
+}
+
 func ToSlice[T any](vec *Vector, ret *[]T) {
 	//if (uintptr(unsafe.Pointer(vec))^uintptr(unsafe.Pointer(ret)))&0xffff == 0 {
 	if !typeCompatible[T](vec.typ) {
@@ -274,8 +278,11 @@ func (v *Vector) UnsafeGetStringAt(i int) string {
 	if v.IsConst() {
 		i = 0
 	}
+	if !v.typ.Oid.IsFixedLen() {
+		panic(fmt.Sprintf("type mismatch: expect varlen type but actual %s", v.typ.String()))
+	}
 	var bs []types.Varlena
-	ToSlice(v, &bs)
+	ToSliceNoTypeCheck(v, &bs)
 	return bs[i].UnsafeGetString(v.area)
 }
 
@@ -2367,13 +2374,13 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 		var err error
 		var va types.Varlena
 		var ws []types.Varlena
-		ToSlice(w, &ws)
+		ToSliceNoTypeCheck(w, &ws)
 		err = BuildVarlenaFromValena(v, &va, &ws[sel], &w.area, mp)
 		if err != nil {
 			return err
 		}
 		var col []types.Varlena
-		ToSlice(v, &col)
+		ToSliceNoTypeCheck(v, &col)
 		for i := oldLen; i < v.length; i++ {
 			col[i] = va
 		}
@@ -2546,13 +2553,13 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			var err error
 			var va types.Varlena
 			var ws []types.Varlena
-			ToSlice(w, &ws)
+			ToSliceNoTypeCheck(w, &ws)
 			err = BuildVarlenaFromValena(v, &va, &ws[0], &w.area, mp)
 			if err != nil {
 				return err
 			}
 			var col []types.Varlena
-			ToSlice(v, &col)
+			ToSliceNoTypeCheck(v, &col)
 			for i := oldLen; i < v.length; i++ {
 				col[i] = va
 			}
@@ -2569,8 +2576,8 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 	if v.GetType().IsVarlen() {
 		var err error
 		var vCol, wCol []types.Varlena
-		ToSlice(v, &vCol)
-		ToSlice(w, &wCol)
+		ToSliceNoTypeCheck(v, &vCol)
+		ToSliceNoTypeCheck(w, &wCol)
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
