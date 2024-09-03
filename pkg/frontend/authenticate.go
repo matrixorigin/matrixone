@@ -3466,8 +3466,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 
 	//set backgroundHandler's default schema
 	if handler, ok := bh.(*backExec); ok {
-		handler.backSes.
-			txnCompileCtx.dbName = catalog.MO_CATALOG
+		handler.backSes.txnCompileCtx.dbName = catalog.MO_CATALOG
 	}
 
 	var sql, db, table string
@@ -3479,6 +3478,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 	var deleteCtx context.Context
 	var accountId int64
 	var version uint64
+	var hasAccount = true
 	clusterTables := make(map[string]int)
 
 	da.Name, err = normalizeName(ctx, da.Name)
@@ -3510,6 +3510,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			if !da.IfExists { //when the "IF EXISTS" is set, just skip it.
 				rtnErr = moerr.NewInternalErrorf(ctx, "there is no account %s", da.Name)
 			}
+			hasAccount = false
 			return
 		}
 		accountId = int64(nameInfoMap[da.Name].Id)
