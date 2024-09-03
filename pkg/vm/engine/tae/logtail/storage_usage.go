@@ -801,7 +801,7 @@ func appendToStorageUsageBat(data *CheckpointData, usage UsageData, del bool, mp
 	}
 
 	updateFunc := func(vecs []*vector.Vector, size uint64) {
-		vector.SetFixedAt[uint64](vecs[UsageSize], vecs[UsageSize].Length()-1, size)
+		vector.SetFixedAtWithTypeCheck[uint64](vecs[UsageSize], vecs[UsageSize].Length()-1, size)
 
 		if del {
 			summaryLog[1][len(summaryLog[1])-1].Size = size

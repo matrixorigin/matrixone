@@ -311,7 +311,7 @@ func batchTransferToTombstones(
 	rowids := vector.MustFixedCol[types.Rowid](targetRowids)
 	for pos, endPos := 0, searchPKColumn.Length(); pos < endPos; pos++ {
 		entry := txnWrites[entryPositions[pos]]
-		if err = vector.SetFixedAt[types.Rowid](
+		if err = vector.SetFixedAtWithTypeCheck[types.Rowid](
 			entry.bat.GetVector(0),
 			int(batPositions[pos]),
 			rowids[pos],

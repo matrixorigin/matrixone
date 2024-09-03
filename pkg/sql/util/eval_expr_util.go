@@ -125,86 +125,86 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		if err != nil {
 			return err
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtWithTypeCheck(vec, row, v)
 	case types.T_bit:
 		width := int(vec.GetType().Width)
 		v, err := strconv.ParseUint(val, 0, width)
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", width), "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtWithTypeCheck(vec, row, v)
 	case types.T_int8:
 		v, err := strconv.ParseInt(val, 0, 8)
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, int8(v))
+		return vector.SetFixedAtWithTypeCheck(vec, row, int8(v))
 	case types.T_int16:
 		v, err := strconv.ParseInt(val, 0, 16)
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, int16(v))
+		return vector.SetFixedAtWithTypeCheck(vec, row, int16(v))
 	case types.T_int32:
 		v, err := strconv.ParseInt(val, 0, 32)
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, int32(v))
+		return vector.SetFixedAtWithTypeCheck(vec, row, int32(v))
 	case types.T_int64:
 		v, err := strconv.ParseInt(val, 0, 64)
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, "int64", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, int64(v))
+		return vector.SetFixedAtWithTypeCheck(vec, row, int64(v))
 	case types.T_uint8:
 		v, err := strconv.ParseUint(val, 0, 8)
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, uint8(v))
+		return vector.SetFixedAtWithTypeCheck(vec, row, uint8(v))
 	case types.T_uint16:
 		v, err := strconv.ParseUint(val, 0, 16)
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, uint16(v))
+		return vector.SetFixedAtWithTypeCheck(vec, row, uint16(v))
 	case types.T_uint32:
 		v, err := strconv.ParseUint(val, 0, 32)
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, "uint32", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, uint32(v))
+		return vector.SetFixedAtWithTypeCheck(vec, row, uint32(v))
 	case types.T_uint64:
 		v, err := strconv.ParseUint(val, 0, 64)
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, "uint64", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, uint64(v))
+		return vector.SetFixedAtWithTypeCheck(vec, row, uint64(v))
 	case types.T_float32:
 		v, err := strconv.ParseFloat(val, 32)
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, "float32", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, float32(v))
+		return vector.SetFixedAtWithTypeCheck(vec, row, float32(v))
 	case types.T_float64:
 		v, err := strconv.ParseFloat(val, 64)
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, "float64", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, float64(v))
+		return vector.SetFixedAtWithTypeCheck(vec, row, float64(v))
 	case types.T_decimal64:
 		v, err := types.ParseDecimal64(val, vec.GetType().Width, vec.GetType().Scale)
 		if err != nil {
 			return err
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtWithTypeCheck(vec, row, v)
 	case types.T_decimal128:
 		v, err := types.ParseDecimal128(val, vec.GetType().Width, vec.GetType().Scale)
 		if err != nil {
 			return err
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtWithTypeCheck(vec, row, v)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		return vector.SetBytesAt(vec, row, []byte(val), proc.Mp())
 	case types.T_array_float32:
@@ -230,31 +230,31 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		if err != nil {
 			return err
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtWithTypeCheck(vec, row, v)
 	case types.T_datetime:
 		v, err := types.ParseDatetime(val, vec.GetType().Scale)
 		if err != nil {
 			return err
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtWithTypeCheck(vec, row, v)
 	case types.T_timestamp:
 		v, err := types.ParseTimestamp(time.Local, val, vec.GetType().Scale)
 		if err != nil {
 			return err
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtWithTypeCheck(vec, row, v)
 	case types.T_date:
 		v, err := types.ParseDateCast(val)
 		if err != nil {
 			return err
 		}
-		return vector.SetFixedAt(vec, row, v)
+		return vector.SetFixedAtWithTypeCheck(vec, row, v)
 	case types.T_enum:
 		v, err := strconv.ParseUint(val, 0, 16)
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, "enum", "value '%v'", val)
 		}
-		return vector.SetFixedAt(vec, row, types.Enum(v))
+		return vector.SetFixedAtWithTypeCheck(vec, row, types.Enum(v))
 	default:
 		panic(fmt.Sprintf("unsupported type %v", vec.GetType().Oid))
 	}

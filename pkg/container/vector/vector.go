@@ -405,20 +405,7 @@ func (v *Vector) IsNull(i uint64) bool {
 	return v.nsp.Contains(i)
 }
 
-func DecodeFixedCol[T types.FixedSizeT](v *Vector) []T {
-	sz := v.typ.TypeSize()
-
-	//if cap(v.data)%sz != 0 {
-	//	panic(moerr.NewInternalErrorNoCtx("decode slice that is not a multiple of element size"))
-	//}
-
-	if cap(v.data) >= sz {
-		return unsafe.Slice((*T)(unsafe.Pointer(&v.data[0])), cap(v.data)/sz)
-	}
-	return nil
-}
-
-func SetFixedAt[T types.FixedSizeT](v *Vector, idx int, t T) error {
+func SetFixedAtWithTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
 	// Let it panic if v is not a varlena vec
 	vacol := MustFixedCol[T](v)
 
@@ -438,7 +425,7 @@ func SetBytesAt(v *Vector, idx int, bs []byte, mp *mpool.MPool) error {
 	if err != nil {
 		return err
 	}
-	return SetFixedAt(v, idx, va)
+	return SetFixedAtWithTypeCheck(v, idx, va)
 }
 
 func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {

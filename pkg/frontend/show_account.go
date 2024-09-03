@@ -343,12 +343,12 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64
 }
 
 func updateStorageSize(ori *vector.Vector, size uint64, rowIdx int) {
-	vector.SetFixedAt(ori, rowIdx, math.Round(float64(size)/1048576.0*1e6)/1e6)
+	vector.SetFixedAtWithTypeCheck(ori, rowIdx, math.Round(float64(size)/1048576.0*1e6)/1e6)
 }
 
 func updateCount(ori *vector.Vector, delta int64, rowIdx int) {
 	old := vector.GetFixedAtWithTypeCheck[int64](ori, rowIdx)
-	vector.SetFixedAt[int64](ori, rowIdx, old+delta)
+	vector.SetFixedAtWithTypeCheck[int64](ori, rowIdx, old+delta)
 }
 
 func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (err error) {

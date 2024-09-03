@@ -49,10 +49,10 @@ func (e *Engine) tryAdjustThreeTablesCreatedTimeWithBatch(b *batch.Batch) {
 		tname := b.Vecs[tnameIdx].GetStringAt(i)
 		if aid == 0 && tname == "mo_user" {
 			ts := vector.GetFixedAtWithTypeCheck[types.Timestamp](b.Vecs[createdTsIdx], i)
-			vector.SetFixedAt(e.moDatabaseCreatedTime, 0, ts)
-			vector.SetFixedAt(e.moTablesCreatedTime, 0, ts)
-			vector.SetFixedAt(e.moColumnsCreatedTime, 0, ts)
-			vector.SetFixedAt(e.moCatalogCreatedTime, 0, ts)
+			vector.SetFixedAtWithTypeCheck(e.moDatabaseCreatedTime, 0, ts)
+			vector.SetFixedAtWithTypeCheck(e.moTablesCreatedTime, 0, ts)
+			vector.SetFixedAtWithTypeCheck(e.moColumnsCreatedTime, 0, ts)
+			vector.SetFixedAtWithTypeCheck(e.moCatalogCreatedTime, 0, ts)
 			e.timeFixed = true
 			return
 		}

@@ -143,7 +143,7 @@ func GenericUpdateFixedValue[T types.FixedSizeT](
 	if isNull {
 		nulls.Add(vec.GetNulls(), uint64(row))
 	} else {
-		err := movec.SetFixedAt(vec, int(row), v.(T))
+		err := movec.SetFixedAtWithTypeCheck(vec, int(row), v.(T))
 		if err != nil {
 			panic(err)
 		}
