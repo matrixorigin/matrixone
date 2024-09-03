@@ -342,6 +342,7 @@ func (builder *QueryBuilder) getFullTextMatchFromProject(projNode *plan.Node, sc
 		switch fn.Func.ObjName {
 		case "fulltext_match":
 
+			found := false
 			for _, idx := range scanNode.TableDef.Indexes {
 				nfound := 0
 				for _, p := range idx.Parts {
@@ -357,13 +358,16 @@ func (builder *QueryBuilder) getFullTextMatchFromProject(projNode *plan.Node, sc
 				if nfound == len(idx.Parts) {
 					ftidxs = append(ftidxs, idx)
 					projids = append(projids, int32(i))
+					found = true
 					break
 				}
 			}
 
 			// change the fulltext_match function to fulltext_match_score
 			// which has return type float32 instead of bool
-			projNode.ProjectList[i] = builder.getFullTextMatchScoreExpr(expr)
+			if !found {
+				projNode.ProjectList[i] = builder.getFullTextMatchScoreExpr(expr)
+			}
 
 		default:
 		}
