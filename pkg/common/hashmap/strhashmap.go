@@ -242,10 +242,10 @@ func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int, len
 			hasNull := nsp.Contains(uint64(i + start))
 			hasRollup := rsp.Contains(uint64(i + start))
 			if m.hasNull {
-				if hasNull {
-					m.keys[i] = append(m.keys[i], byte(1))
-				} else if hasRollup {
+				if hasRollup {
 					m.keys[i] = append(m.keys[i], byte(2))
+				} else if hasNull {
+					m.keys[i] = append(m.keys[i], byte(1))
 				} else {
 					bytes := vec.GetBytesAt(i + start)
 					// for "a"，"bc" and "ab","c", we need to distinct
@@ -328,10 +328,10 @@ func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, s
 			isNull := nsp.Contains(uint64(i + start))
 			isRollup := rsp.Contains(uint64(i + start))
 			if m.hasNull {
-				if isNull {
-					m.keys[i] = append(m.keys[i], 1)
-				} else if isRollup {
+				if isRollup {
 					m.keys[i] = append(m.keys[i], 2)
+				} else if isNull {
+					m.keys[i] = append(m.keys[i], 1)
 				} else {
 					bytes := data[(i+start)*sz : (i+start+1)*sz]
 					m.keys[i] = append(m.keys[i], 0)
