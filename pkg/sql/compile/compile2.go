@@ -268,9 +268,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}
 
 	//--------------------------------------------------------------------------------------------------------------
-	if c.checkSQLHasQueryPlan() {
-		runC.GenPhyPlan()
-		runC.fillPlanNodeAnalyzeInfo()
+	if c.hasValidQueryPlan() {
+		c.handlePlanAnalyze(runC)
 	}
 	//--------------------------------------------------------------------------------------------------------------
 
@@ -368,4 +367,9 @@ func setContextForParallelScope(parallelScope *Scope, originalContext context.Co
 	for _, prePipeline := range parallelScope.PreScopes {
 		prePipeline.buildContextFromParentCtx(parallelScope.Proc.Ctx)
 	}
+}
+
+func (c *Compile) handlePlanAnalyze(runC *Compile) {
+	c.GenPhyPlan(runC)
+	c.fillPlanNodeAnalyzeInfo()
 }

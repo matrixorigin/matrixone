@@ -165,8 +165,8 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node) {
 	}
 }
 
-// checkSQLHasQueryPlan Check if SQL has a query plan
-func (c *Compile) checkSQLHasQueryPlan() bool {
+// hasValidQueryPlan Check if SQL has a query plan
+func (c *Compile) hasValidQueryPlan() bool {
 	if qry, ok := c.pn.Plan.(*plan.Plan_Query); ok {
 		if qry.Query.StmtType != plan.Query_REPLACE {
 			return true
@@ -348,7 +348,7 @@ func ConvertSourceToPhySource(source *Source) *models.PhySource {
 	}
 }
 
-func (c *Compile) GenPhyPlan() {
+func (c *Compile) GenPhyPlan(runC *Compile) {
 	var generateReceiverMap func(*Scope, map[*process.WaitRegister]int)
 	generateReceiverMap = func(s *Scope, mp map[*process.WaitRegister]int) {
 		for i := range s.PreScopes {
@@ -363,33 +363,33 @@ func (c *Compile) GenPhyPlan() {
 	}
 
 	receiverMap := make(map[*process.WaitRegister]int)
-	ss := c.scopes
+	ss := runC.scopes
 	for i := range ss {
 		generateReceiverMap(ss[i], receiverMap)
 	}
 	//------------------------------------------------------------------------------------------------------
 	c.anal.phyPlan = models.NewPhyPlan()
-	c.anal.phyPlan.RetryTime = c.anal.retryTimes
+	c.anal.phyPlan.RetryTime = runC.anal.retryTimes
 
-	if len(c.scopes) > 0 {
-		for i := range c.scopes {
-			phyScope := ConvertScopeToPhyScope(c.scopes[i], receiverMap)
+	if len(runC.scopes) > 0 {
+		for i := range runC.scopes {
+			phyScope := ConvertScopeToPhyScope(runC.scopes[i], receiverMap)
 			c.anal.phyPlan.LocalScope = append(c.anal.phyPlan.LocalScope, phyScope)
 		}
 	}
 
 	//-------------------------------------------------------------------------------------------
 	// record the number of s3 requests
-	c.anal.phyPlan.S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
-	c.anal.phyPlan.S3IOInputCount += c.counterSet.FileService.S3.List.Load()
+	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.Put.Load()
+	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.List.Load()
 
-	c.anal.phyPlan.S3IOOutputCount += c.counterSet.FileService.S3.Head.Load()
-	c.anal.phyPlan.S3IOOutputCount += c.counterSet.FileService.S3.Get.Load()
-	c.anal.phyPlan.S3IOOutputCount += c.counterSet.FileService.S3.Delete.Load()
-	c.anal.phyPlan.S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
+	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.Head.Load()
+	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.Get.Load()
+	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.Delete.Load()
+	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.DeleteMulti.Load()
 	//-------------------------------------------------------------------------------------------
 
-	for _, remotePhy := range c.anal.remotePhyPlans {
+	for _, remotePhy := range runC.anal.remotePhyPlans {
 		c.anal.phyPlan.RemoteScope = append(c.anal.phyPlan.RemoteScope, remotePhy.LocalScope[0])
 		c.anal.phyPlan.S3IOInputCount += remotePhy.S3IOInputCount
 		c.anal.phyPlan.S3IOOutputCount += remotePhy.S3IOOutputCount
