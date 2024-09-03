@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -38,80 +37,39 @@ const (
 	LEFT JOIN  
 	(SELECT COUNT(1) as nword, doc_id FROM %s WHERE doc_id in (SELECT doc_id FROM %s WHERE word = '%s') GROUP BY doc_id) AS t2 
 	ON 
-	t1.doc_id = t2.doc_id ORDER BY tfidf;`
+	t1.doc_id = t2.doc_id;`
 )
 
 type fulltextState struct {
-	inited bool
-
-	called bool
-	// holding one call batch, fulltextState owns it.
-	curr    int
-	batches []*batch.Batch
-}
-
-func (u *fulltextState) reset(tf *TableFunction, proc *process.Process) {
-	if u.batches != nil {
-		for i := range u.batches {
-			u.batches[i].CleanOnlyData()
-			//u.batches[i].Clean(proc.Mp())
-		}
-	}
-	u.called = false
-}
-
-func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
-	var res vm.CallResult
-	if u.called {
-		return res, nil
-	}
-	res.Batch = u.batches[u.curr]
-	u.curr += 1
-	u.called = true
-	return res, nil
-}
-
-func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
-	if u.batches != nil {
-		for i := range u.batches {
-			u.batches[i].Clean(proc.Mp())
-		}
-	}
+	simpleOneBatchState
 }
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current unnest impl will
 // always return one batch per nthRow.
 func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+	u.startPreamble(tf, proc, nthRow)
+
 	var err error
 
-	if !u.inited {
-		v := tf.ctr.argVecs[0]
-		if v.GetType().Oid != types.T_varchar {
-			return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: first argument (index table name) must be string, but got %s", v.GetType().String()))
-		}
-		index_table := v.UnsafeGetStringAt(0)
-
-		v = tf.ctr.argVecs[1]
-		if v.GetType().Oid != types.T_varchar {
-			return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: first argument (index table name) must be string, but got %s", v.GetType().String()))
-		}
-		pattern := v.UnsafeGetStringAt(0)
-
-		v = tf.ctr.argVecs[1]
-		if v.GetType().Oid != types.T_int64 {
-			return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: first argument (index table name) must be string, but got %s", v.GetType().String()))
-		}
-		mode := vector.GetFixedAt[int64](v, 0)
-
-		u.batches, err = fulltextIndexMatch(proc, tf, index_table, pattern, mode)
-		u.inited = true
+	v := tf.ctr.argVecs[0]
+	if v.GetType().Oid != types.T_varchar {
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: first argument (index table name) must be string, but got %s", v.GetType().String()))
 	}
+	index_table := v.UnsafeGetStringAt(0)
 
-	u.called = false
-	// clean up the batch
-	if u.curr > 0 {
-		u.batches[u.curr-1].CleanOnlyData()
+	v = tf.ctr.argVecs[1]
+	if v.GetType().Oid != types.T_varchar {
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: second argument (pattern) must be string, but got %s", v.GetType().String()))
 	}
+	pattern := v.UnsafeGetStringAt(0)
+
+	v = tf.ctr.argVecs[2]
+	if v.GetType().Oid != types.T_int64 {
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: third argument (mode) must be int64, but got %s", v.GetType().String()))
+	}
+	mode := vector.GetFixedAt[int64](v, 0)
+
+	err = fulltextIndexMatch(proc, tf, index_table, pattern, mode, u.batch)
 
 	return err
 }
@@ -121,87 +79,13 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 	var err error
 	st := &fulltextState{}
 	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
+	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
 
-	logutil.Infof("FULLTEXTINDESCSCAN PREPARE")
 	for i := range tableFunction.Attrs {
 		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
 	}
 	return st, err
 }
-
-// run SQL here
-/*
-func fulltextIndexScanCall(_ int, proc *process.Process, tableFunction *TableFunction, result *vm.CallResult) (bool, error) {
-
-	var (
-		err  error
-		rbat *batch.Batch
-	)
-	bat := result.Batch
-	defer func() {
-		if err != nil && rbat != nil {
-			rbat.Clean(proc.Mp())
-		}
-	}()
-	if bat == nil {
-		return true, nil
-	}
-
-	logutil.Infof("FULLTEXTINDEXSCAN CALL")
-
-	for i, arg := range tableFunction.Args {
-		logutil.Infof("ARG %d: %s", i, arg.String())
-	}
-
-	logutil.Infof("PARAM : %s", string(tableFunction.Params))
-
-	for i, attr := range tableFunction.Attrs {
-		logutil.Infof("ATTRS %d: %s", i, attr)
-	}
-
-	v, err := tableFunction.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat}, nil)
-	if err != nil {
-		return false, err
-	}
-	if v.GetType().Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: first argument (index table name) must be string, but got %s", v.GetType().String()))
-	}
-
-	index_table := v.UnsafeGetStringAt(0)
-
-	v, err = tableFunction.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat}, nil)
-	if err != nil {
-		return false, err
-	}
-	if v.GetType().Oid != types.T_varchar {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: second argument (search pattern) must be string, but got %s", v.GetType().String()))
-	}
-
-	pattern := v.UnsafeGetStringAt(0)
-
-	v, err = tableFunction.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{bat}, nil)
-	if err != nil {
-		return false, err
-	}
-	if v.GetType().Oid != types.T_int64 {
-		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: third argument (mode) must be string, but got %s", v.GetType().String()))
-	}
-
-	mode := vector.GetFixedAt[int64](v, 0)
-
-	logutil.Infof("index %s, pattern %s mode %d", index_table, pattern, mode)
-
-	rbat, err = fulltextIndexMatch(proc, tableFunction, index_table, pattern)
-	if err != nil {
-		return false, err
-	}
-
-	//result.Batch = bat.Dup(proc.Mp())
-	result.Batch = rbat
-	return false, nil
-}
-
-*/
 
 func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
@@ -220,7 +104,7 @@ func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
 	return exec.Exec(proc.GetTopContext(), sql, opts)
 }
 
-func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, tblname, pattern string, mode int64) (batches []*batch.Batch, err error) {
+func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, tblname, pattern string, mode int64, bat *batch.Batch) (err error) {
 
 	var projects []string
 
@@ -232,8 +116,8 @@ func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, tbl
 	} else if len(tableFunction.Attrs) == 1 {
 		if tableFunction.Attrs[0] == "DOC_ID" {
 			projects = append(projects, project_doc_id)
-			tfidf := fmt.Sprintf(project_tfidf, tblname, tblname, pattern)
-			projects = append(projects, tfidf)
+			//tfidf := fmt.Sprintf(project_tfidf, tblname, tblname, pattern)
+			//projects = append(projects, tfidf)
 		} else {
 			tfidf := fmt.Sprintf(project_tfidf, tblname, tblname, pattern)
 			projects = append(projects, tfidf)
@@ -241,47 +125,22 @@ func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, tbl
 		}
 	}
 
-	/*
-		for j, attr := range tableFunction.Attrs {
-			if attr == "DOC_ID" {
-				projects = append(projects, project_doc_id)
-			} else if attr == "TFIDF" {
-				tfidf := fmt.Sprintf(project_tfidf, tblname, pattern)
-				projects = append(projects, tfidf)
-			}
-		}
-	*/
-	/*
-		projects = append(projects, project_doc_id)
-		tfidf := fmt.Sprintf(project_tfidf, tblname, tblname, pattern)
-		projects = append(projects, tfidf)
-	*/
-
 	project := strings.Join(projects, ",")
 
 	sql := fmt.Sprintf(single_word_exact_match_sql, project, tblname, pattern, tblname, tblname, pattern)
 	logutil.Infof("FULLTEXT SQL = %s", sql)
 	res, err := ft_runSql(proc, sql)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer res.Close()
 
-	batches = make([]*batch.Batch, len(res.Batches))
-	for i, b := range res.Batches {
-		batches[i], err = b.Dup(proc.Mp())
+	for _, b := range res.Batches {
+		bat, err = bat.Append(proc.Ctx, proc.Mp(), b)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	return batches, nil
-	/*
-		if res.Batches != nil && len(res.Batches) > 0 {
-			return res.Batches[0].Dup(proc.Mp())
-			//return res.Batches[0], nil
-		}
-
-		return nil, nil
-	*/
+	return nil
 }
