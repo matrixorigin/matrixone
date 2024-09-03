@@ -329,52 +329,52 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				val := types.DecodeJson(vec.GetBytesAt(i))
 				formatOutputString(ep, []byte(formatJsonString(val.String(), flag[j], terminated)), symbol[j], closeby, flag[j], buffer)
 			case types.T_bool:
-				val := vector.GetFixedAtWithTypeCheck[bool](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[bool](vec, i)
 				if val {
 					formatOutputString(ep, []byte("true"), symbol[j], closeby, flag[j], buffer)
 				} else {
 					formatOutputString(ep, []byte("false"), symbol[j], closeby, flag[j], buffer)
 				}
 			case types.T_bit:
-				val := vector.GetFixedAtWithTypeCheck[uint64](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[uint64](vec, i)
 				bitLength := vec.GetType().Width
 				byteLength := (bitLength + 7) / 8
 				b := types.EncodeUint64(&val)[:byteLength]
 				slices.Reverse(b)
 				formatOutputString(ep, b, symbol[j], closeby, flag[j], buffer)
 			case types.T_int8:
-				val := vector.GetFixedAtWithTypeCheck[int8](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[int8](vec, i)
 				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_int16:
-				val := vector.GetFixedAtWithTypeCheck[int16](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[int16](vec, i)
 				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_int32:
-				val := vector.GetFixedAtWithTypeCheck[int32](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[int32](vec, i)
 				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_int64:
-				val := vector.GetFixedAtWithTypeCheck[int64](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[int64](vec, i)
 				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_uint8:
-				val := vector.GetFixedAtWithTypeCheck[uint8](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[uint8](vec, i)
 				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_uint16:
-				val := vector.GetFixedAtWithTypeCheck[uint16](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[uint16](vec, i)
 				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_uint32:
-				val := vector.GetFixedAtWithTypeCheck[uint32](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[uint32](vec, i)
 				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_uint64:
-				val := vector.GetFixedAtWithTypeCheck[uint64](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[uint64](vec, i)
 				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
 			case types.T_float32:
-				val := vector.GetFixedAtWithTypeCheck[float32](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[float32](vec, i)
 				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
 					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j], buffer)
 				} else {
 					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], buffer)
 				}
 			case types.T_float64:
-				val := vector.GetFixedAtWithTypeCheck[float64](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[float64](vec, i)
 				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
 					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j], buffer)
 				} else {
@@ -392,40 +392,40 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr))
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_date:
-				val := vector.GetFixedAtWithTypeCheck[types.Date](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[types.Date](vec, i)
 				formatOutputString(ep, []byte(val.String()), symbol[j], closeby, flag[j], buffer)
 			case types.T_datetime:
 				scale := vec.GetType().Scale
-				val := vector.GetFixedAtWithTypeCheck[types.Datetime](vec, i).String2(scale)
+				val := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, i).String2(scale)
 				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_time:
 				scale := vec.GetType().Scale
-				val := vector.GetFixedAtWithTypeCheck[types.Time](vec, i).String2(scale)
+				val := vector.GetFixedAtNoTypeCheck[types.Time](vec, i).String2(scale)
 				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_timestamp:
 				scale := vec.GetType().Scale
 				timeZone := ses.GetTimeZone()
-				val := vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, i).String2(timeZone, scale)
+				val := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, i).String2(timeZone, scale)
 				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_decimal64:
 				scale := vec.GetType().Scale
-				val := vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, i).Format(scale)
+				val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, i).Format(scale)
 				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_decimal128:
 				scale := vec.GetType().Scale
-				val := vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, i).Format(scale)
+				val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, i).Format(scale)
 				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_uuid:
-				val := vector.GetFixedAtWithTypeCheck[types.Uuid](vec, i).String()
+				val := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i).String()
 				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_Rowid:
-				val := vector.GetFixedAtWithTypeCheck[types.Rowid](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[types.Rowid](vec, i)
 				formatOutputString(ep, []byte(val.String()), symbol[j], closeby, flag[j], buffer)
 			case types.T_Blockid:
-				val := vector.GetFixedAtWithTypeCheck[types.Blockid](vec, i)
+				val := vector.GetFixedAtNoTypeCheck[types.Blockid](vec, i)
 				formatOutputString(ep, []byte(val.String()), symbol[j], closeby, flag[j], buffer)
 			case types.T_enum:
-				val := vector.GetFixedAtWithTypeCheck[types.Enum](vec, i).String()
+				val := vector.GetFixedAtNoTypeCheck[types.Enum](vec, i).String()
 				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			default:
 				ses.Error(ctx,

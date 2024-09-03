@@ -330,55 +330,55 @@ func (top *Top) getTopValue() ([]byte, bool) {
 	}
 	switch vec.GetType().Oid {
 	case types.T_int8:
-		v := vector.GetFixedAtWithTypeCheck[int8](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[int8](vec, x)
 		return types.EncodeInt8(&v), true
 	case types.T_int16:
-		v := vector.GetFixedAtWithTypeCheck[int16](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[int16](vec, x)
 		return types.EncodeInt16(&v), true
 	case types.T_int32:
-		v := vector.GetFixedAtWithTypeCheck[int32](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[int32](vec, x)
 		return types.EncodeInt32(&v), true
 	case types.T_int64:
-		v := vector.GetFixedAtWithTypeCheck[int64](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[int64](vec, x)
 		return types.EncodeInt64(&v), true
 	case types.T_uint8:
-		v := vector.GetFixedAtWithTypeCheck[uint8](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[uint8](vec, x)
 		return types.EncodeUint8(&v), true
 	case types.T_uint16:
-		v := vector.GetFixedAtWithTypeCheck[uint16](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[uint16](vec, x)
 		return types.EncodeUint16(&v), true
 	case types.T_uint32:
-		v := vector.GetFixedAtWithTypeCheck[uint32](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[uint32](vec, x)
 		return types.EncodeUint32(&v), true
 	case types.T_uint64:
-		v := vector.GetFixedAtWithTypeCheck[uint64](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[uint64](vec, x)
 		return types.EncodeUint64(&v), true
 	case types.T_float32:
-		v := vector.GetFixedAtWithTypeCheck[float32](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[float32](vec, x)
 		return types.EncodeFloat32(&v), true
 	case types.T_float64:
-		v := vector.GetFixedAtWithTypeCheck[float64](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[float64](vec, x)
 		return types.EncodeFloat64(&v), true
 	case types.T_date:
-		v := vector.GetFixedAtWithTypeCheck[types.Date](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Date](vec, x)
 		return types.EncodeDate(&v), true
 	case types.T_datetime:
-		v := vector.GetFixedAtWithTypeCheck[types.Datetime](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, x)
 		return types.EncodeDatetime(&v), true
 	case types.T_timestamp:
-		v := vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, x)
 		return types.EncodeTimestamp(&v), true
 	case types.T_time:
-		v := vector.GetFixedAtWithTypeCheck[types.Time](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Time](vec, x)
 		return types.EncodeTime(&v), true
 	case types.T_decimal64:
-		v := vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, x)
 		return types.EncodeDecimal64(&v), true
 	case types.T_decimal128:
-		v := vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, x)
 		return types.EncodeDecimal128(&v), true
 	case types.T_enum:
-		v := vector.GetFixedAtWithTypeCheck[types.Enum](vec, x)
+		v := vector.GetFixedAtNoTypeCheck[types.Enum](vec, x)
 		return types.EncodeEnum(&v), true
 	}
 	return nil, false
