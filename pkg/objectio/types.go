@@ -49,6 +49,12 @@ type ColumnMetaFetcher interface {
 	MustGetColumn(seqnum uint16) ColumnMeta
 }
 
+type Sourcer interface {
+	Next() []byte
+	SeekFirst()
+	Type() int
+}
+
 type WriteOptions struct {
 	Type WriteType
 	Val  any

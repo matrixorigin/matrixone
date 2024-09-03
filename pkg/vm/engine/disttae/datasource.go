@@ -767,51 +767,6 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 	return nil
 }
 
-func loadBlockDeletesByLocation(
-	ctx context.Context,
-	fs fileservice.FileService,
-	blockId types.Blockid,
-	location objectio.Location,
-	snapshotTS types.TS,
-) (deleteMask *nulls.Nulls, err error) {
-
-	var (
-		rows *nulls.Nulls
-		//bisect           time.Duration
-		release          func()
-		persistedByCN    bool
-		persistedDeletes *batch.Batch
-	)
-
-	if !location.IsEmpty() {
-		//t1 := time.Now()
-
-		if persistedDeletes, persistedByCN, release, err = blockio.ReadBlockDelete(ctx, location, fs); err != nil {
-			return nil, err
-		}
-		defer release()
-
-		//readCost := time.Since(t1)
-
-		if persistedByCN {
-			rows = blockio.EvalDeleteRowsByTimestampForDeletesPersistedByCN(blockId, persistedDeletes)
-		} else {
-			//t2 := time.Now()
-			rows = blockio.EvalDeleteRowsByTimestamp(persistedDeletes, snapshotTS, &blockId)
-			//bisect = time.Since(t2)
-		}
-
-		if rows != nil {
-			deleteMask = rows
-		}
-
-		//readTotal := time.Since(t1)
-		//blockio.RecordReadDel(readTotal, readCost, bisect)
-	}
-
-	return deleteMask, nil
-}
-
 // ApplyTombstones check if any deletes exist in
 //  1. unCommittedInmemDeletes:
 //     a. workspace writes
@@ -1218,8 +1173,8 @@ func GetTombstonesByBlockId(
 
 			var mask *nulls.Nulls
 
-			if mask, err = loadBlockDeletesByLocation(
-				ctx, fs, bid, tombstoneLoc, snapshot,
+			if mask, err = blockio.FillBlockDeleteMask(
+				ctx, snapshot, bid, tombstoneLoc, fs,
 			); err != nil {
 				return false, err
 			}
