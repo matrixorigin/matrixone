@@ -32,20 +32,20 @@ drop publication if exists pub02;
 create publication pub02 database test02 table rs02 account acc01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub02    test02    rs02    acc01        2024-08-21 14:51:51    null    
+pub02    test02    rs02    acc01        2024-08-26 11:55:10    null    
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub02    sys    test02    rs02        2024-08-21 14:51:51    null    null    0
+pub02    sys    test02    rs02        2024-08-26 11:55:10    null    null    0
 drop database if exists sub02;
 create database sub02 from sys publication pub02;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub02    sys    test02    rs02        2024-08-21 14:51:51    sub02    2024-08-21 14:51:52    0
+pub02    sys    test02    rs02        2024-08-26 11:55:10    sub02    2024-08-26 11:55:10    0
 drop snapshot if exists sp02;
 create snapshot sp02 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp02    2024-08-21 06:51:52.016381    account    acc01        
+sp02    2024-08-26 03:55:10.097734    account    acc01        
 drop database sub02;
 drop publication pub02;
 show subscriptions;
@@ -62,3 +62,7 @@ system
 system_metrics
 drop account acc01;
 drop database if exists test02;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
