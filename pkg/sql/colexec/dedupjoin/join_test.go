@@ -223,7 +223,6 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) jo
 		cancel: cancel,
 		arg: &DedupJoin{
 			RightTypes: ts,
-			Result:     rp,
 			Conditions: cs,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{

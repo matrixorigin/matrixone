@@ -45,19 +45,12 @@ type container struct {
 	colexec.ReceiverOperator
 
 	state   int
-	lastpos int
+	lastPos int
 
 	batches       []*batch.Batch
 	batchRowCount int64
-	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
-
-	joinBat1 *batch.Batch
-	cfs1     []func(*vector.Vector, *vector.Vector, int64, int) error
-
-	joinBat2 *batch.Batch
-	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
 	evecs []evalVector
 	vecs  []*vector.Vector
@@ -66,8 +59,6 @@ type container struct {
 
 	matched     *bitmap.Bitmap
 	handledLast bool
-
-	tmpBatches []*batch.Batch // for reuse
 
 	maxAllocSize int64
 	buf          []*batch.Batch
@@ -134,17 +125,15 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.resetEvalVectors()
 	ctr.handledLast = false
 	ctr.state = Build
-	ctr.lastpos = 0
+	ctr.lastPos = 0
 }
 
 func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &dedupJoin.ctr
 	ctr.cleanBuf(proc)
-	ctr.cleanBatch(proc)
 	ctr.cleanEvalVectors()
 	ctr.cleanHashMap()
 	ctr.cleanExprExecutor()
-	ctr.tmpBatches = nil
 
 }
 
@@ -163,28 +152,9 @@ func (ctr *container) cleanExprExecutor() {
 
 func (ctr *container) cleanBuf(proc *process.Process) {
 	for _, bat := range ctr.buf {
-		if bat != ctr.rbat {
-			bat.Clean(proc.GetMPool())
-		}
+		bat.Clean(proc.GetMPool())
 	}
 	ctr.buf = nil
-}
-
-func (ctr *container) cleanBatch(proc *process.Process) {
-	ctr.batches = nil
-
-	if ctr.rbat != nil {
-		ctr.rbat.Clean(proc.GetMPool())
-		ctr.rbat = nil
-	}
-	if ctr.joinBat1 != nil {
-		ctr.joinBat1.Clean(proc.GetMPool())
-		ctr.joinBat1 = nil
-	}
-	if ctr.joinBat2 != nil {
-		ctr.joinBat2.Clean(proc.GetMPool())
-		ctr.joinBat2 = nil
-	}
 }
 
 func (ctr *container) cleanHashMap() {
