@@ -367,9 +367,11 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 	for i := range ss {
 		generateReceiverMap(ss[i], receiverMap)
 	}
+
 	//------------------------------------------------------------------------------------------------------
 	c.anal.phyPlan = models.NewPhyPlan()
 	c.anal.phyPlan.RetryTime = runC.anal.retryTimes
+	c.anal.curNodeIdx = runC.anal.curNodeIdx
 
 	if len(runC.scopes) > 0 {
 		for i := range runC.scopes {
