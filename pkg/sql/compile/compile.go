@@ -3990,12 +3990,23 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		// all expandRanges should be called by Run
 		var filterExpr []*plan.Expr
 		if len(n.BlockFilterList) > 0 {
-			tmpExpr := colexec.RewriteFilterExprList(plan2.DeepCopyExprList(n.BlockFilterList))
-			tmpExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, tmpExpr, c.proc, true, true)
-			if err != nil {
-				return nil, nil, nil, err
+			filterExpr = plan2.DeepCopyExprList(n.BlockFilterList)
+			for _, e := range filterExpr {
+				fn := e.GetF()
+				if fn == nil {
+					panic("not function expr for filter")
+				}
+				_, err := plan2.ReplaceFoldVal(c.proc, e, c.rangesExprExecutor)
+				if err != nil {
+					return nil, nil, nil, err
+				}
 			}
-			filterExpr = append(filterExpr, tmpExpr)
+			for _, e := range filterExpr {
+				err = plan2.EvalFoldValExpr(c.proc, e, c.rangesExprExecutor)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+			}
 		}
 
 		relData, err = c.expandRanges(n, rel, filterExpr)

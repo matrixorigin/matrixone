@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -112,33 +111,29 @@ func isSortedKey(colDef *plan.ColDef) (isPK, isSorted bool) {
 
 func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *process.Process) ([][]byte, bool) {
 	vals := make([][]byte, len(exprs))
+	_ = colDef
+	_ = proc
 	for idx := range exprs {
 		if fExpr, ok := exprs[idx].Expr.(*plan.Expr_Fold); ok {
 			ptr := uintptr(fExpr.Fold.Ptr)
 			vec := (*vector.Vector)(unsafe.Pointer(ptr))
-			constVal := rule.GetConstantValue(vec, true, 0)
-			if constVal == nil {
+			val, can := getConstantBytes(vec, true, 0)
+			if !can {
 				return nil, false
 			}
-			colType := types.T(colDef.Typ.Id)
-			val, ok := evalLiteralExpr2(constVal, colType)
-			if !ok {
-				return nil, ok
-			}
+			// constVal := rule.GetConstantValue(vec, true, 0)
+			// if constVal == nil {
+			// 	return nil, false
+			// }
+			// colType := types.T(colDef.Typ.Id)
+			// val, ok := evalLiteralExpr2(constVal, colType)
+			// if !ok {
+			// 	return nil, ok
+			// }
 
 			vals[idx] = val
 		} else {
-			constVal := getConstValueByExpr(exprs[idx], proc)
-			if constVal == nil {
-				return nil, false
-			}
-			colType := types.T(colDef.Typ.Id)
-			val, ok := evalLiteralExpr2(constVal, colType)
-			if !ok {
-				return nil, ok
-			}
-
-			vals[idx] = val
+			return nil, false
 		}
 	}
 
@@ -1208,5 +1203,109 @@ func ExecuteBlockFilter(
 		extraCommittedObjects,
 		uncommittedObjects...,
 	)
+	return
+}
+
+func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte, can bool) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(row) {
+		return
+	}
+	can = true
+	switch vec.GetType().Oid {
+	case types.T_bool:
+		val := vector.MustFixedCol[bool](vec)[row]
+		ret = types.EncodeBool(&val)
+
+	case types.T_bit:
+		val := vector.MustFixedCol[uint64](vec)[row]
+		ret = types.EncodeUint64(&val)
+
+	case types.T_int8:
+		val := vector.MustFixedCol[int8](vec)[row]
+		ret = types.EncodeInt8(&val)
+
+	case types.T_int16:
+		val := vector.MustFixedCol[int16](vec)[row]
+		ret = types.EncodeInt16(&val)
+
+	case types.T_int32:
+		val := vector.MustFixedCol[int32](vec)[row]
+		ret = types.EncodeInt32(&val)
+
+	case types.T_int64:
+		val := vector.MustFixedCol[int64](vec)[row]
+		ret = types.EncodeInt64(&val)
+
+	case types.T_uint8:
+		val := vector.MustFixedCol[uint8](vec)[row]
+		ret = types.EncodeUint8(&val)
+
+	case types.T_uint16:
+		val := vector.MustFixedCol[uint16](vec)[row]
+		ret = types.EncodeUint16(&val)
+
+	case types.T_uint32:
+		val := vector.MustFixedCol[uint32](vec)[row]
+		ret = types.EncodeUint32(&val)
+
+	case types.T_uint64:
+		val := vector.MustFixedCol[uint64](vec)[row]
+		ret = types.EncodeUint64(&val)
+
+	case types.T_float32:
+		val := vector.MustFixedCol[float32](vec)[row]
+		ret = types.EncodeFloat32(&val)
+
+	case types.T_float64:
+		val := vector.MustFixedCol[float64](vec)[row]
+		ret = types.EncodeFloat64(&val)
+
+	case types.T_varchar, types.T_char,
+		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
+		ret = []byte(vec.GetStringAt(int(row)))
+
+	case types.T_json:
+		if !transAll {
+			can = false
+			return
+		}
+		ret = []byte(vec.GetStringAt(int(row)))
+
+	case types.T_timestamp:
+		val := vector.MustFixedCol[types.Timestamp](vec)[row]
+		ret = types.EncodeTimestamp(&val)
+
+	case types.T_date:
+		val := vector.MustFixedCol[types.Date](vec)[row]
+		ret = types.EncodeDate(&val)
+
+	case types.T_time:
+		val := vector.MustFixedCol[types.Time](vec)[row]
+		ret = types.EncodeTime(&val)
+
+	case types.T_datetime:
+		val := vector.MustFixedCol[types.Datetime](vec)[row]
+		ret = types.EncodeDatetime(&val)
+
+	case types.T_enum:
+		if !transAll {
+			can = false
+			return
+		}
+		val := vector.MustFixedCol[types.Enum](vec)[row]
+		ret = types.EncodeEnum(&val)
+
+	case types.T_decimal64:
+		val := vector.MustFixedCol[types.Decimal64](vec)[row]
+		ret = types.EncodeDecimal64(&val)
+
+	case types.T_decimal128:
+		val := vector.MustFixedCol[types.Decimal128](vec)[row]
+		ret = types.EncodeDecimal128(&val)
+
+	default:
+		can = false
+	}
+
 	return
 }
