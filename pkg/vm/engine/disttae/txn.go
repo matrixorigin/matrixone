@@ -503,10 +503,12 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		}
 		blockInfos, stats, err := s3Writer.SortAndSync(txn.proc)
 		if err != nil {
+			s3Writer.Free(txn.proc)
 			return err
 		}
 		err = s3Writer.FillBlockInfoBat(blockInfos, stats, txn.proc.GetMPool())
 		if err != nil {
+			s3Writer.Free(txn.proc)
 			return err
 		}
 		blockInfo := s3Writer.GetBlockInfoBat()
