@@ -137,3 +137,7 @@ drop account if exists acc01;
 
 drop publication if exists pubname1;
 drop database if exists db1;
+-- @ignore:1
+show snapshots;
+-- @ignore:5,6
+show publications;

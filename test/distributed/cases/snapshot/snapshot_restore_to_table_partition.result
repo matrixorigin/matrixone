@@ -34,7 +34,7 @@ show create table acc_test04.index03;
 Table    Create Table
 index03    CREATE TABLE `index03` (\n  `emp_no` INT NOT NULL,\n  `birth_date` DATE NOT NULL,\n  `first_name` VARCHAR(14) NOT NULL,\n  `last_name` VARCHAR(16) NOT NULL,\n  `gender` VARCHAR(5) NOT NULL,\n  `hire_date` DATE NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
 restore account acc01 database acc_test04 table index03 from snapshot sp04;
-restore account acc01 database acc_test04 table index03 from snapshot sp04 to account acc02;
+restore account acc01 from snapshot sp04 to account acc02;
 select count(*) from acc_test04.index03;
 count(*)
 2
