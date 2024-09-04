@@ -473,7 +473,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			newBat.Vecs = bat.Vecs[1:]
 			newBat.SetRowCount(bat.Vecs[0].Length())
 			mp[tbKey] = append(mp[tbKey], newBat)
-			txn.toFreeBatches[tbKey] = append(txn.toFreeBatches[tbKey], bat)
+			defer bat.Clean(txn.proc.GetMPool())
 
 			keepElement = false
 		}
