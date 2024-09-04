@@ -26,7 +26,6 @@ func TestParseDatalink(t *testing.T) {
 		data          string
 		wantMoUrl     string
 		wantUrlParams []int
-		wantFileExt   string
 	}
 	tests := []testCase{
 		{
