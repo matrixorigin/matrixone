@@ -78,6 +78,7 @@ func (ar *AccountRoutineManager) recordRoutine(tenantID int64, rt *Routine, vers
 
 	ar.accountRoutineMu.Lock()
 	defer ar.accountRoutineMu.Unlock()
+	logutil.Infof("[init account] set account id %d, connection id %d to account routine map", tenantID, rt.getConnectionID())
 	if _, ok := ar.accountId2Routine[tenantID]; !ok {
 		ar.accountId2Routine[tenantID] = make(map[*Routine]uint64)
 	}
@@ -108,6 +109,7 @@ func (ar *AccountRoutineManager) EnKillQueue(tenantID int64, version uint64) {
 	KillRecord := NewKillRecord(time.Now(), version)
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
+	logutil.Infof("[set suspend] set account id %d, version %d to kill queue at time %v, ", tenantID, version, KillRecord.killTime)
 	ar.killIdQueue[tenantID] = KillRecord
 
 }
@@ -122,6 +124,7 @@ func (ar *AccountRoutineManager) AlterRoutineStatue(tenantID int64, status strin
 	if rts, ok := ar.accountId2Routine[tenantID]; ok {
 		for rt := range rts {
 			if status == "restricted" {
+				logutil.Infof("[set restricted] alter routine, set account id %d, connection id %d restricted", tenantID, rt.getConnectionID())
 				rt.setResricted(true)
 			} else {
 				rt.setResricted(false)
@@ -420,6 +423,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 			for rt, version := range rtMap {
 				if rt != nil && ((version+1)%math.MaxUint64)-1 <= killRecord.version {
 					//kill connect of this routine
+					logutil.Infof("[kill connection] do kill connection account id %d, version %d, connection id %d, ", account, killRecord.version, rt.getConnectionID())
 					rt.killConnection(false)
 					ar.deleteRoutine(account, rt)
 				}
