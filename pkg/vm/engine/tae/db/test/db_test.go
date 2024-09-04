@@ -9295,5 +9295,5 @@ func TestDeleteWithObjectStats(t *testing.T) {
 	}
 	assert.NoError(t, txn.Commit(ctx))
 
-	// tae.CheckRowsByScan(10, true)
+	tae.CheckRowsByScan(10, true)
 }

@@ -72,6 +72,7 @@ func GetTombstonesByBlockId(
 	return
 }
 
+/*
 func FindTombstonesOfBlock(
 	ctx context.Context,
 	blockId objectio.Blockid,
@@ -80,6 +81,7 @@ func FindTombstonesOfBlock(
 ) (sels bitmap.Bitmap, err error) {
 	return findTombstoneOfXXX(ctx, blockId[:], tombstoneObjects, fs)
 }
+*/
 
 func FindTombstonesOfObject(
 	ctx context.Context,
@@ -107,7 +109,7 @@ func findTombstoneOfXXX(
 		return &tombstoneObjects[i], nil
 	}
 	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
-		sels.Add(uint64(curr))
+		sels.Add(uint64(curr - 1))
 		return false, nil
 	}
 	_, _, _, err = CheckTombstoneFile(
