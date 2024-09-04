@@ -55,6 +55,9 @@ func (rt RuntimeFilterMessage) GetMsgTag() int32 {
 	return rt.Tag
 }
 
+func (rt RuntimeFilterMessage) Destroy() {
+}
+
 func (rt RuntimeFilterMessage) GetReceiverAddr() MessageAddress {
 	return AddrBroadCastOnCurrentCN()
 }
