@@ -19,15 +19,19 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 type objSizePolicy struct {
 	objects []*catalog.ObjectEntry
+
+	accBuf []int
 }
 
 func newObjSizePolicy() *objSizePolicy {
 	return &objSizePolicy{
 		objects: make([]*catalog.ObjectEntry, 0),
+		accBuf:  make([]int, 1),
 	}
 }
 
@@ -50,7 +54,7 @@ func (m *objSizePolicy) revise(cpu, mem int64, config *BasicPolicyConfig) ([]*ca
 
 func (m *objSizePolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
 	slices.SortFunc(m.objects, func(a, b *catalog.ObjectEntry) int {
-		return cmp.Compare(a.OriginSize(), b.OriginSize())
+		return cmp.Compare(a.Rows(), b.Rows())
 	})
 
 	n := 0
@@ -73,9 +77,35 @@ func (m *objSizePolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog.Ob
 			revisedObj = append(revisedObj, obj)
 		}
 	}
+	revisedObj = m.optimize(revisedObj)
 	return revisedObj, TaskHostDN
 }
 
 func (m *objSizePolicy) resetForTable(*catalog.TableEntry) {
 	m.objects = m.objects[:0]
+}
+
+func (m *objSizePolicy) optimize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
+	// objs are sorted by remaining rows
+	m.accBuf = m.accBuf[:1]
+	for i, obj := range objs {
+		m.accBuf = append(m.accBuf, m.accBuf[i]+obj.GetRows())
+	}
+	acc := m.accBuf
+
+	isBigGap := func(small, big int) bool {
+		if big < int(options.DefaultBlockMaxRows) {
+			return false
+		}
+		return big-small > 3*small
+	}
+
+	var i int
+	// skip merging objects with big row count gaps, 3x and more
+	for i = len(acc) - 1; i > 1 && isBigGap(acc[i-1], acc[i]); i-- {
+	}
+
+	objs = objs[:i]
+
+	return objs
 }

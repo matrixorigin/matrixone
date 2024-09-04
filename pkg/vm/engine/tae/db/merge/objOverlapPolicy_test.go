@@ -1,7 +1,22 @@
+// Copyright 2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package merge
 
 import (
 	"github.com/stretchr/testify/require"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -40,7 +55,7 @@ func TestObjOverlap(t *testing.T) {
 
 	// empty policy
 	policy := newObjOverlapPolicy()
-	objs, kind := policy.revise(0, 100, defaultBasicConfig)
+	objs, kind := policy.revise(0, math.MaxInt64, defaultBasicConfig)
 	require.Equal(t, 0, len(objs))
 	require.Equal(t, TaskHostDN, kind)
 
@@ -51,7 +66,7 @@ func TestObjOverlap(t *testing.T) {
 	entry2 := newSortedTestObjectEntry(3, 4, overlapSizeThreshold)
 	policy.onObject(entry1)
 	policy.onObject(entry2)
-	objs, kind = policy.revise(0, 100, defaultBasicConfig)
+	objs, kind = policy.revise(0, math.MaxInt64, defaultBasicConfig)
 	require.Equal(t, 0, len(objs))
 	require.Equal(t, TaskHostDN, kind)
 
@@ -62,9 +77,9 @@ func TestObjOverlap(t *testing.T) {
 	entry4 := newSortedTestObjectEntry(2, 3, overlapSizeThreshold)
 	policy.onObject(entry3)
 	policy.onObject(entry4)
-	objs, kind = policy.revise(0, 100, defaultBasicConfig)
+	objs, kind = policy.revise(0, math.MaxInt64, defaultBasicConfig)
 	require.Equal(t, 2, len(objs))
-	require.Equal(t, TaskHostDN, kind)
+	require.Equal(t, TaskHostCN, kind)
 
 	policy.resetForTable(nil)
 
@@ -74,7 +89,7 @@ func TestObjOverlap(t *testing.T) {
 	policy.onObject(entry5)
 	policy.onObject(entry6)
 	require.Equal(t, 0, len(policy.objects))
-	objs, kind = policy.revise(0, 100, defaultBasicConfig)
+	objs, kind = policy.revise(0, math.MaxInt64, defaultBasicConfig)
 	require.Equal(t, 0, len(objs))
 	require.Equal(t, TaskHostDN, kind)
 
@@ -96,8 +111,21 @@ func TestObjOverlap(t *testing.T) {
 	policy.onObject(entry10)
 	policy.onObject(entry11)
 
-	objs, kind = policy.revise(0, 100, defaultBasicConfig)
+	objs, kind = policy.revise(0, math.MaxInt64, defaultBasicConfig)
 	require.Equal(t, 3, len(objs))
+	require.Equal(t, TaskHostCN, kind)
+
+	policy.resetForTable(nil)
+
+	// no enough memory
+	entry12 := newSortedTestObjectEntry(1, 4, overlapSizeThreshold)
+	entry13 := newSortedTestObjectEntry(2, 3, overlapSizeThreshold)
+
+	policy.onObject(entry12)
+	policy.onObject(entry13)
+
+	objs, kind = policy.revise(0, 0, defaultBasicConfig)
+	require.Equal(t, 0, len(objs))
 	require.Equal(t, TaskHostDN, kind)
 
 	policy.resetForTable(nil)

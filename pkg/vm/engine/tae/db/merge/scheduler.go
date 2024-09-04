@@ -108,10 +108,10 @@ func (m *Scheduler) OnPostTable(tableEntry *catalog.TableEntry) (err error) {
 
 	tableEntry.Stats.AddRowStat(m.tableRowCnt, m.tableRowDel)
 	// for multi-object run. determine which objects to merge based on all objects.
-	targets, kind := m.policyGroup.revise(m.executor.CPUPercent(), int64(m.executor.MemAvailBytes()))
+	targets := m.policyGroup.revise(m.executor.CPUPercent(), int64(m.executor.MemAvailBytes()))
 	for _, target := range targets {
-		if len(target) > 1 {
-			m.executor.ExecuteObjMerge(tableEntry, target, kind)
+		if len(target.objs) > 1 {
+			m.executor.ExecuteObjMerge(tableEntry, target.objs, target.kind)
 		}
 	}
 	return

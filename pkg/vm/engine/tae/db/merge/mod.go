@@ -33,6 +33,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
+type scheduleResult struct {
+	objs []*catalog.ObjectEntry
+	kind TaskHostKind
+}
+
 var StopMerge atomic.Bool
 var DisableDeltaLocMerge atomic.Bool
 

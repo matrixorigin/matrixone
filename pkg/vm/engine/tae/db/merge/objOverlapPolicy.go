@@ -52,14 +52,11 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) ([]
 		return nil, TaskHostDN
 	}
 	objs, taskHostKind := m.reviseDataObjs(config)
+	objs = controlMem(objs, mem)
 	if len(objs) > 1 {
 		return objs, taskHostKind
 	}
-	objs = controlMem(objs, mem)
-	if len(objs) < 2 {
-		return nil, TaskHostDN
-	}
-	return nil, taskHostKind
+	return nil, TaskHostDN
 }
 
 func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
@@ -122,7 +119,7 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 	if len(objs) > config.MergeMaxOneRun {
 		objs = objs[:config.MergeMaxOneRun]
 	}
-	return objs, TaskHostDN
+	return objs, TaskHostCN
 }
 
 func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry) {

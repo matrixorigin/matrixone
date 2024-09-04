@@ -192,15 +192,18 @@ func (m *policyGroup) onObject(obj *catalog.ObjectEntry) {
 	}
 }
 
-func (m *policyGroup) revise(cpu, mem int64) ([][]*catalog.ObjectEntry, TaskHostKind) {
-	targets := make([][]*catalog.ObjectEntry, 0)
+func (m *policyGroup) revise(cpu, mem int64) []scheduleResult {
+	targets := make([]scheduleResult, 0)
 	for _, p := range m.policies {
-		objs, _ := p.revise(cpu, mem, m.basicConfig)
+		objs, kind := p.revise(cpu, mem, m.basicConfig)
 		if len(objs) > 1 {
-			targets = append(targets, objs)
+			targets = append(targets, scheduleResult{
+				objs: objs,
+				kind: kind,
+			})
 		}
 	}
-	return targets, TaskHostDN
+	return targets
 }
 
 func (m *policyGroup) resetForTable(tbl *catalog.TableEntry) {
