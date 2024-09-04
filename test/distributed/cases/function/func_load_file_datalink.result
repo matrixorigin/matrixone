@@ -1,8 +1,8 @@
 select load_file(cast('file://$resources/file_test/normal.txt' as datalink));
-load_file(cast(file:///Users/arjunsunilkumar/GolandProjects/matrixone/test/distributed/resources/file_test/normal.txt as datalink))
+load_file(cast(file:///Users/eric/github/mo-tester/../matrixone/test/distributed/resources/file_test/normal.txt as datalink))
 Hello world!
 select load_file(cast('file://$resources/file_test/normal.txt?offset=0&size=3' as datalink));
-load_file(cast(file:///Users/arjunsunilkumar/GolandProjects/matrixone/test/distributed/resources/file_test/normal.txt?offset=0&size=3 as datalink))
+load_file(cast(file:///Users/eric/github/mo-tester/../matrixone/test/distributed/resources/file_test/normal.txt?offset=0&size=3 as datalink))
 Hel
 create table t1(a int, b datalink);
 insert into t1 values(1, "wrong datalink url");
@@ -21,3 +21,11 @@ a    load_file(b)
 2    Hello world!
 3    Hel
 4    Hello world!
+create stage filestage URL='file://$resources/file_test/';
+select load_file(cast('stage://filestage/normal.txt' as datalink));
+load_file(cast(stage://filestage/normal.txt as datalink))
+Hello world!
+select load_file(cast('stage://filestage/normal.txt?offset=0&size=3' as datalink));
+load_file(cast(stage://filestage/normal.txt?offset=0&size=3 as datalink))
+Hel
+drop stage filestage;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package types
+package function
 
 import (
 	"reflect"
@@ -34,33 +34,29 @@ func TestParseDatalink(t *testing.T) {
 			data:          "file:///a/b/c/1.txt",
 			wantMoUrl:     "/a/b/c/1.txt",
 			wantUrlParams: []int{0, -1},
-			wantFileExt:   ".txt",
 		},
 		{
 			name:          "Test2 - File",
 			data:          "file:///a/b/c/1.txt?offset=1&size=2",
 			wantMoUrl:     "/a/b/c/1.txt",
 			wantUrlParams: []int{1, 2},
-			wantFileExt:   ".txt",
 		},
 		{
 			name:          "Test3 - File",
 			data:          "file:///a/b/c/1.txt?offset=1",
 			wantMoUrl:     "/a/b/c/1.txt",
 			wantUrlParams: []int{1, -1},
-			wantFileExt:   ".txt",
 		},
 		{
 			name:          "Test4 - File",
 			data:          "file:///a/b/c/1.txt?size=2",
 			wantMoUrl:     "/a/b/c/1.txt",
 			wantUrlParams: []int{0, 2},
-			wantFileExt:   ".txt",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got1, got2, got3, err := ParseDatalink(tt.data)
+			got1, got2, err := ParseDatalink(tt.data, nil)
 			if err != nil {
 				t.Errorf("ParseDatalink() error = %v", err)
 			}
@@ -69,9 +65,6 @@ func TestParseDatalink(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got2, tt.wantUrlParams) {
 				t.Errorf("ParseDatalink() = %v, want %v", got2, tt.wantUrlParams)
-			}
-			if !reflect.DeepEqual(got3, tt.wantFileExt) {
-				t.Errorf("ParseDatalink() = %v, want %v", got3, tt.wantFileExt)
 			}
 		})
 	}

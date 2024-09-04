@@ -24,7 +24,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"math"
 	"runtime"
@@ -33,6 +32,8 @@ import (
 	"sync"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/RoaringBitmap/roaring"
 	"golang.org/x/exp/constraints"
@@ -591,7 +592,7 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		filePath := util.UnsafeBytesToString(_filePath)
 		fs := proc.GetFileService()
 
-		moUrl, offsetSize, ext, err := types.ParseDatalink(filePath)
+		moUrl, offsetSize, err := ParseDatalink(filePath, proc)
 		if err != nil {
 			return err
 		}
@@ -607,18 +608,6 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			return err
 		}
 
-		var contentBytes []byte
-		switch ext {
-		case ".csv", ".txt":
-			contentBytes = fileBytes
-			//nothing to do.
-		default:
-			return moerr.NewInvalidInputf(proc.Ctx, "unsupported file extension: %s", ext)
-		}
-
-		if len(fileBytes) > 65536 /*blob size*/ {
-			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
-		}
 		if len(fileBytes) == 0 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -626,7 +615,7 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			return nil
 		}
 
-		if err = rs.AppendBytes(contentBytes, false); err != nil {
+		if err = rs.AppendBytes(fileBytes, false); err != nil {
 			return err
 		}
 	}

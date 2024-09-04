@@ -23,3 +23,12 @@ insert into t1 values(4, 'file://$resources/file_test/normal.txt?offset=0');
 insert into t1 values(5, 'file://$resources/file_test/normal.txt?offset=0&size=-100');
 
 select a, load_file(b) from t1;
+
+-- stage tests
+create stage filestage URL='file://$resources/file_test/';
+
+-- 1. call datalink directly in load_file function
+select load_file(cast('stage://filestage/normal.txt' as datalink));
+select load_file(cast('stage://filestage/normal.txt?offset=0&size=3' as datalink));
+
+drop stage filestage;
