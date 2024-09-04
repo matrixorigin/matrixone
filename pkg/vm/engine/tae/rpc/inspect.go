@@ -725,10 +725,6 @@ func (c *infoArg) Run() error {
 		b.WriteRune('\n')
 		// b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.obj.GetObjectData().GetDeltaPersistedTS().ToString()))
 		r, reason := c.obj.GetObjectData().PrepareCompactInfo()
-		rows, err := c.obj.GetObjectData().Rows()
-		if err != nil {
-			logutil.Warnf("get object rows failed, obj: %v, err %v", c.obj.ID().String(), err)
-		}
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
 		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.obj.GetObjectData().PPString(c.verbose, 0, "", c.blkn)))
 
