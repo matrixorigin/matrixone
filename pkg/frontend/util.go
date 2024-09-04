@@ -1204,7 +1204,7 @@ func (ui *UserInput) getSqlSourceType(i int) string {
 }
 
 const (
-	issue3482SqlPrefix    = "load data local infile '/data/customer/sutpc_001/data_csv"
+	issue3482SqlPrefix    = "load data local infile"
 	issue3482SqlPrefixLen = len(issue3482SqlPrefix)
 )
 
@@ -1220,7 +1220,7 @@ func (ui *UserInput) isIssue3482Sql() bool {
 	if sqlLen <= issue3482SqlPrefixLen {
 		return false
 	}
-	return strings.HasPrefix(sql, issue3482SqlPrefix)
+	return strings.HasPrefix(strings.ToLower(sql), issue3482SqlPrefix)
 }
 
 func unboxExprStr(ctx context.Context, expr tree.Expr) (string, error) {
