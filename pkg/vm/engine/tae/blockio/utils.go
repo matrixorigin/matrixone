@@ -18,6 +18,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -71,7 +72,6 @@ func GetTombstonesByBlockId(
 	return
 }
 
-/*
 func FindTombstonesOfBlock(
 	ctx context.Context,
 	blockId objectio.Blockid,
@@ -115,7 +115,6 @@ func findTombstoneOfXXX(
 	)
 	return
 }
-*/
 
 func CheckTombstoneFile(
 	ctx context.Context,

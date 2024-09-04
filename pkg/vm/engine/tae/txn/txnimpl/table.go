@@ -178,72 +178,57 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 		return
 	}
 	id := tbl.entry.AsCommonID()
-	// transfer deltaloc
-	for _, stats := range tbl.tombstoneTable.tableSpace.stats {
-		hasConflict := false
-		for blkID := range stats.BlkCnt() {
-			loc := stats.BlockLocation(uint16(blkID), tbl.tombstoneTable.schema.BlockMaxRows)
-			vectors, closeFunc, err := blockio.LoadColumns2(
-				tbl.store.ctx,
-				[]uint16{0, 1},
-				nil,
-				tbl.store.rt.Fs.Service,
-				loc,
-				fileservice.Policy(0),
-				false,
-				nil,
-			)
-			defer closeFunc()
+	var softDeleteObjects []*catalog.ObjectEntry
+	if len(tbl.tombstoneTable.tableSpace.stats) != 0 {
+		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(tbl.store.txn.GetStartTS(), types.TS{}, ts)
+		// transfer deltaloc
+		for _, obj := range softDeleteObjects {
+			sel, err := blockio.FindTombstonesOfObject(context.TODO(), *obj.ID(), tbl.tombstoneTable.tableSpace.stats, tbl.store.rt.Fs.Service)
 			if err != nil {
 				return err
 			}
-			rowID := vectors[0].Get(0).(types.Rowid)
-			blkID, _ := rowID.Decode()
-			id.BlockID = blkID
-			if tbl.store.warChecker.HasConflict(*id.ObjectID()) {
-				// the blk has been transferd
-				continue
-			}
-			if err = tbl.store.warChecker.checkOne(
-				id,
-				ts,
-			); err == nil {
-				continue
-			}
-			// if the error is not a r-w conflict. something wrong really happened
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict) {
-				return err
-			}
-			hasConflict = true
-			var pkType *types.Type
-			for i := 0; i < vectors[0].Length(); i++ {
-				rowID := vectors[0].Get(i).(types.Rowid)
-				blkID2, offset := rowID.Decode()
-				if *blkID2.Object() != *id.ObjectID() {
-					panic(fmt.Sprintf("logic err, id.Object %v, rowID %v", id.ObjectID().String(), rowID.String()))
+			iter := sel.Iterator()
+			for iter.HasNext() {
+				statsOffset := iter.Next()
+				stats := tbl.tombstoneTable.tableSpace.stats[statsOffset]
+				for i := 0; i < int(stats.BlkCnt()); i++ {
+					loc := stats.BlockLocation(uint16(i), tbl.tombstoneTable.schema.BlockMaxRows)
+					vectors, closeFunc, err := blockio.LoadColumns2(
+						tbl.store.ctx,
+						[]uint16{0, 1},
+						nil,
+						tbl.store.rt.Fs.Service,
+						loc,
+						fileservice.Policy(0),
+						false,
+						nil,
+					)
+					defer closeFunc()
+					if err != nil {
+						return err
+					}
+					var pkType *types.Type
+					for i := 0; i < vectors[0].Length(); i++ {
+						rowID := vectors[0].Get(i).(types.Rowid)
+						blkID2, offset := rowID.Decode()
+						if *blkID2.Object() != *obj.ID() {
+							continue
+						}
+						if pkType == nil {
+							pkType = vectors[1].GetType()
+						}
+						pk := vectors[1].Get(i)
+						// try to transfer the delete node
+						// here are some possible returns
+						// nil: transferred successfully
+						// ErrTxnRWConflict: the target block was also be compacted
+						// ErrTxnWWConflict: w-w error
+						if _, err = tbl.TransferDeleteRows(id, offset, pk, pkType, phase, ts); err != nil {
+							return err
+						}
+					}
 				}
-				if pkType == nil {
-					pkType = vectors[1].GetType()
-				}
-				pk := vectors[1].Get(i)
-				// try to transfer the delete node
-				// here are some possible returns
-				// nil: transferred successfully
-				// ErrTxnRWConflict: the target block was also be compacted
-				// ErrTxnWWConflict: w-w error
-				if _, err = tbl.TransferDeleteRows(id, offset, pk, pkType, phase, ts); err != nil {
-					return err
-				}
 			}
-			// if offset == len(tbl.tombstoneTable.tableSpace.stats)-1 {
-			// 	tbl.tombstoneTable.tableSpace.stats = tbl.tombstoneTable.tableSpace.stats[:offset]
-			// } else {
-			// 	tbl.tombstoneTable.tableSpace.stats =
-			// 		append(tbl.tombstoneTable.tableSpace.stats[:offset], tbl.tombstoneTable.tableSpace.stats[offset+1:]...)
-			// }
-		}
-		if hasConflict {
-			tbl.store.warChecker.Delete(id)
 		}
 	}
 	transferd := nulls.Nulls{}
