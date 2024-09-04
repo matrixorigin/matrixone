@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"io"
 	"net/url"
 	"path"
 	"strconv"
@@ -28,6 +29,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"golang.org/x/sync/errgroup"
 
 	//"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -481,4 +483,84 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int, error) 
 	}
 
 	return moUrl, offsetSize, nil
+}
+
+type FileServiceWriter struct {
+	Reader      *io.PipeReader
+	Writer      *io.PipeWriter
+	Group       *errgroup.Group
+	Filepath    string
+	FileService fileservice.FileService
+}
+
+func NewFileServiceWriter(moPath string, proc *process.Process) (*FileServiceWriter, error) {
+
+	var readPath string
+	var err error
+
+	w := &FileServiceWriter{}
+
+	w.Filepath = moPath
+
+	w.Reader, w.Writer = io.Pipe()
+
+	w.FileService, readPath, err = fileservice.GetForETL(proc.Ctx, nil, w.Filepath)
+	if err != nil {
+		return nil, err
+	}
+
+	asyncWriteFunc := func() error {
+		vec := fileservice.IOVector{
+			FilePath: readPath,
+			Entries: []fileservice.IOEntry{
+				{
+					ReaderForWrite: w.Reader,
+					Size:           -1,
+				},
+			},
+		}
+		err := w.FileService.Write(proc.Ctx, vec)
+		if err != nil {
+			err2 := w.Reader.CloseWithError(err)
+			if err2 != nil {
+				return err2
+			}
+		}
+		return err
+	}
+
+	w.Group, _ = errgroup.WithContext(proc.Ctx)
+	w.Group.Go(asyncWriteFunc)
+
+	return w, nil
+}
+
+func (w *FileServiceWriter) Write(b []byte) (int, error) {
+	n, err := w.Writer.Write(b)
+	if err != nil {
+		err2 := w.Writer.CloseWithError(err)
+		if err2 != nil {
+			return 0, err2
+		}
+	}
+	return n, err
+}
+
+func (w *FileServiceWriter) Close() error {
+	err := w.Writer.Close()
+	if err != nil {
+		return err
+	}
+	err = w.Group.Wait()
+	if err != nil {
+		return err
+	}
+	err = w.Reader.Close()
+	if err != nil {
+		return err
+	}
+	w.Reader = nil
+	w.Writer = nil
+	w.Group = nil
+	return err
 }

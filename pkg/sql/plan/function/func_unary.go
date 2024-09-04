@@ -622,6 +622,56 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
+// WriteFileDatalink write content to file service and return number of byte written
+func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
+	contentVec := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		_filePath, null1 := filePathVec.GetStrValue(i)
+		if null1 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		filePath := util.UnsafeBytesToString(_filePath)
+
+		moUrl, _, err := ParseDatalink(filePath, proc)
+		if err != nil {
+			return err
+		}
+
+		_content, null2 := contentVec.GetStrValue(i)
+		if null2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		content := util.UnsafeBytesToString(_content)
+
+		writer, err := NewFileServiceWriter(moUrl, proc)
+		if err != nil {
+			return err
+		}
+
+		defer writer.Close()
+
+		n, err := writer.Write([]byte(content))
+		if err != nil {
+			return err
+		}
+
+		if err = rs.Append(int64(n), false); err != nil {
+			return err
+		}
+
+	}
+	return nil
+}
+
 func MoMemUsage(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if len(ivecs) != 1 {
 		return moerr.NewInvalidInput(proc.Ctx, "no mpool name")
