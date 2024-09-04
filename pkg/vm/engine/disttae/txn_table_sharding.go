@@ -108,7 +108,9 @@ func newTxnTable(
 
 	return tbl, nil
 }
-
+func (tbl *txnTableDelegate) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+	return tbl.origin.CollectChanges(ctx, from, to, mp)
+}
 func (tbl *txnTableDelegate) Stats(
 	ctx context.Context,
 	sync bool,

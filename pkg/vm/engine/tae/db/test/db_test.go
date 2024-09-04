@@ -27,6 +27,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"sort"
 
 	"github.com/panjf2000/ants/v2"
@@ -67,14 +69,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-
-	"net/http"
-	_ "net/http/pprof"
 )
-
-func init() {
-	go http.ListenAndServe("0.0.0.0:6060", nil)
-}
 
 const (
 	ModuleName               = "TAEDB"
@@ -8504,13 +8499,16 @@ func TestCollectDeletesInRange2(t *testing.T) {
 
 	txn, rel := tae.GetRelation()
 	blk := testutil.GetOneObject(rel)
-	deltaLoc, err := testutil.MockCNDeleteInS3(tae.Runtime.Fs, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData(), 0, schema, txn, []uint32{0, 1, 2, 3})
+	stats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData(),
+		0, schema, txn, []uint32{0, 1, 2, 3})
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = tae.GetRelation()
 	blk = testutil.GetOneObject(rel)
-	ok, err := rel.TryDeleteByDeltaloc(blk.Fingerprint(), deltaLoc)
+	//ok, err := rel.TryDeleteByDeltaloc(blk.Fingerprint(), deltaLoc)
+	ok, err := rel.TryDeleteByStats(blk.Fingerprint(), stats)
 	assert.True(t, ok)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -9129,13 +9127,16 @@ func TestTryDeleteByDeltaloc2(t *testing.T) {
 	obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID(), false)
 	assert.NoError(t, err)
 	_, blkOffset := id.BlockID.Offsets()
-	deltaLoc, err := testutil.MockCNDeleteInS3(tae.Runtime.Fs, obj.GetObjectData(), blkOffset, schema, txn, []uint32{offset})
+	stats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, obj.GetObjectData(), blkOffset, schema, txn, []uint32{offset})
 	assert.NoError(t, err)
+	require.False(t, stats.IsZero())
 
 	tae.MergeBlocks(true)
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	ok, err := rel.TryDeleteByDeltaloc(id, deltaLoc)
+	//ok, err := rel.TryDeleteByDeltaloc(id, deltaLoc)
+	ok, err := rel.TryDeleteByStats(id, stats)
 	assert.NoError(t, err)
 	assert.NoError(t, err)
 	assert.True(t, ok)

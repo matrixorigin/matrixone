@@ -797,6 +797,8 @@ type Relation interface {
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 
+	CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (ChangesHandle, error)
+
 	TableDefs(context.Context) ([]TableDef, error)
 
 	// Get complete tableDef information, including columns, constraints, partitions, version, comments, etc

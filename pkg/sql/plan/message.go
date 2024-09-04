@@ -78,9 +78,6 @@ func (builder *QueryBuilder) handleMessgaeFromTopToScan(nodeID int32) {
 	if orderByCol.Col.RelPos != scanNode.BindingTags[0] {
 		return
 	}
-	if scanNode.Stats.BlockNum < 64 {
-		return
-	}
 	if GetSortOrder(scanNode.TableDef, orderByCol.Col.ColPos) != 0 {
 		return
 	}

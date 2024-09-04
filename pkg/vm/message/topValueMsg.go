@@ -16,6 +16,7 @@ package message
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"strconv"
 )
 
 var _ Message = new(TopValueMessage)
@@ -43,4 +44,8 @@ func (t TopValueMessage) GetMsgTag() int32 {
 
 func (t TopValueMessage) GetReceiverAddr() MessageAddress {
 	return AddrBroadCastOnCurrentCN()
+}
+
+func (t TopValueMessage) DebugString() string {
+	return "topvalue message, tag: " + strconv.Itoa(int(t.Tag))
 }
