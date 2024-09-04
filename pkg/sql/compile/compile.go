@@ -2881,17 +2881,8 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 	}
 
 	shuffleGroups := make([]*Scope, 0, len(c.cnList))
-	//currentFirstFlag := c.anal.isFirst
 	for _, cn := range c.cnList {
-		//c.anal.isFirst = currentFirstFlag
 		scopes := c.newScopeListWithNode(plan2.GetShuffleDop(cn.Mcpu), len(ss), cn.Addr)
-		for i := range ss {
-			if isSameCN(cn.Addr, ss[i].NodeInfo.Addr) {
-				scopes[0].PreScopes = append(scopes[0].PreScopes, ss[i])
-				break
-			}
-		}
-
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
 				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
@@ -2905,6 +2896,9 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		shuffleArg := constructShuffleArgForGroup(shuffleGroups, n)
 		shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		ss[i].setRootOperator(shuffleArg)
+		if len(c.cnList) > 1 && ss[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+			ss[i] = c.newMergeScopeByCN([]*Scope{ss[i]}, ss[i].NodeInfo)
+		}
 		dispatchArg := constructDispatch(j, shuffleGroups, ss[i], n, false)
 		dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		ss[i].setRootOperator(dispatchArg)
@@ -2920,6 +2914,23 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 	}
 	c.anal.isFirst = false
 	shuffleGroups = c.compileProjection(n, c.compileRestrict(n, shuffleGroups))
+
+	//append prescopes
+	for _, cn := range c.cnList {
+		index := 0
+		for i := range shuffleGroups {
+			if isSameCN(cn.Addr, shuffleGroups[i].NodeInfo.Addr) {
+				index = i
+				break
+			}
+		}
+		for i := range ss {
+			if isSameCN(cn.Addr, ss[i].NodeInfo.Addr) {
+				shuffleGroups[index].PreScopes = append(shuffleGroups[index].PreScopes, ss[i])
+			}
+		}
+	}
+
 	return shuffleGroups
 
 }
