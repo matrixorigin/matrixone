@@ -39,7 +39,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -921,14 +920,9 @@ func (txn *Transaction) compactionBlksLocked() error {
 			}
 
 			// append the object stats to bat
-			for idx := 0; idx < len(stats); idx++ {
-				if stats[idx].IsZero() {
-					continue
-				}
-				if err = vector.AppendBytes(bat.Vecs[1], stats[idx].Marshal(),
-					false, tbl.getTxn().proc.GetMPool()); err != nil {
-					return err
-				}
+			if err = vector.AppendBytes(bat.Vecs[1], stats.Marshal(),
+				false, tbl.getTxn().proc.GetMPool()); err != nil {
+				return err
 			}
 
 			bat.SetRowCount(len(createdBlks))
@@ -984,31 +978,11 @@ func (txn *Transaction) compactionBlksLocked() error {
 func (txn *Transaction) getUncommittedS3Tombstone(
 	statsSlice *objectio.ObjectStatsSlice,
 ) (err error) {
-	txn.blockId_tn_delete_metaLoc_batch.RLock()
-	defer txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+	txn.cn_flushed_s3_tombstone_object_stats_list.RLock()
+	defer txn.cn_flushed_s3_tombstone_object_stats_list.RUnlock()
 
-	for _, bats := range txn.blockId_tn_delete_metaLoc_batch.data {
-		for _, bat := range bats {
-			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
-			for i := range vs {
-				loc, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
-				if err != nil {
-					return err
-				}
-
-				stats := objectio.ObjectStats{}
-				if err = objectio.SetObjectStatsRowCnt(&stats, loc.Rows()); err != nil {
-					return err
-				}
-				if err = objectio.SetObjectStatsBlkCnt(&stats, 1); err != nil {
-					return err
-				}
-				if err = objectio.SetObjectStatsLocation(&stats, loc[:]); err != nil {
-					return err
-				}
-				statsSlice.Append(stats[:])
-			}
-		}
+	for _, stats := range txn.cn_flushed_s3_tombstone_object_stats_list.data {
+		statsSlice.Append(stats[:])
 	}
 
 	return nil
@@ -1156,7 +1130,7 @@ func (txn *Transaction) delTransaction() {
 	txn.tableOps = nil
 	txn.databaseMap = nil
 	txn.deletedDatabaseMap = nil
-	txn.blockId_tn_delete_metaLoc_batch.data = nil
+	txn.cn_flushed_s3_tombstone_object_stats_list.data = nil
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
@@ -1295,11 +1269,6 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		batchSelectList: make(map[*batch.Batch][]int64),
 		toFreeBatches:   make(map[tableKey][]*batch.Batch),
 	}
-
-	ws.blockId_tn_delete_metaLoc_batch = struct {
-		sync.RWMutex
-		data map[types.Blockid][]*batch.Batch
-	}{data: make(map[types.Blockid][]*batch.Batch)}
 
 	ws.readOnly.Store(true)
 

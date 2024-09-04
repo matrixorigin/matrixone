@@ -49,3 +49,5 @@ select count(*) from t3;
 drop database snapshot_read;
 drop snapshot snapshot_01;
 drop snapshot snapshot_02;
+-- @ignore:1
+show snapshots;

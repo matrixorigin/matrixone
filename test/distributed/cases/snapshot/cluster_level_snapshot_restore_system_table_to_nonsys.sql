@@ -580,4 +580,6 @@ drop user role_u1, role_u2, role_u3;
 -- @session
 drop snapshot sp01;
 drop account acc01;
+-- @ignore:1
+show snapshots;
 set global enable_privilege_cache = on;
