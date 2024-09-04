@@ -103,9 +103,6 @@ func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
 	cb.bytesCacheLock.Unlock()
 
 	bat.Vecs = bat.Vecs[:0]
-	for i := range bat.Attrs {
-		bat.Attrs[i] = ""
-	}
 	bat.Attrs = bat.Attrs[:0]
 	bat.SetRowCount(0)
 
@@ -162,6 +159,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 				dst.Clean(cb.mp)
 				return nil, false, err
 			}
+			dst.Vecs[i].SetSorted(vec.GetSorted())
 
 			// range src and found the same vector.
 			for j, srcVec := range src.Vecs {
