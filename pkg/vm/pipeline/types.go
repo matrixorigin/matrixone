@@ -95,43 +95,47 @@ func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare
 	proc.Cancel()
 
 	// If the last operator of this pipeline is a RecSink Operator.
-	// this is a pipeline at the `pipeline cycle` (like: a send data to b, and b send data to a)
+	// It means this was a pipeline at the `pipeline cycle` (like: a send data to b, and b send data to a)
 	// for deal the deadlock of clean-up,
-	// we need to do a special clean logic.
-	// clean the `dispatch` first, and clean from 0 to n-1.
+	// we need to do a special clean logic for this one.
+	// clean from first operator (data-source operator) to last operator (sender operator).
 	if p.rootOp != nil && p.rootOp.OpType() == vm.Dispatch {
 		if d := p.rootOp.(*dispatch.Dispatch); d.RecSink {
-			d.Reset(proc, pipelineFailed, err)
-			if !isPrepare {
-				d.Free(proc, pipelineFailed, err)
-			}
-
-			vm.HandleAllOp(p.rootOp.GetOperatorBase().GetChildren(0), func(_ vm.Operator, op vm.Operator) error {
+			// clean operator hold memory.
+			_ = vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
 				op.Reset(proc, pipelineFailed, err)
 				return nil
 			})
-			if isPrepare {
-				vm.HandleAllOp(p.rootOp.GetOperatorBase().GetChildren(0), func(_ vm.Operator, op vm.Operator) error {
+
+			if !isPrepare {
+				_ = vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
 					op.Free(proc, pipelineFailed, err)
 					return nil
 				})
 			}
-
 			return
 		}
 	}
 
-	// clean operator hold memory.
-	vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
-		op.Reset(proc, pipelineFailed, err)
-		return nil
-	})
-
+	// for every pipeline, we clean the last operator first.
+	// and then clean from 0 to n-1.
+	if p.rootOp == nil {
+		return
+	}
+	p.rootOp.Reset(proc, pipelineFailed, err)
 	if !isPrepare {
-		vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
-			op.Free(proc, pipelineFailed, err)
+		p.rootOp.Free(proc, pipelineFailed, err)
+	}
+	if len(p.rootOp.GetOperatorBase().Children) > 0 {
+		_ = vm.HandleAllOp(p.rootOp.GetOperatorBase().GetChildren(0), func(_ vm.Operator, op vm.Operator) error {
+			op.Reset(proc, pipelineFailed, err)
 			return nil
 		})
+		if !isPrepare {
+			_ = vm.HandleAllOp(p.rootOp.GetOperatorBase().GetChildren(0), func(_ vm.Operator, op vm.Operator) error {
+				op.Free(proc, pipelineFailed, err)
+				return nil
+			})
+		}
 	}
-
 }
