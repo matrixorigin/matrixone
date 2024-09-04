@@ -20,10 +20,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -643,44 +639,6 @@ func (s *Scope) isTableScan() bool {
 	return isTableScan
 }
 
-func newParallelScope1(s *Scope, c *Compile) (*Scope, []*Scope) {
-	lenChannels := 0
-	if s.IsJoin {
-		lenChannels = 1
-	}
-
-	dispatchOp := s.RootOp
-	s.RootOp = dispatchOp.GetOperatorBase().GetChildren(0)
-	dispatchOp.GetOperatorBase().ResetChildren()
-	rs := newScope(Merge)
-	rs.NodeInfo = engine.Node{Addr: s.NodeInfo.Addr, Mcpu: 1}
-	rs.Proc = s.Proc.NewNoContextChildProc(1)
-	rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, s.NodeInfo.Mcpu)
-	rs.Proc.Reg.MergeReceivers[0].NilBatchCnt = s.NodeInfo.Mcpu
-
-	mergeOp := merge.NewArgument()
-	rs.setRootOperator(mergeOp)
-
-	rs.setRootOperator(dispatchOp)
-
-	parallelScopes := make([]*Scope, s.NodeInfo.Mcpu)
-	for i := 0; i < s.NodeInfo.Mcpu; i++ {
-		parallelScopes[i] = newScope(Normal)
-		parallelScopes[i].NodeInfo = s.NodeInfo
-		parallelScopes[i].NodeInfo.Mcpu = 1
-		parallelScopes[i].Proc = s.Proc.NewContextChildProc(lenChannels)
-		parallelScopes[i].TxnOffset = s.TxnOffset
-		parallelScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i, s.NodeInfo.Mcpu))
-
-		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[0])
-		parallelScopes[i].setRootOperator(connArg)
-	}
-
-	rs.PreScopes = parallelScopes
-	s.PreScopes = nil
-	return rs, parallelScopes
-}
-
 func newParallelScope(s *Scope, c *Compile) (*Scope, []*Scope) {
 	if s.NodeInfo.Mcpu == 1 {
 		return s, nil
@@ -688,9 +646,7 @@ func newParallelScope(s *Scope, c *Compile) (*Scope, []*Scope) {
 
 	if op, ok := s.RootOp.(*dispatch.Dispatch); ok {
 		if len(op.RemoteRegs) > 0 {
-			// dispatch to remote CN is too complicated
-			// after spool implemented, delete this
-			return newParallelScope1(s, c)
+			panic("pipeline end with dispatch should have been merged in multi CN!")
 		}
 	}
 

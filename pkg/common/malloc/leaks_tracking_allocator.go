@@ -21,7 +21,7 @@ type LeaksTrackingAllocator struct {
 }
 
 type leaksTrackingDeallocatorArgs struct {
-	stacktraceID StacktraceID
+	stacktrace Stacktrace
 }
 
 func (leaksTrackingDeallocatorArgs) As(Trait) bool {
@@ -39,7 +39,7 @@ func NewLeaksTrackingAllocator(
 
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *leaksTrackingDeallocatorArgs) {
-				ret.tracker.deallocate(args.stacktraceID)
+				ret.tracker.deallocate(args.stacktrace)
 			},
 		),
 	}
@@ -54,12 +54,12 @@ func (t *LeaksTrackingAllocator) Allocate(size uint64, hints Hints) ([]byte, Dea
 	if err != nil {
 		return nil, nil, err
 	}
-	stacktraceID := GetStacktraceID(0)
+	stacktraceID := GetStacktrace(0)
 	t.tracker.allocate(stacktraceID)
 	return slice, ChainDeallocator(
 		dec,
 		t.deallocatorPool.Get(leaksTrackingDeallocatorArgs{
-			stacktraceID: stacktraceID,
+			stacktrace: stacktraceID,
 		}),
 	), nil
 }
