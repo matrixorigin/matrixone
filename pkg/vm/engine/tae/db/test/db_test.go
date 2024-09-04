@@ -9272,7 +9272,7 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 	assert.NoError(t, txn.Commit(ctx))
 	tae.CompactBlocks(true)
 
-	txn, rel = tae.GetRelation()
+	txn, _ = tae.GetRelation()
 	deletes := &nulls.Nulls{}
 	atombstone.GetObjectData().FillBlockTombstones(
 		ctx,
