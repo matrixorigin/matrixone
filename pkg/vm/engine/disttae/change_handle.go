@@ -36,7 +36,7 @@ func (tbl *txnTable) CollectChanges(ctx context.Context, from, to types.TS, mp *
 	if err != nil {
 		return nil, err
 	}
-	return logtailreplay.NewChangesHandler(state, from, to, mp, 8192, tbl.getTxn().engine.fs, ctx), nil
+	return logtailreplay.NewChangesHandler(state, from, to, mp, 8192, tbl.getTxn().engine.fs, ctx)
 }
 
 type ChangesHandle interface {

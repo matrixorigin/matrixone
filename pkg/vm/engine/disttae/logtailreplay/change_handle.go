@@ -354,11 +354,14 @@ type ChangeHandler struct {
 	dataHandle      *baseHandle
 }
 
-func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) *ChangeHandler {
+func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) (*ChangeHandler, error) {
+	if state.minTS.Greater(&start) {
+		return nil, moerr.NewErrStaleReadNoCtx(state.minTS.ToString(), start.ToString())
+	}
 	return &ChangeHandler{
 		tombstoneHandle: NewBaseHandler(state, start, end, mp, maxRow, true, fs, ctx),
 		dataHandle:      NewBaseHandler(state, start, end, mp, maxRow, false, fs, ctx),
-	}
+	}, nil
 }
 
 func (p *ChangeHandler) Close() error {
