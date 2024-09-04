@@ -38,7 +38,7 @@ func newTrackInfo() *trackInfo {
 	}
 }
 
-func (t *LeaksTracker) allocate(id StacktraceID) {
+func (t *LeaksTracker) allocate(id Stacktrace) {
 	v, ok := t.infos.Load(id)
 	if ok {
 		info := v.(*trackInfo)
@@ -50,7 +50,7 @@ func (t *LeaksTracker) allocate(id StacktraceID) {
 	v.(*trackInfo).allocate.Add(1)
 }
 
-func (t *LeaksTracker) deallocate(id StacktraceID) {
+func (t *LeaksTracker) deallocate(id Stacktrace) {
 	v, ok := t.infos.Load(id)
 	if ok {
 		info := v.(*trackInfo)
@@ -64,7 +64,7 @@ func (t *LeaksTracker) deallocate(id StacktraceID) {
 
 func (t *LeaksTracker) ReportLeaks(w io.Writer) (leaks bool) {
 	t.infos.Range(func(k, v any) bool {
-		stacktraceID := k.(StacktraceID)
+		stacktraceID := k.(Stacktrace)
 		info := v.(*trackInfo)
 
 		allocate := info.allocate.Load()

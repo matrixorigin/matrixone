@@ -156,6 +156,20 @@ type IDGenerator interface {
 	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
 }
 
+type EngineOptions func(*Engine)
+
+func WithWorkspaceThreshold(th uint64) EngineOptions {
+	return func(e *Engine) {
+		e.workspaceThreshold = th
+	}
+}
+
+func WithInsertEntryMaxCount(th int) EngineOptions {
+	return func(e *Engine) {
+		e.insertEntryMaxCount = th
+	}
+}
+
 type Engine struct {
 	sync.RWMutex
 	service  string
@@ -168,6 +182,9 @@ type Engine struct {
 	cli      client.TxnClient
 	idGen    IDGenerator
 	tnID     string
+
+	workspaceThreshold  uint64
+	insertEntryMaxCount int
 
 	//latest catalog will be loaded from TN when engine is initialized.
 	catalog *cache.CatalogCache
@@ -266,9 +283,9 @@ type Transaction struct {
 	// notice that it's guarded by txn.Lock() and has the same lifecycle as transaction.
 	cnBlkId_Pos map[types.Blockid]Pos
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
-	blockId_tn_delete_metaLoc_batch struct {
+	cn_flushed_s3_tombstone_object_stats_list struct {
 		sync.RWMutex
-		data map[types.Blockid][]*batch.Batch
+		data []objectio.ObjectStats
 	}
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
@@ -350,6 +367,14 @@ func (b *deletedBlocks) iter(fn func(*types.Blockid, []int64) bool) {
 
 func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int64) {
 	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
+}
+
+func (txn *Transaction) StashFlushedTombstones(stats objectio.ObjectStats) {
+	txn.cn_flushed_s3_tombstone_object_stats_list.Lock()
+	defer txn.cn_flushed_s3_tombstone_object_stats_list.Unlock()
+
+	txn.cn_flushed_s3_tombstone_object_stats_list.data =
+		append(txn.cn_flushed_s3_tombstone_object_stats_list.data, stats)
 }
 
 func (txn *Transaction) Readonly() bool {

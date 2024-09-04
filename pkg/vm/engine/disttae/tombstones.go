@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
@@ -32,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
@@ -228,7 +226,7 @@ func (tomb *tombstoneData) PrefetchTombstones(
 	for i, end := 0, tomb.files.Len(); i < end; i++ {
 		stats := tomb.files.Get(i)
 		for j := 0; j < int(stats.BlkCnt()); j++ {
-			loc := catalog.BuildLocation(*stats, uint16(j), options.DefaultBlockMaxRows)
+			loc := stats.BlockLocation(uint16(j), options.DefaultBlockMaxRows)
 			if err := blockio.Prefetch(
 				srvId,
 				[]uint16{0, 1, 2},
@@ -277,16 +275,14 @@ func (tomb *tombstoneData) ApplyPersistedTombstones(
 		return
 	}
 
-	var obj logtailreplay.ObjectEntry
-	scanOp := func(onTombstone func(tombstone logtailreplay.ObjectEntry) (bool, error)) error {
-		for i, end := 0, tomb.files.Len(); i < end; i++ {
-			stats := tomb.files.Get(i)
-			obj.ObjectStats = *stats
-			if goOn, err := onTombstone(obj); err != nil || !goOn {
-				return err
-			}
+	var curr int
+	getTombstone := func() (*objectio.ObjectStats, error) {
+		if curr >= tomb.files.Len() {
+			return nil, nil
 		}
-		return nil
+		i := curr
+		curr++
+		return tomb.files.Get(i), nil
 	}
 
 	if deletedMask == nil {
@@ -294,13 +290,14 @@ func (tomb *tombstoneData) ApplyPersistedTombstones(
 		deletedMask.InitWithSize(8192)
 	}
 
-	if err = GetTombstonesByBlockId(
+	if err = blockio.GetTombstonesByBlockId(
 		ctx,
-		fs,
-		bid,
 		snapshot,
+		bid,
+		getTombstone,
 		deletedMask,
-		scanOp); err != nil {
+		fs,
+	); err != nil {
 		return nil, err
 	}
 

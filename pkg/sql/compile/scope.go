@@ -20,10 +20,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -617,6 +613,7 @@ func (s *Scope) isTableScan() bool {
 	return isTableScan
 }
 
+<<<<<<< HEAD
 func newParallelScope1(s *Scope, c *Compile) (*Scope, []*Scope) {
 	lenChannels := 0
 	if s.IsJoin {
@@ -659,6 +656,8 @@ func newParallelScope1(s *Scope, c *Compile) (*Scope, []*Scope) {
 	return rs, parallelScopes
 }
 
+=======
+>>>>>>> 2832937ab7a895a0e91303ec08c5327152d9e289
 func newParallelScope(s *Scope, c *Compile) (*Scope, []*Scope) {
 	if s.NodeInfo.Mcpu == 1 {
 		return s, nil
@@ -666,9 +665,7 @@ func newParallelScope(s *Scope, c *Compile) (*Scope, []*Scope) {
 
 	if op, ok := s.RootOp.(*dispatch.Dispatch); ok {
 		if len(op.RemoteRegs) > 0 {
-			// dispatch to remote CN is too complicated
-			// after spool implemented, delete this
-			return newParallelScope1(s, c)
+			panic("pipeline end with dispatch should have been merged in multi CN!")
 		}
 	}
 

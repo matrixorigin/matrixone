@@ -270,13 +270,15 @@ func (h *Handle) HandlePreCommitWrite(
 				Batch:        moBat,
 				PkCheck:      db.PKCheckType(pe.GetPkCheckByTn()),
 			}
+
 			if req.FileName != "" {
-				loc := req.Batch.Vecs[0]
+				col := req.Batch.Vecs[0]
 				for i := 0; i < req.Batch.RowCount(); i++ {
 					if req.Type == db.EntryInsert {
-						req.MetaLocs = append(req.MetaLocs, loc.GetStringAt(i))
+						req.MetaLocs = append(req.MetaLocs, col.GetStringAt(i))
 					} else {
-						req.DeltaLocs = append(req.DeltaLocs, loc.GetStringAt(i))
+						stats := objectio.ObjectStats(col.GetBytesAt(i))
+						req.TombstoneStats = append(req.TombstoneStats, stats)
 					}
 				}
 			}
@@ -760,55 +762,55 @@ func (h *Handle) HandleWrite(
 		}
 		rowidIdx := 0
 		pkIdx := 1
-		for _, key := range req.DeltaLocs {
-			var location objectio.Location
-			location, err = blockio.EncodeLocationFromString(key)
-			if err != nil {
-				return err
-			}
-			var ok bool
-			var vectors []containers.Vector
-			var closeFunc func()
-			//Extend lifetime of vectors is within the function.
-			//No NeedCopy. closeFunc is required after use.
-			//closeFunc is not nil.
-			vectors, closeFunc, err = blockio.LoadColumns2(
-				ctx,
-				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
-				nil,
-				h.db.Runtime.Fs.Service,
-				location,
-				fileservice.Policy(0),
-				false,
-				nil,
-			)
-			if err != nil {
-				return
-			}
-			defer closeFunc()
-			blkids := getBlkIDsFromRowids(vectors[0].GetDownstreamVector())
+
+		var (
+			ok        bool
+			loc       objectio.Location
+			vectors   []containers.Vector
+			closeFunc func()
+		)
+
+		for _, stats := range req.TombstoneStats {
 			id := tb.GetMeta().(*catalog.TableEntry).AsCommonID()
-			for blkID := range blkids {
-				id.BlockID = blkID
-			}
-			ok, err = tb.TryDeleteByDeltaloc(id, location)
-			if err != nil {
-				return
-			}
-			if ok {
+			id.SetObjectID(stats.ObjectName().ObjectId())
+
+			if ok, err = tb.TryDeleteByStats(id, stats); err != nil {
+				logutil.Errorf("try delete by stats faild: %s, %v", stats.String(), err)
+				return err
+			} else if ok {
 				continue
 			}
-			logutil.Warnf("blk %v try delete by deltaloc failed", id.BlockID.String())
-			rowIDVec := vectors[0]
-			defer rowIDVec.Close()
-			pkVec := vectors[1]
-			//defer pkVec.Close()
-			if err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
-				return
+
+			logutil.Errorf("try delete by stats faild: %s, try to delete by row id and pk",
+				stats.String())
+
+			for i := range stats.BlkCnt() {
+				loc = stats.BlockLocation(uint16(i), options.DefaultBlockMaxRows)
+				vectors, closeFunc, err = blockio.LoadColumns2(
+					ctx,
+					[]uint16{uint16(rowidIdx), uint16(pkIdx)},
+					nil,
+					h.db.Runtime.Fs.Service,
+					loc,
+					fileservice.Policy(0),
+					false,
+					nil,
+				)
+
+				if err = tb.DeleteByPhyAddrKeys(vectors[0], vectors[1]); err != nil {
+					logutil.Errorf("delete by phyaddr keys faild: %s, %s, [idx]%d, %v",
+						stats.String(), loc.String(), i, err)
+
+					closeFunc()
+					return err
+				}
+
+				closeFunc()
 			}
 		}
 		return
 	}
+
 	if len(req.Batch.Vecs) != 2 {
 		panic(fmt.Sprintf("req.Batch.Vecs length is %d, should be 2", len(req.Batch.Vecs)))
 	}
