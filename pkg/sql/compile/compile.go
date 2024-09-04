@@ -3275,21 +3275,10 @@ func (c *Compile) compileOnduplicateKey(n *plan.Node, ss []*Scope) ([]*Scope, er
 // the same block to one and the same CN to perform
 // the deletion operators.
 func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope) *Scope {
-	// Todo: implemet delete merge
-	ss2 := make([]*Scope, 0, len(ss))
-	// ends := make([]*Scope, 0, len(ss))
-	for _, s := range ss {
-		if s.IsEnd {
-			// ends = append(ends, s)
-			continue
-		}
-		ss2 = append(ss2, s)
-	}
-
-	rs := make([]*Scope, 0, len(ss2))
-	uuids := make([]uuid.UUID, 0, len(ss2))
+	rs := make([]*Scope, 0, len(ss))
+	uuids := make([]uuid.UUID, 0, len(ss))
 	var uid uuid.UUID
-	for i := 0; i < len(ss2); i++ {
+	for i := 0; i < len(ss); i++ {
 		rs = append(rs, c.newEmptyMergeScope())
 		uid, _ = uuid.NewV7()
 		uuids = append(uuids, uid)
@@ -3297,8 +3286,8 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope) *Scop
 
 	// for every scope, it should dispatch its
 	// batch to other cn
-	for i := 0; i < len(ss2); i++ {
-		constructDeleteDispatchAndLocal(i, rs, ss2, uuids, c)
+	for i := 0; i < len(ss); i++ {
+		constructDeleteDispatchAndLocal(i, rs, ss, uuids, c)
 	}
 
 	for i := range rs {
