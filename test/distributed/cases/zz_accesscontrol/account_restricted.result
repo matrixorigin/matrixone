@@ -78,7 +78,7 @@ Tables_in_res_test
 r_test
 show create table r_test;
 Table    Create Table
-r_test    CREATE TABLE `r_test` (\n  `c1` INT DEFAULT NULL,\n  `c2` VARCHAR(20) DEFAULT NULL,\n  UNIQUE KEY `ui` (`c1`)\n)
+r_test    CREATE TABLE `r_test` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(20) DEFAULT NULL,\n  UNIQUE KEY `ui` (`c1`)\n)
 show columns from r_test;
 Field    Type    Null    Key    Default    Extra    Comment
 c1    INT(32)    YES    UNI    null        
@@ -258,7 +258,7 @@ Tables_in_res_test
 r_test
 show create table r_test;
 Table    Create Table
-r_test    CREATE TABLE `r_test` (\n  `c1` INT DEFAULT NULL,\n  `c2` VARCHAR(20) DEFAULT NULL,\n  UNIQUE KEY `ui` (`c1`)\n)
+r_test    CREATE TABLE `r_test` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(20) DEFAULT NULL,\n  UNIQUE KEY `ui` (`c1`)\n)
 show columns from r_test;
 Field    Type    Null    Key    Default    Extra    Comment
 c1    INT(32)    YES    UNI    null        
