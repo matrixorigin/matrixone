@@ -3078,7 +3078,7 @@ func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	c.anal.isFirst = false
 
 	if n.Stats.Cost*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && !arg.DeleteCtx.CanTruncate {
-		rs := c.newDeleteMergeScope(arg, ss)
+		rs := c.newDeleteMergeScope(arg, ss, n)
 		rs.Magic = MergeDelete
 
 		mergeDeleteArg := mergedelete.NewArgument().
@@ -3274,20 +3274,23 @@ func (c *Compile) compileOnduplicateKey(n *plan.Node, ss []*Scope) ([]*Scope, er
 // CN, so we need to transfer the rows from the
 // the same block to one and the same CN to perform
 // the deletion operators.
-func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope) *Scope {
-	rs := make([]*Scope, 0, len(ss))
-	uuids := make([]uuid.UUID, 0, len(ss))
-	var uid uuid.UUID
+func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, n *plan.Node) *Scope {
 	for i := 0; i < len(ss); i++ {
-		rs = append(rs, c.newEmptyMergeScope())
-		uid, _ = uuid.NewV7()
-		uuids = append(uuids, uid)
+		if ss[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
 	}
 
-	// for every scope, it should dispatch its
-	// batch to other cn
+	rs := make([]*Scope, len(ss))
 	for i := 0; i < len(ss); i++ {
-		constructDeleteDispatchAndLocal(i, rs, ss, uuids, c)
+		rs[i] = newScope(Remote)
+		rs[i].NodeInfo = engine.Node{Addr: ss[i].NodeInfo.Addr, Mcpu: 1}
+		rs[i].PreScopes = append(rs[i].PreScopes, ss[i])
+		rs[i].Proc = c.proc.NewNoContextChildProc(len(ss))
+	}
+
+	for i := 0; i < len(ss); i++ {
+		constructDispatch(i, rs, ss[i], n, false)
 	}
 
 	for i := range rs {
