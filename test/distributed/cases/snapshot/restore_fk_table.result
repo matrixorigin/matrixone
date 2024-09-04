@@ -112,7 +112,7 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `deptno` INT UNSIGNED NOT NULL COMMENT '部门编号',\n  `dname` VARCHAR(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` VARCHAR(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
 use test02;
 select * from table01;
 col1    col2    col3    col4    col5    col6
@@ -226,7 +226,7 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `deptno` INT UNSIGNED NOT NULL COMMENT '部门编号',\n  `dname` VARCHAR(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` VARCHAR(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
 use test02;
 select * from table01;
 col1    col2    col3    col4    col5    col6

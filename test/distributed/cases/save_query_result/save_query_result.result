@@ -10,10 +10,10 @@ col6 text
 set save_query_result = on;
 show create table test_table;
 Table    Create Table
-test_table    CREATE TABLE `test_table` (\n  `col1` INT DEFAULT NULL,\n  `col2` FLOAT DEFAULT NULL,\n  `col3` BOOL DEFAULT NULL,\n  `col4` DATE DEFAULT NULL,\n  `col5` VARCHAR(255) DEFAULT NULL,\n  `col6` TEXT DEFAULT NULL\n)
+test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` float DEFAULT NULL,\n  `col3` bool DEFAULT NULL,\n  `col4` date DEFAULT NULL,\n  `col5` varchar(255) DEFAULT NULL,\n  `col6` text DEFAULT NULL\n)
 select * from result_scan(last_query_id()) as u;
 table    create table
-test_table    CREATE TABLE `test_table` (\n  `col1` INT DEFAULT NULL,\n  `col2` FLOAT DEFAULT NULL,\n  `col3` BOOL DEFAULT NULL,\n  `col4` DATE DEFAULT NULL,\n  `col5` VARCHAR(255) DEFAULT NULL,\n  `col6` TEXT DEFAULT NULL\n)
+test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` float DEFAULT NULL,\n  `col3` bool DEFAULT NULL,\n  `col4` date DEFAULT NULL,\n  `col5` varchar(255) DEFAULT NULL,\n  `col6` text DEFAULT NULL\n)
 show tables;
 Tables_in_save_query_result
 test_table
