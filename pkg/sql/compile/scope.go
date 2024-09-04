@@ -252,10 +252,6 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
-	if len(s.PreScopes) == 0 {
-		return s.ParallelRun(c)
-	}
-
 	var wg sync.WaitGroup
 	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
