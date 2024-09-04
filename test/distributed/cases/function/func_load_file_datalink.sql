@@ -26,13 +26,15 @@ select a, load_file(b) from t1;
 
 -- stage tests
 create stage filestage URL='file://$resources/file_test/';
+create stage outfilestage URL='file://$resources/into_outfile/';
 
 -- 1. call datalink directly in load_file function
 select load_file(cast('stage://filestage/normal.txt' as datalink));
 select load_file(cast('stage://filestage/normal.txt?offset=0&size=3' as datalink));
 
 -- 2. write datalink to file
-select save_file(cast('stage://filestage/into_outfile/datalink/1.txt' as datalink), 'this is a test.');
-select load_file(cast('stage://filestage/into_outfile/datalink/1.txt' as datalink));
+select save_file(cast('stage://outfilestage/datalink/1.txt' as datalink), 'this is a test.');
+select load_file(cast('stage://outfilestage/datalink/1.txt' as datalink));
 
 drop stage filestage;
+drop stage outfilestage;
