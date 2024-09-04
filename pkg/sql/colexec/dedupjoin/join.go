@@ -70,7 +70,10 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			dedupJoin.build(analyze, proc)
+			err = dedupJoin.build(analyze, proc)
+			if err != nil {
+				return result, err
+			}
 
 			ctr.state = Probe
 			result, err = dedupJoin.Children[0].Call(proc)
@@ -129,16 +132,20 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (dedupJoin *DedupJoin) build(anal process.Analyze, proc *process.Process) {
+func (dedupJoin *DedupJoin) build(anal process.Analyze, proc *process.Process) (err error) {
 	ctr := &dedupJoin.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
-	ctr.mp = message.ReceiveJoinMap(dedupJoin.JoinMapTag, dedupJoin.IsShuffle, dedupJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	ctr.mp, err = message.ReceiveJoinMap(dedupJoin.JoinMapTag, dedupJoin.IsShuffle, dedupJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	if err != nil {
+		return
+	}
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	ctr.batches = ctr.mp.GetBatches()
 	ctr.batchRowCount = ctr.mp.GetRowCount()
+	return
 }
 
 func (ctr *container) sendResult(ap *DedupJoin, proc *process.Process, analyze process.Analyze, _ bool, isLast bool) (bool, error) {
