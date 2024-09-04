@@ -113,3 +113,5 @@ drop database fk_test2;
 -- @session
 
 drop account acc1;
+-- @ignore:1
+show snapshots;

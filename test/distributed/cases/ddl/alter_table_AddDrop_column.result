@@ -39,7 +39,7 @@ alter table add01 add column col8 int not null;
 alter table add01 add column col9 int not null first;
 show create table add01;
 Table    Create Table
-add01    CREATE TABLE `add01` (\n  `col9` INT NOT NULL,\n  `col1` INT NOT NULL AUTO_INCREMENT,\n  `col2` VARCHAR(30) NOT NULL,\n  `col2_3` VARCHAR(20) DEFAULT NULL,\n  `col3` VARCHAR(20) NOT NULL,\n  `col4` VARCHAR(4) NOT NULL,\n  `col5` INT NOT NULL,\n  `col7` VARCHAR(30) NOT NULL,\n  `col8` INT NOT NULL,\n  PRIMARY KEY (`col1`)\n)
+add01    CREATE TABLE `add01` (\n  `col9` int NOT NULL,\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` varchar(30) NOT NULL,\n  `col2_3` varchar(20) DEFAULT NULL,\n  `col3` varchar(20) NOT NULL,\n  `col4` varchar(4) NOT NULL,\n  `col5` int NOT NULL,\n  `col7` varchar(30) NOT NULL,\n  `col8` int NOT NULL,\n  PRIMARY KEY (`col1`)\n)
 insert into add01 values(1,3,'nihao','hei','hu','jj',2,'varchar',1);
 insert into add01 values(2,3,'nihao',null,'hu','jj',2,'varchar',1);
 Duplicate entry '3' for key 'col1'
@@ -47,7 +47,7 @@ insert into add01 values(3,4,'nihao','hi','hu','jj',2,'varchar',null);
 constraint violation: Column 'col8' cannot be null
 show create table add01;
 Table    Create Table
-add01    CREATE TABLE `add01` (\n  `col9` INT NOT NULL,\n  `col1` INT NOT NULL AUTO_INCREMENT,\n  `col2` VARCHAR(30) NOT NULL,\n  `col2_3` VARCHAR(20) DEFAULT NULL,\n  `col3` VARCHAR(20) NOT NULL,\n  `col4` VARCHAR(4) NOT NULL,\n  `col5` INT NOT NULL,\n  `col7` VARCHAR(30) NOT NULL,\n  `col8` INT NOT NULL,\n  PRIMARY KEY (`col1`)\n)
+add01    CREATE TABLE `add01` (\n  `col9` int NOT NULL,\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` varchar(30) NOT NULL,\n  `col2_3` varchar(20) DEFAULT NULL,\n  `col3` varchar(20) NOT NULL,\n  `col4` varchar(4) NOT NULL,\n  `col5` int NOT NULL,\n  `col7` varchar(30) NOT NULL,\n  `col8` int NOT NULL,\n  PRIMARY KEY (`col1`)\n)
 select * from add01;
 col9    col1    col2    col2_3    col3    col4    col5    col7    col8
 0    1    数据库    null    shujuku    abcd    1        0
@@ -62,7 +62,7 @@ alter table add02 add column col3 datetime primary key;
 constraint violation: Column 'col3' cannot be null
 show create table add02;
 Table    Create Table
-add02    CREATE TABLE `add02` (\n  `col1` INT DEFAULT NULL,\n  `col2` BINARY(1) DEFAULT NULL\n)
+add02    CREATE TABLE `add02` (\n  `col1` int DEFAULT NULL,\n  `col2` binary(1) DEFAULT NULL\n)
 drop table add02;
 drop table if exists add03;
 create table add03(col1 double,col2 float);
@@ -70,31 +70,31 @@ insert into add03 values(21321.3213,239243.0);
 alter table add03 add column colf int first;
 show create table add03;
 Table    Create Table
-add03    CREATE TABLE `add03` (\n  `colf` INT DEFAULT NULL,\n  `col1` DOUBLE DEFAULT NULL,\n  `col2` FLOAT DEFAULT NULL\n)
+add03    CREATE TABLE `add03` (\n  `colf` int DEFAULT NULL,\n  `col1` double DEFAULT NULL,\n  `col2` float DEFAULT NULL\n)
 alter table add03 add column cola binary;
 show create table add03;
 Table    Create Table
-add03    CREATE TABLE `add03` (\n  `colf` INT DEFAULT NULL,\n  `col1` DOUBLE DEFAULT NULL,\n  `col2` FLOAT DEFAULT NULL,\n  `cola` BINARY(1) DEFAULT NULL\n)
+add03    CREATE TABLE `add03` (\n  `colf` int DEFAULT NULL,\n  `col1` double DEFAULT NULL,\n  `col2` float DEFAULT NULL,\n  `cola` binary(1) DEFAULT NULL\n)
 alter table add03 add column colm varbinary(10) after col1;
 show create table add03;
 Table    Create Table
-add03    CREATE TABLE `add03` (\n  `colf` INT DEFAULT NULL,\n  `col1` DOUBLE DEFAULT NULL,\n  `colm` VARBINARY(10) DEFAULT NULL,\n  `col2` FLOAT DEFAULT NULL,\n  `cola` BINARY(1) DEFAULT NULL\n)
+add03    CREATE TABLE `add03` (\n  `colf` int DEFAULT NULL,\n  `col1` double DEFAULT NULL,\n  `colm` varbinary(10) DEFAULT NULL,\n  `col2` float DEFAULT NULL,\n  `cola` binary(1) DEFAULT NULL\n)
 alter table add03 drop column colm;
 show create table add03;
 Table    Create Table
-add03    CREATE TABLE `add03` (\n  `colf` INT DEFAULT NULL,\n  `col1` DOUBLE DEFAULT NULL,\n  `col2` FLOAT DEFAULT NULL,\n  `cola` BINARY(1) DEFAULT NULL\n)
+add03    CREATE TABLE `add03` (\n  `colf` int DEFAULT NULL,\n  `col1` double DEFAULT NULL,\n  `col2` float DEFAULT NULL,\n  `cola` binary(1) DEFAULT NULL\n)
 drop table add03;
 drop table if exists add02;
 create table add02(f1 int);
 alter table add02 add column f2 datetime not null, add column f21 date not null;
 show create table add02;
 Table    Create Table
-add02    CREATE TABLE `add02` (\n  `f1` INT DEFAULT NULL,\n  `f2` DATETIME NOT NULL,\n  `f21` DATE NOT NULL\n)
+add02    CREATE TABLE `add02` (\n  `f1` int DEFAULT NULL,\n  `f2` datetime NOT NULL,\n  `f21` date NOT NULL\n)
 insert into add02 values(1,'2000-01-01','2000-01-01');
 alter table add02 add column f3 int not null;
 show create table add02;
 Table    Create Table
-add02    CREATE TABLE `add02` (\n  `f1` INT DEFAULT NULL,\n  `f2` DATETIME NOT NULL,\n  `f21` DATE NOT NULL,\n  `f3` INT NOT NULL\n)
+add02    CREATE TABLE `add02` (\n  `f1` int DEFAULT NULL,\n  `f2` datetime NOT NULL,\n  `f21` date NOT NULL,\n  `f3` int NOT NULL\n)
 alter table add02 add column f3 date not null;
 Duplicate column name 'f3'
 alter table add02 add column f4 datetime not null default '2002-02-02',add column f41 date not null default '2002-02-02';
@@ -122,7 +122,7 @@ insert into drop01 values('ahsekafe',1,2);
 insert into drop01 values('efuiwojq',23,23);
 show create table drop01;
 Table    Create Table
-drop01    CREATE TABLE `drop01` (\n  `a` TEXT DEFAULT NULL,\n  `id` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL\n)
+drop01    CREATE TABLE `drop01` (\n  `a` text DEFAULT NULL,\n  `id` int DEFAULT NULL,\n  `b` int DEFAULT NULL\n)
 alter table drop01 drop column a, add column c text first;
 select * from drop01;
 c    id    b
@@ -130,7 +130,7 @@ null    1    2
 null    23    23
 show create table drop01;
 Table    Create Table
-drop01    CREATE TABLE `drop01` (\n  `c` TEXT DEFAULT NULL,\n  `id` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL\n)
+drop01    CREATE TABLE `drop01` (\n  `c` text DEFAULT NULL,\n  `id` int DEFAULT NULL,\n  `b` int DEFAULT NULL\n)
 drop table drop01;
 drop table if exists drop01;
 create table drop01(col1 int);
@@ -164,19 +164,19 @@ insert into truncate01 values(3,18294234);
 truncate truncate01;
 show create table truncate01;
 Table    Create Table
-truncate01    CREATE TABLE `truncate01` (\n  `col1` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+truncate01    CREATE TABLE `truncate01` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
 select * from truncate01;
 col1    col2
 alter table truncate01 add column col3 int unsigned after col1 ;
 alter table truncate01 add column colF binary first;
 show create table truncate01;
 Table    Create Table
-truncate01    CREATE TABLE `truncate01` (\n  `colF` BINARY(1) DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col3` INT UNSIGNED DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+truncate01    CREATE TABLE `truncate01` (\n  `colF` binary(1) DEFAULT NULL,\n  `col1` int DEFAULT NULL,\n  `col3` int unsigned DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
 alter table truncate01 drop column col3;
 alter table truncate01 drop column col1;
 show create table truncate01;
 Table    Create Table
-truncate01    CREATE TABLE `truncate01` (\n  `colF` BINARY(1) DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+truncate01    CREATE TABLE `truncate01` (\n  `colF` binary(1) DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
 drop table truncate01;
 drop table if exists T1;
 create table t1(id int PRIMARY KEY,name VARCHAR(255),age int);
@@ -194,7 +194,7 @@ Carol    23
 Dora    29
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `name` VARCHAR(255) DEFAULT NULL,\n  `age` INT DEFAULT NULL,\n  UNIQUE KEY `idx` (`name`)\n)
+t1    CREATE TABLE `t1` (\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  UNIQUE KEY `idx` (`name`)\n)
 drop table t1;
 drop table if exists index01;
 create table index01(id int,name varchar(20),unique index(id));
@@ -202,7 +202,7 @@ insert into index01 values(1,'323414');
 alter table index01 drop column id;
 show create table index01;
 Table    Create Table
-index01    CREATE TABLE `index01` (\n  `name` VARCHAR(20) DEFAULT NULL\n)
+index01    CREATE TABLE `index01` (\n  `name` varchar(20) DEFAULT NULL\n)
 drop table index01;
 drop table if exists index02;
 create table index02(col1 int,col2 varchar(20),col3 char(20), index(col1,col2));
@@ -210,14 +210,14 @@ alter table index02 drop column col1;
 alter table index02 drop column col2;
 show create table index02;
 Table    Create Table
-index02    CREATE TABLE `index02` (\n  `col3` CHAR(20) DEFAULT NULL\n)
+index02    CREATE TABLE `index02` (\n  `col3` char(20) DEFAULT NULL\n)
 drop table index02;
 drop table if exists index03;
 create table index03(col1 int,col2 binary(10),col3 text,unique key(col2));
 alter table index03 drop column col2;
 show create table index03;
 Table    Create Table
-index03    CREATE TABLE `index03` (\n  `col1` INT DEFAULT NULL,\n  `col3` TEXT DEFAULT NULL\n)
+index03    CREATE TABLE `index03` (\n  `col1` int DEFAULT NULL,\n  `col3` text DEFAULT NULL\n)
 drop table index03;
 drop table if exists cluster01;
 create table cluster01(a int, b int, c varchar(10)) cluster by(a,b,c);
@@ -238,10 +238,10 @@ col3 int primary key,
 constraint `c1` foreign key(col1) references foreign01(col1));
 show create table foreign01;
 Table    Create Table
-foreign01    CREATE TABLE `foreign01` (\n  `col1` INT NOT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+foreign01    CREATE TABLE `foreign01` (\n  `col1` int NOT NULL,\n  `col2` varchar(20) DEFAULT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` bigint DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n  `col1` INT DEFAULT NULL,\n  `col2` INT DEFAULT NULL,\n  `col3` INT NOT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n  `col1` int DEFAULT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` int NOT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into foreign01 values(1,'sfhuwe',1,1);
 insert into foreign01 values(2,'37829901k3d',2,2);
 insert into foreign02 values(1,1,1);
@@ -278,7 +278,7 @@ alter table test01 add column col4 binary after col2;
 alter table test01 drop column col1;
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col3` TEXT DEFAULT NULL,\n  `col2` CHAR(1) DEFAULT NULL,\n  `col4` BINARY(1) DEFAULT NULL\n)
+test01    CREATE TABLE `test01` (\n  `col3` text DEFAULT NULL,\n  `col2` char(1) DEFAULT NULL,\n  `col4` binary(1) DEFAULT NULL\n)
 select * from test01;
 col3    col2    col4
 null    a    null
@@ -288,7 +288,7 @@ drop table if exists tp5;
 create table tp5 (col1 INT, col2 CHAR(5), col3 DATE) partition by LINEAR key ALGORITHM = 1 (col3) PARTITIONS 5;
 show create table tp5;
 Table    Create Table
-tp5    CREATE TABLE `tp5` (\n  `col1` INT DEFAULT NULL,\n  `col2` CHAR(5) DEFAULT NULL,\n  `col3` DATE DEFAULT NULL\n) partition by linear key algorithm = 1 (col3) partitions 5
+tp5    CREATE TABLE `tp5` (\n  `col1` int DEFAULT NULL,\n  `col2` char(5) DEFAULT NULL,\n  `col3` date DEFAULT NULL\n) partition by linear key algorithm = 1 (col3) partitions 5
 alter table tp5 drop column col1;
 invalid input: can't add/drop column for partition table now
 alter table tp5 add column col4 int;
@@ -338,7 +338,7 @@ alter table transaction01 add column colf int first;
 rollback;
 show create table transaction01;
 Table    Create Table
-transaction01    CREATE TABLE `transaction01` (\n  `c` INT NOT NULL,\n  `d` INT DEFAULT NULL,\n  PRIMARY KEY (`c`)\n)
+transaction01    CREATE TABLE `transaction01` (\n  `c` int NOT NULL,\n  `d` int DEFAULT NULL,\n  PRIMARY KEY (`c`)\n)
 drop table transaction01;
 drop table if exists transaction03;
 create table transaction03 (c int primary key,d int);
@@ -351,7 +351,7 @@ alter table transaction03 add column decimal after c;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 50 near " after c;";
 show create table transaction03;
 Table    Create Table
-transaction03    CREATE TABLE `transaction03` (\n  `c` INT NOT NULL,\n  `d` INT DEFAULT NULL,\n  PRIMARY KEY (`c`)\n)
+transaction03    CREATE TABLE `transaction03` (\n  `c` int NOT NULL,\n  `d` int DEFAULT NULL,\n  PRIMARY KEY (`c`)\n)
 use isolation;
 invalid database isolation
 show create table transaction03;
@@ -363,7 +363,7 @@ show create table transaction03;
 not connect to a database
 show create table transaction03;
 Table    Create Table
-transaction03    CREATE TABLE `transaction03` (\n  `c` INT NOT NULL,\n  `d` INT DEFAULT NULL,\n  PRIMARY KEY (`c`)\n)
+transaction03    CREATE TABLE `transaction03` (\n  `c` int NOT NULL,\n  `d` int DEFAULT NULL,\n  PRIMARY KEY (`c`)\n)
 select * from transaction03;
 c    d
 1    1
@@ -391,7 +391,7 @@ a    b    c
 2    aaaa    2020-09-08 00:00:00
 show create table conflict_test;
 Table    Create Table
-conflict_test    CREATE TABLE `conflict_test` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` VARCHAR(25) NOT NULL,\n  `c` DATETIME DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `bstr` (`b`),\n  KEY `cdate` (`c`)\n)
+conflict_test    CREATE TABLE `conflict_test` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` varchar(25) NOT NULL,\n  `c` datetime DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `bstr` (`b`),\n  KEY `cdate` (`c`)\n)
 drop table conflict_test;
 drop table if exists update01;
 create table update01(col1 int, col2 int, col3 varchar(20));
@@ -409,7 +409,7 @@ col1    col1_2    col2    col3    col5
 2    null    3    329382    null
 show create table update01;
 Table    Create Table
-update01    CREATE TABLE `update01` (\n  `col1` INT DEFAULT NULL,\n  `col1_2` BINARY(1) DEFAULT NULL,\n  `col2` INT DEFAULT NULL,\n  `col3` VARCHAR(20) DEFAULT NULL,\n  `col5` BLOB DEFAULT NULL\n)
+update01    CREATE TABLE `update01` (\n  `col1` int DEFAULT NULL,\n  `col1_2` binary(1) DEFAULT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` varchar(20) DEFAULT NULL,\n  `col5` blob DEFAULT NULL\n)
 insert into update01 values(1,'1',3,'ew83u829d3qcefq','q3829ff2e3qe');
 insert into update01 values(2,'3',6,'3214()_)_)','00');
 select * from update01;
@@ -460,13 +460,13 @@ alter table rename03 rename to rename_03;
 alter table rename04 rename to rename04;
 show create table rename_02;
 Table    Create Table
-rename_02    CREATE TABLE `rename_02` (\n  `a` INT NOT NULL,\n  `b` VARCHAR(20) DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+rename_02    CREATE TABLE `rename_02` (\n  `a` int NOT NULL,\n  `b` varchar(20) DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show create table rename_03;
 Table    Create Table
-rename_03    CREATE TABLE `rename_03` (\n  `col1` INT DEFAULT NULL,\n  `col2` CHAR(1) DEFAULT NULL\n)
+rename_03    CREATE TABLE `rename_03` (\n  `col1` int DEFAULT NULL,\n  `col2` char(1) DEFAULT NULL\n)
 show create table rename04;
 Table    Create Table
-rename04    CREATE TABLE `rename04` (\n  `col1` BINARY(1) DEFAULT NULL,\n  `col2` TEXT DEFAULT NULL\n)
+rename04    CREATE TABLE `rename04` (\n  `col1` binary(1) DEFAULT NULL,\n  `col2` text DEFAULT NULL\n)
 drop table rename_02;
 drop table rename_03;
 drop table rename04;
@@ -562,7 +562,7 @@ a    b    c
 2    aaaa    2020-09-08 00:00:00
 show create table conflict_test;
 Table    Create Table
-conflict_test    CREATE TABLE `conflict_test` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` VARCHAR(25) NOT NULL,\n  `c` DATETIME DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `bstr` (`b`),\n  KEY `cdate` (`c`)\n)
+conflict_test    CREATE TABLE `conflict_test` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` varchar(25) NOT NULL,\n  `c` datetime DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `bstr` (`b`),\n  KEY `cdate` (`c`)\n)
 drop table conflict_test;
 drop table if exists `t+1`;
 drop table if exists `t+2`;
@@ -570,7 +570,7 @@ create table `t+1` (c1 INT);
 alter table  `t+1` rename to `t+2`;
 create table `t+1` (c1 INT);
 alter table  `t+1` rename to `t+2`;
-ExpectedDup
+table t+2 already exists
 drop table `t+1`;
 drop table `t+2`;
 drop table if exists `#sql1`;
@@ -580,19 +580,19 @@ create table `@0023sql2` (c1 INT);
 alter table `#sql1` rename to `@0023sql1`;
 show create table `@0023sql1`;
 Table    Create Table
-@0023sql1    CREATE TABLE `@0023sql1` (\n  `c1` INT DEFAULT NULL\n)
+@0023sql1    CREATE TABLE `@0023sql1` (\n  `c1` int DEFAULT NULL\n)
 alter table `@0023sql2` rename to `#sql2`;
 show create table `#sql2`;
 Table    Create Table
-#sql2    CREATE TABLE `#sql2` (\n  `c1` INT DEFAULT NULL\n)
+#sql2    CREATE TABLE `#sql2` (\n  `c1` int DEFAULT NULL\n)
 alter table `@0023sql1` rename to `#sql-1`;
 alter table `#sql2` rename to `@0023sql-2`;
 show create table `#sql-1`;
 Table    Create Table
-#sql-1    CREATE TABLE `#sql-1` (\n  `c1` INT DEFAULT NULL\n)
+#sql-1    CREATE TABLE `#sql-1` (\n  `c1` int DEFAULT NULL\n)
 show create table `@0023sql-2`;
 Table    Create Table
-@0023sql-2    CREATE TABLE `@0023sql-2` (\n  `c1` INT DEFAULT NULL\n)
+@0023sql-2    CREATE TABLE `@0023sql-2` (\n  `c1` int DEFAULT NULL\n)
 insert into `#sql-1` values (1);
 insert into `@0023sql-2` values (2);
 select * from `#sql-1`;
@@ -613,41 +613,41 @@ create table test02(a int);
 alter table test02 comment = "comment_1";
 show create table test02;
 Table    Create Table
-test02    CREATE TABLE `test02` (\n  `a` INT DEFAULT NULL\n) COMMENT='comment_1'
+test02    CREATE TABLE `test02` (\n  `a` int DEFAULT NULL\n) COMMENT='comment_1'
 alter table test02 comment = "comment_2", comment = "comment_3";
 show create table test02;
 Table    Create Table
-test02    CREATE TABLE `test02` (\n  `a` INT DEFAULT NULL\n) COMMENT='comment_3'
+test02    CREATE TABLE `test02` (\n  `a` int DEFAULT NULL\n) COMMENT='comment_3'
 drop table test02;
 drop table if exists test03;
 create table test03(a int);
 alter table test03 comment = '';
 show create table test03;
 Table    Create Table
-test03    CREATE TABLE `test03` (\n  `a` INT DEFAULT NULL\n)
+test03    CREATE TABLE `test03` (\n  `a` int DEFAULT NULL\n)
 alter table test03 comment = "comment_2", comment = "comment_3";
 show create table test03;
 Table    Create Table
-test03    CREATE TABLE `test03` (\n  `a` INT DEFAULT NULL\n) COMMENT='comment_3'
+test03    CREATE TABLE `test03` (\n  `a` int DEFAULT NULL\n) COMMENT='comment_3'
 drop table test03;
 drop table if exists test04;
 create table test04(a int);
 alter table test04 comment = '数据库Database！';
 show create table test04;
 Table    Create Table
-test04    CREATE TABLE `test04` (\n  `a` INT DEFAULT NULL\n) COMMENT='数据库Database！'
+test04    CREATE TABLE `test04` (\n  `a` int DEFAULT NULL\n) COMMENT='数据库Database！'
 alter table test04 comment = "3721  98479824309284093254324532";
 show create table test04;
 Table    Create Table
-test04    CREATE TABLE `test04` (\n  `a` INT DEFAULT NULL\n) COMMENT='3721  98479824309284093254324532'
+test04    CREATE TABLE `test04` (\n  `a` int DEFAULT NULL\n) COMMENT='3721  98479824309284093254324532'
 alter table test04 comment = "#$%^&*(%$R%TYGHJHUWHDIU^&W%^&WWsUIHFW&W数据库*&()()()__";
 show create table test04;
 Table    Create Table
-test04    CREATE TABLE `test04` (\n  `a` INT DEFAULT NULL\n) COMMENT='#$%^&*(%$R%TYGHJHUWHDIU^&W%^&WWsUIHFW&W数据库*&()()()__'
+test04    CREATE TABLE `test04` (\n  `a` int DEFAULT NULL\n) COMMENT='#$%^&*(%$R%TYGHJHUWHDIU^&W%^&WWsUIHFW&W数据库*&()()()__'
 alter table test04 comment = "47382749823409243f4oir32434",comment = "f73hjkrew473982u4f32g54jjUIHFW&W数据库*&()()()__";
 show create table test04;
 Table    Create Table
-test04    CREATE TABLE `test04` (\n  `a` INT DEFAULT NULL\n) COMMENT='f73hjkrew473982u4f32g54jjUIHFW&W数据库*&()()()__'
+test04    CREATE TABLE `test04` (\n  `a` int DEFAULT NULL\n) COMMENT='f73hjkrew473982u4f32g54jjUIHFW&W数据库*&()()()__'
 drop table test04;
 drop table if exists t1;
 create table t1 (i int unsigned not null auto_increment primary key);
@@ -657,11 +657,11 @@ alter table t1 add column c char(10);
 alter table t1 comment = "no comment";
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `i` INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  `c` CHAR(10) DEFAULT NULL,\n  PRIMARY KEY (`i`)\n) COMMENT='no comment'
+t1    CREATE TABLE `t1` (\n  `i` int unsigned NOT NULL AUTO_INCREMENT,\n  `c` char(10) DEFAULT NULL,\n  PRIMARY KEY (`i`)\n) COMMENT='no comment'
 alter table t1 comment = 'this is a comment';
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `i` INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  `c` CHAR(10) DEFAULT NULL,\n  PRIMARY KEY (`i`)\n) COMMENT='this is a comment'
+t1    CREATE TABLE `t1` (\n  `i` int unsigned NOT NULL AUTO_INCREMENT,\n  `c` char(10) DEFAULT NULL,\n  PRIMARY KEY (`i`)\n) COMMENT='this is a comment'
 drop table t1;
 drop role if exists role_r1;
 drop user if exists role_u1;
@@ -685,7 +685,7 @@ no such table test.rename01
 alter table newRename rename to `newRename`;
 show create table newRename;
 Table    Create Table
-newrename    CREATE TABLE `newrename` (\n  `col1` INT DEFAULT NULL\n)
+newrename    CREATE TABLE `newrename` (\n  `col1` int DEFAULT NULL\n)
 drop table newRename;
 drop role role_r1;
 drop user role_u1;
@@ -721,7 +721,7 @@ insert into enum01 values (1);
 alter table enum01 add column name enum ('A','B','C');
 show create table enum01;
 Table    Create Table
-enum01    CREATE TABLE `enum01` (\n  `id` INT DEFAULT NULL,\n  `name` ENUM('A','B','C') DEFAULT NULL\n)
+enum01    CREATE TABLE `enum01` (\n  `id` int DEFAULT NULL,\n  `name` enum('A','B','C') DEFAULT NULL\n)
 desc enum01;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    YES        null        
@@ -739,7 +739,7 @@ id    name
 alter table enum01 drop column name;
 show create table enum01;
 Table    Create Table
-enum01    CREATE TABLE `enum01` (\n  `id` INT DEFAULT NULL\n)
+enum01    CREATE TABLE `enum01` (\n  `id` int DEFAULT NULL\n)
 select * from enum01;
 id
 1

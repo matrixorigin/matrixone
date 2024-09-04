@@ -20,6 +20,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
@@ -305,6 +311,88 @@ func TestNewParallelScope(t *testing.T) {
 	}
 }
 
+func TestBroadcastJoinScope(t *testing.T) {
+	testCompile := &Compile{
+		proc: testutil.NewProcess(),
+	}
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001"}, engine.Node{Addr: "cn2:6001"}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &analyzeModule{}
+	probe1 := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection})
+	probe1.NodeInfo.Addr = "cn1:6001"
+	probe1.NodeInfo.Mcpu = 4
+	probe2 := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection})
+	probe2.NodeInfo.Addr = "cn2:6001"
+	probe2.NodeInfo.Mcpu = 4
+	build1 := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection})
+	build1.NodeInfo.Addr = "cn1:6001"
+	build1.NodeInfo.Mcpu = 4
+
+	n := &plan.Node{
+		Stats: &plan.Stats{
+			BlockNum:     10000,
+			HashmapStats: &plan.HashMapStats{},
+		},
+	}
+
+	rs, buildScopes := testCompile.newBroadcastJoinScopeList([]*Scope{probe1, probe2}, []*Scope{build1}, n, false)
+	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.Merge}))
+	require.NoError(t, checkScopeWithExpectedList(rs[1], []vm.OpType{vm.Merge}))
+	require.NoError(t, checkScopeWithExpectedList(buildScopes[0], []vm.OpType{vm.Merge}))
+	require.NoError(t, checkScopeWithExpectedList(buildScopes[1], []vm.OpType{vm.Merge}))
+}
+
+func TestCompileExternValueScan(t *testing.T) {
+	testCompile := &Compile{
+		proc: testutil.NewProcess(),
+	}
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001"}, engine.Node{Addr: "cn2:6001"}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &analyzeModule{qry: &plan.Query{}}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: "test.csv",
+		},
+	}
+	n := &plan.Node{
+		TableDef: &plan.TableDef{},
+	}
+	rs, err := testCompile.compileExternValueScan(n, param, true)
+	require.NoError(t, err)
+	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.Merge}))
+	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[0], []vm.OpType{vm.External, vm.Dispatch}))
+}
+
+func TestCompileExternScanParallel(t *testing.T) {
+	testCompile := &Compile{
+		proc: testutil.NewProcess(),
+	}
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &analyzeModule{qry: &plan.Query{}}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: "test.csv",
+		},
+	}
+	n := &plan.Node{
+		TableDef: &plan.TableDef{},
+	}
+	rs, err := testCompile.compileExternScanParallel(n, param, []string{"a", "b"}, []int64{100000, 100000}, true)
+	require.NoError(t, err)
+	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.Merge}))
+	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[0], []vm.OpType{vm.External, vm.Dispatch}))
+}
+
 func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {
 	simpleFakeArgument := func(id vm.OpType) vm.Operator {
 		switch id {
@@ -332,6 +420,8 @@ func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpTy
 			return rightanti.NewArgument()
 		case vm.Right:
 			return right.NewArgument()
+		case vm.Merge:
+			return merge.NewArgument()
 		default:
 			panic("unsupported for ut.")
 		}

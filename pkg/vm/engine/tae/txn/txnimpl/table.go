@@ -182,7 +182,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 	for _, stats := range tbl.tombstoneTable.tableSpace.stats {
 		hasConflict := false
 		for blkID := range stats.BlkCnt() {
-			loc := catalog.BuildLocation(stats, uint16(blkID), tbl.dataTable.schema.BlockMaxRows)
+			loc := stats.BlockLocation(uint16(blkID), tbl.tombstoneTable.schema.BlockMaxRows)
 			vectors, closeFunc, err := blockio.LoadColumns2(
 				tbl.store.ctx,
 				[]uint16{0, 1},
@@ -215,11 +215,15 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 				return err
 			}
 			hasConflict = true
+			var pkType *types.Type
 			for i := 0; i < vectors[0].Length(); i++ {
 				rowID := vectors[0].Get(i).(types.Rowid)
 				blkID2, offset := rowID.Decode()
 				if *blkID2.Object() != *id.ObjectID() {
 					panic(fmt.Sprintf("logic err, id.Object %v, rowID %v", id.ObjectID().String(), rowID.String()))
+				}
+				if pkType == nil {
+					pkType = vectors[1].GetType()
 				}
 				pk := vectors[1].Get(i)
 				// try to transfer the delete node
@@ -227,7 +231,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 				// nil: transferred successfully
 				// ErrTxnRWConflict: the target block was also be compacted
 				// ErrTxnWWConflict: w-w error
-				if _, err = tbl.TransferDeleteRows(id, offset, pk, phase, ts); err != nil {
+				if _, err = tbl.TransferDeleteRows(id, offset, pk, pkType, phase, ts); err != nil {
 					return err
 				}
 			}
@@ -248,6 +252,8 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 		return
 	}
 	deletes := tbl.tombstoneTable.tableSpace.node.data
+	pkVec := deletes.GetVectorByName(catalog.AttrPKVal)
+	var pkType *types.Type
 	for i := 0; i < deletes.Length(); i++ {
 		rowID := deletes.GetVectorByName(catalog.AttrRowID).Get(i).(types.Rowid)
 		id.SetObjectID(rowID.BorrowObjectID())
@@ -271,14 +277,17 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 		}
 		transferd.Add(uint64(i))
 		tbl.store.warChecker.Delete(id)
-		pk := deletes.GetVectorByName(catalog.AttrPKVal).Get(i)
+		pk := pkVec.Get(i)
+		if pkType == nil {
+			pkType = pkVec.GetType()
+		}
 
 		// try to transfer the delete node
 		// here are some possible returns
 		// nil: transferred successfully
 		// ErrTxnRWConflict: the target block was also be compacted
 		// ErrTxnWWConflict: w-w error
-		if _, err = tbl.TransferDeleteRows(id, rowOffset, pk, phase, ts); err != nil {
+		if _, err = tbl.TransferDeleteRows(id, rowOffset, pk, pkType, phase, ts); err != nil {
 			return
 		}
 	}
@@ -305,8 +314,10 @@ func (tbl *txnTable) recurTransferDelete(
 	id *common.ID, // the block had been deleted and committed.
 	row uint32,
 	pk any,
+	pkType *types.Type,
 	depth int,
-	ts types.TS) error {
+	ts types.TS,
+) error {
 
 	var page2 *common.PinnedItem[*model.TransferHashPage]
 
@@ -335,8 +346,7 @@ func (tbl *txnTable) recurTransferDelete(
 	//otherwise recursively transfer the deletes to the next target block.
 	err := tbl.store.warChecker.checkOne(newID, ts)
 	if err == nil {
-		pkType := tbl.dataTable.schema.GetSingleSortKeyType()
-		pkVec := tbl.store.rt.VectorPool.Small.GetVector(&pkType)
+		pkVec := tbl.store.rt.VectorPool.Small.GetVector(pkType)
 		pkVec.Append(pk, false)
 		defer pkVec.Close()
 		//transfer the deletes to the target block.
@@ -377,6 +387,7 @@ func (tbl *txnTable) recurTransferDelete(
 		newID,
 		offset,
 		pk,
+		pkType,
 		depth+1,
 		ts)
 }
@@ -385,8 +396,10 @@ func (tbl *txnTable) TransferDeleteRows(
 	id *common.ID,
 	row uint32,
 	pk any,
+	pkType *types.Type,
 	phase string,
-	ts types.TS) (transferred bool, err error) {
+	ts types.TS,
+) (transferred bool, err error) {
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
 	common.DoIfInfoEnabled(func() {
 		logutil.Info("[Start]",
@@ -421,7 +434,7 @@ func (tbl *txnTable) TransferDeleteRows(
 	// logutil.Infof("TransferDeleteNode deletenode %s", node.DeleteNode.(*updates.DeleteNode).GeneralVerboseString())
 	page := pinned.Item()
 	depth := 0
-	if err = tbl.recurTransferDelete(memo, page, id, row, pk, depth, ts); err != nil {
+	if err = tbl.recurTransferDelete(memo, page, id, row, pk, pkType, depth, ts); err != nil {
 		return
 	}
 
@@ -667,7 +680,11 @@ func (tbl *txnTable) AddObjsWithMetaLoc(ctx context.Context, stats containers.Ve
 		return tbl.addObjsWithMetaLoc(ctx, s, false)
 	}, nil)
 }
-func (tbl *txnTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.ObjectStats, isTombstone bool) (err error) {
+func (tbl *txnTable) addObjsWithMetaLoc(
+	ctx context.Context,
+	stats objectio.ObjectStats,
+	isTombstone bool,
+) (err error) {
 	if isTombstone {
 		if tbl.tombstoneTable == nil {
 			tbl.tombstoneTable = newBaseTable(tbl.entry.GetLastestSchema(true), true, tbl)
@@ -678,7 +695,9 @@ func (tbl *txnTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obje
 	}
 }
 
-func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
+func (tbl *txnTable) GetByFilter(
+	ctx context.Context, filter *handle.Filter,
+) (id *common.ID, offset uint32, err error) {
 	if filter.Op != handle.FilterEq {
 		panic("logic error")
 	}
@@ -726,7 +745,9 @@ func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id
 	return
 }
 
-func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, col uint16, skipCheckDelete bool) (v any, isNull bool, err error) {
+func (tbl *txnTable) GetValue(
+	ctx context.Context, id *common.ID, row uint32, col uint16, skipCheckDelete bool,
+) (v any, isNull bool, err error) {
 	if tbl.dataTable.tableSpace != nil && id.ObjectID().Eq(*tbl.dataTable.tableSpace.entry.ID()) {
 		return tbl.dataTable.tableSpace.GetValue(row, col)
 	}
@@ -741,7 +762,9 @@ func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, co
 	_, blkIdx := id.BlockID.Offsets()
 	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(false), blkIdx, int(row), int(col), skipCheckDelete, common.WorkspaceAllocator)
 }
-func (tbl *txnTable) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStats, isTombstone bool) error {
+func (tbl *txnTable) UpdateObjectStats(
+	id *common.ID, stats *objectio.ObjectStats, isTombstone bool,
+) error {
 	meta, err := tbl.entry.GetObjectByID(id.ObjectID(), isTombstone)
 	if err != nil {
 		return err
@@ -841,7 +864,12 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool) (err
 // DedupSnapByPK 1. checks whether these primary keys exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending data into this table.
-func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, dedupAfterSnapshotTS bool, isTombstone bool) (err error) {
+func (tbl *txnTable) DedupSnapByPK(
+	ctx context.Context,
+	keys containers.Vector,
+	dedupAfterSnapshotTS bool,
+	isTombstone bool,
+) (err error) {
 	r := trace.StartRegion(ctx, "DedupSnapByPK")
 	defer r.End()
 	rowIDs, err := tbl.getBaseTable(isTombstone).getRowsByPK(ctx, keys, dedupAfterSnapshotTS, true)
@@ -870,7 +898,12 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 	}
 	return
 }
-func (tbl *txnTable) findDeletes(ctx context.Context, rowIDs containers.Vector, dedupAfterSnapshotTS, isCommitting bool) (err error) {
+func (tbl *txnTable) findDeletes(
+	ctx context.Context,
+	rowIDs containers.Vector,
+	dedupAfterSnapshotTS,
+	isCommitting bool,
+) (err error) {
 	pkType := rowIDs.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
 	if err = index.BatchUpdateZM(keysZM, rowIDs.GetDownstreamVector()); err != nil {
@@ -921,7 +954,11 @@ func (tbl *txnTable) findDeletes(ctx context.Context, rowIDs containers.Vector, 
 //  2. it is called when txn dequeues from preparing queue.
 //  3. we should make this function run quickly as soon as possible.
 //     TODO::it would be used to do deduplication with the logtail.
-func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM, isTombstone bool) (err error) {
+func (tbl *txnTable) DoPrecommitDedupByPK(
+	pks containers.Vector,
+	pksZM index.ZM,
+	isTombstone bool,
+) (err error) {
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
 		var rowIDs containers.Vector
 		rowIDs, err = tbl.getBaseTable(isTombstone).preCommitGetRowsByPK(tbl.store.ctx, pks)
@@ -1430,7 +1467,8 @@ func (tbl *txnTable) createTombstoneBatch(
 	}
 	return bat
 }
-func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
+
+func (tbl *txnTable) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
 	if tbl.tombstoneTable == nil {
 		tbl.tombstoneTable = newBaseTable(tbl.entry.GetLastestSchema(true), true, tbl)
 	}
@@ -1442,41 +1480,12 @@ func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Locati
 		return
 	}
 	tbl.store.warChecker.Insert(obj.GetMeta().(*catalog.ObjectEntry))
-	stats := tbl.deltaloc2ObjectStat(deltaloc, tbl.store.rt.Fs.Service)
 	err = tbl.addObjsWithMetaLoc(tbl.store.ctx, stats, true)
 	if err == nil {
 		tbl.tombstoneTable.tableSpace.objs = append(tbl.tombstoneTable.tableSpace.objs, id.ObjectID())
 		ok = true
 	}
 	return
-}
-
-func (tbl *txnTable) deltaloc2ObjectStat(loc objectio.Location, fs fileservice.FileService) objectio.ObjectStats {
-	stats := *objectio.NewObjectStatsWithObjectID(loc.Name().ObjectId(), false, true, true)
-	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &loc, false, fs)
-	if err != nil {
-		panic(err)
-	}
-	objectio.SetObjectStatsExtent(&stats, loc.Extent())
-	objectDataMeta := objMeta.MustDataMeta()
-	objectio.SetObjectStatsRowCnt(&stats, objectDataMeta.BlockHeader().Rows())
-	objectio.SetObjectStatsBlkCnt(&stats, objectDataMeta.BlockCount())
-	objectio.SetObjectStatsSize(&stats, loc.Extent().End()+objectio.FooterSize)
-	schema := tbl.tombstoneTable.schema
-	originSize := uint32(0)
-	for _, col := range schema.ColDefs {
-		if col.IsPhyAddr() {
-			continue
-		}
-		colmata := objectDataMeta.MustGetColumn(uint16(col.SeqNum))
-		originSize += colmata.Location().OriginSize()
-	}
-	objectio.SetObjectStatsOriginSize(&stats, originSize)
-	if schema.HasSortKey() {
-		col := schema.GetSingleSortKey()
-		objectio.SetObjectStatsSortKeyZoneMap(&stats, objectDataMeta.MustGetColumn(col.SeqNum).ZoneMap())
-	}
-	return stats
 }
 
 func (tbl *txnTable) FillInWorkspaceDeletes(blkID types.Blockid, deletes **nulls.Nulls) error {

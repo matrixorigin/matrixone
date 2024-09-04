@@ -17,6 +17,7 @@ package objectio
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -116,6 +117,14 @@ func (des *ObjectStats) ObjectShortName() *ObjectNameShort {
 
 func (des *ObjectStats) ObjectLocation() Location {
 	return BuildLocation(des.ObjectName(), des.Extent(), 0, 0)
+}
+
+func (des *ObjectStats) BlockLocation(blk uint16, maxRows uint32) Location {
+	row := maxRows
+	if blk == uint16(des.BlkCnt())-1 {
+		row = des.Rows() - uint32(blk)*maxRows
+	}
+	return BuildLocation(des.ObjectName(), des.Extent(), row, blk)
 }
 
 func (des *ObjectStats) ObjectName() ObjectName {

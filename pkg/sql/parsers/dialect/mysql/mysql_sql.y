@@ -140,6 +140,7 @@ import (
 
     partitionOption *tree.PartitionOption
     clusterByOption *tree.ClusterByOption
+    retentionOption *tree.RetentionOption
     partitionBy *tree.PartitionBy
     windowSpec *tree.WindowSpec
     frameClause *tree.FrameClause
@@ -342,6 +343,7 @@ import (
 %token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
+%token <str> RETENTION PERIOD
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
@@ -1204,27 +1206,7 @@ snapshot_restore_stmt:
             ToAccountName: tree.Identifier($9.Compare()),
         }
     }
-|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident TO ACCOUNT ident
-    {
-        $$ = &tree.RestoreSnapShot{
-            Level: tree.RESTORELEVELDATABASE,
-            AccountName: tree.Identifier($3.Compare()),
-            DatabaseName: tree.Identifier($5.Compare()),
-            SnapShotName: tree.Identifier($8.Compare()),
-            ToAccountName: tree.Identifier($11.Compare()),
-        }
-    }
-|   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident TO ACCOUNT ident
-    {
-        $$ = &tree.RestoreSnapShot{
-            Level: tree.RESTORELEVELTABLE,
-            AccountName: tree.Identifier($3.Compare()),
-            DatabaseName: tree.Identifier($5.Compare()),
-            TableName: tree.Identifier($7.Compare()),
-            SnapShotName: tree.Identifier($10.Compare()),
-            ToAccountName: tree.Identifier($13.Compare()),
-        }
-    }
+
 
 restore_pitr_stmt:
    RESTORE FROM PITR ident STRING
@@ -8412,6 +8394,15 @@ table_option:
     {
         var Preperties = $3
         $$ = tree.NewTableOptionProperties(Preperties)
+    }
+|   WITH RETENTION PERIOD INTEGRAL time_unit
+    {
+        var retentionPeriod = uint64($4.(int64))
+        var retentionUnit = strings.ToLower($5)
+        $$ = tree.NewRetentionOption(
+             retentionPeriod,
+             retentionUnit,
+        )
     }
 
 properties_list:

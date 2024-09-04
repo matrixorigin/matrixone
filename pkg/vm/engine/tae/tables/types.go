@@ -52,6 +52,7 @@ type NodeT interface {
 		rowIDs containers.Vector,
 		isCommitting bool,
 		checkWWConflict bool,
+		skipCommittedBeforeTxnForAblk bool,
 		mp *mpool.MPool,
 	) (err error)
 

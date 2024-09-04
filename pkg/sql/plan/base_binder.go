@@ -1638,6 +1638,28 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
 
+	if name == "round" || name == "ceil" || name == "ceiling" || name == "floor" && argsType[0].IsDecimal() {
+		if len(argsType) == 1 {
+			returnType.Scale = 0
+		} else if lit, ok := args[1].Expr.(*plan.Expr_Lit); ok {
+			if litval, ok := lit.Lit.GetValue().(*plan.Literal_I64Val); ok {
+				scale := litval.I64Val
+				if scale > 38 {
+					scale = 38
+				}
+				if scale < 0 {
+					scale = 0
+				}
+				if returnType.Scale > int32(scale) {
+					returnType.Scale = int32(scale)
+					if returnType.Scale < 0 {
+						returnType.Scale = 0
+					}
+				}
+			}
+		}
+	}
+
 	if function.GetFunctionIsAggregateByName(name) {
 		if constExpr := args[0].GetLit(); constExpr != nil && constExpr.Isnull {
 			args[0].Typ = makePlan2Type(&returnType)

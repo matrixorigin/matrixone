@@ -45,9 +45,9 @@ const (
 	LoggerNameMetricStorage = "MetricStorageUsage"
 
 	StorageUsageCronTask     = "StorageUsage"
-	StorageUsageTaskCronExpr = ExprEvery05Min
+	StorageUsageTaskCronExpr = ExprEvery01Min
 
-	ExprEvery05Min = "0 */1 * * * *"
+	ExprEvery01Min = "0 */1 * * * *"
 	ParamSeparator = " "
 )
 
