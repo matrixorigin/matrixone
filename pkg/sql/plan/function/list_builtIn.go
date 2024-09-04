@@ -6540,12 +6540,20 @@ var supportedOthersBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedDirectlyTypeMatch,
 
-		Overloads: fulltext_expand_overload(),
+		Overloads: fulltext_expand_overload(types.T_bool),
+	},
+	{
+		functionId: FULLTEXT_MATCH_SCORE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: fulltext_expand_overload(types.T_float32),
 	},
 }
 
 // fulltext_match supports varchar, char and text.  Expand the function signature to all possible combination of input types
-func fulltext_expand_overload() []overload {
+func fulltext_expand_overload(rettyp types.T) []overload {
 
 	overloads := make([]overload, 0)
 	supported_types := []types.T{types.T_varchar, types.T_char, types.T_text}
@@ -6559,10 +6567,14 @@ func fulltext_expand_overload() []overload {
 			overloadId: curr,
 			args:       append(prefix_types, t),
 			retType: func(parameters []types.Type) types.Type {
-				return types.T_bool.ToType()
+				return rettyp.ToType()
 			},
 			newOp: func() executeLogicOfOverload {
-				return fullTextMatch
+				if rettyp == types.T_bool {
+					return fullTextMatch
+				} else {
+					return fullTextMatchScore
+				}
 			},
 		}
 
@@ -6577,10 +6589,14 @@ func fulltext_expand_overload() []overload {
 				overloadId: curr,
 				args:       append(prefix_types, []types.T{t1, t2}...),
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
+					return rettyp.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return fullTextMatch
+					if rettyp == types.T_bool {
+						return fullTextMatch
+					} else {
+						return fullTextMatchScore
+					}
 				},
 			}
 
@@ -6597,10 +6613,14 @@ func fulltext_expand_overload() []overload {
 					overloadId: curr,
 					args:       append(prefix_types, []types.T{t1, t2, t3}...),
 					retType: func(parameters []types.Type) types.Type {
-						return types.T_bool.ToType()
+						return rettyp.ToType()
 					},
 					newOp: func() executeLogicOfOverload {
-						return fullTextMatch
+						if rettyp == types.T_bool {
+							return fullTextMatch
+						} else {
+							return fullTextMatchScore
+						}
 					},
 				}
 
