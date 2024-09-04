@@ -63,6 +63,13 @@ func (jm *JoinMap) SetRowCount(cnt int64) {
 	jm.rowcnt = cnt
 }
 
+func (jm *JoinMap) GetRefCount() int64 {
+	if jm == nil {
+		return 0
+	}
+	return atomic.LoadInt64(&jm.refCnt)
+}
+
 func (jm *JoinMap) GetRowCount() int64 {
 	if jm == nil {
 		return 0
@@ -161,7 +168,7 @@ func (t JoinMapMsg) DebugString() string {
 	}
 	if t.JoinMapPtr != nil {
 		buf.WriteString("joinmap rowcnt " + strconv.Itoa(int(t.JoinMapPtr.rowcnt)) + "\n")
-		buf.WriteString("joinmap refcnt " + strconv.Itoa(int(t.JoinMapPtr.refCnt)) + "\n")
+		buf.WriteString("joinmap refcnt " + strconv.Itoa(int(t.JoinMapPtr.GetRefCount())) + "\n")
 	} else {
 		buf.WriteString("joinmapPtr is nil \n")
 	}
