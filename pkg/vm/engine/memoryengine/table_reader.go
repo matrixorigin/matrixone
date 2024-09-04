@@ -246,7 +246,11 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData
 	return rd, nil
 }
 
-func (t *Table) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
+func (t *Table) CollectTombstones(
+	_ context.Context,
+	_ int,
+	_ engine.TombstoneCollectPolicy,
+) (engine.Tombstoner, error) {
 	panic("implement me")
 }
 

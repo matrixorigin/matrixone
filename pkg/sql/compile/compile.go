@@ -3751,7 +3751,7 @@ func collectTombstones(
 	if err != nil {
 		return nil, err
 	}
-	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset)
+	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset, engine.Policy_CollectAllTombstones)
 	if err != nil {
 		return nil, err
 	}
@@ -3764,7 +3764,7 @@ func collectTombstones(
 				if err != nil {
 					return nil, err
 				}
-				subTombstone, err := subrelation.CollectTombstones(ctx, c.TxnOffset)
+				subTombstone, err := subrelation.CollectTombstones(ctx, c.TxnOffset, engine.Policy_CollectAllTombstones)
 				if err != nil {
 					return nil, err
 				}
@@ -3783,7 +3783,7 @@ func collectTombstones(
 				if err != nil {
 					return nil, err
 				}
-				subTombstone, err := subrelation.CollectTombstones(ctx, c.TxnOffset)
+				subTombstone, err := subrelation.CollectTombstones(ctx, c.TxnOffset, engine.Policy_CollectAllTombstones)
 				if err != nil {
 					return nil, err
 				}

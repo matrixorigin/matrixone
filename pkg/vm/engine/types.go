@@ -583,6 +583,14 @@ const (
 	TombstoneData
 )
 
+type TombstoneCollectPolicy uint64
+
+const (
+	Policy_CollectUncommittedTombstones = 1 << iota
+	Policy_CollectCommittedTombstones
+	Policy_CollectAllTombstones = Policy_CollectUncommittedTombstones | Policy_CollectCommittedTombstones
+)
+
 type TombstoneApplyPolicy uint64
 
 const (
@@ -787,7 +795,7 @@ type Relation interface {
 	// third parameter: Transaction offset used to specify the starting position for reading data.
 	Ranges(context.Context, []*plan.Expr, int) (RelData, error)
 
-	CollectTombstones(ctx context.Context, txnOffset int) (Tombstoner, error)
+	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 

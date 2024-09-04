@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,7 +35,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 type Option func(*service)

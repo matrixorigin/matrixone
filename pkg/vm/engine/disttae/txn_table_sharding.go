@@ -18,7 +18,9 @@ import (
 	"context"
 
 	"github.com/fagongzi/goetty/v2/buf"
+
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -242,15 +244,44 @@ func (tbl *txnTableDelegate) Ranges(
 
 func (tbl *txnTableDelegate) CollectTombstones(
 	ctx context.Context,
-	txnOffset int) (engine.Tombstoner, error) {
+	txnOffset int,
+	policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
 	if tbl.isLocal() {
 		return tbl.origin.CollectTombstones(
 			ctx,
 			txnOffset,
+			policy,
 		)
 	}
-	// TODO: forward
-	return nil, nil
+
+	localTombstones, err := tbl.origin.CollectTombstones(
+		ctx,
+		txnOffset,
+		engine.Policy_CollectUncommittedTombstones,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var remoteTombstones engine.Tombstoner
+	err = tbl.forwardRead(
+		ctx,
+		shardservice.ReadCollectTombstones,
+		func(param *shard.ReadParam) {
+			param.CollectTombstonesParam.CollectPolicy = engine.Policy_CollectCommittedTombstones
+		},
+		func(resp []byte) {
+			tombstones, err := UnmarshalTombstoneData(resp)
+			if err != nil {
+				panic(err)
+			}
+			remoteTombstones = tombstones
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	localTombstones.Merge(remoteTombstones)
+	return localTombstones, nil
 }
 
 func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
@@ -333,6 +364,75 @@ func (tbl *txnTableDelegate) BuildReaders(
 			engine.Policy_CheckAll,
 		)
 	}
+	return buildShardingReaders(
+		ctx,
+		proc,
+		expr,
+		relData,
+		num,
+		txnOffset,
+		orderBy,
+		engine.Policy_CheckAll,
+		tbl,
+	)
+}
+
+type shardingReader struct {
+	//lds         engine.DataSource
+	lrd engine.Reader
+	//for reading data from remote shard.
+	tblDelegate *txnTableDelegate
+	//opaqueHandle shardservice.ReadOpaqueHandler
+	streamID types.Uuid
+	//blocks to distribute to remote shard.
+	blocks []objectio.BlockInfo
+}
+
+func (r *shardingReader) Read(
+	ctx context.Context,
+	cols []string,
+	expr *plan.Expr,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+	bat *batch.Batch,
+) (isEnd bool, err error) {
+
+	//TODO::
+	return false, nil
+}
+
+func (r *shardingReader) Close() error {
+	r.lrd.Close()
+	return nil
+}
+
+func (r *shardingReader) SetOrderBy(orderby []*plan.OrderBySpec) {
+	//r.source.SetOrderBy(orderby)
+	panic("not implemented")
+}
+
+func (r *shardingReader) GetOrderBy() []*plan.OrderBySpec {
+	//return r.source.GetOrderBy()
+	panic("not implemented")
+}
+
+func (r *shardingReader) SetFilterZM(zm objectio.ZoneMap) {
+	//r.source.SetFilterZM(zm)
+	panic("not implemented")
+}
+
+func buildShardingReaders(
+	ctx context.Context,
+	proc any,
+	expr *plan.Expr,
+	relData engine.RelData,
+	num int,
+	txnOffset int,
+	orderBy bool,
+	policy engine.TombstoneApplyPolicy,
+	tbl *txnTableDelegate,
+) ([]engine.Reader, error) {
+
 	return nil, nil
 }
 

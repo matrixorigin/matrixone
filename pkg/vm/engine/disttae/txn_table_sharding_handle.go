@@ -182,6 +182,62 @@ func HandleShardingReadRanges(
 	return buffer.EncodeBytes(bys), nil
 }
 
+func HandleShardingReadNext(
+	ctx context.Context,
+	shard shard.TableShard,
+	engine engine.Engine,
+	param shard.ReadParam,
+	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
+) ([]byte, error) {
+	return nil, nil
+}
+
+func HandleShardingReadClose(
+	ctx context.Context,
+	shard shard.TableShard,
+	engine engine.Engine,
+	param shard.ReadParam,
+	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
+) ([]byte, error) {
+	return nil, nil
+}
+
+func HandleShardingReadCollectTombstones(
+	ctx context.Context,
+	shard shard.TableShard,
+	eng engine.Engine,
+	param shard.ReadParam,
+	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
+) ([]byte, error) {
+	tbl, err := getTxnTable(
+		ctx,
+		param,
+		eng,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	tombstones, err := tbl.CollectTombstones(
+		ctx,
+		0,
+		engine.TombstoneCollectPolicy(param.CollectTombstonesParam.CollectPolicy),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	err = tombstones.MarshalBinaryWithBuffer(&buf)
+	if err != nil {
+		return nil, err
+	}
+	return buffer.EncodeBytes(buf.Bytes()), nil
+}
+
 // HandleShardingReadGetColumMetadataScanInfo handles sharding read GetColumMetadataScanInfo
 func HandleShardingReadGetColumMetadataScanInfo(
 	ctx context.Context,
@@ -219,7 +275,7 @@ func HandleShardingReadGetColumMetadataScanInfo(
 }
 
 // HandleShardingReadReader handles sharding read Reader
-func HandleShardingReadReader(
+func HandleShardingReadBuildReader(
 	ctx context.Context,
 	shard shard.TableShard,
 	e engine.Engine,
@@ -236,18 +292,18 @@ func HandleShardingReadReader(
 		return nil, err
 	}
 
-	relData, err := UnmarshalRelationData(param.ReaderParam.Ranges)
+	relData, err := UnmarshalRelationData(param.ReaderBuildParam.RelData)
 	if err != nil {
 		return nil, err
 	}
 	_, err = tbl.BuildReaders(
 		ctx,
 		tbl.proc.Load(),
-		&param.ReaderParam.Expr,
+		param.ReaderBuildParam.Expr,
 		relData,
-		int(param.ReaderParam.Num),
-		int(param.ReaderParam.TxnOffset),
-		param.ReaderParam.OrderedScan,
+		1,
+		0,
+		false,
 		engine.Policy_CheckAll,
 	)
 	if err != nil {

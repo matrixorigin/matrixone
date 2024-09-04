@@ -1002,7 +1002,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 
 				var subBlkList engine.RelData
 				if s.NodeInfo.Data == nil || s.NodeInfo.Data.DataCnt() <= 1 {
-					//Even subBlkList is nil,
+					//Even if subBlkList is nil,
 					//we still need to build reader for sub partition table to read data from memory.
 					subBlkList = nil
 				} else {
