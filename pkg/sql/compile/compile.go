@@ -3287,10 +3287,16 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, n *pl
 		rs[i].NodeInfo = engine.Node{Addr: ss[i].NodeInfo.Addr, Mcpu: 1}
 		rs[i].PreScopes = append(rs[i].PreScopes, ss[i])
 		rs[i].Proc = c.proc.NewNoContextChildProc(len(ss))
+		mergeOp := merge.NewArgument()
+		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		rs[i].setRootOperator(mergeOp)
 	}
 
 	for i := 0; i < len(ss); i++ {
-		constructDispatch(i, rs, ss[i], n, false)
+		dispatchArg := constructDispatch(i, rs, ss[i], n, false)
+		dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		ss[i].setRootOperator(dispatchArg)
+		ss[i].IsEnd = true
 	}
 
 	for i := range rs {
