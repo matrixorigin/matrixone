@@ -1676,6 +1676,7 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 			Name: indexTableName,
 		}
 
+		// ERIC TODO: handle composite primary key (using serial(pk1, pk2,...)?
 		// foreign primary key column
 		keyName := catalog.FullTextIndex_TabCol_Id
 		colDef := &ColDef{
