@@ -1660,7 +1660,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
 
-	if name == "round" || name == "ceil" || name == "floor" && argsType[0].IsDecimal() {
+	if name == "round" || name == "ceil" || name == "ceiling" || name == "floor" && argsType[0].IsDecimal() {
 		if len(argsType) == 1 {
 			returnType.Scale = 0
 		} else if lit, ok := args[1].Expr.(*plan.Expr_Lit); ok {
