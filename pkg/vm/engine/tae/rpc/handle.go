@@ -772,7 +772,7 @@ func (h *Handle) HandleWrite(
 
 		for _, stats := range req.TombstoneStats {
 			id := tb.GetMeta().(*catalog.TableEntry).AsCommonID()
-			copy(id.BlockID.Object()[:], stats.ObjectName().ObjectId()[:])
+			id.SetObjectID(stats.ObjectName().ObjectId())
 
 			if ok, err = tb.TryDeleteByStats(id, stats); err != nil {
 				logutil.Errorf("try delete by stats faild: %s, %v", stats.String(), err)
@@ -785,7 +785,7 @@ func (h *Handle) HandleWrite(
 				stats.String())
 
 			for i := range stats.BlkCnt() {
-				loc = catalog.BuildLocation(stats, uint16(i), options.DefaultBlockMaxRows)
+				loc = stats.BlockLocation(uint16(i), options.DefaultBlockMaxRows)
 				vectors, closeFunc, err = blockio.LoadColumns2(
 					ctx,
 					[]uint16{uint16(rowidIdx), uint16(pkIdx)},
