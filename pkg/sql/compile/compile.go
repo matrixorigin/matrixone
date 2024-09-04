@@ -3537,19 +3537,6 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 
 	probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, true)
 	buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, true)
-	if !single {
-		// merge here to avoid bugs, delete this in the future
-		for i := range probeScopes {
-			if probeScopes[i].NodeInfo.Mcpu > 1 {
-				probeScopes[i] = c.newMergeScopeByCN([]*Scope{probeScopes[i]}, probeScopes[i].NodeInfo)
-			}
-		}
-		for i := range buildScopes {
-			if buildScopes[i].NodeInfo.Mcpu > 1 {
-				buildScopes[i] = c.newMergeScopeByCN([]*Scope{buildScopes[i]}, buildScopes[i].NodeInfo)
-			}
-		}
-	}
 
 	dop := plan2.GetShuffleDop(ncpu)
 	shuffleJoins := make([]*Scope, 0, len(c.cnList)*dop)
@@ -3583,33 +3570,42 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	}
 
 	currentFirstFlag := c.anal.isFirst
-	for i, s := range probeScopes {
+	for i := range probeScopes {
 		shuffleProbeOp := constructShuffleJoinArg(shuffleJoins, n, true)
 		shuffleProbeOp.SetIdx(c.anal.curNodeIdx)
-		s.setRootOperator(shuffleProbeOp)
-		s.setRootOperator(constructDispatch(i, shuffleJoins, s, n, true))
-		s.IsEnd = true
+		probeScopes[i].setRootOperator(shuffleProbeOp)
+
+		if !single && probeScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+			probeScopes[i] = c.newMergeScopeByCN([]*Scope{probeScopes[i]}, probeScopes[i].NodeInfo)
+		}
+
+		probeScopes[i].setRootOperator(constructDispatch(i, shuffleJoins, probeScopes[i], n, true))
+		probeScopes[i].IsEnd = true
 
 		for _, js := range shuffleJoins {
-			if isSameCN(js.NodeInfo.Addr, s.NodeInfo.Addr) {
-				js.PreScopes = append(js.PreScopes, s)
+			if isSameCN(js.NodeInfo.Addr, probeScopes[i].NodeInfo.Addr) {
+				js.PreScopes = append(js.PreScopes, probeScopes[i])
 				break
 			}
 		}
 	}
 
 	c.anal.isFirst = currentFirstFlag
-	for i, s := range buildScopes {
+	for i := range buildScopes {
 		shuffleBuildOp := constructShuffleJoinArg(shuffleJoins, n, false)
 		shuffleBuildOp.SetIdx(c.anal.curNodeIdx)
-		s.setRootOperator(shuffleBuildOp)
+		buildScopes[i].setRootOperator(shuffleBuildOp)
 
-		s.setRootOperator(constructDispatch(i, shuffleBuilds, s, n, false))
-		s.IsEnd = true
+		if !single && buildScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+			buildScopes[i] = c.newMergeScopeByCN([]*Scope{buildScopes[i]}, buildScopes[i].NodeInfo)
+		}
+
+		buildScopes[i].setRootOperator(constructDispatch(i, shuffleBuilds, buildScopes[i], n, false))
+		buildScopes[i].IsEnd = true
 
 		for _, js := range shuffleBuilds {
-			if isSameCN(js.NodeInfo.Addr, s.NodeInfo.Addr) {
-				js.PreScopes = append(js.PreScopes, s)
+			if isSameCN(js.NodeInfo.Addr, buildScopes[i].NodeInfo.Addr) {
+				js.PreScopes = append(js.PreScopes, buildScopes[i])
 				break
 			}
 		}
