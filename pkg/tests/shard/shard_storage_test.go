@@ -27,23 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
-
-func TestInitSQLCanCreated(t *testing.T) {
-	embed.RunBaseClusterTests(
-		func(c embed.Cluster) {
-			cn1, err := c.GetCNService(0)
-			require.NoError(t, err)
-
-			initShardsOnce(t, cn1)
-		},
-	)
-}
 
 func TestPartitionBasedShardCanBeCreated(t *testing.T) {
 	embed.RunBaseClusterTests(
@@ -65,20 +53,12 @@ func TestPartitionBasedShardCanBeCreated(t *testing.T) {
 				store,
 			)
 
-			id, metadata, err := store.Get(shardTableID)
-			require.NoError(t, err)
-			require.Equal(t, shardTableID, id)
-			require.Equal(t, shard.Policy_Partition, metadata.Policy)
-			require.Equal(t, uint32(partitions), metadata.ShardsCount)
-			require.Equal(t, partitions, len(metadata.ShardIDs))
-
-			// check get sharding metadata by partition id
-			for _, pid := range metadata.ShardIDs {
-				id2, metadata2, err := store.Get(pid)
-				require.NoError(t, err)
-				require.Equal(t, shardTableID, id2)
-				require.Equal(t, metadata, metadata2)
-			}
+			checkPartitionBasedShardMetadata(
+				t,
+				store,
+				shardTableID,
+				partitions,
+			)
 		},
 	)
 }
@@ -173,6 +153,30 @@ func mustGetTableID(
 	return id
 }
 
+func mustGetTableIDByCN(
+	t *testing.T,
+	db string,
+	table string,
+	cn embed.ServiceOperator,
+) uint64 {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	tableID := uint64(0)
+	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+	err := exec.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			tableID = mustGetTableID(t, db, table, txn)
+			return nil
+		},
+		executor.Options{}.
+			WithDatabase(catalog.MO_CATALOG),
+	)
+	require.NoError(t, err)
+	return tableID
+}
+
 func mustCreatePartitionTable(
 	t *testing.T,
 	n int,
@@ -187,8 +191,6 @@ func mustCreatePartitionTable(
 		time.Second*10,
 	)
 	defer cancel()
-
-	committedAt := initShardsOnce(t, cn)
 
 	sql := getPartitionTableSQL(table, n)
 
@@ -218,31 +220,30 @@ func mustCreatePartitionTable(
 			return nil
 		},
 		executor.Options{}.
-			WithDatabase(db).
-			WithMinCommittedTS(committedAt),
+			WithDatabase(db),
 	)
 	require.NoError(t, err)
 	return tableID
 }
 
-func initShardsOnce(
+func checkPartitionBasedShardMetadata(
 	t *testing.T,
-	cn embed.ServiceOperator,
-) timestamp.Timestamp {
-	exists := testutils.TableExists(
-		t,
-		catalog.MO_CATALOG,
-		catalog.MOShards,
-		cn,
-	)
-	if exists {
-		return timestamp.Timestamp{}
-	}
+	store shardservice.ShardStorage,
+	tableID uint64,
+	partitions int,
+) {
+	id, metadata, err := store.Get(tableID)
+	require.NoError(t, err)
+	require.Equal(t, tableID, id)
+	require.Equal(t, shard.Policy_Partition, metadata.Policy)
+	require.Equal(t, uint32(partitions), metadata.ShardsCount)
+	require.Equal(t, partitions, len(metadata.ShardIDs))
 
-	return testutils.ExecSQL(
-		t,
-		catalog.MO_CATALOG,
-		cn,
-		shardservice.InitSQLs...,
-	)
+	// check get sharding metadata by partition id
+	for _, pid := range metadata.ShardIDs {
+		id2, metadata2, err := store.Get(pid)
+		require.NoError(t, err)
+		require.Equal(t, tableID, id2)
+		require.Equal(t, metadata, metadata2)
+	}
 }

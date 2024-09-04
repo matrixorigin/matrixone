@@ -17,12 +17,9 @@ package shard
 import (
 	"fmt"
 	"sync"
-	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
-	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -32,7 +29,6 @@ var (
 )
 
 func runShardClusterTest(
-	t *testing.T,
 	fn func(embed.Cluster),
 ) error {
 	mu.Lock()
@@ -72,11 +68,6 @@ func runShardClusterTest(
 				return
 			}
 			shardingCluster = c
-
-			cn1, err := c.GetCNService(0)
-			require.NoError(t, err)
-			committedAt := initShardsOnce(t, cn1)
-			testutils.WaitClusterAppliedTo(t, c, committedAt)
 		},
 	)
 	if err != nil {
