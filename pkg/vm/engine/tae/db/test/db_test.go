@@ -9272,6 +9272,7 @@ func TestDeleteWithObjectStats(t *testing.T) {
 	}
 
 	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
 	vals := make([]any, 0)
 	for i := 0; i < 20; i += 2 {
 		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
