@@ -368,3 +368,5 @@ drop database test01;
 -- @session
 
 drop account acc01;
+-- @ignore:1
+show snapshots;
