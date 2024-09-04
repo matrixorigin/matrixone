@@ -132,46 +132,45 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	bat := result.Batch
-
+	whichToSend := result.Batch
 	if result.Batch == nil {
+		result.Status = vm.ExecStop
 		if ap.RecSink {
-			bat, err = makeEndBatch(proc)
+			whichToSend, err = makeEndBatch(proc)
 			if err != nil {
 				return result, err
 			}
 			defer func() {
-				if bat != nil {
-					bat.Clean(proc.Mp())
+				if whichToSend != nil {
+					whichToSend.Clean(proc.Mp())
 				}
 			}()
 		} else {
 			printShuffleResult(ap)
-			result.Status = vm.ExecStop
 			return result, nil
 		}
 	}
 
-	if bat.Last() {
+	result.Status = vm.ExecNext
+	if whichToSend.Last() {
 		if !ap.ctr.hasData {
-			bat.SetEnd()
+			whichToSend.SetEnd()
+			result.Status = vm.ExecStop
 		} else {
 			ap.ctr.hasData = false
 		}
-	} else if bat.IsEmpty() {
+	} else if whichToSend.IsEmpty() {
 		result.Batch = batch.EmptyBatch
 		return result, nil
 	} else {
 		ap.ctr.hasData = true
 	}
 
-	ok, err := ap.ctr.sendFunc(bat, ap, proc)
+	ok, err := ap.ctr.sendFunc(whichToSend, ap, proc)
 	if ok {
 		result.Status = vm.ExecStop
-		return result, err
-	} else {
-		return result, err
 	}
+	return result, err
 }
 
 func makeEndBatch(proc *process.Process) (*batch.Batch, error) {
