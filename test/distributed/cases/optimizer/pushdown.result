@@ -23,15 +23,18 @@ select mo_ctl('dn', 'flush', 'd1.t3');
 mo_ctl(dn, flush, d1.t3)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 explain select * from (select * from t1 where c1%3=0 order by c1 desc limit 10) tmpt where c1 % 2 = 0;
-QUERY PLAN
+TP QURERY PLAN
 Project
   ->  Filter
         Filter Cond: ((cast(t1.c1 AS BIGINT) % 2) = 0)
         ->  Sort
               Sort Key: t1.c1 DESC
               Limit: 10
+              Send Message: [tag 1 , type MsgTopValue]
               ->  Table Scan on d1.t1
+                    Sort Key: c1 DESC
                     Filter Cond: ((cast(t1.c1 AS BIGINT) % 3) = 0)
+                    Recv Message: [tag 1 , type MsgTopValue]
 explain select * from (select v2.c1 as c1, v2.c2 as c2, v2.c3 as c3 from (select * from t1 where c1!=0 limit 10) v1 join (select * from t2 where c1!=1 limit 10) v2 on v1.c1=v2.c1 where v2.c2>0 limit 10) v3 join (select * from t3 where c1!=2 limit 10) v4 on v3.c3=v4.c3 where v4.c2>0 limit 10;
 QUERY PLAN
 Project
@@ -58,7 +61,7 @@ Project
                     Filter Cond: (t3.c1 <> 2)
                     Limit: 10
 explain select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10;
-QUERY PLAN
+TP QURERY PLAN
 Project
   ->  Sort
         Sort Key: t1.c1 INTERNAL
@@ -72,7 +75,10 @@ Project
               ->  Sort
                     Sort Key: t1.c1 INTERNAL
                     Limit: 10
+                    Send Message: [tag 2 , type MsgTopValue]
                     ->  Table Scan on d1.t1 [ForceOneCN]
+                          Sort Key: c1 INTERNAL
+                          Recv Message: [tag 2 , type MsgTopValue]
 select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10;
 c1    c1    c2    c3
 1    1    1    1
@@ -86,7 +92,7 @@ c1    c1    c2    c3
 9    9    9    9
 10    10    10    10
 explain select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10 offset 20;
-QUERY PLAN
+TP QURERY PLAN
 Project
   ->  Sort
         Sort Key: t1.c1 INTERNAL
@@ -100,7 +106,10 @@ Project
               ->  Sort
                     Sort Key: t1.c1 INTERNAL
                     Limit: 30
+                    Send Message: [tag 2 , type MsgTopValue]
                     ->  Table Scan on d1.t1 [ForceOneCN]
+                          Sort Key: c1 INTERNAL
+                          Recv Message: [tag 2 , type MsgTopValue]
 select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10 offset 20;
 c1    c1    c2    c3
 21    21    21    21
