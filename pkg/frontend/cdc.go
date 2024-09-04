@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -101,20 +100,6 @@ const (
 	dropCdcMeta = "delete from mo_catalog.mo_cdc_task where account_id = %d and task_id = '%s'"
 
 	updateCdcMeta = "update mo_catalog.mo_cdc_task set state = '%s' where account_id = %d and task_id = '%s'"
-
-	updatedWatermark = "update mo_catalog.mo_cdc_task set checkpoint_str = '%s' where account_id = %d and task_id = '%s'"
-
-	insertWatermark = "insert into mo_catalog.mo_cdc_watermark values (%d, '%s', %d, '%s')"
-
-	getWatermark = "select watermark from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s' and table_id = %d"
-
-	getWatermarkCount = "select count(1) from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
-
-	updateWatermark = "update mo_catalog.mo_cdc_watermark set watermark='%s' where account_id = %d and task_id = '%s' and table_id = %d"
-
-	deleteWatermark = "delete from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
-
-	deleteWatermarkByTable = "delete from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s' and table_id = %d"
 )
 
 func getSqlForNewCdcTask(
@@ -185,10 +170,8 @@ func getSqlForDbIdAndTableId(accId uint64, db, table string) string {
 	return fmt.Sprintf(getDbIdAndTableIdFormat, accId, db, table)
 }
 
-func getSqlForTables(
-	pt *PatternTuple,
-) string {
-	return fmt.Sprintf(getTables, pt.SourceAccount, pt.SourceDatabase, pt.SourceTable)
+func getSqlForTables(pt *cdc2.DbTableInfo) string {
+	return fmt.Sprintf(getTables, pt.SourceAccountName, pt.SourceDbName, pt.SourceTblName)
 }
 
 func getSqlForTaskIdAndName(ses *Session, all bool, taskName string) string {
@@ -266,18 +249,8 @@ func string2uint64(str string) (res uint64, err error) {
 	return res, nil
 }
 
-type PatternTuple struct {
-	SourceAccount  string
-	SourceDatabase string
-	SourceTable    string
-	SinkAccount    string
-	SinkDatabase   string
-	SinkTable      string
-	OriginString   string
-}
-
-func splitPattern(pattern string) (*PatternTuple, error) {
-	pt := &PatternTuple{OriginString: pattern}
+func splitPattern(pattern string) (*cdc2.DbTableInfo, error) {
+	info := &cdc2.DbTableInfo{OriginString: pattern}
 	if strings.Contains(pattern, ":") {
 		splitRes := strings.Split(pattern, ":")
 		if len(splitRes) != 2 {
@@ -285,74 +258,73 @@ func splitPattern(pattern string) (*PatternTuple, error) {
 		}
 
 		source := strings.Split(splitRes[0], ".")
-		if len(source) != 2 && len(source) != 3 {
-			return nil, fmt.Errorf("invalid pattern format")
-		}
 		if len(source) == 2 {
-			pt.SourceDatabase, pt.SourceTable = source[0], source[1]
+			info.SourceDbName, info.SourceTblName = source[0], source[1]
+		} else if len(source) == 3 {
+			info.SourceAccountName, info.SourceDbName, info.SourceTblName = source[0], source[1], source[2]
 		} else {
-			pt.SourceAccount, pt.SourceDatabase, pt.SourceTable = source[0], source[1], source[2]
+			return nil, fmt.Errorf("invalid pattern format")
 		}
 
 		sink := strings.Split(splitRes[1], ".")
-		if len(sink) != 2 && len(sink) != 3 {
+		if len(sink) == 2 {
+			info.SinkDbName, info.SinkTblName = sink[0], sink[1]
+		} else if len(sink) == 3 {
+			info.SinkAccountName, info.SinkDbName, info.SinkTblName = sink[0], sink[1], sink[2]
+		} else {
 			return nil, fmt.Errorf("invalid pattern format")
 		}
-		if len(sink) == 2 {
-			pt.SinkDatabase, pt.SinkTable = sink[0], sink[1]
-		} else {
-			pt.SinkAccount, pt.SinkDatabase, pt.SinkTable = sink[0], sink[1], sink[2]
-		}
-		return pt, nil
+		return info, nil
 	}
 
 	source := make([]string, 0)
 	current := strings.Builder{}
 	inRegex := false
 	isRegex := false
+
+	addToSource := func() {
+		res := current.String()
+		if !isRegex {
+			// TODO handle non-regex pattern
+			//res = strings.ReplaceAll(res, "?", ".")
+			//res = strings.ReplaceAll(res, "*", ".*")
+			//res = "^" + res + "$"
+		}
+		isRegex = false
+		source = append(source, res)
+		current.Reset()
+	}
+
 	for i := 0; i < len(pattern); i++ {
 		char := pattern[i]
 		if char == '/' {
 			isRegex = true
 			inRegex = !inRegex
 		} else if char == '.' && !inRegex {
-			res := current.String()
-			if !isRegex {
-				res = strings.ReplaceAll(res, "?", ".")
-				res = strings.ReplaceAll(res, "*", ".*")
-				res = "^" + res + "$"
-			}
-			isRegex = false
-			source = append(source, res)
-			current.Reset()
+			addToSource()
 		} else {
 			current.WriteByte(char)
 		}
 	}
 	if current.Len() > 0 {
-		res := current.String()
-		if !isRegex {
-			res = strings.ReplaceAll(res, "?", ".")
-			res = strings.ReplaceAll(res, "*", ".*")
-			res = "^" + res + "$"
-		}
-		isRegex = false
-		source = append(source, res)
-		current.Reset()
+		addToSource()
 	}
+
 	if (len(source) != 2 && len(source) != 3) || inRegex {
 		return nil, fmt.Errorf("invalid pattern format")
 	}
 	if len(source) == 2 {
-		pt.SourceDatabase, pt.SourceTable = source[0], source[1]
+		info.SourceDbName, info.SourceTblName = source[0], source[1]
+		info.SinkDbName, info.SinkTblName = source[0], source[1]
 	} else {
-		pt.SourceAccount, pt.SourceDatabase, pt.SourceTable = source[0], source[1], source[2]
+		info.SourceAccountName, info.SourceDbName, info.SourceTblName = source[0], source[1], source[2]
+		info.SinkAccountName, info.SinkDbName, info.SinkTblName = source[0], source[1], source[2]
 	}
-	return pt, nil
+	return info, nil
 }
 
-func string2patterns(pattern string) ([]*PatternTuple, error) {
-	pts := make([]*PatternTuple, 0)
+func string2DbTblInfos(pattern string) ([]*cdc2.DbTableInfo, error) {
+	pts := make([]*cdc2.DbTableInfo, 0)
 	current := strings.Builder{}
 	inRegex := false
 	for i := 0; i < len(pattern); i++ {
@@ -382,7 +354,7 @@ func string2patterns(pattern string) ([]*PatternTuple, error) {
 	return pts, nil
 }
 
-func patterns2tables(ctx context.Context, pts []*PatternTuple, bh BackgroundExec) (map[string]string, error) {
+func patterns2tables(ctx context.Context, pts []*cdc2.DbTableInfo, bh BackgroundExec) (map[string]string, error) {
 	resMap := make(map[string]string)
 	for _, pt := range pts {
 		sql := getSqlForTables(pt)
@@ -417,14 +389,14 @@ func patterns2tables(ctx context.Context, pts []*PatternTuple, bh BackgroundExec
 				sourceString.WriteString(db)
 				sourceString.WriteString(".")
 				sourceString.WriteString(tbl)
-				if pt.SinkTable != "" {
-					if pt.SinkAccount != "" {
-						sinkString.WriteString(pt.SinkAccount)
+				if pt.SinkTblName != "" {
+					if pt.SinkAccountName != "" {
+						sinkString.WriteString(pt.SinkAccountName)
 						sinkString.WriteString(".")
 					}
-					sinkString.WriteString(pt.SinkDatabase)
+					sinkString.WriteString(pt.SinkDbName)
 					sinkString.WriteString(".")
-					sinkString.WriteString(pt.SinkTable)
+					sinkString.WriteString(pt.SinkTblName)
 				} else {
 					sinkString.WriteString(sourceString.String())
 				}
@@ -435,16 +407,16 @@ func patterns2tables(ctx context.Context, pts []*PatternTuple, bh BackgroundExec
 	return resMap, nil
 }
 
-func canCreateCdcTask(ctx context.Context, ses *Session, level string, account string, pts []*PatternTuple) error {
+func canCreateCdcTask(ctx context.Context, ses *Session, level string, account string, pts []*cdc2.DbTableInfo) error {
 	if strings.EqualFold(level, ClusterLevel) {
 		if !ses.tenant.IsMoAdminRole() {
 			return moerr.NewInternalError(ctx, "Only sys account administrator are allowed to create cluster level task")
 		}
 		for _, pt := range pts {
-			if pt.SourceAccount == "" {
-				pt.SourceAccount = ses.GetTenantName()
+			if pt.SourceAccountName == "" {
+				pt.SourceAccountName = ses.GetTenantName()
 			}
-			if isBannedDatabase(pt.SourceDatabase) {
+			if isBannedDatabase(pt.SourceDbName) {
 				return moerr.NewInternalError(ctx, "The system database cannot be subscribed to")
 			}
 		}
@@ -453,13 +425,13 @@ func canCreateCdcTask(ctx context.Context, ses *Session, level string, account s
 			return moerr.NewInternalErrorf(ctx, "No privilege to create task on %s", account)
 		}
 		for _, pt := range pts {
-			if pt.SourceAccount == "" {
-				pt.SourceAccount = account
+			if pt.SourceAccountName == "" {
+				pt.SourceAccountName = account
 			}
-			if account != pt.SourceAccount {
+			if account != pt.SourceAccountName {
 				return moerr.NewInternalErrorf(ctx, "No privilege to create task on table %s", pt.OriginString)
 			}
-			if isBannedDatabase(pt.SourceDatabase) {
+			if isBannedDatabase(pt.SourceDbName) {
 				return moerr.NewInternalError(ctx, "The system database cannot be subscribed to")
 			}
 		}
@@ -483,7 +455,7 @@ func createCdc(
 		cdcTaskOptionsMap[create.Option[i]] = create.Option[i+1]
 	}
 
-	pts, err := string2patterns(create.Tables)
+	pts, err := string2DbTblInfos(create.Tables)
 	if err != nil {
 		return err
 	}
@@ -610,12 +582,10 @@ func RegisterCdcExecutor(
 			cnEngMp,
 		)
 		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
-		if err := attachToTask(ctx, T.GetID(), cdc); err != nil {
+		if err = attachToTask(ctx, T.GetID(), cdc); err != nil {
 			return err
 		}
-		err = cdc.Start(ctx)
-
-		return err
+		return cdc.Start(ctx, true)
 	}
 }
 
@@ -676,7 +646,7 @@ func NewCdcTask(
 	}
 }
 
-func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
+func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 	fmt.Fprintln(os.Stderr, "====>cdc start")
 
 	ctx := defines.AttachAccountId(rootCtx, uint32(cdc.cdcTask.AccountId))
@@ -718,8 +688,8 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 		return err
 	}
 
-	//tables
-	tables, err := res.GetString(ctx, 0, 3)
+	//tablesStr
+	tablesStr, err := res.GetString(ctx, 0, 3)
 	if err != nil {
 		return err
 	}
@@ -729,104 +699,81 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	startTs, err := cdc2.StrToTimestamp(startTsStr)
-	if err != nil {
-		return err
-	}
+	startTs := types.StringToTS(startTsStr)
 
 	fmt.Fprintln(os.Stderr, "====>", "cdc task row",
 		cdc.sinkUri,
 		sinkTyp,
 		sinkPwd,
-		tables,
+		tablesStr,
 		"startTs", startTsStr,
 	)
 
-	var dbId, tblId uint64
-	tableList := strings.Split(tables, ",")
-	dbTableInfos := make([]*cdc2.DbTableInfo, 0, len(tableList))
-	for _, table := range tableList {
-		//get dbid tableid for the table
-		seps := strings.Split(table, ".")
-		if len(seps) != 2 {
-			return moerr.NewInternalError(ctx, "invalid tables format")
-		}
-
-		dbName, tblName := seps[0], seps[1]
-		sql = getSqlForDbIdAndTableId(cdc.cdcTask.AccountId, dbName, tblName)
+	dbTableInfos, err := string2DbTblInfos(tablesStr)
+	if err != nil {
+		return err
+	}
+	for _, info := range dbTableInfos {
+		sql = getSqlForDbIdAndTableId(cdc.cdcTask.AccountId, info.SourceDbName, info.SourceTblName)
 		res = cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 		if res.Error() != nil {
 			return res.Error()
 		}
 
 		if res.RowCount() < 1 {
-			return moerr.NewInternalErrorf(ctx, "no table %s:%s", dbName, tblName)
+			return moerr.NewInternalErrorf(ctx, "no table %s:%s", info.SourceDbName, info.SourceTblName)
 		} else if res.RowCount() > 1 {
-			return moerr.NewInternalErrorf(ctx, "duplicate table %s:%s", dbName, tblName)
+			return moerr.NewInternalErrorf(ctx, "duplicate table %s:%s", info.SourceDbName, info.SourceTblName)
 		}
 
-		if dbId, err = res.GetUint64(ctx, 0, 0); err != nil {
+		if info.SourceDbId, err = res.GetUint64(ctx, 0, 0); err != nil {
 			return err
 		}
 
-		if tblId, err = res.GetUint64(ctx, 0, 1); err != nil {
+		if info.SourceTblId, err = res.GetUint64(ctx, 0, 1); err != nil {
 			return err
 		}
-
-		dbTableInfos = append(dbTableInfos, &cdc2.DbTableInfo{
-			DbName:  dbName,
-			TblName: tblName,
-			DbId:    dbId,
-			TblId:   tblId,
-		})
 	}
 
-	// init mo_cdc_watermark table
-	count, err := cdc.getWatermarkCount()
+	cdc.sunkWatermarkUpdater = cdc2.NewWatermarkUpdater(cdc.cdcTask.AccountId, cdc.cdcTask.TaskId, cdc.ie)
+
+	count, err := cdc.sunkWatermarkUpdater.GetWatermarkCount()
 	if err != nil {
 		return err
-	}
-	if count == 0 {
+	} else if count == 0 {
 		for _, info := range dbTableInfos {
 			// use startTs as watermark
-			if err = cdc.insertWatermark(info.TblId, startTs); err != nil {
+			if err = cdc.sunkWatermarkUpdater.InsertWatermark(info.SourceTblId, startTs); err != nil {
 				return err
 			}
 		}
 	}
 
 	// step3 : create cdc pipeline
-	cdc.sunkWatermarkUpdater = cdc2.NewWatermarkUpdater(cdc.updateWatermark)
-
-	// make channels between partitioner and decoder
 	cdc.interChs = make(map[uint64]chan tools.Pair[*cdc2.TableCtx, *cdc2.DecoderOutput], len(dbTableInfos))
 
 	for _, info := range dbTableInfos {
-		if err = cdc.addExePipelineForTable(info.TblId); err != nil {
+		if err = cdc.addExePipelineForTable(ctx, info); err != nil {
+			return
+		}
+
+		watermark, err := cdc.sunkWatermarkUpdater.GetWatermark(info.SourceTblId)
+		if err != nil {
 			return err
 		}
+		_, _ = fmt.Fprintf(os.Stderr, "table %s(%d) current watermark: %s\n",
+			info.SourceTblName, info.SourceTblId, watermark.ToString())
+		cdc.sunkWatermarkUpdater.UpdateTableWatermark(info.SourceTblId, watermark)
 	}
 
 	// start watermark updater
 	go cdc.sunkWatermarkUpdater.Run(cdc.activeRoutine)
 
-	//step4 : boot the table reader
-	for _, info := range dbTableInfos {
-		reader := cdc2.NewTableReader(
-			cdc.cnTxnClient,
-			cdc.cnEngine,
-			cdc.mp,
-			cdc.packerPool,
-			info,
-			cdc.interChs[info.TblId],
-			cdc.sunkWatermarkUpdater,
-		)
-		go reader.Run(ctx, cdc.activeRoutine)
+	if firstTime {
+		// hold
+		ch := make(chan int, 1)
+		<-ch
 	}
-
-	// hold
-	ch := make(chan int, 1)
-	<-ch
 	return
 }
 
@@ -835,20 +782,20 @@ func (cdc *CdcTask) Resume() error {
 	fmt.Println("=====> it's resume")
 	// closed in Pause, need renew
 	cdc.activeRoutine.Cancel = make(chan struct{})
-	return cdc.Start(context.Background())
+	return cdc.Start(context.Background(), false)
 }
 
 // Restart cdc task from init watermark
 func (cdc *CdcTask) Restart() error {
 	fmt.Println("=====> it's restart")
 	// delete previous records
-	if err := cdc.deleteWatermark(); err != nil {
+	if err := cdc.sunkWatermarkUpdater.DeleteWatermarks(); err != nil {
 		return err
 	}
 
 	// closed in Pause, need renew
 	cdc.activeRoutine.Cancel = make(chan struct{})
-	return cdc.Start(context.Background())
+	return cdc.Start(context.Background(), false)
 }
 
 // Pause cdc task
@@ -870,7 +817,7 @@ func (cdc *CdcTask) Cancel() error {
 	for _, c := range cdc.interChs {
 		close(c)
 	}
-	return cdc.deleteWatermark()
+	return cdc.sunkWatermarkUpdater.DeleteWatermarks()
 }
 
 func handleDropCdc(ses *Session, execCtx *ExecCtx, st *tree.DropCDC) error {
@@ -950,44 +897,38 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 	return
 }
 
-func (cdc *CdcTask) persistWatermark(watermark timestamp.Timestamp) error {
-	accountId := uint32(cdc.cdcTask.AccountId)
-	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
-	watermarkStr := cdc2.TimestampToStr(watermark)
-	sql := fmt.Sprintf(updatedWatermark, watermarkStr, accountId, cdcTaskId)
-
-	ctx := defines.AttachAccountId(context.Background(), uint32(cdc.cdcTask.AccountId))
-	return cdc.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
-}
-
-func (cdc *CdcTask) addExePipelineForTable(tableId uint64) (err error) {
-	//                         + == inputCh == > decoder == interCh == > sinker -> remote db    // for table 1
-	// 	                       |
-	// inQueue -> partitioner -+ == inputCh == > decoder == interCh == > sinker -> remote db    // for table 2
-	//	                       |                                                                   ...
-	//	                       |                                                                   ...
-	// 						   + == inputCh == > decoder == interCh == > sinker -> remote db	// for table n
-
-	ctx := defines.AttachAccountId(context.Background(), uint32(cdc.cdcTask.AccountId))
+func (cdc *CdcTask) addExePipelineForTable(ctx context.Context, info *cdc2.DbTableInfo) error {
+	// reader ======interCh===== sinker ----> remote db
 
 	// make interCh for table
-	cdc.interChs[tableId] = make(chan tools.Pair[*cdc2.TableCtx, *cdc2.DecoderOutput])
+	cdc.interChs[info.SourceTblId] = make(chan tools.Pair[*cdc2.TableCtx, *cdc2.DecoderOutput])
 
-	watermark, err := cdc.getWatermark(tableId)
+	tableDef, err := cdc2.GetTableDef(ctx, cdc.cnEngine, cdc.cnTxnClient, info.SourceTblId)
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(os.Stderr, "table %v current watermark: %s\n", tableId, watermark.DebugString())
-	cdc.sunkWatermarkUpdater.UpdateTableWatermark(tableId, watermark)
+
+	// make reader
+	reader := cdc2.NewTableReader(
+		cdc.cnTxnClient,
+		cdc.cnEngine,
+		cdc.mp,
+		cdc.packerPool,
+		info,
+		cdc.interChs[info.SourceTblId],
+		cdc.sunkWatermarkUpdater,
+		tableDef,
+	)
+	go reader.Run(ctx, cdc.activeRoutine)
 
 	// make sinker for table
-	sinker, err := cdc2.NewSinker(ctx, cdc.sinkUri, cdc.interChs[tableId], tableId, cdc.sunkWatermarkUpdater)
+	sinker, err := cdc2.NewSinker(ctx, cdc.sinkUri, cdc.interChs[info.SourceTblId], info, cdc.sunkWatermarkUpdater, tableDef)
 	if err != nil {
 		return err
 	}
 	go sinker.Run(ctx, cdc.activeRoutine)
 
-	return
+	return nil
 }
 
 func (cdc *CdcTask) removeExePipelineForTable(tableId uint64) (err error) {
@@ -999,83 +940,4 @@ func (cdc *CdcTask) removeExePipelineForTable(tableId uint64) (err error) {
 	cdc.sunkWatermarkUpdater.RemoveTable(tableId)
 
 	return
-}
-
-func (cdc *CdcTask) insertWatermark(tableId uint64, watermark timestamp.Timestamp) (err error) {
-	accountId := uint32(cdc.cdcTask.AccountId)
-	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
-	watermarkStr := cdc2.TimestampToStr(watermark)
-	sql := fmt.Sprintf(insertWatermark, accountId, cdcTaskId, tableId, watermarkStr)
-
-	ctx := defines.AttachAccountId(context.Background(), accountId)
-	return cdc.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
-}
-
-func (cdc *CdcTask) getWatermark(tableId uint64) (watermark timestamp.Timestamp, err error) {
-	accountId := uint32(cdc.cdcTask.AccountId)
-	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
-	sql := fmt.Sprintf(getWatermark, accountId, cdcTaskId, tableId)
-
-	ctx := defines.AttachAccountId(context.Background(), accountId)
-	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
-	if res.Error() != nil {
-		err = res.Error()
-	} else if res.RowCount() < 1 {
-		err = moerr.NewInternalErrorf(ctx, "no watermark found for task: %s, tableId: %v\n", cdcTaskId, tableId)
-	} else if res.RowCount() > 1 {
-		err = moerr.NewInternalErrorf(ctx, "duplicate watermark found for task: %s, tableId: %v\n", cdcTaskId, tableId)
-	}
-	if err != nil {
-		return
-	}
-
-	watermarkStr, err := res.GetString(ctx, 0, 0)
-	if err != nil {
-		return timestamp.Timestamp{}, err
-	}
-	return cdc2.StrToTimestamp(watermarkStr)
-}
-
-func (cdc *CdcTask) getWatermarkCount() (uint64, error) {
-	accountId := uint32(cdc.cdcTask.AccountId)
-	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
-	sql := fmt.Sprintf(getWatermarkCount, accountId, cdcTaskId)
-
-	ctx := defines.AttachAccountId(context.Background(), accountId)
-	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
-	if res.Error() != nil {
-		return 0, res.Error()
-	}
-	return res.GetUint64(ctx, 0, 0)
-}
-
-func (cdc *CdcTask) updateWatermark(tableId uint64, watermark timestamp.Timestamp) (err error) {
-	accountId := uint32(cdc.cdcTask.AccountId)
-	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
-	watermarkStr := cdc2.TimestampToStr(watermark)
-	sql := fmt.Sprintf(updateWatermark, watermarkStr, accountId, cdcTaskId, tableId)
-
-	ctx := defines.AttachAccountId(context.Background(), accountId)
-	//fmt.Fprintf(os.Stderr, "====> updateWatermark tableId(%d), watermark(%s), start\n", tableId, watermarkStr)
-	err = cdc.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
-	//fmt.Fprintf(os.Stderr, "====> updateWatermark tableId(%d), watermark(%s), end\n", tableId, watermarkStr)
-	return
-}
-
-func (cdc *CdcTask) deleteWatermark() (err error) {
-	accountId := uint32(cdc.cdcTask.AccountId)
-	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
-	sql := fmt.Sprintf(deleteWatermark, accountId, cdcTaskId)
-
-	ctx := defines.AttachAccountId(context.Background(), accountId)
-	return cdc.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
-}
-
-func (cdc *CdcTask) deleteWatermarkByTable(tableId uint64) (err error) {
-	accountId := uint32(cdc.cdcTask.AccountId)
-	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
-	sql := fmt.Sprintf(deleteWatermarkByTable, accountId, cdcTaskId, tableId)
-
-	ctx := defines.AttachAccountId(context.Background(), accountId)
-	return cdc.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -107,16 +108,16 @@ func Test_parseTables(t *testing.T) {
 
 	for wantIdx, table := range tables {
 		matchedIdx := []int{}
-		pts, err := string2patterns(table)
+		pts, err := string2DbTblInfos(table)
 		assert.Equal(t, err, nil)
 		for _, pt := range pts {
 			for idx := range rows {
 				row := rows[idx]
-				accountMatched, err := regexp.MatchString(pt.SourceAccount, row[0])
+				accountMatched, err := regexp.MatchString(pt.SourceAccountName, row[0])
 				assert.Equal(t, err, nil)
-				databaseMatched, err := regexp.MatchString(pt.SourceDatabase, row[1])
+				databaseMatched, err := regexp.MatchString(pt.SourceDbName, row[1])
 				assert.Equal(t, err, nil)
-				tableMatched, err := regexp.MatchString(pt.SourceTable, row[2])
+				tableMatched, err := regexp.MatchString(pt.SourceTblName, row[2])
 				assert.Equal(t, err, nil)
 				if accountMatched && databaseMatched && tableMatched {
 					matchedIdx = append(matchedIdx, idx)
@@ -131,7 +132,7 @@ func Test_parseTables(t *testing.T) {
 func Test_privilegeCheck(t *testing.T) {
 	var tenantInfo *TenantInfo
 	var err error
-	var pts []*PatternTuple
+	var pts []*cdc2.DbTableInfo
 	ctx := context.Background()
 	ses := &Session{}
 
@@ -140,39 +141,39 @@ func Test_privilegeCheck(t *testing.T) {
 		DefaultRole: moAdminRoleName,
 	}
 	ses.tenant = tenantInfo
-	pts = []*PatternTuple{
-		{SourceAccount: "acc1"},
-		{SourceAccount: sysAccountName},
+	pts = []*cdc2.DbTableInfo{
+		{SourceAccountName: "acc1"},
+		{SourceAccountName: sysAccountName},
 	}
 	err = canCreateCdcTask(ctx, ses, "Cluster", "", pts)
 	assert.Nil(t, err)
 
-	pts = []*PatternTuple{
-		{SourceAccount: sysAccountName, SourceDatabase: moCatalog},
+	pts = []*cdc2.DbTableInfo{
+		{SourceAccountName: sysAccountName, SourceDbName: moCatalog},
 	}
 	err = canCreateCdcTask(ctx, ses, "Cluster", "", pts)
 	assert.NotNil(t, err)
 
-	pts = []*PatternTuple{
-		{SourceAccount: sysAccountName},
+	pts = []*cdc2.DbTableInfo{
+		{SourceAccountName: sysAccountName},
 	}
 	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
 	assert.NotNil(t, err)
 
-	pts = []*PatternTuple{
-		{SourceAccount: "acc2"},
+	pts = []*cdc2.DbTableInfo{
+		{SourceAccountName: "acc2"},
 	}
 	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
 	assert.NotNil(t, err)
 
-	pts = []*PatternTuple{
+	pts = []*cdc2.DbTableInfo{
 		{},
 	}
 	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
 	assert.Nil(t, err)
 
-	pts = []*PatternTuple{
-		{SourceAccount: "acc1"},
+	pts = []*cdc2.DbTableInfo{
+		{SourceAccountName: "acc1"},
 	}
 	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
 	assert.Nil(t, err)
@@ -183,8 +184,8 @@ func Test_privilegeCheck(t *testing.T) {
 	}
 	ses.tenant = tenantInfo
 
-	pts = []*PatternTuple{
-		{SourceAccount: "acc1"},
+	pts = []*cdc2.DbTableInfo{
+		{SourceAccountName: "acc1"},
 		{},
 	}
 	err = canCreateCdcTask(ctx, ses, "Cluster", "", pts)
@@ -196,9 +197,9 @@ func Test_privilegeCheck(t *testing.T) {
 	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
 	assert.Nil(t, err)
 
-	pts = []*PatternTuple{
-		{SourceAccount: "acc2"},
-		{SourceAccount: sysAccountName},
+	pts = []*cdc2.DbTableInfo{
+		{SourceAccountName: "acc2"},
+		{SourceAccountName: sysAccountName},
 	}
 	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
 	assert.NotNil(t, err)

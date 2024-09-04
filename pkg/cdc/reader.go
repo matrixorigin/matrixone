@@ -11,6 +11,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -27,6 +28,9 @@ type tableReader struct {
 	interCh      chan tools.Pair[*TableCtx, *DecoderOutput]
 	wMarkUpdater *WatermarkUpdater
 	tick         *time.Ticker
+
+	insTsColIdx, insCompositedPkColIdx int
+	delTsColIdx, delCompositedPkColIdx int
 }
 
 func NewTableReader(
@@ -37,8 +41,9 @@ func NewTableReader(
 	info *DbTableInfo,
 	interCh chan tools.Pair[*TableCtx, *DecoderOutput],
 	wMarkUpdater *WatermarkUpdater,
+	tableDef *plan.TableDef,
 ) Reader {
-	ret := &tableReader{
+	reader := &tableReader{
 		cnTxnClient:  cnTxnClient,
 		cnEngine:     cnEngine,
 		mp:           mp,
@@ -48,15 +53,25 @@ func NewTableReader(
 		wMarkUpdater: wMarkUpdater,
 		tick:         time.NewTicker(time.Second * 1), //test interval
 	}
-	return ret
+
+	// bat columns layout:
+	// 1. data: user defined cols | cpk (if need) | commit-ts
+	// 2. tombstone: pk/cpk | commit-ts
+	reader.insTsColIdx, reader.insCompositedPkColIdx = len(tableDef.Cols)-1, len(tableDef.Cols)-2
+	reader.delTsColIdx, reader.delCompositedPkColIdx = 1, 0
+	// if single col pk, there's no additional cpk col
+	if len(tableDef.Pkey.Names) == 1 {
+		reader.insCompositedPkColIdx = int(tableDef.Name2ColIndex[tableDef.Pkey.Names[0]])
+	}
+	return reader
 }
 
 func (reader *tableReader) tableCtx() *TableCtx {
 	return &TableCtx{
-		db:      reader.info.DbName,
-		dbId:    reader.info.DbId,
-		table:   reader.info.TblName,
-		tableId: reader.info.TblId,
+		db:      reader.info.SourceDbName,
+		dbId:    reader.info.SourceDbId,
+		table:   reader.info.SourceTblName,
+		tableId: reader.info.SourceTblId,
 	}
 }
 
@@ -67,8 +82,8 @@ func (reader *tableReader) Close() {
 func (reader *tableReader) Run(
 	ctx context.Context,
 	ar *ActiveRoutine) {
-	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ tableReader(%s).Run: start\n", reader.info.TblName)
-	defer fmt.Fprintf(os.Stderr, "^^^^^ tableReader(%s).Run: end\n", reader.info.TblName)
+	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ tableReader(%s).Run: start\n", reader.info.SourceTblName)
+	defer fmt.Fprintf(os.Stderr, "^^^^^ tableReader(%s).Run: end\n", reader.info.SourceTblName)
 
 	for {
 		select {
@@ -149,7 +164,7 @@ func (reader *tableReader) readTableWithTxn(
 	var rel engine.Relation
 	var changes engine.ChangesHandle
 	//step1 : get relation
-	_, _, rel, err = reader.cnEngine.GetRelationById(ctx, txnOp, reader.info.TblId)
+	_, _, rel, err = reader.cnEngine.GetRelationById(ctx, txnOp, reader.info.SourceTblId)
 	if err != nil {
 		return
 	}
@@ -161,10 +176,9 @@ func (reader *tableReader) readTableWithTxn(
 	//step2 : define time range
 	//	from = last wmark
 	//  to = txn operator snapshot ts
-	wMark := reader.wMarkUpdater.GetTableWatermark(reader.info.TblId)
-	fromTs := types.TimestampToTS(wMark)
+	fromTs := reader.wMarkUpdater.GetTableWatermark(reader.info.SourceTblId)
 	toTs := types.TimestampToTS(txnOp.SnapshotTS())
-	fmt.Fprintln(os.Stderr, reader.info, "from", fromTs.ToString(), "to", toTs.ToString())
+	//fmt.Fprintln(os.Stderr, reader.info, "from", fromTs.ToString(), "to", toTs.ToString())
 	changes, err = rel.CollectChanges(ctx, fromTs, toTs, reader.mp)
 	if err != nil {
 		return
@@ -211,19 +225,6 @@ func (reader *tableReader) readTableWithTxn(
 			break
 		}
 
-		//FIXME: define the rule with changes handle
-		insTsColIdx, insCompositedPkColIdx := -1, -1
-		delTsColIdx, delCompositedPkColIdx := -1, -1
-
-		if insertData != nil {
-			insTsColIdx = len(insertData.Vecs) - 1
-			insCompositedPkColIdx = len(insertData.Vecs) - 2
-		}
-		if deleteData != nil {
-			delTsColIdx = len(deleteData.Vecs) - 1
-			delCompositedPkColIdx = len(deleteData.Vecs) - 2
-		}
-
 		switch curHint {
 		case engine.ChangesHandle_Snapshot:
 			// transform into insert instantly
@@ -232,23 +233,25 @@ func (reader *tableReader) readTableWithTxn(
 				&DecoderOutput{
 					outputTyp:     OutputTypeCheckpoint,
 					checkpointBat: insertData,
+					toTs:          toTs,
 				})
 		case engine.ChangesHandle_Tail_wip:
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
-			insertAtmBatch.Append(packer, insertData, insTsColIdx, insCompositedPkColIdx)
-			deleteAtmBatch.Append(packer, deleteData, delTsColIdx, delCompositedPkColIdx)
+			insertAtmBatch.Append(packer, insertData, reader.insTsColIdx, reader.insCompositedPkColIdx)
+			deleteAtmBatch.Append(packer, deleteData, reader.delTsColIdx, reader.delCompositedPkColIdx)
 		case engine.ChangesHandle_Tail_done:
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
-			insertAtmBatch.Append(packer, insertData, insTsColIdx, insCompositedPkColIdx)
-			deleteAtmBatch.Append(packer, deleteData, delTsColIdx, delCompositedPkColIdx)
+			insertAtmBatch.Append(packer, insertData, reader.insTsColIdx, reader.insCompositedPkColIdx)
+			deleteAtmBatch.Append(packer, deleteData, reader.delTsColIdx, reader.delCompositedPkColIdx)
 			reader.interCh <- tools.NewPair(
 				tableCtx,
 				&DecoderOutput{
 					outputTyp:      OutputTypeTailDone,
 					insertAtmBatch: insertAtmBatch,
 					deleteAtmBatch: deleteAtmBatch,
+					toTs:           toTs,
 				},
 			)
 			insertAtmBatch = nil
@@ -259,13 +262,13 @@ func (reader *tableReader) readTableWithTxn(
 	//FIXME: it is engine's bug
 	//Tail_wip does not finished with Tail_done
 	if insertAtmBatch != nil || deleteAtmBatch != nil {
-
 		reader.interCh <- tools.NewPair(
 			tableCtx,
 			&DecoderOutput{
 				outputTyp:      OutputTypeUnfinishedTailWIP,
 				insertAtmBatch: insertAtmBatch,
 				deleteAtmBatch: deleteAtmBatch,
+				toTs:           toTs,
 			},
 		)
 	}

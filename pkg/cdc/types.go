@@ -42,8 +42,18 @@ type Sinker interface {
 
 // Sink represents the destination mysql or matrixone
 type Sink interface {
-	Send(ctx context.Context, data *DecoderOutput) error
+	Send(ctx context.Context, sql string) error
 	Close()
+}
+
+type ActiveRoutine struct {
+	Cancel chan struct{}
+}
+
+func NewCdcActiveRoutine() *ActiveRoutine {
+	activeRoutine := &ActiveRoutine{}
+	activeRoutine.Cancel = make(chan struct{})
+	return activeRoutine
 }
 
 type OutputType int
@@ -80,29 +90,39 @@ type DecoderOutput struct {
 type RowType int
 
 const (
-	DeleteRow RowType = 1
-	InsertRow RowType = 2
+	Invalid RowType = iota
+	InsertRow
+	DeleteRow
 )
 
 type RowIterator interface {
 	Next() bool
-	Row(ctx context.Context, wantedColsIndices []int, row []any) error
+	Row(ctx context.Context, row []any) error
 	Close() error
 }
 
 type DbTableInfo struct {
-	DbName  string
-	TblName string
-	DbId    uint64
-	TblId   uint64
+	OriginString string
+
+	SourceAccountName string
+	SourceDbName      string
+	SourceTblName     string
+	SourceDbId        uint64
+	SourceTblId       uint64
+
+	SinkAccountName string
+	SinkDbName      string
+	SinkTblName     string
 }
 
 func (info DbTableInfo) String() string {
-	return fmt.Sprintf("%v %v %v %v",
-		info.DbName,
-		info.TblName,
-		info.DbId,
-		info.TblId,
+	return fmt.Sprintf("%v(%v).%v(%v) -> %v.%v",
+		info.SourceDbName,
+		info.SourceDbId,
+		info.SourceTblName,
+		info.SourceTblId,
+		info.SinkDbName,
+		info.SinkTblName,
 	)
 }
 
@@ -138,11 +158,8 @@ func NewAtomicBatch(
 }
 
 type AtomicBatchRow struct {
-	Ts types.TS
-	Pk []byte
-	// idx of batch in AtomicBatch.Batches
-	batIdx int
-	// row offset of batch
+	Ts     types.TS
+	Pk     []byte
 	Offset int
 	Src    *batch.Batch
 }
@@ -170,16 +187,22 @@ func (bat *AtomicBatch) Append(
 		//composited pk columns
 		compositedPkBytes := logtailreplay.EncodePrimaryKeyVector(batch.Vecs[compositedPkColIdx], packer)
 
-		for i, ts := range tsVec {
+		for i, pk := range compositedPkBytes {
+			// if ts is constant, then tsVec[0] is the ts for all rows
+			ts := tsVec[0]
+			if i < len(tsVec) {
+				ts = tsVec[i]
+			}
+
 			row := AtomicBatchRow{
 				Ts:     ts,
-				Pk:     compositedPkBytes[i],
-				batIdx: len(bat.Batches),
+				Pk:     pk,
 				Offset: i,
 				Src:    batch,
 			}
 			bat.Rows.Set(row)
 		}
+
 		bat.Batches = append(bat.Batches, batch)
 	}
 }
@@ -196,26 +219,39 @@ func (bat *AtomicBatch) Close() {
 
 func (bat *AtomicBatch) GetRowIterator() RowIterator {
 	return &atomicBatchRowIter{
-		iter: bat.Rows.Iter(),
+		iter:     bat.Rows.Iter(),
+		initIter: bat.Rows.Iter(),
 	}
 }
 
 var _ RowIterator = new(atomicBatchRowIter)
 
 type atomicBatchRowIter struct {
-	iter btree.IterG[AtomicBatchRow]
+	iter     btree.IterG[AtomicBatchRow]
+	initIter btree.IterG[AtomicBatchRow]
+}
+
+func (iter *atomicBatchRowIter) Item() AtomicBatchRow {
+	return iter.iter.Item()
+}
+
+func (iter *atomicBatchRowIter) Reset() {
+	iter.iter = iter.initIter
+}
+
+func (iter *atomicBatchRowIter) Prev() bool {
+	return iter.iter.Prev()
 }
 
 func (iter *atomicBatchRowIter) Next() bool {
 	return iter.iter.Next()
 }
 
-func (iter *atomicBatchRowIter) Row(ctx context.Context, wantedColsIndices []int, row []any) error {
+func (iter *atomicBatchRowIter) Row(ctx context.Context, row []any) error {
 	batchRow := iter.iter.Item()
 	return extractRowFromEveryVector2(
 		ctx,
 		batchRow.Src,
-		wantedColsIndices,
 		batchRow.Offset,
 		row,
 	)

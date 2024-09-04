@@ -15,36 +15,58 @@
 package cdc
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
 const (
 	watermarkUpdateInterval = time.Second
+
+	insertWatermarkFormat = "insert into mo_catalog.mo_cdc_watermark values (%d, '%s', %d, '%s')"
+
+	getWatermarkFormat = "select watermark from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s' and table_id = %d"
+
+	getWatermarkCountFormat = "select count(1) from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
+
+	updateWatermarkFormat = "update mo_catalog.mo_cdc_watermark set watermark='%s' where account_id = %d and task_id = '%s' and table_id = %d"
+
+	deleteWatermarkFormat = "delete from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
+
+	deleteWatermarkByTableFormat = "delete from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s' and table_id = %d"
 )
 
 type WatermarkUpdater struct {
+	accountId uint32
+	taskId    uuid.UUID
+	// sql executor
+	ie ie.InternalExecutor
 	// watermarkMap saves the watermark of each table
 	watermarkMap *sync.Map
-
-	persistFunc func(tableId uint64, watermark timestamp.Timestamp) error
 }
 
-func NewWatermarkUpdater(persistFunc func(tableId uint64, watermark timestamp.Timestamp) error) *WatermarkUpdater {
-	return &WatermarkUpdater{
+func NewWatermarkUpdater(accountId uint64, taskId string, ie ie.InternalExecutor) *WatermarkUpdater {
+	u := &WatermarkUpdater{
+		accountId:    uint32(accountId),
+		ie:           ie,
 		watermarkMap: &sync.Map{},
-		persistFunc:  persistFunc,
 	}
+	u.taskId, _ = uuid.Parse(taskId)
+	return u
 }
 
 func (u *WatermarkUpdater) Run(ar *ActiveRoutine) {
 	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ WatermarkUpdater.Run: start\n")
 	defer func() {
-		u.updateWatermark()
+		u.flushAll()
 		_, _ = fmt.Fprintf(os.Stderr, "^^^^^ WatermarkUpdater.Run: end\n")
 	}()
 
@@ -54,12 +76,12 @@ func (u *WatermarkUpdater) Run(ar *ActiveRoutine) {
 			return
 
 		case <-time.After(watermarkUpdateInterval):
-			u.updateWatermark()
+			u.flushAll()
 		}
 	}
 }
 
-func (u *WatermarkUpdater) UpdateTableWatermark(tableId uint64, watermark timestamp.Timestamp) {
+func (u *WatermarkUpdater) UpdateTableWatermark(tableId uint64, watermark types.TS) {
 	u.watermarkMap.Store(tableId, watermark)
 }
 
@@ -67,42 +89,78 @@ func (u *WatermarkUpdater) RemoveTable(tableId uint64) {
 	u.watermarkMap.Delete(tableId)
 }
 
-func (u *WatermarkUpdater) GetTableWatermark(tableId uint64) timestamp.Timestamp {
+func (u *WatermarkUpdater) GetTableWatermark(tableId uint64) types.TS {
 	if value, ok := u.watermarkMap.Load(tableId); ok {
-		return value.(timestamp.Timestamp)
-	} else {
-		return timestamp.Timestamp{}
+		return value.(types.TS)
 	}
+	return types.TS{}
 }
 
-func (u *WatermarkUpdater) updateWatermark() {
+func (u *WatermarkUpdater) flushAll() {
 	u.watermarkMap.Range(func(k, v any) bool {
 		tableId := k.(uint64)
-		ts := v.(timestamp.Timestamp)
+		ts := v.(types.TS)
 		// TODO handle error
-		_ = u.persistFunc(tableId, ts)
+		_ = u.updateWatermark(tableId, ts)
 		return true
 	})
 }
 
-type WatermarkPair struct {
-	newWMark timestamp.Timestamp
-	oldWMark timestamp.Timestamp
+func (u *WatermarkUpdater) InsertWatermark(tableId uint64, watermark types.TS) (err error) {
+	sql := fmt.Sprintf(insertWatermarkFormat, u.accountId, u.taskId, tableId, watermark.ToString())
+	ctx := defines.AttachAccountId(context.Background(), u.accountId)
+	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }
 
-func (wmark *WatermarkPair) String() string {
-	return fmt.Sprintf("newWMark %v oldWMark %v", TimestampToStr(wmark.newWMark), TimestampToStr(wmark.oldWMark))
-}
-
-func (wmark *WatermarkPair) NeedSkip(inputWMark timestamp.Timestamp) bool {
-	return inputWMark.LessEq(wmark.oldWMark)
-}
-
-func (wmark *WatermarkPair) Update(inputWMark timestamp.Timestamp) {
-	if wmark == nil {
+func (u *WatermarkUpdater) GetWatermark(tableId uint64) (watermark types.TS, err error) {
+	sql := fmt.Sprintf(getWatermarkFormat, u.accountId, u.taskId, tableId)
+	ctx := defines.AttachAccountId(context.Background(), u.accountId)
+	res := u.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
+	if res.Error() != nil {
+		err = res.Error()
+	} else if res.RowCount() < 1 {
+		err = moerr.NewInternalErrorf(ctx, "no watermark found for task: %s, tableId: %v\n", u.taskId, tableId)
+	} else if res.RowCount() > 1 {
+		err = moerr.NewInternalErrorf(ctx, "duplicate watermark found for task: %s, tableId: %v\n", u.taskId, tableId)
+	}
+	if err != nil {
 		return
 	}
-	if inputWMark.Greater(wmark.newWMark) {
-		wmark.newWMark = inputWMark
+
+	watermarkStr, err := res.GetString(ctx, 0, 0)
+	if err != nil {
+		return
 	}
+	return types.StringToTS(watermarkStr), nil
+}
+
+func (u *WatermarkUpdater) GetWatermarkCount() (uint64, error) {
+	sql := fmt.Sprintf(getWatermarkCountFormat, u.accountId, u.taskId)
+	ctx := defines.AttachAccountId(context.Background(), u.accountId)
+	res := u.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
+	if res.Error() != nil {
+		return 0, res.Error()
+	}
+	return res.GetUint64(ctx, 0, 0)
+}
+
+func (u *WatermarkUpdater) updateWatermark(tableId uint64, watermark types.TS) (err error) {
+	sql := fmt.Sprintf(updateWatermarkFormat, watermark.ToString(), u.accountId, u.taskId, tableId)
+	ctx := defines.AttachAccountId(context.Background(), u.accountId)
+	//fmt.Fprintf(os.Stderr, "====> updateWatermark tableId(%d), watermark(%s), start\n", tableId, watermarkStr)
+	err = u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
+	//fmt.Fprintf(os.Stderr, "====> updateWatermark tableId(%d), watermark(%s), end\n", tableId, watermarkStr)
+	return
+}
+
+func (u *WatermarkUpdater) DeleteWatermarks() (err error) {
+	sql := fmt.Sprintf(deleteWatermarkFormat, u.accountId, u.taskId)
+	ctx := defines.AttachAccountId(context.Background(), u.accountId)
+	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
+}
+
+func (u *WatermarkUpdater) deleteWatermarkByTable(tableId uint64) (err error) {
+	sql := fmt.Sprintf(deleteWatermarkByTableFormat, u.accountId, u.taskId, tableId)
+	ctx := defines.AttachAccountId(context.Background(), u.accountId)
+	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }

@@ -14,15 +14,6 @@
 
 package cdc
 
-import (
-	"context"
-	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-)
-
 const (
 	RowsRealDataOffset    int = 2
 	ObjectsRealDataOffset int = 0
@@ -436,149 +427,149 @@ const (
 //	return
 //}
 
-// appendInsertBuff appends bytes to insertBuff if not exceed its cap
-// otherwise, save insertBuff to res and reset insertBuff
-func appendInsertBuff(insertBuff, insertPrefix, bytes []byte, res *[][]byte) []byte {
-	// insert comma if not the first item
-	commaLen := 0
-	if len(insertBuff) != len(insertPrefix) {
-		commaLen = 1
-	}
+//// appendInsertBuff appends bytes to insertBuff if not exceed its cap
+//// otherwise, save insertBuff to res and reset insertBuff
+//func appendInsertBuff(insertBuff, insertPrefix, bytes []byte, res *[][]byte) []byte {
+//	// insert comma if not the first item
+//	commaLen := 0
+//	if len(insertBuff) != len(insertPrefix) {
+//		commaLen = 1
+//	}
+//
+//	if len(insertBuff)+commaLen+len(bytes) > cap(insertBuff) {
+//		*res = append(*res, copyBytes(insertBuff))
+//		insertBuff = insertBuff[:0]
+//		// TODO need to update timePrefix?
+//		insertBuff = append(insertBuff, insertPrefix...)
+//	}
+//
+//	if len(insertBuff) != len(insertPrefix) {
+//		insertBuff = appendByte(insertBuff, ',')
+//	}
+//	return append(insertBuff, bytes...)
+//}
 
-	if len(insertBuff)+commaLen+len(bytes) > cap(insertBuff) {
-		*res = append(*res, copyBytes(insertBuff))
-		insertBuff = insertBuff[:0]
-		// TODO need to update timePrefix?
-		insertBuff = append(insertBuff, insertPrefix...)
-	}
+//func appendDeleteBuff(deleteBuff, deletePrefix, bytes []byte, res *[][]byte) []byte {
+//	// insert comma if not the first item
+//	commaLen := 0
+//	if len(deleteBuff) != len(deletePrefix) {
+//		commaLen = 1
+//	}
+//
+//	// +1 is for the right parenthesis
+//	if len(deleteBuff)+commaLen+len(bytes)+1 > cap(deleteBuff) {
+//		deleteBuff = appendByte(deleteBuff, ')')
+//		*res = append(*res, copyBytes(deleteBuff))
+//		deleteBuff = deleteBuff[:0]
+//		deleteBuff = append(deleteBuff, deletePrefix...)
+//	}
+//
+//	if len(deleteBuff) != len(deletePrefix) {
+//		deleteBuff = appendByte(deleteBuff, ',')
+//	}
+//	return append(deleteBuff, bytes...)
+//}
 
-	if len(insertBuff) != len(insertPrefix) {
-		insertBuff = appendByte(insertBuff, ',')
-	}
-	return append(insertBuff, bytes...)
-}
+//func getPrimaryKeyStr(ctx context.Context, tableDef *plan.TableDef) (string, error) {
+//	if len(tableDef.Pkey.Names) == 0 {
+//		return "", moerr.NewInternalError(ctx, "cdc table need primary key")
+//	}
+//
+//	buf := strings.Builder{}
+//	buf.WriteByte('(')
+//	for i, pkName := range tableDef.Pkey.Names {
+//		if i > 0 {
+//			buf.WriteByte(',')
+//		}
+//		buf.WriteString(pkName)
+//	}
+//	buf.WriteByte(')')
+//	return buf.String(), nil
+//}
 
-func appendDeleteBuff(deleteBuff, deletePrefix, bytes []byte, res *[][]byte) []byte {
-	// insert comma if not the first item
-	commaLen := 0
-	if len(deleteBuff) != len(deletePrefix) {
-		commaLen = 1
-	}
+//func getValuesBuff(
+//	ctx context.Context,
+//	typs []types.Type,
+//	row []any,
+//	startColIdx int,
+//	colsCnt int,
+//	valuesBuff []byte,
+//) ([]byte, error) {
+//	var err error
+//	valuesBuff = valuesBuff[:0]
+//
+//	valuesBuff = appendByte(valuesBuff, '(')
+//	for i := startColIdx; i < startColIdx+colsCnt; i++ {
+//		if i > startColIdx {
+//			valuesBuff = appendByte(valuesBuff, ',')
+//		}
+//
+//		//transform column into text values
+//		if valuesBuff, err = convertColIntoSql(ctx, row[i], &typs[i], valuesBuff); err != nil {
+//			return valuesBuff, err
+//		}
+//	}
+//	valuesBuff = appendByte(valuesBuff, ')')
+//
+//	return valuesBuff, nil
+//}
 
-	// +1 is for the right parenthesis
-	if len(deleteBuff)+commaLen+len(bytes)+1 > cap(deleteBuff) {
-		deleteBuff = appendByte(deleteBuff, ')')
-		*res = append(*res, copyBytes(deleteBuff))
-		deleteBuff = deleteBuff[:0]
-		deleteBuff = append(deleteBuff, deletePrefix...)
-	}
-
-	if len(deleteBuff) != len(deletePrefix) {
-		deleteBuff = appendByte(deleteBuff, ',')
-	}
-	return append(deleteBuff, bytes...)
-}
-
-func getPrimaryKeyStr(ctx context.Context, tableDef *plan.TableDef) (string, error) {
-	if len(tableDef.Pkey.Names) == 0 {
-		return "", moerr.NewInternalError(ctx, "cdc table need primary key")
-	}
-
-	buf := strings.Builder{}
-	buf.WriteByte('(')
-	for i, pkName := range tableDef.Pkey.Names {
-		if i > 0 {
-			buf.WriteByte(',')
-		}
-		buf.WriteString(pkName)
-	}
-	buf.WriteByte(')')
-	return buf.String(), nil
-}
-
-func getValuesBuff(
-	ctx context.Context,
-	typs []types.Type,
-	row []any,
-	startColIdx int,
-	colsCnt int,
-	valuesBuff []byte,
-) ([]byte, error) {
-	var err error
-	valuesBuff = valuesBuff[:0]
-
-	valuesBuff = appendByte(valuesBuff, '(')
-	for i := startColIdx; i < startColIdx+colsCnt; i++ {
-		if i > startColIdx {
-			valuesBuff = appendByte(valuesBuff, ',')
-		}
-
-		//transform column into text values
-		if valuesBuff, err = convertColIntoSql(ctx, row[i], &typs[i], valuesBuff); err != nil {
-			return valuesBuff, err
-		}
-	}
-	valuesBuff = appendByte(valuesBuff, ')')
-
-	return valuesBuff, nil
-}
-
-func getDeleteInBuff(
-	ctx context.Context,
-	tableDef *plan.TableDef,
-	colName2Index map[string]int,
-	row []any,
-	pkIdxInRow int,
-	deleteInBuff []byte,
-) ([]byte, error) {
-	var err error
-	deleteInBuff = deleteInBuff[:0]
-
-	//decode primary key col from pk col data
-	if len(tableDef.Pkey.Names) != 1 {
-		//case 1: composed pk col
-		comPkCol := row[pkIdxInRow]
-		pkTuple, pkTypes, err := types.UnpackWithSchema(comPkCol.([]byte))
-		if err != nil {
-			return deleteInBuff, err
-		}
-
-		deleteInBuff = appendByte(deleteInBuff, '(')
-		for pkIdx, pkEle := range pkTuple {
-			if pkIdx > 0 {
-				deleteInBuff = appendByte(deleteInBuff, ',')
-			}
-			pkName := tableDef.Pkey.Names[pkIdx]
-			pkColIdx := colName2Index[pkName]
-			pkCol := tableDef.Cols[pkColIdx]
-			if pkTypes[pkIdx] != types.T(pkCol.Typ.Id) {
-				return deleteInBuff, moerr.NewInternalErrorf(ctx, "different pk col Type %v %v", pkTypes[pkIdx], pkCol.Typ.Id)
-			}
-			ttype := types.Type{
-				Oid:   types.T(pkCol.Typ.Id),
-				Width: pkCol.Typ.Width,
-				Scale: pkCol.Typ.Scale,
-			}
-			if deleteInBuff, err = convertColIntoSql(ctx, pkEle, &ttype, deleteInBuff); err != nil {
-				return deleteInBuff, err
-			}
-		}
-		deleteInBuff = appendByte(deleteInBuff, ')')
-	} else {
-		//case 2: single pk col
-		pkColData := row[pkIdxInRow]
-		pkName := tableDef.Pkey.Names[0]
-		pkColIdx := colName2Index[pkName]
-		pkCol := tableDef.Cols[pkColIdx]
-		ttype := types.Type{
-			Oid:   types.T(pkCol.Typ.Id),
-			Width: pkCol.Typ.Width,
-			Scale: pkCol.Typ.Scale,
-		}
-		if deleteInBuff, err = convertColIntoSql(ctx, pkColData, &ttype, deleteInBuff); err != nil {
-			return deleteInBuff, err
-		}
-	}
-
-	return deleteInBuff, nil
-}
+//func getDeleteInBuff(
+//	ctx context.Context,
+//	tableDef *plan.TableDef,
+//	colName2Index map[string]int,
+//	row []any,
+//	pkIdxInRow int,
+//	deleteInBuff []byte,
+//) ([]byte, error) {
+//	var err error
+//	deleteInBuff = deleteInBuff[:0]
+//
+//	//decode primary key col from pk col data
+//	if len(tableDef.Pkey.Names) != 1 {
+//		//case 1: composed pk col
+//		comPkCol := row[pkIdxInRow]
+//		pkTuple, pkTypes, err := types.UnpackWithSchema(comPkCol.([]byte))
+//		if err != nil {
+//			return deleteInBuff, err
+//		}
+//
+//		deleteInBuff = appendByte(deleteInBuff, '(')
+//		for pkIdx, pkEle := range pkTuple {
+//			if pkIdx > 0 {
+//				deleteInBuff = appendByte(deleteInBuff, ',')
+//			}
+//			pkName := tableDef.Pkey.Names[pkIdx]
+//			pkColIdx := colName2Index[pkName]
+//			pkCol := tableDef.Cols[pkColIdx]
+//			if pkTypes[pkIdx] != types.T(pkCol.Typ.Id) {
+//				return deleteInBuff, moerr.NewInternalErrorf(ctx, "different pk col Type %v %v", pkTypes[pkIdx], pkCol.Typ.Id)
+//			}
+//			ttype := types.Type{
+//				Oid:   types.T(pkCol.Typ.Id),
+//				Width: pkCol.Typ.Width,
+//				Scale: pkCol.Typ.Scale,
+//			}
+//			if deleteInBuff, err = convertColIntoSql(ctx, pkEle, &ttype, deleteInBuff); err != nil {
+//				return deleteInBuff, err
+//			}
+//		}
+//		deleteInBuff = appendByte(deleteInBuff, ')')
+//	} else {
+//		//case 2: single pk col
+//		pkColData := row[pkIdxInRow]
+//		pkName := tableDef.Pkey.Names[0]
+//		pkColIdx := colName2Index[pkName]
+//		pkCol := tableDef.Cols[pkColIdx]
+//		ttype := types.Type{
+//			Oid:   types.T(pkCol.Typ.Id),
+//			Width: pkCol.Typ.Width,
+//			Scale: pkCol.Typ.Scale,
+//		}
+//		if deleteInBuff, err = convertColIntoSql(ctx, pkColData, &ttype, deleteInBuff); err != nil {
+//			return deleteInBuff, err
+//		}
+//	}
+//
+//	return deleteInBuff, nil
+//}
