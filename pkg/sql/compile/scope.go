@@ -534,7 +534,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 				exprs = append(exprs, spec.Expr)
 				filters = append(filters, msg)
 			}
-			msgReceiver.Free()
 		}
 	}
 
