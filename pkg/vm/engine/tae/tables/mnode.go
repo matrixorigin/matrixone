@@ -117,10 +117,20 @@ func (node *memoryNode) getDuplicatedRowsLocked(
 	rowIDs containers.Vector,
 	maxRow uint32,
 	skipFn func(uint32) error,
+	skipCommittedBeforeTxnForAblk bool,
 	mp *mpool.MPool,
 ) (err error) {
 	blkID := objectio.NewBlockidWithObjectID(node.object.meta.Load().ID(), 0)
-	return node.pkIndex.GetDuplicatedRows(ctx, keys.GetDownstreamVector(), keysZM, blkID, rowIDs.GetDownstreamVector(), maxRow, skipFn, mp)
+	return node.pkIndex.GetDuplicatedRows(
+		ctx,
+		keys.GetDownstreamVector(),
+		keysZM,
+		blkID,
+		rowIDs.GetDownstreamVector(),
+		maxRow,
+		skipFn,
+		skipCommittedBeforeTxnForAblk,
+		mp)
 }
 
 func (node *memoryNode) Rows() (uint32, error) {
@@ -147,8 +157,11 @@ func (node *memoryNode) getDataWindowOnWriteSchema(
 	if node.data == nil {
 		return nil
 	}
-	from, to, commitTSVec, _, _ :=
+	from, to, commitTSVec, abort, _ :=
 		node.object.appendMVCC.CollectAppendLocked(start, end, mp)
+	if abort != nil {
+		abort.Close()
+	}
 	if commitTSVec == nil {
 		return nil
 	}
@@ -250,6 +263,7 @@ func (node *memoryNode) GetDuplicatedRows(
 	rowIDs containers.Vector,
 	isCommitting bool,
 	checkWWConflict bool,
+	skipCommittedBeforeTxnForAblk bool,
 	mp *mpool.MPool,
 ) (err error) {
 	node.object.RLock()
@@ -258,7 +272,7 @@ func (node *memoryNode) GetDuplicatedRows(
 	if checkWWConflict {
 		checkFn = node.checkConflictLocked(txn, isCommitting)
 	}
-	err = node.getDuplicatedRowsLocked(ctx, keys, keysZM, rowIDs, maxVisibleRow, checkFn, mp)
+	err = node.getDuplicatedRowsLocked(ctx, keys, keysZM, rowIDs, maxVisibleRow, checkFn, skipCommittedBeforeTxnForAblk, mp)
 
 	return
 }
@@ -331,11 +345,13 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 ) (err error) {
 	node.object.RLock()
 	defer node.object.RUnlock()
-	minRow, maxRow, commitTSVec, _, _ :=
+	minRow, maxRow, commitTSVec, abort, _ :=
 		node.object.appendMVCC.CollectAppendLocked(start, end, mp)
 	if commitTSVec == nil {
 		return nil
 	}
+	defer commitTSVec.Close()
+	defer abort.Close()
 	rowIDs := vector.MustFixedCol[types.Rowid](
 		node.data.GetVectorByName(catalog.AttrRowID).GetDownstreamVector())
 	commitTSs := vector.MustFixedCol[types.TS](commitTSVec.GetDownstreamVector())

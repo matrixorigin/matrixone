@@ -132,7 +132,8 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	return nil
+	// 4. delete retention info
+	return c.runSql(fmt.Sprintf(deleteMoRetentionWithDatabaseNameFormat, dbName))
 }
 
 func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
@@ -1266,6 +1267,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
+	if qry.RetentionDeadline != 0 {
+		insertRetention := fmt.Sprintf("insert into `%s`.`%s` values ('%s','%s', %d)",
+			catalog.MO_CATALOG, catalog.MO_RETENTION, dbName, tblName, qry.RetentionDeadline)
+		err = c.runSql(insertRetention)
+		if err != nil {
+			return err
+		}
+	}
+
 	if len(partitionTables) == 0 {
 		return nil
 	}
@@ -2286,7 +2296,15 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 		}
 	}
-	return nil
+
+	// remove entry in mo_retention if exists
+	// skip tables in mo_catalog.
+	// These tables do not have retention info.
+	if dbName == catalog.MO_CATALOG {
+		return nil
+	}
+	deleteRetentionSQL := fmt.Sprintf(deleteMoRetentionWithDatabaseNameAndTableNameFormat, dbName, tblName)
+	return c.runSql(deleteRetentionSQL)
 }
 
 func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {

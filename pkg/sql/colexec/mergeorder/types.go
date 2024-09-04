@@ -35,6 +35,7 @@ const (
 	receiving = iota
 	normalSending
 	pickUpSending
+	finish
 )
 
 type MergeOrder struct {

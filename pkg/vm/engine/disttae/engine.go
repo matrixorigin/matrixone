@@ -72,6 +72,7 @@ func New(
 	hakeeper logservice.CNHAKeeperClient,
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
 	updateWorkerFactor int,
+	options ...EngineOptions,
 ) *Engine {
 	cluster := clusterservice.GetMOCluster(service)
 	services := cluster.GetAllTNServices()
@@ -131,12 +132,31 @@ func New(
 		RwMutex:       &sync.Mutex{},
 	}
 
+	for _, opt := range options {
+		opt(e)
+	}
+	e.fillDefaults()
+
 	if err := e.init(ctx); err != nil {
 		panic(err)
 	}
 
 	e.pClient.LogtailRPCClientFactory = DefaultNewRpcStreamToTnLogTailService
 	return e
+}
+
+func (e *Engine) fillDefaults() {
+	if e.insertEntryMaxCount <= 0 {
+		e.insertEntryMaxCount = InsertEntryThreshold
+	}
+	if e.workspaceThreshold <= 0 {
+		e.workspaceThreshold = WorkspaceThreshold
+	}
+	logutil.Info(
+		"INIT-ENGINE-CONFIG",
+		zap.Int("InsertEntryMaxCount", e.insertEntryMaxCount),
+		zap.Uint64("WorkspaceThreshold", e.workspaceThreshold),
+	)
 }
 
 func (e *Engine) GetService() string {
@@ -551,11 +571,6 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		toFreeBatches:        make(map[tableKey][]*batch.Batch),
 		syncCommittedTSCount: e.cli.GetSyncLatestCommitTSTimes(),
 	}
-
-	txn.blockId_tn_delete_metaLoc_batch = struct {
-		sync.RWMutex
-		data map[types.Blockid][]*batch.Batch
-	}{data: make(map[types.Blockid][]*batch.Batch)}
 
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
