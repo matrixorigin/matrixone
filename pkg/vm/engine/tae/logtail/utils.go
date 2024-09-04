@@ -794,7 +794,7 @@ func (data *CNCheckpointData) ReadFromData(
 		it := table.locations.MakeIterator()
 		for it.HasNext() {
 			block := it.Next()
-			var bat *batch.Batch
+			var bat, newBat *batch.Batch
 			schema := checkpointDataReferVersions[version][uint32(idx)]
 			reader, err = blockio.NewObjectReader(data.sid, reader.GetObjectReader().GetObject().GetFs(), block.GetLocation())
 			if err != nil {
@@ -804,17 +804,22 @@ func (data *CNCheckpointData) ReadFromData(
 			if err != nil {
 				return
 			}
+			defer bat.Clean(m)
 			if block.GetEndOffset() == 0 {
 				continue
 			}
-			windowCNBatch(bat, block.GetStartOffset(), block.GetEndOffset())
+			newBat, err = bat.Window(int(block.GetStartOffset()), int(block.GetEndOffset()))
+			if err != nil {
+				return
+			}
+			defer newBat.Clean(m)
 			if dataBats[uint32(i)] == nil {
-				cnBatch := batch.NewWithSize(len(bat.Vecs))
-				cnBatch.Attrs = make([]string, len(bat.Attrs))
-				copy(cnBatch.Attrs, bat.Attrs)
+				cnBatch := batch.NewWithSize(len(newBat.Vecs))
+				cnBatch.Attrs = make([]string, len(newBat.Attrs))
+				copy(cnBatch.Attrs, newBat.Attrs)
 				for n := range cnBatch.Vecs {
-					cnBatch.Vecs[n] = vector.NewVec(*bat.Vecs[n].GetType())
-					if err = cnBatch.Vecs[n].UnionBatch(bat.Vecs[n], 0, bat.Vecs[n].Length(), nil, m); err != nil {
+					cnBatch.Vecs[n] = vector.NewVec(*newBat.Vecs[n].GetType())
+					if err = cnBatch.Vecs[n].UnionBatch(newBat.Vecs[n], 0, newBat.Vecs[n].Length(), nil, m); err != nil {
 						return
 					}
 				}
@@ -895,16 +900,6 @@ func (data *CNCheckpointData) GetCloseCB(version uint32, m *mpool.MPool) func() 
 // 	vec.Free(m)
 
 // }
-
-func windowCNBatch(bat *batch.Batch, start, end uint64) {
-	var err error
-	for i, vec := range bat.Vecs {
-		bat.Vecs[i], err = vec.Window(int(start), int(end))
-		if err != nil {
-			panic(err)
-		}
-	}
-}
 
 func (data *CheckpointData) Allocator() *mpool.MPool { return data.allocator }
 

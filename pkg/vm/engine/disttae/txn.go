@@ -472,7 +472,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			newBat.Vecs = bat.Vecs[1:]
 			newBat.SetRowCount(bat.Vecs[0].Length())
 			mp[tbKey] = append(mp[tbKey], newBat)
-			defer bat.Clean(txn.proc.GetMPool())
+			txn.toFreeBatches[tbKey] = append(txn.toFreeBatches[tbKey], bat)
 
 			keepElement = false
 		}
@@ -1126,6 +1126,7 @@ func (txn *Transaction) delTransaction() {
 		}
 		txn.proc.PutBatch(txn.writes[i].bat)
 	}
+	txn.CleanToFreeBatches()
 	txn.tableCache = nil
 	txn.tableOps = nil
 	txn.databaseMap = nil
@@ -1285,6 +1286,15 @@ func (txn *Transaction) SetHaveDDL(haveDDL bool) {
 
 func (txn *Transaction) GetHaveDDL() bool {
 	return txn.haveDDL.Load()
+}
+
+func (txn *Transaction) CleanToFreeBatches() {
+	for key := range txn.toFreeBatches {
+		for _, bat := range txn.toFreeBatches[key] {
+			txn.proc.PutBatch(bat)
+		}
+		delete(txn.toFreeBatches, key)
+	}
 }
 
 func newTableOps() *tableOpsChain {

@@ -557,6 +557,13 @@ func LoadCheckpointEntries(
 		}
 		var bat []*batch.Batch
 		bat, err = data.ReadFromData(ctx, tableID, locations[i], readers[i], versions[i], mp)
+		defer func() {
+			for _, b := range bat {
+				if b != nil {
+					b.Clean(mp)
+				}
+			}
+		}()
 		closeCBs = append(closeCBs, data.GetCloseCB(versions[i], mp))
 		if err != nil {
 			for j := range closeCBs {
