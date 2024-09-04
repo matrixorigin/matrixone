@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -27,6 +26,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"sort"
 
@@ -68,14 +69,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-
-	"net/http"
-	_ "net/http/pprof"
 )
-
-func init() {
-	go http.ListenAndServe("0.0.0.0:6060", nil)
-}
 
 const (
 	ModuleName               = "TAEDB"
