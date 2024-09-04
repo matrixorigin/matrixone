@@ -437,7 +437,6 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if s.NodeInfo.Mcpu <= 1 {
 		return s, nil
 	}
-	//only right broadcast join will go here
 	ms, ss := newParallelScope(s, c)
 	probeScope := c.newBroadcastJoinProbeScope(s, ss)
 	ms.PreScopes = append(ms.PreScopes, probeScope)
