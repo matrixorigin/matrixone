@@ -2975,13 +2975,12 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 			}
 			parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
 			scopes := make([]*Scope, 0, parallelSize)
-			regs := make([]*process.WaitRegister, 0, parallelSize)
+
 			for i := 0; i < parallelSize; i++ {
 				s := c.newEmptyMergeScope()
 				mergeArg := merge.NewArgument()
 				mergeArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				s.setRootOperator(mergeArg)
-
 				scopes = append(scopes, s)
 				scopes[i].Proc = c.proc.NewNoContextChildProc(1)
 				if c.anal.qry.LoadTag {
@@ -2989,7 +2988,6 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 						rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 					}
 				}
-				regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 			}
 
 			if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize && parallelSize > 1 {
@@ -2999,11 +2997,9 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 				arg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 				dataScope.setRootOperator(arg)
 			} else {
-				dispatchArg := constructDispatchLocal(false, false, false, regs)
+				_, dispatchArg := constructDispatchLocalAndRemote(0, scopes, dataScope)
+				dispatchArg.FuncId = dispatch.SendToAnyLocalFunc
 				dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-				if dataScope.NodeInfo.Mcpu > 1 {
-					dataScope = c.newMergeScope([]*Scope{dataScope})
-				}
 				dataScope.setRootOperator(dispatchArg)
 			}
 			dataScope.IsEnd = true
@@ -3623,7 +3619,9 @@ func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i, i)
 	}
 
-	rs.setRootOperator(constructDispatchLocal(false, false, false, extraRegisters(ss, 0)))
+	_, dispatchArg := constructDispatchLocalAndRemote(0, ss, rs)
+	dispatchArg.FuncId = dispatch.SendToAnyLocalFunc
+	rs.setRootOperator(dispatchArg)
 	rs.IsEnd = true
 	return rs
 }
@@ -4718,17 +4716,6 @@ func putBlocksInCurrentCN(c *Compile, relData engine.RelData, n *plan.Node) engi
 	})
 	nodes[0].Data = relData
 	return nodes
-}
-
-func extraRegisters(ss []*Scope, i int) []*process.WaitRegister {
-	regs := make([]*process.WaitRegister, 0, len(ss))
-	for _, s := range ss {
-		if s.IsEnd {
-			continue
-		}
-		regs = append(regs, s.Proc.Reg.MergeReceivers[i])
-	}
-	return regs
 }
 
 func dupType(typ *plan.Type) types.Type {
