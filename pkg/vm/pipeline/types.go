@@ -91,7 +91,7 @@ type Pipeline struct {
 // Cleanup do memory release work for whole pipeline.
 // we deliver the error because some operator may need to know what the error it is.
 func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
-	// should cancel the context before clean the pipeline to avoid more batch inputting while cleaning.
+	// cancel the context to stop its pre-pipelines.
 	proc.Cancel()
 
 	// If the last operator of this pipeline is a RecSink Operator.

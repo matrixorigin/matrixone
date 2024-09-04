@@ -117,7 +117,9 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-	preInsert.initBuf(proc, bat)
+	if err = preInsert.initBuf(proc, bat); err != nil {
+		return result, err
+	}
 
 	// keep shuffleIDX unchanged
 	preInsert.ctr.buf.ShuffleIDX = bat.ShuffleIDX

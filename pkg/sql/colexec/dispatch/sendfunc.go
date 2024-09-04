@@ -212,12 +212,12 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (
 
 	queryDone, err := ap.ctr.sp.SendBatch(proc.Ctx, sendto, bat, nil)
 	if err != nil || queryDone {
-		return false, err
+		return true, err
 	}
 	reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(ap.ctr.sp, sendto)
 	ap.ctr.sendCnt++
 
-	return true, nil
+	return false, nil
 }
 
 // common sender: send to any RemoteReceiver

@@ -125,8 +125,6 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	ap := dispatch
-
 	result, err := dispatch.Children[0].Call(proc)
 	if err != nil {
 		return result, err
@@ -135,7 +133,7 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	whichToSend := result.Batch
 	if result.Batch == nil {
 		result.Status = vm.ExecStop
-		if ap.RecSink {
+		if dispatch.RecSink {
 			whichToSend, err = makeEndBatch(proc)
 			if err != nil {
 				return result, err
@@ -146,27 +144,27 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}()
 		} else {
-			printShuffleResult(ap)
+			printShuffleResult(dispatch)
 			return result, nil
 		}
 	}
 
-	result.Status = vm.ExecNext
 	if whichToSend.Last() {
-		if !ap.ctr.hasData {
+		if !dispatch.ctr.hasData {
 			whichToSend.SetEnd()
 			result.Status = vm.ExecStop
 		} else {
-			ap.ctr.hasData = false
+			dispatch.ctr.hasData = false
 		}
 	} else if whichToSend.IsEmpty() {
 		result.Batch = batch.EmptyBatch
 		return result, nil
 	} else {
-		ap.ctr.hasData = true
+		dispatch.ctr.hasData = true
 	}
 
-	ok, err := ap.ctr.sendFunc(whichToSend, ap, proc)
+	// sending.
+	ok, err := dispatch.ctr.sendFunc(whichToSend, dispatch, proc)
 	if ok {
 		result.Status = vm.ExecStop
 	}
