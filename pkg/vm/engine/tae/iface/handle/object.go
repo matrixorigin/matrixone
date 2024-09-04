@@ -82,7 +82,6 @@ type ObjectReader interface {
 	) error
 	GetRelation() Relation
 
-	BatchDedup(pks containers.Vector) error
 	Prefetch(idxes []int) error
 	BlkCnt() int
 }

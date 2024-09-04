@@ -137,9 +137,6 @@ func (obj *TxnObject) GetRelation() (rel handle.Relation)                       
 func (obj *TxnObject) Update(uint64, uint32, uint16, any) (err error)                    { return }
 func (obj *TxnObject) RangeDelete(uint64, uint32, uint32, handle.DeleteType) (err error) { return }
 
-func (obj *TxnObject) SoftDeleteBlock(id types.Blockid) (err error) { return }
-func (obj *TxnObject) BatchDedup(containers.Vector) (err error)     { return }
-
 // func (blk *TxnBlock) IsAppendable() bool                                   { return true }
 
 func (blk *TxnBlock) Reset() {
