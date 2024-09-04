@@ -268,7 +268,7 @@ func (c *Conn) Read() ([]byte, error) {
 	if packetLength+HeaderLengthOfTheProtocol < c.ReadBufLen() {
 		// CASE 1: packet length < 1MB, fixBuf have more than 1 packet, c.fixBuf.writeIndex > HeaderLengthOfTheProtocol + packetLength
 		// So we keep next packet data
-		c.IncReadIndex(Min(packetLength+HeaderLengthOfTheProtocol, c.ReadBufLen()))
+		c.IncReadIndex(packetLength + HeaderLengthOfTheProtocol)
 	} else if packetLength+HeaderLengthOfTheProtocol == c.ReadBufLen() {
 		// CASE 2: packet length < 1MB, fixBuf just have 1 packet, c.fixBuf.writeIndex > HeaderLengthOfTheProtocol = packetLength
 		// indicates that fixBuf have no data, clean it
