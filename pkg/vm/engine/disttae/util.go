@@ -45,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -1435,7 +1434,7 @@ func NewStatsBlkIter(stats *objectio.ObjectStats, meta objectio.ObjectDataMeta) 
 		cur:        -1,
 		accRows:    0,
 		totalRows:  stats.Rows(),
-		curBlkRows: options.DefaultBlockMaxRows,
+		curBlkRows: objectio.BlockMaxRows,
 		meta:       meta,
 	}
 }
@@ -1453,7 +1452,7 @@ func (i *StatsBlkIter) Entry() objectio.BlockInfo {
 		i.cur = 0
 	}
 
-	// assume that all blks have DefaultBlockMaxRows, except the last one
+	// assume that all blks have BlockMaxRows, except the last one
 	if i.meta.IsEmpty() {
 		if i.cur == int(i.blkCnt-1) {
 			i.curBlkRows = i.totalRows - i.accRows

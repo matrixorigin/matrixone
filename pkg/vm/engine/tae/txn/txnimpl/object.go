@@ -178,9 +178,6 @@ func (obj *txnObject) Close() (err error) {
 	// putObjectCnt.Add(1)
 	return
 }
-func (obj *txnObject) GetTotalChanges() int {
-	return obj.entry.GetObjectData().GetTotalChanges()
-}
 func (obj *txnObject) GetMeta() any           { return obj.entry }
 func (obj *txnObject) String() string         { return obj.entry.String() }
 func (obj *txnObject) GetID() *types.Objectid { return obj.entry.ID() }
