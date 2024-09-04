@@ -789,6 +789,8 @@ message Node {
 	ObjectRef parent_obj_ref = 19;
 	RowsetData rowset_data = 20;
 
+	repeated Expr insert_delete_cols = 21;
+
 	string extra_options = 22;
 	DeleteCtx delete_ctx = 23;
 

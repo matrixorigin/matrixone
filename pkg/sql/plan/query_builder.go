@@ -1384,6 +1384,137 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
+	case plan.Node_DEDUP_JOIN:
+		for _, expr := range node.OnList {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
+
+		internalMap := make(map[[2]int32][2]int32)
+
+		leftID := node.Children[0]
+		leftRemapping, err := builder.remapAllColRefs(leftID, step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+
+		for k, v := range leftRemapping.globalToLocal {
+			internalMap[k] = v
+		}
+
+		rightID := node.Children[1]
+		rightRemapping, err := builder.remapAllColRefs(rightID, step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+
+		for k, v := range rightRemapping.globalToLocal {
+			internalMap[k] = [2]int32{1, v[1]}
+		}
+
+		remapInfo.tip = "OnList"
+		for idx, expr := range node.OnList {
+			increaseRefCnt(expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		childProjList := builder.qry.Nodes[leftID].ProjectList
+		for i, globalRef := range leftRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+		}
+
+		childProjList = builder.qry.Nodes[rightID].ProjectList
+		for i, globalRef := range rightRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 1,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+		}
+
+	case plan.Node_INSERT, plan.Node_DELETE:
+		for _, expr := range node.InsertDeleteCols {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
+
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+
+		remapInfo.tip = "FilterList"
+		for idx, expr := range node.InsertDeleteCols {
+			increaseRefCnt(expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		for i, globalRef := range childRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+		}
+
+		if len(node.ProjectList) == 0 {
+			if len(childRemapping.localToGlobal) > 0 {
+				remapping.addColRef(childRemapping.localToGlobal[0])
+			}
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[0].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+					},
+				},
+			})
+		}
+
 	default:
 		return nil, moerr.NewInternalError(builder.GetContext(), "unsupport node type")
 	}
@@ -1580,8 +1711,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootNode := builder.qry.Nodes[rootID]
 		resultTag := rootNode.BindingTags[0]
 		colRefCnt := make(map[[2]int32]int)
-		for j := range rootNode.ProjectList {
-			colRefCnt[[2]int32{resultTag, int32(j)}] = 1
+		if rootNode.NodeType == plan.Node_PROJECT {
+			for j := range rootNode.ProjectList {
+				colRefCnt[[2]int32{resultTag, int32(j)}] = 1
+			}
 		}
 		_, err := builder.remapAllColRefs(rootID, int32(i), colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
