@@ -729,9 +729,7 @@ func (c *infoArg) Run() error {
 		if err != nil {
 			logutil.Warnf("get object rows failed, obj: %v, err %v", c.obj.ID().String(), err)
 		}
-		dels := c.obj.GetObjectData().GetTotalChanges()
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
-		b.WriteString(fmt.Sprintf("left rows: %v\n", rows-dels))
 		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.obj.GetObjectData().PPString(c.verbose, 0, "", c.blkn)))
 
 		schema := c.obj.GetSchema()

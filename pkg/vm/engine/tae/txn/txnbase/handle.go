@@ -150,7 +150,6 @@ func (blk *TxnBlock) Reset() {
 	blk.Txn = nil
 	blk.Seg = nil
 }
-func (blk *TxnBlock) GetTotalChanges() int                                  { return 0 }
 func (blk *TxnBlock) IsAppendableBlock() bool                               { return true }
 func (blk *TxnBlock) Fingerprint() *common.ID                               { return &common.ID{} }
 func (blk *TxnBlock) Rows() int                                             { return 0 }
