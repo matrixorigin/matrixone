@@ -100,6 +100,7 @@ type txnTable struct {
 
 	dataTable      *baseTable
 	tombstoneTable *baseTable
+	transferedTS   types.TS
 
 	idx int
 }
@@ -132,7 +133,9 @@ func (tbl *txnTable) getBaseTable(isTombstone bool) *baseTable {
 	return tbl.dataTable
 }
 func (tbl *txnTable) PrePreareTransfer(phase string, ts types.TS) (err error) {
-	return tbl.TransferDeletes(ts, phase)
+	err = tbl.TransferDeletes(ts, phase)
+	tbl.transferedTS = ts
+	return
 }
 
 func (tbl *txnTable) TransferDeleteIntent(
@@ -180,7 +183,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 	id := tbl.entry.AsCommonID()
 	var softDeleteObjects []*catalog.ObjectEntry
 	if len(tbl.tombstoneTable.tableSpace.stats) != 0 {
-		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(tbl.store.txn.GetStartTS(), types.TS{}, ts)
+		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(tbl.store.txn.GetStartTS(), tbl.transferedTS.Next(), ts)
 		// transfer deltaloc
 		for _, obj := range softDeleteObjects {
 			sel, err := blockio.FindTombstonesOfObject(context.TODO(), *obj.ID(), tbl.tombstoneTable.tableSpace.stats, tbl.store.rt.Fs.Service)
@@ -214,6 +217,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 						if *blkID2.Object() != *obj.ID() {
 							continue
 						}
+						id.BlockID = blkID2
 						if pkType == nil {
 							pkType = vectors[1].GetType()
 						}
@@ -229,6 +233,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 					}
 				}
 			}
+			tbl.store.warChecker.Delete(id)
 		}
 	}
 	transferd := nulls.Nulls{}

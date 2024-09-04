@@ -150,9 +150,6 @@ func (entry *TableEntry) GetSoftdeleteObjects(txnStartTS, dedupedTS, collectTS t
 	defer iter2.Release()
 	for iter2.Next() {
 		obj := iter2.Item()
-		if !obj.CreatedAt.Less(&txnStartTS) {
-			continue
-		}
 		if obj.DeletedAt.IsEmpty() {
 			continue
 		}
