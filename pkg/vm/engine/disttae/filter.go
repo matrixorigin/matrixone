@@ -1296,6 +1296,10 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 		val := vector.MustFixedCol[types.Decimal128](vec)[row]
 		ret = types.EncodeDecimal128(&val)
 
+	case types.T_uuid:
+		val := vector.MustFixedCol[types.Uuid](vec)[row]
+		ret = types.EncodeUuid(&val)
+
 	default:
 		can = false
 	}

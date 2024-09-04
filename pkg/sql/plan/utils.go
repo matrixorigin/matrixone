@@ -2349,13 +2349,7 @@ func ReplaceFoldVal(proc *process.Process, expr *Expr, executorMap map[int]colex
 		switch expr.Expr.(type) {
 		case *plan.Expr_List:
 			//@todo need Expr_List executor
-			// for i := range ef.List.List {
-			// 	if !rule.IsConstant(ef.List.List[i], true) {
-			// 		return false, nil
-			// 	}
-			// }
-			// return true, nil
-			return false, nil
+			return true, nil
 		case *plan.Expr_Col:
 			return false, nil
 		case *plan.Expr_Vec:
@@ -2390,6 +2384,11 @@ func ReplaceFoldVal(proc *process.Process, expr *Expr, executorMap map[int]colex
 	} else {
 		for i, canFold := range argFold {
 			if canFold {
+				fn.Args[i], err = ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
+				if err != nil {
+					return false, err
+				}
+
 				exprExecutor, err := colexec.NewExpressionExecutor(proc, fn.Args[i])
 				if err != nil {
 					return false, err
