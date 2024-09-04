@@ -190,7 +190,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 				}
 
 				getUpgradeLogger().Info("final version added",
-					zap.String("final", final.Version))
+					zap.String("final", final.Version), zap.Uint32("versionOffset", final.VersionOffset))
 
 				latest, err := versions.MustGetLatestReadyVersion(txn)
 				if err != nil {
