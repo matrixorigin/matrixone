@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -54,7 +55,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/tidwall/btree"
 	"golang.org/x/sync/errgroup"
 )
@@ -2987,7 +2987,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	if accountExist {
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusSuspend {
 			ses.getRoutineManager().accountRoutine.EnKillQueue(int64(targetAccountId), version)
-
+			logutil.Infof("[set suspend] set account id %d, version %d suspend", targetAccountId, version)
 			if err := postDropSuspendAccount(ctx, ses, aa.Name, int64(targetAccountId), version); err != nil {
 				ses.Errorf(ctx, "post alter account suspend error: %s", err.Error())
 			}
@@ -2997,6 +2997,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			accountId2RoutineMap := ses.getRoutineManager().accountRoutine.deepCopyRoutineMap()
 			if rtMap, ok := accountId2RoutineMap[int64(targetAccountId)]; ok {
 				for rt := range rtMap {
+					logutil.Infof("[set restricted] set account id %d, connection id %d restricted", targetAccountId, rt.getConnectionID())
 					rt.setResricted(true)
 				}
 			}
@@ -3465,8 +3466,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 
 	//set backgroundHandler's default schema
 	if handler, ok := bh.(*backExec); ok {
-		handler.backSes.
-			txnCompileCtx.dbName = catalog.MO_CATALOG
+		handler.backSes.txnCompileCtx.dbName = catalog.MO_CATALOG
 	}
 
 	var sql, db, table string
@@ -3478,6 +3478,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 	var deleteCtx context.Context
 	var accountId int64
 	var version uint64
+	var hasAccount = true
 	clusterTables := make(map[string]int)
 
 	da.Name, err = normalizeName(ctx, da.Name)
@@ -3509,6 +3510,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			if !da.IfExists { //when the "IF EXISTS" is set, just skip it.
 				rtnErr = moerr.NewInternalErrorf(ctx, "there is no account %s", da.Name)
 			}
+			hasAccount = false
 			return
 		}
 		accountId = int64(nameInfoMap[da.Name].Id)
@@ -3712,6 +3714,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		return err
 	}
 
+	if !hasAccount {
+		return err
+	}
 	// if drop the account, add the account to kill queue
 	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
 
@@ -3725,36 +3730,19 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 func postDropSuspendAccount(
 	ctx context.Context, ses *Session, accountName string, accountID int64, version uint64,
 ) (err error) {
+	if accountID == 0 {
+		return err
+	}
 	qc := getGlobalPu().QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
 	var nodes []string
-	currTenant := ses.GetTenantInfo().GetTenant()
-	currUser := ses.GetTenantInfo().User
-	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": accountName}, clusterservice.Contain)
-	sysTenant := isSysTenant(currTenant)
-	if sysTenant {
-		route.RouteForSuperTenant(
-			ses.GetService(),
-			clusterservice.NewSelector(),
-			currUser,
-			nil,
-			func(s *metadata.CNService) {
-				nodes = append(nodes, s.QueryAddress)
-			},
-		)
-	} else {
-		route.RouteForCommonTenant(
-			ses.GetService(),
-			labels,
-			nil,
-			func(s *metadata.CNService) {
-				nodes = append(nodes, s.QueryAddress)
-			},
-		)
-	}
+	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(clusterservice.NewSelectAll(),
+		func(s metadata.CNService) bool {
+			nodes = append(nodes, s.QueryAddress)
+			return true
+		})
 
 	var retErr error
 	genRequest := func() *query.Request {
@@ -8791,36 +8779,18 @@ func postAlterSessionStatus(
 	accountName string,
 	tenantId int64,
 	status string) error {
+	logutil.Infof("[set restricted] post set account id %d status : %s", tenantId, status)
 	qc := getGlobalPu().QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
-	currTenant := ses.GetTenantInfo().GetTenant()
-	currUser := ses.GetTenantInfo().GetUser()
+
 	var nodes []string
-	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": accountName}, clusterservice.Contain)
-	sysTenant := isSysTenant(currTenant)
-	if sysTenant {
-		route.RouteForSuperTenant(
-			ses.GetService(),
-			clusterservice.NewSelector(),
-			currUser,
-			nil,
-			func(s *metadata.CNService) {
-				nodes = append(nodes, s.QueryAddress)
-			},
-		)
-	} else {
-		route.RouteForCommonTenant(
-			ses.GetService(),
-			labels,
-			nil,
-			func(s *metadata.CNService) {
-				nodes = append(nodes, s.QueryAddress)
-			},
-		)
-	}
+	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(clusterservice.NewSelectAll(),
+		func(s metadata.CNService) bool {
+			nodes = append(nodes, s.QueryAddress)
+			return true
+		})
 
 	var retErr, err error
 

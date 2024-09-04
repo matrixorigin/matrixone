@@ -269,10 +269,10 @@ GRANT values ON table *.* `admin`@`localhost`
 GRANT connect ON account  `admin`@`localhost`
 /* save_result */show create table tt;
 Table    Create Table
-tt    CREATE TABLE `tt` (\n  `a` INT DEFAULT NULL\n)
+tt    CREATE TABLE `tt` (\n  `a` int DEFAULT NULL\n)
 select * from result_scan(last_query_id()) as u;
-Table    Create Table
-tt    CREATE TABLE `tt` (\n  `a` INT DEFAULT NULL\n)
+table    create table
+tt    CREATE TABLE `tt` (\n  `a` int DEFAULT NULL\n)
 alter table tt add unique index id(a);
 /* save_result */show index from tt;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
@@ -495,7 +495,7 @@ select * from result_scan(last_query_id()) as u;
 no configure: save query result
 /* save_result */show create table tt;
 Table    Create Table
-tt    CREATE TABLE `tt` (\n  `a` INT DEFAULT NULL\n)
+tt    CREATE TABLE `tt` (\n  `a` int DEFAULT NULL\n)
 select * from result_scan(last_query_id()) as u;
 no configure: save query result
 alter table tt add unique index id(a);
