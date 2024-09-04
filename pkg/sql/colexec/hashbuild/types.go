@@ -90,7 +90,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	if pipelineFailed || err != nil {
 		hashBuild.ctr.hashmapBuilder.FreeWithError(proc)
 	} else {
-		hashBuild.ctr.hashmapBuilder.Reset()
+		hashBuild.ctr.hashmapBuilder.Reset(proc)
 	}
 }
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {

@@ -63,6 +63,13 @@ func (jm *JoinMap) SetRowCount(cnt int64) {
 	jm.rowcnt = cnt
 }
 
+func (jm *JoinMap) GetRefCount() int64 {
+	if jm == nil {
+		return 0
+	}
+	return atomic.LoadInt64(&jm.refCnt)
+}
+
 func (jm *JoinMap) GetRowCount() int64 {
 	if jm == nil {
 		return 0
