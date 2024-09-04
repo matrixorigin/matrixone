@@ -2388,6 +2388,9 @@ func ReplaceFoldVal(proc *process.Process, expr *Expr, executorMap map[int]colex
 				if err != nil {
 					return false, err
 				}
+				if _, ok := fn.Args[i].Expr.(*plan.Expr_Vec); ok {
+					continue
+				}
 
 				exprExecutor, err := colexec.NewExpressionExecutor(proc, fn.Args[i])
 				if err != nil {
