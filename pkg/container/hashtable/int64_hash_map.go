@@ -15,7 +15,6 @@
 package hashtable
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -48,18 +47,10 @@ func init() {
 	maxIntCellCntPerBlock = maxBlockSize / intCellSize
 }
 
-<<<<<<< HEAD
 func (ht *Int64HashMap) Free(m *mpool.MPool) {
 	for i := range ht.rawData {
 		if len(ht.rawData[i]) > 0 {
 			m.Free(ht.rawData[i])
-=======
-func (ht *Int64HashMap) Free() {
-	logutil.Infof("int64 hashmap free!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-	for i, de := range ht.rawDataDeallocators {
-		if de != nil {
-			de.Deallocate(malloc.NoHints)
->>>>>>> f3ed304... fix
 		}
 		ht.rawData[i], ht.cells[i] = nil, nil
 	}
