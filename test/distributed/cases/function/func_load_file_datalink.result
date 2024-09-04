@@ -28,4 +28,9 @@ Hello world!
 select load_file(cast('stage://filestage/normal.txt?offset=0&size=3' as datalink));
 load_file(cast(stage://filestage/normal.txt?offset=0&size=3 as datalink))
 Hel
+select save_file(cast('stage://filestage/into_outfile/datalink/1.txt' as datalink), 'this is a test.');
+file 1.txt already exists
+select load_file(cast('stage://filestage/into_outfile/datalink/1.txt' as datalink));
+load_file(cast(stage://filestage/into_outfile/datalink/1.txt as datalink))
+this is a test.
 drop stage filestage;

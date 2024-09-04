@@ -31,4 +31,8 @@ create stage filestage URL='file://$resources/file_test/';
 select load_file(cast('stage://filestage/normal.txt' as datalink));
 select load_file(cast('stage://filestage/normal.txt?offset=0&size=3' as datalink));
 
+-- 2. write datalink to file
+select save_file(cast('stage://filestage/into_outfile/datalink/1.txt' as datalink), 'this is a test.');
+select load_file(cast('stage://filestage/into_outfile/datalink/1.txt' as datalink));
+
 drop stage filestage;
