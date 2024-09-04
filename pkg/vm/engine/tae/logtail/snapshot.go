@@ -187,10 +187,11 @@ func (d *DeltaLocDataSource) Close() {
 func (d *DeltaLocDataSource) ApplyTombstones(
 	ctx context.Context,
 	bid objectio.Blockid,
+	byCN bool,
 	rowsOffset []int64,
 	applyPolicy engine.TombstoneApplyPolicy,
 ) ([]int64, error) {
-	deleteMask, err := d.getAndApplyTombstones(ctx, bid)
+	deleteMask, err := d.getAndApplyTombstones(ctx, bid, byCN)
 	if err != nil {
 		return nil, err
 	}
@@ -206,10 +207,10 @@ func (d *DeltaLocDataSource) ApplyTombstones(
 }
 
 func (d *DeltaLocDataSource) GetTombstones(
-	ctx context.Context, bid objectio.Blockid,
+	ctx context.Context, bid objectio.Blockid, byCN bool,
 ) (deletedRows *nulls.Nulls, err error) {
 	var rows *nulls.Bitmap
-	rows, err = d.getAndApplyTombstones(ctx, bid)
+	rows, err = d.getAndApplyTombstones(ctx, bid, byCN)
 	if err != nil {
 		return
 	}
@@ -220,14 +221,14 @@ func (d *DeltaLocDataSource) GetTombstones(
 }
 
 func (d *DeltaLocDataSource) getAndApplyTombstones(
-	ctx context.Context, bid objectio.Blockid,
+	ctx context.Context, bid objectio.Blockid, createdByCN bool,
 ) (*nulls.Bitmap, error) {
 	deltaLoc, ts := d.ds.GetDeltaLoc(bid)
 	if deltaLoc.IsEmpty() {
 		return nil, nil
 	}
 	logutil.Infof("deltaLoc: %v, id is %d", deltaLoc.String(), bid.Sequence())
-	deletes, _, release, err := blockio.ReadBlockDelete(ctx, deltaLoc, d.fs)
+	deletes, release, err := blockio.ReadDeletes(ctx, deltaLoc, d.fs, createdByCN)
 	if err != nil {
 		return nil, err
 	}
@@ -597,7 +598,8 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 	if err != nil {
 		return 0, err
 	}
-	size := writer.GetObjectStats()[0].OriginSize()
+	ss := writer.GetObjectStats()
+	size := ss.OriginSize()
 	return size, err
 }
 
@@ -665,7 +667,8 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 	if err != nil {
 		return 0, err
 	}
-	size := writer.GetObjectStats()[0].OriginSize()
+	ss := writer.GetObjectStats()
+	size := ss.OriginSize()
 	return size, err
 }
 

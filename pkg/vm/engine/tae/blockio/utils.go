@@ -38,7 +38,7 @@ func GetTombstonesByBlockId(
 	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
 		location := tombstoneObject.BlockLocation(uint16(pos), objectio.BlockMaxRows)
 		if mask, err := FillBlockDeleteMask(
-			ctx, ts, blockId, location, fs,
+			ctx, ts, blockId, location, fs, tombstoneObject.GetCNCreated(),
 		); err != nil {
 			return false, err
 		} else {

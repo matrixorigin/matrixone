@@ -547,18 +547,15 @@ func (w *S3Writer) sync(proc *process.Process) ([]objectio.BlockInfo, objectio.O
 		)
 	}
 
-	stats := w.writer.GetObjectStats()
-
-	var i = -1
-	for i = range stats {
-		if !stats[i].IsZero() {
-			stats[i].SetCNCreated()
-			if w.sortIndex != -1 {
-				stats[i].SetSorted()
-			}
-			break
-		}
+	opts := []objectio.ObjectStatsOptions{
+		objectio.WithCNCreated(),
 	}
 
-	return blkInfos, stats[i], err
+	if w.sortIndex != -1 {
+		opts = append(opts, objectio.WithSorted())
+	}
+
+	stats := w.writer.GetObjectStats(opts...)
+
+	return blkInfos, stats, err
 }

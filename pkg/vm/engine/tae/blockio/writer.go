@@ -101,8 +101,8 @@ func (w *BlockWriter) SetAppendable() {
 	w.writer.SetAppendable()
 }
 
-func (w *BlockWriter) GetObjectStats() []objectio.ObjectStats {
-	return w.objectStats
+func (w *BlockWriter) GetObjectStats(opts ...objectio.ObjectStatsOptions) objectio.ObjectStats {
+	return w.writer.GetObjectStats(opts...)
 }
 
 // WriteBatch write a batch whose schema is decribed by seqnum in NewBlockWriterNew
@@ -203,8 +203,6 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 			common.OperandField("[Size=0]"), common.OperandField(w.writer.GetSeqnums()))
 		return blocks, objectio.Extent{}, err
 	}
-
-	w.objectStats = w.writer.GetObjectStats()
 
 	logutil.Debug("[WriteEnd]",
 		common.OperationField(w.String(blocks)),

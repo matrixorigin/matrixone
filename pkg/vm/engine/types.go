@@ -742,12 +742,13 @@ type DataSource interface {
 	ApplyTombstones(
 		ctx context.Context,
 		bid objectio.Blockid,
+		byCN bool,
 		rowsOffset []int64,
 		applyPolicy TombstoneApplyPolicy,
 	) ([]int64, error)
 
 	GetTombstones(
-		ctx context.Context, bid objectio.Blockid,
+		ctx context.Context, bid objectio.Blockid, byCN bool,
 	) (deletedRows *nulls.Nulls, err error)
 
 	SetOrderBy(orderby []*plan.OrderBySpec)

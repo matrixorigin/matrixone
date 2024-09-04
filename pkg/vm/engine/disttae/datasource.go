@@ -210,6 +210,7 @@ func (rs *RemoteDataSource) applyPersistedTombstones(
 func (rs *RemoteDataSource) ApplyTombstones(
 	ctx context.Context,
 	bid objectio.Blockid,
+	byCN bool,
 	rowsOffset []int64,
 	applyPolicy engine.TombstoneApplyPolicy,
 ) (left []int64, err error) {
@@ -228,7 +229,7 @@ func (rs *RemoteDataSource) ApplyTombstones(
 }
 
 func (rs *RemoteDataSource) GetTombstones(
-	ctx context.Context, bid objectio.Blockid,
+	ctx context.Context, bid objectio.Blockid, byCN bool,
 ) (mask *nulls.Nulls, err error) {
 
 	mask = &nulls.Nulls{}
@@ -607,7 +608,8 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 		offsets := rowIdsToOffset(retainedRowIds, int64(0)).([]int64)
 
 		b, _ := retainedRowIds[0].Decode()
-		sels, err := ls.ApplyTombstones(ls.ctx, b, offsets, engine.Policy_CheckUnCommittedOnly)
+		sels, err := ls.ApplyTombstones(
+			ls.ctx, b, false, offsets, engine.Policy_CheckUnCommittedOnly)
 		if err != nil {
 			return err
 		}
@@ -707,7 +709,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 			//	minTS = entry.Time
 			//}
 
-			sel, err = ls.ApplyTombstones(ls.ctx, b, []int64{int64(o)}, applyPolicy)
+			sel, err = ls.ApplyTombstones(ls.ctx, b, false, []int64{int64(o)}, applyPolicy)
 			if err != nil {
 				return err
 			}
@@ -777,6 +779,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 func (ls *LocalDataSource) ApplyTombstones(
 	ctx context.Context,
 	bid objectio.Blockid,
+	byCN bool,
 	rowsOffset []int64,
 	dynamicPolicy engine.TombstoneApplyPolicy,
 ) ([]int64, error) {
@@ -835,7 +838,7 @@ func (ls *LocalDataSource) ApplyTombstones(
 }
 
 func (ls *LocalDataSource) GetTombstones(
-	ctx context.Context, bid objectio.Blockid,
+	ctx context.Context, bid objectio.Blockid, byCN bool,
 ) (deletedRows *nulls.Nulls, err error) {
 
 	deletedRows = &nulls.Nulls{}
@@ -1153,9 +1156,8 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		bfIndex  index.StaticFilter
 		location objectio.Location
 
-		loaded        *batch.Batch
-		persistedByCN bool
-		release       func()
+		loaded  *batch.Batch
+		release func()
 	)
 
 	anyIf := func(check func(row types.Rowid) bool) bool {
@@ -1207,7 +1209,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
-			if loaded, persistedByCN, release, err = blockio.ReadBlockDelete(ls.ctx, location, ls.fs); err != nil {
+			if loaded, release, err = blockio.ReadDeletes(ls.ctx, location, ls.fs, obj.GetCNCreated()); err != nil {
 				return nil, err
 			}
 
@@ -1215,7 +1217,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 			var commit []types.TS
 
 			deletedRowIds = vector.MustFixedColWithTypeCheck[types.Rowid](loaded.Vecs[0])
-			if !persistedByCN {
+			if !obj.GetCNCreated() {
 				commit = vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[1])
 			}
 

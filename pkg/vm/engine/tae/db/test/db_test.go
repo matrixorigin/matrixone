@@ -4197,8 +4197,7 @@ func TestBlockRead(t *testing.T) {
 			bid, _ := blkEntry.ID(), blkEntry.ID()
 
 			info := &objectio.BlockInfo{
-				BlockID:    *objectio.NewBlockidWithObjectID(bid, 0),
-				Appendable: false, // TODO: jxm
+				BlockID: *objectio.NewBlockidWithObjectID(bid, 0),
 			}
 			metaloc := objectEntry.ObjectLocation()
 			metaloc.SetRows(schema.BlockMaxRows)
@@ -4275,7 +4274,7 @@ func TestBlockRead(t *testing.T) {
 			assert.Equal(t, 16, b4.Vecs[0].Length())
 
 			// read rowid column only
-			info.Appendable = false
+			//info.Appendable = false
 			b5 := buildBatch([]types.Type{types.T_Rowid.ToType()})
 			err = blockio.BlockDataReadInner(
 				context.Background(), "", info,
@@ -4997,7 +4996,8 @@ func TestMergeMemsize(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, batCnt, len(blocks))
 	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
+	ss := writer.GetObjectStats()
+	statsVec.Append(ss[:], false)
 	{
 		txn, _ := tae.StartTxn(nil)
 		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
@@ -5067,7 +5067,8 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
 	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
+	ss := writer.GetObjectStats()
+	statsVec.Append(ss[:], false)
 	defer statsVec.Close()
 	{
 		txn, _ := tae.StartTxn(nil)
@@ -5169,7 +5170,8 @@ func TestAlwaysUpdate(t *testing.T) {
 		blocks, _, err := writer.Sync(context.Background())
 		assert.Nil(t, err)
 		assert.Equal(t, 25, len(blocks))
-		statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
+		ss := writer.GetObjectStats()
+		statsVec.Append(ss[:], false)
 	}
 
 	// var did, tid uint64
@@ -7572,7 +7574,8 @@ func TestCommitS3Blocks(t *testing.T) {
 		assert.Equal(t, 50, len(blocks))
 		statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 		defer statsVec.Close()
-		statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
+		ss := writer.GetObjectStats()
+		statsVec.Append(ss[:], false)
 		statsVecs = append(statsVecs, statsVec)
 	}
 
@@ -7646,7 +7649,8 @@ func TestDedupSnapshot2(t *testing.T) {
 	assert.Equal(t, 1, len(blocks))
 	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 	defer statsVec.Close()
-	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
+	ss := writer.GetObjectStats()
+	statsVec.Append(ss[:], false)
 
 	name2 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
 	writer, err = blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name2, 0, nil)
@@ -7659,7 +7663,8 @@ func TestDedupSnapshot2(t *testing.T) {
 	assert.Equal(t, 1, len(blocks))
 	statsVec2 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 	defer statsVec2.Close()
-	statsVec2.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
+	ss = writer.GetObjectStats()
+	statsVec2.Append(ss[:], false)
 
 	txn, rel := tae.GetRelation()
 	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec)
@@ -7821,7 +7826,8 @@ func TestDeduplication(t *testing.T) {
 
 	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 	defer statsVec.Close()
-	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
+	ss := writer.GetObjectStats()
+	statsVec.Append(ss[:], false)
 
 	txn, rel := tae.GetRelation()
 	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec)

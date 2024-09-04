@@ -96,6 +96,7 @@ func (d *BackupDeltaLocDataSource) Close() {
 func (d *BackupDeltaLocDataSource) ApplyTombstones(
 	_ context.Context,
 	_ objectio.Blockid,
+	_ bool,
 	_ []int64,
 	_ engine.TombstoneApplyPolicy,
 ) ([]int64, error) {
@@ -172,7 +173,7 @@ func GetTombstonesByBlockId(
 }
 
 func (d *BackupDeltaLocDataSource) GetTombstones(
-	_ context.Context, bid objectio.Blockid,
+	_ context.Context, bid objectio.Blockid, byCN bool,
 ) (deletedRows *nulls.Nulls, err error) {
 	deletedRows = &nulls.Nulls{}
 	deletedRows.InitWithSize(8192)
@@ -550,7 +551,8 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 			files = append(files, name.String())
 			blockLocation := objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
-			objectData.stats = &writer.GetObjectStats()[objectio.SchemaData]
+			ss := writer.GetObjectStats()
+			objectData.stats = &ss
 			objectio.SetObjectStatsLocation(objectData.stats, blockLocation)
 			insertObjBatch[objectData.tid] = append(insertObjBatch[objectData.tid], objectData)
 		}
@@ -655,7 +657,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					} else {
 						appendValToBatch(oldMeta, newMeta, i)
 						row := newMeta.Length() - 1
-						insertObjData[i].stats.SetSorted()
+						objectio.WithSorted()(insertObjData[i].stats)
 						newMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, insertObjData[i].stats[:], false)
 						newMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
 					}
