@@ -91,7 +91,6 @@ func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16, bool) (v any, isNul
 func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, isNull bool, err error) {
 	return
 }
-func (rel *TxnRelation) Update(*common.ID, uint32, uint16, any, bool) (err error)             { return }
 func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error)                                   { return }
 func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector, containers.Vector) (err error) { return }
 func (rel *TxnRelation) RangeDelete(*common.ID, uint32, uint32, handle.DeleteType) (err error) {
@@ -138,10 +137,8 @@ func (obj *TxnObject) GetRelation() (rel handle.Relation)                       
 func (obj *TxnObject) Update(uint64, uint32, uint16, any) (err error)                    { return }
 func (obj *TxnObject) RangeDelete(uint64, uint32, uint32, handle.DeleteType) (err error) { return }
 
-func (obj *TxnObject) PushDeleteOp(handle.Filter) (err error)              { return }
-func (obj *TxnObject) PushUpdateOp(handle.Filter, string, any) (err error) { return }
-func (obj *TxnObject) SoftDeleteBlock(id types.Blockid) (err error)        { return }
-func (obj *TxnObject) BatchDedup(containers.Vector) (err error)            { return }
+func (obj *TxnObject) SoftDeleteBlock(id types.Blockid) (err error) { return }
+func (obj *TxnObject) BatchDedup(containers.Vector) (err error)     { return }
 
 // func (blk *TxnBlock) IsAppendable() bool                                   { return true }
 
@@ -163,5 +160,3 @@ func (blk *TxnBlock) GetObject() (obj handle.Object) { return }
 func (blk *TxnBlock) Append(*containers.Batch, uint32) (n uint32, err error)    { return }
 func (blk *TxnBlock) Update(uint32, uint16, any) (err error)                    { return }
 func (blk *TxnBlock) RangeDelete(uint32, uint32, handle.DeleteType) (err error) { return }
-func (blk *TxnBlock) PushDeleteOp(handle.Filter) (err error)                    { return }
-func (blk *TxnBlock) PushUpdateOp(handle.Filter, string, any) (err error)       { return }

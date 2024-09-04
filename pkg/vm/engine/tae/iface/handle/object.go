@@ -90,10 +90,6 @@ type ObjectReader interface {
 type ObjectWriter interface {
 	io.Closer
 	String() string
-
-	PushDeleteOp(filter Filter) error
-	PushUpdateOp(filter Filter, attr string, val any) error
-
 	UpdateStats(objectio.ObjectStats) error
 }
 
