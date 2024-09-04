@@ -146,13 +146,26 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 
 			getUpgradeLogger().Info("get current mo cluster latest version",
 				zap.String("latest", v.Version),
-				zap.String("final", final.Version))
+				zap.Uint32("latest versionOffset", v.VersionOffset),
+				zap.String("final", final.Version),
+				zap.Uint32("final versionOffset", final.VersionOffset))
 
 			// cluster is upgrading to v1, only v1's cn can start up.
-			if !v.IsReady() && v.Version != final.Version {
-				panic(fmt.Sprintf("cannot upgrade to version %s, because version %s is in upgrading",
-					final.Version,
-					v.Version))
+			if !v.IsReady() && v.Version != final.Version && v.VersionOffset != final.VersionOffset {
+				if v.Version == final.Version {
+					if v.VersionOffset != final.VersionOffset {
+						panic(fmt.Sprintf("cannot upgrade to version %s with versionOffset[%d], because version %s with versionOffset[%d] is in upgrading",
+							final.Version,
+							final.VersionOffset,
+							v.Version,
+							v.VersionOffset))
+					}
+				} else {
+					panic(fmt.Sprintf("cannot upgrade to version %s , because version %s is in upgrading",
+						final.Version,
+						v.Version))
+				}
+
 			}
 			// cluster is running at v1, cannot startup a old version to join cluster.
 			if v.IsReady() && versions.Compare(final.Version, v.Version) < 0 {
