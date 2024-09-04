@@ -15,7 +15,6 @@
 package hashmap_util
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -82,12 +81,7 @@ func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process
 		}
 	}
 	if hb.keyWidth <= 8 {
-<<<<<<< HEAD
 		if hb.IntHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
-=======
-		logutil.Infof("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! int hashmap init")
-		if hb.IntHashMap, err = hashmap.NewIntHashMap(false); err != nil {
->>>>>>> f3ed304... fix
 			return err
 		}
 	} else {
