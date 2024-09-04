@@ -153,8 +153,6 @@ func (h *txnRelation) GetMeta() any { return h.table.entry }
 // Schema return schema in txnTable, not the lastest schema in TableEntry
 func (h *txnRelation) Schema(isTombstone bool) any { return h.table.GetLocalSchema(isTombstone) }
 
-func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
-
 func (h *txnRelation) BatchDedup(col containers.Vector) error {
 	return h.Txn.GetStore().BatchDedup(h.table.entry.GetDB().ID, h.table.entry.GetID(), col)
 }
