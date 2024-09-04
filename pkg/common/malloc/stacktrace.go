@@ -15,66 +15,36 @@
 package malloc
 
 import (
-	"hash/maphash"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
-	"unsafe"
+	"unique"
 )
 
-type StacktraceID uint64
+// _PCs represents a fixed-size array of program counters (PCs) for stack traces.
+// 128 is chosen as a reasonable maximum depth for most stack traces.
+type _PCs [128]uintptr
 
-func GetStacktraceID(skip int) StacktraceID {
-	pcs := pcs1024Pool.Get().(*[]uintptr)
+type Stacktrace unique.Handle[_PCs]
 
-	n := runtime.Callers(2+skip, *pcs)
-	*pcs = (*pcs)[:n]
-
-	hasher := hasherPool.Get().(*maphash.Hash)
-	defer func() {
-		hasher.Reset()
-		hasherPool.Put(hasher)
-	}()
-	for _, pc := range *pcs {
-		hasher.Write(
-			unsafe.Slice((*byte)(unsafe.Pointer(&pc)), unsafe.Sizeof(pc)),
-		)
+func GetStacktrace(skip int) Stacktrace {
+	if skip < 0 {
+		skip = 0
 	}
-	id := StacktraceID(hasher.Sum64())
-
-	if _, ok := stackIDToInfo.Load(id); ok {
-		// recycle
-		*pcs = (*pcs)[:cap(*pcs)]
-		pcs1024Pool.Put(pcs)
-		return id
-	}
-
-	_, loaded := stackIDToInfo.LoadOrStore(id, pcs)
-	if loaded {
-		// recycle
-		*pcs = (*pcs)[:cap(*pcs)]
-		pcs1024Pool.Put(pcs)
-	}
-
-	return id
+	var pcs _PCs
+	runtime.Callers(2+skip, pcs[:])
+	return Stacktrace(unique.Make(pcs))
 }
 
-var stackIDToInfo sync.Map // StacktraceID -> []uintptr
-
-var pcs1024Pool = sync.Pool{
-	New: func() any {
-		slice := make([]uintptr, 64)
-		return &slice
-	},
-}
-
-func (s StacktraceID) String() string {
-	v, ok := stackIDToInfo.Load(s)
-	if !ok {
-		panic("bad stack id")
+func (s Stacktrace) String() string {
+	var n int
+	pcs := unique.Handle[_PCs](s).Value()
+	for ; n < len(pcs); n++ {
+		if pcs[n] == 0 {
+			break
+		}
 	}
-	return pcsToString(*(v.(*[]uintptr)))
+	return pcsToString(pcs[:n])
 }
 
 func pcsToString(pcs []uintptr) string {
