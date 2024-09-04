@@ -168,7 +168,7 @@ func (t JoinMapMsg) DebugString() string {
 	}
 	if t.JoinMapPtr != nil {
 		buf.WriteString("joinmap rowcnt " + strconv.Itoa(int(t.JoinMapPtr.rowcnt)) + "\n")
-		buf.WriteString("joinmap refcnt " + strconv.Itoa(int(t.JoinMapPtr.refCnt)) + "\n")
+		buf.WriteString("joinmap refcnt " + strconv.Itoa(int(t.JoinMapPtr.GetRefCount())) + "\n")
 	} else {
 		buf.WriteString("joinmapPtr is nil \n")
 	}
