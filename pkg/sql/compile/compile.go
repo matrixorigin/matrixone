@@ -1890,10 +1890,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	if len(n.FilterList) != len(s.DataSource.FilterList) {
 		s.DataSource.FilterList = plan2.DeepCopyExprList(n.FilterList)
 		for _, e := range s.DataSource.FilterList {
-			fn := e.GetF()
-			if fn == nil {
-				panic("not function expr for filter")
-			}
 			_, err := plan2.ReplaceFoldVal(c.proc, e, c.filterExprExecutor)
 			if err != nil {
 				return err
@@ -1911,10 +1907,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	if len(n.BlockFilterList) != len(s.DataSource.BlockFilter) {
 		s.DataSource.BlockFilter = plan2.DeepCopyExprList(n.BlockFilterList)
 		for _, e := range s.DataSource.BlockFilter {
-			fn := e.GetF()
-			if fn == nil {
-				panic("not function expr for filter")
-			}
 			_, err := plan2.ReplaceFoldVal(c.proc, e, c.filterExprExecutor)
 			if err != nil {
 				return err
@@ -4024,10 +4016,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		if len(n.BlockFilterList) > 0 {
 			filterExpr = plan2.DeepCopyExprList(n.BlockFilterList)
 			for _, e := range filterExpr {
-				fn := e.GetF()
-				if fn == nil {
-					panic("not function expr for filter")
-				}
 				_, err := plan2.ReplaceFoldVal(c.proc, e, c.filterExprExecutor)
 				if err != nil {
 					return nil, nil, nil, err
