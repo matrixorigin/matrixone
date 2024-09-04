@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -57,6 +58,30 @@ func tokenizeForFullTextIndex(c *Compile, originalTableDef *plan.TableDef, index
 	}
 
 	defer res.Close()
+
+	if res.Batches != nil {
+		for _, bat := range res.Batches {
+
+			for i := 0; i < int(bat.RowCount()); i++ {
+				typ := bat.Vecs[0].GetType()
+				switch typ.Oid {
+				case types.T_varchar:
+					idstr := bat.Vecs[0].UnsafeGetStringAt(i)
+					logutil.Infof(idstr)
+				default:
+				}
+				id := bat.Vecs[0].GetRawBytesAt(i)
+				null := bat.Vecs[1].IsNull(uint64(i))
+				if null {
+					continue
+				}
+				str := bat.Vecs[1].GetStringAt(i)
+
+				logutil.Infof("%v %s", id, str)
+			}
+
+		}
+	}
 
 	logutil.Infof("RESULT %v", res)
 	return nil
