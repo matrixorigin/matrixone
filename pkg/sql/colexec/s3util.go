@@ -61,9 +61,6 @@ type S3Writer struct {
 	// An intermediate cache after the merge sort of all `batches` data
 	buffer *batch.Batch
 
-	//for memory multiplexing.
-	tableBatchPool []*batch.Batch
-
 	// batches[i] used to store the batches of table
 	// Each batch in batches will be sorted internally, and all batches correspond to only one table
 	// when the batches' size is over 64M, we will use merge sort, and then write a segment in s3
@@ -74,7 +71,7 @@ type S3Writer struct {
 	batSize uint64
 
 	typs []types.Type
-	ufs  []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion
+	ufs  []func(*vector.Vector, *vector.Vector, int64) error // function rowIdx for type conversion
 }
 
 const (
@@ -94,10 +91,6 @@ func (w *S3Writer) Free(proc *process.Process) {
 		w.buffer.Clean(proc.Mp())
 		w.buffer = nil
 	}
-	for _, bat := range w.tableBatchPool {
-		bat.Clean(proc.Mp())
-	}
-	w.tableBatchPool = nil
 	for _, bat := range w.batches {
 		bat.Clean(proc.Mp())
 	}
@@ -260,16 +253,10 @@ func (w *S3Writer) StashBatch(proc *process.Process, bat *batch.Batch) bool {
 			rbat = w.batches[n-1]
 		} else {
 			// w.batches[n-1] is full, use a new batch.
-			if len(w.tableBatchPool) > 0 {
-				rbat = w.tableBatchPool[0]
-				w.tableBatchPool = w.tableBatchPool[1:]
-				rbat.CleanOnlyData()
-			} else {
-				var err error
-				rbat, err = proc.NewBatchFromSrc(bat, int(options.DefaultBlockMaxRows))
-				if err != nil {
-					panic(err)
-				}
+			var err error
+			rbat, err = proc.NewBatchFromSrc(bat, int(options.DefaultBlockMaxRows))
+			if err != nil {
+				panic(err)
 			}
 			w.batches = append(w.batches, rbat)
 		}
@@ -328,10 +315,6 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 
 	defer func() {
 		// clean
-		for i := range w.batches {
-			//recycle the batch
-			w.putBatch(w.batches[i])
-		}
 		w.batches = w.batches[:0]
 		w.batSize = 0
 	}()
@@ -345,6 +328,7 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 			if _, err := w.writer.WriteBatch(w.batches[i]); err != nil {
 				return nil, objectio.ObjectStats{}, err
 			}
+			w.batches[i].Clean(proc.GetMPool())
 		}
 		return w.sync(proc)
 	}
@@ -431,6 +415,10 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 				return nil, objectio.ObjectStats{}, err
 			}
 		}
+		// all data in w.batches[batchIndex] are used. Clean it.
+		if rowIndex+1 == w.batches[batchIndex].RowCount() {
+			w.batches[batchIndex].Clean(proc.GetMPool())
+		}
 		lens++
 		if lens == int(options.DefaultBlockMaxRows) {
 			lens = 0
@@ -450,10 +438,6 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 		w.buffer.CleanOnlyData()
 	}
 	return w.sync(proc)
-}
-
-func (w *S3Writer) putBatch(bat *batch.Batch) {
-	w.tableBatchPool = append(w.tableBatchPool, bat)
 }
 
 func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, error) {
