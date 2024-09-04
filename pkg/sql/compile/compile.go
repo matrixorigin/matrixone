@@ -1318,7 +1318,7 @@ func (c *Compile) getStepRegs(step int32) []*process.WaitRegister {
 }
 
 func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
-	ds := newScope(Normal)
+	ds := newScope(Merge)
 	ds.NodeInfo = getEngineNode(c)
 	if parallel {
 		ds.Magic = Remote
@@ -1367,7 +1367,7 @@ func (c *Compile) compileSourceScan(n *plan.Node) ([]*Scope, error) {
 
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		ss[i] = newScope(Normal)
+		ss[i] = newScope(Merge)
 		ss[i].NodeInfo = getEngineNode(c)
 		ss[i].Proc = c.proc.NewNoContextChildProc(0)
 		arg := constructStream(n, ps[i])
@@ -1551,7 +1551,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	}
 
 	if len(fileList) == 0 {
-		ret := newScope(Normal)
+		ret := newScope(Merge)
 		ret.NodeInfo = getEngineNode(c)
 		ret.NodeInfo.Mcpu = 1
 		ret.DataSource = &Source{isConst: true, node: n}
@@ -1734,7 +1734,7 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
-	ds := newScope(Normal)
+	ds := newScope(Merge)
 	ds.NodeInfo = getEngineNode(c)
 	ds.DataSource = &Source{isConst: true, node: n}
 	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
@@ -2212,7 +2212,6 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		}
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, rs[0].RootOp, 1))
 		buildScopes[0].IsEnd = true
-		rs[0].Magic = Merge
 	} else {
 		for i := range buildScopes {
 			buildScopes[i].setRootOperator(constructJoinBuildOperator(c, rs[i].RootOp, int32(rs[i].NodeInfo.Mcpu)))
@@ -3612,7 +3611,8 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 }
 
 func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
-	rs := c.newEmptyMergeScope()
+	rs := newScope(Normal)
+	rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 	mergeOp := merge.NewArgument()
 	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
 	mergeOp.SetIsFirst(true)

@@ -520,11 +520,11 @@ func (ls *LocalDataSource) iterateInMemData(
 
 	bat.SetRowCount(0)
 
-	if err = ls.filterInMemUnCommittedInserts(seqNums, mp, bat); err != nil {
+	if err = ls.filterInMemUnCommittedInserts(ctx, seqNums, mp, bat); err != nil {
 		return err
 	}
 
-	if err = ls.filterInMemCommittedInserts(colTypes, seqNums, mp, bat); err != nil {
+	if err = ls.filterInMemCommittedInserts(ctx, colTypes, seqNums, mp, bat); err != nil {
 		return err
 	}
 
@@ -567,6 +567,7 @@ func checkWorkspaceEntryType(
 }
 
 func (ls *LocalDataSource) filterInMemUnCommittedInserts(
+	_ context.Context,
 	seqNums []uint16,
 	mp *mpool.MPool,
 	bat *batch.Batch,
@@ -601,7 +602,7 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 			break
 		}
 
-		entry := ls.table.getTxn().writes[ls.wsCursor]
+		entry := writes[ls.wsCursor]
 
 		if ok := checkWorkspaceEntryType(ls.table, entry, true); !ok {
 			continue
@@ -640,6 +641,7 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 }
 
 func (ls *LocalDataSource) filterInMemCommittedInserts(
+	_ context.Context,
 	colTypes []types.Type,
 	seqNums []uint16,
 	mp *mpool.MPool,
@@ -677,6 +679,11 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 		batRowIdx = len(bat.Attrs)
 		bat.Attrs = append(bat.Attrs, catalog.Row_ID)
 		bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_Rowid.ToType()))
+		// Add empty rowid for workspace row
+		// It is impossible for them to be be eliminated by tombstone in tomestone objects, so using emtpy rowid is totally safe.
+		for range bat.RowCount() {
+			vector.AppendFixed(bat.Vecs[len(bat.Vecs)-1], types.Rowid{}, false, mp)
+		}
 
 		defer func() {
 			bat.Attrs = bat.Attrs[:len(bat.Attrs)-1]

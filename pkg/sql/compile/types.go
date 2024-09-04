@@ -49,7 +49,6 @@ const (
 	Merge magicType = iota
 	Normal
 	Remote
-	Parallel
 	CreateDatabase
 	CreateTable
 	CreateView
