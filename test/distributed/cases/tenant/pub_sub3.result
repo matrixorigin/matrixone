@@ -69,7 +69,7 @@ a    INT(32)    YES        null
 b    INT(32)    YES        null        
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL\n)
 select * from t1;
 a    b
 1    1
@@ -121,7 +121,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    FLOAT(0)    YES        null        
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` FLOAT DEFAULT NULL\n)
+t1    CREATE TABLE `t1` (\n  `a` float DEFAULT NULL\n)
 select * from t1;
 a
 1.0
@@ -188,7 +188,7 @@ a    INT(32)    YES        null
 b    INT(32)    YES        null        
 show create table sys_sub_part_tbls.t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL\n)
 select * from sys_sub_part_tbls.t1;
 a    b
 1    1
@@ -213,7 +213,7 @@ a    INT(32)    YES        null
 b    INT(32)    YES        null        
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL\n)
 select * from t1;
 a    b
 1    1

@@ -1166,6 +1166,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusRestricted.String() {
+		logutil.Infof("[set restricted] init session, init account id %d, connection id %d restricted", tenantID, ses.GetConnectionID())
 		ses.getRoutine().setResricted(true)
 	} else {
 		ses.getRoutine().setResricted(false)
