@@ -75,7 +75,10 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			rightJoin.build(analyze, proc)
+			err = rightJoin.build(analyze, proc)
+			if err != nil {
+				return result, err
+			}
 			if ctr.mp == nil && !rightJoin.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
@@ -137,11 +140,14 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (rightJoin *RightJoin) build(anal process.Analyze, proc *process.Process) {
+func (rightJoin *RightJoin) build(anal process.Analyze, proc *process.Process) (err error) {
 	ctr := &rightJoin.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
-	ctr.mp = message.ReceiveJoinMap(rightJoin.JoinMapTag, rightJoin.IsShuffle, rightJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	ctr.mp, err = message.ReceiveJoinMap(rightJoin.JoinMapTag, rightJoin.IsShuffle, rightJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	if err != nil {
+		return err
+	}
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
@@ -151,6 +157,7 @@ func (rightJoin *RightJoin) build(anal process.Analyze, proc *process.Process) {
 		ctr.matched = &bitmap.Bitmap{}
 		ctr.matched.InitWithSize(ctr.batchRowCount)
 	}
+	return nil
 }
 
 func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyze process.Analyze, _ bool, isLast bool, result *vm.CallResult) (bool, error) {
