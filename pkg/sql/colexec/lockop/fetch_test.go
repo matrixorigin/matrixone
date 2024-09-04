@@ -1148,7 +1148,7 @@ func TestFetchCharRows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[][]byte{{0}, {math.MaxUint8, math.MaxUint8}},
+		[][]byte{{0}, types.PackerStringMax()},
 		func(packer *types.Packer, v []byte) {
 			packer.EncodeStringType(v)
 		},
@@ -1167,7 +1167,7 @@ func TestFetchCharRowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[][]byte{{0}, {math.MaxUint8, math.MaxUint8}},
+		[][]byte{{0}, types.PackerStringMax()},
 		func(packer *types.Packer, v []byte) {
 			packer.EncodeStringType(v)
 		},
@@ -1186,7 +1186,7 @@ func TestFetchVarcharRows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[][]byte{{0}, {math.MaxUint8, math.MaxUint8}},
+		[][]byte{{0}, types.PackerStringMax()},
 		func(packer *types.Packer, v []byte) {
 			packer.EncodeStringType(v)
 		},
@@ -1205,7 +1205,7 @@ func TestFetchVarcharRowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[][]byte{{0}, {math.MaxUint8, math.MaxUint8}},
+		[][]byte{{0}, types.PackerStringMax()},
 		func(packer *types.Packer, v []byte) {
 			packer.EncodeStringType(v)
 		},

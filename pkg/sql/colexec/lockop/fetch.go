@@ -629,7 +629,7 @@ func fetchVarlenaRows(
 	}
 	if lockTable {
 		min := fn([]byte{0})
-		max := fn(getMax(int(tp.Width)))
+		max := fn(types.PackerStringMax())
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}
@@ -768,12 +768,4 @@ func fetchFixedRowsWithCompare[T any](
 		rows = append(rows, fn(v))
 	}
 	return len(rows) > 0, rows, lock.Granularity_Row
-}
-
-func getMax(size int) []byte {
-	v := make([]byte, size)
-	for idx := range v {
-		v[idx] = math.MaxUint8
-	}
-	return v
 }
