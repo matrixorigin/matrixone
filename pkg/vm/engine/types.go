@@ -786,6 +786,19 @@ type Ranges interface {
 
 var _ Ranges = (*objectio.BlockInfoSlice)(nil)
 
+type ChangesHandle_Hint int
+
+const (
+	ChangesHandle_Snapshot ChangesHandle_Hint = iota
+	ChangesHandle_Tail_wip
+	ChangesHandle_Tail_done
+)
+
+type ChangesHandle interface {
+	Next(ctx context.Context, mp *mpool.MPool) (data *batch.Batch, tombstone *batch.Batch, hint ChangesHandle_Hint, err error)
+	Close() error
+}
+
 type Relation interface {
 	Statistics
 
