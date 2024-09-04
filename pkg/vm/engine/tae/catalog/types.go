@@ -17,7 +17,6 @@ package catalog
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -111,13 +110,4 @@ func NewTombstoneBatchByPKType(pkType types.Type, mp *mpool.MPool) *containers.B
 	bat.AddVector(AttrPKVal, pkVec)
 	bat.AddVector(AttrCommitTs, commitTSVec)
 	return bat
-}
-
-func BuildLocation(stats objectio.ObjectStats, blkOffset uint16, blkMaxRows uint32) objectio.Location {
-	blkRow := blkMaxRows
-	if blkOffset == uint16(stats.BlkCnt())-1 {
-		blkRow = stats.Rows() - uint32(blkOffset)*blkMaxRows
-	}
-	metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, blkOffset)
-	return metaloc
 }
