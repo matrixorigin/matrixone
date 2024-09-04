@@ -322,7 +322,9 @@ func (node *persistedNode) FillBlockTombstones(
 			}
 			commitTSs = vector.MustFixedCol[types.TS](commitTSVec.GetDownstreamVector())
 		}
-		defer commitTSVec.Close()
+		if commitTSVec != nil {
+			defer commitTSVec.Close()
+		}
 		rowIDs := vector.MustFixedCol[types.Rowid](vecs[0].GetDownstreamVector())
 		// TODO: biselect, check visibility
 		for i := 0; i < len(rowIDs); i++ {
