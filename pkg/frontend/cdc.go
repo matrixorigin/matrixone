@@ -802,17 +802,20 @@ func (cdc *CdcTask) Restart() error {
 func (cdc *CdcTask) Pause() error {
 	fmt.Println("=====> it's pause")
 	close(cdc.activeRoutine.Cancel)
-
+	cdc.activeRoutine.Cancel = nil
 	for _, c := range cdc.interChs {
 		close(c)
 	}
+	cdc.interChs = nil
 	return nil
 }
 
 // Cancel cdc task
 func (cdc *CdcTask) Cancel() error {
 	fmt.Println("=====> it's cancel")
-	close(cdc.activeRoutine.Cancel)
+	if cdc.activeRoutine.Cancel != nil {
+		close(cdc.activeRoutine.Cancel)
+	}
 
 	for _, c := range cdc.interChs {
 		close(c)
