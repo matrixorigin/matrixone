@@ -67,7 +67,6 @@ func (rel *TxnRelation) Close() error                                           
 func (rel *TxnRelation) ID() uint64                                               { return 0 }
 func (rel *TxnRelation) Rows() int64                                              { return 0 }
 func (rel *TxnRelation) Size(attr string) int64                                   { return 0 }
-func (rel *TxnRelation) GetCardinality(attr string) int64                         { return 0 }
 func (rel *TxnRelation) Schema(bool) any                                          { return nil }
 func (rel *TxnRelation) MakeObjectIt(bool) handle.ObjectIt                        { return nil }
 func (rel *TxnRelation) MakeObjectItOnSnap(bool) handle.ObjectIt                  { return nil }
