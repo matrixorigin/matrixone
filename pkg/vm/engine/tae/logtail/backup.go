@@ -96,7 +96,6 @@ func (d *BackupDeltaLocDataSource) Close() {
 func (d *BackupDeltaLocDataSource) ApplyTombstones(
 	_ context.Context,
 	_ objectio.Blockid,
-	_ bool,
 	_ []int64,
 	_ engine.TombstoneApplyPolicy,
 ) ([]int64, error) {
@@ -173,7 +172,7 @@ func GetTombstonesByBlockId(
 }
 
 func (d *BackupDeltaLocDataSource) GetTombstones(
-	_ context.Context, bid objectio.Blockid, byCN bool,
+	_ context.Context, bid objectio.Blockid,
 ) (deletedRows *nulls.Nulls, err error) {
 	deletedRows = &nulls.Nulls{}
 	deletedRows.InitWithSize(8192)

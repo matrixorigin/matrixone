@@ -210,7 +210,6 @@ func (rs *RemoteDataSource) applyPersistedTombstones(
 func (rs *RemoteDataSource) ApplyTombstones(
 	ctx context.Context,
 	bid objectio.Blockid,
-	byCN bool,
 	rowsOffset []int64,
 	applyPolicy engine.TombstoneApplyPolicy,
 ) (left []int64, err error) {
@@ -229,7 +228,7 @@ func (rs *RemoteDataSource) ApplyTombstones(
 }
 
 func (rs *RemoteDataSource) GetTombstones(
-	ctx context.Context, bid objectio.Blockid, byCN bool,
+	ctx context.Context, bid objectio.Blockid,
 ) (mask *nulls.Nulls, err error) {
 
 	mask = &nulls.Nulls{}
@@ -609,7 +608,7 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 
 		b, _ := retainedRowIds[0].Decode()
 		sels, err := ls.ApplyTombstones(
-			ls.ctx, b, false, offsets, engine.Policy_CheckUnCommittedOnly)
+			ls.ctx, b, offsets, engine.Policy_CheckUnCommittedOnly)
 		if err != nil {
 			return err
 		}
@@ -709,7 +708,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 			//	minTS = entry.Time
 			//}
 
-			sel, err = ls.ApplyTombstones(ls.ctx, b, false, []int64{int64(o)}, applyPolicy)
+			sel, err = ls.ApplyTombstones(ls.ctx, b, []int64{int64(o)}, applyPolicy)
 			if err != nil {
 				return err
 			}
@@ -779,7 +778,6 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 func (ls *LocalDataSource) ApplyTombstones(
 	ctx context.Context,
 	bid objectio.Blockid,
-	byCN bool,
 	rowsOffset []int64,
 	dynamicPolicy engine.TombstoneApplyPolicy,
 ) ([]int64, error) {
@@ -838,7 +836,7 @@ func (ls *LocalDataSource) ApplyTombstones(
 }
 
 func (ls *LocalDataSource) GetTombstones(
-	ctx context.Context, bid objectio.Blockid, byCN bool,
+	ctx context.Context, bid objectio.Blockid,
 ) (deletedRows *nulls.Nulls, err error) {
 
 	deletedRows = &nulls.Nulls{}

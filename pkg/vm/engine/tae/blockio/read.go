@@ -83,7 +83,7 @@ func ReadDataByFilter(
 	if len(sels) == 0 {
 		return
 	}
-	sels, err = ds.ApplyTombstones(ctx, info.BlockID, info.IsCNCreated(), sels, engine.Policy_CheckAll)
+	sels, err = ds.ApplyTombstones(ctx, info.BlockID, sels, engine.Policy_CheckAll)
 	return
 }
 
@@ -126,7 +126,7 @@ func BlockDataReadNoCopy(
 	); err != nil {
 		return nil, nil, nil, err
 	}
-	tombstones, err := ds.GetTombstones(ctx, info.BlockID, info.IsCNCreated())
+	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -301,7 +301,7 @@ func BlockDataReadBackup(
 			}
 		}
 	}
-	tombstones, err := ds.GetTombstones(ctx, info.BlockID, info.IsCNCreated())
+	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
 	if err != nil {
 		return
 	}
@@ -381,7 +381,7 @@ func BlockDataReadInner(
 		return
 	}
 
-	tombstones, err := ds.GetTombstones(ctx, info.BlockID, info.IsCNCreated())
+	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
 	if err != nil {
 		return
 	}
