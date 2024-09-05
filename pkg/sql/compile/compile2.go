@@ -178,6 +178,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 
 	stats := statistic.StatsInfoFromContext(execTopContext)
+	stats.ResetIOAccessTimeConsumption()
+	stats.ResetIOMergerTimeConsumption()
 	stats.ExecutionStart()
 	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOperator, executeSQL, seq)
 	defer func() {
