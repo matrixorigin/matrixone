@@ -88,6 +88,11 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 		}
 
 		typeStr := FormatColType(col.Typ)
+		if strings.HasPrefix(typeStr, "ENUM") {
+			typeStr = strings.ToLower(typeStr[:4]) + typeStr[4:]
+		} else {
+			typeStr = strings.ToLower(typeStr)
+		}
 		fmt.Fprintf(buf, "  `%s` %s", formatStr(colNameOrigin), typeStr)
 
 		//-------------------------------------------------------------------------------------------------------------
