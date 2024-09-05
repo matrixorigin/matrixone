@@ -88,7 +88,7 @@ func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bo
 	if pipelineFailed || err != nil {
 		shuffleBuild.ctr.hashmapBuilder.FreeWithError(proc)
 	} else {
-		shuffleBuild.ctr.hashmapBuilder.Reset()
+		shuffleBuild.ctr.hashmapBuilder.Reset(proc)
 	}
 }
 

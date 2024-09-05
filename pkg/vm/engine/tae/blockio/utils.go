@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 func GetTombstonesByBlockId(
@@ -37,7 +36,7 @@ func GetTombstonesByBlockId(
 ) (err error) {
 	loadedBlkCnt := 0
 	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
-		location := tombstoneObject.BlockLocation(uint16(pos), options.DefaultBlockMaxRows)
+		location := tombstoneObject.BlockLocation(uint16(pos), objectio.BlockMaxRows)
 		if mask, err := FillBlockDeleteMask(
 			ctx, ts, blockId, location, fs,
 		); err != nil {

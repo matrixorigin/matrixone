@@ -622,15 +622,6 @@ func (entry *TableEntry) IsActive() bool {
 	return !entry.HasDropCommitted()
 }
 
-// GetTerminationTS is coarse API: no consistency check
-func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
-	dbEntry := entry.GetDB()
-
-	terminated, ts = dbEntry.TryGetTerminatedTS(true)
-
-	return
-}
-
 func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, req *apipb.AlterTableReq) (isNewNode bool, newSchema *Schema, err error) {
 	entry.Lock()
 	defer entry.Unlock()
