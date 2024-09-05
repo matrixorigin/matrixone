@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 const (
@@ -282,6 +283,11 @@ func (c *Conn) Read() ([]byte, error) {
 			return nil, err
 		}
 		c.ResetReadBufIndex()
+	}
+	if len(firstPayload) > 100 {
+		logutil.Infof("FirstPayload is %s, PacketLength is %d, ActLength is %d, Now fixBuf.readIndex is %d, writeIndex is %d", string(firstPayload)[:100], packetLength, len(firstPayload), c.fixBuf.readIndex, c.fixBuf.writeIndex)
+	} else {
+		logutil.Infof("FirstPayload is %s, PacketLength is %d, ActLength is %d, Now fixBuf.readIndex is %d, writeIndex is %d", string(firstPayload), packetLength, len(firstPayload), c.fixBuf.readIndex, c.fixBuf.writeIndex)
 	}
 
 	if packetLength != int(MaxPayloadSize) {
