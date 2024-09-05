@@ -151,7 +151,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 				zap.Uint32("final versionOffset", final.VersionOffset))
 
 			// cluster is upgrading to v1, only v1's cn can start up.
-			if !v.IsReady() && v.Version != final.Version && v.VersionOffset != final.VersionOffset {
+			if !v.IsReady() {
 				if v.Version == final.Version {
 					if v.VersionOffset != final.VersionOffset {
 						panic(fmt.Sprintf("cannot upgrade to version %s with versionOffset[%d], because version %s with versionOffset[%d] is in upgrading",
