@@ -15,6 +15,7 @@
 package embed
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -22,7 +23,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func BenchmarkSelect1(b *testing.B) {
+// BenchmarkRoTx benchmarks the performance of read-only, noop transactions.
+func BenchmarkRoTx(b *testing.B) {
 	RunBaseClusterTests(
 		func(c Cluster) {
 
@@ -39,17 +41,51 @@ func BenchmarkSelect1(b *testing.B) {
 
 			b.ResetTimer()
 			for range b.N {
-
 				tx, err := db.Begin()
-				require.NoError(b, err)
-				_, err = tx.Exec(`select 1`)
 				require.NoError(b, err)
 				err = tx.Commit()
 				require.NoError(b, err)
-
 			}
 			b.StopTimer()
+		},
+	)
+}
 
+// BenchmarkSelect1Conn benchmarks the performance of running select 1
+// from one connection, in autocommit mode.
+func BenchmarkSelect1Conn(b *testing.B) {
+	RunBaseClusterTests(
+		func(c Cluster) {
+
+			cn0, err := c.GetCNService(0)
+			require.NoError(b, err)
+
+			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/",
+				cn0.GetServiceConfig().CN.Frontend.Port,
+			)
+
+			db, err := sql.Open("mysql", dsn)
+			require.NoError(b, err)
+			defer db.Close()
+
+			ctx := context.Background()
+			conn, err := db.Conn(ctx)
+			require.NoError(b, err)
+			defer conn.Close()
+
+			_, err = conn.ExecContext(ctx, `set debug_break=on`)
+			require.NoError(b, err)
+
+			b.ResetTimer()
+			for range b.N {
+				func() {
+					rows, err := conn.QueryContext(ctx, `select 1`)
+					require.NoError(b, err)
+					require.NoError(b, rows.Err())
+					defer rows.Close()
+				}()
+			}
+			b.StopTimer()
 		},
 	)
 }

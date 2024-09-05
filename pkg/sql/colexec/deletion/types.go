@@ -34,9 +34,15 @@ import (
 
 var _ vm.Operator = new(Deletion)
 
-const (
+// make it mutable in ut
+var (
 	flushThreshold = 32 * mpool.MB
 )
+
+// SetCNFlushDeletesThreshold update threshold to n MB
+func SetCNFlushDeletesThreshold(n int) {
+	flushThreshold = n * mpool.MB
+}
 
 type BatchPool struct {
 	pools []*batch.Batch
@@ -57,9 +63,9 @@ func (pool *BatchPool) get() *batch.Batch {
 
 // for now, we won't do compaction for cn block
 type container struct {
-	blockId_bitmap                 map[types.Blockid]*nulls.Nulls
-	partitionId_blockId_rowIdBatch map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
-	partitionId_blockId_deltaLoc   map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> MetaLocation
+	blockId_bitmap                       map[types.Blockid]*nulls.Nulls
+	partitionId_blockId_rowIdBatch       map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
+	partitionId_tombstoneObjectStatsBats map[int][]*batch.Batch                 // PartitionId -> tombstone object stats
 	// don't flush cn block rowId and rawBatch
 	// we just do compaction for cn block in the
 	// future
@@ -151,15 +157,16 @@ func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err 
 			}
 			delete(ctr.partitionId_blockId_rowIdBatch, pidx)
 		}
-		for pidx, blockId_metaLoc := range ctr.partitionId_blockId_deltaLoc {
-			for blkid, bat := range blockId_metaLoc {
+
+		for pIdx, bats := range ctr.partitionId_tombstoneObjectStatsBats {
+			for _, bat := range bats {
 				if bat != nil {
 					bat.Clean(proc.GetMPool())
 				}
-				delete(blockId_metaLoc, blkid)
 			}
-			delete(ctr.partitionId_blockId_deltaLoc, pidx)
+			delete(ctr.partitionId_tombstoneObjectStatsBats, pIdx)
 		}
+
 		for blkid := range ctr.blockId_type {
 			delete(ctr.blockId_type, blkid)
 		}
@@ -187,7 +194,7 @@ func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err e
 		deletion.SegmentMap = nil
 		ctr.blockId_bitmap = nil
 		ctr.partitionId_blockId_rowIdBatch = nil
-		ctr.partitionId_blockId_deltaLoc = nil
+		ctr.partitionId_tombstoneObjectStatsBats = nil
 		ctr.blockId_type = nil
 		ctr.pool = nil
 	}
@@ -228,7 +235,7 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch)
 		collectBatchInfo(proc, deletion, srcBat, deletion.DeleteCtx.RowIdIdx, 0, delCtx.PrimaryKeyIdx)
 	}
 	// we will flush all
-	if deletion.ctr.batch_size >= flushThreshold {
+	if deletion.ctr.batch_size >= uint32(flushThreshold) {
 		size, err := deletion.ctr.flush(proc)
 		if err != nil {
 			return err
@@ -266,30 +273,28 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			delete(blockId_rowIdBatch, blkid)
 		}
 
-		blkInfos, _, err := s3writer.SortAndSync(proc)
+		_, stats, err := s3writer.SortAndSync(proc)
 		if err != nil {
 			return 0, err
 		}
-		for i, blkInfo := range blkInfos {
-			if _, has := ctr.partitionId_blockId_deltaLoc[pidx]; !has {
-				ctr.partitionId_blockId_deltaLoc[pidx] = make(map[types.Blockid]*batch.Batch)
-			}
-			blockId_deltaLoc := ctr.partitionId_blockId_deltaLoc[pidx]
-			if _, ok := blockId_deltaLoc[blkids[i]]; !ok {
-				bat := batch.New(false, []string{catalog.BlockMeta_DeltaLoc})
-				bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-				blockId_deltaLoc[blkids[i]] = bat
-			}
-			bat := blockId_deltaLoc[blkids[i]]
-			vector.AppendBytes(bat.GetVector(0), []byte(blkInfo.MetaLocation().String()), false, proc.GetMPool())
+
+		bat := batch.New(false, []string{catalog.ObjectMeta_ObjectStats})
+		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		if err = vector.AppendBytes(
+			bat.GetVector(0), stats.Marshal(), false, proc.GetMPool()); err != nil {
+			return 0, err
 		}
+
+		bat.SetRowCount(bat.Vecs[0].Length())
+		ctr.partitionId_tombstoneObjectStatsBats[pidx] =
+			append(ctr.partitionId_tombstoneObjectStatsBats[pidx], bat)
 	}
 	return resSize, nil
 }
 
 // Collect relevant information about intermediate batche
 func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batch.Batch, rowIdIdx int, pIdx int, pkIdx int) {
-	vs := vector.MustFixedCol[types.Rowid](destBatch.GetVector(int32(rowIdIdx)))
+	vs := vector.MustFixedColWithTypeCheck[types.Rowid](destBatch.GetVector(int32(rowIdIdx)))
 	var bitmap *nulls.Nulls
 	for i, rowId := range vs {
 		blkid := rowId.CloneBlockID()
@@ -350,6 +355,7 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 		batchSize += bat.Size()
 		bat.SetRowCount(bat.Vecs[0].Length())
 	}
+
 	deletion.ctr.batch_size = uint32(batchSize)
 }
 
@@ -380,51 +386,51 @@ func makeDelRemoteBatch() *batch.Batch {
 func getNonNullValue(col *vector.Vector, row uint32) any {
 	switch col.GetType().Oid {
 	case types.T_bool:
-		return vector.GetFixedAt[bool](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[bool](col, int(row))
 	case types.T_bit:
-		return vector.GetFixedAt[uint64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint64](col, int(row))
 	case types.T_int8:
-		return vector.GetFixedAt[int8](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[int8](col, int(row))
 	case types.T_int16:
-		return vector.GetFixedAt[int16](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[int16](col, int(row))
 	case types.T_int32:
-		return vector.GetFixedAt[int32](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[int32](col, int(row))
 	case types.T_int64:
-		return vector.GetFixedAt[int64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[int64](col, int(row))
 	case types.T_uint8:
-		return vector.GetFixedAt[uint8](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint8](col, int(row))
 	case types.T_uint16:
-		return vector.GetFixedAt[uint16](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint16](col, int(row))
 	case types.T_uint32:
-		return vector.GetFixedAt[uint32](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint32](col, int(row))
 	case types.T_uint64:
-		return vector.GetFixedAt[uint64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint64](col, int(row))
 	case types.T_decimal64:
-		return vector.GetFixedAt[types.Decimal64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Decimal64](col, int(row))
 	case types.T_decimal128:
-		return vector.GetFixedAt[types.Decimal128](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Decimal128](col, int(row))
 	case types.T_uuid:
-		return vector.GetFixedAt[types.Uuid](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Uuid](col, int(row))
 	case types.T_float32:
-		return vector.GetFixedAt[float32](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[float32](col, int(row))
 	case types.T_float64:
-		return vector.GetFixedAt[float64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[float64](col, int(row))
 	case types.T_date:
-		return vector.GetFixedAt[types.Date](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Date](col, int(row))
 	case types.T_time:
-		return vector.GetFixedAt[types.Time](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Time](col, int(row))
 	case types.T_datetime:
-		return vector.GetFixedAt[types.Datetime](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Datetime](col, int(row))
 	case types.T_timestamp:
-		return vector.GetFixedAt[types.Timestamp](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Timestamp](col, int(row))
 	case types.T_enum:
-		return vector.GetFixedAt[types.Enum](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Enum](col, int(row))
 	case types.T_TS:
-		return vector.GetFixedAt[types.TS](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.TS](col, int(row))
 	case types.T_Rowid:
-		return vector.GetFixedAt[types.Rowid](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Rowid](col, int(row))
 	case types.T_Blockid:
-		return vector.GetFixedAt[types.Blockid](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Blockid](col, int(row))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return col.GetBytesAt(int(row))

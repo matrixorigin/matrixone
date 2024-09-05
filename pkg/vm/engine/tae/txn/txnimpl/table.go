@@ -119,8 +119,6 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) 
 	if schema.HasPK() {
 		tombstoneSchema := entry.GetVisibleSchema(store.txn, true)
 		tbl.tombstoneTable = newBaseTable(tombstoneSchema, true, tbl)
-	} else {
-		logutil.Warnf("table %d-%v doesn't have pk", entry.ID, schema.Name)
 	}
 	return tbl, nil
 }
@@ -182,7 +180,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 	for _, stats := range tbl.tombstoneTable.tableSpace.stats {
 		hasConflict := false
 		for blkID := range stats.BlkCnt() {
-			loc := catalog.BuildLocation(stats, uint16(blkID), tbl.dataTable.schema.BlockMaxRows)
+			loc := stats.BlockLocation(uint16(blkID), tbl.tombstoneTable.schema.BlockMaxRows)
 			vectors, closeFunc, err := blockio.LoadColumns2(
 				tbl.store.ctx,
 				[]uint16{0, 1},
@@ -353,7 +351,7 @@ func (tbl *txnTable) recurTransferDelete(
 		if err = tbl.RangeDelete(newID, offset, offset, pkVec, handle.DT_Normal); err != nil {
 			return err
 		}
-		common.DoIfInfoEnabled(func() {
+		common.DoIfDebugEnabled(func() {
 			logutil.Infof("depth-%d %s transfer delete from blk-%s row-%d to blk-%s row-%d, txn %x, val %v",
 				depth,
 				tbl.dataTable.schema.Name,
@@ -401,7 +399,7 @@ func (tbl *txnTable) TransferDeleteRows(
 	ts types.TS,
 ) (transferred bool, err error) {
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
-	common.DoIfInfoEnabled(func() {
+	common.DoIfDebugEnabled(func() {
 		logutil.Info("[Start]",
 			common.AnyField("txn-ctx", tbl.store.txn.Repr()),
 			common.OperationField("transfer-deletes"),
@@ -409,7 +407,7 @@ func (tbl *txnTable) TransferDeleteRows(
 			common.AnyField("phase", phase))
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
+		common.DoIfDebugEnabled(func() {
 			logutil.Info("[End]",
 				common.AnyField("txn-ctx", tbl.store.txn.Repr()),
 				common.OperationField("transfer-deletes"),
@@ -1431,7 +1429,7 @@ func (tbl *txnTable) contains(
 			if err != nil {
 				return err
 			}
-			data := vector.MustFixedCol[types.Rowid](vectors[0].GetDownstreamVector())
+			data := vector.MustFixedColWithTypeCheck[types.Rowid](vectors[0].GetDownstreamVector())
 			containers.ForeachVector(keys,
 				func(id types.Rowid, isNull bool, row int) error {
 					if keys.IsNull(row) {
@@ -1467,7 +1465,8 @@ func (tbl *txnTable) createTombstoneBatch(
 	}
 	return bat
 }
-func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
+
+func (tbl *txnTable) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
 	if tbl.tombstoneTable == nil {
 		tbl.tombstoneTable = newBaseTable(tbl.entry.GetLastestSchema(true), true, tbl)
 	}
@@ -1479,41 +1478,12 @@ func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Locati
 		return
 	}
 	tbl.store.warChecker.Insert(obj.GetMeta().(*catalog.ObjectEntry))
-	stats := tbl.deltaloc2ObjectStat(deltaloc, tbl.store.rt.Fs.Service)
 	err = tbl.addObjsWithMetaLoc(tbl.store.ctx, stats, true)
 	if err == nil {
 		tbl.tombstoneTable.tableSpace.objs = append(tbl.tombstoneTable.tableSpace.objs, id.ObjectID())
 		ok = true
 	}
 	return
-}
-
-func (tbl *txnTable) deltaloc2ObjectStat(loc objectio.Location, fs fileservice.FileService) objectio.ObjectStats {
-	stats := *objectio.NewObjectStatsWithObjectID(loc.Name().ObjectId(), false, true, true)
-	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &loc, false, fs)
-	if err != nil {
-		panic(err)
-	}
-	objectio.SetObjectStatsExtent(&stats, loc.Extent())
-	objectDataMeta := objMeta.MustDataMeta()
-	objectio.SetObjectStatsRowCnt(&stats, objectDataMeta.BlockHeader().Rows())
-	objectio.SetObjectStatsBlkCnt(&stats, objectDataMeta.BlockCount())
-	objectio.SetObjectStatsSize(&stats, loc.Extent().End()+objectio.FooterSize)
-	schema := tbl.tombstoneTable.schema
-	originSize := uint32(0)
-	for _, col := range schema.ColDefs {
-		if col.IsPhyAddr() {
-			continue
-		}
-		colmata := objectDataMeta.MustGetColumn(uint16(col.SeqNum))
-		originSize += colmata.Location().OriginSize()
-	}
-	objectio.SetObjectStatsOriginSize(&stats, originSize)
-	if schema.HasSortKey() {
-		col := schema.GetSingleSortKey()
-		objectio.SetObjectStatsSortKeyZoneMap(&stats, objectDataMeta.MustGetColumn(col.SeqNum).ZoneMap())
-	}
-	return stats
 }
 
 func (tbl *txnTable) FillInWorkspaceDeletes(blkID types.Blockid, deletes **nulls.Nulls) error {

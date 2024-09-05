@@ -109,7 +109,7 @@ func newBatch(ts []types.Type, rows int, proc *process.Process) *batch.Batch {
 		switch typ.Oid {
 		case types.T_int8:
 			vec, _ := proc.AllocVectorOfRows(typ, rows, nil)
-			vs := vector.MustFixedCol[int8](vec)
+			vs := vector.MustFixedColWithTypeCheck[int8](vec)
 			for j := range vs {
 				vs[j] = int8(j)
 			}

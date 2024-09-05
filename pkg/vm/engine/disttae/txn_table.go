@@ -178,7 +178,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 				}
 			} else {
 				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 					for _, v := range vs {
 						deletes[v] = struct{}{}
 					}
@@ -451,102 +451,6 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	return infoList, nil
 }
 
-func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionState) []types.Blockid {
-	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
-	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
-
-	dirtyBlks := make([]types.Blockid, 0)
-	for blk := range tbl.getTxn().blockId_tn_delete_metaLoc_batch.data {
-		if !state.BlockPersisted(blk) {
-			continue
-		}
-		dirtyBlks = append(dirtyBlks, blk)
-	}
-	return dirtyBlks
-}
-
-func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (err error) {
-	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
-	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
-
-	bats, ok := tbl.getTxn().blockId_tn_delete_metaLoc_batch.data[bid]
-	if !ok {
-		return nil
-	}
-	for _, bat := range bats {
-		vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
-		for i := range vs {
-			location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
-			if err != nil {
-				return err
-			}
-			rowIdBat, release, err := blockio.LoadColumns(
-				tbl.getTxn().proc.Ctx,
-				[]uint16{0},
-				nil,
-				tbl.getTxn().engine.fs,
-				location,
-				tbl.getTxn().proc.GetMPool(),
-				fileservice.Policy(0))
-			if err != nil {
-				return err
-			}
-			defer release()
-			rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
-			for _, rowId := range rowIds {
-				_, offset := rowId.Decode()
-				*offsets = append(*offsets, int64(offset))
-			}
-		}
-	}
-	return nil
-}
-
-// LoadDeletesForMemBlocksIn loads deletes for memory blocks whose data resides in PartitionState.rows
-func (tbl *txnTable) LoadDeletesForMemBlocksIn(
-	state *logtailreplay.PartitionState,
-	deletesRowId map[types.Rowid]uint8) error {
-
-	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
-	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
-
-	for blk, bats := range tbl.getTxn().blockId_tn_delete_metaLoc_batch.data {
-		//if blk is in partitionState.blks, it means that blk is persisted.
-		if state.BlockPersisted(blk) {
-			continue
-		}
-		for _, bat := range bats {
-			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
-			for i := range vs {
-				location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
-				if err != nil {
-					return err
-				}
-				rowIdBat, release, err := blockio.LoadColumns(
-					tbl.getTxn().proc.Ctx,
-					[]uint16{0},
-					nil,
-					tbl.getTxn().engine.fs,
-					location,
-					tbl.getTxn().proc.GetMPool(),
-					fileservice.Policy(0))
-				if err != nil {
-					return err
-				}
-				defer release()
-				rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
-				for _, rowId := range rowIds {
-					if deletesRowId != nil {
-						deletesRowId[rowId] = 0
-					}
-				}
-			}
-		}
-
-	}
-	return nil
-}
-
 func (tbl *txnTable) GetEngineType() engine.EngineType {
 	return engine.Disttae
 }
@@ -587,7 +491,7 @@ func (tbl *txnTable) CollectTombstones(
 				//}
 				//deletes in txn.Write maybe comes from PartitionState.Rows ,
 				// PartitionReader need to skip them.
-				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 				tombstone.rowids = append(tombstone.rowids, vs...)
 			}
 		})
@@ -1023,7 +927,7 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectS
 //				//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
 //				if entry.fileName == "" &&
 //					entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
-//					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+//					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 //					for _, v := range vs {
 //						id, _ := v.Decode()
 //						dirtyBlks[id] = struct{}{}
@@ -1532,12 +1436,12 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 //	blkId(string)     deltaLoc(string)                   type(int)
 //
 // |-----------|-----------------------------------|----------------|
-// |  blk_id   |   batch.Marshal(deltaLoc)         |  FlushDeltaLoc | TN Block
+// |  obj_id   |   object stats                    |  FlushDeltaLoc | TN Block
 // |  blk_id   |   batch.Marshal(uint32 offset)    |  CNBlockOffset | CN Block
 // |  blk_id   |   batch.Marshal(rowId)            |  RawRowIdBatch | TN Blcok
 // |  blk_id   |   batch.Marshal(uint32 offset)    | RawBatchOffset | RawBatch (in txn workspace)
 func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
-	blkId, typ_str := objectio.Str2Blockid(name[:len(name)-2]), string(name[len(name)-1])
+	_, typ_str := objectio.Str2Blockid(name[:len(name)-2]), string(name[len(name)-1])
 	typ, err := strconv.ParseInt(typ_str, 10, 64)
 	if err != nil {
 		return err
@@ -1545,24 +1449,19 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	switch typ {
 	case deletion.FlushDeltaLoc:
 		tbl.getTxn().hasS3Op.Store(true)
-		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].UnsafeGetStringAt(0))
-		if err != nil {
-			return err
-		}
-		fileName := location.Name().String()
+		stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(0))
+		fileName := stats.ObjectLocation().String()
 		copBat, err := util.CopyBatch(bat, tbl.getTxn().proc)
 		if err != nil {
 			return err
 		}
+
 		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
 			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.getTxn().tnStores[0]); err != nil {
 			return err
 		}
 
-		tbl.getTxn().blockId_tn_delete_metaLoc_batch.RWMutex.Lock()
-		tbl.getTxn().blockId_tn_delete_metaLoc_batch.data[*blkId] =
-			append(tbl.getTxn().blockId_tn_delete_metaLoc_batch.data[*blkId], copBat)
-		tbl.getTxn().blockId_tn_delete_metaLoc_batch.RWMutex.Unlock()
+		tbl.getTxn().StashFlushedTombstones(stats)
 
 	case deletion.CNBlockOffset:
 	case deletion.RawBatchOffset:
@@ -1601,10 +1500,10 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 // TODO:: do prefetch read and parallel compaction
 func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64,
-) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
+) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
 	s3writer, err := colexec.NewS3Writer(tbl.getTxn().proc, tbl.tableDef, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, objectio.ObjectStats{}, err
 	}
 	tbl.ensureSeqnumsAndTypesExpectRowid()
 
@@ -1619,7 +1518,7 @@ func (tbl *txnTable) compaction(
 			tbl.getTxn().engine.fs,
 			tbl.getTxn().proc.GetMPool())
 		if e != nil {
-			return nil, nil, e
+			return nil, objectio.ObjectStats{}, e
 		}
 		if bat.RowCount() == 0 {
 			continue
@@ -2410,7 +2309,7 @@ func (tbl *txnTable) getUncommittedRows(
 				rows = rows + uint64(entry.bat.RowCount())
 			} else {
 				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 					for _, v := range vs {
 						deletes[v] = struct{}{}
 					}

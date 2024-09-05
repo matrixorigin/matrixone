@@ -153,8 +153,6 @@ func (h *txnRelation) GetMeta() any { return h.table.entry }
 // Schema return schema in txnTable, not the lastest schema in TableEntry
 func (h *txnRelation) Schema(isTombstone bool) any { return h.table.GetLocalSchema(isTombstone) }
 
-func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
-
 func (h *txnRelation) BatchDedup(col containers.Vector) error {
 	return h.Txn.GetStore().BatchDedup(h.table.entry.GetDB().ID, h.table.entry.GetID(), col)
 }
@@ -331,8 +329,13 @@ func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.De
 	}
 	return h.Txn.GetStore().RangeDelete(id, start, end, pkVec, dt)
 }
-func (h *txnRelation) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
-	return h.Txn.GetStore().TryDeleteByDeltaloc(id, deltaloc)
+
+//func (h *txnRelation) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
+//	return h.Txn.GetStore().TryDeleteByDeltaloc(id, deltaloc)
+//}
+
+func (h *txnRelation) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
+	return h.Txn.GetStore().TryDeleteByStats(id, stats)
 }
 
 // Only used by test.

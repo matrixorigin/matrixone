@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
 
@@ -305,7 +304,7 @@ func mockStatsList(t *testing.T, statsCnt int) (statsList []objectio.ObjectStats
 		stats := objectio.NewObjectStats()
 		blkCnt := rand.Uint32()%100 + 1
 		require.Nil(t, objectio.SetObjectStatsBlkCnt(stats, blkCnt))
-		require.Nil(t, objectio.SetObjectStatsRowCnt(stats, options.DefaultBlockMaxRows*(blkCnt-1)+options.DefaultBlockMaxRows*6/10))
+		require.Nil(t, objectio.SetObjectStatsRowCnt(stats, objectio.BlockMaxRows*(blkCnt-1)+objectio.BlockMaxRows*6/10))
 		require.Nil(t, objectio.SetObjectStatsObjectName(stats, objectio.BuildObjectName(objectio.NewSegmentid(), uint16(blkCnt))))
 		require.Nil(t, objectio.SetObjectStatsExtent(stats, objectio.NewExtent(0, 0, 0, 0)))
 		require.Nil(t, objectio.SetObjectStatsSortKeyZoneMap(stats, index.NewZM(types.T_bool, 1)))
@@ -599,7 +598,7 @@ func TestGetPkExprValue(t *testing.T) {
 	equalToVecFn := func(expect []int64, actual any) bool {
 		vec := vector.NewVec(types.T_any.ToType())
 		_ = vec.UnmarshalBinary(actual.([]byte))
-		actualVals := vector.MustFixedCol[int64](vec)
+		actualVals := vector.MustFixedColWithTypeCheck[int64](vec)
 		if len(expect) != len(actualVals) {
 			return false
 		}

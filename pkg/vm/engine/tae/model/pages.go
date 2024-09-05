@@ -159,7 +159,6 @@ func (page *TransferHashPage) Clear() {
 
 	page.hashmap.Store(nil)
 	v2.TaskMergeTransferPageLengthGauge.Sub(float64(len(*m)))
-	clear(*m)
 }
 
 func (page *TransferHashPage) Train(m api.TransferMap) {

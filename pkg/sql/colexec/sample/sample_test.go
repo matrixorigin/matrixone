@@ -73,7 +73,7 @@ func TestSamplePool(t *testing.T) {
 		require.Equal(t, 5, out.Vecs[0].Length())
 		require.Equal(t, 5, out.Vecs[1].Length())
 		// invalid scan row count was 9. the 10th row with null value at the sample column will be ignored.
-		require.Equal(t, int64(9), vector.GetFixedAt[int64](out.Vecs[2], 0))
+		require.Equal(t, int64(9), vector.GetFixedAtWithTypeCheck[int64](out.Vecs[2], 0))
 
 		out.Clean(proc.Mp())
 		pool1.Free()

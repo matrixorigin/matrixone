@@ -106,6 +106,7 @@ select ceil(null, 1);
 select ceil(null, null);
 
 select ceil(1.001,2);
+select ceiling(1.001,2);
 
 drop table if exists t1;
 create table t1(a int ,b decimal(10,5));
@@ -125,3 +126,4 @@ insert into t1 values (13, 20.89123);
 insert into t1 values (14, 23.40123);
 insert into t1 values (15, 123.45678);
 select a, b, ceil(b,2) from t1;
+select a, b, ceiling(b,2) from t1;
