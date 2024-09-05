@@ -222,7 +222,6 @@ func (sm *SnapshotMeta) updateTableInfo(ctx context.Context, fs fileservice.File
 			createAt: createTS,
 			deleteAt: deleteTS,
 		}
-		return
 	}
 	collectObjects(&objects, data.GetObjectBatchs(), collector)
 	collectObjects(&tombstones, data.GetTombstoneObjectBatchs(), collector)
@@ -428,8 +427,9 @@ func (sm *SnapshotMeta) Update(
 		}
 		logutil.Info("[UpdateSnapshot] Delete object",
 			zap.Uint64("table id", tid),
-			zap.String("object name", id.String()))
-		zap.String("delete at", deleteTS.ToString())
+			zap.String("object name", id.String()),
+			zap.String("delete at", deleteTS.ToString()))
+
 		delete(oMap, id)
 	}
 	collectObjects(&sm.objects, data.GetObjectBatchs(), collector)
