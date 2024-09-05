@@ -20,15 +20,8 @@ import (
 	"strings"
 	"sync"
 
-<<<<<<< HEAD
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-
-=======
->>>>>>> 97976e80abdf6a5eaf6f862a70a2a46317875ef8
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
