@@ -142,24 +142,12 @@ func buildDS(
 }
 
 func (d *BackupDeltaLocDataSource) ApplyTombstones(
-	ctx context.Context,
-	bid objectio.Blockid,
-	rowsOffset []int64,
-	applyPolicy engine.TombstoneApplyPolicy,
+	_ context.Context,
+	_ objectio.Blockid,
+	_ []int64,
+	_ engine.TombstoneApplyPolicy,
 ) ([]int64, error) {
-	deleteMask, err := d.GetTombstones(ctx, bid)
-	if err != nil {
-		return nil, err
-	}
-	var rows []int64
-	if !deleteMask.IsEmpty() {
-		for _, row := range rowsOffset {
-			if !deleteMask.Contains(uint64(row)) {
-				rows = append(rows, row)
-			}
-		}
-	}
-	return rows, nil
+	panic("Not Support ApplyTombstones")
 }
 
 func GetTombstonesByBlockId(
