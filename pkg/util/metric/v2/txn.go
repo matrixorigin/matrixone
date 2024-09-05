@@ -276,9 +276,9 @@ var (
 			Name:      "S3_tombstone",
 			Help:      "Total number of transfer in S3 tombstone",
 		}, []string{"type"})
-	TxnS3TombstoneSoftdeleteObjectCounter  = txnS3TombstoneCounter.WithLabelValues("softdelete objects")
+	TxnS3TombstoneSoftdeleteObjectCounter   = txnS3TombstoneCounter.WithLabelValues("softdelete objects")
 	TxnS3TombstoneTransferDataObjectCounter = txnS3TombstoneCounter.WithLabelValues("transfer data objects")
-	TxnS3TombstoneTransferStatsCounter     = txnS3TombstoneCounter.WithLabelValues("transfer tombstones")
+	TxnS3TombstoneTransferStatsCounter      = txnS3TombstoneCounter.WithLabelValues("transfer tombstones")
 
 	txnS3TombstoneDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
