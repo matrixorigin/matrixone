@@ -12,9 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package objectio
 
-type RowGen interface {
-	HasNext() bool
-	Next() uint32
-}
+import (
+	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+)
+
+const (
+	BlockMaxRows = 8192
+
+	SEQNUM_UPPER    = math.MaxUint16 - 5 // reserved 5 column for special committs、committs etc.
+	SEQNUM_ROWID    = math.MaxUint16
+	SEQNUM_ABORT    = math.MaxUint16 - 1
+	SEQNUM_COMMITTS = math.MaxUint16 - 2
+)
+
+const ZoneMapSize = index.ZMSize
