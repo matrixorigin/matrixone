@@ -572,11 +572,6 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		syncCommittedTSCount: e.cli.GetSyncLatestCommitTSTimes(),
 	}
 
-	txn.blockId_tn_delete_metaLoc_batch = struct {
-		sync.RWMutex
-		data map[types.Blockid][]*batch.Batch
-	}{data: make(map[types.Blockid][]*batch.Batch)}
-
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
 	colexec.Get().PutCnSegment(id, colexec.TxnWorkSpaceIdType)

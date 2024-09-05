@@ -18,8 +18,6 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -68,41 +66,35 @@ func (is *itemSet) Clear() {
 	*is = old[:0]
 }
 
-func getBlkIDsFromRowids(vec *vector.Vector) map[types.Blockid]struct{} {
-	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
-	blkids := make(map[types.Blockid]struct{})
-	for _, rowid := range rowids {
-		blkID := *rowid.BorrowBlockID()
-		blkids[blkID] = struct{}{}
-	}
-	return blkids
-}
-
 func (h *Handle) prefetchDeleteRowID(_ context.Context, req *db.WriteReq) error {
-	if len(req.DeltaLocs) == 0 {
+	if len(req.TombstoneStats) == 0 {
 		return nil
 	}
+
 	//for loading deleted rowid.
 	columnIdx := 0
 	pkIdx := 1
+
 	//start loading jobs asynchronously,should create a new root context.
-	loc, err := blockio.EncodeLocationFromString(req.DeltaLocs[0])
-	if err != nil {
-		return err
-	}
-	pref, err := blockio.BuildPrefetchParams(h.db.Runtime.Fs.Service, loc)
-	if err != nil {
-		return err
-	}
-	for _, key := range req.DeltaLocs {
-		var location objectio.Location
-		location, err = blockio.EncodeLocationFromString(key)
+	for _, stats := range req.TombstoneStats {
+		loc := stats.BlockLocation(uint16(0), objectio.BlockMaxRows)
+		pref, err := blockio.BuildPrefetchParams(h.db.Runtime.Fs.Service, loc)
 		if err != nil {
 			return err
 		}
-		pref.AddBlockWithType([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()}, uint16(objectio.SchemaTombstone))
+		for i := range stats.BlkCnt() {
+			pref.AddBlockWithType(
+				[]uint16{uint16(columnIdx), uint16(pkIdx)},
+				[]uint16{uint16(i)},
+				uint16(objectio.SchemaTombstone))
+		}
+
+		if err = blockio.PrefetchWithMerged(h.db.Opts.SID, pref); err != nil {
+			return err
+		}
 	}
-	return blockio.PrefetchWithMerged(h.db.Opts.SID, pref)
+
+	return nil
 }
 
 func (h *Handle) prefetchMetadata(_ context.Context, req *db.WriteReq) (int, error) {
@@ -156,7 +148,7 @@ func (h *Handle) TryPrefetchTxn(ctx context.Context, meta txn.TxnMeta) error {
 		if r, ok := e.(*db.WriteReq); ok && r.FileName != "" {
 			if r.Type == db.EntryDelete {
 				// start to load deleted row ids
-				deltaLocCnt += len(r.DeltaLocs)
+				deltaLocCnt += 1
 				if err := h.prefetchDeleteRowID(ctx, r); err != nil {
 					return err
 				}

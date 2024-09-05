@@ -127,9 +127,11 @@ func (store *NoopTxnStore) RangeDelete(
 ) (err error) {
 	return
 }
-func (store *NoopTxnStore) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
+
+func (store *NoopTxnStore) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
 	return
 }
+
 func (store *NoopTxnStore) GetByFilter(
 	context.Context, uint64, uint64, *handle.Filter,
 ) (id *common.ID, offset uint32, err error) {

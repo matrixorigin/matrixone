@@ -190,9 +190,13 @@ func callBlocking(
 		if len(lockOp.ctr.cachedBatches) == 0 {
 			lockOp.ctr.step = stepEnd
 		} else {
-			bat := lockOp.ctr.cachedBatches[0]
+			if lockOp.ctr.buf != nil {
+				lockOp.ctr.buf.Clean(proc.Mp())
+				lockOp.ctr.buf = nil
+			}
+			lockOp.ctr.buf = lockOp.ctr.cachedBatches[0]
 			lockOp.ctr.cachedBatches = lockOp.ctr.cachedBatches[1:]
-			result.Batch = bat
+			result.Batch = lockOp.ctr.buf
 			anal.Output(result.Batch, lockOp.IsLast)
 			return result, nil
 		}
@@ -889,6 +893,10 @@ func (lockOp *LockOp) cleanCachedBatch(proc *process.Process) {
 		bat.Clean(proc.Mp())
 	}
 	lockOp.ctr.cachedBatches = nil
+	if lockOp.ctr.buf != nil {
+		lockOp.ctr.buf.Clean(proc.Mp())
+		lockOp.ctr.buf = nil
+	}
 }
 
 func (lockOp *LockOp) resetParker() {

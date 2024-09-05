@@ -126,10 +126,7 @@ func readObjects(stats objectio.ObjectStats, blockID uint32, fs fileservice.File
 	if isTombstone {
 		metaType = objectio.SchemaTombstone
 	}
-	loc := catalog.BuildLocation(
-		stats,
-		uint16(blockID),
-		8192)
+	loc := stats.BlockLocation(uint16(blockID), 8192)
 	bat, _, err = blockio.LoadOneBlock(
 		ctx,
 		fs,

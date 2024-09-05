@@ -34,9 +34,15 @@ import (
 
 var _ vm.Operator = new(Deletion)
 
-const (
+// make it mutable in ut
+var (
 	flushThreshold = 32 * mpool.MB
 )
+
+// SetCNFlushDeletesThreshold update threshold to n MB
+func SetCNFlushDeletesThreshold(n int) {
+	flushThreshold = n * mpool.MB
+}
 
 type BatchPool struct {
 	pools []*batch.Batch
@@ -57,9 +63,9 @@ func (pool *BatchPool) get() *batch.Batch {
 
 // for now, we won't do compaction for cn block
 type container struct {
-	blockId_bitmap                 map[types.Blockid]*nulls.Nulls
-	partitionId_blockId_rowIdBatch map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
-	partitionId_blockId_deltaLoc   map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> MetaLocation
+	blockId_bitmap                       map[types.Blockid]*nulls.Nulls
+	partitionId_blockId_rowIdBatch       map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
+	partitionId_tombstoneObjectStatsBats map[int][]*batch.Batch                 // PartitionId -> tombstone object stats
 	// don't flush cn block rowId and rawBatch
 	// we just do compaction for cn block in the
 	// future
@@ -151,15 +157,16 @@ func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err 
 			}
 			delete(ctr.partitionId_blockId_rowIdBatch, pidx)
 		}
-		for pidx, blockId_metaLoc := range ctr.partitionId_blockId_deltaLoc {
-			for blkid, bat := range blockId_metaLoc {
+
+		for pIdx, bats := range ctr.partitionId_tombstoneObjectStatsBats {
+			for _, bat := range bats {
 				if bat != nil {
 					bat.Clean(proc.GetMPool())
 				}
-				delete(blockId_metaLoc, blkid)
 			}
-			delete(ctr.partitionId_blockId_deltaLoc, pidx)
+			delete(ctr.partitionId_tombstoneObjectStatsBats, pIdx)
 		}
+
 		for blkid := range ctr.blockId_type {
 			delete(ctr.blockId_type, blkid)
 		}
@@ -187,7 +194,7 @@ func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err e
 		deletion.SegmentMap = nil
 		ctr.blockId_bitmap = nil
 		ctr.partitionId_blockId_rowIdBatch = nil
-		ctr.partitionId_blockId_deltaLoc = nil
+		ctr.partitionId_tombstoneObjectStatsBats = nil
 		ctr.blockId_type = nil
 		ctr.pool = nil
 	}
@@ -228,7 +235,7 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch)
 		collectBatchInfo(proc, deletion, srcBat, deletion.DeleteCtx.RowIdIdx, 0, delCtx.PrimaryKeyIdx)
 	}
 	// we will flush all
-	if deletion.ctr.batch_size >= flushThreshold {
+	if deletion.ctr.batch_size >= uint32(flushThreshold) {
 		size, err := deletion.ctr.flush(proc)
 		if err != nil {
 			return err
@@ -266,23 +273,21 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			delete(blockId_rowIdBatch, blkid)
 		}
 
-		blkInfos, _, err := s3writer.SortAndSync(proc)
+		_, stats, err := s3writer.SortAndSync(proc)
 		if err != nil {
 			return 0, err
 		}
-		for i, blkInfo := range blkInfos {
-			if _, has := ctr.partitionId_blockId_deltaLoc[pidx]; !has {
-				ctr.partitionId_blockId_deltaLoc[pidx] = make(map[types.Blockid]*batch.Batch)
-			}
-			blockId_deltaLoc := ctr.partitionId_blockId_deltaLoc[pidx]
-			if _, ok := blockId_deltaLoc[blkids[i]]; !ok {
-				bat := batch.New(false, []string{catalog.BlockMeta_DeltaLoc})
-				bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-				blockId_deltaLoc[blkids[i]] = bat
-			}
-			bat := blockId_deltaLoc[blkids[i]]
-			vector.AppendBytes(bat.GetVector(0), []byte(blkInfo.MetaLocation().String()), false, proc.GetMPool())
+
+		bat := batch.New(false, []string{catalog.ObjectMeta_ObjectStats})
+		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		if err = vector.AppendBytes(
+			bat.GetVector(0), stats.Marshal(), false, proc.GetMPool()); err != nil {
+			return 0, err
 		}
+
+		bat.SetRowCount(bat.Vecs[0].Length())
+		ctr.partitionId_tombstoneObjectStatsBats[pidx] =
+			append(ctr.partitionId_tombstoneObjectStatsBats[pidx], bat)
 	}
 	return resSize, nil
 }
@@ -350,6 +355,7 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 		batchSize += bat.Size()
 		bat.SetRowCount(bat.Vecs[0].Length())
 	}
+
 	deletion.ctr.batch_size = uint32(batchSize)
 }
 

@@ -314,13 +314,16 @@ func (node *persistedNode) FillBlockTombstones(
 			}
 		}()
 		var commitTSs []types.TS
+		var commitTSVec containers.Vector
 		if node.object.meta.Load().IsAppendable() {
-			commitTSVec, err := node.object.LoadPersistedCommitTS(uint16(tombstoneBlkID))
+			commitTSVec, err = node.object.LoadPersistedCommitTS(uint16(tombstoneBlkID))
 			if err != nil {
 				return err
 			}
 			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
-			commitTSVec.Close()
+		}
+		if commitTSVec != nil {
+			defer commitTSVec.Close()
 		}
 		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
 		// TODO: biselect, check visibility
