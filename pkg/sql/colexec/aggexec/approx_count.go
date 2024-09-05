@@ -209,7 +209,7 @@ func (exec *approxCountFixedExec[T]) Fill(groupIndex int, row int, vectors []*ve
 	if vectors[0].IsConst() {
 		row = 0
 	}
-	v := vector.MustFixedCol[T](vectors[0])[row]
+	v := vector.MustFixedColWithTypeCheck[T](vectors[0])[row]
 	exec.groups[groupIndex].Insert(types.EncodeFixed[T](v))
 	return nil
 }
@@ -219,7 +219,7 @@ func (exec *approxCountFixedExec[T]) BulkFill(groupIndex int, vectors []*vector.
 		return nil
 	}
 	if vectors[0].IsConst() {
-		v := vector.MustFixedCol[T](vectors[0])[0]
+		v := vector.MustFixedColWithTypeCheck[T](vectors[0])[0]
 		exec.groups[groupIndex].Insert(types.EncodeFixed[T](v))
 		return nil
 	}
@@ -245,7 +245,7 @@ func (exec *approxCountFixedExec[T]) BatchFill(offset int, groups []uint64, vect
 		return nil
 	}
 	if vectors[0].IsConst() {
-		v := vector.MustFixedCol[T](vectors[0])[0]
+		v := vector.MustFixedColWithTypeCheck[T](vectors[0])[0]
 		for _, group := range groups {
 			if group != GroupNotMatched {
 				exec.groups[group-1].Insert(types.EncodeFixed[T](v))

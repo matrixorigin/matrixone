@@ -2454,7 +2454,7 @@ func TestSegDelLogtail(t *testing.T) {
 	startTSVec := resp.Commands[0].Bat.Vecs[9]
 	cnStartVec, err := vector.ProtoVectorToVector(startTSVec)
 	assert.NoError(t, err)
-	startTSs := vector.MustFixedCol[types.TS](cnStartVec)
+	startTSs := vector.MustFixedColWithTypeCheck[types.TS](cnStartVec)
 	for _, ts := range startTSs {
 		assert.False(t, ts.IsEmpty())
 	}
@@ -2466,7 +2466,7 @@ func TestSegDelLogtail(t *testing.T) {
 	startTSVec = resp.Commands[1].Bat.Vecs[9]
 	cnStartVec, err = vector.ProtoVectorToVector(startTSVec)
 	assert.NoError(t, err)
-	startTSs = vector.MustFixedCol[types.TS](cnStartVec)
+	startTSs = vector.MustFixedColWithTypeCheck[types.TS](cnStartVec)
 	for _, ts := range startTSs {
 		assert.False(t, ts.IsEmpty())
 	}

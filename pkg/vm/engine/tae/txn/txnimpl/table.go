@@ -1429,7 +1429,7 @@ func (tbl *txnTable) contains(
 			if err != nil {
 				return err
 			}
-			data := vector.MustFixedCol[types.Rowid](vectors[0].GetDownstreamVector())
+			data := vector.MustFixedColWithTypeCheck[types.Rowid](vectors[0].GetDownstreamVector())
 			containers.ForeachVector(keys,
 				func(id types.Rowid, isNull bool, row int) error {
 					if keys.IsNull(row) {

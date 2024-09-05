@@ -15,6 +15,8 @@
 package mergegroup
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 // generateInputData return an input batch for mergeGroup operator.
@@ -116,8 +117,8 @@ func TestMergeGroupBehavior1(t *testing.T) {
 				if outputBatch != nil {
 					require.Equal(t, 2, len(outputBatch.Vecs))
 					require.Equal(t, 0, len(outputBatch.Aggs))
-					require.Equal(t, int64(3), vector.MustFixedCol[int64](outputBatch.Vecs[0])[0])
-					require.Equal(t, int64(11), vector.MustFixedCol[int64](outputBatch.Vecs[1])[0])
+					require.Equal(t, int64(3), vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[0])[0])
+					require.Equal(t, int64(11), vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[1])[0])
 				} else {
 					require.Fail(t, "output batch should not be nil.")
 				}
@@ -172,7 +173,7 @@ func TestMergeGroupBehavior1(t *testing.T) {
 				if outputBatch != nil {
 					require.Equal(t, 1, len(outputBatch.Vecs))
 					require.Equal(t, 0, len(outputBatch.Aggs))
-					require.Equal(t, int64(15), vector.MustFixedCol[int64](outputBatch.Vecs[0])[0])
+					require.Equal(t, int64(15), vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[0])[0])
 				} else {
 					require.Fail(t, "output batch should not be nil.")
 				}
@@ -231,12 +232,12 @@ func TestMergeGroupBehavior2(t *testing.T) {
 				if outputBatch != nil {
 					require.Equal(t, 1, len(outputBatch.Vecs))
 					require.Equal(t, 1, len(outputBatch.Aggs))
-					require.Equal(t, int64(3), vector.MustFixedCol[int64](outputBatch.Vecs[0])[0])
+					require.Equal(t, int64(3), vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[0])[0])
 
 					// flush to check the result
 					vec, err := outputBatch.Aggs[0].Flush()
 					require.NoError(t, err)
-					require.Equal(t, int64(11), vector.MustFixedCol[int64](vec)[0])
+					require.Equal(t, int64(11), vector.MustFixedColWithTypeCheck[int64](vec)[0])
 					vec.Free(proc.Mp())
 				} else {
 					require.Fail(t, "output batch should not be nil.")
@@ -296,7 +297,7 @@ func TestMergeGroupBehavior2(t *testing.T) {
 					// flush to check the result
 					vec, err := outputBatch.Aggs[0].Flush()
 					require.NoError(t, err)
-					require.Equal(t, int64(15), vector.MustFixedCol[int64](vec)[0])
+					require.Equal(t, int64(15), vector.MustFixedColWithTypeCheck[int64](vec)[0])
 					vec.Free(proc.Mp())
 				} else {
 					require.Fail(t, "output batch should not be nil.")
