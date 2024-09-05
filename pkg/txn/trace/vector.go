@@ -90,79 +90,79 @@ func writeValue(
 	t := vec.GetType()
 	switch t.Oid {
 	case types.T_bool:
-		v := vector.MustFixedCol[bool](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[bool](vec)[row]
 		if v {
 			buf.buf.WriteString("true")
 		} else {
 			buf.buf.WriteString("false")
 		}
 	case types.T_bit:
-		v := vector.MustFixedCol[uint64](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[uint64](vec)[row]
 		buf.buf.MustWrite(uintToString(dst, uint64(v)))
 	case types.T_int8:
-		v := vector.MustFixedCol[int8](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[int8](vec)[row]
 		buf.buf.MustWrite(intToString(dst, int64(v)))
 	case types.T_int16:
-		v := vector.MustFixedCol[int16](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[int16](vec)[row]
 		buf.buf.MustWrite(intToString(dst, int64(v)))
 	case types.T_int32:
-		v := vector.MustFixedCol[int32](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[int32](vec)[row]
 		buf.buf.MustWrite(intToString(dst, int64(v)))
 	case types.T_int64:
-		v := vector.MustFixedCol[int64](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[int64](vec)[row]
 		buf.buf.MustWrite(intToString(dst, int64(v)))
 	case types.T_uint8:
-		v := vector.MustFixedCol[uint8](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[uint8](vec)[row]
 		buf.buf.MustWrite(uintToString(dst, uint64(v)))
 	case types.T_uint16:
-		v := vector.MustFixedCol[uint16](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[uint16](vec)[row]
 		buf.buf.MustWrite(uintToString(dst, uint64(v)))
 	case types.T_uint32:
-		v := vector.MustFixedCol[uint32](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[uint32](vec)[row]
 		buf.buf.MustWrite(uintToString(dst, uint64(v)))
 	case types.T_uint64:
-		v := vector.MustFixedCol[uint64](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[uint64](vec)[row]
 		buf.buf.MustWrite(uintToString(dst, uint64(v)))
 	case types.T_float32:
-		v := vector.MustFixedCol[float32](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[float32](vec)[row]
 		buf.buf.MustWrite(floatToString(dst, float64(v)))
 	case types.T_float64:
-		v := vector.MustFixedCol[float64](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[float64](vec)[row]
 		buf.buf.MustWrite(floatToString(dst, float64(v)))
 	case types.T_date:
-		v := vector.MustFixedCol[types.Date](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[types.Date](vec)[row]
 		buf.buf.MustWrite(intToString(dst, int64(v)))
 	case types.T_time:
-		v := vector.MustFixedCol[types.Time](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[types.Time](vec)[row]
 		buf.buf.MustWrite(intToString(dst, int64(v)))
 	case types.T_datetime:
-		v := vector.MustFixedCol[types.Datetime](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[row]
 		buf.buf.MustWrite(intToString(dst, int64(v)))
 	case types.T_timestamp:
-		v := vector.MustFixedCol[types.Timestamp](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[row]
 		buf.buf.MustWrite(intToString(dst, int64(v)))
 	case types.T_decimal64:
-		v := vector.MustFixedCol[types.Decimal64](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row]
 		buf.buf.MustWrite(uintToString(dst, uint64(v)))
 	case types.T_uuid:
-		v := vector.MustFixedCol[types.Uuid](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[types.Uuid](vec)[row]
 		buf.buf.MustWrite(v[:])
 	case types.T_char, types.T_varchar, types.T_binary:
 		data := vec.GetBytesAt(row)
 		buf.buf.MustWrite(data)
 	case types.T_enum:
-		v := vector.MustFixedCol[types.Enum](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[types.Enum](vec)[row]
 		buf.buf.MustWrite(uintToString(dst, uint64(v)))
 	case types.T_Rowid:
-		v := vector.MustFixedCol[types.Rowid](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[types.Rowid](vec)[row]
 		buf.buf.WriteString(v.String())
 	case types.T_TS:
-		v := vector.MustFixedCol[types.TS](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[types.TS](vec)[row]
 		buf.buf.MustWrite(intToString(dst, int64(v.Physical())))
 		buf.buf.WriteString("-")
 		buf.buf.MustWrite(intToString(dst, int64(v.Logical())))
 	case types.T_Blockid:
-		v := vector.MustFixedCol[types.Blockid](vec)[row]
+		v := vector.MustFixedColNoTypeCheck[types.Blockid](vec)[row]
 		n := hex.EncodedLen(len(v[:]))
 		hex.Encode(dst[:n], v[:])
 		buf.buf.MustWrite(dst[:n])

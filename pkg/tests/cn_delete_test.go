@@ -58,7 +58,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 		require.NoError(t, err)
 
 		resp.ReadRows(func(rows int, cols []*vector.Vector) bool {
-			cnt := vector.GetFixedAt[int64](cols[0], 0)
+			cnt := vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
 			require.Equal(t, int64(512*1024), cnt)
 			return true
 		})
@@ -74,7 +74,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 		require.NoError(t, err)
 
 		resp.ReadRows(func(rows int, cols []*vector.Vector) bool {
-			cnt := vector.GetFixedAt[int64](cols[0], 0)
+			cnt := vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
 			require.Equal(t, int64(1), cnt)
 			return true
 		})

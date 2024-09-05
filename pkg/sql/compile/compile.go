@@ -924,7 +924,7 @@ func constructValueScanBatch(proc *process.Process, node *plan.Node) (*batch.Bat
 				exprList = exprs.([][]colexec.ExpressionExecutor)[i]
 			}
 			if params != nil {
-				vs := vector.MustFixedCol[types.Varlena](params)
+				vs := vector.MustFixedColWithTypeCheck[types.Varlena](params)
 				for _, row := range colsData[i].Data {
 					if row.Pos >= 0 {
 						isNull := params.GetNulls().Contains(uint64(row.Pos - 1))
@@ -2580,7 +2580,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			}
 			defer vec2.Free(c.proc.Mp())
 
-			limit, offset := vector.MustFixedCol[uint64](vec1)[0], vector.MustFixedCol[uint64](vec2)[0]
+			limit, offset := vector.MustFixedColWithTypeCheck[uint64](vec1)[0], vector.MustFixedColWithTypeCheck[uint64](vec2)[0]
 			topN := limit + offset
 			overflow := false
 			if topN < limit || topN < offset {
@@ -4906,7 +4906,7 @@ func runDetectSql(c *Compile, sql string) error {
 	if res.Batches != nil {
 		vs := res.Batches[0].Vecs
 		if vs != nil && vs[0].Length() > 0 {
-			yes := vector.GetFixedAt[bool](vs[0], 0)
+			yes := vector.GetFixedAtWithTypeCheck[bool](vs[0], 0)
 			if !yes {
 				return moerr.NewErrFKNoReferencedRow2(c.proc.Ctx)
 			}
@@ -4927,7 +4927,7 @@ func runDetectFkReferToDBSql(c *Compile, sql string) error {
 	if res.Batches != nil {
 		vs := res.Batches[0].Vecs
 		if vs != nil && vs[0].Length() > 0 {
-			yes := vector.GetFixedAt[bool](vs[0], 0)
+			yes := vector.GetFixedAtWithTypeCheck[bool](vs[0], 0)
 			if yes {
 				return moerr.NewInternalError(c.proc.Ctx,
 					"can not drop database. It has been referenced by foreign keys")
