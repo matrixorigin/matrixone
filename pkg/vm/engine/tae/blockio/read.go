@@ -749,3 +749,44 @@ func FindIntervalForBlock(rowids []types.Rowid, id *types.Blockid) (start int, e
 	end = i
 	return
 }
+
+func FillBlockDeleteMask(
+	ctx context.Context,
+	snapshotTS types.TS,
+	blockId types.Blockid,
+	location objectio.Location,
+	fs fileservice.FileService,
+) (deleteMask *nulls.Nulls, err error) {
+	var (
+		rows *nulls.Nulls
+		//bisect           time.Duration
+		release          func()
+		persistedByCN    bool
+		persistedDeletes *batch.Batch
+	)
+
+	if !location.IsEmpty() {
+		//t1 := time.Now()
+
+		if persistedDeletes, persistedByCN, release, err = ReadBlockDelete(ctx, location, fs); err != nil {
+			return nil, err
+		}
+		defer release()
+
+		//readCost := time.Since(t1)
+
+		if persistedByCN {
+			rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(blockId, persistedDeletes)
+		} else {
+			//t2 := time.Now()
+			rows = EvalDeleteRowsByTimestamp(persistedDeletes, snapshotTS, &blockId)
+			//bisect = time.Since(t2)
+		}
+
+		if rows != nil {
+			deleteMask = rows
+		}
+	}
+
+	return deleteMask, nil
+}

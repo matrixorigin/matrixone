@@ -394,6 +394,7 @@ func GetSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row in
 	return
 }
 
+// TODO replace it with MockCNDeleteInS3_2
 func MockCNDeleteInS3(
 	fs *objectio.ObjectFS,
 	obj data.Object,
@@ -401,7 +402,7 @@ func MockCNDeleteInS3(
 	schema *catalog.Schema,
 	txn txnif.AsyncTxn,
 	deleteRows []uint32,
-) (location objectio.Location, err error) {
+) (stats objectio.ObjectStats, err error) {
 	pkDef := schema.GetPrimaryKey()
 	var view *containers.Batch
 	err = obj.Scan(context.Background(), &view, txn, schema, blkOffset, []int{pkDef.Idx}, common.DefaultAllocator)
@@ -434,7 +435,43 @@ func MockCNDeleteInS3(
 	if err != nil {
 		return
 	}
-	blks, _, err := writer.Sync(context.Background())
-	location = blockio.EncodeLocation(name, blks[0].GetExtent(), uint32(bat.Length()), blks[0].GetID())
+	_, _, err = writer.Sync(context.Background())
+	//location = blockio.EncodeLocation(name, blks[0].GetExtent(), uint32(bat.Length()), blks[0].GetID())
+
+	stats = writer.GetObjectStats()[0]
+	stats.SetCNCreated()
+
+	return
+}
+
+func MockCNDeleteInS3_2(
+	fs *objectio.ObjectFS,
+	rowIDVec containers.Vector,
+	pkVec containers.Vector,
+	schema *catalog.Schema,
+	txn txnif.AsyncTxn,
+) (stats objectio.ObjectStats, err error) {
+	bat := containers.NewBatch()
+	bat.AddVector(catalog.AttrRowID, rowIDVec)
+	bat.AddVector("pk", pkVec)
+	name := objectio.MockObjectName()
+	writer, err := blockio.NewBlockWriterNew(fs.Service, name, 0, nil)
+	writer.SetDataType(objectio.SchemaTombstone)
+	writer.SetPrimaryKeyWithType(uint16(catalog.TombstonePrimaryKeyIdx), index.HBF,
+		index.ObjectPrefixFn,
+		index.BlockPrefixFn)
+	if err != nil {
+		return
+	}
+	_, err = writer.WriteBatch(containers.ToCNBatch(bat))
+	if err != nil {
+		return
+	}
+	_, _, err = writer.Sync(context.Background())
+	//location = blockio.EncodeLocation(name, blks[0].GetExtent(), uint32(bat.Length()), blks[0].GetID())
+
+	stats = writer.GetObjectStats()[0]
+	stats.SetCNCreated()
+
 	return
 }
