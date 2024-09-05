@@ -183,18 +183,30 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 	id := tbl.entry.AsCommonID()
 	var softDeleteObjects []*catalog.ObjectEntry
 	if len(tbl.tombstoneTable.tableSpace.stats) != 0 {
+		tGetSoftdeleteObjects := time.Now()
 		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(tbl.store.txn.GetStartTS(), tbl.transferedTS.Next(), ts)
+		v2.TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram.Observe(time.Since(tGetSoftdeleteObjects).Seconds())
+		v2.TxnS3TombstoneSoftdeleteObjectCounter.Add(float64(len(softDeleteObjects)))
+		var findTombstoneDuration, readTombstoneDuration, deleteRowsDuration time.Duration
 		// transfer deltaloc
 		for _, obj := range softDeleteObjects {
+			tFindTombstone := time.Now()
 			sel, err := blockio.FindTombstonesOfObject(context.TODO(), *obj.ID(), tbl.tombstoneTable.tableSpace.stats, tbl.store.rt.Fs.Service)
+			findTombstoneDuration += time.Since(tFindTombstone)
 			if err != nil {
 				return err
 			}
+			if sel.IsEmpty() {
+				continue
+			}
+			v2.TxnS3TombstoneTransferDataObjectCounter.Add(1)
+			v2.TxnS3TombstoneTransferStatsCounter.Add(float64(sel.Count()))
 			iter := sel.Iterator()
 			for iter.HasNext() {
 				statsOffset := iter.Next()
 				stats := tbl.tombstoneTable.tableSpace.stats[statsOffset]
 				for i := 0; i < int(stats.BlkCnt()); i++ {
+					tReadTombstone := time.Now()
 					loc := stats.BlockLocation(uint16(i), tbl.tombstoneTable.schema.BlockMaxRows)
 					vectors, closeFunc, err := blockio.LoadColumns2(
 						tbl.store.ctx,
@@ -206,6 +218,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 						false,
 						nil,
 					)
+					readTombstoneDuration += time.Since(tReadTombstone)
 					defer closeFunc()
 					if err != nil {
 						return err
@@ -227,14 +240,19 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 						// nil: transferred successfully
 						// ErrTxnRWConflict: the target block was also be compacted
 						// ErrTxnWWConflict: w-w error
+						tDeleteRows := time.Now()
 						if _, err = tbl.TransferDeleteRows(id, offset, pk, pkType, phase, ts); err != nil {
 							return err
 						}
+						deleteRowsDuration += time.Since(tDeleteRows)
 					}
 				}
 			}
 			tbl.store.warChecker.Delete(id)
 		}
+		v2.TxnS3TombstoneTransferFindTombstonesHistogram.Observe(findTombstoneDuration.Seconds())
+		v2.TxnS3TombstoneTransferReadTombstoneHistogram.Observe(readTombstoneDuration.Seconds())
+		v2.TxnS3TombstoneTransferDeleteRowsHistogram.Observe(deleteRowsDuration.Seconds())
 	}
 	transferd := nulls.Nulls{}
 	// transfer in memory deletes
