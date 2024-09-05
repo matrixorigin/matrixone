@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -114,69 +115,69 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 
 	filters := []BasePKFilter{
 		// "a=10",
-		{op: function.EQUAL, valid: true, lb: encodeVal(10)},
-		{valid: true, op: function.EQUAL, lb: encodeVal(20)},
-		{valid: true, op: function.EQUAL, lb: encodeVal(30)}, // 3
-		{op: function.IN, valid: true, vec: encodeVec([]int64{1, 2})},
+		{Op: function.EQUAL, Valid: true, LB: encodeVal(10)},
+		{Valid: true, Op: function.EQUAL, LB: encodeVal(20)},
+		{Valid: true, Op: function.EQUAL, LB: encodeVal(30)}, // 3
+		{Op: function.IN, Valid: true, Vec: encodeVec([]int64{1, 2})},
 		// "b=40 and a=50",
-		{valid: true, op: function.EQUAL, lb: encodeVal(50)}, // 5
-		{valid: false},
-		{valid: false}, // 7
-		{valid: false},
-		{valid: false}, // 9
-		{valid: false},
-		{valid: true, op: function.EQUAL, lb: encodeVal(30)}, // 11
-		{valid: false},
+		{Valid: true, Op: function.EQUAL, LB: encodeVal(50)}, // 5
+		{Valid: false},
+		{Valid: false}, // 7
+		{Valid: false},
+		{Valid: false}, // 9
+		{Valid: false},
+		{Valid: true, Op: function.EQUAL, LB: encodeVal(30)}, // 11
+		{Valid: false},
 
 		// "a>=1 and a<=3",
-		{valid: true, op: function.BETWEEN, lb: encodeVal(1), ub: encodeVal(3)}, //13
-		{valid: true, op: rangeLeftOpen, lb: encodeVal(1), ub: encodeVal(3)},
-		{valid: true, op: rangeRightOpen, lb: encodeVal(1), ub: encodeVal(3)}, //15
-		{valid: true, op: rangeBothOpen, lb: encodeVal(1), ub: encodeVal(3)},
+		{Valid: true, Op: function.BETWEEN, LB: encodeVal(1), UB: encodeVal(3)}, //13
+		{Valid: true, Op: rangeLeftOpen, LB: encodeVal(1), UB: encodeVal(3)},
+		{Valid: true, Op: rangeRightOpen, LB: encodeVal(1), UB: encodeVal(3)}, //15
+		{Valid: true, Op: rangeBothOpen, LB: encodeVal(1), UB: encodeVal(3)},
 
-		{valid: false}, // 17
-		{valid: false},
-		{valid: false}, // 19
-		{valid: false},
+		{Valid: false}, // 17
+		{Valid: false},
+		{Valid: false}, // 19
+		{Valid: false},
 
-		{valid: true, op: function.GREAT_THAN, lb: encodeVal(3)}, // 21
-		{valid: true, op: function.GREAT_THAN, lb: encodeVal(3)},
-		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(3)}, // 23
-		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(3)},
+		{Valid: true, Op: function.GREAT_THAN, LB: encodeVal(3)}, // 21
+		{Valid: true, Op: function.GREAT_THAN, LB: encodeVal(3)},
+		{Valid: true, Op: function.GREAT_EQUAL, LB: encodeVal(3)}, // 23
+		{Valid: true, Op: function.GREAT_EQUAL, LB: encodeVal(3)},
 
-		{valid: true, op: function.GREAT_THAN, lb: encodeVal(1)}, // 25
-		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(1)},
-		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(1)}, // 27
-		{valid: true, op: function.GREAT_THAN, lb: encodeVal(1)},
+		{Valid: true, Op: function.GREAT_THAN, LB: encodeVal(1)}, // 25
+		{Valid: true, Op: function.GREAT_EQUAL, LB: encodeVal(1)},
+		{Valid: true, Op: function.GREAT_EQUAL, LB: encodeVal(1)}, // 27
+		{Valid: true, Op: function.GREAT_THAN, LB: encodeVal(1)},
 
-		{valid: true, op: function.LESS_THAN, lb: encodeVal(1)}, // 29
-		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(1)},
-		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(1)}, // 31
-		{valid: true, op: function.LESS_THAN, lb: encodeVal(1)},
+		{Valid: true, Op: function.LESS_THAN, LB: encodeVal(1)}, // 29
+		{Valid: true, Op: function.LESS_EQUAL, LB: encodeVal(1)},
+		{Valid: true, Op: function.LESS_EQUAL, LB: encodeVal(1)}, // 31
+		{Valid: true, Op: function.LESS_THAN, LB: encodeVal(1)},
 
-		{valid: true, op: function.LESS_THAN, lb: encodeVal(3)}, // 33
-		{valid: true, op: function.LESS_THAN, lb: encodeVal(3)},
-		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(3)}, // 35
-		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(3)},
+		{Valid: true, Op: function.LESS_THAN, LB: encodeVal(3)}, // 33
+		{Valid: true, Op: function.LESS_THAN, LB: encodeVal(3)},
+		{Valid: true, Op: function.LESS_EQUAL, LB: encodeVal(3)}, // 35
+		{Valid: true, Op: function.LESS_EQUAL, LB: encodeVal(3)},
 
-		{valid: true, op: function.EQUAL, lb: encodeVal(5)}, // 37
-		{valid: true, op: function.LESS_THAN, lb: encodeVal(10)},
-		{valid: true, op: function.GREAT_THAN, lb: encodeVal(10)}, // 39
-		{valid: true, op: function.EQUAL, lb: encodeVal(15)},
-		{valid: true, op: function.EQUAL, lb: encodeVal(10)}, // 41
-		{valid: true, op: function.EQUAL, lb: encodeVal(10)},
+		{Valid: true, Op: function.EQUAL, LB: encodeVal(5)}, // 37
+		{Valid: true, Op: function.LESS_THAN, LB: encodeVal(10)},
+		{Valid: true, Op: function.GREAT_THAN, LB: encodeVal(10)}, // 39
+		{Valid: true, Op: function.EQUAL, LB: encodeVal(15)},
+		{Valid: true, Op: function.EQUAL, LB: encodeVal(10)}, // 41
+		{Valid: true, Op: function.EQUAL, LB: encodeVal(10)},
 
-		{valid: true, op: function.LESS_THAN, lb: encodeVal(10)}, // 43
-		{valid: false},
-		{valid: false}, // 45
-		{valid: true, op: function.GREAT_THAN, lb: encodeVal(10)},
-		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(10)}, // 47
-		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(10)},
+		{Valid: true, Op: function.LESS_THAN, LB: encodeVal(10)}, // 43
+		{Valid: false},
+		{Valid: false}, // 45
+		{Valid: true, Op: function.GREAT_THAN, LB: encodeVal(10)},
+		{Valid: true, Op: function.GREAT_EQUAL, LB: encodeVal(10)}, // 47
+		{Valid: true, Op: function.LESS_EQUAL, LB: encodeVal(10)},
 
-		{valid: true, op: function.LESS_THAN, lb: encodeVal(99)}, // 49
-		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(99)},
-		{valid: true, op: function.GREAT_THAN, lb: encodeVal(99)}, // 51
-		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(99)},
+		{Valid: true, Op: function.LESS_THAN, LB: encodeVal(99)}, // 49
+		{Valid: true, Op: function.LESS_EQUAL, LB: encodeVal(99)},
+		{Valid: true, Op: function.GREAT_THAN, LB: encodeVal(99)}, // 51
+		{Valid: true, Op: function.GREAT_EQUAL, LB: encodeVal(99)},
 	}
 
 	exprs := []*plan.Expr{
