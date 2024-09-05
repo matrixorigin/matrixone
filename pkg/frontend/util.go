@@ -404,29 +404,29 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, e
 	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
-		return vector.MustFixedCol[bool](vec)[0], nil
+		return vector.MustFixedColNoTypeCheck[bool](vec)[0], nil
 	case types.T_bit:
-		return vector.MustFixedCol[uint64](vec)[0], nil
+		return vector.MustFixedColNoTypeCheck[uint64](vec)[0], nil
 	case types.T_int8:
-		return vector.MustFixedCol[int8](vec)[0], nil
+		return vector.MustFixedColNoTypeCheck[int8](vec)[0], nil
 	case types.T_int16:
-		return vector.MustFixedCol[int16](vec)[0], nil
+		return vector.MustFixedColNoTypeCheck[int16](vec)[0], nil
 	case types.T_int32:
-		return vector.MustFixedCol[int32](vec)[0], nil
+		return vector.MustFixedColNoTypeCheck[int32](vec)[0], nil
 	case types.T_int64:
-		return vector.MustFixedCol[int64](vec)[0], nil
+		return vector.MustFixedColNoTypeCheck[int64](vec)[0], nil
 	case types.T_uint8:
-		return vector.MustFixedCol[uint8](vec)[0], nil
+		return vector.MustFixedColNoTypeCheck[uint8](vec)[0], nil
 	case types.T_uint16:
-		return vector.MustFixedCol[uint16](vec)[0], nil
+		return vector.MustFixedColNoTypeCheck[uint16](vec)[0], nil
 	case types.T_uint32:
-		return vector.MustFixedCol[uint32](vec)[0], nil
+		return vector.MustFixedColNoTypeCheck[uint32](vec)[0], nil
 	case types.T_uint64:
-		return vector.MustFixedCol[uint64](vec)[0], nil
+		return vector.MustFixedColNoTypeCheck[uint64](vec)[0], nil
 	case types.T_float32:
-		return vector.MustFixedCol[float32](vec)[0], nil
+		return vector.MustFixedColNoTypeCheck[float32](vec)[0], nil
 	case types.T_float64:
-		return vector.MustFixedCol[float64](vec)[0], nil
+		return vector.MustFixedColNoTypeCheck[float64](vec)[0], nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		return vec.GetStringAt(0), nil
 	case types.T_array_float32:
@@ -434,32 +434,32 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, e
 	case types.T_array_float64:
 		return vector.GetArrayAt[float64](vec, 0), nil
 	case types.T_decimal64:
-		val := vector.GetFixedAt[types.Decimal64](vec, 0)
+		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0)
 		return val.Format(expr.Typ.Scale), nil
 	case types.T_decimal128:
-		val := vector.GetFixedAt[types.Decimal128](vec, 0)
+		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0)
 		return val.Format(expr.Typ.Scale), nil
 	case types.T_json:
 		val := vec.GetBytesAt(0)
 		byteJson := types.DecodeJson(val)
 		return byteJson.String(), nil
 	case types.T_uuid:
-		val := vector.MustFixedCol[types.Uuid](vec)[0]
+		val := vector.MustFixedColNoTypeCheck[types.Uuid](vec)[0]
 		return val.String(), nil
 	case types.T_date:
-		val := vector.MustFixedCol[types.Date](vec)[0]
+		val := vector.MustFixedColNoTypeCheck[types.Date](vec)[0]
 		return val.String(), nil
 	case types.T_time:
-		val := vector.MustFixedCol[types.Time](vec)[0]
+		val := vector.MustFixedColNoTypeCheck[types.Time](vec)[0]
 		return val.String(), nil
 	case types.T_datetime:
-		val := vector.MustFixedCol[types.Datetime](vec)[0]
+		val := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[0]
 		return val.String(), nil
 	case types.T_timestamp:
-		val := vector.MustFixedCol[types.Timestamp](vec)[0]
+		val := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[0]
 		return val.String2(ses.GetTimeZone(), vec.GetType().Scale), nil
 	case types.T_enum:
-		return vector.MustFixedCol[types.Enum](vec)[0], nil
+		return vector.MustFixedColNoTypeCheck[types.Enum](vec)[0], nil
 	default:
 		return nil, moerr.NewInvalidArg(ctx, "variable type", vec.GetType().Oid.String())
 	}
@@ -737,7 +737,7 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement) stri
 			//get value of parameters
 			paramCnt := prepareStmt.params.Length()
 			paramValues := make([]string, paramCnt)
-			vs := vector.MustFixedCol[types.Varlena](prepareStmt.params)
+			vs := vector.MustFixedColNoTypeCheck[types.Varlena](prepareStmt.params)
 			for i := 0; i < paramCnt; i++ {
 				isNull := prepareStmt.params.GetNulls().Contains(uint64(i))
 				if isNull {

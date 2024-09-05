@@ -48,7 +48,7 @@ func (offset *Offset) Prepare(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	offset.ctr.offset = uint64(vector.MustFixedCol[uint64](vec)[0])
+	offset.ctr.offset = uint64(vector.MustFixedColWithTypeCheck[uint64](vec)[0])
 
 	return nil
 }

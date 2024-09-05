@@ -23,7 +23,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -110,7 +112,10 @@ func ExecSQL(
 	sql ...string,
 ) timestamp.Timestamp {
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(
+		defines.AttachAccountId(context.Background(), 0),
+		10*time.Second,
+	)
 	defer cancel()
 
 	var txnOp client.TxnOperator
@@ -209,4 +214,26 @@ func TableExists(
 	require.NoError(t, err)
 
 	return HasName(name, res)
+}
+
+func WaitClusterAppliedTo(
+	t *testing.T,
+	c embed.Cluster,
+	ts timestamp.Timestamp,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	c.ForeachServices(
+		func(s embed.ServiceOperator) bool {
+			if s.ServiceType() == metadata.ServiceType_CN {
+				_, err := s.RawService().(cnservice.Service).GetTimestampWaiter().GetTimestamp(
+					ctx,
+					ts,
+				)
+				require.NoError(t, err)
+			}
+			return true
+		},
+	)
 }
