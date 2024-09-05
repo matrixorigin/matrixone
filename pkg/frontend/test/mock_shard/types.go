@@ -2,6 +2,7 @@
 // Source: pkg/shardservice/types.go
 
 // Package mock_shard is a generated GoMock package.
+// mockgen -source pkg/shardservice/types.go --destination pkg/frontend/test/mock_shard/types.go -package=mock_shard
 package mock_shard
 
 import (
@@ -220,6 +221,20 @@ func (mr *MockShardServiceMockRecorder) ReplicaCount() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReplicaCount", reflect.TypeOf((*MockShardService)(nil).ReplicaCount))
 }
 
+// TableReplicaCount mocks base method.
+func (m *MockShardService) TableReplicaCount(tableID uint64) int64 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TableReplicaCount", tableID)
+	ret0, _ := ret[0].(int64)
+	return ret0
+}
+
+// TableReplicaCount indicates an expected call of TableReplicaCount.
+func (mr *MockShardServiceMockRecorder) TableReplicaCount(tableID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TableReplicaCount", reflect.TypeOf((*MockShardService)(nil).TableReplicaCount), tableID)
+}
+
 // Mockscheduler is a mock of scheduler interface.
 type Mockscheduler struct {
 	ctrl     *gomock.Controller
@@ -319,6 +334,30 @@ func (mr *MockEnvMockRecorder) UpdateState(cn, state interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateState", reflect.TypeOf((*MockEnv)(nil).UpdateState), cn, state)
 }
+
+// Mockfilter is a mock of filter interface.
+type Mockfilter struct {
+	ctrl     *gomock.Controller
+	recorder *MockfilterMockRecorder
+}
+
+// MockfilterMockRecorder is the mock recorder for Mockfilter.
+type MockfilterMockRecorder struct {
+	mock *Mockfilter
+}
+
+// NewMockfilter creates a new mock instance.
+func NewMockfilter(ctrl *gomock.Controller) *Mockfilter {
+	mock := &Mockfilter{ctrl: ctrl}
+	mock.recorder = &MockfilterMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *Mockfilter) EXPECT() *MockfilterMockRecorder {
+	return m.recorder
+}
+
 
 // MockShardStorage is a mock of ShardStorage interface.
 type MockShardStorage struct {
