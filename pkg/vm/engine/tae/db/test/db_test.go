@@ -9136,6 +9136,7 @@ func TestTryDeleteByDeltaloc2(t *testing.T) {
 	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
 	filter := handle.NewEQFilter(v1)
 	id, offset, err := rel.GetByFilter(ctx, filter)
+	assert.NoError(t, err)
 	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*id.ObjectID(), id.BlockID.Sequence(), offset)
 	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
 	pkVec.Append(v1, false)

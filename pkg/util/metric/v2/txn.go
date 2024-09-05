@@ -276,9 +276,9 @@ var (
 			Name:      "S3_tombstone",
 			Help:      "Total number of transfer in S3 tombstone",
 		}, []string{"type"})
-	TxnS3TombstoneSoftdeleteObjectCounter  = txnLockCounter.WithLabelValues("softdelete objects")
-	TxnS3TombstoneTransferDataObjectCounter = txnLockCounter.WithLabelValues("transfer data objects")
-	TxnS3TombstoneTransferStatsCounter     = txnLockCounter.WithLabelValues("transfer tombstones")
+	TxnS3TombstoneSoftdeleteObjectCounter  = txnS3TombstoneCounter.WithLabelValues("softdelete objects")
+	TxnS3TombstoneTransferDataObjectCounter = txnS3TombstoneCounter.WithLabelValues("transfer data objects")
+	TxnS3TombstoneTransferStatsCounter     = txnS3TombstoneCounter.WithLabelValues("transfer tombstones")
 
 	txnS3TombstoneDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -289,10 +289,10 @@ var (
 			Buckets:   getDurationBuckets(),
 		}, []string{"step"})
 
-	TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram = txnTNSideDurationHistogram.WithLabelValues("1-GetSoftdeleteObjects")
-	TxnS3TombstoneTransferFindTombstonesHistogram       = txnTNSideDurationHistogram.WithLabelValues("2-FindTombstonesOfObject")
-	TxnS3TombstoneTransferReadTombstoneHistogram        = txnTNSideDurationHistogram.WithLabelValues("3-ReadTombstone")
-	TxnS3TombstoneTransferDeleteRowsHistogram           = txnTNSideDurationHistogram.WithLabelValues("4-TransferDeleteRows")
+	TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram = txnS3TombstoneDurationHistogram.WithLabelValues("1-GetSoftdeleteObjects")
+	TxnS3TombstoneTransferFindTombstonesHistogram       = txnS3TombstoneDurationHistogram.WithLabelValues("2-FindTombstonesOfObject")
+	TxnS3TombstoneTransferReadTombstoneHistogram        = txnS3TombstoneDurationHistogram.WithLabelValues("3-ReadTombstone")
+	TxnS3TombstoneTransferDeleteRowsHistogram           = txnS3TombstoneDurationHistogram.WithLabelValues("4-TransferDeleteRows")
 
 	TxnBeforeCommitDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("before_txn_commit")
 
