@@ -2500,7 +2500,7 @@ func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildSco
 			var tmp []*Scope
 			for j := range rs {
 				if isSameCN(c.cnList[i].Addr, rs[j].NodeInfo.Addr) {
-					tmp = append(tmp, rs[i])
+					tmp = append(tmp, rs[j])
 				}
 			}
 			bs := newScope(Remote)
