@@ -131,9 +131,9 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 
 		// "a>=1 and a<=3",
 		{Valid: true, Op: function.BETWEEN, LB: encodeVal(1), UB: encodeVal(3)}, //13
-		{Valid: true, Op: rangeLeftOpen, LB: encodeVal(1), UB: encodeVal(3)},
-		{Valid: true, Op: rangeRightOpen, LB: encodeVal(1), UB: encodeVal(3)}, //15
-		{Valid: true, Op: rangeBothOpen, LB: encodeVal(1), UB: encodeVal(3)},
+		{Valid: true, Op: RangeLeftOpen, LB: encodeVal(1), UB: encodeVal(3)},
+		{Valid: true, Op: RangeRightOpen, LB: encodeVal(1), UB: encodeVal(3)}, //15
+		{Valid: true, Op: RangeBothOpen, LB: encodeVal(1), UB: encodeVal(3)},
 
 		{Valid: false}, // 17
 		{Valid: false},
@@ -729,11 +729,11 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		}
 		BasePKFilter, err := ConstructBasePKFilter(expr, tableDef, proc)
 		require.NoError(t, err)
-		require.Equal(t, filters[i].valid, BasePKFilter.valid, exprStrings[i])
-		if filters[i].valid {
-			require.Equal(t, filters[i].op, BasePKFilter.op, exprStrings[i])
-			require.Equal(t, filters[i].lb, BasePKFilter.lb, exprStrings[i])
-			require.Equal(t, filters[i].ub, BasePKFilter.ub, exprStrings[i])
+		require.Equal(t, filters[i].Valid, BasePKFilter.Valid, exprStrings[i])
+		if filters[i].Valid {
+			require.Equal(t, filters[i].Op, BasePKFilter.Op, exprStrings[i])
+			require.Equal(t, filters[i].LB, BasePKFilter.LB, exprStrings[i])
+			require.Equal(t, filters[i].UB, BasePKFilter.UB, exprStrings[i])
 		}
 	}
 
