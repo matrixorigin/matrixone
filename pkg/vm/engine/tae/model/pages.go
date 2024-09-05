@@ -160,6 +160,7 @@ func (page *TransferHashPage) Clear() {
 		return
 	}
 	page.hashmap.Store(nil)
+	clear(*m)
 	v2.TaskMergeTransferPageLengthGauge.Sub(float64(len(*m)))
 }
 
