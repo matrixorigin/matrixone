@@ -16,36 +16,75 @@ package memorycache
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
-// refcnt is an atomic reference counter
-type refcnt struct {
+// _RC is an atomic reference counter
+type _RC struct {
 	val atomic.Int32
+
+	mu   sync.Mutex
+	logs []rcLog
 }
 
-func (r *refcnt) init(val int32) {
-	r.val.Store(val)
+type rcLog struct {
+	msg        string
+	stacktrace malloc.StacktraceID
+	refs       int32
 }
 
-func (r *refcnt) refs() int32 {
+func (r *_RC) log(msg string) {
+	r.mu.Lock()
+	r.logs = append(r.logs, rcLog{
+		msg:        msg,
+		stacktrace: malloc.GetStacktraceID(1),
+		refs:       r.val.Load(),
+	})
+	r.mu.Unlock()
+}
+
+func (r *_RC) init() {
+	r.val.Store(1)
+	r.log("init")
+}
+
+func (r *_RC) refs() int32 {
 	return r.val.Load()
 }
 
-func (r *refcnt) acquire() {
+func (r *_RC) inc() {
 	switch v := r.val.Add(1); {
 	case v <= 1:
+		r.dump(os.Stderr)
 		panic(fmt.Sprintf("inconsistent refcnt count: %d", v))
 	}
+	r.log("inc")
 }
 
-func (r *refcnt) release() bool {
+func (r *_RC) dec() bool {
+	defer r.log("dec")
 	switch v := r.val.Add(-1); {
 	case v < 0:
+		r.dump(os.Stderr)
 		panic(fmt.Sprintf("inconsistent refcnt count: %d", v))
 	case v == 0:
 		return true
 	default:
 		return false
 	}
+}
+
+func (r *_RC) dump(w io.Writer) {
+	r.mu.Lock()
+	for i, log := range r.logs {
+		fmt.Fprintf(w, "%d: msg %s, refs %d, stack %s\n",
+			i, log.msg, log.refs, log.stacktrace.String(),
+		)
+	}
+	r.mu.Unlock()
 }
