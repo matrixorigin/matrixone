@@ -77,7 +77,7 @@ func (o *customConfigProvider) getConfig(tbl *catalog.TableEntry) *BasicPolicyCo
 	if !ok {
 		// load from an atomic value
 		extra := tbl.GetLastestSchemaLocked(false).Extra
-		if extra.MaxObjOnerun == 0 && extra.MinOsizeQuailifed == 0 {
+		if extra == nil || (extra.MaxObjOnerun == 0 && extra.MinOsizeQuailifed == 0) {
 			p = defaultBasicConfig
 			o.configs[tbl.ID] = p
 		} else {

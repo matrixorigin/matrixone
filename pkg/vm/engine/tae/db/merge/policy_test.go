@@ -127,3 +127,25 @@ func TestPolicyTombstone(t *testing.T) {
 	require.Equal(t, 3, len(result))
 	require.Equal(t, TaskHostDN, kind)
 }
+
+func TestPolicyGroup(t *testing.T) {
+	common.IsStandaloneBoost.Store(true)
+	g := newPolicyGroup(newBasicPolicy(), newTombstonePolicy())
+	g.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{BlockMaxRows: options.DefaultBlockMaxRows}))
+	g.config = &BasicPolicyConfig{MergeMaxOneRun: 2, ObjectMinOsize: 100}
+
+	g.onObject(newTestObjectEntry(t, 10, 0, false))
+	g.onObject(newTestObjectEntry(t, 20, 0, false))
+	g.onObject(newTestObjectEntry(t, 30, 0, false))
+	g.onObject(newTestObjectEntry(t, 10, 0, true))
+	g.onObject(newTestObjectEntry(t, 20, 0, true))
+	g.onObject(newTestObjectEntry(t, 30, 0, true))
+
+	results := g.revise(0, math.MaxInt64)
+	require.Equal(t, 2, len(results))
+	require.Equal(t, TaskHostDN, results[0].kind)
+	require.Equal(t, TaskHostDN, results[1].kind)
+
+	require.Equal(t, 2, len(results[0].objs))
+	require.Equal(t, 2, len(results[1].objs))
+}
