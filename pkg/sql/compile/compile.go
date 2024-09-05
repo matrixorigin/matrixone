@@ -2486,8 +2486,16 @@ func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildSco
 		return rs
 	}
 
+	for i := range rs {
+		if isSameCN(rs[i].NodeInfo.Addr, buildScopes[0].NodeInfo.Addr) {
+			rs[i].PreScopes = append(rs[i].PreScopes, buildScopes[0])
+			break
+		}
+	}
+
+	buildOpScopes := make([]*Scope, 0, len(c.cnList))
+
 	if len(rs) > len(c.cnList) { // probe side is shuffle scopes
-		buildOpScopes := make([]*Scope, 0, len(c.cnList))
 		for i := range c.cnList {
 			var tmp []*Scope
 			for j := range rs {
@@ -2503,14 +2511,14 @@ func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildSco
 			bs.setRootOperator(merge.NewArgument())
 			bs.setRootOperator(constructJoinBuildOperator(c, tmp[0].RootOp, int32(len(tmp))))
 			tmp[0].PreScopes = append(tmp[0].PreScopes, bs)
-			buildOpScopes = append(buildScopes, bs)
+			buildOpScopes = append(buildOpScopes, bs)
 		}
 		buildScopes[0].setRootOperator(constructDispatch(0, buildOpScopes, buildScopes[0], node, false))
 		return rs
 	}
 
 	//broadcast join on multi CN
-	buildOpScopes := make([]*Scope, 0, len(rs))
+
 	for i := range rs {
 		bs := newScope(Remote)
 		bs.NodeInfo = engine.Node{Addr: rs[i].NodeInfo.Addr, Mcpu: 1}
@@ -2520,7 +2528,7 @@ func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildSco
 		bs.setRootOperator(merge.NewArgument())
 		bs.setRootOperator(constructJoinBuildOperator(c, rs[i].RootOp, int32(rs[i].NodeInfo.Mcpu)))
 		rs[i].PreScopes = append(rs[i].PreScopes, bs)
-		buildOpScopes = append(buildScopes, bs)
+		buildOpScopes = append(buildOpScopes, bs)
 	}
 	buildScopes[0].setRootOperator(constructDispatch(0, buildOpScopes, buildScopes[0], node, false))
 	return rs
