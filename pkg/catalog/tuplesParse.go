@@ -339,117 +339,117 @@ func GenRows(bat *batch.Batch) [][]any {
 		vec := bat.GetVector(int32(i))
 		switch vec.GetType().Oid {
 		case types.T_bool:
-			col := vector.MustFixedCol[bool](vec)
+			col := vector.MustFixedColNoTypeCheck[bool](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_bit:
-			col := vector.MustFixedCol[uint64](vec)
+			col := vector.MustFixedColNoTypeCheck[uint64](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_int8:
-			col := vector.MustFixedCol[int8](vec)
+			col := vector.MustFixedColNoTypeCheck[int8](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_int16:
-			col := vector.MustFixedCol[int16](vec)
+			col := vector.MustFixedColNoTypeCheck[int16](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_int32:
-			col := vector.MustFixedCol[int32](vec)
+			col := vector.MustFixedColNoTypeCheck[int32](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_int64:
-			col := vector.MustFixedCol[int64](vec)
+			col := vector.MustFixedColNoTypeCheck[int64](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_uint8:
-			col := vector.MustFixedCol[uint8](vec)
+			col := vector.MustFixedColNoTypeCheck[uint8](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_uint16:
-			col := vector.MustFixedCol[uint16](vec)
+			col := vector.MustFixedColNoTypeCheck[uint16](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_uint32:
-			col := vector.MustFixedCol[uint32](vec)
+			col := vector.MustFixedColNoTypeCheck[uint32](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_uint64:
-			col := vector.MustFixedCol[uint64](vec)
+			col := vector.MustFixedColNoTypeCheck[uint64](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_float32:
-			col := vector.MustFixedCol[float32](vec)
+			col := vector.MustFixedColNoTypeCheck[float32](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_float64:
-			col := vector.MustFixedCol[float64](vec)
+			col := vector.MustFixedColNoTypeCheck[float64](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_date:
-			col := vector.MustFixedCol[types.Date](vec)
+			col := vector.MustFixedColNoTypeCheck[types.Date](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_time:
-			col := vector.MustFixedCol[types.Time](vec)
+			col := vector.MustFixedColNoTypeCheck[types.Time](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_datetime:
-			col := vector.MustFixedCol[types.Datetime](vec)
+			col := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_timestamp:
-			col := vector.MustFixedCol[types.Timestamp](vec)
+			col := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_enum:
-			col := vector.MustFixedCol[types.Enum](vec)
+			col := vector.MustFixedColNoTypeCheck[types.Enum](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_decimal64:
-			col := vector.MustFixedCol[types.Decimal64](vec)
+			col := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_decimal128:
-			col := vector.MustFixedCol[types.Decimal128](vec)
+			col := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_uuid:
-			col := vector.MustFixedCol[types.Uuid](vec)
+			col := vector.MustFixedColNoTypeCheck[types.Uuid](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_TS:
-			col := vector.MustFixedCol[types.TS](vec)
+			col := vector.MustFixedColNoTypeCheck[types.TS](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_Rowid:
-			col := vector.MustFixedCol[types.Rowid](vec)
+			col := vector.MustFixedColNoTypeCheck[types.Rowid](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
 		case types.T_Blockid:
-			col := vector.MustFixedCol[types.Blockid](vec)
+			col := vector.MustFixedColNoTypeCheck[types.Blockid](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}

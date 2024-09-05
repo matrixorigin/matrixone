@@ -88,9 +88,9 @@ func GetUpgradeTenantTasks(
 		from := int32(-1)
 		to := int32(-1)
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-			taskID = vector.GetFixedAt[uint64](cols[0], 0)
-			from = vector.GetFixedAt[int32](cols[1], 0)
-			to = vector.GetFixedAt[int32](cols[2], 0)
+			taskID = vector.GetFixedAtWithTypeCheck[uint64](cols[0], 0)
+			from = vector.GetFixedAtWithTypeCheck[int32](cols[1], 0)
+			to = vector.GetFixedAtWithTypeCheck[int32](cols[2], 0)
 			return true
 		})
 		res.Close()
@@ -110,7 +110,7 @@ func GetUpgradeTenantTasks(
 		}
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
-				tenants = append(tenants, vector.GetFixedAt[int32](cols[0], i))
+				tenants = append(tenants, vector.GetFixedAtWithTypeCheck[int32](cols[0], i))
 				versions = append(versions, cols[1].UnsafeGetStringAt(i))
 			}
 			return true

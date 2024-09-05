@@ -301,7 +301,7 @@ func (w *S3Writer) StashBatch(proc *process.Process, bat *batch.Batch) bool {
 func getFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int) (cols [][]T) {
 	cols = make([][]T, 0, len(bats))
 	for i := range bats {
-		cols = append(cols, vector.MustFixedCol[T](bats[i].Vecs[idx]))
+		cols = append(cols, vector.MustFixedColWithTypeCheck[T](bats[i].Vecs[idx]))
 	}
 	return
 }

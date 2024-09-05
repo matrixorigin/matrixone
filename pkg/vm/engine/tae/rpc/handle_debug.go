@@ -431,11 +431,11 @@ func marshalTransferMaps(
 
 			for _, bat := range bats {
 				for i := range bat.RowCount() {
-					srcBlk := vector.GetFixedAt[int32](bat.Vecs[0], i)
-					srcRow := vector.GetFixedAt[uint32](bat.Vecs[1], i)
-					destObj := vector.GetFixedAt[uint8](bat.Vecs[2], i)
-					destBlk := vector.GetFixedAt[uint16](bat.Vecs[3], i)
-					destRow := vector.GetFixedAt[uint32](bat.Vecs[4], i)
+					srcBlk := vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], i)
+					srcRow := vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[1], i)
+					destObj := vector.GetFixedAtNoTypeCheck[uint8](bat.Vecs[2], i)
+					destBlk := vector.GetFixedAtNoTypeCheck[uint16](bat.Vecs[3], i)
+					destRow := vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[4], i)
 
 					booking[srcBlk][srcRow] = api.TransferDestPos{
 						ObjIdx: destObj,

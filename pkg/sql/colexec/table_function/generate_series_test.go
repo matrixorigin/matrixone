@@ -137,7 +137,7 @@ func numTest[T int32 | int64](t *testing.T, typ types.T) {
 		endVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.end, 1, proc.Mp())
 		stepVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.step, 1, proc.Mp())
 
-		err := initStartAndEndNum[T](&gs, proc, startVec, endVec, stepVec, 0)
+		err := initStartAndEndNumNoTypeCheck[T](&gs, proc, startVec, endVec, stepVec, 0)
 		if err != nil {
 			require.True(t, kase.err)
 			continue
@@ -155,7 +155,7 @@ func numTest[T int32 | int64](t *testing.T, typ types.T) {
 			}
 			vec := bat.GetVector(0)
 			for i := 0; i < bat.RowCount(); i++ {
-				val := vector.GetFixedAt[T](vec, i)
+				val := vector.GetFixedAtWithTypeCheck[T](vec, i)
 				result = append(result, val)
 			}
 		}
@@ -297,7 +297,7 @@ func TestGenerateTimestamp(t *testing.T) {
 			}
 			vec := bat.GetVector(0)
 			for i := 0; i < bat.RowCount(); i++ {
-				val := vector.GetFixedAt[types.Datetime](vec, i)
+				val := vector.GetFixedAtWithTypeCheck[types.Datetime](vec, i)
 				res = append(res, val)
 			}
 		}
