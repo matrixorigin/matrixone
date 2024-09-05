@@ -108,6 +108,7 @@ func (v *Vector) Reset(typ types.Type) {
 
 	v.length = 0
 	v.nsp.Reset()
+	v.rsp.Reset()
 	v.sorted = false
 }
 
@@ -124,6 +125,7 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 		v.area = v.area[:0]
 	}
 	v.nsp = &nulls.Nulls{}
+	v.rsp = &nulls.Nulls{}
 	v.length = 0
 	v.capacity = cap(v.data) / v.typ.TypeSize()
 	v.sorted = false
@@ -192,8 +194,20 @@ func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 	}
 }
 
+func (v *Vector) SetRollups(rsp *nulls.Nulls) {
+	if rsp != nil {
+		v.rsp.InitWith(rsp)
+	} else {
+		v.rsp.Reset()
+	}
+}
+
 func (v *Vector) HasNull() bool {
 	return v.IsConstNull() || !v.nsp.IsEmpty()
+}
+
+func (v *Vector) HasRollup() bool {
+	return !v.rsp.IsEmpty()
 }
 
 func (v *Vector) AllNull() bool {
@@ -251,6 +265,7 @@ func (v *Vector) CleanOnlyData() {
 		v.area = v.area[:0]
 	}
 	v.nsp.Reset()
+	v.rsp.Reset()
 	v.sorted = false
 }
 
@@ -466,6 +481,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.cantFreeArea = false
 
 	v.nsp.Reset()
+	v.rsp.Reset()
 	v.sorted = false
 	v.isBin = false
 
@@ -960,6 +976,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 					}
 				}
 			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if w.rsp.Contains(uint64(i)) {
+						v.rsp.Set(uint64(i + v.length))
+					}
+				}
+			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
@@ -987,6 +1010,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				for i := 0; i < w.length; i++ {
 					if nulls.Contains(w.nsp, uint64(i)) {
 						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
 					}
 				}
 			}
@@ -1020,6 +1050,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 					}
 				}
 			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
+					}
+				}
+			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
@@ -1047,6 +1084,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				for i := 0; i < w.length; i++ {
 					if nulls.Contains(w.nsp, uint64(i)) {
 						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
 					}
 				}
 			}
@@ -1080,6 +1124,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 					}
 				}
 			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
+					}
+				}
+			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
@@ -1107,6 +1158,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				for i := 0; i < w.length; i++ {
 					if nulls.Contains(w.nsp, uint64(i)) {
 						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
 					}
 				}
 			}
@@ -1140,6 +1198,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 					}
 				}
 			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
+					}
+				}
+			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
@@ -1167,6 +1232,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				for i := 0; i < w.length; i++ {
 					if nulls.Contains(w.nsp, uint64(i)) {
 						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
 					}
 				}
 			}
@@ -1200,6 +1272,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 					}
 				}
 			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
+					}
+				}
+			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
@@ -1227,6 +1306,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				for i := 0; i < w.length; i++ {
 					if nulls.Contains(w.nsp, uint64(i)) {
 						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
 					}
 				}
 			}
@@ -1260,6 +1346,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 					}
 				}
 			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
+					}
+				}
+			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
@@ -1287,6 +1380,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				for i := 0; i < w.length; i++ {
 					if nulls.Contains(w.nsp, uint64(i)) {
 						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
 					}
 				}
 			}
@@ -1320,6 +1420,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 					}
 				}
 			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
+					}
+				}
+			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
@@ -1347,6 +1454,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				for i := 0; i < w.length; i++ {
 					if nulls.Contains(w.nsp, uint64(i)) {
 						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
 					}
 				}
 			}
@@ -1380,6 +1494,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 					}
 				}
 			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
+					}
+				}
+			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
@@ -1407,6 +1528,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				for i := 0; i < w.length; i++ {
 					if nulls.Contains(w.nsp, uint64(i)) {
 						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
 					}
 				}
 			}
@@ -1440,6 +1568,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 					}
 				}
 			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
+					}
+				}
+			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
@@ -1467,6 +1602,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				for i := 0; i < w.length; i++ {
 					if nulls.Contains(w.nsp, uint64(i)) {
 						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
 					}
 				}
 			}
@@ -1500,6 +1642,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 					}
 				}
 			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
+					}
+				}
+			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
@@ -1527,6 +1676,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				for i := 0; i < w.length; i++ {
 					if nulls.Contains(w.nsp, uint64(i)) {
 						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
 					}
 				}
 			}
@@ -1560,6 +1716,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 					}
 				}
 			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
+					}
+				}
+			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
@@ -1587,6 +1750,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				for i := 0; i < w.length; i++ {
 					if nulls.Contains(w.nsp, uint64(i)) {
 						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
 					}
 				}
 			}
@@ -1626,6 +1796,9 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			ToSlice(v, &vs)
 			var err error
 			for i := range ws {
+				if nulls.Contains(w.rsp, uint64(i)) {
+					nulls.Add(v.rsp, uint64(v.length))
+				}
 				if nulls.Contains(w.nsp, uint64(i)) {
 					nulls.Add(v.nsp, uint64(v.length))
 				} else {
@@ -1663,6 +1836,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 					}
 				}
 			}
+			if w.rsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.rsp, uint64(i)) {
+						nulls.Add(v.rsp, uint64(i+v.length))
+					}
+				}
+			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
@@ -1686,6 +1866,7 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			if w.IsConst() {
 				return appendOneFixed(v, ws[0], false, mp)
 			}
+
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_bit:
@@ -3152,6 +3333,7 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 		for i, sel := range sels {
 			vs[i] = vs[sel]
 		}
+		nulls.Filter(v.rsp, sels, false)
 		nulls.Filter(v.nsp, sels, false)
 		v.length = len(sels)
 	} else if len(sels) > 0 {
@@ -3172,6 +3354,7 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 			}
 		}
 		nulls.Filter(v.nsp, sels, true)
+		nulls.Filter(v.rsp, sels, true)
 		v.length -= len(sels)
 	}
 }

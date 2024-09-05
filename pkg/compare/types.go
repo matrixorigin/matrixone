@@ -31,8 +31,10 @@ type compare[T any] struct {
 	xs          [][]T
 	cmp         func(T, T) int
 	ns          []*nulls.Nulls
+	rs          []*nulls.Nulls
 	vs          []*vector.Vector
 	isConstNull []bool
+	isRollup    []bool
 	cpy         func([]T, []T, int64, int64)
 	nullsLast   bool
 }
