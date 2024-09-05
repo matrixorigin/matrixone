@@ -91,21 +91,25 @@ func ExecuteBlockFilter(
 		}
 	}()
 
-	getNextStats := func() (objectio.ObjectStats, error) {
-		if iter == nil {
-			iter, err = snapshot.NewObjectsIter(
-				types.TimestampToTS(snapshotTS),
-				true,
-				false,
-			)
-			if err != nil {
-				return objectio.ZeroObjectStats, err
+	var getNextStats func() (objectio.ObjectStats, error)
+
+	if snapshot != nil {
+		getNextStats = func() (objectio.ObjectStats, error) {
+			if iter == nil {
+				iter, err = snapshot.NewObjectsIter(
+					types.TimestampToTS(snapshotTS),
+					true,
+					false,
+				)
+				if err != nil {
+					return objectio.ZeroObjectStats, err
+				}
 			}
+			if !iter.Next() {
+				return objectio.ZeroObjectStats, engine_util.ErrNoMore
+			}
+			return iter.Entry().ObjectStats, nil
 		}
-		if !iter.Next() {
-			return objectio.ZeroObjectStats, engine_util.ErrNoMore
-		}
-		return iter.Entry().ObjectStats, nil
 	}
 
 	totalBlocks, loadHit,
