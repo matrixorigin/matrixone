@@ -1480,14 +1480,6 @@ func (tbl *txnTable) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats)
 	if tbl.tombstoneTable == nil {
 		tbl.tombstoneTable = newBaseTable(tbl.entry.GetLastestSchema(true), true, tbl)
 	}
-	obj, err := tbl.store.GetObject(id, false)
-	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return false, nil
-		}
-		return
-	}
-	tbl.store.warChecker.Insert(obj.GetMeta().(*catalog.ObjectEntry))
 	err = tbl.addObjsWithMetaLoc(tbl.store.ctx, stats, true)
 	if err == nil {
 		tbl.tombstoneTable.tableSpace.objs = append(tbl.tombstoneTable.tableSpace.objs, id.ObjectID())
