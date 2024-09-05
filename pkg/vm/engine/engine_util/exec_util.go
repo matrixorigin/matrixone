@@ -43,13 +43,15 @@ func ForeachObjectsExecute(
 			return
 		}
 	}
-	for obj, err = nextObjectFn(); err == nil; obj, err = nextObjectFn() {
-		if err = onObject(obj); err != nil {
-			return
+	if nextObjectFn != nil {
+		for obj, err = nextObjectFn(); err == nil; obj, err = nextObjectFn() {
+			if err = onObject(obj); err != nil {
+				return
+			}
 		}
-	}
-	if err == ErrNoMore {
-		err = nil
+		if err == ErrNoMore {
+			err = nil
+		}
 	}
 	return
 }
