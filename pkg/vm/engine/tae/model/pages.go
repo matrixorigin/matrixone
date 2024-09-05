@@ -152,14 +152,13 @@ func (page *TransferHashPage) Pin() *common.PinnedItem[*TransferHashPage] {
 }
 
 func (page *TransferHashPage) Clear() {
-	if page.bornTS.Load().Add(page.ttl).Before(time.Now()) {
-		return
-	}
 	m := page.hashmap.Load()
 	if m == nil {
 		return
 	}
-
+	if page.bornTS.Load().Add(page.ttl).Before(time.Now()) {
+		return
+	}
 	page.hashmap.Store(nil)
 	v2.TaskMergeTransferPageLengthGauge.Sub(float64(len(*m)))
 }
