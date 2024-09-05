@@ -51,7 +51,7 @@ func FilterRowIdForDel(proc *process.Process, retBat *batch.Batch, srcBat *batch
 	if err != nil {
 		return err
 	}
-	err = primaryVec.Union(srcBat.Vecs[idx], sels, proc.Mp())
+	err = primaryVec.Union(srcBat.Vecs[primaryKeyIdx], sels, proc.Mp())
 	if err != nil {
 		return err
 	}
