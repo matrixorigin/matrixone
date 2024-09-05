@@ -156,7 +156,7 @@ func (page *TransferHashPage) Clear() {
 	if m == nil {
 		return
 	}
-	if page.bornTS.Load().Add(page.ttl).Before(time.Now()) {
+	if page.bornTS.Load().Add(page.ttl).After(time.Now()) {
 		return
 	}
 	page.hashmap.Store(nil)
