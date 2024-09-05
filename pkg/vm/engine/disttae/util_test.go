@@ -598,7 +598,7 @@ func TestGetPkExprValue(t *testing.T) {
 	equalToVecFn := func(expect []int64, actual any) bool {
 		vec := vector.NewVec(types.T_any.ToType())
 		_ = vec.UnmarshalBinary(actual.([]byte))
-		actualVals := vector.MustFixedCol[int64](vec)
+		actualVals := vector.MustFixedColWithTypeCheck[int64](vec)
 		if len(expect) != len(actualVals) {
 			return false
 		}

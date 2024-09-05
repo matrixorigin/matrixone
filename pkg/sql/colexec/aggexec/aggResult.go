@@ -60,7 +60,7 @@ func (r *basicResult) extend(more int) (oldLen, newLen int, err error) {
 	r.res.SetLength(newLen)
 	r.ess.SetLength(newLen)
 
-	r.empty = vector.MustFixedCol[bool](r.ess)
+	r.empty = vector.MustFixedColWithTypeCheck[bool](r.ess)
 	for i := oldLen; i < newLen; i++ {
 		r.empty[i] = true
 	}
@@ -125,8 +125,8 @@ func (r *basicResult) eq0(other basicResult) bool {
 	if !r.typ.Eq(other.typ) {
 		return false
 	}
-	bs1 := vector.MustFixedCol[bool](r.ess)
-	bs2 := vector.MustFixedCol[bool](other.ess)
+	bs1 := vector.MustFixedColWithTypeCheck[bool](r.ess)
+	bs2 := vector.MustFixedColWithTypeCheck[bool](other.ess)
 	if len(bs1) != len(bs2) {
 		return false
 	}
@@ -175,7 +175,7 @@ func (r *basicResult) unmarshal0(data []byte) error {
 		r.res.Free(mp)
 		return err
 	}
-	r.empty = vector.MustFixedCol[bool](r.ess)
+	r.empty = vector.MustFixedColWithTypeCheck[bool](r.ess)
 	return nil
 }
 
@@ -217,7 +217,7 @@ func (r *aggFuncResult[T]) grows(more int) error {
 	if err != nil {
 		return err
 	}
-	r.values = vector.MustFixedCol[T](r.res)
+	r.values = vector.MustFixedColWithTypeCheck[T](r.res)
 	// reset the new row.
 	var v T
 	if r.requireInit {
@@ -259,7 +259,7 @@ func (r *aggFuncResult[T]) unmarshal(data []byte) error {
 	if err := r.unmarshal0(d1); err != nil {
 		return err
 	}
-	r.values = vector.MustFixedCol[T](r.res)
+	r.values = vector.MustFixedColWithTypeCheck[T](r.res)
 	r.requireInit = types.DecodeBool(d2[:1])
 	if r.requireInit {
 		r.requiredResult = types.DecodeFixed[T](d2[1:])
@@ -271,12 +271,12 @@ func (r *aggFuncResult[T]) eq(other aggFuncResult[T]) bool {
 	if !r.basicResult.eq0(other.basicResult) {
 		return false
 	}
-	vs1 := vector.MustFixedCol[T](r.res)
-	vs2 := vector.MustFixedCol[T](other.res)
+	vs1 := vector.MustFixedColWithTypeCheck[T](r.res)
+	vs2 := vector.MustFixedColWithTypeCheck[T](other.res)
 	if len(vs1) != len(vs2) {
 		return false
 	}
-	bs1 := vector.MustFixedCol[bool](r.ess)
+	bs1 := vector.MustFixedColWithTypeCheck[bool](r.ess)
 	for i, j := 0, len(vs1); i < j; i++ {
 		if bs1[i] {
 			continue
@@ -376,7 +376,7 @@ func (r *aggFuncBytesResult) eq(other aggFuncBytesResult) bool {
 	if len(vs1) != len(vs2) {
 		return false
 	}
-	bs1 := vector.MustFixedCol[bool](r.ess)
+	bs1 := vector.MustFixedColWithTypeCheck[bool](r.ess)
 	for i, j := 0, len(vs1); i < j; i++ {
 		if bs1[i] {
 			continue

@@ -177,7 +177,7 @@ func parseAContainsArgs(args ...any) (
 func getDuplicateRowIDNABlkFuncFactory[T any](comp func(T, T) int) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
 		vec, rowIDs, blkID := parseNAGetDuplicatedArgs(args...)
-		vs := vector.MustFixedCol[T](vec)
+		vs := vector.MustFixedColNoTypeCheck[T](vec)
 		return func(v T, _ bool, row int) (err error) {
 			// logutil.Infof("row=%d,v=%v", row, v)
 			if !rowIDs.IsNull(row) {
@@ -200,7 +200,7 @@ func getDuplicateRowIDNABlkFuncFactory[T any](comp func(T, T) int) func(args ...
 func containsNABlkFuncFactory[T any](comp func(T, T) int) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
 		vec, rowIDs := parseNAContainsArgs(args...)
-		vs := vector.MustFixedCol[T](vec)
+		vs := vector.MustFixedColNoTypeCheck[T](vec)
 		return func(v T, isNull bool, row int) (err error) {
 			// logutil.Infof("row=%d,v=%v", row, v)
 			if rowIDs.IsNull(row) {
@@ -240,7 +240,7 @@ func getDuplicatedRowIDsNABlkBytesFunc(args ...any) func([]byte, bool, int) erro
 
 func getDuplicatedRowIDNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, bool, int) error {
 	vec, rowIDs, blkID := parseNAGetDuplicatedArgs(args...)
-	vs := vector.MustFixedCol[T](vec)
+	vs := vector.MustFixedColNoTypeCheck[T](vec)
 	return func(v T, _ bool, row int) (err error) {
 		// logutil.Infof("row=%d,v=%v", row, v)
 		if !rowIDs.IsNull(row) {
@@ -362,7 +362,7 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
 		vec, rowIDs, scanFn, txn := parseAContainsArgs(args...)
-		vs := vector.MustFixedCol[T](vec.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[T](vec.GetDownstreamVector())
 		return func(v1 T, _ bool, rowOffset int) error {
 			if rowIDs.IsNull(rowOffset) {
 				return nil
