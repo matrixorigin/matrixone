@@ -29,6 +29,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -36,7 +38,6 @@ import (
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
-	"go.uber.org/zap"
 )
 
 // LocalFS is a FileService implementation backed by local file system
@@ -360,11 +361,6 @@ read_memory_cache:
 		}()
 	}
 
-	ioStart := time.Now()
-	defer func() {
-		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
-	}()
-
 	startLock := time.Now()
 	done, wait := l.ioMerger.Merge(vector.ioMergeKey())
 	if done != nil {
@@ -375,6 +371,12 @@ read_memory_cache:
 		stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
 		goto read_memory_cache
 	}
+
+	// Record diskIO and netwokIO(un memory IO) resource
+	ioStart := time.Now()
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
 
 	if l.diskCache != nil {
 
