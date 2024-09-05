@@ -36,24 +36,24 @@ func TestGetNonIntPkValueByExpr(t *testing.T) {
 
 	testCases := []asserts{
 		// a > "a"  false   only 'and', '=' function is supported
-		{false, 0, engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
+		{false, 0, MakeFunctionExprForTest(">", []*plan.Expr{
 			MakeColExprForTest(0, types.T_int64),
 			plan2.MakePlan2StringConstExprWithType("a"),
 		}), types.T_int64},
 		// a = 100  true
 		{true, int64(100),
-			engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
+			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
 				plan2.MakePlan2Int64ConstExprWithType(100),
 			}), types.T_int64},
 		// b > 10 and a = "abc"  true
 		{true, []byte("abc"),
-			engine_util.MakeFunctionExprForTest("and", []*plan.Expr{
-				engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
+			MakeFunctionExprForTest("and", []*plan.Expr{
+				MakeFunctionExprForTest(">", []*plan.Expr{
 					MakeColExprForTest(1, types.T_int64),
 					plan2.MakePlan2Int64ConstExprWithType(10),
 				}),
-				engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
+				MakeFunctionExprForTest("=", []*plan.Expr{
 					MakeColExprForTest(0, types.T_int64),
 					plan2.MakePlan2StringConstExprWithType("abc"),
 				}),
