@@ -16,6 +16,7 @@ package versions
 
 import (
 	"fmt"
+
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -240,11 +241,11 @@ func CheckTableColumn(txn executor.TxnExecutor,
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		data_type := cols[0].GetStringAt(0)
 		is_nullable := cols[1].GetStringAt(0)
-		character_length := vector.GetFixedAt[int64](cols[2], 0)
-		numeric_precision := vector.GetFixedAt[int64](cols[3], 0)
-		numeric_scale := vector.GetFixedAt[int64](cols[4], 0)
-		datetime_precision := vector.GetFixedAt[int64](cols[5], 0)
-		ordinal_position := vector.GetFixedAt[int32](cols[6], 0)
+		character_length := vector.GetFixedAtWithTypeCheck[int64](cols[2], 0)
+		numeric_precision := vector.GetFixedAtWithTypeCheck[int64](cols[3], 0)
+		numeric_scale := vector.GetFixedAtWithTypeCheck[int64](cols[4], 0)
+		datetime_precision := vector.GetFixedAtWithTypeCheck[int64](cols[5], 0)
+		ordinal_position := vector.GetFixedAtWithTypeCheck[int32](cols[6], 0)
 		column_default := cols[7].GetStringAt(0)
 		extra := cols[8].GetStringAt(0)
 		column_comment := cols[9].GetStringAt(0)

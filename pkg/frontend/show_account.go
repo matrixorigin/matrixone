@@ -212,10 +212,10 @@ func handleStorageUsageResponse_V0(
 		}
 
 		storageUsageBat := ckpData.GetBatches()[logtail.StorageUsageInsIDX]
-		accIDVec := vector.MustFixedCol[uint64](
+		accIDVec := vector.MustFixedColWithTypeCheck[uint64](
 			storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector(),
 		)
-		sizeVec := vector.MustFixedCol[uint64](
+		sizeVec := vector.MustFixedColWithTypeCheck[uint64](
 			storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector(),
 		)
 
@@ -343,12 +343,12 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64
 }
 
 func updateStorageSize(ori *vector.Vector, size uint64, rowIdx int) {
-	vector.SetFixedAt(ori, rowIdx, math.Round(float64(size)/1048576.0*1e6)/1e6)
+	vector.SetFixedAtWithTypeCheck(ori, rowIdx, math.Round(float64(size)/1048576.0*1e6)/1e6)
 }
 
 func updateCount(ori *vector.Vector, delta int64, rowIdx int) {
-	old := vector.GetFixedAt[int64](ori, rowIdx)
-	vector.SetFixedAt[int64](ori, rowIdx, old+delta)
+	old := vector.GetFixedAtWithTypeCheck[int64](ori, rowIdx)
+	vector.SetFixedAtWithTypeCheck[int64](ori, rowIdx, old+delta)
 }
 
 func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (err error) {
@@ -526,7 +526,7 @@ func getAccountInfo(ctx context.Context,
 	for i := 0; i < batchCount; i++ {
 		vecLen := rsOfMoAccount[i].Vecs[0].Length()
 		for row := 0; row < vecLen; row++ {
-			accountIds[i] = append(accountIds[i], vector.GetFixedAt[int64](rsOfMoAccount[i].Vecs[0], row))
+			accountIds[i] = append(accountIds[i], vector.GetFixedAtWithTypeCheck[int64](rsOfMoAccount[i].Vecs[0], row))
 		}
 	}
 
@@ -575,7 +575,7 @@ func getSpecialTableInfo(ctx context.Context, bh BackgroundExec, accId int64) (d
 		return 0, 0, moerr.NewInternalError(ctx, "no special table info")
 	}
 
-	dbCnt = vector.MustFixedCol[int64](ret[0].Vecs[1])[0]
-	tblCnt = vector.MustFixedCol[int64](ret[0].Vecs[0])[0]
+	dbCnt = vector.MustFixedColWithTypeCheck[int64](ret[0].Vecs[1])[0]
+	tblCnt = vector.MustFixedColWithTypeCheck[int64](ret[0].Vecs[0])[0]
 	return dbCnt, tblCnt, nil
 }

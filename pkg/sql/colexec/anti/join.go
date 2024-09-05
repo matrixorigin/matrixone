@@ -230,7 +230,7 @@ func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Proc
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 						continue
 					}
-					bs := vector.MustFixedCol[bool](vec)
+					bs := vector.MustFixedColWithTypeCheck[bool](vec)
 					if bs[0] {
 						continue
 					}
@@ -254,7 +254,7 @@ func (ctr *container) probe(ap *AntiJoin, inbat *batch.Batch, proc *process.Proc
 						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 							continue
 						}
-						bs := vector.MustFixedCol[bool](vec)
+						bs := vector.MustFixedColWithTypeCheck[bool](vec)
 						if bs[0] {
 							matched = true
 							break
