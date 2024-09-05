@@ -513,6 +513,9 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 		lenVecs := len(blockInfo.Attrs)
 		// only remain the metaLoc col and object stats
+		for i := 0; i < lenVecs-2; i++ {
+			blockInfo.Vecs[i].Free(txn.proc.GetMPool())
+		}
 		blockInfo.Vecs = blockInfo.Vecs[lenVecs-2:]
 		blockInfo.Attrs = blockInfo.Attrs[lenVecs-2:]
 		blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
@@ -1123,6 +1126,7 @@ func (txn *Transaction) delTransaction() {
 		}
 		txn.proc.PutBatch(txn.writes[i].bat)
 	}
+	txn.CleanToFreeBatches()
 	txn.tableCache = nil
 	txn.tableOps = nil
 	txn.databaseMap = nil
@@ -1282,6 +1286,15 @@ func (txn *Transaction) SetHaveDDL(haveDDL bool) {
 
 func (txn *Transaction) GetHaveDDL() bool {
 	return txn.haveDDL.Load()
+}
+
+func (txn *Transaction) CleanToFreeBatches() {
+	for key := range txn.toFreeBatches {
+		for _, bat := range txn.toFreeBatches[key] {
+			txn.proc.PutBatch(bat)
+		}
+		delete(txn.toFreeBatches, key)
+	}
 }
 
 func newTableOps() *tableOpsChain {
