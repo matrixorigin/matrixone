@@ -71,7 +71,7 @@ type S3Writer struct {
 	batSize uint64
 
 	typs []types.Type
-	ufs  []func(*vector.Vector, *vector.Vector, int64) error // function rowIdx for type conversion
+	ufs  []func(*vector.Vector, *vector.Vector) error // functions for vector union
 }
 
 const (
@@ -241,7 +241,7 @@ func (w *S3Writer) StashBatch(proc *process.Process, bat *batch.Batch) bool {
 		for i := 0; i < bat.VectorCount(); i++ {
 			typ := *bat.GetVector(int32(i)).GetType()
 			w.typs = append(w.typs, typ)
-			w.ufs = append(w.ufs, vector.GetUnionOneFunction(typ, proc.Mp()))
+			w.ufs = append(w.ufs, vector.GetUnionAllFunction(typ, proc.Mp()))
 		}
 	}
 	res := false
@@ -265,14 +265,15 @@ func (w *S3Writer) StashBatch(proc *process.Process, bat *batch.Batch) bool {
 			rows = left
 		}
 
-		var err error
 		for i := 0; i < bat.VectorCount(); i++ {
 			vec := rbat.GetVector(int32(i))
-			srcVec := bat.GetVector(int32(i))
-			for j := 0; j < rows; j++ {
-				if err = w.ufs[i](vec, srcVec, int64(j+start)); err != nil {
-					panic(err)
-				}
+			srcVec, err := bat.GetVector(int32(i)).Window(start, start+rows)
+			if err != nil {
+				panic(err)
+			}
+			err = w.ufs[i](vec, srcVec)
+			if err != nil {
+				panic(err)
 			}
 		}
 		rbat.AddRowCount(rows)
