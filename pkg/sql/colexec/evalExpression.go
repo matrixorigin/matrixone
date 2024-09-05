@@ -786,63 +786,63 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 		} else {
 			switch val := t.GetValue().(type) {
 			case *plan.Literal_Bval:
-				veccol := vector.MustFixedCol[bool](vec)
+				veccol := vector.MustFixedColNoTypeCheck[bool](vec)
 				veccol[i] = val.Bval
 			case *plan.Literal_I8Val:
-				veccol := vector.MustFixedCol[int8](vec)
+				veccol := vector.MustFixedColNoTypeCheck[int8](vec)
 				veccol[i] = int8(val.I8Val)
 			case *plan.Literal_I16Val:
-				veccol := vector.MustFixedCol[int16](vec)
+				veccol := vector.MustFixedColNoTypeCheck[int16](vec)
 				veccol[i] = int16(val.I16Val)
 			case *plan.Literal_I32Val:
-				veccol := vector.MustFixedCol[int32](vec)
+				veccol := vector.MustFixedColNoTypeCheck[int32](vec)
 				veccol[i] = val.I32Val
 			case *plan.Literal_I64Val:
-				veccol := vector.MustFixedCol[int64](vec)
+				veccol := vector.MustFixedColNoTypeCheck[int64](vec)
 				veccol[i] = val.I64Val
 			case *plan.Literal_U8Val:
-				veccol := vector.MustFixedCol[uint8](vec)
+				veccol := vector.MustFixedColNoTypeCheck[uint8](vec)
 				veccol[i] = uint8(val.U8Val)
 			case *plan.Literal_U16Val:
-				veccol := vector.MustFixedCol[uint16](vec)
+				veccol := vector.MustFixedColNoTypeCheck[uint16](vec)
 				veccol[i] = uint16(val.U16Val)
 			case *plan.Literal_U32Val:
-				veccol := vector.MustFixedCol[uint32](vec)
+				veccol := vector.MustFixedColNoTypeCheck[uint32](vec)
 				veccol[i] = val.U32Val
 			case *plan.Literal_U64Val:
-				veccol := vector.MustFixedCol[uint64](vec)
+				veccol := vector.MustFixedColNoTypeCheck[uint64](vec)
 				veccol[i] = val.U64Val
 			case *plan.Literal_Fval:
-				veccol := vector.MustFixedCol[float32](vec)
+				veccol := vector.MustFixedColNoTypeCheck[float32](vec)
 				veccol[i] = val.Fval
 			case *plan.Literal_Dval:
-				veccol := vector.MustFixedCol[float64](vec)
+				veccol := vector.MustFixedColNoTypeCheck[float64](vec)
 				veccol[i] = val.Dval
 			case *plan.Literal_Dateval:
-				veccol := vector.MustFixedCol[types.Date](vec)
+				veccol := vector.MustFixedColNoTypeCheck[types.Date](vec)
 				veccol[i] = types.Date(val.Dateval)
 			case *plan.Literal_Timeval:
-				veccol := vector.MustFixedCol[types.Time](vec)
+				veccol := vector.MustFixedColNoTypeCheck[types.Time](vec)
 				veccol[i] = types.Time(val.Timeval)
 			case *plan.Literal_Datetimeval:
-				veccol := vector.MustFixedCol[types.Datetime](vec)
+				veccol := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 				veccol[i] = types.Datetime(val.Datetimeval)
 			case *plan.Literal_Decimal64Val:
 				cd64 := val.Decimal64Val
 				d64 := types.Decimal64(cd64.A)
-				veccol := vector.MustFixedCol[types.Decimal64](vec)
+				veccol := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
 				veccol[i] = d64
 			case *plan.Literal_Decimal128Val:
 				cd128 := val.Decimal128Val
 				d128 := types.Decimal128{B0_63: uint64(cd128.A), B64_127: uint64(cd128.B)}
-				veccol := vector.MustFixedCol[types.Decimal128](vec)
+				veccol := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
 				veccol[i] = d128
 			case *plan.Literal_Timestampval:
 				scale := expr.Typ.Scale
 				if scale < 0 || scale > 6 {
 					return nil, moerr.NewInternalError(proc.Ctx, "invalid timestamp scale")
 				}
-				veccol := vector.MustFixedCol[types.Timestamp](vec)
+				veccol := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
 				veccol[i] = types.Timestamp(val.Timestampval)
 			case *plan.Literal_Sval:
 				sval := val.Sval
@@ -852,10 +852,10 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 				}
 			case *plan.Literal_Defaultval:
 				defaultVal := val.Defaultval
-				veccol := vector.MustFixedCol[bool](vec)
+				veccol := vector.MustFixedColNoTypeCheck[bool](vec)
 				veccol[i] = defaultVal
 			case *plan.Literal_EnumVal:
-				veccol := vector.MustFixedCol[types.Enum](vec)
+				veccol := vector.MustFixedColNoTypeCheck[types.Enum](vec)
 				veccol[i] = types.Enum(val.EnumVal)
 			default:
 				return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", t.GetValue()))
@@ -1016,7 +1016,7 @@ func EvaluateFilterByZoneMap(
 		if err != nil {
 			return true
 		}
-		cols := vector.MustFixedCol[bool](vec)
+		cols := vector.MustFixedColWithTypeCheck[bool](vec)
 		for _, isNeed := range cols {
 			if isNeed {
 				vec.Free(proc.Mp())

@@ -421,7 +421,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				data := loader.loadAt(idx)
 				err = vector.AppendBytes(vec, data, false, proc.Mp())
 				if err == nil {
-					va := vector.GetFixedAt[types.Varlena](vec, vec.Length()-1)
+					va := vector.GetFixedAtNoTypeCheck[types.Varlena](vec, vec.Length()-1)
 					cache[idx] = &va
 				} else {
 					return err
@@ -494,7 +494,7 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 		return err
 	}
 	vec.SetLength(n + length)
-	ret := vector.MustFixedCol[U](vec)
+	ret := vector.MustFixedColWithTypeCheck[U](vec)
 	levels := page.DefinitionLevels()
 	j := 0
 	for i := 0; i < n; i++ {

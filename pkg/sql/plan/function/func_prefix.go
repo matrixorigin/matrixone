@@ -31,7 +31,7 @@ func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 
 	lvec := parameters[0]
 	rval := parameters[1].GetBytesAt(0)
-	res := vector.MustFixedCol[bool](result.GetResultVector())
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
 	lcol, larea := vector.MustVarlenaRawData(lvec)
 
@@ -67,7 +67,7 @@ func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrap
 	ivec := parameters[0]
 	lval := parameters[1].GetBytesAt(0)
 	rval := parameters[2].GetBytesAt(0)
-	res := vector.MustFixedCol[bool](result.GetResultVector())
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
 	icol, iarea := vector.MustVarlenaRawData(ivec)
 
@@ -129,7 +129,7 @@ func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.Fu
 	}
 
 	lvec := parameters[0]
-	res := vector.MustFixedCol[bool](result.GetResultVector())
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
 	lcol, larea := vector.MustVarlenaRawData(lvec)
 

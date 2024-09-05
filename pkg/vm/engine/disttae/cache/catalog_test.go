@@ -93,8 +93,8 @@ func TestTables(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cc := NewCatalog()
 	bat := newTestTableBatch(mp)
-	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
-	databaseIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
+	accounts := vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
+	databaseIds := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
 	{ // reset account id
 		for i := range accounts {
 			accounts[i] = 1
@@ -119,7 +119,7 @@ func TestDatabases(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cc := NewCatalog()
 	bat := newTestDatabaseBatch(mp)
-	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
+	accounts := vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
 	{ // reset account id
 		for i := range accounts {
 			accounts[i] = 0
@@ -139,8 +139,8 @@ func TestDatabasesWithMultiVersion(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cc := NewCatalog()
 	bat := newTestDatabaseBatch(mp)
-	names := vector.MustFixedCol[types.Varlena](bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
-	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
+	names := vector.MustFixedColWithTypeCheck[types.Varlena](bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
+	accounts := vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
 	{ // reset account id
 		for i := range accounts {
 			accounts[i] = 0
@@ -167,9 +167,9 @@ func TestDatabaseCache(t *testing.T) {
 	cc := NewCatalog()
 	bat := newTestDatabaseBatch(mp)
 	cc.InsertDatabase(bat)
-	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
+	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	names := vector.InefficientMustStrCol(bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
-	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
+	accounts := vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
 	key := new(DatabaseItem)
 	// test get
 	for i, account := range accounts {
@@ -208,13 +208,13 @@ func TestTableInsert(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cc := NewCatalog()
 	bat := newTestTableBatch(mp)
-	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
-	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
+	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
+	accounts := vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
 	names := vector.InefficientMustStrCol(bat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
-	databaseIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
+	databaseIds := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
 
-	cstrs := vector.MustFixedCol[types.Varlena](bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF))
-	partitioned := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
+	cstrs := vector.MustFixedColWithTypeCheck[types.Varlena](bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF))
+	partitioned := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
 	empty, _, _ := types.BuildVarlena([]byte{}, nil, nil)
 	for i := range accounts {
 		// avoid unmarshal error
@@ -286,11 +286,11 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 	typs = append(typs, types.New(types.T_Rowid, 0, 0))
 	typs = append(typs, types.New(types.T_TS, 0, 0))
 	typs = append(typs, catalog.MoColumnsTypes...)
-	timestamps := vector.MustFixedCol[types.TS](ibat.GetVector(MO_TIMESTAMP_IDX))
-	accounts := vector.MustFixedCol[uint32](ibat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
+	timestamps := vector.MustFixedColWithTypeCheck[types.TS](ibat.GetVector(MO_TIMESTAMP_IDX))
+	accounts := vector.MustFixedColWithTypeCheck[uint32](ibat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
 	names := vector.InefficientMustBytesCol(ibat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
-	ids := vector.MustFixedCol[uint64](ibat.GetVector(catalog.MO_TABLES_REL_ID_IDX + MO_OFF))
-	databaseIds := vector.MustFixedCol[uint64](ibat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
+	ids := vector.MustFixedColWithTypeCheck[uint64](ibat.GetVector(catalog.MO_TABLES_REL_ID_IDX + MO_OFF))
+	databaseIds := vector.MustFixedColWithTypeCheck[uint64](ibat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
 	bat := batch.NewWithSize(len(typs))
 	bat.SetRowCount(Rows)
 	for i := range bat.Vecs {
