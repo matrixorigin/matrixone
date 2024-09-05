@@ -506,6 +506,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	runC = c
 	for {
 		if err = runC.runOnce(); err == nil {
+			c.fillS3ToNodeAnalyzeInfo(runC)
 			break
 		}
 
@@ -555,6 +556,20 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		return result, c.proc.TxnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 	return result, nil
+}
+
+func (c *Compile) fillS3ToNodeAnalyzeInfo(runC *Compile) {
+	// record the number of s3 requests
+	c.anal.S3IOInputCount(c.anal.curr, runC.counterSet.FileService.S3.Put.Load())
+	c.anal.S3IOInputCount(c.anal.curr, runC.counterSet.FileService.S3.List.Load())
+
+	c.anal.S3IOOutputCount(c.anal.curr, runC.counterSet.FileService.S3.Head.Load())
+	c.anal.S3IOOutputCount(c.anal.curr, runC.counterSet.FileService.S3.Get.Load())
+	c.anal.S3IOOutputCount(c.anal.curr, runC.counterSet.FileService.S3.Delete.Load())
+	c.anal.S3IOOutputCount(c.anal.curr, runC.counterSet.FileService.S3.DeleteMulti.Load())
+
+	atomic.StoreInt64(&c.anal.qry.Nodes[c.anal.curr].AnalyzeInfo.S3IOInputCount, atomic.LoadInt64(&c.anal.S3IOInputCountV1))
+	atomic.StoreInt64(&c.anal.qry.Nodes[c.anal.curr].AnalyzeInfo.S3IOOutputCount, atomic.LoadInt64(&c.anal.S3IOOutputCountV1))
 }
 
 func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
@@ -3774,13 +3789,13 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 
 func (c *Compile) fillAnalyzeInfo() {
 	// record the number of s3 requests
-	c.anal.S3IOInputCount(c.anal.curr, c.counterSet.FileService.S3.Put.Load())
-	c.anal.S3IOInputCount(c.anal.curr, c.counterSet.FileService.S3.List.Load())
-
-	c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Head.Load())
-	c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Get.Load())
-	c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Delete.Load())
-	c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.DeleteMulti.Load())
+	//c.anal.S3IOInputCount(c.anal.curr, c.counterSet.FileService.S3.Put.Load())
+	//c.anal.S3IOInputCount(c.anal.curr, c.counterSet.FileService.S3.List.Load())
+	//
+	//c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Head.Load())
+	//c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Get.Load())
+	//c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Delete.Load())
+	//c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.DeleteMulti.Load())
 
 	for i, anal := range c.anal.analInfos {
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputRows, atomic.LoadInt64(&anal.InputRows))
