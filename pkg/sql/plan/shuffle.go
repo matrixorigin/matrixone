@@ -30,7 +30,7 @@ import (
 
 const (
 	threshHoldForRightJoinShuffle   = 120000
-	threshHoldForRangeShuffle       = 240000
+	threshHoldForRangeShuffle       = 640000
 	threshHoldForHybirdShuffle      = 4000000
 	threshHoldForHashShuffle        = 8000000
 	MAXShuffleDOP                   = 64
