@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -249,7 +250,7 @@ func NewReader(
 	source engine.DataSource,
 ) (*reader, error) {
 
-	baseFilter, err := newBasePKFilter(
+	baseFilter, err := engine_util.ConstructBasePKFilter(
 		expr,
 		tableDef,
 		proc,
@@ -269,7 +270,7 @@ func NewReader(
 		return nil, err
 	}
 
-	blockFilter, err := newBlockReadPKFilter(
+	blockFilter, err := engine_util.ConstructBlockPKFilter(
 		tableDef.Pkey.PkeyColName,
 		baseFilter,
 	)

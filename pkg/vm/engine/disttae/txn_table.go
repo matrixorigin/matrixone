@@ -52,6 +52,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -1915,12 +1916,12 @@ func (tbl *txnTable) PKPersistedBetween(
 			bytes,
 			false)
 
-		basePKFilter, err := newBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
+		basePKFilter, err := engine_util.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
 		if err != nil {
 			return nil, err
 		}
 
-		blockReadPKFilter, err := newBlockReadPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
+		blockReadPKFilter, err := engine_util.ConstructBlockPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
 		if err != nil {
 			return nil, err
 		}
