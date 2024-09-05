@@ -582,6 +582,11 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 				newScope(AlterTable).
 					withPlan(pn),
 			}, nil
+		case plan.DataDefinition_RENAME_TABLE:
+			return []*Scope{
+				newScope(RenameTable).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_DROP_TABLE:
 			return []*Scope{
 				newScope(DropTable).

@@ -42,6 +42,8 @@ import (
     alterColPosition *tree.ColumnPosition
     alterColumnOrderBy []*tree.AlterColumnOrder
     alterColumnOrder *tree.AlterColumnOrder
+    renameTableOptions []*tree.AlterTable
+    renameTableOption *tree.AlterTable
 
     PartitionNames tree.IdentifierList
 
@@ -498,7 +500,7 @@ import (
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> show_servers_stmt show_connectors_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt rename_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt
@@ -600,6 +602,8 @@ import (
 %type <attributeReference> references_def
 %type <alterTableOptions> alter_option_list
 %type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename
+%type <renameTableOptions> rename_table_list
+%type <renameTableOption> rename_option
 %type <alterPartitionOption> alter_partition_option partition_option
 %type <alterColPosition> column_position
 %type <alterColumnOrder> alter_column_order
@@ -3165,6 +3169,7 @@ alter_stmt:
 |   alter_stage_stmt
 |   alter_sequence_stmt
 |   alter_pitr_stmt
+|   rename_stmt
 // |    alter_ddl_stmt
 
 alter_sequence_stmt:
@@ -3215,14 +3220,35 @@ alter_table_stmt:
         alterTable.PartitionOption = $4
         $$ = alterTable
     }
-|   RENAME TABLE table_name TO alter_table_rename
+
+rename_stmt:
+    RENAME TABLE rename_table_list
     {
-        var table = $3
+        alterTables := $3
+        renameTables := tree.NewRenameTable(alterTables)
+        $$ = renameTables
+    }
+
+rename_table_list:
+    rename_option
+    {
+        $$ = []*tree.AlterTable{$1}
+    }
+|   rename_table_list ',' rename_option
+    {
+        $$ = append($1, $3)
+    }
+
+rename_option:
+    table_name TO alter_table_rename
+    {
+        var table = $1
         alterTable := tree.NewAlterTable(table)
-        opt := tree.AlterTableOption($5)
+        opt := tree.AlterTableOption($3)
         alterTable.Options = []tree.AlterTableOption{opt}
         $$ = alterTable
     }
+
 
 alter_option_list:
     alter_option

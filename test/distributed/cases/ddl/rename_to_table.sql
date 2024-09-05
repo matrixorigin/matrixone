@@ -41,9 +41,9 @@ drop table `rename`;
 create table rename_table_09(a int,b varchar(10));
 create table rename_table_10(a int,b varchar(10));
 insert into rename_table_10 values(20,'ste'),(22,'ip'),(24,'opt');
--- @bvt:issue#18424
+
 rename table rename_table_10 to rename_table_09;
--- @bvt:issue
+
 drop table rename_table_09;
 drop table rename_table_10;
 --rename after rename
