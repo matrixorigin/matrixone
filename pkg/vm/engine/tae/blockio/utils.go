@@ -172,7 +172,7 @@ func CheckTombstoneFile(
 			}
 			var goOn bool
 			if goOn, err = onBlockSelectedFn(tombstoneObject, pos); err != nil || !goOn {
-				return
+				break
 			}
 		}
 	}
