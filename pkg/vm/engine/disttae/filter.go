@@ -112,10 +112,16 @@ func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *proces
 	vals := make([][]byte, len(exprs))
 	_ = colDef
 	_ = proc
+	var vec *vector.Vector
 	for idx := range exprs {
 		if fExpr, ok := exprs[idx].Expr.(*plan.Expr_Fold); ok {
-			ptr := uintptr(fExpr.Fold.Ptr)
-			vec := (*vector.Vector)(unsafe.Pointer(ptr))
+			if fExpr.Fold.Ptr == 0 {
+				vec = vector.NewVec(types.T_any.ToType())
+				_ = vec.UnmarshalBinary(fExpr.Fold.Data)
+			} else {
+				ptr := uintptr(fExpr.Fold.Ptr)
+				vec = (*vector.Vector)(unsafe.Pointer(ptr))
+			}
 			val, can := getConstantBytes(vec, true, 0)
 			if !can {
 				return nil, false

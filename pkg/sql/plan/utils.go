@@ -2442,3 +2442,34 @@ func EvalFoldValExpr(proc *process.Process, expr *Expr, executorMap map[int]cole
 
 	return nil
 }
+
+func EvalFoldValExprForRemote(proc *process.Process, expr *Expr, executorMap map[int]colexec.ExpressionExecutor) (err error) {
+	switch ef := expr.Expr.(type) {
+	case *plan.Expr_Fold:
+		var vec *vector.Vector
+		exe, ok := executorMap[int(ef.Fold.Id)]
+		if !ok {
+			panic("EvalFoldVal: fold id not exist")
+		}
+		vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		if err != nil {
+			return err
+		}
+		ef.Fold.Ptr = 0
+		vec.InplaceSortAndCompact()
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		ef.Fold.Data = data
+	case *plan.Expr_F:
+		for i := range ef.F.Args {
+			err = EvalFoldValExprForRemote(proc, ef.F.Args[i], executorMap)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
