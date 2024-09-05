@@ -95,7 +95,7 @@ type Conn struct {
 	timeout           time.Duration
 	allocator         *BufferAllocator
 	ses               *Session
-	closeConnFunc     sync.Once
+	mu                sync.Mutex
 	closeFunc         sync.Once
 }
 
@@ -557,6 +557,8 @@ func (c *Conn) RemoteAddress() string {
 }
 
 func (c *Conn) closeConn() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var err error
 	if c.conn != nil {
 		if err = c.conn.Close(); err != nil {

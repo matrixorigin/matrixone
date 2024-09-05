@@ -200,7 +200,7 @@ func (mp *MysqlProtocolImpl) safeQuit() {
 		return
 	}
 	if mp.tcpConn != nil {
-		_ = mp.tcpConn.Close()
+		_ = mp.tcpConn.closeConn()
 	}
 	//release salt
 	if mp.salt != nil {
