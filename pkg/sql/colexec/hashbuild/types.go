@@ -15,12 +15,9 @@
 package hashbuild
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashmap_util"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -33,29 +30,16 @@ const (
 	BuildHashMap = iota
 	HandleRuntimeFilter
 	SendJoinMap
-	End
 )
 
 type container struct {
-	state              int
-	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
-	runtimeFilterIn    bool
-	multiSels          [][]int32
-	batches            []*batch.Batch
-	inputBatchRowCount int
-	tmpBatch           *batch.Batch
-
-	executor []colexec.ExpressionExecutor
-	vecs     [][]*vector.Vector
-
-	intHashMap *hashmap.IntHashMap
-	strHashMap *hashmap.StrHashMap
-
-	uniqueJoinKeys []*vector.Vector
+	state           int
+	runtimeFilterIn bool
+	hashmapBuilder  hashmap_util.HashmapBuilder
 }
 
 type HashBuild struct {
-	ctr               *container
+	ctr               container
 	NeedHashMap       bool
 	HashOnPK          bool
 	NeedBatches       bool
@@ -99,39 +83,21 @@ func (hashBuild *HashBuild) Release() {
 }
 
 func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	hashBuild.Free(proc, pipelineFailed, err)
-}
-
-func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := hashBuild.ctr
+	hashBuild.ctr.state = BuildHashMap
+	hashBuild.ctr.runtimeFilterIn = false
 	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
-	if ctr != nil {
-		ctr.batches = nil
-		ctr.intHashMap = nil
-		ctr.strHashMap = nil
-		ctr.multiSels = nil
-		ctr.cleanEvalVectors()
-		hashBuild.ctr = nil
+	if pipelineFailed || err != nil {
+		hashBuild.ctr.hashmapBuilder.FreeWithError(proc)
+	} else {
+		hashBuild.ctr.hashmapBuilder.Reset()
 	}
 }
+func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 
-func (ctr *container) cleanEvalVectors() {
-	for i := range ctr.executor {
-		if ctr.executor[i] != nil {
-			ctr.executor[i].Free()
-		}
-	}
-	ctr.executor = nil
-}
-
-func (ctr *container) cleanHashMap() {
-	if ctr.intHashMap != nil {
-		ctr.intHashMap.Free()
-		ctr.intHashMap = nil
-	}
-	if ctr.strHashMap != nil {
-		ctr.strHashMap.Free()
-		ctr.strHashMap = nil
+	if pipelineFailed || err != nil {
+		hashBuild.ctr.hashmapBuilder.FreeWithError(proc)
+	} else {
+		hashBuild.ctr.hashmapBuilder.Free(proc)
 	}
 }

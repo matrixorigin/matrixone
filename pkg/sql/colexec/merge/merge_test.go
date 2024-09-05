@@ -79,6 +79,9 @@ func TestMerge(t *testing.T) {
 			if ok.Status == vm.ExecStop || err != nil {
 				break
 			}
+			if ok.Batch != nil {
+				ok.Batch.Clean(tc.proc.GetMPool())
+			}
 		}
 		tc.arg.Reset(tc.proc, false, nil)
 		// for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
@@ -102,6 +105,9 @@ func TestMerge(t *testing.T) {
 			ok, err := tc.arg.Call(tc.proc)
 			if ok.Status == vm.ExecStop || err != nil {
 				break
+			}
+			if ok.Batch != nil {
+				ok.Batch.Clean(tc.proc.GetMPool())
 			}
 		}
 		tc.arg.Free(tc.proc, false, nil)

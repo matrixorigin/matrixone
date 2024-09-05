@@ -39,7 +39,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -116,7 +115,7 @@ func (txn *Transaction) WriteBatch(
 		}
 		txn.genBlock()
 		len := bat.RowCount()
-		genRowidVec = txn.proc.GetVector(types.T_Rowid.ToType())
+		genRowidVec = vector.NewVec(types.T_Rowid.ToType())
 		for i := 0; i < len; i++ {
 			if err := vector.AppendFixed(genRowidVec, txn.genRowId(), false,
 				txn.proc.Mp()); err != nil {
@@ -405,14 +404,11 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 	//offset < 0 indicates commit.
 	if offset < 0 {
-		//if txn.workspaceSize < WorkspaceThreshold {
-		//	return nil
-		//}
-		if txn.workspaceSize < WorkspaceThreshold && txn.insertCount < InsertEntryThreshold {
+		if txn.workspaceSize < txn.engine.workspaceThreshold && txn.insertCount < txn.engine.insertEntryMaxCount {
 			return nil
 		}
 	} else {
-		if txn.workspaceSize < WorkspaceThreshold {
+		if txn.workspaceSize < txn.engine.workspaceThreshold {
 			return nil
 		}
 	}
@@ -921,14 +917,9 @@ func (txn *Transaction) compactionBlksLocked() error {
 			}
 
 			// append the object stats to bat
-			for idx := 0; idx < len(stats); idx++ {
-				if stats[idx].IsZero() {
-					continue
-				}
-				if err = vector.AppendBytes(bat.Vecs[1], stats[idx].Marshal(),
-					false, tbl.getTxn().proc.GetMPool()); err != nil {
-					return err
-				}
+			if err = vector.AppendBytes(bat.Vecs[1], stats.Marshal(),
+				false, tbl.getTxn().proc.GetMPool()); err != nil {
+				return err
 			}
 
 			bat.SetRowCount(len(createdBlks))
@@ -981,22 +972,16 @@ func (txn *Transaction) compactionBlksLocked() error {
 //}
 
 // TODO::remove it after workspace refactor.
-func (txn *Transaction) getUncommittedS3Tombstone(mp map[types.Blockid][]objectio.Location) (err error) {
-	txn.blockId_tn_delete_metaLoc_batch.RLock()
-	defer txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+func (txn *Transaction) getUncommittedS3Tombstone(
+	statsSlice *objectio.ObjectStatsSlice,
+) (err error) {
+	txn.cn_flushed_s3_tombstone_object_stats_list.RLock()
+	defer txn.cn_flushed_s3_tombstone_object_stats_list.RUnlock()
 
-	for bid, bats := range txn.blockId_tn_delete_metaLoc_batch.data {
-		for _, b := range bats {
-			vs, area := vector.MustVarlenaRawData(b.GetVector(0))
-			for i := range vs {
-				loc, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
-				if err != nil {
-					return err
-				}
-				mp[bid] = append(mp[bid], loc)
-			}
-		}
+	for _, stats := range txn.cn_flushed_s3_tombstone_object_stats_list.data {
+		statsSlice.Append(stats[:])
 	}
+
 	return nil
 }
 
@@ -1142,7 +1127,7 @@ func (txn *Transaction) delTransaction() {
 	txn.tableOps = nil
 	txn.databaseMap = nil
 	txn.deletedDatabaseMap = nil
-	txn.blockId_tn_delete_metaLoc_batch.data = nil
+	txn.cn_flushed_s3_tombstone_object_stats_list.data = nil
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
@@ -1281,11 +1266,6 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		batchSelectList: make(map[*batch.Batch][]int64),
 		toFreeBatches:   make(map[tableKey][]*batch.Batch),
 	}
-
-	ws.blockId_tn_delete_metaLoc_batch = struct {
-		sync.RWMutex
-		data map[types.Blockid][]*batch.Batch
-	}{data: make(map[types.Blockid][]*batch.Batch)}
 
 	ws.readOnly.Store(true)
 

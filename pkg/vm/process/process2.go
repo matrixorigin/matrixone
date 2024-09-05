@@ -21,8 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
@@ -81,7 +79,6 @@ func NewTopProcess(
 
 		// 2. fields from make.
 		LastInsertID:   new(uint64),
-		vp:             initCachedVectorPool(),
 		valueScanBatch: make(map[[16]byte]*batch.Batch),
 
 		// 3. other fields.
@@ -244,10 +241,6 @@ func (proc *Process) Free() {
 		return
 	}
 	proc.CleanValueScanBatchs()
-
-	// we should free the vector pool at the end,
-	// avoid any free action before will put memories into the pool.
-	proc.Base.vp.free(proc.Base.mp)
 }
 
 type QueryBaseContext struct {
@@ -299,8 +292,8 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 
 	for _, vec := range bat.Vecs {
 		if vec != nil {
-			proc.PutVector(vec)
 			bat.ReplaceVector(vec, nil)
+			vec.Free(proc.GetMPool())
 		}
 	}
 	for _, agg := range bat.Aggs {
@@ -312,28 +305,4 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 	bat.Vecs = nil
 	bat.Attrs = nil
 	bat.SetRowCount(0)
-}
-
-// PutVector attempts to put the vector to the pool.
-// It should be noted that, for performance and correct memory usage, we won't call the reset() action here.
-//
-// If the put operation fails, it releases the memory of the vector.
-func (proc *Process) PutVector(vec *vector.Vector) {
-	if !proc.Base.vp.putVectorIntoPool(vec) {
-		vec.Free(proc.Mp())
-	}
-}
-
-// GetVector attempts to retrieve a vector of a specified type from the pool.
-//
-// If the get operation fails, it allocates a new vector to return.
-func (proc *Process) GetVector(typ types.Type) *vector.Vector {
-	if typ.Oid == types.T_any {
-		return vector.NewVec(typ)
-	}
-	if vec := proc.Base.vp.getVectorFromPool(typ); vec != nil {
-		vec.Reset(typ)
-		return vec
-	}
-	return vector.NewVec(typ)
 }

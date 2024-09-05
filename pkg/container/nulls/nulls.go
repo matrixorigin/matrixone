@@ -81,6 +81,7 @@ func (nsp *Nulls) Build(size int, rows ...uint64) {
 	nsp.InitWithSize(size)
 	Add(nsp, rows...)
 }
+
 func Build(size int, rows ...uint64) *Nulls {
 	var n Nulls
 	n.Build(size, rows...)
@@ -382,7 +383,7 @@ func (nsp *Nulls) ReadNoCopy(data []byte) error {
 
 // Or the m Nulls into nsp.
 func (nsp *Nulls) Or(m *Nulls) {
-	if !m.np.EmptyByFlag() {
+	if m != nil && !m.np.EmptyByFlag() {
 		nsp.np.Or(&m.np)
 	}
 }

@@ -650,3 +650,5 @@ drop database School;
 drop database University;
 drop database EducationSystem;
 drop snapshot if exists sp06;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

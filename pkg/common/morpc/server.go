@@ -378,6 +378,10 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						fields = append(fields, zap.String("response",
 							f.send.Message.DebugString()))
 					}
+					conn := cs.conn.RawConn()
+					if _, ok := f.send.Message.(PayloadMessage); ok && conn != nil {
+						conn.SetWriteDeadline(time.Now().Add(v))
+					}
 					if err := cs.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
 						s.logger.Error("write response failed",
 							zap.Uint64("request-id", f.send.Message.GetID()),

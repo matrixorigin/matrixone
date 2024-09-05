@@ -32,3 +32,5 @@ drop snapshot if exists snapshot1;
 drop snapshot if exists snapshot2;
 drop table if exists cluster_table_1;
 drop account if exists acc01;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

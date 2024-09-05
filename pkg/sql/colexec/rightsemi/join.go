@@ -41,21 +41,22 @@ func (rightSemi *RightSemi) OpType() vm.OpType {
 }
 
 func (rightSemi *RightSemi) Prepare(proc *process.Process) (err error) {
-	rightSemi.ctr = new(container)
-	rightSemi.ctr.InitProc(proc)
-	rightSemi.ctr.vecs = make([]*vector.Vector, len(rightSemi.Conditions[0]))
-	rightSemi.ctr.evecs = make([]evalVector, len(rightSemi.Conditions[0]))
-	for i := range rightSemi.ctr.evecs {
-		rightSemi.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, rightSemi.Conditions[0][i])
-		if err != nil {
-			return err
+	if len(rightSemi.ctr.tmpBatches) == 0 {
+		rightSemi.ctr.vecs = make([]*vector.Vector, len(rightSemi.Conditions[0]))
+		rightSemi.ctr.evecs = make([]evalVector, len(rightSemi.Conditions[0]))
+		for i := range rightSemi.ctr.evecs {
+			rightSemi.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, rightSemi.Conditions[0][i])
+			if err != nil {
+				return err
+			}
 		}
-	}
 
-	if rightSemi.Cond != nil {
-		rightSemi.ctr.expr, err = colexec.NewExpressionExecutor(proc, rightSemi.Cond)
+		if rightSemi.Cond != nil {
+			rightSemi.ctr.expr, err = colexec.NewExpressionExecutor(proc, rightSemi.Cond)
+		}
+		rightSemi.ctr.tmpBatches = make([]*batch.Batch, 2)
 	}
-	rightSemi.ctr.tmpBatches = make([]*batch.Batch, 2)
+	rightSemi.ctr.InitProc(proc)
 	return err
 }
 
@@ -67,13 +68,16 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	analyze := proc.GetAnalyze(rightSemi.GetIdx(), rightSemi.GetParallelIdx(), rightSemi.GetParallelMajor())
 	analyze.Start()
 	defer analyze.Stop()
-	ctr := rightSemi.ctr
+	ctr := &rightSemi.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			rightSemi.build(analyze, proc)
+			err = rightSemi.build(analyze, proc)
+			if err != nil {
+				return result, err
+			}
 			if ctr.mp == nil && !rightSemi.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
@@ -136,11 +140,14 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) {
-	ctr := rightSemi.ctr
+func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) (err error) {
+	ctr := &rightSemi.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
-	ctr.mp = message.ReceiveJoinMap(rightSemi.JoinMapTag, rightSemi.IsShuffle, rightSemi.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	ctr.mp, err = message.ReceiveJoinMap(rightSemi.JoinMapTag, rightSemi.IsShuffle, rightSemi.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	if err != nil {
+		return err
+	}
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
@@ -150,6 +157,7 @@ func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) {
 		ctr.matched = &bitmap.Bitmap{}
 		ctr.matched.InitWithSize(ctr.batchRowCount)
 	}
+	return nil
 }
 
 func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyze process.Analyze, _ bool, isLast bool) (bool, error) {
@@ -186,14 +194,15 @@ func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyze pro
 
 	if len(sels) <= colexec.DefaultBatchSize {
 		if ctr.rbat != nil {
-			proc.PutBatch(ctr.rbat)
-			ctr.rbat = nil
-		}
-		ctr.rbat = batch.NewWithSize(len(ap.Result))
+			ctr.rbat.CleanOnlyData()
+		} else {
+			ctr.rbat = batch.NewWithSize(len(ap.Result))
 
-		for i, pos := range ap.Result {
-			ctr.rbat.Vecs[i] = proc.GetVector(ap.RightTypes[pos])
+			for i, pos := range ap.Result {
+				ctr.rbat.Vecs[i] = vector.NewVec(ap.RightTypes[pos])
+			}
 		}
+
 		for j, pos := range ap.Result {
 			for _, sel := range sels {
 				idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
@@ -213,7 +222,7 @@ func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyze pro
 		for k := range ap.ctr.buf {
 			ap.ctr.buf[k] = batch.NewWithSize(len(ap.Result))
 			for i, pos := range ap.Result {
-				ap.ctr.buf[k].Vecs[i] = proc.GetVector(ap.RightTypes[pos])
+				ap.ctr.buf[k].Vecs[i] = vector.NewVec(ap.RightTypes[pos])
 			}
 			var newsels []int32
 			if (k+1)*colexec.DefaultBatchSize <= len(sels) {

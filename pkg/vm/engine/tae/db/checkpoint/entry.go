@@ -80,9 +80,6 @@ func (e *CheckpointEntry) CheckPrintTime() bool {
 	return time.Since(e.lastPrint) > e.waterLine
 }
 func (e *CheckpointEntry) LSNString() string {
-	if e.version < logtail.CheckpointVersion7 {
-		return fmt.Sprintf("version too small: v%d", e.version)
-	}
 	return fmt.Sprintf("ckp %d, truncate %d", e.ckpLSN, e.truncateLSN)
 }
 
@@ -249,7 +246,7 @@ func (e *CheckpointEntry) ReadMetaIdx(
 	return data.ReadTNMetaBatch(ctx, e.version, e.tnLocation, reader)
 }
 
-func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns, segDel *api.Batch, err error) {
+func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectFS, tid uint64) (ins, del, dataObject, tombstoneObject *api.Batch, err error) {
 	reader, err := blockio.NewObjectReader(e.sid, fs.Service, e.cnLocation)
 	if err != nil {
 		return
@@ -280,7 +277,7 @@ func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectF
 	if bats, err = data.ReadFromData(ctx, tid, e.cnLocation, reader, e.version, common.CheckpointAllocator); err != nil {
 		return
 	}
-	ins, del, cnIns, segDel, err = data.GetTableDataFromBats(tid, bats)
+	ins, del, dataObject, tombstoneObject, err = data.GetTableDataFromBats(tid, bats)
 	return
 }
 

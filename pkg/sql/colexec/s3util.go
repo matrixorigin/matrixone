@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -181,33 +183,23 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
 	// vecs[1] store relative block metadata
 	if w.blockInfoBat != nil {
-		proc.PutBatch(w.blockInfoBat)
-	}
-	w.blockInfoBat = newBlockInfoBat(proc)
-}
+		w.blockInfoBat.CleanOnlyData()
+	} else {
+		attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+		blockInfoBat := batch.NewWithSize(len(attrs))
+		blockInfoBat.Attrs = attrs
+		blockInfoBat.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+		blockInfoBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
+		blockInfoBat.Vecs[2] = vector.NewVec(types.T_binary.ToType())
 
-func newBlockInfoBat(proc *process.Process) *batch.Batch {
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-	blockInfoBat := batch.NewWithSize(len(attrs))
-	blockInfoBat.Attrs = attrs
-	blockInfoBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
-	blockInfoBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
-	blockInfoBat.Vecs[2] = proc.GetVector(types.T_binary.ToType())
-	return blockInfoBat
+		w.blockInfoBat = blockInfoBat
+	}
 }
 
 func (w *S3Writer) Output(proc *process.Process, result *vm.CallResult) error {
 	var err error
-	if result.Batch == nil {
-		result.Batch, err = proc.NewBatchFromSrc(w.blockInfoBat, 0)
-		if err != nil {
-			return err
-		}
-	}
-
 	result.Batch, err = result.Batch.Append(proc.Ctx, proc.GetMPool(), w.blockInfoBat)
 	if err != nil {
-		proc.PutBatch(result.Batch)
 		return err
 	}
 	w.ResetBlockInfoBat(proc)
@@ -244,27 +236,6 @@ func (w *S3Writer) initBuffers(proc *process.Process, bat *batch.Batch) {
 		panic(err)
 	}
 	w.buffer = buffer
-}
-
-func (w *S3Writer) WriteBatch(proc *process.Process, bat *batch.Batch) error {
-	if w.sortIndex != -1 {
-		err := sortByKey(proc, bat, w.sortIndex, w.isClusterBy, proc.GetMPool())
-		if err != nil {
-			return err
-		}
-	}
-	if w.writer == nil {
-		_, err := w.generateWriter(proc)
-		if err != nil {
-			return err
-		}
-	}
-	if w.isTombstone {
-		_, err := w.writer.WriteTombstoneBatch(bat)
-		return err
-	}
-	_, err := w.writer.WriteBatch(bat)
-	return err
 }
 
 // StashBatch batch into w.bats.
@@ -343,16 +314,16 @@ func getStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
 	return
 }
 
-func (w *S3Writer) FlushTailBatch(proc *process.Process) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
+func (w *S3Writer) FlushTailBatch(proc *process.Process) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
 	if w.batSize >= TagS3SizeForMOLogger {
 		return w.SortAndSync(proc)
 	}
-	return nil, nil, w.writeBatsToBlockInfoBat(proc.GetMPool())
+	return nil, objectio.ObjectStats{}, w.writeBatsToBlockInfoBat(proc.GetMPool())
 }
 
-func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
+func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
 	if len(w.batches) == 0 {
-		return nil, nil, nil
+		return nil, objectio.ObjectStats{}, nil
 	}
 
 	defer func() {
@@ -367,27 +338,21 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, []o
 
 	if w.sortIndex == -1 {
 		if _, err := w.generateWriter(proc); err != nil {
-			return nil, nil, err
+			return nil, objectio.ObjectStats{}, err
 		}
 
 		for i := range w.batches {
-			if w.isTombstone {
-				if _, err := w.writer.WriteTombstoneBatch(w.batches[i]); err != nil {
-					return nil, nil, err
-				}
-			} else {
-				if _, err := w.writer.WriteBatch(w.batches[i]); err != nil {
-					return nil, nil, err
-				}
+			if _, err := w.writer.WriteBatch(w.batches[i]); err != nil {
+				return nil, objectio.ObjectStats{}, err
 			}
 		}
-		return w.Sync(proc)
+		return w.sync(proc)
 	}
 
 	for i := range w.batches {
 		err := sortByKey(proc, w.batches[i], w.sortIndex, w.isClusterBy, proc.GetMPool())
 		if err != nil {
-			return nil, nil, err
+			return nil, objectio.ObjectStats{}, err
 		}
 	}
 
@@ -451,7 +416,7 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, []o
 		panic(fmt.Sprintf("invalid type: %s", w.batches[0].Vecs[w.sortIndex].GetType().Oid))
 	}
 	if _, err := w.generateWriter(proc); err != nil {
-		return nil, nil, err
+		return nil, objectio.ObjectStats{}, err
 	}
 	lens := 0
 	size := len(w.batches)
@@ -463,21 +428,15 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, []o
 		for i := range w.buffer.Vecs {
 			err := w.buffer.Vecs[i].UnionOne(w.batches[batchIndex].Vecs[i], int64(rowIndex), proc.GetMPool())
 			if err != nil {
-				return nil, nil, err
+				return nil, objectio.ObjectStats{}, err
 			}
 		}
 		lens++
 		if lens == int(options.DefaultBlockMaxRows) {
 			lens = 0
 			w.buffer.SetRowCount(int(options.DefaultBlockMaxRows))
-			if w.isTombstone {
-				if _, err := w.writer.WriteTombstoneBatch(w.buffer); err != nil {
-					return nil, nil, err
-				}
-			} else {
-				if _, err := w.writer.WriteBatch(w.buffer); err != nil {
-					return nil, nil, err
-				}
+			if _, err := w.writer.WriteBatch(w.buffer); err != nil {
+				return nil, objectio.ObjectStats{}, err
 			}
 			// force clean
 			w.buffer.CleanOnlyData()
@@ -485,18 +444,12 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, []o
 	}
 	if lens > 0 {
 		w.buffer.SetRowCount(lens)
-		if w.isTombstone {
-			if _, err := w.writer.WriteTombstoneBatch(w.buffer); err != nil {
-				return nil, nil, err
-			}
-		} else {
-			if _, err := w.writer.WriteBatch(w.buffer); err != nil {
-				return nil, nil, err
-			}
+		if _, err := w.writer.WriteBatch(w.buffer); err != nil {
+			return nil, objectio.ObjectStats{}, err
 		}
 		w.buffer.CleanOnlyData()
 	}
-	return w.Sync(proc)
+	return w.sync(proc)
 }
 
 func (w *S3Writer) putBatch(bat *batch.Batch) {
@@ -520,8 +473,21 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 		w.writer.SetSortKey(uint16(w.sortIndex))
 	}
 
-	if w.pk > -1 {
-		w.writer.SetPrimaryKey(uint16(w.pk))
+	if w.isTombstone {
+		w.writer.SetDataType(objectio.SchemaTombstone)
+		if w.pk > -1 {
+			w.writer.SetPrimaryKeyWithType(
+				uint16(w.pk),
+				index.HBF,
+				index.ObjectPrefixFn,
+				index.BlockPrefixFn,
+			)
+		}
+	} else {
+		w.writer.SetDataType(objectio.SchemaData)
+		if w.pk > -1 {
+			w.writer.SetPrimaryKey(uint16(w.pk))
+		}
 	}
 
 	return obj, err
@@ -554,7 +520,8 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_nul
 	return bat.Shuffle(sels, m)
 }
 
-func (w *S3Writer) FillBlockInfoBat(blkInfos []objectio.BlockInfo, stats []objectio.ObjectStats, mpool *mpool.MPool) error {
+// FillBlockInfoBat put blockInfo generated by sync into metaLocBat
+func (w *S3Writer) FillBlockInfoBat(blkInfos []objectio.BlockInfo, stats objectio.ObjectStats, mpool *mpool.MPool) error {
 	for _, blkInfo := range blkInfos {
 		if err := vector.AppendFixed(
 			w.blockInfoBat.Vecs[0],
@@ -572,29 +539,21 @@ func (w *S3Writer) FillBlockInfoBat(blkInfos []objectio.BlockInfo, stats []objec
 		}
 	}
 
-	// append the object stats to bat,
-	// at most one will append in
-	for idx := range stats {
-		if stats[idx].IsZero() {
-			continue
-		}
-
-		if err := vector.AppendBytes(w.blockInfoBat.Vecs[2],
-			stats[idx].Marshal(), false, mpool); err != nil {
-			return err
-		}
+	if err := vector.AppendBytes(w.blockInfoBat.Vecs[2],
+		stats.Marshal(), false, mpool); err != nil {
+		return err
 	}
 
 	w.blockInfoBat.SetRowCount(w.blockInfoBat.Vecs[0].Length())
 	return nil
 }
 
-// Sync writes batches in buffer to fileservice(aka s3 in this feature) and get metadata about block on fileservice and put it into metaLocBat
+// sync writes batches in buffer to fileservice(aka s3 in this feature) and get metadata about block on fileservice.
 // For more information, please refer to the comment about func WriteEnd in Writer interface
-func (w *S3Writer) Sync(proc *process.Process) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
+func (w *S3Writer) sync(proc *process.Process) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, objectio.ObjectStats{}, err
 	}
 	blkInfos := make([]objectio.BlockInfo, 0, len(blocks))
 	for j := range blocks {
@@ -602,5 +561,19 @@ func (w *S3Writer) Sync(proc *process.Process) ([]objectio.BlockInfo, []objectio
 			blocks[j].GenerateBlockInfo(w.writer.GetName(), w.sortIndex != -1),
 		)
 	}
-	return blkInfos, w.writer.GetObjectStats(), err
+
+	stats := w.writer.GetObjectStats()
+
+	var i int = -1
+	for i = range stats {
+		if !stats[i].IsZero() {
+			stats[i].SetCNCreated()
+			if w.sortIndex != -1 {
+				stats[i].SetSorted()
+			}
+			break
+		}
+	}
+
+	return blkInfos, stats[i], err
 }

@@ -73,7 +73,7 @@ a    INT(32)    YES        null
 b    INT(32)    YES        null        
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL\n)
 select * from t1;
 a    b
 1    1

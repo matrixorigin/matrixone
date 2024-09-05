@@ -19,17 +19,14 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 
-	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -37,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -47,10 +43,6 @@ type BlockT[T common.IRef] interface {
 	common.IRef
 	Pin() *common.PinnedItem[T]
 	GetID() *common.ID
-}
-
-func DefaultTombstoneFactory(meta *catalog.ObjectEntry) data.Tombstone {
-	return updates.NewObjectMVCCHandle(meta)
 }
 
 type baseObject struct {
@@ -69,81 +61,57 @@ func newBaseObject(
 	meta *catalog.ObjectEntry,
 	rt *dbutils.Runtime,
 ) *baseObject {
-	blk := &baseObject{
+	obj := &baseObject{
 		impl:       impl,
 		rt:         rt,
 		appendMVCC: updates.NewAppendMVCCHandle(meta),
 	}
-	blk.meta.Store(meta)
-	blk.appendMVCC.SetAppendListener(blk.OnApplyAppend)
-	blk.RWMutex = blk.appendMVCC.RWMutex
-	return blk
+	obj.meta.Store(meta)
+	obj.appendMVCC.SetAppendListener(obj.OnApplyAppend)
+	obj.RWMutex = obj.appendMVCC.RWMutex
+	return obj
 }
 
-func (blk *baseObject) GetMutex() *sync.RWMutex { return blk.RWMutex }
-func (blk *baseObject) UpdateMeta(meta any) {
-	blk.meta.Store(meta.(*catalog.ObjectEntry))
+func (obj *baseObject) GetMutex() *sync.RWMutex { return obj.RWMutex }
+func (obj *baseObject) UpdateMeta(meta any) {
+	obj.meta.Store(meta.(*catalog.ObjectEntry))
 }
 
-func (blk *baseObject) OnApplyAppend(n txnif.AppendNode) (err error) {
-	blk.meta.Load().GetTable().AddRows(
+func (obj *baseObject) OnApplyAppend(n txnif.AppendNode) (err error) {
+	if n.IsTombstone() {
+		obj.meta.Load().GetTable().RemoveRows(
+			uint64(n.GetMaxRow() - n.GetStartRow()),
+		)
+		return
+	}
+	obj.meta.Load().GetTable().AddRows(
 		uint64(n.GetMaxRow() - n.GetStartRow()),
 	)
 	return
 }
-func (blk *baseObject) Close() {
+func (obj *baseObject) Close() {
 	// TODO
 }
 
-func (blk *baseObject) GetRuntime() *dbutils.Runtime {
-	return blk.rt
+func (obj *baseObject) GetRuntime() *dbutils.Runtime {
+	return obj.rt
 }
 
-func (blk *baseObject) PinNode() *Node {
-	n := blk.node.Load()
+func (obj *baseObject) PinNode() *Node {
+	n := obj.node.Load()
 	// if ref fails, reload.
 	// Note: avoid bad case where releasing happens before Ref()
-	for ; !n.RefIfHasRef(); n = blk.node.Load() {
+	for ; !n.RefIfHasRef(); n = obj.node.Load() {
 	}
 	return n
 }
-func (blk *baseObject) tryGetMVCC() *updates.ObjectMVCCHandle {
-	tombstone := blk.meta.Load().GetTable().TryGetTombstone(*blk.meta.Load().ID())
-	if tombstone == nil {
-		return nil
-	}
-	return tombstone.(*updates.ObjectMVCCHandle)
-}
-func (blk *baseObject) getOrCreateMVCC() *updates.ObjectMVCCHandle {
-	return blk.meta.Load().GetTable().GetOrCreateTombstone(blk.meta.Load(), DefaultTombstoneFactory).(*updates.ObjectMVCCHandle)
-}
 
-func (blk *baseObject) GCInMemoryDeletesByTSForTest(ts types.TS) {
-	blk.Lock()
-	defer blk.Unlock()
-	mvcc := blk.tryGetMVCC()
-	if mvcc == nil {
-		return
-	}
-	mvcc.UpgradeDeleteChainByTSLocked(ts)
-}
-
-func (blk *baseObject) UpgradeAllDeleteChain() {
-	blk.Lock()
-	defer blk.Unlock()
-	mvcc := blk.tryGetMVCC()
-	if mvcc == nil {
-		return
-	}
-	mvcc.UpgradeAllDeleteChain()
-}
-
-func (blk *baseObject) Rows() (int, error) {
-	node := blk.PinNode()
+func (obj *baseObject) Rows() (int, error) {
+	node := obj.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
-		blk.RLock()
-		defer blk.RUnlock()
+		obj.RLock()
+		defer obj.RUnlock()
 		rows, err := node.Rows()
 		return int(rows), err
 	} else {
@@ -151,37 +119,17 @@ func (blk *baseObject) Rows() (int, error) {
 		return int(rows), err
 	}
 }
-func (blk *baseObject) Foreach(
-	ctx context.Context,
-	readSchema any,
-	blkID uint16,
-	colIdx int,
-	op func(v any, isNull bool, row int) error,
-	sels []uint32,
-	mp *mpool.MPool,
-) error {
-	node := blk.PinNode()
-	defer node.Unref()
-	schema := readSchema.(*catalog.Schema)
-	if !node.IsPersisted() {
-		blk.RLock()
-		defer blk.RUnlock()
-		return node.MustMNode().Foreach(schema, blkID, colIdx, op, sels, mp)
-	} else {
-		return node.MustPNode().Foreach(ctx, schema, blkID, colIdx, op, sels, mp)
-	}
-}
 
-func (blk *baseObject) TryUpgrade() (err error) {
-	node := blk.node.Load()
+func (obj *baseObject) TryUpgrade() (err error) {
+	node := obj.node.Load()
 	if node.IsPersisted() {
 		return
 	}
-	pnode := newPersistedNode(blk)
+	pnode := newPersistedNode(obj)
 	nnode := NewNode(pnode)
 	nnode.Ref()
 
-	if !blk.node.CompareAndSwap(node, nnode) {
+	if !obj.node.CompareAndSwap(node, nnode) {
 		nnode.Unref()
 	} else {
 		node.Unref()
@@ -189,71 +137,39 @@ func (blk *baseObject) TryUpgrade() (err error) {
 	return
 }
 
-func (blk *baseObject) GetMeta() any { return blk.meta.Load() }
-func (blk *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
-	if !blk.meta.Load().IsAppendable() {
+func (obj *baseObject) GetMeta() any { return obj.meta.Load() }
+func (obj *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
+	if !obj.meta.Load().IsAppendable() {
 		panic("not support")
 	}
-	if blk.meta.Load().HasDropCommitted() {
+	if obj.meta.Load().HasDropCommitted() {
 		panic("not support")
 	}
-	blk.RLock()
-	defer blk.RUnlock()
-	x := blk.appendMVCC.GetLatestAppendPrepareTSLocked()
+	obj.RLock()
+	defer obj.RUnlock()
+	x := obj.appendMVCC.GetLatestAppendPrepareTSLocked()
 	return x.Greater(&startts)
 }
-func (blk *baseObject) GetFs() *objectio.ObjectFS { return blk.rt.Fs }
-func (blk *baseObject) GetID() *common.ID         { return blk.meta.Load().AsCommonID() }
+func (obj *baseObject) GetFs() *objectio.ObjectFS { return obj.rt.Fs }
+func (obj *baseObject) GetID() *common.ID         { return obj.meta.Load().AsCommonID() }
 
-func (blk *baseObject) fillInMemoryDeletesLocked(
-	txn txnif.TxnReader,
-	blkID uint16,
-	view **nulls.Nulls,
-	rwlocker *sync.RWMutex,
-) (err error) {
-	mvcc := blk.tryGetMVCC()
-	if mvcc == nil {
-		return
+func (obj *baseObject) buildMetalocation(bid uint16) (objectio.Location, error) {
+	if !obj.meta.Load().ObjectPersisted() {
+		panic("logic error")
 	}
-	deleteHandle := mvcc.TryGetDeleteChain(blkID)
-	if deleteHandle == nil {
-		return
-	}
-	chain := deleteHandle.GetDeleteChain()
-	deletes, err := chain.CollectDeletesLocked(txn, rwlocker)
-	if err != nil || deletes.IsEmpty() {
-		return
-	}
-	if *view == nil {
-		*view = deletes
-	} else {
-		(*view).Or(deletes)
-	}
-	return
-}
-
-func (blk *baseObject) buildMetalocation(bid uint16) (objectio.Location, error) {
-	if !blk.meta.Load().ObjectPersisted() {
-		return nil, nil
-	}
-	stats, err := blk.meta.Load().MustGetObjectStats()
+	stats, err := obj.meta.Load().MustGetObjectStats()
 	if err != nil {
 		return nil, err
 	}
-	blkMaxRows := blk.meta.Load().GetSchema().BlockMaxRows
-	blkRow := blkMaxRows
-	if bid == uint16(blk.meta.Load().BlockCnt())-1 {
-		blkRow = stats.Rows() - uint32(bid)*blkMaxRows
-	}
-	metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, bid)
-	return metaloc, nil
+	blkMaxRows := obj.meta.Load().GetSchema().BlockMaxRows
+	return stats.BlockLocation(bid, blkMaxRows), nil
 }
 
-func (blk *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector, err error) {
-	if !blk.meta.Load().IsAppendable() {
-		return
+func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector, err error) {
+	if !obj.meta.Load().IsAppendable() {
+		panic("not support")
 	}
-	location, err := blk.buildMetalocation(bid)
+	location, err := obj.buildMetalocation(bid)
 	if err != nil {
 		return
 	}
@@ -266,459 +182,180 @@ func (blk *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector,
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
-		blk.rt.Fs.Service,
+		obj.rt.Fs.Service,
 		location,
 		fileservice.Policy(0),
 		true,
-		blk.rt.VectorPool.Transient,
+		obj.rt.VectorPool.Transient,
 	)
 	if err != nil {
 		return
 	}
 	if vectors[0].GetType().Oid != types.T_TS {
-		panic(fmt.Sprintf("%s: bad commits layout", blk.meta.Load().ID().String()))
+		panic(fmt.Sprintf("%s: bad commits layout", obj.meta.Load().ID().String()))
 	}
 	vec = vectors[0]
 	return
 }
 
-func (blk *baseObject) LoadPersistedColumnData(
-	ctx context.Context, schema *catalog.Schema, colIdx int, mp *mpool.MPool, blkID uint16,
-) (vec containers.Vector, err error) {
-	def := schema.ColDefs[colIdx]
-	location, err := blk.buildMetalocation(blkID)
-	if err != nil {
-		return nil, err
-	}
-	id := blk.meta.Load().AsCommonID()
-	id.SetBlockOffset(blkID)
-	return LoadPersistedColumnData(
-		ctx,
-		blk.rt,
-		id,
-		def,
-		location,
-		mp,
-	)
-}
+// func (obj *baseObject) LoadPersistedColumnData(
+// 	ctx context.Context, schema *catalog.Schema, colIdx int, mp *mpool.MPool, blkID uint16,
+// ) (vec containers.Vector, err error) {
+// 	def := schema.ColDefs[colIdx]
+// 	location, err := obj.buildMetalocation(blkID)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	id := obj.meta.Load().AsCommonID()
+// 	id.SetBlockOffset(blkID)
+// 	return LoadPersistedColumnData(
+// 		ctx,
+// 		obj.rt,
+// 		id,
+// 		def,
+// 		location,
+// 		mp,
+// 	)
+// }
 
-func (blk *baseObject) loadLatestPersistedDeletes(
-	ctx context.Context,
-	blkID uint16,
-	txn txnif.TxnReader,
-	mp *mpool.MPool,
-) (bat *containers.Batch, persistedByCN bool, deltalocCommitTS types.TS, visible bool, release func(), err error) {
-	blk.RLock()
-	mvcc := blk.tryGetMVCC()
-	if mvcc == nil {
-		blk.RUnlock()
-		return
-	}
-	node := mvcc.GetLatestMVCCNode(blkID)
-	if node == nil {
-		blk.RUnlock()
-		return
-	}
-	location := node.BaseNode.DeltaLoc
-	if location.IsEmpty() {
-		blk.RUnlock()
-		return
-	}
-	deltalocCommitTS = node.End
-	visible = node.IsVisible(txn)
-	blk.RUnlock()
-	pkName := blk.meta.Load().GetSchema().GetPrimaryKey().Name
-	bat, persistedByCN, release, err = LoadPersistedDeletes(
-		ctx,
-		pkName,
-		blk.rt.Fs,
-		location,
-		mp,
-	)
-	return
-}
-func (blk *baseObject) FillPersistedDeletes(
-	ctx context.Context,
-	blkID uint16,
-	txn txnif.TxnReader,
-	view **nulls.Nulls,
-	mp *mpool.MPool,
-) (err error) {
-	return blk.foreachPersistedDeletesVisibleByTxn(
-		ctx,
-		txn,
-		blkID,
-		true,
-		func(i int, rowIdVec *vector.Vector) {
-			rowid := vector.GetFixedAt[types.Rowid](rowIdVec, i)
-			row := rowid.GetRowOffset()
-			if *view == nil {
-				*view = nulls.NewWithSize(int(row) + 1)
-			}
-			(*view).Add(uint64(row))
-		},
-		nil,
-		mp,
-	)
-}
-
-func (blk *baseObject) fillPersistedDeletesInRange(
-	ctx context.Context,
-	blkID uint16,
-	start, end types.TS,
-	view **nulls.Nulls,
-	mp *mpool.MPool,
-) (err error) {
-	err = blk.foreachPersistedDeletesCommittedInRange(
-		ctx,
-		start,
-		end,
-		blkID,
-		true,
-		func(i int, rowIdVec *vector.Vector) {
-			rowid := vector.GetFixedAt[types.Rowid](rowIdVec, i)
-			row := rowid.GetRowOffset()
-			if *view == nil {
-				*view = nulls.NewWithSize(int(row) + 1)
-			}
-			(*view).Add(uint64(row))
-		},
-		nil,
-		mp,
-	)
-	return err
-}
-
-func (blk *baseObject) persistedCollectDeleteMaskInRange(
-	ctx context.Context,
-	blkID uint16,
-	start, end types.TS,
-	mp *mpool.MPool,
-) (deletes *nulls.Nulls, err error) {
-	err = blk.foreachPersistedDeletesCommittedInRange(
-		ctx,
-		start,
-		end,
-		blkID,
-		true,
-		func(i int, rowIdVec *vector.Vector) {
-			rowid := vector.GetFixedAt[types.Rowid](rowIdVec, i)
-			row := rowid.GetRowOffset()
-			if deletes == nil {
-				deletes = nulls.NewWithSize(int(row) + 1)
-			}
-			deletes.Add(uint64(row))
-		},
-		nil,
-		mp,
-	)
-	return
-}
-
-// for each deletes in [start,end]
-func (blk *baseObject) foreachPersistedDeletesCommittedInRange(
-	ctx context.Context,
-	start, end types.TS,
-	blkID uint16,
-	skipAbort bool,
-	loopOp func(int, *vector.Vector),
-	postOp func(*containers.Batch),
-	mp *mpool.MPool,
-) (err error) {
-	loadFn := func() (bat *containers.Batch, persistedByCN bool, commitTS types.TS, visible bool, release func(), err error) {
-		mvcc := blk.tryGetMVCC()
-		if mvcc == nil {
-			return
-		}
-		// commitTS of deltalocation is the commitTS of deletes persisted by CN batches
-		location, deltalocCommitTS, deltalocStartTS := mvcc.GetDeltaLocAndCommitTS(blkID)
-		if location.IsEmpty() {
-			return
-		}
-
-		// quick check for early return.
-		persistedByCN, err = blockio.IsPersistedByCN(ctx, location, blk.rt.Fs.Service)
-		if err != nil {
-			return
-		}
-		if persistedByCN {
-			if deltalocCommitTS.Equal(&txnif.UncommitTS) {
-				return
-			}
-			if deltalocCommitTS.Less(&start) || deltalocCommitTS.Greater(&end) {
-				return
-			}
-		} else if deltalocStartTS.Less(&start) {
-			return
-		}
-
-		// IO
-		visible = true
-		pkName := blk.meta.Load().GetSchema().GetPrimaryKey().Name
-		bat, release, err = LoadPersistedDeletesBySchema(
-			ctx,
-			pkName,
-			blk.rt.Fs,
-			location,
-			persistedByCN,
-			mp,
-		)
-		return
-	}
-	return blk.foreachPersistedDeletes(ctx, start, end, blkID, skipAbort, loadFn, loopOp, postOp, mp)
-}
-
-// for each deletes in [start,end]
-func (blk *baseObject) foreachPersistedDeletesVisibleByTxn(
-	ctx context.Context,
-	txn txnif.TxnReader,
-	blkID uint16,
-	skipAbort bool,
-	loopOp func(int, *vector.Vector),
-	postOp func(*containers.Batch),
-	mp *mpool.MPool,
-) (err error) {
-	loadFn := func() (deletes *containers.Batch, persistedByCN bool, commitTS types.TS, visible bool, release func(), err error) {
-		// commitTS of deltalocation is the commitTS of deletes persisted by CN batches
-		return blk.loadLatestPersistedDeletes(ctx, blkID, txn, mp)
-	}
-	return blk.foreachPersistedDeletes(ctx, types.TS{}, txn.GetStartTS(), blkID, skipAbort, loadFn, loopOp, postOp, mp)
-}
-func (blk *baseObject) foreachPersistedDeletes(
-	ctx context.Context,
-	start, end types.TS,
-	blkID uint16,
-	skipAbort bool,
-	loadFn func() (bat *containers.Batch, persistedByCN bool, commitTS types.TS, visible bool, release func(), err error),
-	loopOp func(int, *vector.Vector),
-	postOp func(*containers.Batch),
-	mp *mpool.MPool,
-) (err error) {
-	// commitTS of deltalocation is the commitTS of deletes persisted by CN batches
-	deletes, persistedByCN, deltalocCommitTS, visible, release, err := loadFn()
-	if deletes == nil || err != nil {
-		return
-	}
-	if v := ctx.Value(common.RecorderKey{}); v != nil {
-		recorder := v.(*common.DeletesCollectRecorder)
-		inst := time.Now()
-		defer func() {
-			recorder.BisectCost = time.Since(inst)
-		}()
-	}
-	defer release()
-	defer deletes.Close()
-	if persistedByCN {
-		if !visible {
-			return
-		}
-		rowIdVec := deletes.Vecs[0].GetDownstreamVector()
-		for i := 0; i < deletes.Length(); i++ {
-			loopOp(i, rowIdVec)
-		}
-		commitTSVec := containers.NewConstFixed[types.TS](types.T_TS.ToType(), deltalocCommitTS, deletes.Length())
-		abortVec := containers.NewConstFixed[bool](types.T_bool.ToType(), false, deletes.Length())
-		deletes.AddVector(catalog.AttrCommitTs, commitTSVec)
-		deletes.AddVector(catalog.AttrAborted, abortVec)
-	} else {
-		abortVec := deletes.Vecs[3].GetDownstreamVector()
-		commitTsVec := deletes.Vecs[1].GetDownstreamVector()
-		rowIdVec := deletes.Vecs[0].GetDownstreamVector()
-
-		rstart, rend := blockio.FindIntervalForBlock(vector.MustFixedCol[types.Rowid](rowIdVec), objectio.NewBlockidWithObjectID(blk.meta.Load().ID(), blkID))
-		for i := rstart; i < rend; i++ {
-			if skipAbort {
-				abort := vector.GetFixedAt[bool](abortVec, i)
-				if abort {
-					continue
-				}
-			}
-			commitTS := vector.GetFixedAt[types.TS](commitTsVec, i)
-			if commitTS.GreaterEq(&start) && commitTS.LessEq(&end) {
-				loopOp(i, rowIdVec)
-			}
-		}
-	}
-	if postOp != nil {
-		postOp(deletes)
-	}
-	return
-}
-func (blk *baseObject) Prefetch(idxes []uint16, blkID uint16) error {
-	node := blk.PinNode()
+func (obj *baseObject) Prefetch(idxes []uint16, blkID uint16) error {
+	node := obj.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
 		return nil
 	} else {
-		key, err := blk.buildMetalocation(blkID)
+		key, err := obj.buildMetalocation(blkID)
 		if err != nil {
 			return err
 		}
-		return blockio.Prefetch(blk.rt.SID(), idxes, []uint16{key.ID()}, blk.rt.Fs.Service, key)
+		return blockio.Prefetch(obj.rt.SID(), idxes, []uint16{key.ID()}, obj.rt.Fs.Service, key)
 	}
 }
 
-func (blk *baseObject) ResolvePersistedColumnDatas(
+func (obj *baseObject) ResolvePersistedColumnData(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
-	blkID uint16,
-	colIdxs []int,
-	skipDeletes bool,
+	blkOffset uint16,
+	col int,
 	mp *mpool.MPool,
-) (view *containers.Batch, err error) {
-
-	location, err := blk.buildMetalocation(blkID)
-	if err != nil {
-		return nil, err
-	}
-	id := blk.meta.Load().AsCommonID()
-	id.SetBlockOffset(blkID)
-	vecs, err := LoadPersistedColumnDatas(
-		ctx, readSchema, blk.rt, id, colIdxs, location, mp,
-	)
-	if err != nil {
-		return nil, err
-	}
-	view = containers.NewBatch()
-	for i, vec := range vecs {
-		view.AddVector(readSchema.ColDefs[colIdxs[i]].Name, vec)
-	}
-
-	if skipDeletes {
-		return
-	}
-
-	defer func() {
-		if err != nil {
-			view.Close()
-		}
-	}()
-
-	blk.RLock()
-	err = blk.fillInMemoryDeletesLocked(txn, blkID, &view.Deletes, blk.RWMutex)
-	blk.RUnlock()
-
-	if err = blk.FillPersistedDeletes(ctx, blkID, txn, &view.Deletes, mp); err != nil {
-		return
-	}
+) (bat *containers.Batch, err error) {
+	err = obj.Scan(ctx, &bat, txn, readSchema, blkOffset, []int{col}, mp)
 	return
 }
 
-func (blk *baseObject) ResolvePersistedColumnData(
-	ctx context.Context,
-	txn txnif.TxnReader,
-	readSchema *catalog.Schema,
-	blkID uint16,
-	colIdx int,
-	skipDeletes bool,
-	mp *mpool.MPool,
-) (view *containers.Batch, err error) {
-	vec, err := blk.LoadPersistedColumnData(context.Background(), readSchema, colIdx, mp, blkID)
-	if err != nil {
-		return
-	}
-	view = containers.NewBatch()
-	view.AddVector(readSchema.ColDefs[colIdx].Name, vec)
-
-	if skipDeletes {
-		return
-	}
-
-	defer func() {
-		if err != nil {
-			view.Close()
-		}
-	}()
-
-	if err = blk.FillPersistedDeletes(ctx, blkID, txn, &view.Deletes, mp); err != nil {
-		return
-	}
-
-	blk.RLock()
-	err = blk.fillInMemoryDeletesLocked(txn, blkID, &view.Deletes, blk.RWMutex)
-	blk.RUnlock()
-	return
-}
-
-func (blk *baseObject) dedupWithLoad(
+func (obj *baseObject) getDuplicateRowsWithLoad(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	keys containers.Vector,
 	sels *nulls.Bitmap,
-	rowmask *roaring.Bitmap,
+	rowIDs containers.Vector,
 	blkOffset uint16,
 	isAblk bool,
+	skipCommittedBeforeTxnForAblk bool,
+	maxVisibleRow uint32,
 	mp *mpool.MPool,
 ) (err error) {
-	schema := blk.meta.Load().GetSchema()
+	schema := obj.meta.Load().GetSchema()
 	def := schema.GetSingleSortKey()
-	view, err := blk.ResolvePersistedColumnData(
+	data, err := obj.ResolvePersistedColumnData(
 		ctx,
 		txn,
 		schema,
 		blkOffset,
 		def.Idx,
-		false,
 		mp,
 	)
 	if err != nil {
-		return err
+		return
 	}
-	if rowmask != nil {
-		if view.Deletes == nil {
-			view.Deletes = common.RoaringToMOBitmap(rowmask)
-		} else {
-			common.MOOrRoaringBitmap(view.Deletes, rowmask)
-		}
-	}
-	defer view.Close()
+	defer data.Close()
+	blkID := objectio.NewBlockidWithObjectID(obj.meta.Load().ID(), blkOffset)
 	var dedupFn any
 	if isAblk {
 		dedupFn = containers.MakeForeachVectorOp(
-			keys.GetType().Oid, dedupAlkFunctions, view.Vecs[0], view.Deletes, def, blk.LoadPersistedCommitTS, txn,
+			keys.GetType().Oid, getRowIDAlkFunctions, data.Vecs[0], rowIDs, blkID, maxVisibleRow, obj.LoadPersistedCommitTS, txn, skipCommittedBeforeTxnForAblk,
 		)
 	} else {
 		dedupFn = containers.MakeForeachVectorOp(
-			keys.GetType().Oid, dedupNABlkFunctions, view.Vecs[0], view.Deletes, def,
+			keys.GetType().Oid, getDuplicatedRowIDNABlkFunctions, data.Vecs[0], rowIDs, blkID,
 		)
 	}
 	err = containers.ForeachVector(keys, dedupFn, sels)
 	return
 }
 
-func (blk *baseObject) PersistedBatchDedup(
+func (obj *baseObject) containsWithLoad(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	isCommitting bool,
 	keys containers.Vector,
-	keysZM index.ZM,
-	rowmask *roaring.Bitmap,
+	sels *nulls.Bitmap,
+	blkOffset uint16,
 	isAblk bool,
-	bf objectio.BloomFilter,
+	isCommitting bool,
 	mp *mpool.MPool,
 ) (err error) {
-	pkIndex, err := MakeImmuIndex(
+	schema := obj.meta.Load().GetSchema()
+	def := schema.GetSingleSortKey()
+	data, err := obj.ResolvePersistedColumnData(
 		ctx,
-		blk.meta.Load(),
-		bf,
-		blk.rt,
+		txn,
+		schema,
+		blkOffset,
+		def.Idx,
+		mp,
 	)
 	if err != nil {
 		return
 	}
-	for i := 0; i < blk.meta.Load().BlockCnt(); i++ {
+	defer data.Close()
+	var dedupFn any
+	if isAblk {
+		dedupFn = containers.MakeForeachVectorOp(
+			keys.GetType().Oid, containsAlkFunctions, data.Vecs[0], keys, obj.LoadPersistedCommitTS, txn,
+		)
+	} else {
+		dedupFn = containers.MakeForeachVectorOp(
+			keys.GetType().Oid, containsNABlkFunctions, data.Vecs[0], keys,
+		)
+	}
+	err = containers.ForeachVector(keys, dedupFn, sels)
+	return
+}
+
+func (obj *baseObject) persistedGetDuplicatedRows(
+	ctx context.Context,
+	txn txnif.TxnReader,
+	skipCommittedBeforeTxnForAblk bool,
+	keys containers.Vector,
+	keysZM index.ZM,
+	rowIDs containers.Vector,
+	isAblk bool,
+	maxVisibleRow uint32,
+	mp *mpool.MPool,
+) (err error) {
+	pkIndex, err := MakeImmuIndex(
+		ctx,
+		obj.meta.Load(),
+		nil,
+		obj.rt,
+	)
+	if err != nil {
+		return
+	}
+	for i := 0; i < obj.meta.Load().BlockCnt(); i++ {
 		sels, err := pkIndex.BatchDedup(
 			ctx,
 			keys,
 			keysZM,
-			blk.rt,
+			obj.rt,
+			obj.meta.Load().IsTombstone,
 			uint32(i),
 		)
 		if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 			continue
 		}
-		err = blk.dedupWithLoad(ctx, txn, keys, sels, rowmask, uint16(i), isAblk, mp)
+		err = obj.getDuplicateRowsWithLoad(ctx, txn, keys, sels, rowIDs, uint16(i), isAblk, skipCommittedBeforeTxnForAblk, maxVisibleRow, mp)
 		if err != nil {
 			return err
 		}
@@ -726,108 +363,75 @@ func (blk *baseObject) PersistedBatchDedup(
 	return nil
 }
 
-func (blk *baseObject) getPersistedValue(
+func (obj *baseObject) persistedContains(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	schema *catalog.Schema,
-	blkID uint16,
-	row, col int,
-	skipMemory bool,
+	isCommitting bool,
+	keys containers.Vector,
+	keysZM index.ZM,
+	isAblk bool,
 	mp *mpool.MPool,
-) (v any, isNull bool, err error) {
-	view := containers.NewBatch()
-	if err = blk.FillPersistedDeletes(ctx, blkID, txn, &view.Deletes, mp); err != nil {
+) (err error) {
+	pkIndex, err := MakeImmuIndex(
+		ctx,
+		obj.meta.Load(),
+		nil,
+		obj.rt,
+	)
+	if err != nil {
 		return
 	}
-	if !skipMemory {
-		blk.RLock()
-		err = blk.fillInMemoryDeletesLocked(txn, blkID, &view.Deletes, blk.RWMutex)
-		blk.RUnlock()
+	for i := 0; i < obj.meta.Load().BlockCnt(); i++ {
+		sels, err := pkIndex.BatchDedup(
+			ctx,
+			keys,
+			keysZM,
+			obj.rt,
+			true,
+			uint32(i),
+		)
+		if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+			continue
+		}
+		err = obj.containsWithLoad(ctx, txn, keys, sels, uint16(i), isAblk, isCommitting, mp)
 		if err != nil {
-			return
+			return err
 		}
 	}
-	if view.Deletes.Contains(uint64(row)) {
-		err = moerr.NewNotFoundNoCtx()
-		return
-	}
-	view2, err := blk.ResolvePersistedColumnData(ctx, txn, schema, blkID, col, true, mp)
+	return nil
+}
+
+func (obj *baseObject) OnReplayAppend(_ txnif.AppendNode) (err error) {
+	panic("not supported")
+}
+
+func (obj *baseObject) OnReplayAppendPayload(_ *containers.Batch) (err error) {
+	panic("not supported")
+}
+
+func (obj *baseObject) MakeAppender() (appender data.ObjectAppender, err error) {
+	panic("not supported")
+}
+
+func (obj *baseObject) GetTotalChanges() int {
+	return int(obj.meta.Load().GetDeleteCount())
+}
+
+func (obj *baseObject) IsAppendable() bool { return false }
+
+func (obj *baseObject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {
+	rows, err := obj.Rows()
 	if err != nil {
-		return
+		logutil.Warnf("get object rows failed, obj: %v, err: %v", obj.meta.Load().ID().String(), err)
 	}
-	defer view2.Close()
-	isNull = view2.Vecs[0].IsNull(row)
-	if !isNull {
-		v = view2.Vecs[0].Get(row)
-	}
-	return
-}
-
-func (blk *baseObject) DeletesInfo() string {
-	blk.RLock()
-	defer blk.RUnlock()
-	mvcc := blk.tryGetMVCC()
-	if mvcc == nil {
-		return ""
-	}
-	return mvcc.StringLocked(1, 0, "")
-}
-
-func (blk *baseObject) RangeDelete(
-	txn txnif.AsyncTxn,
-	blkID uint16,
-	start, end uint32,
-	pk containers.Vector,
-	dt handle.DeleteType) (node txnif.DeleteNode, err error) {
-	blk.Lock()
-	defer blk.Unlock()
-	blkMVCC := blk.getOrCreateMVCC().GetOrCreateDeleteChainLocked(blkID)
-	if err = blkMVCC.CheckNotDeleted(start, end, txn.GetStartTS()); err != nil {
-		return
-	}
-	node = blkMVCC.CreateDeleteNode(txn, dt)
-	node.RangeDeleteLocked(start, end, pk, common.MutMemAllocator)
-	return
-}
-func (blk *baseObject) GetObjMeta() *catalog.ObjectEntry {
-	return blk.meta.Load()
-}
-func (blk *baseObject) TryDeleteByDeltaloc(
-	txn txnif.AsyncTxn,
-	blkID uint16,
-	deltaLoc objectio.Location) (node txnif.TxnEntry, ok bool, err error) {
-	if blk.meta.Load().IsAppendable() {
-		return
-	}
-	blk.Lock()
-	defer blk.Unlock()
-	if blk.meta.Load().HasDropIntent() {
-		return
-	}
-	blkMVCC := blk.getOrCreateMVCC().GetOrCreateDeleteChainLocked(blkID)
-	return blkMVCC.TryDeleteByDeltalocLocked(txn, deltaLoc, true)
-}
-
-func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {
-	rows, err := blk.Rows()
-	if err != nil {
-		logutil.Warnf("get object rows failed, obj: %v, err: %v", blk.meta.Load().ID().String(), err)
-	}
-	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.Load().PPString(level, depth, prefix), rows)
+	s := fmt.Sprintf("%s | [Rows=%d]", obj.meta.Load().PPString(level, depth, prefix), rows)
 	if level >= common.PPL1 {
-		blk.RLock()
+		obj.RLock()
 		var appendstr, deletestr string
-		if blk.appendMVCC != nil {
-			appendstr = blk.appendMVCC.StringLocked()
+		if obj.appendMVCC != nil {
+			appendstr = obj.appendMVCC.StringLocked()
 		}
-		if mvcc := blk.tryGetMVCC(); mvcc != nil {
-			if blkid >= 0 {
-				deletestr = mvcc.StringBlkLocked(level, 0, "", blkid)
-			} else {
-				deletestr = mvcc.String(level, 0, "")
-			}
-		}
-		blk.RUnlock()
+		obj.RUnlock()
 		if appendstr != "" {
 			s = fmt.Sprintf("%s\n Appends: %s", s, appendstr)
 		}
@@ -837,282 +441,106 @@ func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string, 
 	}
 	return s
 }
-
-func (blk *baseObject) HasDeleteIntentsPreparedIn(from, to types.TS) (found, isPersist bool) {
-	blk.RLock()
-	defer blk.RUnlock()
-	mvcc := blk.tryGetMVCC()
-	if mvcc == nil {
-		return
-	}
-	return mvcc.HasDeleteIntentsPreparedIn(from, to)
-}
-func (blk *baseObject) HasDeleteIntentsPreparedInByBlock(blkID uint16, from, to types.TS) (found, isPersist bool) {
-	blk.RLock()
-	defer blk.RUnlock()
-	mvcc := blk.tryGetMVCC()
-	if mvcc == nil {
-		return
-	}
-	return mvcc.HasInMemoryDeleteIntentsPreparedInByBlock(blkID, from, to)
-}
-func (blk *baseObject) CollectChangesInRange(
+func (obj *baseObject) Scan(
 	ctx context.Context,
+	bat **containers.Batch,
+	txn txnif.TxnReader,
+	readSchema any,
 	blkID uint16,
-	startTs, endTs types.TS,
+	colIdxes []int,
 	mp *mpool.MPool,
-) (view *containers.Batch, err error) {
-	view = containers.NewBatch()
-	view.Deletes, err = blk.inMemoryCollectDeletesInRange(blkID, startTs, endTs)
-	blk.fillPersistedDeletesInRange(ctx, blkID, startTs, endTs, &view.Deletes, mp)
-	return
+) (err error) {
+	node := obj.PinNode()
+	defer node.Unref()
+	return node.Scan(ctx, bat, txn, readSchema.(*catalog.Schema), blkID, colIdxes, mp)
 }
 
-func (blk *baseObject) inMemoryCollectDeletesInRange(blkID uint16, start, end types.TS) (deletes *nulls.Bitmap, err error) {
-	blk.RLock()
-	defer blk.RUnlock()
-	mvcc := blk.tryGetMVCC()
-	if mvcc == nil {
-		return
+func (obj *baseObject) FillBlockTombstones(
+	ctx context.Context,
+	txn txnif.TxnReader,
+	blkID *objectio.Blockid,
+	deletes **nulls.Nulls,
+	mp *mpool.MPool) error {
+	node := obj.PinNode()
+	defer node.Unref()
+	if !obj.meta.Load().IsTombstone {
+		panic("logic err")
 	}
-	blkMvcc := mvcc.TryGetDeleteChain(blkID)
-	if blkMvcc == nil {
-		return
-	}
-	deleteChain := blkMvcc.GetDeleteChain()
-	deletes, err =
-		deleteChain.CollectDeletesInRangeWithLock(start, end, blk.RWMutex)
-	return
+	return node.FillBlockTombstones(ctx, txn, blkID, deletes, mp)
 }
 
-func (blk *baseObject) CollectDeleteInRange(
+func (obj *baseObject) ScanInMemory(
+	ctx context.Context,
+	batches map[uint32]*containers.BatchWithVersion,
+	start, end types.TS,
+	mp *mpool.MPool,
+) (err error) {
+	node := obj.PinNode()
+	defer node.Unref()
+	if node.IsPersisted() {
+		return nil
+	}
+	mnode := node.MustMNode()
+	return mnode.getDataWindowOnWriteSchema(ctx, batches, start, end, mp)
+}
+
+func (obj *baseObject) CollectObjectTombstoneInRange(
 	ctx context.Context,
 	start, end types.TS,
-	withAborted bool,
+	objID *types.Objectid,
+	bat **containers.Batch,
 	mp *mpool.MPool,
-) (bat *containers.Batch, emtpyDelBlkIdx *bitmap.Bitmap, err error) {
-	emtpyDelBlkIdx = &bitmap.Bitmap{}
-	emtpyDelBlkIdx.InitWithSize(int64(blk.meta.Load().BlockCnt()))
-	for blkID := uint16(0); blkID < uint16(blk.meta.Load().BlockCnt()); blkID++ {
-		deletes, err := blk.CollectDeleteInRangeByBlock(ctx, blkID, start, end, withAborted, mp)
+	vpool *containers.VectorPool,
+) (err error) {
+	if !obj.meta.Load().IsTombstone {
+		panic("logic err")
+	}
+	node := obj.PinNode()
+	defer node.Unref()
+	return node.CollectObjectTombstoneInRange(ctx, start, end, objID, bat, mp, vpool)
+}
+
+// TODO: equal filter
+func (obj *baseObject) GetValue(
+	ctx context.Context,
+	txn txnif.AsyncTxn,
+	readSchema any,
+	blkOffset uint16,
+	row, col int,
+	skipCheckDelete bool,
+	mp *mpool.MPool,
+) (v any, isNull bool, err error) {
+	if !obj.meta.Load().IsTombstone && !skipCheckDelete {
+		var bat *containers.Batch
+		blkID := objectio.NewBlockidWithObjectID(obj.meta.Load().ID(), blkOffset)
+		err = HybridScanByBlock(ctx, obj.meta.Load().GetTable(), txn, &bat, readSchema.(*catalog.Schema), []int{col}, blkID, mp)
 		if err != nil {
-			return nil, nil, err
+			return
 		}
-		if deletes == nil || deletes.Length() == 0 {
-			emtpyDelBlkIdx.Add(uint64(blkID))
-		} else {
-			if bat == nil {
-				bat = containers.NewBatch()
-				bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType(), mp))
-				bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), mp))
-				bat.AddVector(catalog.AttrPKVal, containers.MakeVector(*deletes.GetVectorByName(catalog.AttrPKVal).GetType(), mp))
-				if withAborted {
-					bat.AddVector(catalog.AttrAborted, containers.MakeVector(types.T_bool.ToType(), mp))
-				}
-			}
-			bat.Extend(deletes)
-			deletes.Close()
+		defer bat.Close()
+		err = txn.GetStore().FillInWorkspaceDeletes(obj.meta.Load().AsCommonID(), &bat.Deletes)
+		if err != nil {
+			return
 		}
-	}
-	return
-}
-
-func (blk *baseObject) CollectDeleteInRangeByBlock(
-	ctx context.Context,
-	blkID uint16,
-	start, end types.TS,
-	withAborted bool,
-	mp *mpool.MPool) (*containers.Batch, error) {
-	var recorder *common.DeletesCollectRecorder
-	var inst time.Time
-	if v := ctx.Value(common.RecorderKey{}); v != nil {
-		recorder = v.(*common.DeletesCollectRecorder)
-		inst = time.Now()
-	}
-	deletes, minTS, _, err := blk.inMemoryCollectDeleteInRange(
-		ctx,
-		blkID,
-		start,
-		end,
-		withAborted,
-		mp,
-	)
-	if recorder != nil {
-		recorder.MemCost = time.Since(inst)
-	}
-	if err != nil {
-		if deletes != nil {
-			deletes.Close()
+		if bat.Deletes != nil && bat.Deletes.Contains(uint64(row)) {
+			err = moerr.NewNotFoundNoCtx()
+			return
 		}
-		return nil, err
-	}
-	currentEnd := end
-	if !minTS.IsEmpty() && currentEnd.Greater(&minTS) {
-		currentEnd = minTS.Prev()
-	}
-	deletes, err = blk.PersistedCollectDeleteInRange(
-		ctx,
-		deletes,
-		blkID,
-		start,
-		currentEnd,
-		withAborted,
-		mp,
-	)
-	if err != nil {
-		if deletes != nil {
-			deletes.Close()
+		isNull = bat.Vecs[0].IsNull(row)
+		if !isNull {
+			v = bat.Vecs[0].Get(row)
 		}
-		return nil, err
-	}
-	return deletes, nil
-}
-
-func (blk *baseObject) inMemoryCollectDeleteInRange(
-	ctx context.Context,
-	blkID uint16,
-	start, end types.TS,
-	withAborted bool,
-	mp *mpool.MPool,
-) (bat *containers.Batch, minTS, persistedTS types.TS, err error) {
-	blk.RLock()
-	objMVCC := blk.tryGetMVCC()
-	if objMVCC == nil {
-		blk.RUnlock()
 		return
 	}
-	mvcc := objMVCC.TryGetDeleteChain(blkID)
-	blk.RUnlock()
-	if mvcc == nil {
+	var bat *containers.Batch
+	err = obj.Scan(ctx, &bat, txn, readSchema, blkOffset, []int{col}, mp)
+	if err != nil {
 		return
 	}
-	return mvcc.InMemoryCollectDeleteInRange(ctx, start, end, withAborted, mp)
-}
-
-// collect the row if its committs is in [start,end]
-func (blk *baseObject) PersistedCollectDeleteInRange(
-	ctx context.Context,
-	b *containers.Batch,
-	blkID uint16,
-	start, end types.TS,
-	withAborted bool,
-	mp *mpool.MPool,
-) (bat *containers.Batch, err error) {
-	if b != nil {
-		bat = b
+	isNull = bat.Vecs[0].IsNull(row)
+	if !isNull {
+		v = bat.Vecs[0].Get(row)
 	}
-	t := types.T_int64.ToType()
-	sels := blk.rt.VectorPool.Transient.GetVector(&t)
-	defer sels.Close()
-	selsVec := sels.GetDownstreamVector()
-	blk.foreachPersistedDeletesCommittedInRange(
-		ctx,
-		start, end,
-		blkID,
-		!withAborted,
-		func(row int, rowIdVec *vector.Vector) {
-			_ = vector.AppendFixed[int64](selsVec, int64(row), false, mp)
-		},
-		func(delBat *containers.Batch) {
-			if sels.Length() == 0 {
-				return
-			}
-			if bat == nil {
-				bat = containers.NewBatchWithCapacity(len(delBat.Attrs))
-				for i, name := range delBat.Attrs {
-					if !withAborted && name == catalog.AttrAborted {
-						continue
-					}
-					bat.AddVector(
-						name,
-						blk.rt.VectorPool.Transient.GetVector(delBat.Vecs[i].GetType()),
-					)
-				}
-			}
-			for _, name := range bat.Attrs {
-				retVec := bat.GetVectorByName(name)
-				srcVec := delBat.GetVectorByName(name)
-				retVec.PreExtend(sels.Length())
-				retVec.GetDownstreamVector().Union(
-					srcVec.GetDownstreamVector(),
-					vector.MustFixedCol[int64](sels.GetDownstreamVector()),
-					retVec.GetAllocator(),
-				)
-			}
-		},
-		mp,
-	)
-	return bat, nil
-}
-
-func (blk *baseObject) OnReplayDelete(blkID uint16, node txnif.DeleteNode) (err error) {
-	blk.getOrCreateMVCC().GetOrCreateDeleteChainLocked(blkID).OnReplayDeleteNode(node)
-	err = node.OnApply()
+	bat.Close()
 	return
-}
-
-func (blk *baseObject) OnReplayAppend(_ txnif.AppendNode) (err error) {
-	panic("not supported")
-}
-
-func (blk *baseObject) OnReplayAppendPayload(_ *containers.Batch) (err error) {
-	panic("not supported")
-}
-
-func (blk *baseObject) MakeAppender() (appender data.ObjectAppender, err error) {
-	panic("not supported")
-}
-
-func (blk *baseObject) GetTotalChanges() int {
-	blk.RLock()
-	defer blk.RUnlock()
-	objMVCC := blk.tryGetMVCC()
-	if objMVCC == nil {
-		return 0
-	}
-	return int(objMVCC.GetDeleteCnt())
-}
-
-func (blk *baseObject) IsAppendable() bool { return false }
-
-func (blk *baseObject) MutationInfo() string {
-	rows, err := blk.Rows()
-	blk.RLock()
-	defer blk.RUnlock()
-	if err != nil {
-		logutil.Warnf("get object rows failed, obj: %v, err %v", blk.meta.Load().ID().String(), err)
-	}
-	objMVCC := blk.tryGetMVCC()
-	var deleteCnt uint32
-	if objMVCC != nil {
-		deleteCnt = objMVCC.GetDeleteCnt()
-	}
-	s := fmt.Sprintf("Block %s Mutation Info: Changes=%d/%d",
-		blk.meta.Load().AsCommonID().BlockString(),
-		deleteCnt,
-		rows)
-	return s
-}
-
-func (blk *baseObject) CollectAppendInRange(
-	start, end types.TS, withAborted bool, mp *mpool.MPool,
-) (*containers.BatchWithVersion, error) {
-	return nil, nil
-}
-
-func (blk *baseObject) UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLoc objectio.Location) (bool, txnif.TxnEntry, error) {
-	blk.Lock()
-	defer blk.Unlock()
-	mvcc := blk.getOrCreateMVCC().GetOrCreateDeleteChainLocked(blkID)
-	return mvcc.UpdateDeltaLocLocked(txn, deltaLoc, false)
-}
-
-func (blk *baseObject) GetDeltaPersistedTS() types.TS {
-	blk.RLock()
-	defer blk.RUnlock()
-	objMVCC := blk.tryGetMVCC()
-	if objMVCC == nil {
-		return types.TS{}
-	}
-	return objMVCC.GetDeltaPersistedTSLocked()
 }

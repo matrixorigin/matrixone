@@ -38,41 +38,26 @@ drop table clu01;
 drop database test;
 drop snapshot sp01;
 drop database if exists test01;
-
 create database test01;
-
 use test01;
-
 drop table if exists rs01;
-
 create table rs01 (col1 int, col2 decimal(6), col3 varchar(30));
-
 insert into rs01 values (1, null, 'database');
-
 insert into rs01 values (2, 38291.32132, 'database');
-
 insert into rs01 values (3, null, 'database management system');
-
 insert into rs01 values (4, 10, null);
-
 insert into rs01 values (1, -321.321, null);
-
 insert into rs01 values (2, -1, null);
-
 select count(*) from rs01;
 count(*)
 6
 drop snapshot if exists sp01;
-
 create snapshot sp01 for cluster;
-
 select count(*) from rs01 {snapshot = 'sp01'};
 count(*)
 6
 insert into rs01 values (2, -1, null);
-
 insert into rs01 values (1, -321.321, null);
-
 select * from rs01;
 col1    col2    col3
 1    null    database
@@ -88,35 +73,57 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-288962    test01    def    create database test01    0    1    2024-07-04 11:11:09    0    
+272562    test01    def    create database test01    0    1    2024-08-28 11:23:19    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
-__mo_fake_pk_col
-__mo_rowid
 col1
 col2
 col3
+__mo_fake_pk_col
+__mo_rowid
 restore account sys from snapshot sp01;
 select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 user_id    user_name    creator    owner    default_role
 0    root    0    0    0
 1    dump    0    0    0
 select count(*) from rs01 {snapshot = 'sp01'};
-
+count(*)
+6
 select count(*) from rs01 {snapshot = 'sp01'};
-
+count(*)
+6
+select count(*) from rs01 {snapshot = 'sp01'};
+count(*)
+6
+select count(*) from rs01 {snapshot = 'sp01'};
+count(*)
+6
+select count(*) from rs01 {snapshot = 'sp01'};
+count(*)
+6
 select * from rs01 {snapshot = 'sp01'};
-
+col1    col2    col3
+1    null    database
+2    38291    database
+3    null    database management system
+4    10    null
+1    -321    null
+2    -1    null
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
-
+count(*)
+1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
-
+dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
+272562    test01    def    create database test01    0    1    2024-08-28 11:23:19    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
-
+attname
+col1
+col2
+col3
+__mo_fake_pk_col
+__mo_rowid
 drop snapshot sp01;
-
 drop database test01;
-
 use mo_catalog;
 drop table if exists cluster01;
 create cluster table cluster01(col1 int,col2 bigint);
@@ -270,10 +277,10 @@ count(*)
 14
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `deptno` INT UNSIGNED NOT NULL COMMENT '部门编号',\n  `dname` VARCHAR(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` VARCHAR(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
 show create table aff01;
 Table    Create Table
-aff01    CREATE TABLE `aff01` (\n  `empno` INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` VARCHAR(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` VARCHAR(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` INT UNSIGNED DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` DATE DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` DECIMAL(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` DECIMAL(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` INT UNSIGNED DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 drop snapshot if exists sp04;
 create snapshot sp04 for cluster;
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp04'} where reldatabase = 'test03';
@@ -284,19 +291,19 @@ dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    cr
 303195    test03    def    create database test03    0    1    2024-07-08 17:35:47    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
 attname
+empno
+ename
+job
+mgr
+hiredate
+sal
+comm
+deptno
 __mo_rowid
 deptno
 dname
 loc
 __mo_rowid
-comm
-deptno
-empno
-ename
-hiredate
-job
-mgr
-sal
 show snapshots where snapshot_name = 'sp04';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
 sp04    2024-07-08 09:35:47.77113    cluster            
@@ -356,10 +363,10 @@ user_id    user_name    creator    owner    default_role
 use test03;
 show create table aff01;
 Table    Create Table
-aff01    CREATE TABLE `aff01` (\n  `empno` INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` VARCHAR(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` VARCHAR(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` INT UNSIGNED DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` DATE DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` DECIMAL(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` DECIMAL(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` INT UNSIGNED DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `deptno` INT UNSIGNED NOT NULL COMMENT '部门编号',\n  `dname` VARCHAR(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` VARCHAR(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
 select count(*) from aff01;
 count(*)
 14
@@ -499,13 +506,13 @@ cool1    col2
 3    4
 show create table test01.t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `col1` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+t1    CREATE TABLE `t1` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
 show create table test02.t2;
 Table    Create Table
-t2    CREATE TABLE `t2` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+t2    CREATE TABLE `t2` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show create table test03.t2;
 Table    Create Table
-t2    CREATE TABLE `t2` (\n  `cool1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  PRIMARY KEY (`cool1`)\n)
+t2    CREATE TABLE `t2` (\n  `cool1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`cool1`)\n)
 drop database test01;
 drop database test02;
 drop database test03;
@@ -600,7 +607,7 @@ alter table table01 drop primary key;
 insert into table02 values(134, 'database');
 show create table table01;
 Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  `col3` CHAR(1) DEFAULT NULL,\n  `col4` VARCHAR(20) DEFAULT NULL,\n  `col5` TEXT DEFAULT NULL,\n  `col6` DOUBLE DEFAULT NULL,\n  UNIQUE KEY `col2` (`col2`)\n)
+table01    CREATE TABLE `table01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` char(1) DEFAULT NULL,\n  `col4` varchar(20) DEFAULT NULL,\n  `col5` text DEFAULT NULL,\n  `col6` double DEFAULT NULL,\n  UNIQUE KEY `col2` (`col2`)\n)
 drop snapshot if exists sp10;
 create snapshot sp10 for cluster;
 show snapshots;
@@ -627,7 +634,7 @@ count(*)
 2
 show create table table01;
 Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  `col3` CHAR(1) DEFAULT NULL,\n  `col4` VARCHAR(20) DEFAULT NULL,\n  `col5` TEXT DEFAULT NULL,\n  `col6` DOUBLE DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `col2` (`col2`)\n)
+table01    CREATE TABLE `table01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` char(1) DEFAULT NULL,\n  `col4` varchar(20) DEFAULT NULL,\n  `col5` text DEFAULT NULL,\n  `col6` double DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `col2` (`col2`)\n)
 restore account sys from snapshot sp10;
 select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 user_id    user_name    creator    owner    default_role
@@ -642,7 +649,7 @@ count(*)
 2
 show create table db02.table01;
 Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  `col3` CHAR(1) DEFAULT NULL,\n  `col4` VARCHAR(20) DEFAULT NULL,\n  `col5` TEXT DEFAULT NULL,\n  `col6` DOUBLE DEFAULT NULL,\n  UNIQUE KEY `col2` (`col2`)\n)
+table01    CREATE TABLE `table01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` char(1) DEFAULT NULL,\n  `col4` varchar(20) DEFAULT NULL,\n  `col5` text DEFAULT NULL,\n  `col6` double DEFAULT NULL,\n  UNIQUE KEY `col2` (`col2`)\n)
 select * from db02.table02;
 col1    col2
 133    database
@@ -666,16 +673,16 @@ create  table ti2(a INT primary key AUTO_INCREMENT, b INT, c INT);
 create  table tm2(a INT primary key AUTO_INCREMENT, b INT, c INT);
 show create table ti1;
 Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 show create table tm1;
 Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 show create table ti2;
 Table    Create Table
-ti2    CREATE TABLE `ti2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+ti2    CREATE TABLE `ti2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show create table tm2;
 Table    Create Table
-tm2    CREATE TABLE `tm2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+tm2    CREATE TABLE `tm2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 drop snapshot if exists sp11;
 create snapshot sp11 for cluster;
 insert into ti1 values (1,1,1), (2,2,2);
@@ -718,30 +725,30 @@ alter table ti1 add constraint fi1 foreign key (b) references ti2(a);
 alter table tm1 add constraint fm1 foreign key (b) references tm2(a);
 show create table ti1;
 Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table ti1{snapshot = 'sp13'};
 Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 show create table tm1;
 Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  CONSTRAINT `fm1` FOREIGN KEY (`b`) REFERENCES `tm2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fm1` FOREIGN KEY (`b`) REFERENCES `tm2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table tm1{snapshot = 'sp13'};
 Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 drop snapshot if exists sp14;
 create snapshot sp14 for cluster;
 show create table ti1 {snapshot = 'sp14'};
 Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table tm1 {snapshot = 'sp13'};
 Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 show create table ti1 {snapshot = 'sp14'};
 Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table tm1 {snapshot = 'sp13'};
 Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 alter table ti1 drop foreign key fi1;
 alter table tm1 drop foreign key fm1;
 truncate ti2;
@@ -750,16 +757,16 @@ drop snapshot if exists sp15;
 create snapshot sp15 for cluster;
 show create table ti1 {snapshot = 'sp14'};
 Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table tm1 {snapshot = 'sp15'};
 Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 show create table ti1 {snapshot = 'sp14'};
 Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table tm1 {snapshot = 'sp15'};
 Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 select count(*) from ti1;
 count(*)
 2
@@ -798,16 +805,16 @@ select * from db03.tm2;
 a    b    c
 show create table db03.ti1;
 Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 show create table db03.tm1;
 Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 show create table db03.ti2;
 Table    Create Table
-ti2    CREATE TABLE `ti2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+ti2    CREATE TABLE `ti2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show create table db03.tm2;
 Table    Create Table
-tm2    CREATE TABLE `tm2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+tm2    CREATE TABLE `tm2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 restore account sys from snapshot sp14;
 select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 user_id    user_name    creator    owner    default_role
@@ -842,16 +849,16 @@ a    b    c
 2    2    2
 show create table db03.ti1;
 Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table db03.tm1;
 Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  CONSTRAINT `fm1` FOREIGN KEY (`b`) REFERENCES `tm2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fm1` FOREIGN KEY (`b`) REFERENCES `tm2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table db03.ti2;
 Table    Create Table
-ti2    CREATE TABLE `ti2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+ti2    CREATE TABLE `ti2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show create table db03.tm2;
 Table    Create Table
-tm2    CREATE TABLE `tm2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+tm2    CREATE TABLE `tm2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 drop database db03;
 drop snapshot sp15;
 drop snapshot sp14;
@@ -952,7 +959,7 @@ insert into index01 values (1);
 insert into index01 values (2);
 show create table db07.table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` ENUM('a','b','c') DEFAULT NULL\n)
+table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
 drop snapshot if exists sp14;
 create snapshot sp14 for cluster;
 use db07;
@@ -960,10 +967,10 @@ drop table table01;
 alter table table02 add column newC int first;
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n  `newC` INT DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col2` ENUM('a','b','c') DEFAULT NULL\n)
+table02    CREATE TABLE `table02` (\n  `newC` int DEFAULT NULL,\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
 show create table table02 {snapshot = 'sp14'};
 Table    Create Table
-table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` ENUM('a','b','c') DEFAULT NULL\n)
+table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
 drop database db08;
 drop snapshot if exists sp15;
 create snapshot sp15 for cluster;
@@ -987,7 +994,7 @@ Tables_in_db07
 table02
 show create table table01 {snapshot = 'sp14'};
 Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` INT NOT NULL AUTO_INCREMENT,\n  `col2` ENUM('a','b','c') DEFAULT NULL\n)
+table01    CREATE TABLE `table01` (\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
 show create table table01;
 no such table db07.table01
 select * from table01;
@@ -1084,10 +1091,10 @@ col1    col2    col3    col4
 3    1981-02-20    Bob    22
 show create table index01;
 Table    Create Table
-index01    CREATE TABLE `index01` (\n  `col1` INT NOT NULL,\n  `col2` DATE NOT NULL,\n  `col3` VARCHAR(16) NOT NULL,\n  `col4` INT UNSIGNED NOT NULL,\n  PRIMARY KEY (`col1`)\n)
+index01    CREATE TABLE `index01` (\n  `col1` int NOT NULL,\n  `col2` date NOT NULL,\n  `col3` varchar(16) NOT NULL,\n  `col4` int unsigned NOT NULL,\n  PRIMARY KEY (`col1`)\n)
 show create table index02;
 Table    Create Table
-index02    CREATE TABLE `index02` (\n  `col1` CHAR(1) DEFAULT NULL,\n  `col2` INT DEFAULT NULL,\n  `col3` BINARY(1) DEFAULT NULL,\n  KEY `pk` (`col1`) COMMENT 'primary key'\n)
+index02    CREATE TABLE `index02` (\n  `col1` char(1) DEFAULT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` binary(1) DEFAULT NULL,\n  KEY `pk` (`col1`) COMMENT 'primary key'\n)
 use db10;
 select * from index03;
 emp_no    birth_date    first_name    last_name    gender    hire_date
@@ -1095,7 +1102,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp16    2024-07-08 09:35:54.686691    cluster            
+sp16    2024-08-26 04:02:21.809805    cluster
 drop database db09;
 drop database db10;
 drop snapshot sp16;
@@ -1120,7 +1127,7 @@ create snapshot sp18 for cluster;
 restore account sys database db11 table pri01 from snapshot sp18;
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 select * from pri01;
 col1    col2
 1    2378
@@ -1133,7 +1140,7 @@ count(*)
 restore account sys database db11 table pri01 from snapshot sp17;
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+pri01    CREATE TABLE `pri01` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
 select * from pri01;
 col1    col2
 1    2378
@@ -1144,7 +1151,7 @@ count(*)
 restore account sys database db11 table pri01 from snapshot sp18;
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 select * from pri01;
 col1    col2
 1    2378
@@ -1164,38 +1171,33 @@ col1    col2
 23420    32432543
 show columns from pri01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DECIMAL(38)    YES        null        
+col1    INT(32)    NO    PRI    null
+col2    DECIMAL(38)    YES        null
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp18'} where reldatabase = 'db11';
 count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp18'} where datname = 'db11';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-303452    db11    def    create database db11    0    1    2024-07-08 17:35:55    0    
+272812    db11    def    create database db11    0    1    2024-08-26 12:02:22    0
 select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database = 'db11';
 attname
-__mo_rowid
 col1
 col2
+__mo_rowid
 drop database db11;
 drop snapshot sp18;
 drop snapshot sp17;
 drop database if exists test_fk;
-
 create database test_fk;
-
 use test_fk;
-
 CREATE TABLE Students (
 StudentID INT PRIMARY KEY,
 Name VARCHAR(100)
 );
-
 CREATE TABLE Courses (
 CourseID INT PRIMARY KEY,
 CourseName VARCHAR(100)
 );
-
 CREATE TABLE Enrollments (
 EnrollmentID INT PRIMARY KEY AUTO_INCREMENT,
 StudentID INT,
@@ -1204,40 +1206,41 @@ Grade CHAR(2),
 FOREIGN KEY (StudentID) REFERENCES Students(StudentID),
 FOREIGN KEY (CourseID) REFERENCES Courses(CourseID)
 );
-
 INSERT INTO Students (StudentID, Name) VALUES (1, 'Alice');
-
 INSERT INTO Students (StudentID, Name) VALUES (2, 'Bob');
-
 INSERT INTO Courses (CourseID, CourseName) VALUES (101, 'Mathematics');
-
 INSERT INTO Courses (CourseID, CourseName) VALUES (102, 'Physics');
-
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 101, 'A');
-
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 102, 'B');
-
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (2, 101, 'B');
-
 drop snapshot if exists sp_fk;
-
 create snapshot sp_fk for cluster;
-
 restore account sys database test_fk table Students from snapshot sp_fk;
-
 restore account sys database test_fk table Courses from snapshot sp_fk;
-
 restore account sys database test_fk table Enrollments from snapshot sp_fk;
-
 show databases;
-
+Database
+cluster_level_snapshot_restore_to_sys_account
+information_schema
+mo_catalog
+mo_debug
+mo_task
+mysql
+system
+system_metrics
+test_fk
 select * from Students;
-
+studentid    name
+1    Alice
+2    Bob
 select * from Courses;
-
+courseid    coursename
+101    Mathematics
+102    Physics
 select * from Enrollments;
-
+enrollmentid    studentid    courseid    grade
+1    1    101    A
+2    1    102    B
+3    2    101    B
 drop snapshot sp_fk;
-
 drop database test_fk;
-

@@ -32,6 +32,7 @@ func (r *Reader) GetDirty() (tree *model.Tree, count int) {
 	tree = model.NewTree()
 	op := func(row RowT) (moveOn bool) {
 		if memo := row.GetMemo(); memo.HasAnyTableDataChanges() {
+			row.GetTxnState(true)
 			tree.Merge(memo.GetDirty())
 		}
 		count++

@@ -16,8 +16,6 @@ package mergerecursive
 
 import (
 	"bytes"
-	"sync/atomic"
-
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -34,7 +32,6 @@ func (mergeRecursive *MergeRecursive) OpType() vm.OpType {
 }
 
 func (mergeRecursive *MergeRecursive) Prepare(proc *process.Process) error {
-	mergeRecursive.ctr = new(container)
 	return nil
 }
 
@@ -46,10 +43,11 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 	anal := proc.GetAnalyze(mergeRecursive.GetIdx(), mergeRecursive.GetParallelIdx(), mergeRecursive.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+	ctr := &mergeRecursive.ctr
 
 	result := vm.NewCallResult()
 	var err error
-	for !mergeRecursive.ctr.last {
+	for !ctr.last {
 		result, err = mergeRecursive.GetChildren(0).Call(proc)
 		if err != nil {
 			return result, err
@@ -61,10 +59,26 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 			return result, nil
 		}
 		if bat.Last() {
-			mergeRecursive.ctr.last = true
+			ctr.last = true
 		}
-		atomic.AddInt64(&bat.Cnt, 1)
-		mergeRecursive.ctr.bats = append(mergeRecursive.ctr.bats, bat)
+
+		if len(ctr.freeBats) > ctr.i {
+			if ctr.freeBats[ctr.i] != nil {
+				ctr.freeBats[ctr.i].CleanOnlyData()
+			}
+			ctr.freeBats[ctr.i], err = ctr.freeBats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+			if err != nil {
+				return result, err
+			}
+		} else {
+			appBat, err := result.Batch.Dup(proc.Mp())
+			if err != nil {
+				return result, err
+			}
+			ctr.freeBats = append(ctr.freeBats, appBat)
+		}
+		mergeRecursive.ctr.bats = append(mergeRecursive.ctr.bats, ctr.freeBats[ctr.i])
+		ctr.i++
 	}
 	mergeRecursive.ctr.buf = mergeRecursive.ctr.bats[0]
 	mergeRecursive.ctr.bats = mergeRecursive.ctr.bats[1:]
@@ -74,7 +88,6 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 	}
 
 	if mergeRecursive.ctr.buf.End() {
-		mergeRecursive.ctr.buf.Clean(proc.Mp())
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil

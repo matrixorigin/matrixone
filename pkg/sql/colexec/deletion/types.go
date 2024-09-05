@@ -34,9 +34,15 @@ import (
 
 var _ vm.Operator = new(Deletion)
 
-const (
+// make it mutable in ut
+var (
 	flushThreshold = 32 * mpool.MB
 )
+
+// SetCNFlushDeletesThreshold update threshold to n MB
+func SetCNFlushDeletesThreshold(n int) {
+	flushThreshold = n * mpool.MB
+}
 
 type BatchPool struct {
 	pools []*batch.Batch
@@ -57,9 +63,9 @@ func (pool *BatchPool) get() *batch.Batch {
 
 // for now, we won't do compaction for cn block
 type container struct {
-	blockId_bitmap                 map[types.Blockid]*nulls.Nulls
-	partitionId_blockId_rowIdBatch map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
-	partitionId_blockId_deltaLoc   map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> MetaLocation
+	blockId_bitmap                       map[types.Blockid]*nulls.Nulls
+	partitionId_blockId_rowIdBatch       map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
+	partitionId_tombstoneObjectStatsBats map[int][]*batch.Batch                 // PartitionId -> tombstone object stats
 	// don't flush cn block rowId and rawBatch
 	// we just do compaction for cn block in the
 	// future
@@ -73,11 +79,11 @@ type container struct {
 	resBat           *batch.Batch
 	source           engine.Relation
 	partitionSources []engine.Relation // Align array index with the partition number
+	affectedRows     uint64
 }
 type Deletion struct {
-	ctr          *container
-	DeleteCtx    *DeleteCtx
-	affectedRows uint64
+	ctr       container
+	DeleteCtx *DeleteCtx
 
 	// for delete filter below
 	// mp[segmentId] = 1 => txnWorkSpace,mp[segmentId] = 2 => CN Block
@@ -136,48 +142,74 @@ type DeleteCtx struct {
 }
 
 func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	deletion.Free(proc, pipelineFailed, err)
+	ctr := &deletion.ctr
+	ctr.state = vm.Build
+	if deletion.RemoteDelete {
+		for k := range ctr.blockId_bitmap {
+			delete(ctr.blockId_bitmap, k)
+		}
+		for pidx, blockidRowidbatch := range ctr.partitionId_blockId_rowIdBatch {
+			for blkid, bat := range blockidRowidbatch {
+				if bat != nil {
+					bat.Clean(proc.GetMPool())
+				}
+				delete(blockidRowidbatch, blkid)
+			}
+			delete(ctr.partitionId_blockId_rowIdBatch, pidx)
+		}
+
+		for pIdx, bats := range ctr.partitionId_tombstoneObjectStatsBats {
+			for _, bat := range bats {
+				if bat != nil {
+					bat.Clean(proc.GetMPool())
+				}
+			}
+			delete(ctr.partitionId_tombstoneObjectStatsBats, pIdx)
+		}
+
+		for blkid := range ctr.blockId_type {
+			delete(ctr.blockId_type, blkid)
+		}
+		for _, bat := range ctr.pool.pools {
+			bat.Clean(proc.GetMPool())
+		}
+		ctr.pool.pools = ctr.pool.pools[:0]
+	}
+
+	if ctr.resBat != nil {
+		ctr.resBat.CleanOnlyData()
+	}
+
+	ctr.partitionSources = nil
+	ctr.source = nil
+
+	ctr.batch_size = 0
+	ctr.deleted_length = 0
 }
 
 // delete from t1 using t1 join t2 on t1.a = t2.a;
 func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &deletion.ctr
 	if deletion.RemoteDelete {
 		deletion.SegmentMap = nil
-		if deletion.ctr != nil {
-			for _, blockId_rowIdBatch := range deletion.ctr.partitionId_blockId_rowIdBatch {
-				for _, bat := range blockId_rowIdBatch {
-					if bat != nil {
-						bat.Clean(proc.GetMPool())
-					}
-				}
-			}
-			for _, blockId_metaLoc := range deletion.ctr.partitionId_blockId_deltaLoc {
-				for _, bat := range blockId_metaLoc {
-					if bat != nil {
-						bat.Clean(proc.GetMPool())
-					}
-				}
-			}
-			deletion.ctr.blockId_bitmap = nil
-			deletion.ctr.partitionId_blockId_rowIdBatch = nil
-			deletion.ctr.partitionId_blockId_deltaLoc = nil
-			deletion.ctr.blockId_type = nil
-			deletion.ctr.pool = nil
-		}
+		ctr.blockId_bitmap = nil
+		ctr.partitionId_blockId_rowIdBatch = nil
+		ctr.partitionId_tombstoneObjectStatsBats = nil
+		ctr.blockId_type = nil
+		ctr.pool = nil
 	}
-	if deletion.ctr != nil {
-		if deletion.ctr.resBat != nil {
-			deletion.ctr.resBat.Clean(proc.Mp())
-			deletion.ctr.resBat = nil
-		}
-		deletion.ctr.partitionSources = nil
-		deletion.ctr.source = nil
-		deletion.ctr = nil
+
+	if ctr.resBat != nil {
+		ctr.resBat.Clean(proc.GetMPool())
+		ctr.resBat = nil
 	}
+
+	ctr.partitionSources = nil
+	ctr.source = nil
 }
 
 func (deletion *Deletion) AffectedRows() uint64 {
-	return deletion.affectedRows
+	return deletion.ctr.affectedRows
 }
 
 func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch) error {
@@ -196,14 +228,14 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch)
 			return err
 		}
 		for i, delBatch := range delBatches {
-			deletion.collectBatchInfo(proc, srcBat, i, 1)
-			proc.PutBatch(delBatch)
+			collectBatchInfo(proc, deletion, delBatch, 0, i, 1)
+			delBatch.Clean(proc.GetMPool())
 		}
 	} else {
-		deletion.collectBatchInfo(proc, srcBat, 0, delCtx.PrimaryKeyIdx)
+		collectBatchInfo(proc, deletion, srcBat, deletion.DeleteCtx.RowIdIdx, 0, delCtx.PrimaryKeyIdx)
 	}
 	// we will flush all
-	if deletion.ctr.batch_size >= flushThreshold {
+	if deletion.ctr.batch_size >= uint32(flushThreshold) {
 		size, err := deletion.ctr.flush(proc)
 		if err != nil {
 			return err
@@ -234,40 +266,35 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 		for _, blkid := range blkids {
 			bat := blockId_rowIdBatch[blkid]
 
-			err = s3writer.WriteBatch(proc, bat)
-			if err != nil {
-				return 0, err
-			}
+			s3writer.StashBatch(proc, bat)
 			resSize += uint32(bat.Size())
 			bat.CleanOnlyData()
 			ctr.pool.put(bat)
 			delete(blockId_rowIdBatch, blkid)
 		}
 
-		blkInfos, _, err := s3writer.Sync(proc)
+		_, stats, err := s3writer.SortAndSync(proc)
 		if err != nil {
 			return 0, err
 		}
-		for i, blkInfo := range blkInfos {
-			if _, has := ctr.partitionId_blockId_deltaLoc[pidx]; !has {
-				ctr.partitionId_blockId_deltaLoc[pidx] = make(map[types.Blockid]*batch.Batch)
-			}
-			blockId_deltaLoc := ctr.partitionId_blockId_deltaLoc[pidx]
-			if _, ok := blockId_deltaLoc[blkids[i]]; !ok {
-				bat := batch.New(false, []string{catalog.BlockMeta_DeltaLoc})
-				bat.SetVector(0, proc.GetVector(types.T_text.ToType()))
-				blockId_deltaLoc[blkids[i]] = bat
-			}
-			bat := blockId_deltaLoc[blkids[i]]
-			vector.AppendBytes(bat.GetVector(0), []byte(blkInfo.MetaLocation().String()), false, proc.GetMPool())
+
+		bat := batch.New(false, []string{catalog.ObjectMeta_ObjectStats})
+		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		if err = vector.AppendBytes(
+			bat.GetVector(0), stats.Marshal(), false, proc.GetMPool()); err != nil {
+			return 0, err
 		}
+
+		bat.SetRowCount(bat.Vecs[0].Length())
+		ctr.partitionId_tombstoneObjectStatsBats[pidx] =
+			append(ctr.partitionId_tombstoneObjectStatsBats[pidx], bat)
 	}
 	return resSize, nil
 }
 
 // Collect relevant information about intermediate batche
-func (deletion *Deletion) collectBatchInfo(proc *process.Process, destBatch *batch.Batch, pIdx int, pkIdx int) {
-	vs := vector.MustFixedCol[types.Rowid](destBatch.GetVector(int32(deletion.DeleteCtx.RowIdIdx)))
+func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batch.Batch, rowIdIdx int, pIdx int, pkIdx int) {
+	vs := vector.MustFixedCol[types.Rowid](destBatch.GetVector(int32(rowIdIdx)))
 	var bitmap *nulls.Nulls
 	for i, rowId := range vs {
 		blkid := rowId.CloneBlockID()
@@ -302,9 +329,7 @@ func (deletion *Deletion) collectBatchInfo(proc *process.Process, destBatch *bat
 			var tmpBat *batch.Batch
 			tmpBat = deletion.ctr.pool.get()
 			if tmpBat == nil {
-				tmpBat = batch.New(false, []string{catalog.Row_ID, "pk"})
-				tmpBat.SetVector(0, proc.GetVector(types.T_Rowid.ToType()))
-				tmpBat.SetVector(1, proc.GetVector(*destBatch.GetVector(int32(pkIdx)).GetType()))
+				tmpBat = makeDelBatch(*destBatch.GetVector(int32(pkIdx)).GetType())
 			}
 			blockIdRowIdBatchMap[blkid] = tmpBat
 			deletion.ctr.partitionId_blockId_rowIdBatch[pIdx] = blockIdRowIdBatchMap
@@ -314,9 +339,7 @@ func (deletion *Deletion) collectBatchInfo(proc *process.Process, destBatch *bat
 				var bat *batch.Batch
 				bat = deletion.ctr.pool.get()
 				if bat == nil {
-					bat = batch.New(false, []string{catalog.Row_ID, "pk"})
-					bat.SetVector(0, proc.GetVector(types.T_Rowid.ToType()))
-					bat.SetVector(1, proc.GetVector(*destBatch.GetVector(int32(pkIdx)).GetType()))
+					bat = makeDelBatch(*destBatch.GetVector(int32(pkIdx)).GetType())
 				}
 				blockIdRowIdBatchMap[blkid] = bat
 			}
@@ -332,7 +355,32 @@ func (deletion *Deletion) collectBatchInfo(proc *process.Process, destBatch *bat
 		batchSize += bat.Size()
 		bat.SetRowCount(bat.Vecs[0].Length())
 	}
+
 	deletion.ctr.batch_size = uint32(batchSize)
+}
+
+func makeDelBatch(pkType types.Type) *batch.Batch {
+	bat := batch.New(false, []string{catalog.Row_ID, "pk"})
+	bat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
+	bat.SetVector(1, vector.NewVec(pkType))
+	return bat
+}
+
+func makeDelRemoteBatch() *batch.Batch {
+	bat := batch.NewWithSize(5)
+	bat.Attrs = []string{
+		catalog.BlockMeta_Delete_ID,
+		catalog.BlockMeta_DeltaLoc,
+		catalog.BlockMeta_Type,
+		catalog.BlockMeta_Partition,
+		catalog.BlockMeta_Deletes_Length,
+	}
+	bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+	bat.SetVector(1, vector.NewVec(types.T_text.ToType()))
+	bat.SetVector(2, vector.NewVec(types.T_int8.ToType()))
+	bat.SetVector(3, vector.NewVec(types.T_int32.ToType()))
+	//bat.Vecs[4] is constant
+	return bat
 }
 
 func getNonNullValue(col *vector.Vector, row uint32) any {

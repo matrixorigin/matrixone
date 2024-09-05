@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -140,6 +141,9 @@ func (h *Handle) GetDB() *db.DB {
 }
 
 func (h *Handle) IsInterceptTable(name string) bool {
+	if name == "bmsql_stock" {
+		return true
+	}
 	printMatchRegexp := h.getInterceptMatchRegexp()
 	if printMatchRegexp == nil {
 		return false
@@ -266,13 +270,15 @@ func (h *Handle) HandlePreCommitWrite(
 				Batch:        moBat,
 				PkCheck:      db.PKCheckType(pe.GetPkCheckByTn()),
 			}
+
 			if req.FileName != "" {
-				loc := req.Batch.Vecs[0]
+				col := req.Batch.Vecs[0]
 				for i := 0; i < req.Batch.RowCount(); i++ {
 					if req.Type == db.EntryInsert {
-						req.MetaLocs = append(req.MetaLocs, loc.GetStringAt(i))
+						req.MetaLocs = append(req.MetaLocs, col.GetStringAt(i))
 					} else {
-						req.DeltaLocs = append(req.DeltaLocs, loc.GetStringAt(i))
+						stats := objectio.ObjectStats(col.GetBytesAt(i))
+						req.TombstoneStats = append(req.TombstoneStats, stats)
 					}
 				}
 			}
@@ -633,15 +639,15 @@ func (h *Handle) HandleWrite(
 	ctx = perfcounter.WithCounterSetFrom(ctx, h.db.Opts.Ctx)
 	switch req.PkCheck {
 	case db.FullDedup:
-		txn.SetDedupType(txnif.FullDedup)
+		txn.SetDedupType(txnif.DedupPolicy_CheckAll)
 	case db.IncrementalDedup:
 		if h.db.Opts.IncrementalDedup {
-			txn.SetDedupType(txnif.IncrementalDedup)
+			txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 		} else {
-			txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
+			txn.SetDedupType(txnif.DedupPolicy_SkipWorkspace)
 		}
 	case db.FullSkipWorkspaceDedup:
-		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
+		txn.SetDedupType(txnif.DedupPolicy_SkipWorkspace)
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s txn: %s",
@@ -682,6 +688,9 @@ func (h *Handle) HandleWrite(
 			statsVec := containers.ToTNVector(statsCNVec, common.WorkspaceAllocator)
 			for i := 0; i < statsVec.Length(); i++ {
 				s := objectio.ObjectStats(statsVec.Get(i).([]byte))
+				if !s.GetCNCreated() {
+					logutil.Fatal("the `CNCreated` mask not set")
+				}
 				delete(metalocations, s.ObjectName().String())
 			}
 			if len(metalocations) != 0 {
@@ -703,10 +712,6 @@ func (h *Handle) HandleWrite(
 				logutil.Errorf("the vec:%d in req.Batch is nil", i)
 				panic("invalid vector : vector is nil")
 			}
-			if vec.Length() == 0 {
-				logutil.Errorf("the vec:%d in req.Batch is empty", i)
-				panic("invalid vector: vector is empty")
-			}
 			if i == 0 {
 				len = vec.Length()
 			}
@@ -716,17 +721,32 @@ func (h *Handle) HandleWrite(
 			}
 		}
 		// TODO: debug for #13342, remove me later
-		if h.IsInterceptTable(tb.Schema().(*catalog.Schema).Name) {
-			if tb.Schema().(*catalog.Schema).HasPK() {
-				idx := tb.Schema().(*catalog.Schema).GetSingleSortKeyIdx()
+		if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {
+			schema := tb.Schema(false).(*catalog.Schema)
+			if schema.HasPK() {
+				pkDef := schema.GetSingleSortKey()
+				idx := pkDef.Idx
+				isCompositeKey := pkDef.IsCompositeColumn()
 				for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
-					logutil.Info(
-						"op1",
-						zap.String("start-ts", txn.GetStartTS().ToString()),
-						zap.String("pk", common.MoVectorToString(req.Batch.Vecs[idx], i)),
-					)
+					if isCompositeKey {
+						pkbuf := req.Batch.Vecs[idx].GetBytesAt(i)
+						tuple, _ := types.Unpack(pkbuf)
+						logutil.Info(
+							"op1",
+							zap.String("txn", txn.String()),
+							zap.String("pk", common.TypeStringValue(*req.Batch.Vecs[idx].GetType(), pkbuf, false)),
+							zap.Any("detail", tuple.SQLStrings(nil)),
+						)
+					} else {
+						logutil.Info(
+							"op1",
+							zap.String("txn", txn.String()),
+							zap.String("pk", common.MoVectorToString(req.Batch.Vecs[idx], i)),
+						)
+					}
 				}
 			}
+
 		}
 		//Appends a batch of data into table.
 		err = AppendDataToTable(ctx, tb, req.Batch)
@@ -742,58 +762,55 @@ func (h *Handle) HandleWrite(
 		}
 		rowidIdx := 0
 		pkIdx := 1
-		for _, key := range req.DeltaLocs {
-			var location objectio.Location
-			location, err = blockio.EncodeLocationFromString(key)
-			if err != nil {
-				return err
-			}
-			var ok bool
-			var vectors []containers.Vector
-			var closeFunc func()
-			//Extend lifetime of vectors is within the function.
-			//No NeedCopy. closeFunc is required after use.
-			//closeFunc is not nil.
-			vectors, closeFunc, err = blockio.LoadTombstoneColumns2(
-				ctx,
-				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
-				nil,
-				h.db.Runtime.Fs.Service,
-				location,
-				false,
-				nil,
-			)
-			if err != nil {
-				return
-			}
-			defer closeFunc()
-			blkids := getBlkIDsFromRowids(vectors[0].GetDownstreamVector())
+
+		var (
+			ok        bool
+			loc       objectio.Location
+			vectors   []containers.Vector
+			closeFunc func()
+		)
+
+		for _, stats := range req.TombstoneStats {
 			id := tb.GetMeta().(*catalog.TableEntry).AsCommonID()
-			if len(blkids) == 1 {
-				for blkID := range blkids {
-					id.BlockID = blkID
-				}
-				ok, err = tb.TryDeleteByDeltaloc(id, location)
-				if err != nil {
-					return
-				}
-				if ok {
-					continue
-				}
-				logutil.Warnf("blk %v try delete by deltaloc failed", id.BlockID.String())
-			} else {
-				logutil.Warnf("multiply blocks in one deltalocation")
+			id.SetObjectID(stats.ObjectName().ObjectId())
+
+			if ok, err = tb.TryDeleteByStats(id, stats); err != nil {
+				logutil.Errorf("try delete by stats faild: %s, %v", stats.String(), err)
+				return err
+			} else if ok {
+				continue
 			}
-			rowIDVec := vectors[0]
-			defer rowIDVec.Close()
-			pkVec := vectors[1]
-			//defer pkVec.Close()
-			if err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
-				return
+
+			logutil.Errorf("try delete by stats faild: %s, try to delete by row id and pk",
+				stats.String())
+
+			for i := range stats.BlkCnt() {
+				loc = stats.BlockLocation(uint16(i), options.DefaultBlockMaxRows)
+				vectors, closeFunc, err = blockio.LoadColumns2(
+					ctx,
+					[]uint16{uint16(rowidIdx), uint16(pkIdx)},
+					nil,
+					h.db.Runtime.Fs.Service,
+					loc,
+					fileservice.Policy(0),
+					false,
+					nil,
+				)
+
+				if err = tb.DeleteByPhyAddrKeys(vectors[0], vectors[1]); err != nil {
+					logutil.Errorf("delete by phyaddr keys faild: %s, %s, [idx]%d, %v",
+						stats.String(), loc.String(), i, err)
+
+					closeFunc()
+					return err
+				}
+
+				closeFunc()
 			}
 		}
 		return
 	}
+
 	if len(req.Batch.Vecs) != 2 {
 		panic(fmt.Sprintf("req.Batch.Vecs length is %d, should be 2", len(req.Batch.Vecs)))
 	}
@@ -802,16 +819,30 @@ func (h *Handle) HandleWrite(
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
-	if h.IsInterceptTable(tb.Schema().(*catalog.Schema).Name) {
-		if tb.Schema().(*catalog.Schema).HasPK() {
+	if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {
+		schema := tb.Schema(false).(*catalog.Schema)
+		if schema.HasPK() {
+			isCompositeKey := schema.GetSingleSortKey().IsCompositeColumn()
 			for i := 0; i < rowIDVec.Length(); i++ {
 				rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
-				logutil.Info(
-					"op2",
-					zap.String("start-ts", txn.GetStartTS().ToString()),
-					zap.String("pk", common.MoVectorToString(req.Batch.Vecs[1], i)),
-					zap.String("rowid", rowID.String()),
-				)
+				if isCompositeKey {
+					pkbuf := req.Batch.Vecs[1].GetBytesAt(i)
+					tuple, _ := types.Unpack(pkbuf)
+					logutil.Info(
+						"op2",
+						zap.String("txn", txn.String()),
+						zap.String("pk", common.TypeStringValue(*req.Batch.Vecs[1].GetType(), pkbuf, false)),
+						zap.String("rowid", rowID.String()),
+						zap.Any("detail", tuple.SQLStrings(nil)),
+					)
+				} else {
+					logutil.Info(
+						"op2",
+						zap.String("txn", txn.String()),
+						zap.String("pk", common.MoVectorToString(req.Batch.Vecs[1], i)),
+						zap.String("rowid", rowID.String()),
+					)
+				}
 			}
 		}
 	}

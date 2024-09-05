@@ -616,5 +616,5 @@ drop database test03;
 drop database test05;
 drop snapshot sp100;
 drop snapshot sp101;
-
-
+-- @ignore:1
+show snapshots;

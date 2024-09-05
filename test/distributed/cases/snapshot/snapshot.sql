@@ -90,3 +90,5 @@ select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select count(*) from cluster01{snapshot = `_binary`};
 drop snapshot if exists `_binary`;
 drop table if exists cluster01;
+-- @ignore:1
+show snapshots;

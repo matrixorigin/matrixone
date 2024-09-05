@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	gotrace "runtime/trace"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -116,11 +117,11 @@ func (c *Compile) Compile(
 	c.proc.ReplaceTopCtx(topContext)
 
 	// from plan to scope.
-	if c.scope, err = c.compileScope(queryPlan); err != nil {
+	if c.scopes, err = c.compileScope(queryPlan); err != nil {
 		return err
 	}
 	// todo: this is redundant.
-	for _, s := range c.scope {
+	for _, s := range c.scopes {
 		if len(s.NodeInfo.Addr) == 0 {
 			s.NodeInfo.Addr = c.addr
 		}
@@ -204,7 +205,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	for {
 		// build query context and pipeline contexts for the current run.
 		runC.InitPipelineContextToExecuteQuery()
-
+		runC.MessageBoard.BeforeRunonce()
 		if err = runC.runOnce(); err == nil {
 			break
 		}
@@ -249,6 +250,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		return nil, err
 	}
 	queryResult.AffectRows = runC.getAffectedRows()
+	if c.uid != "mo_logger" && strings.Contains(strings.ToLower(c.sql), "insert") && (strings.Contains(c.sql, "{MO_TS =") || strings.Contains(c.sql, "{SNAPSHOT =")) {
+		getLogger(c.proc.GetService()).Info("insert into with snapshot", zap.String("sql", c.sql), zap.Uint64("affectRows", queryResult.AffectRows))
+	}
 	if txnOperator != nil {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
 	}
@@ -312,7 +316,7 @@ func (c *Compile) InitPipelineContextToExecuteQuery() {
 
 	// build pipeline context.
 	currentContext := c.proc.BuildPipelineContext(queryContext)
-	for _, pipeline := range c.scope {
+	for _, pipeline := range c.scopes {
 		if pipeline.Proc == nil {
 			continue
 		}

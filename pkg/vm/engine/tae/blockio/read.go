@@ -89,10 +89,10 @@ func ReadDataByFilter(
 			return deleteMask.Contains(uint64(i))
 		})
 	}
-	sels, err = ds.ApplyTombstones(ctx, info.BlockID, sels)
-	if err != nil {
+	if len(sels) == 0 {
 		return
 	}
+	sels, err = ds.ApplyTombstones(ctx, info.BlockID, sels, engine.Policy_CheckAll)
 	return
 }
 
@@ -142,7 +142,7 @@ func BlockDataReadNoCopy(
 	}
 
 	// merge deletes from tombstones
-	deleteMask.Merge(tombstones)
+	deleteMask.Or(tombstones)
 
 	// build rowid column if needed
 	if rowidPos >= 0 {
@@ -178,7 +178,8 @@ func BlockDataRead(
 	vp engine.VectorPool,
 	policy fileservice.Policy,
 	tableName string,
-) (*batch.Batch, error) {
+	bat *batch.Batch,
+) error {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
 	}
@@ -200,7 +201,7 @@ func BlockDataRead(
 			ctx, sid, info, ds, filterSeqnums, filterColTypes,
 			types.TimestampToTS(ts), searchFunc, fs, mp, tableName,
 		); err != nil {
-			return nil, err
+			return err
 		}
 		v2.TaskSelReadFilterTotal.Inc()
 		if len(sels) == 0 {
@@ -211,28 +212,20 @@ func BlockDataRead(
 		}
 
 		if len(sels) == 0 {
-			result := batch.NewWithSize(len(colTypes))
-			for i, typ := range colTypes {
-				if vp == nil {
-					result.Vecs[i] = vector.NewVec(typ)
-				} else {
-					result.Vecs[i] = vp.GetVector(typ)
-				}
-			}
-			return result, nil
+			return nil
 		}
 	}
 
-	columnBatch, err := BlockDataReadInner(
+	err = BlockDataReadInner(
 		ctx, sid, info, ds, columns, colTypes,
-		types.TimestampToTS(ts), sels, fs, mp, vp, policy,
+		types.TimestampToTS(ts), sels, fs, mp, vp, policy, bat,
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	columnBatch.SetRowCount(columnBatch.Vecs[0].Length())
-	return columnBatch, nil
+	bat.SetRowCount(bat.Vecs[0].Length())
+	return nil
 }
 
 func BlockCompactionRead(
@@ -275,6 +268,61 @@ func BlockCompactionRead(
 	return result, nil
 }
 
+func windowCNBatch(bat *batch.Batch, start, end uint64) error {
+	var err error
+	for i, vec := range bat.Vecs {
+		bat.Vecs[i], err = vec.Window(int(start), int(end))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func BlockDataReadBackup(
+	ctx context.Context,
+	sid string,
+	info *objectio.BlockInfo,
+	ds engine.DataSource,
+	ts types.TS,
+	fs fileservice.FileService,
+) (loaded *batch.Batch, sortKey uint16, err error) {
+	// read block data from storage specified by meta location
+	loaded, sortKey, err = LoadOneBlock(ctx, fs, info.MetaLocation(), objectio.SchemaData)
+	if err != nil {
+		return
+	}
+	if !ts.IsEmpty() {
+		commitTs := types.TS{}
+		for v := 0; v < loaded.Vecs[0].Length(); v++ {
+			err = commitTs.Unmarshal(loaded.Vecs[len(loaded.Vecs)-1].GetRawBytesAt(v))
+			if err != nil {
+				return
+			}
+			if commitTs.Greater(&ts) {
+				err = windowCNBatch(loaded, 0, uint64(v))
+				if err != nil {
+					return
+				}
+				logutil.Debug("[BlockDataReadBackup]",
+					zap.String("commitTs", commitTs.ToString()),
+					zap.String("ts", ts.ToString()),
+					zap.String("location", info.MetaLocation().String()))
+				break
+			}
+		}
+	}
+	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
+	if err != nil {
+		return
+	}
+	rows := tombstones.ToI64Arrary()
+	if len(rows) > 0 {
+		loaded.Shrink(rows, true)
+	}
+	return
+}
+
 // BlockDataReadInner only read data,don't apply deletes.
 func BlockDataReadInner(
 	ctx context.Context,
@@ -289,7 +337,8 @@ func BlockDataReadInner(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 	policy fileservice.Policy,
-) (result *batch.Batch, err error) {
+	bat *batch.Batch,
+) (err error) {
 	var (
 		rowidPos    int
 		deletedRows []int64
@@ -306,7 +355,7 @@ func BlockDataReadInner(
 	}
 	defer release()
 	// assemble result batch for return
-	result = batch.NewWithSize(len(loaded.Vecs))
+	//result = batch.NewWithSize(len(loaded.Vecs))
 
 	if len(selectRows) > 0 {
 		// NOTE: it always goes here if there is a filter and the block is sorted
@@ -319,32 +368,26 @@ func BlockDataReadInner(
 			); err != nil {
 				return
 			}
+			defer func() {
+				loaded.Vecs[rowidPos].Free(mp)
+			}()
 		}
 
 		// assemble result batch only with selected rows
 		for i, col := range loaded.Vecs {
 			typ := *col.GetType()
 			if typ.Oid == types.T_Rowid {
-				result.Vecs[i] = col
+				err = bat.Vecs[i].UnionBatch(col, 0, col.Length(), nil, mp)
+				if err != nil {
+					return
+				}
 				continue
 			}
-			if vp == nil {
-				result.Vecs[i] = vector.NewVec(typ)
-			} else {
-				result.Vecs[i] = vp.GetVector(typ)
-			}
-			if err = result.Vecs[i].PreExtendWithArea(len(selectRows), 0, mp); err != nil {
+			if err = bat.Vecs[i].PreExtendWithArea(len(selectRows), 0, mp); err != nil {
 				break
 			}
-			if err = result.Vecs[i].Union(col, selectRows, mp); err != nil {
+			if err = bat.Vecs[i].Union(col, selectRows, mp); err != nil {
 				break
-			}
-		}
-		if err != nil {
-			for _, col := range result.Vecs {
-				if col != nil {
-					col.Free(mp)
-				}
 			}
 		}
 		return
@@ -356,7 +399,7 @@ func BlockDataReadInner(
 	}
 
 	// merge deletes from tombstones
-	deleteMask.Merge(tombstones)
+	deleteMask.Or(tombstones)
 
 	// Note: it always goes here if no filter or the block is not sorted
 
@@ -377,39 +420,20 @@ func BlockDataReadInner(
 		); err != nil {
 			return
 		}
+		defer func() {
+			loaded.Vecs[rowidPos].Free(mp)
+		}()
 	}
 
 	// assemble result batch
 	for i, col := range loaded.Vecs {
 		typ := *col.GetType()
-
-		if typ.Oid == types.T_Rowid {
-			// rowid is already allocted by the mpool, no need to create a new vector
-			result.Vecs[i] = col
-		} else {
-			// for other types, we need to create a new vector
-			if vp == nil {
-				result.Vecs[i] = vector.NewVec(typ)
-			} else {
-				result.Vecs[i] = vp.GetVector(typ)
-			}
-			// copy the data from loaded vector to result vector
-			// TODO: avoid this allocation and copy
-			if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], col); err != nil {
-				break
-			}
+		// TODO: avoid this allocation and copy
+		if err = vector.GetUnionAllFunction(typ, mp)(bat.Vecs[i], col); err != nil {
+			break
 		}
 		if len(deletedRows) > 0 {
-			result.Vecs[i].Shrink(deletedRows, true)
-		}
-	}
-
-	// if any error happens, free the result batch allocated
-	if err != nil {
-		for _, col := range result.Vecs {
-			if col != nil {
-				col.Free(mp)
-			}
+			bat.Vecs[i].Shrink(deletedRows, true)
 		}
 	}
 	return
@@ -508,7 +532,8 @@ func readBlockData(
 	readABlkColumns := func(cols []uint16) (result *batch.Batch, deletes nulls.Bitmap, err error) {
 		var loaded *batch.Batch
 		// appendable block should be filtered by committs
-		cols = append(cols, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT) // committs, aborted
+		//cols = append(cols, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT) // committs, aborted
+		cols = append(cols, objectio.SEQNUM_COMMITTS) // committs, aborted
 
 		// no need to add typs, the two columns won't be generated
 		if result, loaded, err = readColumns(cols); err != nil {
@@ -516,10 +541,10 @@ func readBlockData(
 		}
 
 		t0 := time.Now()
-		aborts := vector.MustFixedCol[bool](loaded.Vecs[len(loaded.Vecs)-1])
-		commits := vector.MustFixedCol[types.TS](loaded.Vecs[len(loaded.Vecs)-2])
+		//aborts := vector.MustFixedCol[bool](loaded.Vecs[len(loaded.Vecs)-1])
+		commits := vector.MustFixedCol[types.TS](loaded.Vecs[len(loaded.Vecs)-1])
 		for i := 0; i < len(commits); i++ {
-			if aborts[i] || commits[i].Greater(&ts) {
+			if commits[i].Greater(&ts) {
 				deletes.Add(uint64(i))
 			}
 		}
@@ -553,12 +578,16 @@ func ReadBlockDeleteBySchema(
 	ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService, isPersistedByCN bool,
 ) (bat *batch.Batch, release func(), err error) {
 	var cols []uint16
+	var typs []types.Type
+
 	if isPersistedByCN {
-		cols = []uint16{0, 1}
+		cols = []uint16{0}
+		typs = []types.Type{types.T_Rowid.ToType()}
 	} else {
-		cols = []uint16{0, 1, 2, 3}
+		cols = []uint16{0, objectio.SEQNUM_COMMITTS}
+		typs = []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType()}
 	}
-	bat, release, err = LoadTombstoneColumns(ctx, cols, nil, fs, deltaloc, nil)
+	bat, release, err = LoadTombstoneColumns(ctx, cols, typs, fs, deltaloc, nil, fileservice.Policy(0))
 	return
 }
 
@@ -589,23 +618,24 @@ func EvalDeleteRowsByTimestamp(
 
 	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
 	tss := vector.MustFixedCol[types.TS](deletes.Vecs[1])
-	aborts := deletes.Vecs[3]
+	//aborts := deletes.Vecs[3]
 
 	start, end := FindIntervalForBlock(rowids, blockid)
 
-	for i := start; i < end; i++ {
-		abort := vector.GetFixedAt[bool](aborts, i)
-		if abort || tss[i].Greater(&ts) {
+	for i := end - 1; i >= start; i-- {
+		if tss[i].Greater(&ts) {
 			continue
 		}
 		row := rowids[i].GetRowOffset()
 		rows.Add(uint64(row))
 	}
+
 	return
 }
 
 func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
-	blkID types.Blockid, deletes *batch.Batch,
+	bid types.Blockid,
+	deletes *batch.Batch,
 ) (rows *nulls.Bitmap) {
 	if deletes == nil {
 		return
@@ -614,7 +644,8 @@ func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
 	rows = nulls.NewWithSize(0)
 	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
 
-	start, end := FindIntervalForBlock(rowids, &blkID)
+	start, end := FindIntervalForBlock(rowids, &bid)
+
 	for i := start; i < end; i++ {
 		row := rowids[i].GetRowOffset()
 		rows.Add(uint64(row))
@@ -717,4 +748,45 @@ func FindIntervalForBlock(rowids []types.Rowid, id *types.Blockid) (start int, e
 	}
 	end = i
 	return
+}
+
+func FillBlockDeleteMask(
+	ctx context.Context,
+	snapshotTS types.TS,
+	blockId types.Blockid,
+	location objectio.Location,
+	fs fileservice.FileService,
+) (deleteMask *nulls.Nulls, err error) {
+	var (
+		rows *nulls.Nulls
+		//bisect           time.Duration
+		release          func()
+		persistedByCN    bool
+		persistedDeletes *batch.Batch
+	)
+
+	if !location.IsEmpty() {
+		//t1 := time.Now()
+
+		if persistedDeletes, persistedByCN, release, err = ReadBlockDelete(ctx, location, fs); err != nil {
+			return nil, err
+		}
+		defer release()
+
+		//readCost := time.Since(t1)
+
+		if persistedByCN {
+			rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(blockId, persistedDeletes)
+		} else {
+			//t2 := time.Now()
+			rows = EvalDeleteRowsByTimestamp(persistedDeletes, snapshotTS, &blockId)
+			//bisect = time.Since(t2)
+		}
+
+		if rows != nil {
+			deleteMask = rows
+		}
+	}
+
+	return deleteMask, nil
 }

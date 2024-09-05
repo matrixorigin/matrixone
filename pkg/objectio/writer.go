@@ -73,7 +73,13 @@ const (
 	WriterTmp
 )
 
-const ObjectSizeLimit = 3 * mpool.GB
+// make it mutable in ut
+var ObjectSizeLimit = 3 * mpool.GB
+
+// SetObjectSizeLimit set ObjectSizeLimit to limit Bytes
+func SetObjectSizeLimit(limit int) {
+	ObjectSizeLimit = limit
+}
 
 func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.FileService) (*objectWriterV1, error) {
 	var name ObjectName
@@ -412,7 +418,7 @@ func (w *objectWriterV1) writerBlocks(blocks []blockData) error {
 			size += uint64(len(block.data[idx]))
 		}
 	}
-	if size > ObjectSizeLimit {
+	if size > uint64(ObjectSizeLimit) {
 		return moerr.NewErrTooLargeObjectSizeNoCtx(size)
 	}
 	return nil
@@ -487,8 +493,9 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 			metaHeader.SetDataMetaOffset(idxStart)
 			metaHeader.SetDataMetaCount(uint16(len(w.blocks[i])))
 		} else if i == int(SchemaTombstone) {
-			metaHeader.SetTombstoneMetaOffset(idxStart)
-			metaHeader.SetTombstoneMetaCount(uint16(len(w.blocks[SchemaTombstone])))
+			if len(w.blocks[i]) != 0 {
+				panic("invalid data meta type")
+			}
 		} else {
 			subMetachIndex.SetSchemaMeta(uint16(i-2), uint16(i-2), uint16(len(w.blocks[i])), idxStart)
 		}

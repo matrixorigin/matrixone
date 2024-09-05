@@ -27,7 +27,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2024-07-04 08:02:33.937343    cluster            
+sp01    2024-07-04 08:02:33.937343    cluster
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 insert into s3t values (300001, 34, 23, 1);
@@ -88,7 +88,7 @@ avg(col1)
 15000.5
 show create table s3t;
 Table    Create Table
-s3t    CREATE TABLE `s3t` (\n  `col1` INT NOT NULL,\n  `col2` INT NOT NULL,\n  `col3` INT DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
+s3t    CREATE TABLE `s3t` (\n  `col1` int NOT NULL,\n  `col2` int NOT NULL,\n  `col3` int DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
 restore account acc01 from snapshot sp01;
 show databases;
 Database
@@ -116,7 +116,7 @@ count(*)
 30000
 show create table s3t;
 Table    Create Table
-s3t    CREATE TABLE `s3t` (\n  `col1` INT NOT NULL,\n  `col2` INT NOT NULL,\n  `col4` INT DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
+s3t    CREATE TABLE `s3t` (\n  `col1` int NOT NULL,\n  `col2` int NOT NULL,\n  `col4` int DEFAULT NULL,\n  `col3` int DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
 drop snapshot sp01;
 drop snapshot sp02;
 drop database acc_test01;
@@ -208,10 +208,10 @@ deptno    dname    loc
 40    OPERATIONS    BOSTON
 show create table acc_test02.pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `deptno` INT UNSIGNED NOT NULL COMMENT '部门编号',\n  `dname` VARCHAR(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` VARCHAR(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
 show create table acc_test02.aff01;
 Table    Create Table
-aff01    CREATE TABLE `aff01` (\n  `empno` INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` VARCHAR(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` VARCHAR(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` INT UNSIGNED DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` DATE DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` DECIMAL(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` DECIMAL(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` INT UNSIGNED DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 select count(*) from acc_test03.table01;
 count(*)
 2
@@ -226,22 +226,22 @@ count(*)
 2
 show create table acc_test03.table01;
 Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  `col3` CHAR(1) DEFAULT NULL,\n  `col4` VARCHAR(20) DEFAULT NULL,\n  `col5` TEXT DEFAULT NULL,\n  `col6` DOUBLE DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+table01    CREATE TABLE `table01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` char(1) DEFAULT NULL,\n  `col4` varchar(20) DEFAULT NULL,\n  `col5` text DEFAULT NULL,\n  `col6` double DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show create table acc_test03.table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(20) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 show create table acc_test03.table03;
 Table    Create Table
-table03    CREATE TABLE `table03` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+table03    CREATE TABLE `table03` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show create table acc_test03.table04;
 Table    Create Table
-table04    CREATE TABLE `table04` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+table04    CREATE TABLE `table04` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 select count(*) from acc_test04.index03;
 count(*)
 2
 show create table acc_test04.index03;
 Table    Create Table
-index03    CREATE TABLE `index03` (\n  `emp_no` INT NOT NULL,\n  `birth_date` DATE NOT NULL,\n  `first_name` VARCHAR(14) NOT NULL,\n  `last_name` VARCHAR(16) NOT NULL,\n  `gender` VARCHAR(5) NOT NULL,\n  `hire_date` DATE NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
+index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
 drop snapshot if exists sp04;
 create snapshot sp04 for cluster;
 insert into acc_test02.pri01 values (50,'ACCOUNTING','NEW YORK');
@@ -268,7 +268,7 @@ a    b    c
 10000    1    2
 show create table acc_test04.index03;
 Table    Create Table
-index03    CREATE TABLE `index03` (\n  `emp_no` INT NOT NULL,\n  `birth_date` DATE NOT NULL,\n  `first_name` VARCHAR(14) NOT NULL,\n  `last_name` VARCHAR(16) NOT NULL,\n  `gender` VARCHAR(5) NOT NULL,\n  `hire_date` DATE NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
+index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
 restore account acc01 from snapshot sp04;
 show databases;
 Database
@@ -326,8 +326,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2024-07-04 08:02:40.632236    cluster            
-sp07    2024-07-04 08:02:40.526937    cluster            
+sp08    2024-07-04 08:02:40.632236    cluster
+sp07    2024-07-04 08:02:40.526937    cluster
 use test01;
 create table table03 (col1 int);
 insert into table03 values (1),(2);
@@ -357,7 +357,7 @@ col1    col2
 134    database
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(20) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 drop database test01;
 drop snapshot sp07;
 drop snapshot sp08;
@@ -384,7 +384,7 @@ show create table table01;
 no such table test02.table01
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  `new` DECIMAL(38,0) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(20) DEFAULT NULL,\n  `new` decimal(38,0) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 insert into table02 values(139, 'database', null);
 alter table table02 drop column new;
 restore account acc01 from snapshot sp10;
@@ -393,7 +393,7 @@ show create table table01;
 no such table test02.table01
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  `new` DECIMAL(38,0) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(20) DEFAULT NULL,\n  `new` decimal(38,0) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 select * from table02;
 col1    col2    new
 133    database    null
@@ -474,16 +474,16 @@ create  table ti2(a INT primary key AUTO_INCREMENT, b INT, c INT);
 create  table tm2(a INT primary key AUTO_INCREMENT, b INT, c INT);
 show create table ti1;
 Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 show create table tm1;
 Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 show create table ti2;
 Table    Create Table
-ti2    CREATE TABLE `ti2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+ti2    CREATE TABLE `ti2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show create table tm2;
 Table    Create Table
-tm2    CREATE TABLE `tm2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+tm2    CREATE TABLE `tm2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 insert into ti1 values (1,1,1), (2,2,2);
 insert into ti2 values (1,1,1), (2,2,2);
 drop snapshot if exists clu01;
@@ -584,7 +584,7 @@ create snapshot sp18 for cluster;
 restore account acc01 database db11 table pri01 from snapshot sp17;
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+pri01    CREATE TABLE `pri01` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
 select * from pri01;
 col1    col2
 1    2378
@@ -595,7 +595,7 @@ count(*)
 restore account acc01 database db11 table pri01 from snapshot sp18;
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 select * from pri01;
 col1    col2
 1    2378
@@ -626,21 +626,16 @@ drop database db11;
 drop snapshot sp17;
 drop snapshot sp18;
 drop database if exists test_fk;
-
 create database test_fk;
-
 use test_fk;
-
 CREATE TABLE Students (
 StudentID INT PRIMARY KEY,
 Name VARCHAR(100)
 );
-
 CREATE TABLE Courses (
 CourseID INT PRIMARY KEY,
 CourseName VARCHAR(100)
 );
-
 CREATE TABLE Enrollments (
 EnrollmentID INT PRIMARY KEY AUTO_INCREMENT,
 StudentID INT,
@@ -649,41 +644,44 @@ Grade CHAR(2),
 FOREIGN KEY (StudentID) REFERENCES Students(StudentID),
 FOREIGN KEY (CourseID) REFERENCES Courses(CourseID)
 );
-
 INSERT INTO Students (StudentID, Name) VALUES (1, 'Alice');
-
 INSERT INTO Students (StudentID, Name) VALUES (2, 'Bob');
-
 INSERT INTO Courses (CourseID, CourseName) VALUES (101, 'Mathematics');
-
 INSERT INTO Courses (CourseID, CourseName) VALUES (102, 'Physics');
-
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 101, 'A');
-
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 102, 'B');
-
 INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (2, 101, 'B');
-
 drop snapshot if exists sp_fk;
-
-create snapshot sp_fk for account sys;
-
-restore account sys database test_fk table Students from snapshot sp_fk;
-
-restore account sys database test_fk table Courses from snapshot sp_fk;
-
-restore account sys database test_fk table Enrollments from snapshot sp_fk;
-
+create snapshot sp_fk for account acc01;
+restore account acc01 database test_fk table Students from snapshot sp_fk;
+restore account acc01 database test_fk table Courses from snapshot sp_fk;
+restore account acc01 database test_fk table Enrollments from snapshot sp_fk;
 show databases;
-
+Database
+acc_test02
+acc_test04
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+test_fk
+use test_fk;
 select * from Students;
-
+studentid    name
+1    Alice
+2    Bob
 select * from Courses;
-
+courseid    coursename
+101    Mathematics
+102    Physics
 select * from Enrollments;
-
+enrollmentid    studentid    courseid    grade
+1    1    101    A
+2    1    102    B
+3    2    101    B
 drop snapshot sp_fk;
-
+drop database test_fk;
 drop account acc01;
 drop account acc02;
 drop account acc03;

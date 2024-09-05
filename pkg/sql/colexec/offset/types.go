@@ -16,6 +16,7 @@ package offset
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -28,9 +29,10 @@ type container struct {
 	seen           uint64 // seen is the number of tuples seen so far
 	offset         uint64
 	offsetExecutor colexec.ExpressionExecutor
+	buf            *batch.Batch
 }
 type Offset struct {
-	ctr        *container
+	ctr        container
 	OffsetExpr *plan.Expr
 
 	vm.OperatorBase
@@ -73,16 +75,23 @@ func (offset *Offset) Release() {
 }
 
 func (offset *Offset) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	offset.Free(proc, pipelineFailed, err)
+	if offset.ctr.offsetExecutor != nil {
+		offset.ctr.offsetExecutor.ResetForNextQuery()
+	}
+	if offset.ctr.buf != nil {
+		offset.ctr.buf.CleanOnlyData()
+	}
+	offset.ctr.seen = 0
 }
 
 func (offset *Offset) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if offset.ctr != nil {
-		if offset.ctr.offsetExecutor != nil {
-			offset.ctr.offsetExecutor.Free()
-			offset.ctr.offsetExecutor = nil
-		}
-		offset.ctr = nil
+	if offset.ctr.offsetExecutor != nil {
+		offset.ctr.offsetExecutor.Free()
+		offset.ctr.offsetExecutor = nil
 	}
 
+	if offset.ctr.buf != nil {
+		offset.ctr.buf.Clean(proc.GetMPool())
+		offset.ctr.buf = nil
+	}
 }

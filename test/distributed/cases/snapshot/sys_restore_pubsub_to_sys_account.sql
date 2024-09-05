@@ -618,3 +618,5 @@ drop snapshot sp105;
 drop account acc01;
 drop account acc02;
 drop account acc03;
+-- @ignore:1
+show snapshots;

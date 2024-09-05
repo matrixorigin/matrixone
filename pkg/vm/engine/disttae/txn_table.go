@@ -102,7 +102,7 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 		return nil, err
 	}
 	e := tbl.db.getEng()
-	approxObjectNum := int64(partitionState.ApproxObjectsNum())
+	approxObjectNum := int64(partitionState.ApproxDataObjectsNum())
 	if approxObjectNum == 0 {
 		// There are no objects flushed yet.
 		return nil, nil
@@ -225,7 +225,7 @@ func ForeachVisibleDataObject(
 	fn func(obj logtailreplay.ObjectEntry) error,
 	executor ConcurrentExecutor,
 ) (err error) {
-	iter, err := state.NewObjectsIter(ts, true)
+	iter, err := state.NewObjectsIter(ts, true, false)
 	if err != nil {
 		return err
 	}
@@ -257,7 +257,7 @@ func (tbl *txnTable) ApproxObjectsNum(ctx context.Context) int {
 	if err != nil {
 		return 0
 	}
-	return part.ApproxObjectsNum()
+	return part.ApproxDataObjectsNum()
 }
 
 func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
@@ -369,7 +369,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	if err != nil {
 		return nil, err
 	}
-	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxObjectsNum())
+	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxDataObjectsNum())
 	var updateMu sync.Mutex
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
@@ -451,101 +451,6 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	return infoList, nil
 }
 
-func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionState) []types.Blockid {
-	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
-	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
-
-	dirtyBlks := make([]types.Blockid, 0)
-	for blk := range tbl.getTxn().blockId_tn_delete_metaLoc_batch.data {
-		if !state.BlockPersisted(blk) {
-			continue
-		}
-		dirtyBlks = append(dirtyBlks, blk)
-	}
-	return dirtyBlks
-}
-
-func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (err error) {
-	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
-	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
-
-	bats, ok := tbl.getTxn().blockId_tn_delete_metaLoc_batch.data[bid]
-	if !ok {
-		return nil
-	}
-	for _, bat := range bats {
-		vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
-		for i := range vs {
-			location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
-			if err != nil {
-				return err
-			}
-			rowIdBat, release, err := blockio.LoadTombstoneColumns(
-				tbl.getTxn().proc.Ctx,
-				[]uint16{0},
-				nil,
-				tbl.getTxn().engine.fs,
-				location,
-				tbl.getTxn().proc.GetMPool())
-			if err != nil {
-				return err
-			}
-			defer release()
-			rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
-			for _, rowId := range rowIds {
-				_, offset := rowId.Decode()
-				*offsets = append(*offsets, int64(offset))
-			}
-		}
-	}
-	return nil
-}
-
-// LoadDeletesForMemBlocksIn loads deletes for memory blocks whose data resides in PartitionState.rows
-func (tbl *txnTable) LoadDeletesForMemBlocksIn(
-	state *logtailreplay.PartitionState,
-	deletesRowId map[types.Rowid]uint8,
-) error {
-
-	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
-	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
-
-	for blk, bats := range tbl.getTxn().blockId_tn_delete_metaLoc_batch.data {
-		//if blk is in partitionState.blks, it means that blk is persisted.
-		if state.BlockPersisted(blk) {
-			continue
-		}
-		for _, bat := range bats {
-			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
-			for i := range vs {
-				location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
-				if err != nil {
-					return err
-				}
-				rowIdBat, release, err := blockio.LoadTombstoneColumns(
-					tbl.getTxn().proc.Ctx,
-					[]uint16{0},
-					nil,
-					tbl.getTxn().engine.fs,
-					location,
-					tbl.getTxn().proc.GetMPool())
-				if err != nil {
-					return err
-				}
-				defer release()
-				rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
-				for _, rowId := range rowIds {
-					if deletesRowId != nil {
-						deletesRowId[rowId] = 0
-					}
-				}
-			}
-		}
-
-	}
-	return nil
-}
-
 func (tbl *txnTable) GetEngineType() engine.EngineType {
 	return engine.Disttae
 }
@@ -554,11 +459,10 @@ func (tbl *txnTable) resetSnapshot() {
 	tbl._partState.Store(nil)
 }
 
-// CollectTombstones collects in memory tombstones and tombstone objects.
 func (tbl *txnTable) CollectTombstones(
 	ctx context.Context, txnOffset int,
 ) (engine.Tombstoner, error) {
-	tombstone := NewEmptyTombstoneWithDeltaLoc()
+	tombstone := NewEmptyTombstoneData()
 
 	offset := txnOffset
 	if tbl.db.op.IsSnapOp() {
@@ -588,15 +492,12 @@ func (tbl *txnTable) CollectTombstones(
 				//deletes in txn.Write maybe comes from PartitionState.Rows ,
 				// PartitionReader need to skip them.
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				for _, v := range vs {
-					bid, o := v.Decode()
-					tombstone.inMemTombstones[bid] = append(tombstone.inMemTombstones[bid], int32(o))
-				}
+				tombstone.rowids = append(tombstone.rowids, vs...)
 			}
 		})
 
 	//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
-	tbl.getTxn().deletedBlocks.getDeletedRowIDs(tombstone.inMemTombstones)
+	tbl.getTxn().deletedBlocks.getDeletedRowIDs(&tombstone.rowids)
 
 	//collect committed in-memory tombstones from partition state.
 	state, err := tbl.getPartitionState(ctx)
@@ -608,21 +509,23 @@ func (tbl *txnTable) CollectTombstones(
 		iter := state.NewRowsIter(types.TimestampToTS(ts), nil, true)
 		for iter.Next() {
 			entry := iter.Entry()
-			bid, o := entry.RowID.Decode()
-			tombstone.inMemTombstones[bid] = append(tombstone.inMemTombstones[bid], int32(o))
+			//bid, o := entry.RowID.Decode()
+			tombstone.rowids = append(tombstone.rowids, entry.RowID)
 		}
 		iter.Close()
 	}
 
 	//collect uncommitted persisted tombstones.
-	if err := tbl.getTxn().getUncommittedS3Tombstone(tombstone.blk2UncommitLoc); err != nil {
+	if err := tbl.getTxn().getUncommittedS3Tombstone(&tombstone.files); err != nil {
 		return nil, err
 	}
+
+	tombstone.SortInMemory()
 	//collect committed persisted tombstones from partition state.
-	if err = state.GetTombstoneDeltaLocs(tombstone.blk2CommitLoc); err != nil {
-		return nil, err
-	}
-	return tombstone, nil
+	//state.GetTombstoneDeltaLocs(tombstone.blk2CommitLoc)
+	snapshot := types.TimestampToTS(tbl.db.op.Txn().SnapshotTS)
+	err = state.CollectTombstoneObjects(snapshot, &tombstone.files)
+	return tombstone, err
 }
 
 // Ranges returns all unmodified blocks from the table.
@@ -913,13 +816,6 @@ func (tbl *txnTable) rangesOnePart(
 
 				blk.Sorted = obj.Sorted
 				blk.Appendable = obj.Appendable
-				blk.CommitTs = obj.CommitTS
-				//if obj.HasDeltaLoc {
-				//	_, commitTs, ok := state.GetBlockDeltaLoc(blk.BlockID)
-				//	if ok {
-				//		blk.CommitTs = commitTs
-				//	}
-				//}
 
 				outBlocks.AppendBlockInfo(blk)
 
@@ -1540,12 +1436,12 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 //	blkId(string)     deltaLoc(string)                   type(int)
 //
 // |-----------|-----------------------------------|----------------|
-// |  blk_id   |   batch.Marshal(deltaLoc)         |  FlushDeltaLoc | TN Block
+// |  obj_id   |   object stats                    |  FlushDeltaLoc | TN Block
 // |  blk_id   |   batch.Marshal(uint32 offset)    |  CNBlockOffset | CN Block
 // |  blk_id   |   batch.Marshal(rowId)            |  RawRowIdBatch | TN Blcok
 // |  blk_id   |   batch.Marshal(uint32 offset)    | RawBatchOffset | RawBatch (in txn workspace)
 func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
-	blkId, typ_str := objectio.Str2Blockid(name[:len(name)-2]), string(name[len(name)-1])
+	_, typ_str := objectio.Str2Blockid(name[:len(name)-2]), string(name[len(name)-1])
 	typ, err := strconv.ParseInt(typ_str, 10, 64)
 	if err != nil {
 		return err
@@ -1553,24 +1449,19 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	switch typ {
 	case deletion.FlushDeltaLoc:
 		tbl.getTxn().hasS3Op.Store(true)
-		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].UnsafeGetStringAt(0))
-		if err != nil {
-			return err
-		}
-		fileName := location.Name().String()
+		stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(0))
+		fileName := stats.ObjectLocation().String()
 		copBat, err := util.CopyBatch(bat, tbl.getTxn().proc)
 		if err != nil {
 			return err
 		}
+
 		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
 			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.getTxn().tnStores[0]); err != nil {
 			return err
 		}
 
-		tbl.getTxn().blockId_tn_delete_metaLoc_batch.RWMutex.Lock()
-		tbl.getTxn().blockId_tn_delete_metaLoc_batch.data[*blkId] =
-			append(tbl.getTxn().blockId_tn_delete_metaLoc_batch.data[*blkId], copBat)
-		tbl.getTxn().blockId_tn_delete_metaLoc_batch.RWMutex.Unlock()
+		tbl.getTxn().StashFlushedTombstones(stats)
 
 	case deletion.CNBlockOffset:
 	case deletion.RawBatchOffset:
@@ -1609,10 +1500,10 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 // TODO:: do prefetch read and parallel compaction
 func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64,
-) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
+) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
 	s3writer, err := colexec.NewS3Writer(tbl.getTxn().proc, tbl.tableDef, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, objectio.ObjectStats{}, err
 	}
 	tbl.ensureSeqnumsAndTypesExpectRowid()
 
@@ -1627,7 +1518,7 @@ func (tbl *txnTable) compaction(
 			tbl.getTxn().engine.fs,
 			tbl.getTxn().proc.GetMPool())
 		if e != nil {
-			return nil, nil, e
+			return nil, objectio.ObjectStats{}, e
 		}
 		if bat.RowCount() == 0 {
 			continue
@@ -2001,13 +1892,6 @@ func (tbl *txnTable) PKPersistedBetween(
 
 					blk.Sorted = obj.Sorted
 					blk.Appendable = obj.Appendable
-					blk.CommitTs = obj.CommitTS
-					if obj.HasDeltaLoc {
-						_, commitTs, ok := p.GetBlockDeltaLoc(blk.BlockID)
-						if ok {
-							blk.CommitTs = commitTs
-						}
-					}
 					blk.PartitionNum = -1
 					candidateBlks[blk.BlockID] = &blk
 					return true
@@ -2187,7 +2071,7 @@ func (tbl *txnTable) MergeObjects(
 		return nil, err
 	}
 
-	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost)
+	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost, false)
 	if err != nil {
 		taskHost.commitEntry.Err = err.Error()
 		return taskHost.commitEntry, err
