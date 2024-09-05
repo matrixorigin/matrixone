@@ -416,7 +416,6 @@ func (c *Compile) FreeOperator() {
 	}
 }
 
-/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)
@@ -425,7 +424,7 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
-*/
+
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
@@ -453,7 +452,7 @@ func (c *Compile) runOnce() error {
 		_, _ = GetCompileService().removeRunningCompile(c)
 	}()
 
-	//c.printPipeline()
+	c.printPipeline()
 
 	for i := range c.scopes {
 		wg.Add(1)
@@ -2483,6 +2482,7 @@ func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildSco
 
 	if len(rs) == 1 { // broadcast join on single cn
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, rs[0].RootOp, int32(rs[0].NodeInfo.Mcpu)))
+		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 		return rs
 	}
 
@@ -2524,11 +2524,6 @@ func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildSco
 	}
 	buildScopes[0].setRootOperator(constructDispatch(0, buildOpScopes, buildScopes[0], node, false))
 	return rs
-}
-
-func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
-	rs := c.compileProbeSideForBoradcastJoin(node, left, right, probeScopes)
-	return c.compileBuildSideForBoradcastJoin(node, rs, buildScopes)
 }
 
 func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
