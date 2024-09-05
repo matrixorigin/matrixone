@@ -2094,7 +2094,7 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	objStats := make([]objectio.ObjectStats, 0, tbl.ApproxObjectsNum(ctx))
 
 	err = ForeachVisibleDataObject(state, snapshot, func(obj logtailreplay.ObjectEntry) error {
-		if obj.Appendable {
+		if obj.GetAppendable() {
 			return nil
 		}
 		if sortKeyPos != -1 {
