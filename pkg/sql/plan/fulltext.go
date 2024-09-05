@@ -23,7 +23,8 @@ import (
 
 // coldef shall copy index type
 var (
-	fulltext_index_scan_func_name = "fulltext_index_scan"
+	fulltext_index_scan_func_name     = "fulltext_index_scan"
+	fulltext_index_tokenize_func_name = "fulltext_index_tokenize"
 
 	ftIndexColdefs = []*plan.ColDef{
 		// row_id type should be same as index type
@@ -40,6 +41,54 @@ var (
 				Id:          int32(types.T_float32),
 				NotNullable: false,
 				Width:       4,
+			},
+		},
+	}
+
+	tokenizeColDefs = []*plan.ColDef{
+		// row_id type should be same as index type
+		{
+			Name: "doc_id",
+			Typ: plan.Type{
+				Id:          int32(types.T_any),
+				NotNullable: false,
+			},
+		},
+		{
+			Name: "pos",
+			Typ: plan.Type{
+				Id:          int32(types.T_int32),
+				NotNullable: false,
+				Width:       4,
+			},
+		},
+		{
+			Name: "word",
+			Typ: plan.Type{
+				Id:          int32(types.T_varchar),
+				NotNullable: false,
+			},
+		},
+		{
+			Name: "doc_count",
+			Typ: plan.Type{
+				Id:          int32(types.T_int32),
+				NotNullable: false,
+				Width:       4,
+			},
+		},
+		{
+			Name: "first_doc_id",
+			Typ: plan.Type{
+				Id:          int32(types.T_any),
+				NotNullable: false,
+			},
+		},
+		{
+			Name: "last_doc_id",
+			Typ: plan.Type{
+				Id:          int32(types.T_any),
+				NotNullable: false,
 			},
 		},
 	}
@@ -103,4 +152,57 @@ func (builder *QueryBuilder) getFullTextColDefs(fn *tree.FuncExpr) ([]*plan.ColD
 	}
 
 	return coldefs, nil
+}
+
+// select * from index_table, fulltext_index_tokenize(doc_id, concat(body, ' ', title))
+// arg list [doc_id, content]
+func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+
+	if len(exprs) != 2 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 2).")
+	}
+
+	colDefs := _getColDefs(tokenizeColDefs)
+
+	scanNode := builder.qry.Nodes[childId]
+	if scanNode.NodeType != plan.Node_TABLE_SCAN {
+		return 0, moerr.NewNoConfig(builder.GetContext(), "child node is not a TABLE SCAN")
+	}
+
+	pkPos := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
+	pkType := scanNode.TableDef.Cols[pkPos].Typ
+	colDefs[0].Typ = pkType
+	colDefs[4].Typ = pkType
+	colDefs[5].Typ = pkType
+
+	/*
+	   val, err := builder.compCtx.ResolveVariable("save_query_result", true, false)
+	   if err == nil {
+	           if v, _ := val.(int8); v == 0 {
+	                   return 0, moerr.NewNoConfig(builder.GetContext(), "save query result")
+	           } else {
+	                   logutil.Infof("buildMetaScan : save query result: %v", v)
+	           }
+	   } else {
+	           return 0, err
+	   }
+	*/
+
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table", //test if ok
+			//Name:               tbl.String(),
+			TblFunc: &plan.TableFunction{
+				Name:  fulltext_index_tokenize_func_name,
+				Param: []byte(""),
+			},
+			Cols: colDefs,
+		},
+		BindingTags:     []int32{builder.genNewTag()},
+		TblFuncExprList: exprs,
+		Children:        []int32{childId},
+	}
+	return builder.appendNode(node, ctx), nil
 }
