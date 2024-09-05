@@ -261,6 +261,10 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 
 			// If only one batch, no need to sort. just send it.
 			if len(ctr.batchList) == 1 {
+				if ctr.buf != nil {
+					ctr.buf.Clean(proc.Mp())
+					ctr.buf = nil
+				}
 				ctr.buf = ctr.batchList[0]
 				ctr.batchList[0] = nil
 				result := vm.NewCallResult()

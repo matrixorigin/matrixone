@@ -44,7 +44,6 @@ type ObjectEntry struct {
 	table *TableEntry
 	ObjectNode
 	objData     data.Object
-	deleteCount atomic.Uint32
 	ObjectState uint8
 
 	HasPrintedPrepareComapct atomic.Bool
@@ -62,13 +61,6 @@ func (entry *ObjectEntry) GetCreatedAt() types.TS {
 func (entry *ObjectEntry) GetLoaded() bool {
 	stats := entry.GetObjectStats()
 	return stats.Rows() != 0
-}
-
-func (entry *ObjectEntry) AddDeleteCount(count uint32) {
-	entry.deleteCount.Add(count)
-}
-func (entry *ObjectEntry) GetDeleteCount() uint32 {
-	return entry.deleteCount.Load()
 }
 
 func (entry *ObjectEntry) GetSortKeyZonemap() index.ZM {
@@ -398,7 +390,6 @@ func (entry *ObjectEntry) getBlockCntFromStats() (blkCnt uint32) {
 
 func (entry *ObjectEntry) IsAppendable() bool {
 	return entry.ObjectStats.GetAppendable()
-	// return entry.state == ES_Appendable
 }
 
 func (entry *ObjectEntry) IsSorted() bool {
@@ -433,7 +424,6 @@ func (entry *ObjectEntry) GetLatestCommittedNode() *txnbase.TxnMVCCNode {
 	}
 	return nil
 }
-func (entry *ObjectEntry) GetCatalog() *Catalog { return entry.table.db.catalog }
 
 func (entry *ObjectEntry) PrepareRollback() (err error) {
 	lastNode := entry.table.getObjectList(entry.IsTombstone).GetLastestNode(entry.SortHint)
@@ -486,23 +476,6 @@ func (entry *ObjectEntry) TreeMaxDropCommitEntry() (BaseEntry, *ObjectEntry) {
 		return nil, entry
 	}
 	return nil, nil
-}
-
-// GetTerminationTS is coarse API: no consistency check
-func (entry *ObjectEntry) GetTerminationTS() (ts types.TS, terminated bool) {
-	tableEntry := entry.GetTable()
-	dbEntry := tableEntry.GetDB()
-
-	dbEntry.RLock()
-	terminated, ts = dbEntry.TryGetTerminatedTSLocked(true)
-	if terminated {
-		dbEntry.RUnlock()
-		return
-	}
-	dbEntry.RUnlock()
-
-	terminated, ts = tableEntry.TryGetTerminatedTS(true)
-	return
 }
 
 func (entry *ObjectEntry) GetSchema() *Schema {
