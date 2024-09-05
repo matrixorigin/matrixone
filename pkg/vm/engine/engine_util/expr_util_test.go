@@ -15,6 +15,7 @@
 package engine_util
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -24,6 +25,62 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetNonIntPkValueByExpr(t *testing.T) {
+	type asserts = struct {
+		result bool
+		data   any
+		expr   *plan.Expr
+		typ    types.T
+	}
+
+	testCases := []asserts{
+		// a > "a"  false   only 'and', '=' function is supported
+		{false, 0, engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
+			MakeColExprForTest(0, types.T_int64),
+			plan2.MakePlan2StringConstExprWithType("a"),
+		}), types.T_int64},
+		// a = 100  true
+		{true, int64(100),
+			engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
+				MakeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(100),
+			}), types.T_int64},
+		// b > 10 and a = "abc"  true
+		{true, []byte("abc"),
+			engine_util.MakeFunctionExprForTest("and", []*plan.Expr{
+				engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
+					MakeColExprForTest(1, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(10),
+				}),
+				engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
+					MakeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2StringConstExprWithType("abc"),
+				}),
+			}), types.T_char},
+	}
+
+	t.Run("test getPkValueByExpr", func(t *testing.T) {
+		for i, testCase := range testCases {
+			result, _, _, data := getPkValueByExpr(testCase.expr, "a", testCase.typ, true, nil)
+			if result != testCase.result {
+				t.Fatalf("test getPkValueByExpr at cases[%d], get result is different with expected", i)
+			}
+			if result {
+				if a, ok := data.([]byte); ok {
+					b := testCase.data.([]byte)
+					if !bytes.Equal(a, b) {
+						t.Fatalf("test getPkValueByExpr at cases[%d], data is not match", i)
+					}
+				} else {
+					if data != testCase.data {
+						t.Fatalf("test getPkValueByExpr at cases[%d], data is not match", i)
+					}
+				}
+			}
+		}
+	})
+}
 
 func TestGetPKExpr(t *testing.T) {
 	m := mpool.MustNewNoFixed(t.Name())
