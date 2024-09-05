@@ -57,7 +57,6 @@ func (ps *pipelineSpool) SendBatch(
 	}
 
 	msg := pipelineSpoolMessage{
-		msgCtx:  ctx,
 		content: dst,
 		err:     info,
 		src:     ps.cache,
@@ -100,8 +99,6 @@ var _ spool.Element = pipelineSpoolMessage{}
 
 // pipelineSpoolMessage is the element of pipelineSpool.
 type pipelineSpoolMessage struct {
-	msgCtx context.Context
-
 	content *batch.Batch
 	err     error
 
