@@ -162,7 +162,7 @@ func (obj *baseObject) buildMetalocation(bid uint16) (objectio.Location, error) 
 		return nil, err
 	}
 	blkMaxRows := obj.meta.Load().GetSchema().BlockMaxRows
-	return catalog.BuildLocation(stats, bid, blkMaxRows), nil
+	return stats.BlockLocation(bid, blkMaxRows), nil
 }
 
 func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector, err error) {
@@ -411,10 +411,6 @@ func (obj *baseObject) OnReplayAppendPayload(_ *containers.Batch) (err error) {
 
 func (obj *baseObject) MakeAppender() (appender data.ObjectAppender, err error) {
 	panic("not supported")
-}
-
-func (obj *baseObject) GetTotalChanges() int {
-	return int(obj.meta.Load().GetDeleteCount())
 }
 
 func (obj *baseObject) IsAppendable() bool { return false }

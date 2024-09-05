@@ -73,7 +73,13 @@ const (
 	WriterTmp
 )
 
-const ObjectSizeLimit = 3 * mpool.GB
+// make it mutable in ut
+var ObjectSizeLimit = 3 * mpool.GB
+
+// SetObjectSizeLimit set ObjectSizeLimit to limit Bytes
+func SetObjectSizeLimit(limit int) {
+	ObjectSizeLimit = limit
+}
 
 func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.FileService) (*objectWriterV1, error) {
 	var name ObjectName
@@ -412,7 +418,7 @@ func (w *objectWriterV1) writerBlocks(blocks []blockData) error {
 			size += uint64(len(block.data[idx]))
 		}
 	}
-	if size > ObjectSizeLimit {
+	if size > uint64(ObjectSizeLimit) {
 		return moerr.NewErrTooLargeObjectSizeNoCtx(size)
 	}
 	return nil

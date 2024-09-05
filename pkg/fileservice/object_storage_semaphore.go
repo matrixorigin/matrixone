@@ -62,10 +62,24 @@ func (o *objectStorageSemaphore) List(ctx context.Context, prefix string, fn fun
 	return o.upstream.List(ctx, prefix, fn)
 }
 
-func (o *objectStorageSemaphore) Read(ctx context.Context, key string, min *int64, max *int64) (r io.ReadCloser, err error) {
+func (o *objectStorageSemaphore) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
 	o.acquire()
-	defer o.release()
-	return o.upstream.Read(ctx, key, min, max)
+	r, err := o.upstream.Read(ctx, key, min, max)
+	if err != nil {
+		o.release()
+		return nil, err
+	}
+	released := false
+	return &readCloser{
+		r: r,
+		closeFunc: func() error {
+			if !released {
+				o.release()
+				released = true
+			}
+			return r.Close()
+		},
+	}, nil
 }
 
 func (o *objectStorageSemaphore) Stat(ctx context.Context, key string) (size int64, err error) {

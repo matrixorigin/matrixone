@@ -98,12 +98,3 @@ func IDArraryString(ids []ID) string {
 	str = fmt.Sprintf("%s]", str)
 	return str
 }
-
-func BlockIDArraryString(ids []ID) string {
-	str := "["
-	for _, id := range ids {
-		str = fmt.Sprintf("%s%s,", str, id.BlockID.String())
-	}
-	str = fmt.Sprintf("%s]", str)
-	return str
-}

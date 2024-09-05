@@ -1305,103 +1305,32 @@ func constructDispatchLocal(all bool, isSink, RecSink bool, regs []*process.Wait
 	return arg
 }
 
-// ss[currentIdx] means it's local scope the dispatch rule should be like below:
-// dispatch batch to all other cn and also put one into proc.MergeReciever[0] for
-// local deletion
-func constructDeleteDispatchAndLocal(
-	currentIdx int,
-	rs []*Scope,
-	ss []*Scope,
-	uuids []uuid.UUID,
-	c *Compile) {
-	op := dispatch.NewArgument()
-	op.RemoteRegs = make([]colexec.ReceiveInfo, 0, len(ss)-1)
-	// rs is used to get batch from dispatch operator (include
-	// local batch)
-	rs[currentIdx].NodeInfo = ss[currentIdx].NodeInfo
-	rs[currentIdx].Magic = Remote
-	rs[currentIdx].PreScopes = append(rs[currentIdx].PreScopes, ss[currentIdx])
-	rs[currentIdx].Proc = c.proc.NewNoContextChildProc(len(ss))
-	rs[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0, len(ss)-1)
-
-	// use arg.RemoteRegs to know the uuid,
-	// use this uuid to register Server.uuidCsChanMap (uuid,proc.DispatchNotifyCh),
-	// So how to use this?
-	// the answer is below:
-	// when the remote Cn run the scope, if scope's RemoteReceivRegInfos
-	// is not empty, it will start to give a PrepareDoneNotifyMessage to
-	// tell the dispatcher it's prepared, and also to know,this messgae
-	// will carry the uuid and a clientSession. In dispatch instruction,
-	// first it will use the uuid to get the proc.DispatchNotifyCh from the Server.
-	// (remember the DispatchNotifyCh is in a process,not a global one,because we
-	// need to send the WrapCs (a struct,contains clientSession,uuid and So on) in the
-	// sepcified process).
-	// And then Dispatcher will use this clientSession to dispatch batches to remoteCN.
-	// When remoteCn get the batches, it should know send it to where by itself.
-	for i := 0; i < len(ss); i++ {
-		if i != currentIdx {
-			// just use this uuid in dispatch, we need to
-			// use it in the prepare func (store the map [uuid -> proc.DispatchNotifyCh])
-			op.RemoteRegs = append(
-				op.RemoteRegs,
-				colexec.ReceiveInfo{
-					Uuid:     uuids[i],
-					NodeAddr: ss[i].NodeInfo.Addr,
-				})
-			// let remote scope knows it need to recieve bacth from
-			// remote CN, it will use this to send PrepareDoneNotifyMessage
-			// and then to recieve batches from remote CNs
-			rs[currentIdx].RemoteReceivRegInfos = append(
-				rs[currentIdx].RemoteReceivRegInfos,
-				RemoteReceivRegInfo{
-					Uuid: uuids[currentIdx],
-					// I use i to tag, scope should send the batches (recieved from remote CNs)
-					// to process.MergeRecievers[i]
-					Idx:      i,
-					FromAddr: ss[i].NodeInfo.Addr,
-				})
-		}
-	}
-	if len(op.RemoteRegs) == 0 {
-		op.FuncId = dispatch.SendToAllLocalFunc
-	} else {
-		op.FuncId = dispatch.SendToAllFunc
-	}
-
-	op.LocalRegs = append(
-		op.LocalRegs,
-		rs[currentIdx].Proc.Reg.MergeReceivers[currentIdx])
-
-	ss[currentIdx].setRootOperator(op)
-	// add merge to recieve all batches
-	rs[currentIdx].setRootOperator(merge.NewArgument())
-}
-
 // This function do not setting funcId.
 // PLEASE SETTING FuncId AFTER YOU CALL IT.
-func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string, mcpu int) (bool, *dispatch.Dispatch) {
+func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (bool, *dispatch.Dispatch) {
 	arg := dispatch.NewArgument()
-	scopeLen := len(ss)
+	scopeLen := len(target)
 	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
 	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, scopeLen)
-	arg.ShuffleRegIdxLocal = make([]int, 0, len(ss))
-	arg.ShuffleRegIdxRemote = make([]int, 0, len(ss))
+	arg.ShuffleRegIdxLocal = make([]int, 0, len(target))
+	arg.ShuffleRegIdxRemote = make([]int, 0, len(target))
 	hasRemote := false
 
-	for _, s := range ss {
-		if !isSameCN(s.NodeInfo.Addr, currentCNAddr) {
+	for _, s := range target {
+		if !isSameCN(s.NodeInfo.Addr, source.NodeInfo.Addr) {
 			hasRemote = true
 			break
 		}
 	}
+	if hasRemote && source.NodeInfo.Mcpu > 1 {
+		panic("pipeline end with dispatch should have been merged in multi CN!")
+	}
 
-	for i, s := range ss {
-		if isSameCN(s.NodeInfo.Addr, currentCNAddr) {
+	for i, s := range target {
+		if isSameCN(s.NodeInfo.Addr, source.NodeInfo.Addr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
-			if !hasRemote {
-				s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = mcpu
-			}
+			s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = source.NodeInfo.Mcpu
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 			arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
 		} else {
@@ -1417,7 +1346,7 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string,
 			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
 				Idx:      idx,
 				Uuid:     newUuid,
-				FromAddr: currentCNAddr,
+				FromAddr: source.NodeInfo.Addr,
 			})
 		}
 	}
@@ -1473,8 +1402,8 @@ func constructShuffleArgForGroup(ss []*Scope, node *plan.Node) *shuffle.Shuffle 
 }
 
 // cross-cn dispath  will send same batch to all register
-func constructDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.Node, left bool, mcpu int) *dispatch.Dispatch {
-	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr, mcpu)
+func constructDispatch(idx int, target []*Scope, source *Scope, node *plan.Node, left bool) *dispatch.Dispatch {
+	hasRemote, arg := constructDispatchLocalAndRemote(idx, target, source)
 	if node.Stats.HashmapStats.Shuffle {
 		arg.FuncId = dispatch.ShuffleToAllFunc
 		if node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
