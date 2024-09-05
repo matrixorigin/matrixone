@@ -2915,23 +2915,26 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 	shuffleGroups = c.compileProjection(n, c.compileRestrict(n, shuffleGroups))
 
 	//append prescopes
+	c.appendPrescopes(shuffleGroups, ss)
+	return shuffleGroups
+
+}
+
+func (c *Compile) appendPrescopes(parents, children []*Scope) {
 	for _, cn := range c.cnList {
 		index := 0
-		for i := range shuffleGroups {
-			if isSameCN(cn.Addr, shuffleGroups[i].NodeInfo.Addr) {
+		for i := range parents {
+			if isSameCN(cn.Addr, parents[i].NodeInfo.Addr) {
 				index = i
 				break
 			}
 		}
-		for i := range ss {
-			if isSameCN(cn.Addr, ss[i].NodeInfo.Addr) {
-				shuffleGroups[index].PreScopes = append(shuffleGroups[index].PreScopes, ss[i])
+		for i := range children {
+			if isSameCN(cn.Addr, children[i].NodeInfo.Addr) {
+				parents[index].PreScopes = append(parents[index].PreScopes, children[i])
 			}
 		}
 	}
-
-	return shuffleGroups
-
 }
 
 // compilePreInsert Compile PreInsert Node and set it as the root operator for each Scope.
