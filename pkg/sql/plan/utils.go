@@ -2339,7 +2339,7 @@ func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
 // a > current_time() + 1 and b < ? + c and d > ? + 2
 // =>
 // a > foldVal1 and b < foldVal2 + c and d > foldVal3
-func ReplaceFoldVal(proc *process.Process, expr *Expr, executorMap map[int]colexec.ExpressionExecutor) (bool, error) {
+func ReplaceFoldExpr(proc *process.Process, expr *Expr, executorMap map[int]colexec.ExpressionExecutor) (bool, error) {
 	allCanFold := true
 	var err error
 
@@ -2370,7 +2370,7 @@ func ReplaceFoldVal(proc *process.Process, expr *Expr, executorMap map[int]colex
 
 	argFold := make([]bool, len(fn.Args))
 	for i := range fn.Args {
-		argFold[i], err = ReplaceFoldVal(proc, fn.Args[i], executorMap)
+		argFold[i], err = ReplaceFoldExpr(proc, fn.Args[i], executorMap)
 		if err != nil {
 			return false, err
 		}
@@ -2417,7 +2417,7 @@ func ReplaceFoldVal(proc *process.Process, expr *Expr, executorMap map[int]colex
 	}
 }
 
-func EvalFoldValExpr(proc *process.Process, expr *Expr, executorMap map[int]colexec.ExpressionExecutor) (err error) {
+func EvalFoldExpr(proc *process.Process, expr *Expr, executorMap map[int]colexec.ExpressionExecutor) (err error) {
 	switch ef := expr.Expr.(type) {
 	case *plan.Expr_Fold:
 		var vec *vector.Vector
@@ -2433,7 +2433,7 @@ func EvalFoldValExpr(proc *process.Process, expr *Expr, executorMap map[int]cole
 		ef.Fold.Ptr = uint64(ptr)
 	case *plan.Expr_F:
 		for i := range ef.F.Args {
-			err = EvalFoldValExpr(proc, ef.F.Args[i], executorMap)
+			err = EvalFoldExpr(proc, ef.F.Args[i], executorMap)
 			if err != nil {
 				return err
 			}
@@ -2443,7 +2443,7 @@ func EvalFoldValExpr(proc *process.Process, expr *Expr, executorMap map[int]cole
 	return nil
 }
 
-func EvalFoldValExprForRemote(proc *process.Process, expr *Expr, executorMap map[int]colexec.ExpressionExecutor) (err error) {
+func EvalFoldExprForRemote(proc *process.Process, expr *Expr, executorMap map[int]colexec.ExpressionExecutor) (err error) {
 	switch ef := expr.Expr.(type) {
 	case *plan.Expr_Fold:
 		var vec *vector.Vector
@@ -2464,7 +2464,7 @@ func EvalFoldValExprForRemote(proc *process.Process, expr *Expr, executorMap map
 		ef.Fold.Data = data
 	case *plan.Expr_F:
 		for i := range ef.F.Args {
-			err = EvalFoldValExprForRemote(proc, ef.F.Args[i], executorMap)
+			err = EvalFoldExprForRemote(proc, ef.F.Args[i], executorMap)
 			if err != nil {
 				return err
 			}
@@ -2472,4 +2472,29 @@ func EvalFoldValExprForRemote(proc *process.Process, expr *Expr, executorMap map
 	}
 
 	return nil
+}
+
+func HasFoldExprForList(exprs []*Expr) bool {
+	for _, e := range exprs {
+		hasFoldExpr := HasFoldValExpr(e)
+		if hasFoldExpr {
+			return true
+		}
+	}
+	return false
+}
+
+func HasFoldValExpr(expr *Expr) bool {
+	switch ef := expr.Expr.(type) {
+	case *plan.Expr_Fold:
+		return true
+	case *plan.Expr_F:
+		for i := range ef.F.Args {
+			hasFoldExpr := HasFoldValExpr(ef.F.Args[i])
+			if hasFoldExpr {
+				return true
+			}
+		}
+	}
+	return false
 }

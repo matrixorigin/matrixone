@@ -714,6 +714,10 @@ func (tbl *txnTable) rangesOnePart(
 		)
 	}
 
+	hasFoldExpr := plan2.HasFoldExprForList(exprs)
+	if hasFoldExpr {
+		exprs = nil
+	}
 	var (
 		objMeta    objectio.ObjectMeta
 		zms        []objectio.ZoneMap

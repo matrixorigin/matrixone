@@ -457,7 +457,7 @@ func evalFoldValExpr(s *Scope, c *Compile) error {
 		}
 	}
 	if s.DataSource != nil && s.DataSource.FilterExpr != nil {
-		err := plan.EvalFoldValExprForRemote(c.proc, s.DataSource.FilterExpr, c.filterExprExecutor)
+		err := plan.EvalFoldExprForRemote(c.proc, s.DataSource.FilterExpr, c.filterExprExecutor)
 		if err != nil {
 			return err
 		}
