@@ -23,22 +23,28 @@ import (
 )
 
 func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (int32, error) {
+	if len(stmt.Tables) != 1 {
+		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
+	}
+
 	aliasMap := make(map[string][2]string)
 	for _, tbl := range stmt.TableRefs {
 		getAliasToName(builder.compCtx, tbl, "", aliasMap)
 	}
+
 	tblInfo, err := getDmlTableInfo(builder.compCtx, stmt.Tables, stmt.With, aliasMap, "delete")
 	if err != nil {
 		return 0, err
 	}
 
 	var selectList []tree.SelectExpr
-	//var tableNames []string
-	fromTables := &tree.From{}
+	colName2Idx := make([]map[string]int, len(stmt.Tables))
 
 	getResolveExpr := func(alias string) {
 		defIdx := tblInfo.alias[alias]
+		colName2Idx[defIdx] = make(map[string]int)
 		for _, col := range tblInfo.tableDefs[defIdx].Cols {
+			colName2Idx[defIdx][col.Name] = len(selectList)
 			selectExpr := tree.NewUnresolvedName(tree.NewCStr(alias, ctx.lower), tree.NewCStr(col.Name, 1))
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: selectExpr,
@@ -60,14 +66,11 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 		}
 	}
 
+	fromTables := &tree.From{}
 	if stmt.TableRefs != nil {
 		fromTables.Tables = stmt.TableRefs
 	} else {
 		fromTables.Tables = stmt.Tables
-	}
-
-	if len(stmt.TableRefs) != 1 {
-		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
 	}
 
 	astSelect := &tree.Select{
@@ -82,19 +85,30 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 		With:    stmt.With,
 	}
 
-	lastNodeID, err := builder.bindSelect(astSelect, ctx, false)
+	selectCtx := NewBindContext(builder, ctx)
+	lastNodeID, err := builder.bindSelect(astSelect, selectCtx, false)
 	if err != nil {
 		return 0, nil
 	}
 
-	var scanNodes []*plan.Node
-	for i := range tblInfo.tableDefs {
-		scanNodes = append(scanNodes, builder.qry.Nodes[builder.name2ScanNode[tblInfo.tableDefs[i].Name]])
+	selectNode := builder.qry.Nodes[lastNodeID]
+	if selectNode.NodeType != plan.Node_PROJECT {
+		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
 	}
-	idxScanNodes := make([][]*plan.Node, len(scanNodes))
 
-	for i, node := range scanNodes {
-		tableDef := node.TableDef
+	if stmt.Where == nil && stmt.Limit == nil {
+		// TODO: convert to truncate table
+	}
+
+	//var scanNodes []*plan.Node
+	//for i := range tblInfo.tableDefs {
+	//	scanNodes = append(scanNodes, builder.qry.Nodes[builder.name2ScanNode[tblInfo.tableDefs[i].Name]])
+	//}
+
+	idxScanNodes := make([][]*plan.Node, len(tblInfo.tableDefs))
+
+	for i, tableDef := range tblInfo.tableDefs {
+		scanNode := builder.qry.Nodes[builder.name2ScanNode[tableDef.Name]]
 		idxDefs := tableDef.Indexes
 		idxScanNodes[i] = make([]*plan.Node, len(idxDefs))
 
@@ -112,18 +126,12 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 				TableDef:     idxTableDef,
 				ObjRef:       idxObjRef,
 				BindingTags:  []int32{idxTag},
-				ScanSnapshot: scanNodes[0].ScanSnapshot,
+				ScanSnapshot: scanNode.ScanSnapshot,
 			}
 
 			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], builder.ctxByNode[lastNodeID])
 
-			var rightPkPos int32 = -1
-			for colIdx, col := range idxTableDef.Cols {
-				if col.Name == catalog.IndexTableIndexColName {
-					rightPkPos = int32(colIdx)
-					break
-				}
-			}
+			rightPkPos := idxTableDef.Name2ColIndex[catalog.IndexTableIndexColName]
 			pkTyp := idxTableDef.Cols[rightPkPos].Typ
 
 			rightExpr := &plan.Expr{
@@ -142,8 +150,8 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
-							RelPos: scanNodes[0].BindingTags[0],
-							ColPos: tableDef.Name2ColIndex[idxDef.Parts[0]],
+							RelPos: selectNode.BindingTags[0],
+							ColPos: int32(colName2Idx[i][idxDef.Parts[0]]),
 						},
 					},
 				}
@@ -154,13 +162,14 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 				}
 
 				args := make([]*plan.Expr, len(idxDef.Parts))
+
 				for k, part := range idxDef.Parts {
-					colPos := tableDef.Name2ColIndex[part]
+					colPos := int32(colName2Idx[i][part])
 					args[k] = &plan.Expr{
-						Typ: tableDef.Cols[colPos].Typ,
+						Typ: selectNode.ProjectList[colPos].Typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
-								RelPos: scanNodes[0].BindingTags[0],
+								RelPos: selectNode.BindingTags[0],
 								ColPos: colPos,
 							},
 						},
@@ -168,12 +177,12 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 				}
 
 				if !idxDef.Unique {
-					colPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+					colPos := int32(colName2Idx[i][tableDef.Pkey.PkeyColName])
 					args[len(idxDef.Parts)] = &plan.Expr{
-						Typ: scanNodes[0].TableDef.Cols[colPos].Typ,
+						Typ: selectNode.ProjectList[colPos].Typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
-								RelPos: scanNodes[0].BindingTags[0],
+								RelPos: selectNode.BindingTags[0],
 								ColPos: colPos,
 							},
 						},
@@ -197,11 +206,26 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 		}
 	}
 
-	canTruncate := stmt.Where == nil && stmt.Limit == nil
-	for i, scanNode := range scanNodes {
-		lastNodeID, err = builder.createDeleteNodesForTable(scanNode, idxScanNodes[i], lastNodeID, canTruncate)
-	}
-
+	/*
+		for i, tableDef := range tblInfo.tableDefs {
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_DELETE,
+				Children: []int32{lastNodeID},
+				// ProjectList: getProjectionByLastNode(builder, lastNodeId),
+				DeleteCtx: &plan.DeleteCtx{
+					TableDef:            tableDef,
+					RowIdIdx:            int32(delNodeInfo.deleteIndex),
+					Ref:                 tblInfo.objRef[i],
+					AddAffectedRows:     delNodeInfo.addAffectedRows,
+					IsClusterTable:      delNodeInfo.IsClusterTable,
+					PartitionTableIds:   delNodeInfo.partTableIDs,
+					PartitionTableNames: delNodeInfo.partTableNames,
+					PartitionIdx:        int32(delNodeInfo.partitionIdx),
+					PrimaryKeyIdx:       int32(delNodeInfo.pkPos),
+				},
+			}, nil)
+		}
+	*/
 	// append delete plans
 	beginIdx := 0
 	// needLockTable := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
@@ -253,23 +277,6 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 	reCheckifNeedLockWholeTable(builder)
 
 	return lastNodeID, err
-}
-
-func (builder *QueryBuilder) enumerateTableScanNodes(rootID int32) []*plan.Node {
-	var nodes []*plan.Node
-	root := builder.qry.Nodes[rootID]
-	if root.NodeType == plan.Node_TABLE_SCAN {
-		nodes = append(nodes, root)
-	} else {
-		for _, child := range root.Children {
-			nodes = append(nodes, builder.enumerateTableScanNodes(child)...)
-		}
-	}
-	return nodes
-}
-
-func (builder *QueryBuilder) createDeleteNodesForTable(scanNode *plan.Node, idxTables []*plan.Node, lastNodeID int32, canTruncate bool) (int32, error) {
-	return 0, nil
 }
 
 // makeOneDeletePlan
