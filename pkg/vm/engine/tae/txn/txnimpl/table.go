@@ -400,7 +400,7 @@ func (tbl *txnTable) TransferDeleteRows(
 ) (transferred bool, err error) {
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
 	common.DoIfDebugEnabled(func() {
-		logutil.Debug("[Start]",
+		logutil.Info("[Start]",
 			common.AnyField("txn-ctx", tbl.store.txn.Repr()),
 			common.OperationField("transfer-deletes"),
 			common.OperandField(id.BlockString()),
@@ -408,7 +408,7 @@ func (tbl *txnTable) TransferDeleteRows(
 	})
 	defer func() {
 		common.DoIfDebugEnabled(func() {
-			logutil.Debug("[End]",
+			logutil.Info("[End]",
 				common.AnyField("txn-ctx", tbl.store.txn.Repr()),
 				common.OperationField("transfer-deletes"),
 				common.OperandField(id.BlockString()),
