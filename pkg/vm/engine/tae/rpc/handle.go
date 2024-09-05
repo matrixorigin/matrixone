@@ -785,7 +785,7 @@ func (h *Handle) HandleWrite(
 				stats.String())
 
 			for i := range stats.BlkCnt() {
-				loc = stats.BlockLocation(uint16(i), options.DefaultBlockMaxRows)
+				loc = stats.BlockLocation(uint16(i), objectio.BlockMaxRows)
 				vectors, closeFunc, err = blockio.LoadColumns2(
 					ctx,
 					[]uint16{uint16(rowidIdx), uint16(pkIdx)},
