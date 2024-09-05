@@ -288,9 +288,9 @@ func (s *Scope) RenameTable(c *Compile) (err error) {
 				},
 			},
 		}
-		newScope := newScope(AlterTable).withPlan(plan)
-		defer newScope.release()
-		err = newScope.AlterTable(c)
+		subScope := newScope(AlterTable).withPlan(plan)
+		defer subScope.release()
+		err = subScope.AlterTable(c)
 		if err != nil {
 			return err
 		}
