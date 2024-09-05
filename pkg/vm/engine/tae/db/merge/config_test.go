@@ -56,4 +56,24 @@ func TestConfigForTable(t *testing.T) {
 	require.Equal(t, defaultBasicConfig.MergeMaxOneRun, config.MergeMaxOneRun)
 	require.Equal(t, defaultBasicConfig.ObjectMinOsize, config.ObjectMinOsize)
 	require.Equal(t, defaultBasicConfig.MergeHints, config.MergeHints)
+
+	tbl3 := catalog.MockStaloneTableEntry(0, newTestSchema(1, 0, &BasicPolicyConfig{
+		MaxOsizeMergedObj: uint32(500 * 8192),
+		MergeMaxOneRun:    2,
+	}))
+	configProvider = newCustomConfigProvider()
+	config = configProvider.getConfig(tbl3)
+	require.Equal(t, defaultBasicConfig.MinCNMergeSize, config.MinCNMergeSize)
+	require.Equal(t, uint32(500*8192), config.MaxOsizeMergedObj)
+	require.Equal(t, 2, config.MergeMaxOneRun)
+	require.Equal(t, defaultBasicConfig.ObjectMinOsize, config.ObjectMinOsize)
+	require.Equal(t, defaultBasicConfig.MergeHints, config.MergeHints)
+
+	tbl3.GetLastestSchema(false).Extra.MaxOsizeMergedObj = 0
+	config = configProvider.getConfig(tbl3)
+	require.Equal(t, uint32(500*8192), config.MaxOsizeMergedObj)
+
+	configProvider.invalidCache(tbl3)
+	config = configProvider.getConfig(tbl3)
+	require.Equal(t, defaultBasicConfig.MaxOsizeMergedObj, config.MaxOsizeMergedObj)
 }
