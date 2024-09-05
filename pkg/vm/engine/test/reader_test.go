@@ -129,7 +129,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	resultHit := 0
 	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
 	for idx := 0; idx < blockCnt; idx++ {
-		_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, nil, ret)
+		_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, ret)
 		require.NoError(t, err)
 
 		resultHit += int(ret.RowCount())
@@ -333,7 +333,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 				break
 			}
 		}
-		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, mp, nil, ret)
+		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, mp, ret)
 		require.NoError(t, err)
 		require.True(t, ret.Allocated() > 0)
 
@@ -375,7 +375,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		nmp, _ := mpool.NewMPool("test", mpool.MB, mpool.NoFixed)
 
 		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
-		_, err = reader.Read(ctx, ret.Attrs, nil, nmp, nil, ret)
+		_, err = reader.Read(ctx, ret.Attrs, nil, nmp, ret)
 		require.Error(t, err)
 		require.NoError(t, txn.Commit(ctx))
 	}
