@@ -109,7 +109,7 @@ func NewS3TombstoneWriter() (*S3Writer, error) {
 	}, nil
 }
 
-func NewS3Writer(proc *process.Process, tableDef *plan.TableDef, partitionIdx int16) (*S3Writer, error) {
+func NewS3Writer(tableDef *plan.TableDef, partitionIdx int16) (*S3Writer, error) {
 	writer := &S3Writer{
 		tablename:      tableDef.GetName(),
 		seqnums:        make([]uint16, 0, len(tableDef.Cols)),
@@ -119,7 +119,7 @@ func NewS3Writer(proc *process.Process, tableDef *plan.TableDef, partitionIdx in
 		partitionIndex: partitionIdx,
 	}
 
-	writer.ResetBlockInfoBat(proc)
+	writer.ResetBlockInfoBat()
 	for i, colDef := range tableDef.Cols {
 		if colDef.Name != catalog.Row_ID {
 			writer.seqnums = append(writer.seqnums, uint16(colDef.Seqnum))
@@ -158,11 +158,11 @@ func NewS3Writer(proc *process.Process, tableDef *plan.TableDef, partitionIdx in
 }
 
 // NewPartitionS3Writer Alloc S3 writers for partitioned table.
-func NewPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*S3Writer, error) {
+func NewPartitionS3Writer(tableDef *plan.TableDef) ([]*S3Writer, error) {
 	partitionNum := len(tableDef.Partition.PartitionTableNames)
 	writers := make([]*S3Writer, partitionNum)
 	for i := range writers {
-		writer, err := NewS3Writer(proc, tableDef, int16(i))
+		writer, err := NewS3Writer(tableDef, int16(i))
 		if err != nil {
 			return nil, err
 		}
@@ -171,7 +171,7 @@ func NewPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*S3
 	return writers, nil
 }
 
-func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
+func (w *S3Writer) ResetBlockInfoBat() {
 	// A simple explanation of the two vectors held by metaLocBat
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
 	// vecs[1] store relative block metadata
@@ -195,7 +195,7 @@ func (w *S3Writer) Output(proc *process.Process, result *vm.CallResult) error {
 	if err != nil {
 		return err
 	}
-	w.ResetBlockInfoBat(proc)
+	w.ResetBlockInfoBat()
 	return nil
 }
 
@@ -224,7 +224,7 @@ func (w *S3Writer) initBuffers(proc *process.Process, bat *batch.Batch) {
 	if w.buffer != nil {
 		return
 	}
-	buffer, err := proc.NewBatchFromSrc(bat, int(options.DefaultBlockMaxRows))
+	buffer, err := proc.NewBatchFromSrc(bat, options.DefaultBlockMaxRows)
 	if err != nil {
 		panic(err)
 	}
@@ -248,20 +248,20 @@ func (w *S3Writer) StashBatch(proc *process.Process, bat *batch.Batch) bool {
 	start, end := 0, bat.RowCount()
 	for start < end {
 		n := len(w.batches)
-		if n != 0 && w.batches[n-1].RowCount() < int(options.DefaultBlockMaxRows) {
+		if n != 0 && w.batches[n-1].RowCount() < options.DefaultBlockMaxRows {
 			// w.batches[n-1] is not full.
 			rbat = w.batches[n-1]
 		} else {
 			// w.batches[n-1] is full, use a new batch.
 			var err error
-			rbat, err = proc.NewBatchFromSrc(bat, int(options.DefaultBlockMaxRows))
+			rbat, err = proc.NewBatchFromSrc(bat, options.DefaultBlockMaxRows)
 			if err != nil {
 				panic(err)
 			}
 			w.batches = append(w.batches, rbat)
 		}
 		rows := end - start
-		if left := int(options.DefaultBlockMaxRows) - rbat.RowCount(); rows > left {
+		if left := options.DefaultBlockMaxRows - rbat.RowCount(); rows > left {
 			rows = left
 		}
 
@@ -421,9 +421,9 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 			w.batches[batchIndex].Clean(proc.GetMPool())
 		}
 		lens++
-		if lens == int(options.DefaultBlockMaxRows) {
+		if lens == options.DefaultBlockMaxRows {
 			lens = 0
-			w.buffer.SetRowCount(int(options.DefaultBlockMaxRows))
+			w.buffer.SetRowCount(options.DefaultBlockMaxRows)
 			if _, err := w.writer.WriteBatch(w.buffer); err != nil {
 				return nil, objectio.ObjectStats{}, err
 			}
@@ -549,7 +549,7 @@ func (w *S3Writer) sync(proc *process.Process) ([]objectio.BlockInfo, objectio.O
 
 	stats := w.writer.GetObjectStats()
 
-	var i int = -1
+	var i = -1
 	for i = range stats {
 		if !stats[i].IsZero() {
 			stats[i].SetCNCreated()
