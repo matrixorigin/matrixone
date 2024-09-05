@@ -223,7 +223,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
-	_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, nil, ret)
+	_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, ret)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, int(ret.RowCount()))
