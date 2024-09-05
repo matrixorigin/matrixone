@@ -30,7 +30,7 @@ const (
 	MaxBinaryLen      = 255
 	MaxEnumLen        = 65535
 	MaxBitLen         = 64
-	MaxBlobLen        = 64 * 1024 * 1024
+	MaxBlobLen        = 65535
 	MaxVarcharLen     = MaxBlobLen
 	MaxVarBinaryLen   = MaxBlobLen
 	MaxStringSize     = MaxBlobLen

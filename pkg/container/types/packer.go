@@ -277,10 +277,9 @@ func (p *Packer) EncodeStringType(e []byte) {
 	p.encodeBytes(bytesCode, e)
 }
 
-var stringMax = [2]byte{stringTypeCode, bytesMaxCode}
-
-func PackerStringMax() []byte {
-	return stringMax[:]
+func (p *Packer) EncodeStringTypeMax() {
+	p.putByte(stringTypeCode)
+	p.putByte(bytesMaxCode)
 }
 
 func (p *Packer) EncodeBit(e uint64) {

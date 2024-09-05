@@ -624,12 +624,17 @@ func fetchVarlenaRows(
 	filterCols []int32) (bool, [][]byte, lock.Granularity) {
 	fn := func(v []byte) []byte {
 		parker.Reset()
-		parker.EncodeStringType(v[:])
+		if v == nil {
+			parker.EncodeStringTypeMax()
+		} else {
+			parker.EncodeStringType(v[:])
+		}
 		return parker.Bytes()
 	}
+
 	if lockTable {
 		min := fn([]byte{0})
-		max := fn(types.PackerStringMax())
+		max := fn(nil)
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}
