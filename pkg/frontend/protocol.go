@@ -18,8 +18,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // Response Categories
@@ -199,7 +200,7 @@ func (mp *MysqlProtocolImpl) safeQuit() {
 		return
 	}
 	if mp.tcpConn != nil {
-		_ = mp.tcpConn.closeConn()
+		_ = mp.tcpConn.Close()
 	}
 	//release salt
 	if mp.salt != nil {

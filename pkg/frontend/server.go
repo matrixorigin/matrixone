@@ -18,13 +18,14 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"io"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"go.uber.org/zap"
 
@@ -447,6 +448,13 @@ func (mo *MOServer) handleMessage(rs *Conn) error {
 func (mo *MOServer) handleRequest(rs *Conn) error {
 	var msg []byte
 	var err error
+	mo.mu.RLock()
+	if !mo.running {
+		mo.mu.RUnlock()
+		return io.EOF
+	}
+	mo.mu.RUnlock()
+
 	msg, err = rs.Read()
 	if err != nil {
 		if err == io.EOF {

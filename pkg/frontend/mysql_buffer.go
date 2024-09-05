@@ -558,13 +558,11 @@ func (c *Conn) RemoteAddress() string {
 
 func (c *Conn) closeConn() error {
 	var err error
-	c.closeConnFunc.Do(func() {
-		if c.conn != nil {
-			if err = c.conn.Close(); err != nil {
-				return
-			}
+	if c.conn != nil {
+		if err = c.conn.Close(); err != nil {
+			return err
 		}
-	})
+	}
 	return err
 }
 
