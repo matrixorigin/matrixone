@@ -720,7 +720,7 @@ func fetchFixedRowsWithCompare[T any](
 	filter RowsFilter,
 	filterCols []int32) (bool, [][]byte, lock.Granularity) {
 	n := vec.Length()
-	values := vector.MustFixedCol[T](vec)
+	values := vector.MustFixedColWithTypeCheck[T](vec)
 	if n == 1 {
 		if filter != nil && !filter(0, filterCols) {
 			return false, nil, lock.Granularity_Row

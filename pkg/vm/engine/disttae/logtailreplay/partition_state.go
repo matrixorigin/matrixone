@@ -111,19 +111,19 @@ func (p *PartitionState) HandleDataObjectList(
 
 	vec := mustVectorFromProto(ee.Bat.Vecs[5])
 	defer vec.Free(pool)
-	createTSCol := vector.MustFixedCol[types.TS](vec)
+	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	vec = mustVectorFromProto(ee.Bat.Vecs[6])
 	defer vec.Free(pool)
-	deleteTSCol := vector.MustFixedCol[types.TS](vec)
+	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	vec = mustVectorFromProto(ee.Bat.Vecs[7])
 	defer vec.Free(pool)
-	startTSCol := vector.MustFixedCol[types.TS](vec)
+	startTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	vec = mustVectorFromProto(ee.Bat.Vecs[9])
 	defer vec.Free(pool)
-	commitTSCol := vector.MustFixedCol[types.TS](vec)
+	commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	for idx := 0; idx < statsVec.Length(); idx++ {
 		p.shared.Lock()
@@ -267,19 +267,19 @@ func (p *PartitionState) HandleTombstoneObjectList(
 
 	vec := mustVectorFromProto(ee.Bat.Vecs[5])
 	defer vec.Free(pool)
-	createTSCol := vector.MustFixedCol[types.TS](vec)
+	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	vec = mustVectorFromProto(ee.Bat.Vecs[6])
 	defer vec.Free(pool)
-	deleteTSCol := vector.MustFixedCol[types.TS](vec)
+	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	vec = mustVectorFromProto(ee.Bat.Vecs[7])
 	defer vec.Free(pool)
-	startTSCol := vector.MustFixedCol[types.TS](vec)
+	startTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	vec = mustVectorFromProto(ee.Bat.Vecs[9])
 	defer vec.Free(pool)
-	commitTSCol := vector.MustFixedCol[types.TS](vec)
+	commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	var tbIter = p.inMemTombstoneIndex.Copy().Iter()
 	defer tbIter.Release()
@@ -381,15 +381,15 @@ func (p *PartitionState) HandleRowsDelete(
 
 	vec := mustVectorFromProto(input.Vecs[0])
 	defer vec.Free(pool)
-	rowIDVector := vector.MustFixedCol[types.Rowid](vec)
+	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
 
 	vec = mustVectorFromProto(input.Vecs[1])
 	defer vec.Free(pool)
-	timeVector := vector.MustFixedCol[types.TS](vec)
+	timeVector := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	vec = mustVectorFromProto(input.Vecs[3])
 	defer vec.Free(pool)
-	tbRowIdVector := vector.MustFixedCol[types.Rowid](vec)
+	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
 
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
@@ -478,11 +478,11 @@ func (p *PartitionState) HandleRowsInsert(
 
 	vec := mustVectorFromProto(input.Vecs[0])
 	defer vec.Free(pool)
-	rowIDVector := vector.MustFixedCol[types.Rowid](vec)
+	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
 
 	vec = mustVectorFromProto(input.Vecs[1])
 	defer vec.Free(pool)
-	timeVector := vector.MustFixedCol[types.TS](vec)
+	timeVector := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {

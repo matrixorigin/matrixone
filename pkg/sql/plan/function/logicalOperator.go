@@ -35,9 +35,9 @@ func notFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func opMultiAnd(params []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rsVec := vector.MustFunctionResult[bool](result).GetResultVector()
-	rsArr := vector.MustFixedCol[bool](rsVec)
+	rsArr := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
-	arr0 := vector.MustFixedCol[bool](params[0])
+	arr0 := vector.MustFixedColWithTypeCheck[bool](params[0])
 	if params[0].IsConstNull() {
 		for i := 0; i < length; i++ {
 			rsArr[i] = false
@@ -53,7 +53,7 @@ func opMultiAnd(params []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	}
 
 	for idx := 1; idx < len(params); idx++ {
-		arr1 := vector.MustFixedCol[bool](params[idx])
+		arr1 := vector.MustFixedColWithTypeCheck[bool](params[idx])
 
 		if params[idx].IsConstNull() {
 			for i := 0; i < length; i++ {
@@ -103,9 +103,9 @@ func opMultiAnd(params []*vector.Vector, result vector.FunctionResultWrapper, _ 
 
 func opMultiOr(params []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rsVec := vector.MustFunctionResult[bool](result).GetResultVector()
-	rsArr := vector.MustFixedCol[bool](rsVec)
+	rsArr := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
-	arr0 := vector.MustFixedCol[bool](params[0])
+	arr0 := vector.MustFixedColWithTypeCheck[bool](params[0])
 	if params[0].IsConstNull() {
 		for i := 0; i < length; i++ {
 			rsArr[i] = false
@@ -121,7 +121,7 @@ func opMultiOr(params []*vector.Vector, result vector.FunctionResultWrapper, _ *
 	}
 
 	for idx := 1; idx < len(params); idx++ {
-		arr1 := vector.MustFixedCol[bool](params[idx])
+		arr1 := vector.MustFixedColWithTypeCheck[bool](params[idx])
 
 		if params[idx].IsConstNull() {
 			for i := 0; i < length; i++ {

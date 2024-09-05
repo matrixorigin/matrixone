@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -94,7 +95,8 @@ func newTxnTable(
 	tbl.shard.service = service
 	tbl.shard.is = false
 
-	if service.Config().Enable {
+	if service.Config().Enable &&
+		db.databaseId != catalog.MO_CATALOG_ID {
 		tableID, policy, is, err := service.GetShardInfo(item.Id)
 		if err != nil {
 			return nil, err
