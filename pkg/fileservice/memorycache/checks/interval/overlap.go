@@ -16,8 +16,9 @@ package interval
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type OverlapChecker struct {
