@@ -197,13 +197,15 @@ func (markJoin *MarkJoin) build(ap *MarkJoin, proc *process.Process, analyzer pr
 	ctr := &markJoin.ctr
 	start := time.Now()
 	defer analyzer.WaitStop(start)
-	mp := message.ReceiveJoinMap(markJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	mp, err := message.ReceiveJoinMap(markJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	if err != nil {
+		return err
+	}
 	if mp == nil {
 		return nil
 	}
 	batches := mp.GetBatches()
 	ctr.mp = mp
-	var err error
 	//maybe optimize this in the future
 	for i := range batches {
 		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])

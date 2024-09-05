@@ -135,12 +135,15 @@ func (product *Product) build(proc *process.Process, analyzer process.Analyzer) 
 	ctr := &product.ctr
 	start := time.Now()
 	defer analyzer.WaitStop(start)
-	mp := message.ReceiveJoinMap(product.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	mp, err := message.ReceiveJoinMap(product.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	if err != nil {
+		return err
+	}
 	if mp == nil {
 		return nil
 	}
 	batches := mp.GetBatches()
-	var err error
+
 	//maybe optimize this in the future
 	for i := range batches {
 		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])

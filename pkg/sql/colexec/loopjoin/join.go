@@ -169,11 +169,11 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (loopJoin *LoopJoin) build(proc *process.Process, analyzer process.Analyzer) error {
+func (loopJoin *LoopJoin) build(proc *process.Process, analyzer process.Analyzer) (err error) {
 	start := time.Now()
 	defer analyzer.WaitStop(start)
-	loopJoin.ctr.mp = message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
-	return nil
+	loopJoin.ctr.mp, err = message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	return err
 }
 
 func (ctr *container) emptyProbe(ap *LoopJoin, proc *process.Process, result *vm.CallResult) error {

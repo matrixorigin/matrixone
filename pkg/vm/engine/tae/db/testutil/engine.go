@@ -345,9 +345,11 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 		obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID(), false)
 		assert.NoError(e.T, err)
 		_, blkOffset := id.BlockID.Offsets()
-		deltaLoc, err := MockCNDeleteInS3(e.Runtime.Fs, obj.GetObjectData(), blkOffset, e.schema, txn, offsets)
+		stats, err := MockCNDeleteInS3(e.Runtime.Fs, obj.GetObjectData(), blkOffset, e.schema, txn, offsets)
 		assert.NoError(e.T, err)
-		ok, err = rel.TryDeleteByDeltaloc(&id, deltaLoc)
+		require.False(e.T, stats.IsZero())
+		//ok, err = rel.TryDeleteByDeltaloc(&id, deltaLoc)
+		ok, err = rel.TryDeleteByStats(&id, stats)
 		assert.NoError(e.T, err)
 		if !ok {
 			return ok, err

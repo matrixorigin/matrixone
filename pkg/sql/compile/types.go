@@ -48,7 +48,6 @@ const (
 	Merge magicType = iota
 	Normal
 	Remote
-	Parallel
 	CreateDatabase
 	CreateTable
 	CreateView
@@ -75,8 +74,6 @@ func (m magicType) String() string {
 		return "Normal"
 	case Remote:
 		return "Remote"
-	case Parallel:
-		return "Parallel"
 	case CreateDatabase:
 		return "CreateDatabase"
 	case CreateTable:

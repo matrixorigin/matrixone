@@ -24,7 +24,7 @@ t1    0    PRIMARY    1    id    A    0    NULL    NULL                        Y
 t1    1    idx1    1    name    A    0    NULL    NULL    YES                    YES    NULL
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) DEFAULT NULL,\n  `age` INT DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` (`name`)\n)
+t1    CREATE TABLE `t1` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` (`name`)\n)
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx1";
 name    type    column_name
 idx1    MULTIPLE    name

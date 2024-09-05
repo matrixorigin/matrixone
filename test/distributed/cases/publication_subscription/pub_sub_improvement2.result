@@ -79,7 +79,7 @@ select count(*) from books;
 SQL parser error: table "books" does not exist
 show create table publishers;
 Table    Create Table
-publishers    CREATE TABLE `publishers` (\n  `publisher_id` INT NOT NULL AUTO_INCREMENT,\n  `name` VARCHAR(100) NOT NULL,\n  `address` VARCHAR(255) DEFAULT NULL,\n  `city` VARCHAR(100) DEFAULT NULL,\n  `country` VARCHAR(100) DEFAULT NULL,\n  PRIMARY KEY (`publisher_id`)\n)
+publishers    CREATE TABLE `publishers` (\n  `publisher_id` int NOT NULL AUTO_INCREMENT,\n  `name` varchar(100) NOT NULL,\n  `address` varchar(255) DEFAULT NULL,\n  `city` varchar(100) DEFAULT NULL,\n  `country` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`publisher_id`)\n)
 drop database acc01_sub01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments

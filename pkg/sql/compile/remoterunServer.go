@@ -198,7 +198,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			_, _ = GetCompileService().removeRunningCompile(runCompile)
 		}()
 
-		err = s.ParallelRun(runCompile)
+		err = s.MergeRun(runCompile)
 		//-------------------------------------------------------------------
 		if err == nil {
 			runCompile.GenPhyPlan(runCompile)

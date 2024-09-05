@@ -207,7 +207,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	for {
 		// build query context and pipeline contexts for the current run.
 		runC.InitPipelineContextToExecuteQuery()
-
+		runC.MessageBoard.BeforeRunonce()
 		if err = runC.runOnce(); err == nil {
 			if runC.anal != nil {
 				runC.anal.retryTimes = retryTimes

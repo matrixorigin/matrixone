@@ -88,7 +88,10 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 	for {
 		switch ctr.state {
 		case Build:
-			singleJoin.build(analyzer, proc)
+			err = singleJoin.build(analyzer, proc)
+			if err != nil {
+				return result, err
+			}
 			ctr.state = Probe
 
 		case Probe:
@@ -157,14 +160,18 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 		}
 	}
 }
-func (singleJoin *SingleJoin) build(analyzer process.Analyzer, proc *process.Process) {
+func (singleJoin *SingleJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &singleJoin.ctr
 	start := time.Now()
 	defer analyzer.WaitStop(start)
-	ctr.mp = message.ReceiveJoinMap(singleJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	ctr.mp, err = message.ReceiveJoinMap(singleJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	if err != nil {
+		return err
+	}
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
+	return nil
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, result *vm.CallResult) error {
