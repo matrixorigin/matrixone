@@ -38,6 +38,13 @@ func Test_versionHandle_HandleTenantUpgrade(t *testing.T) {
 				return executor.Result{}, nil
 			}, txnOperator)
 
+			metadata := Handler.Metadata()
+			t.Logf("version metadata:%v", metadata)
+
+			if err := Handler.Prepare(context.Background(), executor, true); err != nil {
+				t.Errorf("Prepare() error = %v", err)
+			}
+
 			if err := Handler.HandleCreateFrameworkDeps(executor); err == nil {
 				t.Errorf("HandleCreateFrameworkDeps() should report err")
 			}
