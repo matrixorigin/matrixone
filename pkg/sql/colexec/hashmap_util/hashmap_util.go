@@ -80,19 +80,6 @@ func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process
 			}
 		}
 	}
-<<<<<<< HEAD
-	if hb.keyWidth <= 8 {
-		if hb.IntHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
-			return err
-		}
-	} else {
-		if hb.StrHashMap, err = hashmap.NewStrMap(false, proc.Mp()); err != nil {
-			return err
-		}
-	}
-=======
-
->>>>>>> 9b331d9... fix
 	return nil
 }
 
@@ -199,12 +186,12 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 
 	var itr hashmap.Iterator
 	if hb.keyWidth <= 8 {
-		if hb.IntHashMap, err = hashmap.NewIntHashMap(false); err != nil {
+		if hb.IntHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
 			return err
 		}
 		itr = hb.IntHashMap.NewIterator()
 	} else {
-		if hb.StrHashMap, err = hashmap.NewStrMap(false); err != nil {
+		if hb.StrHashMap, err = hashmap.NewStrMap(false, proc.Mp()); err != nil {
 			return err
 		}
 		itr = hb.StrHashMap.NewIterator()
@@ -213,20 +200,12 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 	if hashOnPK {
 		// if hash on primary key, prealloc hashmap size to the count of batch
 		if hb.keyWidth <= 8 {
-<<<<<<< HEAD
-			err := hb.IntHashMap.PreAlloc(uint64(hb.InputBatchRowCount), proc.Mp())
-=======
-			err = hb.IntHashMap.PreAlloc(uint64(hb.InputBatchRowCount))
->>>>>>> 9b331d9... fix
+			err = hb.IntHashMap.PreAlloc(uint64(hb.InputBatchRowCount), proc.Mp())
 			if err != nil {
 				return err
 			}
 		} else {
-<<<<<<< HEAD
-			err := hb.StrHashMap.PreAlloc(uint64(hb.InputBatchRowCount), proc.Mp())
-=======
-			err = hb.StrHashMap.PreAlloc(uint64(hb.InputBatchRowCount))
->>>>>>> 9b331d9... fix
+			err = hb.StrHashMap.PreAlloc(uint64(hb.InputBatchRowCount), proc.Mp())
 			if err != nil {
 				return err
 			}
