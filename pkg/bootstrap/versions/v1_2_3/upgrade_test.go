@@ -21,6 +21,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -107,6 +108,25 @@ func Test_HandleTenantUpgrade(t *testing.T) {
 
 			upg_mo_snapshots.Upgrade(executor, uint32(0))
 
+		},
+	)
+}
+
+func Test_HandleTenantUpgradeError(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				return executor.Result{}, moerr.NewInvalidInputNoCtx("return error")
+			}, txnOperator)
+
+			if err := Handler.HandleTenantUpgrade(context.Background(), 0, executor); err == nil {
+				t.Errorf("HandleTenantUpgrade() should reprot error")
+			}
 		},
 	)
 }
