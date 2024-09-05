@@ -30,7 +30,7 @@ col1    col2    col3    col4    col5
 10    100    8899001122    101.24    156.79
 show create table snapshot01;
 Table    Create Table
-snapshot01    CREATE TABLE `snapshot01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  `col3` BIGINT DEFAULT NULL,\n  `col4` DOUBLE DEFAULT NULL,\n  `col5` FLOAT DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+snapshot01    CREATE TABLE `snapshot01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` bigint DEFAULT NULL,\n  `col4` double DEFAULT NULL,\n  `col5` float DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 drop snapshot if exists sp01;
 create snapshot sp01 for account sys;
 select * from snapshot01 {snapshot = 'sp01'};
@@ -111,7 +111,7 @@ col1    col2    col3    col4    col5
 alter table snapshot01 add column column1 bigint first;
 show create table snapshot01;
 Table    Create Table
-snapshot01    CREATE TABLE `snapshot01` (\n  `column1` BIGINT DEFAULT NULL,\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  `col3` BIGINT DEFAULT NULL,\n  `col4` DOUBLE DEFAULT NULL,\n  `col5` FLOAT DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+snapshot01    CREATE TABLE `snapshot01` (\n  `column1` bigint DEFAULT NULL,\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` bigint DEFAULT NULL,\n  `col4` double DEFAULT NULL,\n  `col5` float DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 select count(*) from snapshot01;
 count(*)
 2
@@ -137,7 +137,7 @@ col1    col2    col3    col4    col5
 truncate table snapshot01;
 show create table snapshot01;
 Table    Create Table
-snapshot01    CREATE TABLE `snapshot01` (\n  `column1` BIGINT DEFAULT NULL,\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  `col3` BIGINT DEFAULT NULL,\n  `col4` DOUBLE DEFAULT NULL,\n  `col5` FLOAT DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+snapshot01    CREATE TABLE `snapshot01` (\n  `column1` bigint DEFAULT NULL,\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` bigint DEFAULT NULL,\n  `col4` double DEFAULT NULL,\n  `col5` float DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 select count(*) from snapshot01;
 count(*)
 0
@@ -222,10 +222,10 @@ col3 int primary key,
 constraint `c1` foreign key(col1) references snapshot03(col1));
 show create table snapshot03;
 Table    Create Table
-snapshot03    CREATE TABLE `snapshot03` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+snapshot03    CREATE TABLE `snapshot03` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(20) DEFAULT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` bigint DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 show create table snapshot04;
 Table    Create Table
-snapshot04    CREATE TABLE `snapshot04` (\n  `col1` INT DEFAULT NULL,\n  `col2` INT DEFAULT NULL,\n  `col3` INT NOT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `snapshot03` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+snapshot04    CREATE TABLE `snapshot04` (\n  `col1` int DEFAULT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` int NOT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `snapshot03` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into snapshot03 values(1,'sfhuwe',1,1);
 insert into snapshot03 values(2,'37829901k3d',2,2);
 insert into snapshot04 values(1,1,1);
@@ -421,7 +421,7 @@ col1    col2    col3    col4
 alter table acc02_test01 add column new int first;
 show create table acc02_test01;
 Table    Create Table
-acc02_test01    CREATE TABLE `acc02_test01` (\n  `new` INT DEFAULT NULL,\n  `col1` DECIMAL(38,0) DEFAULT NULL,\n  `col2` CHAR(1) DEFAULT NULL,\n  `col3` VARCHAR(30) DEFAULT NULL,\n  `col4` FLOAT DEFAULT NULL\n)
+acc02_test01    CREATE TABLE `acc02_test01` (\n  `new` int DEFAULT NULL,\n  `col1` decimal(38,0) DEFAULT NULL,\n  `col2` char(1) DEFAULT NULL,\n  `col3` varchar(30) DEFAULT NULL,\n  `col4` float DEFAULT NULL\n)
 select count(*) from acc02_test01 {snapshot = 'snap02'};
 count(*)
 3
@@ -607,7 +607,7 @@ drop snapshot if exists sp06;
 create snapshot sp06 for account sys;
 select count(*) from mo_catalog.mo_tables{snapshot = sp06} where reldatabase = 'mo_catalog';
 count(*)
-41
+43
 select * from mo_catalog.mo_database{snapshot = sp06} where datname = 'mo_catalog';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
 1    mo_catalog    mo_catalog        0    0    2024-06-03 10:16:00    0
@@ -689,7 +689,7 @@ count(*)
 11
 show create table pt_table{snapshot = 'sp07'};
 Table    Create Table
-pt_table    CREATE TABLE `pt_table` (\n  `col1` TINYINT DEFAULT NULL,\n  `col2` SMALLINT DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  `clo4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE DEFAULT NULL,\n  `col11` VARCHAR(255) DEFAULT NULL,\n  `col12` DATE DEFAULT NULL,\n  `col13` DATETIME DEFAULT NULL,\n  `col14` TIMESTAMP NULL DEFAULT NULL,\n  `col15` BOOL DEFAULT NULL,\n  `col16` DECIMAL(5,2) DEFAULT NULL,\n  `col17` TEXT DEFAULT NULL,\n  `col18` VARCHAR(255) DEFAULT NULL,\n  `col19` VARCHAR(255) DEFAULT NULL,\n  `col20` TEXT DEFAULT NULL\n) partition by key algorithm = 2 (col13) partitions 10
+pt_table    CREATE TABLE `pt_table` (\n  `col1` tinyint DEFAULT NULL,\n  `col2` smallint DEFAULT NULL,\n  `col3` int DEFAULT NULL,\n  `clo4` bigint DEFAULT NULL,\n  `col5` tinyint unsigned DEFAULT NULL,\n  `col6` smallint unsigned DEFAULT NULL,\n  `col7` int unsigned DEFAULT NULL,\n  `col8` bigint unsigned DEFAULT NULL,\n  `col9` float DEFAULT NULL,\n  `col10` double DEFAULT NULL,\n  `col11` varchar(255) DEFAULT NULL,\n  `col12` date DEFAULT NULL,\n  `col13` datetime DEFAULT NULL,\n  `col14` timestamp NULL DEFAULT NULL,\n  `col15` bool DEFAULT NULL,\n  `col16` decimal(5,2) DEFAULT NULL,\n  `col17` text DEFAULT NULL,\n  `col18` varchar(255) DEFAULT NULL,\n  `col19` varchar(255) DEFAULT NULL,\n  `col20` text DEFAULT NULL\n) partition by key algorithm = 2 (col13) partitions 10
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp07'} where reldatabase = 'test03';
 count(*)
 11

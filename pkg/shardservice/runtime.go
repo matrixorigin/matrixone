@@ -68,7 +68,6 @@ func (r *rt) heartbeat(
 	if !r.env.HasCN(cn) {
 		return []pb.Operator{newDeleteAllOp()}
 	}
-
 	r.Lock()
 	defer r.Unlock()
 
@@ -76,6 +75,7 @@ func (r *rt) heartbeat(
 	if !ok {
 		c = r.newCN(cn)
 		r.cns[cn] = c
+		r.logger.Info("cn added", zap.String("cn", cn))
 	}
 	if c.isDown() {
 		return []pb.Operator{newDeleteAllOp()}
@@ -148,6 +148,7 @@ func (r *rt) add(
 
 	r.deleteTableLocked(old)
 	r.tables[t.id] = t
+	r.logger.Info("new shard table added", zap.String("metadata", t.metadata.String()))
 }
 
 func (r *rt) delete(id uint64) {
@@ -272,6 +273,7 @@ func (r *rt) getDownCNsLocked(downCNs map[string]struct{}) {
 		cn.down()
 		delete(r.cns, cn.id)
 		downCNs[cn.id] = struct{}{}
+		r.logger.Info("cn removed", zap.String("cn", cn.id))
 	}
 }
 

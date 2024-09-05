@@ -174,7 +174,7 @@ drop table if exists table05;
 create table table05 as select col1, col3, col5, col7 from table03;
 show create table table05;
 Table    Create Table
-table05    CREATE TABLE `table05` (\n  `col1` INT DEFAULT NULL,\n  `col3` VARCHAR(10) DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col7` DECIMAL(38,0) DEFAULT NULL\n)
+table05    CREATE TABLE `table05` (\n  `col1` int DEFAULT NULL,\n  `col3` varchar(10) DEFAULT NULL,\n  `col5` tinyint unsigned DEFAULT NULL,\n  `col7` decimal(38,0) DEFAULT NULL\n)
 select * from table05;
 col1    col3    col5    col7
 1    database    12    3232
@@ -294,7 +294,7 @@ drop table if exists unique_courses;
 create table unique_courses as select distinct course from distinct01;
 show create table unique_courses;
 Table    Create Table
-unique_courses    CREATE TABLE `unique_courses` (\n  `course` VARCHAR(100) DEFAULT NULL\n)
+unique_courses    CREATE TABLE `unique_courses` (\n  `course` varchar(100) DEFAULT NULL\n)
 select * from unique_courses;
 course
 Computer Science
@@ -304,7 +304,7 @@ drop table if exists unique_courses;
 create table unique_courses as select distinct * from distinct01;
 show create table unique_courses;
 Table    Create Table
-unique_courses    CREATE TABLE `unique_courses` (\n  `id` INT DEFAULT NULL,\n  `first_name` VARCHAR(50) DEFAULT NULL,\n  `last_name` VARCHAR(50) DEFAULT NULL,\n  `course` VARCHAR(100) DEFAULT NULL\n)
+unique_courses    CREATE TABLE `unique_courses` (\n  `id` int DEFAULT NULL,\n  `first_name` varchar(50) DEFAULT NULL,\n  `last_name` varchar(50) DEFAULT NULL,\n  `course` varchar(100) DEFAULT NULL\n)
 select * from unique_courses;
 id    first_name    last_name    course
 1    John    Doe    Computer Science
@@ -327,7 +327,7 @@ drop table if exists cast02;
 create table cast02(col1 double, col2 float) select * from cast01;
 show create table cast02;
 Table    Create Table
-cast02    CREATE TABLE `cast02` (\n  `col1` DOUBLE DEFAULT NULL,\n  `col2` FLOAT DEFAULT NULL\n)
+cast02    CREATE TABLE `cast02` (\n  `col1` double DEFAULT NULL,\n  `col2` float DEFAULT NULL\n)
 select * from cast02;
 col1    col2
 2.617481216E9    372534.44
@@ -370,7 +370,7 @@ col1    col2
 null    null
 show create table cast06;
 Table    Create Table
-cast06    CREATE TABLE `cast06` (\n  `col1` INT DEFAULT NULL,\n  `col2` BIGINT DEFAULT NULL\n)
+cast06    CREATE TABLE `cast06` (\n  `col1` int DEFAULT NULL,\n  `col2` bigint DEFAULT NULL\n)
 drop table cast05;
 drop table cast06;
 drop table if exists time01;
@@ -387,7 +387,7 @@ drop table if exists time02;
 create table time02 (col1 int, col2 int, col4 int) as select * from time01;
 show create table time02;
 Table    Create Table
-time02    CREATE TABLE `time02` (\n  `col1` INT DEFAULT NULL,\n  `col2` INT DEFAULT NULL,\n  `col3` TIMESTAMP NULL DEFAULT NULL,\n  `col4` INT DEFAULT NULL\n)
+time02    CREATE TABLE `time02` (\n  `col1` int DEFAULT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` timestamp NULL DEFAULT NULL,\n  `col4` int DEFAULT NULL\n)
 select * from time02;
 col1    col2    col3    col4
 18262    1607731201    1997-01-01 10:10:10    121212
@@ -398,7 +398,7 @@ drop table if exists time03;
 create table time03 (col2 decimal(38, 0), col4 decimal) as select col2, col3, col4 from time01;
 show create table time03;
 Table    Create Table
-time03    CREATE TABLE `time03` (\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  `col3` TIMESTAMP NULL DEFAULT NULL,\n  `col4` DECIMAL(38,0) DEFAULT NULL\n)
+time03    CREATE TABLE `time03` (\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` timestamp NULL DEFAULT NULL,\n  `col4` decimal(38,0) DEFAULT NULL\n)
 select * from time03;
 col2    col3    col4
 1607731201    1997-01-01 10:10:10    121212
@@ -419,7 +419,7 @@ drop table if exists table02;
 create table table02 as select * from table01;
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n  `col1` INT NOT NULL,\n  `col2` CHAR(1) DEFAULT 'c',\n  `col3` DECIMAL(38,0) NOT NULL\n)
+table02    CREATE TABLE `table02` (\n  `col1` int NOT NULL,\n  `col2` char(1) DEFAULT 'c',\n  `col3` decimal(38,0) NOT NULL\n)
 desc table02;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO        null        
@@ -442,7 +442,7 @@ drop table if exists table05;
 create table table05 as select * from table04;
 show create table table05;
 Table    Create Table
-table05    CREATE TABLE `table05` (\n  `a` INT DEFAULT NULL,\n  `b` VARCHAR(5) DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+table05    CREATE TABLE `table05` (\n  `a` int DEFAULT NULL,\n  `b` varchar(5) DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 select * from table05;
 a    b    c
 1    zs1    101
@@ -596,7 +596,7 @@ drop table if exists string05;
 create table string05 as select trim(col1), ltrim(col1), rtrim(col1) from string01;
 show create table string05;
 Table    Create Table
-string05    CREATE TABLE `string05` (\n  `trim(col1)` VARCHAR(65535) DEFAULT NULL,\n  `ltrim(col1)` VARCHAR(65535) DEFAULT NULL,\n  `rtrim(col1)` VARCHAR(65535) DEFAULT NULL\n)
+string05    CREATE TABLE `string05` (\n  `trim(col1)` varchar(65535) DEFAULT NULL,\n  `ltrim(col1)` varchar(65535) DEFAULT NULL,\n  `rtrim(col1)` varchar(65535) DEFAULT NULL\n)
 select * from string05;
 trim(col1)    ltrim(col1)    rtrim(col1)
 database system    database system      database system
@@ -617,7 +617,7 @@ drop table if exists string07;
 create table string07 as select startswith(col1, ' '), endswith(col1, ' ') from string01;
 show create table string07;
 Table    Create Table
-string07    CREATE TABLE `string07` (\n  `startswith(col1,  )` BOOL DEFAULT NULL,\n  `endswith(col1,  )` BOOL DEFAULT NULL\n)
+string07    CREATE TABLE `string07` (\n  `startswith(col1,  )` bool DEFAULT NULL,\n  `endswith(col1,  )` bool DEFAULT NULL\n)
 select * from string07;
 startswith(col1,  )    endswith(col1,  )
 true    false
@@ -628,7 +628,7 @@ drop table if exists string08;
 create table string08 as select hex(col2) from string01;
 show create table string08;
 Table    Create Table
-string08    CREATE TABLE `string08` (\n  `hex(col2)` VARCHAR(65535) DEFAULT NULL\n)
+string08    CREATE TABLE `string08` (\n  `hex(col2)` varchar(65535) DEFAULT NULL\n)
 select * from string08;
 hex(col2)
 32
@@ -639,7 +639,7 @@ drop table if exists string09;
 create table string09 as select substring(col1, 3, 4), reverse(col2) from string01;
 show create table string09;
 Table    Create Table
-string09    CREATE TABLE `string09` (\n  `substring(col1, 3, 4)` VARCHAR(65535) DEFAULT NULL,\n  `reverse(col2)` VARCHAR(65535) DEFAULT NULL\n)
+string09    CREATE TABLE `string09` (\n  `substring(col1, 3, 4)` varchar(65535) DEFAULT NULL,\n  `reverse(col2)` varchar(65535) DEFAULT NULL\n)
 select * from string09;
 substring(col1, 3, 4)    reverse(col2)
 data    2
@@ -653,7 +653,7 @@ drop table if exists string11;
 create table string11 as select bin(col1) from string10;
 show create table string11;
 Table    Create Table
-string11    CREATE TABLE `string11` (\n  `bin(col1)` VARCHAR(65535) DEFAULT NULL\n)
+string11    CREATE TABLE `string11` (\n  `bin(col1)` varchar(65535) DEFAULT NULL\n)
 select * from string11;
 bin(col1)
 10001010001111011111110100101001
@@ -674,7 +674,7 @@ drop table if exists string13;
 create table string13 as select * from string12 where col1 = space(5);
 show create table string13;
 Table    Create Table
-string13    CREATE TABLE `string13` (\n  `col1` VARCHAR(100) NOT NULL,\n  `col2` DATE NOT NULL\n)
+string13    CREATE TABLE `string13` (\n  `col1` varchar(100) NOT NULL,\n  `col2` date NOT NULL\n)
 select * from string13;
 col1    col2
 drop table string12;
@@ -718,7 +718,7 @@ drop table if exists time04;
 create table time04 as select date_add(col2, interval 45 day), date_sub(col2, interval 5 day) from time01;
 show create table time04;
 Table    Create Table
-time04    CREATE TABLE `time04` (\n  `date_add(col2, interval(45, day))` DATETIME DEFAULT NULL,\n  `date_sub(col2, interval(5, day))` DATETIME DEFAULT NULL\n)
+time04    CREATE TABLE `time04` (\n  `date_add(col2, interval(45, day))` datetime DEFAULT NULL,\n  `date_sub(col2, interval(5, day))` datetime DEFAULT NULL\n)
 select * from time04;
 date_add(col2, interval(45, day))    date_sub(col2, interval(5, day))
 2023-12-26 10:00:01    2023-11-06 10:00:01
@@ -749,7 +749,7 @@ drop table if exists time07;
 create table time07 as select timediff("22:22:22", col4) as timedifferent from time01;
 show create table time07;
 Table    Create Table
-time07    CREATE TABLE `time07` (\n  `timedifferent` TIME DEFAULT NULL\n)
+time07    CREATE TABLE `time07` (\n  `timedifferent` time DEFAULT NULL\n)
 select * from time07;
 timedifferent
 10:10:10
@@ -864,7 +864,7 @@ drop table if exists max_customer;
 create table max_customer as select customer_id, total_amount from customer_totals order by total_amount asc limit 1;
 show create table max_customer;
 Table    Create Table
-max_customer    CREATE TABLE `max_customer` (\n  `customer_id` INT DEFAULT NULL,\n  `total_amount` DECIMAL(38,0) DEFAULT NULL\n)
+max_customer    CREATE TABLE `max_customer` (\n  `customer_id` int DEFAULT NULL,\n  `total_amount` decimal(38,0) DEFAULT NULL\n)
 select * from max_customer;
 customer_id    total_amount
 101    325
@@ -931,7 +931,7 @@ insert into table01 (col1, col2, col3, col4, col5, col6, col7, col8, col9, col10
 create table test.table02 as select * from table01;
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n  `id` INT NOT NULL AUTO_INCREMENT,\n  `col1` VARCHAR(255) NOT NULL,\n  `col2` INT DEFAULT NULL,\n  `col3` DECIMAL(10,2) DEFAULT NULL,\n  `col4` DATE DEFAULT NULL,\n  `col5` BOOL DEFAULT NULL,\n  `col6` ENUM('apple','banana','orange') DEFAULT NULL,\n  `col7` TEXT DEFAULT NULL,\n  `col8` TIMESTAMP NULL DEFAULT NULL,\n  `col9` BLOB DEFAULT NULL,\n  `col10` CHAR(1) DEFAULT NULL\n)
+table02    CREATE TABLE `table02` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `col1` varchar(255) NOT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` decimal(10,2) DEFAULT NULL,\n  `col4` date DEFAULT NULL,\n  `col5` bool DEFAULT NULL,\n  `col6` enum('apple','banana','orange') DEFAULT NULL,\n  `col7` text DEFAULT NULL,\n  `col8` timestamp NULL DEFAULT NULL,\n  `col9` blob DEFAULT NULL,\n  `col10` char(1) DEFAULT NULL\n)
 select * from table02;
 id    col1    col2    col3    col4    col5    col6    col7    col8    col9    col10
 1    Value2    456    78.90    2023-10-24    false    banana    Another text    2022-01-01 01:01:01    More binary data    D
@@ -951,7 +951,7 @@ id    col1    col2    col3    col4    col5    col6    col7    col8    col9    co
 alter table table02 add column newcolumn int after col3, drop column col4;
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n  `id` INT NOT NULL AUTO_INCREMENT,\n  `col1` VARCHAR(255) NOT NULL,\n  `col2` INT DEFAULT NULL,\n  `col3` DECIMAL(10,2) DEFAULT NULL,\n  `newcolumn` INT DEFAULT NULL,\n  `col5` BOOL DEFAULT NULL,\n  `col6` ENUM('apple','banana','orange') DEFAULT NULL,\n  `col7` TEXT DEFAULT NULL,\n  `col8` TIMESTAMP NULL DEFAULT NULL,\n  `col9` BLOB DEFAULT NULL,\n  `col10` CHAR(1) DEFAULT NULL\n)
+table02    CREATE TABLE `table02` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `col1` varchar(255) NOT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` decimal(10,2) DEFAULT NULL,\n  `newcolumn` int DEFAULT NULL,\n  `col5` bool DEFAULT NULL,\n  `col6` enum('apple','banana','orange') DEFAULT NULL,\n  `col7` text DEFAULT NULL,\n  `col8` timestamp NULL DEFAULT NULL,\n  `col9` blob DEFAULT NULL,\n  `col10` char(1) DEFAULT NULL\n)
 alter table table02 modify column newcolumn bigint;
 desc table02;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -1094,7 +1094,7 @@ drop table if exists oj01;
 create table oj01 as select outerjoin01.col1, outerjoin01.col2, outerjoin02.a2 from outerjoin01 left outer join outerjoin02 on outerjoin01.col1=10 limit 3;
 show create table oj01;
 Table    Create Table
-oj01    CREATE TABLE `oj01` (\n  `col1` INT DEFAULT NULL,\n  `col2` CHAR(3) DEFAULT NULL,\n  `a2` INT DEFAULT NULL\n)
+oj01    CREATE TABLE `oj01` (\n  `col1` int DEFAULT NULL,\n  `col2` char(3) DEFAULT NULL,\n  `a2` int DEFAULT NULL\n)
 select * from oj01;
 col1    col2    a2
 10    aaa    10
@@ -1104,7 +1104,7 @@ drop table if exists oj02;
 create table oj02 as select outerjoin01.col1, outerjoin01.col2, outerjoin02.a2 from outerjoin01 natural join outerjoin02 order by col1 desc;
 show create table oj02;
 Table    Create Table
-oj02    CREATE TABLE `oj02` (\n  `col1` INT DEFAULT NULL,\n  `col2` CHAR(3) DEFAULT NULL,\n  `a2` INT DEFAULT NULL\n)
+oj02    CREATE TABLE `oj02` (\n  `col1` int DEFAULT NULL,\n  `col2` char(3) DEFAULT NULL,\n  `a2` int DEFAULT NULL\n)
 select * from oj02;
 col1    col2    a2
 20    zzz    10
@@ -1178,7 +1178,7 @@ drop table if exists test02;
 create table test02 (col1 int primary key ) as select col1 from test01;
 show create table test02;
 Table    Create Table
-test02    CREATE TABLE `test02` (\n  `col1` INT NOT NULL,\n  PRIMARY KEY (`col1`)\n)
+test02    CREATE TABLE `test02` (\n  `col1` int NOT NULL,\n  PRIMARY KEY (`col1`)\n)
 desc test02;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
@@ -1188,7 +1188,7 @@ drop table if exists test03;
 create table test03 (col2 decimal unique key) as select col2 from test01;
 show create table test03;
 Table    Create Table
-test03    CREATE TABLE `test03` (\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  UNIQUE KEY `col2` (`col2`)\n)
+test03    CREATE TABLE `test03` (\n  `col2` decimal(38,0) DEFAULT NULL,\n  UNIQUE KEY `col2` (`col2`)\n)
 desc test03;
 Field    Type    Null    Key    Default    Extra    Comment
 col2    DECIMAL(38)    YES    UNI    null        
@@ -1198,7 +1198,7 @@ drop table if exists test04;
 create table test04 (col1 int, col2 varchar(50), key(col1, col2)) as select col1, col3 from test01;
 show create table test04;
 Table    Create Table
-test04    CREATE TABLE `test04` (\n  `col2` VARCHAR(50) DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col3` VARCHAR(50) DEFAULT NULL,\n  KEY `col1` (`col1`,`col2`)\n)
+test04    CREATE TABLE `test04` (\n  `col2` varchar(50) DEFAULT NULL,\n  `col1` int DEFAULT NULL,\n  `col3` varchar(50) DEFAULT NULL,\n  KEY `col1` (`col1`,`col2`)\n)
 select * from test04;
 col2    col1    col3
 null    1    3224332r32r
@@ -1208,7 +1208,7 @@ drop table if exists test05;
 create table test05 (col1 int, col2 decimal, primary key (col1, col2)) as select col1, col2 from test01;
 show create table test05;
 Table    Create Table
-test05    CREATE TABLE `test05` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) NOT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
+test05    CREATE TABLE `test05` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) NOT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
 select * from test05;
 col1    col2
 1    3242434
@@ -1219,7 +1219,7 @@ Duplicate entry ('\d\w\d{38}'|'\(2\,39304\)') for key '__mo_cpkey_col'
 alter table test01 rename column col1 to newCol;
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `newCol` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  `col3` VARCHAR(50) DEFAULT NULL\n)
+test01    CREATE TABLE `test01` (\n  `newCol` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` varchar(50) DEFAULT NULL\n)
 drop table if exists test06;
 create table test06 (col1 int not null default 100) as select col1 from test01;
 invalid input: column col1 does not exist
@@ -1242,7 +1242,7 @@ create table prepare01(col1 int primary key , col2 char);
 insert into prepare01 values (1,'a'),(2,'b'),(3,'c');
 show create table prepare01;
 Table    Create Table
-prepare01    CREATE TABLE `prepare01` (\n  `col1` INT NOT NULL,\n  `col2` CHAR(1) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+prepare01    CREATE TABLE `prepare01` (\n  `col1` int NOT NULL,\n  `col2` char(1) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show columns from prepare01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
@@ -1252,7 +1252,7 @@ prepare s1 from 'create table prepare02 as select * from prepare01';
 execute s1;
 show create table prepare02;
 Table    Create Table
-prepare02    CREATE TABLE `prepare02` (\n  `col1` INT NOT NULL,\n  `col2` CHAR(1) DEFAULT NULL\n)
+prepare02    CREATE TABLE `prepare02` (\n  `col1` int NOT NULL,\n  `col2` char(1) DEFAULT NULL\n)
 select * from prepare02;
 col1    col2
 1    a
@@ -1268,7 +1268,7 @@ null    2    b
 null    3    c
 show create table prepare03;
 Table    Create Table
-prepare03    CREATE TABLE `prepare03` (\n  `col3` CHAR(1) DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col2` CHAR(1) DEFAULT NULL\n)
+prepare03    CREATE TABLE `prepare03` (\n  `col3` char(1) DEFAULT NULL,\n  `col1` int DEFAULT NULL,\n  `col2` char(1) DEFAULT NULL\n)
 drop table prepare01;
 drop table prepare02;
 drop table prepare03;
@@ -1311,7 +1311,7 @@ drop table if exists max_customer;
 create temporary table max_customer as select customer_id, total_amount from customer_totals order by total_amount asc limit 1;
 show create table max_customer;
 Table    Create Table
-max_customer    CREATE TABLE `max_customer` (\n  `customer_id` INT DEFAULT NULL,\n  `total_amount` DECIMAL(38,0) DEFAULT NULL\n)
+max_customer    CREATE TABLE `max_customer` (\n  `customer_id` int DEFAULT NULL,\n  `total_amount` decimal(38,0) DEFAULT NULL\n)
 select * from max_customer;
 customer_id    total_amount
 101    325
@@ -1539,7 +1539,7 @@ insert into test01 values (1,2,3,4,5,6,7,8,10.2131,3824.34324);
 insert into test01 values (2,3,4,5,6,7,8,9,2131.3242343,-3824.34324);
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col1` TINYINT DEFAULT NULL,\n  `col2` SMALLINT DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE DEFAULT NULL\n)
+test01    CREATE TABLE `test01` (\n  `col1` tinyint DEFAULT NULL,\n  `col2` smallint DEFAULT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` bigint DEFAULT NULL,\n  `col5` tinyint unsigned DEFAULT NULL,\n  `col6` smallint unsigned DEFAULT NULL,\n  `col7` int unsigned DEFAULT NULL,\n  `col8` bigint unsigned DEFAULT NULL,\n  `col9` float DEFAULT NULL,\n  `col10` double DEFAULT NULL\n)
 create publication publication01 database test account all;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
@@ -1594,7 +1594,7 @@ drop table if exists alias02;
 create table alias02 (NewCol int) as select * from alias01;
 show create table alias02;
 Table    Create Table
-alias02    CREATE TABLE `alias02` (\n  `NewCol` INT DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+alias02    CREATE TABLE `alias02` (\n  `NewCol` int DEFAULT NULL,\n  `col1` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
 select * from alias02;
 newcol    col1    col2
 null    1    2
@@ -1815,7 +1815,7 @@ drop table if exists agg01;
 create table agg01 as select avg(col1) as avgCol, sum(col2) as sumcol, count(col3) as countCol, max(col4) as maxCol, min(col4) as minCol from math01;
 show create table agg01;
 Table    Create Table
-agg01    CREATE TABLE `agg01` (\n  `avgcol` DOUBLE DEFAULT NULL,\n  `sumcol` DECIMAL(38,0) DEFAULT NULL,\n  `countcol` BIGINT NOT NULL,\n  `maxcol` DOUBLE NOT NULL,\n  `mincol` DOUBLE NOT NULL\n)
+agg01    CREATE TABLE `agg01` (\n  `avgcol` double DEFAULT NULL,\n  `sumcol` decimal(38,0) DEFAULT NULL,\n  `countcol` bigint NOT NULL,\n  `maxcol` double NOT NULL,\n  `mincol` double NOT NULL\n)
 select * from agg01;
 avgcol    sumcol    countcol    maxcol    mincol
 7571.333333333333    10424    3    10.0    -9392032.0
