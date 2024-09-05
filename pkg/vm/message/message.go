@@ -66,6 +66,7 @@ type Message interface {
 	GetMsgTag() int32
 	GetReceiverAddr() MessageAddress
 	DebugString() string
+	Destroy()
 }
 
 type MessageCenter struct {
@@ -144,6 +145,10 @@ func (m *MessageBoard) Reset() *MessageBoard {
 	}
 	m.rwMutex.Lock()
 	defer m.rwMutex.Unlock()
+	for i := range m.messages {
+		message := *m.messages[i]
+		message.Destroy()
+	}
 	m.messages = m.messages[:0]
 	m.waiters = m.waiters[:0]
 	m.multiCN = false
@@ -210,19 +215,6 @@ func (mr *MessageReceiver) receiveMessageNonBlock() []Message {
 		}
 	}
 	return result
-}
-
-func (mr *MessageReceiver) Free() {
-	if len(mr.received) == 0 {
-		return
-	}
-	mr.mb.rwMutex.Lock()
-	defer mr.mb.rwMutex.Unlock()
-	for i := range mr.received {
-		mr.mb.messages[mr.received[i]] = nil
-	}
-	mr.received = nil
-	mr.waiter = nil
 }
 
 func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) ([]Message, bool, error) {
