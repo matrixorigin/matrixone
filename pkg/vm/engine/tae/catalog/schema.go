@@ -158,7 +158,7 @@ func NewEmptySchema(name string) *Schema {
 		SeqnumMap: make(map[uint16]int),
 		Extra:     &apipb.SchemaExtra{},
 	}
-	schema.BlockMaxRows = options.DefaultBlockMaxRows
+	schema.BlockMaxRows = objectio.BlockMaxRows
 	schema.ObjectMaxBlocks = options.DefaultBlocksPerObject
 	return schema
 }

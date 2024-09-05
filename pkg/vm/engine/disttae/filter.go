@@ -32,7 +32,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -1169,9 +1168,9 @@ func ExecuteBlockFilter(
 				var rows uint32
 				if objRows := objStats.Rows(); objRows != 0 {
 					if pos < blockCnt-1 {
-						rows = options.DefaultBlockMaxRows
+						rows = objectio.BlockMaxRows
 					} else {
-						rows = objRows - options.DefaultBlockMaxRows*uint32(pos)
+						rows = objRows - objectio.BlockMaxRows*uint32(pos)
 					}
 				} else {
 					if blkMeta == nil {

@@ -96,22 +96,6 @@ func (be *BaseEntryImpl[T]) CreateWithTxnLocked(txn txnif.AsyncTxn, baseNode T) 
 	be.InsertLocked(node)
 }
 
-func (be *BaseEntryImpl[T]) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
-	be.RLock()
-	defer be.RUnlock()
-	return be.TryGetTerminatedTSLocked(waitIfcommitting)
-}
-
-func (be *BaseEntryImpl[T]) TryGetTerminatedTSLocked(waitIfcommitting bool) (terminated bool, TS types.TS) {
-	node := be.GetLatestCommittedNodeLocked()
-	if node == nil {
-		return
-	}
-	if node.HasDropCommitted() {
-		return true, node.DeletedAt
-	}
-	return
-}
 func (be *BaseEntryImpl[T]) PrepareAdd(txn txnif.TxnReader) (err error) {
 	if err = be.ConflictCheck(txn); err != nil {
 		return
@@ -201,14 +185,6 @@ func (be *BaseEntryImpl[T]) HasDropCommittedLocked() bool {
 		return false
 	}
 	return un.HasDropCommitted()
-}
-
-func (be *BaseEntryImpl[T]) HasDropIntentLocked() bool {
-	un := be.GetLatestNodeLocked()
-	if un == nil {
-		return false
-	}
-	return un.HasDropIntent()
 }
 
 func (be *BaseEntryImpl[T]) ensureVisibleAndNotDroppedLocked(txn txnif.TxnReader) bool {

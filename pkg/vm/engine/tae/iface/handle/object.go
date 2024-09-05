@@ -82,7 +82,6 @@ type ObjectReader interface {
 	) error
 	GetRelation() Relation
 
-	BatchDedup(pks containers.Vector) error
 	Prefetch(idxes []int) error
 	BlkCnt() int
 }
@@ -90,10 +89,6 @@ type ObjectReader interface {
 type ObjectWriter interface {
 	io.Closer
 	String() string
-
-	PushDeleteOp(filter Filter) error
-	PushUpdateOp(filter Filter, attr string, val any) error
-
 	UpdateStats(objectio.ObjectStats) error
 }
 
