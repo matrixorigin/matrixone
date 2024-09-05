@@ -155,7 +155,7 @@ func TestUnionOne(t *testing.T) {
 		err = v.UnionOne(w, 0, mp)
 		require.NoError(t, err)
 		require.Equal(t, 1, v.Length())
-		vs := MustFixedCol[bool](v)
+		vs := MustFixedColNoTypeCheck[bool](v)
 		require.Equal(t, true, vs[0])
 
 		v.Free(mp)
@@ -172,7 +172,7 @@ func TestUnionOne(t *testing.T) {
 		err = v.UnionOne(w, 0, mp)
 		require.NoError(t, err)
 		require.Equal(t, 1, v.Length())
-		vs := MustFixedCol[int8](v)
+		vs := MustFixedColNoTypeCheck[int8](v)
 		require.Equal(t, int8(1), vs[0])
 
 		v.Free(mp)
@@ -189,7 +189,7 @@ func TestUnionOne(t *testing.T) {
 		err = v.UnionOne(w, 0, mp)
 		require.NoError(t, err)
 		require.Equal(t, 1, v.Length())
-		vs := MustFixedCol[int16](v)
+		vs := MustFixedColNoTypeCheck[int16](v)
 		require.Equal(t, int16(1), vs[0])
 
 		v.Free(mp)
@@ -206,7 +206,7 @@ func TestUnionOne(t *testing.T) {
 		err = v.UnionOne(w, 0, mp)
 		require.NoError(t, err)
 		require.Equal(t, 1, v.Length())
-		vs := MustFixedCol[int32](v)
+		vs := MustFixedColNoTypeCheck[int32](v)
 		require.Equal(t, int32(1), vs[0])
 
 		v.Free(mp)
@@ -223,7 +223,7 @@ func TestUnionOne(t *testing.T) {
 		err = v.UnionOne(w, 0, mp)
 		require.NoError(t, err)
 		require.Equal(t, 1, v.Length())
-		vs := MustFixedCol[int64](v)
+		vs := MustFixedColNoTypeCheck[int64](v)
 		require.Equal(t, int64(1), vs[0])
 
 		v.Free(mp)
@@ -240,7 +240,7 @@ func TestUnionOne(t *testing.T) {
 		err = v.UnionOne(w, 0, mp)
 		require.NoError(t, err)
 		require.Equal(t, 1, v.Length())
-		vs := MustFixedCol[uint8](v)
+		vs := MustFixedColNoTypeCheck[uint8](v)
 		require.Equal(t, uint8(1), vs[0])
 
 		v.Free(mp)
