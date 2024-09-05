@@ -38,7 +38,6 @@ type BlockWriter struct {
 	sortKeyIdx     uint16
 	nameStr        string
 	name           objectio.ObjectName
-	objectStats    []objectio.ObjectStats
 	prefix         []index.PrefixFn
 
 	// schema data
