@@ -51,15 +51,6 @@ func removeIf[T any](data []T, pred func(t T) bool) []T {
 	return data[:res]
 }
 
-type ReadFilterSearchFuncType func([]*vector.Vector) []int64
-
-type BlockReadFilter struct {
-	HasFakePK          bool
-	Valid              bool
-	SortedSearchFunc   ReadFilterSearchFuncType
-	UnSortedSearchFunc ReadFilterSearchFuncType
-}
-
 // ReadDataByFilter only read block data from storage by filter, don't apply deletes.
 func ReadDataByFilter(
 	ctx context.Context,
@@ -70,7 +61,7 @@ func ReadDataByFilter(
 	columns []uint16,
 	colTypes []types.Type,
 	ts types.TS,
-	searchFunc ReadFilterSearchFuncType,
+	searchFunc objectio.ReadFilterSearchFuncType,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (sels []int64, err error) {
@@ -171,7 +162,7 @@ func BlockDataRead(
 	ts timestamp.Timestamp,
 	filterSeqnums []uint16,
 	filterColTypes []types.Type,
-	filter BlockReadFilter,
+	filter objectio.BlockReadFilter,
 	policy fileservice.Policy,
 	tableName string,
 	bat *batch.Batch,
@@ -187,7 +178,7 @@ func BlockDataRead(
 		err  error
 	)
 
-	var searchFunc ReadFilterSearchFuncType
+	var searchFunc objectio.ReadFilterSearchFuncType
 	if (filter.HasFakePK || !info.Sorted) && filter.UnSortedSearchFunc != nil {
 		searchFunc = filter.UnSortedSearchFunc
 	} else if info.Sorted && filter.SortedSearchFunc != nil {

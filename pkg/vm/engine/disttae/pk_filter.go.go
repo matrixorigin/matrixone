@@ -18,20 +18,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 func newBlockReadPKFilter(
 	pkName string,
 	basePKFilter basePKFilter,
-) (f blockio.BlockReadFilter, err error) {
+) (f objectio.BlockReadFilter, err error) {
 	if !basePKFilter.valid {
-		return blockio.BlockReadFilter{}, nil
+		return objectio.BlockReadFilter{}, nil
 	}
 
-	var readFilter blockio.BlockReadFilter
+	var readFilter objectio.BlockReadFilter
 	var sortedSearchFunc, unSortedSearchFunc func(*vector.Vector) []int64
 
 	readFilter.HasFakePK = pkName == catalog.FakePrimaryKeyColName

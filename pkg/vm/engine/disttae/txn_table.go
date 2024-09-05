@@ -1902,8 +1902,8 @@ func (tbl *txnTable) PKPersistedBetween(
 		return true, err
 	}
 
-	var filter blockio.ReadFilterSearchFuncType
-	buildFilter := func() (blockio.ReadFilterSearchFuncType, error) {
+	var filter objectio.ReadFilterSearchFuncType
+	buildFilter := func() (objectio.ReadFilterSearchFuncType, error) {
 		//keys must be sorted.
 		keys.InplaceSort()
 		bytes, _ := keys.MarshalBinary()
@@ -1928,8 +1928,8 @@ func (tbl *txnTable) PKPersistedBetween(
 		return blockReadPKFilter.SortedSearchFunc, nil
 	}
 
-	var unsortedFilter blockio.ReadFilterSearchFuncType
-	buildUnsortedFilter := func() blockio.ReadFilterSearchFuncType {
+	var unsortedFilter objectio.ReadFilterSearchFuncType
+	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
 		return getNonSortedPKSearchFuncByPKVec(keys)
 	}
 

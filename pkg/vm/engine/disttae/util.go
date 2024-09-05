@@ -44,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -1162,7 +1161,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 
 func getNonSortedPKSearchFuncByPKVec(
 	vec *vector.Vector,
-) blockio.ReadFilterSearchFuncType {
+) objectio.ReadFilterSearchFuncType {
 
 	searchPKFunc := LinearSearchOffsetByValFactory(vec)
 

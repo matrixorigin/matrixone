@@ -485,7 +485,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, sid string, fs fileserv
 				defer bat.Clean(mp)
 				err := blockio.BlockDataRead(
 					ctx, sid, &blk, ds, idxes, colTypes, checkpointTS.ToTimestamp(),
-					nil, nil, blockio.BlockReadFilter{}, fileservice.Policy(0), "", bat, mp, fs,
+					nil, nil, objectio.BlockReadFilter{}, fileservice.Policy(0), "", bat, mp, fs,
 				)
 				if err != nil {
 					return nil, err
