@@ -139,7 +139,6 @@ func (r *emptyReader) Read(
 	_ []string,
 	_ *plan.Expr,
 	_ *mpool.MPool,
-	_ engine.VectorPool,
 	_ *batch.Batch,
 ) (bool, error) {
 	return true, nil
@@ -207,7 +206,6 @@ func (r *mergeReader) Read(
 	cols []string,
 	expr *plan.Expr,
 	mp *mpool.MPool,
-	vp engine.VectorPool,
 	bat *batch.Batch,
 ) (bool, error) {
 	start := time.Now()
@@ -219,7 +217,7 @@ func (r *mergeReader) Read(
 		return true, nil
 	}
 	for len(r.rds) > 0 {
-		isEnd, err := r.rds[0].Read(ctx, cols, expr, mp, vp, bat)
+		isEnd, err := r.rds[0].Read(ctx, cols, expr, mp, bat)
 		if err != nil {
 			for _, rd := range r.rds {
 				rd.Close()
@@ -320,7 +318,6 @@ func (r *reader) Read(
 	cols []string,
 	expr *plan.Expr,
 	mp *mpool.MPool,
-	vp engine.VectorPool,
 	bat *batch.Batch,
 ) (isEnd bool, err error) {
 
@@ -343,7 +340,6 @@ func (r *reader) Read(
 		r.columns.seqnums,
 		r.memFilter,
 		mp,
-		vp,
 		bat)
 
 	dataState = state
@@ -383,9 +379,11 @@ func (r *reader) Read(
 		r.filterState.seqnums,
 		r.filterState.colTypes,
 		filter,
-		r.fs, mp, vp, policy,
+		policy,
 		r.tableDef.Name,
 		bat,
+		mp,
+		r.fs,
 	)
 	if err != nil {
 		return false, err

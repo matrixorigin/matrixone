@@ -63,6 +63,7 @@ type BlockReadFilter struct {
 // ReadDataByFilter only read block data from storage by filter, don't apply deletes.
 func ReadDataByFilter(
 	ctx context.Context,
+	tableName string,
 	sid string,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
@@ -70,11 +71,10 @@ func ReadDataByFilter(
 	colTypes []types.Type,
 	ts types.TS,
 	searchFunc ReadFilterSearchFuncType,
-	fs fileservice.FileService,
 	mp *mpool.MPool,
-	tableName string,
+	fs fileservice.FileService,
 ) (sels []int64, err error) {
-	bat, rowidIdx, deleteMask, release, err := readBlockData(ctx, columns, colTypes, info, ts, fs, mp, nil, fileservice.Policy(0))
+	bat, rowidIdx, deleteMask, release, err := readBlockData(ctx, columns, colTypes, info, ts, fileservice.Policy(0), mp, fs)
 	if err != nil {
 		return
 	}
@@ -105,10 +105,9 @@ func BlockDataReadNoCopy(
 	columns []uint16,
 	colTypes []types.Type,
 	ts types.TS,
-	fs fileservice.FileService,
-	mp *mpool.MPool,
-	vp engine.VectorPool,
 	policy fileservice.Policy,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
 ) (*batch.Batch, *nulls.Bitmap, func(), error) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
@@ -132,7 +131,7 @@ func BlockDataReadNoCopy(
 
 	// read block data from storage specified by meta location
 	if loaded, rowidPos, deleteMask, release, err = readBlockData(
-		ctx, columns, colTypes, info, ts, fs, mp, vp, policy,
+		ctx, columns, colTypes, info, ts, policy, mp, fs,
 	); err != nil {
 		return nil, nil, nil, err
 	}
@@ -147,7 +146,7 @@ func BlockDataReadNoCopy(
 	// build rowid column if needed
 	if rowidPos >= 0 {
 		if loaded.Vecs[rowidPos], err = buildRowidColumn(
-			info, nil, mp, vp,
+			info, nil, mp,
 		); err != nil {
 
 			return nil, nil, nil, err
@@ -173,12 +172,11 @@ func BlockDataRead(
 	filterSeqnums []uint16,
 	filterColTypes []types.Type,
 	filter BlockReadFilter,
-	fs fileservice.FileService,
-	mp *mpool.MPool,
-	vp engine.VectorPool,
 	policy fileservice.Policy,
 	tableName string,
 	bat *batch.Batch,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
 ) error {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
@@ -198,8 +196,8 @@ func BlockDataRead(
 
 	if searchFunc != nil {
 		if sels, err = ReadDataByFilter(
-			ctx, sid, info, ds, filterSeqnums, filterColTypes,
-			types.TimestampToTS(ts), searchFunc, fs, mp, tableName,
+			ctx, tableName, sid, info, ds, filterSeqnums, filterColTypes,
+			types.TimestampToTS(ts), searchFunc, mp, fs,
 		); err != nil {
 			return err
 		}
@@ -218,7 +216,7 @@ func BlockDataRead(
 
 	err = BlockDataReadInner(
 		ctx, sid, info, ds, columns, colTypes,
-		types.TimestampToTS(ts), sels, fs, mp, vp, policy, bat,
+		types.TimestampToTS(ts), sels, policy, bat, mp, fs,
 	)
 	if err != nil {
 		return err
@@ -333,11 +331,10 @@ func BlockDataReadInner(
 	colTypes []types.Type,
 	ts types.TS,
 	selectRows []int64, // if selectRows is not empty, it was already filtered by filter
-	fs fileservice.FileService,
-	mp *mpool.MPool,
-	vp engine.VectorPool,
 	policy fileservice.Policy,
 	bat *batch.Batch,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
 ) (err error) {
 	var (
 		rowidPos    int
@@ -349,7 +346,7 @@ func BlockDataReadInner(
 
 	// read block data from storage specified by meta location
 	if loaded, rowidPos, deleteMask, release, err = readBlockData(
-		ctx, columns, colTypes, info, ts, fs, mp, vp, policy,
+		ctx, columns, colTypes, info, ts, policy, mp, fs,
 	); err != nil {
 		return
 	}
@@ -364,7 +361,7 @@ func BlockDataReadInner(
 		// build rowid column if needed
 		if rowidPos >= 0 {
 			if loaded.Vecs[rowidPos], err = buildRowidColumn(
-				info, selectRows, mp, vp,
+				info, selectRows, mp,
 			); err != nil {
 				return
 			}
@@ -416,7 +413,7 @@ func BlockDataReadInner(
 	// build rowid column if needed
 	if rowidPos >= 0 {
 		if loaded.Vecs[rowidPos], err = buildRowidColumn(
-			info, nil, mp, vp,
+			info, nil, mp,
 		); err != nil {
 			return
 		}
@@ -463,13 +460,8 @@ func buildRowidColumn(
 	info *objectio.BlockInfo,
 	sels []int64,
 	m *mpool.MPool,
-	vp engine.VectorPool,
 ) (col *vector.Vector, err error) {
-	if vp == nil {
-		col = vector.NewVec(objectio.RowidType)
-	} else {
-		col = vp.GetVector(objectio.RowidType)
-	}
+	col = vector.NewVec(objectio.RowidType)
 	if len(sels) == 0 {
 		err = objectio.ConstructRowidColumnTo(
 			col,
@@ -499,10 +491,9 @@ func readBlockData(
 	colTypes []types.Type,
 	info *objectio.BlockInfo,
 	ts types.TS,
-	fs fileservice.FileService,
-	m *mpool.MPool,
-	vp engine.VectorPool,
 	policy fileservice.Policy,
+	m *mpool.MPool,
+	fs fileservice.FileService,
 ) (bat *batch.Batch, rowidPos int, deleteMask nulls.Bitmap, release func(), err error) {
 	rowidPos, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
 
