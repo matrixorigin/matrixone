@@ -2790,7 +2790,7 @@ func (v *Vector) String() string {
 }
 
 func implRowToString[T types.FixedSizeT](v *Vector, idx int) string {
-	col := MustFixedCol[T](v)
+	col := MustFixedColNoTypeCheck[T](v)
 	if len(col) == 1 {
 		if nulls.Contains(v.nsp, 0) {
 			return "null"
@@ -2854,7 +2854,7 @@ func (v *Vector) RowToString(idx int) string {
 	case types.T_Blockid:
 		return implRowToString[types.Blockid](v, idx)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink:
-		col := MustFixedCol[types.Varlena](v)
+		col := MustFixedColNoTypeCheck[types.Varlena](v)
 		if len(col) == 1 {
 			if nulls.Contains(v.nsp, 0) {
 				return "null"
