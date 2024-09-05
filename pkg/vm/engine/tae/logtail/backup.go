@@ -149,7 +149,7 @@ func GetTombstonesByBlockId(
 		}
 
 		for idx := 0; idx < int(obj.BlkCnt()); idx++ {
-			rowids := vector.MustFixedCol[types.Rowid](oData.data[idx].Vecs[0])
+			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](oData.data[idx].Vecs[0])
 			start, end := blockio.FindIntervalForBlock(rowids, &bid)
 			if start == end {
 				continue

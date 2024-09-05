@@ -343,7 +343,7 @@ func isResultQuery(proc *process.Process, p *plan.Plan) ([]string, error) {
 					if err != nil {
 						return nil, err
 					}
-					uuid := vector.MustFixedCol[types.Uuid](vec)[0]
+					uuid := vector.MustFixedColWithTypeCheck[types.Uuid](vec)[0]
 					vec.Free(proc.GetMPool())
 
 					uuids = append(uuids, uuid.String())
