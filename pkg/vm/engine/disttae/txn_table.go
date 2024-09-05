@@ -1466,7 +1466,6 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	case deletion.CNBlockOffset:
 	case deletion.RawBatchOffset:
 	case deletion.RawRowIdBatch:
-		logutil.Infof("data return by remote pipeline\n")
 		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 		if bat.RowCount() == 0 {
 			return nil
