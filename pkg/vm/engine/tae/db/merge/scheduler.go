@@ -15,6 +15,7 @@
 package merge
 
 import (
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,7 +37,10 @@ type Scheduler struct {
 
 	skipForTransPageLimit bool
 
-	stoppedTables map[*catalog.TableEntry]time.Time
+	stoppedTables struct {
+		sync.RWMutex
+		m map[*catalog.TableEntry]time.Time
+	}
 }
 
 func NewScheduler(rt *dbutils.Runtime, sched CNMergeScheduler) *Scheduler {
@@ -44,7 +48,10 @@ func NewScheduler(rt *dbutils.Runtime, sched CNMergeScheduler) *Scheduler {
 		LoopProcessor: new(catalog.LoopProcessor),
 		policies:      newPolicyGroup(newBasicPolicy(), newTombstonePolicy()),
 		executor:      newMergeExecutor(rt, sched),
-		stoppedTables: make(map[*catalog.TableEntry]time.Time),
+		stoppedTables: struct {
+			sync.RWMutex
+			m map[*catalog.TableEntry]time.Time
+		}{m: make(map[*catalog.TableEntry]time.Time)},
 	}
 
 	op.DatabaseFn = op.onDataBase
@@ -115,12 +122,15 @@ func (s *Scheduler) onTable(tableEntry *catalog.TableEntry) (err error) {
 		return moerr.GetOkStopCurrRecur()
 	}
 
-	if t, ok := s.stoppedTables[tableEntry]; ok {
+	s.stoppedTables.RLock()
+	if t, ok := s.stoppedTables.m[tableEntry]; ok {
 		if time.Now().After(t.Add(10 * time.Minute)) {
 			logutil.Warnf("table %s has stopped merging for over 10 minutes", tableEntry.GetFullName())
 		}
+		s.stoppedTables.RUnlock()
 		return moerr.GetOkStopCurrRecur()
 	}
+	s.stoppedTables.RUnlock()
 
 	tableEntry.RLock()
 	// this table is creating or altering
@@ -159,7 +169,6 @@ func (s *Scheduler) onObject(objectEntry *catalog.ObjectEntry) (err error) {
 		return moerr.GetOkStopCurrRecur()
 	}
 
-	// Rows will check objectStat, and if not loaded, it will load it.
 	s.policies.onObject(objectEntry)
 	return
 }
@@ -171,11 +180,15 @@ func (s *Scheduler) onPostObject(*catalog.ObjectEntry) (err error) {
 }
 
 func (s *Scheduler) StopMerge(tbl *catalog.TableEntry) {
-	s.stoppedTables[tbl] = time.Now()
+	s.stoppedTables.Lock()
+	defer s.stoppedTables.Unlock()
+	s.stoppedTables.m[tbl] = time.Now()
 }
 
 func (s *Scheduler) StartMerge(tbl *catalog.TableEntry) {
-	delete(s.stoppedTables, tbl)
+	s.stoppedTables.Lock()
+	defer s.stoppedTables.Unlock()
+	delete(s.stoppedTables.m, tbl)
 }
 
 func objectValid(objectEntry *catalog.ObjectEntry) bool {
