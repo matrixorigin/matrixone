@@ -178,8 +178,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 
 	stats := statistic.StatsInfoFromContext(execTopContext)
-	stats.ResetIOAccessTimeConsumption()
-	stats.ResetIOMergerTimeConsumption()
 	stats.ExecutionStart()
 	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOperator, executeSQL, seq)
 	defer func() {
@@ -207,6 +205,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
 	for {
+		// Before compile.runOnce, reset `StatsInfo` IO resources which in sql context
+		stats.ResetIOAccessTimeConsumption()
+		stats.ResetIOMergerTimeConsumption()
+
 		// build query context and pipeline contexts for the current run.
 		runC.InitPipelineContextToExecuteQuery()
 		runC.MessageBoard.BeforeRunonce()
@@ -245,12 +247,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if runC != c {
 			runC.Release()
 		}
-
-		//-----------------------------------------------------
-		// After execute failed, reset `StatsInfo` physical resources which in sql context
-		stats.ResetIOAccessTimeConsumption()
-		stats.ResetIOMergerTimeConsumption()
-		//-----------------------------------------------------
 
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 		if runC, err = c.prepareRetry(defChanged); err != nil {
