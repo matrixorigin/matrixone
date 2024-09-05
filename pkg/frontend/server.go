@@ -122,6 +122,12 @@ func (mo *MOServer) Stop() error {
 	return nil
 }
 
+func (mo *MOServer) IsRunning() bool {
+	mo.mu.RLock()
+	defer mo.mu.RUnlock()
+	return mo.running == true
+}
+
 func (mo *MOServer) startListener() {
 	logutil.Debug("mo server accept loop started")
 	defer func() {
@@ -447,12 +453,9 @@ func (mo *MOServer) handleMessage(rs *Conn) error {
 func (mo *MOServer) handleRequest(rs *Conn) error {
 	var msg []byte
 	var err error
-	mo.mu.RLock()
-	if !mo.running {
-		mo.mu.RUnlock()
+	if !mo.IsRunning() {
 		return io.EOF
 	}
-	mo.mu.RUnlock()
 
 	msg, err = rs.Read()
 	if err != nil {
