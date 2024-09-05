@@ -31,9 +31,10 @@ package interval
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // Comparable is an interface for trichotomic comparisons.
