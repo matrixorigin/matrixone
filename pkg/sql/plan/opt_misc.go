@@ -34,6 +34,7 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	increaseRefCntForExprList(node.GroupingSet, 1, colRefCnt)
 	increaseRefCntForExprList(node.AggList, 1, colRefCnt)
 	increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
+	increaseRefCntForExprList(node.InsertDeleteCols, 1, colRefCnt)
 	for i := range node.OrderBy {
 		increaseRefCnt(node.OrderBy[i].Expr, 1, colRefCnt)
 	}
@@ -167,6 +168,7 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.GroupingSet, projMap)
 	replaceColumnsForExprList(node.AggList, projMap)
 	replaceColumnsForExprList(node.WinSpecList, projMap)
+	replaceColumnsForExprList(node.InsertDeleteCols, projMap)
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr = replaceColumnsForExpr(node.OrderBy[i].Expr, projMap)
 	}
@@ -331,6 +333,7 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 	increaseTagCntForExprList(node.GroupingSet, 1, tagCnt)
 	increaseTagCntForExprList(node.AggList, 1, tagCnt)
 	increaseTagCntForExprList(node.WinSpecList, 1, tagCnt)
+	increaseTagCntForExprList(node.InsertDeleteCols, 1, tagCnt)
 	for i := range node.OrderBy {
 		increaseTagCnt(node.OrderBy[i].Expr, 1, tagCnt)
 	}
@@ -364,6 +367,7 @@ END:
 	increaseTagCntForExprList(node.GroupingSet, -1, tagCnt)
 	increaseTagCntForExprList(node.AggList, -1, tagCnt)
 	increaseTagCntForExprList(node.WinSpecList, -1, tagCnt)
+	increaseTagCntForExprList(node.InsertDeleteCols, -1, tagCnt)
 	for i := range node.OrderBy {
 		increaseTagCnt(node.OrderBy[i].Expr, -1, tagCnt)
 	}
