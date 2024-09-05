@@ -175,9 +175,7 @@ func (s *Scheduler) StopMerge(tbl *catalog.TableEntry) {
 }
 
 func (s *Scheduler) StartMerge(tbl *catalog.TableEntry) {
-	if _, ok := s.stoppedTables[tbl]; ok {
-		delete(s.stoppedTables, tbl)
-	}
+	delete(s.stoppedTables, tbl)
 }
 
 func objectValid(objectEntry *catalog.ObjectEntry) bool {
