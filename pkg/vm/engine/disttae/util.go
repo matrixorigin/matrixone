@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -760,69 +759,6 @@ func removeIf[T any](data []T, pred func(t T) bool) []T {
 		}
 	}
 	return data[:res]
-}
-func MakeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
-	argTypes := make([]types.Type, len(args))
-	for i, arg := range args {
-		argTypes[i] = plan2.MakeTypeByPlan2Expr(arg)
-	}
-
-	finfo, err := function.GetFunctionByName(context.TODO(), name, argTypes)
-	if err != nil {
-		panic(err)
-	}
-
-	retTyp := finfo.GetReturnType()
-
-	return &plan.Expr{
-		Typ: plan2.MakePlan2Type(&retTyp),
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{
-					Obj:     finfo.GetEncodedOverloadID(),
-					ObjName: name,
-				},
-				Args: args,
-			},
-		},
-	}
-}
-
-func MakeInExprForTest[T any](
-	arg0 *plan.Expr, vals []T, oid types.T, mp *mpool.MPool,
-) *plan.Expr {
-	vec := vector.NewVec(oid.ToType())
-	for _, val := range vals {
-		_ = vector.AppendAny(vec, val, false, mp)
-	}
-	data, _ := vec.MarshalBinary()
-	vec.Free(mp)
-	return &plan.Expr{
-		Typ: plan.Type{
-			Id:          int32(types.T_bool),
-			NotNullable: true,
-		},
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{
-					Obj:     function.InFunctionEncodedID,
-					ObjName: function.InFunctionName,
-				},
-				Args: []*plan.Expr{
-					arg0,
-					{
-						Typ: plan2.MakePlan2Type(vec.GetType()),
-						Expr: &plan.Expr_Vec{
-							Vec: &plan.LiteralVec{
-								Len:  int32(len(vals)),
-								Data: data,
-							},
-						},
-					},
-				},
-			},
-		},
-	}
 }
 
 func stringifySlice(req any, f func(any) string) string {

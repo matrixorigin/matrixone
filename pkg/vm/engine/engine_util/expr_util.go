@@ -15,8 +15,10 @@
 package engine_util
 
 import (
+	"context"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -694,5 +697,69 @@ func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
 		return true, types.Decimal128{B0_63: uint64(a), B64_127: uint64(b)}
 	default:
 		return false, nil
+	}
+}
+
+func MakeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
+	argTypes := make([]types.Type, len(args))
+	for i, arg := range args {
+		argTypes[i] = plan2.MakeTypeByPlan2Expr(arg)
+	}
+
+	finfo, err := function.GetFunctionByName(context.TODO(), name, argTypes)
+	if err != nil {
+		panic(err)
+	}
+
+	retTyp := finfo.GetReturnType()
+
+	return &plan.Expr{
+		Typ: plan2.MakePlan2Type(&retTyp),
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     finfo.GetEncodedOverloadID(),
+					ObjName: name,
+				},
+				Args: args,
+			},
+		},
+	}
+}
+
+func MakeInExprForTest[T any](
+	arg0 *plan.Expr, vals []T, oid types.T, mp *mpool.MPool,
+) *plan.Expr {
+	vec := vector.NewVec(oid.ToType())
+	for _, val := range vals {
+		_ = vector.AppendAny(vec, val, false, mp)
+	}
+	data, _ := vec.MarshalBinary()
+	vec.Free(mp)
+	return &plan.Expr{
+		Typ: plan.Type{
+			Id:          int32(types.T_bool),
+			NotNullable: true,
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     function.InFunctionEncodedID,
+					ObjName: function.InFunctionName,
+				},
+				Args: []*plan.Expr{
+					arg0,
+					{
+						Typ: plan2.MakePlan2Type(vec.GetType()),
+						Expr: &plan.Expr_Vec{
+							Vec: &plan.LiteralVec{
+								Len:  int32(len(vals)),
+								Data: data,
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 }
