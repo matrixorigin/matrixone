@@ -72,8 +72,18 @@ func (signal PipelineSignal) Action() (data *batch.Batch, info error) {
 	return signal.directly, nil
 }
 
+func (signal PipelineSignal) Release() {
+	if signal.typ == GetFromIndex {
+		signal.source.FreeCurrentReceive(signal.index)
+	}
+}
+
 type PipelineSignalReceiver struct {
 	alive int
+
+	// the previous buffer we have received.
+	// release it before try to receive next one can help we release it immediately.
+	pre *PipelineSignal
 
 	// receive data channel, first reg is the monitor for runningCtx.
 	regs []reflect.SelectCase
@@ -98,12 +108,15 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 
 	return &PipelineSignalReceiver{
 		alive: len(regs),
+		pre:   nil,
 		regs:  scs,
 		nbs:   nbs,
 	}
 }
 
 func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, info error) {
+	receiver.releaseLastReceive()
+
 	for {
 		if receiver.alive == 0 {
 			return nil, nil
@@ -112,11 +125,13 @@ func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, in
 		chosen, v, ok := reflect.Select(receiver.regs)
 		if chosen == 0 {
 			// user was going to end.
+			receiver.releaseLastReceive()
 			return nil, nil
 		}
 		if ok {
 			msg := (v.Interface()).(PipelineSignal)
 			content, info = msg.Action()
+			receiver.pre = &msg
 			if content == nil {
 				idx := chosen - 1
 
@@ -129,12 +144,18 @@ func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, in
 				}
 				continue
 			}
-
 			return content, info
 		}
 		break
 	}
 	panic("unexpected sender close during GetNextBatch")
+}
+
+func (receiver *PipelineSignalReceiver) releaseLastReceive() {
+	if receiver.pre != nil {
+		receiver.pre.Release()
+		receiver.pre = nil
+	}
 }
 
 func (receiver *PipelineSignalReceiver) WaitingEnd() {

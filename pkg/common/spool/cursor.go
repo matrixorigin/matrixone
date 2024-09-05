@@ -30,14 +30,7 @@ func (c *Cursor[T]) Next() (ret T, ok bool) {
 	}
 
 	for {
-
-		// decrease reference of last node
-		if c.last != nil {
-			c.last.numCursors.Add(-1)
-		}
-
-		// check free
-		c.spool.checkFree()
+		c.FreeCurrent()
 
 		// wait value ok
 		c.next.mu.Lock()
@@ -75,6 +68,18 @@ func (c *Cursor[T]) Next() (ret T, ok bool) {
 		}
 
 	}
+}
+
+// FreeCurrent decrease reference for last node and check free.
+func (c *Cursor[T]) FreeCurrent() {
+	// decrease reference of last node
+	if c.last != nil {
+		c.last.numCursors.Add(-1)
+		c.last = nil
+	}
+
+	// check free
+	c.spool.checkFree()
 }
 
 // Peek returns the next value if available
