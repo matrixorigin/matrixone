@@ -700,6 +700,29 @@ func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
 	}
 }
 
+// for test
+func MakeColExprForTest(idx int32, typ types.T, colName ...string) *plan.Expr {
+	schema := []string{"a", "b", "c", "d"}
+	var name = schema[idx]
+	if len(colName) > 0 {
+		name = colName[0]
+	}
+
+	containerType := typ.ToType()
+	exprType := plan2.MakePlan2Type(&containerType)
+
+	return &plan.Expr{
+		Typ: exprType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: idx,
+				Name:   name,
+			},
+		},
+	}
+}
+
 func MakeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	argTypes := make([]types.Type, len(args))
 	for i, arg := range args {

@@ -32,10 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -718,30 +716,6 @@ func (e *concurrentExecutor) Run(ctx context.Context) {
 // GetConcurrency implements the ConcurrentExecutor interface.
 func (e *concurrentExecutor) GetConcurrency() int {
 	return e.concurrency
-}
-
-// for test
-
-func MakeColExprForTest(idx int32, typ types.T, colName ...string) *plan.Expr {
-	schema := []string{"a", "b", "c", "d"}
-	var name = schema[idx]
-	if len(colName) > 0 {
-		name = colName[0]
-	}
-
-	containerType := typ.ToType()
-	exprType := plan2.MakePlan2Type(&containerType)
-
-	return &plan.Expr{
-		Typ: exprType,
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: 0,
-				ColPos: idx,
-				Name:   name,
-			},
-		},
-	}
 }
 
 // removeIf removes the elements that pred is true.

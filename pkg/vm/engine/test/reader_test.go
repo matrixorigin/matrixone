@@ -111,7 +111,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 
 	expr := []*plan.Expr{
 		engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
-			disttae.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
+			engine_util.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
 			plan2.MakePlan2Int64ConstExprWithType(bats[0].Vecs[primaryKeyIdx].Get(0).(int64)),
 		}),
 	}
@@ -207,7 +207,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 
 	expr := []*plan.Expr{
 		engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
-			disttae.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
+			engine_util.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
 			plan2.MakePlan2Int64ConstExprWithType(bat1.Vecs[primaryKeyIdx].Get(9).(int64)),
 		}),
 	}

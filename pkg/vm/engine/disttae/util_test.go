@@ -49,17 +49,17 @@ func TestCheckExprIsZonemappable(t *testing.T) {
 	testCases := []asserts{
 		// a > 1  -> true
 		{true, engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
-			MakeColExprForTest(0, types.T_int64),
+			engine_util.MakeColExprForTest(0, types.T_int64),
 			plan2.MakePlan2Int64ConstExprWithType(10),
 		})},
 		// a >= b -> true
 		{true, engine_util.MakeFunctionExprForTest(">=", []*plan.Expr{
-			MakeColExprForTest(0, types.T_int64),
-			MakeColExprForTest(1, types.T_int64),
+			engine_util.MakeColExprForTest(0, types.T_int64),
+			engine_util.MakeColExprForTest(1, types.T_int64),
 		})},
 		// abs(a) -> false
 		{false, engine_util.MakeFunctionExprForTest("abs", []*plan.Expr{
-			MakeColExprForTest(0, types.T_int64),
+			engine_util.MakeColExprForTest(0, types.T_int64),
 		})},
 	}
 
@@ -103,113 +103,113 @@ func TestEvalZonemapFilter(t *testing.T) {
 			},
 			exprs: []*plan.Expr{
 				engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
-					MakeColExprForTest(0, types.T_float64),
+					engine_util.MakeColExprForTest(0, types.T_float64),
 					plan2.MakePlan2Float64ConstExprWithType(10),
 				}),
 				engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
-					MakeColExprForTest(0, types.T_float64),
+					engine_util.MakeColExprForTest(0, types.T_float64),
 					plan2.MakePlan2Float64ConstExprWithType(30),
 				}),
 				engine_util.MakeFunctionExprForTest("<=", []*plan.Expr{
-					MakeColExprForTest(0, types.T_float64),
+					engine_util.MakeColExprForTest(0, types.T_float64),
 					plan2.MakePlan2Float64ConstExprWithType(-10),
 				}),
 				engine_util.MakeFunctionExprForTest("<", []*plan.Expr{
-					MakeColExprForTest(0, types.T_float64),
+					engine_util.MakeColExprForTest(0, types.T_float64),
 					plan2.MakePlan2Float64ConstExprWithType(-10),
 				}),
 				engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
 					engine_util.MakeFunctionExprForTest("+", []*plan.Expr{
-						MakeColExprForTest(0, types.T_float64),
-						MakeColExprForTest(1, types.T_float64),
+						engine_util.MakeColExprForTest(0, types.T_float64),
+						engine_util.MakeColExprForTest(1, types.T_float64),
 					}),
 					plan2.MakePlan2Float64ConstExprWithType(60),
 				}),
 				engine_util.MakeFunctionExprForTest("<", []*plan.Expr{
 					engine_util.MakeFunctionExprForTest("+", []*plan.Expr{
-						MakeColExprForTest(0, types.T_float64),
-						MakeColExprForTest(1, types.T_float64),
+						engine_util.MakeColExprForTest(0, types.T_float64),
+						engine_util.MakeColExprForTest(1, types.T_float64),
 					}),
 					plan2.MakePlan2Float64ConstExprWithType(-5),
 				}),
 				engine_util.MakeFunctionExprForTest("<", []*plan.Expr{
 					engine_util.MakeFunctionExprForTest("-", []*plan.Expr{
-						MakeColExprForTest(0, types.T_float64),
-						MakeColExprForTest(1, types.T_float64),
+						engine_util.MakeColExprForTest(0, types.T_float64),
+						engine_util.MakeColExprForTest(1, types.T_float64),
 					}),
 					plan2.MakePlan2Float64ConstExprWithType(-34),
 				}),
 				engine_util.MakeFunctionExprForTest("<", []*plan.Expr{
 					engine_util.MakeFunctionExprForTest("-", []*plan.Expr{
-						MakeColExprForTest(0, types.T_float64),
-						MakeColExprForTest(1, types.T_float64),
+						engine_util.MakeColExprForTest(0, types.T_float64),
+						engine_util.MakeColExprForTest(1, types.T_float64),
 					}),
 					plan2.MakePlan2Float64ConstExprWithType(-35),
 				}),
 				engine_util.MakeFunctionExprForTest("<=", []*plan.Expr{
 					engine_util.MakeFunctionExprForTest("-", []*plan.Expr{
-						MakeColExprForTest(0, types.T_float64),
-						MakeColExprForTest(1, types.T_float64),
+						engine_util.MakeColExprForTest(0, types.T_float64),
+						engine_util.MakeColExprForTest(1, types.T_float64),
 					}),
 					plan2.MakePlan2Float64ConstExprWithType(-35),
 				}),
 				engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
-					MakeColExprForTest(0, types.T_float64),
-					MakeColExprForTest(1, types.T_float64),
+					engine_util.MakeColExprForTest(0, types.T_float64),
+					engine_util.MakeColExprForTest(1, types.T_float64),
 				}),
 				engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
-					MakeColExprForTest(0, types.T_float64),
+					engine_util.MakeColExprForTest(0, types.T_float64),
 					engine_util.MakeFunctionExprForTest("+", []*plan.Expr{
-						MakeColExprForTest(1, types.T_float64),
+						engine_util.MakeColExprForTest(1, types.T_float64),
 						plan2.MakePlan2Float64ConstExprWithType(15),
 					}),
 				}),
 				engine_util.MakeFunctionExprForTest(">=", []*plan.Expr{
-					MakeColExprForTest(0, types.T_float64),
+					engine_util.MakeColExprForTest(0, types.T_float64),
 					engine_util.MakeFunctionExprForTest("+", []*plan.Expr{
-						MakeColExprForTest(1, types.T_float64),
+						engine_util.MakeColExprForTest(1, types.T_float64),
 						plan2.MakePlan2Float64ConstExprWithType(15),
 					}),
 				}),
 				engine_util.MakeFunctionExprForTest("or", []*plan.Expr{
 					engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
-						MakeColExprForTest(0, types.T_float64),
+						engine_util.MakeColExprForTest(0, types.T_float64),
 						plan2.MakePlan2Float64ConstExprWithType(100),
 					}),
 					engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
-						MakeColExprForTest(1, types.T_float64),
+						engine_util.MakeColExprForTest(1, types.T_float64),
 						plan2.MakePlan2Float64ConstExprWithType(10),
 					}),
 				}),
 				engine_util.MakeFunctionExprForTest("and", []*plan.Expr{
 					engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
-						MakeColExprForTest(0, types.T_float64),
+						engine_util.MakeColExprForTest(0, types.T_float64),
 						plan2.MakePlan2Float64ConstExprWithType(100),
 					}),
 					engine_util.MakeFunctionExprForTest("<", []*plan.Expr{
-						MakeColExprForTest(1, types.T_float64),
+						engine_util.MakeColExprForTest(1, types.T_float64),
 						plan2.MakePlan2Float64ConstExprWithType(0),
 					}),
 				}),
 				engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
-					MakeColExprForTest(3, types.T_varchar),
+					engine_util.MakeColExprForTest(3, types.T_varchar),
 					plan2.MakePlan2StringConstExprWithType("xyz"),
 				}),
 				engine_util.MakeFunctionExprForTest("<=", []*plan.Expr{
-					MakeColExprForTest(3, types.T_varchar),
+					engine_util.MakeColExprForTest(3, types.T_varchar),
 					plan2.MakePlan2StringConstExprWithType("efg"),
 				}),
 				engine_util.MakeFunctionExprForTest("<", []*plan.Expr{
-					MakeColExprForTest(3, types.T_varchar),
+					engine_util.MakeColExprForTest(3, types.T_varchar),
 					plan2.MakePlan2StringConstExprWithType("efg"),
 				}),
 				engine_util.MakeFunctionExprForTest(">", []*plan.Expr{
-					MakeColExprForTest(2, types.T_varchar),
-					MakeColExprForTest(3, types.T_varchar),
+					engine_util.MakeColExprForTest(2, types.T_varchar),
+					engine_util.MakeColExprForTest(3, types.T_varchar),
 				}),
 				engine_util.MakeFunctionExprForTest("<", []*plan.Expr{
-					MakeColExprForTest(2, types.T_varchar),
-					MakeColExprForTest(3, types.T_varchar),
+					engine_util.MakeColExprForTest(2, types.T_varchar),
+					engine_util.MakeColExprForTest(3, types.T_varchar),
 				}),
 			},
 			meta: func() objectio.BlockObject {
