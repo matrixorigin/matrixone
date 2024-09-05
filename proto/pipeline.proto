@@ -588,15 +588,14 @@ message Pipeline {
   repeated Instruction instruction_list = 6;
 
   bool is_end = 7;
-  bool is_join = 8;
-  bool is_load = 9;
-  NodeInfo node = 10;
-  int32 push_down_info = 11;
-  int32 children_count = 12;
-  repeated int32 channel_buffer_size = 13;
-  repeated int32 nil_batch_cnt = 14;
+  bool is_load = 8;
+  NodeInfo node = 9;
+  int32 push_down_info = 10;
+  int32 children_count = 11;
+  repeated int32 channel_buffer_size = 12;
+  repeated int32 nil_batch_cnt = 13;
 
-  repeated UuidToRegIdx uuids_to_reg_idx = 15;
+  repeated UuidToRegIdx uuids_to_reg_idx = 14;
 }
 
 message WrapNode {
