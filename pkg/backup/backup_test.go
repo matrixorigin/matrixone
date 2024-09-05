@@ -45,7 +45,6 @@ const (
 )
 
 func TestBackupData(t *testing.T) {
-	t.Skipf("Skip TestBackupData")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
