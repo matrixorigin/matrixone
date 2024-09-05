@@ -416,6 +416,7 @@ func (c *Compile) FreeOperator() {
 	}
 }
 
+/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)
@@ -424,7 +425,7 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
-
+*/
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
@@ -452,7 +453,7 @@ func (c *Compile) runOnce() error {
 		_, _ = GetCompileService().removeRunningCompile(c)
 	}()
 
-	c.printPipeline()
+	//c.printPipeline()
 
 	for i := range c.scopes {
 		wg.Add(1)
