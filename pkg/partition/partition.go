@@ -43,7 +43,7 @@ func genericPartition[T types.FixedSizeT](sels []int64, diffs []bool, partitions
 		var n bool
 		var v T
 
-		vs := vector.MustFixedCol[T](vec)
+		vs := vector.MustFixedColWithTypeCheck[T](vec)
 		nsp := vec.GetNulls()
 		if nsp.Any() {
 			for i, sel := range sels {

@@ -145,7 +145,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	copy(attrs, insertBatch.Attrs)
 
 	updateExpr := insertArg.OnDuplicateExpr
-	oldRowIdVec := vector.MustFixedCol[types.Rowid](originBatch.Vecs[rowIdIdx])
+	oldRowIdVec := vector.MustFixedColWithTypeCheck[types.Rowid](originBatch.Vecs[rowIdIdx])
 	for i := 0; i < originBatch.RowCount(); i++ {
 		newBatch, err := fetchOneRowAsBatch(i, originBatch, proc, attrs)
 		if err != nil {
@@ -166,8 +166,8 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 
 			// if conflict with origin row. and row_id is not equal row_id of insertBatch's inflict row. then throw error
 			if !newBatch.Vecs[rowIdIdx].GetNulls().Contains(0) {
-				oldRowId := vector.MustFixedCol[types.Rowid](insertBatch.Vecs[rowIdIdx])[oldConflictIdx]
-				newRowId := vector.MustFixedCol[types.Rowid](newBatch.Vecs[rowIdIdx])[0]
+				oldRowId := vector.MustFixedColWithTypeCheck[types.Rowid](insertBatch.Vecs[rowIdIdx])[oldConflictIdx]
+				newRowId := vector.MustFixedColWithTypeCheck[types.Rowid](newBatch.Vecs[rowIdIdx])[0]
 				if !bytes.Equal(oldRowId[:], newRowId[:]) {
 					newBatch.Clean(proc.GetMPool())
 					return moerr.NewConstraintViolation(proc.Ctx, conflictMsg)
@@ -364,7 +364,7 @@ func checkConflict(proc *process.Process, newBatch *batch.Batch, checkConflictBa
 		}
 
 		// run expr row by row. if result is true, break
-		isConflict := vector.MustFixedCol[bool](result)
+		isConflict := vector.MustFixedColWithTypeCheck[bool](result)
 		for _, flag := range isConflict {
 			if flag {
 				conflictMsg := fmt.Sprintf("Duplicate entry for key '%s'", uniqueCols[i])

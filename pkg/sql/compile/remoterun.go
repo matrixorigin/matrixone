@@ -170,7 +170,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.PipelineType = pipeline.Pipeline_PipelineType(s.Magic)
 	p.PipelineId = ctx.id
 	p.IsEnd = s.IsEnd
-	p.IsJoin = s.IsJoin
 	p.IsLoad = s.IsLoad
 	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
 
@@ -315,7 +314,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 
 	s = newScope(magicType(p.GetPipelineType()))
 	s.IsEnd = p.IsEnd
-	s.IsJoin = p.IsJoin
 	s.IsLoad = p.IsLoad
 	s.IsRemote = isRemote
 	if err = convertPipelineUuid(p, s); err != nil {

@@ -238,7 +238,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Proc
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 						continue
 					}
-					bs := vector.MustFixedCol[bool](vec)
+					bs := vector.MustFixedColWithTypeCheck[bool](vec)
 					if bs[0] {
 						if matched {
 							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
@@ -285,7 +285,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Proc
 						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 							continue
 						}
-						bs := vector.MustFixedCol[bool](vec)
+						bs := vector.MustFixedColWithTypeCheck[bool](vec)
 						if bs[0] {
 							if matched {
 								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
