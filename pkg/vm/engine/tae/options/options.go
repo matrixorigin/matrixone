@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
@@ -136,7 +137,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.StorageCfg == nil {
 		o.StorageCfg = &StorageCfg{
-			BlockMaxRows:    DefaultBlockMaxRows,
+			BlockMaxRows:    objectio.BlockMaxRows,
 			ObjectMaxBlocks: DefaultBlocksPerObject,
 		}
 	}

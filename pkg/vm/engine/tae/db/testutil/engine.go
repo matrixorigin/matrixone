@@ -325,6 +325,7 @@ func (e *TestEngine) TryDeleteByDeltaloc(vals []any) (ok bool, err error) {
 	return
 }
 
+// TODO replace it with TryDeleteByDeltalocWithTxn2
 func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) (ok bool, err error) {
 	rel := e.GetRelationWithTxn(txn)
 
@@ -354,6 +355,38 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 		if !ok {
 			return ok, err
 		}
+	}
+	ok = true
+	return
+}
+
+func (e *TestEngine) TryDeleteByDeltalocWithTxn2(vals []any, txn txnif.AsyncTxn) (ok bool, err error) {
+	rel := e.GetRelationWithTxn(txn)
+
+	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	pks := containers.MakeVector(e.schema.GetPrimaryKey().Type, common.DebugAllocator)
+	var firstID *common.ID // TODO use table.AsCommonID
+	for i, val := range vals {
+		filter := handle.NewEQFilter(val)
+		id, offset, err := rel.GetByFilter(context.Background(), filter)
+		if i == 0 {
+			firstID = id
+		}
+		assert.NoError(e.T, err)
+		objID := id.ObjectID()
+		_, blkOffset := id.BlockID.Offsets()
+		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*objID, blkOffset, offset)
+		rowIDs.Append(rowID, false)
+		pks.Append(val, false)
+	}
+
+	stats, err := MockCNDeleteInS3_2(e.Runtime.Fs, rowIDs, pks, e.schema, txn)
+	assert.NoError(e.T, err)
+	require.False(e.T, stats.IsZero())
+	ok, err = rel.TryDeleteByStats(firstID, stats)
+	assert.NoError(e.T, err)
+	if !ok {
+		return ok, err
 	}
 	ok = true
 	return
