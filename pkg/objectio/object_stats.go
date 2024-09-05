@@ -60,14 +60,6 @@ type ObjectStats [ObjectStatsLen]byte
 
 type ObjectStatsOptions func(*ObjectStats)
 
-func WithFlags(flags ...int) ObjectStatsOptions {
-	return func(o *ObjectStats) {
-		for _, f := range flags {
-			o[reservedOffset] |= byte(f)
-		}
-	}
-}
-
 func WithCNCreated() ObjectStatsOptions {
 	return func(o *ObjectStats) {
 		o[reservedOffset] |= CNCreatedFlag
