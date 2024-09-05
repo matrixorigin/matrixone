@@ -16,5 +16,16 @@ show tables;
 
 rename table rename_table_01 to rename01,rename_table_02 to rename02,rename_table_03 to rename03,rename_table_04 to rename04,rename_table_05 to rename05;
 show tables;
+desc rename01;
+desc rename02;
+desc rename03;
+desc rename04;
+desc rename05;
+
+show create table rename01;
+show create table rename02;
+show create table rename03;
+show create table rename04;
+show create table rename05;
 
 drop database if exists abc;
