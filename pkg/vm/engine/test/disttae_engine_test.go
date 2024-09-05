@@ -1085,7 +1085,7 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	require.Equal(t, 2, res.Batches[0].RowCount())
 	pkSum := int16(0)
 	for i := 0; i < 2; i++ {
-		pkSum += vector.GetFixedAt[int16](res.Batches[0].Vecs[1], i)
+		pkSum += vector.GetFixedAtWithTypeCheck[int16](res.Batches[0].Vecs[1], i)
 	}
 	require.Equal(t, int16(5 /*2+3*/), pkSum)
 }
