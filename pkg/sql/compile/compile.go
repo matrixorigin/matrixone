@@ -363,6 +363,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.AlterView(c)
 	case AlterTable:
 		return s.AlterTable(c)
+	case RenameTable:
+		return s.RenameTable(c)
 	case DropTable:
 		return s.DropTable(c)
 	case DropSequence:

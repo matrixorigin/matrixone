@@ -2886,7 +2886,7 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		}
 
 		alterTablePlan := &plan.AlterTable{
-			Actions:        make([]*plan.AlterTable_Action, len(stmt.AlterTables)),
+			Actions:        make([]*plan.AlterTable_Action, len(alterTable.Options)),
 			AlgorithmType:  plan.AlterTable_INPLACE,
 			Database:       schemaName,
 			TableDef:       tableDef,

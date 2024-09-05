@@ -274,6 +274,30 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	return err
 }
 
+func (s *Scope) RenameTable(c *Compile) (err error) {
+	qry := s.Plan.GetDdl().GetRenameTable()
+
+	for _, alterTable := range qry.AlterTables {
+		plan := &plan.Plan{
+			Plan: &plan.Plan_Ddl{
+				Ddl: &plan.DataDefinition{
+					DdlType: plan.DataDefinition_ALTER_TABLE,
+					Definition: &plan.DataDefinition_AlterTable{
+						AlterTable: alterTable,
+					},
+				},
+			},
+		}
+		newScope := newScope(AlterTable).withPlan(plan)
+		defer newScope.release()
+		err = newScope.AlterTable(c)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // updateTableForeignKeyColId update foreign key colid of child table references
 func updateTableForeignKeyColId(c *Compile, changColDefMap map[uint64]*plan.ColDef, childTblId uint64, oldParentTblId uint64, newParentTblId uint64) error {
 	var childRelation engine.Relation
