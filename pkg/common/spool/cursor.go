@@ -102,6 +102,31 @@ func (c *Cursor[T]) Peek() (ret T, ok bool) {
 	return c.next.value, true
 }
 
+func (c *Cursor[T]) SkipNext() {
+	if c.closed {
+		return
+	}
+
+	c.FreeCurrent()
+	// check readability
+	skip := false
+	if n := c.next.maxConsumer.Add(-1); n < 0 {
+		skip = true
+	}
+	if c.next.target != nil && c.next.target != c {
+		skip = true
+	}
+
+	if !skip {
+		panic("cannot skip this element from cursor.")
+	}
+
+	c.last = c.next
+	c.next = c.next.next
+	c.next.numCursors.Add(1)
+	c.FreeCurrent()
+}
+
 // Close closes the cursor
 func (c *Cursor[T]) Close() {
 	if c.closed {

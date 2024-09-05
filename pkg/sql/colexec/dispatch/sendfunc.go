@@ -82,14 +82,15 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIndex uint32) (err error) {
 	var queryDone bool
 
-	for i, reg := range ap.LocalRegs {
+	for i := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if regIndex == batIndex {
 			queryDone, err = ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
 			if err != nil || queryDone {
 				return err
 			}
-			reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(ap.ctr.sp, i)
+			onlyOneRegToDealThis(i, ap)
+			break
 		}
 	}
 
@@ -120,7 +121,7 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIn
 
 func sendBatToLocalMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
 	localRegsCnt := uint32(ap.ctr.localRegsCnt)
-	for i, reg := range ap.LocalRegs {
+	for i := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if regIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && !bat.IsEmpty() {
@@ -128,8 +129,9 @@ func sendBatToLocalMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 				if err != nil || queryDone {
 					return err
 				}
-				reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(ap.ctr.sp, i)
+				onlyOneRegToDealThis(i, ap)
 			}
+			break
 		}
 	}
 	return nil
@@ -147,6 +149,7 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 				}
 				reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(ap.ctr.sp, i)
 			}
+			break
 		}
 	}
 	for _, r := range ap.ctr.remoteReceivers {
@@ -203,18 +206,28 @@ func sendToAllFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool,
 	return sendToAllLocalFunc(bat, ap, proc)
 }
 
+func onlyOneRegToDealThis(sendto int, ap *Dispatch) {
+	ap.LocalRegs[sendto].Ch2 <- process.NewPipelineSignalToGetFromSpool(ap.ctr.sp, sendto)
+	for i := 0; i < sendto; i++ {
+		ap.LocalRegs[i].Ch2 <- process.NewPipelineSignalToSkip(ap.ctr.sp, i)
+	}
+	for i := sendto + 1; i < len(ap.LocalRegs); i++ {
+		ap.LocalRegs[i].Ch2 <- process.NewPipelineSignalToSkip(ap.ctr.sp, i)
+	}
+}
+
 // common sender: send to any LocalReceiver
 // if the reg which you want to send to is closed
 // send it to next one.
 func sendToAnyLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	sendto := ap.ctr.sendCnt % ap.ctr.localRegsCnt
-	reg := ap.LocalRegs[sendto]
 
 	queryDone, err := ap.ctr.sp.SendBatch(proc.Ctx, sendto, bat, nil)
 	if err != nil || queryDone {
 		return true, err
 	}
-	reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(ap.ctr.sp, sendto)
+	onlyOneRegToDealThis(sendto, ap)
+
 	ap.ctr.sendCnt++
 
 	return false, nil

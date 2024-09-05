@@ -33,8 +33,8 @@ type PipelineCommunication interface {
 	// ReceiveBatch get data from the idx-th receiver.
 	ReceiveBatch(idx int) (data *batch.Batch, info error)
 
-	// FreeCurrentReceive flag the current received message for idx receiver.
-	FreeCurrentReceive(idx int)
+	// Skip ignore next coming data from idx-th receiver.
+	Skip(idx int)
 
 	// Close the sender and receivers.
 	Close()

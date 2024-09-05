@@ -26,9 +26,8 @@ type PipelineActionType uint8
 const (
 	GetFromIndex PipelineActionType = iota
 	GetDirectly
+	SkipFromCursor
 )
-
-var _ = GetDirectly
 
 type PipelineSignal struct {
 	typ PipelineActionType
@@ -62,28 +61,33 @@ func NewPipelineSignalToDirectly(data *batch.Batch) PipelineSignal {
 	}
 }
 
+// NewPipelineSignalToSkip return a signal indicates the receiver to skip the next data from source.
+func NewPipelineSignalToSkip(source pSpool.PipelineCommunication, index int) PipelineSignal {
+	return PipelineSignal{
+		typ:      SkipFromCursor,
+		source:	  source,
+		index:    index,
+	}
+}
+
 // Action will get the input batch from one place according to which type this signal is.
 //
 // the result batch of this function is an READ-ONLY one.
-func (signal PipelineSignal) Action() (data *batch.Batch, info error) {
+func (signal PipelineSignal) Action() (data *batch.Batch, info error, skipThis bool) {
 	if signal.typ == GetFromIndex {
-		return signal.source.ReceiveBatch(signal.index)
+		data, info = signal.source.ReceiveBatch(signal.index)
+		return data, info, false
 	}
-	return signal.directly, nil
-}
+	if signal.typ == SkipFromCursor {
+		signal.source.Skip(signal.index)
+		return nil, nil, true
+	}
 
-func (signal PipelineSignal) Release() {
-	if signal.typ == GetFromIndex {
-		signal.source.FreeCurrentReceive(signal.index)
-	}
+	return signal.directly, nil, false
 }
 
 type PipelineSignalReceiver struct {
 	alive int
-
-	// the previous buffer we have received.
-	// release it before try to receive next one can help we release it immediately.
-	pre *PipelineSignal
 
 	// receive data channel, first reg is the monitor for runningCtx.
 	regs []reflect.SelectCase
@@ -108,14 +112,13 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 
 	return &PipelineSignalReceiver{
 		alive: len(regs),
-		pre:   nil,
 		regs:  scs,
 		nbs:   nbs,
 	}
 }
 
 func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, info error) {
-	receiver.releaseLastReceive()
+	var skipThisSignal bool
 
 	for {
 		if receiver.alive == 0 {
@@ -124,14 +127,14 @@ func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, in
 
 		chosen, v, ok := reflect.Select(receiver.regs)
 		if chosen == 0 {
-			// user was going to end.
-			receiver.releaseLastReceive()
 			return nil, nil
 		}
 		if ok {
 			msg := (v.Interface()).(PipelineSignal)
-			content, info = msg.Action()
-			receiver.pre = &msg
+			content, info, skipThisSignal = msg.Action()
+			if skipThisSignal {
+				continue
+			}
 			if content == nil {
 				idx := chosen - 1
 
@@ -149,13 +152,6 @@ func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, in
 		break
 	}
 	panic("unexpected sender close during GetNextBatch")
-}
-
-func (receiver *PipelineSignalReceiver) releaseLastReceive() {
-	if receiver.pre != nil {
-		receiver.pre.Release()
-		receiver.pre = nil
-	}
 }
 
 func (receiver *PipelineSignalReceiver) WaitingEnd() {

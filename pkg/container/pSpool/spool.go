@@ -80,8 +80,8 @@ func (ps *pipelineSpool) ReceiveBatch(idx int) (*batch.Batch, error) {
 	return b.content, b.err
 }
 
-func (ps *pipelineSpool) FreeCurrentReceive(idx int) {
-	ps.cs[idx].FreeCurrent()
+func (ps *pipelineSpool) Skip(idx int) {
+	ps.cs[idx].SkipNext()
 }
 
 func (ps *pipelineSpool) waitReceiversOver() {
