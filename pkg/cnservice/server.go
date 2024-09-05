@@ -776,6 +776,7 @@ func (s *service) initShardService() {
 	s.shardService = shardservice.NewService(
 		cfg,
 		store,
+		shardservice.WithWaitCNReported(),
 	)
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
 		runtime.ShardService,
