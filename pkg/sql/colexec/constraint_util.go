@@ -47,17 +47,13 @@ func FilterRowIdForDel(proc *process.Process, retBat *batch.Batch, srcBat *batch
 			sels = append(sels, int64(i))
 		}
 	}
-	uf := vector.GetUnionOneFunction(types.T_Rowid.ToType(), proc.Mp())
-	for _, sel := range sels {
-		if err := uf(rowidVec, srcBat.Vecs[idx], sel); err != nil {
-			return err
-		}
+	err := rowidVec.Union(srcBat.Vecs[idx], sels, proc.Mp())
+	if err != nil {
+		return err
 	}
-	uf = vector.GetUnionOneFunction(*srcBat.GetVector(int32(primaryKeyIdx)).GetType(), proc.Mp())
-	for _, sel := range sels {
-		if err := uf(primaryVec, srcBat.Vecs[primaryKeyIdx], sel); err != nil {
-			return err
-		}
+	err = primaryVec.Union(srcBat.Vecs[idx], sels, proc.Mp())
+	if err != nil {
+		return err
 	}
 	retBat.SetRowCount(len(sels))
 	return nil
@@ -69,7 +65,6 @@ func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, rowIdIdx
 	vecList := make([]*vector.Vector, partitionNum)
 	pkList := make([]*vector.Vector, partitionNum)
 	pkTyp := bat.Vecs[pkIdx].GetType()
-	fun := vector.GetUnionOneFunction(*pkTyp, proc.Mp())
 	for i := 0; i < partitionNum; i++ {
 		retVec := vector.NewVec(types.T_Rowid.ToType())
 		pkVec := vector.NewVec(*pkTyp)
@@ -90,7 +85,7 @@ func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, rowIdIdx
 				if err != nil {
 					break
 				}
-				err = fun(pkList[partition], bat.Vecs[pkIdx], int64(i))
+				err = pkList[partition].UnionOne(bat.Vecs[pkIdx], int64(i), proc.Mp())
 				if err != nil {
 					break
 				}
