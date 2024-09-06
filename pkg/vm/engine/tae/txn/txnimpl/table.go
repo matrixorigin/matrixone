@@ -100,6 +100,7 @@ type txnTable struct {
 
 	dataTable      *baseTable
 	tombstoneTable *baseTable
+	transferedTS   types.TS
 
 	idx int
 }
@@ -130,7 +131,9 @@ func (tbl *txnTable) getBaseTable(isTombstone bool) *baseTable {
 	return tbl.dataTable
 }
 func (tbl *txnTable) PrePreareTransfer(phase string, ts types.TS) (err error) {
-	return tbl.TransferDeletes(ts, phase)
+	err = tbl.TransferDeletes(ts, phase)
+	tbl.transferedTS = ts
+	return
 }
 
 func (tbl *txnTable) TransferDeleteIntent(
@@ -176,73 +179,78 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 		return
 	}
 	id := tbl.entry.AsCommonID()
-	// transfer deltaloc
-	for _, stats := range tbl.tombstoneTable.tableSpace.stats {
-		hasConflict := false
-		for blkID := range stats.BlkCnt() {
-			loc := stats.BlockLocation(uint16(blkID), tbl.tombstoneTable.schema.BlockMaxRows)
-			vectors, closeFunc, err := blockio.LoadColumns2(
-				tbl.store.ctx,
-				[]uint16{0, 1},
-				nil,
-				tbl.store.rt.Fs.Service,
-				loc,
-				fileservice.Policy(0),
-				false,
-				nil,
-			)
-			defer closeFunc()
+	var softDeleteObjects []*catalog.ObjectEntry
+	if len(tbl.tombstoneTable.tableSpace.stats) != 0 {
+		tGetSoftdeleteObjects := time.Now()
+		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(tbl.store.txn.GetStartTS(), tbl.transferedTS.Next(), ts)
+		v2.TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram.Observe(time.Since(tGetSoftdeleteObjects).Seconds())
+		v2.TxnS3TombstoneSoftdeleteObjectCounter.Add(float64(len(softDeleteObjects)))
+		var findTombstoneDuration, readTombstoneDuration, deleteRowsDuration time.Duration
+		// transfer deltaloc
+		for _, obj := range softDeleteObjects {
+			tFindTombstone := time.Now()
+			sel, err := blockio.FindTombstonesOfObject(context.TODO(), *obj.ID(), tbl.tombstoneTable.tableSpace.stats, tbl.store.rt.Fs.Service)
+			findTombstoneDuration += time.Since(tFindTombstone)
 			if err != nil {
 				return err
 			}
-			rowID := vectors[0].Get(0).(types.Rowid)
-			blkID, _ := rowID.Decode()
-			id.BlockID = blkID
-			if tbl.store.warChecker.HasConflict(*id.ObjectID()) {
-				// the blk has been transferd
+			if sel.IsEmpty() {
 				continue
 			}
-			if err = tbl.store.warChecker.checkOne(
-				id,
-				ts,
-			); err == nil {
-				continue
-			}
-			// if the error is not a r-w conflict. something wrong really happened
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict) {
-				return err
-			}
-			hasConflict = true
-			var pkType *types.Type
-			for i := 0; i < vectors[0].Length(); i++ {
-				rowID := vectors[0].Get(i).(types.Rowid)
-				blkID2, offset := rowID.Decode()
-				if *blkID2.Object() != *id.ObjectID() {
-					panic(fmt.Sprintf("logic err, id.Object %v, rowID %v", id.ObjectID().String(), rowID.String()))
+			v2.TxnS3TombstoneTransferDataObjectCounter.Add(1)
+			v2.TxnS3TombstoneTransferStatsCounter.Add(float64(sel.Count()))
+			iter := sel.Iterator()
+			for iter.HasNext() {
+				statsOffset := iter.Next()
+				stats := tbl.tombstoneTable.tableSpace.stats[statsOffset]
+				for i := 0; i < int(stats.BlkCnt()); i++ {
+					tReadTombstone := time.Now()
+					loc := stats.BlockLocation(uint16(i), tbl.tombstoneTable.schema.BlockMaxRows)
+					vectors, closeFunc, err := blockio.LoadColumns2(
+						tbl.store.ctx,
+						[]uint16{0, 1},
+						nil,
+						tbl.store.rt.Fs.Service,
+						loc,
+						fileservice.Policy(0),
+						false,
+						nil,
+					)
+					readTombstoneDuration += time.Since(tReadTombstone)
+					defer closeFunc()
+					if err != nil {
+						return err
+					}
+					var pkType *types.Type
+					for i := 0; i < vectors[0].Length(); i++ {
+						rowID := vectors[0].Get(i).(types.Rowid)
+						blkID2, offset := rowID.Decode()
+						if *blkID2.Object() != *obj.ID() {
+							continue
+						}
+						id.BlockID = blkID2
+						if pkType == nil {
+							pkType = vectors[1].GetType()
+						}
+						pk := vectors[1].Get(i)
+						// try to transfer the delete node
+						// here are some possible returns
+						// nil: transferred successfully
+						// ErrTxnRWConflict: the target block was also be compacted
+						// ErrTxnWWConflict: w-w error
+						tDeleteRows := time.Now()
+						if _, err = tbl.TransferDeleteRows(id, offset, pk, pkType, phase, ts); err != nil {
+							return err
+						}
+						deleteRowsDuration += time.Since(tDeleteRows)
+					}
 				}
-				if pkType == nil {
-					pkType = vectors[1].GetType()
-				}
-				pk := vectors[1].Get(i)
-				// try to transfer the delete node
-				// here are some possible returns
-				// nil: transferred successfully
-				// ErrTxnRWConflict: the target block was also be compacted
-				// ErrTxnWWConflict: w-w error
-				if _, err = tbl.TransferDeleteRows(id, offset, pk, pkType, phase, ts); err != nil {
-					return err
-				}
 			}
-			// if offset == len(tbl.tombstoneTable.tableSpace.stats)-1 {
-			// 	tbl.tombstoneTable.tableSpace.stats = tbl.tombstoneTable.tableSpace.stats[:offset]
-			// } else {
-			// 	tbl.tombstoneTable.tableSpace.stats =
-			// 		append(tbl.tombstoneTable.tableSpace.stats[:offset], tbl.tombstoneTable.tableSpace.stats[offset+1:]...)
-			// }
-		}
-		if hasConflict {
 			tbl.store.warChecker.Delete(id)
 		}
+		v2.TxnS3TombstoneTransferFindTombstonesHistogram.Observe(findTombstoneDuration.Seconds())
+		v2.TxnS3TombstoneTransferReadTombstoneHistogram.Observe(readTombstoneDuration.Seconds())
+		v2.TxnS3TombstoneTransferDeleteRowsHistogram.Observe(deleteRowsDuration.Seconds())
 	}
 	transferd := nulls.Nulls{}
 	// transfer in memory deletes
@@ -1470,14 +1478,6 @@ func (tbl *txnTable) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats)
 	if tbl.tombstoneTable == nil {
 		tbl.tombstoneTable = newBaseTable(tbl.entry.GetLastestSchema(true), true, tbl)
 	}
-	obj, err := tbl.store.GetObject(id, false)
-	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return false, nil
-		}
-		return
-	}
-	tbl.store.warChecker.Insert(obj.GetMeta().(*catalog.ObjectEntry))
 	err = tbl.addObjsWithMetaLoc(tbl.store.ctx, stats, true)
 	if err == nil {
 		tbl.tombstoneTable.tableSpace.objs = append(tbl.tombstoneTable.tableSpace.objs, id.ObjectID())
