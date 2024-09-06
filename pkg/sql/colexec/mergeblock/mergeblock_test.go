@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 
@@ -168,14 +168,9 @@ func TestMergeBlock(t *testing.T) {
 }
 
 func resetChildren(arg *MergeBlock, bat *batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: []*batch.Batch{bat},
-	}
-	valueScanArg.Prepare(nil)
-	arg.SetChildren(
-		[]vm.Operator{
-			valueScanArg,
-		})
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
 }
 
 func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {

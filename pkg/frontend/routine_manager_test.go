@@ -16,12 +16,14 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/stretchr/testify/require"
 	"net"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
 )
 
 func Test_Closed(t *testing.T) {
@@ -50,9 +52,9 @@ func Test_Closed(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	cf.Close()
 
+	closeDbConn(t, db)
 	err = mo.Stop()
 	require.NoError(t, err)
-	closeDbConn(t, db)
 	serverConn.Close()
 	clientConn.Close()
 	wg.Wait()

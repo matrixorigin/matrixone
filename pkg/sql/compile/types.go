@@ -123,7 +123,6 @@ type Source struct {
 	Attributes             []string
 	R                      engine.Reader
 	Rel                    engine.Relation
-	Bat                    *batch.Batch
 	FilterExpr             *plan.Expr // todo: change this to []*plan.Expr
 	node                   *plan.Node
 	TableDef               *plan.TableDef

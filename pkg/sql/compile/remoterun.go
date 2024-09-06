@@ -215,13 +215,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
 		}
-		if s.DataSource.Bat != nil {
-			data, err := types.Encode(s.DataSource.Bat)
-			if err != nil {
-				return nil, -1, err
-			}
-			p.DataSource.Block = string(data)
-		}
 	}
 	// PreScope
 	p.Children = make([]*pipeline.Pipeline, len(s.PreScopes))
@@ -253,7 +246,7 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	// Instructions
 	var ins *pipeline.Instruction
 	err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
-		if ctxId, ins, err = convertToPipelineInstruction(op, ctx, ctxId); err != nil {
+		if ctxId, ins, err = convertToPipelineInstruction(op, s.Proc, ctx, ctxId); err != nil {
 			return err
 		}
 		p.InstructionList = append(p.InstructionList, ins)
@@ -333,14 +326,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
 			isConst:            dsc.IsConst,
 		}
-		if len(dsc.Block) > 0 {
-			bat := new(batch.Batch)
-			if err = types.Decode([]byte(dsc.Block), bat); err != nil {
-				return nil, err
-			}
-			bat.Cnt = 1
-			s.DataSource.Bat = bat
-		}
 	}
 	//var relData engine.RelData
 	if p.Node != nil {
@@ -402,7 +387,7 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 
 // convert vm.Instruction to pipeline.Instruction
 // todo: bad design, need to be refactored. and please refer to how sample operator do.
-func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
+func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
 	opBase := op.GetOperatorBase()
 	in := &pipeline.Instruction{
 		Op:      int32(op.OpType()),
@@ -779,7 +764,18 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 		in.TableScan.Types = t.Types
 		in.ProjectList = t.ProjectList
 	case *value_scan.ValueScan:
+		if err := op.Prepare(proc); err != nil {
+			return -1, nil, err
+		}
 		in.ValueScan = &pipeline.ValueScan{}
+		if t.Batchs != nil {
+			data, err := types.Encode(t.Batchs[0])
+			if err != nil {
+				return -1, nil, err
+			}
+			in.ValueScan.BatchBlock = string(data)
+		}
+
 		in.ProjectList = t.ProjectList
 	case *unionall.UnionAll:
 		in.UnionAll = &pipeline.UnionAll{}
@@ -1223,6 +1219,14 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.ValueScan:
 		op = value_scan.NewArgument()
 		op.(*value_scan.ValueScan).ProjectList = opr.ProjectList
+		if len(opr.ValueScan.BatchBlock) > 0 {
+			bat := new(batch.Batch)
+			if err := types.Decode([]byte(opr.ValueScan.BatchBlock), bat); err != nil {
+				return nil, err
+			}
+			bat.Cnt = 1
+			op.(*value_scan.ValueScan).Batchs = append(op.(*value_scan.ValueScan).Batchs, bat)
+		}
 	case vm.UnionAll:
 		op = unionall.NewArgument()
 	case vm.HashBuild:
