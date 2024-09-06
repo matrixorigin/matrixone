@@ -804,7 +804,7 @@ func (data *CNCheckpointData) ReadFromData(
 			if err != nil {
 				return
 			}
-			//defer bat.Clean(m)
+			defer bat.Clean(m)
 			if block.GetEndOffset() == 0 {
 				continue
 			}
@@ -812,19 +812,19 @@ func (data *CNCheckpointData) ReadFromData(
 			if err != nil {
 				return
 			}
-			if dataBats[uint32(i)] == nil {
-				cnBatch := batch.NewWithSize(len(newBat.Vecs))
-				cnBatch.Attrs = make([]string, len(newBat.Attrs))
-				copy(cnBatch.Attrs, newBat.Attrs)
-				for n := range cnBatch.Vecs {
-					cnBatch.Vecs[n] = vector.NewVec(*newBat.Vecs[n].GetType())
-					if err = cnBatch.Vecs[n].UnionBatch(newBat.Vecs[n], 0, newBat.Vecs[n].Length(), nil, m); err != nil {
-						return
-					}
+			cnBatch := batch.NewWithSize(len(newBat.Vecs))
+			cnBatch.Attrs = make([]string, len(newBat.Attrs))
+			copy(cnBatch.Attrs, newBat.Attrs)
+			for n := range cnBatch.Vecs {
+				cnBatch.Vecs[n] = vector.NewVec(*newBat.Vecs[n].GetType())
+				if err = cnBatch.Vecs[n].UnionBatch(newBat.Vecs[n], 0, newBat.Vecs[n].Length(), nil, m); err != nil {
+					return
 				}
+			}
+			if dataBats[uint32(i)] == nil {
 				dataBats[uint32(i)] = cnBatch
 			} else {
-				dataBats[uint32(i)], err = dataBats[uint32(i)].Append(ctx, m, newBat)
+				dataBats[uint32(i)], err = dataBats[uint32(i)].Append(ctx, m, cnBatch)
 				if err != nil {
 					return
 				}
