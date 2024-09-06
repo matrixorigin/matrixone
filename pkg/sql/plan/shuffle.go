@@ -408,7 +408,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	factor := 1 / math.Pow((n.Stats.Outcnt/n.Stats.Selectivity/child.Stats.Outcnt), 1.5)
+	factor := 1 / math.Pow((n.Stats.Outcnt/n.Stats.Selectivity/child.Stats.Outcnt), 0.8)
 	if n.Stats.HashmapStats.HashmapSize < threshHoldForShuffleGroup*factor {
 		return
 	}
