@@ -291,13 +291,14 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	}
 
 	startLock := time.Now()
-	done, wait := s.ioMerger.Merge(IOMergeKey{
+	done, _ := s.ioMerger.Merge(IOMergeKey{
 		Path: filePath,
 	})
 	if done != nil {
 		defer done()
 	} else {
-		wait()
+		// not wait in prefetch, return
+		return nil
 	}
 	statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
 
@@ -502,29 +503,14 @@ read_memory_cache:
 		}()
 	}
 
-	stats := statistic.StatsInfoFromContext(ctx)
-	LogEvent(ctx, str_ioMerger_Merge_begin)
-	startLock := time.Now()
-	done, wait := s.ioMerger.Merge(vector.ioMergeKey())
-	if done != nil {
-		stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
-		LogEvent(ctx, str_ioMerger_Merge_initiate)
-		LogEvent(ctx, str_ioMerger_Merge_end)
-		defer done()
-	} else {
-		LogEvent(ctx, str_ioMerger_Merge_wait)
-		wait()
-		stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
-		LogEvent(ctx, str_ioMerger_Merge_end)
-		goto read_memory_cache
-	}
-
 	// Record diskIO and netwokIO(un memory IO) resource
+	stats := statistic.StatsInfoFromContext(ctx)
 	ioStart := time.Now()
 	defer func() {
 		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
 	}()
 
+read_disk_cache:
 	if s.diskCache != nil {
 
 		t0 := time.Now()
@@ -566,6 +552,31 @@ read_memory_cache:
 		}
 		if vector.allDone() {
 			return nil
+		}
+	}
+
+	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
+	mayReadDiskCache := vector.Policy&SkipDiskCacheReads == 0
+	if mayReadMemoryCache || mayReadDiskCache {
+		// may read caches, merge
+		LogEvent(ctx, str_ioMerger_Merge_begin)
+		startLock := time.Now()
+		done, wait := s.ioMerger.Merge(vector.ioMergeKey())
+		if done != nil {
+			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
+			LogEvent(ctx, str_ioMerger_Merge_initiate)
+			LogEvent(ctx, str_ioMerger_Merge_end)
+			defer done()
+		} else {
+			LogEvent(ctx, str_ioMerger_Merge_wait)
+			wait()
+			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
+			LogEvent(ctx, str_ioMerger_Merge_end)
+			if mayReadMemoryCache {
+				goto read_memory_cache
+			} else {
+				goto read_disk_cache
+			}
 		}
 	}
 
