@@ -137,9 +137,13 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node) {
 		//node.AnalyzeInfo.S3IOInputCount += op.OpStats.TotalS3InputCount
 		//node.AnalyzeInfo.S3IOOutputCount += op.OpStats.TotalS3OutputCount
 		node.AnalyzeInfo.NetworkIO += op.OpStats.TotalNetworkIO
-		node.AnalyzeInfo.ScanTime += op.OpStats.TotalScanTime
-		node.AnalyzeInfo.InsertTime += op.OpStats.TotalInsertTime
+		//node.AnalyzeInfo.ScanTime += op.OpStats.TotalScanTime
+		//node.AnalyzeInfo.InsertTime += op.OpStats.TotalInsertTime
 		node.AnalyzeInfo.InputBlocks += op.OpStats.TotalInputBlocks
+
+		//-------------------------------------------------------------------
+		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
+		node.AnalyzeInfo.InsertTime += op.OpStats.GetMetricByKey(process.OpInsertTime)
 	}
 
 	// Recursive processing of sub operators

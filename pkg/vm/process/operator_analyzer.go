@@ -21,6 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
+type MetricType int
+
+const (
+	OpScanTime MetricType = iota
+	OpInsertTime
+	OpIncrementTime
+)
+
 // Analyze analyzes information for operator
 type Analyzer interface {
 	Start()
@@ -178,7 +186,9 @@ func (opAlyzr *operatorAnalyzer) AddScanTime(t time.Time) {
 		panic("operatorAnalyzer.AddScanTime: operatorAnalyzer.opStats is nil")
 	}
 	duration := time.Since(t)
-	opAlyzr.opStats.TotalScanTime += duration.Nanoseconds()
+	//opAlyzr.opStats.TotalScanTime += duration.Nanoseconds()
+
+	opAlyzr.opStats.AddOpMetric(OpScanTime, duration.Nanoseconds())
 }
 
 func (opAlyzr *operatorAnalyzer) AddInsertTime(t time.Time) {
@@ -186,7 +196,9 @@ func (opAlyzr *operatorAnalyzer) AddInsertTime(t time.Time) {
 		panic("operatorAnalyzer.AddInsertTime: operatorAnalyzer.opStats is nil")
 	}
 	duration := time.Since(t)
-	opAlyzr.opStats.TotalInsertTime += duration.Nanoseconds()
+	//opAlyzr.opStats.TotalInsertTime += duration.Nanoseconds()
+
+	opAlyzr.opStats.AddOpMetric(OpInsertTime, duration.Nanoseconds())
 }
 
 func (opAlyzr *operatorAnalyzer) ServiceInvokeTime(t time.Time) {
@@ -194,7 +206,9 @@ func (opAlyzr *operatorAnalyzer) ServiceInvokeTime(t time.Time) {
 		panic("operatorAnalyzer.ServiceInvokeTime: operatorAnalyzer.opStats is nil")
 	}
 	duration := time.Since(t)
-	opAlyzr.opStats.TotalServiceTime += duration.Nanoseconds()
+	//opAlyzr.opStats.TotalServiceTime += duration.Nanoseconds()
+
+	opAlyzr.opStats.AddOpMetric(OpIncrementTime, duration.Nanoseconds())
 }
 
 func (opAlyzr *operatorAnalyzer) GetOpStats() *OperatorStats {
@@ -220,9 +234,10 @@ type OperatorStats struct {
 	TotalS3IOByte int64 `json:"-"`
 	//TotalS3InputCount     int64  `json:"-"`
 	//TotalS3OutputCount    int64  `json:"-"`
-	TotalScanTime    int64 `json:"-"`
-	TotalInsertTime  int64 `json:"-"`
-	TotalServiceTime int64 `json:"-"`
+	//TotalScanTime    int64                `json:"-"`
+	//TotalInsertTime  int64                `json:"-"`
+	//TotalServiceTime int64                `json:"-"`
+	OperatorMetrics map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
 }
 
 func NewOperatorStats(operatorName string) *OperatorStats {
@@ -231,11 +246,43 @@ func NewOperatorStats(operatorName string) *OperatorStats {
 	}
 }
 
+func (ps *OperatorStats) AddOpMetric(key MetricType, value int64) {
+	if ps.OperatorMetrics == nil {
+		ps.OperatorMetrics = make(map[MetricType]int64)
+	}
+	ps.OperatorMetrics[key] += value
+}
+
+func (ps *OperatorStats) GetMetricByKey(metricType MetricType) int64 {
+	if ps.OperatorMetrics == nil {
+		return 0
+	}
+	return ps.OperatorMetrics[metricType]
+}
+
 func (ps *OperatorStats) Reset() {
 	*ps = OperatorStats{}
 }
 
 func (ps *OperatorStats) String() string {
+	// Convert OperationMetrics map to a formatted string
+	var metricsStr string
+	if len(ps.OperatorMetrics) > 0 {
+		metricsStr = " "
+		for k, v := range ps.OperatorMetrics {
+			metricName := "Unknown"
+			switch k {
+			case OpScanTime:
+				metricName = "ScanTime"
+			case OpInsertTime:
+				metricName = "InsertTime"
+			case OpIncrementTime:
+				metricName = "IncrementTime"
+			}
+			metricsStr += fmt.Sprintf("%s: %dns\n", metricName, v)
+		}
+	}
+
 	return fmt.Sprintf(" CallNum:%d "+
 		"TimeCost:%dns "+
 		"WaitTime:%dns "+
@@ -246,9 +293,8 @@ func (ps *OperatorStats) String() string {
 		"OutSize:%dbytes "+
 		"MemSize:%dbytes "+
 		"S3IOByte:%dbytes "+
-		"NetworkIO:%dbytes "+
-		"ScanTime:%dns "+
-		"ServiceTime:%dns",
+		"NetworkIO:%dbytes"+
+		"%s",
 		ps.CallNum,
 		ps.TotalTimeConsumed,
 		ps.TotalWaitTimeConsumed,
@@ -260,11 +306,27 @@ func (ps *OperatorStats) String() string {
 		ps.TotalMemorySize,
 		ps.TotalS3IOByte,
 		ps.TotalNetworkIO,
-		ps.TotalScanTime,
-		ps.TotalServiceTime)
+		metricsStr)
 }
 
 func (ps *OperatorStats) ReducedString() string {
+	var metricsStr string
+	if len(ps.OperatorMetrics) > 0 {
+		metricsStr = " "
+		for k, v := range ps.OperatorMetrics {
+			metricName := "Unknown"
+			switch k {
+			case OpScanTime:
+				metricName = "ScanTime"
+			case OpInsertTime:
+				metricName = "InsertTime"
+			case OpIncrementTime:
+				metricName = "IncrementTime"
+			}
+			metricsStr += fmt.Sprintf("%s: %dns\n", metricName, v)
+		}
+	}
+
 	return fmt.Sprintf(" CallNum:%d "+
 		"TimeCost:%dns "+
 		"WaitTime:%dns "+
@@ -273,7 +335,8 @@ func (ps *OperatorStats) ReducedString() string {
 		"InSize:%dbytes "+
 		"OutSize:%dbytes "+
 		"MemSize:%dbytes "+
-		"Network:%dbytes",
+		"Network:%dbytes"+
+		"%s",
 		ps.CallNum,
 		ps.TotalTimeConsumed,
 		ps.TotalWaitTimeConsumed,
@@ -283,5 +346,6 @@ func (ps *OperatorStats) ReducedString() string {
 		ps.TotalOutputSize,
 		ps.TotalMemorySize,
 		ps.TotalNetworkIO,
+		metricsStr,
 	)
 }
