@@ -5,11 +5,28 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/monlp/tokenizer"
 )
+
+type SeenIds struct {
+	FirstDocId any
+	LastDocId  any
+}
+
+type FullTextEntry struct {
+	DocId    any
+	Pos      int32
+	Word     string
+	DocCount int32
+	SeenIds
+}
+
+type Document struct {
+	Words []FullTextEntry
+}
 
 type tokenizeState struct {
 	inited bool
@@ -79,23 +96,46 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 	var id any
 	id = vector.GetAny(idVec, nthRow)
-	//id := idVec.GetRawBytesAt(nthRow)
 	c := contentVec.GetStringAt(nthRow)
-	logutil.Infof("id = %d, content %s", id, c)
 
-	// type of id follow primary key column
-	vector.AppendAny(u.batch.Vecs[0], id, false, proc.Mp())
-	// pos
-	vector.AppendFixed[int32](u.batch.Vecs[1], 4, false, proc.Mp())
-	// word
-	vector.AppendBytes(u.batch.Vecs[2], []byte("red"), false, proc.Mp())
-	// doc_count
-	vector.AppendFixed[int32](u.batch.Vecs[3], 0, false, proc.Mp())
-	// first_doc_id
-	vector.AppendAny(u.batch.Vecs[4], id, false, proc.Mp())
-	// last_doc_id
-	vector.AppendAny(u.batch.Vecs[5], id, false, proc.Mp())
+	var doc Document
+	doc_count := make(map[string]int32)
 
-	u.batch.SetRowCount(1)
+	tok, _ := tokenizer.NewSimpleTokenizer([]byte(c))
+	for t := range tok.Tokenize() {
+
+		slen := t.TokenBytes[0]
+		word := string(t.TokenBytes[1 : slen+1])
+
+		if _, ok := doc_count[word]; ok {
+			doc_count[word] += 1
+		} else {
+			doc_count[word] = 1
+		}
+		//doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos, SeenIds: SeenIds{FirstDocId: id, LastDocId: id}})
+		doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
+	}
+
+	for i, w := range doc.Words {
+		// update doc_count
+		doc.Words[i].DocCount = doc_count[doc.Words[i].Word]
+
+		// write the batch
+
+		// type of id follow primary key column
+		vector.AppendAny(u.batch.Vecs[0], w.DocId, false, proc.Mp())
+		// pos
+		vector.AppendFixed[int32](u.batch.Vecs[1], w.Pos, false, proc.Mp())
+		// word
+		vector.AppendBytes(u.batch.Vecs[2], []byte(w.Word), false, proc.Mp())
+		// doc_count
+		vector.AppendFixed[int32](u.batch.Vecs[3], w.DocCount, false, proc.Mp())
+		// first_doc_id
+		vector.AppendAny(u.batch.Vecs[4], nil, true, proc.Mp())
+		// last_doc_id
+		vector.AppendAny(u.batch.Vecs[5], nil, true, proc.Mp())
+	}
+
+	u.batch.SetRowCount(len(doc.Words))
 	return nil
 }
