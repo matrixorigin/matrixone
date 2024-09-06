@@ -375,20 +375,6 @@ func (stats *StatsInfo) ResetIOAccessTimeConsumption() {
 	atomic.StoreInt64(&stats.IOAccessTimeConsumption, 0)
 }
 
-//func (stats *StatsInfo) AppendRetryPlanTimeConsumption(d time.Duration) {
-//	if stats == nil {
-//		return
-//	}
-//	stats.PlanDuration += d
-//}
-//
-//func (stats *StatsInfo) AppendRetryCompileTimeConsumption(d time.Duration) {
-//	if stats == nil {
-//		return
-//	}
-//	stats.CompileDuration += d
-//}
-
 func (stats *StatsInfo) IOMergerTimeConsumption() int64 {
 	if stats == nil {
 		return 0

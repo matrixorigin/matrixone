@@ -34,8 +34,9 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -85,7 +86,6 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Snapshot().AnyTimes()
 
-	//a := reuse.Alloc[process.AnalyzeInfo](nil)
 	proc := process.NewTopProcess(defines.AttachAccountId(context.TODO(), catalog.System_Account),
 		nil,
 		nil,
@@ -99,7 +99,6 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	proc.Base.Id = "1"
 	proc.Base.Lim = process.Limitation{}
 	proc.Base.UnixTime = 1000000
-	//proc.Base.AnalInfos = []*process.AnalyzeInfo{a}
 	proc.Base.SessionInfo = process.SessionInfo{
 		Account:        "",
 		User:           "",
@@ -317,19 +316,6 @@ func Test_convertToVmInstruction(t *testing.T) {
 	}
 }
 
-//func Test_mergeAnalyseInfo(t *testing.T) {
-//	target := newAnalyzeModule()
-//	a := reuse.Alloc[process.AnalyzeInfo](nil)
-//	target.analInfos = []*process.AnalyzeInfo{a}
-//	ana := &pipeline.AnalysisList{
-//		List: []*plan2.AnalyzeInfo{
-//			{},
-//		},
-//	}
-//	mergeAnalyseInfo(target, ana)
-//	require.Equal(t, len(ana.List), 1)
-//}
-
 func Test_convertToProcessLimitation(t *testing.T) {
 	lim := pipeline.ProcessLimitation{
 		Size: 100,
@@ -346,13 +332,6 @@ func Test_convertToProcessSessionInfo(t *testing.T) {
 	_, err := process.ConvertToProcessSessionInfo(sei)
 	require.Nil(t, err)
 }
-
-//func Test_convertToPlanAnalyzeInfo(t *testing.T) {
-//	info := reuse.Alloc[process.AnalyzeInfo](nil)
-//	info.InputRows = 100
-//	analyzeInfo := convertToPlanAnalyzeInfo(info)
-//	require.Equal(t, analyzeInfo.InputRows, int64(100))
-//}
 
 func Test_decodeBatch(t *testing.T) {
 	mp := &mpool.MPool{}

@@ -132,16 +132,12 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node) {
 		node.AnalyzeInfo.TimeConsumed += op.OpStats.TotalTimeConsumed
 		node.AnalyzeInfo.MemorySize += op.OpStats.TotalMemorySize
 		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.TotalWaitTimeConsumed
-		//node.AnalyzeInfo.DiskIO += op.OpStats.TotalDiskIO
 		node.AnalyzeInfo.S3IOByte += op.OpStats.TotalS3IOByte
-		//node.AnalyzeInfo.S3IOInputCount += op.OpStats.TotalS3InputCount
-		//node.AnalyzeInfo.S3IOOutputCount += op.OpStats.TotalS3OutputCount
 		node.AnalyzeInfo.NetworkIO += op.OpStats.TotalNetworkIO
 		//node.AnalyzeInfo.ScanTime += op.OpStats.TotalScanTime
 		//node.AnalyzeInfo.InsertTime += op.OpStats.TotalInsertTime
 		node.AnalyzeInfo.InputBlocks += op.OpStats.TotalInputBlocks
 
-		//-------------------------------------------------------------------
 		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
 		node.AnalyzeInfo.InsertTime += op.OpStats.GetMetricByKey(process.OpInsertTime)
 	}
@@ -255,19 +251,10 @@ func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]
 		return nil
 	}
 
-	//--------------------debug---------------------
-	//if op.GetOperatorBase().OpAnalyzer == nil {
-	//	buf := bytes.NewBuffer(make([]byte, 0, 50))
-	//	op.String(buf)
-	//	panic(fmt.Sprintf("<>operator analyzer is null opName: %v", buf.String()))
-	//}
-	//--------------------debug---------------------
-
 	phyOp := &models.PhyOperator{
 		OpName:       op.OpType().String(),
 		NodeIdx:      op.GetOperatorBase().Idx,
 		DestReceiver: getDestReceiver(op, rmp),
-		//OpStats:      op.GetOperatorBase().OpAnalyzer.GetOpStats(),
 	}
 
 	if op.GetOperatorBase().IsFirst {

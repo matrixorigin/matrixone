@@ -361,8 +361,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 func (s *Scope) ParallelRun(c *Compile) (err error) {
 	var parallelScope *Scope
 
-	// waring: 有可能发生这样的情况： pipeline还未执行prepare，就发生错误，触发defer pipeline.Cleanup(),
-	// 执行reset和free，如果analyzer没有实例化，如果reset中有统计操作，就会发生空指针
+	// Warning: It is possible that an error occurs before the pipeline has executed prepare, triggering
+	// defer `pipeline.Cleanup()`, and execute `reset()` and `free()`. If the operator analyzer is not
+	// instantiated and there is a statistical operation in reset, a null pointer will occur
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)

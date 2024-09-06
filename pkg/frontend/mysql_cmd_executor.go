@@ -2610,11 +2610,6 @@ func executeStmt(ses *Session,
 		}
 	}
 
-	//defer func() {
-	//	// Serialize the execution plan as json
-	//	_ = execCtx.cw.RecordExecPlan(execCtx.reqCtx)
-	//}()
-
 	cmpBegin = time.Now()
 
 	ses.EnterFPrint(FPExecStmtBeforeCompile)
@@ -3467,8 +3462,6 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 				stats.BytesScan += bytes
 			}
 		}
-		//statsByte.AddS3Input
-		//statsByte.AddS3Output
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}

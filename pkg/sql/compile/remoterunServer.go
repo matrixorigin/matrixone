@@ -205,28 +205,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
 		}
 		//-------------------------------------------------------------------
-		//if err == nil {
-		//	// record the number of s3 requests
-		//	runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
-		//	runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
-		//	runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
-		//	runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
-		//	runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
-		//	runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
-		//
-		//	receiver.finalAnalysisInfo = runCompile.proc.Base.AnalInfos
-		//} else {
-		//	// there are 3 situations to release analyzeInfo
-		//	// 1 is free analyzeInfo of Local CN when release analyze
-		//	// 2 is free analyzeInfo of remote CN before transfer back
-		//	// 3 is free analyzeInfo of remote CN when errors happen before transfer back
-		//	// this is situation 3
-		//	for i := range runCompile.proc.Base.AnalInfos {
-		//		reuse.Free[process.AnalyzeInfo](runCompile.proc.Base.AnalInfos[i], nil)
-		//	}
-		//}
-		//runCompile.proc.Base.AnalInfos = nil
-		//runCompile.anal.analInfos = nil
 		return err
 
 	case pipeline.Method_StopSending:

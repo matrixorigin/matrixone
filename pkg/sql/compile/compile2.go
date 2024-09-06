@@ -265,11 +265,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 
-	//--------------------------------------------------------------------------------------------------------------
 	if c.hasValidQueryPlan() {
 		c.handlePlanAnalyze(runC)
 	}
-	//--------------------------------------------------------------------------------------------------------------
 
 	return queryResult, err
 }

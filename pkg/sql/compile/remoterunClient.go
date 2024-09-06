@@ -131,7 +131,6 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	}()
 
 	LastOperator := s.RootOp
-	//lastAnalyze := c.proc.GetAnalyze(LastOperator.GetOperatorBase().GetIdx(), -1, false)
 	switch arg := LastOperator.(type) {
 	case *connector.Connector:
 		oldChildren := arg.Children
@@ -172,7 +171,6 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 			return nil
 		}
 
-		//lastAnalyze.Network(bat)
 		LastOperator.GetOperatorBase().OpAnalyzer.Network(bat)
 		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
 
@@ -413,11 +411,6 @@ func (sender *messageSenderOnClient) dealRemoteAnalysis(p models.PhyPlan) {
 		return
 	}
 	sender.anal.AppendRemotePhyPlan(p)
-
-	//TODO: A lock may need to be added here
-	//sender.anal.phyPlan.RemoteScope = append(sender.anal.phyPlan.RemoteScope, p.LocalScope[0])
-	//sender.anal.phyPlan.S3IOInputCount += p.S3IOInputCount
-	//sender.anal.phyPlan.S3IOOutputCount += p.S3IOOutputCount
 }
 
 func (sender *messageSenderOnClient) close() {

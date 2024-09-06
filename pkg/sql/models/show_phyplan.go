@@ -152,7 +152,6 @@ func ExplainPhyPlan(phy *PhyPlan, option ExplainOption) string {
 		}
 	}
 
-	//------------------------------------------------------------------------------------------------------------------
 	if len(phy.RemoteScope) > 0 {
 		buffer.WriteString("\n")
 		buffer.WriteString("REMOTE SCOPES:")
