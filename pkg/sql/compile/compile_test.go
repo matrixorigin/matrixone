@@ -228,7 +228,7 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 	e, _, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1)
 	require.NoError(t, err)
-	pn, err := plan2.BuildPlan(compilerCtx, stmts[0], false)
+	pn, err := plan2.BuildPlan(compilerCtx, stmts[0], false, false)
 	if err != nil {
 		panic(err)
 	}

@@ -1691,6 +1691,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.rewriteStarApproxCount(rootID)
 
+		builder.updateLocksOnDemand(rootID)
+
 		rootNode := builder.qry.Nodes[rootID]
 
 		for j := range rootNode.ProjectList {

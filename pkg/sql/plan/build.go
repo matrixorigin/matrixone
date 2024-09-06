@@ -131,7 +131,7 @@ func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepa
 		v2.TxnStatementBuildExplainHistogram.Observe(time.Since(start).Seconds())
 	}()
 	//get query optimizer and execute Optimize
-	plan, err := BuildPlan(ctx, stmt.Statement, isPrepareStmt)
+	plan, err := BuildPlan(ctx, stmt.Statement, isPrepareStmt, false)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +151,7 @@ func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepa
 	return plan, nil
 }
 
-func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
+func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, isExplain bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildPlanHistogram.Observe(time.Since(start).Seconds())

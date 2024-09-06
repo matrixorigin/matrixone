@@ -32,7 +32,7 @@ func AssertPlan(ctx context.Context, sql string, pattern *MatchPattern) error {
 	if err != nil {
 		return err
 	}
-	actual, err := plan.BuildPlan(mock.CurrentContext(), one, false)
+	actual, err := plan.BuildPlan(mock.CurrentContext(), one, false, false)
 	if err != nil {
 		return err
 	}

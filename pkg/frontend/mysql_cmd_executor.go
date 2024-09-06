@@ -1873,7 +1873,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
+			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt, false)
 			if err != nil {
 				return nil, err
 			}
@@ -1894,9 +1894,20 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 		*tree.Update, *tree.Delete, *tree.Insert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber, *tree.ShowTableNumber,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
-		*tree.ExplainStmt, *tree.ExplainAnalyze:
+		*tree.ExplainAnalyze:
 		opt := plan2.NewBaseOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt, isPrepareStmt)
+		optimized, err := opt.Optimize(stmt, isPrepareStmt, false)
+		if err != nil {
+			return nil, err
+		}
+		ret = &plan2.Plan{
+			Plan: &plan2.Plan_Query{
+				Query: optimized,
+			},
+		}
+	case *tree.ExplainStmt:
+		opt := plan2.NewBaseOptimizer(ctx)
+		optimized, err := opt.Optimize(stmt, isPrepareStmt, true)
 		if err != nil {
 			return nil, err
 		}
@@ -1906,7 +1917,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 			},
 		}
 	default:
-		ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
+		ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt, false)
 	}
 	if ret != nil {
 		ret.IsPrepare = isPrepareStmt

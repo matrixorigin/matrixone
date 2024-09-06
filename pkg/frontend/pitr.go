@@ -1361,7 +1361,7 @@ func restoreViewsWithPitr(
 
 		compCtx.SetDatabase(view.dbName)
 		// build create sql to find dependent views
-		if _, err = plan.BuildPlan(compCtx, stmts[0], false); err != nil {
+		if _, err = plan.BuildPlan(compCtx, stmts[0], false, false); err != nil {
 			return err
 		}
 
