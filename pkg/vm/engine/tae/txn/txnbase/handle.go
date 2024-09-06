@@ -67,7 +67,6 @@ func (rel *TxnRelation) Close() error                                           
 func (rel *TxnRelation) ID() uint64                                               { return 0 }
 func (rel *TxnRelation) Rows() int64                                              { return 0 }
 func (rel *TxnRelation) Size(attr string) int64                                   { return 0 }
-func (rel *TxnRelation) GetCardinality(attr string) int64                         { return 0 }
 func (rel *TxnRelation) Schema(bool) any                                          { return nil }
 func (rel *TxnRelation) MakeObjectIt(bool) handle.ObjectIt                        { return nil }
 func (rel *TxnRelation) MakeObjectItOnSnap(bool) handle.ObjectIt                  { return nil }
@@ -92,15 +91,16 @@ func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16, bool) (v any, isNul
 func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, isNull bool, err error) {
 	return
 }
-func (rel *TxnRelation) Update(*common.ID, uint32, uint16, any, bool) (err error)             { return }
 func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error)                                   { return }
 func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector, containers.Vector) (err error) { return }
 func (rel *TxnRelation) RangeDelete(*common.ID, uint32, uint32, handle.DeleteType) (err error) {
 	return
 }
-func (rel *TxnRelation) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
+
+func (rel *TxnRelation) TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
 	return
 }
+
 func (rel *TxnRelation) GetByFilter(context.Context, *handle.Filter) (id *common.ID, offset uint32, err error) {
 	return
 }
@@ -137,18 +137,12 @@ func (obj *TxnObject) GetRelation() (rel handle.Relation)                       
 func (obj *TxnObject) Update(uint64, uint32, uint16, any) (err error)                    { return }
 func (obj *TxnObject) RangeDelete(uint64, uint32, uint32, handle.DeleteType) (err error) { return }
 
-func (obj *TxnObject) PushDeleteOp(handle.Filter) (err error)              { return }
-func (obj *TxnObject) PushUpdateOp(handle.Filter, string, any) (err error) { return }
-func (obj *TxnObject) SoftDeleteBlock(id types.Blockid) (err error)        { return }
-func (obj *TxnObject) BatchDedup(containers.Vector) (err error)            { return }
-
 // func (blk *TxnBlock) IsAppendable() bool                                   { return true }
 
 func (blk *TxnBlock) Reset() {
 	blk.Txn = nil
 	blk.Seg = nil
 }
-func (blk *TxnBlock) GetTotalChanges() int                                  { return 0 }
 func (blk *TxnBlock) IsAppendableBlock() bool                               { return true }
 func (blk *TxnBlock) Fingerprint() *common.ID                               { return &common.ID{} }
 func (blk *TxnBlock) Rows() int                                             { return 0 }
@@ -163,5 +157,3 @@ func (blk *TxnBlock) GetObject() (obj handle.Object) { return }
 func (blk *TxnBlock) Append(*containers.Batch, uint32) (n uint32, err error)    { return }
 func (blk *TxnBlock) Update(uint32, uint16, any) (err error)                    { return }
 func (blk *TxnBlock) RangeDelete(uint32, uint32, handle.DeleteType) (err error) { return }
-func (blk *TxnBlock) PushDeleteOp(handle.Filter) (err error)                    { return }
-func (blk *TxnBlock) PushUpdateOp(handle.Filter, string, any) (err error)       { return }

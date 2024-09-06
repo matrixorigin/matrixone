@@ -263,6 +263,14 @@ func (b *TableLogtailRespBuilder) Close() {
 		}
 	}
 	b.dataDelBatches = nil
+	if b.dataMetaBatch != nil {
+		b.dataMetaBatch.Close()
+		b.dataMetaBatch = nil
+	}
+	if b.tombstoneMetaBatch != nil {
+		b.tombstoneMetaBatch.Close()
+		b.tombstoneMetaBatch = nil
+	}
 }
 
 func (b *TableLogtailRespBuilder) VisitObj(e *catalog.ObjectEntry) error {
@@ -549,7 +557,15 @@ func LoadCheckpointEntries(
 		}
 		var bat []*batch.Batch
 		bat, err = data.ReadFromData(ctx, tableID, locations[i], readers[i], versions[i], mp)
-		closeCBs = append(closeCBs, data.GetCloseCB(versions[i], mp))
+		cb := data.GetCloseCB(versions[i], mp)
+		closeCBs = append(closeCBs, func() {
+			for _, b := range bat {
+				if b != nil {
+					b.Clean(mp)
+				}
+			}
+			cb()
+		})
 		if err != nil {
 			for j := range closeCBs {
 				if closeCBs[j] != nil {

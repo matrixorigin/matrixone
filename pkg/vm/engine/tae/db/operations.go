@@ -19,12 +19,12 @@ import (
 	fmt "fmt"
 	"time"
 
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 const (
@@ -168,7 +168,7 @@ type WriteReq struct {
 	FileName string
 	MetaLocs []string
 	//for delete on S3
-	DeltaLocs []string
+	TombstoneStats []objectio.ObjectStats
 	//tasks for loading primary keys or deleted row ids
 	Jobs []*tasks.Job
 	//loaded sorted primary keys or deleted row ids.
