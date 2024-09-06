@@ -122,7 +122,7 @@ func (s *sPool) setPerfFields(isGroupBy bool) {
 // for example, the row from 1,000 rows data source will be picked more times than the row from 100 rows data source.
 func (s *sPool) updateProbabilityAdjustmentFactor(inputBatch *batch.Batch) {
 	if s.isMerge {
-		row := vector.GetFixedAt[int64](inputBatch.Vecs[len(inputBatch.Vecs)-1], 0)
+		row := vector.GetFixedAtWithTypeCheck[int64](inputBatch.Vecs[len(inputBatch.Vecs)-1], 0)
 		if s.baseRow == 0 {
 			s.baseRow = row
 		}

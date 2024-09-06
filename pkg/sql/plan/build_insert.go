@@ -702,7 +702,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				// handles UUID types specifically by creating a VARCHAR type and casting the UUID to a string.
 				if bat.Vecs[idx].GetType().Oid == types.T_uuid {
 					// we have not uuid type in plan.Const. so use string & cast string to uuid
-					val := vector.MustFixedCol[types.Uuid](bat.Vecs[idx])[i]
+					val := vector.MustFixedColWithTypeCheck[types.Uuid](bat.Vecs[idx])[i]
 					constExpr := &plan.Expr{
 						Typ: varcharTyp,
 						Expr: &plan.Expr_Lit{
@@ -847,8 +847,10 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			if err != nil {
 				return nil, err
 			}
+			vecLength := vec.Length()
 			vec.InplaceSortAndCompact()
 			data, err := vec.MarshalBinary()
+			vec.Free(proc.Mp())
 			if err != nil {
 				return nil, err
 			}
@@ -858,7 +860,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					Typ: pkExpr.Typ,
 					Expr: &plan.Expr_Vec{
 						Vec: &plan.LiteralVec{
-							Len:  int32(vec.Length()),
+							Len:  int32(vecLength),
 							Data: data,
 						},
 					},

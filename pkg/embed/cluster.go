@@ -38,6 +38,9 @@ const (
 )
 
 var (
+	minPort = uint64(10000)
+	maxPort = uint64(60000)
+
 	basePort     = getInitPort("")
 	basePortStep = uint64(20)
 
@@ -429,9 +432,12 @@ func getInitPort(name string) uint64 {
 	if err != nil && err != io.EOF {
 		panic(err)
 	}
-	value := uint64(10000)
+	value := minPort
 	if n > 0 {
 		value = binary.BigEndian.Uint64(data)
+	}
+	if value > maxPort {
+		value = minPort
 	}
 	binary.BigEndian.PutUint64(data, value+1000)
 

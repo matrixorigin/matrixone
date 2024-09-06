@@ -413,10 +413,6 @@ func (obj *baseObject) MakeAppender() (appender data.ObjectAppender, err error) 
 	panic("not supported")
 }
 
-func (obj *baseObject) GetTotalChanges() int {
-	return int(obj.meta.Load().GetDeleteCount())
-}
-
 func (obj *baseObject) IsAppendable() bool { return false }
 
 func (obj *baseObject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {

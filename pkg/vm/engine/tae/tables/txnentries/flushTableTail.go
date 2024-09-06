@@ -204,8 +204,8 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 		if bat == nil || bat.Length() == 0 {
 			continue
 		}
-		rowid := vector.MustFixedCol[types.Rowid](bat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector())
-		ts := vector.MustFixedCol[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
+		rowid := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector())
+		ts := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
 
 		count := len(rowid)
 		transCnt += count

@@ -765,10 +765,10 @@ func getStorageUsageBatVectors(bat *containers.Batch) []*vector.Vector {
 func getStorageUsageVectorCols(vecs []*vector.Vector) (
 	accCol []uint64, dbCol []uint64, tblCol []uint64, sizeCol []uint64) {
 
-	dbCol = vector.MustFixedCol[uint64](vecs[UsageDBID])
-	accCol = vector.MustFixedCol[uint64](vecs[UsageAccID])
-	tblCol = vector.MustFixedCol[uint64](vecs[UsageTblID])
-	sizeCol = vector.MustFixedCol[uint64](vecs[UsageSize])
+	dbCol = vector.MustFixedColWithTypeCheck[uint64](vecs[UsageDBID])
+	accCol = vector.MustFixedColWithTypeCheck[uint64](vecs[UsageAccID])
+	tblCol = vector.MustFixedColWithTypeCheck[uint64](vecs[UsageTblID])
+	sizeCol = vector.MustFixedColWithTypeCheck[uint64](vecs[UsageSize])
 
 	return
 }
@@ -801,7 +801,7 @@ func appendToStorageUsageBat(data *CheckpointData, usage UsageData, del bool, mp
 	}
 
 	updateFunc := func(vecs []*vector.Vector, size uint64) {
-		vector.SetFixedAt[uint64](vecs[UsageSize], vecs[UsageSize].Length()-1, size)
+		vector.SetFixedAtWithTypeCheck[uint64](vecs[UsageSize], vecs[UsageSize].Length()-1, size)
 
 		if del {
 			summaryLog[1][len(summaryLog[1])-1].Size = size
@@ -1158,10 +1158,10 @@ func GetStorageUsageHistory(
 }
 
 func cnBatchToUsageDatas(bat *batch.Batch) []UsageData {
-	accCol := vector.MustFixedCol[uint64](bat.GetVector(2))
-	dbCol := vector.MustFixedCol[uint64](bat.GetVector(3))
-	tblCol := vector.MustFixedCol[uint64](bat.GetVector(4))
-	sizeCol := vector.MustFixedCol[uint64](bat.GetVector(6))
+	accCol := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(2))
+	dbCol := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(3))
+	tblCol := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(4))
+	sizeCol := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(6))
 
 	usages := make([]UsageData, 0)
 

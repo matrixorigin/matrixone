@@ -85,7 +85,7 @@ func TestAppend1(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(14, 3)
-	schema.BlockMaxRows = options.DefaultBlockMaxRows
+	schema.BlockMaxRows = objectio.BlockMaxRows
 	schema.ObjectMaxBlocks = options.DefaultBlocksPerObject
 	tae.BindSchema(schema)
 	data := catalog.MockBatch(schema, int(schema.BlockMaxRows*2))
@@ -2454,7 +2454,7 @@ func TestSegDelLogtail(t *testing.T) {
 	startTSVec := resp.Commands[0].Bat.Vecs[9]
 	cnStartVec, err := vector.ProtoVectorToVector(startTSVec)
 	assert.NoError(t, err)
-	startTSs := vector.MustFixedCol[types.TS](cnStartVec)
+	startTSs := vector.MustFixedColWithTypeCheck[types.TS](cnStartVec)
 	for _, ts := range startTSs {
 		assert.False(t, ts.IsEmpty())
 	}
@@ -2466,7 +2466,7 @@ func TestSegDelLogtail(t *testing.T) {
 	startTSVec = resp.Commands[1].Bat.Vecs[9]
 	cnStartVec, err = vector.ProtoVectorToVector(startTSVec)
 	assert.NoError(t, err)
-	startTSs = vector.MustFixedCol[types.TS](cnStartVec)
+	startTSs = vector.MustFixedColWithTypeCheck[types.TS](cnStartVec)
 	for _, ts := range startTSs {
 		assert.False(t, ts.IsEmpty())
 	}
@@ -9249,4 +9249,85 @@ func TestDedup4(t *testing.T) {
 	err := rel.Append(context.Background(), bat)
 	assert.Error(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
+}
+
+func TestDeleteWithObjectStats(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 20
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 20)
+	defer bat.Close()
+	bats := bat.Split(10)
+	tae.CreateRelAndAppend(bats[0], true)
+	tae.CompactBlocks(true)
+	for i := 1; i < 10; i++ {
+		tae.DoAppend(bats[i])
+		tae.CompactBlocks(true)
+	}
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	vals := make([]any, 0)
+	for i := 0; i < 20; i += 2 {
+		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		vals = append(vals, v)
+	}
+	ok, err := tae.TryDeleteByDeltalocWithTxn2(vals, txn)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+	{
+		txn, rel := tae.GetRelation()
+		iter := rel.MakeObjectIt(false)
+		iter.Next()
+		iter.Next()
+		obj := iter.GetObject()
+		metas := []*catalog.ObjectEntry{obj.GetMeta().(*catalog.ObjectEntry)}
+		task, err := jobs.NewMergeObjectsTask(nil, txn, metas, tae.Runtime, 0, false)
+		assert.NoError(t, err)
+		err = task.OnExec(context.Background())
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(ctx))
+	}
+	assert.NoError(t, txn.Commit(ctx))
+
+	// tae.CheckRowsByScan(10, true)
+}
+
+func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 1
+	schema.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.DeleteAll(true)
+
+	txn, rel := tae.GetRelation()
+	atombstone := testutil.GetOneTombstoneMeta(rel)
+	dataObj := testutil.GetOneBlockMeta(rel)
+	assert.NoError(t, txn.Commit(ctx))
+	tae.CompactBlocks(true)
+
+	txn, _ = tae.GetRelation()
+	deletes := &nulls.Nulls{}
+	atombstone.GetObjectData().FillBlockTombstones(
+		ctx,
+		txn,
+		types.NewBlockidWithObjectID(dataObj.ID(), 0),
+		&deletes,
+		common.DebugAllocator)
+	assert.NoError(t, txn.Commit(ctx))
+	assert.Equal(t, 1, deletes.Count())
 }
