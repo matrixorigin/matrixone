@@ -159,18 +159,16 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			}
 
 			if !v.IsReady() {
-				if v.Version == final.Version {
-					if v.VersionOffset != final.VersionOffset {
-						panic(fmt.Sprintf("cannot upgrade to version %s with versionOffset[%d], because version %s with versionOffset[%d] is in upgrading",
-							final.Version,
-							final.VersionOffset,
-							v.Version,
-							v.VersionOffset))
-					}
-				} else {
-					panic(fmt.Sprintf("cannot upgrade to version %s , because version %s is in upgrading",
+				if v.Version != final.Version {
+					panic(fmt.Sprintf("cannot upgrade to version %s, because version %s is in upgrading",
 						final.Version,
 						v.Version))
+				} else if v.VersionOffset != final.VersionOffset {
+					panic(fmt.Sprintf("cannot upgrade to version %s with versionOffset[%d], because version %s with versionOffset[%d] is in upgrading",
+						final.Version,
+						final.VersionOffset,
+						v.Version,
+						v.VersionOffset))
 				}
 			}
 
