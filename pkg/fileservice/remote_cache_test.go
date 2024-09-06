@@ -24,6 +24,7 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
@@ -35,8 +36,8 @@ type mockKeyRouter[K comparable] struct {
 	target string
 }
 
-func (r *mockKeyRouter[K]) Target(_ CacheKey) string    { return r.target }
-func (r *mockKeyRouter[K]) AddItem(_ gossip.CommonItem) {}
+func (r *mockKeyRouter[K]) Target(_ fscache.CacheKey) string { return r.target }
+func (r *mockKeyRouter[K]) AddItem(_ gossip.CommonItem)      {}
 
 type cacheFs struct {
 	qs queryservice.QueryService
