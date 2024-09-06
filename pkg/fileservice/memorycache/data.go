@@ -27,7 +27,7 @@ type Data struct {
 	bytes []byte
 	// reference counta for the Data, the Data is free
 	// when the reference count is 0
-	ref         refcnt
+	ref         _RC
 	deallocator malloc.Deallocator
 	globalSize  *atomic.Int64
 }
@@ -51,7 +51,7 @@ func newData(
 			panic(err)
 		}
 	}
-	data.ref.init(1)
+	data.ref.init()
 	return data
 }
 
@@ -77,11 +77,11 @@ func (d *Data) refs() int32 {
 }
 
 func (d *Data) acquire() {
-	d.ref.acquire()
+	d.ref.inc()
 }
 
 func (d *Data) Release() {
-	if d.ref.release() {
+	if d.ref.dec() {
 		d.free()
 	}
 }

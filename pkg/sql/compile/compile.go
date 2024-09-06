@@ -505,6 +505,10 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	v2.TxnStatementTotalCounter.Inc()
 	runC = c
 	for {
+		// Before compile.runOnce, reset `StatsInfo` IO resources which in sql context
+		stats.ResetIOAccessTimeConsumption()
+		stats.ResetIOMergerTimeConsumption()
+
 		if err = runC.runOnce(); err == nil {
 			break
 		}

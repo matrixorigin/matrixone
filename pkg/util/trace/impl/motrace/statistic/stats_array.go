@@ -264,12 +264,12 @@ type StatsInfo struct {
 	//S3ReadBytes             uint
 	//S3WriteBytes            uint
 
-	LocalFSReadIOMergerTimeConsumption      int64
-	LocalFSReadCacheIOMergerTimeConsumption int64
+	// Local FileService blocking wait time
+	LocalFSReadIOMergerTimeConsumption int64
 
+	// S3 FileService blocking wait time
 	S3FSPrefetchFileIOMergerTimeConsumption int64
 	S3FSReadIOMergerTimeConsumption         int64
-	S3FSReadCacheIOMergerTimeConsumption    int64
 
 	ParseStartTime     time.Time `json:"ParseStartTime"`
 	PlanStartTime      time.Time `json:"PlanStartTime"`
@@ -340,12 +340,6 @@ func (stats *StatsInfo) AddIOAccessTimeConsumption(d time.Duration) {
 	atomic.AddInt64(&stats.IOAccessTimeConsumption, int64(d))
 }
 
-func (stats *StatsInfo) AddLocalFSReadCacheIOMergerTimeConsumption(d time.Duration) {
-	if stats == nil {
-		return
-	}
-	atomic.AddInt64(&stats.LocalFSReadCacheIOMergerTimeConsumption, int64(d))
-}
 func (stats *StatsInfo) AddLocalFSReadIOMergerTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
@@ -364,21 +358,29 @@ func (stats *StatsInfo) AddS3FSReadIOMergerTimeConsumption(d time.Duration) {
 	}
 	atomic.AddInt64(&stats.S3FSReadIOMergerTimeConsumption, int64(d))
 }
-func (stats *StatsInfo) AddS3FSReadCacheIOMergerTimeConsumption(d time.Duration) {
+
+func (stats *StatsInfo) ResetIOMergerTimeConsumption() {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.S3FSReadCacheIOMergerTimeConsumption, int64(d))
+	atomic.StoreInt64(&stats.LocalFSReadIOMergerTimeConsumption, 0)
+	atomic.StoreInt64(&stats.S3FSPrefetchFileIOMergerTimeConsumption, 0)
+	atomic.StoreInt64(&stats.S3FSReadIOMergerTimeConsumption, 0)
+}
+
+func (stats *StatsInfo) ResetIOAccessTimeConsumption() {
+	if stats == nil {
+		return
+	}
+	atomic.StoreInt64(&stats.IOAccessTimeConsumption, 0)
 }
 
 func (stats *StatsInfo) IOMergerTimeConsumption() int64 {
 	if stats == nil {
 		return 0
 	}
-	return stats.LocalFSReadCacheIOMergerTimeConsumption +
-		stats.LocalFSReadIOMergerTimeConsumption +
+	return stats.LocalFSReadIOMergerTimeConsumption +
 		stats.S3FSPrefetchFileIOMergerTimeConsumption +
-		stats.S3FSReadCacheIOMergerTimeConsumption +
 		stats.S3FSReadIOMergerTimeConsumption
 }
 
