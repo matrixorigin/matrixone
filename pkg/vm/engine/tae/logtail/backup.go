@@ -103,6 +103,14 @@ func (d *BackupDeltaLocDataSource) Close() {
 
 }
 
+func (d *BackupDeltaLocDataSource) ApplyTombstones(
+	_ context.Context,
+	_ objectio.Blockid,
+	_ []int64,
+	_ engine.TombstoneApplyPolicy,
+) ([]int64, error) {
+	panic("Not Support ApplyTombstones")
+}
 func (d *BackupDeltaLocDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	panic("Not Support order by")
 }
@@ -139,15 +147,6 @@ func buildDS(
 		}
 	}
 	return nil
-}
-
-func (d *BackupDeltaLocDataSource) ApplyTombstones(
-	_ context.Context,
-	_ objectio.Blockid,
-	_ []int64,
-	_ engine.TombstoneApplyPolicy,
-) ([]int64, error) {
-	panic("Not Support ApplyTombstones")
 }
 
 func GetTombstonesByBlockId(

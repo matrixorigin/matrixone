@@ -182,12 +182,24 @@ func isMoTable(tid uint64) bool {
 	return tid == catalog2.MO_TABLES_ID
 }
 
+func isMoDB(tid uint64) bool {
+	return tid == catalog2.MO_DATABASE_ID
+}
+
+func isMoCol(tid uint64) bool {
+	return tid == catalog2.MO_COLUMNS_ID
+}
+
 type tombstone struct {
 	pk types.Tuple
 	ts types.TS
 }
 
-func (sm *SnapshotMeta) updateTableInfo(ctx context.Context, fs fileservice.FileService, data *CheckpointData) error {
+func (sm *SnapshotMeta) updateTableInfo(
+	ctx context.Context,
+	fs fileservice.FileService,
+	data *CheckpointData,
+) error {
 	var objects map[uint64]map[objectio.Segmentid]*objectInfo
 	var tombstones map[uint64]map[objectio.Segmentid]*objectInfo
 	objects = make(map[uint64]map[objectio.Segmentid]*objectInfo, 1)
@@ -564,6 +576,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 }
 
 func (sm *SnapshotMeta) SetTid(tid uint64) {
+	sm.tides[tid] = struct{}{}
 }
 
 func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint32, error) {
@@ -904,6 +917,23 @@ func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint32][]types.TS, tid 
 }
 
 func (sm *SnapshotMeta) GetSnapshotListLocked(SnapshotList map[uint32][]types.TS, tid uint64) []types.TS {
+	if isMoTable(tid) || isMoDB(tid) || isMoCol(tid) {
+		allSnapshot := make(map[types.TS]struct{}, 0)
+		snapshotList := make([]types.TS, 0)
+		for _, snapshots := range SnapshotList {
+			for _, snapshot := range snapshots {
+				allSnapshot[snapshot] = struct{}{}
+			}
+		}
+
+		for snapshot := range allSnapshot {
+			snapshotList = append(snapshotList, snapshot)
+		}
+		sort.Slice(snapshotList, func(i, j int) bool {
+			return snapshotList[i].Less(&snapshotList[j])
+		})
+		return snapshotList
+	}
 	if sm.acctIndexes[tid] == nil {
 		return nil
 	}

@@ -6504,6 +6504,9 @@ func TestSnapshotMeta(t *testing.T) {
 		rel5, err = database3.CreateRelation(snapshotSchema2)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
+		db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
+		db.DiskCleaner.GetCleaner().SetTid(rel4.ID())
+		db.DiskCleaner.GetCleaner().SetTid(rel5.ID())
 	}
 	//db.DiskCleaner.GetCleaner().DisableGCForTest()
 
