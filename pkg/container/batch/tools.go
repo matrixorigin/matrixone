@@ -35,7 +35,7 @@ func BatchToProtoBatch(bat *Batch) (*api.Batch, error) {
 
 func CopyToProtoBatch(bat *Batch) (*api.Batch, error) {
 	rbat := new(api.Batch)
-	rbat.Attrs = bat.Attrs
+	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
 	for _, vec := range bat.Vecs {
 		pbVector, err := vector.CopyToProtoVector(vec)
 		if err != nil {
@@ -44,7 +44,6 @@ func CopyToProtoBatch(bat *Batch) (*api.Batch, error) {
 		rbat.Vecs = append(rbat.Vecs, pbVector)
 	}
 	return rbat, nil
-
 }
 
 func ProtoBatchToBatch(bat *api.Batch) (*Batch, error) {

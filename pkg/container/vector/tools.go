@@ -289,8 +289,11 @@ func CopyToProtoVector(vec *Vector) (ret api.Vector, err error) {
 		return
 	}
 	sz := vec.typ.TypeSize()
-	var data, area []byte
+	data := make([]byte, vec.length*sz)
+	area := make([]byte, len(vec.area))
+
 	copy(data, vec.data[:vec.length*sz])
+	copy(area, vec.area)
 	return api.Vector{
 		Nsp:      nsp,
 		Nullable: true,
