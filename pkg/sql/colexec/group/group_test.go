@@ -19,11 +19,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -345,18 +345,8 @@ func newColumnExpression(pos int32, typ types.Type) *plan.Expr {
 }
 
 func resetChildren(arg *Group, bats []*batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: bats,
-	}
-	_ = valueScanArg.Prepare(nil)
-	if arg.NumChildren() == 0 {
-		arg.AppendChild(valueScanArg)
-
-	} else {
-		arg.SetChildren(
-			[]vm.Operator{
-				valueScanArg,
-			})
-	}
+	op := colexec.NewMockOperator().WithBatchs(bats)
+	arg.Children = nil
+	arg.AppendChild(op)
 	arg.ctr.state = vm.Build
 }
