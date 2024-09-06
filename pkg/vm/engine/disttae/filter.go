@@ -120,6 +120,7 @@ func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *proces
 				_ = vec.UnmarshalBinary(fExpr.Fold.Data)
 			} else {
 				ptr := uintptr(fExpr.Fold.Ptr)
+				// nolint
 				vec = (*vector.Vector)(unsafe.Pointer(ptr))
 			}
 			val, can := getConstantBytes(vec, true, 0)
