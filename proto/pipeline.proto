@@ -399,7 +399,7 @@ message TableScan {
 }
 
 message ValueScan {
-
+  string batch_block = 1;
 }
 
 message UnionAll {

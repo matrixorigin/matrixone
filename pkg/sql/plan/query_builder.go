@@ -2513,10 +2513,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		// bind GROUP BY clause
 		if clause.GroupBy != nil {
 			if ctx.recSelect {
-				return 0, moerr.NewParseErrorf(builder.GetContext(), "not support group by in recursive cte: '%v'", tree.String(&clause.GroupBy, dialect.MYSQL))
+				return 0, moerr.NewParseErrorf(builder.GetContext(), "not support group by in recursive cte: '%v'", tree.String(clause.GroupBy, dialect.MYSQL))
 			}
 			groupBinder := NewGroupBinder(builder, ctx, selectList)
-			for _, group := range clause.GroupBy {
+			for _, group := range clause.GroupBy.GroupByExprs {
 				group, err = ctx.qualifyColumnNames(group, AliasAfterColumn)
 				if err != nil {
 					return 0, err
