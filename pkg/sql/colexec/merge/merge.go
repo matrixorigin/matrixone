@@ -51,21 +51,21 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
+	var info error
 	result := vm.NewCallResult()
 	for {
-		b, info := merge.ctr.receiver.GetNextBatch()
+		result.Batch, info = merge.ctr.receiver.GetNextBatch()
 		if info != nil {
 			return vm.CancelResult, info
 		}
 
-		if b == nil {
+		if result.Batch == nil {
 			result.Status = vm.ExecStop
 			return result, nil
 		}
-		if b.Last() && merge.SinkScan {
+		if merge.SinkScan && result.Batch.Last() {
 			continue
 		}
-		result.Batch = b
 		break
 	}
 
