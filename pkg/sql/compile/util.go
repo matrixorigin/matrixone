@@ -89,8 +89,8 @@ var (
 )
 
 var (
-	insertIntoFullTextIndexTableFormat = "insert into `%s`.`%s` select * from `%s`.`%s`, fulltext_index_insert(%s);"
-	updateFullTextIndexTableFormat     = "UPDATE `%s`.`%s` AS dst, (SELECT word, min(doc_id) as first_doc_id, max(doc_id) as last_doc_id FROM `%s`.`%s` GROUP BY word) AS src SET dst.first_doc_id = src.first_doc_id, dst.last_doc_id = src.last_doc_id WHERE dst.word = src.word;"
+	insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` (doc_id, pos, word, doc_count) SELECT src.%s, f.* FROM `%s`.`%s` AS src CROSS APPLY fulltext_index_tokenize(%s) as f;"
+	updateFullTextIndexTableFormat     = "UPDATE `%s`.`%s` AS dst, (SELECT word, min(doc_id) AS first_doc_id, max(doc_id) as last_doc_id FROM `%s`.`%s` GROUP BY word) AS src SET dst.first_doc_id = src.first_doc_id, dst.last_doc_id = src.last_doc_id WHERE dst.word = src.word;"
 )
 
 // genCreateIndexTableSql: Generate ddl statements for creating index table
