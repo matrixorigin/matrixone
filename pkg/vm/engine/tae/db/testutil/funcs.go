@@ -306,7 +306,6 @@ func CreateRelationAndAppend(
 	err = rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
-	return
 }
 
 func GetRelation(t *testing.T, tenantID uint32, e *db.DB, dbName, tblName string) (txn txnif.AsyncTxn, rel handle.Relation) {

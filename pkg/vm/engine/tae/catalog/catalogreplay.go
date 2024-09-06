@@ -253,7 +253,7 @@ func (catalog *Catalog) RelayFromSysTableObjects(
 		defer columnBatch.Close()
 		catalog.ReplayMOTables(ctx, txnNode, dataFactory, tableBatch, columnBatch)
 	}
-	logutil.Infof(catalog.SimplePPString(common.PPL3))
+	// logutil.Info(catalog.SimplePPString(common.PPL3))
 }
 
 func (catalog *Catalog) ReplayMODatabase(ctx context.Context, txnNode *txnbase.TxnMVCCNode, bat *containers.Batch) {
