@@ -66,7 +66,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	if err != nil {
 		return 0, err
 	}
-	uuid := vector.MustFixedCol[types.Uuid](vec)[0]
+	uuid := vector.MustFixedColWithTypeCheck[types.Uuid](vec)[0]
 	vec.Free(builder.compCtx.GetProcess().GetMPool())
 
 	// get cols

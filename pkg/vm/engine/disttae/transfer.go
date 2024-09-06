@@ -137,7 +137,7 @@ func TransferTombstones(
 
 		// column 0 is rowid, column 1 is pk
 		// fetch rowid and pk column data
-		rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+		rowids := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 		pkColumn := entry.bat.GetVector(1)
 
 		for j, rowid := range rowids {
@@ -306,12 +306,12 @@ func batchTransferToTombstones(
 		}
 	}
 
-	entryPositions := vector.MustFixedCol[int32](searchEntryPos)
-	batPositions := vector.MustFixedCol[int32](searchBatPos)
-	rowids := vector.MustFixedCol[types.Rowid](targetRowids)
+	entryPositions := vector.MustFixedColWithTypeCheck[int32](searchEntryPos)
+	batPositions := vector.MustFixedColWithTypeCheck[int32](searchBatPos)
+	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](targetRowids)
 	for pos, endPos := 0, searchPKColumn.Length(); pos < endPos; pos++ {
 		entry := txnWrites[entryPositions[pos]]
-		if err = vector.SetFixedAt[types.Rowid](
+		if err = vector.SetFixedAtWithTypeCheck[types.Rowid](
 			entry.bat.GetVector(0),
 			int(batPositions[pos]),
 			rowids[pos],

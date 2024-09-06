@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -37,7 +38,6 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 )
 
@@ -82,7 +82,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	blockCnt := 10
-	rowsCount := int(options.DefaultBlockMaxRows) * blockCnt
+	rowsCount := int(objectio.BlockMaxRows) * blockCnt
 	bats := catalog2.MockBatch(schema, rowsCount).Split(blockCnt)
 
 	// write table
@@ -194,7 +194,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 		var bat2 *batch.Batch
 		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
 			relation.GetDBID(ctx), relation.GetTableID(ctx), 1, func(entry disttae.Entry) {
-				waitedDeletes := vector.MustFixedCol[types.Rowid](entry.Bat().GetVector(0))
+				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
 				waitedDeletes = waitedDeletes[:rowsCount/2]
 				bat2 = batch.NewWithSize(1)
 				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())

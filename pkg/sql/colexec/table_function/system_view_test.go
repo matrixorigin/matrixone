@@ -356,7 +356,7 @@ func Test_gettingInfo(t *testing.T) {
 
 			// what?
 			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[0], "mock_cache")
-			assert.Equal(t, vector.MustFixedCol[uint64](bat.GetVector(1))[0], uint64(0))
+			assert.Equal(t, vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(1))[0], uint64(0))
 		})
 	}
 

@@ -63,6 +63,13 @@ func (jm *JoinMap) SetRowCount(cnt int64) {
 	jm.rowcnt = cnt
 }
 
+func (jm *JoinMap) GetRefCount() int64 {
+	if jm == nil {
+		return 0
+	}
+	return atomic.LoadInt64(&jm.refCnt)
+}
+
 func (jm *JoinMap) GetRowCount() int64 {
 	if jm == nil {
 		return 0
@@ -98,24 +105,30 @@ func (jm *JoinMap) IsValid() bool {
 	return jm.valid
 }
 
-func (jm *JoinMap) Free() {
-	if atomic.AddInt64(&jm.refCnt, -1) != 0 {
-		return
-	}
+func (jm *JoinMap) FreeMemory() {
 	for i := range jm.multiSels {
 		jm.multiSels[i] = nil
 	}
 	jm.multiSels = nil
 	if jm.ihm != nil {
 		jm.ihm.Free()
+		jm.ihm = nil
 	} else if jm.shm != nil {
 		jm.shm.Free()
+		jm.shm = nil
 	}
 	for i := range jm.batches {
 		jm.batches[i].Clean(jm.mpool)
 	}
 	jm.batches = nil
 	jm.valid = false
+}
+
+func (jm *JoinMap) Free() {
+	if atomic.AddInt64(&jm.refCnt, -1) != 0 {
+		return
+	}
+	jm.FreeMemory()
 }
 
 func (jm *JoinMap) Size() int64 {
@@ -149,6 +162,12 @@ func (t JoinMapMsg) NeedBlock() bool {
 	return true
 }
 
+func (t JoinMapMsg) Destroy() {
+	if t.JoinMapPtr != nil {
+		t.JoinMapPtr.FreeMemory()
+	}
+}
+
 func (t JoinMapMsg) GetMsgTag() int32 {
 	return t.Tag
 }
@@ -161,7 +180,7 @@ func (t JoinMapMsg) DebugString() string {
 	}
 	if t.JoinMapPtr != nil {
 		buf.WriteString("joinmap rowcnt " + strconv.Itoa(int(t.JoinMapPtr.rowcnt)) + "\n")
-		buf.WriteString("joinmap refcnt " + strconv.Itoa(int(t.JoinMapPtr.refCnt)) + "\n")
+		buf.WriteString("joinmap refcnt " + strconv.Itoa(int(t.JoinMapPtr.GetRefCount())) + "\n")
 	} else {
 		buf.WriteString("joinmapPtr is nil \n")
 	}

@@ -75,14 +75,14 @@ func newroaringFilter(t types.T) *roaringFilter {
 }
 
 func addFunc[T canUseRoaring](f *roaringFilter, v *vector.Vector) {
-	ss := vector.MustFixedCol[T](v)
+	ss := vector.MustFixedColNoTypeCheck[T](v)
 	for _, s := range ss {
 		f.b.Add(uint32(s))
 	}
 }
 
 func testFunc[T canUseRoaring](f *roaringFilter, v *vector.Vector) (int, any) {
-	ss := vector.MustFixedCol[T](v)
+	ss := vector.MustFixedColNoTypeCheck[T](v)
 	for i, s := range ss {
 		if f.b.Contains(uint32(s)) {
 			return i, s
@@ -92,7 +92,7 @@ func testFunc[T canUseRoaring](f *roaringFilter, v *vector.Vector) (int, any) {
 }
 
 func testAndAddFunc[T canUseRoaring](f *roaringFilter, v *vector.Vector) (int, any) {
-	ss := vector.MustFixedCol[T](v)
+	ss := vector.MustFixedColWithTypeCheck[T](v)
 	for i, s := range ss {
 		if !f.b.CheckedAdd(uint32(s)) {
 			return i, s

@@ -192,7 +192,6 @@ type BaseNode[T any] interface {
 	CloneData() T
 	String() string
 	Update(vun T)
-	IdempotentUpdate(vun T)
 	WriteTo(w io.Writer) (n int64, err error)
 	ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error)
 }
@@ -249,12 +248,6 @@ func (e *MVCCNode[T]) String() string {
 
 // for create drop in one txn
 func (e *MVCCNode[T]) Update(un *MVCCNode[T]) {
-	e.CreatedAt = un.CreatedAt
-	e.DeletedAt = un.DeletedAt
-	e.BaseNode.Update(un.BaseNode)
-}
-
-func (e *MVCCNode[T]) IdempotentUpdate(un *MVCCNode[T]) {
 	e.CreatedAt = un.CreatedAt
 	e.DeletedAt = un.DeletedAt
 	e.BaseNode.Update(un.BaseNode)

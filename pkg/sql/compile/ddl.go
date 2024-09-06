@@ -1227,7 +1227,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.proc.Ctx, c.proc, dbSource, newRelation)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1236,7 +1236,10 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		err = c.runSql(insertSQL)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Error(c.proc.Ctx, "createTable",
+				zap.String("insertSQL", insertSQL),
+				zap.String("dbName0", dbName),
+				zap.String("tblName0", tblName),
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
