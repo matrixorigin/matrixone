@@ -58,51 +58,51 @@ func MergeAObj(
 	} else {
 		switch typ.Oid {
 		case types.T_bool:
-			merger = newAObjMerger(vpool, batches, sort.BoolLess, sortKeyPos, vector.MustFixedCol[bool], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.BoolLess, sortKeyPos, vector.MustFixedColNoTypeCheck[bool], toLayout)
 		case types.T_bit:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedColNoTypeCheck[uint64], toLayout)
 		case types.T_int8:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[int8], sortKeyPos, vector.MustFixedCol[int8], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[int8], sortKeyPos, vector.MustFixedColNoTypeCheck[int8], toLayout)
 		case types.T_int16:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[int16], sortKeyPos, vector.MustFixedCol[int16], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[int16], sortKeyPos, vector.MustFixedColNoTypeCheck[int16], toLayout)
 		case types.T_int32:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[int32], sortKeyPos, vector.MustFixedCol[int32], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[int32], sortKeyPos, vector.MustFixedColNoTypeCheck[int32], toLayout)
 		case types.T_int64:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[int64], sortKeyPos, vector.MustFixedCol[int64], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[int64], sortKeyPos, vector.MustFixedColNoTypeCheck[int64], toLayout)
 		case types.T_float32:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[float32], sortKeyPos, vector.MustFixedCol[float32], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[float32], sortKeyPos, vector.MustFixedColNoTypeCheck[float32], toLayout)
 		case types.T_float64:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[float64], sortKeyPos, vector.MustFixedCol[float64], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[float64], sortKeyPos, vector.MustFixedColNoTypeCheck[float64], toLayout)
 		case types.T_uint8:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint8], sortKeyPos, vector.MustFixedCol[uint8], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint8], sortKeyPos, vector.MustFixedColNoTypeCheck[uint8], toLayout)
 		case types.T_uint16:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint16], sortKeyPos, vector.MustFixedCol[uint16], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint16], sortKeyPos, vector.MustFixedColNoTypeCheck[uint16], toLayout)
 		case types.T_uint32:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint32], sortKeyPos, vector.MustFixedCol[uint32], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint32], sortKeyPos, vector.MustFixedColNoTypeCheck[uint32], toLayout)
 		case types.T_uint64:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedColNoTypeCheck[uint64], toLayout)
 		case types.T_date:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Date], sortKeyPos, vector.MustFixedCol[types.Date], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Date], sortKeyPos, vector.MustFixedColNoTypeCheck[types.Date], toLayout)
 		case types.T_timestamp:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Timestamp], sortKeyPos, vector.MustFixedCol[types.Timestamp], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Timestamp], sortKeyPos, vector.MustFixedColNoTypeCheck[types.Timestamp], toLayout)
 		case types.T_datetime:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Datetime], sortKeyPos, vector.MustFixedCol[types.Datetime], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Datetime], sortKeyPos, vector.MustFixedColNoTypeCheck[types.Datetime], toLayout)
 		case types.T_time:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Time], sortKeyPos, vector.MustFixedCol[types.Time], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Time], sortKeyPos, vector.MustFixedColNoTypeCheck[types.Time], toLayout)
 		case types.T_enum:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Enum], sortKeyPos, vector.MustFixedCol[types.Enum], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Enum], sortKeyPos, vector.MustFixedColNoTypeCheck[types.Enum], toLayout)
 		case types.T_decimal64:
-			merger = newAObjMerger(vpool, batches, sort.Decimal64Less, sortKeyPos, vector.MustFixedCol[types.Decimal64], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.Decimal64Less, sortKeyPos, vector.MustFixedColNoTypeCheck[types.Decimal64], toLayout)
 		case types.T_decimal128:
-			merger = newAObjMerger(vpool, batches, sort.Decimal128Less, sortKeyPos, vector.MustFixedCol[types.Decimal128], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.Decimal128Less, sortKeyPos, vector.MustFixedColNoTypeCheck[types.Decimal128], toLayout)
 		case types.T_uuid:
-			merger = newAObjMerger(vpool, batches, sort.UuidLess, sortKeyPos, vector.MustFixedCol[types.Uuid], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.UuidLess, sortKeyPos, vector.MustFixedColNoTypeCheck[types.Uuid], toLayout)
 		case types.T_TS:
-			merger = newAObjMerger(vpool, batches, sort.TsLess, sortKeyPos, vector.MustFixedCol[types.TS], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.TsLess, sortKeyPos, vector.MustFixedColNoTypeCheck[types.TS], toLayout)
 		case types.T_Rowid:
-			merger = newAObjMerger(vpool, batches, sort.RowidLess, sortKeyPos, vector.MustFixedCol[types.Rowid], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.RowidLess, sortKeyPos, vector.MustFixedColNoTypeCheck[types.Rowid], toLayout)
 		case types.T_Blockid:
-			merger = newAObjMerger(vpool, batches, sort.BlockidLess, sortKeyPos, vector.MustFixedCol[types.Blockid], toLayout)
+			merger = newAObjMerger(vpool, batches, sort.BlockidLess, sortKeyPos, vector.MustFixedColNoTypeCheck[types.Blockid], toLayout)
 		default:
 			return nil, nil, nil, moerr.NewErrUnsupportedDataType(ctx, typ)
 		}
