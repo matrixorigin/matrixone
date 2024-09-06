@@ -101,5 +101,47 @@ WITH
 ROLLUP
 ORDER BY GROUPING(year) DESC;
 
-create table t1(a int, b int)
-insert into t1 values(1,2),(2,3),(6,7)
+#Error cases
+SELECT
+year,
+country,
+SUM(profit) AS profit,
+GROUPING(product) AS grp_product
+FROM sales
+GROUP BY
+year,
+country
+WITH
+ROLLUP
+ORDER BY
+profit;
+
+SELECT
+year,
+country,
+SUM(profit) AS profit,
+GROUPING(year+1) AS grp_product
+FROM sales
+GROUP BY
+year,
+country
+WITH
+ROLLUP
+ORDER BY
+profit;
+
+SELECT
+year,
+country,
+SUM(profit) AS profit,
+FROM sales
+WHERE
+GROUPING(year) = 1
+GROUP BY
+year,
+country
+WITH
+ROLLUP
+ORDER BY
+profit;
+
