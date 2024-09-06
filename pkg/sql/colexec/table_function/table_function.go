@@ -31,7 +31,7 @@ const opName = "table_function"
 
 const (
 	FULLTEXT_INDEX_SCAN     = "fulltext_index_scan"
-	FULLTEXT_INDEX_TOKENIZE = "fulltext_tokenize"
+	FULLTEXT_INDEX_TOKENIZE = "fulltext_index_tokenize"
 )
 
 func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, error) {
@@ -139,8 +139,10 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = moTransactionsPrepare(proc, tblArg)
 	case "mo_cache":
 		tblArg.ctr.state, err = moCachePrepare(proc, tblArg)
-	case FULLTEXT_INDEX_SCAN:
+	case "fulltext_index_scan":
 		tblArg.ctr.state, err = fulltextIndexScanPrepare(proc, tblArg)
+	case "fulltext_index_tokenize":
+		tblArg.ctr.state, err = fulltextIndexTokenizePrepare(proc, tblArg)
 	case "stage_list":
 		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
 	default:
