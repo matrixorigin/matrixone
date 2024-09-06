@@ -15,11 +15,12 @@
 package aggexec
 
 import (
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"sort"
 )
 
 var MedianSupportedType = []types.T{
@@ -144,7 +145,7 @@ func (exec *medianColumnExecSelf[T, R]) Fill(groupIndex int, row int, vectors []
 	}
 
 	exec.ret.setGroupNotEmpty(groupIndex)
-	value := vector.MustFixedCol[T](vectors[0])[row]
+	value := vector.MustFixedColWithTypeCheck[T](vectors[0])[row]
 
 	return vectorAppendWildly(exec.groups[groupIndex], exec.ret.mp, value)
 }
@@ -160,7 +161,7 @@ func (exec *medianColumnExecSelf[T, R]) BulkFill(groupIndex int, vectors []*vect
 
 	if vectors[0].IsConst() {
 		exec.ret.setGroupNotEmpty(groupIndex)
-		value := vector.MustFixedCol[T](vectors[0])[0]
+		value := vector.MustFixedColWithTypeCheck[T](vectors[0])[0]
 		return vector.AppendMultiFixed[T](exec.groups[0], value, false, vectors[0].Length(), exec.ret.mp)
 	}
 
@@ -189,7 +190,7 @@ func (exec *medianColumnExecSelf[T, R]) distinctBulkFill(groupIndex int, vectors
 		}
 
 		exec.ret.setGroupNotEmpty(groupIndex)
-		value := vector.MustFixedCol[T](vectors[0])[0]
+		value := vector.MustFixedColWithTypeCheck[T](vectors[0])[0]
 		return vector.AppendMultiFixed[T](exec.groups[groupIndex], value, false, vectors[0].Length(), exec.ret.mp)
 	}
 
@@ -229,7 +230,7 @@ func (exec *medianColumnExecSelf[T, R]) BatchFill(offset int, groups []uint64, v
 	}
 
 	if vectors[0].IsConst() {
-		value := vector.MustFixedCol[T](vectors[0])[0]
+		value := vector.MustFixedColWithTypeCheck[T](vectors[0])[0]
 		for i := 0; i < len(groups); i++ {
 			if groups[i] != GroupNotMatched {
 				groupIndex := groups[i] - 1
@@ -269,7 +270,7 @@ func (exec *medianColumnExecSelf[T, R]) distinctBatchFill(offset int, groups []u
 	}
 
 	if vectors[0].IsConst() {
-		value := vector.MustFixedCol[T](vectors[0])[0]
+		value := vector.MustFixedColWithTypeCheck[T](vectors[0])[0]
 		for i := 0; i < len(groups); i++ {
 			if needs[i] && groups[i] != GroupNotMatched {
 				groupIndex := groups[i] - 1
@@ -308,7 +309,7 @@ func (exec *medianColumnExecSelf[T, R]) Merge(other *medianColumnExecSelf[T, R],
 	if other.groups[groupIdx2].Length() == 0 {
 		return nil
 	}
-	vs := vector.MustFixedCol[T](other.groups[groupIdx2])
+	vs := vector.MustFixedColWithTypeCheck[T](other.groups[groupIdx2])
 	return vector.AppendFixedList[T](exec.groups[groupIdx1], vs, nil, exec.ret.mp)
 }
 
@@ -413,8 +414,8 @@ func (exec *medianColumnNumericExec[T]) Flush() (*vector.Vector, error) {
 		}
 
 		exec.ret.empty[i] = false
-		sort.Sort(generateSortableSlice(vector.MustFixedCol[T](exec.groups[i])))
-		srcs := vector.MustFixedCol[T](exec.groups[i])
+		sort.Sort(generateSortableSlice(vector.MustFixedColWithTypeCheck[T](exec.groups[i])))
+		srcs := vector.MustFixedColWithTypeCheck[T](exec.groups[i])
 		if rows&1 == 1 {
 			vs[i] = float64(srcs[rows>>1])
 		} else {
@@ -446,9 +447,9 @@ func (exec *medianColumnDecimalExec[T]) Flush() (*vector.Vector, error) {
 		}
 
 		exec.ret.empty[i] = false
-		sort.Sort(generateSortableSlice2(vector.MustFixedCol[T](exec.groups[i])))
+		sort.Sort(generateSortableSlice2(vector.MustFixedColWithTypeCheck[T](exec.groups[i])))
 		if argIsDecimal128 {
-			srcs := vector.MustFixedCol[types.Decimal128](exec.groups[i])
+			srcs := vector.MustFixedColWithTypeCheck[types.Decimal128](exec.groups[i])
 			if rows&1 == 1 {
 				if vs[i], err = srcs[rows>>1].Scale(1); err != nil {
 					return nil, err
@@ -473,7 +474,7 @@ func (exec *medianColumnDecimalExec[T]) Flush() (*vector.Vector, error) {
 			}
 
 		} else {
-			srcs := vector.MustFixedCol[types.Decimal64](exec.groups[i])
+			srcs := vector.MustFixedColWithTypeCheck[types.Decimal64](exec.groups[i])
 			if rows&1 == 1 {
 				if vs[i], err = FromD64ToD128(srcs[rows>>1]).Scale(1); err != nil {
 					return nil, err
