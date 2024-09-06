@@ -68,7 +68,7 @@ func initCachedBatch(mp *mpool.MPool, capacity int) *cachedBatch {
 }
 
 func (cb *cachedBatch) CacheBatch(bat *batch.Batch) {
-	if bat == nil || bat == batch.EmptyBatch {
+	if bat == nil || bat == batch.EmptyBatch || bat == batch.CteEndBatch {
 		return
 	}
 	cb.cacheVectorsInBatch(bat)
@@ -117,7 +117,7 @@ func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch) {
 // and copy the data and area of the src batch to the dst batch.
 func (cb *cachedBatch) GetCopiedBatch(
 	senderCtx context.Context, src *batch.Batch) (dst *batch.Batch, senderDone bool, err error) {
-	if src == nil || src == batch.EmptyBatch {
+	if src == nil || src == batch.EmptyBatch || src == batch.CteEndBatch {
 		dst = src
 
 	} else {

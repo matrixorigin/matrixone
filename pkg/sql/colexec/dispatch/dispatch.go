@@ -24,8 +24,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -130,19 +128,16 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
+	if dispatch.RecSink {
+		a := 1
+		_ = a
+	}
+
 	whichToSend := result.Batch
 	if result.Batch == nil {
 		result.Status = vm.ExecStop
 		if dispatch.RecSink {
-			whichToSend, err = makeEndBatch(proc)
-			if err != nil {
-				return result, err
-			}
-			defer func() {
-				if whichToSend != nil {
-					whichToSend.Clean(proc.Mp())
-				}
-			}()
+			whichToSend = batch.CteEndBatch
 		} else {
 			printShuffleResult(dispatch)
 			return result, nil
@@ -151,17 +146,21 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if whichToSend.Last() {
 		if !dispatch.ctr.hasData {
-			whichToSend.SetEnd()
 			result.Status = vm.ExecStop
 		} else {
 			dispatch.ctr.hasData = false
 		}
 	} else if whichToSend.IsEmpty() {
-		result.Batch = batch.EmptyBatch
 		return result, nil
 	} else {
 		dispatch.ctr.hasData = true
 	}
+
+	//if dispatch.RecSink && !whichToSend.End() && result.Status == vm.ExecStop {
+	//	defer func() {
+	//		_, err = dispatch.ctr.sendFunc(batch.CteEndBatch, dispatch, proc)
+	//	}()
+	//}
 
 	// sending.
 	ok, err := dispatch.ctr.sendFunc(whichToSend, dispatch, proc)
@@ -169,20 +168,6 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 	}
 	return result, err
-}
-
-func makeEndBatch(proc *process.Process) (*batch.Batch, error) {
-	b := batch.NewWithSize(1)
-	b.Attrs = []string{
-		"recursive_col",
-	}
-	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
-	err := vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
-	if err == nil {
-		batch.SetLength(b, 1)
-		b.SetEnd()
-	}
-	return b, err
 }
 
 func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, error) {
