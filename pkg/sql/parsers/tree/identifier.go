@@ -26,6 +26,10 @@ func (node *Identifier) Format(ctx *FmtCtx) {
 	ctx.WriteString(string(*node))
 }
 
+func (node *Identifier) String() string {
+	return string(*node)
+}
+
 type UnrestrictedIdentifier string
 
 // the list of identifiers.

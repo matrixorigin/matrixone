@@ -16,14 +16,14 @@ package frontend
 
 import (
 	"context"
-	"regexp"
-	"sort"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/stretchr/testify/assert"
+
+	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 )
 
 func Test_newCdcSqlFormat(t *testing.T) {
@@ -46,8 +46,8 @@ func Test_newCdcSqlFormat(t *testing.T) {
 		"op filters",
 		"error",
 		"common",
-		123,
-		456,
+		"",
+		"",
 		"conf path",
 		d,
 		"running",
@@ -55,127 +55,190 @@ func Test_newCdcSqlFormat(t *testing.T) {
 		"xxx",
 		"yyy",
 	)
-	wantSql := `insert into mo_catalog.mo_cdc_task values(3,"019111fd-aed1-70c0-8760-9abadd8f0f4a","task1","src uri","123","dst uri","mysql","456","ca path","cert path","key path","db1:t1","xfilter","op filters","error","common",123,"123",456,"456","conf path","2024-08-02 15:20:00","running",125,"125","xxx","yyy","","","","","")`
+	wantSql := "insert into mo_catalog.mo_cdc_task values(3,\"019111fd-aed1-70c0-8760-9abadd8f0f4a\",\"task1\",\"src uri\",\"123\",\"dst uri\",\"mysql\",\"456\",\"ca path\",\"cert path\",\"key path\",\"db1:t1\",\"xfilter\",\"op filters\",\"error\",\"common\",\"\",\"\",\"conf path\",\"2024-08-02 15:20:00\",\"running\",125,\"125\",\"xxx\",\"yyy\",\"\",\"\",\"\",\"\",\"\")"
 	assert.Equal(t, wantSql, sql)
 
 	sql2 := getSqlForRetrievingCdcTask(3, id)
-	wantSql2 := `select sink_uri, sink_type, sink_password, tables, start_ts_str, checkpoint_str from mo_catalog.mo_cdc_task where account_id = 3 and task_id = "019111fd-aed1-70c0-8760-9abadd8f0f4a"`
+	wantSql2 := "select sink_uri, sink_type, sink_password, tables, filters, start_ts from mo_catalog.mo_cdc_task where account_id = 3 and task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
 	assert.Equal(t, wantSql2, sql2)
 }
 
 func Test_parseTables(t *testing.T) {
-	rows := [][]string{
-		{"acc1", "users", "t1"},
-		{"acc1", "users", "t2"},
-		{"acc2", "users", "t1"},
-		{"acc2", "users", "t2"},
-		{"acc3", "items", "t1"},
-		{"acc3", "items", "table1"},
-		{"acc3", "items", "table2"},
-		{"acc3", "items", "table3"},
-		{"sys", "test", "test"},
-		{"sys", "test1", "test"},
-		{"sys", "test2", "test"},
-		{"sys", "test", "t1"},
-		{"sys", "test", "t11"},
-		{"sys", "test", "t111"},
-		{"sys", "test", "t1111"},
+	//tables := []string{
+	//	"acc1.users.t1:acc1.users.t1",
+	//	"acc1.users.t*:acc1.users.t*",
+	//	"acc*.users.t?:acc*.users.t?",
+	//	"acc*.users|items.*[12]/:acc*.users|items.*[12]/",
+	//	"acc*.*./table./",
+	//	//"acc*.*.table*",
+	//	//"/sys|acc.*/.*.t*",
+	//	//"/sys|acc.*/.*./t.$/",
+	//	//"/sys|acc.*/.test*./t1{1,3}$/,/acc[23]/.items./.*/",
+	//}
+
+	type tableInfo struct {
+		account, db, table string
+		tableIsRegexp      bool
 	}
 
-	tables := []string{
-		"acc1.users.t1",
-		"acc1.users.t*",
-		"acc*.users.t?",
-		"acc*./users|items/./t.*[12]/",
-		"acc*.*./table./",
-		"acc*.*.table*",
-		"/sys|acc.*/.*.t*",
-		"/sys|acc.*/.*./t.$/",
-		"/sys|acc.*/.test*./t1{1,3}$/,/acc[23]/.items./.*/",
+	isSame := func(info tableInfo, account, db, table string, isRegexp bool, tip string) {
+		assert.Equalf(t, info.account, account, tip)
+		assert.Equalf(t, info.db, db, tip)
+		assert.Equalf(t, info.table, table, tip)
+		assert.Equalf(t, info.tableIsRegexp, isRegexp, tip)
 	}
 
-	want := [][]int{
-		{0},
-		{0, 1},
-		{0, 1, 2, 3},
-		{0, 1, 2, 3, 4, 5, 6},
-		{5, 6, 7},
-		{5, 6, 7},
-		{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14},
-		{0, 1, 2, 3, 4, 11},
-		{4, 5, 6, 7, 11, 12, 13},
+	type kase struct {
+		input   string
+		wantErr bool
+		src     tableInfo
+		dst     tableInfo
 	}
 
-	for wantIdx, table := range tables {
-		matchedIdx := []int{}
-		pts, err := string2DbTblInfos(table)
-		assert.Equal(t, err, nil)
-		for _, pt := range pts {
-			for idx := range rows {
-				row := rows[idx]
-				accountMatched, err := regexp.MatchString(pt.SourceAccountName, row[0])
-				assert.Equal(t, err, nil)
-				databaseMatched, err := regexp.MatchString(pt.SourceDbName, row[1])
-				assert.Equal(t, err, nil)
-				tableMatched, err := regexp.MatchString(pt.SourceTblName, row[2])
-				assert.Equal(t, err, nil)
-				if accountMatched && databaseMatched && tableMatched {
-					matchedIdx = append(matchedIdx, idx)
-				}
-			}
+	kases := []kase{
+		{
+			input:   "acc1.users.t1:acc1.users.t1",
+			wantErr: false,
+			src: tableInfo{
+				account: "acc1",
+				db:      "users",
+				table:   "t1",
+			},
+			dst: tableInfo{
+				account: "acc1",
+				db:      "users",
+				table:   "t1",
+			},
+		},
+		{
+			input:   "acc1.users.t*:acc1.users.t*",
+			wantErr: false,
+			src: tableInfo{
+				account: "acc1",
+				db:      "users",
+				table:   "t*",
+			},
+			dst: tableInfo{
+				account: "acc1",
+				db:      "users",
+				table:   "t*",
+			},
+		},
+		{
+			input:   "acc*.users.t?:acc*.users.t?",
+			wantErr: false,
+			src: tableInfo{
+				account: "acc*",
+				db:      "users",
+				table:   "t?",
+			},
+			dst: tableInfo{
+				account: "acc*",
+				db:      "users",
+				table:   "t?",
+			},
+		},
+		{
+			input:   "acc*.users|items.*[12]/:acc*.users|items.*[12]/",
+			wantErr: false,
+			src: tableInfo{
+				account: "acc*",
+				db:      "users|items",
+				table:   "*[12]/",
+			},
+			dst: tableInfo{
+				account: "acc*",
+				db:      "users|items",
+				table:   "*[12]/",
+			},
+		},
+		{
+			input:   "acc*.*./table./",
+			wantErr: true,
+			src:     tableInfo{},
+			dst:     tableInfo{},
+		},
+		{
+			input:   "acc*.*.table*:acc*.*.table*",
+			wantErr: false,
+			src: tableInfo{
+				account: "acc*",
+				db:      "*",
+				table:   "table*",
+			},
+			dst: tableInfo{
+				account: "acc*",
+				db:      "*",
+				table:   "table*",
+			},
+		},
+	}
+
+	for _, tkase := range kases {
+		pirs, err := extractTablePairs(context.Background(), tkase.input)
+		if tkase.wantErr {
+			assert.Errorf(t, err, tkase.input)
+		} else {
+			assert.NoErrorf(t, err, tkase.input)
+			assert.Equal(t, len(pirs.Pts), 1, tkase.input)
+			pir := pirs.Pts[0]
+			isSame(tkase.src, pir.Source.Account, pir.Source.Database, pir.Source.Table, pir.Source.TableIsRegexp, tkase.input)
+			isSame(tkase.dst, pir.Sink.Account, pir.Sink.Database, pir.Sink.Table, pir.Sink.TableIsRegexp, tkase.input)
 		}
-		sort.Ints(matchedIdx)
-		assert.Equal(t, want[wantIdx], matchedIdx)
 	}
 }
 
 func Test_privilegeCheck(t *testing.T) {
 	var tenantInfo *TenantInfo
 	var err error
-	var pts []*cdc2.DbTableInfo
+	var pts []*cdc2.PatternTuple
 	ctx := context.Background()
 	ses := &Session{}
+
+	gen := func(pts []*cdc2.PatternTuple) *cdc2.PatternTuples {
+		return &cdc2.PatternTuples{Pts: pts}
+	}
 
 	tenantInfo = &TenantInfo{
 		Tenant:      sysAccountName,
 		DefaultRole: moAdminRoleName,
 	}
 	ses.tenant = tenantInfo
-	pts = []*cdc2.DbTableInfo{
-		{SourceAccountName: "acc1"},
-		{SourceAccountName: sysAccountName},
+	pts = []*cdc2.PatternTuple{
+		{Source: cdc2.PatternTable{Account: "acc1"}},
+		{Source: cdc2.PatternTable{Account: sysAccountName}},
 	}
-	err = canCreateCdcTask(ctx, ses, "Cluster", "", pts)
+	err = canCreateCdcTask(ctx, ses, "Cluster", "", gen(pts))
 	assert.Nil(t, err)
 
-	pts = []*cdc2.DbTableInfo{
-		{SourceAccountName: sysAccountName, SourceDbName: moCatalog},
+	pts = []*cdc2.PatternTuple{
+		{Source: cdc2.PatternTable{Account: sysAccountName, Database: moCatalog}},
 	}
-	err = canCreateCdcTask(ctx, ses, "Cluster", "", pts)
+	err = canCreateCdcTask(ctx, ses, "Cluster", "", gen(pts))
 	assert.NotNil(t, err)
 
-	pts = []*cdc2.DbTableInfo{
-		{SourceAccountName: sysAccountName},
+	pts = []*cdc2.PatternTuple{
+		{Source: cdc2.PatternTable{Account: sysAccountName}},
 	}
-	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
+	err = canCreateCdcTask(ctx, ses, "Account", "acc1", gen(pts))
 	assert.NotNil(t, err)
 
-	pts = []*cdc2.DbTableInfo{
-		{SourceAccountName: "acc2"},
+	pts = []*cdc2.PatternTuple{
+		{Source: cdc2.PatternTable{Account: "acc2"}},
 	}
-	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
+	err = canCreateCdcTask(ctx, ses, "Account", "acc1", gen(pts))
 	assert.NotNil(t, err)
 
-	pts = []*cdc2.DbTableInfo{
+	pts = []*cdc2.PatternTuple{
 		{},
 	}
-	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
+	err = canCreateCdcTask(ctx, ses, "Account", "acc1", gen(pts))
 	assert.Nil(t, err)
 
-	pts = []*cdc2.DbTableInfo{
-		{SourceAccountName: "acc1"},
+	pts = []*cdc2.PatternTuple{
+		{Source: cdc2.PatternTable{Account: "acc1"}},
 	}
-	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
+	err = canCreateCdcTask(ctx, ses, "Account", "acc1", gen(pts))
 	assert.Nil(t, err)
 
 	tenantInfo = &TenantInfo{
@@ -184,24 +247,229 @@ func Test_privilegeCheck(t *testing.T) {
 	}
 	ses.tenant = tenantInfo
 
-	pts = []*cdc2.DbTableInfo{
-		{SourceAccountName: "acc1"},
+	pts = []*cdc2.PatternTuple{
+		{Source: cdc2.PatternTable{Account: "acc1"}},
 		{},
 	}
-	err = canCreateCdcTask(ctx, ses, "Cluster", "", pts)
+	err = canCreateCdcTask(ctx, ses, "Cluster", "", gen(pts))
 	assert.NotNil(t, err)
 
-	err = canCreateCdcTask(ctx, ses, "Account", "acc2", pts)
+	err = canCreateCdcTask(ctx, ses, "Account", "acc2", gen(pts))
 	assert.NotNil(t, err)
 
-	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
+	err = canCreateCdcTask(ctx, ses, "Account", "acc1", gen(pts))
 	assert.Nil(t, err)
 
-	pts = []*cdc2.DbTableInfo{
-		{SourceAccountName: "acc2"},
-		{SourceAccountName: sysAccountName},
+	pts = []*cdc2.PatternTuple{
+		{Source: cdc2.PatternTable{Account: "acc2"}},
+		{Source: cdc2.PatternTable{Account: sysAccountName}},
 	}
-	err = canCreateCdcTask(ctx, ses, "Account", "acc1", pts)
+	err = canCreateCdcTask(ctx, ses, "Account", "acc1", gen(pts))
 	assert.NotNil(t, err)
 
+}
+
+func Test_extractTableInfo(t *testing.T) {
+	type args struct {
+		ctx                 context.Context
+		input               string
+		mustBeConcreteTable bool
+	}
+	tests := []struct {
+		name        string
+		args        args
+		wantAccount string
+		wantDb      string
+		wantTable   string
+		wantErr     assert.ErrorAssertionFunc
+	}{
+		{
+			name: "t1-1",
+			args: args{
+				input:               "acc1.db.t1",
+				mustBeConcreteTable: true,
+			},
+			wantAccount: "acc1",
+			wantDb:      "db",
+			wantTable:   "t1",
+			wantErr:     nil,
+		},
+		{
+			name: "t1-2",
+			args: args{
+				input:               "acc1.db.t*",
+				mustBeConcreteTable: true,
+			},
+			wantAccount: "acc1",
+			wantDb:      "db",
+			wantTable:   "t*",
+			wantErr:     nil,
+		},
+		{
+			name: "t1-3-table pattern needs //",
+			args: args{
+				input:               "acc1.db.t*",
+				mustBeConcreteTable: false,
+			},
+			wantAccount: "acc1",
+			wantDb:      "db",
+			wantTable:   "t*",
+			wantErr:     nil,
+		},
+		{
+			name: "t1-4",
+			args: args{
+				input:               "acc1.db./t*/",
+				mustBeConcreteTable: false,
+			},
+			wantAccount: "acc1",
+			wantDb:      "db",
+			wantTable:   "/t*/",
+			wantErr:     nil,
+		},
+		{
+			name: "t2-1",
+			args: args{
+				input:               "db.t1",
+				mustBeConcreteTable: true,
+			},
+			wantAccount: "",
+			wantDb:      "db",
+			wantTable:   "t1",
+			wantErr:     nil,
+		},
+		{
+			name: "t2-2-table pattern needs //",
+			args: args{
+				input:               "db.t*",
+				mustBeConcreteTable: true,
+			},
+			wantAccount: "",
+			wantDb:      "db",
+			wantTable:   "t*",
+			wantErr:     nil,
+		},
+		{
+			name: "t2-3-table name can be 't*'",
+			args: args{
+				input:               "db.t*",
+				mustBeConcreteTable: false,
+			},
+			wantAccount: "",
+			wantDb:      "db",
+			wantTable:   "t*",
+			wantErr:     nil,
+		},
+		{
+			name: "t2-4",
+			args: args{
+				input:               "db./t*/",
+				mustBeConcreteTable: false,
+			},
+			wantAccount: "",
+			wantDb:      "db",
+			wantTable:   "/t*/",
+			wantErr:     nil,
+		},
+		{
+			name: "t2-5",
+			args: args{
+				input:               "db./t*/",
+				mustBeConcreteTable: true,
+			},
+			wantAccount: "",
+			wantDb:      "db",
+			wantTable:   "/t*/",
+			wantErr:     nil,
+		},
+		{
+			name: "t3--invalid format",
+			args: args{
+				input:               "nodot",
+				mustBeConcreteTable: false,
+			},
+			wantAccount: "",
+			wantDb:      "",
+			wantTable:   "",
+			wantErr:     assert.Error,
+		},
+		{
+			name: "t3--invalid account name",
+			args: args{
+				input:               "1234*90.db.t1",
+				mustBeConcreteTable: false,
+			},
+			wantAccount: "1234*90",
+			wantDb:      "db",
+			wantTable:   "t1",
+			wantErr:     nil,
+		},
+		{
+			name: "t3--invalid database name",
+			args: args{
+				input:               "acc.12ddg.t1",
+				mustBeConcreteTable: false,
+			},
+			wantAccount: "acc",
+			wantDb:      "12ddg",
+			wantTable:   "t1",
+			wantErr:     nil,
+		},
+		{
+			name: "t4--invalid database name",
+			args: args{
+				input:               "acc*./users|items/./t.*[12]/",
+				mustBeConcreteTable: false,
+			},
+			wantAccount: "",
+			wantDb:      "",
+			wantTable:   "",
+			wantErr:     assert.Error,
+		},
+		{
+			name: "t4-- X ",
+			args: args{
+				input:               "/sys|acc.*/.*.t*",
+				mustBeConcreteTable: false,
+			},
+			wantAccount: "",
+			wantDb:      "",
+			wantTable:   "",
+			wantErr:     assert.Error,
+		},
+		{
+			name: "t4-- XX",
+			args: args{
+				input:               "/sys|acc.*/.*./t.$/",
+				mustBeConcreteTable: false,
+			},
+			wantAccount: "",
+			wantDb:      "",
+			wantTable:   "",
+			wantErr:     assert.Error,
+		},
+		{
+			name: "t4-- XXX",
+			args: args{
+				input:               "/sys|acc.*/.test*./t1{1,3}$/,/acc[23]/.items./.*/",
+				mustBeConcreteTable: false,
+			},
+			wantAccount: "",
+			wantDb:      "",
+			wantTable:   "",
+			wantErr:     assert.Error,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotAccount, gotDb, gotTable, _, err := extractTableInfo(tt.args.ctx, tt.args.input, tt.args.mustBeConcreteTable)
+			if tt.wantErr != nil && tt.wantErr(t, err, fmt.Sprintf("extractTableInfo(%v, %v, %v)", tt.args.ctx, tt.args.input, tt.args.mustBeConcreteTable)) {
+				return
+			} else {
+				assert.Equalf(t, tt.wantAccount, gotAccount, "extractTableInfo(%v, %v, %v)", tt.args.ctx, tt.args.input, tt.args.mustBeConcreteTable)
+				assert.Equalf(t, tt.wantDb, gotDb, "extractTableInfo(%v, %v, %v)", tt.args.ctx, tt.args.input, tt.args.mustBeConcreteTable)
+				assert.Equalf(t, tt.wantTable, gotTable, "extractTableInfo(%v, %v, %v)", tt.args.ctx, tt.args.input, tt.args.mustBeConcreteTable)
+			}
+		})
+	}
 }

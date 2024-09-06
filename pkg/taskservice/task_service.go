@@ -20,10 +20,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/robfig/cron/v3"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/robfig/cron/v3"
 )
 
 type taskService struct {
@@ -223,7 +224,7 @@ func (s *taskService) QueryDaemonTask(ctx context.Context, conds ...Condition) (
 	return s.store.QueryDaemonTask(ctx, conds...)
 }
 
-func (s *taskService) AddCdcTask(ctx context.Context, metadata task.TaskMetadata, details *task.Details, insertSql string) (int, error) {
+func (s *taskService) AddCdcTask(ctx context.Context, metadata task.TaskMetadata, details *task.Details, callback func(context.Context, DBExecutor) (int, error)) (int, error) {
 	now := time.Now()
 
 	dt := task.DaemonTask{
@@ -235,7 +236,7 @@ func (s *taskService) AddCdcTask(ctx context.Context, metadata task.TaskMetadata
 		UpdateAt:   now,
 	}
 
-	return s.store.AddCdcTask(ctx, insertSql, dt)
+	return s.store.AddCdcTask(ctx, dt, callback)
 }
 
 func (s *taskService) UpdateCdcTask(ctx context.Context, targetStatus task.TaskStatus, conds ...Condition) (int, error) {

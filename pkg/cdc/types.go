@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,10 @@ package cdc
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/tidwall/btree"
 
@@ -287,4 +290,109 @@ func (tctx *TableCtx) TableId() uint64 {
 
 func (tctx *TableCtx) TableDef() *plan.TableDef {
 	return tctx.tblDef
+}
+
+type UriInfo struct {
+	SinkTyp       string `json:"_"`
+	User          string `json:"user"`
+	Password      string `json:"-"`
+	Ip            string `json:"ip"`
+	Port          int    `json:"port"`
+	PasswordStart int    `json:"-"`
+	PasswordEnd   int    `json:"-"`
+	Reserved      string `json:"reserved"`
+}
+
+func (info *UriInfo) GetEncodedPassword() (string, error) {
+	return AesCFBEncode([]byte(info.Password))
+}
+
+// EncodeUriInfo encodes the UriInfo
+func EncodeUriInfo(info *UriInfo) (string, error) {
+	jsonUri, err := json.Marshal(info)
+	if err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(jsonUri), nil
+}
+
+// DecodeUriInfo decodes the uri json bytes
+func DecodeUriInfo(uri string, uriInfo *UriInfo) error {
+	jsonSinkUriBytes, err := hex.DecodeString(uri)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(jsonSinkUriBytes, uriInfo)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type PatternTable struct {
+	Account       string `json:"account"`
+	Database      string `json:"database"`
+	Table         string `json:"table"`
+	TableIsRegexp bool   `json:"table_is_regexp"`
+	Reserved      bool   `json:"reserved"`
+}
+
+func (table PatternTable) String() string {
+	return fmt.Sprintf("(%s,%s,%s)", table.Account, table.Database, table.Table)
+}
+
+type PatternTuple struct {
+	Source       PatternTable `json:"Source"`
+	Sink         PatternTable `json:"Sink"`
+	OriginString string       `json:"-"`
+	Reserved     string       `json:"reserved"`
+}
+
+func (tuple *PatternTuple) String() string {
+	if tuple == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s,%s", tuple.Source, tuple.Sink)
+}
+
+type PatternTuples struct {
+	Pts      []*PatternTuple `json:"pts"`
+	Reserved string          `json:"reserved"`
+}
+
+func (pts *PatternTuples) Append(pt *PatternTuple) {
+	pts.Pts = append(pts.Pts, pt)
+}
+
+func (pts *PatternTuples) String() string {
+	if pts.Pts == nil {
+		return ""
+	}
+	ss := make([]string, 0)
+	for _, pt := range pts.Pts {
+		ss = append(ss, pt.String())
+	}
+	return strings.Join(ss, ",")
+}
+
+func EncodePatternTuples(pts *PatternTuples) (string, error) {
+	jsonTablePts, err := json.Marshal(pts)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(jsonTablePts), err
+}
+
+func DecodePatternTuples(jsonTuples string, pts *PatternTuples) error {
+	jsonBytes, err := hex.DecodeString(jsonTuples)
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(jsonBytes, &pts)
+	if err != nil {
+		return err
+	}
+	return nil
 }

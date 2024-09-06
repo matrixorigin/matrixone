@@ -16,9 +16,9 @@ package frontend
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -59,10 +60,8 @@ const (
 		`"%s",` + //opfilters
 		`"%s",` + //source_state
 		`"%s",` + //sink_state
-		`%d,` + //start_ts
-		`"%d-0",` + //start_ts_str
-		`%d,` + //end_ts
-		`"%d",` + //end_ts_str
+		`"%s",` + //start_ts
+		`"%s",` + //end_ts
 		`"%s",` + //config_file
 		`"%s",` + //task_create_time
 		`"%s",` + //state
@@ -82,7 +81,8 @@ const (
 		`sink_type, ` +
 		`sink_password, ` +
 		`tables, ` +
-		`start_ts_str ` +
+		`filters, ` +
+		`start_ts ` +
 		`from ` +
 		`mo_catalog.mo_cdc_task ` +
 		`where ` +
@@ -100,6 +100,24 @@ const (
 	dropCdcMeta = "delete from mo_catalog.mo_cdc_task where account_id = %d and task_id = '%s'"
 
 	updateCdcMeta = "update mo_catalog.mo_cdc_task set state = '%s' where account_id = %d and task_id = '%s'"
+
+	updatedWatermark = "update mo_catalog.mo_cdc_task set checkpoint_str = '%s' where account_id = %d and task_id = '%s'"
+
+	insertWatermark = "insert into mo_catalog.mo_cdc_watermark values (%d, '%s', %d, '%s')"
+
+	getWatermark = "select watermark from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s' and table_id = %d"
+
+	getWatermarkCount = "select count(1) from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
+
+	updateWatermark = "update mo_catalog.mo_cdc_watermark set watermark='%s' where account_id = %d and task_id = '%s' and table_id = %d"
+
+	deleteWatermark = "delete from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
+
+	deleteWatermarkByTable = "delete from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s' and table_id = %d"
+
+	showTables = "show tables from `%s`"
+
+	showIndex = "show index from `%s`.`%s`"
 )
 
 func getSqlForNewCdcTask(
@@ -119,8 +137,8 @@ func getSqlForNewCdcTask(
 	opfilters string,
 	sourceState string,
 	sinkState string,
-	startTs uint64,
-	endTs uint64,
+	startTs string,
+	endTs string,
 	configFile string,
 	taskCreateTime time.Time,
 	state string,
@@ -146,8 +164,6 @@ func getSqlForNewCdcTask(
 		sourceState,
 		sinkState,
 		startTs,
-		startTs,
-		endTs,
 		endTs,
 		configFile,
 		taskCreateTime.Format(time.DateTime),
@@ -170,8 +186,10 @@ func getSqlForDbIdAndTableId(accId uint64, db, table string) string {
 	return fmt.Sprintf(getDbIdAndTableIdFormat, accId, db, table)
 }
 
-func getSqlForTables(pt *cdc2.DbTableInfo) string {
-	return fmt.Sprintf(getTables, pt.SourceAccountName, pt.SourceDbName, pt.SourceTblName)
+func getSqlForTables(
+	pt *cdc2.PatternTuple,
+) string {
+	return fmt.Sprintf(getTables, pt.Source.Account, pt.Source.Database, pt.Source.Table)
 }
 
 func getSqlForTaskIdAndName(ses *Session, all bool, taskName string) string {
@@ -190,11 +208,24 @@ func getSqlForUpdateCdcMeta(ses *Session, taskId string, status string) string {
 	return fmt.Sprintf(updateCdcMeta, status, ses.GetAccountId(), taskId)
 }
 
+func getSqlForShowTables(s string) string {
+	return fmt.Sprintf(showTables, s)
+}
+
+func getSqlForShowIndex(db, table string) string {
+	return fmt.Sprintf(showIndex, db, table)
+}
+
 const (
-	AccountLevel  = "account"
-	ClusterLevel  = "cluster"
-	MysqlSink     = "mysql"
-	MatrixoneSink = "matrixone"
+	AccountLevel      = "account"
+	ClusterLevel      = "cluster"
+	MysqlSink         = "mysql"
+	MatrixoneSink     = "matrixone"
+	ConsoleSink       = "console"
+	SourceUriPrefix   = "mysql://"
+	SinkUriPrefix     = "mysql://"
+	ConsolePrefix     = "console://" //only used in testing stage
+	EnableConsoleSink = true
 
 	SASCommon = "common"
 	SASError  = "error"
@@ -215,257 +246,98 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
 
-	err = createCdc(
-		ctx,
-		ses,
-		ts,
-		create,
-	)
-	return err
-}
-
-func cdcTaskMetadata(cdcId string) pb.TaskMetadata {
-	return pb.TaskMetadata{
-		ID:       cdcId,
-		Executor: pb.TaskCode_InitCdc,
-		Options: pb.TaskOptions{
-			MaxRetryTimes: defaultConnectorTaskMaxRetryTimes,
-			RetryInterval: defaultConnectorTaskRetryInterval,
-			DelayDuration: 0,
-			Concurrency:   0,
-		},
-	}
-}
-
-func string2uint64(str string) (res uint64, err error) {
-	if str != "" {
-		res, err = strconv.ParseUint(str, 10, 64)
-		if err != nil {
-			return 0, err
-		}
-	} else {
-		res = uint64(0)
-	}
-	return res, nil
-}
-
-func splitPattern(pattern string) (*cdc2.DbTableInfo, error) {
-	info := &cdc2.DbTableInfo{OriginString: pattern}
-	if strings.Contains(pattern, ":") {
-		splitRes := strings.Split(pattern, ":")
-		if len(splitRes) != 2 {
-			return nil, fmt.Errorf("invalid pattern format")
-		}
-
-		source := strings.Split(splitRes[0], ".")
-		if len(source) == 2 {
-			info.SourceDbName, info.SourceTblName = source[0], source[1]
-		} else if len(source) == 3 {
-			info.SourceAccountName, info.SourceDbName, info.SourceTblName = source[0], source[1], source[2]
-		} else {
-			return nil, fmt.Errorf("invalid pattern format")
-		}
-
-		sink := strings.Split(splitRes[1], ".")
-		if len(sink) == 2 {
-			info.SinkDbName, info.SinkTblName = sink[0], sink[1]
-		} else if len(sink) == 3 {
-			info.SinkAccountName, info.SinkDbName, info.SinkTblName = sink[0], sink[1], sink[2]
-		} else {
-			return nil, fmt.Errorf("invalid pattern format")
-		}
-		return info, nil
-	}
-
-	source := make([]string, 0)
-	current := strings.Builder{}
-	inRegex := false
-	isRegex := false
-
-	addToSource := func() {
-		res := current.String()
-		if !isRegex {
-			// TODO handle non-regex pattern
-			//res = strings.ReplaceAll(res, "?", ".")
-			//res = strings.ReplaceAll(res, "*", ".*")
-			//res = "^" + res + "$"
-		}
-		isRegex = false
-		source = append(source, res)
-		current.Reset()
-	}
-
-	for i := 0; i < len(pattern); i++ {
-		char := pattern[i]
-		if char == '/' {
-			isRegex = true
-			inRegex = !inRegex
-		} else if char == '.' && !inRegex {
-			addToSource()
-		} else {
-			current.WriteByte(char)
-		}
-	}
-	if current.Len() > 0 {
-		addToSource()
-	}
-
-	if (len(source) != 2 && len(source) != 3) || inRegex {
-		return nil, fmt.Errorf("invalid pattern format")
-	}
-	if len(source) == 2 {
-		info.SourceDbName, info.SourceTblName = source[0], source[1]
-		info.SinkDbName, info.SinkTblName = source[0], source[1]
-	} else {
-		info.SourceAccountName, info.SourceDbName, info.SourceTblName = source[0], source[1], source[2]
-		info.SinkAccountName, info.SinkDbName, info.SinkTblName = source[0], source[1], source[2]
-	}
-	return info, nil
-}
-
-func string2DbTblInfos(pattern string) ([]*cdc2.DbTableInfo, error) {
-	pts := make([]*cdc2.DbTableInfo, 0)
-	current := strings.Builder{}
-	inRegex := false
-	for i := 0; i < len(pattern); i++ {
-		char := pattern[i]
-		if char == '/' {
-			inRegex = !inRegex
-		}
-		if char == ',' && !inRegex {
-			pt, err := splitPattern(current.String())
-			if err != nil {
-				return nil, err
-			}
-			pts = append(pts, pt)
-			current.Reset()
-		} else {
-			current.WriteByte(char)
-		}
-	}
-
-	if current.Len() != 0 {
-		pt, err := splitPattern(current.String())
-		if err != nil {
-			return nil, err
-		}
-		pts = append(pts, pt)
-	}
-	return pts, nil
-}
-
-func patterns2tables(ctx context.Context, pts []*cdc2.DbTableInfo, bh BackgroundExec) (map[string]string, error) {
-	resMap := make(map[string]string)
-	for _, pt := range pts {
-		sql := getSqlForTables(pt)
-		bh.ClearExecResultSet()
-		err := bh.Exec(ctx, sql)
-		if err != nil {
-			return nil, err
-		}
-		erArray, err := getResultSet(ctx, bh)
-		if err != nil {
-			return nil, err
-		}
-		if execResultArrayHasData(erArray) {
-			res := erArray[0]
-			for rowIdx := range erArray[0].GetRowCount() {
-				sourceString := strings.Builder{}
-				sinkString := strings.Builder{}
-				acc, err := res.GetString(ctx, rowIdx, 0)
-				if err != nil {
-					return nil, err
-				}
-				db, err := res.GetString(ctx, rowIdx, 1)
-				if err != nil {
-					return nil, err
-				}
-				tbl, err := res.GetString(ctx, rowIdx, 2)
-				if err != nil {
-					return nil, err
-				}
-				sourceString.WriteString(acc)
-				sourceString.WriteString(".")
-				sourceString.WriteString(db)
-				sourceString.WriteString(".")
-				sourceString.WriteString(tbl)
-				if pt.SinkTblName != "" {
-					if pt.SinkAccountName != "" {
-						sinkString.WriteString(pt.SinkAccountName)
-						sinkString.WriteString(".")
-					}
-					sinkString.WriteString(pt.SinkDbName)
-					sinkString.WriteString(".")
-					sinkString.WriteString(pt.SinkTblName)
-				} else {
-					sinkString.WriteString(sourceString.String())
-				}
-				resMap[sourceString.String()] = sinkString.String()
-			}
-		}
-	}
-	return resMap, nil
-}
-
-func canCreateCdcTask(ctx context.Context, ses *Session, level string, account string, pts []*cdc2.DbTableInfo) error {
-	if strings.EqualFold(level, ClusterLevel) {
-		if !ses.tenant.IsMoAdminRole() {
-			return moerr.NewInternalError(ctx, "Only sys account administrator are allowed to create cluster level task")
-		}
-		for _, pt := range pts {
-			if pt.SourceAccountName == "" {
-				pt.SourceAccountName = ses.GetTenantName()
-			}
-			if isBannedDatabase(pt.SourceDbName) {
-				return moerr.NewInternalError(ctx, "The system database cannot be subscribed to")
-			}
-		}
-	} else if strings.EqualFold(level, AccountLevel) {
-		if !ses.tenant.IsMoAdminRole() && ses.GetTenantName() != account {
-			return moerr.NewInternalErrorf(ctx, "No privilege to create task on %s", account)
-		}
-		for _, pt := range pts {
-			if pt.SourceAccountName == "" {
-				pt.SourceAccountName = account
-			}
-			if account != pt.SourceAccountName {
-				return moerr.NewInternalErrorf(ctx, "No privilege to create task on table %s", pt.OriginString)
-			}
-			if isBannedDatabase(pt.SourceDbName) {
-				return moerr.NewInternalError(ctx, "The system database cannot be subscribed to")
-			}
-		}
-	} else {
-		return moerr.NewInternalErrorf(ctx, "Incorrect level %s", level)
-	}
-	return nil
-}
-
-func createCdc(
-	ctx context.Context,
-	ses *Session,
-	ts taskservice.TaskService,
-	create *tree.CreateCDC,
-) error {
-	var startTs, endTs uint64
-	var err error
-
 	cdcTaskOptionsMap := make(map[string]string)
 	for i := 0; i < len(create.Option); i += 2 {
 		cdcTaskOptionsMap[create.Option[i]] = create.Option[i+1]
 	}
 
-	pts, err := string2DbTblInfos(create.Tables)
+	//step 1 : handle tables
+	jsonTables, tablePts, err := preprocessTables(ctx, ses, cdcTaskOptionsMap["Level"], cdcTaskOptionsMap["Account"], create.Tables)
 	if err != nil {
 		return err
 	}
 
-	if err = canCreateCdcTask(ctx, ses, cdcTaskOptionsMap["Level"], cdcTaskOptionsMap["Account"], pts); err != nil {
+	//step 2: handle filters
+	//There must be no special characters (',' '.' ':' '`') in the single rule.
+	var filters string
+	filters = cdcTaskOptionsMap["Rules"]
+
+	fmt.Fprintln(os.Stderr, "===>create cdc rules", filters)
+
+	jsonFilters, filterPts, err := preprocessRules(ctx, filters)
+	if err != nil {
 		return err
 	}
 
+	//TODO: refine it after 1.3
+	//check table be filtered or not
+	if filterTable(tablePts, filterPts) == 0 {
+		return moerr.NewInternalError(ctx, "all tables has been excluded by filters. create cdc failed.")
+	}
+
+	dat := time.Now().UTC()
+
 	accInfo := ses.GetTenantInfo()
 	cdcId, _ := uuid.NewV7()
+
+	//step 4: check uri format and strip password
+	jsonSrcUri, _, err := extractUriInfo(ctx, create.SourceUri, SourceUriPrefix)
+	if err != nil {
+		return err
+	}
+
+	sinkType := strings.ToLower(create.SinkType)
+	useConsole := false
+	if EnableConsoleSink && sinkType == ConsoleSink {
+		useConsole = true
+	}
+
+	if !useConsole && sinkType != MysqlSink && sinkType != MatrixoneSink {
+		return moerr.NewInternalErrorf(ctx, "unsupported sink type: %s", create.SinkType)
+	}
+
+	var jsonSinkUri string
+	var encodedSinkPwd string
+	var sinkUriInfo cdc2.UriInfo
+	if !useConsole {
+		jsonSinkUri, sinkUriInfo, err = extractUriInfo(ctx, create.SinkUri, SinkUriPrefix)
+		if err != nil {
+			return err
+		}
+
+		encodedSinkPwd, err = sinkUriInfo.GetEncodedPassword()
+		if err != nil {
+			return err
+		}
+	}
+
+	//step 5: create daemon task
+	insertSql := getSqlForNewCdcTask(
+		uint64(accInfo.GetTenantID()),
+		cdcId,
+		create.TaskName.String(),
+		jsonSrcUri, //json bytes
+		"",
+		jsonSinkUri, //json bytes
+		sinkType,
+		encodedSinkPwd, //encrypted password
+		"",
+		"",
+		"",
+		jsonTables,
+		jsonFilters,
+		"",
+		SASCommon,
+		SASCommon,
+		"", //1.3 does not support startTs
+		"", //1.3 does not support endTs
+		cdcTaskOptionsMap["ConfigFile"],
+		dat,
+		SyncStopped,
+		0,
+		"",
+		"",
+	)
 
 	details := &pb.Details{
 		AccountID: accInfo.GetTenantID(),
@@ -473,7 +345,7 @@ func createCdc(
 		Username:  accInfo.GetUser(),
 		Details: &pb.Details_CreateCdc{
 			CreateCdc: &pb.CreateCdcDetails{
-				TaskName:  create.TaskName,
+				TaskName:  create.TaskName.String(),
 				AccountId: uint64(accInfo.GetTenantID()),
 				TaskId:    cdcId.String(),
 			},
@@ -489,48 +361,438 @@ func createCdc(
 		create.SinkType,
 	)
 
-	startTs, err = string2uint64(cdcTaskOptionsMap["StartTS"])
-	if err != nil {
+	addCdcTaskCallback := func(ctx context.Context, tx taskservice.DBExecutor) (ret int, err error) {
+
+		ret, err = checkTableState(ctx, tx, tablePts, filterPts)
+		if err != nil {
+			return 0, err
+		}
+
+		//insert cdc record into the mo_cdc_task
+		exec, err := tx.ExecContext(ctx, insertSql)
+		if err != nil {
+			return 0, err
+		}
+
+		cdcTaskRowsAffected, err := exec.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+
+		if cdcTaskRowsAffected == 0 {
+			return 0, nil
+		}
+
+		return int(cdcTaskRowsAffected), nil
+	}
+
+	if _, err = ts.AddCdcTask(ctx, cdcTaskMetadata(cdcId.String()), details, addCdcTaskCallback); err != nil {
 		return err
 	}
-	endTs, err = string2uint64(cdcTaskOptionsMap["EndTS"])
+	return
+}
+
+// checkTableState
+// checks the table existed or not
+// checks the table having the primary key
+// filters the table
+func checkTableState(ctx context.Context, tx taskservice.DBExecutor, tablePts, filterPts *cdc2.PatternTuples) (int, error) {
+	var err error
+	var found bool
+	var hasPrimaryKey bool
+	for _, pt := range tablePts.Pts {
+		if pt == nil {
+			continue
+		}
+
+		//skip tables that is filtered
+		if needSkipThisTable(pt.Source.Database, pt.Source.Table, filterPts) {
+			continue
+		}
+
+		//check tables exists or not and filter the table
+		found, err = checkTableExists(ctx, tx, pt.Source.Database, pt.Source.Table)
+		if err != nil {
+			return 0, err
+		}
+		if !found {
+			return 0, moerr.NewInternalErrorf(ctx, "no table %s:%s", pt.Source.Database, pt.Source.Table)
+		}
+
+		//check table has primary key
+		hasPrimaryKey, err = checkPrimarykey(ctx, tx, pt.Source.Database, pt.Source.Table)
+		if err != nil {
+			return 0, err
+		}
+		if !hasPrimaryKey {
+			return 0, moerr.NewInternalErrorf(ctx, "table %s:%s does not have primary key", pt.Source.Database, pt.Source.Table)
+		}
+	}
+	return 0, err
+}
+
+// filterTable checks the table filtered or not
+// returns the count of tables that not be filtered
+func filterTable(tablePts, filterPts *cdc2.PatternTuples) int {
+	//check table be filtered or not
+	leftCount := 0
+	for _, pt := range tablePts.Pts {
+		if pt == nil {
+			continue
+		}
+
+		//skip tables that is filtered
+		if needSkipThisTable(pt.Source.Database, pt.Source.Table, filterPts) {
+			continue
+		}
+		leftCount++
+	}
+	return leftCount
+}
+
+func queryTable(
+	ctx context.Context,
+	tx taskservice.DBExecutor,
+	query string,
+	callback func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
+	var rows *sql.Rows
+	var err error
+	rows, err = tx.QueryContext(ctx, query)
 	if err != nil {
-		return err
+		return false, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	var ret bool
+	for rows.Next() {
+		ret, err = callback(ctx, rows)
+		if err != nil {
+			return false, err
+		}
+		if ret {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func checkTableExists(ctx context.Context, tx taskservice.DBExecutor, db, table string) (bool, error) {
+	//TODO: use show tables from ... like ... but stuck in escape character
+	checkSql := getSqlForShowTables(db)
+	var err error
+	var ret bool
+	var tableName string
+	ret, err = queryTable(ctx, tx, checkSql, func(ctx context.Context, rows *sql.Rows) (bool, error) {
+		tableName = ""
+		if err = rows.Scan(&tableName); err != nil {
+			return false, err
+		}
+		if tableName == table {
+			return true, nil
+		}
+		return false, nil
+	})
+
+	return ret, err
+}
+
+func checkPrimarykey(ctx context.Context, tx taskservice.DBExecutor, db, table string) (bool, error) {
+	checkSql := getSqlForShowIndex(db, table)
+	var ret bool
+	var err error
+	var tableName string
+	var nonUnique int
+	var keyName string
+	var seqInIndex int
+	var columnName string
+	var collation string
+	var card int
+	var subpart string
+	var packed string
+	var yes string
+	var indexType string
+	var comment string
+	var indexComment string
+	var indexParams string
+	var visible string
+	var expr string
+
+	ret, err = queryTable(ctx, tx, checkSql, func(ctx context.Context, rows *sql.Rows) (bool, error) {
+		tableName = ""
+		nonUnique = 0
+		keyName = ""
+		seqInIndex = 0
+		columnName = ""
+		card = 0
+		subpart = ""
+		packed = ""
+		yes = ""
+		indexType = ""
+		comment = ""
+		indexComment = ""
+		indexParams = ""
+		visible = ""
+		expr = ""
+		/*
+			CREATE TABLE show_01(sname varchar(30),id int);
+			mysql> show INDEX FROM show_01;
+			+---------+------------+------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+------------------+---------+------------+
+			| Table   | Non_unique | Key_name   | Seq_in_index | Column_name | Collation | Cardinality | Sub_part | Packed | Null | Index_type | Comment          | Visible | Expression |
+			+---------+------------+------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+------------------+---------+------------+
+			| show_01 |          0 | id         |            1 | id          | A         |           0 | NULL     | NULL   | YES  |            |                  | YES     | NULL       |
+			| show_01 |          0 | sname      |            1 | sname       | A         |           0 | NULL     | NULL   | YES  |            |                  | YES     | NULL       |
+			| show_01 |          0 | __mo_rowid |            1 | __mo_rowid  | A         |           0 | NULL     | NULL   | NO   |            | Physical address | NO      | NULL       |
+			+---------+------------+------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+------------------+---------+------------+
+			3 rows in set (0.02 sec)
+		*/
+		if err = rows.Scan(
+			&tableName,
+			&nonUnique,
+			&keyName,
+			&seqInIndex,
+			&columnName,
+			&collation,
+			&card,
+			&subpart,
+			&packed,
+			&yes,
+			&indexType,
+			&comment,
+			&indexComment,
+			&indexParams,
+			&visible,
+			&expr,
+		); err != nil {
+			return false, err
+		}
+		if strings.ToLower(keyName) == "primary" {
+			return true, nil
+		}
+		return false, nil
+	})
+
+	return ret, err
+}
+
+func cdcTaskMetadata(cdcId string) pb.TaskMetadata {
+	return pb.TaskMetadata{
+		ID:       cdcId,
+		Executor: pb.TaskCode_InitCdc,
+		Options: pb.TaskOptions{
+			MaxRetryTimes: defaultConnectorTaskMaxRetryTimes,
+			RetryInterval: defaultConnectorTaskRetryInterval,
+			DelayDuration: 0,
+			Concurrency:   0,
+		},
+	}
+}
+
+// extractTablePair
+// extract source:sink pair from the pattern
+//
+//	There must be no special characters (','  '.'  ':' '`') in account name & database name & table name.
+func extractTablePair(ctx context.Context, pattern string) (*cdc2.PatternTuple, error) {
+	var err error
+	pattern = strings.TrimSpace(pattern)
+	//step1 : split table pair by ':' => table0 table1
+	//step2 : split table0/1 by '.' => account database table
+	//step3 : check table accord with regular expression
+	pt := &cdc2.PatternTuple{OriginString: pattern}
+	if strings.Contains(pattern, ":") {
+		//Format: account.db.table:db:table
+		splitRes := strings.Split(pattern, ":")
+		if len(splitRes) != 2 {
+			return nil, moerr.NewInternalErrorf(ctx, "must be source : sink. invalid format")
+		}
+
+		//handle source part
+		pt.Source.Account, pt.Source.Database, pt.Source.Table, pt.Source.TableIsRegexp, err = extractTableInfo(ctx, splitRes[0], false)
+		if err != nil {
+			return nil, err
+		}
+
+		//handle sink part
+		pt.Sink.Account, pt.Sink.Database, pt.Sink.Table, pt.Sink.TableIsRegexp, err = extractTableInfo(ctx, splitRes[1], false)
+		if err != nil {
+			return nil, err
+		}
+		return pt, nil
 	}
 
-	dat := time.Now().UTC()
+	//Format: account.db.table
+	//handle source part only
+	pt.Source.Account, pt.Source.Database, pt.Source.Table, pt.Source.TableIsRegexp, err = extractTableInfo(ctx, pattern, false)
+	if err != nil {
+		return nil, err
+	}
+	pt.Sink.Account = pt.Source.Account
+	pt.Sink.Database = pt.Source.Database
+	pt.Sink.Table = pt.Source.Table
+	pt.Sink.TableIsRegexp = pt.Source.TableIsRegexp
+	return pt, nil
+}
 
-	//TODO: make it better
-	//Currently just for test
-	insertSql := getSqlForNewCdcTask(
-		uint64(accInfo.GetTenantID()),
-		cdcId,
-		create.TaskName,
-		create.SourceUri,
-		"FIXME",
-		create.SinkUri,
-		create.SinkType,
-		"FIXME",
-		"",
-		"",
-		"",
-		create.Tables,
-		"FIXME",
-		"FIXME",
-		SASCommon,
-		SASCommon,
-		startTs,
-		endTs,
-		cdcTaskOptionsMap["ConfigFile"],
-		dat,
-		SyncLoading,
-		0, //FIXME
-		"FIXME",
-		"FIXME",
-	)
+// extractTableInfo
+// get account,database,table info from string
+//
+// account: may be empty
+// database: must be concrete name instead of pattern.
+// table: must be concrete name or pattern in the source part. must be concrete name in the destination part
+// isRegexpTable: table name is regular expression
+// !!!NOTE!!!
+//
+//	There must be no special characters (','  '.'  ':' '`') in account name & database name & table name.
+func extractTableInfo(ctx context.Context, input string, mustBeConcreteTable bool) (account string, db string, table string, isRegexpTable bool, err error) {
+	parts := strings.Split(strings.TrimSpace(input), ".")
+	if len(parts) != 2 && len(parts) != 3 {
+		return "", "", "", false, moerr.NewInternalErrorf(ctx, "needs account.database.table or database.table. invalid format.")
+	}
 
-	if _, err = ts.AddCdcTask(ctx, cdcTaskMetadata(cdcId.String()), details, insertSql); err != nil {
-		return err
+	if len(parts) == 2 {
+		db, table = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	} else {
+		account, db, table = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
+
+		if !accountNameIsLegal(account) {
+			return "", "", "", false, moerr.NewInternalErrorf(ctx, "invalid account name")
+		}
+	}
+
+	if !dbNameIsLegal(db) {
+		return "", "", "", false, moerr.NewInternalErrorf(ctx, "invalid database name")
+	}
+
+	if !tableNameIsLegal(table) {
+		return "", "", "", false, moerr.NewInternalErrorf(ctx, "invalid table name")
+	}
+
+	return
+}
+
+// preprocessTables extract tables and serialize them
+func preprocessTables(
+	ctx context.Context,
+	ses *Session,
+	level string,
+	account string,
+	tables string) (string, *cdc2.PatternTuples, error) {
+	tablesPts, err := extractTablePairs(ctx, tables)
+	if err != nil {
+		return "", nil, err
+	}
+
+	//step 2: check privilege
+	if err = canCreateCdcTask(ctx, ses, level, account, tablesPts); err != nil {
+		return "", nil, err
+	}
+
+	jsonTablePts, err := cdc2.EncodePatternTuples(tablesPts)
+	if err != nil {
+		return "", nil, err
+	}
+	return jsonTablePts, tablesPts, nil
+}
+
+/*
+extractTablePairs extracts all source:sink pairs from the pattern
+There must be no special characters (','  '.'  ':' '`') in account name & database name & table name.
+*/
+func extractTablePairs(ctx context.Context, pattern string) (*cdc2.PatternTuples, error) {
+	pattern = strings.TrimSpace(pattern)
+	pts := &cdc2.PatternTuples{}
+
+	tablePairs := strings.Split(pattern, ",")
+	if len(tablePairs) == 0 {
+		return nil, fmt.Errorf("invalid pattern format")
+	}
+
+	//step1 : split pattern by ',' => table pair
+	for _, pair := range tablePairs {
+		pt, err := extractTablePair(ctx, pair)
+		if err != nil {
+			return nil, err
+		}
+		pts.Append(pt)
+	}
+
+	return pts, nil
+}
+
+func preprocessRules(ctx context.Context, rules string) (string, *cdc2.PatternTuples, error) {
+	pts, err := extractRules(ctx, rules)
+	if err != nil {
+		return "", nil, err
+	}
+
+	jsonPts, err := cdc2.EncodePatternTuples(pts)
+	if err != nil {
+		return "", nil, err
+	}
+	return jsonPts, pts, nil
+}
+
+/*
+extractRules extracts filters
+pattern maybe empty string. then, it returns empty PatternTuples
+There must be no special characters (','  '.'  ':' '`') in account name & database name & table name.
+*/
+func extractRules(ctx context.Context, pattern string) (*cdc2.PatternTuples, error) {
+	pattern = strings.TrimSpace(pattern)
+	pts := &cdc2.PatternTuples{}
+	if len(pattern) == 0 {
+		return pts, nil
+	}
+
+	tablePairs := strings.Split(pattern, ",")
+	if len(tablePairs) == 0 {
+		return nil, fmt.Errorf("invalid pattern format")
+	}
+	var err error
+	//step1 : split pattern by ',' => table pair
+	for _, pair := range tablePairs {
+		pt := &cdc2.PatternTuple{}
+		pt.Source.Account, pt.Source.Database, pt.Source.Table, pt.Source.TableIsRegexp, err = extractTableInfo(ctx, pair, false)
+		if err != nil {
+			return nil, err
+		}
+		pts.Append(pt)
+	}
+
+	return pts, nil
+}
+
+func canCreateCdcTask(ctx context.Context, ses *Session, level string, account string, pts *cdc2.PatternTuples) error {
+	if strings.EqualFold(level, ClusterLevel) {
+		if !ses.tenant.IsMoAdminRole() {
+			return moerr.NewInternalError(ctx, "Only sys account administrator are allowed to create cluster level task")
+		}
+		for _, pt := range pts.Pts {
+			if pt.Source.Account == "" {
+				pt.Source.Account = ses.GetTenantName()
+			}
+			if isBannedDatabase(pt.Source.Database) {
+				return moerr.NewInternalError(ctx, "The system database cannot be subscribed to")
+			}
+		}
+	} else if strings.EqualFold(level, AccountLevel) {
+		if !ses.tenant.IsMoAdminRole() && ses.GetTenantName() != account {
+			return moerr.NewInternalErrorf(ctx, "No privilege to create task on %s", account)
+		}
+		for _, pt := range pts.Pts {
+			if pt.Source.Account == "" {
+				pt.Source.Account = account
+			}
+			if account != pt.Source.Account {
+				return moerr.NewInternalErrorf(ctx, "No privilege to create task on table %s", pt.OriginString)
+			}
+			if isBannedDatabase(pt.Source.Database) {
+				return moerr.NewInternalError(ctx, "The system database cannot be subscribed to")
+			}
+		}
+	} else {
+		return moerr.NewInternalErrorf(ctx, "Incorrect level %s", level)
 	}
 	return nil
 }
@@ -603,7 +865,10 @@ type CdcTask struct {
 	mp         *mpool.MPool
 	packerPool *fileservice.Pool[*types.Packer]
 
-	sinkUri string
+	sinkUri cdc2.UriInfo
+
+	tables  cdc2.PatternTuples
+	filters cdc2.PatternTuples
 
 	activeRoutine *cdc2.ActiveRoutine
 	// interChs are channels between decoder and sinker; key is tableId
@@ -651,88 +916,36 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 
 	ctx := defines.AttachAccountId(rootCtx, uint32(cdc.cdcTask.AccountId))
 
-	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
-
 	//step1 : get cdc task definition
-	sql := getSqlForRetrievingCdcTask(cdc.cdcTask.AccountId, cdcTaskId)
-	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
-	if res.Error() != nil {
-		return res.Error()
-	}
-
-	if res.RowCount() < 1 {
-		return moerr.NewInternalErrorf(ctx, "none cdc task for %d %s", cdc.cdcTask.AccountId, cdc.cdcTask.TaskId)
-	} else if res.RowCount() > 1 {
-		return moerr.NewInternalErrorf(ctx, "duplicate cdc task for %d %s", cdc.cdcTask.AccountId, cdc.cdcTask.TaskId)
-	}
-
-	//sink uri
-	cdc.sinkUri, err = res.GetString(ctx, 0, 0)
+	err = cdc.retrieveCdcTask(ctx)
 	if err != nil {
 		return err
 	}
 
-	//sink_type
-	sinkTyp, err := res.GetString(ctx, 0, 1)
-	if err != nil {
-		return err
+	//check table be filtered or not
+	if filterTable(&cdc.tables, &cdc.filters) == 0 {
+		return moerr.NewInternalError(ctx, "all tables has been excluded by filters. start cdc failed.")
 	}
 
-	if sinkTyp != MysqlSink && sinkTyp != MatrixoneSink {
-		return moerr.NewInternalErrorf(ctx, "unsupported sink type: %s", sinkTyp)
-	}
-
-	//sink_password
-	sinkPwd, err := res.GetString(ctx, 0, 2)
-	if err != nil {
-		return err
-	}
-
-	//tablesStr
-	tablesStr, err := res.GetString(ctx, 0, 3)
-	if err != nil {
-		return err
-	}
-
-	// start_ts_str
-	startTsStr, err := res.GetString(ctx, 0, 4)
-	if err != nil {
-		return err
-	}
-	startTs := types.StringToTS(startTsStr)
-
-	fmt.Fprintln(os.Stderr, "====>", "cdc task row",
-		cdc.sinkUri,
-		sinkTyp,
-		sinkPwd,
-		tablesStr,
-		"startTs", startTsStr,
-	)
-
-	dbTableInfos, err := string2DbTblInfos(tablesStr)
-	if err != nil {
-		return err
-	}
-	for _, info := range dbTableInfos {
-		sql = getSqlForDbIdAndTableId(cdc.cdcTask.AccountId, info.SourceDbName, info.SourceTblName)
-		res = cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
-		if res.Error() != nil {
-			return res.Error()
+	//step2 : get source tableid
+	var info *cdc2.DbTableInfo
+	dbTableInfos := make([]*cdc2.DbTableInfo, 0, len(cdc.tables.Pts))
+	for _, tuple := range cdc.tables.Pts {
+		if needSkipThisTable(tuple.Source.Database, tuple.Source.Table, &cdc.filters) {
+			logutil.Infof("cdc skip table %s:%s by filter", tuple.Source.Database, tuple.Source.Table)
+			continue
 		}
-
-		if res.RowCount() < 1 {
-			return moerr.NewInternalErrorf(ctx, "no table %s:%s", info.SourceDbName, info.SourceTblName)
-		} else if res.RowCount() > 1 {
-			return moerr.NewInternalErrorf(ctx, "duplicate table %s:%s", info.SourceDbName, info.SourceTblName)
-		}
-
-		if info.SourceDbId, err = res.GetUint64(ctx, 0, 0); err != nil {
+		//get dbid tableid for the source table
+		info, err = cdc.retrieveTable(ctx, tuple.Source.Database, tuple.Source.Table)
+		if err != nil {
 			return err
 		}
 
-		if info.SourceTblId, err = res.GetUint64(ctx, 0, 1); err != nil {
-			return err
-		}
+		info.SinkAccountName = tuple.Sink.Account
+		info.SinkDbName = tuple.Sink.Database
+		info.SinkTblName = tuple.Sink.Table
+
+		dbTableInfos = append(dbTableInfos, info)
 	}
 
 	cdc.sunkWatermarkUpdater = cdc2.NewWatermarkUpdater(cdc.cdcTask.AccountId, cdc.cdcTask.TaskId, cdc.ie)
@@ -743,6 +956,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 	} else if count == 0 {
 		for _, info := range dbTableInfos {
 			// use startTs as watermark
+			startTs := types.TS{}
 			if err = cdc.sunkWatermarkUpdater.InsertWatermark(info.SourceTblId, startTs); err != nil {
 				return err
 			}
@@ -775,6 +989,136 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		<-ch
 	}
 	return
+}
+
+func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
+	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
+	sql := getSqlForRetrievingCdcTask(cdc.cdcTask.AccountId, cdcTaskId)
+	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
+	if res.Error() != nil {
+		return res.Error()
+	}
+
+	if res.RowCount() < 1 {
+		return moerr.NewInternalErrorf(ctx, "none cdc task for %d %s", cdc.cdcTask.AccountId, cdc.cdcTask.TaskId)
+	} else if res.RowCount() > 1 {
+		return moerr.NewInternalErrorf(ctx, "duplicate cdc task for %d %s", cdc.cdcTask.AccountId, cdc.cdcTask.TaskId)
+	}
+
+	//sink_type
+	sinkTyp, err := res.GetString(ctx, 0, 1)
+	if err != nil {
+		return err
+	}
+
+	var sinkPwd string
+	if sinkTyp != ConsoleSink {
+		//sink uri
+		jsonSinkUri, err := res.GetString(ctx, 0, 0)
+		if err != nil {
+			return err
+		}
+
+		err = cdc2.DecodeUriInfo(jsonSinkUri, &cdc.sinkUri)
+		if err != nil {
+			return err
+		}
+
+		//sink_password
+		sinkPwd, err = res.GetString(ctx, 0, 2)
+		if err != nil {
+			return err
+		}
+
+		cdc.sinkUri.Password, err = cdc2.AesCFBDecode(ctx, sinkPwd)
+		if err != nil {
+			return err
+		}
+	}
+
+	//update sink type after deserialize
+	cdc.sinkUri.SinkTyp = sinkTyp
+
+	//tables
+	jsonTables, err := res.GetString(ctx, 0, 3)
+	if err != nil {
+		return err
+	}
+
+	err = cdc2.DecodePatternTuples(jsonTables, &cdc.tables)
+	if err != nil {
+		return err
+	}
+
+	//filters
+	jsonFilters, err := res.GetString(ctx, 0, 4)
+	if err != nil {
+		return err
+	}
+
+	err = cdc2.DecodePatternTuples(jsonFilters, &cdc.filters)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(os.Stderr, "====>", "cdc task row",
+		cdc.sinkUri,
+		sinkTyp,
+		sinkPwd,
+		cdc.tables,
+		cdc.filters,
+	)
+	return nil
+}
+
+func (cdc *CdcTask) retrieveTable(ctx context.Context, dbName, tblName string) (*cdc2.DbTableInfo, error) {
+	var dbId, tblId uint64
+	var err error
+	sql := getSqlForDbIdAndTableId(cdc.cdcTask.AccountId, dbName, tblName)
+	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
+	if res.Error() != nil {
+		return nil, res.Error()
+	}
+
+	/*
+		missing table will be handled in the future.
+	*/
+	if res.RowCount() < 1 {
+
+		return nil, moerr.NewInternalErrorf(ctx, "no table %s:%s", dbName, tblName)
+	} else if res.RowCount() > 1 {
+		return nil, moerr.NewInternalErrorf(ctx, "duplicate table %s:%s", dbName, tblName)
+	}
+
+	if dbId, err = res.GetUint64(ctx, 0, 0); err != nil {
+		return nil, err
+	}
+
+	if tblId, err = res.GetUint64(ctx, 0, 1); err != nil {
+		return nil, err
+	}
+
+	return &cdc2.DbTableInfo{
+		SourceDbName:  dbName,
+		SourceTblName: tblName,
+		SourceDbId:    dbId,
+		SourceTblId:   tblId,
+	}, err
+}
+
+func needSkipThisTable(dbName, tblName string, filters *cdc2.PatternTuples) bool {
+	if len(filters.Pts) == 0 {
+		return false
+	}
+	for _, filter := range filters.Pts {
+		if filter == nil {
+			continue
+		}
+		if filter.Source.Database == dbName && filter.Source.Table == tblName {
+			return true
+		}
+	}
+	return false
 }
 
 // Resume cdc task from last recorded watermark
@@ -858,7 +1202,7 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 		} else {
 			n, err = ts.UpdateCdcTask(ctx, targetTaskStatus,
 				taskservice.WithAccountID(taskservice.EQ, ses.accountId),
-				taskservice.WithTaskName(taskservice.EQ, stmt.Option.TaskName),
+				taskservice.WithTaskName(taskservice.EQ, stmt.Option.TaskName.String()),
 				taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 			)
 		}
@@ -872,7 +1216,7 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 		} else {
 			n, err = ts.UpdateCdcTask(ctx, targetTaskStatus,
 				taskservice.WithAccountID(taskservice.EQ, ses.accountId),
-				taskservice.WithTaskName(taskservice.EQ, stmt.Option.TaskName),
+				taskservice.WithTaskName(taskservice.EQ, stmt.Option.TaskName.String()),
 				taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 			)
 		}
@@ -880,14 +1224,14 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 		targetTaskStatus = task.TaskStatus_RestartRequested
 		n, err = ts.UpdateCdcTask(ctx, targetTaskStatus,
 			taskservice.WithAccountID(taskservice.EQ, ses.accountId),
-			taskservice.WithTaskName(taskservice.EQ, stmt.TaskName),
+			taskservice.WithTaskName(taskservice.EQ, stmt.TaskName.String()),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 		)
 	case *tree.ResumeCDC:
 		targetTaskStatus = task.TaskStatus_ResumeRequested
 		n, err = ts.UpdateCdcTask(ctx, targetTaskStatus,
 			taskservice.WithAccountID(taskservice.EQ, ses.accountId),
-			taskservice.WithTaskName(taskservice.EQ, stmt.TaskName),
+			taskservice.WithTaskName(taskservice.EQ, stmt.TaskName.String()),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 		)
 	}

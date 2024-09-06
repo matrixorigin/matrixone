@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -37,23 +37,18 @@ const (
 
 func NewSinker(
 	ctx context.Context,
-	sinkUri string,
+	sinkUri UriInfo,
 	inputCh chan tools.Pair[*TableCtx, *DecoderOutput],
 	dbTblInfo *DbTableInfo,
 	watermarkUpdater *WatermarkUpdater,
 	tableDef *plan.TableDef,
 ) (Sinker, error) {
 	//TODO: remove console
-	if strings.HasPrefix(strings.ToLower(sinkUri), "console://") {
+	if sinkUri.SinkTyp == "console" {
 		return NewConsoleSinker(inputCh, dbTblInfo, watermarkUpdater), nil
 	}
 
-	//extract the info from the sink uri
-	userName, pwd, ip, port, err := extractUriInfo(ctx, sinkUri)
-	if err != nil {
-		return nil, err
-	}
-	sink, err := NewMysqlSink(userName, pwd, ip, port)
+	sink, err := NewMysqlSink(sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port)
 	if err != nil {
 		return nil, err
 	}

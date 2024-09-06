@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,12 +16,19 @@ package cdc
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"math"
+	"math/rand"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go.uber.org/zap"
 )
 
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
@@ -174,7 +180,7 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 	case types.T_enum:
 		row[i] = vector.GetFixedAt[types.Enum](vec, rowIndex)
 	default:
-		logutil.Errorf(
+		logutil.Error(
 			"Failed to extract row from vector, unsupported type",
 			zap.Int("typeID", int(vec.GetType().Oid)))
 		return moerr.NewInternalErrorf(ctx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
@@ -330,7 +336,7 @@ func convertColIntoSql(
 		sqlBuff = appendString(sqlBuff, value.String())
 		sqlBuff = appendByte(sqlBuff, '"')
 	default:
-		logutil.Errorf(
+		logutil.Error(
 			"Failed to extract row from vector, unsupported type",
 			zap.Int("typeID", int(typ.Oid)))
 		return nil, moerr.NewInternalErrorf(ctx, "extractRowFromVector : unsupported type %d", typ.Oid)
@@ -454,4 +460,115 @@ func GetTableDef(
 	}
 
 	return rel.CopyTableDef(ctx), nil
+}
+
+func TrimSpace(values []string) []string {
+	if len(values) == 0 {
+		return values
+	}
+	ret := make([]string, 0)
+	ForEach[string](values, func(v string) {
+		res := strings.TrimSpace(v)
+		if len(res) > 0 {
+			ret = append(ret)
+		}
+	})
+	return ret
+}
+
+func Deduplicate[T ~string | ~int](values []T) []T {
+	if len(values) == 0 {
+		return values
+	}
+	set := make(map[T]struct{})
+	ForEach(values, func(val T) {
+		if _, ok := set[val]; !ok {
+			set[val] = struct{}{}
+		}
+	})
+	ret := make([]T, 0)
+	for key, _ := range set {
+		ret = append(ret, key)
+	}
+	return ret
+}
+
+func ForEach[T any](values []T, fn func(T)) {
+	if len(values) == 0 || fn == nil {
+		return
+	}
+	for _, value := range values {
+		fn(value)
+	}
+}
+
+func ForEachWithError[T any](values []T, fn func(T) error) error {
+	if len(values) == 0 || fn == nil {
+		return nil
+	}
+	for _, value := range values {
+		err := fn(value)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+const (
+	aesKey = "test-aes-key-not-use-it-in-cloud"
+)
+
+func AesCFBEncode(data []byte) (string, error) {
+	return aesCFBEncode(data, []byte(aesKey))
+}
+
+func aesCFBEncode(data []byte, aesKey []byte) (string, error) {
+	block, err := aes.NewCipher(aesKey)
+	if err != nil {
+		return "", err
+	}
+
+	encoded := make([]byte, aes.BlockSize+len(data))
+	iv := encoded[:aes.BlockSize]
+	salt := generate_salt(aes.BlockSize)
+	copy(iv, salt)
+	stream := cipher.NewCFBEncrypter(block, iv)
+	stream.XORKeyStream(encoded[aes.BlockSize:], data)
+	return hex.EncodeToString(encoded), nil
+}
+
+func AesCFBDecode(ctx context.Context, data string) (string, error) {
+	return aesCFBDecode(ctx, data, []byte(aesKey))
+}
+func aesCFBDecode(ctx context.Context, data string, aesKey []byte) (string, error) {
+	encodedData, err := hex.DecodeString(data)
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(aesKey)
+	if err != nil {
+		return "", err
+	}
+	if len(encodedData) < aes.BlockSize {
+		return "", moerr.NewInternalError(ctx, "encoded string is too short")
+	}
+	iv := encodedData[:aes.BlockSize]
+	encodedData = encodedData[aes.BlockSize:]
+	stream := cipher.NewCFBDecrypter(block, iv)
+	stream.XORKeyStream(encodedData, encodedData)
+	return string(encodedData), nil
+}
+
+func generate_salt(n int) []byte {
+	buf := make([]byte, n)
+	r := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
+	r.Read(buf)
+	for i := 0; i < n; i++ {
+		buf[i] &= 0x7f
+		if buf[i] == 0 || buf[i] == '$' {
+			buf[i]++
+		}
+	}
+	return buf
 }

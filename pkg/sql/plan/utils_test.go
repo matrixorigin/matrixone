@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -40,4 +41,146 @@ func Test_removeIf(t *testing.T) {
 	assert.Equal(t, []string{}, res2)
 
 	assert.Equal(t, []string(nil), RemoveIf[string](nil, nil))
+}
+
+func Test_handelEscapeCharInWhere(t *testing.T) {
+	type args struct {
+		s string
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "t1",
+			args: args{
+				s: "",
+			},
+			want: "",
+		},
+		{
+			name: "t2",
+			args: args{
+				s: "abcd",
+			},
+			want: "abcd",
+		},
+		{
+			name: "t3",
+			args: args{
+				s: "abc\\",
+			},
+			want: "abc\\\\",
+		},
+		{
+			name: "t4",
+			args: args{
+				s: "abac'",
+			},
+			want: "abac''",
+		},
+		{
+			name: "t5",
+			args: args{
+				s: "b'00011011'",
+			},
+			want: "b''00011011''",
+		},
+		{
+			name: "t6",
+			args: args{
+				s: "b\\\\a9''",
+			},
+			want: "b\\\\\\\\a9''''",
+		},
+		//Following Cases Reference to: https://dev.mysql.com/doc/refman/8.4/en/string-literals.html
+		{
+			name: "t7",
+			args: args{
+				s: "\\0", // \0
+			},
+			want: "\\\\0",
+		},
+		{
+			name: "t8",
+			args: args{
+				s: "\\'", // \'
+			},
+			want: "\\\\''",
+		},
+		{
+			name: "t9",
+			args: args{
+				s: "\\\"", // \"
+			},
+			want: "\\\\\"",
+		},
+		{
+			name: "t10",
+			args: args{
+				s: "\\b", // \b
+			},
+			want: "\\\\b",
+		},
+		{
+			name: "t11",
+			args: args{
+				s: "\\n", // \n
+			},
+			want: "\\\\n",
+		},
+		{
+			name: "t12",
+			args: args{
+				s: "\\r", // \r
+			},
+			want: "\\\\r",
+		},
+		{
+			name: "t13",
+			args: args{
+				s: "\\t", // \t
+			},
+			want: "\\\\t",
+		},
+		{
+			name: "t14",
+			args: args{
+				s: "\\Z", // \Z
+			},
+			want: "\\\\Z",
+		},
+		{
+			name: "t15",
+			args: args{
+				s: "\\\\", // \\
+			},
+			want: "\\\\\\\\",
+		},
+		//not in pattern-matching context
+		{
+			name: "t16",
+			args: args{
+				s: "\\%", // \%
+			},
+			want: "\\\\%",
+		},
+		{
+			name: "t17",
+			args: args{
+				s: "\\_", // \_
+			},
+			want: "\\\\_",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, HandleEscapeCharInWhereClause(tt.args.s), "HandleEscapeCharInWhereClause(%v)", tt.args.s)
+		})
+	}
+}
+
+func Test_chars(t *testing.T) {
+	fmt.Println("\000")
 }

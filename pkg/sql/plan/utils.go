@@ -2334,3 +2334,28 @@ func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
 	}
 	return false
 }
+
+// HandleEscapeCharInWhereClause transforms the string into
+// one that has same semantics in the where clause.
+// Example:
+//
+//	String: b\\a9''
+//
+//	Used in where clause.
+//		right usage:
+//			select * from t1 where a = 'b\\\\a9'''''; // actual equal to wanted b\\a9''
+//		wrong usage:
+//			select * from t1 where a = 'b\\a9'''; // actual equal to b\a9'
+//
+// Reference to: https://dev.mysql.com/doc/refman/8.4/en/string-literals.html
+func HandleEscapeCharInWhereClause(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+	//if there is no '\' and '\'', just return
+	if !strings.ContainsAny(s, "\\'") {
+		return s
+	}
+	s1 := strings.ReplaceAll(s, "\\", "\\\\")
+	return strings.ReplaceAll(s1, "'", "''")
+}

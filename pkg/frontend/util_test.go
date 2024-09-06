@@ -1304,3 +1304,83 @@ func Test_issue3482(t *testing.T) {
 func Test_xxx(t *testing.T) {
 	list.New()
 }
+
+func Test_isLegal(t *testing.T) {
+	type args struct {
+		name string
+	}
+	trueNames := []string{
+		"abc",
+		"0b",
+		"0b0a1fg",
+		"123",
+		"b'00011011'",
+		"b\\\\a9''", //b\\a9''
+		"\\0",       //\0
+		"\\\\'",     //\\'
+		"\\Z",       //\Z
+		"/000/",
+	}
+
+	type kase struct {
+		name string
+		args args
+		want bool
+	}
+
+	tests := []kase{}
+	for i, name := range trueNames {
+		tests = append(tests, kase{
+			name: fmt.Sprintf("t%d", i),
+			args: args{
+				name: name,
+			},
+			want: true,
+		})
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, accountNameIsLegal(tt.args.name), "accountNameIsLegal(%v)", tt.args.name)
+			assert.Equalf(t, tt.want, dbNameIsLegal(tt.args.name), "dbNameIsLegal(%v)", tt.args.name)
+			assert.Equalf(t, tt.want, tableNameIsLegal(tt.args.name), "tableNameIsLegal(%v)", tt.args.name)
+		})
+	}
+}
+
+func Test_parser(t *testing.T) {
+	sql := "select db_name, table_name, constraint_name, column_name, refer_column_name, on_delete, on_update from `mo_catalog`.`mo_foreign_keys` where refer_db_name = `test` and refer_table_name = `b'00011011'`  and (db_name != `test` or db_name = `test` and table_name != `b'00011011'`) order by db_name, table_name, constraint_name;"
+	x, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	assert.NoError(t, err)
+	fmt.Println(x)
+
+}
+
+func Test_replaceStr(t *testing.T) {
+	type args struct {
+		s     string
+		start int
+		end   int
+		s2    string
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "t1",
+			args: args{
+				s:     "mysql://root:111@127.0.0.1:6001",
+				start: 13,
+				end:   16,
+				s2:    "******",
+			},
+			want: "mysql://root:******@127.0.0.1:6001",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, replaceStr(tt.args.s, tt.args.start, tt.args.end, tt.args.s2), "replaceStr(%v, %v, %v, %v)", tt.args.s, tt.args.start, tt.args.end, tt.args.s2)
+		})
+	}
+}

@@ -975,11 +975,11 @@ backup_timestamp_opt:
     }
 
 create_cdc_stmt:
-    CREATE CDC not_exists_opt STRING STRING STRING STRING STRING '{' create_cdc_opts '}'
+    CREATE CDC not_exists_opt ident STRING STRING STRING STRING '{' create_cdc_opts '}'
     {
         $$ = &tree.CreateCDC{
              		IfNotExists: $3,
-             		TaskName:    $4,
+             		TaskName:    tree.Identifier($4.Compare()),
              		SourceUri:   $5,
              		SinkType:    $6,
              		SinkUri:     $7,
@@ -1037,27 +1037,27 @@ all_cdc_opt:
                     TaskName: "",
         }
     }
-|   TASK STRING
+|   TASK ident
     {
         $$ = &tree.AllOrNotCDC{
             All: false,
-            TaskName: $2,
+            TaskName: tree.Identifier($2.Compare()),
         }
     }
 
 resume_cdc_stmt:
-    RESUME CDC TASK STRING
+    RESUME CDC TASK ident
     {
         $$ = &tree.ResumeCDC{
-                    TaskName:    $4,
+                    TaskName:    tree.Identifier($4.Compare()),
         }
     }
 
 restart_cdc_stmt:
-    RESUME CDC TASK STRING STRING
+    RESUME CDC TASK ident STRING
     {
         $$ = &tree.RestartCDC{
-                    TaskName:    $4,
+                    TaskName:    tree.Identifier($4.Compare()),
         }
     }
 

@@ -69,6 +69,7 @@ var HandleSqlForRecord = func(sql string) []string {
 	split := SplitSqlBySemicolon(sql)
 	for i := range split {
 		stripScanner := mysql.NewScanner(dialect.MYSQL, split[i])
+		defer mysql.PutScanner(stripScanner)
 		//strip needed comment "/*XXX*/"
 		var commentIdx [][]int
 		for stripScanner.Pos < len(split[i]) {
@@ -114,6 +115,7 @@ var HandleSqlForRecord = func(sql string) []string {
 		// -1, 1, 2, 3, 3, 10
 		// These mean we need to get (-1, 1), (2, 3), (3, 10) from split[i]
 		scanner := mysql.NewScanner(dialect.MYSQL, split[i])
+		defer mysql.PutScanner(scanner)
 		indexes := []int{-1}
 		eq := int('=')
 		for scanner.Pos < len(split[i]) {
@@ -158,6 +160,7 @@ func SplitSqlBySemicolon(sql string) []string {
 		return []string{sql}
 	}
 	scanner := mysql.NewScanner(dialect.MYSQL, sql)
+	defer mysql.PutScanner(scanner)
 	lastEnd := 0
 	endWithSemicolon := false
 	for scanner.Pos < len(sql) {

@@ -46,7 +46,7 @@ type CreateCDCOption struct {
 type CreateCDC struct {
 	statementImpl
 	IfNotExists bool
-	TaskName    string
+	TaskName    Identifier
 	SourceUri   string
 	SinkType    string
 	SinkUri     string
@@ -56,7 +56,7 @@ type CreateCDC struct {
 
 func (node *CreateCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString("create cdc ")
-	ctx.WriteString(fmt.Sprintf("'%s' ", node.TaskName))
+	ctx.WriteString(fmt.Sprintf("%s ", node.TaskName))
 	ctx.WriteString(fmt.Sprintf("'%s' ", node.SourceUri))
 	ctx.WriteString(fmt.Sprintf("'%s' ", node.SinkType))
 	ctx.WriteString(fmt.Sprintf("'%s' ", node.SinkUri))
@@ -73,14 +73,14 @@ func (node *CreateCDC) GetStatementType() string { return "Create CDC" }
 
 func (node *CreateCDC) GetQueryType() string { return QueryTypeOth }
 
-func (node CreateCDC) TypeName() string { return "tree.CreateCDC" }
+func (node *CreateCDC) TypeName() string { return "tree.CreateCDC" }
 
 func (node *DropCDC) Free() {
 	reuse.Free[DropCDC](node, nil)
 }
 
 type AllOrNotCDC struct {
-	TaskName string
+	TaskName Identifier
 	All      bool
 }
 type ShowCDC struct {
@@ -94,7 +94,7 @@ func (node *ShowCDC) Format(ctx *FmtCtx) {
 		ctx.WriteString(" all")
 	} else {
 		ctx.WriteString(" task ")
-		ctx.WriteString(fmt.Sprintf("'%s'", node.Option.TaskName))
+		ctx.WriteString(fmt.Sprintf("%s", node.Option.TaskName))
 	}
 	ctx.WriteByte(';')
 }
@@ -103,7 +103,7 @@ func (node *ShowCDC) GetStatementType() string { return "Show CDC" }
 
 func (node *ShowCDC) GetQueryType() string { return QueryTypeOth }
 
-func (node ShowCDC) TypeName() string { return "tree.ShowCDC" }
+func (node *ShowCDC) TypeName() string { return "tree.ShowCDC" }
 
 type PauseCDC struct {
 	statementImpl
@@ -116,7 +116,7 @@ func (node *PauseCDC) Format(ctx *FmtCtx) {
 		ctx.WriteString(" all")
 	} else {
 		ctx.WriteString(" task ")
-		ctx.WriteString(fmt.Sprintf("'%s'", node.Option.TaskName))
+		ctx.WriteString(fmt.Sprintf("%s", node.Option.TaskName))
 	}
 	ctx.WriteByte(';')
 }
@@ -125,7 +125,7 @@ func (node *PauseCDC) GetStatementType() string { return "Pause CDC" }
 
 func (node *PauseCDC) GetQueryType() string { return QueryTypeOth }
 
-func (node PauseCDC) TypeName() string { return "tree.PauseCDC" }
+func (node *PauseCDC) TypeName() string { return "tree.PauseCDC" }
 
 type DropCDC struct {
 	statementImpl
@@ -144,7 +144,7 @@ func (node *DropCDC) Format(ctx *FmtCtx) {
 		ctx.WriteString(" all")
 	} else {
 		ctx.WriteString(" task ")
-		ctx.WriteString(fmt.Sprintf("'%s'", node.Option.TaskName))
+		ctx.WriteString(fmt.Sprintf("%s", node.Option.TaskName))
 	}
 	ctx.WriteByte(';')
 }
@@ -153,7 +153,7 @@ func (node *DropCDC) GetStatementType() string { return "Drop CDC" }
 
 func (node *DropCDC) GetQueryType() string { return QueryTypeOth }
 
-func (node DropCDC) TypeName() string { return "tree.DropCDC" }
+func (node *DropCDC) TypeName() string { return "tree.DropCDC" }
 
 func (node *DropCDC) reset() {
 	if node.Option != nil {
@@ -164,13 +164,13 @@ func (node *DropCDC) reset() {
 
 type ResumeCDC struct {
 	statementImpl
-	TaskName string
+	TaskName Identifier
 }
 
 func (node *ResumeCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString("resume cdc")
 	ctx.WriteString(" task ")
-	ctx.WriteString(fmt.Sprintf("'%s'", node.TaskName))
+	ctx.WriteString(fmt.Sprintf("%s", node.TaskName))
 	ctx.WriteByte(';')
 }
 
@@ -178,17 +178,17 @@ func (node *ResumeCDC) GetStatementType() string { return "Resume CDC" }
 
 func (node *ResumeCDC) GetQueryType() string { return QueryTypeOth }
 
-func (node ResumeCDC) TypeName() string { return "tree.ResumeCDC" }
+func (node *ResumeCDC) TypeName() string { return "tree.ResumeCDC" }
 
 type RestartCDC struct {
 	statementImpl
-	TaskName string
+	TaskName Identifier
 }
 
 func (node *RestartCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString("resume cdc")
 	ctx.WriteString(" task ")
-	ctx.WriteString(fmt.Sprintf("'%s'", node.TaskName))
+	ctx.WriteString(fmt.Sprintf("%s", node.TaskName))
 	ctx.WriteString(" 'restart'")
 	ctx.WriteByte(';')
 }
@@ -197,4 +197,4 @@ func (node *RestartCDC) GetStatementType() string { return "Restart CDC" }
 
 func (node *RestartCDC) GetQueryType() string { return QueryTypeOth }
 
-func (node RestartCDC) TypeName() string { return "tree.RestartCDC" }
+func (node *RestartCDC) TypeName() string { return "tree.RestartCDC" }

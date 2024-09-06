@@ -19,13 +19,14 @@ import (
 	"fmt"
 	"sync"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"go.uber.org/zap"
 )
 
 var (
@@ -381,15 +382,15 @@ func (s *refreshableTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks 
 	return v, err
 }
 
-func (s *refreshableTaskStorage) AddCdcTask(ctx context.Context, insertSql string, dt task.DaemonTask) (int, error) {
-	v, lastAddress, err := s.AddCdcTaskSub(ctx, insertSql, dt)
+func (s *refreshableTaskStorage) AddCdcTask(ctx context.Context, dt task.DaemonTask, callback func(context.Context, DBExecutor) (int, error)) (int, error) {
+	v, lastAddress, err := s.AddCdcTaskSub(ctx, dt, callback)
 	if err != nil {
 		s.maybeRefresh(lastAddress)
 	}
 	return v, err
 }
 
-func (s *refreshableTaskStorage) AddCdcTaskSub(ctx context.Context, insertSql string, dt task.DaemonTask) (int, string, error) {
+func (s *refreshableTaskStorage) AddCdcTaskSub(ctx context.Context, dt task.DaemonTask, callback func(context.Context, DBExecutor) (int, error)) (int, string, error) {
 	var v int
 	var err error
 	s.mu.RLock()
@@ -398,7 +399,7 @@ func (s *refreshableTaskStorage) AddCdcTaskSub(ctx context.Context, insertSql st
 	if s.mu.store == nil {
 		err = ErrNotReady
 	} else if err = s.mu.store.PingContext(ctx); err == nil {
-		v, err = s.mu.store.AddCdcTask(ctx, insertSql, dt)
+		v, err = s.mu.store.AddCdcTask(ctx, dt, callback)
 	}
 	return v, lastAddress, err
 }
