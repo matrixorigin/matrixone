@@ -186,8 +186,6 @@ func (opAlyzr *operatorAnalyzer) AddScanTime(t time.Time) {
 		panic("operatorAnalyzer.AddScanTime: operatorAnalyzer.opStats is nil")
 	}
 	duration := time.Since(t)
-	//opAlyzr.opStats.TotalScanTime += duration.Nanoseconds()
-
 	opAlyzr.opStats.AddOpMetric(OpScanTime, duration.Nanoseconds())
 }
 
@@ -196,8 +194,6 @@ func (opAlyzr *operatorAnalyzer) AddInsertTime(t time.Time) {
 		panic("operatorAnalyzer.AddInsertTime: operatorAnalyzer.opStats is nil")
 	}
 	duration := time.Since(t)
-	//opAlyzr.opStats.TotalInsertTime += duration.Nanoseconds()
-
 	opAlyzr.opStats.AddOpMetric(OpInsertTime, duration.Nanoseconds())
 }
 
@@ -206,8 +202,6 @@ func (opAlyzr *operatorAnalyzer) ServiceInvokeTime(t time.Time) {
 		panic("operatorAnalyzer.ServiceInvokeTime: operatorAnalyzer.opStats is nil")
 	}
 	duration := time.Since(t)
-	//opAlyzr.opStats.TotalServiceTime += duration.Nanoseconds()
-
 	opAlyzr.opStats.AddOpMetric(OpIncrementTime, duration.Nanoseconds())
 }
 
@@ -219,25 +213,19 @@ func (opAlyzr *operatorAnalyzer) GetOpStats() *OperatorStats {
 }
 
 type OperatorStats struct {
-	OperatorName          string `json:"-"`
-	CallNum               int    `json:"CallCount,omitempty"`
-	TotalTimeConsumed     int64  `json:"TotalTimeConsumed,omitempty"`
-	TotalWaitTimeConsumed int64  `json:"TotalWaitTimeConsumed,omitempty"`
-	TotalMemorySize       int64  `json:"TotalMemorySize,omitempty"`
-	TotalInputRows        int64  `json:"TotalInputRows,omitempty"`
-	TotalInputSize        int64  `json:"TotalInputSize,omitempty"`
-	TotalOutputRows       int64  `json:"TotalOutputRows,omitempty"`
-	TotalOutputSize       int64  `json:"TotalOutputSize,omitempty"`
-	TotalNetworkIO        int64  `json:"TotalNetworkIO,omitempty"`
-	TotalInputBlocks      int64  `json:"-"`
-	//TotalDiskIO           int64  `json:"-"`
-	TotalS3IOByte int64 `json:"-"`
-	//TotalS3InputCount     int64  `json:"-"`
-	//TotalS3OutputCount    int64  `json:"-"`
-	//TotalScanTime    int64                `json:"-"`
-	//TotalInsertTime  int64                `json:"-"`
-	//TotalServiceTime int64                `json:"-"`
-	OperatorMetrics map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
+	OperatorName          string               `json:"-"`
+	CallNum               int                  `json:"CallCount,omitempty"`
+	TotalTimeConsumed     int64                `json:"TotalTimeConsumed,omitempty"`
+	TotalWaitTimeConsumed int64                `json:"TotalWaitTimeConsumed,omitempty"`
+	TotalMemorySize       int64                `json:"TotalMemorySize,omitempty"`
+	TotalInputRows        int64                `json:"TotalInputRows,omitempty"`
+	TotalInputSize        int64                `json:"TotalInputSize,omitempty"`
+	TotalOutputRows       int64                `json:"TotalOutputRows,omitempty"`
+	TotalOutputSize       int64                `json:"TotalOutputSize,omitempty"`
+	TotalNetworkIO        int64                `json:"TotalNetworkIO,omitempty"`
+	TotalInputBlocks      int64                `json:"-"`
+	TotalS3IOByte         int64                `json:"-"`
+	OperatorMetrics       map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
 }
 
 func NewOperatorStats(operatorName string) *OperatorStats {
