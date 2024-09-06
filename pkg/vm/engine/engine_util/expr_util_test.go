@@ -485,9 +485,10 @@ func TestEvalExprListToVec(t *testing.T) {
 			"[i64(2), i64(1)]",
 			"[i64(1), i64(2)]",
 			"[i64(2), i64vec(1,10), [i64vec(4,8), i64(5)]]",
+			"[i64(2), i64vec(1,10), [i64vec(4,8), i64(5)]]",
 		},
 		oids: []types.T{
-			types.T_int64, types.T_int64, types.T_int64, types.T_int64,
+			types.T_int64, types.T_int64, types.T_int64, types.T_int64, types.T_char,
 		},
 		exprs: []*plan.Expr_List{
 			nil,
@@ -525,9 +526,27 @@ func TestEvalExprListToVec(t *testing.T) {
 					},
 				},
 			},
+			{
+				List: &plan.ExprList{
+					List: []*plan.Expr{
+						plan2.MakePlan2Int64ConstExprWithType(2),
+						plan2.MakePlan2Int64VecExprWithType(m, int64(1), int64(10)),
+						{
+							Expr: &plan.Expr_List{
+								List: &plan.ExprList{
+									List: []*plan.Expr{
+										plan2.MakePlan2Int64VecExprWithType(m, int64(4), int64(8)),
+										plan2.MakePlan2Int64ConstExprWithType(5),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 		canEvals: []bool{
-			false, true, true, true,
+			false, true, true, true, false,
 		},
 	}
 	tc.expects = append(tc.expects, nil)
@@ -547,6 +566,7 @@ func TestEvalExprListToVec(t *testing.T) {
 	vector.AppendAny(vec, int64(8), false, m)
 	vector.AppendAny(vec, int64(10), false, m)
 	tc.expects = append(tc.expects, vec)
+	tc.expects = append(tc.expects, nil)
 
 	for i, expr := range tc.exprs {
 		// for _, e2 := range expr.List.List {
@@ -569,4 +589,429 @@ func TestEvalExprListToVec(t *testing.T) {
 	}
 	proc.Free()
 	require.Zero(t, m.CurrNB())
+}
+
+func TestTransferIval(t *testing.T) {
+	type Inputs struct {
+		val int64
+		oid types.T
+	}
+	type Case struct {
+		ok  bool
+		val any
+	}
+
+	intputs := []Inputs{
+		{val: 1, oid: types.T_int8},
+		{val: 1, oid: types.T_int16},
+		{val: 1, oid: types.T_int32},
+		{val: 1, oid: types.T_int64},
+		{val: 1, oid: types.T_uint8},
+		{val: 1, oid: types.T_uint16},
+		{val: 1, oid: types.T_uint32},
+		{val: 1, oid: types.T_uint64},
+		{val: 1, oid: types.T_float32},
+		{val: 1, oid: types.T_float64},
+		{val: 1, oid: types.T_char},
+	}
+	asserts := []Case{
+		{ok: true, val: int8(1)},
+		{ok: true, val: int16(1)},
+		{ok: true, val: int32(1)},
+		{ok: true, val: int64(1)},
+		{ok: true, val: uint8(1)},
+		{ok: true, val: uint16(1)},
+		{ok: true, val: uint32(1)},
+		{ok: true, val: uint64(1)},
+		{ok: true, val: float32(1)},
+		{ok: true, val: float64(1)},
+		{ok: false, val: nil},
+	}
+
+	for i, input := range intputs {
+		ok, v := transferIval(input.val, input.oid)
+		require.Equal(t, asserts[i].ok, ok)
+		if ok {
+			require.Equal(t, asserts[i].val, v)
+		}
+	}
+}
+
+func TestTransferUval(t *testing.T) {
+	type Inputs struct {
+		val uint64
+		oid types.T
+	}
+	type Case struct {
+		ok  bool
+		val any
+	}
+
+	intputs := []Inputs{
+		{val: 1, oid: types.T_int8},
+		{val: 1, oid: types.T_int16},
+		{val: 1, oid: types.T_int32},
+		{val: 1, oid: types.T_int64},
+		{val: 1, oid: types.T_uint8},
+		{val: 1, oid: types.T_uint16},
+		{val: 1, oid: types.T_uint32},
+		{val: 1, oid: types.T_uint64},
+		{val: 1, oid: types.T_float32},
+		{val: 1, oid: types.T_float64},
+		{val: 1, oid: types.T_char},
+	}
+	asserts := []Case{
+		{ok: true, val: int8(1)},
+		{ok: true, val: int16(1)},
+		{ok: true, val: int32(1)},
+		{ok: true, val: int64(1)},
+		{ok: true, val: uint8(1)},
+		{ok: true, val: uint16(1)},
+		{ok: true, val: uint32(1)},
+		{ok: true, val: uint64(1)},
+		{ok: true, val: float32(1)},
+		{ok: true, val: float64(1)},
+		{ok: false, val: nil},
+	}
+
+	for i, input := range intputs {
+		ok, v := transferUval(input.val, input.oid)
+		require.Equal(t, asserts[i].ok, ok)
+		if ok {
+			require.Equal(t, asserts[i].val, v)
+		}
+	}
+}
+
+func TestTransferFval(t *testing.T) {
+	type Inputs struct {
+		val float32
+		oid types.T
+	}
+	type Case struct {
+		ok  bool
+		val any
+	}
+
+	intputs := []Inputs{
+		{val: 1, oid: types.T_float32},
+		{val: 1, oid: types.T_float64},
+		{val: 1, oid: types.T_int64},
+		{val: 1, oid: types.T_uint64},
+	}
+	asserts := []Case{
+		{ok: true, val: float32(1)},
+		{ok: true, val: float64(1)},
+		{ok: false, val: nil},
+		{ok: false, val: nil},
+	}
+
+	for i, input := range intputs {
+		ok, v := transferFval(input.val, input.oid)
+		require.Equal(t, asserts[i].ok, ok)
+		if ok {
+			require.Equal(t, asserts[i].val, v)
+		}
+	}
+}
+
+func TestTransferDval(t *testing.T) {
+	type Inputs struct {
+		val float64
+		oid types.T
+	}
+	type Case struct {
+		ok  bool
+		val any
+	}
+
+	intputs := []Inputs{
+		{val: 1, oid: types.T_float32},
+		{val: 1, oid: types.T_float64},
+		{val: 1, oid: types.T_int64},
+		{val: 1, oid: types.T_uint64},
+	}
+	asserts := []Case{
+		{ok: true, val: float32(1)},
+		{ok: true, val: float64(1)},
+		{ok: false, val: nil},
+		{ok: false, val: nil},
+	}
+
+	for i, input := range intputs {
+		ok, v := transferDval(input.val, input.oid)
+		require.Equal(t, asserts[i].ok, ok)
+		if ok {
+			require.Equal(t, asserts[i].val, v)
+		}
+	}
+}
+
+func TestTransferSval(t *testing.T) {
+	type Inputs struct {
+		val string
+		oid types.T
+	}
+	type Case struct {
+		ok  bool
+		val any
+	}
+
+	intputs := []Inputs{
+		{val: "1", oid: types.T_json},
+		{val: "1", oid: types.T_char},
+		{val: "1", oid: types.T_varchar},
+		{val: "1", oid: types.T_text},
+		{val: "1", oid: types.T_blob},
+		{val: "1", oid: types.T_datalink},
+		{val: "1", oid: types.T_binary},
+		{val: "1", oid: types.T_varbinary},
+		{val: "1", oid: types.T_uuid},
+		{val: "1", oid: types.T_int64},
+		{val: "1", oid: types.T_uint64},
+	}
+
+	var uv types.Uuid
+	copy(uv[:], []byte("1")[:])
+
+	asserts := []Case{
+		{ok: true, val: []byte("1")},
+		{ok: true, val: []byte("1")},
+		{ok: true, val: []byte("1")},
+		{ok: true, val: []byte("1")},
+		{ok: true, val: []byte("1")},
+		{ok: true, val: []byte("1")},
+		{ok: true, val: []byte("1")},
+		{ok: true, val: []byte("1")},
+		{ok: true, val: uv},
+		{ok: false, val: nil},
+		{ok: false, val: nil},
+	}
+
+	for i, input := range intputs {
+		ok, v := transferSval(input.val, input.oid)
+		require.Equal(t, asserts[i].ok, ok)
+		if ok {
+			require.Equal(t, asserts[i].val, v)
+		}
+	}
+}
+
+func TestTransferBval(t *testing.T) {
+	type Inputs struct {
+		val bool
+		oid types.T
+	}
+	type Case struct {
+		ok  bool
+		val any
+	}
+
+	intputs := []Inputs{
+		{val: true, oid: types.T_bool},
+		{val: false, oid: types.T_bool},
+		{val: true, oid: types.T_int64},
+		{val: true, oid: types.T_char},
+	}
+
+	asserts := []Case{
+		{ok: true, val: true},
+		{ok: true, val: false},
+		{ok: false, val: nil},
+		{ok: false, val: nil},
+	}
+
+	for i, input := range intputs {
+		ok, v := transferBval(input.val, input.oid)
+		require.Equal(t, asserts[i].ok, ok)
+		if ok {
+			require.Equal(t, asserts[i].val, v)
+		}
+	}
+}
+
+func TestTransferDateval(t *testing.T) {
+	type Inputs struct {
+		val int32
+		oid types.T
+	}
+	type Case struct {
+		ok  bool
+		val any
+	}
+
+	intputs := []Inputs{
+		{val: 1, oid: types.T_date},
+		{val: 1, oid: types.T_int64},
+		{val: 1, oid: types.T_char},
+	}
+
+	asserts := []Case{
+		{ok: true, val: types.Date(1)},
+		{ok: false, val: nil},
+		{ok: false, val: nil},
+	}
+
+	for i, input := range intputs {
+		ok, v := transferDateval(input.val, input.oid)
+		require.Equal(t, asserts[i].ok, ok)
+		if ok {
+			require.Equal(t, asserts[i].val, v)
+		}
+	}
+}
+
+func TestTransferTimeval(t *testing.T) {
+	type Inputs struct {
+		val int64
+		oid types.T
+	}
+	type Case struct {
+		ok  bool
+		val any
+	}
+
+	intputs := []Inputs{
+		{val: 1, oid: types.T_time},
+		{val: 1, oid: types.T_int64},
+		{val: 1, oid: types.T_char},
+	}
+
+	asserts := []Case{
+		{ok: true, val: types.Time(1)},
+		{ok: false, val: nil},
+		{ok: false, val: nil},
+	}
+
+	for i, input := range intputs {
+		ok, v := transferTimeval(input.val, input.oid)
+		require.Equal(t, asserts[i].ok, ok)
+		if ok {
+			require.Equal(t, asserts[i].val, v)
+		}
+	}
+}
+
+func TestTransferDatetimeval(t *testing.T) {
+	type Inputs struct {
+		val int64
+		oid types.T
+	}
+	type Case struct {
+		ok  bool
+		val any
+	}
+
+	intputs := []Inputs{
+		{val: 1, oid: types.T_datetime},
+		{val: 1, oid: types.T_int64},
+		{val: 1, oid: types.T_char},
+	}
+
+	asserts := []Case{
+		{ok: true, val: types.Datetime(1)},
+		{ok: false, val: nil},
+		{ok: false, val: nil},
+	}
+
+	for i, input := range intputs {
+		ok, v := transferDatetimeval(input.val, input.oid)
+		require.Equal(t, asserts[i].ok, ok)
+		if ok {
+			require.Equal(t, asserts[i].val, v)
+		}
+	}
+}
+
+func TestTransferTimestampval(t *testing.T) {
+	type Inputs struct {
+		val int64
+		oid types.T
+	}
+	type Case struct {
+		ok  bool
+		val any
+	}
+
+	intputs := []Inputs{
+		{val: 1, oid: types.T_timestamp},
+		{val: 1, oid: types.T_int64},
+		{val: 1, oid: types.T_char},
+	}
+
+	asserts := []Case{
+		{ok: true, val: types.Timestamp(1)},
+		{ok: false, val: nil},
+		{ok: false, val: nil},
+	}
+
+	for i, input := range intputs {
+		ok, v := transferTimestampval(input.val, input.oid)
+		require.Equal(t, asserts[i].ok, ok)
+		if ok {
+			require.Equal(t, asserts[i].val, v)
+		}
+	}
+}
+
+func TestTransferDecimal64val(t *testing.T) {
+	type Inputs struct {
+		val int64
+		oid types.T
+	}
+	type Case struct {
+		ok  bool
+		val any
+	}
+
+	intputs := []Inputs{
+		{val: 1, oid: types.T_decimal64},
+		{val: 1, oid: types.T_int64},
+		{val: 1, oid: types.T_char},
+	}
+
+	asserts := []Case{
+		{ok: true, val: types.Decimal64(1)},
+		{ok: false, val: nil},
+		{ok: false, val: nil},
+	}
+
+	for i, input := range intputs {
+		ok, v := transferDecimal64val(input.val, input.oid)
+		require.Equal(t, asserts[i].ok, ok)
+		if ok {
+			require.Equal(t, asserts[i].val, v)
+		}
+	}
+}
+
+func TestTransferDecimal128val(t *testing.T) {
+	type Inputs struct {
+		a, b int64
+		oid  types.T
+	}
+	type Case struct {
+		ok  bool
+		val any
+	}
+
+	intputs := []Inputs{
+		{a: 1, b: 1, oid: types.T_decimal128},
+		{a: 1, b: 1, oid: types.T_int64},
+		{a: 1, b: 1, oid: types.T_char},
+	}
+
+	asserts := []Case{
+		{ok: true, val: types.Decimal128{B0_63: uint64(1), B64_127: uint64(1)}},
+		{ok: false, val: nil},
+		{ok: false, val: nil},
+	}
+
+	for i, input := range intputs {
+		ok, v := transferDecimal128val(input.a, input.b, input.oid)
+		require.Equal(t, asserts[i].ok, ok)
+		if ok {
+			require.Equal(t, asserts[i].val, v)
+		}
+	}
 }
