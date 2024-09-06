@@ -161,7 +161,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 					argsLen++
 				}
 
-				args := make([]*plan.Expr, len(idxDef.Parts))
+				args := make([]*plan.Expr, argsLen)
 
 				for k, part := range idxDef.Parts {
 					colPos := int32(colName2Idx[i][part])

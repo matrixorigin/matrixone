@@ -2174,7 +2174,7 @@ func TestSendPrepareResponse(t *testing.T) {
 			t.Error(err)
 		}
 		compCtx := plan.NewEmptyCompilerContext()
-		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
+		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st, false)
 		if err != nil {
 			t.Error(err)
 		}
@@ -2206,7 +2206,7 @@ func TestSendPrepareResponse(t *testing.T) {
 			t.Error(err)
 		}
 		compCtx := plan.NewEmptyCompilerContext()
-		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
+		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st, false)
 		if err != nil {
 			t.Error(err)
 		}
@@ -2249,7 +2249,7 @@ func FuzzParseExecuteData(f *testing.F) {
 		f.Error(err)
 	}
 	compCtx := plan.NewEmptyCompilerContext()
-	preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
+	preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st, false)
 	if err != nil {
 		f.Error(err)
 	}

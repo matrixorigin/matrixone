@@ -184,7 +184,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
-		cwft.plan, err = buildPlan(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+		cwft.plan, err = buildPlan(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt, false)
 	} else if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil && !cwft.ses.IsBackgroundSession() {
 		var accId uint32
 		accId, err = defines.GetAccountId(execCtx.reqCtx)
@@ -424,7 +424,7 @@ func createCompile(
 	)
 	retCompile.SetIsPrepare(isPrepare)
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
-		plan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), stmt)
+		plan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), stmt, false)
 		if err != nil {
 			return nil, err
 		}

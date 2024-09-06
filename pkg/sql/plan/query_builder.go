@@ -1318,6 +1318,34 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 	case plan.Node_LOCK_OP:
 		preNode := builder.qry.Nodes[node.Children[0]]
+
+		if len(node.BindingTags) == 0 {
+			childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+			if err != nil {
+				return nil, err
+			}
+
+			for i, globalRef := range childRemapping.localToGlobal {
+				if colRefCnt[globalRef] == 0 {
+					continue
+				}
+				remapping.addColRef(globalRef)
+
+				node.ProjectList = append(node.ProjectList, &plan.Expr{
+					Typ: preNode.ProjectList[i].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: int32(i),
+							Name:   builder.nameByColRef[globalRef],
+						},
+					},
+				})
+			}
+
+			break
+		}
+
 		pkexpr := &plan.Expr{
 			Typ: node.LockTargets[0].GetPrimaryColTyp(),
 			Expr: &plan.Expr_Col{
@@ -1712,9 +1740,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i := len(builder.qry.Steps) - 1; i >= 0; i-- {
 		rootID := builder.qry.Steps[i]
 		rootNode := builder.qry.Nodes[rootID]
-		resultTag := rootNode.BindingTags[0]
 		colRefCnt := make(map[[2]int32]int)
 		if rootNode.NodeType == plan.Node_PROJECT {
+			resultTag := rootNode.BindingTags[0]
 			for j := range rootNode.ProjectList {
 				colRefCnt[[2]int32{resultTag, int32(j)}] = 1
 			}
