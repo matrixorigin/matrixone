@@ -118,7 +118,6 @@ func (innerJoin *InnerJoin) Release() {
 
 func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &innerJoin.ctr
-	//anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
 
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
@@ -129,7 +128,6 @@ func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.batchRowCount = 0
 
 	if innerJoin.ProjectList != nil {
-		//anal.Alloc(innerJoin.ProjectAllocSize + innerJoin.ctr.maxAllocSize)
 		if innerJoin.OpAnalyzer != nil {
 			innerJoin.OpAnalyzer.Alloc(innerJoin.ProjectAllocSize + innerJoin.ctr.maxAllocSize)
 		}
@@ -137,7 +135,6 @@ func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, er
 		innerJoin.ctr.maxAllocSize = 0
 		innerJoin.ResetProjection(proc)
 	} else {
-		//anal.Alloc(innerJoin.ctr.maxAllocSize)
 		if innerJoin.OpAnalyzer != nil {
 			innerJoin.OpAnalyzer.Alloc(innerJoin.ctr.maxAllocSize)
 		}

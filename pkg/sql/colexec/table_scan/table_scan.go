@@ -144,7 +144,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		break
 	}
 
-	//anal.Input(tableScan.ctr.buf, tableScan.IsFirst)
 	analyzer.Input(tableScan.ctr.buf)
 
 	retBatch, err := tableScan.EvalProjection(tableScan.ctr.buf, proc)
@@ -152,7 +151,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		e = err
 		return vm.CancelResult, err
 	}
-	//anal.Output(retBatch, tableScan.IsLast)
 	analyzer.Output(retBatch)
 	return vm.CallResult{Batch: retBatch, Status: vm.ExecNext}, nil
 

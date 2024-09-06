@@ -19,15 +19,13 @@ import (
 	"math"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -78,7 +76,6 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if ctr.inBat == nil {
-				//result, err = productl2.Children[0].Call(proc)
 				result, err = vm.ChildrenCall(productl2.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
@@ -97,7 +94,6 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.inBat = nil
 					continue
 				}
-				//anal.Input(ctr.inBat, productl2.GetIsFirst())
 			}
 
 			if ctr.rbat == nil {
@@ -124,7 +120,6 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 			}
-			//anal.Output(result.Batch, productl2.GetIsLast())
 			analyzer.Output(result.Batch)
 			return result, nil
 

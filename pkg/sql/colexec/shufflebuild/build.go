@@ -119,8 +119,7 @@ func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *proc
 		if result.Batch.IsEmpty() {
 			continue
 		}
-		//anal.Input(result.Batch, isFirst)
-		//anal.Alloc(int64(result.Batch.Size()))
+
 		analyzer.Alloc(int64(result.Batch.Size()))
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
 		err = ctr.hashmapBuilder.Batches.CopyIntoBatches(result.Batch, proc)

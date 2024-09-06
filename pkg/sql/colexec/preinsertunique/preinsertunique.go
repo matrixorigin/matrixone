@@ -90,7 +90,6 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 	if err != nil {
 		return result, err
 	}
-	//anal.Input(result.Batch, preInsertUnique.IsFirst)
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
@@ -134,7 +133,6 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 		}
 	}
 	result.Batch = preInsertUnique.ctr.buf
-	//anal.Output(result.Batch, preInsertUnique.IsLast)
 	analyzer.Output(result.Batch)
 	return result, nil
 }

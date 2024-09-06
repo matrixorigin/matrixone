@@ -18,15 +18,13 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -95,7 +93,6 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			//result, err = rightAnti.Children[0].Call(proc)
 			result, err = vm.ChildrenCall(rightAnti.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
@@ -224,7 +221,6 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyzer pr
 			}
 		}
 		ctr.rbat.AddRowCount(len(sels))
-		//analyze.Output(ctr.rbat, isLast)
 		ap.ctr.buf = []*batch.Batch{ctr.rbat}
 		return false, nil
 	} else {
@@ -250,7 +246,6 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyzer pr
 				}
 			}
 			ap.ctr.buf[k].SetRowCount(len(newsels))
-			//analyze.Output(ap.ctr.buf[k], isLast)
 		}
 		return false, nil
 	}
@@ -258,8 +253,6 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyzer pr
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Process, analyzer process.Analyzer) error {
-	//analyze.Input(bat, isFirst)
-
 	if err := ctr.evalJoinCondition(bat, proc); err != nil {
 		return err
 	}

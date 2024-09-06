@@ -105,7 +105,6 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 func (minus *Minus) buildHashTable(proc *process.Process, analyzer process.Analyzer, index int) error {
 	ctr := &minus.ctr
 	for {
-		//input, err := minus.GetChildren(index).Call(proc)
 		input, err := vm.ChildrenCall(minus.GetChildren(index), proc, analyzer)
 		if err != nil {
 			return err
@@ -120,7 +119,6 @@ func (minus *Minus) buildHashTable(proc *process.Process, analyzer process.Analy
 		if input.Batch.IsEmpty() {
 			continue
 		}
-		//ana.Input(input.Batch, isFirst)
 
 		itr := ctr.hashTable.NewIterator()
 		count := input.Batch.Vecs[0].Length()
@@ -146,7 +144,6 @@ func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analy
 	restoreInserted := make([]uint8, hashmap.UnitLimit)
 
 	for {
-		//input, err := minus.GetChildren(index).Call(proc)
 		input, err := vm.ChildrenCall(minus.GetChildren(index), proc, analyzer)
 		if err != nil {
 			return false, err
@@ -164,7 +161,6 @@ func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analy
 		if input.Batch.IsEmpty() {
 			continue
 		}
-		//ana.Input(input.Batch, isFirst)
 
 		if minus.ctr.bat == nil {
 			minus.ctr.bat = batch.NewWithSize(len(input.Batch.Vecs))
@@ -208,8 +204,6 @@ func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analy
 				}
 			}
 		}
-		//ana.Alloc(int64(minus.ctr.bat.Size()))
-		//ana.Output(minus.ctr.bat, isLast)
 		analyzer.Alloc(int64(minus.ctr.bat.Size()))
 		result.Batch = minus.ctr.bat
 		return false, nil

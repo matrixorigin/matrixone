@@ -87,7 +87,6 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.status {
 		case receiveAll:
 			for {
-				//result, err := window.GetChildren(0).Call(proc)
 				result, err := vm.ChildrenCall(window.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
@@ -96,14 +95,12 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.status = eval
 					break
 				}
-				//anal.Input(result.Batch, window.GetIsFirst())
 				ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 				if err != nil {
 					return result, err
 				}
 			}
 		case receive:
-			//result, err := window.GetChildren(0).Call(proc)
 			result, err := vm.ChildrenCall(window.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
@@ -112,7 +109,6 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.status = done
 			} else {
 				ctr.status = eval
-				//anal.Input(result.Batch, window.GetIsFirst())
 				if ctr.bat != nil {
 					ctr.bat.CleanOnlyData()
 				}
@@ -166,7 +162,6 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			// we can not reuse agg func
 			ctr.freeAggFun()
 
-			//anal.Output(ctr.bat, window.GetIsLast())
 			if len(window.WinSpecList[0].Expr.(*plan.Expr_W).W.PartitionBy) == 0 {
 				ctr.status = done
 			} else {

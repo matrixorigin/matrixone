@@ -130,7 +130,6 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 		ctr.bat.CleanOnlyData()
 	}
 	for {
-		//result, err := ap.GetChildren(0).Call(proc)
 		result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return true, err
@@ -145,8 +144,6 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 		}
 		analyzer.Alloc(int64(bat.Size()))
 		defer bat.Clean(proc.Mp())
-
-		//anal.Input(bat, isFirst)
 
 		ctr.n = len(bat.Vecs)
 		ctr.poses = ctr.poses[:0]
@@ -266,7 +263,6 @@ func (ctr *container) eval(limit uint64, proc *process.Process, analyzer process
 		ctr.bat.Vecs[i].Free(proc.Mp())
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
-	//anal.Output(ctr.bat, isLast)
 	result.Batch = ctr.bat
 	return nil
 }

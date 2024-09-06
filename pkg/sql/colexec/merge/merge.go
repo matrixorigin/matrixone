@@ -18,7 +18,6 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/vm"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -96,8 +95,6 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		break
 	}
 
-	//anal.Input(merge.ctr.buf, merge.GetIsFirst())
-	//anal.Output(merge.ctr.buf, merge.GetIsLast())
 	analyzer.Output(result.Batch)
 	return result, nil
 }

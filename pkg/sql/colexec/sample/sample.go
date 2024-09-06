@@ -145,7 +145,6 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if bat == nil {
 		result.Batch, lastErr = ctr.samplePool.Result(true)
-		//anal.Output(result.Batch, sample.GetIsLast())
 		sample.ctr.buf = result.Batch
 		result.Status = vm.ExecStop
 		ctr.workDone = true
@@ -155,8 +154,6 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 
 	var err error
 	if !bat.IsEmpty() {
-		//anal.Input(bat, sample.GetIsFirst())
-
 		if err = ctr.evaluateSampleAndGroupByColumns(proc, bat); err != nil {
 			return result, err
 		}
@@ -179,7 +176,6 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 	} else {
 		result.Batch, err = ctr.samplePool.Result(false)
 	}
-	//anal.Output(result.Batch, sample.GetIsLast())
 	sample.ctr.buf = result.Batch
 	analyzer.Output(result.Batch)
 	return result, err

@@ -62,7 +62,6 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		valueScan.ctr.idx += 1
 	}
-	//anal.Input(result.Batch, valueScan.IsFirst)
 	var err error
 	result.Batch, err = valueScan.EvalProjection(result.Batch, proc)
 

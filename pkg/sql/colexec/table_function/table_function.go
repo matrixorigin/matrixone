@@ -47,12 +47,10 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 	for {
 		if tableFunction.ctr.inputBatch.IsDone() || tableFunction.ctr.nextRow >= tableFunction.ctr.inputBatch.RowCount() {
 			// get to next input batch
-			//input, err := vm.ChildrenCall(tableFunction.GetChildren(0), proc, anal)
 			input, err := vm.ChildrenCall(tableFunction.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return input, err
 			}
-			//anal.Input(input.Batch, tableFunction.IsFirst)
 
 			tableFunction.ctr.inputBatch = input.Batch
 			if input.Batch.IsDone() {

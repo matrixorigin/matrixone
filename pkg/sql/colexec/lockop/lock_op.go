@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -37,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 var (
@@ -123,13 +124,11 @@ func callNonBlocking(
 		return result, err
 	}
 
-	//anal.Input(result.Batch, lockOp.IsFirst)
 	if result.Batch == nil {
 		return result, lockOp.ctr.retryError
 	}
 	bat := result.Batch
 	if bat.IsEmpty() {
-		//anal.Output(result.Batch, lockOp.IsLast)
 		analyzer.Output(result.Batch)
 		return result, err
 	}
@@ -138,7 +137,6 @@ func callNonBlocking(
 		return result, err
 	}
 
-	//anal.Output(result.Batch, lockOp.IsLast)
 	analyzer.Output(result.Batch)
 	return result, nil
 }
@@ -213,7 +211,6 @@ func callBlocking(
 	if lockOp.ctr.step == stepEnd {
 		result.Status = vm.ExecStop
 		lockOp.cleanCachedBatch(proc)
-		//anal.Output(result.Batch, lockOp.IsLast)
 		analyzer.Output(result.Batch)
 		return result, lockOp.ctr.retryError
 	}

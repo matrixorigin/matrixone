@@ -110,7 +110,6 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	case sendRecursive:
 		for !mergeCTE.ctr.last {
-			//result, err = mergeCTE.GetChildren(1).Call(proc)
 			result, err = vm.ChildrenCall(mergeCTE.GetChildren(1), proc, analyzer)
 			if err != nil {
 				result.Status = vm.ExecStop
@@ -176,8 +175,6 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		mergeCTE.ctr.last = false
 	}
 
-	//anal.Input(mergeCTE.ctr.buf, mergeCTE.GetIsFirst())
-	//anal.Output(mergeCTE.ctr.buf, mergeCTE.GetIsLast())
 	result.Batch = mergeCTE.ctr.buf
 	result.Status = vm.ExecHasMore
 	analyzer.Output(result.Batch)

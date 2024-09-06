@@ -71,8 +71,6 @@ func (group *Group) Reset(
 
 	group.ctr.cleanHashMap()
 	if group.ProjectList != nil {
-		//anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
-		//anal.Alloc(group.ProjectAllocSize)
 		if group.OpAnalyzer != nil {
 			group.OpAnalyzer.Alloc(group.ProjectAllocSize)
 		}

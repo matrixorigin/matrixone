@@ -116,7 +116,6 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.status {
 		case dataTag:
-			//result, err := timeWin.GetChildren(0).Call(proc)
 			result, err := vm.ChildrenCall(timeWin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
@@ -148,7 +147,6 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.i++
 
-			//anal.Input(ctr.bats[ctr.i], timeWin.GetIsFirst())
 			if err = ctr.evalVecs(proc); err != nil {
 				return result, err
 			}
@@ -219,7 +217,6 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = nextTag
 			result.Batch = ctr.rbat
-			//anal.Output(result.Batch, timeWin.IsLast)
 			analyzer.Output(result.Batch)
 			return result, nil
 
@@ -237,7 +234,6 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			result.Batch = ctr.rbat
-			//anal.Output(result.Batch, timeWin.IsLast)
 			analyzer.Output(result.Batch)
 			return result, nil
 
@@ -280,14 +276,12 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = endTag
 			result.Batch = ctr.rbat
-			//anal.Output(result.Batch, timeWin.IsLast)
 			analyzer.Output(result.Batch)
 			return result, nil
 
 		case endTag:
 			result.Batch = nil
 			result.Status = vm.ExecStop
-			//anal.Output(result.Batch, timeWin.IsLast)
 			analyzer.Output(result.Batch)
 			return result, nil
 		}

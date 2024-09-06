@@ -95,7 +95,6 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 			ctr.state = Probe
 
 		case Probe:
-			//input, err = singleJoin.Children[0].Call(proc)
 			input, err = vm.ChildrenCall(singleJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
@@ -113,7 +112,6 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 			if bat.IsEmpty() {
 				continue
 			}
-			//anal.Input(bat, singleJoin.GetIsFirst())
 
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(singleJoin.Result))
@@ -149,7 +147,6 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 				return result, err
 			}
 
-			//anal.Output(result.Batch, singleJoin.GetIsLast())
 			analyzer.Output(result.Batch)
 			return result, nil
 

@@ -123,7 +123,6 @@ func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.
 			continue
 		}
 
-		//analyzer.Input(input.Batch, isFirst)
 		// build hashTable and a counter to record how many times each key appears
 		{
 			itr := ctr.hashTable.NewIterator()
@@ -170,7 +169,6 @@ func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.
 		if input.Batch == nil {
 			return true, nil
 		}
-		//analyzer.Input(input.Batch, isFirst)
 		if input.Batch.Last() {
 			result.Batch = input.Batch
 			return false, nil
@@ -235,7 +233,6 @@ func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.
 
 		}
 		analyzer.Alloc(int64(ctr.buf.Size()))
-		//analyzer.Output(ctr.buf, isLast)
 		result.Batch = ctr.buf
 		return false, nil
 	}

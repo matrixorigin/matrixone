@@ -19,13 +19,12 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -102,7 +101,6 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if ctr.inbat == nil {
-				//input, err = loopJoin.Children[0].Call(proc)
 				input, err = vm.ChildrenCall(loopJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
@@ -115,7 +113,6 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if ctr.inbat.IsEmpty() {
 					continue
 				}
-				//anal.Input(ctr.inbat, loopJoin.GetIsFirst())
 				ctr.probeIdx = 0
 				ctr.batIdx = 0
 			}
@@ -158,7 +155,6 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			//anal.Output(result.Batch, loopJoin.GetIsLast())
 			analyzer.Output(result.Batch)
 			return result, err
 		default:

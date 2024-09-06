@@ -18,14 +18,13 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -92,7 +91,6 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if leftJoin.ctr.inbat == nil {
-				//input, err = leftJoin.Children[0].Call(proc)
 				input, err = vm.ChildrenCall(leftJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
@@ -108,7 +106,6 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				ctr.inbat = bat
 				ctr.lastrow = 0
-				//anal.Input(bat, leftJoin.GetIsFirst())
 			}
 
 			if ctr.rbat == nil {
@@ -150,7 +147,6 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				return result, err
 			}
-			//anal.Output(result.Batch, leftJoin.GetIsLast())
 			analyzer.Output(result.Batch)
 			return result, nil
 

@@ -110,8 +110,6 @@ func (intersect *Intersect) buildHashTable(proc *process.Process, analyzer proce
 			continue
 		}
 
-		//analyse.Input(input.Batch, isFirst)
-
 		cnt := input.Batch.RowCount()
 		itr := ctr.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
@@ -161,7 +159,6 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyzer proce
 			continue
 		}
 
-		//analyze.Input(input.Batch, isFirst)
 		if ctr.buf == nil {
 			ctr.buf = batch.NewWithSize(len(input.Batch.Vecs))
 			for i := range input.Batch.Vecs {
@@ -217,7 +214,6 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyzer proce
 		}
 
 		analyzer.Alloc(int64(ctr.buf.Size()))
-		//analyze.Output(ctr.buf, isLast)
 		result.Batch = ctr.buf
 		return false, nil
 	}

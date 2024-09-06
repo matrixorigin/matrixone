@@ -18,17 +18,14 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -97,7 +94,6 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if rightJoin.ctr.buf == nil {
-				//result, err = rightJoin.Children[0].Call(proc)
 				result, err = vm.ChildrenCall(rightJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
@@ -222,13 +218,11 @@ func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyzer pr
 
 	}
 	ctr.rbat.AddRowCount(len(sels))
-	//analyze.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return false, nil
 }
 
 func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
-	//anal.Input(ap.ctr.buf, isFirst)
 	ap.resetRBat()
 
 	if err := ctr.evalJoinCondition(ap.ctr.buf, proc); err != nil {
@@ -248,7 +242,6 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer proce
 	for i := ap.ctr.lastpos; i < count; i += hashmap.UnitLimit {
 		if rowCountIncrese >= colexec.DefaultBatchSize {
 			ctr.rbat.AddRowCount(rowCountIncrese)
-			//anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.ctr.lastpos = i
 			return nil

@@ -102,7 +102,6 @@ func (singleJoin *SingleJoin) Release() {
 
 func (singleJoin *SingleJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &singleJoin.ctr
-	//anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
 
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
@@ -110,14 +109,12 @@ func (singleJoin *SingleJoin) Reset(proc *process.Process, pipelineFailed bool, 
 	ctr.state = Build
 
 	if singleJoin.ProjectList != nil {
-		//anal.Alloc(singleJoin.ProjectAllocSize + singleJoin.ctr.maxAllocSize)
 		if singleJoin.OpAnalyzer != nil {
 			singleJoin.OpAnalyzer.Alloc(singleJoin.ProjectAllocSize + singleJoin.ctr.maxAllocSize)
 		}
 		singleJoin.ctr.maxAllocSize = 0
 		singleJoin.ResetProjection(proc)
 	} else {
-		//anal.Alloc(singleJoin.ctr.maxAllocSize)
 		if singleJoin.OpAnalyzer != nil {
 			singleJoin.OpAnalyzer.Alloc(singleJoin.ctr.maxAllocSize)
 		}

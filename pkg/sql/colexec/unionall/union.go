@@ -51,14 +51,11 @@ func (unionall *UnionAll) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer.Start()
 	defer analyzer.Stop()
 
-	//result, err := vm.ChildrenCall(unionall.GetChildren(0), proc, anal)
 	result, err := vm.ChildrenCall(unionall.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
 
-	//anal.Input(result.Batch, unionall.IsFirst)
-	//anal.Output(result.Batch, unionall.IsLast)
 	analyzer.Output(result.Batch)
 	return result, nil
 }

@@ -17,11 +17,10 @@ package hashbuild
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -113,8 +112,7 @@ func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Pr
 		if result.Batch.IsEmpty() {
 			continue
 		}
-		//anal.Input(result.Batch, isFirst)
-		//anal.Alloc(int64(result.Batch.Size()))
+
 		analyzer.Alloc(int64(result.Batch.Size()))
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
 		err = ctr.hashmapBuilder.Batches.CopyIntoBatches(result.Batch, proc)

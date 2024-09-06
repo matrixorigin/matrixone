@@ -197,7 +197,6 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			//anal.Input(input.Batch, order.IsFirst)
 			enoughToSend, err := ctr.appendBatch(proc, input.Batch)
 			if err != nil {
 				return vm.CancelResult, err

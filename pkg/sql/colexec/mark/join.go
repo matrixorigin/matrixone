@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -28,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -127,7 +126,6 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = Probe
 
 		case Probe:
-			//input, err = markJoin.Children[0].Call(proc)
 			input, err = vm.ChildrenCall(markJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
@@ -140,7 +138,6 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if bat.IsEmpty() {
 				continue
 			}
-			//anal.Input(bat, markJoin.GetIsFirst())
 
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(markJoin.Result))
@@ -181,7 +178,6 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			//anal.Output(result.Batch, markJoin.GetIsLast())
 			analyzer.Output(result.Batch)
 			return result, nil
 

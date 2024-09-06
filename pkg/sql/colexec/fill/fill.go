@@ -170,8 +170,6 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, analyzer proc
 		return result, err
 	}
 
-	//anal.Input(ctr.buf, ap.IsFirst)
-
 	for i := 0; i < ap.ColLen; i++ {
 		for j := 0; j < ctr.buf.Vecs[i].Length(); j++ {
 			if ctr.buf.Vecs[i].IsNull(uint64(j)) {
@@ -183,7 +181,6 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, analyzer proc
 	}
 
 	result.Batch = ctr.buf
-	//anal.Output(ctr.buf, ap.IsLast)
 	analyzer.Output(result.Batch)
 	return result, nil
 }
@@ -295,7 +292,7 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	//anal.Input(ctr.buf, ap.IsFirst)
+
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
 	}
@@ -329,7 +326,6 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 		}
 	}
 	result.Batch = ctr.buf
-	//anal.Output(result.Batch, ap.IsLast)
 	analyzer.Output(result.Batch)
 	return result, nil
 }

@@ -19,6 +19,8 @@ import (
 	"context"
 	"io"
 
+	"github.com/parquet-go/parquet-go"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -31,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/parquet-go/parquet-go"
 )
 
 var _ vm.Operator = new(External)
@@ -157,13 +158,13 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 	if external.ctr.buf != nil {
 		external.ctr.buf.CleanOnlyData()
 	}
-	//anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
+
 	allocSize := int64(external.ctr.maxAllocSize)
 	if external.ProjectList != nil {
 		allocSize += external.ProjectAllocSize
 		external.ResetProjection(proc)
 	}
-	//anal.Alloc(allocSize)
+
 	if external.OpAnalyzer != nil {
 		external.OpAnalyzer.Alloc(allocSize)
 	}

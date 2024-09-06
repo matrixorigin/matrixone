@@ -100,15 +100,11 @@ func (insert *Insert) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	//anal := proc.GetAnalyze(insert.GetIdx(), insert.GetParallelIdx(), insert.GetParallelMajor())
-	//anal.Start()
 	analyzer := insert.OpAnalyzer
 	analyzer.Start()
 
 	t := time.Now()
 	defer func() {
-		//anal.AddInsertTime(t)
-		//anal.Stop()
 		analyzer.AddInsertTime(t)
 		analyzer.Stop()
 	}()
@@ -140,7 +136,6 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 				continue
 			}
 
-			//anal.Input(input.Batch, insert.IsFirst)
 			if insert.InsertCtx.AddAffectedRows {
 				affectedRows := uint64(input.Batch.RowCount())
 				atomic.AddUint64(&insert.ctr.affectedRows, affectedRows)
@@ -207,7 +202,6 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 			}
 		}
 		insert.ctr.state = vm.End
-		//anal.Output(result.Batch, insert.IsLast)
 		analyzer.Output(result.Batch)
 		return result, nil
 	}
@@ -224,7 +218,6 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 	if err != nil {
 		return input, err
 	}
-	//anal.Input(input.Batch, insert.IsFirst)
 
 	if input.Batch == nil || input.Batch.IsEmpty() {
 		return input, nil
@@ -268,7 +261,6 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 		atomic.AddUint64(&insert.ctr.affectedRows, affectedRows)
 	}
 	// `insertBat` does not include partition expression columns
-	//anal.Output(input.Batch, insert.IsLast)
 	analyzer.Output(input.Batch)
 	return input, nil
 }

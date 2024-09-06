@@ -67,7 +67,6 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		switch ctr.state {
 		case Build:
 			for {
-				//result, err := mergeGroup.GetChildren(0).Call(proc)
 				result, err := vm.ChildrenCall(mergeGroup.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
@@ -78,7 +77,6 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 				}
 
 				bat := result.Batch
-				//anal.Input(bat, mergeGroup.GetIsFirst())
 				if err = ctr.process(bat, proc); err != nil {
 					return result, err
 				}
@@ -118,7 +116,6 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 						return result, err
 					}
 				}
-				//anal.Output(result.Batch, mergeGroup.GetIsLast())
 			}
 			ctr.state = End
 			analyzer.Output(result.Batch)

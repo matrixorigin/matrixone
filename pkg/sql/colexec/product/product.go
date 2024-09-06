@@ -18,14 +18,11 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -93,7 +90,6 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.inBat = nil
 					continue
 				}
-				//anal.Input(ctr.inBat, product.GetIsFirst())
 			}
 
 			if ctr.rbat == nil {
@@ -119,7 +115,6 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 			}
-			//anal.Output(result.Batch, product.GetIsLast())
 			analyzer.Output(result.Batch)
 			return result, nil
 

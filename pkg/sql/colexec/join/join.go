@@ -18,14 +18,13 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -120,7 +119,6 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				ctr.inbat = bat
 				ctr.lastrow = 0
-				//anal.Input(bat, innerJoin.GetIsFirst())
 			}
 
 			startrow := innerJoin.ctr.lastrow
@@ -138,7 +136,6 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			//anal.Output(result.Batch, innerJoin.GetIsLast())
 			analyzer.Output(result.Batch)
 			return result, nil
 

@@ -73,7 +73,6 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 	if err != nil {
 		return input, err
 	}
-	//anal.Input(input.Batch, mergeBlock.IsFirst)
 
 	if input.Batch == nil {
 		return vm.CancelResult, nil
@@ -125,7 +124,6 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		mergeBlock.container.mp2[0] = mergeBlock.container.mp2[0][:0]
 	}
 
-	//anal.Output(input.Batch, mergeBlock.IsLast)
 	analyzer.Output(input.Batch)
 	return input, nil
 }

@@ -81,8 +81,6 @@ func (indexJoin *IndexJoin) Reset(proc *process.Process, pipelineFailed bool, er
 		indexJoin.ctr.buf.CleanOnlyData()
 	}
 	if indexJoin.ProjectList != nil {
-		//anal := proc.GetAnalyze(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor())
-		//anal.Alloc(indexJoin.ProjectAllocSize)
 		if indexJoin.OpAnalyzer != nil {
 			indexJoin.OpAnalyzer.Alloc(indexJoin.ProjectAllocSize)
 		}

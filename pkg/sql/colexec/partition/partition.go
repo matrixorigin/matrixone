@@ -85,7 +85,6 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.status {
 		case receive:
-			//result, err := partition.GetChildren(0).Call(proc)
 			result, err := vm.ChildrenCall(partition.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
@@ -127,11 +126,9 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 			ok, err := ctr.pickAndSend(proc, &result)
 			if ok {
 				result.Status = vm.ExecStop
-				//anal.Output(result.Batch, partition.IsLast)
 				analyzer.Output(result.Batch)
 				return result, err
 			}
-			//anal.Output(result.Batch, partition.IsLast)
 			analyzer.Output(result.Batch)
 			return result, err
 
@@ -201,7 +198,6 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	var row int64
 	var cols []*vector.Vector
 	for {
-
 		if wholeLength == 0 {
 			choice = ctr.pickFirstRow()
 		} else {

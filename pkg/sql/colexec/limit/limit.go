@@ -82,7 +82,6 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
-	//anal.Input(result.Batch, limit.GetIsFirst())
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
@@ -96,7 +95,6 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 		batch.SetLength(bat, int(limit.ctr.limit-limit.ctr.seen))
 		result.Status = vm.ExecStop
 	}
-	//anal.Output(bat, limit.GetIsLast())
 	limit.ctr.seen = newSeen
 	analyzer.Output(result.Batch)
 	return result, nil

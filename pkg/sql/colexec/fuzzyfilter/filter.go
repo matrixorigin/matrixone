@@ -17,14 +17,13 @@ package fuzzyfilter
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -172,7 +171,6 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 				return result, err
 			}
 			bat := input.Batch
-			//anal.Input(bat, fuzzyFilter.IsFirst)
 
 			if bat == nil {
 				if fuzzyFilter.ifBuildOnSink() {
@@ -211,14 +209,12 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 				return result, err
 			}
 			bat := input.Batch
-			//anal.Input(bat, fuzzyFilter.IsFirst)
 
 			if bat == nil {
 				// fmt.Println("probe cnt = ", arg.probeCnt)
 				// this will happen in such case:create unique index from a table that unique col have no data
 				if ctr.rbat == nil || ctr.collisionCnt == 0 {
 					result.Status = vm.ExecStop
-					//anal.Output(result.Batch, fuzzyFilter.IsLast)
 					analyzer.Output(result.Batch)
 					return result, nil
 				}
@@ -231,7 +227,6 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 				if err := fuzzyFilter.Callback(ctr.rbat); err != nil {
 					return result, err
 				} else {
-					//anal.Output(result.Batch, fuzzyFilter.IsLast)
 					analyzer.Output(result.Batch)
 					return result, nil
 				}
@@ -252,7 +247,6 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			continue
 		case End:
 			result.Status = vm.ExecStop
-			//anal.Output(result.Batch, fuzzyFilter.IsLast)
 			analyzer.Output(result.Batch)
 			return result, nil
 		}

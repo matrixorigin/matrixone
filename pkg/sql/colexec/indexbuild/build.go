@@ -91,8 +91,6 @@ func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.
 			continue
 		}
 
-		//anal.Input(result.Batch, isFirst)
-		//anal.Alloc(int64(result.Batch.Size()))
 		analyzer.Alloc(int64(result.Batch.Size()))
 		ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 		if err != nil {

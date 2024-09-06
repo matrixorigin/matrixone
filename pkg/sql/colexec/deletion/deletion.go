@@ -120,7 +120,6 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 			if result.Batch.IsEmpty() {
 				continue
 			}
-			//anal.Input(result.Batch, deletion.IsFirst)
 
 			if err = deletion.SplitBatch(proc, result.Batch); err != nil {
 				return result, err
@@ -222,10 +221,6 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 }
 
 func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, error) {
-	//anal := proc.GetAnalyze(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor())
-	//anal.Start()
-	//defer anal.Stop()
-
 	analyzer := deletion.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()
@@ -237,7 +232,6 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}
-	//anal.Input(result.Batch, deletion.IsFirst)
 
 	if deletion.ctr.resBat == nil {
 		deletion.ctr.resBat = makeDelBatch(*result.Batch.GetVector(int32(deletion.DeleteCtx.PrimaryKeyIdx)).GetType())

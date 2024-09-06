@@ -103,7 +103,6 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			//input, err = semiJoin.Children[0].Call(proc)
 			input, err = vm.ChildrenCall(semiJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
@@ -116,7 +115,6 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if bat.IsEmpty() {
 				continue
 			}
-			//anal.Input(bat, semiJoin.GetIsFirst())
 
 			if ctr.skipProbe {
 				newvecs := make([]*vector.Vector, len(semiJoin.Result))
@@ -128,7 +126,6 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, err
 				}
-				//anal.Output(result.Batch, semiJoin.GetIsLast())
 				analyzer.Output(result.Batch)
 				return result, nil
 			}
@@ -160,7 +157,6 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			//anal.Output(result.Batch, semiJoin.GetIsLast())
 			analyzer.Output(result.Batch)
 			return result, nil
 

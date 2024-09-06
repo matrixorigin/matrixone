@@ -84,7 +84,7 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 			analyzer.Output(input.Batch)
 			return input, nil
 		}
-		//anal.Input(input.Batch, offset.GetIsFirst())
+
 		length := input.Batch.RowCount()
 		if offset.ctr.buf != nil {
 			offset.ctr.buf.CleanOnlyData()

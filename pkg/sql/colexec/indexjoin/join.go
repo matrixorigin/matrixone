@@ -67,7 +67,7 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.state {
 
 		case Probe:
-			// TODO: index join 算子原本没有input统计，该处后期需要验证
+			// TODO: `indexjoin` operator originally did not have input statistics, which needs to be verified later
 			result, err = vm.ChildrenCall(indexJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
@@ -100,7 +100,7 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 			}
-			//anal.Output(result.Batch, indexJoin.GetIsLast())
+
 			analyzer.Output(result.Batch)
 			return result, nil
 

@@ -122,8 +122,6 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr.bats = ctr.bats[:0]
 
 	if fill.ProjectList != nil {
-		//anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
-		//anal.Alloc(fill.ProjectAllocSize)
 		if fill.OpAnalyzer != nil {
 			fill.OpAnalyzer.Alloc(fill.ProjectAllocSize)
 		}

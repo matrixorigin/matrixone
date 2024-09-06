@@ -107,7 +107,6 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if inbat.IsEmpty() {
 				continue
 			}
-			//anal.Input(inbat, antiJoin.GetIsFirst())
 
 			if ctr.rbat == nil {
 				ctr.rbat = batch.NewWithSize(len(ap.Result))
@@ -137,7 +136,6 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			//anal.Output(result.Batch, antiJoin.GetIsLast())
 			analyzer.Output(result.Batch)
 			return result, nil
 

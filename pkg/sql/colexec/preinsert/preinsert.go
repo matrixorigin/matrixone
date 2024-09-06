@@ -16,8 +16,11 @@ package preinsert
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"go.uber.org/zap"
 )
 
 const opName = "preinsert"
@@ -119,7 +121,6 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
-	//anal.Input(result.Batch, preInsert.IsFirst)
 
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
@@ -167,7 +168,6 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	}
 
 	result.Batch = preInsert.ctr.buf
-	//anal.Output(result.Batch, preInsert.IsLast)
 	analyzer.Output(result.Batch)
 	return result, nil
 }

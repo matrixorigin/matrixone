@@ -74,7 +74,6 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		return result, nil
 	}
 	bat := result.Batch
-	//anal.Input(bat, projection.GetIsFirst())
 
 	// keep shuffleIDX unchanged
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX
@@ -93,7 +92,6 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	projection.maxAllocSize = max(projection.maxAllocSize, projection.ctr.buf.Size())
 	projection.ctr.buf.SetRowCount(bat.RowCount())
 
-	//anal.Output(projection.ctr.buf, projection.GetIsLast())
 	result.Batch = projection.ctr.buf
 	analyzer.Output(result.Batch)
 	return result, nil

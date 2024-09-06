@@ -70,7 +70,6 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 		switch onDuplicatekey.ctr.state {
 		case Build:
 			for {
-				//result, err := onDuplicatekey.GetChildren(0).Call(proc)
 				result, err := vm.ChildrenCall(onDuplicatekey.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
@@ -80,7 +79,6 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 					break
 				}
 				bat := result.Batch
-				//anal.Input(bat, onDuplicatekey.GetIsFirst())
 				err = resetInsertBatchForOnduplicateKey(proc, bat, onDuplicatekey)
 				if err != nil {
 					return result, err
@@ -90,9 +88,6 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 			onDuplicatekey.ctr.state = Eval
 
 		case Eval:
-			//if onDuplicatekey.ctr.rbat != nil {
-			//	anal.Output(onDuplicatekey.ctr.rbat, onDuplicatekey.GetIsLast())
-			//}
 			result.Batch = onDuplicatekey.ctr.rbat
 			onDuplicatekey.ctr.state = End
 			analyzer.Output(result.Batch)

@@ -75,10 +75,7 @@ func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, 
 			projection.ctr.projExecutors[i].ResetForNextQuery()
 		}
 	}
-	//anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
-	//anal.Alloc(int64(projection.maxAllocSize))
-	// 有可能发生这样的情况： pipeline还未执行prepare，就发生错误，触发defer pipeline.Cleanup(),
-	// 执行reset和free，如果reset中有统计操作，就会发生空指针
+
 	if projection.OpAnalyzer != nil {
 		projection.OpAnalyzer.Alloc(int64(projection.maxAllocSize))
 	}

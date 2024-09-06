@@ -90,7 +90,6 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 	if err != nil {
 		return result, err
 	}
-	//anal.Input(result.Batch, preInsertSecIdx.IsFirst)
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
@@ -137,7 +136,6 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 	}
 
 	result.Batch = preInsertSecIdx.ctr.buf
-	//anal.Output(result.Batch, preInsertSecIdx.IsLast)
 	analyzer.Output(result.Batch)
 	return result, nil
 }

@@ -103,7 +103,6 @@ func (antiJoin *AntiJoin) Release() {
 
 func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &antiJoin.ctr
-	//anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
 
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
@@ -112,14 +111,12 @@ func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.batchRowCount = 0
 
 	if antiJoin.ProjectList != nil {
-		//anal.Alloc(antiJoin.ProjectAllocSize + antiJoin.ctr.maxAllocSize)
 		if antiJoin.OpAnalyzer != nil {
 			antiJoin.OpAnalyzer.Alloc(antiJoin.ProjectAllocSize + antiJoin.ctr.maxAllocSize)
 		}
 		antiJoin.ctr.maxAllocSize = 0
 		antiJoin.ResetProjection(proc)
 	} else {
-		//anal.Alloc(antiJoin.ctr.maxAllocSize)
 		if antiJoin.OpAnalyzer != nil {
 			antiJoin.OpAnalyzer.Alloc(antiJoin.ctr.maxAllocSize)
 		}

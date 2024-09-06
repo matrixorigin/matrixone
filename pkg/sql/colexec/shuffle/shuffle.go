@@ -108,7 +108,6 @@ SENDLAST:
 
 	for len(shuffle.ctr.sendPool) == 0 {
 		// do input
-		//result, err := vm.ChildrenCall(shuffle.GetChildren(0), proc, anal)
 		result, err := vm.ChildrenCall(shuffle.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
