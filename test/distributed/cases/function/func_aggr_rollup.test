@@ -41,7 +41,7 @@ profit;
 SELECT
 IF(
 GROUPING(year),
-'All years',
+9999,
 year
 ) AS year,
 IF(
@@ -100,3 +100,6 @@ year
 WITH
 ROLLUP
 ORDER BY GROUPING(year) DESC;
+
+create table t1(a int, b int)
+insert into t1 values(1,2),(2,3),(6,7)
