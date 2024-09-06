@@ -18,8 +18,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"io"
 	"net"
 	"sync"
@@ -32,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 // RelationName counter for the new connection
@@ -120,6 +120,12 @@ func (mo *MOServer) Stop() error {
 	}
 	logutil.Debug("application stopped")
 	return nil
+}
+
+func (mo *MOServer) IsRunning() bool {
+	mo.mu.RLock()
+	defer mo.mu.RUnlock()
+	return mo.running
 }
 
 func (mo *MOServer) startListener() {
@@ -447,6 +453,10 @@ func (mo *MOServer) handleMessage(rs *Conn) error {
 func (mo *MOServer) handleRequest(rs *Conn) error {
 	var msg []byte
 	var err error
+	if !mo.IsRunning() {
+		return io.EOF
+	}
+
 	msg, err = rs.Read()
 	if err != nil {
 		if err == io.EOF {
