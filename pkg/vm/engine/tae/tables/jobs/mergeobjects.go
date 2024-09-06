@@ -21,6 +21,7 @@ import (
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -355,6 +356,9 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	sortkeyPos := -1
 	if schema.HasSortKey() {
 		sortkeyPos = schema.GetSingleSortKeyIdx()
+	}
+	if task.rt.LockMergeService.IsLockedByUser(task.rel.ID()) {
+		return moerr.NewInternalErrorNoCtxf("LockMerge give up in exec %v", task.Name())
 	}
 	phaseDesc = "1-DoMergeAndWrite"
 	if err = mergesort.DoMergeAndWrite(ctx, task.txn.String(), sortkeyPos, task, task.isTombstone); err != nil {

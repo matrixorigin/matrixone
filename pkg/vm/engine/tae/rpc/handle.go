@@ -197,11 +197,45 @@ func (h *Handle) CacheTxnRequest(
 	return nil
 }
 
+func (h *Handle) tryLockMergeForBulkDelete(reqs []any, txn txnif.AsyncTxn) (releaseF []func()) {
+	delM := make(map[uint64]uint64)
+	for _, e := range reqs {
+		if req, ok := e.(*db.WriteReq); ok && req.Type == db.EntryDelete {
+			if req.FileName != "" {
+				for _, stats := range req.TombstoneStats {
+					delM[req.TableID] += uint64(stats.Rows())
+				}
+			}
+			if req.Batch != nil {
+				delM[req.TableID] += uint64(req.Batch.RowCount())
+			}
+		}
+	}
+
+	for id, rows := range delM {
+		if rows <= h.db.Opts.BulkTomestoneTxnThreshold {
+			continue
+		}
+		h.db.Runtime.LockMergeService.LockFromUser(id)
+		logutil.Info("LockMerge Bulk Delete",
+			zap.Uint64("tid", id), zap.Uint64("rows", rows), zap.String("txn", txn.String()))
+		release := func() {
+			h.db.Runtime.LockMergeService.UnlockFromUser(id)
+			logutil.Info("LockMerge Bulk Delete Committed",
+				zap.Uint64("tid", id), zap.Uint64("rows", rows), zap.String("txn", txn.String()))
+		}
+		releaseF = append(releaseF, release)
+	}
+
+	return
+}
+
 func (h *Handle) handleRequests(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	txnCtx *txnContext,
-) (err error) {
+) (releaseF []func(), err error) {
+	releaseF = h.tryLockMergeForBulkDelete(txnCtx.reqs, txn)
 	for _, e := range txnCtx.reqs {
 		switch req := e.(type) {
 		case *pkgcatalog.CreateDatabaseReq:
@@ -303,7 +337,11 @@ func (h *Handle) HandleCommit(
 		logutil.Debugf("HandleCommit start : %X",
 			string(meta.GetID()))
 	})
+	var releaseF []func()
 	defer func() {
+		for _, f := range releaseF {
+			f()
+		}
 		if ok {
 			//delete the txn's context.
 			h.txnCtxs.Delete(util.UnsafeBytesToString(meta.GetID()))
@@ -326,7 +364,7 @@ func (h *Handle) HandleCommit(
 		if err != nil {
 			return
 		}
-		err = h.handleRequests(ctx, txn, txnCtx)
+		releaseF, err = h.handleRequests(ctx, txn, txnCtx)
 		if err != nil {
 			return
 		}
@@ -350,6 +388,9 @@ func (h *Handle) HandleCommit(
 
 	if moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 		for {
+			for _, f := range releaseF {
+				f()
+			}
 			txn, err = h.db.StartTxnWithStartTSAndSnapshotTS(nil,
 				types.TimestampToTS(meta.GetSnapshotTS()))
 			if err != nil {
@@ -361,7 +402,7 @@ func (h *Handle) HandleCommit(
 				zap.String("new-txn", txn.GetID()),
 			)
 			//Handle precommit-write command for 1PC
-			err = h.handleRequests(ctx, txn, txnCtx)
+			releaseF, err = h.handleRequests(ctx, txn, txnCtx)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 				break
 			}

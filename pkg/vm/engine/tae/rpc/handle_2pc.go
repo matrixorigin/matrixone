@@ -61,6 +61,7 @@ func (h *Handle) HandlePrepare(
 			return
 		}
 		h.handleRequests(ctx, txn, txnCtx)
+		panic("NYI")
 	}
 	txn, err = h.db.GetTxnByID(meta.GetID())
 	if err != nil {
