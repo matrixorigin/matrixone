@@ -86,6 +86,7 @@ const (
 	ErrWrongDatetimeSpec    uint16 = 20310
 	ErrUpgrateError         uint16 = 20311
 	ErrInvalidTz            uint16 = 20312
+	ErrUnsupportedDML       uint16 = 20313
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -334,6 +335,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Unknown column '%s' in '%s'"},
 	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
 	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
+	ErrUnsupportedDML:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -841,6 +843,11 @@ func NewConstraintViolationf(ctx context.Context, format string, args ...any) *E
 
 func NewConstraintViolation(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrConstraintViolation, msg)
+}
+
+func NewUnsupportedDML(ctx context.Context, msg string, args ...any) *Error {
+	xmsg := fmt.Sprintf(msg, args...)
+	return newError(ctx, ErrUnsupportedDML, xmsg)
 }
 
 func NewEmptyVector(ctx context.Context) *Error {
