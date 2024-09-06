@@ -1212,51 +1212,51 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 	can = true
 	switch vec.GetType().Oid {
 	case types.T_bool:
-		val := vector.MustFixedCol[bool](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[bool](vec)[row]
 		ret = types.EncodeBool(&val)
 
 	case types.T_bit:
-		val := vector.MustFixedCol[uint64](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[uint64](vec)[row]
 		ret = types.EncodeUint64(&val)
 
 	case types.T_int8:
-		val := vector.MustFixedCol[int8](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[int8](vec)[row]
 		ret = types.EncodeInt8(&val)
 
 	case types.T_int16:
-		val := vector.MustFixedCol[int16](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[int16](vec)[row]
 		ret = types.EncodeInt16(&val)
 
 	case types.T_int32:
-		val := vector.MustFixedCol[int32](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[int32](vec)[row]
 		ret = types.EncodeInt32(&val)
 
 	case types.T_int64:
-		val := vector.MustFixedCol[int64](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[int64](vec)[row]
 		ret = types.EncodeInt64(&val)
 
 	case types.T_uint8:
-		val := vector.MustFixedCol[uint8](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[uint8](vec)[row]
 		ret = types.EncodeUint8(&val)
 
 	case types.T_uint16:
-		val := vector.MustFixedCol[uint16](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[uint16](vec)[row]
 		ret = types.EncodeUint16(&val)
 
 	case types.T_uint32:
-		val := vector.MustFixedCol[uint32](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[uint32](vec)[row]
 		ret = types.EncodeUint32(&val)
 
 	case types.T_uint64:
-		val := vector.MustFixedCol[uint64](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[uint64](vec)[row]
 		ret = types.EncodeUint64(&val)
 
 	case types.T_float32:
-		val := vector.MustFixedCol[float32](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[float32](vec)[row]
 		ret = types.EncodeFloat32(&val)
 
 	case types.T_float64:
-		val := vector.MustFixedCol[float64](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[float64](vec)[row]
 		ret = types.EncodeFloat64(&val)
 
 	case types.T_varchar, types.T_char,
@@ -1271,19 +1271,19 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 		ret = []byte(vec.GetStringAt(int(row)))
 
 	case types.T_timestamp:
-		val := vector.MustFixedCol[types.Timestamp](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[row]
 		ret = types.EncodeTimestamp(&val)
 
 	case types.T_date:
-		val := vector.MustFixedCol[types.Date](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[types.Date](vec)[row]
 		ret = types.EncodeDate(&val)
 
 	case types.T_time:
-		val := vector.MustFixedCol[types.Time](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[types.Time](vec)[row]
 		ret = types.EncodeTime(&val)
 
 	case types.T_datetime:
-		val := vector.MustFixedCol[types.Datetime](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[row]
 		ret = types.EncodeDatetime(&val)
 
 	case types.T_enum:
@@ -1291,19 +1291,19 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 			can = false
 			return
 		}
-		val := vector.MustFixedCol[types.Enum](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[types.Enum](vec)[row]
 		ret = types.EncodeEnum(&val)
 
 	case types.T_decimal64:
-		val := vector.MustFixedCol[types.Decimal64](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row]
 		ret = types.EncodeDecimal64(&val)
 
 	case types.T_decimal128:
-		val := vector.MustFixedCol[types.Decimal128](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row]
 		ret = types.EncodeDecimal128(&val)
 
 	case types.T_uuid:
-		val := vector.MustFixedCol[types.Uuid](vec)[row]
+		val := vector.MustFixedColNoTypeCheck[types.Uuid](vec)[row]
 		ret = types.EncodeUuid(&val)
 
 	default:
