@@ -112,9 +112,9 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// addOpStatsToPlanNode Recursive traversal of PhyOperator tree,
+// applyOpStatsToNode Recursive traversal of PhyOperator tree,
 // and add OpStats statistics to the corresponding NodeAnalyze Info
-func addOpStatsToPlanNode(op *models.PhyOperator, nodes []*plan.Node) {
+func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node) {
 	if op == nil {
 		return
 	}
@@ -144,7 +144,7 @@ func addOpStatsToPlanNode(op *models.PhyOperator, nodes []*plan.Node) {
 
 	// Recursive processing of sub operators
 	for _, childOp := range op.Children {
-		addOpStatsToPlanNode(childOp, nodes)
+		applyOpStatsToNode(childOp, nodes)
 	}
 }
 
@@ -156,7 +156,7 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node) {
 
 	// handle current Scope operator pipeline
 	if scope.RootOperator != nil {
-		addOpStatsToPlanNode(scope.RootOperator, nodes)
+		applyOpStatsToNode(scope.RootOperator, nodes)
 	}
 
 	// handle preScopes recursively
