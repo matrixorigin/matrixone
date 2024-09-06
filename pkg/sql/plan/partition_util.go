@@ -997,7 +997,7 @@ func evalPartitionBoolExpr(ctx context.Context, lOriExpr *Expr, rOriExpr *Expr, 
 	if err != nil {
 		return false, err
 	}
-	fixedCol := vector.MustFixedCol[bool](vec)
+	fixedCol := vector.MustFixedColWithTypeCheck[bool](vec)
 	return fixedCol[0], nil
 }
 
