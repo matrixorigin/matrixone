@@ -804,7 +804,7 @@ func (data *CNCheckpointData) ReadFromData(
 			if err != nil {
 				return
 			}
-			defer bat.Clean(m)
+			//defer bat.Clean(m)
 			if block.GetEndOffset() == 0 {
 				continue
 			}
@@ -812,7 +812,6 @@ func (data *CNCheckpointData) ReadFromData(
 			if err != nil {
 				return
 			}
-			defer newBat.Clean(m)
 			if dataBats[uint32(i)] == nil {
 				cnBatch := batch.NewWithSize(len(newBat.Vecs))
 				cnBatch.Attrs = make([]string, len(newBat.Attrs))
@@ -825,7 +824,7 @@ func (data *CNCheckpointData) ReadFromData(
 				}
 				dataBats[uint32(i)] = cnBatch
 			} else {
-				dataBats[uint32(i)], err = dataBats[uint32(i)].Append(ctx, m, bat)
+				dataBats[uint32(i)], err = dataBats[uint32(i)].Append(ctx, m, newBat)
 				if err != nil {
 					return
 				}
