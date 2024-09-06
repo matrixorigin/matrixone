@@ -794,7 +794,7 @@ func (data *CNCheckpointData) ReadFromData(
 		it := table.locations.MakeIterator()
 		for it.HasNext() {
 			block := it.Next()
-			var bat, newBat *batch.Batch
+			var bat, windowBat *batch.Batch
 			schema := checkpointDataReferVersions[version][uint32(idx)]
 			reader, err = blockio.NewObjectReader(data.sid, reader.GetObjectReader().GetObject().GetFs(), block.GetLocation())
 			if err != nil {
@@ -808,17 +808,16 @@ func (data *CNCheckpointData) ReadFromData(
 			if block.GetEndOffset() == 0 {
 				continue
 			}
-			newBat, err = bat.Window(int(block.GetStartOffset()), int(block.GetEndOffset()))
+			windowBat, err = bat.Window(int(block.GetStartOffset()), int(block.GetEndOffset()))
 			if err != nil {
 				return
 			}
-			var cnBatch *batch.Batch
-			cnBatch = batch.NewWithSize(len(newBat.Vecs))
-			cnBatch.Attrs = make([]string, len(newBat.Attrs))
-			copy(cnBatch.Attrs, newBat.Attrs)
+			cnBatch := batch.NewWithSize(len(windowBat.Vecs))
+			cnBatch.Attrs = make([]string, len(windowBat.Attrs))
+			copy(cnBatch.Attrs, windowBat.Attrs)
 			for n := range cnBatch.Vecs {
-				cnBatch.Vecs[n] = vector.NewVec(*newBat.Vecs[n].GetType())
-				err = cnBatch.Vecs[n].UnionBatch(newBat.Vecs[n], 0, newBat.Vecs[n].Length(), nil, m)
+				cnBatch.Vecs[n] = vector.NewVec(*windowBat.Vecs[n].GetType())
+				err = cnBatch.Vecs[n].UnionBatch(windowBat.Vecs[n], 0, windowBat.Vecs[n].Length(), nil, m)
 				if err != nil {
 					return
 				}
