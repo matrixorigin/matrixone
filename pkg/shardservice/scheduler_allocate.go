@@ -53,8 +53,17 @@ func (s *allocateScheduler) doAllocate(
 
 	cns := r.getAvailableCNsLocked(t, filters...)
 	if len(cns) == 0 {
+		r.logger.Warn("no available CNs for allocate",
+			zap.Uint64("table", t.id),
+			zap.Any("cns", r.cns),
+		)
 		return
 	}
+
+	r.logger.Info("ready to allocate shard replica",
+		zap.Uint64("table", t.id),
+		zap.Any("cns", r.cns),
+	)
 
 	seq := 0
 	getCN := func() string {
@@ -68,7 +77,7 @@ func (s *allocateScheduler) doAllocate(
 			if t.shards[i].Replicas[j].CN == "" {
 				cn := getCN()
 				t.allocate(cn, i, j)
-				r.logger.Info("allocate shard",
+				r.logger.Info("allocate shard replica",
 					zap.String("shard", t.shards[i].String()),
 					zap.String("replica", t.shards[i].Replicas[j].String()),
 				)
