@@ -73,7 +73,7 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	// TODO: not a good way to solve this problem. and will be fixed by file `specialRule.go`
 	scale := int32(6)
 	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
-		scale = int32(vector.MustFixedCol[int64](ivecs[0])[0])
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
@@ -92,7 +92,7 @@ func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 	scale := int32(6)
 	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
-		scale = int32(vector.MustFixedCol[int64](ivecs[0])[0])
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
@@ -979,7 +979,7 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	fillStringGroupStr := func(keys [][]byte, vec *vector.Vector, n int, start int) {
 		area := vec.GetArea()
-		vs := vector.MustFixedCol[types.Varlena](vec)
+		vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
 		if !vec.GetNulls().Any() {
 			for i := 0; i < n; i++ {
 				keys[i] = append(keys[i], byte(0))
@@ -1430,7 +1430,7 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 			}
 		}
 	case types.T_enum:
-		s := vector.MustFixedCol[types.Enum](v)
+		s := vector.MustFixedColWithTypeCheck[types.Enum](v)
 		if hasNull {
 			for i, b := range s {
 				if nulls.Contains(v.GetNulls(), uint64(i)) {

@@ -31,7 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -68,7 +68,7 @@ func TestCallLockOpWithNoConflict(t *testing.T) {
 			require.NoError(t, err)
 
 			vec := result.Batch.GetVector(1)
-			values := vector.MustFixedCol[types.TS](vec)
+			values := vector.MustFixedColWithTypeCheck[types.TS](vec)
 			assert.Equal(t, 3, len(values))
 			for _, v := range values {
 				assert.Equal(t, types.TS{}, v)
@@ -106,7 +106,7 @@ func TestCallLockOpWithConflict(t *testing.T) {
 				require.NoError(t, err)
 
 				vec := result.Batch.GetVector(1)
-				values := vector.MustFixedCol[types.TS](vec)
+				values := vector.MustFixedColWithTypeCheck[types.TS](vec)
 				assert.Equal(t, 3, len(values))
 				for _, v := range values {
 					assert.Equal(t, types.BuildTS(math.MaxInt64, 1), v)
@@ -157,8 +157,8 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
 				arg2.ctr.hasNewVersionInRange = testFunc
-				valueScan := arg.GetChildren(0).(*value_scan.ValueScan)
-				resetChildren(arg2, valueScan.Batchs[0])
+				child := arg.GetChildren(0).(*colexec.MockOperator)
+				resetChildren(arg2, child.GetBatchs()[0])
 				defer arg2.ctr.parker.Close()
 
 				_, err = arg2.Call(proc)
@@ -225,8 +225,8 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
 				arg2.ctr.hasNewVersionInRange = testFunc
-				valueScan := arg.GetChildren(0).(*value_scan.ValueScan)
-				resetChildren(arg2, valueScan.Batchs[0])
+				child := arg.GetChildren(0).(*colexec.MockOperator)
+				resetChildren(arg2, child.GetBatchs()[0])
 				defer arg2.ctr.parker.Close()
 
 				_, err = arg2.Call(proc)
@@ -293,8 +293,8 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
 				arg2.ctr.hasNewVersionInRange = testFunc
-				valueScan := arg.GetChildren(0).(*value_scan.ValueScan)
-				resetChildren(arg2, valueScan.Batchs[0])
+				child := arg.GetChildren(0).(*colexec.MockOperator)
+				resetChildren(arg2, child.GetBatchs()[0])
 				defer arg2.ctr.parker.Close()
 
 				proc.GetTxnOperator().TxnRef().SnapshotTS = timestamp.Timestamp{PhysicalTime: math.MaxInt64}
@@ -604,12 +604,7 @@ func runLockOpTest(
 }
 
 func resetChildren(arg *LockOp, bat *batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: []*batch.Batch{bat},
-	}
-	valueScanArg.Prepare(nil)
-	arg.SetChildren(
-		[]vm.Operator{
-			valueScanArg,
-		})
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
 }
