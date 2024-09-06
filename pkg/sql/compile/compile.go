@@ -416,7 +416,6 @@ func (c *Compile) FreeOperator() {
 	}
 }
 
-/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)
@@ -425,7 +424,7 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
-*/
+
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
@@ -453,7 +452,7 @@ func (c *Compile) runOnce() error {
 		_, _ = GetCompileService().removeRunningCompile(c)
 	}()
 
-	//c.printPipeline()
+	c.printPipeline()
 
 	for i := range c.scopes {
 		wg.Add(1)
@@ -3008,84 +3007,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 	toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
-	if toWriteS3 {
-		c.proc.Debugf(c.proc.Ctx, "insert of '%s' write s3\n", c.sql)
-		if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
-			currentFirstFlag := c.anal.isFirst
-			c.anal.isFirst = false
-
-			insertArg := constructInsert(n, c.e)
-			insertArg.ToWriteS3 = true
-			insertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			currentFirstFlag = false
-
-			rs := c.newInsertMergeScope(insertArg, ss)
-			insertArg.Release()
-			rs.Magic = MergeInsert
-
-			mergeInsertArg := constructMergeblock(c.e, n)
-			mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs.setRootOperator(mergeInsertArg)
-
-			ss = []*Scope{rs}
-		} else {
-			currentFirstFlag := c.anal.isFirst
-			c.anal.isFirst = false
-
-			dataScope := c.newMergeScope(ss)
-			if c.anal.qry.LoadTag {
-				// reset the channel buffer of sink for load
-				dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, dataScope.NodeInfo.Mcpu)
-			}
-			parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
-			scopes := make([]*Scope, 0, parallelSize)
-
-			for i := 0; i < parallelSize; i++ {
-				s := c.newEmptyMergeScope()
-				mergeArg := merge.NewArgument()
-				mergeArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-				s.setRootOperator(mergeArg)
-				scopes = append(scopes, s)
-				scopes[i].Proc = c.proc.NewNoContextChildProc(1)
-				if c.anal.qry.LoadTag {
-					for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
-						rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
-					}
-				}
-			}
-
-			if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize && parallelSize > 1 {
-				_, arg := constructDispatchLocalAndRemote(0, scopes, dataScope)
-				arg.FuncId = dispatch.ShuffleToAllFunc
-				arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
-				arg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-				dataScope.setRootOperator(arg)
-			} else {
-				_, dispatchArg := constructDispatchLocalAndRemote(0, scopes, dataScope)
-				dispatchArg.FuncId = dispatch.SendToAnyLocalFunc
-				dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-				dataScope.setRootOperator(dispatchArg)
-			}
-			dataScope.IsEnd = true
-
-			for i := range scopes {
-				insertArg := constructInsert(n, c.e)
-				insertArg.ToWriteS3 = true
-				insertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-				scopes[i].setRootOperator(insertArg)
-			}
-			currentFirstFlag = false
-
-			rs := c.newMergeScope(scopes)
-			rs.PreScopes = append(rs.PreScopes, dataScope)
-			rs.Magic = MergeInsert
-			mergeInsertArg := constructMergeblock(c.e, n)
-			mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs.setRootOperator(mergeInsertArg)
-
-			ss = []*Scope{rs}
-		}
-	} else {
+	if !toWriteS3 {
 		currentFirstFlag := c.anal.isFirst
 		// Not write S3
 		for i := range ss {
@@ -3094,7 +3016,43 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 			ss[i].setRootOperator(insertArg)
 		}
 		c.anal.isFirst = false
+		return ss, nil
 	}
+
+	// to write S3
+	c.proc.Debugf(c.proc.Ctx, "insert of '%s' write s3\n", c.sql)
+	if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
+		currentFirstFlag := c.anal.isFirst
+		c.anal.isFirst = false
+		insertArg := constructInsert(n, c.e)
+		insertArg.ToWriteS3 = true
+		insertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		currentFirstFlag = false
+		rs := c.newInsertMergeScope(insertArg, ss)
+		insertArg.Release()
+		rs.Magic = MergeInsert
+		mergeInsertArg := constructMergeblock(c.e, n)
+		mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		rs.setRootOperator(mergeInsertArg)
+		ss = []*Scope{rs}
+		return ss, nil
+	}
+
+	currentFirstFlag := c.anal.isFirst
+	c.anal.isFirst = false
+	for i := range ss {
+		insertArg := constructInsert(n, c.e)
+		insertArg.ToWriteS3 = true
+		insertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ss[i].setRootOperator(insertArg)
+	}
+	currentFirstFlag = false
+	rs := c.newMergeScope(ss)
+	rs.Magic = MergeInsert
+	mergeInsertArg := constructMergeblock(c.e, n)
+	mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	rs.setRootOperator(mergeInsertArg)
+	ss = []*Scope{rs}
 	return ss, nil
 }
 
