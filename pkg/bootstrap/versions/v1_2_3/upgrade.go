@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v1_2_2
+package v1_2_3
 
 import (
 	"context"
@@ -27,15 +27,14 @@ import (
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{}
-var tenantUpgEntries = []versions.UpgradeEntry{}
 
 var (
 	Handler = &versionHandle{
 		metadata: versions.Version{
-			Version:           "1.2.2",
-			MinUpgradeVersion: "1.2.1",
-			UpgradeCluster:    versions.No,
-			UpgradeTenant:     versions.No,
+			Version:           "1.2.3",
+			MinUpgradeVersion: "1.2.2",
+			UpgradeCluster:    versions.Yes,
+			UpgradeTenant:     versions.Yes,
 			VersionOffset:     uint32(len(clusterUpgEntries) + len(tenantUpgEntries)),
 		},
 	}
@@ -61,13 +60,15 @@ func (v *versionHandle) HandleTenantUpgrade(
 	ctx context.Context,
 	tenantID int32,
 	txn executor.TxnExecutor) error {
-
 	for _, upgEntry := range tenantUpgEntries {
 		start := time.Now()
-
 		err := upgEntry.Upgrade(txn, uint32(tenantID))
 		if err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
+			getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error",
+				zap.Error(err),
+				zap.Int32("tenantId", tenantID),
+				zap.String("version", v.Metadata().Version),
+				zap.String("upgrade entry", upgEntry.String()))
 			return err
 		}
 
