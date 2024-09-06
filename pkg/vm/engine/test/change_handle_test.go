@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -32,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -378,7 +378,7 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	blockCnt := 10
-	rowsCount := int(options.DefaultBlockMaxRows) * blockCnt
+	rowsCount := objectio.BlockMaxRows * blockCnt
 	bat := catalog2.MockBatch(schema, rowsCount)
 	bats := bat.Split(blockCnt)
 

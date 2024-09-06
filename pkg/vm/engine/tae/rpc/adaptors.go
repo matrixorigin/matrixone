@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -43,7 +44,7 @@ func CreateRelation(
 	if err != nil {
 		return
 	}
-	schema.BlockMaxRows = options.DefaultBlockMaxRows
+	schema.BlockMaxRows = objectio.BlockMaxRows
 	schema.ObjectMaxBlocks = options.DefaultBlocksPerObject
 	if len(schema.Comment) > 0 {
 		if r := MaxRows.FindStringSubmatch(schema.Comment); len(r) > 0 {
