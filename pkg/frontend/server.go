@@ -125,7 +125,7 @@ func (mo *MOServer) Stop() error {
 func (mo *MOServer) IsRunning() bool {
 	mo.mu.RLock()
 	defer mo.mu.RUnlock()
-	return mo.running == true
+	return mo.running
 }
 
 func (mo *MOServer) startListener() {
