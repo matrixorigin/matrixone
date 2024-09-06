@@ -300,7 +300,7 @@ type SelectClause struct {
 	Exprs    SelectExprs
 	From     *From
 	Where    *Where
-	GroupBy  GroupBy
+	GroupBy  *GroupByClause
 	Having   *Where
 	Option   string
 }
@@ -335,7 +335,7 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Where.Format(ctx)
 	}
-	if len(node.GroupBy) > 0 {
+	if node.GroupBy != nil {
 		ctx.WriteByte(' ')
 		node.GroupBy.Format(ctx)
 	}
@@ -397,14 +397,20 @@ func (node *SelectExpr) Format(ctx *FmtCtx) {
 }
 
 // a GROUP BY clause.
-type GroupBy []Expr
+type GroupByClause struct {
+	GroupByExprs []Expr
+	RollUp       bool
+}
 
-func (node *GroupBy) Format(ctx *FmtCtx) {
+func (node *GroupByClause) Format(ctx *FmtCtx) {
 	prefix := "group by "
-	for _, n := range *node {
+	for _, n := range node.GroupByExprs {
 		ctx.WriteString(prefix)
 		n.Format(ctx)
 		prefix = ", "
+	}
+	if node.RollUp {
+		ctx.WriteString(" with rollup")
 	}
 }
 

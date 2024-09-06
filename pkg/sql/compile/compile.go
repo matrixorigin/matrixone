@@ -30,7 +30,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
-	"github.com/google/uuid"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 
@@ -901,57 +900,6 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 	}
 }
 
-func constructValueScanBatch(proc *process.Process, node *plan.Node) (*batch.Batch, error) {
-	var nodeId uuid.UUID
-	var exprList []colexec.ExpressionExecutor
-
-	if node.RowsetData == nil { // select 1,2
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
-		bat.SetRowCount(1)
-		return bat, nil
-	}
-	// select * from (values row(1,1), row(2,2), row(3,3)) a;
-	tableDef := node.TableDef
-	colCount := len(tableDef.Cols)
-	colsData := node.RowsetData.Cols
-	copy(nodeId[:], node.Uuid)
-	bat := proc.GetPrepareBatch()
-	if bat == nil {
-		bat = proc.GetValueScanBatch(nodeId)
-		if bat == nil {
-			return nil, moerr.NewInfo(proc.Ctx, fmt.Sprintf("constructValueScanBatch failed, node id: %s", nodeId.String()))
-		}
-	}
-	params := proc.GetPrepareParams()
-	if len(colsData) > 0 {
-		exprs := proc.GetPrepareExprList()
-		for i := 0; i < colCount; i++ {
-			if exprs != nil {
-				exprList = exprs.([][]colexec.ExpressionExecutor)[i]
-			}
-			if params != nil {
-				vs := vector.MustFixedColWithTypeCheck[types.Varlena](params)
-				for _, row := range colsData[i].Data {
-					if row.Pos >= 0 {
-						isNull := params.GetNulls().Contains(uint64(row.Pos - 1))
-						str := vs[row.Pos-1].UnsafeGetString(params.GetArea())
-						if err := util.SetBytesToAnyVector(proc.Ctx, str, int(row.RowPos), isNull, bat.Vecs[i],
-							proc); err != nil {
-							return nil, err
-						}
-					}
-				}
-			}
-			if err := evalRowsetData(proc, colsData[i].Data, bat.Vecs[i], exprList); err != nil {
-				bat.Clean(proc.Mp())
-				return nil, err
-			}
-		}
-	}
-	return bat, nil
-}
-
 func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node) ([]*Scope, error) {
 	start := time.Now()
 	defer func() {
@@ -1745,6 +1693,13 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	op := constructValueScan()
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	op.NodeType = n.NodeType
+	if n.RowsetData != nil {
+		op.RowsetData = n.RowsetData
+		op.ColCount = len(n.TableDef.Cols)
+		op.Uuid = n.Uuid
+	}
+
 	ds.setRootOperator(op)
 	c.anal.isFirst = false
 
@@ -4780,42 +4735,6 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 		ctx = defines.AttachAccountId(c.proc.Ctx, uint32(accountId))
 	}
 	return exec.Exec(ctx, sql, opts)
-}
-
-func evalRowsetData(proc *process.Process,
-	exprs []*plan.RowsetExpr, vec *vector.Vector, exprExecs []colexec.ExpressionExecutor,
-) error {
-	var bats []*batch.Batch
-
-	vec.ResetArea()
-	bats = []*batch.Batch{batch.EmptyForConstFoldBatch}
-	if len(exprExecs) > 0 {
-		for i, expr := range exprExecs {
-			val, err := expr.Eval(proc, bats, nil)
-			if err != nil {
-				return err
-			}
-			if err := vec.Copy(val, int64(exprs[i].RowPos), 0, proc.Mp()); err != nil {
-				return err
-			}
-		}
-	} else {
-		for _, expr := range exprs {
-			if expr.Pos >= 0 {
-				continue
-			}
-			val, err := colexec.EvalExpressionOnce(proc, expr.Expr, bats)
-			if err != nil {
-				return err
-			}
-			if err := vec.Copy(val, int64(expr.RowPos), 0, proc.Mp()); err != nil {
-				val.Free(proc.Mp())
-				return err
-			}
-			val.Free(proc.Mp())
-		}
-	}
-	return nil
 }
 
 func (c *Compile) newInsertMergeScope(arg *insert.Insert, ss []*Scope) *Scope {
