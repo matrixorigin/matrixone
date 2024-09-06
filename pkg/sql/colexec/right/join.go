@@ -269,7 +269,7 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, anal process.A
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 						continue
 					}
-					bs := vector.MustFixedCol[bool](vec)
+					bs := vector.MustFixedColWithTypeCheck[bool](vec)
 					if bs[0] {
 						for j, rp := range ap.Result {
 							if rp.Rel == 0 {
@@ -320,7 +320,7 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, anal process.A
 						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 							continue
 						}
-						bs := vector.MustFixedCol[bool](vec)
+						bs := vector.MustFixedColWithTypeCheck[bool](vec)
 						if !bs[0] {
 							continue
 						}

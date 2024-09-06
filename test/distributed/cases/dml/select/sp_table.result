@@ -19,6 +19,8 @@ mo_role    r
 mo_role_grant    r
 mo_role_privs    r
 mo_sessions    v
+mo_shards    r
+mo_shards_metadata    r
 mo_snapshots    r
 mo_stages    r
 mo_stored_procedure    r
