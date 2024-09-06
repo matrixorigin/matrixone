@@ -288,7 +288,7 @@ const maxTimeWindowRows = 8192
 
 func eval[T constraints.Integer](ctr *container, ap *TimeWin, proc *process.Process) (err error) {
 	end := T(ctr.end)
-	ts := vector.MustFixedCol[T](ctr.tsVec[ctr.curIdx])
+	ts := vector.MustFixedColNoTypeCheck[T](ctr.tsVec[ctr.curIdx])
 	for ; ctr.curRow < len(ts); ctr.curRow++ {
 		if ts[ctr.curRow] >= T(ctr.nextStart) && ctr.pre == withoutPre {
 			ctr.preRow = ctr.curRow
@@ -538,7 +538,7 @@ func (ctr *container) firstWindow(ap *TimeWin, proc *process.Process) (err error
 	vec := ctr.tsVec[ctr.curIdx]
 	switch ctr.tsOid {
 	case types.T_date:
-		ts := vector.MustFixedCol[types.Date](vec)[0]
+		ts := vector.MustFixedColNoTypeCheck[types.Date](vec)[0]
 		start, err := doDateSub(ts, ap.Interval.Val/2, ap.Interval.Typ)
 		if err != nil {
 			return err
@@ -552,7 +552,7 @@ func (ctr *container) firstWindow(ap *TimeWin, proc *process.Process) (err error
 		ctr.start = int64(start)
 		ctr.end = int64(end)
 	case types.T_datetime:
-		ts := vector.MustFixedCol[types.Datetime](vec)[0]
+		ts := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[0]
 		start, err := doDatetimeSub(ts, ap.Interval.Val/2, ap.Interval.Typ)
 		if err != nil {
 			return err
@@ -566,7 +566,7 @@ func (ctr *container) firstWindow(ap *TimeWin, proc *process.Process) (err error
 		ctr.start = int64(start)
 		ctr.end = int64(end)
 	case types.T_time:
-		ts := vector.MustFixedCol[types.Time](vec)[0]
+		ts := vector.MustFixedColNoTypeCheck[types.Time](vec)[0]
 		start, err := doTimeSub(ts, ap.Interval.Val/2, ap.Interval.Typ)
 		if err != nil {
 			return err
@@ -580,7 +580,7 @@ func (ctr *container) firstWindow(ap *TimeWin, proc *process.Process) (err error
 		ctr.start = int64(start)
 		ctr.end = int64(end)
 	case types.T_timestamp:
-		ts := vector.MustFixedCol[types.Timestamp](vec)[0]
+		ts := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[0]
 
 		itv, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, ts, ap.Interval.Val, ap.Interval.Typ)
 		if err != nil {

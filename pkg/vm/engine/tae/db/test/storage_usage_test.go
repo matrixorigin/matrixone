@@ -325,10 +325,10 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 				delBat := ckpData.GetBatches()[logtail.StorageUsageDelIDX]
 				//insBat := ckpData.GetBatches()[logtail.StorageUsageInsIDX]
 
-				accCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
-				dbCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
-				tblCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
-				sizeCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
+				accCol := vector.MustFixedColWithTypeCheck[uint64](delBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
+				dbCol := vector.MustFixedColWithTypeCheck[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
+				tblCol := vector.MustFixedColWithTypeCheck[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+				sizeCol := vector.MustFixedColWithTypeCheck[uint64](delBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
 
 				require.Equal(t, len(accCol), len(delUsages))
 
@@ -383,10 +383,10 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 					return memo.GetCache().LessFunc()(usages[i], usages[j])
 				})
 
-				accCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
-				dbCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
-				tblCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
-				sizeCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
+				accCol := vector.MustFixedColWithTypeCheck[uint64](insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
+				dbCol := vector.MustFixedColWithTypeCheck[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
+				tblCol := vector.MustFixedColWithTypeCheck[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+				sizeCol := vector.MustFixedColWithTypeCheck[uint64](insBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
 
 				for idx := 0; idx < len(accCol); idx++ {
 					require.Equal(t, accCol[idx], usages[idx].AccId)

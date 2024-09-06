@@ -498,7 +498,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 			zap.String("workspace", op.GetWorkspace().PPString()))
 		panic("delete table failed: query failed")
 	}
-	rowId := vector.GetFixedAt[types.Rowid](res.Batches[0].Vecs[0], 0)
+	rowId := vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
 
 	// write the batch to delete the database
 	var packer *types.Packer

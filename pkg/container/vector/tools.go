@@ -24,6 +24,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+func ToFixedColNoTypeCheck[T any](v *Vector, ret *[]T) {
+	ToSliceNoTypeCheck(v, ret)
+	if v.class == CONSTANT {
+		*ret = (*ret)[:1]
+	} else {
+		*ret = (*ret)[:v.length]
+	}
+}
+
 func ToFixedCol[T any](v *Vector, ret *[]T) {
 	// XXX hack.   Sometimes we generate an t_any, for untyped const null.
 	// This should be handled more carefully and gracefully.
@@ -38,7 +47,12 @@ func ToFixedCol[T any](v *Vector, ret *[]T) {
 	}
 }
 
-func MustFixedCol[T any](v *Vector) (ret []T) {
+func MustFixedColNoTypeCheck[T any](v *Vector) (ret []T) {
+	ToFixedColNoTypeCheck(v, &ret)
+	return
+}
+
+func MustFixedColWithTypeCheck[T any](v *Vector) (ret []T) {
 	ToFixedCol(v, &ret)
 	return
 }
@@ -56,7 +70,7 @@ func InefficientMustBytesCol(v *Vector) [][]byte {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
-	varcol := MustFixedCol[types.Varlena](v)
+	varcol := MustFixedColWithTypeCheck[types.Varlena](v)
 	if v.class == CONSTANT {
 		return [][]byte{(&varcol[0]).GetByteSlice(v.area)}
 	} else {
@@ -87,7 +101,7 @@ func InefficientMustStrCol(v *Vector) []string {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
-	varcol := MustFixedCol[types.Varlena](v)
+	varcol := MustFixedColNoTypeCheck[types.Varlena](v)
 	if v.class == CONSTANT {
 		return []string{(&varcol[0]).UnsafeGetString(v.area)}
 	} else {
@@ -104,7 +118,7 @@ func MustArrayCol[T types.RealNumbers](v *Vector) [][]T {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
-	varcol := MustFixedCol[types.Varlena](v)
+	varcol := MustFixedColWithTypeCheck[types.Varlena](v)
 	if v.class == CONSTANT {
 		return [][]T{types.GetArray[T](&varcol[0], v.area)}
 	} else {
@@ -130,7 +144,7 @@ func ExpandFixedCol[T any](v *Vector) []T {
 		}
 		return vs
 	}
-	return MustFixedCol[T](v)
+	return MustFixedColWithTypeCheck[T](v)
 }
 
 func ExpandStrCol(v *Vector) []string {
@@ -138,7 +152,7 @@ func ExpandStrCol(v *Vector) []string {
 		vs := make([]string, v.Length())
 		if len(v.data) > 0 {
 			var cols []types.Varlena
-			ToSlice(v, &cols)
+			ToSliceNoTypeCheck(v, &cols)
 			ss := cols[0].UnsafeGetString(v.area)
 			for i := range vs {
 				vs[i] = ss
@@ -154,7 +168,7 @@ func ExpandBytesCol(v *Vector) [][]byte {
 		vs := make([][]byte, v.Length())
 		if len(v.data) > 0 {
 			var cols []types.Varlena
-			ToSlice(v, &cols)
+			ToSliceNoTypeCheck(v, &cols)
 			ss := cols[0].GetByteSlice(v.area)
 			for i := range vs {
 				vs[i] = ss
@@ -166,13 +180,13 @@ func ExpandBytesCol(v *Vector) [][]byte {
 }
 
 func MustVarlenaToInt64Slice(v *Vector) [][3]int64 {
-	data := MustFixedCol[types.Varlena](v)
+	data := MustFixedColNoTypeCheck[types.Varlena](v)
 	pointer := (*[3]int64)(data[0].UnsafePtr())
 	return unsafe.Slice(pointer, len(data))
 }
 
 func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
-	data = MustFixedCol[types.Varlena](v)
+	data = MustFixedColNoTypeCheck[types.Varlena](v)
 	area = v.area
 	return
 }

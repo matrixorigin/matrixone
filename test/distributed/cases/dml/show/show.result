@@ -240,6 +240,8 @@ mo_role
 mo_role_grant
 mo_role_privs
 mo_sessions
+mo_shards
+mo_shards_metadata
 mo_snapshots
 mo_stages
 mo_stored_procedure
@@ -256,7 +258,7 @@ mo_variables
 mo_version
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-29
+32
 show column_number from mo_database;
 Number of columns in mo_database
 9

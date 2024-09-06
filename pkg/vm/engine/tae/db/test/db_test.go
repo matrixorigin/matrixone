@@ -2454,7 +2454,7 @@ func TestSegDelLogtail(t *testing.T) {
 	startTSVec := resp.Commands[0].Bat.Vecs[9]
 	cnStartVec, err := vector.ProtoVectorToVector(startTSVec)
 	assert.NoError(t, err)
-	startTSs := vector.MustFixedCol[types.TS](cnStartVec)
+	startTSs := vector.MustFixedColWithTypeCheck[types.TS](cnStartVec)
 	for _, ts := range startTSs {
 		assert.False(t, ts.IsEmpty())
 	}
@@ -2466,7 +2466,7 @@ func TestSegDelLogtail(t *testing.T) {
 	startTSVec = resp.Commands[1].Bat.Vecs[9]
 	cnStartVec, err = vector.ProtoVectorToVector(startTSVec)
 	assert.NoError(t, err)
-	startTSs = vector.MustFixedCol[types.TS](cnStartVec)
+	startTSs = vector.MustFixedColWithTypeCheck[types.TS](cnStartVec)
 	for _, ts := range startTSs {
 		assert.False(t, ts.IsEmpty())
 	}
@@ -8499,11 +8499,24 @@ func TestCollectDeletesInRange2(t *testing.T) {
 
 	txn, rel := tae.GetRelation()
 	blk := testutil.GetOneObject(rel)
+	rowidVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	for i := 0; i < 4; i++ {
+		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*blk.GetID(), 0, uint32(i))
+		rowidVec.Append(rowID, false)
+	}
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	for i := 0; i < 4; i++ {
+		pk, _, err := rel.GetValue(blk.Fingerprint(), uint32(i), uint16(schema.GetPrimaryKey().Idx), true)
+		require.NoError(t, err)
+		pkVec.Append(pk, false)
+	}
 	stats, err := testutil.MockCNDeleteInS3(
-		tae.Runtime.Fs, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData(),
-		0, schema, txn, []uint32{0, 1, 2, 3})
+		tae.Runtime.Fs, rowidVec, pkVec, schema, txn)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
+	pkVec.Close()
+	rowidVec.Close()
+	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
 
 	txn, rel = tae.GetRelation()
 	blk = testutil.GetOneObject(rel)
@@ -9124,13 +9137,18 @@ func TestTryDeleteByDeltaloc2(t *testing.T) {
 	filter := handle.NewEQFilter(v1)
 	id, offset, err := rel.GetByFilter(ctx, filter)
 	assert.NoError(t, err)
-	obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID(), false)
-	assert.NoError(t, err)
-	_, blkOffset := id.BlockID.Offsets()
+	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*id.ObjectID(), id.BlockID.Sequence(), offset)
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	pkVec.Append(v1, false)
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	rowIDVec.Append(rowID, false)
 	stats, err := testutil.MockCNDeleteInS3(
-		tae.Runtime.Fs, obj.GetObjectData(), blkOffset, schema, txn, []uint32{offset})
+		tae.Runtime.Fs, rowIDVec, pkVec, schema, txn)
 	assert.NoError(t, err)
 	require.False(t, stats.IsZero())
+	pkVec.Close()
+	rowIDVec.Close()
+	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
 
 	tae.MergeBlocks(true)
 	t.Log(tae.Catalog.SimplePPString(3))
@@ -9278,7 +9296,7 @@ func TestDeleteWithObjectStats(t *testing.T) {
 		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
 		vals = append(vals, v)
 	}
-	ok, err := tae.TryDeleteByDeltalocWithTxn2(vals, txn)
+	ok, err := tae.TryDeleteByDeltalocWithTxn(vals, txn)
 	assert.NoError(t, err)
 	assert.True(t, ok)
 	{
@@ -9296,7 +9314,7 @@ func TestDeleteWithObjectStats(t *testing.T) {
 	}
 	assert.NoError(t, txn.Commit(ctx))
 
-	// tae.CheckRowsByScan(10, true)
+	tae.CheckRowsByScan(10, true)
 }
 
 func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
@@ -9330,4 +9348,5 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 		common.DebugAllocator)
 	assert.NoError(t, txn.Commit(ctx))
 	assert.Equal(t, 1, deletes.Count())
+	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
 }
