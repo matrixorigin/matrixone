@@ -92,7 +92,7 @@ func TestOrder(t *testing.T) {
 				index := tc.arg.OrderBySpecs[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos
 				vec := bat.Vecs[index]
 				if vec.GetType().Oid == types.T_int8 {
-					i8c := vector.MustFixedCol[int8](vec)
+					i8c := vector.MustFixedColWithTypeCheck[int8](vec)
 					if desc {
 						for j := range i8c {
 							if j > 0 {
@@ -107,7 +107,7 @@ func TestOrder(t *testing.T) {
 						}
 					}
 				} else if vec.GetType().Oid == types.T_int64 {
-					i64c := vector.MustFixedCol[int64](vec)
+					i64c := vector.MustFixedColWithTypeCheck[int64](vec)
 					if desc {
 						for j := range i64c {
 							if j > 0 {

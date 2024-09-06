@@ -151,65 +151,65 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Bitmap) (offs
 	vec := data.GetDownstreamVector()
 	switch data.GetType().Oid {
 	case types.T_bool:
-		vs := vector.MustFixedCol[bool](vec)
+		vs := vector.MustFixedColNoTypeCheck[bool](vec)
 		return GetOffsetWithFunc(vs, v.(bool), CompareBool, skipmask)
 	case types.T_bit:
-		vs := vector.MustFixedCol[uint64](vec)
+		vs := vector.MustFixedColNoTypeCheck[uint64](vec)
 		return GetOffsetOfOrdered(vs, v.(uint64), skipmask)
 	case types.T_int8:
-		vs := vector.MustFixedCol[int8](vec)
+		vs := vector.MustFixedColNoTypeCheck[int8](vec)
 		return GetOffsetOfOrdered(vs, v.(int8), skipmask)
 	case types.T_int16:
-		vs := vector.MustFixedCol[int16](vec)
+		vs := vector.MustFixedColNoTypeCheck[int16](vec)
 		return GetOffsetOfOrdered(vs, v.(int16), skipmask)
 	case types.T_int32:
-		vs := vector.MustFixedCol[int32](vec)
+		vs := vector.MustFixedColNoTypeCheck[int32](vec)
 		return GetOffsetOfOrdered(vs, v.(int32), skipmask)
 	case types.T_int64:
-		vs := vector.MustFixedCol[int64](vec)
+		vs := vector.MustFixedColNoTypeCheck[int64](vec)
 		return GetOffsetOfOrdered(vs, v.(int64), skipmask)
 	case types.T_uint8:
-		vs := vector.MustFixedCol[uint8](vec)
+		vs := vector.MustFixedColNoTypeCheck[uint8](vec)
 		return GetOffsetOfOrdered(vs, v.(uint8), skipmask)
 	case types.T_uint16:
-		vs := vector.MustFixedCol[uint16](vec)
+		vs := vector.MustFixedColNoTypeCheck[uint16](vec)
 		return GetOffsetOfOrdered(vs, v.(uint16), skipmask)
 	case types.T_uint32:
-		vs := vector.MustFixedCol[uint32](vec)
+		vs := vector.MustFixedColNoTypeCheck[uint32](vec)
 		return GetOffsetOfOrdered(vs, v.(uint32), skipmask)
 	case types.T_uint64:
-		vs := vector.MustFixedCol[uint64](vec)
+		vs := vector.MustFixedColNoTypeCheck[uint64](vec)
 		return GetOffsetOfOrdered(vs, v.(uint64), skipmask)
 	case types.T_float32:
-		vs := vector.MustFixedCol[float32](vec)
+		vs := vector.MustFixedColNoTypeCheck[float32](vec)
 		return GetOffsetOfOrdered(vs, v.(float32), skipmask)
 	case types.T_float64:
-		vs := vector.MustFixedCol[float64](vec)
+		vs := vector.MustFixedColNoTypeCheck[float64](vec)
 		return GetOffsetOfOrdered(vs, v.(float64), skipmask)
 	case types.T_date:
-		vs := vector.MustFixedCol[types.Date](vec)
+		vs := vector.MustFixedColNoTypeCheck[types.Date](vec)
 		return GetOffsetOfOrdered(vs, v.(types.Date), skipmask)
 	case types.T_time:
-		vs := vector.MustFixedCol[types.Time](vec)
+		vs := vector.MustFixedColNoTypeCheck[types.Time](vec)
 		return GetOffsetOfOrdered(vs, v.(types.Time), skipmask)
 	case types.T_datetime:
-		vs := vector.MustFixedCol[types.Datetime](vec)
+		vs := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 		return GetOffsetOfOrdered(vs, v.(types.Datetime), skipmask)
 	case types.T_timestamp:
-		vs := vector.MustFixedCol[types.Timestamp](vec)
+		vs := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
 		return GetOffsetOfOrdered(vs, v.(types.Timestamp), skipmask)
 	case types.T_enum:
-		vs := vector.MustFixedCol[types.Enum](vec)
+		vs := vector.MustFixedColNoTypeCheck[types.Enum](vec)
 		return GetOffsetOfOrdered(vs, v.(types.Enum), skipmask)
 	case types.T_decimal64:
-		vs := vector.MustFixedCol[types.Decimal64](vec)
+		vs := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
 		return GetOffsetWithFunc(
 			vs,
 			v.(types.Decimal64),
 			types.CompareDecimal64,
 			skipmask)
 	case types.T_decimal128:
-		vs := vector.MustFixedCol[types.Decimal128](vec)
+		vs := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
 		return GetOffsetWithFunc(
 			vs,
 			v.(types.Decimal128),
@@ -217,25 +217,25 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Bitmap) (offs
 			skipmask)
 	case types.T_TS:
 		return GetOffsetWithFunc(
-			vector.MustFixedCol[types.TS](vec),
+			vector.MustFixedColNoTypeCheck[types.TS](vec),
 			v.(types.TS),
 			types.CompareTSTSAligned,
 			skipmask)
 	case types.T_Rowid:
 		return GetOffsetWithFunc(
-			vector.MustFixedCol[types.Rowid](vec),
+			vector.MustFixedColNoTypeCheck[types.Rowid](vec),
 			v.(types.Rowid),
 			types.CompareRowidRowidAligned,
 			skipmask)
 	case types.T_Blockid:
 		return GetOffsetWithFunc(
-			vector.MustFixedCol[types.Blockid](vec),
+			vector.MustFixedColNoTypeCheck[types.Blockid](vec),
 			v.(types.Blockid),
 			types.CompareBlockidBlockidAligned,
 			skipmask)
 	case types.T_uuid:
 		return GetOffsetWithFunc(
-			vector.MustFixedCol[types.Uuid](vec),
+			vector.MustFixedColNoTypeCheck[types.Uuid](vec),
 			v.(types.Uuid),
 			types.CompareUuid,
 			skipmask)

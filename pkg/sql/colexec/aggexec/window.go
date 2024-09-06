@@ -50,7 +50,7 @@ func (exec *singleWindowExec) PreAllocateGroups(more int) error {
 }
 
 func (exec *singleWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	value := vector.MustFixedCol[int64](vectors[0])[row]
+	value := vector.MustFixedColWithTypeCheck[int64](vectors[0])[row]
 	exec.groups[groupIndex] = append(exec.groups[groupIndex], value)
 	return nil
 }

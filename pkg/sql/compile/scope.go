@@ -108,48 +108,22 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 		return err
 	}
 
-	if s.DataSource != nil {
-		if s.DataSource.isConst {
-			s.DataSource.Bat = nil
-		} else {
-			s.DataSource.Rel = nil
-			s.DataSource.R = nil
-		}
+	if s.DataSource != nil && !s.DataSource.isConst {
+		s.DataSource.Rel = nil
+		s.DataSource.R = nil
 	}
 	return nil
 }
 
 func (s *Scope) initDataSource(c *Compile) (err error) {
-	if s.DataSource == nil {
+	if s.DataSource == nil || s.DataSource.isConst {
 		return nil
 	}
-	if s.DataSource.isConst {
-		if s.DataSource.Bat != nil {
-			return
-		}
 
-		if err := vm.HandleLeafOp(nil, s.RootOp, func(leafOpParent vm.Operator, leafOp vm.Operator) error {
-			if leafOp.OpType() == vm.ValueScan {
-				if s.DataSource.node.NodeType == plan.Node_VALUE_SCAN {
-					bat, err := constructValueScanBatch(c.proc, s.DataSource.node)
-					if err != nil {
-						return err
-					}
-					s.DataSource.Bat = bat
-				}
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-
-	} else {
-		if s.DataSource.Rel != nil {
-			return nil
-		}
-		return c.compileTableScanDataSource(s)
+	if s.DataSource.Rel != nil {
+		return nil
 	}
-	return nil
+	return c.compileTableScanDataSource(s)
 }
 
 // Run read data from storage engine and run the instructions of scope.
@@ -183,7 +157,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 		if s.DataSource.isConst {
-			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
+			_, err = p.ConstRun(s.Proc)
 		} else {
 			if s.DataSource.R == nil {
 				s.NodeInfo.Data = engine.BuildEmptyRelData()
@@ -400,9 +374,9 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 
 	switch {
 	// probability 1: it's a JOIN pipeline.
-	case s.IsJoin:
-		parallelScope, err = buildJoinParallelRun(s, c)
-		//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
+	//case s.IsJoin:
+	//parallelScope, err = buildJoinParallelRun(s, c)
+	//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
 
 	// probability 2: it's a LOAD pipeline.
 	case s.IsLoad:
@@ -431,22 +405,10 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	return err
 }
 
-// buildJoinParallelRun deal one case of scope.ParallelRun.
-// this function will create a pipeline to run a join in parallel.
-func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
-	if s.NodeInfo.Mcpu <= 1 {
-		return s, nil
-	}
-	ms, ss := newParallelScope(s, c)
-	probeScope := c.newBroadcastJoinProbeScope(s, ss)
-	ms.PreScopes = append(ms.PreScopes, probeScope)
-	return ms, nil
-}
-
 // buildLoadParallelRun deal one case of scope.ParallelRun.
 // this function will create a pipeline to load in parallel.
 func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
-	ms, ss := newParallelScope(s, c)
+	ms, ss := newParallelScope(s)
 	for i := range ss {
 		ss[i].DataSource = &Source{
 			isConst: true,
@@ -484,7 +446,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan must run in only one parallel.")
 	}
 
-	ms, ss := newParallelScope(s, c)
+	ms, ss := newParallelScope(s)
 	for i := range ss {
 		ss[i].DataSource = &Source{
 			R:            readers[i],
@@ -534,7 +496,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 				exprs = append(exprs, spec.Expr)
 				filters = append(filters, msg)
 			}
-			msgReceiver.Free()
 		}
 	}
 
@@ -608,7 +569,7 @@ func (s *Scope) isTableScan() bool {
 	return isTableScan
 }
 
-func newParallelScope(s *Scope, c *Compile) (*Scope, []*Scope) {
+func newParallelScope(s *Scope) (*Scope, []*Scope) {
 	if s.NodeInfo.Mcpu == 1 {
 		return s, nil
 	}
@@ -617,11 +578,6 @@ func newParallelScope(s *Scope, c *Compile) (*Scope, []*Scope) {
 		if len(op.RemoteRegs) > 0 {
 			panic("pipeline end with dispatch should have been merged in multi CN!")
 		}
-	}
-
-	lenChannels := 0
-	if s.IsJoin {
-		lenChannels = 1
 	}
 
 	// fake scope is used to merge parallel scopes, and do nothing itself
@@ -633,7 +589,7 @@ func newParallelScope(s *Scope, c *Compile) (*Scope, []*Scope) {
 		parallelScopes[i] = newScope(Normal)
 		parallelScopes[i].NodeInfo = s.NodeInfo
 		parallelScopes[i].NodeInfo.Mcpu = 1
-		parallelScopes[i].Proc = rs.Proc.NewContextChildProc(lenChannels)
+		parallelScopes[i].Proc = rs.Proc.NewContextChildProc(0)
 		parallelScopes[i].TxnOffset = s.TxnOffset
 		parallelScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i, s.NodeInfo.Mcpu))
 	}

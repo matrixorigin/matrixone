@@ -8,8 +8,8 @@ create account tenant_test admin_name = 'root' open comment 'tenant_test';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 51 near " open comment 'tenant_test';";
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    comments
-tenant_test    root    2024-07-23 07:41:56    open    null    5    63    0.0    tenant_test
-sys    root    2024-07-23 06:40:00    open    null    8    98    23.066661    system account
+tenant_test    root    2024-09-04 11:27:54    open    null    5    65    0.0    tenant_test
+sys    root    2024-09-04 11:11:14    open    null    8    103    10.127852    system account
 drop account if exists tenant_test;
 select account_id,relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and relname not like '__mo_index_unique__%' order by relname;
 account_id    relname    relkind
@@ -30,6 +30,8 @@ account_id    relname    relkind
 0    mo_role_grant    r
 0    mo_role_privs    r
 0    mo_sessions    v
+0    mo_shards    r
+0    mo_shards_metadata    r
 0    mo_snapshots    r
 0    mo_stages    r
 0    mo_stored_procedure    r
