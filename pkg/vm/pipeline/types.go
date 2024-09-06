@@ -119,23 +119,23 @@ func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare
 
 	// for every pipeline, we clean the last operator first.
 	// and then clean from 0 to n-1.
-	if p.rootOp == nil {
-		return
-	}
-	p.rootOp.Reset(proc, pipelineFailed, err)
-	if !isPrepare {
-		p.rootOp.Free(proc, pipelineFailed, err)
-	}
-	if len(p.rootOp.GetOperatorBase().Children) > 0 {
-		_ = vm.HandleAllOp(p.rootOp.GetOperatorBase().GetChildren(0), func(_ vm.Operator, op vm.Operator) error {
-			op.Reset(proc, pipelineFailed, err)
-			return nil
-		})
+	if root := p.rootOp; root != nil {
+		p.rootOp.Reset(proc, pipelineFailed, err)
 		if !isPrepare {
-			_ = vm.HandleAllOp(p.rootOp.GetOperatorBase().GetChildren(0), func(_ vm.Operator, op vm.Operator) error {
-				op.Free(proc, pipelineFailed, err)
+			p.rootOp.Free(proc, pipelineFailed, err)
+		}
+
+		for _, child := range p.rootOp.GetOperatorBase().Children {
+			_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
+				op.Reset(proc, pipelineFailed, err)
 				return nil
 			})
+			if !isPrepare {
+				_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
+					op.Free(proc, pipelineFailed, err)
+					return nil
+				})
+			}
 		}
 	}
 }
