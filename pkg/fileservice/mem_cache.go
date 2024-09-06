@@ -17,50 +17,26 @@ package fileservice
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/checks/interval"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type MemCache struct {
-	cache       *memorycache.Cache
+	cache       fscache.DataCache
 	counterSets []*perfcounter.CounterSet
 }
 
 func NewMemCache(
-	dataCache *memorycache.Cache,
+	capacity fscache.CapacityFunc,
+	callbacks *CacheCallbacks,
 	counterSets []*perfcounter.CounterSet,
 	name string,
 ) *MemCache {
-	ret := &MemCache{
-		cache:       dataCache,
-		counterSets: counterSets,
-	}
-	if name != "" {
-		allMemoryCaches.Store(ret, name)
-	}
-	return ret
-}
 
-func newMemoryCache(
-	capacity fscache.CapacityFunc,
-	checkOverlaps bool,
-	callbacks *CacheCallbacks,
-) *memorycache.Cache {
-
-	var overlapChecker *interval.OverlapChecker
-	if checkOverlaps {
-		overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
-	}
-
-	postSetFn := func(key CacheKey, value fscache.Data) {
-		if overlapChecker != nil {
-			if err := overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
-				panic(err)
-			}
-		}
+	postSetFn := func(key fscache.CacheKey, value fscache.Data) {
+		value.Retain()
 
 		if callbacks != nil {
 			for _, fn := range callbacks.PostSet {
@@ -69,7 +45,9 @@ func newMemoryCache(
 		}
 	}
 
-	postGetFn := func(key CacheKey, value fscache.Data) {
+	postGetFn := func(key fscache.CacheKey, value fscache.Data) {
+		value.Retain()
+
 		if callbacks != nil {
 			for _, fn := range callbacks.PostGet {
 				fn(key, value)
@@ -77,12 +55,8 @@ func newMemoryCache(
 		}
 	}
 
-	postEvictFn := func(key CacheKey, value fscache.Data) {
-		if overlapChecker != nil {
-			if err := overlapChecker.Remove(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
-				panic(err)
-			}
-		}
+	postEvictFn := func(key fscache.CacheKey, value fscache.Data) {
+		value.Release()
 
 		if callbacks != nil {
 			for _, fn := range callbacks.PostEvict {
@@ -91,7 +65,7 @@ func newMemoryCache(
 		}
 	}
 
-	return memorycache.NewCache(
+	dataCache := fifocache.NewDataCache(
 		func() int64 {
 			// read from global hint
 			if n := GlobalMemoryCacheSizeHint.Load(); n > 0 {
@@ -101,15 +75,21 @@ func newMemoryCache(
 			return capacity()
 		},
 		postSetFn, postGetFn, postEvictFn,
-		getMemoryCacheAllocator(),
 	)
+
+	ret := &MemCache{
+		cache:       dataCache,
+		counterSets: counterSets,
+	}
+
+	if name != "" {
+		allMemoryCaches.Store(ret, name)
+	}
+
+	return ret
 }
 
 var _ IOVectorCache = new(MemCache)
-
-func (m *MemCache) Alloc(n int) fscache.Data {
-	return m.cache.Alloc(n)
-}
 
 func (m *MemCache) Read(
 	ctx context.Context,
@@ -145,7 +125,7 @@ func (m *MemCache) Read(
 		if entry.done {
 			continue
 		}
-		key := CacheKey{
+		key := fscache.CacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
 			Sz:     entry.Size,
@@ -186,7 +166,7 @@ func (m *MemCache) Update(
 			continue
 		}
 
-		key := CacheKey{
+		key := fscache.CacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
 			Sz:     entry.Size,

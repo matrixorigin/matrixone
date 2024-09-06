@@ -701,7 +701,7 @@ func testFileService(
 						if len(data) > 0 {
 							assert.Equal(t, bs, data)
 						}
-						cacheData := allocator.Alloc(len(bs))
+						cacheData := allocator.AllocateCacheData(len(bs))
 						copy(cacheData.Bytes(), bs)
 						return cacheData, nil
 					},
