@@ -91,13 +91,13 @@ func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerC
 	}
 */
 
-func bindAndOptimizeDeleteQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Delete, isPrepareStmt bool, skipStats bool) (*Plan, error) {
+func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
+	builder := NewQueryBuilder(plan.Query_DELETE, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -172,7 +172,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.Update:
 		return buildTableUpdate(stmt, ctx, isPrepareStmt)
 	case *tree.Delete:
-		return buildDelete(stmt, ctx, isPrepareStmt)
+		return bindAndOptimizeDeleteQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.BeginTransaction:
 		return buildBeginTransaction(stmt, ctx)
 	case *tree.CommitTransaction:

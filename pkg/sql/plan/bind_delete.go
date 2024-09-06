@@ -17,9 +17,9 @@ package plan
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (int32, error) {
@@ -129,7 +129,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 				ScanSnapshot: scanNode.ScanSnapshot,
 			}
 
-			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], builder.ctxByNode[lastNodeID])
+			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], ctx)
 
 			rightPkPos := idxTableDef.Name2ColIndex[catalog.IndexTableIndexColName]
 			pkTyp := idxTableDef.Cols[rightPkPos].Typ
@@ -202,83 +202,174 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 				Children: []int32{lastNodeID, idxTableNodeID},
 				JoinType: plan.Node_LEFT,
 				OnList:   []*plan.Expr{joinCond},
-			}, builder.ctxByNode[lastNodeID])
+			}, ctx)
 		}
 	}
 
-	/*
-		for i, tableDef := range tblInfo.tableDefs {
+	for i, tableDef := range tblInfo.tableDefs {
+		if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+			continue
+		}
+
+		pkPos, pkTyp := getPkPos(tableDef, false)
+
+		lockTarget := &plan.LockTarget{
+			TableId:            tableDef.TblId,
+			PrimaryColIdxInBat: int32(pkPos),
+			PrimaryColTyp:      pkTyp,
+			RefreshTsIdxInBat:  -1, //unsupported now
+		}
+
+		//if tableDef.Partition != nil {
+		//	lockTarget.IsPartitionTable = true
+		//	lockTarget.FilterColIdxInBat = int32(partitionIdx)
+		//	lockTarget.PartitionTableIds = partTableIDs
+		//}
+
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_LOCK_OP,
+			Children:    []int32{lastNodeID},
+			LockTargets: []*plan.LockTarget{lockTarget},
+		}, ctx)
+
+		for _, idxNode := range idxScanNodes[i] {
+			if idxNode == nil {
+				continue
+			}
+
+			pkPos, pkTyp := getPkPos(idxNode.TableDef, false)
+
+			lockTarget := &plan.LockTarget{
+				TableId:            idxNode.TableDef.TblId,
+				PrimaryColIdxInBat: int32(pkPos),
+				PrimaryColTyp:      pkTyp,
+				RefreshTsIdxInBat:  -1, //unsupported now
+			}
+
+			//if tableDef.Partition != nil {
+			//	lockTarget.IsPartitionTable = true
+			//	lockTarget.FilterColIdxInBat = int32(partitionIdx)
+			//	lockTarget.PartitionTableIds = partTableIDs
+			//}
+
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_LOCK_OP,
+				Children:    []int32{lastNodeID},
+				LockTargets: []*plan.LockTarget{lockTarget},
+			}, ctx)
+		}
+	}
+
+	for i, tableDef := range tblInfo.tableDefs {
+		pkPos := int32(colName2Idx[i][tableDef.Pkey.PkeyColName])
+		rowIDPos := int32(colName2Idx[i][catalog.Row_ID])
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_DELETE,
+			Children: []int32{lastNodeID},
+			// ProjectList: getProjectionByLastNode(builder, lastNodeId),
+			DeleteCtx: &plan.DeleteCtx{
+				TableDef: tableDef,
+				//RowIdIdx:            int32(delNodeInfo.deleteIndex),
+				Ref: tblInfo.objRef[i],
+				//AddAffectedRows:     delNodeInfo.addAffectedRows,
+				//IsClusterTable:      delNodeInfo.IsClusterTable,
+				//PartitionTableIds:   delNodeInfo.partTableIDs,
+				//PartitionTableNames: delNodeInfo.partTableNames,
+				//PartitionIdx:        int32(delNodeInfo.partitionIdx),
+			},
+			InsertDeleteCols: []*plan.Expr{
+				{
+					Typ: selectNode.ProjectList[pkPos].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: selectNode.BindingTags[0],
+							ColPos: pkPos,
+						},
+					},
+				},
+				{
+					Typ: selectNode.ProjectList[rowIDPos].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: selectNode.BindingTags[0],
+							ColPos: rowIDPos,
+						},
+					},
+				},
+			},
+		}, ctx)
+
+		for _, idxNode := range idxScanNodes[i] {
+			if idxNode == nil {
+				continue
+			}
+
+			pkPos := int32(idxNode.TableDef.Name2ColIndex[idxNode.TableDef.Pkey.PkeyColName])
+			rowIDPos := int32(idxNode.TableDef.Name2ColIndex[catalog.Row_ID])
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_DELETE,
 				Children: []int32{lastNodeID},
-				// ProjectList: getProjectionByLastNode(builder, lastNodeId),
 				DeleteCtx: &plan.DeleteCtx{
-					TableDef:            tableDef,
-					RowIdIdx:            int32(delNodeInfo.deleteIndex),
-					Ref:                 tblInfo.objRef[i],
-					AddAffectedRows:     delNodeInfo.addAffectedRows,
-					IsClusterTable:      delNodeInfo.IsClusterTable,
-					PartitionTableIds:   delNodeInfo.partTableIDs,
-					PartitionTableNames: delNodeInfo.partTableNames,
-					PartitionIdx:        int32(delNodeInfo.partitionIdx),
-					PrimaryKeyIdx:       int32(delNodeInfo.pkPos),
+					TableDef: idxNode.TableDef,
+					Ref:      idxNode.ObjRef,
+					//PrimaryKeyIdx:       int32(delNodeInfo.pkPos),
+					//CanTruncate:         canTruncate,
+					//AddAffectedRows:     delNodeInfo.addAffectedRows,
+					//IsClusterTable:      delNodeInfo.IsClusterTable,
+					//PartitionTableIds:   delNodeInfo.partTableIDs,
+					//PartitionTableNames: delNodeInfo.partTableNames,
+					//PartitionIdx:        int32(delNodeInfo.partitionIdx),
 				},
-			}, nil)
+				InsertDeleteCols: []*plan.Expr{
+					{
+						Typ: idxNode.TableDef.Cols[pkPos].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: idxNode.BindingTags[0],
+								ColPos: pkPos,
+							},
+						},
+					},
+					{
+						Typ: idxNode.TableDef.Cols[rowIDPos].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: idxNode.BindingTags[0],
+								ColPos: rowIDPos,
+							},
+						},
+					},
+				},
+			}, ctx)
 		}
-	*/
-	// append delete plans
-	beginIdx := 0
-	// needLockTable := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
-	// todo will do not lock table now.
-	isDeleteWithoutFilters := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
-	needLockTable := isDeleteWithoutFilters
-	delPlanCtx := getDmlPlanCtx()
-	for i, tableDef := range tblInfo.tableDefs {
-		deleteBindCtx := NewBindContext(builder, nil)
-		delPlanCtx.objRef = tblInfo.objRef[i]
-		delPlanCtx.tableDef = tableDef
-		delPlanCtx.beginIdx = beginIdx
-		delPlanCtx.isMulti = tblInfo.isMulti
-		delPlanCtx.needAggFilter = tblInfo.needAggFilter
-		delPlanCtx.updateColLength = 0
-		delPlanCtx.rowIdPos = getRowIdPos(tableDef)
-		//delPlanCtx.allDelTableIDs = allDelTableIDs
-		//delPlanCtx.allDelTables = allDelTables
-		delPlanCtx.lockTable = needLockTable
-		delPlanCtx.isDeleteWithoutFilters = isDeleteWithoutFilters
-
-		if tableDef.Partition != nil {
-			partTableIds := make([]uint64, tableDef.Partition.PartitionNum)
-			partTableNames := make([]string, tableDef.Partition.PartitionNum)
-			for j, partition := range tableDef.Partition.Partitions {
-				_, partTableDef := builder.compCtx.Resolve(tblInfo.objRef[i].SchemaName, partition.PartitionTableName, nil)
-				partTableIds[j] = partTableDef.TblId
-				partTableNames[j] = partition.PartitionTableName
-			}
-			delPlanCtx.partitionInfos[tableDef.TblId] = &partSubTableInfo{
-				partTableIDs:   partTableIds,
-				partTableNames: partTableNames,
-			}
-		}
-
-		lastNodeID, err = makePreUpdateDeletePlan(builder.compCtx, builder, deleteBindCtx, delPlanCtx, lastNodeID)
-		if err != nil {
-			return 0, err
-		}
-
-		err = buildDeletePlans(builder.compCtx, builder, deleteBindCtx, delPlanCtx)
-		if err != nil {
-			return 0, err
-		}
-		beginIdx = beginIdx + len(tableDef.Cols)
 	}
-	putDmlPlanCtx(delPlanCtx)
 
 	reCheckifNeedLockWholeTable(builder)
 
 	return lastNodeID, err
 }
 
+func (builder *QueryBuilder) updateLocksOnDemand(nodeID int32) {
+	lockService := builder.compCtx.GetProcess().Base.LockService
+	if lockService == nil {
+		// MockCompilerContext
+		return
+	}
+	lockconfig := lockService.GetConfig()
+
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType != plan.Node_LOCK_OP {
+		for _, childID := range node.Children {
+			builder.updateLocksOnDemand(childID)
+		}
+	} else if !node.LockTargets[0].LockTable && node.Stats.Outcnt > float64(lockconfig.MaxLockRowCount) {
+		node.LockTargets[0].LockTable = true
+		logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
+		logutil.Infof("the outcnt stats is %f", node.Stats.Outcnt)
+	}
+}
+
+/*
 // makeOneDeletePlan
 // lock -> delete
 func makeOneDeletePlan0(
@@ -338,7 +429,6 @@ func makeOneDeletePlan0(
 	return lastNodeId, nil
 }
 
-/*
 func (builder *QueryBuilder) appendDeletePlan(scanNode *plan.Node, delCtx *dmlPlanCtx, bindCtx *BindContext, canTruncate bool) error {
 	builder.deleteNode[delCtx.tableDef.TblId] = builder.qry.Steps[delCtx.sourceStep]
 	//isUpdate := delCtx.updateColLength > 0
