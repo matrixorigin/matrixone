@@ -335,7 +335,7 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Where.Format(ctx)
 	}
-	if len(node.GroupBy.Exprs) > 0 {
+	if node.GroupBy != nil {
 		ctx.WriteByte(' ')
 		node.GroupBy.Format(ctx)
 	}

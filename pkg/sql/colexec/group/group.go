@@ -290,8 +290,7 @@ func (ctr *container) processH0() error {
 // processH8 do group by aggregation with int hashmap.
 func (ctr *container) processH8(bat *batch.Batch, proc *process.Process, rollup bool) error {
 	count := bat.RowCount()
-	var itr hashmap.Iterator
-	itr = ctr.intHashMap.NewIterator()
+	itr := ctr.intHashMap.NewIterator()
 
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		if i%(hashmap.UnitLimit*32) == 0 {
