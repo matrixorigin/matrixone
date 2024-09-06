@@ -110,24 +110,30 @@ func (jm *JoinMap) IsValid() bool {
 	return jm.valid
 }
 
-func (jm *JoinMap) Free() {
-	if atomic.AddInt64(&jm.refCnt, -1) != 0 {
-		return
-	}
+func (jm *JoinMap) FreeMemory() {
 	for i := range jm.multiSels {
 		jm.multiSels[i] = nil
 	}
 	jm.multiSels = nil
 	if jm.ihm != nil {
 		jm.ihm.Free()
+		jm.ihm = nil
 	} else if jm.shm != nil {
 		jm.shm.Free()
+		jm.shm = nil
 	}
 	for i := range jm.batches {
 		jm.batches[i].Clean(jm.mpool)
 	}
 	jm.batches = nil
 	jm.valid = false
+}
+
+func (jm *JoinMap) Free() {
+	if atomic.AddInt64(&jm.refCnt, -1) != 0 {
+		return
+	}
+	jm.FreeMemory()
 }
 
 func (jm *JoinMap) Size() int64 {
@@ -159,6 +165,12 @@ func (t JoinMapMsg) Deserialize([]byte) Message {
 
 func (t JoinMapMsg) NeedBlock() bool {
 	return true
+}
+
+func (t JoinMapMsg) Destroy() {
+	if t.JoinMapPtr != nil {
+		t.JoinMapPtr.FreeMemory()
+	}
 }
 
 func (t JoinMapMsg) GetMsgTag() int32 {

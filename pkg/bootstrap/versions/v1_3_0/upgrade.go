@@ -29,7 +29,7 @@ var (
 	Handler = &versionHandle{
 		metadata: versions.Version{
 			Version:           "1.3.0",
-			MinUpgradeVersion: "1.2.2",
+			MinUpgradeVersion: "1.2.3",
 			UpgradeCluster:    versions.Yes,
 			UpgradeTenant:     versions.Yes,
 			VersionOffset:     uint32(len(clusterUpgEntries) + len(tenantUpgEntries)),
