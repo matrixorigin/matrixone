@@ -46,7 +46,6 @@ var upg_mo_snapshots = versions.UpgradeEntry{
 	},
 }
 
-
 var upg_system_metrics_server_object_count_total = versions.UpgradeEntry{
 	Schema:    catalog.MO_SYSTEM_METRICS,
 	TableName: "server_object_count",
