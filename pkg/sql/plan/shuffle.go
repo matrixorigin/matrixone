@@ -31,7 +31,7 @@ import (
 
 const (
 	threshHoldForShuffleGroup       = 64000
-	threshHoldForRightJoinShuffle   = 120000
+	threshHoldForRightJoinShuffle   = 8192
 	threshHoldForRangeShuffle       = 640000
 	threshHoldForHybirdShuffle      = 4000000
 	threshHoldForHashShuffle        = 8000000
@@ -408,7 +408,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	factor := 1 / math.Pow((n.Stats.Outcnt/child.Stats.Outcnt), 1.5)
+	factor := 1 / math.Pow((n.Stats.Outcnt/n.Stats.Selectivity/child.Stats.Outcnt), 1.5)
 	if n.Stats.HashmapStats.HashmapSize < threshHoldForShuffleGroup*factor {
 		return
 	}
