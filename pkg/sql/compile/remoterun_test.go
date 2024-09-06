@@ -248,8 +248,11 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		pipe:     nil,
 		regs:     nil,
 	}
+
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
 	for _, op := range ops {
-		_, _, err := convertToPipelineInstruction(op, ctx, 1)
+		_, _, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.Nil(t, err)
 	}
 }

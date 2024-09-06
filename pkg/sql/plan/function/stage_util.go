@@ -216,7 +216,7 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s StageDef, err 
 		for _, batch := range res.Batches {
 			if batch != nil && batch.Vecs[0] != nil && batch.Vecs[0].Length() > 0 {
 				for i := 0; i < batch.Vecs[0].Length(); i++ {
-					stage_id := vector.GetFixedAt[uint32](batch.Vecs[id_idx], i)
+					stage_id := vector.GetFixedAtWithTypeCheck[uint32](batch.Vecs[id_idx], i)
 					stage_name := string(batch.Vecs[name_idx].GetBytesAt(i))
 					stage_url, err := url.Parse(string(batch.Vecs[url_idx].GetBytesAt(i)))
 					if err != nil {

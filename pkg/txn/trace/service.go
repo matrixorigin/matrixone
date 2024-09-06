@@ -650,7 +650,7 @@ func (l *EntryData) createApply(
 	buf *buffer,
 	fn func(e dataEvent),
 	completedPKTables *sync.Map) {
-	commitTS := vector.MustFixedCol[types.TS](l.commitVec)
+	commitTS := vector.MustFixedColWithTypeCheck[types.TS](l.commitVec)
 
 	l.writeToBuf(
 		buf,
