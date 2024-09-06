@@ -1000,7 +1000,7 @@ func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc
 		if vec.GetType().Oid != types.T_bool {
 			return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
 		}
-		cols := vector.MustFixedCol[bool](vec)
+		cols := vector.MustFixedColWithTypeCheck[bool](vec)
 		for _, isNeed := range cols {
 			if isNeed {
 				return true, nil

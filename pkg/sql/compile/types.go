@@ -80,7 +80,6 @@ type Source struct {
 	Attributes             []string
 	R                      engine.Reader
 	Rel                    engine.Relation
-	Bat                    *batch.Batch
 	FilterExpr             *plan.Expr   // todo: change this to []*plan.Expr,    FilterList + RuntimeFilter
 	FilterList             []*plan.Expr //from node.FilterList, use for reader
 	BlockFilter            []*plan.Expr //from node.BlockFilterList, use for range
@@ -107,9 +106,6 @@ type Scope struct {
 	// 1 -  execution unit for processing intermediate results.
 	// 2 -  execution unit that requires remote call.
 	Magic magicType
-
-	// IsJoin means the pipeline is join
-	IsJoin bool
 
 	// IsEnd means the pipeline is end
 	IsEnd bool

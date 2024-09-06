@@ -36,6 +36,8 @@ def    mo_catalog    mo_retention    BASE TABLE    Tae
 def    mo_catalog    mo_role    BASE TABLE    Tae
 def    mo_catalog    mo_role_grant    BASE TABLE    Tae
 def    mo_catalog    mo_role_privs    BASE TABLE    Tae
+def    mo_catalog    mo_shards    BASE TABLE    Tae
+def    mo_catalog    mo_shards_metadata    BASE TABLE    Tae
 def    mo_catalog    mo_snapshots    BASE TABLE    Tae
 def    mo_catalog    mo_stages    BASE TABLE    Tae
 def    mo_catalog    mo_stored_procedure    BASE TABLE    Tae

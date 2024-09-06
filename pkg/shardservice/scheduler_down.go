@@ -59,6 +59,7 @@ func (s *downScheduler) schedule(
 	}
 	for k := range s.downCNs {
 		delete(r.cns, k)
+		delete(s.downCNs, k)
 	}
 	return nil
 }
