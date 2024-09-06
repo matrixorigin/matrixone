@@ -216,7 +216,7 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 
 		if info.ShuffleRanges[i] != nil {
 			if s.MinValMap[colName] != s.MaxValMap[colName] &&
-				s.TableCnt > 1000000 &&
+				s.TableCnt > ShuffleThreshHoldOfNDV*2 &&
 				info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV &&
 				!util.JudgeIsCompositeClusterByColumn(colName) &&
 				colName != catalog.CPrimaryKeyColName {
