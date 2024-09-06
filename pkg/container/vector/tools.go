@@ -283,28 +283,6 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 	}, nil
 }
 
-func CopyToProtoVector(vec *Vector) (ret api.Vector, err error) {
-	nsp, err := vec.nsp.Show()
-	if err != nil {
-		return
-	}
-	sz := vec.typ.TypeSize()
-	data := make([]byte, vec.length*sz)
-	area := make([]byte, len(vec.area))
-
-	copy(data, vec.data[:vec.length*sz])
-	copy(area, vec.area)
-	return api.Vector{
-		Nsp:      nsp,
-		Nullable: true,
-		Area:     area,
-		IsConst:  vec.IsConst(),
-		Len:      uint32(vec.length),
-		Type:     TypeToProtoType(vec.typ),
-		Data:     data,
-	}, nil
-}
-
 func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 	rvec := NewVecFromReuse()
 	rvec.area = vec.Area
