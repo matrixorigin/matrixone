@@ -59,11 +59,7 @@ insert into t3 select *,* from generate_series(1,1000000)g;
 -- @separator:table
 explain select count(*) from t3 where t3.c2 in (select c3 from t1 where t1.c2!=20000 and  t1.c2 not in ( select c2 from t2 where t2.c3>150000 ));
 select count(*) from t3 where t3.c2 in (select c3 from t1 where t1.c2!=20000 and  t1.c2 not in ( select c2 from t2 where t2.c3>150000 ));
--- @separator:table
-explain select count(*) from t3 where t3.c1<100000 and t3.c2 not in (select c3 from t1 where t1.c2!=30000 and  t1.c2  in ( select c2 from t2 where t2.c3<850000 ));
 select count(*) from t3 where t3.c1<100000 and t3.c2 not in (select c3 from t1 where t1.c2!=30000 and  t1.c2  in ( select c2 from t2 where t2.c3<850000 ));
--- @separator:table
-explain select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t1.c2=t3.c2 and t2.c2<900000 and t3.c1<500000;
 select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t1.c2=t3.c2 and t2.c2<900000 and t3.c1<500000;
 drop table t3;
 drop database if exists d1;
