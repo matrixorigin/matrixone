@@ -126,10 +126,7 @@ func readObjects(stats objectio.ObjectStats, blockID uint32, fs fileservice.File
 	if isTombstone {
 		metaType = objectio.SchemaTombstone
 	}
-	loc := catalog.BuildLocation(
-		stats,
-		uint16(blockID),
-		8192)
+	loc := stats.BlockLocation(uint16(blockID), 8192)
 	bat, _, err = blockio.LoadOneBlock(
 		ctx,
 		fs,
@@ -444,51 +441,51 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 		var val any
 		switch vec.GetType().Oid {
 		case types.T_bool:
-			val = vector.GetFixedAt[bool](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[bool](src, offset)
 		case types.T_bit:
-			val = vector.GetFixedAt[uint64](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[uint64](src, offset)
 		case types.T_int8:
-			val = vector.GetFixedAt[int8](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[int8](src, offset)
 		case types.T_int16:
-			val = vector.GetFixedAt[int16](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[int16](src, offset)
 		case types.T_int32:
-			val = vector.GetFixedAt[int32](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[int32](src, offset)
 		case types.T_int64:
-			val = vector.GetFixedAt[int64](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[int64](src, offset)
 		case types.T_uint8:
-			val = vector.GetFixedAt[uint8](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[uint8](src, offset)
 		case types.T_uint16:
-			val = vector.GetFixedAt[uint16](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[uint16](src, offset)
 		case types.T_uint32:
-			val = vector.GetFixedAt[uint32](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[uint32](src, offset)
 		case types.T_uint64:
-			val = vector.GetFixedAt[uint64](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[uint64](src, offset)
 		case types.T_decimal64:
-			val = vector.GetFixedAt[types.Decimal64](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[types.Decimal64](src, offset)
 		case types.T_decimal128:
-			val = vector.GetFixedAt[types.Decimal128](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[types.Decimal128](src, offset)
 		case types.T_uuid:
-			val = vector.GetFixedAt[types.Uuid](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[types.Uuid](src, offset)
 		case types.T_float32:
-			val = vector.GetFixedAt[float32](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[float32](src, offset)
 		case types.T_float64:
-			val = vector.GetFixedAt[float64](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[float64](src, offset)
 		case types.T_date:
-			val = vector.GetFixedAt[types.Date](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[types.Date](src, offset)
 		case types.T_time:
-			val = vector.GetFixedAt[types.Time](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[types.Time](src, offset)
 		case types.T_datetime:
-			val = vector.GetFixedAt[types.Datetime](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[types.Datetime](src, offset)
 		case types.T_timestamp:
-			val = vector.GetFixedAt[types.Timestamp](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[types.Timestamp](src, offset)
 		case types.T_enum:
-			val = vector.GetFixedAt[types.Enum](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[types.Enum](src, offset)
 		case types.T_TS:
-			val = vector.GetFixedAt[types.TS](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[types.TS](src, offset)
 		case types.T_Rowid:
-			val = vector.GetFixedAt[types.Rowid](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[types.Rowid](src, offset)
 		case types.T_Blockid:
-			val = vector.GetFixedAt[types.Blockid](src, offset)
+			val = vector.GetFixedAtNoTypeCheck[types.Blockid](src, offset)
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 			types.T_array_float32, types.T_array_float64, types.T_datalink:
 			val = src.GetBytesAt(offset)

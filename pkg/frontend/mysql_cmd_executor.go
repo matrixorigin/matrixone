@@ -871,7 +871,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			return err
 		}
 
-		bs := vector.MustFixedCol[bool](vec)
+		bs := vector.MustFixedColWithTypeCheck[bool](vec)
 		sels := execCtx.proc.Mp().GetSels()
 		for i, b := range bs {
 			if b {
@@ -1565,7 +1565,7 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 			return err
 		}
 
-		bs := vector.MustFixedCol[bool](vec)
+		bs := vector.MustFixedColWithTypeCheck[bool](vec)
 		sels := proc.Mp().GetSels()
 		for i, b := range bs {
 			if b {
@@ -1578,10 +1578,10 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 		proc.Mp().PutSels(sels)
 		v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
 		v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
-		v2 := vector.MustFixedCol[int64](bat.Vecs[2])
+		v2 := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[2])
 		v3, area3 := vector.MustVarlenaRawData(bat.Vecs[3])
 		v4, area4 := vector.MustVarlenaRawData(bat.Vecs[4])
-		v5 := vector.MustFixedCol[int32](bat.Vecs[5])
+		v5 := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[5])
 		v6, area6 := vector.MustVarlenaRawData(bat.Vecs[6])
 		rows = rows[:len(v0)]
 		for i := range v0 {
@@ -2059,6 +2059,10 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 
+		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() {
+			logutil.Infof("account %d routine %d is restricted, can not execute the statement", ses.GetAccountId(), ses.getRoutine().getConnectionID())
+		}
+
 		// can or not execute in retricted status
 		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !ses.GetPrivilege().canExecInRestricted {
 			return moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
@@ -2220,7 +2224,6 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
 		}
-		return err
 	}
 	if readTime > maxReadTime {
 		maxReadTime = readTime
@@ -2243,7 +2246,6 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 				err = nil
 				break
 			}
-			return err
 		}
 
 		if readTime > maxReadTime {

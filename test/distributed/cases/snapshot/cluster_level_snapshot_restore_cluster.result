@@ -44,7 +44,7 @@ department_name varchar(100)
 );
 show create table departments;
 Table    Create Table
-departments    CREATE TABLE `departments` (\n  `department_id` INT NOT NULL AUTO_INCREMENT,\n  `department_name` VARCHAR(100) DEFAULT NULL,\n  PRIMARY KEY (`department_id`)\n)
+departments    CREATE TABLE `departments` (\n  `department_id` int NOT NULL AUTO_INCREMENT,\n  `department_name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`department_id`)\n)
 insert into departments (department_id, department_name)
 values (1, 'HR'),(2, 'Engineering');
 drop table if exists employees;
@@ -130,10 +130,10 @@ count(*)
 14
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `deptno` INT UNSIGNED NOT NULL COMMENT '部门编号',\n  `dname` VARCHAR(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` VARCHAR(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
 show create table aff01;
 Table    Create Table
-aff01    CREATE TABLE `aff01` (\n  `empno` INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` VARCHAR(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` VARCHAR(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` INT UNSIGNED DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` DATE DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` DECIMAL(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` DECIMAL(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` INT UNSIGNED DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 use mo_catalog;
 drop table if exists t1;
 create cluster table t1(a int);
@@ -417,7 +417,7 @@ use db02;
 alter table departments add column newcolumn int after department_id;
 show create table departments;
 Table    Create Table
-departments    CREATE TABLE `departments` (\n  `department_id` INT NOT NULL AUTO_INCREMENT,\n  `newcolumn` INT DEFAULT NULL,\n  `department_name` VARCHAR(100) DEFAULT NULL,\n  PRIMARY KEY (`department_id`)\n)
+departments    CREATE TABLE `departments` (\n  `department_id` int NOT NULL AUTO_INCREMENT,\n  `newcolumn` int DEFAULT NULL,\n  `department_name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`department_id`)\n)
 drop table employees;
 select * from employee_view;
 SQL parser error: table "employees" does not exist
@@ -457,6 +457,8 @@ mo_role
 mo_role_grant
 mo_role_privs
 mo_sessions
+mo_shards
+mo_shards_metadata
 mo_snapshots
 mo_stages
 mo_stored_procedure
@@ -518,7 +520,7 @@ department_id    department_name
 2    Engineering
 show create table departments;
 Table    Create Table
-departments    CREATE TABLE `departments` (\n  `department_id` INT NOT NULL AUTO_INCREMENT,\n  `department_name` VARCHAR(100) DEFAULT NULL,\n  PRIMARY KEY (`department_id`)\n)
+departments    CREATE TABLE `departments` (\n  `department_id` int NOT NULL AUTO_INCREMENT,\n  `department_name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`department_id`)\n)
 select * from employee_view;
 employee_id    first_name    last_name    department_id
 1    John    Doe    1
@@ -564,6 +566,8 @@ mo_role
 mo_role_grant
 mo_role_privs
 mo_sessions
+mo_shards
+mo_shards_metadata
 mo_snapshots
 mo_stages
 mo_stored_procedure

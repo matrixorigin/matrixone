@@ -15,6 +15,8 @@
 package message
 
 import (
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
@@ -41,6 +43,13 @@ func (t TopValueMessage) GetMsgTag() int32 {
 	return t.Tag
 }
 
+func (t TopValueMessage) Destroy() {
+}
+
 func (t TopValueMessage) GetReceiverAddr() MessageAddress {
 	return AddrBroadCastOnCurrentCN()
+}
+
+func (t TopValueMessage) DebugString() string {
+	return "topvalue message, tag: " + strconv.Itoa(int(t.Tag))
 }

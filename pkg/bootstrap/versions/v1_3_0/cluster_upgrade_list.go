@@ -18,12 +18,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pitr,
 	upg_mo_subs,
+	upgradeShardingMetadata,
+	upgradeSharding,
 }
 
 var needUpgradePubSub = false
@@ -62,5 +65,41 @@ var upg_mo_subs = versions.UpgradeEntry{
 		}
 		needUpgradePubSub = true
 		return false, nil
+	},
+}
+
+var upgradeShardingMetadata = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MOShardsMetadata,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    shardservice.MetadataTableSQL,
+	CheckFunc: func(
+		txn executor.TxnExecutor,
+		accountId uint32,
+	) (bool, error) {
+		return versions.CheckTableDefinition(
+			txn,
+			accountId,
+			catalog.MO_CATALOG,
+			catalog.MOShardsMetadata,
+		)
+	},
+}
+
+var upgradeSharding = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MOShards,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    shardservice.ShardsTableSQL,
+	CheckFunc: func(
+		txn executor.TxnExecutor,
+		accountId uint32,
+	) (bool, error) {
+		return versions.CheckTableDefinition(
+			txn,
+			accountId,
+			catalog.MO_CATALOG,
+			catalog.MOShards,
+		)
 	},
 }
