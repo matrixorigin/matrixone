@@ -57,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -4670,27 +4669,6 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 		ctx = defines.AttachAccountId(c.proc.Ctx, uint32(accountId))
 	}
 	return exec.Exec(ctx, sql, opts)
-}
-
-func (c *Compile) newInsertMergeScope(arg *insert.Insert, ss []*Scope) *Scope {
-	// see errors.Join()
-	n := 0
-	for _, s := range ss {
-		if !s.IsEnd {
-			n++
-		}
-	}
-	ss2 := make([]*Scope, 0, n)
-	for _, s := range ss {
-		if !s.IsEnd {
-			ss2 = append(ss2, s)
-		}
-	}
-
-	for i := range ss2 {
-		ss2[i].setRootOperator(dupOperator(arg, i, len(ss2)))
-	}
-	return c.newMergeScope(ss2)
 }
 
 func (c *Compile) fatalLog(retry int, err error) {
