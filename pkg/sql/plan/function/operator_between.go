@@ -96,7 +96,7 @@ func opBetweenBool(
 	p2 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[2])
 	rs := vector.MustFunctionResult[bool](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[bool](rsVec)
+	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
 	// The lower and upper bound of BETWEEN must be non-null constants, or it should be collapsed to "a >= b and a <= c"
 	lb, _ := p1.GetValue(0)
@@ -158,7 +158,7 @@ func opBetweenFixed[T constraints.Integer | constraints.Float](
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[2])
 	rs := vector.MustFunctionResult[bool](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[bool](rsVec)
+	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
 	// The lower and upper bound of BETWEEN must be non-null constants, or it should be collapsed to "a >= b and a <= c"
 	lb, _ := p1.GetValue(0)
@@ -212,7 +212,7 @@ func opBetweenFixedWithFn[T types.FixedSizeTExceptStrType](
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[2])
 	rs := vector.MustFunctionResult[bool](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[bool](rsVec)
+	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
 	// The lower and upper bound of BETWEEN must be non-null constants, or it should be collapsed to "a >= b and a <= c"
 	lb, _ := p1.GetValue(0)
@@ -265,7 +265,7 @@ func opBetweenBytes(
 	p2 := vector.GenerateFunctionStrParameter(parameters[2])
 	rs := vector.MustFunctionResult[bool](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[bool](rsVec)
+	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
 	// The lower and upper bound of BETWEEN must be non-null constants, or it should be collapsed to "a >= b and a <= c"
 	lb, _ := p1.GetStrValue(0)

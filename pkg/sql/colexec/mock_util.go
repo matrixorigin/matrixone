@@ -49,6 +49,10 @@ func (op *MockOperator) WithBatchs(batchs []*batch.Batch) *MockOperator {
 	return op
 }
 
+func (op *MockOperator) GetBatchs() []*batch.Batch {
+	return op.batchs
+}
+
 func (op *MockOperator) Release() {
 }
 

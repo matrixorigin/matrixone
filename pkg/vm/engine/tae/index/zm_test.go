@@ -183,8 +183,8 @@ func TestVectorZM(t *testing.T) {
 	require.Equal(t, 2, vec.Length())
 	require.False(t, vec.IsConst())
 	require.False(t, vec.GetNulls().Any())
-	require.Equal(t, uint32(12), vector.GetFixedAt[uint32](vec, 0))
-	require.Equal(t, uint32(22), vector.GetFixedAt[uint32](vec, 1))
+	require.Equal(t, uint32(12), vector.GetFixedAtWithTypeCheck[uint32](vec, 0))
+	require.Equal(t, uint32(22), vector.GetFixedAtWithTypeCheck[uint32](vec, 1))
 
 	zm2 := VectorToZM(vec, nil)
 	require.Equal(t, zm, zm2)
