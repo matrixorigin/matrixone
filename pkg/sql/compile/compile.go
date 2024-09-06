@@ -58,7 +58,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -3021,23 +3020,6 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 
 	// to write S3
 	c.proc.Debugf(c.proc.Ctx, "insert of '%s' write s3\n", c.sql)
-	if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
-		currentFirstFlag := c.anal.isFirst
-		c.anal.isFirst = false
-		insertArg := constructInsert(n, c.e)
-		insertArg.ToWriteS3 = true
-		insertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		currentFirstFlag = false
-		rs := c.newInsertMergeScope(insertArg, ss)
-		insertArg.Release()
-		rs.Magic = MergeInsert
-		mergeInsertArg := constructMergeblock(c.e, n)
-		mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		rs.setRootOperator(mergeInsertArg)
-		ss = []*Scope{rs}
-		return ss, nil
-	}
-
 	currentFirstFlag := c.anal.isFirst
 	c.anal.isFirst = false
 	for i := range ss {
@@ -4767,27 +4749,6 @@ func evalRowsetData(proc *process.Process,
 		}
 	}
 	return nil
-}
-
-func (c *Compile) newInsertMergeScope(arg *insert.Insert, ss []*Scope) *Scope {
-	// see errors.Join()
-	n := 0
-	for _, s := range ss {
-		if !s.IsEnd {
-			n++
-		}
-	}
-	ss2 := make([]*Scope, 0, n)
-	for _, s := range ss {
-		if !s.IsEnd {
-			ss2 = append(ss2, s)
-		}
-	}
-
-	for i := range ss2 {
-		ss2[i].setRootOperator(dupOperator(arg, i, len(ss2)))
-	}
-	return c.newMergeScope(ss2)
 }
 
 func (c *Compile) fatalLog(retry int, err error) {
