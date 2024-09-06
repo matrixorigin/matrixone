@@ -119,8 +119,6 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) 
 	if schema.HasPK() {
 		tombstoneSchema := entry.GetVisibleSchema(store.txn, true)
 		tbl.tombstoneTable = newBaseTable(tombstoneSchema, true, tbl)
-	} else {
-		logutil.Warnf("table %d-%v doesn't have pk", entry.ID, schema.Name)
 	}
 	return tbl, nil
 }
@@ -353,7 +351,7 @@ func (tbl *txnTable) recurTransferDelete(
 		if err = tbl.RangeDelete(newID, offset, offset, pkVec, handle.DT_Normal); err != nil {
 			return err
 		}
-		common.DoIfInfoEnabled(func() {
+		common.DoIfDebugEnabled(func() {
 			logutil.Infof("depth-%d %s transfer delete from blk-%s row-%d to blk-%s row-%d, txn %x, val %v",
 				depth,
 				tbl.dataTable.schema.Name,
@@ -401,7 +399,7 @@ func (tbl *txnTable) TransferDeleteRows(
 	ts types.TS,
 ) (transferred bool, err error) {
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
-	common.DoIfInfoEnabled(func() {
+	common.DoIfDebugEnabled(func() {
 		logutil.Info("[Start]",
 			common.AnyField("txn-ctx", tbl.store.txn.Repr()),
 			common.OperationField("transfer-deletes"),
@@ -409,7 +407,7 @@ func (tbl *txnTable) TransferDeleteRows(
 			common.AnyField("phase", phase))
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
+		common.DoIfDebugEnabled(func() {
 			logutil.Info("[End]",
 				common.AnyField("txn-ctx", tbl.store.txn.Repr()),
 				common.OperationField("transfer-deletes"),
