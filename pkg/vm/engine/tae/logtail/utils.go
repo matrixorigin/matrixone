@@ -862,14 +862,14 @@ func (data *CNCheckpointData) GetTableDataFromBats(tid uint64, bats []*batch.Bat
 
 	dataObjectTaeBat = bats[DataObject]
 	if dataObjectTaeBat != nil {
-		dataObject, err = batch.BatchToProtoBatch(dataObjectTaeBat)
+		dataObject, err = batch.CopyToProtoBatch(dataObjectTaeBat)
 		if err != nil {
 			return
 		}
 	}
 	tombstoneObjectTaeBat = bats[TombstoneObject]
 	if tombstoneObjectTaeBat != nil {
-		tombstoneObject, err = batch.BatchToProtoBatch(tombstoneObjectTaeBat)
+		tombstoneObject, err = batch.CopyToProtoBatch(tombstoneObjectTaeBat)
 		if err != nil {
 			return
 		}
