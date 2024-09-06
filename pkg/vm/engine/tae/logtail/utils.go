@@ -812,12 +812,14 @@ func (data *CNCheckpointData) ReadFromData(
 			if err != nil {
 				return
 			}
-			cnBatch := batch.NewWithSize(len(newBat.Vecs))
+			var cnBatch *batch.Batch
+			cnBatch = batch.NewWithSize(len(newBat.Vecs))
 			cnBatch.Attrs = make([]string, len(newBat.Attrs))
 			copy(cnBatch.Attrs, newBat.Attrs)
 			for n := range cnBatch.Vecs {
 				cnBatch.Vecs[n] = vector.NewVec(*newBat.Vecs[n].GetType())
-				if err = cnBatch.Vecs[n].UnionBatch(newBat.Vecs[n], 0, newBat.Vecs[n].Length(), nil, m); err != nil {
+				err = cnBatch.Vecs[n].UnionBatch(newBat.Vecs[n], 0, newBat.Vecs[n].Length(), nil, m)
+				if err != nil {
 					return
 				}
 			}
