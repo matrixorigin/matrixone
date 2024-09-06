@@ -322,6 +322,18 @@ func (store *txnStore) RangeDelete(
 	return db.RangeDelete(id, start, end, pkVec, dt)
 }
 
+func (store *txnStore) DeleteByPhyAddrKeys(
+	id *common.ID,
+	rowIDVec, pkVec containers.Vector, dt handle.DeleteType,
+) (err error) {
+	store.IncreateWriteCnt()
+	db, err := store.getOrSetDB(id.DbID)
+	if err != nil {
+		return err
+	}
+	return db.DeleteByPhyAddrKeys(id, rowIDVec, pkVec, dt)
+}
+
 func (store *txnStore) TryDeleteByStats(
 	id *common.ID, stats objectio.ObjectStats,
 ) (ok bool, err error) {
