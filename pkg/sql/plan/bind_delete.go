@@ -96,9 +96,9 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
 	}
 
-	if stmt.Where == nil && stmt.Limit == nil {
-		// TODO: convert to truncate table
-	}
+	//if stmt.Where == nil && stmt.Limit == nil {
+	// TODO: convert to truncate table
+	//}
 
 	//var scanNodes []*plan.Node
 	//for i := range tblInfo.tableDefs {

@@ -192,29 +192,29 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) jo
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	_, cancel := context.WithCancel(context.Background())
-	args := make([]*plan.Expr, 0, 2)
-	args = append(args, &plan.Expr{
-		Typ: plan.Type{
-			Id: int32(ts[0].Oid),
-		},
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: 0,
-				ColPos: 0,
-			},
-		},
-	})
-	args = append(args, &plan.Expr{
-		Typ: plan.Type{
-			Id: int32(ts[0].Oid),
-		},
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: 1,
-				ColPos: 0,
-			},
-		},
-	})
+	//args := make([]*plan.Expr, 0, 2)
+	//args = append(args, &plan.Expr{
+	//	Typ: plan.Type{
+	//		Id: int32(ts[0].Oid),
+	//	},
+	//	Expr: &plan.Expr_Col{
+	//		Col: &plan.ColRef{
+	//			RelPos: 0,
+	//			ColPos: 0,
+	//		},
+	//	},
+	//})
+	//args = append(args, &plan.Expr{
+	//	Typ: plan.Type{
+	//		Id: int32(ts[0].Oid),
+	//	},
+	//	Expr: &plan.Expr_Col{
+	//		Col: &plan.ColRef{
+	//			RelPos: 1,
+	//			ColPos: 0,
+	//		},
+	//	},
+	//})
 	tag++
 	return joinTestCase{
 		types:  ts,
