@@ -366,7 +366,7 @@ func updateCount(ori *vector.Vector, delta int64, rowIdx int) {
 }
 
 func updateObjectCount(ori *vector.Vector, cnt int64, rowIdx int) {
-	vector.SetFixedAt[int64](ori, rowIdx, cnt)
+	vector.SetFixedAtWithTypeCheck[int64](ori, rowIdx, cnt)
 }
 
 func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (err error) {
