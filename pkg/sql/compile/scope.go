@@ -326,9 +326,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		return s.MergeRun(c)
 	}
 
-	if strings.HasPrefix(c.sql, "SELECT ROUND(SUM(distance), 2) AS total_distance") {
-		fmt.Println("----------------remote run with table total_distance-------------------")
-	}
+	//if strings.HasPrefix(c.sql, "SELECT ROUND(SUM(distance), 2) AS total_distance") {
+	//	fmt.Println("----------------remote run with table total_distance-------------------")
+	//}
 
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",

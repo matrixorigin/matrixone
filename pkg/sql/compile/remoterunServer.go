@@ -495,7 +495,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("--------------yyyy-send PhyPlan to source cn-------------%s\n", string(jsonData))
+	//fmt.Printf("--------------yyyy-send PhyPlan to source cn-------------%s\n", string(jsonData))
 	message.SetAnalysis(jsonData)
 
 	return receiver.clientSession.Write(receiver.messageCtx, message)

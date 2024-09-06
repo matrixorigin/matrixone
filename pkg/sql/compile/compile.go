@@ -1709,25 +1709,25 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 		ss[0].NodeInfo.Mcpu = 1
 	}
 
-	if strings.Contains(n.TableDef.Name, "real_time_position") {
-		fmt.Printf("-----------wuxiliang-compileTableScan-------------->cnList: %v , nodes:%s,  scopes: %s \n",
-			c.cnList,
-			getNodeBaseInfo(nodes),
-			DebugShowScopes(ss, VerboseLevel))
-	}
+	//if strings.Contains(n.TableDef.Name, "real_time_position") {
+	//	fmt.Printf("-----------wuxiliang-compileTableScan-------------->cnList: %v , nodes:%s,  scopes: %s \n",
+	//		c.cnList,
+	//		getNodeBaseInfo(nodes),
+	//		DebugShowScopes(ss, VerboseLevel))
+	//}
 
 	ss[0].PartialResults = partialResults
 	ss[0].PartialResultTypes = partialResultTypes
 	return ss, nil
 }
 
-func getNodeBaseInfo(nodes engine.Nodes) string {
-	var str = ""
-	for i := range nodes {
-		str += nodes[i].Addr + ", "
-	}
-	return str
-}
+//func getNodeBaseInfo(nodes engine.Nodes) string {
+//	var str = ""
+//	for i := range nodes {
+//		str += nodes[i].Addr + ", "
+//	}
+//	return str
+//}
 
 func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, firstFlag bool) (*Scope, error) {
 	s := newScope(Remote)

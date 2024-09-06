@@ -331,7 +331,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 					return nil, false, err
 				}
 
-				fmt.Printf("-------------------xxx receive PhyPlan from remote cn--------------------%v\n", string(anaData))
+				//fmt.Printf("-------------------xxx receive PhyPlan from remote cn--------------------%v\n", string(anaData))
 
 				sender.dealRemoteAnalysis(p)
 				//---------------------------------------------------------------
