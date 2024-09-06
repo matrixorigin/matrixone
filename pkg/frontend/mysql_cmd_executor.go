@@ -2938,14 +2938,16 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
+	var serverStatus uint16
+	serverStatus = ses.txnHandler.GetServerStatus()
 	defer func() {
 		if e := recover(); e != nil {
 			moe, ok := e.(*moerr.Error)
 			if !ok {
 				err = moerr.ConvertPanicError(execCtx.reqCtx, e)
-				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), err)
+				resp = NewGeneralErrorResponse(COM_QUERY, serverStatus, err)
 			} else {
-				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), moe)
+				resp = NewGeneralErrorResponse(COM_QUERY, serverStatus, moe)
 			}
 		}
 	}()
