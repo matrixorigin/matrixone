@@ -322,51 +322,51 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 func GetAny(vec *Vector, i int) any {
 	switch vec.typ.Oid {
 	case types.T_bool:
-		return GetFixedAt[bool](vec, i)
+		return GetFixedAtNoTypeCheck[bool](vec, i)
 	case types.T_bit:
-		return GetFixedAt[uint64](vec, i)
+		return GetFixedAtNoTypeCheck[uint64](vec, i)
 	case types.T_int8:
-		return GetFixedAt[int8](vec, i)
+		return GetFixedAtNoTypeCheck[int8](vec, i)
 	case types.T_int16:
-		return GetFixedAt[int16](vec, i)
+		return GetFixedAtNoTypeCheck[int16](vec, i)
 	case types.T_int32:
-		return GetFixedAt[int32](vec, i)
+		return GetFixedAtNoTypeCheck[int32](vec, i)
 	case types.T_int64:
-		return GetFixedAt[int64](vec, i)
+		return GetFixedAtNoTypeCheck[int64](vec, i)
 	case types.T_uint8:
-		return GetFixedAt[uint8](vec, i)
+		return GetFixedAtNoTypeCheck[uint8](vec, i)
 	case types.T_uint16:
-		return GetFixedAt[uint16](vec, i)
+		return GetFixedAtNoTypeCheck[uint16](vec, i)
 	case types.T_uint32:
-		return GetFixedAt[uint32](vec, i)
+		return GetFixedAtNoTypeCheck[uint32](vec, i)
 	case types.T_uint64:
-		return GetFixedAt[uint64](vec, i)
+		return GetFixedAtNoTypeCheck[uint64](vec, i)
 	case types.T_float32:
-		return GetFixedAt[float32](vec, i)
+		return GetFixedAtNoTypeCheck[float32](vec, i)
 	case types.T_float64:
-		return GetFixedAt[float64](vec, i)
+		return GetFixedAtNoTypeCheck[float64](vec, i)
 	case types.T_date:
-		return GetFixedAt[types.Date](vec, i)
+		return GetFixedAtNoTypeCheck[types.Date](vec, i)
 	case types.T_datetime:
-		return GetFixedAt[types.Datetime](vec, i)
+		return GetFixedAtNoTypeCheck[types.Datetime](vec, i)
 	case types.T_time:
-		return GetFixedAt[types.Time](vec, i)
+		return GetFixedAtNoTypeCheck[types.Time](vec, i)
 	case types.T_timestamp:
-		return GetFixedAt[types.Timestamp](vec, i)
+		return GetFixedAtNoTypeCheck[types.Timestamp](vec, i)
 	case types.T_enum:
-		return GetFixedAt[types.Enum](vec, i)
+		return GetFixedAtNoTypeCheck[types.Enum](vec, i)
 	case types.T_decimal64:
-		return GetFixedAt[types.Decimal64](vec, i)
+		return GetFixedAtNoTypeCheck[types.Decimal64](vec, i)
 	case types.T_decimal128:
-		return GetFixedAt[types.Decimal128](vec, i)
+		return GetFixedAtNoTypeCheck[types.Decimal128](vec, i)
 	case types.T_uuid:
-		return GetFixedAt[types.Uuid](vec, i)
+		return GetFixedAtNoTypeCheck[types.Uuid](vec, i)
 	case types.T_TS:
-		return GetFixedAt[types.TS](vec, i)
+		return GetFixedAtNoTypeCheck[types.TS](vec, i)
 	case types.T_Rowid:
-		return GetFixedAt[types.Rowid](vec, i)
+		return GetFixedAtNoTypeCheck[types.Rowid](vec, i)
 	case types.T_Blockid:
-		return GetFixedAt[types.Blockid](vec, i)
+		return GetFixedAtNoTypeCheck[types.Blockid](vec, i)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return vec.GetBytesAt(i)

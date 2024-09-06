@@ -116,20 +116,22 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 		doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
 	}
 
-	for i, w := range doc.Words {
-		// update doc_count
+	// update doc_count
+	for i := range doc.Words {
 		doc.Words[i].DocCount = doc_count[doc.Words[i].Word]
+	}
 
-		// write the batch
+	// write the batch
+	for i := range doc.Words {
 
 		// type of id follow primary key column
-		vector.AppendAny(u.batch.Vecs[0], w.DocId, false, proc.Mp())
+		vector.AppendAny(u.batch.Vecs[0], doc.Words[i].DocId, false, proc.Mp())
 		// pos
-		vector.AppendFixed[int32](u.batch.Vecs[1], w.Pos, false, proc.Mp())
+		vector.AppendFixed[int32](u.batch.Vecs[1], doc.Words[i].Pos, false, proc.Mp())
 		// word
-		vector.AppendBytes(u.batch.Vecs[2], []byte(w.Word), false, proc.Mp())
+		vector.AppendBytes(u.batch.Vecs[2], []byte(doc.Words[i].Word), false, proc.Mp())
 		// doc_count
-		vector.AppendFixed[int32](u.batch.Vecs[3], w.DocCount, false, proc.Mp())
+		vector.AppendFixed[int32](u.batch.Vecs[3], doc.Words[i].DocCount, false, proc.Mp())
 		// first_doc_id
 		vector.AppendAny(u.batch.Vecs[4], nil, true, proc.Mp())
 		// last_doc_id

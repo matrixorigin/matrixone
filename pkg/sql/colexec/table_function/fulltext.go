@@ -67,7 +67,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	if v.GetType().Oid != types.T_int64 {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("fulltext_index_scan: third argument (mode) must be int64, but got %s", v.GetType().String()))
 	}
-	mode := vector.GetFixedAt[int64](v, 0)
+	mode := vector.GetFixedAtNoTypeCheck[int64](v, 0)
 
 	err = fulltextIndexMatch(proc, tf, index_table, pattern, mode, u.batch)
 
