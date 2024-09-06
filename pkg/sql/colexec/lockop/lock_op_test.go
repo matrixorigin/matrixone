@@ -68,7 +68,7 @@ func TestCallLockOpWithNoConflict(t *testing.T) {
 			require.NoError(t, err)
 
 			vec := result.Batch.GetVector(1)
-			values := vector.MustFixedCol[types.TS](vec)
+			values := vector.MustFixedColWithTypeCheck[types.TS](vec)
 			assert.Equal(t, 3, len(values))
 			for _, v := range values {
 				assert.Equal(t, types.TS{}, v)
@@ -106,7 +106,7 @@ func TestCallLockOpWithConflict(t *testing.T) {
 				require.NoError(t, err)
 
 				vec := result.Batch.GetVector(1)
-				values := vector.MustFixedCol[types.TS](vec)
+				values := vector.MustFixedColWithTypeCheck[types.TS](vec)
 				assert.Equal(t, 3, len(values))
 				for _, v := range values {
 					assert.Equal(t, types.BuildTS(math.MaxInt64, 1), v)
@@ -397,9 +397,6 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 		},
 		func(arg *LockOp, proc *process.Process) {
 			require.True(t, moerr.IsMoErrCode(arg.ctr.retryError, moerr.ErrTxnNeedRetry))
-			for _, bat := range arg.ctr.cachedBatches {
-				bat.Clean(proc.Mp())
-			}
 			arg.Free(proc, false, nil)
 			proc.Free()
 		},

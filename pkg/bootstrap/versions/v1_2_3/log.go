@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package v1_2_3
 
-type RowGen interface {
-	HasNext() bool
-	Next() uint32
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+)
+
+func getLogger(sid string) *log.MOLogger {
+	return runtime.ServiceRuntime(sid).Logger()
 }

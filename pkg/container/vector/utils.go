@@ -114,7 +114,7 @@ func FindFirstIndexInSortedVarlenVector(vec *Vector, v []byte) int {
 // IntegerGetSum get the sum the vector if the vector type is integer.
 func IntegerGetSum[T types.Ints | types.UInts, U int64 | uint64](vec *Vector) (sum U) {
 	var ok bool
-	col := MustFixedCol[T](vec)
+	col := MustFixedColNoTypeCheck[T](vec)
 	if vec.HasNull() {
 		for i, v := range col {
 			if vec.IsNull(uint64(i)) {
@@ -146,7 +146,7 @@ func addInt[T int64 | uint64](a, b T) (T, bool) {
 
 // FloatGetSum get the sum the vector if the vector type is float.
 func FloatGetSum[T types.Floats](vec *Vector) (sum float64) {
-	col := MustFixedCol[T](vec)
+	col := MustFixedColNoTypeCheck[T](vec)
 	if vec.HasNull() {
 		for i, v := range col {
 			if vec.IsNull(uint64(i)) {
@@ -164,7 +164,7 @@ func FloatGetSum[T types.Floats](vec *Vector) (sum float64) {
 
 func Decimal64GetSum(vec *Vector) (sum types.Decimal64) {
 	var err error
-	col := MustFixedCol[types.Decimal64](vec)
+	col := MustFixedColNoTypeCheck[types.Decimal64](vec)
 	if vec.HasNull() {
 		for i, v := range col {
 			if vec.IsNull(uint64(i)) {
@@ -189,7 +189,7 @@ func Decimal64GetSum(vec *Vector) (sum types.Decimal64) {
 // OrderedGetMinAndMax returns the min and max value of a vector of ordered type
 // If the vector has null, the null value will be ignored
 func OrderedGetMinAndMax[T types.OrderedT](vec *Vector) (minv, maxv T) {
-	col := MustFixedCol[T](vec)
+	col := MustFixedColNoTypeCheck[T](vec)
 	if vec.HasNull() {
 		first := true
 		for i, j := 0, vec.Length(); i < j; i++ {
@@ -225,7 +225,7 @@ func OrderedGetMinAndMax[T types.OrderedT](vec *Vector) (minv, maxv T) {
 func FixedSizeGetMinMax[T types.OrderedT](
 	vec *Vector, comp func(T, T) int64,
 ) (minv, maxv T) {
-	col := MustFixedCol[T](vec)
+	col := MustFixedColNoTypeCheck[T](vec)
 	if vec.HasNull() {
 		first := true
 		for i, j := 0, vec.Length(); i < j; i++ {

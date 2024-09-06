@@ -442,7 +442,7 @@ func TestLogtailBasic(t *testing.T) {
 		rowidMap[id] = 1
 	}
 	for i := int64(0); i < 10; i++ {
-		id := vector.MustFixedCol[types.Rowid](rowids)[i]
+		id := vector.MustFixedColWithTypeCheck[types.Rowid](rowids)[i]
 		rowidMap[id] = rowidMap[id] + 1
 	}
 	require.Equal(t, 10, len(rowidMap))
@@ -798,8 +798,6 @@ func TestShowDatabasesInRestoreTxn(t *testing.T) {
 
 	ts := time.Now().UTC().UnixNano()
 
-	time.Sleep(10 * time.Millisecond)
-
 	schema2 := catalog2.MockSchemaAll(10, -1)
 	schema2.Name = "test2"
 	txnop = p.StartCNTxn()
@@ -846,16 +844,6 @@ func TestShowDatabasesInRestoreTxn(t *testing.T) {
 	}
 	require.Equal(t, 2, len(rels), rels) // mo_catalog + db
 	require.NotContains(t, rels, "db2")
-	// res, err = exec.Exec(p.Ctx, "show databases", executor.Options{}.WithTxn(txnop))
-	// var brels []string
-	// for _, b := range res.Batches {
-	// 	for i, v := 0, b.Vecs[0]; i < v.Length(); i++ {
-	// 		brels = append(brels, v.GetStringAt(i))
-	// 	}
-	// }
-	// require.NoError(t, err)
-	// t.Log(rels, brels)
-
 }
 
 func TestObjectStats1(t *testing.T) {
@@ -1030,4 +1018,74 @@ func TestObjectStats2(t *testing.T) {
 	}
 	iter.Close()
 	assert.Equal(t, objCount, 1)
+}
+
+func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	tae := p.T.GetDB()
+
+	schema := catalog2.MockSchemaAll(5, 1)
+	schema.Name = "mo_account"
+	txnop := p.StartCNTxn()
+	bats := catalog2.MockBatch(schema, 4).Split(2)
+	bat, bat1 := bats[0], bats[1]
+	_, rel := p.CreateDBAndTable(txnop, "db", schema)
+	rel.Write(p.Ctx, containers.ToCNBatch(bat)) // pk 0 and 1
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	did, tid := rel.GetDBID(p.Ctx), rel.GetTableID(p.Ctx)
+	require.NoError(t, p.D.SubscribeTable(p.Ctx, did, tid, false))
+
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		panic(fmt.Sprintf("missing sql executor in service %q", ""))
+	}
+	exec := v.(executor.SQLExecutor)
+
+	txnop = p.StartCNTxn()
+	_, err := exec.Exec(p.Ctx, "delete from db.mo_account where mock_1 in (0, 1)", executor.Options{}.WithTxn(txnop))
+	require.NoError(t, err)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txn, _ := tae.StartTxn(nil)
+	udb, _ := txn.GetDatabaseByID(did)
+	utbl, _ := udb.GetRelationByID(tid)
+
+	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker.Start()
+	defer worker.Stop()
+
+	// flusht tombstone ahead of data insert
+	it := utbl.MakeObjectIt(true)
+	it.Next()
+	firstEntry := it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+	t.Log(firstEntry.ID().ShortStringEx())
+	task1, err := jobs.NewFlushTableTailTask(
+		tasks.WaitableCtx, txn,
+		nil,
+		[]*catalog2.ObjectEntry{firstEntry},
+		tae.Runtime)
+	require.NoError(t, err)
+	worker.SendOp(task1)
+	err = task1.WaitDone(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+	db, err := p.D.Engine.Database(p.Ctx, "db", txnop)
+	require.NoError(t, err)
+	rel, err = db.Relation(p.Ctx, "mo_account", nil)
+	require.NoError(t, err)
+	require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat1))) // pk 2 and 3
+	res, err := exec.Exec(p.Ctx, "select * from db.mo_account", executor.Options{}.WithTxn(txnop))
+	require.NoError(t, err)
+	require.Equal(t, 1, len(res.Batches))
+	require.Equal(t, 2, res.Batches[0].RowCount())
+	pkSum := int16(0)
+	for i := 0; i < 2; i++ {
+		pkSum += vector.GetFixedAtWithTypeCheck[int16](res.Batches[0].Vecs[1], i)
+	}
+	require.Equal(t, int16(5 /*2+3*/), pkSum)
 }

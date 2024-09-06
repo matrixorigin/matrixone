@@ -141,7 +141,7 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 	switch vec.GetType().Oid {
 	case types.T_bit:
 		vs := make([]int, len(os))
-		col := vector.MustFixedCol[uint64](vec)
+		col := vector.MustFixedColWithTypeCheck[uint64](vec)
 		for i := range vs {
 			vs[i] = int(col[i])
 		}
@@ -159,7 +159,7 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 		}
 	case types.T_int32:
 		vs := make([]int, len(os))
-		col := vector.MustFixedCol[int32](vec)
+		col := vector.MustFixedColWithTypeCheck[int32](vec)
 		for i := range vs {
 			vs[i] = int(col[i])
 		}
@@ -177,7 +177,7 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 		}
 	case types.T_int64:
 		vs := make([]int, len(os))
-		col := vector.MustFixedCol[int64](vec)
+		col := vector.MustFixedColWithTypeCheck[int64](vec)
 		for i := range vs {
 			vs[i] = int(col[i])
 		}
@@ -195,7 +195,7 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 		}
 	case types.T_float32:
 		vs := make([]float64, len(os))
-		col := vector.MustFixedCol[float32](vec)
+		col := vector.MustFixedColWithTypeCheck[float32](vec)
 		for i := range vs {
 			vs[i] = float64(col[i])
 		}
@@ -213,7 +213,7 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 		}
 	case types.T_float64:
 		vs := make([]float64, len(os))
-		col := vector.MustFixedCol[float64](vec)
+		col := vector.MustFixedColWithTypeCheck[float64](vec)
 		for i := range vs {
 			vs[i] = float64(col[i])
 		}

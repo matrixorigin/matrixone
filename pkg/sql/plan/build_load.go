@@ -331,7 +331,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	inlineDataSize := unsafe.Sizeof(stmt.Param.Data)
 	builder.qry.LoadWriteS3 = true
 
-	if noCompress && (stmt.Param.Parallel || inlineDataSize < LoadParallelMinSize) {
+	if noCompress && (stmt.Param.FileSize-offset < LoadParallelMinSize || inlineDataSize < LoadParallelMinSize) {
 		builder.qry.LoadWriteS3 = false
 	}
 
