@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -240,15 +241,37 @@ type QueryBaseContext struct {
 	// Once query was began to run, the query context and query cancel will be refreshed by calling BuildQueryCtx() method.
 	queryContext context.Context
 	queryCancel  context.CancelFunc
+
+	// TODO: this is a hack here for resolving pipeline loop of recursive cte.
+	// 	we do a special clean-up for the first return pipeline in this pipeline-loop to get rid of deadlock.
+	//
+	// if pipelineLoopBreak is true, this means no need to do special cleanup yet.
+	sync.RWMutex
+	pipelineLoopBreak bool
 }
 
 func (bp *BaseProcess) GetContextBase() *QueryBaseContext {
 	return &bp.sqlContext
 }
 
+func (qbCtx *QueryBaseContext) DoSpecialCleanUp() bool {
+	qbCtx.Lock()
+	defer qbCtx.Unlock()
+
+	if qbCtx.pipelineLoopBreak {
+		return false
+	}
+	qbCtx.pipelineLoopBreak = true
+	return true
+}
+
 // BuildQueryCtx refreshes the query context and cancellation method after the outer context was ready to run the query.
 func (qbCtx *QueryBaseContext) BuildQueryCtx() context.Context {
 	qbCtx.queryContext, qbCtx.queryCancel = context.WithCancel(qbCtx.outerContext)
+
+	qbCtx.Lock()
+	qbCtx.pipelineLoopBreak = false
+	qbCtx.Unlock()
 	return qbCtx.queryContext
 }
 

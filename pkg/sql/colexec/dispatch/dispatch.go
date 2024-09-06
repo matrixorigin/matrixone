@@ -23,7 +23,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -136,17 +135,14 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	whichToSend := result.Batch
 	if result.Batch == nil {
 		result.Status = vm.ExecStop
-		if dispatch.RecSink {
-			whichToSend = batch.CteEndBatch
-		} else {
-			printShuffleResult(dispatch)
-			return result, nil
-		}
+		printShuffleResult(dispatch)
+		return result, nil
 	}
 
-	if whichToSend.Last() {
+	if whichToSend.Recursive == 1 {
 		if !dispatch.ctr.hasData {
 			result.Status = vm.ExecStop
+			whichToSend.SetEnd()
 		} else {
 			dispatch.ctr.hasData = false
 		}
@@ -155,12 +151,6 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	} else {
 		dispatch.ctr.hasData = true
 	}
-
-	//if dispatch.RecSink && !whichToSend.End() && result.Status == vm.ExecStop {
-	//	defer func() {
-	//		_, err = dispatch.ctr.sendFunc(batch.CteEndBatch, dispatch, proc)
-	//	}()
-	//}
 
 	// sending.
 	ok, err := dispatch.ctr.sendFunc(whichToSend, dispatch, proc)

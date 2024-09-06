@@ -15,7 +15,6 @@
 package pipeline
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -88,6 +87,25 @@ type Pipeline struct {
 	rootOp vm.Operator
 }
 
+func (p *Pipeline) isCtePipelineAtLoop() bool {
+	// required:
+	// 1. it is a linked tree.
+	// 2. it holds `merge-cte` or `merge-recursive`.
+	next := p.rootOp
+	for next != nil {
+		if opt := next.OpType(); opt == vm.MergeCTE || opt == vm.MergeRecursive {
+			return true
+		}
+
+		cds := next.GetOperatorBase().Children
+		if len(cds) != 1 {
+			break
+		}
+		next = cds[0]
+	}
+	return false
+}
+
 // Cleanup do memory release work for whole pipeline.
 // we deliver the error because some operator may need to know what the error it is.
 func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
@@ -99,20 +117,27 @@ func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare
 	// for deal the deadlock of clean-up,
 	// we need to do a special clean logic for this one.
 	// clean from first operator (data-source operator) to last operator (sender operator).
-	if p.rootOp != nil && p.rootOp.OpType() == vm.Dispatch {
-		if d := p.rootOp.(*dispatch.Dispatch); d.RecSink {
-			// clean operator hold memory.
-			_ = vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
-				op.Reset(proc, pipelineFailed, err)
-				return nil
-			})
+	if p.isCtePipelineAtLoop() {
+		if proc.Base.GetContextBase().DoSpecialCleanUp() {
 
+			p.rootOp.Reset(proc, pipelineFailed, err)
 			if !isPrepare {
-				_ = vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
-					op.Free(proc, pipelineFailed, err)
+				p.rootOp.Free(proc, pipelineFailed, err)
+			}
+
+			for _, child := range p.rootOp.GetOperatorBase().Children {
+				_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
+					op.Reset(proc, pipelineFailed, err)
 					return nil
 				})
+				if !isPrepare {
+					_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
+						op.Free(proc, pipelineFailed, err)
+						return nil
+					})
+				}
 			}
+
 			return
 		}
 	}
@@ -120,22 +145,36 @@ func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare
 	// for every pipeline, we clean the last operator first.
 	// and then clean from 0 to n-1.
 	if root := p.rootOp; root != nil {
-		p.rootOp.Reset(proc, pipelineFailed, err)
-		if !isPrepare {
-			p.rootOp.Free(proc, pipelineFailed, err)
-		}
 
-		for _, child := range p.rootOp.GetOperatorBase().Children {
-			_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
-				op.Reset(proc, pipelineFailed, err)
+		// clean operator hold memory.
+		_ = vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
+			op.Reset(proc, pipelineFailed, err)
+			return nil
+		})
+
+		if !isPrepare {
+			_ = vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
+				op.Free(proc, pipelineFailed, err)
 				return nil
 			})
-			if !isPrepare {
-				_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
-					op.Free(proc, pipelineFailed, err)
-					return nil
-				})
-			}
 		}
+
+		//p.rootOp.Reset(proc, pipelineFailed, err)
+		//if !isPrepare {
+		//	p.rootOp.Free(proc, pipelineFailed, err)
+		//}
+		//
+		//for _, child := range p.rootOp.GetOperatorBase().Children {
+		//	_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
+		//		op.Reset(proc, pipelineFailed, err)
+		//		return nil
+		//	})
+		//	if !isPrepare {
+		//		_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
+		//			op.Free(proc, pipelineFailed, err)
+		//			return nil
+		//		})
+		//	}
+		//}
 	}
 }
