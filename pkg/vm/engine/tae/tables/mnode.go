@@ -352,9 +352,9 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 	}
 	defer commitTSVec.Close()
 	defer abort.Close()
-	rowIDs := vector.MustFixedCol[types.Rowid](
+	rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](
 		node.data.GetVectorByName(catalog.AttrRowID).GetDownstreamVector())
-	commitTSs := vector.MustFixedCol[types.TS](commitTSVec.GetDownstreamVector())
+	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
 	pkVec := node.data.GetVectorByName(catalog.AttrPKVal)
 	for i := minRow; i < maxRow; i++ {
 		if types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 {
@@ -383,7 +383,7 @@ func (node *memoryNode) FillBlockTombstones(
 		return err
 	}
 	rowIDVec := node.data.GetVectorByName(catalog.AttrRowID)
-	rowIDs := vector.MustFixedCol[types.Rowid](rowIDVec.GetDownstreamVector())
+	rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](rowIDVec.GetDownstreamVector())
 	for i := 0; i < int(maxRow); i++ {
 		rowID := rowIDs[i]
 		if types.PrefixCompare(rowID[:], blkID[:]) == 0 {

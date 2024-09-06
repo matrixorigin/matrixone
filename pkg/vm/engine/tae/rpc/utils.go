@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 )
@@ -78,7 +77,7 @@ func (h *Handle) prefetchDeleteRowID(_ context.Context, req *db.WriteReq) error 
 
 	//start loading jobs asynchronously,should create a new root context.
 	for _, stats := range req.TombstoneStats {
-		loc := stats.BlockLocation(uint16(0), options.DefaultBlockMaxRows)
+		loc := stats.BlockLocation(uint16(0), objectio.BlockMaxRows)
 		pref, err := blockio.BuildPrefetchParams(h.db.Runtime.Fs.Service, loc)
 		if err != nil {
 			return err
