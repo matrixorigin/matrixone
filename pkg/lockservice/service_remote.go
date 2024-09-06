@@ -443,6 +443,7 @@ func (s *service) getLocalLockTable(
 				func(table uint64, lt lockTable) bool {
 					return lt.getBind().Equal(bind)
 				})
+			panic("stale bind found, handle remote lock on remote lock table instance")
 			return nil, ErrLockTableBindChanged
 		}
 
