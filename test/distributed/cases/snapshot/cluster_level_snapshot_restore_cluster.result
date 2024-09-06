@@ -457,6 +457,8 @@ mo_role
 mo_role_grant
 mo_role_privs
 mo_sessions
+mo_shards
+mo_shards_metadata
 mo_snapshots
 mo_stages
 mo_stored_procedure
@@ -564,6 +566,8 @@ mo_role
 mo_role_grant
 mo_role_privs
 mo_sessions
+mo_shards
+mo_shards_metadata
 mo_snapshots
 mo_stages
 mo_stored_procedure
