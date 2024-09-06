@@ -14,9 +14,21 @@
 
 package fscache
 
-type Data interface {
-	Bytes() []byte
-	Slice(length int) Data
-	Retain()
-	Release()
+import (
+	"context"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+)
+
+type CacheKey = pb.CacheKey
+
+type DataCache interface {
+	EnsureNBytes(n int)
+	Capacity() int64
+	Used() int64
+	Available() int64
+	Get(context.Context, CacheKey) (Data, bool)
+	Set(context.Context, CacheKey, Data) error
+	DeletePaths(context.Context, []string)
+	Flush()
+	Evict(chan int64)
 }
