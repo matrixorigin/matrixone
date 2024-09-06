@@ -56,7 +56,7 @@ func ForeachObjectsExecute(
 	return
 }
 
-func ExecuteFilterOnObjects(
+func FilterObjects(
 	ctx context.Context,
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,

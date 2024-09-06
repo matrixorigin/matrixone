@@ -46,7 +46,7 @@ func TryFastFilterBlocks(
 		return false, nil
 	}
 
-	err = ExecuteBlockFilter(
+	err = FilterTxnObjects(
 		ctx,
 		tbl,
 		snapshotTS,
@@ -66,7 +66,7 @@ func TryFastFilterBlocks(
 	return true, err
 }
 
-func ExecuteBlockFilter(
+func FilterTxnObjects(
 	ctx context.Context,
 	tbl *txnTable,
 	snapshotTS timestamp.Timestamp,
@@ -116,7 +116,7 @@ func ExecuteBlockFilter(
 		objFilterTotal, objFilterHit,
 		blkFilterTotal, blkFilterHit,
 		fastFilterTotal, fastFilterHit,
-		err := engine_util.ExecuteFilterOnObjects(
+		err := engine_util.FilterObjects(
 		ctx,
 		fastFilterOp,
 		loadOp,
