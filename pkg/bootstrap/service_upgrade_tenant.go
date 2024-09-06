@@ -312,7 +312,7 @@ func fetchTenants(
 		n := 0
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
-				last = vector.GetFixedAt[int32](cols[0], i)
+				last = vector.GetFixedAtWithTypeCheck[int32](cols[0], i)
 				ids = append(ids, last)
 				n++
 			}

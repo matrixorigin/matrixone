@@ -102,7 +102,7 @@ func TestSortBlockColumns(t *testing.T) {
 	columns, err = SortBlockColumns(vecSlice, 0, mocks.GetTestVectorPool())
 	require.NoError(t, err)
 	require.Equal(t, []int64{1, 0, 2}, columns)
-	require.Equal(t, []int32{0, 1, 3}, vector.MustFixedCol[int32](vecWithNull.GetDownstreamVector()))
+	require.Equal(t, []int32{0, 1, 3}, vector.MustFixedColWithTypeCheck[int32](vecWithNull.GetDownstreamVector()))
 }
 
 func BenchmarkSortBlockColumns(b *testing.B) {
@@ -144,8 +144,8 @@ func TestAObjMerge(t *testing.T) {
 	require.NoError(t, err)
 	for i := 0; i < batCnt; i++ {
 		for j := 0; j < vecCnt; j++ {
-			t.Log(vector.MustFixedCol[int32](ret[i].Vecs[j]))
-			require.True(t, slices.IsSorted(vector.MustFixedCol[int32](ret[i].Vecs[j])))
+			t.Log(vector.MustFixedColWithTypeCheck[int32](ret[i].Vecs[j]))
+			require.True(t, slices.IsSorted(vector.MustFixedColWithTypeCheck[int32](ret[i].Vecs[j])))
 		}
 	}
 	t.Log(mapping)
@@ -180,7 +180,7 @@ func TestAObjMergeContainsNull(t *testing.T) {
 	require.NoError(t, err)
 	for _, bat := range ret {
 		for _, vec := range bat.Vecs {
-			s := vector.MustFixedCol[int32](vec)
+			s := vector.MustFixedColWithTypeCheck[int32](vec)
 			for i := range s {
 				if vec.IsNull(uint64(i)) {
 					s[i] = 0
@@ -222,95 +222,95 @@ func testAObjMerger(t types.Type, vpool DisposableVecPool) func(batches []*conta
 	switch t.Oid {
 	case types.T_bool:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.BoolLess, sortKeyPos, vector.MustFixedCol[bool], toLayout)
+			return newAObjMerger(vpool, batches, sort.BoolLess, sortKeyPos, vector.MustFixedColWithTypeCheck[bool], toLayout)
 		}
 	case types.T_bit:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedColWithTypeCheck[uint64], toLayout)
 		}
 	case types.T_int8:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[int8], sortKeyPos, vector.MustFixedCol[int8], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[int8], sortKeyPos, vector.MustFixedColWithTypeCheck[int8], toLayout)
 		}
 	case types.T_int16:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[int16], sortKeyPos, vector.MustFixedCol[int16], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[int16], sortKeyPos, vector.MustFixedColWithTypeCheck[int16], toLayout)
 		}
 	case types.T_int32:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[int32], sortKeyPos, vector.MustFixedCol[int32], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[int32], sortKeyPos, vector.MustFixedColWithTypeCheck[int32], toLayout)
 		}
 	case types.T_int64:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[int64], sortKeyPos, vector.MustFixedCol[int64], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[int64], sortKeyPos, vector.MustFixedColWithTypeCheck[int64], toLayout)
 		}
 	case types.T_float32:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[float32], sortKeyPos, vector.MustFixedCol[float32], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[float32], sortKeyPos, vector.MustFixedColWithTypeCheck[float32], toLayout)
 		}
 	case types.T_float64:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[float64], sortKeyPos, vector.MustFixedCol[float64], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[float64], sortKeyPos, vector.MustFixedColWithTypeCheck[float64], toLayout)
 		}
 	case types.T_uint8:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[uint8], sortKeyPos, vector.MustFixedCol[uint8], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[uint8], sortKeyPos, vector.MustFixedColWithTypeCheck[uint8], toLayout)
 		}
 	case types.T_uint16:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[uint16], sortKeyPos, vector.MustFixedCol[uint16], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[uint16], sortKeyPos, vector.MustFixedColWithTypeCheck[uint16], toLayout)
 		}
 	case types.T_uint32:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[uint32], sortKeyPos, vector.MustFixedCol[uint32], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[uint32], sortKeyPos, vector.MustFixedColWithTypeCheck[uint32], toLayout)
 		}
 	case types.T_uint64:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedColWithTypeCheck[uint64], toLayout)
 		}
 	case types.T_date:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[types.Date], sortKeyPos, vector.MustFixedCol[types.Date], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[types.Date], sortKeyPos, vector.MustFixedColWithTypeCheck[types.Date], toLayout)
 		}
 	case types.T_timestamp:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[types.Timestamp], sortKeyPos, vector.MustFixedCol[types.Timestamp], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[types.Timestamp], sortKeyPos, vector.MustFixedColWithTypeCheck[types.Timestamp], toLayout)
 		}
 	case types.T_datetime:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[types.Datetime], sortKeyPos, vector.MustFixedCol[types.Datetime], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[types.Datetime], sortKeyPos, vector.MustFixedColWithTypeCheck[types.Datetime], toLayout)
 		}
 	case types.T_time:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[types.Time], sortKeyPos, vector.MustFixedCol[types.Time], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[types.Time], sortKeyPos, vector.MustFixedColWithTypeCheck[types.Time], toLayout)
 		}
 	case types.T_enum:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.GenericLess[types.Enum], sortKeyPos, vector.MustFixedCol[types.Enum], toLayout)
+			return newAObjMerger(vpool, batches, sort.GenericLess[types.Enum], sortKeyPos, vector.MustFixedColWithTypeCheck[types.Enum], toLayout)
 		}
 	case types.T_decimal64:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.Decimal64Less, sortKeyPos, vector.MustFixedCol[types.Decimal64], toLayout)
+			return newAObjMerger(vpool, batches, sort.Decimal64Less, sortKeyPos, vector.MustFixedColWithTypeCheck[types.Decimal64], toLayout)
 		}
 	case types.T_decimal128:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.Decimal128Less, sortKeyPos, vector.MustFixedCol[types.Decimal128], toLayout)
+			return newAObjMerger(vpool, batches, sort.Decimal128Less, sortKeyPos, vector.MustFixedColWithTypeCheck[types.Decimal128], toLayout)
 		}
 	case types.T_uuid:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.UuidLess, sortKeyPos, vector.MustFixedCol[types.Uuid], toLayout)
+			return newAObjMerger(vpool, batches, sort.UuidLess, sortKeyPos, vector.MustFixedColWithTypeCheck[types.Uuid], toLayout)
 		}
 	case types.T_TS:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.TsLess, sortKeyPos, vector.MustFixedCol[types.TS], toLayout)
+			return newAObjMerger(vpool, batches, sort.TsLess, sortKeyPos, vector.MustFixedColWithTypeCheck[types.TS], toLayout)
 		}
 	case types.T_Rowid:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.RowidLess, sortKeyPos, vector.MustFixedCol[types.Rowid], toLayout)
+			return newAObjMerger(vpool, batches, sort.RowidLess, sortKeyPos, vector.MustFixedColWithTypeCheck[types.Rowid], toLayout)
 		}
 	case types.T_Blockid:
 		return func(batches []*containers.Batch, sortKeyPos int, toLayout []uint32) AObjMerger {
-			return newAObjMerger(vpool, batches, sort.BlockidLess, sortKeyPos, vector.MustFixedCol[types.Blockid], toLayout)
+			return newAObjMerger(vpool, batches, sort.BlockidLess, sortKeyPos, vector.MustFixedColWithTypeCheck[types.Blockid], toLayout)
 		}
 	default:
 		panic(fmt.Sprintf("unsupported type %s", t.String()))

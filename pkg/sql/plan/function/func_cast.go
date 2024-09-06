@@ -3560,7 +3560,7 @@ func decimal64ToDecimal128Array(
 	totype := to.GetType()
 
 	if !from.WithAnyNullValue() {
-		v := vector.MustFixedCol[types.Decimal64](from.GetSourceVector())
+		v := vector.MustFixedColWithTypeCheck[types.Decimal64](from.GetSourceVector())
 		if totype.Width < fromtype.Width {
 			for i = 0; i < l; i++ {
 				fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}

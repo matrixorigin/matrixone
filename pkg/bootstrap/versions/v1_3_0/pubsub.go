@@ -44,12 +44,12 @@ func getAccounts(txn executor.TxnExecutor) (nameInfoMap map[string]*pubsub.Accou
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
 			var accountInfo pubsub.AccountInfo
-			accountInfo.Id = vector.GetFixedAt[int32](cols[0], i)
+			accountInfo.Id = vector.GetFixedAtWithTypeCheck[int32](cols[0], i)
 			accountInfo.Name = cols[1].GetStringAt(i)
 			accountInfo.Status = cols[2].GetStringAt(i)
-			accountInfo.Version = vector.GetFixedAt[uint64](cols[3], i)
+			accountInfo.Version = vector.GetFixedAtWithTypeCheck[uint64](cols[3], i)
 			if !cols[4].IsNull(uint64(i)) {
-				accountInfo.SuspendedTime = vector.GetFixedAt[types.Timestamp](cols[4], i).String2(time.Local, cols[4].GetType().Scale)
+				accountInfo.SuspendedTime = vector.GetFixedAtWithTypeCheck[types.Timestamp](cols[4], i).String2(time.Local, cols[4].GetType().Scale)
 			} else {
 				accountInfo.SuspendedTime = ""
 			}
@@ -75,12 +75,12 @@ func getPubInfos(txn executor.TxnExecutor, accountId uint32) (pubInfos []*pubsub
 			var pubInfo pubsub.PubInfo
 			pubInfo.PubName = cols[0].GetStringAt(i)
 			pubInfo.DbName = cols[1].GetStringAt(i)
-			pubInfo.DbId = vector.GetFixedAt[uint64](cols[2], i)
+			pubInfo.DbId = vector.GetFixedAtWithTypeCheck[uint64](cols[2], i)
 			pubInfo.TablesStr = cols[3].GetStringAt(i)
 			pubInfo.SubAccountsStr = cols[4].GetStringAt(i)
-			pubInfo.CreateTime = vector.GetFixedAt[types.Timestamp](cols[5], i).String2(time.Local, cols[5].GetType().Scale)
+			pubInfo.CreateTime = vector.GetFixedAtWithTypeCheck[types.Timestamp](cols[5], i).String2(time.Local, cols[5].GetType().Scale)
 			if !cols[6].IsNull(uint64(i)) {
-				pubInfo.UpdateTime = vector.GetFixedAt[types.Timestamp](cols[6], i).String2(time.Local, cols[6].GetType().Scale)
+				pubInfo.UpdateTime = vector.GetFixedAtWithTypeCheck[types.Timestamp](cols[6], i).String2(time.Local, cols[6].GetType().Scale)
 			}
 			pubInfo.Comment = cols[7].GetStringAt(i)
 			pubInfos = append(pubInfos, &pubInfo)
@@ -137,8 +137,8 @@ func getPubSubscribedInfos(txn executor.TxnExecutor) (subscribedInfos map[string
 			var subInfo pubsub.SubInfo
 			createSql := cols[0].GetStringAt(i)
 			subInfo.SubName, subInfo.PubAccountName, subInfo.PubName, _ = getSubInfoFromSql(createSql)
-			subInfo.SubTime = vector.GetFixedAt[types.Timestamp](cols[1], i).String2(time.Local, cols[1].GetType().Scale)
-			subInfo.SubAccountId = int32(vector.GetFixedAt[uint32](cols[2], i))
+			subInfo.SubTime = vector.GetFixedAtWithTypeCheck[types.Timestamp](cols[1], i).String2(time.Local, cols[1].GetType().Scale)
+			subInfo.SubAccountId = int32(vector.GetFixedAtWithTypeCheck[uint32](cols[2], i))
 
 			key := subInfo.PubAccountName + "#" + subInfo.PubName
 			subscribedInfos[key] = append(subscribedInfos[key], &subInfo)

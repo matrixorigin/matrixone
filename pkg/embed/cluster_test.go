@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -150,6 +151,9 @@ func TestGetInitPort(t *testing.T) {
 	}
 
 	wg.Wait()
+	sort.Slice(ports, func(i, j int) bool {
+		return ports[i] < ports[j]
+	})
 	require.Equal(t, []uint64{10000, 11000, 12000, 13000}, ports)
 }
 
