@@ -18,8 +18,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // Response Categories
