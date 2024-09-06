@@ -32,7 +32,7 @@ import (
 const (
 	threshHoldForShuffleGroup       = 64000
 	threshHoldForRightJoinShuffle   = 8192
-	threshHoldForRangeShuffle       = 640000
+	threshHoldForShuffleJoin        = 120000
 	threshHoldForHybirdShuffle      = 4000000
 	threshHoldForHashShuffle        = 8000000
 	MAXShuffleDOP                   = 64
@@ -312,16 +312,6 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.BuildOnLeft {
-		if n.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
-			return
-		}
-	} else {
-		if n.Stats.HashmapStats.HashmapSize < threshHoldForRangeShuffle {
-			return
-		}
-	}
-
 	idx := 0
 	if !builder.IsEquiJoin(n) {
 		return
@@ -339,6 +329,19 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		if isEquiCond(n.OnList[i], leftTags, rightTags) {
 			idx = i
 			break
+		}
+	}
+
+	if n.BuildOnLeft {
+		if n.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
+			return
+		}
+	} else {
+		leftchild := builder.qry.Nodes[n.Children[0]]
+		rightchild := builder.qry.Nodes[n.Children[1]]
+		factor := math.Pow((leftchild.Stats.Outcnt / rightchild.Stats.Outcnt), 0.4)
+		if n.Stats.HashmapStats.HashmapSize < threshHoldForShuffleJoin*factor {
+			return
 		}
 	}
 
