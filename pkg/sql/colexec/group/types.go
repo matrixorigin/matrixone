@@ -78,7 +78,6 @@ type container struct {
 	intHashMap   *hashmap.IntHashMap
 	strHashMap   *hashmap.StrHashMap
 	rollupStrMap *hashmap.StrHashMap
-	rollupIntMap *hashmap.IntHashMap
 	// idx        *index.LowCardinalityIndex
 
 	aggVecs   []ExprEvalVector

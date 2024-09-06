@@ -196,15 +196,7 @@ func (ctr *container) processGroupByAndAgg(
 				if ap.NeedRollup {
 					for i := len(ctr.groupVecs.Vec) - 1; i >= 0; i-- {
 						ctr.rollupColumn = i
-						switch ctr.typ {
-						case H8:
-							err = ctr.processH8(bat, proc, true)
-						case HStr:
-							err = ctr.processHStr(bat, proc, true)
-						default:
-							err = moerr.NewInternalError(proc.Ctx, "unexpected hashmap typ for group-operator.")
-						}
-
+						err = ctr.processHStr(bat, proc, true)
 					}
 				}
 
@@ -299,11 +291,8 @@ func (ctr *container) processH0() error {
 func (ctr *container) processH8(bat *batch.Batch, proc *process.Process, rollup bool) error {
 	count := bat.RowCount()
 	var itr hashmap.Iterator
-	if !rollup {
-		itr = ctr.intHashMap.NewIterator()
-	} else {
-		itr = ctr.rollupIntMap.NewIterator()
-	}
+	itr = ctr.intHashMap.NewIterator()
+
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		if i%(hashmap.UnitLimit*32) == 0 {
 			runtime.Gosched()
@@ -316,18 +305,9 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process, rollup 
 		var rows uint64
 		var vals []uint64
 		var err error
-		if !rollup {
-			rows = ctr.intHashMap.GroupCount()
-			vals, _, err = itr.Insert(i, n, vecs)
-		} else {
-			rows = ctr.rollupIntMap.GroupCount()
-			rollVecs := vecs[:ctr.rollupColumn]
-			for k, vec := range vecs[ctr.rollupColumn:] {
-				rollVec := vector.NewRollupConst(ctr.groupVecs.Typ[ctr.rollupColumn+k], vec.Length(), proc.Mp())
-				rollVecs = append(rollVecs, rollVec)
-			}
-			vals, _, err = itr.Insert(i, n, rollVecs)
-		}
+
+		rows = ctr.intHashMap.GroupCount()
+		vals, _, err = itr.Insert(i, n, vecs)
 		if err != nil {
 			return err
 		}
@@ -538,25 +518,12 @@ func (ctr *container) initResultAndHashTable(bat **batch.Batch, proc *process.Pr
 	}
 
 	if config.NeedRollup {
-		switch {
-		case ctr.keyWidth <= 8:
-			if ctr.rollupIntMap, err = hashmap.NewIntHashMap(true, proc.Mp()); err != nil {
+		if ctr.rollupStrMap, err = hashmap.NewStrMap(true, proc.Mp()); err != nil {
+			return err
+		}
+		if config.PreAllocSize > 0 {
+			if err = ctr.rollupStrMap.PreAlloc(config.PreAllocSize, proc.Mp()); err != nil {
 				return err
-			}
-			if config.PreAllocSize > 0 {
-				if err = ctr.rollupIntMap.PreAlloc(config.PreAllocSize, proc.Mp()); err != nil {
-					return err
-				}
-			}
-
-		default:
-			if ctr.rollupStrMap, err = hashmap.NewStrMap(true, proc.Mp()); err != nil {
-				return err
-			}
-			if config.PreAllocSize > 0 {
-				if err = ctr.rollupStrMap.PreAlloc(config.PreAllocSize, proc.Mp()); err != nil {
-					return err
-				}
 			}
 		}
 	}
