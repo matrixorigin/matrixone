@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"math"
 	"math/bits"
 	"unsafe"
 
@@ -29,6 +30,7 @@ import (
 )
 
 const (
+	threshHoldForShuffleGroup       = 64000
 	threshHoldForRightJoinShuffle   = 120000
 	threshHoldForRangeShuffle       = 640000
 	threshHoldForHybirdShuffle      = 4000000
@@ -406,9 +408,11 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.Stats.HashmapStats.HashmapSize < threshHoldForRangeShuffle {
+	factor := 1 / math.Pow((n.Stats.Outcnt/child.Stats.Outcnt), 1.5)
+	if n.Stats.HashmapStats.HashmapSize < threshHoldForShuffleGroup*factor {
 		return
 	}
+
 	//find the highest ndv
 	highestNDV := n.GroupBy[0].Ndv
 	idx := 0
