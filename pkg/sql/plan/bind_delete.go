@@ -27,6 +27,11 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
 	}
 
+	//FIXME: optimize truncate table?
+	//if stmt.Where == nil && stmt.Limit == nil {
+	//	return 0, moerr.NewUnsupportedDML(builder.GetContext(), "rewrite to truncate table")
+	//}
+
 	aliasMap := make(map[string][2]string)
 	for _, tbl := range stmt.TableRefs {
 		getAliasToName(builder.compCtx, tbl, "", aliasMap)
@@ -93,17 +98,8 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 
 	selectNode := builder.qry.Nodes[lastNodeID]
 	if selectNode.NodeType != plan.Node_PROJECT {
-		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
+		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "malformed select node")
 	}
-
-	//if stmt.Where == nil && stmt.Limit == nil {
-	// TODO: convert to truncate table
-	//}
-
-	//var scanNodes []*plan.Node
-	//for i := range tblInfo.tableDefs {
-	//	scanNodes = append(scanNodes, builder.qry.Nodes[builder.name2ScanNode[tblInfo.tableDefs[i].Name]])
-	//}
 
 	idxScanNodes := make([][]*plan.Node, len(tblInfo.tableDefs))
 

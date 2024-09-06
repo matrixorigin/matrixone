@@ -234,6 +234,8 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "window", nil
 	case plan.Node_MATERIAL:
 		return "mterial", nil
+	case plan.Node_DEDUP_JOIN:
+		return "dedup_join", nil
 	default:
 		return "", moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
@@ -631,6 +633,11 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	case plan.Node_MATERIAL:
 		labels = append(labels, Label{
 			Name:  Label_Meterial,
+			Value: []string{},
+		})
+	case plan.Node_DEDUP_JOIN:
+		labels = append(labels, Label{
+			Name:  Label_Dedup_Join,
 			Value: []string{},
 		})
 	default:
