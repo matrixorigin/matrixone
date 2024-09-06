@@ -65,6 +65,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		isPrepareStatement: isPrepareStatement,
 		deleteNode:         make(map[uint64]int32),
 		skipStats:          skipStats,
+		name2ScanNode:      make(map[string]int32),
 	}
 }
 
