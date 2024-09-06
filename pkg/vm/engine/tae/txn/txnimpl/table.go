@@ -1311,6 +1311,7 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 	rowIDVec containers.Vector,
 	pk containers.Vector,
 	dt handle.DeleteType) (err error) {
+	rowIDStr := rowIDVec.PPString(1)
 	defer func() {
 		if err == nil {
 			return
@@ -1331,14 +1332,14 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 			logutil.Debugf("[ts=%s]: table-%d delete rows(%v) %v",
 				tbl.store.txn.GetStartTS().ToString(),
 				tbl.GetID(),
-				rowIDVec.PPString(1),
+				rowIDStr,
 				err)
 			if tbl.store.rt.Options.IncrementalDedup && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 				logutil.Warnf("[txn%X,ts=%s]: table-%d delete rows(%v) pk %s",
 					tbl.store.txn.GetID(),
 					tbl.store.txn.GetStartTS().ToString(),
 					tbl.GetID(),
-					rowIDVec.PPString(1),
+					rowIDStr,
 					pk.PPString(pk.Length()),
 				)
 			}
