@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -609,14 +608,7 @@ func GetConstraintDefFromTableDefs(defs []engine.TableDef) *engine.ConstraintDef
 }
 
 func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, indexDef *plan.IndexDef, qryDatabase string) []string {
-	/*
-
-			        insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS JOIN fulltext_index_tokenize('%s', %s, %s) AS f WHERE %s = f.doc_id;"
-		        updateFullTextIndexTableFormat     = "UPDATE `%s`.`%s` AS dst, (SELECT word, min(doc_id) AS first_doc_id, max(doc_id) as last_doc_id FROM `%s`.`%s` GROUP BY word) AS src SET dst.first_doc_id = src.first_doc_id, dst.last_doc_id = src.last_doc_id WHERE dst.word = src.word;"
-	*/
-
 	src_alias := "src"
-
 	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
 	params := indexDef.IndexAlgoParams
 	tblname := indexDef.IndexTableName
@@ -626,9 +618,11 @@ func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, ind
 		parts = append(parts, src_alias+"."+p)
 	}
 
-	concat := strings.Join(parts, ", ' ', ")
+	var concat string
 	if len(parts) > 1 {
-		concat = "CONCAT(" + concat + ")"
+		concat = "CONCAT(" + strings.Join(parts, ", ' ', ") + ")"
+	} else {
+		concat = parts[0]
 	}
 
 	var sqls []string
@@ -643,13 +637,13 @@ func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, ind
 
 	sqls = append(sqls, sql)
 
-	logutil.Infof("GEN INSERT %s", sql)
+	//logutil.Infof("GEN INSERT %s", sql)
 
 	sql = fmt.Sprintf(updateFullTextIndexTableFormat,
 		qryDatabase, tblname,
 		qryDatabase, tblname)
 
-	logutil.Infof("GEN UPDATE %s", sql)
+	//logutil.Infof("GEN UPDATE %s", sql)
 
 	sqls = append(sqls, sql)
 
