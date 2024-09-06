@@ -211,13 +211,13 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 		vec := bat.Vecs[colIdx]
 		switch id {
 		case types.T_int64:
-			cols := vector.MustFixedCol[int64](vec)
+			cols := vector.MustFixedColNoTypeCheck[int64](vec)
 			cols[rowIdx] = field.Integer
 		case types.T_uint64:
-			cols := vector.MustFixedCol[uint64](vec)
+			cols := vector.MustFixedColNoTypeCheck[uint64](vec)
 			cols[rowIdx] = uint64(field.Integer)
 		case types.T_float64:
-			cols := vector.MustFixedCol[float64](vec)
+			cols := vector.MustFixedColNoTypeCheck[float64](vec)
 			cols[rowIdx] = field.GetFloat64()
 		case types.T_char, types.T_varchar,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
@@ -266,7 +266,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 			}
 
 		case types.T_datetime:
-			cols := vector.MustFixedCol[types.Datetime](vec)
+			cols := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 			switch field.Type {
 			case table.TDatetime:
 				var buf [64]byte
@@ -397,23 +397,23 @@ func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
 	typ := vec.GetType()
 	switch typ.Oid {
 	case types.T_int64:
-		cols := vector.MustFixedCol[int64](vec)
+		cols := vector.MustFixedColNoTypeCheck[int64](vec)
 		return len(cols), nil
 	case types.T_uint64:
-		cols := vector.MustFixedCol[uint64](vec)
+		cols := vector.MustFixedColNoTypeCheck[uint64](vec)
 		return len(cols), nil
 	case types.T_float64:
-		cols := vector.MustFixedCol[float64](vec)
+		cols := vector.MustFixedColNoTypeCheck[float64](vec)
 		return len(cols), nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
-		cols := vector.MustFixedCol[types.Varlena](vec)
+		cols := vector.MustFixedColNoTypeCheck[types.Varlena](vec)
 		return len(cols), nil
 	case types.T_json:
-		cols := vector.MustFixedCol[types.Varlena](vec)
+		cols := vector.MustFixedColNoTypeCheck[types.Varlena](vec)
 		return len(cols), nil
 	case types.T_datetime:
-		cols := vector.MustFixedCol[types.Datetime](vec)
+		cols := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 		return len(cols), nil
 	default:
 		return 0, moerr.NewInternalErrorf(ctx, "the value type with oid %d is not support now", vec.GetType().Oid)
@@ -424,13 +424,13 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 	typ := vec.GetType()
 	switch typ.Oid {
 	case types.T_int64:
-		cols := vector.MustFixedCol[int64](vec)
+		cols := vector.MustFixedColNoTypeCheck[int64](vec)
 		return fmt.Sprintf("%d", cols[rowIdx]), nil
 	case types.T_uint64:
-		cols := vector.MustFixedCol[uint64](vec)
+		cols := vector.MustFixedColNoTypeCheck[uint64](vec)
 		return fmt.Sprintf("%d", cols[rowIdx]), nil
 	case types.T_float64:
-		cols := vector.MustFixedCol[float64](vec)
+		cols := vector.MustFixedColNoTypeCheck[float64](vec)
 		return fmt.Sprintf("%f", cols[rowIdx]), nil
 	case types.T_char, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
@@ -448,7 +448,7 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 		bjson := types.DecodeJson(val)
 		return bjson.String(), nil
 	case types.T_datetime:
-		cols := vector.MustFixedCol[types.Datetime](vec)
+		cols := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 		return table.Time2DatetimeString(cols[rowIdx].ConvertToGoTime(time.Local)), nil
 	default:
 		return "", moerr.NewInternalErrorf(ctx, "the value type with oid %d is not support now", vec.GetType().Oid)

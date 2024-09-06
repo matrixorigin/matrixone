@@ -52,7 +52,7 @@ func vectorAppendBytesWildly(v *vector.Vector, mp *mpool.MPool, value []byte) er
 	v.SetLength(oldLen + 1)
 
 	var vs []types.Varlena
-	vector.ToSlice(v, &vs)
+	vector.ToSliceNoTypeCheck(v, &vs)
 	vs[oldLen] = va
 	return nil
 }
