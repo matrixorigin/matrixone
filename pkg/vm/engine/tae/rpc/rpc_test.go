@@ -1833,7 +1833,6 @@ func TestApplyDeltaloc(t *testing.T) {
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
 	inMemoryDeleteTxns := make([]*txn.TxnMeta, 0)
-	blkIDOffsetsMap := make(map[common.ID][]uint32)
 	makeDeleteTxnFn := func(val any) {
 		filter := handle.NewEQFilter(val)
 		id, offset, err := rel.GetByFilter(context.Background(), filter)
@@ -1855,6 +1854,10 @@ func TestApplyDeltaloc(t *testing.T) {
 	}
 	assert.NoError(t, txn0.Commit(context.Background()))
 
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer pkVec.Close()
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer rowIDVec.Close()
 	for i := 0; i < rowCount; i++ {
 		val := taeBat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
 		if i%5 == 0 {
@@ -1862,12 +1865,9 @@ func TestApplyDeltaloc(t *testing.T) {
 			filter := handle.NewEQFilter(val)
 			id, offset, err := rel.GetByFilter(context.Background(), filter)
 			assert.NoError(t, err)
-			offsets, ok := blkIDOffsetsMap[*id]
-			if !ok {
-				offsets = make([]uint32, 0)
-			}
-			offsets = append(offsets, offset)
-			blkIDOffsetsMap[*id] = offsets
+			rowid := types.NewRowIDWithObjectIDBlkNumAndRowID(*id.ObjectID(), id.BlockID.Sequence(), offset)
+			pkVec.Append(val, false)
+			rowIDVec.Append(rowid, false)
 		} else {
 			// in memory deletes
 			makeDeleteTxnFn(val)
@@ -1888,15 +1888,10 @@ func TestApplyDeltaloc(t *testing.T) {
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
 	delLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
-	for id, offsets := range blkIDOffsetsMap {
-		obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID(), false)
-		assert.NoError(t, err)
-		_, blkOffset := id.BlockID.Offsets()
-		stats, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, obj.GetObjectData(), blkOffset, schema, txn0, offsets)
-		assert.NoError(t, err)
-		require.False(t, stats.IsZero())
-		delLocBat.Vecs[0].Append(stats.Marshal(), false)
-	}
+	stats, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, rowIDVec, pkVec, schema, txn0)
+	assert.NoError(t, err)
+	require.False(t, stats.IsZero())
+	delLocBat.Vecs[0].Append(stats.Marshal(), false)
 	deleteS3Entry, err := makePBEntry(DELETE, dbID, tid, "db", schema.Name, "file", containers.ToCNBatch(delLocBat))
 	assert.NoError(t, err)
 	deleteS3Txn := mock1PCTxn(h.db)
