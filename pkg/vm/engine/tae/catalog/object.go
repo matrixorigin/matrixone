@@ -431,9 +431,9 @@ func (entry *ObjectEntry) PrepareRollback() (err error) {
 		panic("logic error")
 	}
 	switch lastNode.ObjectState {
-	case ObjectState_Create_Active:
+	case ObjectState_Create_Active, ObjectState_Create_PrepareCommit:
 		entry.table.getObjectList(entry.IsTombstone).Delete(lastNode)
-	case ObjectState_Delete_Active:
+	case ObjectState_Delete_Active, ObjectState_Delete_PrepareCommit:
 		newEntry := entry.Clone()
 		newEntry.DeleteNode.Reset()
 		newEntry.ObjectState = ObjectState_Create_ApplyCommit
