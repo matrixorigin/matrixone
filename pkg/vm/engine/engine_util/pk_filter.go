@@ -109,7 +109,7 @@ func ConstructBlockPKFilter(
 		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixBetweenFactory(basePKFilter.LB, basePKFilter.UB)
 
 	case function.IN:
-		var vec *vector.Vector = basePKFilter.Vec
+		vec := basePKFilter.Vec
 
 		switch vec.GetType().Oid {
 		case types.T_bit:
@@ -173,7 +173,7 @@ func ConstructBlockPKFilter(
 		}
 
 	case function.PREFIX_IN:
-		var vec *vector.Vector = basePKFilter.Vec
+		vec := basePKFilter.Vec
 
 		sortedSearchFunc = vector.CollectOffsetsByPrefixInFactory(vec)
 		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixInFactory(vec)
