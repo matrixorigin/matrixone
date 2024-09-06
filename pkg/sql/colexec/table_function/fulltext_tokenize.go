@@ -5,6 +5,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -77,6 +78,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 	if !u.inited {
 
+		logutil.Infof("TOKEN PARAMS %s", tf.Params)
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}

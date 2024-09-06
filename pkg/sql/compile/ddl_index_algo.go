@@ -112,15 +112,14 @@ func (s *Scope) handleFullTextIndexTable(c *Compile, indexDef *plan.IndexDef, qr
 	if err != nil {
 		return err
 	}
-	/*
-		insertSQLs := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
-		for _, insertSQL := range insertSQLs {
-			err = c.runSql(insertSQL)
-			if err != nil {
-				return err
-			}
+
+	insertSQLs := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
+	for _, insertSQL := range insertSQLs {
+		err = c.runSql(insertSQL)
+		if err != nil {
+			return err
 		}
-	*/
+	}
 	return nil
 }
 

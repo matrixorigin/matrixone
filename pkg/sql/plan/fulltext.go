@@ -155,14 +155,18 @@ func (builder *QueryBuilder) getFullTextColDefs(fn *tree.FuncExpr) ([]*plan.ColD
 }
 
 // select * from index_table, fulltext_index_tokenize(doc_id, concat(body, ' ', title))
-// arg list [doc_id, content]
+// arg list [params, doc_id, content]
 func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
 
-	if len(exprs) != 2 {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 2).")
+	if len(exprs) != 3 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 3).")
 	}
 
 	colDefs := _getColDefs(tokenizeColDefs)
+	params, err := builder.getFullTextParams(tbl.Func)
+	if err != nil {
+		return 0, err
+	}
 
 	scanNode := builder.qry.Nodes[childId]
 	if scanNode.NodeType != plan.Node_TABLE_SCAN {
@@ -188,6 +192,9 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 	   }
 	*/
 
+	// remove the first argment and put the first argument to Param
+	exprs = exprs[1:]
+
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
 		Stats:    &plan.Stats{},
@@ -196,7 +203,7 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
 				Name:  fulltext_index_tokenize_func_name,
-				Param: []byte(""),
+				Param: []byte(params),
 			},
 			Cols: colDefs,
 		},
@@ -205,4 +212,11 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 		Children:        []int32{childId},
 	}
 	return builder.appendNode(node, ctx), nil
+}
+
+func (builder *QueryBuilder) getFullTextParams(fn *tree.FuncExpr) (string, error) {
+	if _, ok := fn.Exprs[0].(*tree.NumVal); ok {
+		return fn.Exprs[0].String(), nil
+	}
+	return "", moerr.NewNoConfig(builder.GetContext(), "first parameter must be string")
 }
