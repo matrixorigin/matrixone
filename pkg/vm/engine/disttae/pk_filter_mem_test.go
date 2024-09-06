@@ -50,7 +50,7 @@ func TestNewMemPKFilter(t *testing.T) {
 			Names: []string{"a"},
 		},
 		Cols: []*plan.ColDef{
-			&plan.ColDef{
+			{
 				Name: "a",
 				Typ: plan.Type{
 					Id: int32(types.T_int64),
