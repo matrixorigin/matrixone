@@ -289,6 +289,28 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids
 }
 
+func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode *plan.Node) *plan.IndexDef {
+
+	nargs := len(fn.Args) - 2
+	for _, idx := range scanNode.TableDef.Indexes {
+		nfound := 0
+		for _, p := range idx.Parts {
+			for j := 2; j < len(fn.Args); j++ {
+				if strings.EqualFold(p, fn.Args[j].GetCol().GetName()) {
+					// found
+					nfound++
+					break
+				}
+			}
+		}
+
+		if nfound == nargs && nfound == len(idx.Parts) {
+			return idx
+		}
+	}
+	return nil
+}
+
 // Get the filters that are fulltext_match() in ScanNode
 func (builder *QueryBuilder) getFullTextMatchFiltersFromScanNode(node *plan.Node) ([]int32, []*plan.IndexDef) {
 
@@ -303,23 +325,11 @@ func (builder *QueryBuilder) getFullTextMatchFiltersFromScanNode(node *plan.Node
 
 		switch fn.Func.ObjName {
 		case "fulltext_match":
-			for _, idx := range node.TableDef.Indexes {
-				nfound := 0
-				for _, p := range idx.Parts {
-					for j := 2; j < len(fn.Args); j++ {
-						if strings.EqualFold(p, fn.Args[j].GetCol().GetName()) {
-							// found
-							nfound++
-							break
-						}
-					}
-				}
 
-				if nfound == len(idx.Parts) {
-					ftidxs = append(ftidxs, idx)
-					filterids = append(filterids, int32(i))
-					break
-				}
+			idx := builder.findMatchFullTextIndex(fn, node)
+			if idx != nil {
+				ftidxs = append(ftidxs, idx)
+				filterids = append(filterids, int32(i))
 			}
 		default:
 		}
@@ -342,33 +352,15 @@ func (builder *QueryBuilder) getFullTextMatchFromProject(projNode *plan.Node, sc
 		switch fn.Func.ObjName {
 		case "fulltext_match":
 
-			found := false
-			for _, idx := range scanNode.TableDef.Indexes {
-				nfound := 0
-				for _, p := range idx.Parts {
-					for j := 2; j < len(fn.Args); j++ {
-						if strings.EqualFold(p, fn.Args[j].GetCol().GetName()) {
-							// found
-							nfound++
-							break
-						}
-					}
-				}
-
-				if nfound == len(idx.Parts) {
-					ftidxs = append(ftidxs, idx)
-					projids = append(projids, int32(i))
-					found = true
-					break
-				}
-			}
-
-			// change the fulltext_match function to fulltext_match_score
-			// which has return type float32 instead of bool
-			if !found {
+			idx := builder.findMatchFullTextIndex(fn, scanNode)
+			if idx != nil {
+				ftidxs = append(ftidxs, idx)
+				projids = append(projids, int32(i))
+			} else {
+				// change the fulltext_match function to fulltext_match_score
+				// which has return type float32 instead of bool
 				projNode.ProjectList[i] = builder.getFullTextMatchScoreExpr(expr)
 			}
-
 		default:
 		}
 	}
