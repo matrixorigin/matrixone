@@ -2939,7 +2939,6 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 // ExecRequest the server execute the commands from the client following the mysql's routine
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
 	var serverStatus uint16
-	serverStatus = ses.txnHandler.GetServerStatus()
 	defer func() {
 		if e := recover(); e != nil {
 			moe, ok := e.(*moerr.Error)
@@ -2951,6 +2950,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			}
 		}
 	}()
+	serverStatus = ses.txnHandler.GetServerStatus()
 	ses.EnterFPrint(FPExecRequest)
 	defer ses.ExitFPrint(FPExecRequest)
 
