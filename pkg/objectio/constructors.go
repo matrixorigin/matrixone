@@ -37,13 +37,13 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 
 		// no compress
 		if algo == compress.None {
-			cacheData = allocator.Alloc(len(data))
+			cacheData = allocator.AllocateCacheData(len(data))
 			copy(cacheData.Bytes(), data)
 			return cacheData, nil
 		}
 
 		// lz4 compress
-		decompressed := allocator.Alloc(int(size))
+		decompressed := allocator.AllocateCacheData(int(size))
 		bs, err := compress.Decompress(data, decompressed.Bytes(), compress.Lz4)
 		if err != nil {
 			return
