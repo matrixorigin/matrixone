@@ -324,7 +324,6 @@ func (space *tableSpace) AddObjsWithMetaLoc(
 	pkVecs []containers.Vector,
 	stats objectio.ObjectStats,
 ) (err error) {
-	space.registerStats(stats)
 	for i := range pkVecs {
 		dedupType := space.table.store.txn.GetDedupType()
 		//insert primary keys into space.index
@@ -342,6 +341,7 @@ func (space *tableSpace) AddObjsWithMetaLoc(
 			space.rows += uint32(pkVecs[i].Length())
 		}
 	}
+	space.registerStats(stats)
 	return nil
 }
 

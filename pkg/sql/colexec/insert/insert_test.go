@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -130,14 +130,8 @@ func TestInsertOperator(t *testing.T) {
 }
 
 func resetChildren(arg *Insert, bat *batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: []*batch.Batch{bat},
-	}
-	valueScanArg.Prepare(nil)
-	arg.SetChildren(
-		[]vm.Operator{
-			valueScanArg,
-		})
-
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
 	arg.ctr.state = vm.Build
 }
