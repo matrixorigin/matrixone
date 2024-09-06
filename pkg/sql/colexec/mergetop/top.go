@@ -59,7 +59,7 @@ func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
 	if err != nil {
 		return err
 	}
-	mergeTop.ctr.limit = vector.MustFixedCol[uint64](vec)[0]
+	mergeTop.ctr.limit = vector.MustFixedColWithTypeCheck[uint64](vec)[0]
 	if mergeTop.ctr.limit > 1024 {
 		mergeTop.ctr.sels = make([]int64, 0, 1024)
 	} else {

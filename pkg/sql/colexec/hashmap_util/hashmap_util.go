@@ -80,30 +80,17 @@ func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process
 			}
 		}
 	}
-	if hb.keyWidth <= 8 {
-		if hb.IntHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
-			return err
-		}
-	} else {
-		if hb.StrHashMap, err = hashmap.NewStrMap(false, proc.Mp()); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
-func (hb *HashmapBuilder) Reset() {
+func (hb *HashmapBuilder) Reset(proc *process.Process) {
+	if hb.InputBatchRowCount == 0 {
+		hb.FreeHashMapAndBatches(proc)
+	}
 	hb.InputBatchRowCount = 0
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
-	/*
-		for i := range hb.vecs {
-			for j := range hb.vecs[i] {
-				hb.vecs[i][j].CleanOnlyData()
-			}
-		}
-	*/
 	hb.vecs = nil
 	for i := range hb.UniqueJoinKeys {
 		hb.UniqueJoinKeys[i].CleanOnlyData()
@@ -130,13 +117,6 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 		}
 	}
 	hb.executor = nil
-	/*
-		for i := range hb.vecs {
-			for j := range hb.vecs[i] {
-				hb.vecs[i][j].Free(proc.Mp())
-			}
-		}
-	*/
 	hb.vecs = nil
 	for i := range hb.UniqueJoinKeys {
 		hb.UniqueJoinKeys[i].Free(proc.Mp())
@@ -145,8 +125,8 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 }
 
 // hashmap and batches are owned by probe operators
-// build operator can only call this when error occurs
-func (hb *HashmapBuilder) FreeWithError(proc *process.Process) {
+// build operator can only call this when error occurs, or inputbatch rowcount is 0
+func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 	if hb.IntHashMap != nil {
 		hb.IntHashMap.Free()
 		hb.IntHashMap = nil
@@ -155,10 +135,12 @@ func (hb *HashmapBuilder) FreeWithError(proc *process.Process) {
 		hb.StrHashMap.Free()
 		hb.StrHashMap = nil
 	}
-	if hb.MultiSels != nil {
-		hb.MultiSels = nil
-	}
 	hb.Batches.Clean(proc.Mp())
+}
+
+func (hb *HashmapBuilder) FreeWithError(proc *process.Process) {
+	hb.FreeHashMapAndBatches(proc)
+	hb.MultiSels = nil
 	for i := range hb.executor {
 		if hb.executor[i] != nil {
 			hb.executor[i].Free()
@@ -197,26 +179,33 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, run
 		return nil
 	}
 
-	if err := hb.evalJoinCondition(proc); err != nil {
+	var err error
+	if err = hb.evalJoinCondition(proc); err != nil {
 		return err
 	}
 
 	var itr hashmap.Iterator
 	if hb.keyWidth <= 8 {
+		if hb.IntHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
+			return err
+		}
 		itr = hb.IntHashMap.NewIterator()
 	} else {
+		if hb.StrHashMap, err = hashmap.NewStrMap(false, proc.Mp()); err != nil {
+			return err
+		}
 		itr = hb.StrHashMap.NewIterator()
 	}
 
 	if hashOnPK {
 		// if hash on primary key, prealloc hashmap size to the count of batch
 		if hb.keyWidth <= 8 {
-			err := hb.IntHashMap.PreAlloc(uint64(hb.InputBatchRowCount), proc.Mp())
+			err = hb.IntHashMap.PreAlloc(uint64(hb.InputBatchRowCount), proc.Mp())
 			if err != nil {
 				return err
 			}
 		} else {
-			err := hb.StrHashMap.PreAlloc(uint64(hb.InputBatchRowCount), proc.Mp())
+			err = hb.StrHashMap.PreAlloc(uint64(hb.InputBatchRowCount), proc.Mp())
 			if err != nil {
 				return err
 			}

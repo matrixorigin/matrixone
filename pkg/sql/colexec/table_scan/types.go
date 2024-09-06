@@ -92,7 +92,6 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 	}
 	tableScan.ctr.maxAllocSize = 0
 	anal.Alloc(allocSize)
-	tableScan.freeReceiver()
 	tableScan.closeReader()
 }
 
@@ -100,13 +99,6 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.Clean(proc.Mp())
 		tableScan.ctr.buf = nil
-	}
-}
-
-func (tableScan *TableScan) freeReceiver() {
-	if tableScan.ctr.msgReceiver != nil {
-		tableScan.ctr.msgReceiver.Free()
-		tableScan.ctr.msgReceiver = nil
 	}
 }
 

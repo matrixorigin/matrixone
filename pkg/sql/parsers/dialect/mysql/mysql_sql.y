@@ -77,7 +77,7 @@ import (
 
     from *tree.From
     where *tree.Where
-    groupBy tree.GroupBy
+    groupBy *tree.GroupByClause
     aliasedTableExpr *tree.AliasedTableExpr
     direction tree.Direction
     nullsPosition tree.NullsPosition
@@ -483,6 +483,9 @@ import (
 // CDC
 %token <str> CDC
 
+// ROLLUP
+%token <str> ROLLUP
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
@@ -722,7 +725,7 @@ import (
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
 %type <unsignedOpt> unsigned_opt header_opt parallel_opt strict_opt
 %type <zeroFillOpt> zero_fill_opt
-%type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt
+%type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt rollup_opt
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict distinct_keyword separator_opt kmeans_opt
 %type <insert> insert_data
@@ -1206,27 +1209,7 @@ snapshot_restore_stmt:
             ToAccountName: tree.Identifier($9.Compare()),
         }
     }
-|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident TO ACCOUNT ident
-    {
-        $$ = &tree.RestoreSnapShot{
-            Level: tree.RESTORELEVELDATABASE,
-            AccountName: tree.Identifier($3.Compare()),
-            DatabaseName: tree.Identifier($5.Compare()),
-            SnapShotName: tree.Identifier($8.Compare()),
-            ToAccountName: tree.Identifier($11.Compare()),
-        }
-    }
-|   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident TO ACCOUNT ident
-    {
-        $$ = &tree.RestoreSnapShot{
-            Level: tree.RESTORELEVELTABLE,
-            AccountName: tree.Identifier($3.Compare()),
-            DatabaseName: tree.Identifier($5.Compare()),
-            TableName: tree.Identifier($7.Compare()),
-            SnapShotName: tree.Identifier($10.Compare()),
-            ToAccountName: tree.Identifier($13.Compare()),
-        }
-    }
+
 
 restore_pitr_stmt:
    RESTORE FROM PITR ident STRING
@@ -3728,7 +3711,7 @@ alter_database_config_stmt:
 |   ALTER ACCOUNT CONFIG SET MYSQL_COMPATIBILITY_MODE  var_name equal_or_assignment set_expr
     {
         assignments := []*tree.VarAssignmentExpr{
-            &tree.VarAssignmentExpr{
+            {
                 System: true,
                 Global: true,
                 Name: $6,
@@ -3985,7 +3968,7 @@ show_grants_stmt:
     {
         s := &tree.ShowGrants{}
         roles := []*tree.Role{
-            &tree.Role{UserName: $5.Compare()},
+            {UserName: $5.Compare()},
         }
         s.Roles = roles
         s.ShowGrantType = tree.GrantForRole
@@ -5601,9 +5584,21 @@ group_by_opt:
     {
         $$ = nil
     }
-|   GROUP BY expression_list
+|   GROUP BY expression_list rollup_opt
     {
-        $$ = tree.GroupBy($3)
+        $$ = &tree.GroupByClause{
+            GroupByExprs: $3,
+            RollUp:       $4,
+        }
+    }
+
+rollup_opt:
+    {
+        $$ = false
+    }
+|   WITH ROLLUP
+    {
+        $$ = true
     }
 
 where_expression_opt:
@@ -12385,6 +12380,7 @@ non_reserved_keyword:
 |	PERCENT
 |	OWNERSHIP
 |   MO_TS
+|   ROLLUP
 
 func_not_keyword:
     DATE_ADD

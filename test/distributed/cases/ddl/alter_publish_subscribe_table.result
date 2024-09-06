@@ -18,7 +18,7 @@ insert into test01 values (1,2,3,4,5,6,7,8,10.2131,3824.34324);
 insert into test01 values (2,3,4,5,6,7,8,9,2131.3242343,-3824.34324);
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col1` TINYINT DEFAULT NULL,\n  `col2` SMALLINT DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE DEFAULT NULL\n)
+test01    CREATE TABLE `test01` (\n  `col1` tinyint DEFAULT NULL,\n  `col2` smallint DEFAULT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` bigint DEFAULT NULL,\n  `col5` tinyint unsigned DEFAULT NULL,\n  `col6` smallint unsigned DEFAULT NULL,\n  `col7` int unsigned DEFAULT NULL,\n  `col8` bigint unsigned DEFAULT NULL,\n  `col9` float DEFAULT NULL,\n  `col10` double DEFAULT NULL\n)
 create publication publication01 database test account all;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
@@ -26,19 +26,19 @@ publication01    test    *    *        2024-07-29 12:37:00    null
 alter table test01 add primary key (col1, col2);
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col1` TINYINT NOT NULL,\n  `col2` SMALLINT NOT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
+test01    CREATE TABLE `test01` (\n  `col1` tinyint NOT NULL,\n  `col2` smallint NOT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` bigint DEFAULT NULL,\n  `col5` tinyint unsigned DEFAULT NULL,\n  `col6` smallint unsigned DEFAULT NULL,\n  `col7` int unsigned DEFAULT NULL,\n  `col8` bigint unsigned DEFAULT NULL,\n  `col9` float DEFAULT NULL,\n  `col10` double DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
 alter table test01 add unique index `ui`(col1, col3);
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col1` TINYINT NOT NULL,\n  `col2` SMALLINT NOT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`),\n  UNIQUE KEY `ui` (`col1`,`col3`)\n)
+test01    CREATE TABLE `test01` (\n  `col1` tinyint NOT NULL,\n  `col2` smallint NOT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` bigint DEFAULT NULL,\n  `col5` tinyint unsigned DEFAULT NULL,\n  `col6` smallint unsigned DEFAULT NULL,\n  `col7` int unsigned DEFAULT NULL,\n  `col8` bigint unsigned DEFAULT NULL,\n  `col9` float DEFAULT NULL,\n  `col10` double DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`),\n  UNIQUE KEY `ui` (`col1`,`col3`)\n)
 alter table test01 drop primary key;
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col1` TINYINT NOT NULL,\n  `col2` SMALLINT NOT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE DEFAULT NULL,\n  UNIQUE KEY `ui` (`col1`,`col3`)\n)
+test01    CREATE TABLE `test01` (\n  `col1` tinyint NOT NULL,\n  `col2` smallint NOT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` bigint DEFAULT NULL,\n  `col5` tinyint unsigned DEFAULT NULL,\n  `col6` smallint unsigned DEFAULT NULL,\n  `col7` int unsigned DEFAULT NULL,\n  `col8` bigint unsigned DEFAULT NULL,\n  `col9` float DEFAULT NULL,\n  `col10` double DEFAULT NULL,\n  UNIQUE KEY `ui` (`col1`,`col3`)\n)
 alter table test01 add primary key (col10);
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col1` TINYINT NOT NULL,\n  `col2` SMALLINT NOT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE NOT NULL,\n  PRIMARY KEY (`col10`),\n  UNIQUE KEY `ui` (`col1`,`col3`)\n)
+test01    CREATE TABLE `test01` (\n  `col1` tinyint NOT NULL,\n  `col2` smallint NOT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` bigint DEFAULT NULL,\n  `col5` tinyint unsigned DEFAULT NULL,\n  `col6` smallint unsigned DEFAULT NULL,\n  `col7` int unsigned DEFAULT NULL,\n  `col8` bigint unsigned DEFAULT NULL,\n  `col9` float DEFAULT NULL,\n  `col10` double NOT NULL,\n  PRIMARY KEY (`col10`),\n  UNIQUE KEY `ui` (`col1`,`col3`)\n)
 alter table test01 add column newCol int after col1;
 select * from test01;
 col1    newcol    col2    col3    col4    col5    col6    col7    col8    col9    col10
@@ -46,11 +46,11 @@ col1    newcol    col2    col3    col4    col5    col6    col7    col8    col9  
 2    null    3    4    5    6    7    8    9    2131.3242    -3824.34324
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col1` TINYINT NOT NULL,\n  `newCol` INT DEFAULT NULL,\n  `col2` SMALLINT NOT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE NOT NULL,\n  PRIMARY KEY (`col10`),\n  UNIQUE KEY `ui` (`col1`,`col3`)\n)
+test01    CREATE TABLE `test01` (\n  `col1` tinyint NOT NULL,\n  `newCol` int DEFAULT NULL,\n  `col2` smallint NOT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` bigint DEFAULT NULL,\n  `col5` tinyint unsigned DEFAULT NULL,\n  `col6` smallint unsigned DEFAULT NULL,\n  `col7` int unsigned DEFAULT NULL,\n  `col8` bigint unsigned DEFAULT NULL,\n  `col9` float DEFAULT NULL,\n  `col10` double NOT NULL,\n  PRIMARY KEY (`col10`),\n  UNIQUE KEY `ui` (`col1`,`col3`)\n)
 alter table test01 modify column col1 decimal;
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col1` DECIMAL(38,0) DEFAULT NULL,\n  `newCol` INT DEFAULT NULL,\n  `col2` SMALLINT NOT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE NOT NULL,\n  PRIMARY KEY (`col10`),\n  UNIQUE KEY `ui` (`col1`,`col3`)\n)
+test01    CREATE TABLE `test01` (\n  `col1` decimal(38,0) DEFAULT NULL,\n  `newCol` int DEFAULT NULL,\n  `col2` smallint NOT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` bigint DEFAULT NULL,\n  `col5` tinyint unsigned DEFAULT NULL,\n  `col6` smallint unsigned DEFAULT NULL,\n  `col7` int unsigned DEFAULT NULL,\n  `col8` bigint unsigned DEFAULT NULL,\n  `col9` float DEFAULT NULL,\n  `col10` double NOT NULL,\n  PRIMARY KEY (`col10`),\n  UNIQUE KEY `ui` (`col1`,`col3`)\n)
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 publication01    test    *    *        2024-07-29 12:37:00    null    
@@ -91,19 +91,19 @@ use sys_db_1;
 alter table sys_tbl_1 drop primary key;
 show create table sys_tbl_1;
 Table    Create Table
-sys_tbl_1    CREATE TABLE `sys_tbl_1` (\n  `a` INT NOT NULL,\n  `b` DECIMAL(38,0) DEFAULT NULL,\n  `c` CHAR(1) DEFAULT NULL,\n  `d` VARCHAR(20) DEFAULT NULL\n)
+sys_tbl_1    CREATE TABLE `sys_tbl_1` (\n  `a` int NOT NULL,\n  `b` decimal(38,0) DEFAULT NULL,\n  `c` char(1) DEFAULT NULL,\n  `d` varchar(20) DEFAULT NULL\n)
 alter table sys_tbl_1 add primary key(a,b);
 show create table sys_tbl_1;
 Table    Create Table
-sys_tbl_1    CREATE TABLE `sys_tbl_1` (\n  `a` INT NOT NULL,\n  `b` DECIMAL(38,0) NOT NULL,\n  `c` CHAR(1) DEFAULT NULL,\n  `d` VARCHAR(20) DEFAULT NULL,\n  PRIMARY KEY (`a`,`b`)\n)
+sys_tbl_1    CREATE TABLE `sys_tbl_1` (\n  `a` int NOT NULL,\n  `b` decimal(38,0) NOT NULL,\n  `c` char(1) DEFAULT NULL,\n  `d` varchar(20) DEFAULT NULL,\n  PRIMARY KEY (`a`,`b`)\n)
 alter table sys_tbl_1 add unique index `b`(b,c);
 show create table sys_tbl_1;
 Table    Create Table
-sys_tbl_1    CREATE TABLE `sys_tbl_1` (\n  `a` INT NOT NULL,\n  `b` DECIMAL(38,0) NOT NULL,\n  `c` CHAR(1) DEFAULT NULL,\n  `d` VARCHAR(20) DEFAULT NULL,\n  PRIMARY KEY (`a`,`b`),\n  UNIQUE KEY `b` (`b`,`c`)\n)
+sys_tbl_1    CREATE TABLE `sys_tbl_1` (\n  `a` int NOT NULL,\n  `b` decimal(38,0) NOT NULL,\n  `c` char(1) DEFAULT NULL,\n  `d` varchar(20) DEFAULT NULL,\n  PRIMARY KEY (`a`,`b`),\n  UNIQUE KEY `b` (`b`,`c`)\n)
 alter table sys_tbl_1 modify column a char after c;
 show create table sys_tbl_1;
 Table    Create Table
-sys_tbl_1    CREATE TABLE `sys_tbl_1` (\n  `b` DECIMAL(38,0) NOT NULL,\n  `c` CHAR(1) DEFAULT NULL,\n  `a` CHAR(1) NOT NULL,\n  `d` VARCHAR(20) DEFAULT NULL,\n  PRIMARY KEY (`a`,`b`),\n  UNIQUE KEY `b` (`b`,`c`)\n)
+sys_tbl_1    CREATE TABLE `sys_tbl_1` (\n  `b` decimal(38,0) NOT NULL,\n  `c` char(1) DEFAULT NULL,\n  `a` char(1) NOT NULL,\n  `d` varchar(20) DEFAULT NULL,\n  PRIMARY KEY (`a`,`b`),\n  UNIQUE KEY `b` (`b`,`c`)\n)
 drop database sub1;
 drop account acc0;
 drop publication sys_pub_1;

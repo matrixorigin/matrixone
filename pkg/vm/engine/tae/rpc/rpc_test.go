@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+	"github.com/stretchr/testify/require"
 	"strconv"
 	"sync"
 	"testing"
@@ -497,46 +498,18 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	blocks, _, err = writer.Sync(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, len(physicals), len(blocks))
-	delLoc1 := blockio.EncodeLocation(
-		writer.GetName(),
-		blocks[0].GetExtent(),
-		uint32(physicals[0].Vecs[0].Length()),
-		blocks[0].GetID(),
-	).String()
-	assert.Nil(t, err)
-	delLoc2 := blockio.EncodeLocation(
-		writer.GetName(),
-		blocks[1].GetExtent(),
-		uint32(physicals[1].Vecs[0].Length()),
-		blocks[1].GetID(),
-	).String()
-	assert.Nil(t, err)
-	delLoc3 := blockio.EncodeLocation(
-		writer.GetName(),
-		blocks[2].GetExtent(),
-		uint32(physicals[2].Vecs[0].Length()),
-		blocks[2].GetID(),
-	).String()
-	assert.Nil(t, err)
-	delLoc4 := blockio.EncodeLocation(
-		writer.GetName(),
-		blocks[3].GetExtent(),
-		uint32(physicals[3].Vecs[0].Length()),
-		blocks[3].GetID(),
-	).String()
-	assert.Nil(t, err)
+
+	stats := writer.GetObjectStats()[0]
+	require.False(t, stats.IsZero())
 
 	//prepare delete locations.
-	attrs = []string{catalog2.BlockMeta_DeltaLoc}
+	attrs = []string{catalog2.ObjectMeta_ObjectStats}
 	vecTypes = []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
 
 	vecOpts = containers.Options{}
 	vecOpts.Capacity = 0
 	delLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
-	delLocBat.Vecs[0].Append([]byte(delLoc1), false)
-	delLocBat.Vecs[0].Append([]byte(delLoc2), false)
-	delLocBat.Vecs[0].Append([]byte(delLoc3), false)
-	delLocBat.Vecs[0].Append([]byte(delLoc4), false)
+	delLocBat.Vecs[0].Append(stats.Marshal(), false)
 
 	delLocMoBat := containers.ToCNBatch(delLocBat)
 	var delApiEntries []*api.Entry
@@ -1860,7 +1833,6 @@ func TestApplyDeltaloc(t *testing.T) {
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
 	inMemoryDeleteTxns := make([]*txn.TxnMeta, 0)
-	blkIDOffsetsMap := make(map[common.ID][]uint32)
 	makeDeleteTxnFn := func(val any) {
 		filter := handle.NewEQFilter(val)
 		id, offset, err := rel.GetByFilter(context.Background(), filter)
@@ -1882,6 +1854,10 @@ func TestApplyDeltaloc(t *testing.T) {
 	}
 	assert.NoError(t, txn0.Commit(context.Background()))
 
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer pkVec.Close()
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer rowIDVec.Close()
 	for i := 0; i < rowCount; i++ {
 		val := taeBat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
 		if i%5 == 0 {
@@ -1889,12 +1865,9 @@ func TestApplyDeltaloc(t *testing.T) {
 			filter := handle.NewEQFilter(val)
 			id, offset, err := rel.GetByFilter(context.Background(), filter)
 			assert.NoError(t, err)
-			offsets, ok := blkIDOffsetsMap[*id]
-			if !ok {
-				offsets = make([]uint32, 0)
-			}
-			offsets = append(offsets, offset)
-			blkIDOffsetsMap[*id] = offsets
+			rowid := types.NewRowIDWithObjectIDBlkNumAndRowID(*id.ObjectID(), id.BlockID.Sequence(), offset)
+			pkVec.Append(val, false)
+			rowIDVec.Append(rowid, false)
 		} else {
 			// in memory deletes
 			makeDeleteTxnFn(val)
@@ -1909,24 +1882,23 @@ func TestApplyDeltaloc(t *testing.T) {
 	assert.NoError(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
-	attrs := []string{catalog2.BlockMeta_DeltaLoc}
+	attrs := []string{catalog2.ObjectMeta_ObjectStats}
 	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
 
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
 	delLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
-	for id, offsets := range blkIDOffsetsMap {
-		obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID(), false)
-		assert.NoError(t, err)
-		_, blkOffset := id.BlockID.Offsets()
-		deltaLoc, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, obj.GetObjectData(), blkOffset, schema, txn0, offsets)
-		assert.NoError(t, err)
-		delLocBat.Vecs[0].Append([]byte(deltaLoc.String()), false)
-	}
+	stats, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, rowIDVec, pkVec, schema, txn0)
+	assert.NoError(t, err)
+	require.False(t, stats.IsZero())
+	delLocBat.Vecs[0].Append(stats.Marshal(), false)
 	deleteS3Entry, err := makePBEntry(DELETE, dbID, tid, "db", schema.Name, "file", containers.ToCNBatch(delLocBat))
 	assert.NoError(t, err)
 	deleteS3Txn := mock1PCTxn(h.db)
-	err = h.HandlePreCommit(context.Background(), deleteS3Txn, &api.PrecommitWriteCmd{EntryList: []*api.Entry{deleteS3Entry}}, nil)
+	err = h.HandlePreCommit(
+		context.Background(),
+		deleteS3Txn, &api.PrecommitWriteCmd{
+			EntryList: []*api.Entry{deleteS3Entry}}, nil)
 	assert.NoError(t, err)
 	assert.NoError(t, txn0.Commit(context.Background()))
 
