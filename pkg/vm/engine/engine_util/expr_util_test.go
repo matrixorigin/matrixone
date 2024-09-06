@@ -1015,3 +1015,249 @@ func TestTransferDecimal128val(t *testing.T) {
 		}
 	}
 }
+
+func TestEvalLiteralExpr(t *testing.T) {
+	type testCase struct {
+		literal *plan.Literal
+		oid     types.T
+		ok      bool
+		val     any
+	}
+
+	tc := []testCase{
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_I8Val{
+					I8Val: 1,
+				},
+			},
+			oid: types.T_int8,
+			ok:  true,
+			val: int8(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_I16Val{
+					I16Val: 1,
+				},
+			},
+			oid: types.T_int16,
+			ok:  true,
+			val: int16(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_I32Val{
+					I32Val: 1,
+				},
+			},
+			oid: types.T_int32,
+			ok:  true,
+			val: int32(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_I64Val{
+					I64Val: 1,
+				},
+			},
+			oid: types.T_int64,
+			ok:  true,
+			val: int64(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_U8Val{
+					U8Val: 1,
+				},
+			},
+			oid: types.T_uint8,
+			ok:  true,
+			val: uint8(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_U16Val{
+					U16Val: 1,
+				},
+			},
+			oid: types.T_uint16,
+			ok:  true,
+			val: uint16(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_U32Val{
+					U32Val: 1,
+				},
+			},
+			oid: types.T_uint32,
+			ok:  true,
+			val: uint32(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_U64Val{
+					U64Val: 1,
+				},
+			},
+			oid: types.T_uint64,
+			ok:  true,
+			val: uint64(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Fval{
+					Fval: 1,
+				},
+			},
+			oid: types.T_float32,
+			ok:  true,
+			val: float32(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Dval{
+					Dval: 1,
+				},
+			},
+			oid: types.T_float64,
+			ok:  true,
+			val: float64(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Sval{
+					Sval: "1",
+				},
+			},
+			oid: types.T_char,
+			ok:  true,
+			val: []byte("1"),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Bval{
+					Bval: true,
+				},
+			},
+			oid: types.T_bool,
+			ok:  true,
+			val: true,
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Dateval{
+					Dateval: 1,
+				},
+			},
+			oid: types.T_date,
+			ok:  true,
+			val: types.Date(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Timeval{
+					Timeval: 1,
+				},
+			},
+			oid: types.T_time,
+			ok:  true,
+			val: types.Time(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Datetimeval{
+					Datetimeval: 1,
+				},
+			},
+			oid: types.T_datetime,
+			ok:  true,
+			val: types.Datetime(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Timestampval{
+					Timestampval: 1,
+				},
+			},
+			oid: types.T_timestamp,
+			ok:  true,
+			val: types.Timestamp(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Decimal64Val{
+					Decimal64Val: &plan.Decimal64{
+						A: 1,
+					},
+				},
+			},
+			oid: types.T_decimal64,
+			ok:  true,
+			val: types.Decimal64(1),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Decimal128Val{
+					Decimal128Val: &plan.Decimal128{
+						A: 1,
+						B: 1,
+					},
+				},
+			},
+			oid: types.T_decimal128,
+			ok:  true,
+			val: types.Decimal128{B0_63: uint64(1), B64_127: uint64(1)},
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Jsonval{
+					Jsonval: "1",
+				},
+			},
+			oid: types.T_json,
+			ok:  true,
+			val: []byte("1"),
+		},
+		{
+			literal: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_EnumVal{
+					EnumVal: 1,
+				},
+			},
+			oid: types.T_int32,
+			ok:  true,
+			val: int32(1),
+		},
+	}
+
+	for i, c := range tc {
+		println(c.oid.String())
+		ok, val := evalLiteralExpr(c.literal, c.oid)
+		require.Equal(t, c.ok, ok, i)
+		if ok {
+			require.Equal(t, c.val, val, i)
+		}
+	}
+}
