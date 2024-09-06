@@ -34,9 +34,12 @@ func TestExplainPhyPlan(t *testing.T) {
 		TotalOutputSize:       1900,
 		TotalS3IOByte:         0,
 		TotalNetworkIO:        600,
-		TotalScanTime:         1500,
-		TotalInsertTime:       0,
+		//TotalScanTime:         1500,
+		//TotalInsertTime:       0,
 	}
+	operatorStats.AddOpMetric(process.OpScanTime, 1500)
+	operatorStats.AddOpMetric(process.OpInsertTime, 2500)
+	operatorStats.AddOpMetric(process.OpIncrementTime, 3500)
 
 	//----------------------------------------------------operator---------------------------------------------------
 
