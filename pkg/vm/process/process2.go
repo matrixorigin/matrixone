@@ -126,7 +126,7 @@ func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channe
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
 		for i := range child.Reg.MergeReceivers {
 			child.Reg.MergeReceivers[i] = &WaitRegister{
-				Ch2:          make(chan PipelineSignal, channelBufferSize[i]),
+				Ch2:         make(chan PipelineSignal, channelBufferSize[i]),
 				NilBatchCnt: int(nilbatchCnt[i]),
 			}
 		}
@@ -248,20 +248,22 @@ type QueryBaseContext struct {
 	// if pipelineLoopBreak is true, this means no need to do special cleanup yet.
 	sync.RWMutex
 	pipelineLoopBreak bool
+	isOnMergeCTE      bool
 }
 
 func (bp *BaseProcess) GetContextBase() *QueryBaseContext {
 	return &bp.sqlContext
 }
 
-func (qbCtx *QueryBaseContext) DoSpecialCleanUp() bool {
+func (qbCtx *QueryBaseContext) DoSpecialCleanUp(isMergeCTE bool) bool {
 	qbCtx.Lock()
 	defer qbCtx.Unlock()
 
 	if qbCtx.pipelineLoopBreak {
-		return false
+		return qbCtx.isOnMergeCTE == isMergeCTE
 	}
 	qbCtx.pipelineLoopBreak = true
+	qbCtx.isOnMergeCTE = isMergeCTE
 	return true
 }
 

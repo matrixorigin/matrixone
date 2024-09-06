@@ -87,14 +87,18 @@ type Pipeline struct {
 	rootOp vm.Operator
 }
 
-func (p *Pipeline) isCtePipelineAtLoop() bool {
+func (p *Pipeline) isCtePipelineAtLoop() (isMergeCte bool, atLoop bool) {
 	// required:
 	// 1. it is a linked tree.
 	// 2. it holds `merge-cte` or `merge-recursive`.
 	next := p.rootOp
 	for next != nil {
-		if opt := next.OpType(); opt == vm.MergeCTE || opt == vm.MergeRecursive {
-			return true
+		opt := next.OpType()
+		if opt == vm.MergeCTE {
+			return true, true
+		}
+		if opt == vm.MergeRecursive {
+			return false, true
 		}
 
 		cds := next.GetOperatorBase().Children
@@ -103,7 +107,7 @@ func (p *Pipeline) isCtePipelineAtLoop() bool {
 		}
 		next = cds[0]
 	}
-	return false
+	return false, false
 }
 
 // Cleanup do memory release work for whole pipeline.
@@ -117,8 +121,8 @@ func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare
 	// for deal the deadlock of clean-up,
 	// we need to do a special clean logic for this one.
 	// clean from first operator (data-source operator) to last operator (sender operator).
-	if p.isCtePipelineAtLoop() {
-		if proc.Base.GetContextBase().DoSpecialCleanUp() {
+	if isMergeCte, isSpecial := p.isCtePipelineAtLoop(); isSpecial {
+		if proc.Base.GetContextBase().DoSpecialCleanUp(isMergeCte) {
 
 			p.rootOp.Reset(proc, pipelineFailed, err)
 			if !isPrepare {
