@@ -277,8 +277,6 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 func (s *Scope) RenameTable(c *Compile) (err error) {
 	qry := s.Plan.GetDdl().GetRenameTable()
 
-	var subScope *Scope
-	defer subScope.release()
 	for _, alterTable := range qry.AlterTables {
 		plan := &plan.Plan{
 			Plan: &plan.Plan_Ddl{
@@ -290,7 +288,8 @@ func (s *Scope) RenameTable(c *Compile) (err error) {
 				},
 			},
 		}
-		subScope = newScope(AlterTable).withPlan(plan)
+		subScope := newScope(AlterTable).withPlan(plan)
+		defer subScope.release()
 		err = subScope.AlterTable(c)
 		if err != nil {
 			return err
