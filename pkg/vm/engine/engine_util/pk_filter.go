@@ -396,7 +396,7 @@ func ConstructBlockPKFilter(
 
 			sortedSearchFunc = vector.CollectOffsetsByBetweenWithCompareFactory(val1, val2, types.CompareDecimal128)
 			unSortedSearchFunc = vector.FixedSizedLinearCollectOffsetsByBetweenFactory(val1, val2, types.CompareDecimal128)
-		case types.T_text, types.T_datalink:
+		case types.T_text, types.T_datalink, types.T_varchar:
 			lb := string(basePKFilter.LB)
 			ub := string(basePKFilter.UB)
 			sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lb, ub, hint)
@@ -500,7 +500,7 @@ func mergeBaseFilterInKind(
 	case types.T_uint8:
 		a := vector.MustFixedColNoTypeCheck[uint8](va)
 		b := vector.MustFixedColNoTypeCheck[uint8](vb)
-		cmp := func(x, y uint8) int { return int(x - y) }
+		cmp := func(x, y uint8) int { return int(x) - int(y) }
 
 		if isOR {
 			err = vector.Union2VectorOrdered(a, b, ret.Vec, proc.Mp(), cmp)
@@ -510,7 +510,7 @@ func mergeBaseFilterInKind(
 	case types.T_uint16:
 		a := vector.MustFixedColNoTypeCheck[uint16](va)
 		b := vector.MustFixedColNoTypeCheck[uint16](vb)
-		cmp := func(x, y uint16) int { return int(x - y) }
+		cmp := func(x, y uint16) int { return int(x) - int(y) }
 
 		if isOR {
 			err = vector.Union2VectorOrdered(a, b, ret.Vec, proc.Mp(), cmp)
@@ -520,7 +520,7 @@ func mergeBaseFilterInKind(
 	case types.T_uint32:
 		a := vector.MustFixedColNoTypeCheck[uint32](va)
 		b := vector.MustFixedColNoTypeCheck[uint32](vb)
-		cmp := func(x, y uint32) int { return int(x - y) }
+		cmp := func(x, y uint32) int { return int(x) - int(y) }
 
 		if isOR {
 			err = vector.Union2VectorOrdered(a, b, ret.Vec, proc.Mp(), cmp)
@@ -530,7 +530,7 @@ func mergeBaseFilterInKind(
 	case types.T_uint64:
 		a := vector.MustFixedColNoTypeCheck[uint64](va)
 		b := vector.MustFixedColNoTypeCheck[uint64](vb)
-		cmp := func(x, y uint64) int { return int(x - y) }
+		cmp := func(x, y uint64) int { return int(x) - int(y) }
 
 		if isOR {
 			err = vector.Union2VectorOrdered(a, b, ret.Vec, proc.Mp(), cmp)
