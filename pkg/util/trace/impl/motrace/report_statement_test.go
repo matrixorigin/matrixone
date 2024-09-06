@@ -24,7 +24,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
@@ -401,7 +400,7 @@ func TestStatementInfo_Key(t *testing.T) {
 		name   string
 		fields fields
 		args   args
-		want   table.WindowKey
+		want   any
 	}{
 		{
 			name: "normal",
