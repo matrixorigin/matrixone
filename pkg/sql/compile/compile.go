@@ -1426,11 +1426,6 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		}
 	}()
 
-	t := time.Now()
-
-	if time.Since(t) > time.Second {
-		c.proc.Infof(ctx, "lock table %s.%s cost %v", n.ObjRef.SchemaName, n.ObjRef.ObjName, time.Since(t))
-	}
 	ID2Addr := make(map[int]int, 0)
 	mcpu := 0
 	for i := 0; i < len(c.cnList); i++ {
@@ -1515,7 +1510,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		}
 	}
 
-	t = time.Now()
+	t := time.Now()
 	param.FileService = c.proc.Base.FileService
 	param.Ctx = c.proc.Ctx
 	var fileList []string
