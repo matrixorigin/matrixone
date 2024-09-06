@@ -4185,25 +4185,6 @@ func TestDirtyWatchRace(t *testing.T) {
 	wg.Wait()
 }
 
-type TestBlockReadDeltaSource struct {
-	deltaLoc objectio.Location
-	testTs   types.TS
-}
-
-func (b *TestBlockReadDeltaSource) SetTS(ts types.TS) {
-	b.testTs = ts
-}
-
-func (b *TestBlockReadDeltaSource) GetDeltaLoc(bid objectio.Blockid) (objectio.Location, types.TS) {
-	return b.deltaLoc, b.testTs
-}
-
-func NewTestBlockReadSource(deltaLoc objectio.Location) logtail.DeltaSource {
-	return &TestBlockReadDeltaSource{
-		deltaLoc: deltaLoc,
-	}
-}
-
 func TestBlockRead(t *testing.T) {
 	blockio.RunPipelineTest(
 		func() {
@@ -4243,8 +4224,7 @@ func TestBlockRead(t *testing.T) {
 			tombstoneObjectEntry := testutil.GetOneTombstoneMeta(rel)
 			objectEntry := testutil.GetOneBlockMeta(rel)
 			objStats := tombstoneObjectEntry.ObjectMVCCNode
-			testDS := NewTestBlockReadSource(objStats.ObjectLocation())
-			ds := logtail.NewDeltaLocDataSource(ctx, tae.DB.Runtime.Fs.Service, beforeDel, testDS)
+			ds := logtail.NewSnapshotDataSource(ctx, tae.DB.Runtime.Fs.Service, beforeDel, []objectio.ObjectStats{objStats.ObjectStats})
 			bid, _ := blkEntry.ID(), blkEntry.ID()
 
 			info := &objectio.BlockInfo{
@@ -4291,7 +4271,7 @@ func TestBlockRead(t *testing.T) {
 			assert.Equal(t, len(columns), len(b1.Vecs))
 			assert.Equal(t, 20, b1.Vecs[0].Length())
 
-			testDS.SetTS(afterFirstDel)
+			ds.SetTS(afterFirstDel)
 
 			b2 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
@@ -4301,7 +4281,7 @@ func TestBlockRead(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, 19, b2.Vecs[0].Length())
 
-			testDS.SetTS(afterSecondDel)
+			ds.SetTS(afterSecondDel)
 
 			b3 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
@@ -6532,7 +6512,6 @@ func TestAppendAndGC2(t *testing.T) {
 }
 
 func TestSnapshotGC(t *testing.T) {
-	t.Skip("FIXME: jiangwei")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -6558,13 +6537,13 @@ func TestSnapshotGC(t *testing.T) {
 	var rel3 handle.Relation
 	{
 		txn, _ := db.StartTxn(nil)
-		database, err := txn.CreateDatabase("db", "", "")
+		database, err := testutil.CreateDatabase2(ctx, txn, "db")
 		assert.Nil(t, err)
-		_, err = database.CreateRelation(schema1)
+		_, err = testutil.CreateRelation2(ctx, txn, database, schema1)
 		assert.Nil(t, err)
-		_, err = database.CreateRelation(schema2)
+		_, err = testutil.CreateRelation2(ctx, txn, database, schema2)
 		assert.Nil(t, err)
-		rel3, err = database.CreateRelation(snapshotSchema)
+		rel3, err = testutil.CreateRelation2(ctx, txn, database, snapshotSchema)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
@@ -6669,7 +6648,6 @@ func TestSnapshotGC(t *testing.T) {
 }
 
 func TestSnapshotMeta(t *testing.T) {
-	t.Skip("TODO(aptend: broken snapshot read)")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -6694,19 +6672,22 @@ func TestSnapshotMeta(t *testing.T) {
 	var rel3, rel4, rel5 handle.Relation
 	{
 		txn, _ := db.StartTxn(nil)
-		database, err := txn.CreateDatabase("db", "", "")
+		database, err := testutil.CreateDatabase2(ctx, txn, "db")
 		assert.Nil(t, err)
-		database2, err := txn.CreateDatabase("db2", "", "")
+		database2, err := testutil.CreateDatabase2(ctx, txn, "db2")
 		assert.Nil(t, err)
-		database3, err := txn.CreateDatabase("db3", "", "")
+		database3, err := testutil.CreateDatabase2(ctx, txn, "db3")
 		assert.Nil(t, err)
-		rel3, err = database.CreateRelation(snapshotSchema)
+		rel3, err = testutil.CreateRelation2(ctx, txn, database, snapshotSchema)
 		assert.Nil(t, err)
-		rel4, err = database2.CreateRelation(snapshotSchema1)
+		rel4, err = testutil.CreateRelation2(ctx, txn, database2, snapshotSchema1)
 		assert.Nil(t, err)
-		rel5, err = database3.CreateRelation(snapshotSchema2)
+		rel5, err = testutil.CreateRelation2(ctx, txn, database3, snapshotSchema2)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
+		db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
+		db.DiskCleaner.GetCleaner().SetTid(rel4.ID())
+		db.DiskCleaner.GetCleaner().SetTid(rel5.ID())
 	}
 	//db.DiskCleaner.GetCleaner().DisableGCForTest()
 

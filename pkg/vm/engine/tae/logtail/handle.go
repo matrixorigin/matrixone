@@ -187,25 +187,6 @@ type RespBuilder interface {
 	Close()
 }
 
-// this is used to collect ONE ROW of db or table change
-func catalogEntry2Batch[
-	T *catalog.DBEntry | *catalog.TableEntry,
-	N *catalog.MVCCNode[*catalog.EmptyMVCCNode] | *catalog.MVCCNode[*catalog.TableMVCCNode]](
-	dstBatch *containers.Batch,
-	e T,
-	node N,
-	schema *catalog.Schema,
-	fillDataRow func(e T, node N, attr string, col containers.Vector),
-	rowid types.Rowid,
-	commitTs types.TS,
-) {
-	for _, col := range schema.ColDefs {
-		fillDataRow(e, node, col.Name, dstBatch.GetVectorByName(col.Name))
-	}
-	dstBatch.GetVectorByName(catalog.PhyAddrColumnName).Append(rowid, false)
-	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs, false)
-}
-
 // CatalogLogtailRespBuilder knows how to make api-entry from block entry.
 // impl catalog.Processor interface, driven by BoundTableOperator
 type TableLogtailRespBuilder struct {

@@ -57,10 +57,12 @@ type tableOffset struct {
 }
 
 type BackupDeltaLocDataSource struct {
-	ctx context.Context
-	fs  fileservice.FileService
-	ts  types.TS
-	ds  map[string]*objData
+	ctx        context.Context
+	fs         fileservice.FileService
+	ts         types.TS
+	ds         map[string]*objData
+	tombstones []objectio.ObjectStats
+	needShrink bool
 }
 
 func NewBackupDeltaLocDataSource(
@@ -70,11 +72,18 @@ func NewBackupDeltaLocDataSource(
 	ds map[string]*objData,
 ) *BackupDeltaLocDataSource {
 	return &BackupDeltaLocDataSource{
-		ctx: ctx,
-		fs:  fs,
-		ts:  ts,
-		ds:  ds,
+		ctx:        ctx,
+		fs:         fs,
+		ts:         ts,
+		ds:         ds,
+		needShrink: true,
 	}
+}
+
+func (d *BackupDeltaLocDataSource) SetTS(
+	ts types.TS,
+) {
+	d.ts = ts
 }
 
 func (d *BackupDeltaLocDataSource) Next(
@@ -101,7 +110,6 @@ func (d *BackupDeltaLocDataSource) ApplyTombstones(
 ) ([]int64, error) {
 	panic("Not Support ApplyTombstones")
 }
-
 func (d *BackupDeltaLocDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	panic("Not Support order by")
 }
@@ -125,7 +133,18 @@ func ForeachTombstoneObject(
 			}
 		}
 	}
+	return nil
+}
 
+func buildDS(
+	onTombstone func(tombstone objectio.ObjectStats) (next bool, err error),
+	ds []objectio.ObjectStats,
+) error {
+	for _, d := range ds {
+		if next, err := onTombstone(d); !next || err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -133,6 +152,7 @@ func GetTombstonesByBlockId(
 	bid objectio.Blockid,
 	deleteMask *nulls.Nulls,
 	scanOp func(func(tombstone *objData) (bool, error)) error,
+	needShrink bool,
 ) (err error) {
 
 	onTombstone := func(oData *objData) (bool, error) {
@@ -162,7 +182,9 @@ func GetTombstonesByBlockId(
 
 			// Shrink the tombstone batch, Because the rowid in the tombstone is no longer needed after apply,
 			// it cannot be written to disk
-			oData.data[idx].Shrink(deleteRows, true)
+			if needShrink {
+				oData.data[idx].Shrink(deleteRows, true)
+			}
 		}
 		return true, nil
 	}
@@ -172,11 +194,57 @@ func GetTombstonesByBlockId(
 }
 
 func (d *BackupDeltaLocDataSource) GetTombstones(
-	_ context.Context, bid objectio.Blockid,
+	ctx context.Context, bid objectio.Blockid,
 ) (deletedRows *nulls.Nulls, err error) {
 	deletedRows = &nulls.Nulls{}
 	deletedRows.InitWithSize(8192)
-
+	if len(d.tombstones) > 0 {
+		if err := buildDS(
+			func(tombstone objectio.ObjectStats) (bool, error) {
+				if !tombstone.ZMIsEmpty() {
+					objZM := tombstone.SortKeyZoneMap()
+					if skip := !objZM.PrefixEq(bid[:]); skip {
+						return true, nil
+					}
+				}
+				name := tombstone.ObjectName()
+				logutil.Infof("[GetSnapshot] tombstone object %v", name.String())
+				bat, _, err := blockio.LoadOneBlock(ctx, d.fs, tombstone.ObjectLocation(), objectio.SchemaData)
+				if err != nil {
+					return false, err
+				}
+				if !tombstone.GetCNCreated() {
+					deleteRow := make([]int64, 0)
+					for v := 0; v < bat.Vecs[0].Length(); v++ {
+						var commitTs types.TS
+						err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-1].GetRawBytesAt(v))
+						if err != nil {
+							return false, err
+						}
+						if commitTs.Greater(&d.ts) {
+							logutil.Debugf("delete row %v, commitTs %v, location %v",
+								v, commitTs.ToString(), name.String())
+						} else {
+							deleteRow = append(deleteRow, int64(v))
+						}
+					}
+					if len(deleteRow) != bat.Vecs[0].Length() {
+						bat.Shrink(deleteRow, false)
+					}
+				}
+				d.ds[name.String()] = &objData{
+					stats:      &tombstone,
+					dataType:   objectio.SchemaData,
+					sortKey:    uint16(math.MaxUint16),
+					data:       make([]*batch.Batch, 0),
+					appendable: true,
+				}
+				d.ds[name.String()].data = append(d.ds[name.String()].data, bat)
+				return true, nil
+			}, d.tombstones); err != nil {
+			return nil, err
+		}
+	}
 	scanOp := func(onTombstone func(tombstone *objData) (bool, error)) (err error) {
 		return ForeachTombstoneObject(onTombstone, d.ds)
 	}
@@ -184,7 +252,8 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 	if err := GetTombstonesByBlockId(
 		bid,
 		deletedRows,
-		scanOp); err != nil {
+		scanOp,
+		d.needShrink); err != nil {
 		return nil, err
 	}
 	return
