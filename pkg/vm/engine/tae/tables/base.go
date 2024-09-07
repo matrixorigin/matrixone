@@ -139,11 +139,8 @@ func (obj *baseObject) TryUpgrade() (err error) {
 
 func (obj *baseObject) GetMeta() any { return obj.meta.Load() }
 func (obj *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
-	if !obj.meta.Load().IsAppendable() {
-		panic("not support")
-	}
 	if obj.meta.Load().HasDropCommitted() {
-		panic("not support")
+		return false
 	}
 	obj.RLock()
 	defer obj.RUnlock()

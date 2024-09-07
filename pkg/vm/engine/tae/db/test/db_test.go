@@ -937,6 +937,73 @@ func TestFlushTableNoPk(t *testing.T) {
 	tae.CheckRowsByScan(100, true)
 }
 
+func TestFlushTableDroppedEntry(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	// db := initDB(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker.Start()
+	defer worker.Stop()
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Name = "table"
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+	defer bat.Close()
+	testutil.CreateRelationAndAppend(t, 0, tae.DB, "db", schema, bat, true)
+
+	var did, tid uint64
+	{
+		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+		dbH, _ := rel.GetDB()
+		did, tid = dbH.GetID(), rel.ID()
+		rel.DeleteByFilter(ctx, handle.NewEQFilter(bat.Vecs[1].Get(1)))
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	var blkMetas, tombstoneMetas []*catalog.ObjectEntry
+
+	{ // flush all
+		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+		blkMetas = testutil.GetAllBlockMetas(rel, false)
+		tombstoneMetas = testutil.GetAllBlockMetas(rel, true)
+		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tombstoneMetas, tae.DB.Runtime)
+		assert.NoError(t, err)
+		worker.SendOp(task)
+		err = task.WaitDone(ctx)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
+
+		testutils.WaitExpect(10000, func() bool {
+			d, _ := tae.Catalog.GetDatabaseByID(did)
+			r, _ := d.GetTableEntryByID(tid)
+			o, _ := r.GetObjectByID(blkMetas[0].ID(), false)
+			return o.HasDropCommitted()
+		})
+	}
+
+	{ // flush again, skip dropped
+		d, _ := tae.Catalog.GetDatabaseByID(did)
+		r, _ := d.GetTableEntryByID(tid)
+		blkMetas[0], _ = r.GetObjectByID(blkMetas[0].ID(), false)
+		tombstoneMetas[0], _ = r.GetObjectByID(tombstoneMetas[0].ID(), true)
+		txn, _ := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tombstoneMetas, tae.DB.Runtime)
+		assert.NoError(t, err)
+		worker.SendOp(task)
+		err = task.WaitDone(ctx)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
+
+	tae.CheckRowsByScan(49, true)
+}
+
 func TestFlushTableErrorHandle(t *testing.T) {
 	ctx := context.WithValue(context.Background(), jobs.TestFlushBailoutPos1{}, "bail")
 
