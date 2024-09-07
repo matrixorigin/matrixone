@@ -61,9 +61,7 @@ func FilterRowIdForDel(proc *process.Process, retBat *batch.Batch, srcBat *batch
 // FillPartitionBatchForDelete fills the data into the corresponding batch based on the different partitions to which the current `row_id` data belongs.
 func FillPartitionBatchForDelete(proc *process.Process, input *batch.Batch, buffer *batch.Batch, expect int32, rowIdIdx int, partitionIdx int, pkIdx int) error {
 	// Fill the data into the corresponding batch based on the different partitions to which the current `row_id` data
-	pkTyp := input.Vecs[pkIdx].GetType()
 	rid2pid := vector.MustFixedColWithTypeCheck[int32](input.Vecs[partitionIdx])
-	fun := vector.GetUnionOneFunction(*pkTyp, proc.Mp())
 	var err error
 
 	for i, rowid := range vector.MustFixedColWithTypeCheck[types.Rowid](input.Vecs[rowIdIdx]) {
@@ -76,7 +74,7 @@ func FillPartitionBatchForDelete(proc *process.Process, input *batch.Batch, buff
 				if err != nil {
 					return err
 				}
-				err = pkList[partition].UnionOne(bat.Vecs[pkIdx], int64(i), proc.Mp())
+				err = buffer.Vecs[1].UnionOne(input.Vecs[pkIdx], int64(i), proc.Mp())
 				if err != nil {
 					return err
 				}
