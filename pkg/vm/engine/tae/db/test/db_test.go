@@ -4154,7 +4154,7 @@ func TestBlockRead(t *testing.T) {
 			assert.NoError(t, err)
 			infos := make([]*objectio.BlockInfo, 0)
 			infos = append(infos, info)
-			err = blockio.BlockPrefetch("", colIdxs, fs, infos, false)
+			err = blockio.Prefetch("", fs, infos[0].MetaLocation())
 			assert.NoError(t, err)
 
 			var vp engine.VectorPool

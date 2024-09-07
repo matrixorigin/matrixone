@@ -653,42 +653,6 @@ func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
 	return
 }
 
-// BlockPrefetch is the interface for cn to call read ahead
-// columns  Which columns should be taken for columns
-// service  fileservice
-// infos [s3object name][block]
-// FIXME: using objectio.BlockInfoSlice
-func BlockPrefetch(
-	sid string,
-	idxes []uint16,
-	service fileservice.FileService,
-	infos []*objectio.BlockInfo,
-	prefetchFile bool,
-) error {
-	if len(infos) == 0 {
-		return nil
-	}
-
-	// build reader
-	pref, err := BuildPrefetchParams(service, infos[0].MetaLocation())
-	if err != nil {
-		return err
-	}
-
-	// Generate prefetch task
-	for i := range infos {
-		pref.AddBlock(idxes, []uint16{infos[i].MetaLocation().ID()})
-	}
-
-	pref.prefetchFile = prefetchFile
-	err = MustGetPipeline(sid).Prefetch(pref)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func RecordReadDel(
 	sid string,
 	total, read, bisect time.Duration,

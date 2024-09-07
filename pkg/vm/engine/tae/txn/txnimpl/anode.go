@@ -243,6 +243,6 @@ func (n *anode) Scan(ctx context.Context, bat **containers.Batch, colIdxes []int
 	}
 }
 
-func (n *anode) Prefetch(idxes []uint16) error {
+func (n *anode) Prefetch() error {
 	return nil
 }

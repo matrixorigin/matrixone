@@ -158,9 +158,8 @@ func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
 		bids[idx-begin] = blk.BlockID
 	}
 
-	// prefetch blk data
-	err := blockio.BlockPrefetch(
-		rs.proc.GetService(), seqNums, rs.fs, blks, true)
+	err := blockio.Prefetch(
+		rs.proc.GetService(), rs.fs, blks[0].MetaLocation())
 	if err != nil {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
@@ -1120,8 +1119,8 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 	}
 
 	// prefetch blk data
-	err := blockio.BlockPrefetch(
-		ls.table.proc.Load().GetService(), seqNums, ls.fs, blks, true)
+	err := blockio.Prefetch(
+		ls.table.proc.Load().GetService(), ls.fs, blks[0].MetaLocation())
 	if err != nil {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
@@ -1205,7 +1204,6 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 			}) {
 				continue
 			}
-
 			if err != nil {
 				return nil, err
 			}
