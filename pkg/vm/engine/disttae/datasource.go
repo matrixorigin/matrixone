@@ -125,7 +125,6 @@ func (rs *RemoteDataSource) Next(
 	seqNums []uint16,
 	_ any,
 	_ *mpool.MPool,
-	_ engine.VectorPool,
 	_ *batch.Batch,
 ) (*objectio.BlockInfo, engine.DataState, error) {
 
@@ -432,7 +431,6 @@ func (ls *LocalDataSource) Next(
 	seqNums []uint16,
 	filter any,
 	mp *mpool.MPool,
-	vp engine.VectorPool,
 	bat *batch.Batch,
 ) (*objectio.BlockInfo, engine.DataState, error) {
 
@@ -452,7 +450,7 @@ func (ls *LocalDataSource) Next(
 		switch ls.iteratePhase {
 		case engine.InMem:
 			bat.CleanOnlyData()
-			err := ls.iterateInMemData(ctx, cols, types, seqNums, bat, mp, vp)
+			err := ls.iterateInMemData(ctx, cols, types, seqNums, bat, mp)
 			if err != nil {
 				return nil, engine.InMem, err
 			}
@@ -514,7 +512,6 @@ func (ls *LocalDataSource) iterateInMemData(
 	seqNums []uint16,
 	bat *batch.Batch,
 	mp *mpool.MPool,
-	vp engine.VectorPool,
 ) (err error) {
 
 	bat.SetRowCount(0)
