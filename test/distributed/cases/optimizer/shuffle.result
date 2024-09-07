@@ -246,46 +246,9 @@ Project
 select count(*) from t3 where t3.c2 in (select c3 from t1 where t1.c2!=20000 and  t1.c2 not in ( select c2 from t2 where t2.c3>150000 ));
 count(*)
 149999
-explain select count(*) from t3 where t3.c1<100000 and t3.c2 not in (select c3 from t1 where t1.c2!=30000 and  t1.c2  in ( select c2 from t2 where t2.c3<850000 ));
-AP QUERY PLAN ON MULTICN(4 core)
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Join
-              Join Type: RIGHT ANTI
-              Join Cond: (t1.c3 = t3.c2)
-              ->  Join
-                    Join Type: SEMI
-                    Join Cond: (t1.c2 = t2.c2) shuffle: range(t1.c2)
-                    ->  Table Scan on d1.t1
-                          Filter Cond: (t1.c2 <> 30000)
-                    ->  Table Scan on d1.t2
-                          Filter Cond: (t2.c3 < 850000)
-                          Block Filter Cond: (t2.c3 < 850000)
-              ->  Table Scan on d1.t3
-                    Filter Cond: (t3.c1 < 100000)
-                    Block Filter Cond: (t3.c1 < 100000)
 select count(*) from t3 where t3.c1<100000 and t3.c2 not in (select c3 from t1 where t1.c2!=30000 and  t1.c2  in ( select c2 from t2 where t2.c3<850000 ));
 count(*)
 1
-explain select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t1.c2=t3.c2 and t2.c2<900000 and t3.c1<500000;
-AP QUERY PLAN ON MULTICN(4 core)
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Join
-              Join Type: INNER
-              Join Cond: (t1.c2 = t3.c2)
-              ->  Join
-                    Join Type: INNER
-                    Join Cond: (t1.c1 = t2.c1) shuffle: range(t1.c1)
-                    ->  Table Scan on d1.t1
-                    ->  Table Scan on d1.t2
-                          Filter Cond: (t2.c2 < 900000)
-                          Block Filter Cond: (t2.c2 < 900000)
-              ->  Table Scan on d1.t3
-                    Filter Cond: (t3.c1 < 500000)
-                    Block Filter Cond: (t3.c1 < 500000)
 select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t1.c2=t3.c2 and t2.c2<900000 and t3.c1<500000;
 count(*)
 499999

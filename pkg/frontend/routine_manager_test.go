@@ -53,6 +53,7 @@ func Test_Closed(t *testing.T) {
 	cf.Close()
 
 	closeDbConn(t, db)
+	wg.Wait()
 	err = mo.Stop()
 	require.NoError(t, err)
 	serverConn.Close()
