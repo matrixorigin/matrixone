@@ -17,16 +17,17 @@ package mergesort
 import (
 	"context"
 	"errors"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"go.uber.org/zap"
 )
 
 type Merger interface {
@@ -38,7 +39,7 @@ type releasableBatch struct {
 	releaseF func()
 }
 
-type merger[T any] struct {
+type merger[T comparable] struct {
 	heap *heapSlice[T]
 
 	cols    [][]T
@@ -68,7 +69,7 @@ type merger[T any] struct {
 	stats       mergeStats
 }
 
-func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, isTombstone bool, mustColFunc func(*vector.Vector) []T) Merger {
+func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, isTombstone bool, mustColFunc func(*vector.Vector) []T) Merger {
 	size := host.GetObjectCnt()
 	rowSizeU64 := host.GetTotalSize() / uint64(host.GetTotalRowCnt())
 	m := &merger[T]{
@@ -174,6 +175,20 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		if m.stats.blkRowCnt == int(m.rowPerBlk) {
 			m.stats.blkRowCnt = 0
 			m.stats.objBlkCnt++
+
+			sortKeyCol := vector.MustFixedColNoTypeCheck[T](m.buffer.Vecs[m.sortKeyIdx])
+			var lastKey T
+			var zero T
+			for _, k := range sortKeyCol {
+				if lastKey != zero && lastKey == k {
+					logutil.Fatal("duplicate sort key",
+						zap.Any("one", lastKey),
+						zap.Any("other", k),
+						zap.Bool("isTombstone", m.isTombstone),
+					)
+				}
+				lastKey = k
+			}
 
 			if m.writer == nil {
 				m.writer = m.host.PrepareNewWriter()
