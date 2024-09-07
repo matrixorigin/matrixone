@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -101,10 +101,6 @@ func TestConnector(t *testing.T) {
 		}
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		bats = []*batch.Batch{
-			newBatch(tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
-		}
 		resetChildren(tc.arg, bats)
 		/*{
 			for _, vec := range bat.Vecs {
@@ -163,13 +159,7 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 }
 
 func resetChildren(arg *Connector, bats []*batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: bats,
-	}
-	valueScanArg.Prepare(nil)
-	arg.GetOperatorBase().SetChildren(
-		[]vm.Operator{
-			valueScanArg,
-		},
-	)
+	op := colexec.NewMockOperator().WithBatchs(bats)
+	arg.Children = nil
+	arg.AppendChild(op)
 }

@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -131,15 +131,7 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 }
 
 func resetChildren(arg *Dispatch, bats []*batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: bats,
-	}
-	valueScanArg.Prepare(nil)
-	if len(arg.Children) == 0 {
-		arg.AppendChild(valueScanArg)
-
-	} else {
-		arg.Children = arg.Children[:0]
-		arg.AppendChild(valueScanArg)
-	}
+	op := colexec.NewMockOperator().WithBatchs(bats)
+	arg.Children = nil
+	arg.AppendChild(op)
 }
