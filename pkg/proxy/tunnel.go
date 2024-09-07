@@ -609,15 +609,15 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			return false, moerr.NewInternalErrorf(errutil.ContextWithNoReport(ctx, true),
 				"preRecv message: %s, name %s", re.Error(), p.name)
 		}
+		tempBuf := p.src.readAvailBuf()
 		// set txn status and cmd time within the mutex together.
 		// only server->client pipe need to set the txn status.
 		if p.name == pipeServerToClient {
 			var currSeq int16
-			buf := p.src.readAvailBuf()
 
 			// issue#16042
-			if len(buf) > 3 {
-				currSeq = int16(buf[3])
+			if len(tempBuf) > 3 {
+				currSeq = int16(tempBuf[3])
 			}
 
 			// last sequence id is 255 and current sequence id is 0, the
@@ -632,7 +632,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 				rotated = false
 			}
 
-			inTxn, ok := checkTxnStatus(buf)
+			inTxn, ok := checkTxnStatus(tempBuf)
 			if ok {
 				p.mu.inTxn = inTxn
 			}
@@ -640,11 +640,18 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 				peer.wg.Add(1)
 				p.transferred = true
 			}
-			if len(buf) > 3 {
-				lastSeq = int16(buf[3])
+			if len(tempBuf) > 3 {
+				lastSeq = int16(tempBuf[3])
+			}
+			p.mu.lastCmdTime = time.Now()
+		} else {
+			if isEmptyPacket(tempBuf) {
+				p.logger.Warn("there comes an empty packet from client")
+			}
+			if !isEmptyPacket(tempBuf) && !isDeallocatePacket(tempBuf) {
+				p.mu.lastCmdTime = time.Now()
 			}
 		}
-		p.mu.lastCmdTime = time.Now()
 		return false, nil
 	}
 
