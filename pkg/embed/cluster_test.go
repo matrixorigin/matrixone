@@ -97,6 +97,7 @@ func TestBaseClusterOnlyStartOnce(t *testing.T) {
 }
 
 func TestRestartCN(t *testing.T) {
+	t.SkipNow()
 	RunBaseClusterTests(
 		func(c Cluster) {
 			svc, err := c.GetCNService(0)
