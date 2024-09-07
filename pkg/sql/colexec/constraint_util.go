@@ -46,17 +46,13 @@ func FilterRowIdForDel(proc *process.Process, retBat *batch.Batch, srcBat *batch
 			sels = append(sels, int64(i))
 		}
 	}
-	uf := vector.GetUnionOneFunction(types.T_Rowid.ToType(), proc.Mp())
-	for _, sel := range sels {
-		if err := uf(rowidVec, srcBat.Vecs[idx], sel); err != nil {
-			return err
-		}
+	err := rowidVec.Union(srcBat.Vecs[idx], sels, proc.Mp())
+	if err != nil {
+		return err
 	}
-	uf = vector.GetUnionOneFunction(*srcBat.GetVector(int32(primaryKeyIdx)).GetType(), proc.Mp())
-	for _, sel := range sels {
-		if err := uf(primaryVec, srcBat.Vecs[primaryKeyIdx], sel); err != nil {
-			return err
-		}
+	err = primaryVec.Union(srcBat.Vecs[primaryKeyIdx], sels, proc.Mp())
+	if err != nil {
+		return err
 	}
 	retBat.SetRowCount(len(sels))
 	return nil
@@ -80,7 +76,7 @@ func FillPartitionBatchForDelete(proc *process.Process, input *batch.Batch, buff
 				if err != nil {
 					return err
 				}
-				err = fun(buffer.Vecs[1], input.Vecs[pkIdx], int64(i))
+				err = pkList[partition].UnionOne(bat.Vecs[pkIdx], int64(i), proc.Mp())
 				if err != nil {
 					return err
 				}
