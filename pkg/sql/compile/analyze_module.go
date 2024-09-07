@@ -49,7 +49,7 @@ func (anal *AnalyzeModule) GetPhyPlan() *models.PhyPlan {
 	return anal.phyPlan
 }
 
-func (anal AnalyzeModule) TypeName() string {
+func (anal *AnalyzeModule) TypeName() string {
 	return "compile.analyzeModule"
 }
 
@@ -133,8 +133,6 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node) {
 		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.TotalWaitTimeConsumed
 		node.AnalyzeInfo.S3IOByte += op.OpStats.TotalS3IOByte
 		node.AnalyzeInfo.NetworkIO += op.OpStats.TotalNetworkIO
-		//node.AnalyzeInfo.ScanTime += op.OpStats.TotalScanTime
-		//node.AnalyzeInfo.InsertTime += op.OpStats.TotalInsertTime
 		node.AnalyzeInfo.InputBlocks += op.OpStats.TotalInputBlocks
 
 		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
@@ -303,7 +301,6 @@ func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []models.
 						RemoteUuid: "",
 					})
 				} else {
-					//receivers = append(receivers, -1)
 					receivers = append(receivers, models.PhyReceiver{
 						Idx:        -1,
 						RemoteUuid: "",
@@ -317,7 +314,6 @@ func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []models.
 						Idx:        -2, // reg.NodeAddr
 						RemoteUuid: reg.Uuid.String(),
 					})
-					//fmt.Sprintf("[addr: %s, uuid %s]", reg.NodeAddr, reg.Uuid)
 				}
 			}
 		}

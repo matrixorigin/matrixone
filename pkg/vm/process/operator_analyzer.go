@@ -41,7 +41,7 @@ type Analyzer interface {
 	Network(*batch.Batch)
 	AddScanTime(t time.Time)
 	AddInsertTime(t time.Time)
-	ServiceInvokeTime(t time.Time)
+	AddIncrementTime(t time.Time)
 	GetOpStats() *OperatorStats
 	Reset()
 
@@ -106,9 +106,6 @@ func (opAlyzr *operatorAnalyzer) Stop() {
 			opAlyzr.start,
 			time.Now())
 		panic("Time consumed by the operator cannot be less than 0, " + str)
-		//fmt.Printf("Time consumed by the operator cannot be less than 0, %s \n", str)
-		//duration := time.Since(start)
-		//nonNegativeDuration := time.Duration(math.Max(0, float64(duration)))
 	}
 
 	// Update the statistical information of the operation analyzer
@@ -197,7 +194,7 @@ func (opAlyzr *operatorAnalyzer) AddInsertTime(t time.Time) {
 	opAlyzr.opStats.AddOpMetric(OpInsertTime, duration.Nanoseconds())
 }
 
-func (opAlyzr *operatorAnalyzer) ServiceInvokeTime(t time.Time) {
+func (opAlyzr *operatorAnalyzer) AddIncrementTime(t time.Time) {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.ServiceInvokeTime: operatorAnalyzer.opStats is nil")
 	}

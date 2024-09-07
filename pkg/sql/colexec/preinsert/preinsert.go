@@ -138,7 +138,7 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 		if err != nil {
 			return result, err
 		}
-		analyzer.ServiceInvokeTime(start)
+		analyzer.AddIncrementTime(start)
 	}
 	// check new rows not null
 	err = colexec.BatchDataNotNullCheck(preInsert.ctr.buf, preInsert.TableDef, proc.Ctx)
