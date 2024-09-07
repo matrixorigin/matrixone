@@ -2076,7 +2076,22 @@ func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeS
 
 // processLoadLocal executes the load data local.
 // load data local interaction: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_query_response_local_infile_request.html
-func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
+func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, reader *io.PipeReader) (err error) {
+	//pipewriter may stick when there is no reader reading on the pipereader.
+	//so we need to make sure the pipewriter.write returns.
+	//issue3976
+	quitC := make(chan int)
+	go func(ctx context.Context) {
+		select {
+		case <-ctx.Done():
+			//close reader
+			_ = reader.Close()
+		case <-quitC:
+		}
+	}(execCtx.reqCtx)
+	defer func() {
+		close(quitC)
+	}()
 	mysqlRrWr := ses.GetResponser().MysqlRrWr()
 	defer func() {
 		err2 := writer.Close()

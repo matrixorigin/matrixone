@@ -122,7 +122,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if st.Local {
 				loadLocalErrGroup = new(errgroup.Group)
 				loadLocalErrGroup.Go(func() error {
-					return processLoadLocal(ses, execCtx, st.Param, execCtx.loadLocalWriter)
+					return processLoadLocal(ses, execCtx, st.Param, execCtx.loadLocalWriter, execCtx.proc.LoadLocalReader)
 				})
 			}
 		}

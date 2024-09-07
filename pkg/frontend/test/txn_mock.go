@@ -550,6 +550,30 @@ func (mr *MockTxnOperatorMockRecorder) Debug(ctx, ops interface{}) *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Debug", reflect.TypeOf((*MockTxnOperator)(nil).Debug), ctx, ops)
 }
 
+// EnterIncrStmt mocks base method.
+func (m *MockTxnOperator) EnterIncrStmt() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "EnterIncrStmt")
+}
+
+// EnterIncrStmt indicates an expected call of EnterIncrStmt.
+func (mr *MockTxnOperatorMockRecorder) EnterIncrStmt() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnterIncrStmt", reflect.TypeOf((*MockTxnOperator)(nil).EnterIncrStmt))
+}
+
+// EnterRollbackStmt mocks base method.
+func (m *MockTxnOperator) EnterRollbackStmt() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "EnterRollbackStmt")
+}
+
+// EnterRollbackStmt indicates an expected call of EnterRollbackStmt.
+func (mr *MockTxnOperatorMockRecorder) EnterRollbackStmt() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnterRollbackStmt", reflect.TypeOf((*MockTxnOperator)(nil).EnterRollbackStmt))
+}
+
 // EnterRunSql mocks base method.
 func (m *MockTxnOperator) EnterRunSql() {
 	m.ctrl.T.Helper()
@@ -560,6 +584,30 @@ func (m *MockTxnOperator) EnterRunSql() {
 func (mr *MockTxnOperatorMockRecorder) EnterRunSql() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnterRunSql", reflect.TypeOf((*MockTxnOperator)(nil).EnterRunSql))
+}
+
+// ExitIncrStmt mocks base method.
+func (m *MockTxnOperator) ExitIncrStmt() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ExitIncrStmt")
+}
+
+// ExitIncrStmt indicates an expected call of ExitIncrStmt.
+func (mr *MockTxnOperatorMockRecorder) ExitIncrStmt() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExitIncrStmt", reflect.TypeOf((*MockTxnOperator)(nil).ExitIncrStmt))
+}
+
+// ExitRollbackStmt mocks base method.
+func (m *MockTxnOperator) ExitRollbackStmt() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ExitRollbackStmt")
+}
+
+// ExitRollbackStmt indicates an expected call of ExitRollbackStmt.
+func (mr *MockTxnOperatorMockRecorder) ExitRollbackStmt() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExitRollbackStmt", reflect.TypeOf((*MockTxnOperator)(nil).ExitRollbackStmt))
 }
 
 // ExitRunSql mocks base method.
@@ -742,13 +790,13 @@ func (mr *MockTxnOperatorMockRecorder) Rollback(ctx interface{}) *gomock.Call {
 // SetFootPrints mocks base method.
 func (m *MockTxnOperator) SetFootPrints(id int, enter bool) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetFootPrints", id)
+	m.ctrl.Call(m, "SetFootPrints", id, enter)
 }
 
 // SetFootPrints indicates an expected call of SetFootPrints.
-func (mr *MockTxnOperatorMockRecorder) SetFootPrints(prints interface{}) *gomock.Call {
+func (mr *MockTxnOperatorMockRecorder) SetFootPrints(id, enter interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFootPrints", reflect.TypeOf((*MockTxnOperator)(nil).SetFootPrints), prints)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFootPrints", reflect.TypeOf((*MockTxnOperator)(nil).SetFootPrints), id, enter)
 }
 
 // Snapshot mocks base method.
