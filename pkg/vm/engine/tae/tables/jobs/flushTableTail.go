@@ -882,6 +882,16 @@ func (task *flushTableTailTask) mergePersistedTombstones(ctx context.Context) er
 		return nil
 	}
 
+	scopes := make([]common.ID, 0, len(tombstones))
+	for _, obj := range tombstones {
+		scopes = append(scopes, *obj.AsCommonID())
+	}
+	err := task.rt.Scheduler.CheckAsyncScopes(scopes)
+	if err != nil {
+		logutil.Error("failed to merge persisted tombstones", zap.Error(err))
+		return err
+	}
+
 	tombstoneTask, err := NewMergeObjectsTask(
 		tasks.WaitableCtx,
 		task.txn,
