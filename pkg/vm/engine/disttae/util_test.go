@@ -1544,11 +1544,19 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 	})
 
 	tableDef.Pkey.PkeyColName = "a"
+
+	exeMap := make(map[int]colexec.ExpressionExecutor)
+
+	for _, expr := range exprs {
+		plan2.ReplaceFoldExpr(proc, expr, exeMap)
+	}
+
 	for i, expr := range exprs {
 		if exprStrings[i] == "b=40 and a=50" {
 			x := 0
 			x++
 		}
+		plan2.EvalFoldExpr(proc, expr, exeMap)
 		basePKFilter, err := newBasePKFilter(expr, tableDef, proc)
 		require.NoError(t, err)
 		require.Equal(t, filters[i].valid, basePKFilter.valid, exprStrings[i])
@@ -1557,6 +1565,11 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 			require.Equal(t, filters[i].lb, basePKFilter.lb, exprStrings[i])
 			require.Equal(t, filters[i].ub, basePKFilter.ub, exprStrings[i])
 		}
+	}
+
+	for k := range exeMap {
+		exeMap[k].Free()
+		delete(exeMap, k)
 	}
 
 	for i := range needFreeVecs {
