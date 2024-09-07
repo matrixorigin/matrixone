@@ -430,6 +430,10 @@ func (m *MockTxnOperator) AddLockTable(locktable lock.LockTable) error {
 	return ret0
 }
 
+func (m *MockTxnOperator) AddLockTable(table uint64) bool {
+	return true
+}
+
 // AddLockTable indicates an expected call of AddLockTable.
 func (mr *MockTxnOperatorMockRecorder) AddLockTable(locktable interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
