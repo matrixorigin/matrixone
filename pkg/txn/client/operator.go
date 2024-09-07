@@ -626,6 +626,16 @@ func (tc *txnOperator) AddLockTable(value lock.LockTable) error {
 	return tc.doAddLockTableLocked(value)
 }
 
+func (tc *txnOperator) HasLockTable(table uint64) bool {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if tc.mu.txn.Mode != txn.TxnMode_Pessimistic {
+		panic("lock in optimistic mode")
+	}
+
+	return tc.hasLockTableLocked(table)
+}
+
 func (tc *txnOperator) ResetRetry(retry bool) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -650,6 +660,15 @@ func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {
 	}
 	tc.mu.lockTables = append(tc.mu.lockTables, value)
 	return nil
+}
+
+func (tc *txnOperator) hasLockTableLocked(table uint64) bool {
+	for _, l := range tc.mu.lockTables {
+		if l.Table == table {
+			return true
+		}
+	}
+	return false
 }
 
 func (tc *txnOperator) Debug(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
