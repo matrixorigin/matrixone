@@ -430,6 +430,11 @@ func (m *MockTxnOperator) AddLockTable(locktable lock.LockTable) error {
 	return ret0
 }
 
+// AddLockTable mocks base method.
+func (m *MockTxnOperator) HasLockTable(table uint64) bool {
+	return true
+}
+
 // AddLockTable indicates an expected call of AddLockTable.
 func (mr *MockTxnOperatorMockRecorder) AddLockTable(locktable interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
