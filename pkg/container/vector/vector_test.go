@@ -80,15 +80,14 @@ func TestSize(t *testing.T) {
 	}
 }
 
-func TestGetUnionOneFunction(t *testing.T) {
+func TestUnionOne(t *testing.T) {
 	{ // test const vector
 		mp := mpool.MustNewZero()
 		v := NewVec(types.T_int8.ToType())
 		w := NewVec(types.T_int8.ToType())
 		err := AppendFixed(w, int8(0), false, mp)
 		require.NoError(t, err)
-		uf := GetUnionOneFunction(*w.GetType(), mp)
-		err = uf(v, w, 0)
+		err = v.UnionOne(w, 0, mp)
 		require.NoError(t, err)
 		w.Free(mp)
 		v.Free(mp)
@@ -100,8 +99,7 @@ func TestGetUnionOneFunction(t *testing.T) {
 		w := NewVec(types.T_varchar.ToType())
 		err := AppendBytes(w, []byte("x"), false, mp)
 		require.NoError(t, err)
-		uf := GetUnionOneFunction(*w.GetType(), mp)
-		err = uf(v, w, 0)
+		err = v.UnionOne(w, 0, mp)
 		require.NoError(t, err)
 		w.Free(mp)
 		v.Free(mp)
@@ -111,10 +109,9 @@ func TestGetUnionOneFunction(t *testing.T) {
 		mp := mpool.MustNewZero()
 		v := NewVec(types.New(types.T_array_float32, 4, 0))
 		w := NewVec(types.New(types.T_array_float32, 4, 0))
-		err := AppendArrayList[float32](w, [][]float32{{1, 2, 3, 0}, {4, 5, 6, 0}}, nil, mp)
+		err := AppendArrayList(w, [][]float32{{1, 2, 3, 0}, {4, 5, 6, 0}}, nil, mp)
 		require.NoError(t, err)
-		uf := GetUnionOneFunction(*w.GetType(), mp)
-		err = uf(v, w, 0)
+		err = v.UnionOne(w, 0, mp)
 		require.NoError(t, err)
 		w.Free(mp)
 		v.Free(mp)
@@ -125,10 +122,9 @@ func TestGetUnionOneFunction(t *testing.T) {
 		mp := mpool.MustNewZero()
 		v := NewVec(types.New(types.T_array_float64, 4, 0))
 		w := NewVec(types.New(types.T_array_float64, 4, 0))
-		err := AppendArrayList[float64](w, [][]float64{{1, 2, 3, 0}, {4, 5, 6, 0}}, nil, mp)
+		err := AppendArrayList(w, [][]float64{{1, 2, 3, 0}, {4, 5, 6, 0}}, nil, mp)
 		require.NoError(t, err)
-		uf := GetUnionOneFunction(*w.GetType(), mp)
-		err = uf(v, w, 0)
+		err = v.UnionOne(w, 0, mp)
 		require.NoError(t, err)
 		w.Free(mp)
 		v.Free(mp)
@@ -138,10 +134,9 @@ func TestGetUnionOneFunction(t *testing.T) {
 		mp := mpool.MustNewZero()
 		v := NewVec(types.New(types.T_bit, 10, 0))
 		w := NewVec(types.New(types.T_bit, 10, 0))
-		err := AppendFixedList[uint64](w, []uint64{1, 2, 3, 4}, nil, mp)
+		err := AppendFixedList(w, []uint64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		uf := GetUnionOneFunction(*w.GetType(), mp)
-		err = uf(v, w, 0)
+		err = v.UnionOne(w, 0, mp)
 		require.NoError(t, err)
 		require.Equal(t, 1, v.Length())
 		vs := MustFixedColWithTypeCheck[uint64](v)
@@ -149,6 +144,124 @@ func TestGetUnionOneFunction(t *testing.T) {
 
 		w.Free(mp)
 		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // bool
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_bool.ToType())
+		w := NewVec(types.T_bool.ToType())
+		err := AppendFixedList(w, []bool{true, false, true, false}, nil, mp)
+		require.NoError(t, err)
+		err = v.UnionOne(w, 0, mp)
+		require.NoError(t, err)
+		require.Equal(t, 1, v.Length())
+		vs := MustFixedColNoTypeCheck[bool](v)
+		require.Equal(t, true, vs[0])
+
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int8
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_int8.ToType())
+		w := NewVec(types.T_int8.ToType())
+		err := AppendFixedList(w, []int8{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		err = v.UnionOne(w, 0, mp)
+		require.NoError(t, err)
+		require.Equal(t, 1, v.Length())
+		vs := MustFixedColNoTypeCheck[int8](v)
+		require.Equal(t, int8(1), vs[0])
+
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int16
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_int16.ToType())
+		w := NewVec(types.T_int16.ToType())
+		err := AppendFixedList(w, []int16{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		err = v.UnionOne(w, 0, mp)
+		require.NoError(t, err)
+		require.Equal(t, 1, v.Length())
+		vs := MustFixedColNoTypeCheck[int16](v)
+		require.Equal(t, int16(1), vs[0])
+
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int32
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_int32.ToType())
+		w := NewVec(types.T_int32.ToType())
+		err := AppendFixedList(w, []int32{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		err = v.UnionOne(w, 0, mp)
+		require.NoError(t, err)
+		require.Equal(t, 1, v.Length())
+		vs := MustFixedColNoTypeCheck[int32](v)
+		require.Equal(t, int32(1), vs[0])
+
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int64
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_int64.ToType())
+		w := NewVec(types.T_int64.ToType())
+		err := AppendFixedList(w, []int64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		err = v.UnionOne(w, 0, mp)
+		require.NoError(t, err)
+		require.Equal(t, 1, v.Length())
+		vs := MustFixedColNoTypeCheck[int64](v)
+		require.Equal(t, int64(1), vs[0])
+
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // uint8
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_uint8.ToType())
+		w := NewVec(types.T_uint8.ToType())
+		err := AppendFixedList(w, []uint8{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		err = v.UnionOne(w, 0, mp)
+		require.NoError(t, err)
+		require.Equal(t, 1, v.Length())
+		vs := MustFixedColNoTypeCheck[uint8](v)
+		require.Equal(t, uint8(1), vs[0])
+
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // text
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_text.ToType())
+		w := NewVec(types.T_text.ToType())
+		err := AppendBytesList(w, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
+		require.NoError(t, err)
+
+		err = v.UnionOne(w, 0, mp)
+		require.NoError(t, err)
+		require.Equal(t, 1, v.Length())
+		vs, area := MustVarlenaRawData(v)
+		require.Equal(t, "1", vs[0].GetString(area))
+
+		v.Free(mp)
+		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 }
