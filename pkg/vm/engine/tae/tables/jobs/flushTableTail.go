@@ -181,9 +181,6 @@ func NewFlushTableTailTask(
 		if !hdl.IsAppendable() {
 			panic(fmt.Sprintf("logic err %v is nonappendable", hdl.GetID().String()))
 		}
-		if obj.HasDropCommitted() {
-			continue
-		}
 		if obj.GetObjectData().CheckFlushTaskRetry(txn.GetStartTS()) {
 			logutil.Info(
 				"[FLUSH-NEED-RETRY]",
@@ -191,6 +188,9 @@ func NewFlushTableTailTask(
 				common.AnyField("obj", obj.ID().String()),
 			)
 			return nil, txnif.ErrTxnNeedRetry
+		}
+		if obj.HasDropCommitted() {
+			continue
 		}
 		task.aObjMetas = append(task.aObjMetas, obj)
 		task.aObjHandles = append(task.aObjHandles, hdl)
@@ -211,12 +211,12 @@ func NewFlushTableTailTask(
 		if !hdl.IsAppendable() {
 			panic(fmt.Sprintf("logic err %v is nonappendable", hdl.GetID().String()))
 		}
-		if obj.HasDropCommitted() {
-			continue
-		}
 		if obj.GetObjectData().CheckFlushTaskRetry(txn.GetStartTS()) {
 			logutil.Infof("[FlushTabletail] obj %v needs retry", obj.ID().String())
 			return nil, txnif.ErrTxnNeedRetry
+		}
+		if obj.HasDropCommitted() {
+			continue
 		}
 		task.aTombstoneMetas = append(task.aTombstoneMetas, obj)
 		task.aTombstoneHandles = append(task.aTombstoneHandles, hdl)
