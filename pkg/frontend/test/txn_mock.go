@@ -430,7 +430,7 @@ func (m *MockTxnOperator) AddLockTable(locktable lock.LockTable) error {
 	return ret0
 }
 
-func (m *MockTxnOperator) AddLockTable(table uint64) bool {
+func (m *MockTxnOperator) HasLockTable(table uint64) bool {
 	return true
 }
 
