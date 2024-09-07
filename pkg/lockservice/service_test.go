@@ -2542,6 +2542,62 @@ func TestOldTxnLockInRollingRestartCN(t *testing.T) {
 	)
 }
 
+func TestIssue4017(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+
+			_, err = l.Lock(
+				ctx,
+				1,
+				[][]byte{{2}},
+				[]byte("txn1"),
+				option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNewTxnInCNRollingRestart))
+
+			err = l.Unlock(
+				ctx,
+				[]byte("txn1"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+		},
+	)
+}
+
 func TestLeaveGetBindInRollingRestartCN(t *testing.T) {
 	runLockServiceTests(
 		t,
