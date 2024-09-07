@@ -110,7 +110,6 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 	}
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
 // applyOpStatsToNode Recursive traversal of PhyOperator tree,
 // and add OpStats statistics to the corresponding NodeAnalyze Info
 func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node) {

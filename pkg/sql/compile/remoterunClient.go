@@ -322,17 +322,13 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 
 			anaData := m.GetAnalyse()
 			if len(anaData) > 0 {
-				//---------------------------------------------------------------
 				var p models.PhyPlan
 				err = json.Unmarshal(anaData, &p)
 				if err != nil {
 					return nil, false, err
 				}
 
-				//fmt.Printf("-------------------xxx receive PhyPlan from remote cn--------------------%v\n", string(anaData))
-
 				sender.dealRemoteAnalysis(p)
-				//---------------------------------------------------------------
 			}
 			return nil, true, nil
 		}

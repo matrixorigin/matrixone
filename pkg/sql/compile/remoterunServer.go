@@ -199,12 +199,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}()
 
 		err = s.MergeRun(runCompile)
-		//-------------------------------------------------------------------
 		if err == nil {
 			runCompile.GenPhyPlan(runCompile)
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
 		}
-		//-------------------------------------------------------------------
 		return err
 
 	case pipeline.Method_StopSending:
@@ -473,7 +471,6 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	if err != nil {
 		return err
 	}
-	//fmt.Printf("--------------yyyy-send PhyPlan to source cn-------------%s\n", string(jsonData))
 	message.SetAnalysis(jsonData)
 
 	return receiver.clientSession.Write(receiver.messageCtx, message)

@@ -24,9 +24,9 @@ import (
 type MetricType int
 
 const (
-	OpScanTime MetricType = iota
-	OpInsertTime
-	OpIncrementTime
+	OpScanTime      MetricType = 0
+	OpInsertTime    MetricType = 1
+	OpIncrementTime MetricType = 2
 )
 
 // Analyze analyzes information for operator
