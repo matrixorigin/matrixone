@@ -20,9 +20,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -171,45 +168,32 @@ func (tomb *tombstoneData) HasBlockTombstone(
 			if zm.PrefixEq(id[:]) {
 				return true, nil
 			}
-			bf, err := objectio.FastLoadBF(
-				ctx,
-				objectStats.ObjectLocation(),
-				false,
-				fs,
+			location := objectStats.ObjectLocation()
+			objectMeta, err := objectio.FastLoadObjectMeta(
+				ctx, &location, false, fs,
 			)
 			if err != nil {
-				logutil.Error(
-					"LOAD-BF-ERROR",
-					zap.String("location", objectStats.ObjectLocation().String()),
-					zap.Error(err),
-				)
 				return false, err
 			}
-			oneBlockBF := index.NewEmptyBloomFilterWithType(index.HBF)
-			for idx, end := 0, int(objectStats.BlkCnt()); idx < end; idx++ {
-				buf := bf.GetBloomFilter(uint32(idx))
-				if err := index.DecodeBloomFilter(oneBlockBF, buf); err != nil {
-					logutil.Error(
-						"DECODE-BF-ERROR",
-						zap.String("location", objectStats.ObjectLocation().String()),
-						zap.Error(err),
-					)
-					return false, err
+
+			dataMeta := objectMeta.MustDataMeta()
+
+			blkCnt := int(dataMeta.BlockCount())
+
+			startIdx := sort.Search(blkCnt, func(i int) bool {
+				return dataMeta.GetBlockMeta(uint32(i)).MustGetColumn(0).ZoneMap().AnyGEByValue(id[:])
+			})
+
+			for pos := startIdx; pos < blkCnt; pos++ {
+				blkMeta := dataMeta.GetBlockMeta(uint32(pos))
+				columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
+				if !columnZonemap.PrefixEq(id[:]) {
+					if columnZonemap.PrefixGT(id[:]) {
+						break
+					}
+					continue
 				}
-				if exist, err := oneBlockBF.PrefixMayContainsKey(
-					id[:],
-					index.PrefixFnID_Block,
-					2,
-				); err != nil {
-					logutil.Error(
-						"PREFIX-MAY-CONTAINS-ERROR",
-						zap.String("location", objectStats.ObjectLocation().String()),
-						zap.Error(err),
-					)
-					return false, err
-				} else if exist {
-					return true, nil
-				}
+				return true, nil
 			}
 		}
 	}
