@@ -17,6 +17,7 @@ package shuffle
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -42,7 +43,22 @@ func (sp *ShufflePool) Reset(m *mpool.MPool) {
 	}
 }
 
-func (sp *ShufflePool) GetEndingBatch() *batch.Batch {
+func (sp *ShufflePool) Print() {
+	for i := range sp.batches {
+		bat := sp.batches[i]
+		if bat == nil {
+			logutil.Infof("shuffle pool %p batches[%v] is nil", sp, i)
+		} else {
+			logutil.Infof("shuffle pool %p batches[%v] rowcnt %v", sp, i, bat.RowCount())
+		}
+	}
+}
+
+// shuffle operator is ending, release buf and sending remaining batches
+func (sp *ShufflePool) GetEndingBatch(buf *batch.Batch, proc *process.Process) *batch.Batch {
+	if buf != nil {
+		buf.Clean(proc.Mp())
+	}
 	for i := range sp.batches {
 		bat := sp.batches[i]
 		if bat != nil && bat.RowCount() > 0 {

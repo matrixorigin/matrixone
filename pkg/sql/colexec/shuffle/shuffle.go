@@ -75,14 +75,17 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 SENDLAST:
 	if shuffle.ctr.ending {
 		//send shuffle pool
-		result.Batch = shuffle.ctr.shufflePool.GetEndingBatch()
+		result.Batch = shuffle.ctr.shufflePool.GetEndingBatch(shuffle.ctr.buf, proc)
 		//need to wait for runtimefilter_pass before send batch
 		if err := shuffle.handleRuntimeFilter(proc); err != nil {
 			return vm.CancelResult, err
 		}
 		if result.Batch == nil {
 			result.Status = vm.ExecStop
+		} else {
+			result.Status = vm.ExecHasMore
 		}
+		shuffle.ctr.buf = result.Batch
 		return result, nil
 	}
 
