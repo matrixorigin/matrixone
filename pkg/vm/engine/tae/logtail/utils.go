@@ -629,14 +629,7 @@ func (data *CNCheckpointData) PrefetchMetaIdx(
 	key objectio.Location,
 	service fileservice.FileService,
 ) (err error) {
-	var pref blockio.PrefetchParams
-	pref, err = blockio.BuildPrefetchParams(service, key)
-	if err != nil {
-		return
-	}
-	pref.AddBlockWithType(idxes, []uint16{0}, uint16(objectio.ConvertToSchemaType(MetaIDX)))
-
-	return blockio.PrefetchWithMerged(data.sid, pref)
+	return blockio.Prefetch(data.sid, service, key)
 }
 
 func (data *CNCheckpointData) PrefetchMetaFrom(
@@ -664,8 +657,8 @@ func (data *CNCheckpointData) PrefetchMetaFrom(
 			}
 		}
 	}
-	for _, location := range locations {
-		err = blockio.PrefetchMeta(data.sid, service, location)
+	for _, key := range locations {
+		err = blockio.PrefetchMeta(data.sid, service, key)
 	}
 	return err
 }
@@ -682,8 +675,6 @@ func (data *CNCheckpointData) PrefetchFrom(
 		return
 	}
 	// for ver less than 5, some tablemeta is empty
-	empty := true
-	files := make(map[string]*blockio.PrefetchParams)
 	for i, table := range meta.tables {
 		if table == nil {
 			continue
@@ -699,26 +690,10 @@ func (data *CNCheckpointData) PrefetchFrom(
 		for it.HasNext() {
 			block := it.Next()
 			location := block.GetLocation()
-			if files[location.Name().String()] == nil {
-				var pref blockio.PrefetchParams
-				pref, err = blockio.BuildPrefetchParams(service, location)
-				if err != nil {
-					return
-				}
-				files[location.Name().String()] = &pref
+			err = blockio.Prefetch(data.sid, service, location)
+			if err != nil {
+				return err
 			}
-			pref := *files[location.Name().String()]
-			pref.AddBlockWithType(idxes, []uint16{block.GetID()}, uint16(objectio.ConvertToSchemaType(idx)))
-			empty = false
-		}
-	}
-	if empty {
-		return
-	}
-	for _, pref := range files {
-		err = blockio.PrefetchWithMerged(data.sid, *pref)
-		if err != nil {
-			return
 		}
 	}
 	return nil
@@ -1441,82 +1416,43 @@ func (data *CheckpointData) ReadTNMetaBatch(
 }
 
 func (data *CheckpointData) PrefetchMeta(
-	ctx context.Context,
-	version uint32,
 	service fileservice.FileService,
-	key objectio.Location) (err error) {
-	var pref blockio.PrefetchParams
-	pref, err = blockio.BuildPrefetchParams(service, key)
-	if err != nil {
-		return
-	}
-	meteIdxSchema := checkpointDataReferVersions[version][MetaIDX]
-	tnMeteIdxSchema := checkpointDataReferVersions[version][TNMetaIDX]
-	idxes := make([]uint16, 0)
-	tnIdxes := make([]uint16, 0)
-	for attr := range meteIdxSchema.attrs {
-		idxes = append(idxes, uint16(attr))
-	}
-	for attr := range tnMeteIdxSchema.attrs {
-		tnIdxes = append(tnIdxes, uint16(attr))
-	}
-	pref.AddBlockWithType(idxes, []uint16{0}, uint16(objectio.ConvertToSchemaType(MetaIDX)))
-	pref.AddBlockWithType(tnIdxes, []uint16{1}, uint16(objectio.ConvertToSchemaType(TNMetaIDX)))
-	return blockio.PrefetchWithMerged(data.sid, pref)
-}
-
-type blockIdx struct {
-	location objectio.Location
-	dataType uint16
+	key objectio.Location,
+) (err error) {
+	return blockio.Prefetch(data.sid, service, key)
 }
 
 func (data *CheckpointData) PrefetchFrom(
-	ctx context.Context,
-	version uint32,
 	service fileservice.FileService,
-	key objectio.Location) (err error) {
-	blocks, area := vector.MustVarlenaRawData(data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_BlockLocation).GetDownstreamVector())
-	dataType := vector.MustFixedColWithTypeCheck[uint16](data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_SchemaType).GetDownstreamVector())
-	var pref blockio.PrefetchParams
-	locations := make(map[string][]blockIdx)
+) (err error) {
+	blocks, area := vector.MustVarlenaRawData(
+		data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_BlockLocation).GetDownstreamVector())
+	var keys map[objectio.ObjectNameShort]objectio.Location
 	checkpointSize := uint64(0)
 	for i := range blocks {
 		location := objectio.Location(blocks[i].GetByteSlice(area))
 		if location.IsEmpty() {
 			continue
 		}
-		name := location.Name()
-		if locations[name.String()] == nil {
-			locations[name.String()] = make([]blockIdx, 0)
+		if len(keys) == 0 {
+			keys = make(map[objectio.ObjectNameShort]objectio.Location)
 		}
-		locations[name.String()] = append(locations[name.String()], blockIdx{location: location, dataType: dataType[i]})
+		keys[*location.ShortName()] = location
 	}
-	for _, blockIdxes := range locations {
-		pref, err = blockio.BuildPrefetchParams(service, blockIdxes[0].location)
-		if err != nil {
-			return
-		}
-		checkpointSize += uint64(blockIdxes[0].location.Extent().End())
+	for _, key := range keys {
+		checkpointSize += uint64(key.Extent().End())
 		logutil.Info("prefetch-read-checkpoint", common.OperationField("prefetch read"),
 			common.OperandField("checkpoint"),
-			common.AnyField("location", blockIdxes[0].location.String()),
+			common.AnyField("location", key.String()),
 			common.AnyField("size", checkpointSize))
-		for _, idx := range blockIdxes {
-			schema := checkpointDataReferVersions[version][idx.dataType]
-			idxes := make([]uint16, len(schema.attrs))
-			for attr := range schema.attrs {
-				idxes[attr] = uint16(attr)
-			}
-			pref.AddBlockWithType(idxes, []uint16{idx.location.ID()}, uint16(objectio.ConvertToSchemaType(idx.dataType)))
-		}
-		err = blockio.PrefetchWithMerged(data.sid, pref)
+		err = blockio.Prefetch(data.sid, service, key)
 		if err != nil {
 			logutil.Warnf("PrefetchFrom PrefetchWithMerged error %v", err)
 		}
 	}
 	logutil.Info("prefetch-checkpoint",
 		common.AnyField("size", checkpointSize),
-		common.AnyField("count", len(locations)))
+		common.AnyField("count", len(keys)))
 	return
 }
 

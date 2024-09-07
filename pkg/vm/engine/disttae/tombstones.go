@@ -228,10 +228,9 @@ func (tomb *tombstoneData) PrefetchTombstones(
 			loc := stats.BlockLocation(uint16(j), objectio.BlockMaxRows)
 			if err := blockio.Prefetch(
 				srvId,
-				[]uint16{0, 1, 2},
-				[]uint16{loc.ID()},
 				fs,
-				loc); err != nil {
+				loc,
+			); err != nil {
 				logutil.Errorf("prefetch block delta location: %s", err.Error())
 			}
 		}
