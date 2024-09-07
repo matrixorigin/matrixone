@@ -138,6 +138,8 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 					DisableTraceV12:       true,
 					DisableErrorV12:       true,
 					DisableSpanV12:        true,
+					// part metric
+					MetricUpdateStorageUsageIntervalV12: toml.Duration{Duration: time.Minute},
 					// part statement_info
 					EnableStmtMergeV12:        true,
 					DisableStmtAggregationV12: true,
@@ -155,6 +157,7 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 			check: func(t *testing.T, cfg *ObservabilityParameters) {
 				require.Equal(t, 123, cfg.StatusPort)
 				require.Equal(t, true, cfg.EnableMetricToProm)
+				require.Equal(t, toml.Duration{Duration: time.Minute}, cfg.MetricStorageUsageUpdateInterval)
 				require.Equal(t, true, cfg.DisableMetric)
 				require.Equal(t, true, cfg.DisableTrace)
 				require.Equal(t, true, cfg.DisableError)
@@ -179,6 +182,7 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 				cfg.DisableError = true
 				cfg.DisableSpan = true
 				cfg.EnableStmtMerge = true
+				cfg.MetricStorageUsageUpdateInterval.UnmarshalText([]byte("5m"))
 				cfg.DisableStmtAggregation = true
 				cfg.AggregationWindow.UnmarshalText([]byte("6s"))
 				cfg.SelectAggThreshold.UnmarshalText([]byte("300ms"))
@@ -191,6 +195,8 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 				cfg.ObservabilityOldParameters = ObservabilityOldParameters{
 					StatusPortV12:         123,
 					EnableMetricToPromV12: true,
+					// part metric
+					MetricUpdateStorageUsageIntervalV12: toml.Duration{Duration: time.Minute},
 					// part trace
 					DisableMetricV12: true,
 					DisableTraceV12:  true,
@@ -213,6 +219,7 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 			check: func(t *testing.T, cfg *ObservabilityParameters) {
 				require.Equal(t, 7101, cfg.StatusPort)
 				require.Equal(t, true, cfg.EnableMetricToProm)
+				require.Equal(t, toml.Duration{Duration: 5 * time.Minute}, cfg.MetricStorageUsageUpdateInterval)
 				require.Equal(t, true, cfg.DisableMetric)
 				require.Equal(t, true, cfg.DisableTrace)
 				require.Equal(t, true, cfg.DisableError)
