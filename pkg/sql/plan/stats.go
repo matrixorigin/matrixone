@@ -1050,8 +1050,6 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		scanSnapshot = &Snapshot{}
 	}
 
-	logutil.Infof("calc scan stats for table %v", node.TableDef.Name)
-
 	s, err := builder.compCtx.Stats(node.ObjRef, *scanSnapshot)
 	if err != nil || s == nil {
 		return DefaultStats()
