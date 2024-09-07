@@ -165,8 +165,8 @@ func (tomb *tombstoneData) HasBlockTombstone(
 		for i, end := 0, tomb.files.Len(); i < end; i++ {
 			objectStats := tomb.files.Get(i)
 			zm := objectStats.SortKeyZoneMap()
-			if zm.PrefixEq(id[:]) {
-				return true, nil
+			if !zm.PrefixEq(id[:]) {
+				continue
 			}
 			location := objectStats.ObjectLocation()
 			objectMeta, err := objectio.FastLoadObjectMeta(
