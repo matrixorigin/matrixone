@@ -143,8 +143,6 @@ func NewService(
 		return nil, err
 	}
 
-	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
-
 	if err = srv.initMetadata(); err != nil {
 		return nil, err
 	}
