@@ -1,0 +1,5 @@
+select statement, error, count(1) < sum(aggr_count) check_result, count(1) cnt, sum(aggr_count) sum from system.statement_info where account="bvt_aggr_error_stmt" and sql_source_type="cloud_nonuser_sql" group by `statement`, error;
+statement    error    check_result    cnt    sum
+select * from system.statement_not_exist_2    SQL parser error: table "statement_not_exist_2" does not exist    true    1    3
+select * from system.statement_not_exist_3    SQL parser error: table "statement_not_exist_3" does not exist    true    1    3
+select * from system.statement_not_exist    SQL parser error: table "statement_not_exist" does not exist    true    1    9

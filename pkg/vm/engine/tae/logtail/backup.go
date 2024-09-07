@@ -84,7 +84,6 @@ func (d *BackupDeltaLocDataSource) Next(
 	_ []uint16,
 	_ any,
 	_ *mpool.MPool,
-	_ engine.VectorPool,
 	_ *batch.Batch,
 ) (*objectio.BlockInfo, engine.DataState, error) {
 	return nil, engine.Persisted, nil
