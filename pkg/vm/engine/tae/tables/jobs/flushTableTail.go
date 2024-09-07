@@ -385,11 +385,13 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	//// phase separator
 	///////////////////
 
-	phaseDesc = "1-merging persisted tombstones"
-	inst = time.Now()
-	// ignore error
-	_ = task.mergePersistedTombstones(ctx)
-	statWaitTombstoneMerge := time.Since(inst)
+	/*
+		phaseDesc = "1-merging persisted tombstones"
+		inst = time.Now()
+		// ignore error
+		_ = task.mergePersistedTombstones(ctx)
+		statWaitTombstoneMerge := time.Since(inst)
+	*/
 
 	/////////////////////
 	//// phase separator
@@ -468,7 +470,7 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 			common.AnyField("wait-aobj-flush", statWaitAobj),
 			common.AnyField("wait-dels-flush", statWaitTombstones),
 			common.AnyField("log-txn-entry", statNewFlushEntry),
-			common.AnyField("tombstone-merge", statWaitTombstoneMerge),
+			//common.AnyField("tombstone-merge", statWaitTombstoneMerge),
 		)
 	}
 
