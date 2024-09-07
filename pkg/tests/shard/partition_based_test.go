@@ -17,7 +17,6 @@ package shard
 import (
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -95,34 +94,4 @@ func mustCreatePartitionBasedTable(
 	)
 
 	return shardTableID
-}
-
-func waitReplica(
-	t *testing.T,
-	c embed.Cluster,
-	tableID uint64,
-	replicas []int64,
-) {
-	cn1, err := c.GetCNService(0)
-	require.NoError(t, err)
-	cn2, err := c.GetCNService(1)
-	require.NoError(t, err)
-	cn3, err := c.GetCNService(2)
-	require.NoError(t, err)
-
-	s1 := shardservice.GetService(cn1.RawService().(cnservice.Service).ID())
-	s2 := shardservice.GetService(cn2.RawService().(cnservice.Service).ID())
-	s3 := shardservice.GetService(cn3.RawService().(cnservice.Service).ID())
-
-	for {
-		n1 := s1.TableReplicaCount(tableID)
-		n2 := s2.TableReplicaCount(tableID)
-		n3 := s3.TableReplicaCount(tableID)
-		if n1 == replicas[0] &&
-			n2 == replicas[1] &&
-			n3 == replicas[2] {
-			return
-		}
-		time.Sleep(time.Second)
-	}
 }
