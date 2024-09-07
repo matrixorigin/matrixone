@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,31 +15,11 @@
 package hashtable
 
 import (
-	"unsafe"
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
-const (
-	kInitialCellCntBits = 10
-	kInitialCellCnt     = 1 << kInitialCellCntBits
-	maxBlockSize        = 256 * (1 << 20)
-)
-
-func maxElemCnt(cellCnt, cellSize uint64) uint64 {
-	if cellCnt*cellSize < maxBlockSize {
-		return cellCnt / 2
-	} else {
-		return cellCnt * 3 / 4
-	}
-}
-
-type Aggregator interface {
-	StateSize() uint8
-	ResultSize() uint8
-	NeedsInit() bool
-
-	Init(state unsafe.Pointer)
-	AddBatch(states []unsafe.Pointer, values unsafe.Pointer)
-	MergeBatch(lstates, rstates []unsafe.Pointer)
-
-	Finalize(states, results []unsafe.Pointer)
-}
+var allocator = sync.OnceValue(func() malloc.Allocator {
+	return malloc.GetDefault(nil)
+})
