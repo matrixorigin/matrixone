@@ -222,4 +222,35 @@ Project
 select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
 count(*)
 10000000
+create table t3(c1 int not null, c2 int not null)cluster by c1;
+insert into t3 select *,* from generate_series(1,1000000)g;
+explain select count(*) from t3 where t3.c2 in (select c3 from t1 where t1.c2!=20000 and  t1.c2 not in ( select c2 from t2 where t2.c3>150000 ));
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Join
+              Join Type: SEMI
+              Join Cond: (t3.c2 = t1.c3)
+              Runtime Filter Build: #[-1,0]
+              ->  Table Scan on d1.t3
+                    Runtime Filter Probe: t3.c2
+              ->  Join
+                    Join Type: ANTI
+                    Join Cond: (t1.c2 = t2.c2) shuffle: range(t1.c2)
+                    ->  Table Scan on d1.t1
+                          Filter Cond: (t1.c2 <> 20000)
+                    ->  Table Scan on d1.t2
+                          Filter Cond: (t2.c3 > 150000)
+                          Block Filter Cond: (t2.c3 > 150000)
+select count(*) from t3 where t3.c2 in (select c3 from t1 where t1.c2!=20000 and  t1.c2 not in ( select c2 from t2 where t2.c3>150000 ));
+count(*)
+149999
+select count(*) from t3 where t3.c1<100000 and t3.c2 not in (select c3 from t1 where t1.c2!=30000 and  t1.c2  in ( select c2 from t2 where t2.c3<850000 ));
+count(*)
+1
+select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t1.c2=t3.c2 and t2.c2<900000 and t3.c1<500000;
+count(*)
+499999
+drop table t3;
 drop database if exists d1;

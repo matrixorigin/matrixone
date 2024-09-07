@@ -144,8 +144,6 @@ func NewService(
 		return nil, err
 	}
 
-	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
-
 	if err = srv.initMetadata(); err != nil {
 		return nil, err
 	}
@@ -780,6 +778,7 @@ func (s *service) initShardService() {
 	s.shardService = shardservice.NewService(
 		cfg,
 		store,
+		shardservice.WithWaitCNReported(),
 	)
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
 		runtime.ShardService,

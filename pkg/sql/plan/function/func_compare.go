@@ -206,7 +206,7 @@ func valueDec64Compare(
 	m := p2.GetType().Scale - p1.GetType().Scale
 
 	rsVec := result.GetResultVector()
-	rss := vector.MustFixedCol[bool](rsVec)
+	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
@@ -395,7 +395,7 @@ func valueDec128Compare(
 	m := p2.GetType().Scale - p1.GetType().Scale
 
 	rsVec := result.GetResultVector()
-	rss := vector.MustFixedCol[bool](rsVec)
+	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()

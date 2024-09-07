@@ -129,7 +129,7 @@ func vectorAtFixed[T any](vec *vector.Vector, i int) (value Nullable) {
 		return
 	}
 
-	slice := vector.MustFixedCol[T](vec)
+	slice := vector.MustFixedColNoTypeCheck[T](vec)
 	if len(slice) != vec.Length() {
 		panic(fmt.Sprintf(
 			"bad vector length, expected %d, got %d",

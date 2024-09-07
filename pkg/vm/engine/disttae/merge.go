@@ -164,7 +164,7 @@ func (t *cnMergeTask) GetAccBlkCnts() []int {
 }
 
 func (t *cnMergeTask) GetBlockMaxRows() uint32 {
-	return options.DefaultBlockMaxRows
+	return objectio.BlockMaxRows
 }
 
 func (t *cnMergeTask) GetObjectMaxBlocks() uint16 {

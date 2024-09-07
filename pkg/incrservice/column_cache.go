@@ -517,7 +517,7 @@ func insertAutoValues[T constraints.Integer](
 		col.maybeAllocate(ctx, tableID, txnOp)
 	}()
 
-	vs := vector.MustFixedCol[T](vec)
+	vs := vector.MustFixedColWithTypeCheck[T](vec)
 	autoCount := vec.GetNulls().Count()
 	lastInsertValue := uint64(0)
 

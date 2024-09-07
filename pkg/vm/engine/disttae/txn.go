@@ -177,73 +177,73 @@ func checkPKDup(
 	colType := pk.GetType()
 	switch colType.Oid {
 	case types.T_bool:
-		vs := vector.MustFixedCol[bool](pk)
+		vs := vector.MustFixedColNoTypeCheck[bool](pk)
 		return checkPKDupGeneric[bool](mp, colType, vs, start, count)
 	case types.T_bit:
-		vs := vector.MustFixedCol[uint64](pk)
+		vs := vector.MustFixedColNoTypeCheck[uint64](pk)
 		return checkPKDupGeneric[uint64](mp, colType, vs, start, count)
 	case types.T_int8:
-		vs := vector.MustFixedCol[int8](pk)
+		vs := vector.MustFixedColNoTypeCheck[int8](pk)
 		return checkPKDupGeneric[int8](mp, colType, vs, start, count)
 	case types.T_int16:
-		vs := vector.MustFixedCol[int16](pk)
+		vs := vector.MustFixedColNoTypeCheck[int16](pk)
 		return checkPKDupGeneric[int16](mp, colType, vs, start, count)
 	case types.T_int32:
-		vs := vector.MustFixedCol[int32](pk)
+		vs := vector.MustFixedColNoTypeCheck[int32](pk)
 		return checkPKDupGeneric[int32](mp, colType, vs, start, count)
 	case types.T_int64:
-		vs := vector.MustFixedCol[int64](pk)
+		vs := vector.MustFixedColNoTypeCheck[int64](pk)
 		return checkPKDupGeneric[int64](mp, colType, vs, start, count)
 	case types.T_uint8:
-		vs := vector.MustFixedCol[uint8](pk)
+		vs := vector.MustFixedColNoTypeCheck[uint8](pk)
 		return checkPKDupGeneric[uint8](mp, colType, vs, start, count)
 	case types.T_uint16:
-		vs := vector.MustFixedCol[uint16](pk)
+		vs := vector.MustFixedColNoTypeCheck[uint16](pk)
 		return checkPKDupGeneric[uint16](mp, colType, vs, start, count)
 	case types.T_uint32:
-		vs := vector.MustFixedCol[uint32](pk)
+		vs := vector.MustFixedColNoTypeCheck[uint32](pk)
 		return checkPKDupGeneric[uint32](mp, colType, vs, start, count)
 	case types.T_uint64:
-		vs := vector.MustFixedCol[uint64](pk)
+		vs := vector.MustFixedColNoTypeCheck[uint64](pk)
 		return checkPKDupGeneric[uint64](mp, colType, vs, start, count)
 	case types.T_decimal64:
-		vs := vector.MustFixedCol[types.Decimal64](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Decimal64](pk)
 		return checkPKDupGeneric[types.Decimal64](mp, colType, vs, start, count)
 	case types.T_decimal128:
-		vs := vector.MustFixedCol[types.Decimal128](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Decimal128](pk)
 		return checkPKDupGeneric[types.Decimal128](mp, colType, vs, start, count)
 	case types.T_uuid:
-		vs := vector.MustFixedCol[types.Uuid](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Uuid](pk)
 		return checkPKDupGeneric[types.Uuid](mp, colType, vs, start, count)
 	case types.T_float32:
-		vs := vector.MustFixedCol[float32](pk)
+		vs := vector.MustFixedColNoTypeCheck[float32](pk)
 		return checkPKDupGeneric[float32](mp, colType, vs, start, count)
 	case types.T_float64:
-		vs := vector.MustFixedCol[float64](pk)
+		vs := vector.MustFixedColNoTypeCheck[float64](pk)
 		return checkPKDupGeneric[float64](mp, colType, vs, start, count)
 	case types.T_date:
-		vs := vector.MustFixedCol[types.Date](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Date](pk)
 		return checkPKDupGeneric[types.Date](mp, colType, vs, start, count)
 	case types.T_timestamp:
-		vs := vector.MustFixedCol[types.Timestamp](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Timestamp](pk)
 		return checkPKDupGeneric[types.Timestamp](mp, colType, vs, start, count)
 	case types.T_time:
-		vs := vector.MustFixedCol[types.Time](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Time](pk)
 		return checkPKDupGeneric[types.Time](mp, colType, vs, start, count)
 	case types.T_datetime:
-		vs := vector.MustFixedCol[types.Datetime](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Datetime](pk)
 		return checkPKDupGeneric[types.Datetime](mp, colType, vs, start, count)
 	case types.T_enum:
-		vs := vector.MustFixedCol[types.Enum](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Enum](pk)
 		return checkPKDupGeneric[types.Enum](mp, colType, vs, start, count)
 	case types.T_TS:
-		vs := vector.MustFixedCol[types.TS](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.TS](pk)
 		return checkPKDupGeneric[types.TS](mp, colType, vs, start, count)
 	case types.T_Rowid:
-		vs := vector.MustFixedCol[types.Rowid](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Rowid](pk)
 		return checkPKDupGeneric[types.Rowid](mp, colType, vs, start, count)
 	case types.T_Blockid:
-		vs := vector.MustFixedCol[types.Blockid](pk)
+		vs := vector.MustFixedColNoTypeCheck[types.Blockid](pk)
 		return checkPKDupGeneric[types.Blockid](mp, colType, vs, start, count)
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
@@ -493,7 +493,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
 
-		s3Writer, err := colexec.NewS3Writer(txn.proc, tableDef, 0)
+		s3Writer, err := colexec.NewS3Writer(tableDef, 0)
 		if err != nil {
 			return err
 		}
@@ -513,6 +513,9 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 		lenVecs := len(blockInfo.Attrs)
 		// only remain the metaLoc col and object stats
+		for i := 0; i < lenVecs-2; i++ {
+			blockInfo.Vecs[i].Free(txn.proc.GetMPool())
+		}
 		blockInfo.Vecs = blockInfo.Vecs[lenVecs-2:]
 		blockInfo.Attrs = blockInfo.Attrs[lenVecs-2:]
 		blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
@@ -705,7 +708,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 
 	mp := make(map[types.Rowid]uint8)
 	deleteBlkId := make(map[types.Blockid]bool)
-	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
+	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(0))
 	min1 := uint32(math.MaxUint32)
 	max1 := uint32(0)
 	cnRowIdOffsets := make([]int64, 0, len(rowids))
@@ -739,7 +742,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
 
 	sels = sels[:0]
-	rowids = vector.MustFixedCol[types.Rowid](bat.GetVector(0))
+	rowids = vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(0))
 	for k, rowid := range rowids {
 		// put rowid to be deleted into sels.
 		if mp[rowid] != 0 {
@@ -782,7 +785,7 @@ func (txn *Transaction) deleteTableWrites(
 		}
 		sels = sels[:0]
 		if e.tableId == tableId && e.databaseId == databaseId {
-			vs := vector.MustFixedCol[types.Rowid](e.bat.GetVector(0))
+			vs := vector.MustFixedColWithTypeCheck[types.Rowid](e.bat.GetVector(0))
 			if len(vs) == 0 {
 				continue
 			}
@@ -1123,6 +1126,7 @@ func (txn *Transaction) delTransaction() {
 		}
 		txn.proc.PutBatch(txn.writes[i].bat)
 	}
+	txn.CleanToFreeBatches()
 	txn.tableCache = nil
 	txn.tableOps = nil
 	txn.databaseMap = nil
@@ -1282,6 +1286,15 @@ func (txn *Transaction) SetHaveDDL(haveDDL bool) {
 
 func (txn *Transaction) GetHaveDDL() bool {
 	return txn.haveDDL.Load()
+}
+
+func (txn *Transaction) CleanToFreeBatches() {
+	for key := range txn.toFreeBatches {
+		for _, bat := range txn.toFreeBatches[key] {
+			txn.proc.PutBatch(bat)
+		}
+		delete(txn.toFreeBatches, key)
+	}
 }
 
 func newTableOps() *tableOpsChain {

@@ -729,7 +729,7 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64, version uint32, loc o
 		meta = data.meta[tableID]
 		return
 	}
-	tidVec := vector.MustFixedCol[uint64](data.bats[MetaIDX].Vecs[Checkpoint_Meta_TID_IDX])
+	tidVec := vector.MustFixedColWithTypeCheck[uint64](data.bats[MetaIDX].Vecs[Checkpoint_Meta_TID_IDX])
 	dataObj := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Data_Object_LOC_IDX]
 	tombstoneObj := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Tombstone_Object_LOC_IDX]
 
@@ -794,7 +794,7 @@ func (data *CNCheckpointData) ReadFromData(
 		it := table.locations.MakeIterator()
 		for it.HasNext() {
 			block := it.Next()
-			var bat *batch.Batch
+			var bat, windowBat *batch.Batch
 			schema := checkpointDataReferVersions[version][uint32(idx)]
 			reader, err = blockio.NewObjectReader(data.sid, reader.GetObjectReader().GetObject().GetFs(), block.GetLocation())
 			if err != nil {
@@ -804,23 +804,28 @@ func (data *CNCheckpointData) ReadFromData(
 			if err != nil {
 				return
 			}
+			defer bat.Clean(m)
 			if block.GetEndOffset() == 0 {
 				continue
 			}
-			windowCNBatch(bat, block.GetStartOffset(), block.GetEndOffset())
-			if dataBats[uint32(i)] == nil {
-				cnBatch := batch.NewWithSize(len(bat.Vecs))
-				cnBatch.Attrs = make([]string, len(bat.Attrs))
-				copy(cnBatch.Attrs, bat.Attrs)
-				for n := range cnBatch.Vecs {
-					cnBatch.Vecs[n] = vector.NewVec(*bat.Vecs[n].GetType())
-					if err = cnBatch.Vecs[n].UnionBatch(bat.Vecs[n], 0, bat.Vecs[n].Length(), nil, m); err != nil {
-						return
-					}
+			windowBat, err = bat.Window(int(block.GetStartOffset()), int(block.GetEndOffset()))
+			if err != nil {
+				return
+			}
+			cnBatch := batch.NewWithSize(len(windowBat.Vecs))
+			cnBatch.Attrs = make([]string, len(windowBat.Attrs))
+			copy(cnBatch.Attrs, windowBat.Attrs)
+			for n := range cnBatch.Vecs {
+				cnBatch.Vecs[n] = vector.NewVec(*windowBat.Vecs[n].GetType())
+				err = cnBatch.Vecs[n].UnionBatch(windowBat.Vecs[n], 0, windowBat.Vecs[n].Length(), nil, m)
+				if err != nil {
+					return
 				}
+			}
+			if dataBats[uint32(i)] == nil {
 				dataBats[uint32(i)] = cnBatch
 			} else {
-				dataBats[uint32(i)], err = dataBats[uint32(i)].Append(ctx, m, bat)
+				dataBats[uint32(i)], err = dataBats[uint32(i)].Append(ctx, m, cnBatch)
 				if err != nil {
 					return
 				}
@@ -873,7 +878,13 @@ func (data *CNCheckpointData) GetTableDataFromBats(tid uint64, bats []*batch.Bat
 }
 
 func (data *CNCheckpointData) GetCloseCB(version uint32, m *mpool.MPool) func() {
-	return nil
+	return func() {
+		for _, bat := range data.bats {
+			if bat != nil {
+				bat.Clean(m)
+			}
+		}
+	}
 }
 
 // FIXME: (jiangwei)
@@ -889,16 +900,6 @@ func (data *CNCheckpointData) GetCloseCB(version uint32, m *mpool.MPool) func() 
 // 	vec.Free(m)
 
 // }
-
-func windowCNBatch(bat *batch.Batch, start, end uint64) {
-	var err error
-	for i, vec := range bat.Vecs {
-		bat.Vecs[i], err = vec.Window(int(start), int(end))
-		if err != nil {
-			panic(err)
-		}
-	}
-}
 
 func (data *CheckpointData) Allocator() *mpool.MPool { return data.allocator }
 
@@ -1475,7 +1476,7 @@ func (data *CheckpointData) PrefetchFrom(
 	service fileservice.FileService,
 	key objectio.Location) (err error) {
 	blocks, area := vector.MustVarlenaRawData(data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_BlockLocation).GetDownstreamVector())
-	dataType := vector.MustFixedCol[uint16](data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_SchemaType).GetDownstreamVector())
+	dataType := vector.MustFixedColWithTypeCheck[uint16](data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_SchemaType).GetDownstreamVector())
 	var pref blockio.PrefetchParams
 	locations := make(map[string][]blockIdx)
 	checkpointSize := uint64(0)
@@ -1640,7 +1641,7 @@ func (data *CheckpointData) readMetaBatch(
 func (data *CheckpointData) replayMetaBatch(version uint32) {
 	bat := data.bats[MetaIDX]
 	data.locations = make(map[string]objectio.Location)
-	tidVec := vector.MustFixedCol[uint64](bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+	tidVec := vector.MustFixedColWithTypeCheck[uint64](bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
 	insVec := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).GetDownstreamVector()
 	dataObjectVec := bat.GetVectorByName(SnapshotMetaAttr_DataObjectBatchLocation).GetDownstreamVector()
 	tombstoneObjectVec := bat.GetVectorByName(SnapshotMetaAttr_TombstoneObjectBatchLocation).GetDownstreamVector()
@@ -1839,9 +1840,9 @@ func (data *CheckpointData) GetCheckpointMetaInfo(id uint64, limit int) (res *Ob
 	tombstone := make(map[string]struct{})
 	tombstoneInfo := make(map[uint64]*tableinfo)
 
-	insTableIDs := vector.MustFixedCol[uint64](
+	insTableIDs := vector.MustFixedColWithTypeCheck[uint64](
 		data.bats[ObjectInfoIDX].GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
-	insDeleteTSs := vector.MustFixedCol[types.TS](
+	insDeleteTSs := vector.MustFixedColWithTypeCheck[types.TS](
 		data.bats[ObjectInfoIDX].GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
 	files := make(map[uint64]*tableinfo)
 	for i := range data.bats[ObjectInfoIDX].Length() {
@@ -1933,7 +1934,7 @@ func (data *CheckpointData) GetCheckpointMetaInfo(id uint64, limit int) (res *Ob
 }
 
 func (data *CheckpointData) GetTableIds() []uint64 {
-	input := vector.MustFixedCol[uint64](data.bats[ObjectInfoIDX].GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+	input := vector.MustFixedColWithTypeCheck[uint64](data.bats[ObjectInfoIDX].GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
 	seen := make(map[uint64]struct{})
 	var result []uint64
 

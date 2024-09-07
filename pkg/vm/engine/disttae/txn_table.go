@@ -178,7 +178,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 				}
 			} else {
 				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 					for _, v := range vs {
 						deletes[v] = struct{}{}
 					}
@@ -942,7 +942,7 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) ([]objectio.Object
 //				//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
 //				if entry.fileName == "" &&
 //					entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
-//					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+//					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 //					for _, v := range vs {
 //						id, _ := v.Decode()
 //						dirtyBlks[id] = struct{}{}
@@ -1481,7 +1481,6 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	case deletion.CNBlockOffset:
 	case deletion.RawBatchOffset:
 	case deletion.RawRowIdBatch:
-		logutil.Infof("data return by remote pipeline\n")
 		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 		if bat.RowCount() == 0 {
 			return nil
@@ -1516,7 +1515,7 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64,
 ) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
-	s3writer, err := colexec.NewS3Writer(tbl.getTxn().proc, tbl.tableDef, 0)
+	s3writer, err := colexec.NewS3Writer(tbl.tableDef, 0)
 	if err != nil {
 		return nil, objectio.ObjectStats{}, err
 	}
@@ -2330,7 +2329,7 @@ func (tbl *txnTable) getUncommittedRows(
 				rows = rows + uint64(entry.bat.RowCount())
 			} else {
 				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 					for _, v := range vs {
 						deletes[v] = struct{}{}
 					}
