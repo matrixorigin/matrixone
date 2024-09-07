@@ -187,7 +187,7 @@ func handleTailNodeReceiver(node *PhyOperator, buffer *bytes.Buffer) {
 	name := node.OpName
 	if name == vm.Connector.String() {
 		if len(node.DestReceiver) != 1 {
-			panic(fmt.Sprintf("The number of DestReceivers of the Connector operator is not 1"))
+			panic("The number of DestReceivers of the Connector operator is not 1")
 		}
 		buffer.WriteString(fmt.Sprintf(" to MergeReceiver %v", node.DestReceiver[0].Idx))
 	}

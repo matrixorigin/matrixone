@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -226,7 +225,7 @@ func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.Wai
 		remote := ""
 		for _, u := range s.RemoteReceivRegInfos {
 			if u.Idx == i {
-				remote = fmt.Sprintf("%s", u.Uuid)
+				remote = u.Uuid.String()
 				break
 			}
 		}
@@ -316,7 +315,7 @@ func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []models.
 				for _, reg := range arg.RemoteRegs {
 					receivers = append(receivers, models.PhyReceiver{
 						Idx:        -2, // reg.NodeAddr
-						RemoteUuid: fmt.Sprintf("%s", reg.Uuid),
+						RemoteUuid: reg.Uuid.String(),
 					})
 					//fmt.Sprintf("[addr: %s, uuid %s]", reg.NodeAddr, reg.Uuid)
 				}
