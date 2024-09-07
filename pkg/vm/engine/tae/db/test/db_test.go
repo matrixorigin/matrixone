@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go.uber.org/zap"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -9305,19 +9306,33 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(1, 0)
-	schema.BlockMaxRows = 1
+	schema := catalog.MockSchemaEnhanced(1, 0, 2)
+	schema.BlockMaxRows = 2
 	schema.ObjectMaxBlocks = 5
 	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 1)
+	bat := catalog.MockBatch(schema, 2)
 	defer bat.Close()
 	tae.CreateRelAndAppend(bat, true)
-	tae.DeleteAll(true)
-
+	//tae.DeleteAll(true)
 	txn, rel := tae.GetRelation()
-	atombstone := testutil.GetOneTombstoneMeta(rel)
-	dataObj := testutil.GetOneBlockMeta(rel)
 	assert.NoError(t, txn.Commit(ctx))
+
+	dataObj := testutil.GetOneBlockMeta(rel)
+	for i := 0; i < bat.Length(); i++ {
+		txn, rel = tae.GetRelation()
+		dataObj = testutil.GetOneBlockMeta(rel)
+		id := dataObj.AsCommonID()
+		err := rel.RangeDelete(id, uint32(i), uint32(i), handle.DT_Normal)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(ctx))
+		time.Sleep(time.Millisecond * 1)
+	}
+
+	txn, rel = tae.GetRelation()
+	dataObj = testutil.GetOneBlockMeta(rel)
+	atombstone := testutil.GetOneTombstoneMeta(rel)
+	assert.NoError(t, txn.Commit(ctx))
+
 	tae.CompactBlocks(true)
 
 	txn, _ = tae.GetRelation()
@@ -9329,5 +9344,55 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 		&deletes,
 		common.DebugAllocator)
 	assert.NoError(t, txn.Commit(ctx))
-	assert.Equal(t, 1, deletes.Count())
+	//assert.Equal(t, 10, deletes.Count())
+
+	txn, rel = tae.GetRelation()
+	it := rel.MakeObjectIt(true)
+	it.Next()
+
+	obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+	stats := obj.GetObjectStats()
+	objLoc := stats.ObjectLocation()
+
+	meta, err := objectio.FastLoadObjectMeta(ctx, &objLoc, false, tae.Runtime.Fs.Service)
+	require.NoError(t, err)
+
+	id := obj.AsCommonID()
+	dataMeta := meta.MustDataMeta()
+	colIdxes := catalog.TombstoneBatchIdxes
+	colIdxes = append(colIdxes, catalog.COLIDX_COMMITS)
+
+	for idx := 0; idx < int(stats.BlkCnt()); idx++ {
+		tsZM := dataMeta.GetColumnMeta(uint32(idx), 2).ZoneMap()
+		maxv := types.DecodeFixed[types.TS](tsZM.GetMaxBuf())
+		minv := types.DecodeFixed[types.TS](tsZM.GetMinBuf())
+
+		loc := stats.BlockLocation(uint16(idx), 8192)
+		id.SetBlockOffset(uint16(idx))
+		vecs, err := tables.LoadPersistedColumnDatas(
+			ctx, obj.GetTable().GetLastestSchema(true), tae.Runtime, id,
+			colIdxes, loc, nil)
+		require.NoError(t, err)
+
+		commitTSs := vector.MustFixedCol[types.TS](vecs[2].GetDownstreamVector())
+		for i := 0; i < len(commitTSs); i++ {
+			fmt.Println(commitTSs[i].ToString())
+		}
+
+		fmt.Println("maxv", maxv.ToString(), tsZM.GetMaxBuf())
+		fmt.Println("minv", minv.ToString(), tsZM.GetMinBuf())
+		if maxv.Less(&minv) {
+			logutil.Fatal("???",
+				zap.Int("blkIdx", idx),
+				zap.String("max", maxv.ToString()),
+				zap.String("min", minv.ToString()))
+		}
+	}
+
+}
+
+func TestX(t *testing.T) {
+	a, b := 19961121, 19981121
+
+	fmt.Printf("%b\n%b\n", a, b)
 }

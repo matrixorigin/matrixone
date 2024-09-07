@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"slices"
 	"sort"
 
@@ -1199,18 +1200,25 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
 			if !obj.GetCNCreated() {
 				tsZM := dataMeta.GetColumnMeta(uint32(idx), uint16(2)).ZoneMap()
-				//lb := types.TS(tsZM.GetMinBuf())
-				ub := types.TS(tsZM.GetMaxBuf())
+				ub := types.DecodeFixed[types.TS](tsZM.GetMaxBuf())
 				if minTS.Greater(&ub) {
+					maxv := types.DecodeFixed[types.TS](tsZM.GetMaxBuf())
+					minv := types.DecodeFixed[types.TS](tsZM.GetMinBuf())
+					fmt.Println("zm filtered",
+						maxv.ToString(),
+						minv.ToString(),
+						minTS.ToString())
+
+					if maxv.Less(&minv) {
+						logutil.Fatal("???",
+							zap.String("max", maxv.ToString()),
+							zap.String("min", minv.ToString()),
+							zap.String("obj", obj.ObjectName().String()),
+							zap.Int("blk", idx),
+							zap.String("zonemap", tsZM.String()))
+					}
 					continue
 				}
-				//if !tsZM.AnyGEByValue(encodedMinTS[:]) {
-				//	fmt.Println("zm filtered",
-				//		types.TS(tsZM.GetMinBuf()).ToString(),
-				//		types.TS(tsZM.GetMaxBuf()).ToString(),
-				//		minTS.ToString())
-				//	continue
-				//}
 			}
 
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
