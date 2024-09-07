@@ -173,6 +173,32 @@ func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []
 	return batches, nil
 }
 
+// FillPartitionBatchForInsert fills the partition batch for insert operation.
+// It takes the input batch, buffer batch, expected partition index, and partition index in the input batch as parameters.
+// It iterates over the rows in the input batch and checks the partition index.
+// If the partition index matches the expected index, it unions the corresponding values into the buffer batch.
+// Finally, it sets the row count of the buffer batch and returns any error encountered.
+func FillPartitionBatchForInsert(proc *process.Process, input *batch.Batch, buffer *batch.Batch, expect int32, partitonIndexInBatch int) error {
+	rid2pid := vector.MustFixedColWithTypeCheck[int32](input.Vecs[partitonIndexInBatch])
+	rowCnt := 0
+	for i, partition := range rid2pid {
+		if !input.Vecs[partitonIndexInBatch].GetNulls().Contains(uint64(i)) {
+			if partition == -1 {
+				return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
+			} else if partition == expect {
+				for j := range buffer.Attrs {
+					if err := buffer.Vecs[j].UnionOne(input.Vecs[j], int64(i), proc.GetMPool()); err != nil {
+						return err
+					}
+				}
+				rowCnt++
+			}
+		}
+	}
+	buffer.SetRowCount(rowCnt)
+	return nil
+}
+
 func BatchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx context.Context) error {
 	for j := range tmpBat.Vecs {
 		if tmpBat.Vecs[j] == nil {
