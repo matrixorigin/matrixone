@@ -148,7 +148,7 @@ func (tomb *tombstoneData) HasAnyTombstoneFile() bool {
 // false positive check
 func (tomb *tombstoneData) HasBlockTombstone(
 	ctx context.Context,
-	id objectio.Blockid,
+	blockId objectio.Blockid,
 	fs fileservice.FileService,
 ) (bool, error) {
 	if tomb == nil {
@@ -156,45 +156,46 @@ func (tomb *tombstoneData) HasBlockTombstone(
 	}
 	if len(tomb.rowids) > 0 {
 		// TODO: optimize binary search once
-		start, end := blockio.FindIntervalForBlock(tomb.rowids, &id)
+		start, end := blockio.FindIntervalForBlock(tomb.rowids, &blockId)
 		if end > start {
 			return true, nil
 		}
 	}
-	if len(tomb.files) > 0 {
-		for i, end := 0, tomb.files.Len(); i < end; i++ {
-			objectStats := tomb.files.Get(i)
-			zm := objectStats.SortKeyZoneMap()
-			if !zm.PrefixEq(id[:]) {
+	if len(tomb.files) == 0 {
+		return false, nil
+	}
+	for i, end := 0, tomb.files.Len(); i < end; i++ {
+		objectStats := tomb.files.Get(i)
+		zm := objectStats.SortKeyZoneMap()
+		if !zm.PrefixEq(blockId[:]) {
+			continue
+		}
+		location := objectStats.ObjectLocation()
+		objectMeta, err := objectio.FastLoadObjectMeta(
+			ctx, &location, false, fs,
+		)
+		if err != nil {
+			return false, err
+		}
+
+		dataMeta := objectMeta.MustDataMeta()
+
+		blkCnt := int(dataMeta.BlockCount())
+
+		startIdx := sort.Search(blkCnt, func(i int) bool {
+			return dataMeta.GetBlockMeta(uint32(i)).MustGetColumn(0).ZoneMap().AnyGEByValue(blockId[:])
+		})
+
+		for pos := startIdx; pos < blkCnt; pos++ {
+			blkMeta := dataMeta.GetBlockMeta(uint32(pos))
+			columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
+			if !columnZonemap.PrefixEq(blockId[:]) {
+				if columnZonemap.PrefixGT(blockId[:]) {
+					break
+				}
 				continue
 			}
-			location := objectStats.ObjectLocation()
-			objectMeta, err := objectio.FastLoadObjectMeta(
-				ctx, &location, false, fs,
-			)
-			if err != nil {
-				return false, err
-			}
-
-			dataMeta := objectMeta.MustDataMeta()
-
-			blkCnt := int(dataMeta.BlockCount())
-
-			startIdx := sort.Search(blkCnt, func(i int) bool {
-				return dataMeta.GetBlockMeta(uint32(i)).MustGetColumn(0).ZoneMap().AnyGEByValue(id[:])
-			})
-
-			for pos := startIdx; pos < blkCnt; pos++ {
-				blkMeta := dataMeta.GetBlockMeta(uint32(pos))
-				columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
-				if !columnZonemap.PrefixEq(id[:]) {
-					if columnZonemap.PrefixGT(id[:]) {
-						break
-					}
-					continue
-				}
-				return true, nil
-			}
+			return true, nil
 		}
 	}
 	return false, nil
