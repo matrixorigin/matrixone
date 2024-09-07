@@ -191,7 +191,11 @@ type TxnOperator interface {
 
 	EnterRunSql()
 	ExitRunSql()
-	SetFootPrints(prints [][2]uint32)
+	EnterIncrStmt()
+	ExitIncrStmt()
+	EnterRollbackStmt()
+	ExitRollbackStmt()
+	SetFootPrints(id int, enter bool)
 }
 
 // TxnIDGenerator txn id generator
