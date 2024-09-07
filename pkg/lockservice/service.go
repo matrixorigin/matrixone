@@ -320,7 +320,7 @@ func (s *service) canLockOnServiceStatus(
 		return true
 	}
 	if opts.Sharding == pb.Sharding_ByRow {
-		tableID = shardingByRow(rows[0])
+		tableID = ShardingByRow(rows[0])
 	}
 	if !s.validGroupTable(opts.Group, tableID) {
 		logCanLockOnService(s.serviceID)
@@ -515,7 +515,7 @@ func (s *service) getLockTableWithCreate(
 	sharding pb.Sharding) (lockTable, error) {
 	originTableID := tableID
 	if sharding == pb.Sharding_ByRow {
-		tableID = shardingByRow(rows[0])
+		tableID = ShardingByRow(rows[0])
 	}
 
 	if v := s.tableGroups.get(group, tableID); v != nil {
@@ -953,7 +953,7 @@ func getUUIDFromServiceIdentifier(id string) string {
 	return id[19:]
 }
 
-func shardingByRow(row []byte) uint64 {
+func ShardingByRow(row []byte) uint64 {
 	return crc64.Checksum(row, crc64.MakeTable(crc64.ECMA))
 }
 
