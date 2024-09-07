@@ -50,7 +50,7 @@ func (anal *AnalyzeModule) GetPhyPlan() *models.PhyPlan {
 	return anal.phyPlan
 }
 
-func (a AnalyzeModule) TypeName() string {
+func (anal AnalyzeModule) TypeName() string {
 	return "compile.analyzeModule"
 }
 
@@ -58,7 +58,7 @@ func newAnalyzeModule() *AnalyzeModule {
 	return reuse.Alloc[AnalyzeModule](nil)
 }
 
-func (a *AnalyzeModule) release() {
+func (anal *AnalyzeModule) release() {
 	// there are 3 situations to release analyzeInfo
 	// 1 is free analyzeInfo of Local CN when release analyze
 	// 2 is free analyzeInfo of remote CN before transfer back
@@ -67,7 +67,7 @@ func (a *AnalyzeModule) release() {
 	//for i := range a.analInfos {
 	//	reuse.Free[process.AnalyzeInfo](a.analInfos[i], nil)
 	//}
-	reuse.Free[AnalyzeModule](a, nil)
+	reuse.Free[AnalyzeModule](anal, nil)
 }
 
 func (c *Compile) initAnalyzeModule(qry *plan.Query) {

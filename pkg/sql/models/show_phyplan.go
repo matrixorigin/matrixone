@@ -22,109 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
 
-var debugInstructionNames = map[vm.OpType]string{
-	vm.Top:                     "top",
-	vm.Join:                    "join",
-	vm.Semi:                    "semi",
-	vm.RightSemi:               "right semi",
-	vm.RightAnti:               "right anti",
-	vm.Left:                    "left",
-	vm.Right:                   "right",
-	vm.Limit:                   "limit",
-	vm.Merge:                   "merge",
-	vm.Order:                   "order",
-	vm.Group:                   "group",
-	vm.Output:                  "output",
-	vm.Offset:                  "offset",
-	vm.Product:                 "product",
-	vm.ProductL2:               "product l2",
-	vm.Filter:                  "filter",
-	vm.Dispatch:                "dispatch",
-	vm.Shuffle:                 "shuffle",
-	vm.Connector:               "connect",
-	vm.Projection:              "projection",
-	vm.Anti:                    "anti",
-	vm.Single:                  "single",
-	vm.Mark:                    "mark",
-	vm.IndexJoin:               "index join",
-	vm.LoopJoin:                "loop join",
-	vm.MergeTop:                "merge top",
-	vm.MergeLimit:              "merge limit",
-	vm.MergeOrder:              "merge order",
-	vm.MergeGroup:              "merge group",
-	vm.MergeOffset:             "merge offset",
-	vm.MergeRecursive:          "merge recursive",
-	vm.MergeCTE:                "merge cte",
-	vm.Partition:               "partition",
-	vm.Deletion:                "delete",
-	vm.Insert:                  "insert",
-	vm.PreInsert:               "pre insert",
-	vm.PreInsertUnique:         "pre insert uk",
-	vm.PreInsertSecondaryIndex: "pre insert 2nd",
-	vm.External:                "external",
-	vm.Source:                  "source",
-	vm.Minus:                   "minus",
-	vm.Intersect:               "intersect",
-	vm.IntersectAll:            "intersect all",
-	vm.UnionAll:                "union all",
-	vm.HashBuild:               "hash build",
-	vm.ShuffleBuild:            "shuffle build",
-	vm.IndexBuild:              "index build",
-	vm.MergeDelete:             "merge delete",
-	vm.LockOp:                  "lockop",
-	vm.MergeBlock:              "merge block",
-	vm.FuzzyFilter:             "fuzzy filter",
-	vm.Sample:                  "sample",
-	vm.Window:                  "window",
-	vm.TimeWin:                 "timewin",
-	vm.Fill:                    "fill",
-	vm.TableScan:               "tablescan",
-	vm.ValueScan:               "valuescan",
-	vm.TableFunction:           "tablefunction",
-	vm.OnDuplicateKey:          "on duplicate key",
-}
-
-type magicType int
-
-// type of scope
-const (
-	Merge magicType = iota
-	Normal
-	Remote
-	Parallel
-	CreateDatabase
-	CreateTable
-	CreateView
-	CreateIndex
-	DropDatabase
-	DropTable
-	DropIndex
-	TruncateTable
-	AlterView
-	AlterTable
-	MergeInsert
-	MergeDelete
-	CreateSequence
-	DropSequence
-	AlterSequence
-	Replace
-)
-
-var debugMagicNames = map[magicType]string{
-	Merge:          "Merge",
-	Normal:         "Normal",
-	Remote:         "Remote",
-	Parallel:       "Parallel",
-	CreateDatabase: "CreateDatabase",
-	CreateTable:    "CreateTable",
-	CreateIndex:    "CreateIndex",
-	DropDatabase:   "DropDatabase",
-	DropTable:      "DropTable",
-	DropIndex:      "DropIndex",
-	MergeDelete:    "MergeDelete",
-	MergeInsert:    "MergeInsert",
-}
-
 const (
 	IsFirstMask = 1 << 0 // 0001
 	IsLastMask  = 1 << 1 // 0010
@@ -245,15 +142,6 @@ func PrintPipelineTree(node *PhyOperator, prefix string, isRoot, isTail bool, op
 	if isRoot {
 		trimLastNewline(buffer)
 	}
-}
-
-// convert magic to its string name
-func magicShow(magic magicType) string {
-	name, ok := debugMagicNames[magic]
-	if ok {
-		return name
-	}
-	return "unknown"
 }
 
 // get receiver id string
