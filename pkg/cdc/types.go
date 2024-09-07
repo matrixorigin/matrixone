@@ -22,14 +22,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tidwall/btree"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/tidwall/btree"
 )
 
 type Reader interface {
@@ -40,7 +38,6 @@ type Reader interface {
 // Sinker manages and drains the sql parts
 type Sinker interface {
 	Sink(ctx context.Context, data *DecoderOutput) error
-	Run(ctx context.Context, ar *ActiveRoutine)
 }
 
 // Sink represents the destination mysql or matrixone
@@ -83,17 +80,38 @@ func (t OutputType) String() string {
 type DecoderOutput struct {
 	outputTyp      OutputType
 	noMoreData     bool
-	toTs           types.TS
+	fromTs, toTs   types.TS
 	checkpointBat  *batch.Batch
 	insertAtmBatch *AtomicBatch
 	deleteAtmBatch *AtomicBatch
 	err            error
 }
 
+func (d *DecoderOutput) ckpBatSize() int {
+	if d.checkpointBat == nil {
+		return 0
+	}
+	return d.checkpointBat.RowCount()
+}
+
+func (d *DecoderOutput) insertBatSize() int {
+	if d.insertAtmBatch == nil || d.insertAtmBatch.Rows == nil {
+		return 0
+	}
+	return d.insertAtmBatch.Rows.Len()
+}
+
+func (d *DecoderOutput) deleteBatSize() int {
+	if d.deleteAtmBatch == nil || d.deleteAtmBatch.Rows == nil {
+		return 0
+	}
+	return d.deleteAtmBatch.Rows.Len()
+}
+
 type RowType int
 
 const (
-	Invalid RowType = iota
+	NoOp RowType = iota
 	InsertRow
 	DeleteRow
 )
@@ -263,33 +281,6 @@ func (iter *atomicBatchRowIter) Row(ctx context.Context, row []any) error {
 func (iter *atomicBatchRowIter) Close() error {
 	iter.iter.Release()
 	return nil
-}
-
-// TableCtx TODO: define suitable names
-type TableCtx struct {
-	db, table     string
-	dbId, tableId uint64
-	tblDef        *plan.TableDef
-}
-
-func (tctx *TableCtx) Db() string {
-	return tctx.db
-}
-
-func (tctx *TableCtx) Table() string {
-	return tctx.table
-}
-
-func (tctx *TableCtx) DBId() uint64 {
-	return tctx.dbId
-}
-
-func (tctx *TableCtx) TableId() uint64 {
-	return tctx.tableId
-}
-
-func (tctx *TableCtx) TableDef() *plan.TableDef {
-	return tctx.tblDef
 }
 
 type UriInfo struct {

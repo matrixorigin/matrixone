@@ -170,7 +170,6 @@ var (
 )
 
 const (
-	CdcLoading = "loading"
 	CdcRunning = "running"
 	CdcStopped = "stopped"
 )

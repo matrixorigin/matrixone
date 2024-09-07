@@ -19,58 +19,56 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/tools"
 )
 
 const (
 	// DefaultMaxAllowedPacket of mysql is 64 MB
 	DefaultMaxAllowedPacket uint64 = 64 * 1024 * 1024
+	DefaultRetryTimes              = 3
+	DefaultRetryDuration           = 30 * time.Minute
 )
 
 func NewSinker(
-	ctx context.Context,
 	sinkUri UriInfo,
-	inputCh chan tools.Pair[*TableCtx, *DecoderOutput],
 	dbTblInfo *DbTableInfo,
 	watermarkUpdater *WatermarkUpdater,
 	tableDef *plan.TableDef,
+	retryTimes int,
+	retryDuration time.Duration,
 ) (Sinker, error) {
 	//TODO: remove console
 	if sinkUri.SinkTyp == "console" {
-		return NewConsoleSinker(inputCh, dbTblInfo, watermarkUpdater), nil
+		return NewConsoleSinker(dbTblInfo, watermarkUpdater), nil
 	}
 
-	sink, err := NewMysqlSink(sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port)
+	sink, err := NewMysqlSink(sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port, retryTimes, retryDuration)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewMysqlSinker(sink, inputCh, dbTblInfo, watermarkUpdater, tableDef), nil
+	return NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef), nil
 }
 
 var _ Sinker = new(consoleSinker)
 
 type consoleSinker struct {
-	inputCh          chan tools.Pair[*TableCtx, *DecoderOutput]
 	dbTblInfo        *DbTableInfo
 	watermarkUpdater *WatermarkUpdater
 }
 
 func NewConsoleSinker(
-	inputCh chan tools.Pair[*TableCtx, *DecoderOutput],
 	dbTblInfo *DbTableInfo,
 	watermarkUpdater *WatermarkUpdater,
 ) Sinker {
 	return &consoleSinker{
-		inputCh:          inputCh,
 		dbTblInfo:        dbTblInfo,
 		watermarkUpdater: watermarkUpdater,
 	}
@@ -110,42 +108,10 @@ func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 	return nil
 }
 
-func (s *consoleSinker) Run(ctx context.Context, ar *ActiveRoutine) {
-	for {
-		select {
-		case <-ar.Cancel:
-			return
-
-		case entry := <-s.inputCh:
-			tableCtx := entry.Key
-			decodeOutput := entry.Value
-			_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: [%v(%v)].[%v(%v)]\n",
-				tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
-
-			if decodeOutput.noMoreData {
-				s.watermarkUpdater.UpdateTableWatermark(tableCtx.TableId(), decodeOutput.toTs)
-				continue
-			}
-
-			err := s.Sink(ctx, decodeOutput)
-			if err != nil {
-				return
-			}
-
-			if decodeOutput.insertAtmBatch != nil {
-				s.watermarkUpdater.UpdateTableWatermark(tableCtx.TableId(), decodeOutput.insertAtmBatch.To)
-			} else if decodeOutput.deleteAtmBatch != nil {
-				s.watermarkUpdater.UpdateTableWatermark(tableCtx.TableId(), decodeOutput.deleteAtmBatch.To)
-			}
-		}
-	}
-}
-
 var _ Sinker = new(mysqlSinker)
 
 type mysqlSinker struct {
 	mysql            Sink
-	inputCh          chan tools.Pair[*TableCtx, *DecoderOutput]
 	dbTblInfo        *DbTableInfo
 	watermarkUpdater *WatermarkUpdater
 
@@ -155,9 +121,11 @@ type mysqlSinker struct {
 	sqlBuf []byte
 	// buf of row data from batch, e.g. values part of insert statement (insert into xx values (a), (b), (c))
 	// or where ... in part of delete statement (delete from xx where pk in ((a), (b), (c)))
-	rowBuf       []byte
-	insertPrefix string
-	deletePrefix string
+	rowBuf         []byte
+	insertPrefix   []byte
+	deletePrefix   []byte
+	tsInsertPrefix []byte
+	tsDeletePrefix []byte
 
 	// iterators
 	insertIters []RowIterator
@@ -177,27 +145,27 @@ type mysqlSinker struct {
 
 func NewMysqlSinker(
 	mysql Sink,
-	inputCh chan tools.Pair[*TableCtx, *DecoderOutput],
 	dbTblInfo *DbTableInfo,
 	watermarkUpdater *WatermarkUpdater,
 	tableDef *plan.TableDef,
 ) Sinker {
 	s := &mysqlSinker{
 		mysql:            mysql,
-		inputCh:          inputCh,
 		dbTblInfo:        dbTblInfo,
 		watermarkUpdater: watermarkUpdater,
-		// TODO: get precise value from downstream
 		maxAllowedPacket: DefaultMaxAllowedPacket,
 	}
+	_ = mysql.(*mysqlSink).conn.QueryRow("SELECT @@max_allowed_packet").Scan(&s.maxAllowedPacket)
 
 	// buf
 	s.sqlBuf = make([]byte, 0, s.maxAllowedPacket)
 	s.rowBuf = make([]byte, 0, 1024)
 
 	// prefix
-	s.insertPrefix = fmt.Sprintf("REPLACE INTO `%s`.`%s` VALUES ", s.dbTblInfo.SinkDbName, s.dbTblInfo.SinkTblName)
-	s.deletePrefix = fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s IN (", s.dbTblInfo.SinkDbName, s.dbTblInfo.SinkTblName, genPrimaryKeyStr(tableDef))
+	s.insertPrefix = []byte(fmt.Sprintf("REPLACE INTO `%s`.`%s` VALUES ", s.dbTblInfo.SinkDbName, s.dbTblInfo.SinkTblName))
+	s.deletePrefix = []byte(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s IN (", s.dbTblInfo.SinkDbName, s.dbTblInfo.SinkTblName, genPrimaryKeyStr(tableDef)))
+	s.tsInsertPrefix = make([]byte, 0, 1024)
+	s.tsDeletePrefix = make([]byte, 0, 1024)
 
 	// types
 	for _, col := range tableDef.Cols {
@@ -224,76 +192,47 @@ func NewMysqlSinker(
 	// rows
 	s.insertRow = make([]any, len(s.insertTypes))
 	s.deleteRow = make([]any, 1)
-	s.preRowType = Invalid
+	s.preRowType = NoOp
 	return s
 }
 
 func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error) {
+	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceTblId)
+	if data.toTs.LessEq(&watermark) {
+		_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: unexpected watermark: %s, current watermark: %s\n",
+			data.toTs.ToString(), watermark.ToString())
+		return
+	}
+
+	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: [%s, %s) ckpBatSize() = %d, insertBatSize() = %d, deleteBatSize() = %d\n",
+		data.fromTs.ToString(), data.toTs.ToString(), data.ckpBatSize(), data.insertBatSize(), data.deleteBatSize())
+
+	tsPrefix := fmt.Sprintf("/* [%s, %s) */", data.fromTs.ToString(), data.toTs.ToString())
+	s.tsInsertPrefix = s.tsInsertPrefix[:0]
+	s.tsInsertPrefix = append(s.tsInsertPrefix, []byte(tsPrefix)...)
+	s.tsInsertPrefix = append(s.tsInsertPrefix, s.insertPrefix...)
+	s.tsDeletePrefix = s.tsDeletePrefix[:0]
+	s.tsDeletePrefix = append(s.tsDeletePrefix, []byte(tsPrefix)...)
+	s.tsDeletePrefix = append(s.tsDeletePrefix, s.deletePrefix...)
+
+	if data.noMoreData {
+		if err = s.sinkRemain(ctx); err != nil {
+			return
+		}
+		s.watermarkUpdater.UpdateMem(s.dbTblInfo.SourceTblId, data.toTs)
+		return
+	}
+
 	if data.outputTyp == OutputTypeCheckpoint {
 		return s.sinkCkp(ctx, data.checkpointBat)
 	} else if data.outputTyp == OutputTypeTailDone {
 		return s.sinkTail(ctx, data.insertAtmBatch, data.deleteAtmBatch)
-	} else {
-		// wip
-		s.insertIters = append(s.insertIters, data.insertAtmBatch.GetRowIterator())
-		s.deleteIters = append(s.deleteIters, data.deleteAtmBatch.GetRowIterator())
 	}
 	return
 }
 
-func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
-	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: start\n")
-	defer func() {
-		s.mysql.Close()
-		_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: end\n")
-	}()
-
-	for {
-		select {
-		case <-ar.Cancel:
-			return
-
-		case entry := <-s.inputCh:
-			tableCtx := entry.Key
-			decodeOutput := entry.Value
-
-			//_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: [%v(%v)].[%v(%v)], to %v\n",
-			//	tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId(), decodeOutput.toTs.ToString())
-
-			watermark := s.watermarkUpdater.GetTableWatermark(tableCtx.TableId())
-			if decodeOutput.toTs.LessEq(&watermark) {
-				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: unexpected watermark: %s, current watermark: %s\n",
-					decodeOutput.toTs.ToString(), watermark.ToString())
-			}
-
-			if decodeOutput.noMoreData {
-				// TODO temporary use here, for there's no TailDone part now
-				if err := s.sinkTail(ctx, decodeOutput.insertAtmBatch, decodeOutput.deleteAtmBatch); err != nil {
-					// TODO handle error
-				}
-				if err := s.sinkRemain(ctx); err != nil {
-					// TODO handle error
-				}
-				s.watermarkUpdater.UpdateTableWatermark(tableCtx.TableId(), decodeOutput.toTs)
-				continue
-			}
-
-			if err := s.Sink(ctx, decodeOutput); err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: [%v(%v)].[%v(%v)], sink error: %v\n",
-					tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId(),
-					err,
-				)
-				// TODO handle error
-				continue
-			}
-			//_, _ = fmt.Fprintf(os.Stderr, "^^^^^ Sinker: [%v(%v)].[%v(%v)], sink over\n",
-			//	tableCtx.Db(), tableCtx.DBId(), tableCtx.Table(), tableCtx.TableId())
-		}
-	}
-}
-
 func (s *mysqlSinker) sinkCkp(ctx context.Context, bat *batch.Batch) (err error) {
-	s.sqlBuf = append(s.sqlBuf[:0], s.insertPrefix...)
+	s.sqlBuf = append(s.sqlBuf[:0], s.tsInsertPrefix...)
 
 	for i := 0; i < bat.RowCount(); i++ {
 		// step1: get row from the batch
@@ -311,11 +250,13 @@ func (s *mysqlSinker) sinkCkp(ctx context.Context, bat *batch.Batch) (err error)
 			return
 		}
 	}
-	if len(s.sqlBuf) != len(s.insertPrefix) {
+	if len(s.sqlBuf) != len(s.tsInsertPrefix) {
 		if err = s.mysql.Send(ctx, string(s.sqlBuf)); err != nil {
 			return
 		}
 	}
+
+	s.sqlBuf = s.sqlBuf[:0]
 	return
 }
 
@@ -337,10 +278,10 @@ func (s *mysqlSinker) sinkTail(ctx context.Context, insertBatch, deleteBatch *At
 	//                                  |  cursor in iterator
 	//
 	//
-	// when receive new data, push new iters:
+	// when receive new tail data, push new iters:
 	// insertIter queue: ins_itN ... ins_it(n+2), ins_it(n+1)           \
 	//                                                                   compare and output the less one
-	// deleteIter queue: del_itM ... del_it(m+1) , del_itm ... del_itx  /
+	// deleteIter queue: del_itM ... del_it(m+1), del_itm ... del_itx  /
 	//                                                            ^
 	//                                                            |  cursor in iterator
 	// continue with the remembered cursor location
@@ -400,13 +341,13 @@ func (s *mysqlSinker) sinkTail(ctx context.Context, insertBatch, deleteBatch *At
 func (s *mysqlSinker) sinkInsert(ctx context.Context, insertIter *atomicBatchRowIter) (err error) {
 	// if last row is not insert row, need output sql first
 	if s.preRowType != InsertRow {
-		if s.preRowType == DeleteRow && len(s.sqlBuf) != len(s.deletePrefix) {
+		if s.preRowType == DeleteRow && len(s.sqlBuf) != len(s.tsDeletePrefix) {
 			s.sqlBuf = appendByte(s.sqlBuf, ')')
 			if err = s.mysql.Send(ctx, string(s.sqlBuf)); err != nil {
 				return
 			}
 		}
-		s.sqlBuf = append(s.sqlBuf[:0], s.insertPrefix...)
+		s.sqlBuf = append(s.sqlBuf[:0], s.tsInsertPrefix...)
 		s.preRowType = InsertRow
 	}
 
@@ -431,12 +372,12 @@ func (s *mysqlSinker) sinkInsert(ctx context.Context, insertIter *atomicBatchRow
 func (s *mysqlSinker) sinkDelete(ctx context.Context, insertIter *atomicBatchRowIter) (err error) {
 	// if last row is not delete row, need output sql first
 	if s.preRowType != DeleteRow {
-		if s.preRowType == InsertRow && len(s.sqlBuf) != len(s.insertPrefix) {
+		if s.preRowType == InsertRow && len(s.sqlBuf) != len(s.tsInsertPrefix) {
 			if err = s.mysql.Send(ctx, string(s.sqlBuf)); err != nil {
 				return
 			}
 		}
-		s.sqlBuf = append(s.sqlBuf[:0], s.deletePrefix...)
+		s.sqlBuf = append(s.sqlBuf[:0], s.tsDeletePrefix...)
 		s.preRowType = DeleteRow
 	}
 
@@ -496,11 +437,11 @@ func (s *mysqlSinker) sinkRemain(ctx context.Context) (err error) {
 		s.deleteIters = s.deleteIters[1:]
 	}
 
-	if s.preRowType == InsertRow && len(s.sqlBuf) != len(s.insertPrefix) {
+	if s.preRowType == InsertRow && len(s.sqlBuf) != len(s.tsInsertPrefix) {
 		if err = s.mysql.Send(ctx, string(s.sqlBuf)); err != nil {
 			return
 		}
-	} else if s.preRowType == DeleteRow && len(s.sqlBuf) != len(s.deletePrefix) {
+	} else if s.preRowType == DeleteRow && len(s.sqlBuf) != len(s.tsDeletePrefix) {
 		s.sqlBuf = appendByte(s.sqlBuf, ')')
 		if err = s.mysql.Send(ctx, string(s.sqlBuf)); err != nil {
 			return
@@ -509,16 +450,16 @@ func (s *mysqlSinker) sinkRemain(ctx context.Context) (err error) {
 
 	// reset status
 	s.sqlBuf = s.sqlBuf[:0]
-	s.preRowType = Invalid
+	s.preRowType = NoOp
 	return
 }
 
 // appendSqlBuf appends rowBuf to sqlBuf if not exceed its cap
 // otherwise, send sql to downstream first, then reset sqlBuf and append
 func (s *mysqlSinker) appendSqlBuf(ctx context.Context, rowType RowType) (err error) {
-	prefixLen := len(s.insertPrefix)
+	prefixLen := len(s.tsInsertPrefix)
 	if rowType == DeleteRow {
-		prefixLen = len(s.deletePrefix)
+		prefixLen = len(s.tsDeletePrefix)
 	}
 
 	// insert comma if not the first item
@@ -608,16 +549,24 @@ type mysqlSink struct {
 	user, password string
 	ip             string
 	port           int
+
+	retryTimes    int
+	retryDuration time.Duration
 }
 
 func NewMysqlSink(
 	user, password string,
-	ip string, port int) (Sink, error) {
+	ip string, port int,
+	retryTimes int,
+	retryDuration time.Duration,
+) (Sink, error) {
 	ret := &mysqlSink{
-		user:     user,
-		password: password,
-		ip:       ip,
-		port:     port,
+		user:          user,
+		password:      password,
+		ip:            ip,
+		port:          port,
+		retryTimes:    retryTimes,
+		retryDuration: retryDuration,
 	}
 	err := ret.connect()
 	return ret, err
@@ -629,10 +578,22 @@ func (s *mysqlSink) connect() (err error) {
 }
 
 func (s *mysqlSink) Send(ctx context.Context, sql string) (err error) {
-	fmt.Fprintf(os.Stderr, "----mysql send sql----, len:%d, sql:%s\n", len(sql), sql[:min(200, len(sql))])
-	_, err = s.conn.ExecContext(ctx, sql)
-	fmt.Fprintf(os.Stderr, "----mysql send sql----, err = %v\n", err)
-	return
+	needRetry := func(retry int, startTime time.Time) bool {
+		// retryTimes == -1 means retry forever
+		// do not exceed retryTimes and retryDuration
+		return (s.retryTimes == -1 || retry < s.retryTimes) && time.Now().Sub(startTime) < s.retryDuration
+	}
+	for retry, startTime := 0, time.Now(); needRetry(retry, startTime); retry++ {
+		fmt.Fprintf(os.Stderr, "----mysql send sql----, len:%d, sql:%s\n", len(sql), sql[:min(200, len(sql))])
+		// return if success
+		if _, err = s.conn.ExecContext(ctx, sql); err == nil {
+			fmt.Fprintf(os.Stderr, "----mysql send sql----, success\n")
+			return
+		}
+		fmt.Fprintf(os.Stderr, "----mysql send sql----, failed, err = %v\n", err)
+		time.Sleep(time.Second)
+	}
+	return moerr.NewInternalError(ctx, "mysql sink retry exceed retryTimes or retryDuration")
 }
 
 func (s *mysqlSink) Close() {
@@ -647,41 +608,6 @@ type matrixoneSink struct {
 
 func (*matrixoneSink) Send(ctx context.Context, data *DecoderOutput) error {
 	return nil
-}
-
-func extractUriInfo(ctx context.Context, uri string) (user string, pwd string, ip string, port int, err error) {
-	slashIdx := strings.Index(uri, "//")
-	if slashIdx == -1 {
-		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 1")
-	}
-	atIdx := strings.Index(uri[slashIdx+2:], "@")
-	if atIdx == -1 {
-		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 2")
-	}
-	userPwd := uri[slashIdx+2:][:atIdx]
-	seps := strings.Split(userPwd, ":")
-	if len(seps) != 2 {
-		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 3")
-	}
-	user = seps[0]
-	pwd = seps[1]
-	ipPort := uri[slashIdx+2:][atIdx+1:]
-	seps = strings.Split(ipPort, ":")
-	if len(seps) != 2 {
-		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 4")
-	}
-	ip = seps[0]
-	portStr := seps[1]
-	var portInt int64
-	portInt, err = strconv.ParseInt(portStr, 10, 32)
-	if err != nil {
-		return "", "", "", 0, moerr.NewInternalErrorf(ctx, "invalid format of uri 5 %v", portStr)
-	}
-	if portInt < 0 || portInt > 65535 {
-		return "", "", "", 0, moerr.NewInternalError(ctx, "invalid format of uri 6")
-	}
-	port = int(portInt)
-	return
 }
 
 func genPrimaryKeyStr(tableDef *plan.TableDef) string {

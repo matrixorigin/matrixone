@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -388,19 +389,13 @@ func openDbConn(
 		ip,
 		port)
 	for i := 0; i < 3; i++ {
-		db, err = tryConn(dsn)
-		if err != nil {
-			time.Sleep(time.Second)
-			continue
+		if db, err = tryConn(dsn); err == nil {
+			// TODO check table existence
+			return
 		}
-		break
+		time.Sleep(time.Second)
 	}
-	if err != nil {
-		// TODO throw error instead of panic
-		panic(err)
-	}
-
-	// TODO check table existence
+	_, _ = fmt.Fprintf(os.Stderr, "^^^^^ openDbConn failed\n")
 	return
 }
 
