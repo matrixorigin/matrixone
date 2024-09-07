@@ -2456,7 +2456,9 @@ func EvalFoldExprForRemote(proc *process.Process, expr *Expr, executorMap map[in
 			return err
 		}
 		ef.Fold.Ptr = 0
-		vec.InplaceSortAndCompact()
+		if vec.Length() > 0 {
+			vec.InplaceSortAndCompact()
+		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return err
