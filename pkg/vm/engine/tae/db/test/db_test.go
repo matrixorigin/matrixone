@@ -9350,3 +9350,30 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 	assert.Equal(t, 1, deletes.Count())
 	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
 }
+
+func TestDeleteByPhyAddrKeys(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 1
+	schema.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	txn, db := tae.GetDB("db")
+	rel, _ := db.GetRelationByName(schema.Name)
+	db.DropRelationByName(schema.Name)
+	obj := testutil.GetOneBlockMeta(rel)
+	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*obj.ID(), 0, 0)
+	rowidVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	rowidVec.Append(rowID, false)
+	defer rowidVec.Close()
+	err := rel.DeleteByPhyAddrKeys(rowidVec, bat.Vecs[0].CloneWindow(0, 1))
+	assert.Error(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+}
