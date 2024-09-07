@@ -57,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -1598,6 +1597,7 @@ func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
 	return cpuNum
 }
 
+// load data inline goes here, should always be single parallel
 func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, strictSqlMode bool) ([]*Scope, error) {
 	s := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
@@ -1606,40 +1606,19 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, 
 	op.SetIsFirst(currentFirstFlag)
 	s.setRootOperator(op)
 	c.anal.isFirst = false
-
-	parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
-	if parallelSize == 1 {
-		return []*Scope{s}, nil
-	}
-	ss := make([]*Scope, parallelSize)
-	for i := 0; i < parallelSize; i++ {
-		ss[i] = c.constructLoadMergeScope()
-	}
-
-	_, dispatchOp := constructDispatchLocalAndRemote(0, ss, s)
-	dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
-	dispatchOp.SetIdx(c.anal.curNodeIdx)
-	s.setRootOperator(dispatchOp)
-
-	ss[0].PreScopes = append(ss[0].PreScopes, s)
-	return ss, nil
+	return []*Scope{s}, nil
 }
 
+// load data infile, goes here for compressed file or parallel false
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
 func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	param.Parallel = false
-	mcpu := c.cnList[0].Mcpu
-	ss := make([]*Scope, mcpu)
-	for i := 0; i < mcpu; i++ {
-		ss[i] = c.constructLoadMergeScope()
-	}
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
 		fileOffsetTmp[i] = &pipeline.FileOffset{}
 		fileOffsetTmp[i].Offset = make([]int64, 0)
 		fileOffsetTmp[i].Offset = append(fileOffsetTmp[i].Offset, []int64{0, -1}...)
 	}
-
 	scope := c.constructScopeForExternal("", false)
 	currentFirstFlag := c.anal.isFirst
 	extern := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
@@ -1648,6 +1627,15 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 	scope.setRootOperator(extern)
 	c.anal.isFirst = false
 
+	mcpu := c.getParallelSizeForExternalScan(n, ncpu) // dop of insert scopes
+	if mcpu == 1 {
+		return []*Scope{scope}, nil
+	}
+
+	ss := make([]*Scope, mcpu)
+	for i := 0; i < mcpu; i++ {
+		ss[i] = c.constructLoadMergeScope()
+	}
 	_, dispatchOp := constructDispatchLocalAndRemote(0, ss, scope)
 	dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
 	dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
@@ -2957,84 +2945,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 	toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
-	if toWriteS3 {
-		c.proc.Debugf(c.proc.Ctx, "insert of '%s' write s3\n", c.sql)
-		if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
-			currentFirstFlag := c.anal.isFirst
-			c.anal.isFirst = false
-
-			insertArg := constructInsert(n, c.e)
-			insertArg.ToWriteS3 = true
-			insertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			currentFirstFlag = false
-
-			rs := c.newInsertMergeScope(insertArg, ss)
-			insertArg.Release()
-			rs.Magic = MergeInsert
-
-			mergeInsertArg := constructMergeblock(c.e, n)
-			mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs.setRootOperator(mergeInsertArg)
-
-			ss = []*Scope{rs}
-		} else {
-			currentFirstFlag := c.anal.isFirst
-			c.anal.isFirst = false
-
-			dataScope := c.newMergeScope(ss)
-			if c.anal.qry.LoadTag {
-				// reset the channel buffer of sink for load
-				dataScope.Proc.Reg.MergeReceivers[0].Ch2 = make(chan process.PipelineSignal, dataScope.NodeInfo.Mcpu)
-			}
-			parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
-			scopes := make([]*Scope, 0, parallelSize)
-
-			for i := 0; i < parallelSize; i++ {
-				s := c.newEmptyMergeScope()
-				mergeArg := merge.NewArgument()
-				mergeArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-				s.setRootOperator(mergeArg)
-				scopes = append(scopes, s)
-				scopes[i].Proc = c.proc.NewNoContextChildProc(1)
-				if c.anal.qry.LoadTag {
-					for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
-						rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
-					}
-				}
-			}
-
-			if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize && parallelSize > 1 {
-				_, arg := constructDispatchLocalAndRemote(0, scopes, dataScope)
-				arg.FuncId = dispatch.ShuffleToAllFunc
-				arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
-				arg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-				dataScope.setRootOperator(arg)
-			} else {
-				_, dispatchArg := constructDispatchLocalAndRemote(0, scopes, dataScope)
-				dispatchArg.FuncId = dispatch.SendToAnyLocalFunc
-				dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-				dataScope.setRootOperator(dispatchArg)
-			}
-			dataScope.IsEnd = true
-
-			for i := range scopes {
-				insertArg := constructInsert(n, c.e)
-				insertArg.ToWriteS3 = true
-				insertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-				scopes[i].setRootOperator(insertArg)
-			}
-			currentFirstFlag = false
-
-			rs := c.newMergeScope(scopes)
-			rs.PreScopes = append(rs.PreScopes, dataScope)
-			rs.Magic = MergeInsert
-			mergeInsertArg := constructMergeblock(c.e, n)
-			mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs.setRootOperator(mergeInsertArg)
-
-			ss = []*Scope{rs}
-		}
-	} else {
+	if !toWriteS3 {
 		currentFirstFlag := c.anal.isFirst
 		// Not write S3
 		for i := range ss {
@@ -3043,7 +2954,26 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 			ss[i].setRootOperator(insertArg)
 		}
 		c.anal.isFirst = false
+		return ss, nil
 	}
+
+	// to write S3
+	c.proc.Debugf(c.proc.Ctx, "insert of '%s' write s3\n", c.sql)
+	currentFirstFlag := c.anal.isFirst
+	c.anal.isFirst = false
+	for i := range ss {
+		insertArg := constructInsert(n, c.e)
+		insertArg.ToWriteS3 = true
+		insertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ss[i].setRootOperator(insertArg)
+	}
+	currentFirstFlag = false
+	rs := c.newMergeScope(ss)
+	rs.Magic = MergeInsert
+	mergeInsertArg := constructMergeblock(c.e, n)
+	mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	rs.setRootOperator(mergeInsertArg)
+	ss = []*Scope{rs}
 	return ss, nil
 }
 
@@ -4713,27 +4643,6 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 		ctx = defines.AttachAccountId(c.proc.Ctx, uint32(accountId))
 	}
 	return exec.Exec(ctx, sql, opts)
-}
-
-func (c *Compile) newInsertMergeScope(arg *insert.Insert, ss []*Scope) *Scope {
-	// see errors.Join()
-	n := 0
-	for _, s := range ss {
-		if !s.IsEnd {
-			n++
-		}
-	}
-	ss2 := make([]*Scope, 0, n)
-	for _, s := range ss {
-		if !s.IsEnd {
-			ss2 = append(ss2, s)
-		}
-	}
-
-	for i := range ss2 {
-		ss2[i].setRootOperator(dupOperator(arg, i, len(ss2)))
-	}
-	return c.newMergeScope(ss2)
 }
 
 func (c *Compile) fatalLog(retry int, err error) {

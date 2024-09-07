@@ -1466,7 +1466,6 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	case deletion.CNBlockOffset:
 	case deletion.RawBatchOffset:
 	case deletion.RawRowIdBatch:
-		logutil.Infof("data return by remote pipeline\n")
 		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 		if bat.RowCount() == 0 {
 			return nil
@@ -1501,7 +1500,7 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64,
 ) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
-	s3writer, err := colexec.NewS3Writer(tbl.getTxn().proc, tbl.tableDef, 0)
+	s3writer, err := colexec.NewS3Writer(tbl.tableDef, 0)
 	if err != nil {
 		return nil, objectio.ObjectStats{}, err
 	}
