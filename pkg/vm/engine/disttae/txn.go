@@ -493,7 +493,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
 
-		s3Writer, err := colexec.NewS3Writer(txn.proc, tableDef, 0)
+		s3Writer, err := colexec.NewS3Writer(tableDef, 0)
 		if err != nil {
 			return err
 		}
