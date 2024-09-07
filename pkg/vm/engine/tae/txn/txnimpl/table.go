@@ -1288,6 +1288,7 @@ func (tbl *txnTable) RangeDeleteLocalRows(start, end uint32) (err error) {
 }
 
 // for ut
+// RangeDelete delete block rows in range [start, end]
 func (tbl *txnTable) RangeDelete(
 	id *common.ID,
 	start,
@@ -1306,7 +1307,6 @@ func (tbl *txnTable) RangeDelete(
 	return tbl.DeleteByPhyAddrKeys(rowIDVec, pk, dt)
 }
 
-// RangeDelete delete block rows in range [start, end]
 func (tbl *txnTable) DeleteByPhyAddrKeys(
 	rowIDVec containers.Vector,
 	pk containers.Vector,
