@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/spool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"sync/atomic"
 )
 
 type PipelineCommunication interface {
@@ -55,6 +56,28 @@ func GeneratePipelineSpool(mp *mpool.MPool, receiverCnt int) PipelineCommunicati
 		csDoneSignal: make(chan struct{}, receiverCnt),
 	}
 	return sp
+}
+
+// InitMyPipelineSpool return a simple pipeline spool for temporary plan.
+//
+// todo: use GeneratePipelineSpool after pipeline construct process is simple.
+func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt int) PipelineCommunication {
+	bl := getBufferLength(receiverCnt)
+
+	ps2 := &pipelineSpool2{
+		shardPool:    make([]pipelineSpoolMessage, bl),
+		shardRefs:    make([]atomic.Int32, bl),
+		rs:           newReceivers(receiverCnt),
+		cache:        initCachedBatch(mp, bl),
+		csDoneSignal: make(chan struct{}, receiverCnt),
+	}
+
+	ps2.freeShardPool = make(chan int8, len(ps2.shardPool))
+	for i := 0; i < len(ps2.shardPool); i++ {
+		ps2.freeShardPool <- int8(i)
+	}
+
+	return ps2
 }
 
 func getBufferLength(cnt int) int {

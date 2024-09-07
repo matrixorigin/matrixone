@@ -17,10 +17,18 @@ package pSpool
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"sync/atomic"
 )
 
 type pipelineSpool2 struct {
+	shardPool []pipelineSpoolMessage
+	shardRefs []atomic.Int32
+
+	rs []receiver
+
 	cache *cachedBatch
+	// free element index on shardPool.
+	freeShardPool chan int8
 
 	// each cs done its work (after the readers get an End-Message from it, reader will put a value into this channel).
 	// and the data producer should wait all consumers done before its close or reset.
@@ -47,21 +55,31 @@ func (ps *pipelineSpool2) SendBatch(
 	}
 
 	if receiverID == SendToAllLocal {
-		ps.sendToAll(msg)
+		queryDone = ps.sendToAll(ctx, msg)
 	} else {
-		ps.sendToIdx(receiverID, msg)
+		queryDone = ps.sendToIdx(ctx, receiverID, msg)
 	}
-	return false, nil
+
+	if queryDone {
+		ps.cache.CacheBatch(dst)
+	}
+	return queryDone, nil
 }
 
 func (ps *pipelineSpool2) ReceiveBatch(idx int) (data *batch.Batch, info error) {
-	// get batch from global part.
-	if idx == SendToAllLocal {
-		return nil, nil
+	if last := ps.rs[idx].getLastPop(); last != noneLastPop {
+		if ps.shardRefs[last].Add(-1) == 0 {
+			ps.cache.CacheBatch(ps.shardPool[last].content)
+			ps.freeShardPool <- last
+		}
+		ps.rs[idx].lastPop = noneLastPop
 	}
 
-	// get batch from specific part.
-	return nil, nil
+	next := ps.rs[idx].popNextIndex()
+	if ps.shardPool[next].content == nil {
+		ps.csDoneSignal <- struct{}{}
+	}
+	return ps.shardPool[next].content, ps.shardPool[next].err
 }
 
 func (ps *pipelineSpool2) Skip(idx int) {
@@ -69,13 +87,42 @@ func (ps *pipelineSpool2) Skip(idx int) {
 }
 
 func (ps *pipelineSpool2) Close() {
+	// wait for all receivers done its work first.
+	requireEndingReceiver := len(ps.rs)
+	for requireEndingReceiver > 0 {
+		requireEndingReceiver--
+
+		<-ps.csDoneSignal
+	}
+
+	ps.cache.Free()
 	return
 }
 
-func (ps *pipelineSpool2) sendToAll(msg pipelineSpoolMessage) {
-	return
+func (ps *pipelineSpool2) sendToAll(ctx context.Context, msg pipelineSpoolMessage) (queryDone bool) {
+	select {
+	case <-ctx.Done():
+		return true
+	case index := <-ps.freeShardPool:
+		ps.shardPool[index] = msg
+		ps.shardRefs[index].Store(int32(len(ps.rs)))
+
+		for i := 0; i < len(ps.rs); i++ {
+			ps.rs[i].pushNextIndex(index)
+		}
+	}
+	return false
 }
 
-func (ps *pipelineSpool2) sendToIdx(idx int, msg pipelineSpoolMessage) {
-	return
+func (ps *pipelineSpool2) sendToIdx(ctx context.Context, idx int, msg pipelineSpoolMessage) (queryDone bool) {
+	select {
+	case <-ctx.Done():
+		return true
+	case index := <-ps.freeShardPool:
+		ps.shardPool[index] = msg
+		ps.shardRefs[index].Store(1)
+
+		ps.rs[idx].pushNextIndex(index)
+	}
+	return false
 }

@@ -14,5 +14,43 @@
 
 package pSpool
 
+import "sync"
+
+const (
+	noneLastPop int8 = -1
+)
+
+// receiver will be a unlimited queue for int8.
 type receiver struct {
+	sync.Mutex
+
+	lastPop int8
+	queue   []int8
+}
+
+func newReceivers(count int) []receiver {
+	rs := make([]receiver, count)
+	for i := range rs {
+		rs[i].lastPop = noneLastPop
+	}
+	return rs
+}
+
+func (r *receiver) getLastPop() int8 {
+	return r.lastPop
+}
+
+func (r *receiver) popNextIndex() int8 {
+	r.Lock()
+	r.lastPop = r.queue[0]
+	r.queue = r.queue[1:]
+	r.Unlock()
+
+	return r.lastPop
+}
+
+func (r *receiver) pushNextIndex(index int8) {
+	r.Lock()
+	r.queue = append(r.queue, index)
+	r.Unlock()
 }

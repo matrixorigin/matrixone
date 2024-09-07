@@ -127,11 +127,6 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	if dispatch.RecSink {
-		a := 1
-		_ = a
-	}
-
 	whichToSend := result.Batch
 	if result.Batch == nil {
 		result.Status = vm.ExecStop
