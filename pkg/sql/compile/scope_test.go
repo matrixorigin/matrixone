@@ -329,7 +329,7 @@ func TestCompileExternValueScan(t *testing.T) {
 	}
 	rs, err := testCompile.compileExternValueScan(n, param, true)
 	require.NoError(t, err)
-	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.External, vm.Dispatch}))
+	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.External}))
 }
 
 func TestCompileExternScanParallel(t *testing.T) {
