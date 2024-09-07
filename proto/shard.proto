@@ -279,6 +279,8 @@ message ReaderBuildParam {
     bytes relData = 1;
     //plan.Expr expr = 2 [(gogoproto.nullable) = false];
     plan.Expr expr = 2;
+    int32 scanType = 3;
+    int32 readPolicy = 4;
 }
 
 message ReaderBuildResult {
@@ -287,6 +289,7 @@ message ReaderBuildResult {
 
 message ReadNextParam {
     bytes uuid = 1;
+    repeated string columns = 2;
 }
 
 message ReadNextResult {

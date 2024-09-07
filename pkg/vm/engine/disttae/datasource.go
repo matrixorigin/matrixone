@@ -65,7 +65,7 @@ func NewLocalDataSource(
 	table *txnTable,
 	txnOffset int,
 	rangesSlice objectio.BlockInfoSlice,
-	skipReadMem bool,
+	readPolicy engine.DataSourceReadPolicy,
 	policy engine.TombstoneApplyPolicy,
 ) (source *LocalDataSource, err error) {
 
@@ -96,7 +96,8 @@ func NewLocalDataSource(
 	source.snapshotTS = types.TimestampToTS(table.getTxn().op.SnapshotTS())
 
 	source.iteratePhase = engine.InMem
-	if skipReadMem {
+	source.readPolicy = readPolicy
+	if readPolicy == engine.Policy_SkipReadInMem {
 		source.iteratePhase = engine.Persisted
 	}
 
@@ -287,9 +288,11 @@ type LocalDataSource struct {
 	ctx context.Context
 	fs  fileservice.FileService
 
-	rangesCursor int
-	snapshotTS   types.TS
-	iteratePhase engine.DataState
+	rangesCursor    int
+	snapshotTS      types.TS
+	iteratePhase    engine.DataState
+	readPolicy      engine.DataSourceReadPolicy
+	tombstonePolicy engine.TombstoneApplyPolicy
 
 	//TODO:: It's so ugly, need to refactor
 	//for order by
@@ -298,8 +301,7 @@ type LocalDataSource struct {
 	sorted   bool // blks need to be sorted by zonemap
 	OrderBy  []*plan.OrderBySpec
 
-	filterZM        objectio.ZoneMap
-	tombstonePolicy engine.TombstoneApplyPolicy
+	filterZM objectio.ZoneMap
 }
 
 func (ls *LocalDataSource) String() string {
@@ -520,12 +522,15 @@ func (ls *LocalDataSource) iterateInMemData(
 
 	bat.SetRowCount(0)
 
-	if err = ls.filterInMemUnCommittedInserts(ctx, seqNums, mp, bat); err != nil {
-		return err
+	if ls.readPolicy&engine.Policy_SkipReadUncommittedInMem == 0 {
+		if err = ls.filterInMemUnCommittedInserts(ctx, seqNums, mp, bat); err != nil {
+			return err
+		}
 	}
-
-	if err = ls.filterInMemCommittedInserts(ctx, colTypes, seqNums, mp, bat); err != nil {
-		return err
+	if ls.readPolicy&engine.Policy_SkipReadCommittedInMem == 0 {
+		if err = ls.filterInMemCommittedInserts(ctx, colTypes, seqNums, mp, bat); err != nil {
+			return err
+		}
 	}
 
 	return nil

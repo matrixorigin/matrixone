@@ -550,10 +550,11 @@ func (tbl *txnTable) Ranges(
 	exprs []*plan.Expr,
 	txnOffset int,
 ) (data engine.RelData, err error) {
+	unCommittedObjs, _ := tbl.collectUnCommittedObjects(txnOffset)
 	return tbl.doRanges(
 		ctx,
 		exprs,
-		tbl.collectUnCommittedObjects(txnOffset),
+		unCommittedObjs,
 	)
 }
 
@@ -860,8 +861,9 @@ func (tbl *txnTable) rangesOnePart(
 // Parameters:
 //   - txnOffset: Transaction writes offset used to specify the starting position for reading data.
 //   - fromSnapshot: Boolean indicating if the data is from a snapshot.
-func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectStats {
+func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
 	var unCommittedObjects []objectio.ObjectStats
+	var unCommittedObjNames map[objectio.ObjectNameShort]struct{}
 
 	if tbl.db.op.IsSnapOp() {
 		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
@@ -883,10 +885,11 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectS
 			for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
 				stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
 				unCommittedObjects = append(unCommittedObjects, stats)
+				unCommittedObjNames[*stats.ObjectShortName()] = struct{}{}
 			}
 		})
 
-	return unCommittedObjects
+	return unCommittedObjects, unCommittedObjNames
 }
 
 //func (tbl *txnTable) collectDirtyBlocks(
@@ -1646,21 +1649,25 @@ func BuildLocalDataSource(
 		tbl = rel.(*txnTableDelegate).origin
 	}
 
-	return tbl.buildLocalDataSource(ctx, txnOffset, ranges, engine.Policy_CheckAll)
+	return tbl.buildLocalDataSource(
+		ctx,
+		txnOffset,
+		ranges,
+		engine.Policy_SkipNone,
+		engine.Policy_CheckAll)
 }
 
 func (tbl *txnTable) buildLocalDataSource(
 	ctx context.Context,
 	txnOffset int,
 	relData engine.RelData,
+	readPolicy engine.DataSourceReadPolicy,
 	policy engine.TombstoneApplyPolicy,
 ) (source engine.DataSource, err error) {
 
 	switch relData.GetType() {
 	case engine.RelDataBlockList:
 		ranges := relData.GetBlockInfoSlice()
-		skipReadMem := !bytes.Equal(
-			objectio.EncodeBlockInfo(*ranges.Get(0)), objectio.EmptyBlockInfoBytes)
 
 		if tbl.db.op.IsSnapOp() {
 			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
@@ -1674,7 +1681,7 @@ func (tbl *txnTable) buildLocalDataSource(
 				}
 			}
 		}
-		if skipReadMem && forceBuildRemoteDS {
+		if readPolicy == engine.Policy_SkipReadInMem && forceBuildRemoteDS {
 			source, err = buildRemoteDS(ctx, tbl, txnOffset, relData)
 		} else {
 			source, err = NewLocalDataSource(
@@ -1682,7 +1689,7 @@ func (tbl *txnTable) buildLocalDataSource(
 				tbl,
 				txnOffset,
 				ranges,
-				skipReadMem,
+				readPolicy,
 				policy,
 			)
 		}
@@ -1742,13 +1749,15 @@ func (tbl *txnTable) BuildReaders(
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
 	var shard engine.RelData
+	var readPolicy engine.DataSourceReadPolicy
 	for i := 0; i < newNum; i++ {
 		if i == 0 {
 			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
 		} else {
 			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
+			readPolicy = engine.Policy_SkipReadInMem
 		}
-		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, tombstonePolicy)
+		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, readPolicy, tombstonePolicy)
 		if err != nil {
 			return nil, err
 		}

@@ -591,6 +591,15 @@ const (
 	Policy_CollectAllTombstones = Policy_CollectUncommittedTombstones | Policy_CollectCommittedTombstones
 )
 
+type DataSourceReadPolicy uint64
+
+const (
+	Policy_SkipNone                 DataSourceReadPolicy = 0
+	Policy_SkipReadUncommittedInMem                      = 1 << iota
+	Policy_SkipReadCommittedInMem
+	Policy_SkipReadInMem = Policy_SkipReadUncommittedInMem | Policy_SkipReadCommittedInMem
+)
+
 type TombstoneApplyPolicy uint64
 
 const (
