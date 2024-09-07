@@ -56,7 +56,7 @@ type CacheCallbacks struct {
 	PostEvict []CacheCallbackFunc
 }
 
-type CacheCallbackFunc = func(CacheKey, fscache.Data)
+type CacheCallbackFunc = func(fscache.CacheKey, fscache.Data)
 
 func (c *CacheConfig) setDefaults() {
 	if c.MemoryCapacity == nil {
@@ -85,7 +85,7 @@ func (c *CacheConfig) SetRemoteCacheCallback() {
 	}
 	c.InitKeyRouter = &sync.Once{}
 	c.CacheCallbacks.PostSet = append(c.CacheCallbacks.PostSet,
-		func(key CacheKey, data fscache.Data) {
+		func(key fscache.CacheKey, data fscache.Data) {
 			c.InitKeyRouter.Do(func() {
 				c.KeyRouter = c.KeyRouterFactory()
 			})
@@ -101,7 +101,7 @@ func (c *CacheConfig) SetRemoteCacheCallback() {
 		},
 	)
 	c.CacheCallbacks.PostEvict = append(c.CacheCallbacks.PostEvict,
-		func(key CacheKey, data fscache.Data) {
+		func(key fscache.CacheKey, data fscache.Data) {
 			c.InitKeyRouter.Do(func() {
 				c.KeyRouter = c.KeyRouterFactory()
 			})
@@ -125,18 +125,11 @@ var DisabledCacheConfig = CacheConfig{
 
 const DisableCacheCapacity = 1
 
-var initDefaultCacheDataAllocator sync.Once
-
-var _defaultCacheDataAllocator CacheDataAllocator
-
-func GetDefaultCacheDataAllocator() CacheDataAllocator {
-	initDefaultCacheDataAllocator.Do(func() {
-		_defaultCacheDataAllocator = &bytesAllocator{
-			allocator: getBytesAllocator(),
-		}
-	})
-	return _defaultCacheDataAllocator
-}
+var DefaultCacheDataAllocator = sync.OnceValue(func() CacheDataAllocator {
+	return &bytesAllocator{
+		allocator: memoryCacheAllocator(),
+	}
+})
 
 // VectorCache caches IOVector
 type IOVectorCache interface {
@@ -197,5 +190,3 @@ func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error
 
 	return nil
 }
-
-type CacheKey = pb.CacheKey
