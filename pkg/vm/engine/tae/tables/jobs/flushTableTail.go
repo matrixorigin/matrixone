@@ -385,13 +385,11 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	//// phase separator
 	///////////////////
 
-	/*
-		phaseDesc = "1-merging persisted tombstones"
-		inst = time.Now()
-		// ignore error
-		_ = task.mergePersistedTombstones(ctx)
-		statWaitTombstoneMerge := time.Since(inst)
-	*/
+	phaseDesc = "1-merging persisted tombstones"
+	inst = time.Now()
+	// ignore error
+	_ = task.mergePersistedTombstones(ctx)
+	statWaitTombstoneMerge := time.Since(inst)
 
 	/////////////////////
 	//// phase separator
@@ -470,7 +468,7 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 			common.AnyField("wait-aobj-flush", statWaitAobj),
 			common.AnyField("wait-dels-flush", statWaitTombstones),
 			common.AnyField("log-txn-entry", statNewFlushEntry),
-			//common.AnyField("tombstone-merge", statWaitTombstoneMerge),
+			common.AnyField("tombstone-merge", statWaitTombstoneMerge),
 		)
 	}
 
@@ -866,18 +864,24 @@ func (task *flushTableTailTask) mergePersistedTombstones(ctx context.Context) er
 	tombstoneIter := task.rel.MakeObjectItOnSnap(true)
 	for tombstoneIter.Next() {
 		tombstone := tombstoneIter.GetObject().GetMeta().(*catalog.ObjectEntry)
-		if tombstone.IsCommitted() && !tombstone.IsAppendable() {
-			tombstones = append(tombstones, tombstone)
+		if !tombstone.IsActive() {
+			continue
 		}
+		if !tombstone.IsCommitted() {
+			continue
+		}
+		if !catalog.ActiveObjectWithNoTxnFilter(tombstone) {
+			continue
+		}
+		if tombstone.IsAppendable() {
+			continue
+		}
+		tombstones = append(tombstones, tombstone)
 	}
 	if len(tombstones) < 2 {
 		return nil
 	}
-	// FIXME: (w-zr) this result of append is never used
-	// scopes := make([]common.ID, 0, len(tombstones))
-	// for _, obj := range tombstones {
-	// 	scopes = append(scopes, *obj.AsCommonID())
-	// }
+
 	tombstoneTask, err := NewMergeObjectsTask(
 		tasks.WaitableCtx,
 		task.txn,
