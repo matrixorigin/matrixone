@@ -772,7 +772,6 @@ func (h *Handle) HandleWrite(
 
 		for _, stats := range req.TombstoneStats {
 			id := tb.GetMeta().(*catalog.TableEntry).AsCommonID()
-			id.SetObjectID(stats.ObjectName().ObjectId())
 
 			if ok, err = tb.TryDeleteByStats(id, stats); err != nil {
 				logutil.Errorf("try delete by stats faild: %s, %v", stats.String(), err)
