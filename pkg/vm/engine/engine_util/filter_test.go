@@ -766,7 +766,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 		for _, ty := range tys {
 			var llb, uub []byte
 
-			if ty == types.T_decimal64 {
+			if ty == types.T_decimal128 {
 				llb = types.EncodeDecimal128(&types.Decimal128{B0_63: uint64(lb), B64_127: uint64(lb)})
 				uub = types.EncodeDecimal128(&types.Decimal128{B0_63: uint64(ub), B64_127: uint64(ub)})
 
