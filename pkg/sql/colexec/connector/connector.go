@@ -32,7 +32,7 @@ func (connector *Connector) String(buf *bytes.Buffer) {
 
 func (connector *Connector) Prepare(proc *process.Process) error {
 	if connector.ctr.sp == nil {
-		connector.ctr.sp = pSpool.GeneratePipelineSpool(proc.Mp(), 1)
+		connector.ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), 1)
 	}
 	return nil
 }

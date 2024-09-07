@@ -66,7 +66,7 @@ func (ps *pipelineSpool2) SendBatch(
 	return queryDone, nil
 }
 
-func (ps *pipelineSpool2) ReceiveBatch(idx int) (data *batch.Batch, info error) {
+func (ps *pipelineSpool2) ReleaseCurrent(idx int) {
 	if last := ps.rs[idx].getLastPop(); last != noneLastPop {
 		if ps.shardRefs[last].Add(-1) == 0 {
 			ps.cache.CacheBatch(ps.shardPool[last].content)
@@ -74,6 +74,10 @@ func (ps *pipelineSpool2) ReceiveBatch(idx int) (data *batch.Batch, info error) 
 		}
 		ps.rs[idx].lastPop = noneLastPop
 	}
+}
+
+func (ps *pipelineSpool2) ReceiveBatch(idx int) (data *batch.Batch, info error) {
+	ps.ReleaseCurrent(idx)
 
 	next := ps.rs[idx].popNextIndex()
 	if ps.shardPool[next].content == nil {

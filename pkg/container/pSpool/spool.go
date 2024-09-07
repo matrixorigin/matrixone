@@ -83,6 +83,10 @@ func (ps *pipelineSpool) Skip(idx int) {
 	ps.cs[idx].SkipNext()
 }
 
+func (ps *pipelineSpool) ReleaseCurrent(idx int) {
+	return
+}
+
 func (ps *pipelineSpool) waitReceiversOver() {
 	require := len(ps.cs)
 	for i := 0; i < require; i++ {

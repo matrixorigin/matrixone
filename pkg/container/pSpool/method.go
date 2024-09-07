@@ -34,6 +34,9 @@ type PipelineCommunication interface {
 	// ReceiveBatch get data from the idx-th receiver.
 	ReceiveBatch(idx int) (data *batch.Batch, info error)
 
+	// ReleaseCurrent force to release the last received one.
+	ReleaseCurrent(idx int)
+
 	// Skip ignore next coming data from idx-th receiver.
 	Skip(idx int)
 

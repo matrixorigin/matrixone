@@ -208,12 +208,12 @@ func sendToAllFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool,
 
 func onlyOneRegToDealThis(sendto int, ap *Dispatch) {
 	ap.LocalRegs[sendto].Ch2 <- process.NewPipelineSignalToGetFromSpool(ap.ctr.sp, sendto)
-	for i := 0; i < sendto; i++ {
-		ap.LocalRegs[i].Ch2 <- process.NewPipelineSignalToSkip(ap.ctr.sp, i)
-	}
-	for i := sendto + 1; i < len(ap.LocalRegs); i++ {
-		ap.LocalRegs[i].Ch2 <- process.NewPipelineSignalToSkip(ap.ctr.sp, i)
-	}
+	//for i := 0; i < sendto; i++ {
+	//	ap.LocalRegs[i].Ch2 <- process.NewPipelineSignalToSkip(ap.ctr.sp, i)
+	//}
+	//for i := sendto + 1; i < len(ap.LocalRegs); i++ {
+	//	ap.LocalRegs[i].Ch2 <- process.NewPipelineSignalToSkip(ap.ctr.sp, i)
+	//}
 }
 
 // common sender: send to any LocalReceiver

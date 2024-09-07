@@ -64,9 +64,9 @@ func NewPipelineSignalToDirectly(data *batch.Batch) PipelineSignal {
 // NewPipelineSignalToSkip return a signal indicates the receiver to skip the next data from source.
 func NewPipelineSignalToSkip(source pSpool.PipelineCommunication, index int) PipelineSignal {
 	return PipelineSignal{
-		typ:      SkipFromCursor,
-		source:	  source,
-		index:    index,
+		typ:    SkipFromCursor,
+		source: source,
+		index:  index,
 	}
 }
 
@@ -93,6 +93,9 @@ type PipelineSignalReceiver struct {
 	regs []reflect.SelectCase
 	// how much nil batch should each reg wait. its length is 1 less than regs.
 	nbs []int
+
+	// currentSignal is the current signal this receiver was using.
+	currentSignal *PipelineSignal
 }
 
 func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister) *PipelineSignalReceiver {
@@ -111,14 +114,27 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 	}
 
 	return &PipelineSignalReceiver{
-		alive: len(regs),
-		regs:  scs,
-		nbs:   nbs,
+		alive:         len(regs),
+		regs:          scs,
+		nbs:           nbs,
+		currentSignal: nil,
+	}
+}
+
+func (receiver *PipelineSignalReceiver) releaseCurrent() {
+	if receiver.currentSignal != nil {
+		if receiver.currentSignal.typ == GetFromIndex {
+			receiver.currentSignal.source.ReleaseCurrent(
+				receiver.currentSignal.index)
+		}
+
+		receiver.currentSignal = nil
 	}
 }
 
 func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, info error) {
 	var skipThisSignal bool
+	receiver.releaseCurrent()
 
 	for {
 		if receiver.alive == 0 {
@@ -147,6 +163,8 @@ func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, in
 				}
 				continue
 			}
+
+			receiver.currentSignal = &msg
 			return content, info
 		}
 		break

@@ -41,7 +41,7 @@ func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 	ctr.localRegsCnt = len(dispatch.LocalRegs)
 	ctr.remoteRegsCnt = len(dispatch.RemoteRegs)
 	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt
-	ctr.sp = pSpool.GeneratePipelineSpool(proc.Mp(), ctr.localRegsCnt)
+	ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), ctr.localRegsCnt)
 
 	switch dispatch.FuncId {
 	case SendToAllFunc:
