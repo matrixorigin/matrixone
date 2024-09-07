@@ -4102,6 +4102,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			return rtnErr
 		}
 		bh.ClearExecResultSet()
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
 			return rtnErr
@@ -4148,6 +4149,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		//step 8 : drop table mo_mysql_compatibility_mode
 		//step 9 : drop table %!%mo_increment_columns
 		for _, sql = range getSqlForDropAccount() {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
 				return rtnErr
@@ -4158,6 +4160,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		databases = make(map[string]int8)
 		dbSql = "show databases;"
 		bh.ClearExecResultSet()
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dbSql)
 		rtnErr = bh.Exec(deleteCtx, dbSql)
 		if rtnErr != nil {
 			return rtnErr
@@ -4194,6 +4197,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		}
 
 		for _, sql = range sqlsForDropDatabases {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
 				return rtnErr
@@ -4201,35 +4205,41 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		}
 
 		// drop table mo_mysql_compatibility_mode
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
 		rtnErr = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
 		if rtnErr != nil {
 			return rtnErr
 		}
 
 		// drop table mo_pubs
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoPubsSql)
 		rtnErr = bh.Exec(deleteCtx, dropMoPubsSql)
 		if rtnErr != nil {
 			return rtnErr
 		}
 
 		// drop autoIcr table
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropAutoIcrColSql)
 		rtnErr = bh.Exec(deleteCtx, dropAutoIcrColSql)
 		if rtnErr != nil {
 			return rtnErr
 		}
 
 		// drop mo_catalog.mo_indexes under general tenant
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoIndexes)
 		rtnErr = bh.Exec(deleteCtx, dropMoIndexes)
 		if rtnErr != nil {
 			return rtnErr
 		}
 
 		// drop mo_catalog.mo_table_partitions under general tenant
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoTablePartitions)
 		rtnErr = bh.Exec(deleteCtx, dropMoTablePartitions)
 		if rtnErr != nil {
 			return rtnErr
 		}
 
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoForeignKeys)
 		rtnErr = bh.Exec(deleteCtx, dropMoForeignKeys)
 		if rtnErr != nil {
 			return rtnErr
@@ -4240,6 +4250,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		if rtnErr != nil {
 			return rtnErr
 		}
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
 			return rtnErr
@@ -4248,6 +4259,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		// get all cluster table in the mo_catalog
 		sql = "show tables from mo_catalog;"
 		bh.ClearExecResultSet()
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
 			return rtnErr
@@ -4272,6 +4284,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		for clusterTable := range clusterTables {
 			sql = fmt.Sprintf("delete from mo_catalog.`%s` where account_id = %d;", clusterTable, accountId)
 			bh.ClearExecResultSet()
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(ctx, sql)
 			if rtnErr != nil {
 				return rtnErr
