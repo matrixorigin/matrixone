@@ -26,6 +26,10 @@ type ShufflePool struct {
 	batches   []*batch.Batch
 }
 
+func NewShufflePool(bucketNum int32) *ShufflePool {
+	return &ShufflePool{bucketNum: bucketNum}
+}
+
 func (sp *ShufflePool) Init() {
 	sp.batches = make([]*batch.Batch, sp.bucketNum)
 }

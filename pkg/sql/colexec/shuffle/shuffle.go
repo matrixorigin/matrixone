@@ -50,6 +50,7 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 			shuffle.ctr.sels[i] = make([]int64, 0, colexec.DefaultBatchSize/shuffle.AliveRegCnt*2)
 		}
 	}
+	shuffle.SetShufflePool(NewShufflePool(shuffle.AliveRegCnt))
 	shuffle.ctr.shufflePool.Init()
 	shuffle.ctr.ending = false
 	return nil
