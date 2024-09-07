@@ -506,6 +506,8 @@ type ObservabilityParameters struct {
 	MetricInternalGatherInterval toml.Duration `toml:"metric-internal-gather-interval"`
 
 	// MetricStorageUsageUpdateInterval, default: 15 min
+	// old version ObservabilityOldParameters.MetricUpdateStorageUsageIntervalV12
+	// tips: diff name
 	MetricStorageUsageUpdateInterval toml.Duration `toml:"metric-storage-usage-update-interval"`
 
 	// MetricStorageUsageCheckNewInterval, default: 1 min
@@ -566,6 +568,9 @@ type ObservabilityParameters struct {
 type ObservabilityOldParameters struct {
 	StatusPortV12         int  `toml:"statusPort" user_setting:"advanced"`
 	EnableMetricToPromV12 bool `toml:"enableMetricToProm"`
+
+	// part metric
+	MetricUpdateStorageUsageIntervalV12 toml.Duration `toml:"metricUpdateStorageUsageInterval"` /* tips: rename */
 
 	// part Trace
 	DisableMetricV12 bool `toml:"disableMetric" user_setting:"advanced"`
@@ -755,6 +760,10 @@ func (op *ObservabilityParameters) resetConfigByOld() {
 	resetBoolConfig(&op.DisableTrace, false, op.DisableTraceV12)
 	resetBoolConfig(&op.DisableError, false, op.DisableErrorV12)
 	resetBoolConfig(&op.DisableSpan, false, op.DisableSpanV12)
+	// part metric
+	resetDurationConfig(&op.MetricStorageUsageUpdateInterval.Duration,
+		defaultMetricUpdateStorageUsageInterval,
+		op.MetricUpdateStorageUsageIntervalV12.Duration)
 	// part statement_info
 	resetBoolConfig(&op.EnableStmtMerge, false, op.EnableStmtMergeV12)
 	resetBoolConfig(&op.DisableStmtAggregation, false, op.DisableStmtAggregationV12)
