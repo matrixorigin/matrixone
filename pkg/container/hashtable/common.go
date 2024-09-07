@@ -16,14 +16,12 @@ package hashtable
 
 import (
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 const (
 	kInitialCellCntBits = 10
 	kInitialCellCnt     = 1 << kInitialCellCntBits
-	maxBlockSize        = mpool.GB / 4
+	maxBlockSize        = 256 * (1 << 20)
 )
 
 func maxElemCnt(cellCnt, cellSize uint64) uint64 {
