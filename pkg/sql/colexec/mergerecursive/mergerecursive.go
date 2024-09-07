@@ -16,6 +16,7 @@ package mergerecursive
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -102,8 +103,6 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 		return result, nil
 	}
 
-	//anal.Input(mergeRecursive.ctr.buf, mergeRecursive.GetIsFirst())
-	//anal.Output(mergeRecursive.ctr.buf, mergeRecursive.GetIsLast())
 	result.Batch = mergeRecursive.ctr.buf
 	result.Status = vm.ExecHasMore
 	analyzer.Output(result.Batch)

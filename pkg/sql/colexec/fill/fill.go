@@ -497,7 +497,6 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	//anal.Input(ctr.buf, ap.IsFirst)
 
 	for i := range ctr.bats[0].Vecs {
 		if err = processNextCol(ctr, i, proc); err != nil {
@@ -509,7 +508,6 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 	result.Status = vm.ExecNext
 	ctr.idx++
 
-	//anal.Output(result.Batch, ap.IsLast)
 	analyzer.Output(result.Batch)
 	return result, nil
 }
@@ -537,7 +535,7 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer pro
 		if result.Batch == nil {
 			break
 		}
-		//anal.Input(result.Batch, ap.IsFirst)
+
 		if len(ctr.bats) > i {
 			if ctr.bats[i] != nil {
 				ctr.bats[i].CleanOnlyData()
@@ -570,7 +568,6 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer pro
 	result.Status = vm.ExecNext
 	ctr.idx++
 
-	//anal.Output(result.Batch, ap.IsLast)
 	analyzer.Output(result.Batch)
 	return result, nil
 }
@@ -585,8 +582,7 @@ func processDefault(ctr *container, ap *Fill, proc *process.Process, analyzer pr
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	//anal.Input(ctr.buf, ap.IsFirst)
-	//anal.Output(result.Batch, ap.IsLast)
+
 	ctr.buf, err = result.Batch.Dup(proc.Mp())
 	analyzer.Alloc(int64(ctr.buf.Size()))
 	if err != nil {
