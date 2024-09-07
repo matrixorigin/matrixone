@@ -863,7 +863,7 @@ func (tbl *txnTable) rangesOnePart(
 //   - fromSnapshot: Boolean indicating if the data is from a snapshot.
 func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
 	var unCommittedObjects []objectio.ObjectStats
-	var unCommittedObjNames map[objectio.ObjectNameShort]struct{}
+	unCommittedObjNames := make(map[objectio.ObjectNameShort]struct{})
 
 	if tbl.db.op.IsSnapOp() {
 		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
