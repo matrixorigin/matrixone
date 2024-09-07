@@ -158,6 +158,8 @@ type TxnOperator interface {
 	// will be committed to tn to check. If the metadata of the lockservice changes in [lock, commit],
 	// the transaction will be rolled back.
 	AddLockTable(locktable lock.LockTable) error
+	// HasLockTable check if had locked table
+	HasLockTable(table uint64) bool
 	// AddWaitLock add wait lock for current txn
 	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
 	// RemoveWaitLock remove wait lock for current txn
