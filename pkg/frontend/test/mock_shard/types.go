@@ -358,7 +358,6 @@ func (m *Mockfilter) EXPECT() *MockfilterMockRecorder {
 	return m.recorder
 }
 
-
 // MockShardStorage is a mock of ShardStorage interface.
 type MockShardStorage struct {
 	ctrl     *gomock.Controller
