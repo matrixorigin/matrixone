@@ -233,10 +233,12 @@ type txnOperator struct {
 		children []*txnOperator
 	}
 
-	commitCounter   counter
-	rollbackCounter counter
-	runSqlCounter   counter
-	fprints         footPrints
+	commitCounter       counter
+	rollbackCounter     counter
+	runSqlCounter       counter
+	incrStmtCounter     counter
+	rollbackStmtCounter counter
+	fprints             footPrints
 
 	waitActiveCost time.Duration
 }
@@ -1260,14 +1262,39 @@ func (tc *txnOperator) inRollback() bool {
 	return tc.rollbackCounter.more()
 }
 
+func (tc *txnOperator) EnterIncrStmt() {
+	tc.incrStmtCounter.addEnter()
+}
+
+func (tc *txnOperator) ExitIncrStmt() {
+	tc.incrStmtCounter.addExit()
+}
+
+func (tc *txnOperator) inIncrStmt() bool {
+	return tc.incrStmtCounter.more()
+}
+
+func (tc *txnOperator) EnterRollbackStmt() {
+	tc.rollbackStmtCounter.addEnter()
+}
+
+func (tc *txnOperator) ExitRollbackStmt() {
+	tc.rollbackStmtCounter.addExit()
+}
+func (tc *txnOperator) inRollbackStmt() bool {
+	return tc.rollbackStmtCounter.more()
+}
+
 func (tc *txnOperator) counter() string {
-	return fmt.Sprintf("commit: %s rollback: %s runSql: %s footPrints: %s",
+	return fmt.Sprintf("commit: %s rollback: %s runSql: %s incrStmt: %s rollbackStmt: %s footPrints: %s",
 		tc.commitCounter.String(),
 		tc.rollbackCounter.String(),
 		tc.runSqlCounter.String(),
+		tc.incrStmtCounter.String(),
+		tc.rollbackStmtCounter.String(),
 		tc.fprints.String())
 }
 
-func (tc *txnOperator) SetFootPrints(prints [][2]uint32) {
-	tc.fprints.setFPrints(prints)
+func (tc *txnOperator) SetFootPrints(id int, enter bool) {
+	tc.fprints.add(id, enter)
 }

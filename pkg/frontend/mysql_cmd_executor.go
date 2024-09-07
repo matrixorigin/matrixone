@@ -2349,7 +2349,6 @@ func executeStmtWithWorkspace(ses FeSession,
 
 	ses.EnterFPrint(118)
 	defer ses.ExitFPrint(118)
-	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//!!!NOTE!!!: statement management
 	//2. start statement on workspace
 	txnOp.GetWorkspace().StartStatement()
@@ -2364,7 +2363,6 @@ func executeStmtWithWorkspace(ses FeSession,
 		if txnOp != nil {
 			ses.EnterFPrint(119)
 			defer ses.ExitFPrint(119)
-			setFPrints(txnOp, execCtx.ses.GetFPrints())
 			//most of the cases, txnOp will not nil except that "set autocommit = 1"
 			//commit the txn immediately then the txnOp is nil.
 			txnOp.GetWorkspace().EndStatement()
@@ -2393,7 +2391,6 @@ func executeStmtWithIncrStmt(ses FeSession,
 	}
 	ses.EnterFPrint(117)
 	defer ses.ExitFPrint(117)
-	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//3. increase statement id
 	err = txnOp.GetWorkspace().IncrStatementID(execCtx.reqCtx, false)
 	if err != nil {
@@ -2410,8 +2407,6 @@ func executeStmtWithIncrStmt(ses FeSession,
 		//if txnOp != nil {
 		//	err = rollbackLastStmt(execCtx, txnOp, err)
 		//}
-		tempTxn := ses.GetTxnHandler().GetTxn()
-		setFPrints(tempTxn, ses.GetFPrints())
 	}()
 
 	err = dispatchStmt(ses, execCtx)

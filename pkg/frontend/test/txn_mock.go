@@ -740,9 +740,9 @@ func (mr *MockTxnOperatorMockRecorder) Rollback(ctx interface{}) *gomock.Call {
 }
 
 // SetFootPrints mocks base method.
-func (m *MockTxnOperator) SetFootPrints(prints [][2]uint32) {
+func (m *MockTxnOperator) SetFootPrints(id int, enter bool) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetFootPrints", prints)
+	m.ctrl.Call(m, "SetFootPrints", id)
 }
 
 // SetFootPrints indicates an expected call of SetFootPrints.

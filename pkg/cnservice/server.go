@@ -664,6 +664,9 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts,
 				client.WithEnableRefreshExpression())
 		}
+
+		s.cfg.Txn.EnableLeakCheck = 1
+		s.cfg.Txn.MaxActiveAges.Duration = time.Second * 30
 		if s.cfg.Txn.EnableLeakCheck == 1 {
 			opts = append(opts, client.WithEnableLeakCheck(
 				s.cfg.Txn.MaxActiveAges.Duration,
@@ -688,6 +691,12 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 						} else if txn.Options.InRollback {
 							v2.TxnInRollbackCounter.Inc()
 							runtime.DefaultRuntime().Logger().Error("found txn in rollback", fields...)
+						} else if txn.Options.InIncrStmt {
+							v2.TxnInIncrStmtCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found txn in incr statement", fields...)
+						} else if txn.Options.InRollbackStmt {
+							v2.TxnInRollbackStmtCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found txn in rollback statement", fields...)
 						} else {
 							v2.TxnLeakCounter.Inc()
 							runtime.DefaultRuntime().Logger().Error("found leak txn", fields...)
