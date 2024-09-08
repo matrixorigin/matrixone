@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -109,8 +110,8 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	// }
 
 	expr := []*plan.Expr{
-		disttae.MakeFunctionExprForTest("=", []*plan.Expr{
-			disttae.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
+		engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
+			engine_util.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
 			plan2.MakePlan2Int64ConstExprWithType(bats[0].Vecs[primaryKeyIdx].Get(0).(int64)),
 		}),
 	}
@@ -129,7 +130,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	resultHit := 0
 	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
 	for idx := 0; idx < blockCnt; idx++ {
-		_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, nil, ret)
+		_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, ret)
 		require.NoError(t, err)
 
 		resultHit += int(ret.RowCount())
@@ -205,8 +206,8 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	}
 
 	expr := []*plan.Expr{
-		disttae.MakeFunctionExprForTest("=", []*plan.Expr{
-			disttae.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
+		engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
+			engine_util.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
 			plan2.MakePlan2Int64ConstExprWithType(bat1.Vecs[primaryKeyIdx].Get(9).(int64)),
 		}),
 	}
@@ -223,7 +224,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
-	_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, nil, ret)
+	_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, ret)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, int(ret.RowCount()))
@@ -333,7 +334,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 				break
 			}
 		}
-		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, mp, nil, ret)
+		_, err = reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, mp, ret)
 		require.NoError(t, err)
 		require.True(t, ret.Allocated() > 0)
 
@@ -375,7 +376,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		nmp, _ := mpool.NewMPool("test", mpool.MB, mpool.NoFixed)
 
 		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
-		_, err = reader.Read(ctx, ret.Attrs, nil, nmp, nil, ret)
+		_, err = reader.Read(ctx, ret.Attrs, nil, nmp, ret)
 		require.Error(t, err)
 		require.NoError(t, txn.Commit(ctx))
 	}

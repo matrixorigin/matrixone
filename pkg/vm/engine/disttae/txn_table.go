@@ -52,6 +52,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -1466,7 +1467,6 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	case deletion.CNBlockOffset:
 	case deletion.RawBatchOffset:
 	case deletion.RawRowIdBatch:
-		logutil.Infof("data return by remote pipeline\n")
 		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 		if bat.RowCount() == 0 {
 			return nil
@@ -1501,7 +1501,7 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64,
 ) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
-	s3writer, err := colexec.NewS3Writer(tbl.getTxn().proc, tbl.tableDef, 0)
+	s3writer, err := colexec.NewS3Writer(tbl.tableDef, 0)
 	if err != nil {
 		return nil, objectio.ObjectStats{}, err
 	}
@@ -1902,8 +1902,8 @@ func (tbl *txnTable) PKPersistedBetween(
 		return true, err
 	}
 
-	var filter blockio.ReadFilterSearchFuncType
-	buildFilter := func() (blockio.ReadFilterSearchFuncType, error) {
+	var filter objectio.ReadFilterSearchFuncType
+	buildFilter := func() (objectio.ReadFilterSearchFuncType, error) {
 		//keys must be sorted.
 		keys.InplaceSort()
 		bytes, _ := keys.MarshalBinary()
@@ -1915,12 +1915,12 @@ func (tbl *txnTable) PKPersistedBetween(
 			bytes,
 			false)
 
-		basePKFilter, err := newBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
+		basePKFilter, err := engine_util.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
 		if err != nil {
 			return nil, err
 		}
 
-		blockReadPKFilter, err := newBlockReadPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
+		blockReadPKFilter, err := engine_util.ConstructBlockPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
 		if err != nil {
 			return nil, err
 		}
@@ -1928,8 +1928,8 @@ func (tbl *txnTable) PKPersistedBetween(
 		return blockReadPKFilter.SortedSearchFunc, nil
 	}
 
-	var unsortedFilter blockio.ReadFilterSearchFuncType
-	buildUnsortedFilter := func() blockio.ReadFilterSearchFuncType {
+	var unsortedFilter objectio.ReadFilterSearchFuncType
+	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
 		return getNonSortedPKSearchFuncByPKVec(keys)
 	}
 

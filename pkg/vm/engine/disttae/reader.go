@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -46,7 +47,7 @@ import (
 
 func (mixin *withFilterMixin) reset() {
 	mixin.filterState.evaluated = false
-	mixin.filterState.filter = blockio.BlockReadFilter{}
+	mixin.filterState.filter = objectio.BlockReadFilter{}
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
@@ -139,7 +140,6 @@ func (r *emptyReader) Read(
 	_ []string,
 	_ *plan.Expr,
 	_ *mpool.MPool,
-	_ engine.VectorPool,
 	_ *batch.Batch,
 ) (bool, error) {
 	return true, nil
@@ -207,7 +207,6 @@ func (r *mergeReader) Read(
 	cols []string,
 	expr *plan.Expr,
 	mp *mpool.MPool,
-	vp engine.VectorPool,
 	bat *batch.Batch,
 ) (bool, error) {
 	start := time.Now()
@@ -219,7 +218,7 @@ func (r *mergeReader) Read(
 		return true, nil
 	}
 	for len(r.rds) > 0 {
-		isEnd, err := r.rds[0].Read(ctx, cols, expr, mp, vp, bat)
+		isEnd, err := r.rds[0].Read(ctx, cols, expr, mp, bat)
 		if err != nil {
 			for _, rd := range r.rds {
 				rd.Close()
@@ -251,7 +250,7 @@ func NewReader(
 	source engine.DataSource,
 ) (*reader, error) {
 
-	baseFilter, err := newBasePKFilter(
+	baseFilter, err := engine_util.ConstructBasePKFilter(
 		expr,
 		tableDef,
 		proc,
@@ -271,7 +270,7 @@ func NewReader(
 		return nil, err
 	}
 
-	blockFilter, err := newBlockReadPKFilter(
+	blockFilter, err := engine_util.ConstructBlockPKFilter(
 		tableDef.Pkey.PkeyColName,
 		baseFilter,
 	)
@@ -320,7 +319,6 @@ func (r *reader) Read(
 	cols []string,
 	expr *plan.Expr,
 	mp *mpool.MPool,
-	vp engine.VectorPool,
 	bat *batch.Batch,
 ) (isEnd bool, err error) {
 
@@ -343,7 +341,6 @@ func (r *reader) Read(
 		r.columns.seqnums,
 		r.memFilter,
 		mp,
-		vp,
 		bat)
 
 	dataState = state
@@ -383,9 +380,11 @@ func (r *reader) Read(
 		r.filterState.seqnums,
 		r.filterState.colTypes,
 		filter,
-		r.fs, mp, vp, policy,
+		policy,
 		r.tableDef.Name,
 		bat,
+		mp,
+		r.fs,
 	)
 	if err != nil {
 		return false, err
