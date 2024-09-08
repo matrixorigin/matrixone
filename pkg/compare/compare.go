@@ -181,11 +181,12 @@ func uuidAscCompare(x, y types.Uuid) int {
 	return x.Compare(y)
 }
 
+// PXU FIXME
 func txntsAscCompare(x, y types.TS) int {
 	return bytes.Compare(x[:], y[:])
 }
 func rowidAscCompare(x, y types.Rowid) int {
-	return bytes.Compare(x[:], y[:])
+	return x.Compare(&y)
 }
 
 func blockidAscCompare(x, y types.Blockid) int {
@@ -224,10 +225,11 @@ func uuidDescCompare(x, y types.Uuid) int {
 }
 
 func txntsDescCompare(x, y types.TS) int {
+	// PXU FIXME
 	return bytes.Compare(y[:], x[:])
 }
 func rowidDescCompare(x, y types.Rowid) int {
-	return bytes.Compare(y[:], x[:])
+	return y.Compare(&x)
 }
 
 func blockidDescCompare(x, y types.Blockid) int {
