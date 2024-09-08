@@ -26,9 +26,6 @@ import (
 
 type ObjectInfo struct {
 	objectio.ObjectStats
-
-	Appendable bool
-	Sorted     bool
 	CreateTime types.TS
 	DeleteTime types.TS
 }
@@ -36,8 +33,11 @@ type ObjectInfo struct {
 func (o ObjectInfo) String() string {
 	return fmt.Sprintf(
 		"%s; appendable: %v; sorted: %v; createTS: %s; deleteTS: %s",
-		o.ObjectStats.String(), o.Appendable, o.Sorted,
-		o.CreateTime.ToString(), o.DeleteTime.ToString())
+		o.ObjectStats.String(),
+		o.ObjectStats.GetAppendable(),
+		o.ObjectStats.GetSorted(),
+		o.CreateTime.ToString(),
+		o.DeleteTime.ToString())
 }
 
 func (o ObjectInfo) Location() objectio.Location {

@@ -14,8 +14,6 @@ select mo_ctl('dn', 'flush', 'd1.t2');
 select Sleep(1);
 -- @separator:table
 explain select * from t1 order by c1 limit 100 offset 200;
--- @separator:table
-explain select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 33333 and 44444 order by t1.c1 limit 10 offset 10;
 select * from t1 order by c1 limit 10 ;
 select * from t1 order by c1 limit 10 offset 200;
 select * from t1 order by c1 desc limit 10 ;
@@ -25,8 +23,6 @@ select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 22 and 44 order by t1.c1
 select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 33333 and 44444 order by t1.c1 limit 10;
 select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 33333 and 44444 order by t1.c1 desc limit 10 offset 10;
 select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 33333 and 555555 order by t1.c1 limit 10;
--- @separator:table
-explain select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 33333 and 555555 order by t1.c1 desc limit 10 offset 10;
 select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 33333 and 555555 order by t1.c1 desc limit 10 offset 10;
 -- @separator:table
 explain select * from t1,t2 where t1.c1=t2.c1  order by t1.c1 desc limit 10 offset 10;

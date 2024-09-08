@@ -1566,7 +1566,7 @@ parallel_opt:
     }
 strict_opt:
     {
-        $$ = false
+        $$ = true
     }
 |   STRICT STRING
     {
