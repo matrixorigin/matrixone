@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -637,6 +638,24 @@ func (zm ZM) Or(o ZM) (res bool, ok bool) {
 		res = false
 	}
 	return
+}
+
+func (zm ZM) RowidPrefixGT(s []byte) bool {
+	zmin := zm.GetMinBuf()
+	v := (*types.Rowid)(unsafe.Pointer(&zmin))
+	return v.ComparePrefix(s)
+}
+
+func (zm ZM) RowidPrefixEq(s []byte) bool {
+	zmin := zm.GetMinBuf()
+	zmax := zm.GetMaxBuf()
+	minv := (*types.Rowid)(unsafe.Pointer(&zmin))
+	if minv.ComparePrefix(s) > 0 {
+		return false
+	}
+	maxv := (*types.Rowid)(unsafe.Pointer(&zmax))
+
+	return maxv.ComparePrefix(s) >= 0
 }
 
 func (zm ZM) PrefixGT(s []byte) bool {

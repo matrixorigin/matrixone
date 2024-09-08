@@ -167,7 +167,7 @@ func (tomb *tombstoneData) HasBlockTombstone(
 	for i, end := 0, tomb.files.Len(); i < end; i++ {
 		objectStats := tomb.files.Get(i)
 		zm := objectStats.SortKeyZoneMap()
-		if !zm.PrefixEq(blockId[:]) {
+		if !zm.RowidPrefixEq(blockId[:]) {
 			continue
 		}
 		location := objectStats.ObjectLocation()
@@ -189,8 +189,8 @@ func (tomb *tombstoneData) HasBlockTombstone(
 		for pos := startIdx; pos < blkCnt; pos++ {
 			blkMeta := dataMeta.GetBlockMeta(uint32(pos))
 			columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
-			if !columnZonemap.PrefixEq(blockId[:]) {
-				if columnZonemap.PrefixGT(blockId[:]) {
+			if !columnZonemap.RowidPrefixEq(blockId[:]) {
+				if columnZonemap.RowidPrefixGT(blockId[:]) {
 					break
 				}
 				continue
