@@ -101,16 +101,16 @@ func (r *Rowid) ComparePrefix(to []byte) int {
 		return v1.Compare(v2)
 	}
 	if toLen == RowidSize {
-		toId := (*types.Rowid)(unsafe.Pointer(&to[0]))
-		return b.Compare(toId)
+		toId := (*Rowid)(unsafe.Pointer(&to[0]))
+		return r.Compare(toId)
 	}
 	if toLen == ObjectidSize {
 		v1 := (*Objectid)(unsafe.Pointer(&r[0]))
 		v2 := (*Objectid)(unsafe.Pointer(&to[0]))
 		return v1.Compare(v2)
 	}
-	if tLen == SegmentidSize {
-		return bytes.Compare(b[:tLen], to)
+	if toLen == SegmentidSize {
+		return bytes.Compare(b[:toLen], to)
 	}
 	panic(fmt.Sprintf("invalid prefix length %d:%X", toLen, to))
 }
@@ -331,7 +331,7 @@ func (o *Objectid) Compare(other *Objectid) int {
 	if v := bytes.Compare(o[:SegmentidSize], other[:SegmentidSize]); v != 0 {
 		return v
 	}
-	filen1 := *(*uint16)(unsafe.Pointer(&r[SegmentidSize]))
+	filen1 := *(*uint16)(unsafe.Pointer(&o[SegmentidSize]))
 	filen2 := *(*uint16)(unsafe.Pointer(&other[SegmentidSize]))
 	if filen1 < filen2 {
 		return -1
