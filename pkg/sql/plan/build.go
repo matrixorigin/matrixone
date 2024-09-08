@@ -58,38 +58,43 @@ func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerC
 	}, err
 }
 
-/*
-	func bindAndOptimizeInsertQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Insert, isPrepareStmt bool, skipStats bool) (*Plan, error) {
-		start := time.Now()
-		defer func() {
-			v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
-		}()
-
-		builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
-		bindCtx := NewBindContext(builder, nil)
-		if IsSnapshotValid(ctx.GetSnapshot()) {
-			bindCtx.snapshot = ctx.GetSnapshot()
-		}
-
-		rootId, err := builder.bindInsert(stmt, bindCtx)
-		if err != nil {
-			return nil, err
-		}
-		ctx.SetViews(bindCtx.views)
-
-		builder.qry.Steps = append(builder.qry.Steps, rootId)
-		builder.skipStats = skipStats
-		query, err := builder.createQuery()
-		if err != nil {
-			return nil, err
-		}
-		return &Plan{
-			Plan: &plan.Plan_Query{
-				Query: query,
-			},
-		}, err
+func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepareStmt bool, skipStats bool, isExplain bool) (*Plan, error) {
+	if true {
+		return buildInsert(stmt, ctx, false, isPrepareStmt)
 	}
-*/
+
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildInsertHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	builder := NewQueryBuilder(plan.Query_DELETE, ctx, isPrepareStmt, true)
+	bindCtx := NewBindContext(builder, nil)
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		bindCtx.snapshot = ctx.GetSnapshot()
+	}
+
+	rootId, err := builder.bindInsert(stmt, bindCtx)
+	if err != nil {
+		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+			return buildInsert(stmt, ctx, false, isPrepareStmt)
+		}
+		return nil, err
+	}
+	ctx.SetViews(bindCtx.views)
+
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	builder.skipStats = skipStats
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
+	}, err
+}
 
 func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepareStmt bool, skipStats bool, isExplain bool) (*Plan, error) {
 	if !isExplain {
@@ -98,7 +103,7 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 
 	start := time.Now()
 	defer func() {
-		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
+		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	builder := NewQueryBuilder(plan.Query_DELETE, ctx, isPrepareStmt, true)
@@ -170,7 +175,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, isE
 	case *tree.ExplainAnalyze:
 		return buildExplainAnalyze(ctx, stmt, isPrepareStmt)
 	case *tree.Insert:
-		return buildInsert(stmt, ctx, false, isPrepareStmt)
+		return bindAndOptimizeInsertQuery(ctx, stmt, isPrepareStmt, false, isExplain)
 	case *tree.Replace:
 		return buildReplace(stmt, ctx, isPrepareStmt, false)
 	case *tree.Update:

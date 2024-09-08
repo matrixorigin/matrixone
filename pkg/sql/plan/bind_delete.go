@@ -113,6 +113,10 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 				continue
 			}
 
+			if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+				return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
+			}
+
 			idxObjRef, idxTableDef := builder.compCtx.Resolve(tblInfo.objRef[0].SchemaName, idxDef.IndexTableName, nil)
 			idxTag := builder.genNewTag()
 			builder.addNameByColRef(idxTag, idxTableDef)
@@ -124,7 +128,6 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 				BindingTags:  []int32{idxTag},
 				ScanSnapshot: scanNode.ScanSnapshot,
 			}
-
 			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], ctx)
 
 			rightPkPos := idxTableDef.Name2ColIndex[catalog.IndexTableIndexColName]
@@ -264,9 +267,9 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 			Children: []int32{lastNodeID},
 			// ProjectList: getProjectionByLastNode(builder, lastNodeId),
 			DeleteCtx: &plan.DeleteCtx{
-				TableDef: tableDef,
+				TableDef: DeepCopyTableDef(tableDef, true),
 				//RowIdIdx:            int32(delNodeInfo.deleteIndex),
-				Ref: tblInfo.objRef[i],
+				Ref: DeepCopyObjectRef(tblInfo.objRef[i]),
 				//AddAffectedRows:     delNodeInfo.addAffectedRows,
 				//IsClusterTable:      delNodeInfo.IsClusterTable,
 				//PartitionTableIds:   delNodeInfo.partTableIDs,
@@ -306,8 +309,8 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, ctx *BindContext) (in
 				NodeType: plan.Node_DELETE,
 				Children: []int32{lastNodeID},
 				DeleteCtx: &plan.DeleteCtx{
-					TableDef: idxNode.TableDef,
-					Ref:      idxNode.ObjRef,
+					TableDef: DeepCopyTableDef(idxNode.TableDef, true),
+					Ref:      DeepCopyObjectRef(idxNode.ObjRef),
 					//PrimaryKeyIdx:       int32(delNodeInfo.pkPos),
 					//CanTruncate:         canTruncate,
 					//AddAffectedRows:     delNodeInfo.addAffectedRows,
