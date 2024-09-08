@@ -102,9 +102,18 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 		// PXU FIXME
 		return CompareBytes(a, b)
 	case types.T_Rowid:
-		v1 := (*types.Rowid)(unsafe.Pointer(&a[0]))
-		v2 := (*types.Rowid)(unsafe.Pointer(&b[0]))
-		return v1.Compare(v2)
+		if len(a) == types.RowidSize {
+			v1 := (*types.Rowid)(unsafe.Pointer(&a[0]))
+			return v1.ComparePrefix(b)
+		} else {
+			v2 := (*types.Rowid)(unsafe.Pointer(&b[0]))
+			if ret := v2.ComparePrefix(a); ret < 0 {
+				return 1
+			} else if ret > 0 {
+				return -1
+			}
+			return 0
+		}
 	case types.T_Blockid:
 		v1 := (*types.Blockid)(unsafe.Pointer(&a[0]))
 		v2 := (*types.Blockid)(unsafe.Pointer(&b[0]))

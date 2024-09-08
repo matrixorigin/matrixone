@@ -93,6 +93,28 @@ func CompareBlockidBlockidAligned(a, b Blockid) int {
 	return a.Compare(&b)
 }
 
+func (r *Rowid) ComparePrefix(to []byte) int {
+	toLen := len(to)
+	if toLen == BlockidSize {
+		v1 := (*Blockid)(unsafe.Pointer(&r[0]))
+		v2 := (*Blockid)(unsafe.Pointer(&to[0]))
+		return v1.Compare(v2)
+	}
+	if toLen == RowidSize {
+		toId := (*types.Rowid)(unsafe.Pointer(&to[0]))
+		return b.Compare(toId)
+	}
+	if toLen == ObjectidSize {
+		v1 := (*Objectid)(unsafe.Pointer(&r[0]))
+		v2 := (*Objectid)(unsafe.Pointer(&to[0]))
+		return v1.Compare(v2)
+	}
+	if tLen == SegmentidSize {
+		return bytes.Compare(b[:tLen], to)
+	}
+	panic(fmt.Sprintf("invalid prefix length %d:%X", toLen, to))
+}
+
 func (r *Rowid) Compare(other *Rowid) int {
 	if v := bytes.Compare(r[:SegmentidSize], other[:SegmentidSize]); v != 0 {
 		return v
@@ -305,19 +327,33 @@ func (o *Objectid) Offset() uint16 {
 	return filen
 }
 
+func (o *Objectid) Compare(other *Objectid) int {
+	if v := bytes.Compare(o[:SegmentidSize], other[:SegmentidSize]); v != 0 {
+		return v
+	}
+	filen1 := *(*uint16)(unsafe.Pointer(&r[SegmentidSize]))
+	filen2 := *(*uint16)(unsafe.Pointer(&other[SegmentidSize]))
+	if filen1 < filen2 {
+		return -1
+	} else if filen1 > filen2 {
+		return 1
+	}
+	return 0
+}
+
 func (o *Objectid) Eq(other Objectid) bool {
-	return bytes.Equal(o[:], other[:])
+	return o.Compare(&other) == 0
 }
 
 func (o *Objectid) Le(other Objectid) bool {
-	return bytes.Compare(o[:], other[:]) <= 0
+	return o.Compare(&other) <= 0
 }
 func (o *Objectid) Ge(other Objectid) bool {
-	return bytes.Compare(o[:], other[:]) >= 0
+	return o.Compare(&other) >= 0
 }
 func (o *Objectid) Lt(other Objectid) bool {
-	return bytes.Compare(o[:], other[:]) < 0
+	return o.Compare(&other) < 0
 }
 func (o *Objectid) Gt(other Objectid) bool {
-	return bytes.Compare(o[:], other[:]) > 0
+	return o.Compare(&other) > 0
 }
