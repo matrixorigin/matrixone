@@ -221,7 +221,7 @@ func (e *Engine) loadDatabaseFromStorage(
 				zap.String("sql", sql), zap.Duration("cost", time.Since(now)))
 		}
 	}()
-	res, err := execReadSql(ctx, op, sql, false)
+	res, err := execReadSql(ctx, op, sql, true)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +324,7 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 	}
 	sql := fmt.Sprintf(catalog.MoDatabasesInEngineQueryFormat, aid)
 
-	res, err := execReadSql(ctx, op, sql, false)
+	res, err := execReadSql(ctx, op, sql, true)
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +394,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			// not found in cache, try storage
 			sql := fmt.Sprintf(catalog.MoTablesQueryNameById, accountId, tableId)
 			tblanmes, dbnames := []string{}, []string{}
-			result, err := execReadSql(ctx, op, sql, false)
+			result, err := execReadSql(ctx, op, sql, true)
 			if err != nil {
 				return "", "", nil, err
 			}
