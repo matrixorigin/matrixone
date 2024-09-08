@@ -24,25 +24,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// func SimpleConstructBlockPKFilter(
-// 	pkName string,
-// 	val []byte,
-// 	inVec *vector.Vector,
-// 	oid types.T,
-// ) (f objectio.BlockReadFilter, err error) {
-// 	var base BasePKFilter
-// 	if inVec != nil {
-// 		base.Op = function.IN
-// 		base.Vec = inVec
-// 		base.Oid = oid
-// 	} else {
-// 		base.Op = function.EQUAL
-// 		base.LB = val
-// 		base.Oid = oid
-// 	}
-// 	base.Valid = true
-// 	return ConstructBlockPKFilter(pkName, base)
-// }
+func DirectConstructBlockPKFilter(
+	isFakePK bool,
+	val []byte,
+	inVec *vector.Vector,
+	oid types.T,
+) (f objectio.BlockReadFilter, err error) {
+	var base BasePKFilter
+	if inVec != nil {
+		base.Op = function.IN
+		base.Vec = inVec
+		base.Oid = oid
+	} else {
+		base.Op = function.EQUAL
+		base.LB = val
+		base.Oid = oid
+	}
+	base.Valid = true
+	return ConstructBlockPKFilter(isFakePK, base)
+}
 
 func ConstructBlockPKFilter(
 	isFakePK bool,
