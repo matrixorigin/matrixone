@@ -102,6 +102,8 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 		// PXU FIXME
 		return CompareBytes(a, b)
 	case types.T_Rowid:
+		// Row id is very special. it is not valena type but always be
+		// compared with prefix: Objectid or Blockid
 		if len(a) == types.RowidSize {
 			v1 := (*types.Rowid)(unsafe.Pointer(&a[0]))
 			return v1.ComparePrefix(b)
