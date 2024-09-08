@@ -184,12 +184,12 @@ func (r *Rowid) ShortStringEx() string {
 	return fmt.Sprintf("%s-%d", b.ShortStringEx(), s)
 }
 
-func (b *Blockid) Less(than Blockid) bool {
-	return b.Compare(&than) < 0
+func (b *Blockid) LT(than *Blockid) bool {
+	return b.Compare(than) < 0
 }
 
-func (b *Blockid) Great(than Blockid) bool {
-	return b.Compare(&than) > 0
+func (b *Blockid) GT(than *Blockid) bool {
+	return b.Compare(than) > 0
 }
 
 func RandomRowid() Rowid {

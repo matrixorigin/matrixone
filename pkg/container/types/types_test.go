@@ -293,7 +293,7 @@ func BenchmarkTypesCompare(b *testing.B) {
 	b.Run("blockid-less", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			blockId_1_1291.Less(*blockId_1_1291)
+			blockId_1_1291.LT(blockId_1_1291)
 		}
 	})
 }
