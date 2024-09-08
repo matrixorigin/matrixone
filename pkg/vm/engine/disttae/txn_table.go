@@ -1920,7 +1920,10 @@ func (tbl *txnTable) PKPersistedBetween(
 			return nil, err
 		}
 
-		blockReadPKFilter, err := engine_util.ConstructBlockPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
+		blockReadPKFilter, err := engine_util.ConstructBlockPKFilter(
+			catalog.IsFakePkName(tbl.tableDef.Pkey.PkeyColName),
+			basePKFilter,
+		)
 		if err != nil {
 			return nil, err
 		}

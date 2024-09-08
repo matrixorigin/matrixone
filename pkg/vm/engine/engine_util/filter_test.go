@@ -791,7 +791,10 @@ func TestConstructBlockPKFilter(t *testing.T) {
 	}
 
 	for i := range basePKFilters {
-		blkPKFilter, err := ConstructBlockPKFilter("a", basePKFilters[i])
+		blkPKFilter, err := ConstructBlockPKFilter(
+			false,
+			basePKFilters[i],
+		)
 		require.NoError(t, err)
 
 		require.True(t, blkPKFilter.Valid)

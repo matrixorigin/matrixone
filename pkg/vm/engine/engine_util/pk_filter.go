@@ -17,7 +17,6 @@ package engine_util
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -25,8 +24,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// func SimpleConstructBlockPKFilter(
+// 	pkName string,
+// 	val []byte,
+// 	inVec *vector.Vector,
+// 	oid types.T,
+// ) (f objectio.BlockReadFilter, err error) {
+// 	var base BasePKFilter
+// 	if inVec != nil {
+// 		base.Op = function.IN
+// 		base.Vec = inVec
+// 		base.Oid = oid
+// 	} else {
+// 		base.Op = function.EQUAL
+// 		base.LB = val
+// 		base.Oid = oid
+// 	}
+// 	base.Valid = true
+// 	return ConstructBlockPKFilter(pkName, base)
+// }
+
 func ConstructBlockPKFilter(
-	pkName string,
+	isFakePK bool,
 	basePKFilter BasePKFilter,
 ) (f objectio.BlockReadFilter, err error) {
 	if !basePKFilter.Valid {
@@ -36,7 +55,7 @@ func ConstructBlockPKFilter(
 	var readFilter objectio.BlockReadFilter
 	var sortedSearchFunc, unSortedSearchFunc func(*vector.Vector) []int64
 
-	readFilter.HasFakePK = pkName == catalog.FakePrimaryKeyColName
+	readFilter.HasFakePK = isFakePK
 
 	switch basePKFilter.Op {
 	case function.EQUAL:

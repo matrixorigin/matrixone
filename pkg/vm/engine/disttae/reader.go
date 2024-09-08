@@ -271,7 +271,7 @@ func NewReader(
 	}
 
 	blockFilter, err := engine_util.ConstructBlockPKFilter(
-		tableDef.Pkey.PkeyColName,
+		catalog.IsFakePkName(tableDef.Pkey.PkeyColName),
 		baseFilter,
 	)
 	if err != nil {
