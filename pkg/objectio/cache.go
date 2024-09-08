@@ -72,8 +72,6 @@ type mataCacheKey [cacheKeyLen]byte
 
 var metaCache *fifocache.Cache[mataCacheKey, []byte]
 var onceInit sync.Once
-var metaCacheStats hitStats
-var metaCacheHitStats hitStats
 
 func metaCacheSize() int64 {
 	v, err := mem.VirtualMemory()
@@ -132,10 +130,6 @@ func LoadObjectMetaByExtent(
 			return
 		}
 		meta = obj.(ObjectMeta)
-		// metaCacheStats.Record(1, 1)
-		// if !prefetch {
-		// 	metaCacheHitStats.Record(1, 1)
-		// }
 		return
 	}
 	if extent.Length() == 0 {
@@ -153,10 +147,6 @@ func LoadObjectMetaByExtent(
 	}
 	meta = obj.(ObjectMeta)
 	metaCache.Set(key, v[:], int64(len(v)))
-	// metaCacheStats.Record(0, 1)
-	// if !prefetch {
-	// 	metaCacheHitStats.Record(0, 1)
-	// }
 	return
 }
 
@@ -169,7 +159,6 @@ func FastLoadBF(
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
 	v, ok := metaCache.Get(key)
 	if ok {
-		// metaCacheStats.Record(1, 1)
 		return v, nil
 	}
 	meta, err := FastLoadObjectMeta(ctx, &location, isPrefetch, fs)
@@ -188,7 +177,6 @@ func LoadBFWithMeta(
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
 	v, ok := metaCache.Get(key)
 	if ok {
-		// metaCacheStats.Record(1, 1)
 		return v, nil
 	}
 	extent := meta.BlockHeader().BFExtent()
@@ -197,7 +185,6 @@ func LoadBFWithMeta(
 		return nil, err
 	}
 	metaCache.Set(key, bf, int64(len(bf)))
-	// metaCacheStats.Record(0, 1)
 	return bf, nil
 }
 
