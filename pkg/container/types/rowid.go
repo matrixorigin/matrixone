@@ -86,39 +86,64 @@ func NewRowIDWithObjectIDBlkNumAndRowID(id Objectid, blknum uint16, offset uint3
 }
 
 func CompareRowidRowidAligned(a, b Rowid) int {
+	// PXU FIXME
 	return bytes.Compare(a[:], b[:])
 }
 
 func CompareBlockidBlockidAligned(a, b Blockid) int {
-	return bytes.Compare(a[:], b[:])
+	return a.Compare(&b)
 }
 
-func (r Rowid) Compare(other Rowid) int {
-	return bytes.Compare(r[:], other[:])
+func (r *Rowid) Compare(other *Rowid) int {
+	if v := bytes.Compare(r[:SegmentidSize], other[:SegmentidSize]); v != 0 {
+		return v
+	}
+	filen1 := *(*uint16)(unsafe.Pointer(&r[SegmentidSize]))
+	filen2 := *(*uint16)(unsafe.Pointer(&other[SegmentidSize]))
+	if filen1 < filen2 {
+		return -1
+	} else if filen1 > filen2 {
+		return 1
+	}
+	blk1 := *(*uint16)(unsafe.Pointer(&r[ObjectidSize]))
+	blk2 := *(*uint16)(unsafe.Pointer(&other[ObjectidSize]))
+	if blk1 < blk2 {
+		return -1
+	} else if blk1 > blk2 {
+		return 1
+	}
+	row1 := *(*uint32)(unsafe.Pointer(&r[BlockidSize]))
+	row2 := *(*uint32)(unsafe.Pointer(&other[BlockidSize]))
+	if row1 < row2 {
+		return -1
+	} else if row1 > row2 {
+		return 1
+	}
+	return 0
 }
 
-func (r Rowid) Less(than Rowid) bool {
-	return bytes.Compare(r[:], than[:]) < 0
+func (r *Rowid) Less(than *Rowid) bool {
+	return r.Compare(than) < 0
 }
 
-func (r Rowid) Le(than Rowid) bool {
-	return r.Less(than) || r.Equal(than)
+func (r *Rowid) Le(than *Rowid) bool {
+	return r.Compare(than) <= 0
 }
 
-func (r Rowid) Equal(to Rowid) bool {
-	return bytes.Equal(r[:], to[:])
+func (r *Rowid) Equal(to *Rowid) bool {
+	return r.Compare(to) == 0
 }
 
-func (r Rowid) NotEqual(to Rowid) bool {
-	return !r.Equal(to)
+func (r *Rowid) NotEqual(to *Rowid) bool {
+	return r.Compare(to) != 0
 }
 
-func (r Rowid) Great(than Rowid) bool {
-	return !r.Less(than)
+func (r *Rowid) Great(than *Rowid) bool {
+	return r.Compare(than) > 0
 }
 
-func (r Rowid) Ge(than Rowid) bool {
-	return r.Great(than) || r.Equal(than)
+func (r *Rowid) Ge(than *Rowid) bool {
+	return r.Compare(than) >= 0
 }
 
 // CloneBlockID clones the block id from row id.

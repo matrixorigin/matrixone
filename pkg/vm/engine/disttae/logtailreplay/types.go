@@ -99,10 +99,10 @@ func (r RowEntry) Less(than RowEntry) bool {
 		return false
 	}
 	// asc
-	if r.RowID.Less(than.RowID) {
+	if r.RowID.Less(&than.RowID) {
 		return true
 	}
-	if than.RowID.Less(r.RowID) {
+	if than.RowID.Less(&r.RowID) {
 		return false
 	}
 	// desc

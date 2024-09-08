@@ -296,4 +296,13 @@ func BenchmarkTypesCompare(b *testing.B) {
 			blockId_1_1291.LT(blockId_1_1291)
 		}
 	})
+
+	rowid_1_1291_1291 := NewRowid(blockId_1_1291, 1291)
+	rowid_1_1291_1036 := NewRowid(blockId_1_1291, 1036)
+	b.Run("rowid-compare", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			rowid_1_1291_1291.Compare(rowid_1_1291_1036)
+		}
+	})
 }

@@ -73,7 +73,7 @@ func (p *rowsIter) Next() bool {
 			// not visible
 			continue
 		}
-		if entry.RowID.Equal(p.lastRowID) {
+		if entry.RowID.Equal(&p.lastRowID) {
 			// already met
 			continue
 		}

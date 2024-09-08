@@ -752,7 +752,7 @@ func (p *PartitionState) PKExistInMemBetween(
 				if row.BlockID.Compare(&entry.BlockID) != 0 {
 					break
 				}
-				if !row.RowID.Equal(entry.RowID) {
+				if !row.RowID.Equal(&entry.RowID) {
 					break
 				}
 				if row.Time.GreaterEq(&from) {

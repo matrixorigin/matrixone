@@ -1222,7 +1222,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 			for i := range rowIds {
 				s, e := blockio.FindIntervalForBlock(deletedRowIds, rowIds[i].BorrowBlockID())
 				for j := s; j < e; j++ {
-					if rowIds[i].Equal(deletedRowIds[j]) && (commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
+					if rowIds[i].Equal(&deletedRowIds[j]) && (commit == nil || commit[j].LessEq(&ls.snapshotTS)) {
 						deleted = append(deleted, int64(i))
 						break
 					}
