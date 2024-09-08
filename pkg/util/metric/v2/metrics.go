@@ -50,6 +50,7 @@ func init() {
 	initFrontendMetrics()
 	initPipelineMetrics()
 	initLogServiceMetrics()
+	initShardingMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -207,6 +208,13 @@ func initLogServiceMetrics() {
 	registry.MustRegister(LogServiceAppendDurationHistogram)
 	registry.MustRegister(LogServiceAppendCounter)
 	registry.MustRegister(LogServiceAppendBytesHistogram)
+}
+
+func initShardingMetrics() {
+	registry.MustRegister(replicaOperatorCounter)
+	registry.MustRegister(replicaReadCounter)
+	registry.MustRegister(ReplicaCountGauge)
+	registry.MustRegister(ReplicaFreezeCNCountGauge)
 }
 
 func getDurationBuckets() []float64 {
