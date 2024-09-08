@@ -102,8 +102,9 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 		// PXU FIXME
 		return CompareBytes(a, b)
 	case types.T_Rowid:
-		// PXU FIXME
-		return CompareBytes(a, b)
+		v1 := (*types.Rowid)(unsafe.Pointer(&a[0]))
+		v2 := (*types.Rowid)(unsafe.Pointer(&b[0]))
+		return v1.Compare(v2)
 	case types.T_Blockid:
 		v1 := (*types.Blockid)(unsafe.Pointer(&a[0]))
 		v2 := (*types.Blockid)(unsafe.Pointer(&b[0]))
@@ -172,8 +173,9 @@ func CompareGeneric(a, b any, t types.T) int {
 		ts2 := a.(types.TS)
 		return ts2.Compare(&ts1)
 	case types.T_Rowid:
-		// PXU FIXME
-		return CompareBytes(a.([]byte), b.([]byte))
+		v1 := b.(types.Rowid)
+		v2 := a.(types.Rowid)
+		return v1.Compare(&v2)
 	case types.T_Blockid:
 		v1 := b.(types.Blockid)
 		v2 := a.(types.Blockid)

@@ -86,8 +86,7 @@ func NewRowIDWithObjectIDBlkNumAndRowID(id Objectid, blknum uint16, offset uint3
 }
 
 func CompareRowidRowidAligned(a, b Rowid) int {
-	// PXU FIXME
-	return bytes.Compare(a[:], b[:])
+	return a.Compare(&b)
 }
 
 func CompareBlockidBlockidAligned(a, b Blockid) int {

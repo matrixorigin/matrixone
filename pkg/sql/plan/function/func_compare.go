@@ -1008,7 +1008,6 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return a.Compare(b) < 0
 		}, selectList)
 	case types.T_Rowid:
-		// PXU TODO: optimize me
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return a.LT(&b)
 		}, selectList)
