@@ -122,27 +122,23 @@ func (r *Rowid) Compare(other *Rowid) int {
 	return 0
 }
 
-func (r *Rowid) Less(than *Rowid) bool {
+func (r *Rowid) LT(than *Rowid) bool {
 	return r.Compare(than) < 0
 }
 
-func (r *Rowid) Le(than *Rowid) bool {
+func (r *Rowid) LE(than *Rowid) bool {
 	return r.Compare(than) <= 0
 }
 
-func (r *Rowid) Equal(to *Rowid) bool {
+func (r *Rowid) EQ(to *Rowid) bool {
 	return r.Compare(to) == 0
 }
 
-func (r *Rowid) NotEqual(to *Rowid) bool {
-	return r.Compare(to) != 0
-}
-
-func (r *Rowid) Great(than *Rowid) bool {
+func (r *Rowid) GT(than *Rowid) bool {
 	return r.Compare(than) > 0
 }
 
-func (r *Rowid) Ge(than *Rowid) bool {
+func (r *Rowid) GE(than *Rowid) bool {
 	return r.Compare(than) >= 0
 }
 

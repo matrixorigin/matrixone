@@ -295,7 +295,7 @@ func (tomb *tombstoneData) ApplyPersistedTombstones(
 
 func (tomb *tombstoneData) SortInMemory() {
 	sort.Slice(tomb.rowids, func(i, j int) bool {
-		return tomb.rowids[i].Less(&tomb.rowids[j])
+		return tomb.rowids[i].LT(&tomb.rowids[j])
 	})
 }
 

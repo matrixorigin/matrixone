@@ -4093,7 +4093,7 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialR
 					case types.T_Rowid:
 						min := types.DecodeFixed[types.Rowid](zm.GetMinBuf())
 						v := partialResults[i].(types.Rowid)
-						if min.Less(&v) {
+						if min.LT(&v) {
 							partialResults[i] = min
 						}
 					case types.T_Blockid:
@@ -4222,7 +4222,7 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialR
 					case types.T_Rowid:
 						max := types.DecodeFixed[types.Rowid](zm.GetMaxBuf())
 						v := partialResults[i].(types.Rowid)
-						if max.Great(&v) {
+						if max.GT(&v) {
 							partialResults[i] = max
 						}
 					case types.T_Blockid:

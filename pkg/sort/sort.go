@@ -339,11 +339,11 @@ func tsGreater(data []types.TS, i, j int64) bool {
 }
 
 func rowidLess(data []types.Rowid, i, j int64) bool {
-	return data[i].Less(&data[j])
+	return data[i].LT(&data[j])
 }
 
 func rowidGreater(data []types.Rowid, i, j int64) bool {
-	return data[i].Great(&data[j])
+	return data[i].GT(&data[j])
 }
 
 func blockidLess(data []types.Blockid, i, j int64) bool {
