@@ -389,7 +389,7 @@ func (r *reader) Read(
 
 	bat.SetAttributes(cols)
 
-	if blkInfo.Sorted && r.columns.indexOfFirstSortedColumn != -1 {
+	if blkInfo.IsSorted() && r.columns.indexOfFirstSortedColumn != -1 {
 		bat.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
 	}
 

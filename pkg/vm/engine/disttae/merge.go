@@ -183,8 +183,7 @@ func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.
 		blk := iter.Entry()
 		// update delta location
 		obj := t.targets[objIdx]
-		blk.Sorted = obj.Sorted
-		blk.Appendable = obj.Appendable
+		blk.SetFlagByObjStats(obj.ObjectStats)
 		return t.readblock(ctx, &blk)
 	}
 	return nil, nil, nil, mergesort.ErrNoMoreBlocks
