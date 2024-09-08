@@ -65,9 +65,10 @@ func UuidLess(a, b types.Uuid) bool {
 }
 
 // it seems that go has no const generic type, handle these types respectively
+// PXU FIXME
 func TsLess(a, b types.TS) bool           { return bytes.Compare(a[:], b[:]) < 0 }
-func RowidLess(a, b types.Rowid) bool     { return bytes.Compare(a[:], b[:]) < 0 }
-func BlockidLess(a, b types.Blockid) bool { return bytes.Compare(a[:], b[:]) < 0 }
+func RowidLess(a, b types.Rowid) bool     { return a.Compare(&b) }
+func BlockidLess(a, b types.Blockid) bool { return a.Compare(&b) }
 
 func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 	if hasNull {
