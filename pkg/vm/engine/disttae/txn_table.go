@@ -837,7 +837,6 @@ func (tbl *txnTable) rangesOnePart(
 	bhit, btotal := outBlocks.Len()-1, int(s3BlkCnt)
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
-	blockio.RecordBlockSelectivity(proc.GetService(), bhit, btotal)
 	if btotal > 0 {
 		v2.TxnRangesSlowPathLoadObjCntHistogram.Observe(float64(loadObjCnt))
 		v2.TxnRangesSlowPathSelectedBlockCntHistogram.Observe(float64(bhit))

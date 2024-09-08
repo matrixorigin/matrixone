@@ -55,7 +55,6 @@ func removeIf[T any](data []T, pred func(t T) bool) []T {
 func ReadDataByFilter(
 	ctx context.Context,
 	tableName string,
-	sid string,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
 	columns []uint16,
@@ -90,7 +89,6 @@ func ReadDataByFilter(
 // BlockDataReadNoCopy only read block data from storage, don't apply deletes.
 func BlockDataReadNoCopy(
 	ctx context.Context,
-	sid string,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
 	columns []uint16,
@@ -154,7 +152,6 @@ func BlockDataReadNoCopy(
 // BlockDataRead only read block data from storage, don't apply deletes.
 func BlockDataRead(
 	ctx context.Context,
-	sid string,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
 	columns []uint16,
@@ -187,17 +184,14 @@ func BlockDataRead(
 
 	if searchFunc != nil {
 		if sels, err = ReadDataByFilter(
-			ctx, tableName, sid, info, ds, filterSeqnums, filterColTypes,
+			ctx, tableName, info, ds, filterSeqnums, filterColTypes,
 			types.TimestampToTS(ts), searchFunc, mp, fs,
 		); err != nil {
 			return err
 		}
 		v2.TaskSelReadFilterTotal.Inc()
 		if len(sels) == 0 {
-			RecordReadFilterSelectivity(sid, 1, 1)
 			v2.TaskSelReadFilterHit.Inc()
-		} else {
-			RecordReadFilterSelectivity(sid, 0, 1)
 		}
 
 		if len(sels) == 0 {
@@ -206,7 +200,7 @@ func BlockDataRead(
 	}
 
 	err = BlockDataReadInner(
-		ctx, sid, info, ds, columns, colTypes,
+		ctx, info, ds, columns, colTypes,
 		types.TimestampToTS(ts), sels, policy, bat, mp, fs,
 	)
 	if err != nil {
@@ -270,7 +264,6 @@ func windowCNBatch(bat *batch.Batch, start, end uint64) error {
 
 func BlockDataReadBackup(
 	ctx context.Context,
-	sid string,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
 	ts types.TS,
@@ -315,7 +308,6 @@ func BlockDataReadBackup(
 // BlockDataReadInner only read data,don't apply deletes.
 func BlockDataReadInner(
 	ctx context.Context,
-	sid string,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
 	columns []uint16,
@@ -633,38 +625,6 @@ func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
 		rows.Add(uint64(row))
 	}
 	return
-}
-
-func RecordReadDel(
-	sid string,
-	total, read, bisect time.Duration,
-) {
-	MustGetPipeline(sid).stats.selectivityStats.RecordReadDel(total, read, bisect)
-}
-
-func RecordReadFilterSelectivity(
-	sid string,
-	hit, total int,
-) {
-	MustGetPipeline(sid).stats.selectivityStats.RecordReadFilterSelectivity(hit, total)
-}
-
-func RecordBlockSelectivity(
-	sid string,
-	hit, total int,
-) {
-	MustGetPipeline(sid).stats.selectivityStats.RecordBlockSelectivity(hit, total)
-}
-
-func RecordColumnSelectivity(
-	sid string,
-	hit, total int,
-) {
-	MustGetPipeline(sid).stats.selectivityStats.RecordColumnSelectivity(hit, total)
-}
-
-func ExportSelectivityString(sid string) string {
-	return MustGetPipeline(sid).stats.selectivityStats.ExportString()
 }
 
 func FindIntervalForBlock(rowids []types.Rowid, id *types.Blockid) (start int, end int) {

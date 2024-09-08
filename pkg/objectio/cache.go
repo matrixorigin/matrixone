@@ -15,9 +15,7 @@
 package objectio
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -115,21 +113,6 @@ func encodeCacheKey(name ObjectNameShort, cacheKeyType uint16) mataCacheKey {
 	copy(key[:], name[:])
 	copy(key[ObjectNameShortLen:], types.EncodeUint16(&cacheKeyType))
 	return key
-}
-
-func ExportCacheStats() string {
-	var buf bytes.Buffer
-	hw, hwt := metaCacheHitStats.ExportW()
-	ht, htt := metaCacheHitStats.Export()
-	w, wt := metaCacheStats.ExportW()
-	t, tt := metaCacheStats.Export()
-
-	fmt.Fprintf(
-		&buf,
-		"MetaCacheWindow: %d/%d | %d/%d, MetaCacheTotal: %d/%d | %d/%d", hw, hwt, w, wt, ht, htt, t, tt,
-	)
-
-	return buf.String()
 }
 
 func LoadObjectMetaByExtent(

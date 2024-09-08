@@ -70,7 +70,6 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
 	v2.TaskSelColumnTotal.Add(float64(ctotal))
 	v2.TaskSelColumnHit.Add(float64(ctotal - chit))
-	blockio.RecordColumnSelectivity(mixin.proc.GetService(), chit, ctotal)
 
 	mixin.columns.seqnums = make([]uint16, len(cols))
 	mixin.columns.colTypes = make([]types.Type, len(cols))
@@ -365,7 +364,6 @@ func (r *reader) Read(
 
 	err = blockio.BlockDataRead(
 		statsCtx,
-		r.withFilterMixin.proc.GetService(),
 		blkInfo,
 		r.source,
 		r.columns.seqnums,
