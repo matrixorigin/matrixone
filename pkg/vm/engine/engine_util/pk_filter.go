@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+/* Don't remove me. will be used lated
 func DirectConstructBlockPKFilter(
 	isFakePK bool,
 	val []byte,
@@ -43,6 +44,7 @@ func DirectConstructBlockPKFilter(
 	base.Valid = true
 	return ConstructBlockPKFilter(isFakePK, base)
 }
+*/
 
 func ConstructBlockPKFilter(
 	isFakePK bool,

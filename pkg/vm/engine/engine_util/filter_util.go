@@ -14,6 +14,8 @@
 
 package engine_util
 
+/* DONT remove me, will be used later
+
 import (
 	"context"
 	"sort"
@@ -164,3 +166,4 @@ func CompilePrimaryKeyEqualFilter(
 	}
 	return
 }
+*/
