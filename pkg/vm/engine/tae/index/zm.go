@@ -643,7 +643,7 @@ func (zm ZM) Or(o ZM) (res bool, ok bool) {
 func (zm ZM) RowidPrefixGT(s []byte) bool {
 	zmin := zm.GetMinBuf()
 	v := (*types.Rowid)(unsafe.Pointer(&zmin))
-	return v.ComparePrefix(s)
+	return v.ComparePrefix(s) > 0
 }
 
 func (zm ZM) RowidPrefixEq(s []byte) bool {
