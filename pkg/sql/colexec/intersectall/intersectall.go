@@ -50,7 +50,7 @@ func (intersectAll *IntersectAll) Prepare(proc *process.Process) error {
 		intersectAll.OpAnalyzer.Reset()
 	}
 
-	if intersectAll.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp()); err != nil {
+	if intersectAll.ctr.hashTable, err = hashmap.NewStrMap(true); err != nil {
 		return err
 	}
 	if len(intersectAll.ctr.inserted) == 0 {

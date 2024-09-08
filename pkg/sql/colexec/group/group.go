@@ -458,21 +458,21 @@ func (ctr *container) initHashMap(proc *process.Process, config *Group) (err err
 	// init the hashmap.
 	switch {
 	case ctr.keyWidth <= 8:
-		if ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVecsNullable, proc.Mp()); err != nil {
+		if ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVecsNullable); err != nil {
 			return err
 		}
 		if config.PreAllocSize > 0 {
-			if err = ctr.intHashMap.PreAlloc(config.PreAllocSize, proc.Mp()); err != nil {
+			if err = ctr.intHashMap.PreAlloc(config.PreAllocSize); err != nil {
 				return err
 			}
 		}
 
 	default:
-		if ctr.strHashMap, err = hashmap.NewStrMap(ctr.groupVecsNullable, proc.Mp()); err != nil {
+		if ctr.strHashMap, err = hashmap.NewStrMap(ctr.groupVecsNullable); err != nil {
 			return err
 		}
 		if config.PreAllocSize > 0 {
-			if err = ctr.strHashMap.PreAlloc(config.PreAllocSize, proc.Mp()); err != nil {
+			if err = ctr.strHashMap.PreAlloc(config.PreAllocSize); err != nil {
 				return err
 			}
 		}

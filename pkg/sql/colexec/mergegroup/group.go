@@ -194,7 +194,7 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 
 	case H8:
 		if ctr.intHashMap == nil {
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.keyNullability, proc.Mp()); err != nil {
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.keyNullability); err != nil {
 				return err
 			}
 		}
@@ -202,7 +202,7 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 
 	default:
 		if ctr.strHashMap == nil {
-			if ctr.strHashMap, err = hashmap.NewStrMap(ctr.keyNullability, proc.Mp()); err != nil {
+			if ctr.strHashMap, err = hashmap.NewStrMap(ctr.keyNullability); err != nil {
 				return err
 			}
 		}
