@@ -815,8 +815,7 @@ func (tbl *txnTable) rangesOnePart(
 					}
 				}
 
-				blk.Sorted = obj.Sorted
-				blk.Appendable = obj.Appendable
+				blk.SetFlagByObjStats(obj.ObjectStats)
 
 				outBlocks.AppendBlockInfo(blk)
 
@@ -1890,8 +1889,8 @@ func (tbl *txnTable) PKPersistedBetween(
 						}
 					}
 
-					blk.Sorted = obj.Sorted
-					blk.Appendable = obj.Appendable
+					blk.SetFlagByObjStats(obj.ObjectStats)
+
 					blk.PartitionNum = -1
 					candidateBlks[blk.BlockID] = &blk
 					return true
@@ -1952,7 +1951,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 		defer release()
 
-		if !blk.Sorted {
+		if !blk.IsSorted() {
 			if unsortedFilter == nil {
 				unsortedFilter = buildUnsortedFilter()
 			}
@@ -2095,7 +2094,7 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	objStats := make([]objectio.ObjectStats, 0, tbl.ApproxObjectsNum(ctx))
 
 	err = ForeachVisibleDataObject(state, snapshot, func(obj logtailreplay.ObjectEntry) error {
-		if obj.Appendable {
+		if obj.GetAppendable() {
 			return nil
 		}
 		if sortKeyPos != -1 {

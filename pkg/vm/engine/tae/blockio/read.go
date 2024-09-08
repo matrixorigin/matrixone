@@ -179,9 +179,9 @@ func BlockDataRead(
 	)
 
 	var searchFunc objectio.ReadFilterSearchFuncType
-	if (filter.HasFakePK || !info.Sorted) && filter.UnSortedSearchFunc != nil {
+	if (filter.HasFakePK || !info.IsSorted()) && filter.UnSortedSearchFunc != nil {
 		searchFunc = filter.UnSortedSearchFunc
-	} else if info.Sorted && filter.SortedSearchFunc != nil {
+	} else if info.IsSorted() && filter.SortedSearchFunc != nil {
 		searchFunc = filter.SortedSearchFunc
 	}
 
@@ -536,7 +536,7 @@ func readBlockData(
 		return
 	}
 
-	if info.Appendable {
+	if info.IsAppendable() {
 		bat, deleteMask, err = readABlkColumns(idxes)
 	} else {
 		bat, _, err = readColumns(idxes)
@@ -545,20 +545,13 @@ func readBlockData(
 	return
 }
 
-func ReadBlockDelete(
-	ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService,
-) (bat *batch.Batch, isPersistedByCN bool, release func(), err error) {
-	isPersistedByCN, err = IsPersistedByCN(ctx, deltaloc, fs)
-	if err != nil {
-		return
-	}
-	bat, release, err = ReadBlockDeleteBySchema(ctx, deltaloc, fs, isPersistedByCN)
-	return
-}
-
-func ReadBlockDeleteBySchema(
-	ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService, isPersistedByCN bool,
+func ReadDeletes(
+	ctx context.Context,
+	deltaLoc objectio.Location,
+	fs fileservice.FileService,
+	isPersistedByCN bool,
 ) (bat *batch.Batch, release func(), err error) {
+
 	var cols []uint16
 	var typs []types.Type
 
@@ -569,24 +562,8 @@ func ReadBlockDeleteBySchema(
 		cols = []uint16{0, objectio.SEQNUM_COMMITTS}
 		typs = []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType()}
 	}
-	bat, release, err = LoadTombstoneColumns(ctx, cols, typs, fs, deltaloc, nil, fileservice.Policy(0))
+	bat, release, err = LoadTombstoneColumns(ctx, cols, typs, fs, deltaLoc, nil, fileservice.Policy(0))
 	return
-}
-
-func IsPersistedByCN(
-	ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService,
-) (bool, error) {
-	objectMeta, err := objectio.FastLoadObjectMeta(ctx, &deltaloc, false, fs)
-	if err != nil {
-		return false, err
-	}
-	meta, ok := objectMeta.TombstoneMeta()
-	if !ok {
-		meta = objectMeta.MustDataMeta()
-	}
-	blkmeta := meta.GetBlockMeta(uint32(deltaloc.ID()))
-	columnCount := blkmeta.GetColumnCount()
-	return columnCount == 2, nil
 }
 
 func EvalDeleteRowsByTimestamp(
@@ -702,31 +679,24 @@ func FillBlockDeleteMask(
 	blockId types.Blockid,
 	location objectio.Location,
 	fs fileservice.FileService,
+	createdByCN bool,
 ) (deleteMask *nulls.Nulls, err error) {
 	var (
-		rows *nulls.Nulls
-		//bisect           time.Duration
+		rows             *nulls.Nulls
 		release          func()
-		persistedByCN    bool
 		persistedDeletes *batch.Batch
 	)
 
 	if !location.IsEmpty() {
-		//t1 := time.Now()
-
-		if persistedDeletes, persistedByCN, release, err = ReadBlockDelete(ctx, location, fs); err != nil {
+		if persistedDeletes, release, err = ReadDeletes(ctx, location, fs, createdByCN); err != nil {
 			return nil, err
 		}
 		defer release()
 
-		//readCost := time.Since(t1)
-
-		if persistedByCN {
+		if createdByCN {
 			rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(blockId, persistedDeletes)
 		} else {
-			//t2 := time.Now()
 			rows = EvalDeleteRowsByTimestamp(persistedDeletes, snapshotTS, &blockId)
-			//bisect = time.Since(t2)
 		}
 
 		if rows != nil {

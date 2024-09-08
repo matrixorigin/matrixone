@@ -163,8 +163,7 @@ func FilterObjects(
 				MetaLoc: objectio.ObjectLocation(loc),
 			}
 
-			blk.Sorted = objStats.GetSorted()
-			blk.Appendable = objStats.GetAppendable()
+			blk.SetFlagByObjStats(objStats)
 			outBlocks.AppendBlockInfo(blk)
 		}
 
