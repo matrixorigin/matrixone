@@ -234,7 +234,6 @@ type IoPipeline struct {
 	}
 
 	stats struct {
-		selectivityStats  *objectio.Stats
 		prefetchDropStats stats.Counter
 	}
 	printer *stopper.Stopper
@@ -284,10 +283,6 @@ func (p *IoPipeline) fillDefaults() {
 	}
 	if p.jobFactory == nil {
 		p.jobFactory = jobFactory
-	}
-
-	if p.stats.selectivityStats == nil {
-		p.stats.selectivityStats = objectio.NewStats()
 	}
 
 	if p.sensors.prefetchDepth == nil {
@@ -481,13 +476,6 @@ func (p *IoPipeline) onWait(jobs ...any) {
 
 func (p *IoPipeline) crontask(ctx context.Context) {
 	hb := w.NewHeartBeaterWithFunc(time.Second*10, func() {
-		logutil.Info(p.stats.selectivityStats.ExportString())
-		// logutil.Info(p.sensors.prefetchDepth.String())
-		// wdrops := p.stats.prefetchDropStats.SwapW(0)
-		// if wdrops > 0 {
-		// 	logutil.Infof("PrefetchDropStats: %d", wdrops)
-		// }
-		// logutil.Info(objectio.ExportCacheStats())
 	}, nil)
 	hb.Start()
 	<-ctx.Done()

@@ -860,12 +860,12 @@ func CompileFilterExpr(
 					return can, ok, nil
 				}
 				if isPK {
-					blkBf := bf.GetBloomFilter(uint32(blkIdx))
-					blkBfIdx := index.NewEmptyBloomFilter()
-					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
+					var blkBF index.BloomFilter
+					buf := bf.GetBloomFilter(uint32(blkIdx))
+					if err := blkBF.Unmarshal(buf); err != nil {
 						return false, false, err
 					}
-					exist, err := blkBfIdx.MayContainsKey(vals[0])
+					exist, err := blkBF.MayContainsKey(vals[0])
 					if err != nil || !exist {
 						return false, false, err
 					}

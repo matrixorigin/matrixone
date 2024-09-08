@@ -851,21 +851,17 @@ type withFilterMixin struct {
 	columns struct {
 		seqnums  []uint16
 		colTypes []types.Type
-		// colNulls []bool
 
 		pkPos                    int // -1 means no primary key in columns
 		indexOfFirstSortedColumn int
 	}
 
 	filterState struct {
-		evaluated bool
 		//point select for primary key
 		expr     *plan.Expr
 		filter   objectio.BlockReadFilter
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
-		hasNull  bool
-		record   bool
 	}
 }
 

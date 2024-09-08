@@ -569,7 +569,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				BlockID: *objectio.BuildObjectBlockid(name, uint16(0)),
 				MetaLoc: objectio.ObjectLocation(metaLoc),
 			}
-			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, sid, &blk, ds, ts, fs)
+			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, &blk, ds, ts, fs)
 			if err != nil {
 				return true, err
 			}
