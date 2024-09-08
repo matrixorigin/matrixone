@@ -18,14 +18,18 @@ import (
 	"context"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
+// Either len(val) == 0 or vec == nil
+// inVec should be sorted
 func CompilePrimaryKeyEqualFilter(
 	ctx context.Context,
 	val []byte,
+	inVec *vector.Vector,
 	colSeqnum uint16,
 	isFakePK bool,
 	skipBloomFilter bool,
@@ -38,6 +42,63 @@ func CompilePrimaryKeyEqualFilter(
 	seekOp SeekFirstBlockOp,
 	err error,
 ) {
+	if skipBloomFilter {
+		loadOp = loadMetadataOnlyOpFactory(fs)
+	} else {
+		loadOp = loadMetadataAndBFOpFactory(fs)
+	}
+
+	// Here process the pk in filter
+	if inVec != nil {
+		if !isFakePK {
+			fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+				if obj.ZMIsEmpty() {
+					return true, nil
+				}
+				return obj.SortKeyZoneMap().AnyIn(inVec), nil
+			}
+		}
+
+		objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
+			if !isFakePK {
+				return true, nil
+			}
+			dataMeta := meta.MustDataMeta()
+			return dataMeta.MustGetColumn(colSeqnum).ZoneMap().AnyIn(inVec), nil
+		}
+
+		blockFilterOp = func(
+			blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
+		) (bool, bool, error) {
+			// TODO: support skipFollowing
+			zm := blkMeta.MustGetColumn(colSeqnum).ZoneMap()
+			if !zm.AnyIn(inVec) {
+				return false, false, nil
+			}
+
+			if skipBloomFilter || bf.Size() == 0 {
+				return false, true, nil
+			}
+
+			buf := bf.GetBloomFilter(uint32(blkIdx))
+			var blkBF index.BloomFilter
+			if err := blkBF.Unmarshal(buf); err != nil {
+				return false, false, err
+			}
+			lb, ub := zm.SubVecIn(inVec)
+			if exist := blkBF.MayContainsAny(
+				inVec, lb, ub,
+			); !exist {
+				return false, false, nil
+			}
+			return false, true, nil
+		}
+
+		return
+	}
+
+	// Here process the pk equal filter
+
 	// for non-fake PK, we can use the object stats sort key zone map
 	// to filter as the fastFilterOp
 	if !isFakePK {
@@ -47,11 +108,6 @@ func CompilePrimaryKeyEqualFilter(
 			}
 			return obj.SortKeyZoneMap().ContainsKey(val), nil
 		}
-	}
-	if skipBloomFilter {
-		loadOp = loadMetadataOnlyOpFactory(fs)
-	} else {
-		loadOp = loadMetadataAndBFOpFactory(fs)
 	}
 
 	objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
