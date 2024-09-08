@@ -257,7 +257,7 @@ func (t *cnMergeTask) PrepareNewWriter() *blockio.BlockWriter {
 func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfo) (bat *batch.Batch, dels *nulls.Nulls, release func(), err error) {
 	// read data
 	bat, dels, release, err = blockio.BlockDataReadNoCopy(
-		ctx, "", info, t.ds, t.colseqnums, t.coltypes,
+		ctx, info, t.ds, t.colseqnums, t.coltypes,
 		t.snapshot, fileservice.Policy(0), t.proc.GetMPool(), t.fs)
 	if err != nil {
 		logutil.Infof("read block data failed: %v", err.Error())
