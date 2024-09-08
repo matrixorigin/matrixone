@@ -258,6 +258,7 @@ func getDuplicatedRowIDNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, b
 	}
 }
 
+// PXU FIXME
 func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 	vec, rowIDs, blkID, maxRow, scanFn, txn, skip := parseAGetDuplicateRowIDsArgs(args...)
 	return func(v1 []byte, _ bool, rowOffset int) error {

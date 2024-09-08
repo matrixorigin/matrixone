@@ -189,7 +189,7 @@ func rowidAscCompare(x, y types.Rowid) int {
 }
 
 func blockidAscCompare(x, y types.Blockid) int {
-	return bytes.Compare(x[:], y[:])
+	return x.Compare(&y)
 }
 
 func genericAscCompare[T types.OrderedT](x, y T) int {
@@ -231,7 +231,7 @@ func rowidDescCompare(x, y types.Rowid) int {
 }
 
 func blockidDescCompare(x, y types.Blockid) int {
-	return bytes.Compare(y[:], x[:])
+	return y.Compare(&x)
 }
 
 func genericDescCompare[T types.OrderedT](x, y T) int {
