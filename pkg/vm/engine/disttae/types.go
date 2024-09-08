@@ -861,7 +861,7 @@ type withFilterMixin struct {
 		evaluated bool
 		//point select for primary key
 		expr     *plan.Expr
-		filter   blockio.BlockReadFilter
+		filter   objectio.BlockReadFilter
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
 		hasNull  bool
