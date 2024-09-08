@@ -1174,7 +1174,7 @@ func (ls *LocalDataSource) batchApplyTombstoneObjects(
 			objZM := obj.SortKeyZoneMap()
 
 			if !anyIf(func(row types.Rowid) bool {
-				return objZM.PrefixEq(row.BorrowBlockID()[:])
+				return objZM.RowidPrefixEq(row.BorrowBlockID()[:])
 			}) {
 				continue
 			}

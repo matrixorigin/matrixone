@@ -642,18 +642,18 @@ func (zm ZM) Or(o ZM) (res bool, ok bool) {
 
 func (zm ZM) RowidPrefixGT(s []byte) bool {
 	zmin := zm.GetMinBuf()
-	v := (*types.Rowid)(unsafe.Pointer(&zmin))
+	v := (*types.Rowid)(unsafe.Pointer(&zmin[0]))
 	return v.ComparePrefix(s) > 0
 }
 
 func (zm ZM) RowidPrefixEq(s []byte) bool {
 	zmin := zm.GetMinBuf()
 	zmax := zm.GetMaxBuf()
-	minv := (*types.Rowid)(unsafe.Pointer(&zmin))
+	minv := (*types.Rowid)(unsafe.Pointer(&zmin[0]))
 	if minv.ComparePrefix(s) > 0 {
 		return false
 	}
-	maxv := (*types.Rowid)(unsafe.Pointer(&zmax))
+	maxv := (*types.Rowid)(unsafe.Pointer(&zmax[0]))
 
 	return maxv.ComparePrefix(s) >= 0
 }
