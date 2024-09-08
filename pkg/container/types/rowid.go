@@ -110,7 +110,7 @@ func (r *Rowid) ComparePrefix(to []byte) int {
 		return v1.Compare(v2)
 	}
 	if toLen == SegmentidSize {
-		return bytes.Compare(b[:toLen], to)
+		return bytes.Compare(r[:toLen], to)
 	}
 	panic(fmt.Sprintf("invalid prefix length %d:%X", toLen, to))
 }
