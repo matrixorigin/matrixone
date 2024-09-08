@@ -749,7 +749,7 @@ func (p *PartitionState) PKExistInMemBetween(
 					}
 				}
 				row := rowIter.Item()
-				if row.BlockID.Compare(entry.BlockID) != 0 {
+				if row.BlockID.Compare(&entry.BlockID) != 0 {
 					break
 				}
 				if !row.RowID.Equal(entry.RowID) {

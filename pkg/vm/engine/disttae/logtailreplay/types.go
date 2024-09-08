@@ -91,7 +91,7 @@ type RowEntry struct {
 
 func (r RowEntry) Less(than RowEntry) bool {
 	// asc
-	cmp := r.BlockID.Compare(than.BlockID)
+	cmp := r.BlockID.Compare(&than.BlockID)
 	if cmp < 0 {
 		return true
 	}

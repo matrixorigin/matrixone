@@ -265,3 +265,35 @@ func TestType_DescString(t *testing.T) {
 		Width: 10,
 	}.DescString(), "BIT(10)")
 }
+
+func BenchmarkTypesCompare(b *testing.B) {
+	obj1 := NewObjectid()
+	obj2 := NewObjectid()
+	blockId_1_1291 := NewBlockidWithObjectID(obj1, 1291)
+	blockId_1_1036 := NewBlockidWithObjectID(obj1, 1036)
+	blockId_2_1291 := NewBlockidWithObjectID(obj2, 1291)
+	b.Run("blockid-compare-same-obj", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			blockId_1_1291.Compare(blockId_1_1036)
+		}
+	})
+	b.Run("blockid-compare-diff-obj", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			blockId_1_1291.Compare(blockId_2_1291)
+		}
+	})
+	b.Run("blockid-compare-same-block", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			blockId_1_1291.Compare(blockId_1_1291)
+		}
+	})
+	b.Run("blockid-less", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			blockId_1_1291.Less(*blockId_1_1291)
+		}
+	})
+}

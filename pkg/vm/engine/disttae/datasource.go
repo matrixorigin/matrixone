@@ -916,7 +916,7 @@ func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 		delRowIds = vector.MustFixedColWithTypeCheck[types.Rowid](writes[idx].bat.Vecs[0])
 		for _, delRowId := range delRowIds {
 			b, o := delRowId.Decode()
-			if bid.Compare(b) != 0 {
+			if bid.Compare(&b) != 0 {
 				continue
 			}
 

@@ -184,12 +184,12 @@ func (r *Rowid) ShortStringEx() string {
 	return fmt.Sprintf("%s-%d", b.ShortStringEx(), s)
 }
 
-func (b Blockid) Less(than Blockid) bool {
-	return b.Compare(than) < 0
+func (b *Blockid) Less(than Blockid) bool {
+	return b.Compare(&than) < 0
 }
 
-func (b Blockid) Great(than Blockid) bool {
-	return b.Compare(than) > 0
+func (b *Blockid) Great(than Blockid) bool {
+	return b.Compare(&than) > 0
 }
 
 func RandomRowid() Rowid {
@@ -199,8 +199,25 @@ func RandomRowid() Rowid {
 	return r
 }
 
-func (b Blockid) Compare(other Blockid) int {
-	return bytes.Compare(b[:], other[:])
+func (b *Blockid) Compare(other *Blockid) int {
+	if r := bytes.Compare(b[:SegmentidSize], other[:SegmentidSize]); r != 0 {
+		return r
+	}
+	filen1 := *(*uint16)(unsafe.Pointer(&b[SegmentidSize]))
+	filen2 := *(*uint16)(unsafe.Pointer(&other[SegmentidSize]))
+	if filen1 < filen2 {
+		return -1
+	} else if filen1 > filen2 {
+		return 1
+	}
+	blk1 := *(*uint16)(unsafe.Pointer(&b[ObjectidSize]))
+	blk2 := *(*uint16)(unsafe.Pointer(&other[ObjectidSize]))
+	if blk1 < blk2 {
+		return -1
+	} else if blk1 > blk2 {
+		return 1
+	}
+	return 0
 }
 
 func (b *Blockid) IsEmpty() bool {
