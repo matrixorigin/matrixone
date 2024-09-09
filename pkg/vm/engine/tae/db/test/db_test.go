@@ -7681,7 +7681,6 @@ func TestDedupSnapshot2(t *testing.T) {
 }
 
 func TestDedupSnapshot3(t *testing.T) {
-	t.Skip("TODO: jxm fix me")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
