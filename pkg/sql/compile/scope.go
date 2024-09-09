@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"strings"
 	"sync"
 
@@ -656,14 +655,8 @@ func (s *Scope) ReplaceLeafOp(dstLeafOp vm.Operator) {
 // and keep receiving the data until the query was done or data is ended.
 func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
-	closeWithError := func(err error, sp pSpool.PipelineCommunication, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		if sp == nil {
-			reg.Ch2 <- process.NewPipelineSignalToDirectly(nil)
-		} else {
-			_, _ = sp.SendBatch(context.TODO(), 0, nil, err)
-			reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
-			sp.Close()
-		}
+	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
+		reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, s.Proc.Mp())
 
 		select {
 		case <-s.Proc.Ctx.Done():
@@ -698,7 +691,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 					nil,
 				)
 				if err != nil {
-					closeWithError(err, nil, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+					closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 					return
 				}
 
@@ -709,16 +702,14 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 				message.Uuid = uuid
 
 				if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
-					closeWithError(errSend, nil, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 					return
 				}
 				sender.safeToClose = false
 				sender.alreadyClose = false
 
-				sp := pSpool.InitMyPipelineSpool(s.Proc.Mp(), 1)
-
-				err = receiveMsgAndForward(sender, sp, s.Proc.Reg.MergeReceivers[receiverIdx].Ch2)
-				closeWithError(err, sp, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+				err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx].Ch2)
+				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 			},
 		)
 
@@ -729,20 +720,14 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 	}
 }
 
-func receiveMsgAndForward(sender *messageSenderOnClient, sp pSpool.PipelineCommunication, forwardCh chan process.PipelineSignal) error {
-	var done bool
+func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.PipelineSignal) error {
 	for {
 		bat, end, err := sender.receiveBatch()
 		if err != nil || end || bat == nil {
 			return err
 		}
 
-		done, err = sp.SendBatch(sender.ctx, 0, bat, nil)
-		bat.Clean(sender.mp)
-		if err != nil || done {
-			return err
-		}
-		forwardCh <- process.NewPipelineSignalToGetFromSpool(sp, 0)
+		forwardCh <- process.NewPipelineSignalToDirectly(bat, sender.mp)
 	}
 }
 

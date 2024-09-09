@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"reflect"
@@ -37,6 +38,7 @@ type PipelineSignal struct {
 	source pSpool.PipelineCommunication
 
 	// for case: GetDirectly
+	mp       *mpool.MPool
 	directly *batch.Batch
 }
 
@@ -46,18 +48,20 @@ func NewPipelineSignalToGetFromSpool(source pSpool.PipelineCommunication, index 
 		typ:      GetFromIndex,
 		source:   source,
 		index:    index,
+		mp:       nil,
 		directly: nil,
 	}
 }
 
 // NewPipelineSignalToDirectly return a signal indicates the receiver to get data from signal directly.
 // But users should watch that, the data shouldn't be allocated from mpool.
-func NewPipelineSignalToDirectly(data *batch.Batch) PipelineSignal {
+func NewPipelineSignalToDirectly(data *batch.Batch, mp *mpool.MPool) PipelineSignal {
 	return PipelineSignal{
 		typ:      GetDirectly,
 		source:   nil,
 		index:    0,
 		directly: data,
+		mp:       mp,
 	}
 }
 
@@ -121,11 +125,19 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 	}
 }
 
+func (receiver *PipelineSignalReceiver) setCurrent(current *PipelineSignal) {
+	receiver.currentSignal = current
+}
+
 func (receiver *PipelineSignalReceiver) releaseCurrent() {
 	if receiver.currentSignal != nil {
 		if receiver.currentSignal.typ == GetFromIndex {
 			receiver.currentSignal.source.ReleaseCurrent(
 				receiver.currentSignal.index)
+		} else if receiver.currentSignal.typ == GetDirectly {
+			if receiver.currentSignal.directly != nil {
+				receiver.currentSignal.directly.Clean(receiver.currentSignal.mp)
+			}
 		}
 
 		receiver.currentSignal = nil
@@ -134,15 +146,17 @@ func (receiver *PipelineSignalReceiver) releaseCurrent() {
 
 func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, info error) {
 	var skipThisSignal bool
-	receiver.releaseCurrent()
 
 	for {
+		receiver.releaseCurrent()
+
 		if receiver.alive == 0 {
 			return nil, nil
 		}
 
 		chosen, v, ok := reflect.Select(receiver.regs)
 		if chosen == 0 {
+
 			return nil, nil
 		}
 		if ok {
@@ -164,7 +178,7 @@ func (receiver *PipelineSignalReceiver) GetNextBatch() (content *batch.Batch, in
 				continue
 			}
 
-			receiver.currentSignal = &msg
+			receiver.setCurrent(&msg)
 			return content, info
 		}
 		break

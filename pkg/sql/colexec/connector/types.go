@@ -84,7 +84,7 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 		connector.ctr.sp.Close()
 		connector.ctr.sp = nil
 	} else {
-		connector.Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil)
+		connector.Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, proc.Mp())
 	}
 }
 

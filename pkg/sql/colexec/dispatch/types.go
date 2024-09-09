@@ -150,7 +150,7 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		dispatch.ctr.sp = nil
 	} else {
 		for _, reg := range dispatch.LocalRegs {
-			reg.Ch2 <- process.NewPipelineSignalToDirectly(nil)
+			reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, proc.Mp())
 		}
 	}
 	dispatch.ctr = nil
