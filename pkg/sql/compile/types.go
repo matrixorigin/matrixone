@@ -184,18 +184,20 @@ type scopeContext struct {
 // anaylze information
 type anaylze struct {
 	// curr is the current index of plan
-	curr      int
-	isFirst   bool
-	qry       *plan.Query
-	analInfos []*process.AnalyzeInfo
+	curr              int
+	isFirst           bool
+	qry               *plan.Query
+	analInfos         []*process.AnalyzeInfo
+	S3IOInputCountV1  int64
+	S3IOOutputCountV1 int64
 }
 
 func (a *anaylze) S3IOInputCount(idx int, count int64) {
-	atomic.AddInt64(&a.analInfos[idx].S3IOInputCount, count)
+	atomic.AddInt64(&a.S3IOInputCountV1, count)
 }
 
 func (a *anaylze) S3IOOutputCount(idx int, count int64) {
-	atomic.AddInt64(&a.analInfos[idx].S3IOOutputCount, count)
+	atomic.AddInt64(&a.S3IOOutputCountV1, count)
 }
 
 func (a *anaylze) Nodes() []*process.AnalyzeInfo {
