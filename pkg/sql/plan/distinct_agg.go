@@ -21,7 +21,9 @@ import (
 
 func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
-
+	if node.WithRollup {
+		return
+	}
 	for _, childID := range node.Children {
 		builder.optimizeDistinctAgg(childID)
 	}

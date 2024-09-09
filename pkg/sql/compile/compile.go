@@ -1291,7 +1291,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		defer groupInfo.Release()
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
 		if n.WithRollup {
-			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileMergeGroup(n, ss, ns, anyDistinctAgg))))
+			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileRollupGroup(n, ss, ns))))
 			return ss, nil
 		} else if c.IsTpQuery() && ss[0].PartialResults == nil {
 			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
@@ -3170,6 +3170,37 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 		ss[0].PartialResults = nil
 		ss[0].PartialResultTypes = nil
 	}
+	arg.Idx = c.anal.curr
+	rs.ReplaceLeafOp(arg)
+
+	return []*Scope{rs}
+}
+
+func (c *Compile) compileRollupGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	for i := range ss {
+		c.anal.isFirst = currentFirstFlag
+		if containBrokenNode(ss[i]) {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
+	}
+	c.anal.isFirst = false
+
+	mergeToGroup := c.newMergeScope(ss)
+	op := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], false, 0, c.proc)
+	op.SetIdx(c.anal.curr)
+	op.SetIsFirst(c.anal.isFirst)
+	mergeToGroup.setRootOperator(op)
+
+	rs := c.newMergeScope([]*Scope{mergeToGroup})
+	arg := constructMergeGroup(true)
+	if ss[0].PartialResults != nil {
+		arg.PartialResults = ss[0].PartialResults
+		arg.PartialResultTypes = ss[0].PartialResultTypes
+		ss[0].PartialResults = nil
+		ss[0].PartialResultTypes = nil
+	}
+
 	arg.Idx = c.anal.curr
 	rs.ReplaceLeafOp(arg)
 
