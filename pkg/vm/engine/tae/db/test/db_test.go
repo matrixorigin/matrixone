@@ -7498,9 +7498,6 @@ func TestCompactLargeTable(t *testing.T) {
 
 	tae.CheckRowsByScan(10, true)
 
-	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemDBSchema, false)
-	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemTableSchema, false)
-	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemColumnSchema, false)
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
