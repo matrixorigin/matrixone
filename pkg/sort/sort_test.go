@@ -15,7 +15,6 @@
 package sort
 
 import (
-	"fmt"
 	"slices"
 	"sort"
 	"testing"
@@ -250,14 +249,16 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 		})
 
 		if desc {
-			slices.Reverse(vs)
+			j := len(vs) - 1
+			for _, v := range vs {
+				require.Equal(t, v, col[os[j]])
+				j--
+			}
+		} else {
+			for i, v := range vs {
+				require.Equal(t, v, col[os[i]])
+			}
 		}
-
-		for i := range col {
-			fmt.Printf("%v %s\n", desc, col[i].String())
-		}
-		fmt.Println()
-		//require.Equal(t, vs, col, fmt.Sprintf("desc: %v", desc))
 
 	case types.T_Rowid:
 		col := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
@@ -272,13 +273,16 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 		})
 
 		if desc {
-			slices.Reverse(vs)
+			j := len(vs) - 1
+			for _, v := range vs {
+				require.Equal(t, v, col[os[j]])
+				j--
+			}
+		} else {
+			for i, v := range vs {
+				require.Equal(t, v, col[os[i]])
+			}
 		}
-
-		for i := range col {
-			fmt.Printf("%s\n", col[i].String())
-		}
-		require.Equal(t, vs, col, fmt.Sprintf("desc: %v", desc))
 	}
 }
 
