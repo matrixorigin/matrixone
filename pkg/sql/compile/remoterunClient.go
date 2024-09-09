@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync/atomic"
 	"time"
 
@@ -118,63 +119,73 @@ func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, pro
 }
 
 func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnClient) error {
+	// if the last operator was connector,
+	// we can send data to the receiver channel to reduce spool's copy.
+	if _, isConnector := s.RootOp.(*connector.Connector); isConnector {
+		return receiveMessageFromCnServerIfConnector(c, s, sender)
+	}
+
 	// generate a new pipeline to send data in local.
-	// value_scan -> connector / dispatch -> next pipeline.
-	fakeValueScanOperator := value_scan.NewArgument()
-	if err := fakeValueScanOperator.Prepare(s.Proc); err != nil {
-		return err
-	}
-	defer func() {
-		fakeValueScanOperator.Release()
-	}()
+	// value_scan -> dispatch -> next pipeline.
+	if arg, isDispatch := s.RootOp.(*dispatch.Dispatch); isDispatch {
+		fakeValueScanOperator := value_scan.NewArgument()
+		if err := fakeValueScanOperator.Prepare(s.Proc); err != nil {
+			return err
+		}
 
-	LastOperator := s.RootOp
-	lastAnalyze := c.proc.GetAnalyze(LastOperator.GetOperatorBase().GetIdx(), -1, false)
-	switch arg := LastOperator.(type) {
-	case *connector.Connector:
 		oldChildren := arg.Children
 		arg.Children = nil
 		arg.AppendChild(fakeValueScanOperator)
 		defer func() {
 			arg.Children = oldChildren
+			fakeValueScanOperator.Release()
 		}()
 
-	case *dispatch.Dispatch:
-		oldChildren := arg.Children
-		arg.Children = nil
-		arg.AppendChild(fakeValueScanOperator)
-		defer func() {
-			arg.Children = oldChildren
-		}()
+		if err := s.RootOp.Prepare(s.Proc); err != nil {
+			return err
+		}
 
-	default:
-		panic(
-			fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", LastOperator.OpType()))
+		var bat *batch.Batch
+		var end bool
+		var err error
+		dispatchAnalyze := c.proc.GetAnalyze(s.RootOp.GetOperatorBase().GetIdx(), -1, false)
+
+		for {
+			bat, end, err = sender.receiveBatch()
+			if err != nil || end || bat == nil {
+				return err
+			}
+
+			dispatchAnalyze.Network(bat)
+			fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
+
+			result, errCall := s.RootOp.Call(s.Proc)
+			bat.Clean(c.proc.GetMPool())
+			if errCall != nil || result.Status == vm.ExecStop {
+				return errCall
+			}
+		}
 	}
 
-	// the last operator is responsible for distributing received data locally. Need Prepare here.
-	if err := LastOperator.Prepare(s.Proc); err != nil {
-		return err
-	}
+	panic(fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", s.RootOp.OpType()))
+}
 
-	// receive back result and send.
+func receiveMessageFromCnServerIfConnector(c *Compile, s *Scope, sender *messageSenderOnClient) error {
 	var bat *batch.Batch
 	var end bool
 	var err error
+
+	connectorAnalyze := c.proc.GetAnalyze(s.RootOp.GetOperatorBase().GetIdx(), -1, false)
+
+	mp := s.Proc.Mp()
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
 			return err
 		}
+		connectorAnalyze.Network(bat)
 
-		lastAnalyze.Network(bat)
-		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
-
-		result, errCall := LastOperator.Call(s.Proc)
-		bat.Clean(c.proc.GetMPool())
-		if errCall != nil || result.Status == vm.ExecStop {
-			return errCall
-		}
+		s.Proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(bat, mp)
 	}
 }
 
