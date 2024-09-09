@@ -926,6 +926,7 @@ const (
 	DataDefinition_SHOW_SEQUENCES      DataDefinition_DdlType = 32
 	DataDefinition_SHOW_CONNECTORS     DataDefinition_DdlType = 33
 	DataDefinition_SHOW_UPGRADE        DataDefinition_DdlType = 34
+	DataDefinition_RENAME_TABLE        DataDefinition_DdlType = 35
 )
 
 var DataDefinition_DdlType_name = map[int32]string{
