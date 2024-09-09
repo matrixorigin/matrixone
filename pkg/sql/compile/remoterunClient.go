@@ -178,6 +178,7 @@ func receiveMessageFromCnServerIfConnector(c *Compile, s *Scope, sender *message
 	connectorAnalyze := c.proc.GetAnalyze(s.RootOp.GetOperatorBase().GetIdx(), -1, false)
 
 	mp := s.Proc.Mp()
+	nextChannel := s.RootOp.(*connector.Connector).Reg.Ch2
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
@@ -185,7 +186,7 @@ func receiveMessageFromCnServerIfConnector(c *Compile, s *Scope, sender *message
 		}
 		connectorAnalyze.Network(bat)
 
-		s.Proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(bat, mp)
+		nextChannel <- process.NewPipelineSignalToDirectly(bat, mp)
 	}
 }
 
