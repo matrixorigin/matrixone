@@ -37,6 +37,9 @@ type Config struct {
 
 	// EnableMetrics indicates whether to expose metrics to prometheus
 	EnableMetrics *bool `toml:"enable-metrics"`
+
+	HashmapSoftLimit *uint64 `toml:"hashmap-soft-limit"`
+	HashmapHardLimit *uint64 `toml:"hashmap-hard-limit"`
 }
 
 var defaultConfig = func() *atomic.Pointer[Config] {
@@ -47,6 +50,8 @@ var defaultConfig = func() *atomic.Pointer[Config] {
 		CheckFraction:     ptrTo(uint32(4096)),
 		EnableMetrics:     ptrTo(true),
 		FullStackFraction: ptrTo(uint32(100)),
+		HashmapSoftLimit:  ptrTo(uint64(48 * (1 << 30))),
+		HashmapHardLimit:  ptrTo(uint64(64 * (1 << 30))),
 	})
 
 	return ret
@@ -65,6 +70,12 @@ func patchConfig(config Config, delta Config) Config {
 	if delta.Allocator != nil {
 		config.Allocator = delta.Allocator
 	}
+	if delta.HashmapSoftLimit != nil {
+		config.HashmapSoftLimit = delta.HashmapSoftLimit
+	}
+	if delta.HashmapHardLimit != nil {
+		config.HashmapHardLimit = delta.HashmapHardLimit
+	}
 	return config
 }
 
@@ -73,4 +84,8 @@ func SetDefaultConfig(delta Config) {
 	config = patchConfig(config, delta)
 	defaultConfig.Store(&config)
 	logutil.Info("malloc: set default config", zap.Any("config", delta))
+}
+
+func GetDefaultConfig() Config {
+	return *defaultConfig.Load()
 }
