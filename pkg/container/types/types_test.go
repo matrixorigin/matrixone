@@ -274,11 +274,20 @@ func TestTypeCompare(t *testing.T) {
 	var blocks []Blockid
 	blocks = append(blocks, *blockId_1_1291)
 	blocks = append(blocks, *blockId_1_1036)
+
 	sort.Slice(blocks, func(i, j int) bool {
 		return blocks[i].LT(&blocks[j])
 	})
 	require.Equal(t, uint16(1036), blocks[0].Sequence())
 	require.Equal(t, uint16(1291), blocks[1].Sequence())
+
+	var blocks2 []Blockid
+	blocks2 = append(blocks2, blocks...)
+	sort.Slice(blocks2, func(i, j int) bool {
+		return blocks[j].LT(&blocks[i])
+	})
+	require.Equal(t, uint16(1291), blocks2[0].Sequence())
+	require.Equal(t, uint16(1036), blocks2[1].Sequence())
 
 	// Blockid LT
 	require.True(t, blockId_1_1036.LT(blockId_1_1291))
