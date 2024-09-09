@@ -64,7 +64,6 @@ show collation like 'utf8mb4_general_ci%';
 show full tables;
 show full tables from res_test;;
 
-select version();
 alter database test set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.7.0';
 select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where privilege_name = 'values';
 select user_name from mo_catalog.mo_user;
