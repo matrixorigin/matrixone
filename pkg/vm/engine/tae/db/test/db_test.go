@@ -7652,7 +7652,7 @@ func TestDedupSnapshot3(t *testing.T) {
 
 			txn2, _ := tae.StartTxn(nil)
 			txn2.SetDedupType(txnif.DedupPolicy_CheckIncremental)
-			txn2.SetSnapshotTS(txn.GetStartTS())
+			txn2.SetStartTS(txn.GetStartTS())
 			database, _ = txn2.GetDatabase("db")
 			rel, _ = database.GetRelationByName(schema.Name)
 			_ = rel.Append(context.Background(), bats[offset])
