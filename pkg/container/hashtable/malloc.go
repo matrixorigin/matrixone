@@ -15,11 +15,56 @@
 package hashtable
 
 import (
+	"fmt"
+	"math"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
-var allocator = sync.OnceValue(func() malloc.Allocator {
-	return malloc.GetDefault(nil)
+func newAllocator() malloc.Allocator {
+	config := malloc.GetDefaultConfig()
+	softLimit := uint64(math.MaxUint)
+	if config.HashmapSoftLimit != nil {
+		softLimit = *config.HashmapSoftLimit
+	}
+	hardLimit := uint64(math.MaxUint)
+	if config.HashmapHardLimit != nil {
+		hardLimit = *config.HashmapHardLimit
+	}
+
+	var softLimitLoggedAt time.Time
+	softLimitLogMinInterval := time.Second * 10
+
+	return malloc.NewInuseTrackingAllocator(
+		malloc.GetDefault(nil),
+		func(inUse uint64) {
+
+			// soft limit
+			if inUse > softLimit && time.Since(softLimitLoggedAt) > softLimitLogMinInterval {
+				logutil.Warn("hashmap memory exceed soft limit",
+					zap.Any("inuse", inUse),
+					zap.Any("soft limit", softLimit),
+				)
+				softLimitLoggedAt = time.Now()
+			}
+
+			// hard limit
+			if inUse > hardLimit {
+				panic(fmt.Sprintf(
+					"hashmap memory exceed hard limit. hard limit %v, inuse %v",
+					hardLimit,
+					inUse,
+				))
+			}
+
+		},
+	)
+}
+
+var defaultAllocator = sync.OnceValue(func() malloc.Allocator {
+	return newAllocator()
 })
