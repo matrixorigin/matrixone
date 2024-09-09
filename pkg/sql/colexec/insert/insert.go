@@ -227,12 +227,10 @@ func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) 
 			expect := int32(partIdx)
 			err = colexec.FillPartitionBatchForInsert(proc, input.Batch, insert.ctr.buf, expect, insert.InsertCtx.PartitionIndexInBatch)
 			if err != nil {
-				insert.ctr.state = vm.End
 				return input, err
 			}
 			err = insert.ctr.partitionSources[partIdx].Write(proc.Ctx, insert.ctr.buf)
 			if err != nil {
-				insert.ctr.state = vm.End
 				return input, err
 			}
 		}
@@ -243,7 +241,6 @@ func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) 
 				insert.ctr.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
 			}
 			if err = insert.ctr.buf.Vecs[i].UnionBatch(input.Batch.Vecs[i], 0, input.Batch.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
-				insert.ctr.state = vm.End
 				return input, err
 			}
 		}
@@ -252,7 +249,6 @@ func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) 
 		// insert into table, insertBat will be deeply copied into txn's workspace.
 		err := insert.ctr.source.Write(proc.Ctx, insert.ctr.buf)
 		if err != nil {
-			insert.ctr.state = vm.End
 			return input, err
 		}
 	}
