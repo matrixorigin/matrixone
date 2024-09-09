@@ -88,7 +88,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug(
 			"Transaction.Relation",
-			zap.String("txn", txn.op.Txn()),
+			zap.String("txn", db.op.Txn().DebugString()),
 			zap.String("name", name),
 		)
 	})

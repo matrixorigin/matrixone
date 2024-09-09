@@ -264,7 +264,7 @@ func (e *Engine) Database(
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug(
 			"Transaction.Database",
-			zap.String("txn", op.Txn()),
+			zap.String("txn", op.Txn().DebugString()),
 			zap.String("name", name),
 		)
 	})
@@ -539,7 +539,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug(
 			"Transaction.New",
-			zap.String("txn", op.Txn()),
+			zap.String("txn", op.Txn().DebugString()),
 		)
 	})
 	proc := process.NewTopProcess(

@@ -1077,7 +1077,7 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug(
 			"Transaction.Commit",
-			zap.String("txn", txn.op.Txn()),
+			zap.String("txn", txn.op.Txn().DebugString()),
 		)
 	})
 
@@ -1116,7 +1116,7 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug(
 			"Transaction.Rollback",
-			zap.String("txn", txn.op.Txn()),
+			zap.String("txn", txn.op.Txn().DebugString()),
 		)
 	})
 	//to gc the s3 objs
