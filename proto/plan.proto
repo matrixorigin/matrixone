@@ -1106,6 +1106,7 @@ message DataDefinition {
 		SHOW_SEQUENCES      = 32;
 		SHOW_CONNECTORS = 33;
 		SHOW_UPGRADE = 34;
+		RENAME_TABLE = 35;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;

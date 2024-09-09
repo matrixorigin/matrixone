@@ -142,7 +142,7 @@ func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *proces
 			vals[idx] = nil
 			vals[idx] = append(vals[idx], fExpr.Fold.Data...)
 		} else {
-			logutil.Errorf("const folded val expr is not a fold expr: %s\n", plan2.FormatExpr(exprs[idx]))
+			logutil.Warnf("const folded val expr is not a fold expr: %s\n", plan2.FormatExpr(exprs[idx]))
 			return nil, false
 		}
 	}
@@ -258,7 +258,7 @@ func mustColVecValueFromBinaryFuncExpr(proc *process.Process, expr *plan.Expr_F)
 	}
 
 	if exprImpl, ok = valExpr.Expr.(*plan.Expr_Vec); !ok {
-		logutil.Errorf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
+		logutil.Warnf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
 		return nil, nil, false
 		// foldedExprs, err := plan2.ConstandFoldList([]*plan.Expr{valExpr}, proc, true)
 		// if err != nil {
