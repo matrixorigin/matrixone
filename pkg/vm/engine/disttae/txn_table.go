@@ -52,6 +52,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -178,7 +179,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 				}
 			} else {
 				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 					for _, v := range vs {
 						deletes[v] = struct{}{}
 					}
@@ -491,7 +492,7 @@ func (tbl *txnTable) CollectTombstones(
 				//}
 				//deletes in txn.Write maybe comes from PartitionState.Rows ,
 				// PartitionReader need to skip them.
-				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 				tombstone.rowids = append(tombstone.rowids, vs...)
 			}
 		})
@@ -814,8 +815,7 @@ func (tbl *txnTable) rangesOnePart(
 					}
 				}
 
-				blk.Sorted = obj.Sorted
-				blk.Appendable = obj.Appendable
+				blk.SetFlagByObjStats(obj.ObjectStats)
 
 				outBlocks.AppendBlockInfo(blk)
 
@@ -836,7 +836,6 @@ func (tbl *txnTable) rangesOnePart(
 	bhit, btotal := outBlocks.Len()-1, int(s3BlkCnt)
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
-	blockio.RecordBlockSelectivity(proc.GetService(), bhit, btotal)
 	if btotal > 0 {
 		v2.TxnRangesSlowPathLoadObjCntHistogram.Observe(float64(loadObjCnt))
 		v2.TxnRangesSlowPathSelectedBlockCntHistogram.Observe(float64(bhit))
@@ -927,7 +926,7 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectS
 //				//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
 //				if entry.fileName == "" &&
 //					entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
-//					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+//					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 //					for _, v := range vs {
 //						id, _ := v.Decode()
 //						dirtyBlks[id] = struct{}{}
@@ -1466,7 +1465,6 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	case deletion.CNBlockOffset:
 	case deletion.RawBatchOffset:
 	case deletion.RawRowIdBatch:
-		logutil.Infof("data return by remote pipeline\n")
 		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 		if bat.RowCount() == 0 {
 			return nil
@@ -1501,7 +1499,7 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64,
 ) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
-	s3writer, err := colexec.NewS3Writer(tbl.getTxn().proc, tbl.tableDef, 0)
+	s3writer, err := colexec.NewS3Writer(tbl.tableDef, 0)
 	if err != nil {
 		return nil, objectio.ObjectStats{}, err
 	}
@@ -1890,8 +1888,8 @@ func (tbl *txnTable) PKPersistedBetween(
 						}
 					}
 
-					blk.Sorted = obj.Sorted
-					blk.Appendable = obj.Appendable
+					blk.SetFlagByObjStats(obj.ObjectStats)
+
 					blk.PartitionNum = -1
 					candidateBlks[blk.BlockID] = &blk
 					return true
@@ -1902,8 +1900,8 @@ func (tbl *txnTable) PKPersistedBetween(
 		return true, err
 	}
 
-	var filter blockio.ReadFilterSearchFuncType
-	buildFilter := func() (blockio.ReadFilterSearchFuncType, error) {
+	var filter objectio.ReadFilterSearchFuncType
+	buildFilter := func() (objectio.ReadFilterSearchFuncType, error) {
 		//keys must be sorted.
 		keys.InplaceSort()
 		bytes, _ := keys.MarshalBinary()
@@ -1915,12 +1913,15 @@ func (tbl *txnTable) PKPersistedBetween(
 			bytes,
 			false)
 
-		basePKFilter, err := newBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
+		basePKFilter, err := engine_util.ConstructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
 		if err != nil {
 			return nil, err
 		}
 
-		blockReadPKFilter, err := newBlockReadPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
+		blockReadPKFilter, err := engine_util.ConstructBlockPKFilter(
+			catalog.IsFakePkName(tbl.tableDef.Pkey.PkeyColName),
+			basePKFilter,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -1928,8 +1929,8 @@ func (tbl *txnTable) PKPersistedBetween(
 		return blockReadPKFilter.SortedSearchFunc, nil
 	}
 
-	var unsortedFilter blockio.ReadFilterSearchFuncType
-	buildUnsortedFilter := func() blockio.ReadFilterSearchFuncType {
+	var unsortedFilter objectio.ReadFilterSearchFuncType
+	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
 		return getNonSortedPKSearchFuncByPKVec(keys)
 	}
 
@@ -1952,7 +1953,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 		defer release()
 
-		if !blk.Sorted {
+		if !blk.IsSorted() {
 			if unsortedFilter == nil {
 				unsortedFilter = buildUnsortedFilter()
 			}
@@ -2095,7 +2096,7 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	objStats := make([]objectio.ObjectStats, 0, tbl.ApproxObjectsNum(ctx))
 
 	err = ForeachVisibleDataObject(state, snapshot, func(obj logtailreplay.ObjectEntry) error {
-		if obj.Appendable {
+		if obj.GetAppendable() {
 			return nil
 		}
 		if sortKeyPos != -1 {
@@ -2309,7 +2310,7 @@ func (tbl *txnTable) getUncommittedRows(
 				rows = rows + uint64(entry.bat.RowCount())
 			} else {
 				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 					for _, v := range vs {
 						deletes[v] = struct{}{}
 					}

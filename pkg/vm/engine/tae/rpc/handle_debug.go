@@ -76,7 +76,7 @@ func (h *Handle) HandleTraceSpan(ctx context.Context,
 }
 
 func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
-	req *db.StorageUsageReq, resp *db.StorageUsageResp) (func(), error) {
+	req *db.StorageUsageReq, resp *db.StorageUsageResp_V2) (func(), error) {
 	memo := h.db.GetUsageMemo()
 
 	start := time.Now()
@@ -143,6 +143,13 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	//	resp.Sizes = append(resp.Sizes, specialSize)
 	//	memo.AddReqTrace(uint64(newIds[idx]), specialSize, start, "new, not ready, only special")
 	//}
+
+	abstract := memo.GatherObjectAbstractForAllAccount()
+	for _, acc := range resp.AccIds {
+		resp.ObjCnts = append(resp.ObjCnts, uint64(abstract[uint64(acc)].TotalObjCnt))
+		resp.BlkCnts = append(resp.BlkCnts, uint64(abstract[uint64(acc)].TotalBlkCnt))
+		resp.RowCnts = append(resp.RowCnts, uint64(abstract[uint64(acc)].TotalRowCnt))
+	}
 
 	resp.Succeed = true
 
@@ -431,11 +438,11 @@ func marshalTransferMaps(
 
 			for _, bat := range bats {
 				for i := range bat.RowCount() {
-					srcBlk := vector.GetFixedAt[int32](bat.Vecs[0], i)
-					srcRow := vector.GetFixedAt[uint32](bat.Vecs[1], i)
-					destObj := vector.GetFixedAt[uint8](bat.Vecs[2], i)
-					destBlk := vector.GetFixedAt[uint16](bat.Vecs[3], i)
-					destRow := vector.GetFixedAt[uint32](bat.Vecs[4], i)
+					srcBlk := vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], i)
+					srcRow := vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[1], i)
+					destObj := vector.GetFixedAtNoTypeCheck[uint8](bat.Vecs[2], i)
+					destBlk := vector.GetFixedAtNoTypeCheck[uint16](bat.Vecs[3], i)
+					destRow := vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[4], i)
 
 					booking[srcBlk][srcRow] = api.TransferDestPos{
 						ObjIdx: destObj,

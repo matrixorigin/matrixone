@@ -148,10 +148,13 @@ func (bm BlockObject) GenerateBlockInfo(objName ObjectName, sorted bool) BlockIn
 			&sid,
 			location.Name().Num(),
 			location.ID()),
-		//non-appendable block
-		Appendable: false,
-		Sorted:     sorted,
 	}
 	blkInfo.SetMetaLocation(location)
+
+	blkInfo.StateFlag |= CNCreatedFlag
+	if sorted {
+		blkInfo.StateFlag |= SortedFlag
+	}
+
 	return blkInfo
 }

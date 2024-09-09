@@ -42,10 +42,6 @@ func i82bool(v int8) bool {
 	return v == 1
 }
 
-func IsFakePkName(name string) bool {
-	return name == pkgcatalog.FakePrimaryKeyColName
-}
-
 const (
 	COLIDX_COMMITS = objectio.SEQNUM_COMMITTS
 )
@@ -158,7 +154,7 @@ func NewEmptySchema(name string) *Schema {
 		SeqnumMap: make(map[uint16]int),
 		Extra:     &apipb.SchemaExtra{},
 	}
-	schema.BlockMaxRows = options.DefaultBlockMaxRows
+	schema.BlockMaxRows = objectio.BlockMaxRows
 	schema.ObjectMaxBlocks = options.DefaultBlocksPerObject
 	return schema
 }
@@ -913,7 +909,7 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		}
 		names[def.Name] = true
 		// Fake pk
-		if IsFakePkName(def.Name) {
+		if pkgcatalog.IsFakePkName(def.Name) {
 			def.FakePK = true
 			def.SortKey = false
 			def.SortIdx = -1

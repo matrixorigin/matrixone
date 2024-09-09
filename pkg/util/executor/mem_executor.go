@@ -53,7 +53,16 @@ func (e *memExecutor) ExecTxn(
 }
 
 type memTxnExecutor struct {
-	mocker func(sql string) (Result, error)
+	mocker      func(sql string) (Result, error)
+	txnOperator client.TxnOperator
+}
+
+// NewMemTxnExecutor used to testing
+func NewMemTxnExecutor(mocker func(sql string) (Result, error), txnOperator client.TxnOperator) TxnExecutor {
+	return &memTxnExecutor{
+		mocker:      mocker,
+		txnOperator: txnOperator,
+	}
 }
 
 func (te *memTxnExecutor) Exec(sql string, _ StatementOption) (Result, error) {
@@ -69,7 +78,7 @@ func (te *memTxnExecutor) LockTable(table string) error {
 }
 
 func (te *memTxnExecutor) Txn() client.TxnOperator {
-	return nil
+	return te.txnOperator
 }
 
 // MemResult used to test. Construct a Result from memory.

@@ -442,7 +442,7 @@ func TestLogtailBasic(t *testing.T) {
 		rowidMap[id] = 1
 	}
 	for i := int64(0); i < 10; i++ {
-		id := vector.MustFixedCol[types.Rowid](rowids)[i]
+		id := vector.MustFixedColWithTypeCheck[types.Rowid](rowids)[i]
 		rowidMap[id] = rowidMap[id] + 1
 	}
 	require.Equal(t, 10, len(rowidMap))
@@ -886,12 +886,12 @@ func TestObjectStats1(t *testing.T) {
 		obj := iter.Entry()
 		objCount++
 		if bytes.Equal(obj.ObjectInfo.ObjectStats.ObjectName().ObjectId()[:], appendableObjectID[:]) {
-			assert.True(t, obj.Appendable)
-			assert.False(t, obj.Sorted)
+			assert.True(t, obj.GetAppendable())
+			assert.False(t, obj.GetSorted())
 			assert.False(t, obj.ObjectStats.GetCNCreated())
 		} else {
-			assert.False(t, obj.Appendable)
-			assert.True(t, obj.Sorted)
+			assert.False(t, obj.GetAppendable())
+			assert.True(t, obj.GetSorted())
 			assert.False(t, obj.ObjectStats.GetCNCreated())
 		}
 	}
@@ -904,10 +904,10 @@ func TestObjectStats1(t *testing.T) {
 	for iter.Next() {
 		obj := iter.Entry()
 		objCount++
-		if obj.Appendable {
+		if obj.GetAppendable() {
 			appendableCount++
 		}
-		assert.True(t, obj.Sorted)
+		assert.True(t, obj.GetSorted())
 		assert.False(t, obj.ObjectStats.GetCNCreated())
 	}
 	assert.Equal(t, appendableCount, 1)
@@ -925,8 +925,8 @@ func TestObjectStats1(t *testing.T) {
 	for iter.Next() {
 		obj := iter.Entry()
 		objCount++
-		assert.False(t, obj.Appendable)
-		assert.True(t, obj.Sorted)
+		assert.False(t, obj.GetAppendable())
+		assert.True(t, obj.GetSorted())
 		assert.False(t, obj.ObjectStats.GetCNCreated())
 	}
 	assert.Equal(t, objCount, 1)
@@ -973,12 +973,12 @@ func TestObjectStats2(t *testing.T) {
 		obj := iter.Entry()
 		objCount++
 		if bytes.Equal(obj.ObjectInfo.ObjectStats.ObjectName().ObjectId()[:], appendableObjectID[:]) {
-			assert.True(t, obj.Appendable)
-			assert.False(t, obj.Sorted)
+			assert.True(t, obj.GetAppendable())
+			assert.False(t, obj.GetSorted())
 			assert.False(t, obj.ObjectStats.GetCNCreated())
 		} else {
-			assert.False(t, obj.Appendable)
-			assert.False(t, obj.Sorted)
+			assert.False(t, obj.GetAppendable())
+			assert.False(t, obj.GetSorted())
 			assert.False(t, obj.ObjectStats.GetCNCreated())
 		}
 	}
@@ -991,10 +991,10 @@ func TestObjectStats2(t *testing.T) {
 	for iter.Next() {
 		obj := iter.Entry()
 		objCount++
-		if obj.Appendable {
+		if obj.GetAppendable() {
 			appendableCount++
 		}
-		assert.True(t, obj.Sorted)
+		assert.True(t, obj.GetSorted())
 		assert.False(t, obj.ObjectStats.GetCNCreated())
 	}
 	assert.Equal(t, appendableCount, 1)
@@ -1012,8 +1012,8 @@ func TestObjectStats2(t *testing.T) {
 	for iter.Next() {
 		obj := iter.Entry()
 		objCount++
-		assert.False(t, obj.Appendable)
-		assert.False(t, obj.Sorted)
+		assert.False(t, obj.GetAppendable())
+		assert.False(t, obj.GetSorted())
 		assert.False(t, obj.ObjectStats.GetCNCreated())
 	}
 	iter.Close()
@@ -1085,7 +1085,7 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	require.Equal(t, 2, res.Batches[0].RowCount())
 	pkSum := int16(0)
 	for i := 0; i < 2; i++ {
-		pkSum += vector.GetFixedAt[int16](res.Batches[0].Vecs[1], i)
+		pkSum += vector.GetFixedAtWithTypeCheck[int16](res.Batches[0].Vecs[1], i)
 	}
 	require.Equal(t, int16(5 /*2+3*/), pkSum)
 }

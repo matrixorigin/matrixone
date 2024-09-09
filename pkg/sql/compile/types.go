@@ -59,6 +59,7 @@ const (
 	TruncateTable
 	AlterView
 	AlterTable
+	RenameTable
 	MergeInsert
 	MergeDelete
 	CreateSequence
@@ -79,7 +80,6 @@ type Source struct {
 	Attributes             []string
 	R                      engine.Reader
 	Rel                    engine.Relation
-	Bat                    *batch.Batch
 	FilterExpr             *plan.Expr // todo: change this to []*plan.Expr
 	node                   *plan.Node
 	TableDef               *plan.TableDef
@@ -104,9 +104,6 @@ type Scope struct {
 	// 1 -  execution unit for processing intermediate results.
 	// 2 -  execution unit that requires remote call.
 	Magic magicType
-
-	// IsJoin means the pipeline is join
-	IsJoin bool
 
 	// IsEnd means the pipeline is end
 	IsEnd bool
