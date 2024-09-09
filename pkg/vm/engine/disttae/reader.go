@@ -46,7 +46,6 @@ import (
 // -----------------------------------------------------------------
 
 func (mixin *withFilterMixin) reset() {
-	mixin.filterState.evaluated = false
 	mixin.filterState.filter = objectio.BlockReadFilter{}
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
@@ -71,7 +70,6 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
 	v2.TaskSelColumnTotal.Add(float64(ctotal))
 	v2.TaskSelColumnHit.Add(float64(ctotal - chit))
-	blockio.RecordColumnSelectivity(mixin.proc.GetService(), chit, ctotal)
 
 	mixin.columns.seqnums = make([]uint16, len(cols))
 	mixin.columns.colTypes = make([]types.Type, len(cols))
@@ -107,13 +105,8 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 		// use the search function to find the offset of the primary key.
 		// it returns the offset of the primary key in the pk vector.
 		// if the primary key is not found, it returns empty slice
-		mixin.filterState.evaluated = true
-		//mixin.filterState.filter = filter
 		mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[mixin.columns.pkPos]}
 		mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
-
-		// records how many blks one reader needs to read when having filter
-		//objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
 	}
 }
 
@@ -271,7 +264,7 @@ func NewReader(
 	}
 
 	blockFilter, err := engine_util.ConstructBlockPKFilter(
-		tableDef.Pkey.PkeyColName,
+		catalog.IsFakePkName(tableDef.Pkey.PkeyColName),
 		baseFilter,
 	)
 	if err != nil {
@@ -371,7 +364,6 @@ func (r *reader) Read(
 
 	err = blockio.BlockDataRead(
 		statsCtx,
-		r.withFilterMixin.proc.GetService(),
 		blkInfo,
 		r.source,
 		r.columns.seqnums,
@@ -397,7 +389,7 @@ func (r *reader) Read(
 
 	bat.SetAttributes(cols)
 
-	if blkInfo.Sorted && r.columns.indexOfFirstSortedColumn != -1 {
+	if blkInfo.IsSorted() && r.columns.indexOfFirstSortedColumn != -1 {
 		bat.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
 	}
 

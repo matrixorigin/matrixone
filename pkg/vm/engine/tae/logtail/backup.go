@@ -550,7 +550,8 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 			files = append(files, name.String())
 			blockLocation := objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
-			objectData.stats = &writer.GetObjectStats()[objectio.SchemaData]
+			ss := writer.GetObjectStats()
+			objectData.stats = &ss
 			objectio.SetObjectStatsLocation(objectData.stats, blockLocation)
 			insertObjBatch[objectData.tid] = append(insertObjBatch[objectData.tid], objectData)
 		}
@@ -568,7 +569,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				BlockID: *objectio.BuildObjectBlockid(name, uint16(0)),
 				MetaLoc: objectio.ObjectLocation(metaLoc),
 			}
-			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, sid, &blk, ds, ts, fs)
+			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, &blk, ds, ts, fs)
 			if err != nil {
 				return true, err
 			}
@@ -655,7 +656,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					} else {
 						appendValToBatch(oldMeta, newMeta, i)
 						row := newMeta.Length() - 1
-						insertObjData[i].stats.SetSorted()
+						objectio.WithSorted()(insertObjData[i].stats)
 						newMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, insertObjData[i].stats[:], false)
 						newMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
 					}

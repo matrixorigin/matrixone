@@ -227,7 +227,7 @@ func (d *DeltaLocDataSource) getAndApplyTombstones(
 		return nil, nil
 	}
 	logutil.Infof("deltaLoc: %v, id is %d", deltaLoc.String(), bid.Sequence())
-	deletes, _, release, err := blockio.ReadBlockDelete(ctx, deltaLoc, d.fs)
+	deletes, release, err := blockio.ReadDeletes(ctx, deltaLoc, d.fs, false)
 	if err != nil {
 		return nil, err
 	}
@@ -484,7 +484,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, sid string, fs fileserv
 				bat := buildBatch()
 				defer bat.Clean(mp)
 				err := blockio.BlockDataRead(
-					ctx, sid, &blk, ds, idxes, colTypes, checkpointTS.ToTimestamp(),
+					ctx, &blk, ds, idxes, colTypes, checkpointTS.ToTimestamp(),
 					nil, nil, objectio.BlockReadFilter{}, fileservice.Policy(0), "", bat, mp, fs,
 				)
 				if err != nil {
@@ -597,7 +597,8 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 	if err != nil {
 		return 0, err
 	}
-	size := writer.GetObjectStats()[0].OriginSize()
+	ss := writer.GetObjectStats()
+	size := ss.OriginSize()
 	return size, err
 }
 
@@ -665,7 +666,8 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 	if err != nil {
 		return 0, err
 	}
-	size := writer.GetObjectStats()[0].OriginSize()
+	ss := writer.GetObjectStats()
+	size := ss.OriginSize()
 	return size, err
 }
 

@@ -402,7 +402,7 @@ func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 }
 
 func checkObjectEntry(entry *ObjectEntry, start, end types.TS) bool {
-	if entry.Appendable {
+	if entry.GetAppendable() {
 		if entry.CreateTime.Greater(&end) {
 			return false
 		}

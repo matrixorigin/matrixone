@@ -815,8 +815,7 @@ func (tbl *txnTable) rangesOnePart(
 					}
 				}
 
-				blk.Sorted = obj.Sorted
-				blk.Appendable = obj.Appendable
+				blk.SetFlagByObjStats(obj.ObjectStats)
 
 				outBlocks.AppendBlockInfo(blk)
 
@@ -837,7 +836,6 @@ func (tbl *txnTable) rangesOnePart(
 	bhit, btotal := outBlocks.Len()-1, int(s3BlkCnt)
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
-	blockio.RecordBlockSelectivity(proc.GetService(), bhit, btotal)
 	if btotal > 0 {
 		v2.TxnRangesSlowPathLoadObjCntHistogram.Observe(float64(loadObjCnt))
 		v2.TxnRangesSlowPathSelectedBlockCntHistogram.Observe(float64(bhit))
@@ -1890,8 +1888,8 @@ func (tbl *txnTable) PKPersistedBetween(
 						}
 					}
 
-					blk.Sorted = obj.Sorted
-					blk.Appendable = obj.Appendable
+					blk.SetFlagByObjStats(obj.ObjectStats)
+
 					blk.PartitionNum = -1
 					candidateBlks[blk.BlockID] = &blk
 					return true
@@ -1920,7 +1918,10 @@ func (tbl *txnTable) PKPersistedBetween(
 			return nil, err
 		}
 
-		blockReadPKFilter, err := engine_util.ConstructBlockPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
+		blockReadPKFilter, err := engine_util.ConstructBlockPKFilter(
+			catalog.IsFakePkName(tbl.tableDef.Pkey.PkeyColName),
+			basePKFilter,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -1952,7 +1953,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 		defer release()
 
-		if !blk.Sorted {
+		if !blk.IsSorted() {
 			if unsortedFilter == nil {
 				unsortedFilter = buildUnsortedFilter()
 			}
@@ -2095,7 +2096,7 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	objStats := make([]objectio.ObjectStats, 0, tbl.ApproxObjectsNum(ctx))
 
 	err = ForeachVisibleDataObject(state, snapshot, func(obj logtailreplay.ObjectEntry) error {
-		if obj.Appendable {
+		if obj.GetAppendable() {
 			return nil
 		}
 		if sortKeyPos != -1 {
