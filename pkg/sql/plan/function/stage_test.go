@@ -68,3 +68,53 @@ func TestParseDatalink(t *testing.T) {
 		})
 	}
 }
+
+func TestParseDatalinkFailed(t *testing.T) {
+
+	type testCase struct {
+		name          string
+		data          string
+		wantMoUrl     string
+		wantUrlParams []int
+	}
+	tests := []testCase{
+		{
+			name:          "Test1 - File",
+			data:          "s3://a/b/c/1.txt",
+			wantMoUrl:     "/a/b/c/1.txt",
+			wantUrlParams: []int{0, -1},
+		},
+		{
+			name:          "Test2 - File",
+			data:          "file:///a/b/c/1.txt?offset=-2&size=2",
+			wantMoUrl:     "/a/b/c/1.txt",
+			wantUrlParams: []int{1, 2},
+		},
+		{
+			name:          "Test3 - File",
+			data:          "file:///a/b/c/1.txt?offset=b",
+			wantMoUrl:     "/a/b/c/1.txt",
+			wantUrlParams: []int{1, -1},
+		},
+		{
+			name:          "Test4 - File",
+			data:          "file:///a/b/c/1.txt?size=c",
+			wantMoUrl:     "/a/b/c/1.txt",
+			wantUrlParams: []int{0, 2},
+		},
+		{
+			name:          "Test5 - Empty Stage",
+			data:          "stage:///a/b/c/1.txt?size=c",
+			wantMoUrl:     "/a/b/c/1.txt",
+			wantUrlParams: []int{0, 2},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := ParseDatalink(tt.data, nil)
+			if err == nil {
+				t.Errorf("ParseDatalink() should error out. %s", tt.data)
+			}
+		})
+	}
+}

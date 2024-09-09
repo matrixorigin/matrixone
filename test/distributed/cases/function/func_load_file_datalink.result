@@ -1,3 +1,7 @@
+select load_file(cast('file://$resources/file_test/normal.txt?offset=0&size=a' as datalink));
+strconv.Atoi: parsing "a": invalid syntax
+select load_file(cast('file://$resources/file_test/normal.txt?offset=b&size=3' as datalink));
+strconv.Atoi: parsing "b": invalid syntax
 select load_file(cast('file://$resources/file_test/normal.txt' as datalink));
 load_file(cast(file:///Users/eric/github/mo-tester/../matrixone/test/distributed/resources/file_test/normal.txt as datalink))
 Hello world!
@@ -34,6 +38,12 @@ save_file(cast(stage://outfilestage/datalink/1.txt as datalink), this is a test.
 15
 select load_file(cast('stage://outfilestage/datalink/1.txt' as datalink));
 load_file(cast(stage://outfilestage/datalink/1.txt as datalink))
+this is a test.
+select save_file(cast('file://$resources/into_outfile/datalink/2.txt' as datalink), 'this is a test.');
+save_file(cast(file:///Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/datalink/2.txt as datalink), this is a test.)
+15
+select load_file(cast('file://$resources/into_outfile/datalink/2.txt' as datalink));
+load_file(cast(file:///Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/datalink/2.txt as datalink))
 this is a test.
 create table t2(a int, b datalink, c varchar);
 insert into t2 values(1, cast('stage://outfilestage/datalink/varchar1.txt' as datalink), 'this is a varchar test 1'),

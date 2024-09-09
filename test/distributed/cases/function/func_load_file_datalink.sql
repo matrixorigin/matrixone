@@ -1,3 +1,7 @@
+-- error out
+select load_file(cast('file://$resources/file_test/normal.txt?offset=0&size=a' as datalink));
+select load_file(cast('file://$resources/file_test/normal.txt?offset=b&size=3' as datalink));
+
 -- 1. call datalink directly in load_file function
 select load_file(cast('file://$resources/file_test/normal.txt' as datalink));
 select load_file(cast('file://$resources/file_test/normal.txt?offset=0&size=3' as datalink));
@@ -33,8 +37,13 @@ select load_file(cast('stage://filestage/normal.txt' as datalink));
 select load_file(cast('stage://filestage/normal.txt?offset=0&size=3' as datalink));
 
 -- 2. write datalink to file
+-- stage
 select save_file(cast('stage://outfilestage/datalink/1.txt' as datalink), 'this is a test.');
 select load_file(cast('stage://outfilestage/datalink/1.txt' as datalink));
+
+-- file
+select save_file(cast('file://$resources/into_outfile/datalink/2.txt' as datalink), 'this is a test.');
+select load_file(cast('file://$resources/into_outfile/datalink/2.txt' as datalink));
 
 -- create a table with datalink column
 create table t2(a int, b datalink, c varchar);
