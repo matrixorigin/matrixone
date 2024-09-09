@@ -120,6 +120,10 @@ func NewAliyunSDK(
 
 var _ ObjectStorage = new(AliyunSDK)
 
+func (a *AliyunSDK) Concurrency() int64 {
+	return 16384
+}
+
 func (a *AliyunSDK) List(
 	ctx context.Context,
 	prefix string,

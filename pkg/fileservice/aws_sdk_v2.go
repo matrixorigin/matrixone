@@ -188,6 +188,10 @@ func NewAwsSDKv2(
 
 var _ ObjectStorage = new(AwsSDKv2)
 
+func (a *AwsSDKv2) Concurrency() int64 {
+	return 16384
+}
+
 func (a *AwsSDKv2) List(
 	ctx context.Context,
 	prefix string,

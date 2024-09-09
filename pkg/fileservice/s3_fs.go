@@ -123,14 +123,17 @@ func NewS3FS(
 	}
 
 	// limit number of concurrent operations
-	concurrency := args.Concurrency
-	if concurrency == 0 {
-		concurrency = 1024
+	concurrency := fs.storage.Concurrency()
+	if args.Concurrency > 0 {
+		// overwrite
+		concurrency = args.Concurrency
 	}
-	fs.storage = newObjectStorageSemaphore(
-		fs.storage,
-		concurrency,
-	)
+	if concurrency > 0 {
+		fs.storage = newObjectStorageSemaphore(
+			fs.storage,
+			concurrency,
+		)
+	}
 
 	// metrics
 	fs.storage = newObjectStorageMetrics(

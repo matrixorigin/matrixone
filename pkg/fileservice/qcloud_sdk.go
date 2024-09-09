@@ -501,3 +501,7 @@ func (a *QCloudSDK) is404(err error) bool {
 	}
 	return false
 }
+
+func (a *QCloudSDK) Concurrency() int64 {
+	return 16384
+}

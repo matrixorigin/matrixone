@@ -190,6 +190,10 @@ func NewMinioSDK(
 
 var _ ObjectStorage = new(MinioSDK)
 
+func (a *MinioSDK) Concurrency() int64 {
+	return 16384
+}
+
 func (a *MinioSDK) List(
 	ctx context.Context,
 	prefix string,

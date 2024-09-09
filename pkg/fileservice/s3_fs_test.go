@@ -130,7 +130,7 @@ func testS3FS(
 			switch storage := fs.storage.(type) {
 			case *AwsSDKv2:
 				storage.listMaxKeys = 5
-			case *AwsSDKv1:
+			case *diskObjectStorage:
 				storage.listMaxKeys = 5
 			}
 
@@ -228,28 +228,34 @@ func testS3FS(
 		})
 	})
 
-	t.Run("mem and disk caching file service", func(t *testing.T) {
-		testCachingFileService(t, func() CachingFileService {
+	t.Run("overwrite concurrency", func(t *testing.T) {
+		testFileService(t, policy, func(name string) FileService {
 			ctx := context.Background()
 			fs, err := NewS3FS(
 				ctx,
 				ObjectStorageArguments{
-					Name:      "s3",
-					Endpoint:  config.Endpoint,
-					Bucket:    config.Bucket,
-					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-					RoleARN:   config.RoleARN,
+					Name:        name,
+					Endpoint:    config.Endpoint,
+					Bucket:      config.Bucket,
+					KeyPrefix:   time.Now().Format("2006-01-02.15:04:05.000000"),
+					RoleARN:     config.RoleARN,
+					Concurrency: 1024,
 				},
-				CacheConfig{
-					MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
-					DiskCapacity:   ptrTo[toml.ByteSize](128 * 1024),
-					DiskPath:       ptrTo(t.TempDir()),
-				},
+				DisabledCacheConfig,
 				nil,
-				false,
+				true,
 				false,
 			)
 			assert.Nil(t, err)
+
+			// to test continuation
+			switch storage := fs.storage.(type) {
+			case *AwsSDKv2:
+				storage.listMaxKeys = 5
+			case *diskObjectStorage:
+				storage.listMaxKeys = 5
+			}
+
 			return fs
 		})
 	})

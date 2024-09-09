@@ -77,4 +77,7 @@ type ObjectStorage interface {
 	) (
 		err error,
 	)
+
+	// Concurrency indicates max number of concurrent operations
+	Concurrency() int64
 }
