@@ -90,15 +90,11 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 		shuffle.ctr.buf.Clean(proc.Mp())
 	}
 	shuffle.ctr.shufflePool.Reset(proc.Mp())
-	if shuffle.ctr.sels != nil {
-		shuffle.ctr.sels = shuffle.ctr.sels[:0]
-	}
+	shuffle.ctr.sels = nil
 	shuffle.ctr.ending = false
 }
 
 func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {
 	shuffle.ctr.buf = nil
 	shuffle.ctr.shufflePool = nil
-	shuffle.ctr.sels = nil
-	shuffle.ctr.ending = false
 }

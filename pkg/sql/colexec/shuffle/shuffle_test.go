@@ -18,6 +18,10 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -27,14 +31,14 @@ import (
 )
 
 const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
+	Rows = 8192 // default rows
 )
 
 // add unit tests for cases
 type shuffleTestCase struct {
-	arg  *Shuffle
-	proc *process.Process
+	arg   *Shuffle
+	types []types.Type
+	proc  *process.Process
 }
 
 var (
@@ -43,26 +47,77 @@ var (
 
 func init() {
 	tcs = []shuffleTestCase{
-		newTestCase(mpool.MustNewZero()),
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_int32.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Range),
+				AliveRegCnt:   4,
+				ShuffleColMin: 1,
+				ShuffleColMax: 1000000,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_int64.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Range),
+				AliveRegCnt:   8,
+				ShuffleColMin: 1,
+				ShuffleColMax: 10000,
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_int64.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Hash),
+				AliveRegCnt:   3,
+			},
+		},
 	}
 }
 
-func newTestCase(m *mpool.MPool) shuffleTestCase {
-	return shuffleTestCase{
-		proc: testutil.NewProcessWithMPool("", m),
-		arg: &Shuffle{
-			ctr:                container{},
-			ShuffleColIdx:      0,
-			ShuffleType:        int32(plan.ShuffleType_Range),
-			AliveRegCnt:        4,
-			ShuffleColMin:      1,
-			ShuffleColMax:      1000000,
-			ShuffleRangeUint64: nil,
-			ShuffleRangeInt64:  nil,
-			RuntimeFilterSpec:  nil,
-			msgReceiver:        nil,
-			OperatorBase:       vm.OperatorBase{},
-		},
+func runShuffleCase(t *testing.T, tc shuffleTestCase) {
+	var result vm.CallResult
+	var count int
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	resetChildren(tc.arg, getInputBats(tc))
+	for {
+		result, err = tc.arg.Call(tc.proc)
+		require.NoError(t, err)
+		if result.Batch == nil || result.Batch.RowCount() == 0 || result.Status == vm.ExecStop {
+			break
+		}
+		count += result.Batch.RowCount()
+	}
+	require.Equal(t, count, 16*Rows)
+	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+	tc.arg.Reset(tc.proc, false, nil)
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestShuffle(t *testing.T) {
+
+	for _, tc := range tcs {
+		runShuffleCase(t, tc)
+		// second run
+		runShuffleCase(t, tc)
+		tc.proc.Free()
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
@@ -88,4 +143,37 @@ func TestReset(t *testing.T) {
 		require.NoError(t, err)
 		tc.arg.Reset(tc.proc, false, nil)
 	}
+}
+
+func getInputBats(tc shuffleTestCase) []*batch.Batch {
+	return []*batch.Batch{
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		newBatch(tc.types, tc.proc, Rows),
+		batch.EmptyBatch,
+	}
+}
+
+// create a new block based on the type information
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+	return testutil.NewBatch(ts, true, int(rows), proc.Mp())
+}
+
+func resetChildren(arg *Shuffle, bats []*batch.Batch) {
+	op := colexec.NewMockOperator().WithBatchs(bats)
+	arg.Children = nil
+	arg.AppendChild(op)
 }
