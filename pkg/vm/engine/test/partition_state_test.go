@@ -75,7 +75,7 @@ func Test_Append(t *testing.T) {
 
 	{
 		var err error
-		txn, _ := taeEngine.GetDB().StartTxn(nil)
+		txn, _ := taeEngine.StartTxn()
 		database, err = txn.CreateDatabase(databaseName, "", "")
 		assert.Nil(t, err)
 
@@ -93,7 +93,7 @@ func Test_Append(t *testing.T) {
 			defer wg.Done()
 
 			var err error
-			txn, _ := taeEngine.GetDB().StartTxn(nil)
+			txn, _ := taeEngine.StartTxn()
 			tmpDB, _ := txn.GetDatabase(databaseName)
 			tmpRel, err := tmpDB.GetRelationByName(schema.Name)
 			assert.Nil(t, err)
@@ -119,14 +119,14 @@ func Test_Append(t *testing.T) {
 	expectObjCnt := expectBlkCnt
 
 	{
-		txn, _ := taeEngine.GetDB().StartTxn(nil)
+		txn, _ := taeEngine.StartTxn()
 		database, _ = txn.GetDatabase(databaseName)
 		rel, _ = database.GetRelationByName(schema.Name)
 		_, err = rel.CreateObject(false)
 		assert.Nil(t, err)
 	}
 	{
-		txn, _ := taeEngine.GetDB().StartTxn(nil)
+		txn, _ := taeEngine.StartTxn()
 		database, _ = txn.GetDatabase(databaseName)
 		rel, _ = database.GetRelationByName(schema.Name)
 		objIt := rel.MakeObjectIt(false)
@@ -220,13 +220,13 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 			{
 				// an obj recorded into ckp
 				testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
-				txn, _ = taeEngine.GetDB().StartTxn(nil)
+				txn, _ = taeEngine.StartTxn()
 				ts := txn.GetStartTS()
 				taeEngine.GetDB().ForceCheckpoint(ctx, ts.Next(), time.Second)
 			}
 
 			{
-				txn, _ = taeEngine.GetDB().StartTxn(nil)
+				txn, _ = taeEngine.StartTxn()
 				database, err = txn.GetDatabase(databaseName)
 				require.Nil(t, err)
 
@@ -324,7 +324,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 	ctx := p.Ctx
 
 	{
-		txn, _ = taeEngine.GetDB().StartTxn(nil)
+		txn, _ = taeEngine.StartTxn()
 		database, _ = txn.GetDatabase(databaseName)
 		rel, _ = database.GetRelationByName(schema.Name)
 		txn.Commit(context.Background())
@@ -357,7 +357,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 	}
 
 	{
-		txn, _ = taeEngine.GetDB().StartTxn(nil)
+		txn, _ = taeEngine.StartTxn()
 		database, _ = txn.GetDatabase(databaseName)
 		rel, _ = database.GetRelationByName(schema.Name)
 
@@ -444,14 +444,14 @@ func Test_EmptyObjectStats(t *testing.T) {
 	{
 		// an obj recorded into ckp
 		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
-		txn, _ = taeEngine.GetDB().StartTxn(nil)
+		txn, _ = taeEngine.StartTxn()
 		ts := txn.GetStartTS()
 		taeEngine.GetDB().ForceCheckpoint(p.Ctx, ts.Next(), time.Second)
 	}
 
 	var err error
 	{
-		txn, _ = taeEngine.GetDB().StartTxn(nil)
+		txn, _ = taeEngine.StartTxn()
 		database, _ = txn.GetDatabase(databaseName)
 		rel, _ = database.GetRelationByName(schema.Name)
 
@@ -548,7 +548,7 @@ func Test_SubscribeUnsubscribeConsistency(t *testing.T) {
 
 	var err error
 	{
-		txn, _ = taeEngine.GetDB().StartTxn(nil)
+		txn, _ = taeEngine.StartTxn()
 		database, err = txn.GetDatabase(databaseName)
 		require.Nil(t, err)
 		rel, err = database.GetRelationByName(schema.Name)
@@ -664,7 +664,7 @@ func Test_Bug_DupEntryWhenGCInMemTombstones(t *testing.T) {
 
 	// flush tombstone only
 	{
-		tnTxnop, err := p.T.GetDB().StartTxn(nil)
+		tnTxnop, err := p.T.StartTxn()
 		require.NoError(t, err)
 
 		dbHandle, err := tnTxnop.GetDatabase(databaseName)
@@ -711,7 +711,7 @@ func Test_Bug_DupEntryWhenGCInMemTombstones(t *testing.T) {
 		require.Equal(t, res.Batches[0].RowCount(), 3)
 		require.Equal(t, 0,
 			slices.Compare(
-				vector.MustFixedCol[int32](res.Batches[0].Vecs[schema.GetPrimaryKey().Idx]),
+				vector.MustFixedColWithTypeCheck[int32](res.Batches[0].Vecs[schema.GetPrimaryKey().Idx]),
 				[]int32{4, 3, 2}))
 
 		res.Close()
@@ -746,7 +746,7 @@ func Test_Bug_DupEntryWhenGCInMemTombstones(t *testing.T) {
 		require.Equal(t, res.Batches[0].RowCount(), 4)
 		require.Equal(t, 0,
 			slices.Compare(
-				vector.MustFixedCol[int32](res.Batches[0].Vecs[schema.GetPrimaryKey().Idx]),
+				vector.MustFixedColWithTypeCheck[int32](res.Batches[0].Vecs[schema.GetPrimaryKey().Idx]),
 				[]int32{4, 3, 2, 1}))
 		res.Close()
 	}

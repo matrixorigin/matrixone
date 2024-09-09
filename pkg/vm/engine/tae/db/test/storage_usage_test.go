@@ -325,10 +325,10 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 				delBat := ckpData.GetBatches()[logtail.StorageUsageDelIDX]
 				//insBat := ckpData.GetBatches()[logtail.StorageUsageInsIDX]
 
-				accCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
-				dbCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
-				tblCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
-				sizeCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
+				accCol := vector.MustFixedColWithTypeCheck[uint64](delBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
+				dbCol := vector.MustFixedColWithTypeCheck[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
+				tblCol := vector.MustFixedColWithTypeCheck[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+				sizeCol := vector.MustFixedColWithTypeCheck[uint64](delBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
 
 				require.Equal(t, len(accCol), len(delUsages))
 
@@ -359,8 +359,19 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 			gCollector.UsageMemo = memo
 			defer gCollector.Close()
 
+			insSegIdxes := make(map[int]struct{})
+			var segInserts []*catalog.ObjectEntry
+			{
+				for i := 0; i < len(usages); i++ {
+					insSegIdxes[i] = struct{}{}
+				}
+				_, _, segInserts = mockDeletesAndInserts(usages, nil, nil, nil, insSegIdxes)
+			}
+
 			for idx := range usages {
 				memo.DeltaUpdate(usages[idx], false)
+
+				gCollector.Usage.ObjInserts = append(gCollector.Usage.ObjInserts, segInserts[idx])
 				gCollector.Usage.ReservedAccIds[usages[idx].AccId] = struct{}{}
 			}
 
@@ -378,15 +389,20 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 				insBat := ckpData.GetBatches()[logtail.StorageUsageInsIDX]
 				require.Equal(t, insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).Length(), len(usages))
 
-				// usage datas in memo ordered
-				sort.Slice(usages, func(i, j int) bool {
-					return memo.GetCache().LessFunc()(usages[i], usages[j])
-				})
+				memUsages := memo.GatherAllAccSize()
+				require.Equal(t, accCnt, len(memUsages))
 
-				accCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
-				dbCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
-				tblCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
-				sizeCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
+				abstract := memo.GatherObjectAbstractForAllAccount()
+				require.Equal(t, accCnt, len(abstract))
+				for id, aa := range abstract {
+					require.Equal(t, dbCnt*tblCnt, aa.TotalObjCnt)
+					require.Equal(t, int(memUsages[id]), aa.TotalObjSize)
+				}
+
+				accCol := vector.MustFixedColWithTypeCheck[uint64](insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
+				dbCol := vector.MustFixedColWithTypeCheck[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
+				tblCol := vector.MustFixedColWithTypeCheck[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+				sizeCol := vector.MustFixedColWithTypeCheck[uint64](insBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
 
 				for idx := 0; idx < len(accCol); idx++ {
 					require.Equal(t, accCol[idx], usages[idx].AccId)
@@ -575,4 +591,73 @@ func Test_GatherSpecialSize(t *testing.T) {
 			require.Equal(t, expected, actual)
 		},
 	)
+}
+
+func Test_UsageDataMerge(t *testing.T) {
+	a := logtail.UsageData{
+		Size: 90,
+		ObjectAbstract: logtail.ObjectAbstract{
+			TotalObjCnt: 1,
+			TotalBlkCnt: 2,
+			TotalRowCnt: 1,
+		},
+	}
+
+	b := logtail.UsageData{
+		Size: 20,
+		ObjectAbstract: logtail.ObjectAbstract{
+			TotalObjCnt: 1,
+			TotalBlkCnt: 2,
+			TotalRowCnt: 1,
+		},
+	}
+
+	c := logtail.UsageData{
+		Size: 10,
+		ObjectAbstract: logtail.ObjectAbstract{
+			TotalObjCnt: 2,
+			TotalBlkCnt: 4,
+			TotalRowCnt: 2,
+		},
+	}
+
+	a.Merge(b, false)
+	a.Merge(c, true)
+
+	require.Equal(t, uint64(100), a.Size)
+	require.Equal(t, 0, a.TotalObjCnt)
+	require.Equal(t, 0, a.TotalBlkCnt)
+	require.Equal(t, 0, a.TotalRowCnt)
+}
+
+func Test_Objects2Usages(t *testing.T) {
+	allocator := atomic.Uint64{}
+	allocator.Store(pkgcatalog.MO_RESERVED_MAX + 1)
+
+	accCnt, dbCnt, tblCnt := 10, 10, 10
+	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
+
+	insertIndexes := make(map[int]struct{})
+	for i := 0; i < len(usages); i++ {
+		insertIndexes[i] = struct{}{}
+	}
+
+	_, _, inserts := mockDeletesAndInserts(usages, nil, nil, nil, insertIndexes)
+
+	turnA := logtail.Objects2Usages(inserts[:len(inserts)/2], false)
+	for i := range turnA {
+		require.Equal(t, uint64(inserts[i].Size()), turnA[i].Size)
+		require.Equal(t, 0, turnA[i].TotalObjCnt)
+		require.Equal(t, 0, turnA[i].TotalBlkCnt)
+		require.Equal(t, 0, turnA[i].TotalRowCnt)
+	}
+
+	turnB := logtail.Objects2Usages(inserts[len(inserts)/2:], true)
+	offset := len(inserts) / 2
+	for i := range turnB {
+		require.Equal(t, uint64(inserts[i+offset].Size()), turnB[i].Size)
+		require.Equal(t, 1, turnB[i].TotalObjCnt)
+		require.Equal(t, int(inserts[i+offset].BlkCnt()), turnB[i].TotalBlkCnt)
+		require.Equal(t, int(inserts[i+offset].Rows()), turnB[i].TotalRowCnt)
+	}
 }

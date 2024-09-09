@@ -265,7 +265,7 @@ func (svbt SystemVariableBoolType) IsTrue(v interface{}) bool {
 	case bool:
 		return vv
 	case string:
-		return strings.ToLower(vv) == "on"
+		return strings.ToLower(vv) == "on" || strings.ToLower(vv) == "true"
 	default:
 		return false
 	}
@@ -1637,6 +1637,15 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("debug_sync"),
 		Default:           "",
 	},
+	"debug_break": {
+		Name:              "debug_break",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("debug_break"),
+		Default:           int64(0),
+	},
+
 	"default_authentication_plugin": {
 		Name:              "default_authentication_plugin",
 		Scope:             ScopeGlobal,

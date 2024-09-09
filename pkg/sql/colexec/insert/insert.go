@@ -45,14 +45,14 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 	if insert.ToWriteS3 {
 		if len(insert.InsertCtx.PartitionTableIDs) > 0 {
 			// If the target is partition table, just only apply writers for all partitioned sub tables
-			s3Writers, err := colexec.NewPartitionS3Writer(proc, insert.InsertCtx.TableDef)
+			s3Writers, err := colexec.NewPartitionS3Writer(insert.InsertCtx.TableDef)
 			if err != nil {
 				return err
 			}
 			insert.ctr.partitionS3Writers = s3Writers
 		} else {
 			// If the target is not partition table, you only need to operate the main table
-			s3Writer, err := colexec.NewS3Writer(proc, insert.InsertCtx.TableDef, 0)
+			s3Writer, err := colexec.NewS3Writer(insert.InsertCtx.TableDef, 0)
 			if err != nil {
 				return err
 			}

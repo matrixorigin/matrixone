@@ -916,6 +916,10 @@ func NewMockRelation(ctrl *gomock.Controller) *MockRelation {
 	return mock
 }
 
+func (m *MockRelation) CollectChanges(_ context.Context, from, to types.TS, _ *mpool.MPool) (engine.ChangesHandle, error) {
+	panic("not support")
+}
+
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockRelation) EXPECT() *MockRelationMockRecorder {
 	return m.recorder
@@ -1409,18 +1413,18 @@ func (mr *MockReaderMockRecorder) GetOrderBy() *gomock.Call {
 }
 
 // Read mocks base method.
-func (m *MockReader) Read(arg0 context.Context, arg1 []string, arg2 *plan.Expr, arg3 *mpool.MPool, arg4 engine.VectorPool, arg5 *batch.Batch) (bool, error) {
+func (m *MockReader) Read(arg0 context.Context, arg1 []string, arg2 *plan.Expr, arg3 *mpool.MPool, arg4 *batch.Batch) (bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Read", arg0, arg1, arg2, arg3, arg4, arg5)
+	ret := m.ctrl.Call(m, "Read", arg0, arg1, arg2, arg3, arg4)
 	ret0, _ := ret[0].(bool)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Read indicates an expected call of Read.
-func (mr *MockReaderMockRecorder) Read(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
+func (mr *MockReaderMockRecorder) Read(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockReader)(nil).Read), arg0, arg1, arg2, arg3, arg4, arg5)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockReader)(nil).Read), arg0, arg1, arg2, arg3, arg4)
 }
 
 // SetFilterZM mocks base method.

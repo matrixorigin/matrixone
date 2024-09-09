@@ -328,30 +328,32 @@ func (e *TestEngine) TryDeleteByDeltaloc(vals []any) (ok bool, err error) {
 func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) (ok bool, err error) {
 	rel := e.GetRelationWithTxn(txn)
 
-	idOffsetsMap := make(map[common.ID][]uint32)
-	for _, val := range vals {
+	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	pks := containers.MakeVector(e.schema.GetPrimaryKey().Type, common.DebugAllocator)
+	var firstID *common.ID // TODO use table.AsCommonID
+	for i, val := range vals {
 		filter := handle.NewEQFilter(val)
 		id, offset, err := rel.GetByFilter(context.Background(), filter)
-		assert.NoError(e.T, err)
-		offsets, ok := idOffsetsMap[*id]
-		if !ok {
-			offsets = make([]uint32, 0)
+		if i == 0 {
+			firstID = id
 		}
-		offsets = append(offsets, offset)
-		idOffsetsMap[*id] = offsets
+		assert.NoError(e.T, err)
+		objID := id.ObjectID()
+		_, blkOffset := id.BlockID.Offsets()
+		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*objID, blkOffset, offset)
+		rowIDs.Append(rowID, false)
+		pks.Append(val, false)
 	}
 
-	for id, offsets := range idOffsetsMap {
-		obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID(), false)
-		assert.NoError(e.T, err)
-		_, blkOffset := id.BlockID.Offsets()
-		deltaLoc, err := MockCNDeleteInS3(e.Runtime.Fs, obj.GetObjectData(), blkOffset, e.schema, txn, offsets)
-		assert.NoError(e.T, err)
-		ok, err = rel.TryDeleteByDeltaloc(&id, deltaLoc)
-		assert.NoError(e.T, err)
-		if !ok {
-			return ok, err
-		}
+	stats, err := MockCNDeleteInS3(e.Runtime.Fs, rowIDs, pks, e.schema, txn)
+	pks.Close()
+	rowIDs.Close()
+	assert.NoError(e.T, err)
+	require.False(e.T, stats.IsZero())
+	ok, err = rel.TryDeleteByStats(firstID, stats)
+	assert.NoError(e.T, err)
+	if !ok {
+		return ok, err
 	}
 	ok = true
 	return

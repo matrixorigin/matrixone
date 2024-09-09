@@ -77,7 +77,10 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			innerJoin.build(anal, proc)
+			err = innerJoin.build(anal, proc)
+			if err != nil {
+				return result, err
+			}
 
 			if ctr.mp == nil && !innerJoin.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
@@ -138,15 +141,19 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (innerJoin *InnerJoin) build(anal process.Analyze, proc *process.Process) {
+func (innerJoin *InnerJoin) build(anal process.Analyze, proc *process.Process) (err error) {
 	ctr := &innerJoin.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
-	ctr.mp = message.ReceiveJoinMap(innerJoin.JoinMapTag, innerJoin.IsShuffle, innerJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	ctr.mp, err = message.ReceiveJoinMap(innerJoin.JoinMapTag, innerJoin.IsShuffle, innerJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	if err != nil {
+		return err
+	}
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	ctr.batchRowCount = ctr.mp.GetRowCount()
+	return nil
 }
 
 func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.CallResult) error {
@@ -280,7 +287,7 @@ func (ctr *container) evalApCondForOneSel(bat, rbat *batch.Batch, ap *InnerJoin,
 	if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 		return nil
 	}
-	bs := vector.MustFixedCol[bool](vec)
+	bs := vector.MustFixedColWithTypeCheck[bool](vec)
 	if !bs[0] {
 		return nil
 	}

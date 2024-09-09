@@ -221,7 +221,7 @@ func (e *Engine) loadDatabaseFromStorage(
 				zap.String("sql", sql), zap.Duration("cost", time.Since(now)))
 		}
 	}()
-	res, err := execReadSql(ctx, op, sql, false)
+	res, err := execReadSql(ctx, op, sql, true)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +324,7 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 	}
 	sql := fmt.Sprintf(catalog.MoDatabasesInEngineQueryFormat, aid)
 
-	res, err := execReadSql(ctx, op, sql, false)
+	res, err := execReadSql(ctx, op, sql, true)
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +394,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			// not found in cache, try storage
 			sql := fmt.Sprintf(catalog.MoTablesQueryNameById, accountId, tableId)
 			tblanmes, dbnames := []string{}, []string{}
-			result, err := execReadSql(ctx, op, sql, false)
+			result, err := execReadSql(ctx, op, sql, true)
 			if err != nil {
 				return "", "", nil, err
 			}
@@ -498,7 +498,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 			zap.String("workspace", op.GetWorkspace().PPString()))
 		panic("delete table failed: query failed")
 	}
-	rowId := vector.GetFixedAt[types.Rowid](res.Batches[0].Vecs[0], 0)
+	rowId := vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
 
 	// write the batch to delete the database
 	var packer *types.Packer
@@ -571,11 +571,6 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		toFreeBatches:        make(map[tableKey][]*batch.Batch),
 		syncCommittedTSCount: e.cli.GetSyncLatestCommitTSTimes(),
 	}
-
-	txn.blockId_tn_delete_metaLoc_batch = struct {
-		sync.RWMutex
-		data map[types.Blockid][]*batch.Batch
-	}{data: make(map[types.Blockid][]*batch.Batch)}
 
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
