@@ -163,11 +163,8 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	var err error
 	for {
 		bat, end, err = sender.receiveBatch()
-		if err != nil {
+		if err != nil || end || bat == nil {
 			return err
-		}
-		if end {
-			return nil
 		}
 
 		lastAnalyze.Network(bat)

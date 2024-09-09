@@ -708,7 +708,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 				sender.safeToClose = false
 				sender.alreadyClose = false
 
-				err = receiveMsgAndForward(s.Proc, sender, s.Proc.Reg.MergeReceivers[receiverIdx].Ch2)
+				err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx].Ch2)
 				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 			},
 		)
@@ -720,26 +720,13 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 	}
 }
 
-func receiveMsgAndForward(proc *process.Process, sender *messageSenderOnClient, forwardCh chan process.PipelineSignal) error {
+func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.PipelineSignal) error {
 	for {
 		bat, end, err := sender.receiveBatch()
-		if err != nil {
+		if err != nil || end || bat == nil {
 			return err
 		}
-		if end {
-			return nil
-		}
-
-		if forwardCh != nil {
-			msg := process.NewPipelineSignalToDirectly(bat)
-			select {
-			case <-proc.Ctx.Done():
-				bat.Clean(proc.Mp())
-				return nil
-
-			case forwardCh <- msg:
-			}
-		}
+		forwardCh <- process.NewPipelineSignalToDirectly(bat)
 	}
 }
 
