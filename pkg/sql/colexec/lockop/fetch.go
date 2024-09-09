@@ -624,12 +624,17 @@ func fetchVarlenaRows(
 	filterCols []int32) (bool, [][]byte, lock.Granularity) {
 	fn := func(v []byte) []byte {
 		parker.Reset()
-		parker.EncodeStringType(v[:])
+		if v == nil {
+			parker.EncodeStringTypeMax()
+		} else {
+			parker.EncodeStringType(v[:])
+		}
 		return parker.Bytes()
 	}
+
 	if lockTable {
 		min := fn([]byte{0})
-		max := fn(getMax(int(tp.Width)))
+		max := fn(nil)
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}
@@ -768,12 +773,4 @@ func fetchFixedRowsWithCompare[T any](
 		rows = append(rows, fn(v))
 	}
 	return len(rows) > 0, rows, lock.Granularity_Row
-}
-
-func getMax(size int) []byte {
-	v := make([]byte, size)
-	for idx := range v {
-		v[idx] = math.MaxUint8
-	}
-	return v
 }

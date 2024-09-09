@@ -187,6 +187,7 @@ func printTuple(tuple Tuple) string {
 const (
 	nilCode        = 0x00
 	bytesCode      = 0x01
+	bytesMaxCode   = 0x02
 	intZeroCode    = 0x14
 	float32Code    = 0x20
 	float64Code    = 0x21

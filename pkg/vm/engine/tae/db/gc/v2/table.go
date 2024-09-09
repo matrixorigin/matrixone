@@ -293,7 +293,8 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 		objectCount := 0
 		tombstoneCount := 0
 		if len(blocks) > 0 && err == nil {
-			size = writer.GetObjectStats()[0].OriginSize()
+			ss := writer.GetObjectStats()
+			size = ss.OriginSize()
 		}
 		if bats != nil {
 			objectCount = bats[ObjectList].Length()

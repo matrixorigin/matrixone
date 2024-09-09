@@ -116,9 +116,6 @@ func TestTop(t *testing.T) {
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 
 		tc.proc.Free()
-		if tc.proc.Mp().CurrNB() != 0 {
-			println(tc.proc.Mp().Report())
-		}
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }

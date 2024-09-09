@@ -3841,7 +3841,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 					ctx, blk.BlockID, fs,
 				); err2 != nil {
 					return false, err2
-				} else if blk.Appendable || hasTombstone {
+				} else if blk.IsAppendable() || hasTombstone {
 					newRelData.AppendBlockInfo(blk)
 					return true, nil
 				}
