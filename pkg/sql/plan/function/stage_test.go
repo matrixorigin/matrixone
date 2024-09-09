@@ -72,41 +72,33 @@ func TestParseDatalink(t *testing.T) {
 func TestParseDatalinkFailed(t *testing.T) {
 
 	type testCase struct {
-		name          string
-		data          string
-		wantMoUrl     string
-		wantUrlParams []int
+		name string
+		data string
 	}
 	tests := []testCase{
 		{
-			name:          "Test1 - File",
-			data:          "s3://a/b/c/1.txt",
-			wantMoUrl:     "/a/b/c/1.txt",
-			wantUrlParams: []int{0, -1},
+			name: "Test1 - File",
+			data: "s3://a/b/c/1.txt",
 		},
 		{
-			name:          "Test2 - File",
-			data:          "file:///a/b/c/1.txt?offset=-2&size=2",
-			wantMoUrl:     "/a/b/c/1.txt",
-			wantUrlParams: []int{1, 2},
+			name: "Test2 - File",
+			data: "file:///a/b/c/1.txt?offset=-2&size=2",
 		},
 		{
-			name:          "Test3 - File",
-			data:          "file:///a/b/c/1.txt?offset=b",
-			wantMoUrl:     "/a/b/c/1.txt",
-			wantUrlParams: []int{1, -1},
+			name: "Test3 - File",
+			data: "file:///a/b/c/1.txt?offset=b",
 		},
 		{
-			name:          "Test4 - File",
-			data:          "file:///a/b/c/1.txt?size=c",
-			wantMoUrl:     "/a/b/c/1.txt",
-			wantUrlParams: []int{0, 2},
+			name: "Test4 - File",
+			data: "file:///a/b/c/1.txt?size=c",
 		},
 		{
-			name:          "Test5 - Empty Stage",
-			data:          "stage:///a/b/c/1.txt?size=c",
-			wantMoUrl:     "/a/b/c/1.txt",
-			wantUrlParams: []int{0, 2},
+			name: "Test5 - Empty Stage",
+			data: "stage:///a/b/c/1.txt?size=c",
+		},
+		{
+			name: "Test6 - Without scheme",
+			data: "/a/b/c/1.txt",
 		},
 	}
 	for _, tt := range tests {
