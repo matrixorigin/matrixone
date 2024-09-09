@@ -184,6 +184,10 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		s.Reset(c)
 	}
 
+	for _, e := range c.filterExprExes {
+		e.ResetForNextQuery()
+	}
+
 	for _, v := range c.nodeRegs {
 		v.CleanChannel(c.proc.GetMPool())
 	}
@@ -239,6 +243,12 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.isPrepare = false
+
+	for _, exe := range c.filterExprExes {
+		exe.Free()
+	}
+	c.filterExprExes = nil
+	c.filterExprVecs = nil
 
 	for k := range c.metaTables {
 		delete(c.metaTables, k)
@@ -1817,12 +1827,30 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		}
 	}
 
-	var filterExpr *plan.Expr
-	if len(n.FilterList) > 0 {
-		filterExpr = colexec.RewriteFilterExprList(n.FilterList)
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true, true)
+	if len(n.FilterList) != len(s.DataSource.FilterList) {
+		s.DataSource.FilterList = plan2.DeepCopyExprList(n.FilterList)
+		for _, e := range s.DataSource.FilterList {
+			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes, &c.filterExprVecs)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	for _, e := range s.DataSource.FilterList {
+		err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes, &c.filterExprVecs)
 		if err != nil {
 			return err
+		}
+	}
+	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
+
+	if len(n.BlockFilterList) != len(s.DataSource.BlockFilterList) {
+		s.DataSource.BlockFilterList = plan2.DeepCopyExprList(n.BlockFilterList)
+		for _, e := range s.DataSource.BlockFilterList {
+			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes, &c.filterExprVecs)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1834,7 +1862,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.PartitionRelationNames = partitionRelNames
 	s.DataSource.SchemaName = n.ObjRef.SchemaName
 	s.DataSource.AccountId = n.ObjRef.GetPubInfo()
-	s.DataSource.FilterExpr = filterExpr
 	s.DataSource.RuntimeFilterSpecs = n.RuntimeFilterProbeList
 	s.DataSource.OrderBy = n.OrderBy
 	return nil
@@ -3707,7 +3734,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(ctx, blockFilterList, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
@@ -3729,7 +3756,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(ctx, blockFilterList, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
@@ -3815,6 +3842,25 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				},
 			}
 		}
+		//@todo need remove expandRanges from Compile.
+		// all expandRanges should be called by Run
+		var filterExpr []*plan.Expr
+		if len(n.BlockFilterList) > 0 {
+			filterExpr = plan2.DeepCopyExprList(n.BlockFilterList)
+			for _, e := range filterExpr {
+				_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes, &c.filterExprVecs)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+			}
+			for _, e := range filterExpr {
+				err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes, &c.filterExprVecs)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+			}
+		}
+
 		relData, err = c.expandRanges(n, rel, n.BlockFilterList)
 		if err != nil {
 			return nil, nil, nil, err

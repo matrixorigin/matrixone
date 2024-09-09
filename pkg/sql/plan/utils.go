@@ -1933,6 +1933,8 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 		out.WriteString(fmt.Sprintf("%sExpr_T(%s)", prefix, t.T.String()))
 	case *plan.Expr_Vec:
 		out.WriteString(fmt.Sprintf("%sExpr_Vec(len=%d)", prefix, t.Vec.Len))
+	case *plan.Expr_Fold:
+		out.WriteString(fmt.Sprintf("%sExpr_Fold(id=%d)", prefix, t.Fold.Id))
 	default:
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}
@@ -2331,6 +2333,177 @@ func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
 	}
 	if _, exists := data[val]; exists {
 		return true
+	}
+	return false
+}
+
+// a > current_time() + 1 and b < ? + c and d > ? + 2
+// =>
+// a > foldVal1 and b < foldVal2 + c and d > foldVal3
+func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.ExpressionExecutor, vecs *[]*vector.Vector) (bool, error) {
+	allCanFold := true
+	var err error
+
+	fn := expr.GetF()
+	if fn == nil {
+		// switch ef := expr.Expr.(type) {
+		switch expr.Expr.(type) {
+		case *plan.Expr_List:
+			//@todo need Expr_List executor
+			return true, nil
+		case *plan.Expr_Col:
+			return false, nil
+		case *plan.Expr_Vec:
+			return false, nil
+		default:
+			return true, nil
+		}
+	}
+
+	overloadID := fn.Func.GetObj()
+	f, exists := function.GetFunctionByIdWithoutError(overloadID)
+	if !exists {
+		panic("ReplaceFoldVal: function not exist")
+	}
+	if f.IsAgg() || f.IsWin() {
+		panic("ReplaceFoldVal: agg or window function")
+	}
+
+	argFold := make([]bool, len(fn.Args))
+	for i := range fn.Args {
+		argFold[i], err = ReplaceFoldExpr(proc, fn.Args[i], exes, vecs)
+		if err != nil {
+			return false, err
+		}
+		if !argFold[i] {
+			allCanFold = false
+		}
+	}
+
+	if allCanFold {
+		return true, nil
+	} else {
+		for i, canFold := range argFold {
+			if canFold {
+				fn.Args[i], err = ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
+				if err != nil {
+					return false, err
+				}
+				if _, ok := fn.Args[i].Expr.(*plan.Expr_Vec); ok {
+					continue
+				}
+
+				exprExecutor, err := colexec.NewExpressionExecutor(proc, fn.Args[i])
+				if err != nil {
+					return false, err
+				}
+				newID := len(*exes)
+				*exes = append(*exes, exprExecutor)
+				*vecs = append(*vecs, nil)
+
+				fn.Args[i] = &plan.Expr{
+					Typ: fn.Args[i].Typ,
+					Expr: &plan.Expr_Fold{
+						Fold: &plan.FoldVal{
+							Id: int32(newID),
+						},
+					},
+					AuxId:       fn.Args[i].AuxId,
+					Ndv:         fn.Args[i].Ndv,
+					Selectivity: fn.Args[i].Selectivity,
+				}
+
+			}
+		}
+		return false, nil
+	}
+}
+
+func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.ExpressionExecutor, vecs *[]*vector.Vector) (err error) {
+	switch ef := expr.Expr.(type) {
+	case *plan.Expr_Fold:
+		var vec *vector.Vector
+		idx := int(ef.Fold.Id)
+		if idx >= len(*executors) {
+			panic("EvalFoldVal: fold id not exist")
+		}
+		exe := (*executors)[idx]
+		vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		if err != nil {
+			return err
+		}
+		(*vecs)[idx] = vec
+
+		//todo need use idx for performance
+		if vec.Length() > 1 {
+			vec.InplaceSortAndCompact()
+		}
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		ef.Fold.Data = data
+	case *plan.Expr_F:
+		for i := range ef.F.Args {
+			err = EvalFoldExpr(proc, ef.F.Args[i], executors, vecs)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func EvalFoldExprForRemote(proc *process.Process, expr *Expr, vecs *[]*vector.Vector) (err error) {
+	switch ef := expr.Expr.(type) {
+	case *plan.Expr_Fold:
+		idx := int(ef.Fold.Id)
+		if idx >= len(*vecs) {
+			panic("EvalFoldVal: fold id not exist")
+		}
+		vec := (*vecs)[idx]
+		if vec.Length() > 1 {
+			vec.InplaceSortAndCompact()
+		}
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		ef.Fold.Data = data
+	case *plan.Expr_F:
+		for i := range ef.F.Args {
+			err = EvalFoldExprForRemote(proc, ef.F.Args[i], vecs)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func HasFoldExprForList(exprs []*Expr) bool {
+	for _, e := range exprs {
+		hasFoldExpr := HasFoldValExpr(e)
+		if hasFoldExpr {
+			return true
+		}
+	}
+	return false
+}
+
+func HasFoldValExpr(expr *Expr) bool {
+	switch ef := expr.Expr.(type) {
+	case *plan.Expr_Fold:
+		return true
+	case *plan.Expr_F:
+		for i := range ef.F.Args {
+			hasFoldExpr := HasFoldValExpr(ef.F.Args[i])
+			if hasFoldExpr {
+				return true
+			}
+		}
 	}
 	return false
 }

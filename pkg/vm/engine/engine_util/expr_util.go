@@ -128,18 +128,26 @@ func mustColConstValueFromBinaryFuncExpr(
 
 func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *process.Process) ([][]byte, bool) {
 	vals := make([][]byte, len(exprs))
+	var vec *vector.Vector
+	_ = colDef
 	for idx := range exprs {
-		constVal := getConstValueByExpr(exprs[idx], proc)
-		if constVal == nil {
+		if fExpr, ok := exprs[idx].Expr.(*plan.Expr_Fold); ok {
+			if len(fExpr.Fold.Data) > 0 {
+				vec = vector.NewVec(types.T_any.ToType())
+				_ = vec.UnmarshalBinary(fExpr.Fold.Data)
+			} else {
+				idx := uintptr(fExpr.Fold.Id)
+				vec = proc.Base.FoldExprVecs[idx]
+			}
+			val, can := getConstantBytes(vec, true, 0)
+			if !can {
+				return nil, false
+			}
+			vals[idx] = val
+		} else {
+			logutil.Errorf("const folded val expr is not a fold expr: %s\n", plan2.FormatExpr(exprs[idx]))
 			return nil, false
 		}
-		colType := types.T(colDef.Typ.Id)
-		val, ok := evalLiteralExpr2(constVal, colType)
-		if !ok {
-			return nil, ok
-		}
-
-		vals[idx] = val
 	}
 
 	return vals, true
@@ -160,82 +168,82 @@ func getConstValueByExpr(
 	return rule.GetConstantValue(vec, true, 0)
 }
 
-func evalLiteralExpr2(expr *plan.Literal, oid types.T) (ret []byte, can bool) {
-	can = true
-	switch val := expr.Value.(type) {
-	case *plan.Literal_I8Val:
-		i8 := int8(val.I8Val)
-		ret = types.EncodeInt8(&i8)
-	case *plan.Literal_I16Val:
-		i16 := int16(val.I16Val)
-		ret = types.EncodeInt16(&i16)
-	case *plan.Literal_I32Val:
-		i32 := val.I32Val
-		ret = types.EncodeInt32(&i32)
-	case *plan.Literal_I64Val:
-		i64 := val.I64Val
-		ret = types.EncodeInt64(&i64)
-	case *plan.Literal_Dval:
-		if oid == types.T_float32 {
-			fval := float32(val.Dval)
-			ret = types.EncodeFloat32(&fval)
-		} else {
-			dval := val.Dval
-			ret = types.EncodeFloat64(&dval)
-		}
-	case *plan.Literal_Sval:
-		ret = []byte(val.Sval)
-	case *plan.Literal_Bval:
-		ret = types.EncodeBool(&val.Bval)
-	case *plan.Literal_U8Val:
-		u8 := uint8(val.U8Val)
-		ret = types.EncodeUint8(&u8)
-	case *plan.Literal_U16Val:
-		u16 := uint16(val.U16Val)
-		ret = types.EncodeUint16(&u16)
-	case *plan.Literal_U32Val:
-		u32 := val.U32Val
-		ret = types.EncodeUint32(&u32)
-	case *plan.Literal_U64Val:
-		u64 := val.U64Val
-		ret = types.EncodeUint64(&u64)
-	case *plan.Literal_Fval:
-		if oid == types.T_float32 {
-			fval := float32(val.Fval)
-			ret = types.EncodeFloat32(&fval)
-		} else {
-			fval := float64(val.Fval)
-			ret = types.EncodeFloat64(&fval)
-		}
-	case *plan.Literal_Dateval:
-		v := types.Date(val.Dateval)
-		ret = types.EncodeDate(&v)
-	case *plan.Literal_Timeval:
-		v := types.Time(val.Timeval)
-		ret = types.EncodeTime(&v)
-	case *plan.Literal_Datetimeval:
-		v := types.Datetime(val.Datetimeval)
-		ret = types.EncodeDatetime(&v)
-	case *plan.Literal_Timestampval:
-		v := types.Timestamp(val.Timestampval)
-		ret = types.EncodeTimestamp(&v)
-	case *plan.Literal_Decimal64Val:
-		v := types.Decimal64(val.Decimal64Val.A)
-		ret = types.EncodeDecimal64(&v)
-	case *plan.Literal_Decimal128Val:
-		v := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
-		ret = types.EncodeDecimal128(&v)
-	case *plan.Literal_EnumVal:
-		v := types.Enum(val.EnumVal)
-		ret = types.EncodeEnum(&v)
-	case *plan.Literal_Jsonval:
-		ret = []byte(val.Jsonval)
-	default:
-		can = false
-	}
+// func evalLiteralExpr2(expr *plan.Literal, oid types.T) (ret []byte, can bool) {
+// 	can = true
+// 	switch val := expr.Value.(type) {
+// 	case *plan.Literal_I8Val:
+// 		i8 := int8(val.I8Val)
+// 		ret = types.EncodeInt8(&i8)
+// 	case *plan.Literal_I16Val:
+// 		i16 := int16(val.I16Val)
+// 		ret = types.EncodeInt16(&i16)
+// 	case *plan.Literal_I32Val:
+// 		i32 := val.I32Val
+// 		ret = types.EncodeInt32(&i32)
+// 	case *plan.Literal_I64Val:
+// 		i64 := val.I64Val
+// 		ret = types.EncodeInt64(&i64)
+// 	case *plan.Literal_Dval:
+// 		if oid == types.T_float32 {
+// 			fval := float32(val.Dval)
+// 			ret = types.EncodeFloat32(&fval)
+// 		} else {
+// 			dval := val.Dval
+// 			ret = types.EncodeFloat64(&dval)
+// 		}
+// 	case *plan.Literal_Sval:
+// 		ret = []byte(val.Sval)
+// 	case *plan.Literal_Bval:
+// 		ret = types.EncodeBool(&val.Bval)
+// 	case *plan.Literal_U8Val:
+// 		u8 := uint8(val.U8Val)
+// 		ret = types.EncodeUint8(&u8)
+// 	case *plan.Literal_U16Val:
+// 		u16 := uint16(val.U16Val)
+// 		ret = types.EncodeUint16(&u16)
+// 	case *plan.Literal_U32Val:
+// 		u32 := val.U32Val
+// 		ret = types.EncodeUint32(&u32)
+// 	case *plan.Literal_U64Val:
+// 		u64 := val.U64Val
+// 		ret = types.EncodeUint64(&u64)
+// 	case *plan.Literal_Fval:
+// 		if oid == types.T_float32 {
+// 			fval := float32(val.Fval)
+// 			ret = types.EncodeFloat32(&fval)
+// 		} else {
+// 			fval := float64(val.Fval)
+// 			ret = types.EncodeFloat64(&fval)
+// 		}
+// 	case *plan.Literal_Dateval:
+// 		v := types.Date(val.Dateval)
+// 		ret = types.EncodeDate(&v)
+// 	case *plan.Literal_Timeval:
+// 		v := types.Time(val.Timeval)
+// 		ret = types.EncodeTime(&v)
+// 	case *plan.Literal_Datetimeval:
+// 		v := types.Datetime(val.Datetimeval)
+// 		ret = types.EncodeDatetime(&v)
+// 	case *plan.Literal_Timestampval:
+// 		v := types.Timestamp(val.Timestampval)
+// 		ret = types.EncodeTimestamp(&v)
+// 	case *plan.Literal_Decimal64Val:
+// 		v := types.Decimal64(val.Decimal64Val.A)
+// 		ret = types.EncodeDecimal64(&v)
+// 	case *plan.Literal_Decimal128Val:
+// 		v := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
+// 		ret = types.EncodeDecimal128(&v)
+// 	case *plan.Literal_EnumVal:
+// 		v := types.Enum(val.EnumVal)
+// 		ret = types.EncodeEnum(&v)
+// 	case *plan.Literal_Jsonval:
+// 		ret = []byte(val.Jsonval)
+// 	default:
+// 		can = false
+// 	}
 
-	return
-}
+// 	return
+// }
 
 func mustColVecValueFromBinaryFuncExpr(proc *process.Process, expr *plan.Expr_F) (*plan.Expr_Col, []byte, bool) {
 	var (
@@ -253,16 +261,18 @@ func mustColVecValueFromBinaryFuncExpr(proc *process.Process, expr *plan.Expr_F)
 	}
 
 	if exprImpl, ok = valExpr.Expr.(*plan.Expr_Vec); !ok {
-		foldedExprs, err := plan2.ConstandFoldList([]*plan.Expr{valExpr}, proc, true)
-		if err != nil {
-			logutil.Errorf("try const fold val expr failed: %s", plan2.FormatExpr(valExpr))
-			return nil, nil, false
-		}
+		logutil.Errorf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
+		return nil, nil, false
+		// foldedExprs, err := plan2.ConstandFoldList([]*plan.Expr{valExpr}, proc, true)
+		// if err != nil {
+		// 	logutil.Errorf("try const fold val expr failed: %s", plan2.FormatExpr(valExpr))
+		// 	return nil, nil, false
+		// }
 
-		if exprImpl, ok = foldedExprs[0].Expr.(*plan.Expr_Vec); !ok {
-			logutil.Errorf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
-			return nil, nil, false
-		}
+		// if exprImpl, ok = foldedExprs[0].Expr.(*plan.Expr_Vec); !ok {
+		// 	logutil.Errorf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
+		// 	return nil, nil, false
+		// }
 	}
 
 	return colExpr, exprImpl.Vec.Data, ok
@@ -785,4 +795,112 @@ func MakeInExprForTest[T any](
 			},
 		},
 	}
+}
+
+func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte, can bool) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(row) {
+		return
+	}
+	can = true
+	switch vec.GetType().Oid {
+	case types.T_bool:
+		val := vector.MustFixedColNoTypeCheck[bool](vec)[row]
+		ret = types.EncodeBool(&val)
+
+	case types.T_bit:
+		val := vector.MustFixedColNoTypeCheck[uint64](vec)[row]
+		ret = types.EncodeUint64(&val)
+
+	case types.T_int8:
+		val := vector.MustFixedColNoTypeCheck[int8](vec)[row]
+		ret = types.EncodeInt8(&val)
+
+	case types.T_int16:
+		val := vector.MustFixedColNoTypeCheck[int16](vec)[row]
+		ret = types.EncodeInt16(&val)
+
+	case types.T_int32:
+		val := vector.MustFixedColNoTypeCheck[int32](vec)[row]
+		ret = types.EncodeInt32(&val)
+
+	case types.T_int64:
+		val := vector.MustFixedColNoTypeCheck[int64](vec)[row]
+		ret = types.EncodeInt64(&val)
+
+	case types.T_uint8:
+		val := vector.MustFixedColNoTypeCheck[uint8](vec)[row]
+		ret = types.EncodeUint8(&val)
+
+	case types.T_uint16:
+		val := vector.MustFixedColNoTypeCheck[uint16](vec)[row]
+		ret = types.EncodeUint16(&val)
+
+	case types.T_uint32:
+		val := vector.MustFixedColNoTypeCheck[uint32](vec)[row]
+		ret = types.EncodeUint32(&val)
+
+	case types.T_uint64:
+		val := vector.MustFixedColNoTypeCheck[uint64](vec)[row]
+		ret = types.EncodeUint64(&val)
+
+	case types.T_float32:
+		val := vector.MustFixedColNoTypeCheck[float32](vec)[row]
+		ret = types.EncodeFloat32(&val)
+
+	case types.T_float64:
+		val := vector.MustFixedColNoTypeCheck[float64](vec)[row]
+		ret = types.EncodeFloat64(&val)
+
+	case types.T_varchar, types.T_char,
+		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
+		ret = []byte(vec.GetStringAt(int(row)))
+
+	case types.T_json:
+		if !transAll {
+			can = false
+			return
+		}
+		ret = []byte(vec.GetStringAt(int(row)))
+
+	case types.T_timestamp:
+		val := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[row]
+		ret = types.EncodeTimestamp(&val)
+
+	case types.T_date:
+		val := vector.MustFixedColNoTypeCheck[types.Date](vec)[row]
+		ret = types.EncodeDate(&val)
+
+	case types.T_time:
+		val := vector.MustFixedColNoTypeCheck[types.Time](vec)[row]
+		ret = types.EncodeTime(&val)
+
+	case types.T_datetime:
+		val := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[row]
+		ret = types.EncodeDatetime(&val)
+
+	case types.T_enum:
+		if !transAll {
+			can = false
+			return
+		}
+		val := vector.MustFixedColNoTypeCheck[types.Enum](vec)[row]
+		ret = types.EncodeEnum(&val)
+
+	case types.T_decimal64:
+		val := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row]
+		ret = types.EncodeDecimal64(&val)
+
+	case types.T_decimal128:
+		val := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row]
+		ret = types.EncodeDecimal128(&val)
+
+	case types.T_uuid:
+		val := vector.MustFixedColNoTypeCheck[types.Uuid](vec)[row]
+		ret = types.EncodeUuid(&val)
+
+	default:
+		can = false
+	}
+
+	return
 }

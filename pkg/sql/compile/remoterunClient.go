@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"go.uber.org/zap"
@@ -58,6 +59,10 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 
 	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte
+	err = evalFoldValExpr(s, c)
+	if err != nil {
+		return
+	}
 	scopeEncodeData, processEncodeData, err = prepareRemoteRunSendingData(c.sql, s)
 	if err != nil {
 		return nil, err
@@ -443,4 +448,20 @@ func (sender *messageSenderOnClient) close() {
 	_ = sender.streamSender.Close(true)
 
 	v2.PipelineMessageSenderCounter.Desc()
+}
+
+func evalFoldValExpr(s *Scope, c *Compile) error {
+	for _, preScope := range s.PreScopes {
+		err := evalFoldValExpr(preScope, c)
+		if err != nil {
+			return err
+		}
+	}
+	if s.DataSource != nil && s.DataSource.FilterExpr != nil {
+		err := plan.EvalFoldExprForRemote(c.proc, s.DataSource.FilterExpr, &c.filterExprVecs)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

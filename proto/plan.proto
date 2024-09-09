@@ -213,12 +213,18 @@ message Expr {
 		TargetType	t		= 11;
 		ExprList	list	= 12;
 		MaxValue	max		= 13;
-		LiteralVec	vec	= 14;
+		LiteralVec	vec		= 14;
+		FoldVal		fold	= 15;
 	}
 
-	int32 aux_id = 15;
-	double ndv = 16;
-	double selectivity = 17;
+	int32 aux_id = 16;
+	double ndv = 17;
+	double selectivity = 18;
+}
+
+message FoldVal {
+	int32 id	= 1;
+	bytes data	= 2;
 }
 
 message LiteralVec {

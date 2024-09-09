@@ -20,8 +20,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -546,14 +544,16 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			panic("can not expand ranges on remote pipeline!")
 		}
 
-		newExprList := plan2.DeepCopyExprList(inExprList)
-		if len(s.DataSource.node.BlockFilterList) > 0 {
-			tmp := colexec.RewriteFilterExprList(plan2.DeepCopyExprList(s.DataSource.node.BlockFilterList))
-			tmp, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, tmp, s.Proc, true, true)
+		for _, e := range s.DataSource.BlockFilterList {
+			err = plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes, &c.filterExprVecs)
 			if err != nil {
 				return err
 			}
-			newExprList = append(newExprList, tmp)
+		}
+
+		newExprList := plan2.DeepCopyExprList(inExprList)
+		if len(s.DataSource.node.BlockFilterList) > 0 {
+			newExprList = append(newExprList, s.DataSource.BlockFilterList...)
 		}
 
 		relData, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList)
