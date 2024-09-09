@@ -89,3 +89,11 @@ func SetDefaultConfig(delta Config) {
 func GetDefaultConfig() Config {
 	return *defaultConfig.Load()
 }
+
+func WithTempDefaultConfig(config Config, fn func()) {
+	old := defaultConfig.Swap(&config)
+	defer func() {
+		defaultConfig.Store(old)
+	}()
+	fn()
+}
