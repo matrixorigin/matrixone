@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 )
 
 type MemPKFilter struct {
@@ -40,7 +41,7 @@ func newMemPKFilter(
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
 	packerPool *fileservice.Pool[*types.Packer],
-	basePKFilter basePKFilter,
+	basePKFilter engine_util.BasePKFilter,
 ) (filter MemPKFilter, err error) {
 	//defer func() {
 	//	if filter.iter == nil {
@@ -55,7 +56,7 @@ func newMemPKFilter(
 
 	filter.TS = types.TimestampToTS(ts)
 
-	if !basePKFilter.valid || tableDef.Pkey == nil {
+	if !basePKFilter.Valid || tableDef.Pkey == nil {
 		return
 	}
 
@@ -65,111 +66,111 @@ func newMemPKFilter(
 	put := packerPool.Get(&packer)
 	defer put.Put()
 
-	if basePKFilter.op != function.IN && basePKFilter.op != function.PREFIX_IN {
-		switch basePKFilter.oid {
+	if basePKFilter.Op != function.IN && basePKFilter.Op != function.PREFIX_IN {
+		switch basePKFilter.Oid {
 		case types.T_int8:
-			lbVal = types.DecodeInt8(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeInt8(basePKFilter.ub)
+			lbVal = types.DecodeInt8(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeInt8(basePKFilter.UB)
 			}
 		case types.T_int16:
-			lbVal = types.DecodeInt16(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeInt16(basePKFilter.ub)
+			lbVal = types.DecodeInt16(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeInt16(basePKFilter.UB)
 			}
 		case types.T_int32:
-			lbVal = types.DecodeInt32(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeInt32(basePKFilter.ub)
+			lbVal = types.DecodeInt32(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeInt32(basePKFilter.UB)
 			}
 		case types.T_int64:
-			lbVal = types.DecodeInt64(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeInt64(basePKFilter.ub)
+			lbVal = types.DecodeInt64(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeInt64(basePKFilter.UB)
 			}
 		case types.T_float32:
-			lbVal = types.DecodeFloat32(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeFloat32(basePKFilter.ub)
+			lbVal = types.DecodeFloat32(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeFloat32(basePKFilter.UB)
 			}
 		case types.T_float64:
-			lbVal = types.DecodeFloat64(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeFloat64(basePKFilter.ub)
+			lbVal = types.DecodeFloat64(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeFloat64(basePKFilter.UB)
 			}
 		case types.T_uint8:
-			lbVal = types.DecodeUint8(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeUint8(basePKFilter.ub)
+			lbVal = types.DecodeUint8(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeUint8(basePKFilter.UB)
 			}
 		case types.T_uint16:
-			lbVal = types.DecodeUint16(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeUint16(basePKFilter.ub)
+			lbVal = types.DecodeUint16(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeUint16(basePKFilter.UB)
 			}
 		case types.T_uint32:
-			lbVal = types.DecodeUint32(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeUint32(basePKFilter.ub)
+			lbVal = types.DecodeUint32(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeUint32(basePKFilter.UB)
 			}
 		case types.T_uint64:
-			lbVal = types.DecodeUint64(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeUint64(basePKFilter.ub)
+			lbVal = types.DecodeUint64(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeUint64(basePKFilter.UB)
 			}
 		case types.T_date:
-			lbVal = types.DecodeDate(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeDate(basePKFilter.ub)
+			lbVal = types.DecodeDate(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeDate(basePKFilter.UB)
 			}
 		case types.T_time:
-			lbVal = types.DecodeTime(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeTime(basePKFilter.ub)
+			lbVal = types.DecodeTime(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeTime(basePKFilter.UB)
 			}
 		case types.T_datetime:
-			lbVal = types.DecodeDatetime(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeDatetime(basePKFilter.ub)
+			lbVal = types.DecodeDatetime(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeDatetime(basePKFilter.UB)
 			}
 		case types.T_timestamp:
-			lbVal = types.DecodeTimestamp(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeTimestamp(basePKFilter.ub)
+			lbVal = types.DecodeTimestamp(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeTimestamp(basePKFilter.UB)
 			}
 		case types.T_decimal64:
-			lbVal = types.DecodeDecimal64(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeDecimal64(basePKFilter.ub)
+			lbVal = types.DecodeDecimal64(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeDecimal64(basePKFilter.UB)
 			}
 		case types.T_decimal128:
-			lbVal = types.DecodeDecimal128(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeDecimal128(basePKFilter.ub)
+			lbVal = types.DecodeDecimal128(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeDecimal128(basePKFilter.UB)
 			}
 		case types.T_varchar, types.T_char:
-			lbVal = basePKFilter.lb
-			ubVal = basePKFilter.ub
+			lbVal = basePKFilter.LB
+			ubVal = basePKFilter.UB
 		case types.T_json:
-			lbVal = types.DecodeJson(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeJson(basePKFilter.ub)
+			lbVal = types.DecodeJson(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeJson(basePKFilter.UB)
 			}
 		case types.T_enum:
-			lbVal = types.DecodeEnum(basePKFilter.lb)
-			if len(basePKFilter.ub) > 0 {
-				ubVal = types.DecodeEnum(basePKFilter.ub)
+			lbVal = types.DecodeEnum(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeEnum(basePKFilter.UB)
 			}
 		default:
 			return
-			//panic(basePKFilter.oid.String())
+			//panic(basePKFilter.Oid.String())
 		}
 	}
 
-	switch basePKFilter.op {
+	switch basePKFilter.Op {
 	case function.EQUAL, function.PREFIX_EQ:
 		packed = append(packed, logtailreplay.EncodePrimaryKey(lbVal, packer))
-		if basePKFilter.op == function.PREFIX_EQ {
+		if basePKFilter.Op == function.PREFIX_EQ {
 			// TODO Remove this later
 			// serial_full(secondary_index, primary_key|fake_pk) => varchar
 			// prefix_eq expression only has the prefix(secondary index) in it.
@@ -178,30 +179,31 @@ func newMemPKFilter(
 			//
 			packed[0] = packed[0][0 : len(packed[0])-1]
 		}
-		filter.SetFullData(basePKFilter.op, false, packed...)
+		filter.SetFullData(basePKFilter.Op, false, packed...)
 
 	case function.IN, function.PREFIX_IN:
-		packed = logtailreplay.EncodePrimaryKeyVector(basePKFilter.vec, packer)
+		packed = logtailreplay.EncodePrimaryKeyVector(basePKFilter.Vec, packer)
 
-		if basePKFilter.op == function.PREFIX_IN {
+		if basePKFilter.Op == function.PREFIX_IN {
 			for x := range packed {
 				packed[x] = packed[x][0 : len(packed[x])-1]
 			}
 		}
-		filter.SetFullData(basePKFilter.op, true, packed...)
+		filter.SetFullData(basePKFilter.Op, true, packed...)
 
 	case function.LESS_THAN, function.LESS_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL:
 		packed = append(packed, logtailreplay.EncodePrimaryKey(lbVal, packer))
-		filter.SetFullData(basePKFilter.op, false, packed...)
+		filter.SetFullData(basePKFilter.Op, false, packed...)
 
-	case function.PREFIX_BETWEEN, function.BETWEEN, rangeLeftOpen, rangeRightOpen, rangeBothOpen:
+	case function.PREFIX_BETWEEN, function.BETWEEN,
+		engine_util.RangeLeftOpen, engine_util.RangeRightOpen, engine_util.RangeBothOpen:
 		packed = append(packed, logtailreplay.EncodePrimaryKey(lbVal, packer))
 		packed = append(packed, logtailreplay.EncodePrimaryKey(ubVal, packer))
-		if basePKFilter.op == function.PREFIX_BETWEEN {
+		if basePKFilter.Op == function.PREFIX_BETWEEN {
 			packed[0] = packed[0][0 : len(packed[0])-1]
 			packed[1] = packed[1][0 : len(packed[1])-1]
 		}
-		filter.SetFullData(basePKFilter.op, false, packed...)
+		filter.SetFullData(basePKFilter.Op, false, packed...)
 	default:
 		return
 	}
@@ -247,33 +249,33 @@ func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(ts timestamp.Timestamp) {
 		// if len(f.packed) > 128 {
 		// 	return
 		// }
-		//spec = logtailreplay.InKind(f.packed, f.op)
+		//spec = logtailreplay.InKind(f.packed, f.Op)
 		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
 			return logtailreplay.InKind(f.packed, f.op)
 		}
 
 	case function.LESS_EQUAL, function.LESS_THAN:
-		//spec = logtailreplay.LessKind(f.packed[0], f.op == function.LESS_EQUAL)
+		//spec = logtailreplay.LessKind(f.packed[0], f.Op == function.LESS_EQUAL)
 		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
 			return logtailreplay.LessKind(f.packed[0], f.op == function.LESS_EQUAL)
 		}
 
 	case function.GREAT_EQUAL, function.GREAT_THAN:
-		//spec = logtailreplay.GreatKind(f.packed[0], f.op == function.GREAT_EQUAL)
+		//spec = logtailreplay.GreatKind(f.packed[0], f.Op == function.GREAT_EQUAL)
 		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
 			return logtailreplay.GreatKind(f.packed[0], f.op == function.GREAT_EQUAL)
 		}
 
-	case function.BETWEEN, rangeLeftOpen, rangeRightOpen, rangeBothOpen, function.PREFIX_BETWEEN:
+	case function.BETWEEN, engine_util.RangeLeftOpen, engine_util.RangeRightOpen, engine_util.RangeBothOpen, function.PREFIX_BETWEEN:
 		var kind int
 		switch f.op {
 		case function.BETWEEN:
 			kind = 0
-		case rangeLeftOpen:
+		case engine_util.RangeLeftOpen:
 			kind = 1
-		case rangeRightOpen:
+		case engine_util.RangeRightOpen:
 			kind = 2
-		case rangeBothOpen:
+		case engine_util.RangeBothOpen:
 			kind = 3
 		case function.PREFIX_BETWEEN:
 			kind = 4

@@ -56,6 +56,12 @@ func withDisableAppendCreateCallback() Option {
 	}
 }
 
+func WithWaitCNReported() Option {
+	return func(s *service) {
+		s.options.waitCNReported = true
+	}
+}
+
 type service struct {
 	logger  *log.MOLogger
 	cfg     Config
@@ -93,6 +99,7 @@ type service struct {
 		disableHeartbeat            atomic.Bool
 		disableAppendDeleteCallback bool
 		disableAppendCreateCallback bool
+		waitCNReported              bool
 	}
 }
 
@@ -310,7 +317,15 @@ func (s *service) GetShardInfo(
 }
 
 func (s *service) ReplicaCount() int64 {
-	return int64(s.cache.allocate.Load().replicasCount())
+	return int64(s.cache.allocate.Load().replicasCount(nil))
+}
+
+func (s *service) TableReplicaCount(tableID uint64) int64 {
+	return int64(s.cache.allocate.Load().replicasCount(
+		func(v pb.TableShard) bool {
+			return v.TableID == tableID
+		},
+	))
 }
 
 func (s *service) removeReadCache(
@@ -424,6 +439,24 @@ func (s *service) getAllocatedShard(
 func (s *service) doTask(
 	ctx context.Context,
 ) {
+	if s.options.waitCNReported {
+		cs := clusterservice.GetMOCluster(s.cfg.ServiceID)
+		for {
+			reported := false
+			cs.GetCNServiceWithoutWorkingState(
+				clusterservice.NewServiceIDSelector(s.cfg.ServiceID),
+				func(_ metadata.CNService) bool {
+					reported = true
+					return false
+				},
+			)
+			if reported {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+	}
+
 	timer := time.NewTimer(s.cfg.HeartbeatDuration.Duration)
 	defer timer.Stop()
 
@@ -440,7 +473,7 @@ func (s *service) doTask(
 				s.logger.Error("failed to heartbeat",
 					zap.Error(err))
 			}
-			v2.ReplicaCountGauge.Set(float64(s.cache.allocate.Load().replicasCount()))
+			v2.ReplicaCountGauge.Set(float64(s.cache.allocate.Load().replicasCount(nil)))
 			timer.Reset(s.cfg.HeartbeatDuration.Duration)
 		case table := <-s.createC:
 			if err := s.handleCreateTable(table); err != nil {
@@ -812,10 +845,14 @@ func (s *allocatedCache) clone() *allocatedCache {
 	return clone
 }
 
-func (s *allocatedCache) replicasCount() int {
+func (s *allocatedCache) replicasCount(
+	filter func(pb.TableShard) bool,
+) int {
 	n := 0
 	for _, v := range s.values {
-		n += len(v.Replicas)
+		if filter == nil || filter(v) {
+			n += len(v.Replicas)
+		}
 	}
 	return n
 }

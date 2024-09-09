@@ -19,10 +19,8 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -61,16 +59,7 @@ func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Proc
 	return p.run(proc)
 }
 
-func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, err error) {
-
-	if valueScanOperator, ok := vm.GetLeafOp(p.rootOp).(*value_scan.ValueScan); ok {
-		pipelineInputBatches := []*batch.Batch{bat}
-		if bat != nil {
-			pipelineInputBatches = append(pipelineInputBatches, nil)
-		}
-		valueScanOperator.Batchs = pipelineInputBatches
-	}
-
+func (p *Pipeline) ConstRun(proc *process.Process) (end bool, err error) {
 	return p.run(proc)
 }
 

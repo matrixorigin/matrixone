@@ -15,8 +15,9 @@
 package message
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 var _ Message = new(TopValueMessage)
@@ -40,6 +41,9 @@ func (t TopValueMessage) NeedBlock() bool {
 
 func (t TopValueMessage) GetMsgTag() int32 {
 	return t.Tag
+}
+
+func (t TopValueMessage) Destroy() {
 }
 
 func (t TopValueMessage) GetReceiverAddr() MessageAddress {

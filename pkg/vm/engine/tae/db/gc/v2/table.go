@@ -125,7 +125,7 @@ func (t *GCTable) SoftGC(
 	var gc []string
 	snapList := make(map[uint32][]types.TS)
 	for acct, snap := range snapShotList {
-		snapList[acct] = vector.MustFixedCol[types.TS](snap.GetDownstreamVector())
+		snapList[acct] = vector.MustFixedColWithTypeCheck[types.TS](snap.GetDownstreamVector())
 	}
 	t.Lock()
 	meta.Lock()
@@ -204,15 +204,15 @@ func (t *GCTable) updateObjectListLocked(ins *containers.Batch, objects map[stri
 		var objectStats objectio.ObjectStats
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
-		commitTS := vector.GetFixedAt[types.TS](insCommitTSVec, i)
-		deleteTS := vector.GetFixedAt[types.TS](insDeleteTSVec, i)
-		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
+		commitTS := vector.GetFixedAtNoTypeCheck[types.TS](insCommitTSVec, i)
+		deleteTS := vector.GetFixedAtNoTypeCheck[types.TS](insDeleteTSVec, i)
+		createTS := vector.GetFixedAtNoTypeCheck[types.TS](insCreateTSVec, i)
 		object := &ObjectEntry{
 			commitTS: commitTS,
 			createTS: createTS,
 			dropTS:   deleteTS,
-			db:       vector.GetFixedAt[uint64](dbid, i),
-			table:    vector.GetFixedAt[uint64](tid, i),
+			db:       vector.GetFixedAtNoTypeCheck[uint64](dbid, i),
+			table:    vector.GetFixedAtNoTypeCheck[uint64](tid, i),
 		}
 		t.addObjectLocked(objectStats.ObjectName().String(), object, commitTS, objects)
 	}
@@ -293,7 +293,8 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 		objectCount := 0
 		tombstoneCount := 0
 		if len(blocks) > 0 && err == nil {
-			size = writer.GetObjectStats()[0].OriginSize()
+			ss := writer.GetObjectStats()
+			size = ss.OriginSize()
 		}
 		if bats != nil {
 			objectCount = bats[ObjectList].Length()
