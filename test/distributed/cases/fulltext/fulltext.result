@@ -1,0 +1,24 @@
+create table src (id bigint primary key, body varchar, title text);
+insert into src values (0, 'red', 't1'), (1, 'yellow', 't2'), (2, 'blue', 't3'), (3, 'blue red', 't4');
+create fulltext index ftidx on src (body, title);
+select * from src where match(body, title) against('red');
+id    body    title
+0    red    t1
+3    blue red    t4
+select src.*, match(body, title) against('blue') from src;
+id    body    title    score
+2    blue    t3    0.32660624
+3    blue red    t4    0.21773751
+drop table src;
+create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2));
+insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
+create fulltext index ftidx2 on src2 (body, title);
+select * from src2 where match(body, title) against('red');
+id1    id2    body    title
+id0    0    red    t1
+id3    3    blue red    t4
+select src2.*, match(body, title) against('blue') from src2;
+id1    id2    body    title    score
+id2    2    blue    t3    0.32660624
+id3    3    blue red    t4    0.21773751
+drop table src2;
