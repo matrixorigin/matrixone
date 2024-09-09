@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"strings"
 	"sync"
 
@@ -721,12 +722,24 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 }
 
 func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.PipelineSignal) error {
+	sp := pSpool.InitMyPipelineSpool(sender.mp, 1)
+	defer func() {
+		sp.Close()
+	}()
+
+	var done bool
 	for {
 		bat, end, err := sender.receiveBatch()
 		if err != nil || end || bat == nil {
 			return err
 		}
-		forwardCh <- process.NewPipelineSignalToDirectly(bat)
+
+		done, err = sp.SendBatch(sender.ctx, 0, bat, nil)
+		bat.Clean(sender.mp)
+		if err != nil || done {
+			return err
+		}
+		forwardCh <- process.NewPipelineSignalToGetFromSpool(sp, 0)
 	}
 }
 
