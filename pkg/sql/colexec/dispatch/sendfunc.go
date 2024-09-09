@@ -90,7 +90,6 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIn
 				return err
 			}
 			onlyOneRegToDealThis(i, ap)
-			break
 		}
 	}
 
@@ -131,7 +130,6 @@ func sendBatToLocalMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 				}
 				onlyOneRegToDealThis(i, ap)
 			}
-			break
 		}
 	}
 	return nil
@@ -149,7 +147,6 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 				}
 				reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(ap.ctr.sp, i)
 			}
-			break
 		}
 	}
 	for _, r := range ap.ctr.remoteReceivers {
