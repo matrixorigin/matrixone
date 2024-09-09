@@ -1178,7 +1178,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	// create version
-	createVersion, err = rsset[0].GetString(sysTenantCtx, 0, 4)
+	createVersion, err = rsset[0].GetString(sysTenantCtx, 0, 5)
 	if err != nil {
 		return nil, err
 	}
