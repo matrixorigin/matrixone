@@ -185,6 +185,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 						zap.Any("one", lastKey),
 						zap.Any("other", k),
 						zap.Bool("isTombstone", m.isTombstone),
+						zap.String("name", m.host.Name()),
 					)
 				}
 				lastKey = k
